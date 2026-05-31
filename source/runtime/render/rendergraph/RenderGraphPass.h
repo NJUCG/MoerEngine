@@ -250,6 +250,8 @@ struct RGPass {
     ERGPassFlags                 flags{ERGPassFlags::None};
     uint32_t                     workload{1};
     bool                         serial{false};
+    bool                         main_thread{false};
+    Moer::Array<String>          event_scopes{};
     Execute                      execute{};
     Moer::Array<RGTextureAccess> texture_accesses{};
     Moer::Array<RGBufferAccess>  buffer_accesses{};

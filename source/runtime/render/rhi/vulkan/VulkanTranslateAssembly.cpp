@@ -46,7 +46,8 @@ static void InjectAutoCommandListGpuEvents(CmdSubmit& submit) {
     const bool has_frame_bound = HasGpuEventType(submit, GPUEvent::EType::FrameBoundary);
 
     const bool inject_command_list_span =
-        submit.b_tick_profiling && !(has_begin_command_list && has_end_command_list);
+        (!submit.gpu_events.empty() || submit.b_tick_profiling) &&
+        !(has_begin_command_list && has_end_command_list);
     const bool inject_frame_bound = submit.b_tick_profiling && !has_frame_bound;
     if (!inject_command_list_span && !inject_frame_bound) {
         return;
@@ -213,15 +214,9 @@ static TranslatePipelineBatch AssembleTranslatePipelineOps(
            bool attach_signals_and_callbacks,
            bool attach_parent_runtime_payload) -> CmdSubmit {
         Array<UniquePtr<Command>> commands{};
-        if (descriptor.UsesCopyScope()) {
-            UniquePtr<Command> copy_scope_holder = std::move(source_submit.cmds[descriptor.copy_scope_index]);
-            auto* copy_scope = static_cast<CopyScopeCmd*>(copy_scope_holder.get());
-            commands = copy_scope->StealCommands();
-        } else {
-            commands.reserve(descriptor.end - descriptor.begin);
-            for (size_t cmd_index = descriptor.begin; cmd_index < descriptor.end; ++cmd_index) {
-                commands.emplace_back(std::move(source_submit.cmds[cmd_index]));
-            }
+        commands.reserve(descriptor.end - descriptor.begin);
+        for (size_t cmd_index = descriptor.begin; cmd_index < descriptor.end; ++cmd_index) {
+            commands.emplace_back(std::move(source_submit.cmds[cmd_index]));
         }
 
         Array<std::function<void(void)>> callbacks{};
@@ -229,13 +224,17 @@ static TranslatePipelineBatch AssembleTranslatePipelineOps(
         Array<GPUEvent>                  gpu_events{};
         Array<WaitEvent>                 wait_events{};
         Array<SignalEvent>               signal_events{};
+        Array<SyncPointRef>              wait_sync_points{};
+        Array<SyncPointRef>              signal_sync_points{};
 
         if (attach_waits) {
             wait_events = std::move(source_submit.wait_events);
+            wait_sync_points = std::move(source_submit.wait_sync_points);
         }
         if (attach_signals_and_callbacks) {
             callbacks     = std::move(source_submit.callbacks);
             signal_events = std::move(source_submit.signal_events);
+            signal_sync_points = std::move(source_submit.signal_sync_points);
         }
         if (attach_parent_runtime_payload) {
             query_tokens = source_submit.query_tokens;
@@ -251,7 +250,8 @@ static TranslatePipelineBatch AssembleTranslatePipelineOps(
         };
         segment_submit.wait_events = std::move(wait_events);
         segment_submit.signal_events = std::move(signal_events);
-        segment_submit.preprocess_mode = source_submit.preprocess_mode;
+        segment_submit.wait_sync_points = std::move(wait_sync_points);
+        segment_submit.signal_sync_points = std::move(signal_sync_points);
         segment_submit.translate_execution_class = source_submit.translate_execution_class;
         if (attach_signals_and_callbacks) {
             segment_submit.b_sync             = source_submit.b_sync;
@@ -325,6 +325,14 @@ static TranslatePipelineBatch AssembleTranslatePipelineOps(
                             inject_queue_transfer_commands(segment_submit, *translate_info);
                             InjectAutoCommandListGpuEvents(segment_submit);
 
+                            Array<SyncPointRef> explicit_wait_syncpoints =
+                                std::move(segment_submit.wait_sync_points);
+                            SyncPointRef explicit_signal_syncpoint{};
+                            if (!segment_submit.signal_sync_points.empty()) {
+                                explicit_signal_syncpoint = std::move(segment_submit.signal_sync_points.front());
+                                segment_submit.signal_sync_points.clear();
+                            }
+
                             QueueTranslateInfo translate_task{
                                 segment_plan.key,
                                 source_key,
@@ -343,7 +351,10 @@ static TranslatePipelineBatch AssembleTranslatePipelineOps(
                             submit_task.key = segment_plan.key;
                             submit_task.queue = translate_info->queue;
                             submit_task.translate_index = translate_index;
-                            submit_task.signal_syncpoint = SyncPoint::Create(ESyncPointMode::GPU);
+                            submit_task.signal_syncpoint = explicit_signal_syncpoint ?
+                                std::move(explicit_signal_syncpoint) :
+                                SyncPoint::Create(ESyncPointMode::GPU);
+                            submit_task.wait_syncpoints = std::move(explicit_wait_syncpoints);
                             submit_task.completion_event = GraphEvent::CreateGraphEvent();
                             AppendUniqueDependency(
                                 submit_task.task_dependencies,

@@ -1,6 +1,5 @@
 #include "VulkanQueue.h"
 #include "PixelFormat.h"
-#include "RHICmdReorderer.h"
 #include "VulkanAllocator.h"
 #include "VulkanCommand.h"
 #include "VulkanDescriptor.h"
@@ -325,42 +324,11 @@ static bool IsBufferTextureWrite(uint64 _flags) {
     return IsBufferTextureWrite(VulkanShaderResourceState(_flags));
 }
 
-static bool IsTextureSampled(uint64 _flags) {
-    VulkanShaderResourceState state(_flags);
-    return state.b_sampled;
-}
-
-static bool IsResourceInBindlessArray(uint64 _res, uint64 _bdls_handle) {
-    VulkanBindlessArray* bindless_array = reinterpret_cast<VulkanBindlessArray*>(_bdls_handle);
-    return bindless_array->IsResourceAllocated(_res);
-}
-
-static bool IsBufferTextureRead(uint64 _flags) {
-    VulkanShaderResourceState state(_flags);
-    switch (state.resource_type) {
-        case SRT_SRV:
-            return true;
-        default:
-            return false;
-    }
-}
-
-static void LockBindlessArray(uint64 _handle) {
-    VulkanBindlessArray* bdls_array = reinterpret_cast<VulkanBindlessArray*>(_handle);
-    bdls_array->Lock();
-}
-
-static void UnlockBindlessArray(uint64 _handle) {
-    VulkanBindlessArray* bdls_array = reinterpret_cast<VulkanBindlessArray*>(_handle);
-    bdls_array->Unlock();
-}
-
 #pragma endregion
 
 #pragma region[ preprocessor ]
 struct VkCmdPreprocessor {
     VkTracker&       tracker;
-    FunctionTable    m_funcs;
     VulkanAllocator& allocator;
     VulkanDevice&    device;
     EQueueType       current_queue;
@@ -374,14 +342,12 @@ struct VkCmdPreprocessor {
         VulkanDevice&          _device,
         VkTracker&             _tracker,
         VulkanAllocator&       _allocator,
-        FunctionTable          _funcs,
         const TCachedArgArray& _cached_args,
         EQueueType             _current_queue = EQueueType::Graphics
     ) :
         device(_device),
         tracker(_tracker),
         allocator(_allocator),
-        m_funcs(_funcs),
         cached_args(_cached_args),
         current_queue(_current_queue) {}
     void HandleBindless(BindlessArrayRef _bindless_array, VkPipelineStageFlagBits2 _pipeline_stages) {
@@ -876,90 +842,6 @@ struct VkCmdPreprocessor {
             },
             _arg
         );
-    }
-
-    bool VisitCmd(const Command* _cmd) {
-        assert(_cmd != nullptr);
-        switch (_cmd->Type()) {
-            case Command::EType::UploadBuffer:
-                Visit(static_cast<const UploadBufferCmd*>(_cmd));
-                break;
-            case Command::EType::UploadTexture:
-                Visit(static_cast<const UploadTextureCmd*>(_cmd));
-                break;
-            case Command::EType::BufferToBuffer:
-                Visit(static_cast<const CopyBufferCmd*>(_cmd));
-                break;
-            case Command::EType::BufferToTexture:
-                Visit(static_cast<const CopyBufferToTextureCmd*>(_cmd));
-                break;
-            case Command::EType::TextureToBuffer:
-                Visit(static_cast<const CopyTextureToBufferCmd*>(_cmd));
-                break;
-            case Command::EType::TextureToTexture:
-                Visit(static_cast<const CopyTextureCmd*>(_cmd));
-                break;
-            case Command::EType::CopyBackBuffer:
-                Visit(static_cast<const CopyBackBufferCmd*>(_cmd));
-                break;
-            case Command::EType::CopyBackTexture:
-                Visit(static_cast<const CopyBackTextureCmd*>(_cmd));
-                break;
-            case Command::EType::ShaderDispatch:
-                Visit(static_cast<const DispatchCmd*>(_cmd));
-                break;
-            case Command::EType::SetDrawState:
-                Visit(static_cast<const SetDrawStateCmd*>(_cmd));
-                break;
-            case Command::EType::MultiDraw:
-                Visit(static_cast<const MultiDrawCmd*>(_cmd));
-                break;
-            case Command::EType::SetGeometryPassDrawState:
-                assert(false && "SetGeometryPassDrawState not implemented");
-                break;
-            case Command::EType::BuildAccel:
-                Visit(static_cast<const BuildAccelerationStructuresCmd*>(_cmd));
-                break;
-            case Command::EType::BuildTLAS:
-                Visit(static_cast<const UpdateRaytracingSceneCmd*>(_cmd));
-                break;
-            case Command::EType::Barrier:
-                Visit(static_cast<const BarrierCmd*>(_cmd));
-                break;
-            case Command::EType::SetTrackedState:
-                Visit(static_cast<const SetTrackedStateCmd*>(_cmd));
-                break;
-            case Command::EType::QueueTransfer:
-                Visit(static_cast<const QueueTransferCmd*>(_cmd));
-                break;
-            case Command::EType::UpdateBindlessArray:
-                Visit(static_cast<const UpdateBindlessArrayCmd*>(_cmd));
-                break;
-
-            case Command::EType::ClearResource:
-                Visit(static_cast<const ClearResourceCmd*>(_cmd));
-                break;
-            case Command::EType::Custom:
-                Visit(static_cast<const CustomCmd*>(_cmd));
-                break;
-            case Command::EType::Scope:
-                break;
-            case Command::EType::Query:
-                break;
-            case Command::EType::CopyScope:
-                assert(false && "CopyScope must be split before VkCommandQueue preprocessing");
-                break;
-            case Command::EType::BufferOverlap:
-                {
-                    const auto* overlap_cmd = static_cast<const BufferOverlapCmd*>(_cmd);
-                    auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(overlap_cmd->BufferHandle());
-                    tracker.SetBufferOverlap(vk_buffer, overlap_cmd->IsBegin());
-                }
-                break;
-            default:
-                assert(false && "Invalid command type");
-        }
-        return false;
     }
 
     bool VisitExplicitCmd(const Command* _cmd) {
@@ -1994,9 +1876,6 @@ public:
                 break;
             case Command::EType::Custom:
                 Visit(static_cast<const CustomCmd&>(*_cmd));
-                break;
-            case Command::EType::CopyScope:
-                assert(false && "CopyScope must be split before VkCmdVisitor recording");
                 break;
             case Command::EType::BufferOverlap:
                 // BufferOverlap is a scheduling marker only.
@@ -3728,7 +3607,6 @@ void ProfilerStorage::VisitQueryCmd(VulkanCmdList& _cmd, const QueryCmd& _query_
 #pragma region[ VkCommandQueue ]
 VulkanRecordedSubmit VkCommandQueue::Translate(
     CmdSubmit&& _submit,
-    const CmdReorderer* _reordered,
     TrackerSeed seed,
     VulkanAllocator* allocator_override
 ) {
@@ -3736,50 +3614,18 @@ VulkanRecordedSubmit VkCommandQueue::Translate(
     if (!queue.SupportsTimestampQueries()) {
         StripUnsupportedTimestampQueries(_submit, MOER_TEXT("timestamp query unsupported on queue"));
     }
-    const bool explicit_submit = _submit.preprocess_mode == ERHISubmitPreprocessMode::ExplicitStateNoSync;
     struct PreparedCmdBatch {
         CmdSubmit               submit;
-        FunctionTable           function_table;
-        UniquePtr<CmdReorderer> owned_reorderer;
-        const CmdReorderer*     reorderer{nullptr};
         double                  reorder_time_ms{0.0};
         bool                    has_cmd{false};
     };
 
     PreparedCmdBatch prepared{
         .submit = std::move(_submit),
-        .function_table =
-            FunctionTable{
-                .is_resource_write       = &IsBufferTextureWrite,
-                .is_resource_read        = &IsBufferTextureRead,
-                .is_texture_sampled      = &IsTextureSampled,
-                .is_resource_in_bindless = &IsResourceInBindlessArray,
-                .lock_bdls_array         = &LockBindlessArray,
-                .unlock_bdls_array       = &UnlockBindlessArray
-            },
-        .owned_reorderer = nullptr,
-        .reorderer = nullptr,
         .reorder_time_ms = 0.0,
         .has_cmd = false
     };
-    if (explicit_submit) {
-        prepared.has_cmd = !prepared.submit.cmds.empty();
-    } else if (_reordered != nullptr) {
-        prepared.reorderer = _reordered;
-        prepared.has_cmd   = !prepared.reorderer->m_cmd_lists.empty();
-    } else {
-        prepared.owned_reorderer = MakeUnique<CmdReorderer>(prepared.function_table, prepared.submit.cached_args);
-        prepared.reorderer       = prepared.owned_reorderer.get();
-
-        Timer reorder_timer{};
-        reorder_timer.Start();
-        for (const auto& cmd : prepared.submit.cmds) {
-            prepared.owned_reorderer->AcceptCmd(cmd.get());
-        }
-        reorder_timer.Stop();
-        prepared.reorder_time_ms = reorder_timer.ElapsedMilliseconds();
-        prepared.has_cmd         = !prepared.reorderer->m_cmd_lists.empty();
-    }
+    prepared.has_cmd = !prepared.submit.cmds.empty();
 
     VulkanRecordedSubmit         recorded{};
     UniquePtr<VulkanAllocator>   owned_allocator{};
@@ -3837,7 +3683,6 @@ VulkanRecordedSubmit VkCommandQueue::Translate(
         vk_device,
         tracker,
         vk_allocator,
-        prepared.function_table,
         recorded.submit->cached_args,
         queue.GetType()
     );
@@ -3846,7 +3691,9 @@ VulkanRecordedSubmit VkCommandQueue::Translate(
     VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Translate.CommandBufferBegin"));
     query_runtime.BeginRecord(active_cmd_list, recorded.submit->query_tokens);
     VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Translate.QueryBeginRecord"));
-    if (recorded.submit->b_tick_profiling && local_profiler) {
+    const bool profile_submit = recorded.submit->b_tick_profiling || !recorded.submit->gpu_events.empty() ||
+                                !recorded.submit->query_tokens.empty();
+    if (profile_submit && local_profiler) {
         local_profiler->BeginProfilerSession(active_cmd_list, MOER_TEXT("Graphics Exec"));
         VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Translate.ProfilerBeginSession"));
     }
@@ -3864,87 +3711,45 @@ VulkanRecordedSubmit VkCommandQueue::Translate(
     Timer preprocess_timer{};
     uint  layer_count = 0;
     VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Translate.ProcessCommands"));
-    if (explicit_submit) {
-        active_cmd_list.BeginLabel(MOER_TEXT("Begin Layers"), {0.0f, 0.0f, 1.0f, 1.0f});
+    active_cmd_list.BeginLabel(MOER_TEXT("Begin Layers"), {0.0f, 0.0f, 1.0f, 1.0f});
+    RHITRACE_LOG(
+        basic,
+        "[RHITrace][ExplicitTranslate] queue={} commands={} reorder=false",
+        QueueTypeName(queue.GetType()),
+        recorded.submit->cmds.size()
+    );
+    for (const auto& cmd : recorded.submit->cmds) {
         RHITRACE_LOG(
-            basic,
-            "[RHITrace][ExplicitTranslate] queue={} commands={} reorder=false",
+            verbose,
+            "[RHITrace][Preprocess][{}][Linear] cmd_type={} name={}",
             QueueTypeName(queue.GetType()),
-            recorded.submit->cmds.size()
+            uint(cmd->Type()),
+            cmd->name
         );
-        for (const auto& cmd : recorded.submit->cmds) {
-            RHITRACE_LOG(
-                verbose,
-                "[RHITrace][Preprocess][{}][Linear] cmd_type={} name={}",
-                QueueTypeName(queue.GetType()),
-                uint(cmd->Type()),
-                cmd->name
-            );
-            preprocess_timer.Start();
-            preprocessor.VisitExplicitCmd(cmd.get());
-            tracker.ResolveBarriers();
-            tracker.DispatchBarriers(active_cmd_list);
-            preprocess_timer.Stop();
-            recorded.preprocess_time_ms += preprocess_timer.ElapsedMilliseconds();
+        preprocess_timer.Start();
+        preprocessor.VisitExplicitCmd(cmd.get());
+        tracker.ResolveBarriers();
+        tracker.DispatchBarriers(active_cmd_list);
+        preprocess_timer.Stop();
+        recorded.preprocess_time_ms += preprocess_timer.ElapsedMilliseconds();
 
-            active_cmd_list.InsertLabel(MOER_TEXT("Layer 0"), {0.0f, 0.0f, 1.0f, 1.0f});
-            RHITRACE_LOG(
-                verbose,
-                "[RHITrace][ExecuteCmd][{}][Linear] cmd_type={} name={}",
-                QueueTypeName(queue.GetType()),
-                uint(cmd->Type()),
-                cmd->name
-            );
-            visitor.VisitCmd(cmd.get());
-        }
-        layer_count = 1;
-    } else {
-        for (const CmdReorderer::LinkedCommandList& cmd_list : prepared.reorderer->m_cmd_lists) {
-            if (layer_count == 0) {
-                active_cmd_list.BeginLabel(MOER_TEXT("Begin Layers"), {0.0f, 0.0f, 1.0f, 1.0f});
-            }
-            if (cmd_list.head == nullptr) {
-                continue;
-            }
-            preprocess_timer.Start();
-            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
-                RHITRACE_LOG(
-                    verbose,
-                    "[RHITrace][Preprocess][{}][Layer {}] cmd_type={} name={}",
-                    QueueTypeName(queue.GetType()),
-                    layer_count,
-                    uint(cmdnode->cmd->Type()),
-                    cmdnode->cmd->name
-                );
-                preprocessor.VisitCmd(cmdnode->cmd);
-            }
-            tracker.ResolveBarriers();
-            tracker.DispatchBarriers(active_cmd_list);
-            preprocess_timer.Stop();
-            recorded.preprocess_time_ms += preprocess_timer.ElapsedMilliseconds();
-
-            active_cmd_list.InsertLabel(
-                Printf(MOER_TEXT("Layer {}"), layer_count++), {0.0f, 0.0f, 1.0f, 1.0f}
-            );
-            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
-                RHITRACE_LOG(
-                    verbose,
-                    "[RHITrace][ExecuteCmd][{}][Layer {}] cmd_type={} name={}",
-                    QueueTypeName(queue.GetType()),
-                    layer_count - 1,
-                    uint(cmdnode->cmd->Type()),
-                    cmdnode->cmd->name
-                );
-                visitor.VisitCmd(cmdnode->cmd);
-            }
-        }
+        active_cmd_list.InsertLabel(MOER_TEXT("Layer 0"), {0.0f, 0.0f, 1.0f, 1.0f});
+        RHITRACE_LOG(
+            verbose,
+            "[RHITrace][ExecuteCmd][{}][Linear] cmd_type={} name={}",
+            QueueTypeName(queue.GetType()),
+            uint(cmd->Type()),
+            cmd->name
+        );
+        visitor.VisitCmd(cmd.get());
     }
+    layer_count = 1;
     if (layer_count > 0) {
         active_cmd_list.EndLabel();
     }
     VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Translate.ProcessCommandsDone"));
 
-    if (recorded.submit->b_tick_profiling && local_profiler) {
+    if (profile_submit && local_profiler) {
         local_profiler->EndProfilerSession(active_cmd_list, MOER_TEXT("Graphics Exec"));
     }
     active_cmd_list.EndLabel();
@@ -3969,7 +3774,7 @@ VulkanRecordedSubmit VkCommandQueue::Translate(
     tracker.Reset();
     vk_allocator.EndSubmitContext();
     if (local_profiler) {
-        if (recorded.submit->b_tick_profiling) {
+        if (profile_submit) {
             local_profiler->RegisterCpuTimestamp(MOER_TEXT("Command Reorder"), recorded.reorder_time_ms);
             local_profiler->RegisterCpuTimestamp(MOER_TEXT("Command Preprocess"), recorded.preprocess_time_ms);
         }
@@ -4219,7 +4024,6 @@ IOWaitEvt               VkCopyQueue::Execute(IOQueueSubmission&& _submission) {
 //TODO:看看barrier
 VulkanRecordedSubmit VkCopyQueue::Translate(
     CmdSubmit&& _evt,
-    const CmdReorderer* _reordered,
     VulkanAllocator* allocator_override
 ) {
     if (!queue.SupportsTimestampQueries()) {
@@ -4237,27 +4041,7 @@ VulkanRecordedSubmit VkCopyQueue::Translate(
         recorded.payloads.emplace_back(std::move(payload));
         return recorded;
     }
-    const bool explicit_submit = recorded.submit->preprocess_mode == ERHISubmitPreprocessMode::ExplicitStateNoSync;
-
-    FunctionTable function_table{
-        .is_resource_write       = &IsBufferTextureWrite,
-        .is_resource_read        = &IsBufferTextureRead,
-        .is_texture_sampled      = &IsTextureSampled,
-        .is_resource_in_bindless = &IsResourceInBindlessArray
-    };
-    UniquePtr<CmdReorderer> owned_reorder{};
-    const CmdReorderer*     reorder = _reordered;
-    if (explicit_submit) {
-        reorder = nullptr;
-    } else if (reorder == nullptr) {
-        owned_reorder = MakeUnique<CmdReorderer>(function_table, recorded.submit->cached_args);
-        for (const auto& cmd : recorded.submit->cmds) {
-            owned_reorder->AcceptCmd(cmd.get());
-        }
-        reorder = owned_reorder.get();
-    }
-    recorded.has_cmd = explicit_submit ? !recorded.submit->cmds.empty() :
-                                         (reorder != nullptr) && !reorder->m_cmd_lists.empty();
+    recorded.has_cmd = !recorded.submit->cmds.empty();
     if (!recorded.has_cmd) {
         return recorded;
     }
@@ -4282,7 +4066,7 @@ VulkanRecordedSubmit VkCopyQueue::Translate(
     vk_tracker.Reset();
 
     VkCmdPreprocessor preprocessor(
-        device, vk_tracker, vk_allocator, {}, recorded.submit->cached_args, EQueueType::Copy
+        device, vk_tracker, vk_allocator, recorded.submit->cached_args, EQueueType::Copy
     );
     VkCmdVisitor visitor(
         device,
@@ -4298,58 +4082,29 @@ VulkanRecordedSubmit VkCopyQueue::Translate(
     VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Copy.Translate.CommandBufferBegin"));
     vk_cmd_list.BeginLabel(MOER_TEXT("Copy"), {0.0f, 1.0f, 1.0f, 1.0f});
     VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Copy.Translate.ProcessCommands"));
-    if (explicit_submit) {
+    RHITRACE_LOG(
+        basic,
+        "[RHITrace][ExplicitTranslate] queue={} commands={} reorder=false",
+        QueueTypeName(EQueueType::Copy),
+        recorded.submit->cmds.size()
+    );
+    for (const auto& cmd : recorded.submit->cmds) {
         RHITRACE_LOG(
-            basic,
-            "[RHITrace][ExplicitTranslate] queue={} commands={} reorder=false",
-            QueueTypeName(EQueueType::Copy),
-            recorded.submit->cmds.size()
+            verbose,
+            "[RHITrace][Preprocess][Copy][Linear] cmd_type={} name={}",
+            uint(cmd->Type()),
+            cmd->name
         );
-        for (const auto& cmd : recorded.submit->cmds) {
-            RHITRACE_LOG(
-                verbose,
-                "[RHITrace][Preprocess][Copy][Linear] cmd_type={} name={}",
-                uint(cmd->Type()),
-                cmd->name
-            );
-            preprocessor.VisitExplicitCmd(cmd.get());
-            vk_tracker.ResolveBarriers();
-            vk_tracker.DispatchBarriers(vk_cmd_list);
-            RHITRACE_LOG(
-                verbose,
-                "[RHITrace][ExecuteCmd][Copy][Linear] cmd_type={} name={}",
-                uint(cmd->Type()),
-                cmd->name
-            );
-            visitor.VisitCmd(cmd.get());
-        }
-    } else {
-        const auto& cmd_lists = reorder->m_cmd_lists;
-        for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
-            if (cmd_list.head == nullptr) {
-                continue;
-            }
-            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
-                RHITRACE_LOG(
-                    verbose,
-                    "[RHITrace][Preprocess][Copy] cmd_type={} name={}",
-                    uint(cmdnode->cmd->Type()),
-                    cmdnode->cmd->name
-                );
-                preprocessor.VisitCmd(cmdnode->cmd);
-            }
-            vk_tracker.ResolveBarriers();
-            vk_tracker.DispatchBarriers(vk_cmd_list);
-            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
-                RHITRACE_LOG(
-                    verbose,
-                    "[RHITrace][ExecuteCmd][Copy] cmd_type={} name={}",
-                    uint(cmdnode->cmd->Type()),
-                    cmdnode->cmd->name
-                );
-                visitor.VisitCmd(cmdnode->cmd);
-            }
-        }
+        preprocessor.VisitExplicitCmd(cmd.get());
+        vk_tracker.ResolveBarriers();
+        vk_tracker.DispatchBarriers(vk_cmd_list);
+        RHITRACE_LOG(
+            verbose,
+            "[RHITrace][ExecuteCmd][Copy][Linear] cmd_type={} name={}",
+            uint(cmd->Type()),
+            cmd->name
+        );
+        visitor.VisitCmd(cmd.get());
     }
 
     vk_cmd_list.EndLabel();

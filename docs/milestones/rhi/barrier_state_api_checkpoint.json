@@ -1,0 +1,174 @@
+{
+  "project": "RHI Refactor",
+  "planning_only": false,
+  "milestone_file": "docs/milestones/rhi/refactor_milestone.json",
+  "stage": {
+    "id": "M2-BARRIER-STATE-API",
+    "title": "Converge public barrier API on explicit state transitions",
+    "status": "in_progress"
+  },
+  "goal": "Replace the old public read/write barrier structs with one explicit BarrierCreateInfo contract, remove public TextureLayout from the API surface, and constrain raw RHI preprocessing to whole-resource tracked-state recovery only. Fine-grained range analysis stays in RenderGraph, while bindless and acceleration-structure transitions remain explicit user-authored barriers.",
+  "entry_gate": [
+    "Tracked-state skip semantics already exist through ETrackedStateUpdateMode plus SetTrackedState.",
+    "BarrierCreateInfo and BarrierState already compile through Vulkan, D3D12, RenderGraph, and focused RHI tests on the current branch.",
+    "testscripts/windows/test_rhi_translate.ps1 passes on the current branch after the barrier API migration."
+  ],
+  "hard_rules": [
+    {
+      "id": "HR-BARRIER-API-01",
+      "rule": "Public texture and buffer transition authoring uses BarrierCreateInfo only. The payload is variant<TextureView, BufferView> plus explicit src_state and dst_state. The old ReadTexture, WriteTexture, ReadBuffer, and WriteBuffer public generation surface is deleted for normal resources."
+    },
+    {
+      "id": "HR-BARRIER-API-02",
+      "rule": "TextureLayout is not part of the public barrier contract. Backend lowering derives native layouts from BarrierState stage and access plus resource traits."
+    },
+    {
+      "id": "HR-BARRIER-API-03",
+      "rule": "Raw RHI preprocessing may only recover whole-resource UNKNOWN to tracked-state starts. It must not own texture subresource splitting, buffer-range hazard inference, implicit write classification, bindless backing-resource inference, or BLAS/TLAS backing-resource inference."
+    },
+    {
+      "id": "HR-BARRIER-API-04",
+      "rule": "Bindless-array and acceleration-structure transitions remain explicit user-authored RHICommandList barriers. BuildAccelerationStructures, UpdateRaytracingScene, and bindless update commands must not carry hidden self-describing transition payloads."
+    },
+    {
+      "id": "HR-BARRIER-API-05",
+      "rule": "Tracked-state publication stays explicit. Use ordinary barrier tracked-state updates for externally visible whole-resource state, use ETrackedStateUpdateMode::Skip for internal subresource barrier sequences, and finalize the visible state with SetTrackedState or explicit tracked-state submission metadata."
+    },
+    {
+      "id": "HR-BARRIER-API-06",
+      "rule": "RenderGraph owns fine-grained range and queue hazard compilation for graph-declared work. Raw RHI keeps only queue-local explicit barriers plus whole-resource tracked-state persistence."
+    },
+    {
+      "id": "HR-BARRIER-API-07",
+      "rule": "Present is the only backend-owned special handoff allowed to derive its native transition from the tracked final state without re-exposing public layout enums or resurrecting backend-specific barrier helpers in pass code."
+    }
+  ],
+  "design": {
+    "public_surface": [
+      "BarrierState is the public API-neutral transition description: pipeline stage mask plus access mask only.",
+      "BarrierCreateInfo::Transition(TextureView, src_state, dst_state) and the buffer twin are the canonical call sites.",
+      "State-to-BarrierState helpers remain convenience wrappers for tracked enums like ETextureState and EBufferState, but the public barrier object stores the lowered BarrierState rather than a tracked enum plus hidden backend rules."
+    ],
+    "tracked_state_model": [
+      "Tracked state remains ETextureState and EBufferState because persistence, RG export/import, and whole-resource reasoning still want a compact logical state vocabulary.",
+      "BarrierState is not the persistent tracked state. It is the explicit transition contract used to lower one barrier command.",
+      "TryGetTrackedTextureState and TryGetTrackedBufferState are allowed only as a narrow projection from explicit barrier dst_state back to the logical tracked-state store when the barrier is marked to update tracked state."
+    ],
+    "preprocess_boundary": [
+      "InferStateAndSync mode is a compatibility path for ordinary graphics submissions. Its only state recovery responsibility is whole-resource UNKNOWN first-use repair from the persistent tracked-state store.",
+      "ExplicitStateNoSync mode is the direct path for submits that already know their tracked starting state. Callers provide explicit tracked texture and buffer state and preprocessing does not invent hidden sync or hidden resource expansions for them.",
+      "If a workload needs texture-subresource or buffer-range hazard planning, that responsibility belongs to RenderGraph compile data, not to raw RHI preprocess."
+    ],
+    "special_resources": [
+      "Bindless arrays stay separate from BarrierCreateInfo because they are not plain TextureView or BufferView resources. Their transitions remain explicit special barrier commands on RHICommandList.",
+      "BLAS and TLAS stay separate from BarrierCreateInfo for the same reason. Their barriers are explicit special commands whose backing-buffer lowering is backend-local, but their existence and batching are user-authored.",
+      "The backend may lower a bindless or acceleration-structure barrier onto backing buffers internally, but that lowering is not a public API contract and must not become preprocess-owned dependency inference."
+    ],
+    "rendergraph_boundary": [
+      "RenderGraph compiles subresource ranges, buffer ranges, queue ownership, and pass-order hazards from declarations and emits queue-local BarrierCreateInfo sequences plus explicit tracked final state.",
+      "RenderGraph does not rely on raw Vulkan preprocess to rediscover graph-level hazards for graph-generated command streams.",
+      "Imported and exported resources bridge RG and raw RHI through logical tracked state, not through public TextureLayout."
+    ],
+    "present_boundary": [
+      "Present source lowering may remain backend-owned because swapchain contracts are backend-native and outside ordinary pass authoring.",
+      "That exception is narrow: it derives from the tracked final state and swapchain requirements only; it does not justify reintroducing public layout fields or broad preprocess inference."
+    ]
+  },
+  "implementation_checkpoints": [
+    {
+      "id": "CP-01",
+      "title": "Unify public barrier call sites on BarrierCreateInfo",
+      "status": "completed",
+      "priority": "critical",
+      "what_must_be_true_after_this_checkpoint": [
+        "Normal texture and buffer transitions are recorded through BarrierCreateInfo.",
+        "RenderGraph, GenerateMips-style helpers, and focused tests stop depending on the old public Read or Write barrier structs for normal resources.",
+        "Tracked-state skip remains available for internal barrier sequences."
+      ]
+    },
+    {
+      "id": "CP-02",
+      "title": "Remove public TextureLayout and derive backend layout from BarrierState",
+      "status": "completed",
+      "priority": "critical",
+      "what_must_be_true_after_this_checkpoint": [
+        "BarrierState no longer exposes TextureLayout publicly.",
+        "Vulkan and D3D12 lowering derive native state from BarrierState and resource traits.",
+        "Pass code no longer chooses backend image layouts directly."
+      ]
+    },
+    {
+      "id": "CP-03",
+      "title": "Constrain preprocess to whole-resource tracked-state recovery",
+      "status": "in_progress",
+      "priority": "critical",
+      "what_must_be_true_after_this_checkpoint": [
+        "Preprocess only recovers UNKNOWN first use from persistent whole-resource tracked state for the compatibility path.",
+        "ExplicitStateNoSync accepts caller-supplied tracked state and does not recreate hidden dependency inference.",
+        "RenderGraph-generated fine-grained state planning is not re-expanded inside raw RHI preprocess."
+      ]
+    },
+    {
+      "id": "CP-04",
+      "title": "Keep bindless and acceleration-structure barriers explicit",
+      "status": "in_progress",
+      "priority": "critical",
+      "what_must_be_true_after_this_checkpoint": [
+        "Bindless update and BLAS or TLAS build flows batch their explicit special barriers in the command list.",
+        "No command-owned hidden barrier payload is added to build or bindless commands.",
+        "Backend lowering may map those barriers to backing buffers internally without changing the public API contract."
+      ]
+    },
+    {
+      "id": "CP-05",
+      "title": "Validate build and focused barrier coverage",
+      "status": "completed",
+      "priority": "critical",
+      "what_must_be_true_after_this_checkpoint": [
+        "CMake build succeeds on the current branch.",
+        "testscripts/windows/test_rhi_translate.ps1 passes after the API migration.",
+        "Known residual failures are documented separately when they fall outside the focused barrier slice."
+      ]
+    }
+  ],
+  "files_likely_affected": [
+    "source/runtime/render/rhi/RHICommand.h",
+    "source/runtime/render/rhi/RHIImpl.h",
+    "source/runtime/render/rhi/RHICommandList.cpp",
+    "source/runtime/render/rhi/vulkan/VulkanSubmissionPreprocess.cpp",
+    "source/runtime/render/rhi/vulkan/VulkanQueue.cpp",
+    "source/runtime/render/rhi/vulkan/RHICmdReorderer.h",
+    "source/runtime/render/rhi/d3d12/D3D12Device.cpp",
+    "source/runtime/render/rendergraph/RenderGraph.cpp",
+    "source/runtime/render/renderer/raytracing/ShaderUtils.cpp",
+    "source/runtime/render/renderer/raytracing/PreprocessLightPass.cpp",
+    "source/test/RHITest/rhi_translate_multiqueue_test.cpp"
+  ],
+  "validation": [
+    "Run the existing CMake build integration after barrier API surface changes.",
+    "Run testscripts/windows/test_rhi_translate.ps1 after barrier or tracked-state behavior changes.",
+    "Use testscripts/windows/test_editor.ps1 only as a separate smoke path, not as the sole blocker for focused barrier API landings."
+  ],
+  "current_execution_state": {
+    "status": "partially_landed",
+    "code_changed": true,
+    "validated": [
+      {
+        "script": "CMake build",
+        "date": "2026-05-14",
+        "result": "passed"
+      },
+      {
+        "script": "testscripts/windows/test_rhi_translate.ps1",
+        "date": "2026-05-14",
+        "result": "passed",
+        "log_dir": "logs/run_20260514_003147"
+      }
+    ],
+    "known_open_items": [
+      "The design boundary for whole-resource tracked-state recovery versus remaining preprocess digest expansion still needs one cleanup pass so the implementation exactly matches HR-BARRIER-API-03.",
+      "testscripts/windows/test_editor.ps1 -TimeoutSec 8 reported a separate moer_renderd.dll exception in logs/run_20260514_003208; that runtime crash is tracked separately from the focused barrier API validation."
+    ],
+    "next_execution_step": "Finish the remaining preprocess simplification so explicit-submit paths and compatibility paths both obey the new boundary exactly, then re-run testscripts/windows/test_rhi_translate.ps1."
+  }
+}

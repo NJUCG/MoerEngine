@@ -1,0 +1,114 @@
+{
+  "project": "RenderGraph Roadmap",
+  "planning_only": false,
+  "milestone_file": "docs/milestones/rendergraph/rendergraph_roadmap_milestone.json",
+  "stage": {
+    "id": "resource_object_compile",
+    "title": "Replace handles, graph-owned pools, global phases, and coarse range tracking",
+    "status": "completed"
+  },
+  "goal": "Make RenderGraph resources explicit typed objects, move pooled allocation outside graph ownership, remove the global phase enum, and build compile metadata from resource-owned subresource or buffer range state partitions after transient allocation is resolved.",
+  "entry_gate": [
+    "RenderGraph already owns pass declarations and Dispatch-triggered private Compile.",
+    "RG resource views and accesses still use RenderGraphHandle and must be migrated in one step.",
+    "PooledTexturePool and PooledBufferPool already exist as reusable physical resource services."
+  ],
+  "hard_rules": [
+    {
+      "id": "HR-ROC-01",
+      "rule": "Delete RenderGraphHandle from the public RenderGraph contract. RGTextureView and RGBufferView must carry RGTexture* and RGBuffer* respectively."
+    },
+    {
+      "id": "HR-ROC-02",
+      "rule": "RenderGraph must not store PooledTexturePool* or PooledBufferPool*. Transient physical allocation is performed by an independent allocator step."
+    },
+    {
+      "id": "HR-ROC-03",
+      "rule": "RenderGraph must not expose Compile and must not guard behavior with a global ERGPhase enum. Dispatch owns setup, compile, allocation, record, final tracked state, and release sequencing."
+    },
+    {
+      "id": "HR-ROC-04",
+      "rule": "After transient resources are allocated, each RGTexture and RGBuffer builds the finest state range partition from declared pass accesses before dependency metadata is derived."
+    },
+    {
+      "id": "HR-ROC-05",
+      "rule": "Compile must not keep per-packet or per-access use lists. Dependency and state results are attached to resources and passes, while compiled hazards reference resource object identity."
+    }
+  ],
+  "checkpoints": [
+    {
+      "id": "CP-01",
+      "title": "Replace RenderGraphHandle with typed resource pointers",
+      "status": "completed",
+      "priority": "critical",
+      "what_must_be_true_after_this_checkpoint": [
+        "RenderGraph Create/Register/Import APIs return RGTexture* or RGBuffer*.",
+        "Export APIs accept typed resources.",
+        "RGTextureView, RGBufferView, RGTextureAccess, and RGBufferAccess no longer contain RenderGraphHandle.",
+        "Renderer and tests use typed resource pointers directly."
+      ]
+    },
+    {
+      "id": "CP-02",
+      "title": "Move pooled allocation outside RenderGraph ownership",
+      "status": "completed",
+      "priority": "critical",
+      "what_must_be_true_after_this_checkpoint": [
+        "RenderGraph has no pool members or pool-taking constructors.",
+        "Transient allocation is driven by a separate RGTransientResourceAllocator using explicit pools.",
+        "Raw RHI imports are wrapped as non-reusable pooled refs without entering a pool."
+      ]
+    },
+    {
+      "id": "CP-03",
+      "title": "Remove global phase state",
+      "status": "completed",
+      "priority": "critical",
+      "what_must_be_true_after_this_checkpoint": [
+        "RenderGraph no longer has ERGPhase.",
+        "Setup-time API validation is expressed through dispatch-started state and data availability assertions.",
+        "Reset returns the graph to reusable construction state without phase transitions."
+      ]
+    },
+    {
+      "id": "CP-04",
+      "title": "Build finest resource state range partitions",
+      "status": "completed",
+      "priority": "critical",
+      "what_must_be_true_after_this_checkpoint": [
+        "RGTexture stores texture state ranges split by declared mip and array boundaries.",
+        "RGBuffer stores buffer state ranges split by declared byte boundaries.",
+        "Hazard metadata is derived from these partitions instead of coarse overlapping state replacement."
+      ]
+    },
+    {
+      "id": "CP-05",
+      "title": "Validate through repository scripts",
+      "status": "completed",
+      "priority": "critical",
+      "what_must_be_true_after_this_checkpoint": [
+        "Build succeeds through the repository CMake build integration.",
+        "Focused RenderGraph/RHI validation passes through testscripts/windows/test_rhi_translate.ps1.",
+        "No ad-hoc validation scripts are added."
+      ]
+    }
+  ],
+  "files_likely_affected": [
+    "source/runtime/render/rendergraph/RenderGraph.h",
+    "source/runtime/render/rendergraph/RenderGraph.cpp",
+    "source/runtime/render/rendergraph/RenderGraphResource.h",
+    "source/runtime/render/rendergraph/RenderGraphResource.cpp",
+    "source/runtime/render/rendergraph/RenderGraphPass.h",
+    "source/runtime/render/rendergraph/RenderGraphHandle.h",
+    "source/runtime/render/renderer/raytracing/RaytracingRenderer.cpp",
+    "source/test/RHITest/rhi_rendergraph_contract_test.cpp"
+  ],
+  "validation": [
+    "Build with the existing CMake project build integration.",
+    "Run testscripts/windows/test_rhi_translate.ps1 after the implementation lands."
+  ],
+  "validation_results": [
+    "CMake Tools build completed successfully.",
+    "testscripts/windows/test_rhi_translate.ps1 passed 31 focused RHI/RenderGraph subtests, including RHI/RenderGraphContractFoundation."
+  ]
+}

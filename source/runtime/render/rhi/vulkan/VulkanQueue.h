@@ -3,7 +3,6 @@
 #include "VulkanAllocator.h"
 #include "VulkanCommand.h"
 #include "VulkanQueryRuntime.h"
-#include "RHICmdReorderer.h"
 #include "VulkanResourceTracker.h"
 // #include "VulkanDevice.h"
 #include "misc/LockFree.h"
@@ -271,7 +270,6 @@ public:
     }
     VulkanRecordedSubmit Translate(
         CmdSubmit&& _submit,
-        const CmdReorderer* _reordered = nullptr,
         TrackerSeed seed = {},
         VulkanAllocator* allocator_override = nullptr
     );
@@ -331,7 +329,6 @@ public:
     IOWaitEvt Execute(IOQueueSubmission&& _submit) override;
     VulkanRecordedSubmit Translate(
         CmdSubmit&& _submit,
-        const CmdReorderer* _reordered = nullptr,
         VulkanAllocator* allocator_override = nullptr
     );
     UniquePtr<VulkanSubmitPayload> SubmitPayloadForRuntime(

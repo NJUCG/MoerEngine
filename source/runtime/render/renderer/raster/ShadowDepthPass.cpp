@@ -418,7 +418,21 @@ void ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterCo
                 shadow_map_texture.hdl
             );
 
+            context.cmd_list.Barriers(
+                EQueueType::Graphics,
+                EQueueType::Graphics,
+                EPassType::Graphics,
+                ETrackedStateUpdateMode::Update,
+                WriteBindlessArray{context.bdls, EBufferState::UNORDERED_ACCESS}
+            );
             context.cmd_list.UpdateBindlessArray(context.bdls);
+            context.cmd_list.Barriers(
+                EQueueType::Graphics,
+                EQueueType::Graphics,
+                EPassType::Graphics,
+                ETrackedStateUpdateMode::Update,
+                ReadBindlessArray{context.bdls, EBufferState::SHADER_RESOURCE}
+            );
         }
     }
 }
@@ -462,8 +476,21 @@ void ShadowDepthPass::PreparePointShadowResources(RasterContext& context, const 
                 cube_res.handle
             );
 
-            // 5. 更新 Bindless Array (提交描述符更新)
+            context.cmd_list.Barriers(
+                EQueueType::Graphics,
+                EQueueType::Graphics,
+                EPassType::Graphics,
+                ETrackedStateUpdateMode::Update,
+                WriteBindlessArray{context.bdls, EBufferState::UNORDERED_ACCESS}
+            );
             context.cmd_list.UpdateBindlessArray(context.bdls);
+            context.cmd_list.Barriers(
+                EQueueType::Graphics,
+                EQueueType::Graphics,
+                EPassType::Graphics,
+                ETrackedStateUpdateMode::Update,
+                ReadBindlessArray{context.bdls, EBufferState::SHADER_RESOURCE}
+            );
         }
     }
 }

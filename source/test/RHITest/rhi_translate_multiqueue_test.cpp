@@ -176,7 +176,7 @@ GPUEvent MakeResolvedGpuEvent(
         .timestamp_ns = timestamp_ns,
     };
 }
-constexpr uint32_t kCopyScopeIterations = 8;
+constexpr uint32_t kExplicitCopyIterations = 8;
 
 BEGIN_INSTANT_EVENT_TEMPLATE(
     ProfileDumpRuntimeTemplate,
@@ -213,6 +213,105 @@ struct IndicePair {
 template<typename T>
 std::span<Moer::byte> ToByteSpan(std::vector<T>& values) {
     return std::span<Moer::byte>(reinterpret_cast<Moer::byte*>(values.data()), values.size() * sizeof(T));
+}
+
+void BufferBarrierUpdate(
+    CommandList&  command_list,
+    BufferView    buffer,
+    EBufferState  src_state,
+    EBufferState  dst_state,
+    EPassType     pass_type
+) {
+    command_list.Barriers(
+        {BarrierCreateInfo::Transition(buffer, src_state, dst_state, pass_type)},
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        ETrackedStateUpdateMode::Update
+    );
+}
+
+void TextureBarrierUpdate(
+    CommandList&  command_list,
+    TextureView   texture,
+    ETextureState src_state,
+    ETextureState dst_state,
+    EPassType     pass_type
+) {
+    command_list.Barriers(
+        {BarrierCreateInfo::Transition(texture, src_state, dst_state, pass_type)},
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        ETrackedStateUpdateMode::Update
+    );
+}
+
+void UploadBufferWithState(
+    CommandList&            command_list,
+    std::span<Moer::byte>   data,
+    BufferView              buffer,
+    EBufferState            final_state,
+    EPassType               final_pass_type = EPassType::Copy,
+    StringView              name = MOER_TEXT("UploadBufferWithState")
+) {
+    BufferBarrierUpdate(command_list, buffer, EBufferState::UNDEFINED, EBufferState::TRANSFER_DST, EPassType::Copy);
+    command_list.CopyFrom(data, buffer, name);
+    command_list.Barriers(
+        {BarrierCreateInfo::Transition(
+            buffer,
+            MakeBarrierState(EBufferState::TRANSFER_DST, EPassType::Copy),
+            MakeBarrierState(final_state, final_pass_type)
+        )},
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        ETrackedStateUpdateMode::Update
+    );
+}
+
+void UploadTextureWithState(
+    CommandList&            command_list,
+    std::span<Moer::byte>   data,
+    TextureView             texture,
+    ETextureState           final_state,
+    EPassType               final_pass_type = EPassType::Copy,
+    StringView              name = MOER_TEXT("UploadTextureWithState")
+) {
+    const ETrackedStateUpdateMode tracked_state = texture.IsWholeResource() ? ETrackedStateUpdateMode::Update :
+                                                                           ETrackedStateUpdateMode::Skip;
+    command_list.Barriers(
+        {BarrierCreateInfo::Transition(texture, ETextureState::UNDEFINED, ETextureState::TRANSFER_DST, EPassType::Copy)},
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        tracked_state
+    );
+    command_list.CopyFrom(data, texture, name);
+    command_list.Barriers(
+        {BarrierCreateInfo::Transition(
+            texture,
+            MakeBarrierState(ETextureState::TRANSFER_DST, EPassType::Copy),
+            MakeBarrierState(final_state, final_pass_type)
+        )},
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        tracked_state
+    );
+}
+
+void UpdateBindlessArrayExplicit(CommandList& command_list, BindlessArrayRef bindless_array) {
+    command_list.Barriers(
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        EPassType::Compute,
+        ETrackedStateUpdateMode::Update,
+        WriteBindlessArray{bindless_array, EBufferState::UNORDERED_ACCESS}
+    );
+    command_list.UpdateBindlessArray(bindless_array);
+    command_list.Barriers(
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        EPassType::Compute,
+        ETrackedStateUpdateMode::Update,
+        ReadBindlessArray{bindless_array, EBufferState::SHADER_RESOURCE}
+    );
 }
 
 std::vector<uint8_t> MakeSolidRgba8(uint32_t width, uint32_t height, uint8_t red) {
@@ -1140,6 +1239,10 @@ int RunTraceConsumerDecodeTest() {
     const std::filesystem::path csv_path = MakeProfileDumpTestPath("trace_consumer_csv_test.csv");
     {
         std::ofstream csv(csv_path, std::ios::binary);
+        csv << MOER_ASCII_TEXT("#moer_trace_csv_version=1\n");
+        csv << MOER_ASCII_TEXT("#session_id=7\n");
+        csv << MOER_ASCII_TEXT("#time_origin_ns=1000\n");
+        csv << MOER_ASCII_TEXT("#session_name=TraceUnitCsv\n");
         csv << MOER_ASCII_TEXT("event_id,session_id,type,track_type,track_id,depth,ts_begin_ns,ts_end_ns,counter,name,category,track_name,args\n");
         csv << MOER_ASCII_TEXT("11,7,0,0,42,1,2000,5000,0,\"TraceScope\",\"Trace\",\"TraceThread\",\"\"\n");
         csv << MOER_ASCII_TEXT("12,7,2,0,42,0,5500,5500,3.5,\"TraceCounter\",\"Trace\",\"TraceThread\",\"\"\n");
@@ -1152,6 +1255,10 @@ int RunTraceConsumerDecodeTest() {
             true
         )) {
         LOG_ERROR(MOER_TEXT("Trace consumer CSV load failed."));
+        return 1;
+    }
+    if (!Utf8Equals(csv_store.metadata.session_name, "TraceUnitCsv")) {
+        LOG_ERROR(MOER_TEXT("Trace consumer CSV did not load session metadata."));
         return 1;
     }
     const auto* csv_scope_event = FindProfileConsumerEvent(csv_store, "TraceScope");
@@ -1480,8 +1587,7 @@ int RunTrackedStateCommandRoundTripTest() {
     explicit_cmd.SetExplicitTrackedState(std::move(explicit_textures), std::move(explicit_buffers));
     explicit_cmd.LambdaCommand([] {});
     CmdSubmit explicit_submit = explicit_cmd.Submit();
-    if (explicit_submit.preprocess_mode != ERHISubmitPreprocessMode::ExplicitStateNoSync ||
-        explicit_submit.explicit_tracked_buffers.size() != 1) {
+    if (explicit_submit.explicit_tracked_buffers.size() != 1) {
         LOG_ERROR(MOER_TEXT("Explicit submit preprocessing metadata did not round-trip"));
         return 1;
     }
@@ -1592,9 +1698,9 @@ int RunRHITranslateMultiQueueReadbackTest() {
         ApplyShuffle(stage0_expected, perm1, final_expected);
 
         CommandList upload_cmd(EQueueType::Graphics);
-        upload_cmd.CopyFrom(ToByteSpan(src_data), src->GetView());
-        upload_cmd.CopyFrom(ToByteSpan(perm0), indices_stage0->GetView());
-        upload_cmd.CopyFrom(ToByteSpan(perm1), indices_stage1->GetView());
+        UploadBufferWithState(upload_cmd, ToByteSpan(src_data), src->GetView(), EBufferState::SHADER_RESOURCE, EPassType::Compute);
+        UploadBufferWithState(upload_cmd, ToByteSpan(perm0), indices_stage0->GetView(), EBufferState::SHADER_RESOURCE, EPassType::Compute);
+        UploadBufferWithState(upload_cmd, ToByteSpan(perm1), indices_stage1->GetView(), EBufferState::SHADER_RESOURCE, EPassType::Compute);
 
         ComponentShuffleShader::Arg shuffle_args{
             .stride = 1u,
@@ -1602,17 +1708,48 @@ int RunRHITranslateMultiQueueReadbackTest() {
         };
 
         CommandList compute_stage0_cmd(EQueueType::Graphics);
+        BufferBarrierUpdate(
+            compute_stage0_cmd,
+            mid->GetView(),
+            EBufferState::UNDEFINED,
+            EBufferState::UNORDERED_ACCESS,
+            EPassType::Compute
+        );
         compute_stage0_cmd
             .Compute(shuffle_pipeline, shuffle_args, indices_stage0->GetView(), src->GetView(), mid->GetView())
             .Dispatch((kElementCount + 63u) / 64u, MOER_TEXT("TranslateStage0Dispatch"));
 
         CommandList compute_stage1_cmd(EQueueType::Graphics);
+        BufferBarrierUpdate(
+            compute_stage1_cmd,
+            mid->GetView(),
+            EBufferState::UNORDERED_ACCESS,
+            EBufferState::SHADER_RESOURCE,
+            EPassType::Compute
+        );
+        BufferBarrierUpdate(
+            compute_stage1_cmd,
+            dst->GetView(),
+            EBufferState::UNDEFINED,
+            EBufferState::UNORDERED_ACCESS,
+            EPassType::Compute
+        );
         compute_stage1_cmd
             .Compute(shuffle_pipeline, shuffle_args, indices_stage1->GetView(), mid->GetView(), dst->GetView())
             .Dispatch((kElementCount + 63u) / 64u, MOER_TEXT("TranslateStage1Dispatch"));
 
         std::fill(readback_data.begin(), readback_data.end(), 0u);
         CommandList readback_cmd(EQueueType::Graphics);
+        readback_cmd.Barriers(
+            {BarrierCreateInfo::Transition(
+                dst->GetView(),
+                MakeBarrierState(EBufferState::UNORDERED_ACCESS, EPassType::Compute),
+                MakeBarrierState(EBufferState::TRANSFER_SRC, EPassType::Copy)
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
+        );
         SyncPointRef readback_event = readback_cmd.ReadbackCopy(dst->GetView(), ToByteSpan(readback_data));
 
         Array<CommandList> frame_cmds{};
@@ -1650,7 +1787,7 @@ int RunMultiCommandListSubmitOrderingTest() {
     }
 
     CommandList upload_cmd(EQueueType::Graphics);
-    upload_cmd.CopyFrom(ToByteSpan(upload_values), buffer->GetView());
+    UploadBufferWithState(upload_cmd, ToByteSpan(upload_values), buffer->GetView(), EBufferState::TRANSFER_SRC);
 
     CommandList readback_cmd(EQueueType::Graphics);
     SyncPointRef readback_event =
@@ -1689,13 +1826,27 @@ int RunRecordingSubmitOrderingTest() {
     }
 
     CommandList initial_cmd(EQueueType::Graphics);
-    initial_cmd.CopyFrom(ToByteSpan(initial_values), buffer->GetView());
+    UploadBufferWithState(initial_cmd, ToByteSpan(initial_values), buffer->GetView(), EBufferState::TRANSFER_SRC);
     Array<CommandList> initial_cmds{};
     initial_cmds.emplace_back(std::move(initial_cmd));
     RHIExecutor::Get().Submit(std::move(initial_cmds), ERHIExecSubmitFlags::None);
 
     SharedPtr<CommandList> recording_cmd = MakeShared<CommandList>(EQueueType::Graphics);
+    BufferBarrierUpdate(
+        *recording_cmd,
+        buffer->GetView(),
+        EBufferState::TRANSFER_SRC,
+        EBufferState::TRANSFER_DST,
+        EPassType::Copy
+    );
     recording_cmd->CopyFrom(ToByteSpan(recording_values), buffer->GetView());
+    BufferBarrierUpdate(
+        *recording_cmd,
+        buffer->GetView(),
+        EBufferState::TRANSFER_DST,
+        EBufferState::TRANSFER_SRC,
+        EPassType::Copy
+    );
     Array<SharedPtr<CommandList>> recording_cmds{};
     recording_cmds.emplace_back(std::move(recording_cmd));
     RHIExecutor::Get().SubmitRecording(std::move(recording_cmds), ERHIExecSubmitFlags::None);
@@ -1735,7 +1886,7 @@ int RunSerialControlTranslateOrderingTest() {
 
     CommandList upload_cmd(EQueueType::Graphics);
     upload_cmd.SetTranslateExecutionClass(ERHITranslateExecutionClass::SerialControl);
-    upload_cmd.CopyFrom(ToByteSpan(upload_values), buffer->GetView());
+    UploadBufferWithState(upload_cmd, ToByteSpan(upload_values), buffer->GetView(), EBufferState::TRANSFER_SRC);
 
     CommandList readback_cmd(EQueueType::Graphics);
     readback_cmd.SetTranslateExecutionClass(ERHITranslateExecutionClass::SerialControl);
@@ -1759,16 +1910,16 @@ int RunSerialControlTranslateOrderingTest() {
     return 0;
 }
 
-int RunGraphicsCopyScopeRoundTripTest() {
+int RunGraphicsExplicitCopyRoundTripTest() {
     auto& device = RenderDevice::Get();
     auto scratch_buffer = device.CreateBuffer<uint32_t>(
-        MOER_TEXT("copyscope_graphics_roundtrip_scratch"),
+        MOER_TEXT("explicit_copy_graphics_roundtrip_scratch"),
         kElementCount,
         EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC |
             EBufferUsageFlags::UNORDERED_ACCESS
     );
     auto transfer_buffer = device.CreateBuffer<uint32_t>(
-        MOER_TEXT("copyscope_graphics_roundtrip"),
+        MOER_TEXT("explicit_copy_graphics_roundtrip"),
         kElementCount,
         EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC |
             EBufferUsageFlags::UNORDERED_ACCESS
@@ -1777,18 +1928,27 @@ int RunGraphicsCopyScopeRoundTripTest() {
     std::vector<uint32_t> upload_values(kElementCount);
     std::vector<uint32_t> readback_values(kElementCount, 0u);
 
-    for (uint32_t iter = 0; iter < kCopyScopeIterations; ++iter) {
+    for (uint32_t iter = 0; iter < kExplicitCopyIterations; ++iter) {
         for (uint32_t i = 0; i < kElementCount; ++i) {
             upload_values[i] = iter * 2048u + i * 5u + 9u;
         }
         std::fill(readback_values.begin(), readback_values.end(), 0u);
 
         CommandList graphics_cmd(EQueueType::Graphics);
+        BufferBarrierUpdate(
+            graphics_cmd,
+            scratch_buffer->GetView(),
+            EBufferState::UNDEFINED,
+            EBufferState::TRANSFER_DST,
+            EPassType::Copy
+        );
         graphics_cmd.ClearResource(scratch_buffer->GetView(), 0u);
-        {
-            auto copy_scope = graphics_cmd.BeginCopyScope();
-            copy_scope.CopyFrom(ToByteSpan(upload_values), transfer_buffer->GetView());
-        }
+        UploadBufferWithState(
+            graphics_cmd,
+            ToByteSpan(upload_values),
+            transfer_buffer->GetView(),
+            EBufferState::TRANSFER_SRC
+        );
         SyncPointRef readback_event =
             graphics_cmd.ReadbackCopy(transfer_buffer->GetView(), ToByteSpan(readback_values));
 
@@ -1804,7 +1964,7 @@ int RunGraphicsCopyScopeRoundTripTest() {
         }
     }
 
-    LOG_INFO(MOER_TEXT("Graphics -> CopyScope -> Graphics test passed, iterations={}"), kCopyScopeIterations);
+    LOG_INFO(MOER_TEXT("Graphics explicit copy roundtrip test passed, iterations={}"), kExplicitCopyIterations);
     return 0;
 }
 
@@ -1853,9 +2013,26 @@ int RunBindlessBufferReadbackTest() {
         std::fill(readback_values.begin(), readback_values.end(), 0u);
 
         CommandList cmd(EQueueType::Graphics);
-        cmd.CopyFrom(ToByteSpan(upload_values), src->GetView());
+        UploadBufferWithState(cmd, ToByteSpan(upload_values), src->GetView(), EBufferState::SHADER_RESOURCE, EPassType::Compute);
+        BufferBarrierUpdate(
+            cmd,
+            output->GetView(),
+            iter == 0u ? EBufferState::UNDEFINED : EBufferState::TRANSFER_SRC,
+            EBufferState::TRANSFER_DST,
+            EPassType::Copy
+        );
         cmd.ClearResource(output->GetView(), 0u);
-        cmd.UpdateBindlessArray(bindless_array);
+        cmd.Barriers(
+            {BarrierCreateInfo::Transition(
+                output->GetView(),
+                MakeBarrierState(EBufferState::TRANSFER_DST, EPassType::Copy),
+                MakeBarrierState(EBufferState::UNORDERED_ACCESS, EPassType::Compute)
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
+        );
+        UpdateBindlessArrayExplicit(cmd, bindless_array);
 
         BindlessReadbackArgs args{
             .src_handle = src_handle,
@@ -1869,12 +2046,12 @@ int RunBindlessBufferReadbackTest() {
         cmd.Barriers(
             {BarrierCreateInfo::Transition(
                 output->GetView(),
-                EBufferState::UNORDERED_ACCESS,
-                EBufferState::TRANSFER_SRC,
-                EPassType::Copy
+                MakeBarrierState(EBufferState::UNORDERED_ACCESS, EPassType::Compute),
+                MakeBarrierState(EBufferState::TRANSFER_SRC, EPassType::Copy)
             )},
             EQueueType::Graphics,
-            EQueueType::Graphics
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
         );
         SyncPointRef readback_event =
             cmd.ReadbackCopy(output->GetView(), ToByteSpan(readback_values));
@@ -1932,12 +2109,12 @@ int RunBindlessTextureReadbackTest() {
         readback_cmd.Barriers(
             {BarrierCreateInfo::Transition(
                 output->GetView(),
-                EBufferState::UNORDERED_ACCESS,
-                EBufferState::TRANSFER_SRC,
-                EPassType::Copy
+                MakeBarrierState(EBufferState::UNORDERED_ACCESS, EPassType::Compute),
+                MakeBarrierState(EBufferState::TRANSFER_SRC, EPassType::Copy)
             )},
             EQueueType::Graphics,
-            EQueueType::Graphics
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
         );
         SyncPointRef readback_event =
             readback_cmd.ReadbackCopy(output->GetView(), ToByteSpan(readback_values));
@@ -1964,6 +2141,21 @@ int RunBindlessTextureReadbackTest() {
         return true;
     };
 
+    const auto clear_output_for_compute = [&](CommandList& cmd, EBufferState src_state) {
+        BufferBarrierUpdate(cmd, output->GetView(), src_state, EBufferState::TRANSFER_DST, EPassType::Copy);
+        cmd.ClearResource(output->GetView(), 0u);
+        cmd.Barriers(
+            {BarrierCreateInfo::Transition(
+                output->GetView(),
+                MakeBarrierState(EBufferState::TRANSFER_DST, EPassType::Copy),
+                MakeBarrierState(EBufferState::UNORDERED_ACCESS, EPassType::Compute)
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
+        );
+    };
+
     auto mip_texture = device.CreateTexture(
         MOER_TEXT("bindless_texture_mip"),
         Extent2D(2u, 2u),
@@ -1980,10 +2172,10 @@ int RunBindlessTextureReadbackTest() {
 
     {
         CommandList cmd(EQueueType::Graphics);
-        cmd.CopyFrom(ToByteSpan(mip0_data), mip_texture->GetView(0u));
-        cmd.CopyFrom(ToByteSpan(mip1_data), mip_texture->GetView(1u));
-        cmd.ClearResource(output->GetView(), 0u);
-        cmd.UpdateBindlessArray(bindless_array);
+        UploadTextureWithState(cmd, ToByteSpan(mip0_data), mip_texture->GetView(0u), ETextureState::SAMPLED, EPassType::Compute);
+        UploadTextureWithState(cmd, ToByteSpan(mip1_data), mip_texture->GetView(1u), ETextureState::SAMPLED, EPassType::Compute);
+        clear_output_for_compute(cmd, EBufferState::UNDEFINED);
+        UpdateBindlessArrayExplicit(cmd, bindless_array);
 
         BindlessTextureReadbackArgs args{
             .handle0 = mip_handle,
@@ -2031,9 +2223,9 @@ int RunBindlessTextureReadbackTest() {
 
     {
         CommandList cmd(EQueueType::Graphics);
-        cmd.CopyFrom(ToByteSpan(sampler_data), sampler_texture->GetView());
-        cmd.ClearResource(output->GetView(), 0u);
-        cmd.UpdateBindlessArray(bindless_array);
+        UploadTextureWithState(cmd, ToByteSpan(sampler_data), sampler_texture->GetView(), ETextureState::SAMPLED, EPassType::Compute);
+        clear_output_for_compute(cmd, EBufferState::TRANSFER_SRC);
+        UpdateBindlessArrayExplicit(cmd, bindless_array);
 
         BindlessTextureReadbackArgs args{
             .handle0 = sampler_handle_clamp,
@@ -2081,10 +2273,10 @@ int RunBindlessTextureReadbackTest() {
 
     {
         CommandList cmd(EQueueType::Graphics);
-        cmd.CopyFrom(ToByteSpan(update_data_a), update_texture_a->GetView());
-        cmd.CopyFrom(ToByteSpan(update_data_b), update_texture_b->GetView());
-        cmd.ClearResource(output->GetView(), 0u);
-        cmd.UpdateBindlessArray(bindless_array);
+        UploadTextureWithState(cmd, ToByteSpan(update_data_a), update_texture_a->GetView(), ETextureState::SAMPLED, EPassType::Compute);
+        UploadTextureWithState(cmd, ToByteSpan(update_data_b), update_texture_b->GetView(), ETextureState::SAMPLED, EPassType::Compute);
+        clear_output_for_compute(cmd, EBufferState::TRANSFER_SRC);
+        UpdateBindlessArrayExplicit(cmd, bindless_array);
 
         BindlessTextureReadbackArgs dispatch_a_args{
             .handle0 = update_handle,
@@ -2103,7 +2295,7 @@ int RunBindlessTextureReadbackTest() {
 
         rebound_handle = bindless_array->AllocateTexture(update_texture_b->GetView(), update_sampler);
 
-        cmd.UpdateBindlessArray(bindless_array);
+        UpdateBindlessArrayExplicit(cmd, bindless_array);
 
         BindlessTextureReadbackArgs dispatch_b_args{
             .handle0 = rebound_handle,
@@ -2186,9 +2378,20 @@ int RunMultiBindlessArrayReadbackTest() {
 
     {
         CommandList cmd(EQueueType::Graphics);
-        cmd.CopyFrom(ToByteSpan(data_a), texture_a->GetView());
-        cmd.CopyFrom(ToByteSpan(data_b), texture_b->GetView());
+        UploadTextureWithState(cmd, ToByteSpan(data_a), texture_a->GetView(), ETextureState::SAMPLED, EPassType::Compute);
+        UploadTextureWithState(cmd, ToByteSpan(data_b), texture_b->GetView(), ETextureState::SAMPLED, EPassType::Compute);
+        BufferBarrierUpdate(cmd, output->GetView(), EBufferState::UNDEFINED, EBufferState::TRANSFER_DST, EPassType::Copy);
         cmd.ClearResource(output->GetView(), 0u);
+        cmd.Barriers(
+            {BarrierCreateInfo::Transition(
+                output->GetView(),
+                MakeBarrierState(EBufferState::TRANSFER_DST, EPassType::Copy),
+                MakeBarrierState(EBufferState::UNORDERED_ACCESS, EPassType::Compute)
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
+        );
 
         BindlessTextureReadbackArgs args_a{
             .handle0 = handle_a,
@@ -2217,15 +2420,15 @@ int RunMultiBindlessArrayReadbackTest() {
         BindlessTextureReadbackArgs args_a_again = args_a;
         args_a_again.output_offset = 2u;
 
-        cmd.UpdateBindlessArray(bindless_array_a);
+        UpdateBindlessArrayExplicit(cmd, bindless_array_a);
         cmd.Compute(pipeline, args_a, output->GetView(), bindless_array_a)
             .Dispatch(1u, MOER_TEXT("MultiBindlessArrayDispatchA"));
 
-        cmd.UpdateBindlessArray(bindless_array_b);
+        UpdateBindlessArrayExplicit(cmd, bindless_array_b);
         cmd.Compute(pipeline, args_b, output->GetView(), bindless_array_b)
             .Dispatch(1u, MOER_TEXT("MultiBindlessArrayDispatchB"));
 
-        cmd.UpdateBindlessArray(bindless_array_a);
+        UpdateBindlessArrayExplicit(cmd, bindless_array_a);
         cmd.Compute(pipeline, args_a_again, output->GetView(), bindless_array_a)
             .Dispatch(1u, MOER_TEXT("MultiBindlessArrayDispatchARepeat"));
 
@@ -2240,12 +2443,12 @@ int RunMultiBindlessArrayReadbackTest() {
         readback_cmd.Barriers(
             {BarrierCreateInfo::Transition(
                 output->GetView(),
-                EBufferState::UNORDERED_ACCESS,
-                EBufferState::TRANSFER_SRC,
-                EPassType::Copy
+                MakeBarrierState(EBufferState::UNORDERED_ACCESS, EPassType::Compute),
+                MakeBarrierState(EBufferState::TRANSFER_SRC, EPassType::Copy)
             )},
             EQueueType::Graphics,
-            EQueueType::Graphics
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
         );
         SyncPointRef readback_event =
             readback_cmd.ReadbackCopy(output->GetView(), ToByteSpan(readback_values));
@@ -2281,16 +2484,16 @@ int RunMultiBindlessArrayReadbackTest() {
     return 0;
 }
 
-int RunMultiCopyScopeOrderingTest() {
+int RunMultiExplicitCopyOrderingTest() {
     auto& device = RenderDevice::Get();
     auto buffer_a = device.CreateBuffer<uint32_t>(
-        MOER_TEXT("copyscope_multi_scope_a"),
+        MOER_TEXT("explicit_copy_multi_a"),
         kElementCount,
         EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC |
             EBufferUsageFlags::UNORDERED_ACCESS
     );
     auto buffer_b = device.CreateBuffer<uint32_t>(
-        MOER_TEXT("copyscope_multi_scope_b"),
+        MOER_TEXT("explicit_copy_multi_b"),
         kElementCount,
         EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC |
             EBufferUsageFlags::UNORDERED_ACCESS
@@ -2307,35 +2510,9 @@ int RunMultiCopyScopeOrderingTest() {
     }
 
     CommandList graphics_cmd(EQueueType::Graphics);
-    {
-        auto copy_scope = graphics_cmd.BeginCopyScope();
-        copy_scope.CopyFrom(ToByteSpan(values_a), buffer_a->GetView());
-    }
-    graphics_cmd.Barriers(
-        {BarrierCreateInfo::Transition(
-            buffer_a->GetView(),
-            EBufferState::TRANSFER_DST,
-            EBufferState::TRANSFER_SRC,
-            EPassType::Copy
-        )},
-        EQueueType::Graphics,
-        EQueueType::Graphics
-    );
+    UploadBufferWithState(graphics_cmd, ToByteSpan(values_a), buffer_a->GetView(), EBufferState::TRANSFER_SRC);
     SyncPointRef readback_a_event = graphics_cmd.ReadbackCopy(buffer_a->GetView(), ToByteSpan(readback_a));
-    {
-        auto copy_scope = graphics_cmd.BeginCopyScope();
-        copy_scope.CopyFrom(ToByteSpan(values_b), buffer_b->GetView());
-    }
-    graphics_cmd.Barriers(
-        {BarrierCreateInfo::Transition(
-            buffer_b->GetView(),
-            EBufferState::TRANSFER_DST,
-            EBufferState::TRANSFER_SRC,
-            EPassType::Copy
-        )},
-        EQueueType::Graphics,
-        EQueueType::Graphics
-    );
+    UploadBufferWithState(graphics_cmd, ToByteSpan(values_b), buffer_b->GetView(), EBufferState::TRANSFER_SRC);
     SyncPointRef readback_b_event = graphics_cmd.ReadbackCopy(buffer_b->GetView(), ToByteSpan(readback_b));
 
     Array<CommandList> frame_cmds{};
@@ -2355,14 +2532,14 @@ int RunMultiCopyScopeOrderingTest() {
         return 1;
     }
 
-    LOG_INFO(MOER_TEXT("Multi-CopyScope ordering test passed"));
+    LOG_INFO(MOER_TEXT("Multi explicit-copy ordering test passed"));
     return 0;
 }
 
-int RunCopyScopeUnknownFirstUseTest() {
+int RunExplicitCopyUnknownFirstUseTest() {
     auto& device = RenderDevice::Get();
     auto buffer = device.CreateBuffer<uint32_t>(
-        MOER_TEXT("copyscope_unknown_first_use"),
+        MOER_TEXT("explicit_copy_unknown_first_use"),
         kElementCount,
         EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC
     );
@@ -2374,20 +2551,7 @@ int RunCopyScopeUnknownFirstUseTest() {
     }
 
     CommandList graphics_cmd(EQueueType::Graphics);
-    {
-        auto copy_scope = graphics_cmd.BeginCopyScope();
-        copy_scope.CopyFrom(ToByteSpan(upload_values), buffer->GetView());
-    }
-    graphics_cmd.Barriers(
-        {BarrierCreateInfo::Transition(
-            buffer->GetView(),
-            EBufferState::TRANSFER_DST,
-            EBufferState::TRANSFER_SRC,
-            EPassType::Copy
-        )},
-        EQueueType::Graphics,
-        EQueueType::Graphics
-    );
+    UploadBufferWithState(graphics_cmd, ToByteSpan(upload_values), buffer->GetView(), EBufferState::TRANSFER_SRC);
     SyncPointRef readback_event = graphics_cmd.ReadbackCopy(buffer->GetView(), ToByteSpan(readback_values));
 
     Array<CommandList> frame_cmds{};
@@ -2401,7 +2565,7 @@ int RunCopyScopeUnknownFirstUseTest() {
         return 1;
     }
 
-    LOG_INFO(MOER_TEXT("CopyScope unknown-first-use test passed"));
+    LOG_INFO(MOER_TEXT("Explicit-copy unknown-first-use test passed"));
     return 0;
 }
 
@@ -2419,11 +2583,35 @@ int RunGpuEventStreamHierarchyTest() {
     SyncPointRef readback_event{};
 
     CommandList graphics_cmd(EQueueType::Graphics);
+    graphics_cmd.PushScopeWithTimeScope(MOER_TEXT("TimedScopeOuter"));
+    BufferBarrierUpdate(
+        graphics_cmd,
+        buffer->GetView(),
+        EBufferState::UNDEFINED,
+        EBufferState::TRANSFER_DST,
+        EPassType::Copy
+    );
+    graphics_cmd.ClearResource(buffer->GetView(), 0x22u);
+    graphics_cmd.PopScopeWithTimeScope();
     {
         GPU_PROFILE_EVENT_SCOPE(graphics_cmd, MOER_TEXT("FrameOuter"));
+        BufferBarrierUpdate(
+            graphics_cmd,
+            buffer->GetView(),
+            EBufferState::TRANSFER_DST,
+            EBufferState::TRANSFER_DST,
+            EPassType::Copy
+        );
         graphics_cmd.ClearResource(buffer->GetView(), 0x11u);
         {
             GPU_PROFILE_EVENT_SCOPE(graphics_cmd, MOER_TEXT("FrameInner"));
+            BufferBarrierUpdate(
+                graphics_cmd,
+                buffer->GetView(),
+                EBufferState::TRANSFER_DST,
+                EBufferState::TRANSFER_DST,
+                EPassType::Copy
+            );
             graphics_cmd.ClearResource(buffer->GetView(), 0x55u);
         }
     }
@@ -2435,7 +2623,8 @@ int RunGpuEventStreamHierarchyTest() {
             EPassType::Copy
         )},
         EQueueType::Graphics,
-        EQueueType::Graphics
+        EQueueType::Graphics,
+        ETrackedStateUpdateMode::Update
     );
     readback_event =
         graphics_cmd.ReadbackCopy(buffer->GetView(), ToByteSpan(readback_values));
@@ -2459,11 +2648,12 @@ int RunGpuEventStreamHierarchyTest() {
         return 1;
     }
 
-    const std::array<std::string_view, 7> required_tokens{
+    const std::array<std::string_view, 8> required_tokens{
         "Frame ",
         "valid=true",
         "Queue Graphics",
         "GPU [queue=Graphics",
+        "TimedScopeOuter",
         "FrameOuter",
         "FrameInner",
         "exclusive_ns=",
@@ -2562,11 +2752,11 @@ int RunGpuEventStreamBoundaryValidationTest() {
     return 0;
 }
 
-int RunPresentWithCopyScopeTests() {
+int RunPresentWithExplicitCopyTests() {
     auto& device = RenderDevice::Get();
     auto* window = WindowContext::GetMainWindow();
     if (window == nullptr) {
-        LOG_ERROR(MOER_TEXT("CopyScope present test window is null."));
+        LOG_ERROR(MOER_TEXT("Explicit-copy present test window is null."));
         return 1;
     }
 
@@ -2581,7 +2771,7 @@ int RunPresentWithCopyScopeTests() {
     };
     SwapchainRef swapchain = device.CreateSwapchain(swapchain_ci);
     TextureRef   output    = device.CreateTexture(
-        MOER_TEXT("translate_present_copyscope_output"),
+        MOER_TEXT("translate_present_explicit_copy_output"),
         Extent2D(kWidth, kHeight),
         swapchain->format,
         ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST
@@ -2597,19 +2787,24 @@ int RunPresentWithCopyScopeTests() {
         std::fill(upload_values.begin(), upload_values.end(), 0xFF000000u | (iter * 131u + 23u));
 
         CommandList graphics_cmd(EQueueType::Graphics);
-        {
-            auto copy_scope = graphics_cmd.BeginCopyScope();
-            copy_scope.CopyFrom(ToByteSpan(upload_values), output->GetView());
-        }
-        graphics_cmd.Barriers(
-            {BarrierCreateInfo::Transition(
-                output->GetView(),
-                ETextureState::TRANSFER_DST,
-                ETextureState::TRANSFER_SRC,
-                EPassType::Copy
-            )},
-            EQueueType::Graphics,
-            EQueueType::Graphics
+        TextureBarrierUpdate(
+            graphics_cmd,
+            output->GetView(),
+            iter == 0 ? ETextureState::UNDEFINED : ETextureState::TRANSFER_SRC,
+            ETextureState::TRANSFER_DST,
+            EPassType::Copy
+        );
+        graphics_cmd.CopyFrom(
+            ToByteSpan(upload_values),
+            output->GetView(),
+            MOER_TEXT("PresentExplicitCopyUpload")
+        );
+        TextureBarrierUpdate(
+            graphics_cmd,
+            output->GetView(),
+            ETextureState::TRANSFER_DST,
+            ETextureState::TRANSFER_SRC,
+            EPassType::Copy
         );
         SyncPointRef readback_event =
             graphics_cmd.ReadbackCopy(output->GetView(), ToByteSpan(readback_values));
@@ -2630,13 +2825,13 @@ int RunPresentWithCopyScopeTests() {
         RHIExecutor::Get().Sync(swapchain);
 
         if (upload_values != readback_values) {
-            LOG_ERROR(MOER_TEXT("CopyScope present readback mismatch at iter={}"), iter);
+            LOG_ERROR(MOER_TEXT("Explicit-copy present readback mismatch at iter={}"), iter);
             return 1;
         }
     }
 
     RHIExecutor::Get().Sync(swapchain);
-    LOG_INFO(MOER_TEXT("Present + CopyScope test passed, iterations={}"), kPresentIterations);
+    LOG_INFO(MOER_TEXT("Present + explicit-copy test passed, iterations={}"), kPresentIterations);
     return 0;
 }
 
@@ -2682,6 +2877,13 @@ int RunPresentTests() {
         std::fill(output_values.begin(), output_values.end(), 0xFF000000u | (iter * 97u + 17u));
 
         CommandList graphics_cmd(EQueueType::Graphics);
+        BufferBarrierUpdate(
+            graphics_cmd,
+            graphics_buffer->GetView(),
+            iter == 0u ? EBufferState::UNDEFINED : EBufferState::TRANSFER_SRC,
+            EBufferState::TRANSFER_DST,
+            EPassType::Copy
+        );
         graphics_cmd.ClearResource(graphics_buffer->GetView(), iter + 1u);
         graphics_cmd.Barriers(
             {BarrierCreateInfo::Transition(
@@ -2691,10 +2893,18 @@ int RunPresentTests() {
                 EPassType::Copy
             )},
             EQueueType::Graphics,
-            EQueueType::Graphics
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
         );
         SyncPointRef readback_event =
             graphics_cmd.ReadbackCopy(graphics_buffer->GetView(), ToByteSpan(readback_values));
+        TextureBarrierUpdate(
+            graphics_cmd,
+            output->GetView(),
+            iter == 0u ? ETextureState::UNDEFINED : ETextureState::TRANSFER_SRC,
+            ETextureState::TRANSFER_DST,
+            EPassType::Copy
+        );
         graphics_cmd.CopyFrom(ToByteSpan(output_values), output->GetView());
         graphics_cmd.Barriers(
             {BarrierCreateInfo::Transition(
@@ -2704,7 +2914,8 @@ int RunPresentTests() {
                 EPassType::Copy
             )},
             EQueueType::Graphics,
-            EQueueType::Graphics
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
         );
         graphics_cmd.TickFrame();
 
@@ -2930,10 +3141,10 @@ int main(int argc, char** argv) {
         return shutdown_and_return(descriptor_heap_ret);
     }
 
-    const int graphics_copyscope_ret =
-        RunNamedTestCase("GraphicsCopyScopeRoundTrip", RunGraphicsCopyScopeRoundTripTest);
-    if (graphics_copyscope_ret != 0) {
-        return shutdown_and_return(graphics_copyscope_ret);
+    const int graphics_explicit_copy_ret =
+        RunNamedTestCase("GraphicsExplicitCopyRoundTrip", RunGraphicsExplicitCopyRoundTripTest);
+    if (graphics_explicit_copy_ret != 0) {
+        return shutdown_and_return(graphics_explicit_copy_ret);
     }
 
     const int bindless_readback_ret =
@@ -2955,13 +3166,13 @@ int main(int argc, char** argv) {
     }
 
     const int multi_scope_ret =
-        RunNamedTestCase("MultiCopyScopeOrdering", RunMultiCopyScopeOrderingTest);
+        RunNamedTestCase("MultiExplicitCopyOrdering", RunMultiExplicitCopyOrderingTest);
     if (multi_scope_ret != 0) {
         return shutdown_and_return(multi_scope_ret);
     }
 
     const int unknown_first_use_ret =
-        RunNamedTestCase("CopyScopeUnknownFirstUse", RunCopyScopeUnknownFirstUseTest);
+        RunNamedTestCase("ExplicitCopyUnknownFirstUse", RunExplicitCopyUnknownFirstUseTest);
     if (unknown_first_use_ret != 0) {
         return shutdown_and_return(unknown_first_use_ret);
     }
@@ -3036,10 +3247,10 @@ int main(int argc, char** argv) {
 
     WindowContext::Init(SurfaceInitInfo(640, 360, "TestRHITranslatePresent", false));
     window_inited = true;
-    const int present_copyscope_ret =
-        RunNamedTestCase("PresentWithCopyScope", RunPresentWithCopyScopeTests);
-    if (present_copyscope_ret != 0) {
-        return shutdown_and_return(present_copyscope_ret);
+    const int present_explicit_copy_ret =
+        RunNamedTestCase("PresentWithExplicitCopy", RunPresentWithExplicitCopyTests);
+    if (present_explicit_copy_ret != 0) {
+        return shutdown_and_return(present_explicit_copy_ret);
     }
     const int present_ret = RunNamedTestCase("PresentRoundTrip", RunPresentTests);
     if (present_ret != 0) {

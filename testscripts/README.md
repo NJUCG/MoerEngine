@@ -94,23 +94,6 @@ Vulkan Loader info messages (layer discovery, driver enumeration) are **excluded
 
 The Windows RHI test (`windows/test_rhi_translate.ps1`) also treats Vulkan validation errors as blockers and records descriptor-heap capability as a grouped subtest.
 
-## RenderGraph / RHI Focused Flow
-
-Use the Windows RHI script for focused RenderGraph and RHI command-list changes:
-
-```powershell
-.\testscripts\windows\test_rhi_translate.ps1
-.\testscripts\windows\test_rhi_translate.ps1 -Config Release
-```
-
-The script resolves the configured build directory, builds `TestRHITranslate`, runs `target/bin/<Config>/TestRHITranslate.exe`, scans the log for Vulkan validation blockers, parses every `[TESTCASE][PASS|FAIL|SKIP]` marker, and requires the `RHICommandListRGBaseline` and `RenderGraphContractFoundation` markers to be present. Logs and `summary.txt` are written to `logs/run_YYYYMMDD_HHMMSS/`.
-
-After a milestone-sized RenderGraph landing, run the aggregate Windows flow:
-
-```powershell
-.\testscripts\windows\test_all.ps1
-```
-
 ## Exit Codes
 
 | Code | Meaning |

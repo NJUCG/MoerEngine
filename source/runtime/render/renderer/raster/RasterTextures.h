@@ -51,7 +51,11 @@ namespace Moer::Render::Raster {
           .SamplerConfig(SF_LINEAR, SAM_CLAMP_TO_EDGE))                                                         \
     X(TexHandle, tonemapping_output, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_UNORM).Usage(E_SAMPLED_COLOR))    \
     X(TexHandle, ui_frame_buffer, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_UNORM).Usage(E_SAMPLED_COLOR))       \
-    X(TexHandle, output, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_SRGB).Usage(E_SAMPLED_COLOR))                 \
+        X(TexHandle,                                                                                                \
+            output,                                                                                                   \
+            Tex2DTag,                                                                                                 \
+            TexConfig::Default(PF_R8G8B8A8_SRGB)                                                                      \
+                    .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC))       \
     X(DepthBufferWithHandle,                                                                                    \
       depth_linear_sampler,                                                                                     \
       TexDepthTag,                                                                                              \
@@ -188,7 +192,21 @@ struct RasterTextures {
         RASTER_TEXTURES_TABLE_DOWNSAMPLED
 #undef X
 
+        cmd_list.Barriers(
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            EPassType::Graphics,
+            ETrackedStateUpdateMode::Update,
+            WriteBindlessArray{bindless_array, EBufferState::UNORDERED_ACCESS}
+        );
         cmd_list.UpdateBindlessArray(bindless_array);
+        cmd_list.Barriers(
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            EPassType::Graphics,
+            ETrackedStateUpdateMode::Update,
+            ReadBindlessArray{bindless_array, EBufferState::SHADER_RESOURCE}
+        );
     }
 
     void FreeFrameBuffers(BindlessArrayRef& bindless_array, bool is_free_external_assets) {

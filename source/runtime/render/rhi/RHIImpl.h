@@ -608,6 +608,7 @@ public:
                     const std::optional<ETextureState> tracked_texture_state =
                         TryGetTrackedTextureState(barrier.dst_state);
                     if (tracked_state == ETrackedStateUpdateMode::Update) {
+                        assert(resource.IsWholeResource() && "partial texture barriers must use ETrackedStateUpdateMode::Skip");
                         assert(tracked_texture_state.has_value() && "texture barrier dst_state must map to tracked state");
                     }
                     textures.emplace_back(TextureBarrier{
@@ -625,6 +626,7 @@ public:
                     const std::optional<EBufferState> tracked_buffer_state =
                         TryGetTrackedBufferState(barrier.dst_state);
                     if (tracked_state == ETrackedStateUpdateMode::Update) {
+                        assert(resource.IsWholeResource() && "partial buffer barriers must use ETrackedStateUpdateMode::Skip");
                         assert(tracked_buffer_state.has_value() && "buffer barrier dst_state must map to tracked state");
                     }
                     buffers.emplace_back(BufferBarrier{
@@ -1840,43 +1842,6 @@ struct FrameTickCmd : public CustomCmd {
     }
 
     void Execute() const {}
-};
-
-/**
- * §2.3 CopyScope marker command
- *
- * A single lightweight command that marks the begin (b_begin=true) or end (b_begin=false)
- * of a CopyCommandScope inside a Graphics or Compute CommandList. The executor translator
- * splits the command stream at these markers and routes enclosed copy commands to the
- * Copy queue command buffer, automatically generating acquire/release barriers at the
- * scope boundaries.
- *
- * Use Command::EType::CopyScopeMarker for both begin and end;
- * distinguish them via the b_begin field.
- */
-struct CopyScopeCmd : public Command {
-    explicit CopyScopeCmd(Array<UniquePtr<Command>>&& _commands) :
-        Command(EType::CopyScope, MOER_TEXT("CopyScope")),
-        commands(std::move(_commands)) {}
-
-    EQueueType GetQueueType() const override {
-        return EQueueType::Ignore;
-    }
-
-    bool Empty() const {
-        return commands.empty();
-    }
-
-    const Array<UniquePtr<Command>>& Commands() const {
-        return commands;
-    }
-
-    Array<UniquePtr<Command>>&& StealCommands() {
-        return std::move(commands);
-    }
-
-private:
-    Array<UniquePtr<Command>> commands;
 };
 
 struct BufferOverlapCmd : public Command {

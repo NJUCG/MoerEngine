@@ -50,12 +50,25 @@ public:
     };
 
     PrepareLightPass(class RenderDevice& _device, class ShaderManager& _manager, Scene& _scene);
-    void AddPasses(RenderGraph& _graph, const RTGraphFrameResources& _rg, RTContext& _rt_ctx);
-    void CountEmissiveInstances(uint& _num_emissive_meshes, uint& _num_emissive_triangles);
+    PreparedCommand Prepare(RTContext& _rt_ctx);
+    void AddPasses(
+        RenderGraph& _graph,
+        const RTGraphFrameResources& _rg,
+        RTContext& _rt_ctx,
+        PreparedCommand&& _command
+    );
 
 private:
-    PreparedCommand Prepare(RTContext& _rt_ctx);
+    struct EmissivePrimitiveEntry {
+        uint primitive_id       = UINT_MAX;
+        uint light_offset       = 0;
+        uint num_triangles      = 0;
+        uint index_start_idx    = 0;
+        uint first_instance_idx = UINT_MAX;
+    };
+
     static RecordResources CaptureResources(RTContext& _rt_ctx);
+    void RebuildEmissivePrimitiveCache();
     void RecordUploads(CommandList& _cmd_list, const PreparedCommand& _command, const RecordResources& _resources);
     void RecordClears(CommandList& _cmd_list, const RecordResources& _resources);
     void RecordPrepareLights(CommandList& _cmd_list, const PreparedCommand& _command, const RecordResources& _resources);
@@ -67,6 +80,12 @@ private:
 
     UnorderedMap<uint64, uint> instance_light_buffer_offsets;
     UnorderedMap<uint64, uint> primitive_light_buffer_offsets;
+    Array<EmissivePrimitiveEntry> cached_emissive_primitives;
+    Array<uint>                   cached_primitive_to_light;
+    uint                          cached_primitive_count              = UINT_MAX;
+    uint                          cached_emissive_triangle_count      = 0;
+    bool                          cached_primitive_to_light_dirty     = true;
+    Buffer*                       cached_primitive_to_light_upload_target = nullptr;
 
     BufferRef geom_instance_to_light_buf;
 

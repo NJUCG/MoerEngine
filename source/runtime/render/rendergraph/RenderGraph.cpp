@@ -1,5 +1,6 @@
 #include "rendergraph/RenderGraph.h"
 
+#include "Core.h"
 #include "misc/Assert.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIImpl.h"
@@ -15,14 +16,9 @@ namespace Moer::Render {
 namespace {
 
 struct RGPreparedRecordedBatch {
-    RGCompiledExecutionBatch          batch{};
-    SharedPtr<Render::CommandList>    command_list{};
-    GraphEventRef                     record_complete_event{nullptr};
-    Render::SyncPointRef              submit_sync_point{};
-};
-
-struct RGParallelDispatchPlan {
-    Moer::Array<RGPreparedRecordedBatch> batches{};
+    uint32_t                       batch_index{RGPass::invalid_pass};
+    SharedPtr<Render::CommandList> command_list{};
+    GraphEventRef                  record_complete_event{nullptr};
 };
 
 std::mutex& LastRenderGraphEventsMutex() {
@@ -67,11 +63,69 @@ void AppendUniqueSyncPoint(Moer::Array<Render::SyncPointRef>& sync_points, const
     sync_points.push_back(sync_point);
 }
 
+void AppendUniqueIndex(Moer::Array<uint32_t>& indices, uint32_t index) {
+    for (uint32_t existing : indices) {
+        if (existing == index) {
+            return;
+        }
+    }
+    indices.push_back(index);
+}
+
 bool BatchContainsPass(const RGCompiledExecutionBatch& batch, uint32_t pass_index) {
     return pass_index >= batch.first_pass && pass_index < batch.first_pass + batch.pass_count;
 }
 
 void EmitRGPassTransitions(RHICommandList& cmd_list, const RGPass& pass);
+
+StringView RGScopeNameAt(StringView graph_name, const Moer::Array<String>& pass_scopes, size_t index) {
+    return index == 0 ? graph_name : StringView(pass_scopes[index - 1]);
+}
+
+size_t RGScopeTargetCount(StringView graph_name, const Moer::Array<String>& pass_scopes) {
+    return graph_name.empty() ? pass_scopes.size() : pass_scopes.size() + 1;
+}
+
+StringView RGScopeTargetName(StringView graph_name, const Moer::Array<String>& pass_scopes, size_t index) {
+    if (graph_name.empty()) {
+        return StringView(pass_scopes[index]);
+    }
+    return RGScopeNameAt(graph_name, pass_scopes, index);
+}
+
+void SyncRGProfilerScopes(
+    RHICommandList&            cmd_list,
+    Moer::Array<String>&       open_scopes,
+    StringView                 graph_name,
+    const Moer::Array<String>& pass_scopes
+) {
+    const size_t target_count = RGScopeTargetCount(graph_name, pass_scopes);
+    size_t       common_count = 0;
+    while (common_count < open_scopes.size() && common_count < target_count &&
+           StringView(open_scopes[common_count]) == RGScopeTargetName(graph_name, pass_scopes, common_count)) {
+        ++common_count;
+    }
+
+    while (open_scopes.size() > common_count) {
+        cmd_list.PopScopeWithTimeScope();
+        open_scopes.pop_back();
+    }
+    for (size_t scope_index = common_count; scope_index < target_count; ++scope_index) {
+        const StringView scope_name = RGScopeTargetName(graph_name, pass_scopes, scope_index);
+        if (scope_name.empty()) {
+            continue;
+        }
+        cmd_list.PushScopeWithTimeScope(scope_name);
+        open_scopes.emplace_back(scope_name);
+    }
+}
+
+void CloseRGProfilerScopes(RHICommandList& cmd_list, Moer::Array<String>& open_scopes) {
+    while (!open_scopes.empty()) {
+        cmd_list.PopScopeWithTimeScope();
+        open_scopes.pop_back();
+    }
+}
 
 bool IsCrossQueueTransition(Render::EQueueType src_queue, Render::EQueueType dst_queue) {
     return src_queue != Render::EQueueType::Ignore && dst_queue != Render::EQueueType::Ignore &&
@@ -203,18 +257,14 @@ void EmitBatchQueueExports(
 void CollectBatchWaitSyncPoints(
     Moer::Array<Render::SyncPointRef>&       wait_sync_points,
     const RGCompiledExecutionBatch&          batch,
-    const Moer::Array<RGCompiledHazardEdge>& hazard_edges,
-    const Moer::Array<Render::SyncPointRef>& submit_sync_point_by_pass
+    const Moer::Array<Render::SyncPointRef>& signal_sync_point_by_batch
 ) {
     wait_sync_points.clear();
-    for (const RGCompiledHazardEdge& edge : hazard_edges) {
-        if (!BatchContainsPass(batch, edge.dst_pass) || edge.src_queue == edge.dst_queue) {
+    for (uint32_t producer_batch : batch.wait_sync_point_batches) {
+        if (producer_batch >= signal_sync_point_by_batch.size()) {
             continue;
         }
-        if (edge.src_pass >= submit_sync_point_by_pass.size()) {
-            continue;
-        }
-        AppendUniqueSyncPoint(wait_sync_points, submit_sync_point_by_pass[edge.src_pass]);
+        AppendUniqueSyncPoint(wait_sync_points, signal_sync_point_by_batch[producer_batch]);
     }
 }
 
@@ -259,11 +309,15 @@ void RecordExecutionBatch(
     const RGCompiledExecutionBatch& batch,
     Moer::Array<RGPass>&           passes,
     const RGCompiledPlan&          compiled_plan,
-    RGContext                      context
+    RGContext                      context,
+    StringView                     graph_name
 ) {
+    Moer::Array<String> open_scopes{};
+    SyncRGProfilerScopes(command_list, open_scopes, graph_name, {});
     EmitBatchQueueImports(command_list, batch, passes, compiled_plan.hazard_edges);
     for (uint32_t offset = 0; offset < batch.pass_count; ++offset) {
         RGPass& batch_pass = passes[batch.first_pass + offset];
+        SyncRGProfilerScopes(command_list, open_scopes, graph_name, batch_pass.event_scopes);
         EmitRGPassTransitions(command_list, batch_pass);
         if (!batch_pass.name.empty()) {
             command_list.PushScopeWithTimeScope(batch_pass.name);
@@ -273,7 +327,9 @@ void RecordExecutionBatch(
             command_list.PopScopeWithTimeScope();
         }
     }
+    SyncRGProfilerScopes(command_list, open_scopes, graph_name, {});
     EmitBatchQueueExports(command_list, batch, passes, compiled_plan.hazard_edges);
+    CloseRGProfilerScopes(command_list, open_scopes);
 }
 
 template<typename TExecutionStatePtr>
@@ -281,39 +337,23 @@ void PrepareRecordedBatchCommandList(
     Render::CommandList&                     command_list,
     const RGCompiledExecutionBatch&          batch,
     const TExecutionStatePtr&                execution_state,
-    const Moer::Array<Render::SyncPointRef>& submit_sync_point_by_pass,
-    const Render::SyncPointRef&              submit_sync_point,
-    GraphEventRef                            record_complete_event
+    const Moer::Array<Render::SyncPointRef>& signal_sync_point_by_batch,
+    uint32_t                                 batch_index
 ) {
     Moer::Array<Render::SyncPointRef>      wait_sync_points{};
     Moer::Array<Render::TrackedTextureState> explicit_textures{};
     Moer::Array<Render::TrackedBufferState>  explicit_buffers{};
-    CollectBatchWaitSyncPoints(
-        wait_sync_points,
-        batch,
-        execution_state->compiled_plan.hazard_edges,
-        submit_sync_point_by_pass
-    );
+    CollectBatchWaitSyncPoints(wait_sync_points, batch, signal_sync_point_by_batch);
     CollectBatchExplicitStates(explicit_textures, explicit_buffers, batch, execution_state->passes);
 
-    command_list.TickProfiling();
-    if (record_complete_event) {
-        command_list.SetRecordCompleteEvent(std::move(record_complete_event));
-    }
     command_list.SetExplicitTrackedState(std::move(explicit_textures), std::move(explicit_buffers));
     for (const Render::SyncPointRef& wait_sync_point : wait_sync_points) {
         command_list.Wait(wait_sync_point);
     }
-    command_list.Signal(submit_sync_point);
-    command_list.SetTranslateExecutionClass(Render::ERHITranslateExecutionClass::SerialControl);
+    if (batch_index < signal_sync_point_by_batch.size()) {
+        command_list.Signal(signal_sync_point_by_batch[batch_index]);
+    }
     command_list.AddCallback([execution_state]() {});
-}
-
-bool CanAppendSerialBatch(
-    const std::optional<RGCompiledExecutionBatch>& active_batch,
-    const RGPass&                                  pass
-) {
-    return active_batch.has_value() && active_batch->queue == RGPassQueue(pass.flags);
 }
 
 void EmitRGPassTransitions(RHICommandList& cmd_list, const RGPass& pass) {
@@ -662,8 +702,44 @@ void RGTransientResourceAllocator::Release(RenderGraph& graph) {
     }
 }
 
+RenderGraph::RenderGraph() : RenderGraph(MOER_TEXT("RenderGraph")) {}
+
+RenderGraph::RenderGraph(StringView name) : m_name(name.empty() ? MOER_TEXT("RenderGraph") : name) {}
+
 RenderGraph::~RenderGraph() {
     Reset();
+}
+
+RGEventScope::RGEventScope(RenderGraph& graph, String name) {
+    if (!name.empty()) {
+        m_graph = &graph;
+        m_graph->PushEventScope(std::move(name));
+    }
+}
+
+RGEventScope::~RGEventScope() {
+    if (m_graph != nullptr) {
+        m_graph->PopEventScope();
+    }
+}
+
+void RenderGraph::PushEventScope(String name) {
+    assert(!m_compiled && "RenderGraph event scopes must be created before compile");
+    ValidateBuildThread();
+    assert(!name.empty() && "RenderGraph event scope name must not be empty");
+    if (name.empty()) {
+        return;
+    }
+    m_scope_stack.push_back(std::move(name));
+}
+
+void RenderGraph::PopEventScope() {
+    assert(!m_compiled && "RenderGraph event scopes must end before compile");
+    ValidateBuildThread();
+    assert(!m_scope_stack.empty() && "RenderGraph event scope stack underflow");
+    if (!m_scope_stack.empty()) {
+        m_scope_stack.pop_back();
+    }
 }
 
 RenderGraph::RGExecutionState::~RGExecutionState() {
@@ -752,6 +828,7 @@ void RenderGraph::ExportBuffer(
 
 void RenderGraph::AddSetupPass(StringView name, SetupExecute&& setup) {
     assert(!m_compiled);
+    ValidateBuildThread();
     RGSetupPass pass{};
     pass.name    = String(name);
     pass.mode    = RGSetupPass::EMode::Lambda;
@@ -764,6 +841,7 @@ void RenderGraph::AddSetupPass(StringView name, SetupExecute&& setup) {
 
 void RenderGraph::AddSetupPass(StringView name, Render::EQueueType queue, SetupCommandExecute&& setup) {
     assert(!m_compiled);
+    ValidateBuildThread();
     assert(queue == Render::EQueueType::Graphics || queue == Render::EQueueType::Compute);
     RGSetupPass pass{};
     pass.name    = String(name);
@@ -783,14 +861,17 @@ uint32_t RenderGraph::AddPassInternal(
     uint32_t                       size,
     ERGPassFlags                   flags,
     bool                           serial,
+    bool                           main_thread,
     Moer::Array<RGTextureAccess>&& texture_accesses,
     Moer::Array<RGBufferAccess>&&  buffer_accesses,
     RGPass::Execute&&              execute
 ) {
     assert(!m_compiled);
     assert(RGPassHasValidQueueFlags(flags));
-    assert(RGPassHasQueue(flags));
+    assert(main_thread ? RGPassHasValidQueueFlags(flags) : RGPassHasQueue(flags));
     assert(serial == RGPassIsSerial(flags));
+    assert(!(main_thread && serial));
+    ValidateBuildThread();
     const uint32_t pass_index = static_cast<uint32_t>(m_passes.size());
     auto&          pass       = m_passes.emplace_back();
     pass.name                 = std::move(name);
@@ -799,6 +880,8 @@ uint32_t RenderGraph::AddPassInternal(
     pass.parameter_size       = size;
     pass.flags                = flags;
     pass.serial               = serial;
+    pass.main_thread          = main_thread;
+    pass.event_scopes         = m_scope_stack;
     pass.execute              = std::move(execute);
     pass.texture_accesses     = std::move(texture_accesses);
     pass.buffer_accesses      = std::move(buffer_accesses);
@@ -822,9 +905,11 @@ void RenderGraph::Compile(RGTransientResourceAllocator& allocator) {
     if (m_compiled) {
         return;
     }
+    assert(m_scope_stack.empty() && "RenderGraph event scopes must end before dispatch");
+    GraphEventRef setup_complete{};
     {
-        TRACE_SCOPE_CAT("RenderGraph.Compile.RunSetupPasses", "RenderGraph");
-        RunSetupPasses();
+        TRACE_SCOPE_CAT("RenderGraph.Compile.DispatchSetupPasses", "RenderGraph");
+        setup_complete = RunSetupPassesAsync();
     }
     {
         TRACE_SCOPE_CAT("RenderGraph.Compile.ValidateSetup", "RenderGraph");
@@ -842,6 +927,14 @@ void RenderGraph::Compile(RGTransientResourceAllocator& allocator) {
         TRACE_SCOPE_CAT("RenderGraph.Compile.BuildMetadata", "RenderGraph");
         BuildCompileMetadata();
     }
+    {
+        TRACE_SCOPE_CAT("RenderGraph.Compile.BuildExecutionBatches", "RenderGraph");
+        BuildExecutionBatches();
+    }
+    if (setup_complete && !setup_complete->IsComplete()) {
+        TRACE_SCOPE_CAT("RenderGraph.Compile.WaitSetupPasses", "RenderGraph");
+        setup_complete->Wait(EThread::UNKNOWN_THREAD);
+    }
     m_compiled = true;
 }
 
@@ -855,15 +948,28 @@ void RenderGraph::Dispatch(RGTransientResourceAllocator& allocator, RHICommandLi
     if (cmd_list == nullptr) {
         TRACE_SCOPE_CAT("RenderGraph.Dispatch.Batched", "RenderGraph");
         DispatchBatched();
-        allocator.Release(*this);
+        {
+            TRACE_SCOPE_CAT("RenderGraph.Dispatch.Release", "RenderGraph");
+            allocator.Release(*this);
+        }
         return;
     }
 
     RGContext context(*this);
     TRACE_SCOPE_CAT("RenderGraph.Dispatch.ExternalRecord", "RenderGraph");
+    Moer::Array<String> open_scopes{};
+    SyncRGProfilerScopes(*cmd_list, open_scopes, m_name, {});
     for (auto& pass : m_passes) {
+        if (pass.main_thread) {
+            SyncRGProfilerScopes(*cmd_list, open_scopes, m_name, {});
+            TRACE_SCOPE_CAT("RenderGraph.Dispatch.MainThreadPass", "RenderGraph");
+            pass.execute(nullptr, context);
+            continue;
+        }
         if (pass.serial) {
+            SyncRGProfilerScopes(*cmd_list, open_scopes, m_name, {});
             Render::CommandList serial_cmd_list(RGPassQueue(pass.flags));
+            EmitPassTransitions(serial_cmd_list, pass);
             if (!pass.name.empty()) {
                 serial_cmd_list.PushScopeWithTimeScope(pass.name);
             }
@@ -876,6 +982,8 @@ void RenderGraph::Dispatch(RGTransientResourceAllocator& allocator, RHICommandLi
             }
             continue;
         }
+        SyncRGProfilerScopes(*cmd_list, open_scopes, m_name, pass.event_scopes);
+        EmitPassTransitions(*cmd_list, pass);
         if (!pass.name.empty()) {
             cmd_list->PushScopeWithTimeScope(pass.name);
         }
@@ -885,7 +993,9 @@ void RenderGraph::Dispatch(RGTransientResourceAllocator& allocator, RHICommandLi
         }
     }
 
+    SyncRGProfilerScopes(*cmd_list, open_scopes, m_name, {});
     EmitFinalTrackedStates(*cmd_list);
+    CloseRGProfilerScopes(*cmd_list, open_scopes);
     Moer::Array<PooledTextureRef> keep_alive_textures{};
     Moer::Array<PooledBufferRef>  keep_alive_buffers{};
     for (const Moer::UniquePtr<RGTexture>& texture : m_textures) {
@@ -922,6 +1032,7 @@ void RenderGraph::EmitFinalTrackedStates(RHICommandList& cmd_list) const {
             continue;
         }
         const EPassType final_pass_type = PassTypeForQueue(texture->owner_queue);
+        bool            final_transition_emitted = false;
         for (const RGTextureStateRange& state_range : texture->state_ranges) {
             const Render::EQueueType src_queue =
                 state_range.queue == Render::EQueueType::Ignore ? texture->owner_queue : state_range.queue;
@@ -940,8 +1051,9 @@ void RenderGraph::EmitFinalTrackedStates(RHICommandList& cmd_list) const {
                 barriers,
                 src_queue,
                 texture->owner_queue,
-                Render::ETrackedStateUpdateMode::Update
+                Render::ETrackedStateUpdateMode::Skip
             );
+            final_transition_emitted = true;
         }
         textures.emplace_back(
             Render::TrackedTextureState{
@@ -953,7 +1065,7 @@ void RenderGraph::EmitFinalTrackedStates(RHICommandList& cmd_list) const {
                 ),
                 .state        = texture->final_state,
                 .owner_queue  = texture->owner_queue,
-                .access_write = RGTextureStateWrites(texture->final_state)
+                .access_write = final_transition_emitted || RGTextureStateWrites(texture->final_state)
             }
         );
     }
@@ -985,7 +1097,7 @@ void RenderGraph::EmitFinalTrackedStates(RHICommandList& cmd_list) const {
                 barriers,
                 src_queue,
                 buffer->owner_queue,
-                Render::ETrackedStateUpdateMode::Update
+                Render::ETrackedStateUpdateMode::Skip
             );
         }
         buffers.emplace_back(
@@ -1009,7 +1121,7 @@ void RenderGraph::EmitPassTransitions(RHICommandList& cmd_list, const RGPass& pa
 
 SharedPtr<RenderGraph::RGExecutionState> RenderGraph::DetachExecutionState() {
     auto state = MakeShared<RGExecutionState>();
-    state->graph = MakeUnique<RenderGraph>();
+    state->graph = MakeUnique<RenderGraph>(m_name);
     state->graph->m_textures = std::move(m_textures);
     state->graph->m_buffers = std::move(m_buffers);
     state->graph->m_resources = std::move(m_resources);
@@ -1018,6 +1130,7 @@ SharedPtr<RenderGraph::RGExecutionState> RenderGraph::DetachExecutionState() {
     state->graph->m_compiled_plan = m_compiled_plan;
     state->graph->m_setup_executed = m_setup_executed;
     state->graph->m_compiled = m_compiled;
+    state->graph->m_scope_stack = m_scope_stack;
     state->resources = state->graph->m_resources;
     state->passes = state->graph->m_passes;
     state->compiled_plan = state->graph->m_compiled_plan;
@@ -1025,6 +1138,7 @@ SharedPtr<RenderGraph::RGExecutionState> RenderGraph::DetachExecutionState() {
 }
 
 void RenderGraph::Reset() {
+    assert(m_scope_stack.empty() && "RenderGraph destroyed with active event scopes");
     for (auto& allocation : m_allocations) {
         if (allocation.ptr && allocation.destroy) {
             allocation.destroy(allocation.ptr);
@@ -1042,38 +1156,55 @@ void RenderGraph::Reset() {
     m_resources.clear();
     m_setup_passes.clear();
     m_passes.clear();
+    m_scope_stack.clear();
     m_compiled_plan.hazard_edges.clear();
     m_compiled_plan.execution_batches.clear();
     m_setup_executed = false;
     m_compiled       = false;
 }
 
-void RenderGraph::RunSetupPasses() {
-    TRACE_SCOPE_CAT("RenderGraph.RunSetupPasses", "RenderGraph");
+GraphEventRef RenderGraph::RunSetupPassesAsync() {
+    TRACE_SCOPE_CAT("RenderGraph.RunSetupPassesAsync", "RenderGraph");
     if (m_setup_executed) {
-        return;
+        return nullptr;
     }
-    RGSetupContext setup_context(*this);
-    Moer::Array<Render::CommandList> setup_command_lists{};
-    for (auto& setup_pass : m_setup_passes) {
-        if (!setup_pass.execute) {
-            continue;
-        }
-        if (setup_pass.mode == RGSetupPass::EMode::CommandList) {
-            TRACE_SCOPE_CAT("RenderGraph.RecordSetupPass", "RenderGraph");
-            Render::CommandList setup_cmd_list(setup_pass.queue);
-            setup_pass.execute(&setup_cmd_list, setup_context);
-            if (!setup_cmd_list.IsEmpty()) {
-                setup_command_lists.emplace_back(std::move(setup_cmd_list));
+
+    GraphEventRef setup_complete = GraphEvent::CreateGraphEvent();
+    LambdaTask::Create(
+        [this]() mutable {
+            TRACE_SCOPE_CAT("RenderGraph.RunSetupPasses", "RenderGraph");
+            RGSetupContext setup_context(*this);
+            Moer::Array<Render::CommandList> setup_command_lists{};
+            for (auto& setup_pass : m_setup_passes) {
+                if (!setup_pass.execute) {
+                    continue;
+                }
+                if (setup_pass.mode == RGSetupPass::EMode::CommandList) {
+                    TRACE_SCOPE_CAT("RenderGraph.RecordSetupPass", "RenderGraph");
+                    Render::CommandList setup_cmd_list(setup_pass.queue);
+                    if (!setup_pass.name.empty()) {
+                        setup_cmd_list.PushScopeWithTimeScope(setup_pass.name);
+                    }
+                    setup_pass.execute(&setup_cmd_list, setup_context);
+                    if (!setup_pass.name.empty()) {
+                        setup_cmd_list.PopScopeWithTimeScope();
+                    }
+                    if (!setup_cmd_list.IsEmpty()) {
+                        setup_command_lists.emplace_back(std::move(setup_cmd_list));
+                    }
+                } else {
+                    TRACE_SCOPE_CAT("RenderGraph.SetupLambda", "RenderGraph");
+                    setup_pass.execute(nullptr, setup_context);
+                }
             }
-        } else {
-            setup_pass.execute(nullptr, setup_context);
-        }
-    }
-    if (!setup_command_lists.empty()) {
-        Render::RHIExecutor::Get().Submit(std::move(setup_command_lists), Render::ERHIExecSubmitFlags::None);
-    }
+            if (!setup_command_lists.empty()) {
+                Render::RHIExecutor::Get().Submit(std::move(setup_command_lists), Render::ERHIExecSubmitFlags::None);
+            }
+        },
+        EThread::AnyThread_NormalPri
+    ).Next(setup_complete).Dispatch();
     m_setup_executed = true;
+    return setup_complete;
 }
 
 const RGTexture& RenderGraph::GetTexture(const RGTexture* texture) const {
@@ -1122,11 +1253,14 @@ void RenderGraph::ValidateSetup() const {
 
     for (const auto& pass : m_passes) {
         assert(RGPassHasValidQueueFlags(pass.flags));
-        if (pass.serial) {
+        if (pass.main_thread) {
+            assert(pass.execute && "Main-thread RGPass must have one execution lambda");
+            assert(!pass.serial);
+            assert(pass.texture_accesses.empty() && pass.buffer_accesses.empty());
+        } else if (pass.serial) {
             assert(pass.execute && "Serial RGPass must have one execution lambda");
             assert(RGPassHasQueue(pass.flags));
             assert(RGPassIsSerial(pass.flags));
-            assert(pass.texture_accesses.empty() && pass.buffer_accesses.empty());
         } else {
             assert(pass.execute && "Parallel RGPass must have one execution lambda");
             assert(RGPassHasQueue(pass.flags));
@@ -1161,6 +1295,10 @@ void RenderGraph::ValidateSetup() const {
             }
         }
     }
+}
+
+void RenderGraph::ValidateBuildThread() const {
+    assert(!IsGameThreadInitialized() || IsCurrentlyGameThread());
 }
 
 void RenderGraph::BuildResourceStateRanges() {
@@ -1258,177 +1396,245 @@ void RenderGraph::BuildResourceStateRanges() {
 
 }
 
-void RenderGraph::DispatchBatched() {
-    TRACE_SCOPE_CAT("RenderGraph.DispatchBatched", "RenderGraph");
-    SharedPtr<RGExecutionState> execution_state = DetachExecutionState();
-    RGContext context(*execution_state->graph);
-    Moer::Array<Render::SyncPointRef> submit_sync_point_by_pass(execution_state->passes.size());
-    Moer::Array<SharedPtr<Render::CommandList>> ordered_command_lists{};
-    Moer::Array<GraphEventRef> record_task_events{};
+void RenderGraph::BuildExecutionBatches() {
     m_compiled_plan.execution_batches.clear();
-    static constexpr uint32_t target_batch_workload = 8;
+    static constexpr uint32_t target_batch_workload = 128;
 
-    auto parallel_dispatch_plan = MakeShared<RGParallelDispatchPlan>();
-    GraphEventRef dispatch_parallel_complete = GraphEvent::CreateGraphEvent();
-    LambdaTask::Create(
-        [parallel_dispatch_plan, execution_state, context, &submit_sync_point_by_pass]() mutable {
-            TRACE_SCOPE_CAT("RenderGraph.DispatchParallelTask", "RenderGraph");
-            std::optional<RGCompiledExecutionBatch> active_parallel_batch{};
+    Moer::Array<uint32_t> pass_to_batch(m_passes.size(), invalid_pass);
+    std::optional<RGCompiledExecutionBatch> active_batch{};
 
-            auto flush_parallel_batch = [&]() {
-                TRACE_SCOPE_CAT("RenderGraph.FlushParallelBatch", "RenderGraph");
-                if (!active_parallel_batch.has_value() || active_parallel_batch->pass_count == 0) {
-                    active_parallel_batch.reset();
-                    return;
-                }
-
-                RGPreparedRecordedBatch prepared_batch{};
-                prepared_batch.batch = *active_parallel_batch;
-                prepared_batch.command_list = MakeShared<Render::CommandList>(prepared_batch.batch.queue);
-                prepared_batch.record_complete_event = GraphEvent::CreateGraphEvent();
-                prepared_batch.submit_sync_point = Render::SyncPoint::Create(Render::ESyncPointMode::GPU);
-                PrepareRecordedBatchCommandList(
-                    *prepared_batch.command_list,
-                    prepared_batch.batch,
-                    execution_state,
-                    submit_sync_point_by_pass,
-                    prepared_batch.submit_sync_point,
-                    prepared_batch.record_complete_event
-                );
-
-                LambdaTask::Create(
-                    [context, command_list = prepared_batch.command_list, batch = prepared_batch.batch, execution_state]() mutable {
-                        TRACE_SCOPE_CAT("RenderGraph.RecordParallelBatch", "RenderGraph");
-                        RecordExecutionBatch(*command_list, batch, execution_state->passes, execution_state->compiled_plan, context);
-                    },
-                    EThread::AnyThread_NormalPri
-                ).Next(prepared_batch.record_complete_event).Dispatch();
-
-                for (uint32_t offset = 0; offset < prepared_batch.batch.pass_count; ++offset) {
-                    submit_sync_point_by_pass[prepared_batch.batch.first_pass + offset] = prepared_batch.submit_sync_point;
-                }
-                parallel_dispatch_plan->batches.push_back(std::move(prepared_batch));
-                active_parallel_batch.reset();
-            };
-
-            for (uint32_t pass_index = 0; pass_index < execution_state->passes.size(); ++pass_index) {
-                const RGPass& pass = execution_state->passes[pass_index];
-                if (pass.serial) {
-                    flush_parallel_batch();
-                    continue;
-                }
-
-                const Render::EQueueType queue = RGPassQueue(pass.flags);
-                const uint32_t workload = pass.workload == 0 ? 1 : pass.workload;
-                const bool starts_new_batch =
-                    !active_parallel_batch.has_value() ||
-                    active_parallel_batch->queue != queue ||
-                    active_parallel_batch->workload + workload > target_batch_workload;
-
-                if (starts_new_batch) {
-                    flush_parallel_batch();
-                    active_parallel_batch = RGCompiledExecutionBatch{
-                        .queue = queue,
-                        .first_pass = pass_index,
-                        .pass_count = 0,
-                        .workload = 0
-                    };
-                }
-
-                ++active_parallel_batch->pass_count;
-                active_parallel_batch->workload += workload;
-            }
-
-            flush_parallel_batch();
-        },
-        EThread::AnyThread_NormalPri
-    ).Next(dispatch_parallel_complete).Dispatch();
-    dispatch_parallel_complete->Wait(EThread::UNKNOWN_THREAD);
-
-    Moer::Array<int32_t> parallel_batch_index_by_first_pass(execution_state->passes.size(), -1);
-    for (int32_t batch_index = 0; batch_index < static_cast<int32_t>(parallel_dispatch_plan->batches.size()); ++batch_index) {
-        const RGPreparedRecordedBatch& prepared_batch = parallel_dispatch_plan->batches[batch_index];
-        parallel_batch_index_by_first_pass[prepared_batch.batch.first_pass] = batch_index;
-        record_task_events.push_back(prepared_batch.record_complete_event);
-    }
-
-    std::optional<RGCompiledExecutionBatch> active_serial_batch{};
-    auto flush_serial_batch = [&]() {
-        TRACE_SCOPE_CAT("RenderGraph.FlushSerialBatch", "RenderGraph");
-        if (!active_serial_batch.has_value() || active_serial_batch->pass_count == 0) {
-            active_serial_batch.reset();
+    auto flush_pending_command_list = [&]() {
+        if (!active_batch.has_value() || active_batch->pass_count == 0) {
+            active_batch.reset();
             return;
         }
 
-        const RGCompiledExecutionBatch batch = *active_serial_batch;
-        auto serial_command_list = MakeShared<Render::CommandList>(batch.queue);
-        const Render::SyncPointRef submit_sync_point = Render::SyncPoint::Create(Render::ESyncPointMode::GPU);
-        PrepareRecordedBatchCommandList(
-            *serial_command_list,
-            batch,
-            execution_state,
-            submit_sync_point_by_pass,
-            submit_sync_point,
-            nullptr
-        );
-        RecordExecutionBatch(*serial_command_list, batch, execution_state->passes, execution_state->compiled_plan, context);
-
-        if (!serial_command_list->IsEmpty()) {
-            ordered_command_lists.push_back(serial_command_list);
-            m_compiled_plan.execution_batches.push_back(batch);
-            for (uint32_t offset = 0; offset < batch.pass_count; ++offset) {
-                submit_sync_point_by_pass[batch.first_pass + offset] = submit_sync_point;
-            }
+        const uint32_t batch_index = static_cast<uint32_t>(m_compiled_plan.execution_batches.size());
+        for (uint32_t offset = 0; offset < active_batch->pass_count; ++offset) {
+            pass_to_batch[active_batch->first_pass + offset] = batch_index;
         }
-
-        active_serial_batch.reset();
+        m_compiled_plan.execution_batches.push_back(std::move(*active_batch));
+        active_batch.reset();
     };
 
-    for (uint32_t pass_index = 0; pass_index < execution_state->passes.size(); ++pass_index) {
-        const int32_t parallel_batch_index = parallel_batch_index_by_first_pass[pass_index];
-        if (parallel_batch_index >= 0) {
-            flush_serial_batch();
-            const RGPreparedRecordedBatch& prepared_batch = parallel_dispatch_plan->batches[parallel_batch_index];
-            ordered_command_lists.push_back(prepared_batch.command_list);
-            m_compiled_plan.execution_batches.push_back(prepared_batch.batch);
-            pass_index += prepared_batch.batch.pass_count - 1;
+    for (uint32_t pass_index = 0; pass_index < m_passes.size(); ++pass_index) {
+        const RGPass& pass = m_passes[pass_index];
+        if (pass.main_thread) {
+            flush_pending_command_list();
             continue;
         }
 
-        RGPass& pass = execution_state->passes[pass_index];
-        if (!pass.serial) {
-            continue;
-        }
+        const uint32_t workload     = pass.workload == 0 ? 1 : pass.workload;
+        const bool     async_record = !pass.serial;
+        const Render::EQueueType queue = RGPassQueue(pass.flags);
+        const bool starts_new_batch =
+            !active_batch.has_value() ||
+            active_batch->queue != queue ||
+            active_batch->async_record != async_record ||
+            (async_record && active_batch->workload + workload > target_batch_workload);
 
-        const uint32_t workload = pass.workload == 0 ? 1 : pass.workload;
-        if (!CanAppendSerialBatch(active_serial_batch, pass)) {
-            flush_serial_batch();
-            active_serial_batch = RGCompiledExecutionBatch{
-                .queue = RGPassQueue(pass.flags),
+        if (starts_new_batch) {
+            flush_pending_command_list();
+            active_batch = RGCompiledExecutionBatch{
+                .queue = queue,
                 .first_pass = pass_index,
                 .pass_count = 0,
-                .workload = 0
+                .workload = 0,
+                .async_record = async_record
             };
         }
 
-        ++active_serial_batch->pass_count;
-        active_serial_batch->workload += workload;
+        ++active_batch->pass_count;
+        active_batch->workload += workload;
     }
-    flush_serial_batch();
+    flush_pending_command_list();
 
-    const Render::EQueueType final_queue = ordered_command_lists.empty()
-        ? Render::EQueueType::Graphics
-        : ordered_command_lists.back()->GetQueueType();
-    auto final_state_command_list = MakeShared<Render::CommandList>(final_queue);
-    final_state_command_list->AddCallback([execution_state]() {});
-    final_state_command_list->SetExplicitTrackedState({}, {});
-    EmitFinalTrackedStates(*final_state_command_list);
-    if (!final_state_command_list->IsEmpty()) {
-        ordered_command_lists.push_back(std::move(final_state_command_list));
+    for (const RGCompiledHazardEdge& edge : m_compiled_plan.hazard_edges) {
+        if (!IsCrossQueueTransition(edge.src_queue, edge.dst_queue) ||
+            edge.src_pass >= pass_to_batch.size() || edge.dst_pass >= pass_to_batch.size()) {
+            continue;
+        }
+
+        const uint32_t src_batch = pass_to_batch[edge.src_pass];
+        const uint32_t dst_batch = pass_to_batch[edge.dst_pass];
+        if (src_batch == invalid_pass || dst_batch == invalid_pass || src_batch == dst_batch) {
+            continue;
+        }
+
+        m_compiled_plan.execution_batches[src_batch].signal_sync_point = true;
+        AppendUniqueIndex(m_compiled_plan.execution_batches[dst_batch].wait_sync_point_batches, src_batch);
+    }
+}
+
+void RenderGraph::DispatchBatched() {
+    TRACE_SCOPE_CAT("RenderGraph.DispatchBatched", "RenderGraph");
+    SharedPtr<RGExecutionState> execution_state{};
+    {
+        TRACE_SCOPE_CAT("RenderGraph.DispatchBatched.DetachExecutionState", "RenderGraph");
+        execution_state = DetachExecutionState();
+    }
+    RGContext context(*execution_state->graph);
+    const Moer::Array<RGCompiledExecutionBatch>& execution_batches = execution_state->compiled_plan.execution_batches;
+    Moer::Array<Render::SyncPointRef> signal_sync_point_by_batch(execution_batches.size());
+    Moer::Array<SharedPtr<Render::CommandList>> pending_submit_command_lists{};
+    Moer::Array<GraphEventRef> record_task_events{};
+    Moer::Array<RGPreparedRecordedBatch> pending_serial_batches{};
+
+    {
+        TRACE_SCOPE_CAT("RenderGraph.DispatchBatched.CreateSyncPoints", "RenderGraph");
+        for (uint32_t batch_index = 0; batch_index < execution_batches.size(); ++batch_index) {
+            if (execution_batches[batch_index].signal_sync_point) {
+                signal_sync_point_by_batch[batch_index] = Render::SyncPoint::Create(Render::ESyncPointMode::GPU);
+            }
+        }
     }
 
-    Render::RHIExecutor::Get().SubmitRecording(std::move(ordered_command_lists), Render::ERHIExecSubmitFlags::None);
-    PublishLastRenderGraphEvents(std::move(record_task_events));
+    auto submit_pending_command_lists = [&]() {
+        TRACE_SCOPE_CAT("RenderGraph.SubmitPendingCommandLists", "RenderGraph");
+        if (pending_submit_command_lists.empty()) {
+            return;
+        }
+        Render::RHIExecutor::Get().SubmitRecording(
+            std::move(pending_submit_command_lists),
+            Render::ERHIExecSubmitFlags::None
+        );
+        pending_submit_command_lists.clear();
+    };
+
+    auto prepare_command_list = [&](uint32_t batch_index) {
+        TRACE_SCOPE_CAT("RenderGraph.PrepareCommandList", "RenderGraph");
+        RGPreparedRecordedBatch prepared_batch{};
+        prepared_batch.batch_index = batch_index;
+        prepared_batch.command_list = MakeShared<Render::CommandList>(execution_batches[batch_index].queue);
+        prepared_batch.record_complete_event = GraphEvent::CreateGraphEvent();
+        prepared_batch.command_list->SetRecordCompleteEvent(prepared_batch.record_complete_event);
+        pending_submit_command_lists.push_back(prepared_batch.command_list);
+
+        const RGCompiledExecutionBatch& batch = execution_batches[batch_index];
+        if (!batch.async_record) {
+            pending_serial_batches.push_back(std::move(prepared_batch));
+            return;
+        }
+
+        LambdaTask::Create(
+            [context,
+             command_list = prepared_batch.command_list,
+             batch_index,
+             execution_state,
+             signal_sync_point_by_batch]() mutable {
+                TRACE_SCOPE_CAT("RenderGraph.RecordParallelBatch", "RenderGraph");
+                const RGCompiledExecutionBatch& record_batch =
+                    execution_state->compiled_plan.execution_batches[batch_index];
+                {
+                    TRACE_SCOPE_CAT("RenderGraph.RecordParallelBatch.PrepareCommandList", "RenderGraph");
+                    PrepareRecordedBatchCommandList(
+                        *command_list,
+                        record_batch,
+                        execution_state,
+                        signal_sync_point_by_batch,
+                        batch_index
+                    );
+                }
+                {
+                    TRACE_SCOPE_CAT("RenderGraph.RecordParallelBatch.Execute", "RenderGraph");
+                    RecordExecutionBatch(
+                        *command_list,
+                        record_batch,
+                        execution_state->passes,
+                        execution_state->compiled_plan,
+                        context,
+                        execution_state->graph->Name()
+                    );
+                }
+            },
+            EThread::AnyThread_NormalPri
+        ).Next(prepared_batch.record_complete_event).Dispatch();
+        record_task_events.push_back(prepared_batch.record_complete_event);
+    };
+
+    auto complete_record_event = [&](const GraphEventRef& event) {
+        if (!event) {
+            return;
+        }
+        LambdaTask::Create([]() {}, EThread::AnyThread_NormalPri).Next(event).Dispatch();
+        record_task_events.push_back(event);
+    };
+
+    auto record_pending_serial_batches = [&]() {
+        TRACE_SCOPE_CAT("RenderGraph.RecordPendingSerialBatches", "RenderGraph");
+        for (RGPreparedRecordedBatch& prepared_batch : pending_serial_batches) {
+            const RGCompiledExecutionBatch& batch = execution_batches[prepared_batch.batch_index];
+            {
+                TRACE_SCOPE_CAT("RenderGraph.RecordSerialBatch.PrepareCommandList", "RenderGraph");
+                PrepareRecordedBatchCommandList(
+                    *prepared_batch.command_list,
+                    batch,
+                    execution_state,
+                    signal_sync_point_by_batch,
+                    prepared_batch.batch_index
+                );
+            }
+            {
+                TRACE_SCOPE_CAT("RenderGraph.RecordSerialBatch.Execute", "RenderGraph");
+                RecordExecutionBatch(
+                    *prepared_batch.command_list,
+                    batch,
+                    execution_state->passes,
+                    execution_state->compiled_plan,
+                    context,
+                    execution_state->graph->Name()
+                );
+            }
+            complete_record_event(prepared_batch.record_complete_event);
+        }
+        pending_serial_batches.clear();
+    };
+
+    uint32_t next_batch_index = 0;
+    auto dispatch_batches_before_pass = [&](uint32_t pass_limit) {
+        TRACE_SCOPE_CAT("RenderGraph.DispatchCommandBatchesBeforePass", "RenderGraph");
+        while (next_batch_index < execution_batches.size() &&
+               execution_batches[next_batch_index].first_pass < pass_limit) {
+            prepare_command_list(next_batch_index);
+            ++next_batch_index;
+        }
+        submit_pending_command_lists();
+        record_pending_serial_batches();
+    };
+
+    for (uint32_t pass_index = 0; pass_index < execution_state->passes.size(); ++pass_index) {
+        RGPass& pass = execution_state->passes[pass_index];
+        if (!pass.main_thread) {
+            continue;
+        }
+        dispatch_batches_before_pass(pass_index);
+        TRACE_SCOPE_CAT("RenderGraph.MainThreadPass", "RenderGraph");
+        pass.execute(nullptr, context);
+    }
+    dispatch_batches_before_pass(static_cast<uint32_t>(execution_state->passes.size()));
+
+    {
+        TRACE_SCOPE_CAT("RenderGraph.DispatchBatched.FinalTrackedStates", "RenderGraph");
+        const Render::EQueueType final_queue = execution_batches.empty()
+            ? Render::EQueueType::Graphics
+            : execution_batches.back().queue;
+        auto final_state_command_list = MakeShared<Render::CommandList>(final_queue);
+        final_state_command_list->AddCallback([execution_state]() {});
+        final_state_command_list->SetExplicitTrackedState({}, {});
+        EmitFinalTrackedStates(*final_state_command_list);
+        if (!final_state_command_list->IsEmpty()) {
+            Moer::Array<SharedPtr<Render::CommandList>> final_command_lists{};
+            final_command_lists.push_back(std::move(final_state_command_list));
+            Render::RHIExecutor::Get().SubmitRecording(
+                std::move(final_command_lists), Render::ERHIExecSubmitFlags::None
+            );
+        }
+    }
+
+    {
+        TRACE_SCOPE_CAT("RenderGraph.DispatchBatched.PublishEvents", "RenderGraph");
+        PublishLastRenderGraphEvents(std::move(record_task_events));
+    }
 }
 
 void RenderGraph::BuildCompileMetadata() {
@@ -1597,7 +1803,7 @@ void RenderGraph::BuildCompileMetadata() {
 
     for (uint32_t pass_index = 0; pass_index < m_passes.size(); ++pass_index) {
         RGPass& pass = m_passes[pass_index];
-        if (pass.serial) {
+        if (pass.main_thread) {
             continue;
         }
         for (const RGTextureAccess& access : pass.texture_accesses) {

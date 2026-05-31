@@ -1,0 +1,263 @@
+{
+  "project": "RHI Refactor",
+  "planning_only": true,
+  "milestone_file": "docs/milestones/rhi/refactor_milestone.json",
+  "stage": {
+    "id": "M2-DESIGN-SYNCPOINT-PAYLOAD",
+    "title": "Replace preprocess-resolved cross-queue sync with deferred syncpoint payload scheduling",
+    "status": "planned"
+  },
+  "goal": "Move cross-queue synchronization ownership from preprocess-time global dependency resolution to user-authored SyncPoint plus Barrier contracts, ordered translate payloads, and submission-thread deferred SyncPoint publication, while also forcing NRD integration state to be translate-thread-owned instead of shared between main-thread frame setup and translate workers.",
+  "problem_statement": [
+    "Current Vulkan preprocess computes cross-queue ordering through a full logical dependency graph keyed by SubmissionKey and then converts producer keys to SyncPointId before submission runtime sees the work.",
+    "Current submission runtime stores resolved syncpoints in a global map and requires preprocess plus assembly to know producer-consumer relationships ahead of time, which couples translate scheduling, dependency analysis, and queue-submit encoding too tightly.",
+    "Current NRD integration stores mutable frame state directly in VkNRDInterface. Main-thread Begin/SetInput/SetOutput mutate integration-facing state before translate worker execution, so frame-overlap and translate concurrency can race on NRD descriptor caches and resource snapshots.",
+    "Current public command recording surface still reflects the old backend-owned synchronization model: CopyScope is only a constrained copy-command container, EventRef appears in readback completion paths, and the backend still owns queue-transfer inference that should move to user-authored SyncPoint and Barrier contracts."
+  ],
+  "entry_gate": [
+    "The current executor chain is ingress -> preprocess -> translate -> submission runtime -> interrupt runtime.",
+    "Current ordered submit flow is stable enough to pass testscripts/windows/test_rhi_translate.ps1 on the baseline documented in docs/milestones/rhi/refactor_milestone.json.",
+    "NRD integration must remain unmodified under 3rdparty/NRD/Integration; engine-side ownership must solve the race without patching vendor code."
+  ],
+  "hard_rules": [
+    {
+      "id": "HR-SP-01",
+      "rule": "Submission payload order must be the executor enqueue order after translate segmentation. SubmissionThread must not reconstruct or globally reorder payload topology from preprocess-owned producer graphs."
+    },
+    {
+      "id": "HR-SP-02",
+      "rule": "Cross-queue synchronization must be representable by explicit user-authored SyncPoint resources carried by payloads. SyncPoint is the only public cross-queue synchronization primitive and must support GPU and GPUCPU modes. SubmissionThread is the owner that resolves queue timeline handles and actual wait values for deferred syncpoints."
+    },
+    {
+      "id": "HR-SP-03",
+      "rule": "Wait(syncpoint) and Signal(syncpoint) are queue-native GPU wait and signal operations. CommandList translation must be allowed to close the current native command buffer and allocator, emit a payload boundary, then reopen a new command buffer when recorded SyncPoint operations require a submit break."
+    },
+    {
+      "id": "HR-SP-04",
+      "rule": "CopyScope remains user-visible but is only syntax sugar. Preprocess or recording must expand it into prefix or copy or suffix payloads, private GPU-only SyncPoints, and explicit barriers generated from scope-declared resources. Any flow representable by CopyScope must also be representable by explicit SyncPoint plus Barrier commands."
+    },
+    {
+      "id": "HR-SP-05",
+      "rule": "Payload readiness checks only unresolved SyncPoint waits. EventRef, GraphEventRef, or any other host-only completion surface must never participate in submission readiness; they are indirect host-wait dependencies derived from GPUCPU SyncPoint completion."
+    },
+    {
+      "id": "HR-SP-06",
+      "rule": "NRD integration state, including NewFrame, ResourceSnapshot population, wrapped command-buffer cache, and descriptor-cache touching calls, must be translate-thread-owned. Main-thread frame setup may only build immutable packets."
+    },
+    {
+      "id": "HR-SP-07",
+      "rule": "Do not add a new ad-hoc validation script. Use testscripts/windows/test_rhi_translate.ps1 first, then testscripts/windows/test_all.ps1 when implementation lands."
+    }
+  ],
+  "design": {
+    "summary": [
+      "Translate produces sequential queue payloads in executor order. Each payload already owns a translated command buffer batch plus metadata; the redesign makes synchronization metadata payload-local instead of preprocess-global.",
+      "User-authored SyncPoint becomes the only public cross-queue synchronization surface. Wait(syncpoint) and Signal(syncpoint) map directly to native GPU queue wait or signal behavior after SubmissionThread publishes queue timeline handle and value for the SyncPoint.",
+      "Recording Wait(syncpoint) or Signal(syncpoint) inserts a hard payload boundary during translate: close the current command buffer, append a payload carrying unresolved SyncPoint records, then continue recording into a fresh command buffer.",
+      "SubmissionThread owns queue-local pending payload lists and scans them in fixed queue order graphics -> compute -> copy. Payloads whose deferred waits are not yet resolved are skipped until the producer payload publishes the queue timeline handle and value.",
+      "When a payload is finally submitted, SubmissionThread assigns actual queue timeline signal values to all unresolved signal records in that payload and derives native wait lists only at that moment.",
+      "EventRef or GraphEventRef is not part of GPU synchronization anymore. It is only a host-facing dependency or completion handle produced from GPUCPU SyncPoint completion, for example readback or explicit CPU wait paths.",
+      "CopyScope remains available to users as syntax sugar. It can be expressed equivalently by user-authored SyncPoint plus Barrier commands, but when used it expands to private GPU-only SyncPoints plus generated barriers from scope-declared resource operations.",
+      "NRD moves to the same model: main-thread setup builds immutable per-frame packets, while translate execution materializes integration state and calls NewFrame and Denoise only on the translate thread."
+    ],
+    "queue_iteration_policy": [
+      "SubmissionThread keeps one pending payload queue per backend queue type.",
+      "Queue scan order is deterministic: graphics first, then compute, then copy.",
+      "A payload blocked on an unresolved syncpoint does not block the whole SubmissionThread. The runtime skips that payload and continues scanning later queues in the same pass.",
+      "Forward progress is defined as submitting at least one ready payload in the scan cycle.",
+      "If pending payloads remain but a full scan produces zero progress, the runtime treats that state as an illegal SyncPoint dependency cycle or missing signal and fails fast instead of sleeping and retrying indefinitely.",
+      "SubmissionThread sleeps only when the pending queues are empty. Enqueue of a new payload wakes the thread."
+    ],
+    "syncpoint_model": {
+      "resource_types": [
+        "SyncPoint with mode GPU: one-shot GPU-only synchronization object used as a queue wait source and private compiler primitive for CopyScope expansion.",
+        "SyncPoint with mode GPUCPU: one-shot GPU synchronization object that also exposes host-visible completion support for readback and explicit CPU waits."
+      ],
+      "payload_fields": [
+        "syncpoint_signals: one or more signal slots that hold references to SyncPoint objects pending SubmissionThread publication.",
+        "syncpoint_waits: wait slots that reference SyncPoint objects and remain unresolved until producer payload submission publishes the actual queue timeline handle and value.",
+        "host_wait_dependencies: optional host-facing completion objects derived from GPUCPU SyncPoint completion; they do not participate in payload readiness."
+      ],
+      "resolution_rule": [
+        "Each SyncPoint is single-assignment: it may be signaled exactly once and then waited by any number of later payloads or host waiters.",
+        "If a payload wait references a SyncPoint whose queue timeline handle and value are not published yet, the payload is not ready.",
+        "When a payload with SyncPoint signals becomes ready, SubmissionThread increments the destination queue timeline once for that queue submit and writes the resulting queue timeline handle and value back into every SyncPoint signal owned by that payload.",
+        "The resolved publication is then visible to later payload waits without preprocess-time global producer scans.",
+        "GPUCPU SyncPoint host completion is resolved after the native queue signal completes and then unlocks EventRef or GraphEventRef style host dependencies."
+      ]
+    },
+    "command_buffer_split_rule": [
+      "Recorded Wait(syncpoint) and Signal(syncpoint) both force translate to flush the current recording context into a payload boundary because native queue wait and signal are submit-level operations.",
+      "The split is done inside translate by closing the current VulkanCmdList and allocator submit-context, appending the translated packet, then reopening a fresh submit-context on the same higher-level CommandList translation pass.",
+      "The split mechanism is local to translation and submit payload assembly; it must not leak back into gameplay-side command recording complexity."
+    ],
+    "copy_scope_rule": [
+      "CopyScope stays user-visible and remains valid only on Graphics or Compute CommandLists.",
+      "Users must be able to declare the resources operated on by the scope so preprocess or recording can generate the exact release or acquire barriers required by the scope body.",
+      "CopyScope expands to three payload regions: parent-prefix, copy-body, and parent-suffix.",
+      "CopyScope owns two private GPU-only SyncPoints: copy_enter and copy_exit. parent-prefix signals copy_enter, copy-body waits copy_enter and signals copy_exit, and parent-suffix waits copy_exit.",
+      "CopyScope is only syntax sugar. The same behavior must remain expressible by explicit user-authored SyncPoint plus Barrier commands without using CopyScope.",
+      "CopyScope must reject nested scopes and boundary conflicts with user-authored manual transfer or ownership barriers on the same resources."
+    ],
+    "nrd_integration_rule": [
+      "Begin, UpdateCommonSettings, SetInput, and SetOutput should only populate an immutable NRD frame packet stored on the command stream or interface packet staging object.",
+      "VkNrdDenoiseCmd must capture immutable packet data directly. It must not rely on mutable vectors or maps in VkNRDInterface that are shared with the main thread.",
+      "The translate-side execution path is the only place allowed to call integration.NewFrame, mutate ResourceSnapshot, touch descriptor caches, or reuse wrapped NRI command-buffer state."
+    ],
+    "host_boundary_rule": [
+      "Host frame-stage ordering remains runtime-owned. main-thread, translate-thread, submission-thread, and interrupt-thread boundaries are not replaced by SyncPoint and remain separate from GPU synchronization.",
+      "Cross-frame GPU ordering is not inferred by the backend. If a later frame depends on an earlier frame GPU result, RG must carry the required SyncPoint explicitly."
+    ]
+  },
+  "delete_or_replace": [
+    {
+      "area": "Submission identity and producer graph",
+      "delete_or_replace": [
+        "Delete preprocess-time use of SubmissionKey as the primary synchronization identity for queue-submit ordering.",
+        "Delete LogicalDependencyGraph producer-to-consumer submit edges for queue-submit synchronization ownership.",
+        "Delete assembly-time signal_syncpoint_by_key lookup that converts producer SubmissionKey edges into wait_syncpoints before SubmissionThread runs."
+      ]
+    },
+    {
+      "area": "Submission runtime syncpoint publication",
+      "delete_or_replace": [
+        "Replace scheduler_state.resolved_syncpoints as a flat global publish-after-preprocess map with payload-owned deferred signal publication records or fence-owned resolved state slots.",
+        "Replace SubmitInfo.signal_syncpoint plus wait_syncpoints as the only synchronization description with richer payload-local deferred and explicit wait-signal records.",
+        "Replace BuildBatchTailBoundary reliance on per-submit exported syncpoint publication with queue-tail state assembled from submitted payload signals."
+      ]
+    },
+    {
+      "area": "Public synchronization surface",
+      "delete_or_replace": [
+        "Delete public explicit-submit synchronization surfaces that rely on backend-owned sync ids or SubmissionKey backpatching, including SetExplicitSubmitState sync_id and wait_sync_ids semantics.",
+        "Replace readback completion surfaces that expose EventRef as the primary GPU synchronization contract with GPUCPU SyncPoint-derived host completion handles.",
+        "Replace CopyScope's current copy-command-only surface with a scope API that also exposes resource operation declarations needed for barrier generation."
+      ]
+    },
+    {
+      "area": "NRD frame setup",
+      "delete_or_replace": [
+        "Delete main-thread Begin() calling integration.NewFrame directly.",
+        "Delete main-thread mutation of integration-facing ResourceSnapshot and descriptor-cache-touching state in VkNRDInterface.",
+        "Replace shared mutable VkNRDInterface frame state with immutable per-frame packet data plus translate-owned runtime state."
+      ]
+    }
+  ],
+  "preprocess_mechanisms_that_can_go_away": [
+    "Cross-queue logical dependency construction whose only purpose is to pre-resolve submit-to-submit waits into SyncPointId relationships.",
+    "explicit_sync_key_to_submit lookup for explicit submit dependency backpatching inside preprocess when the dependency can instead live as direct syncpoint references carried by payloads.",
+    "Assembly-time signal_syncpoint_by_key map and its missing-dependency assertions in VulkanTranslateAssembly.cpp.",
+    "TryResolveWaitSyncPoints as a preprocess-contract helper over a global resolved_syncpoints map; readiness should instead inspect payload wait records or fence-owned resolution state directly.",
+    "BuildResolvedWaits dependence on preprocess-exported wait_syncpoints for cross-queue queue-submit ordering. Deferred syncpoint waits no longer require preprocess-generated wait_syncpoints arrays.",
+    "Backend-owned global resource producer inference such as last visible producer tracking, SubmissionKey-linked persistent ownership, and implicit multi-frame cross-queue dependency synthesis.",
+    "The removed ImportResourcesFromQueue and ExportResourcesToQueue style backend ownership APIs must not reappear under a new name. Ownership and barriers belong to explicit Barrier plus SyncPoint contracts or CopyScope sugar."
+  ],
+  "preprocess_mechanisms_to_keep": [
+    "Linear segment splitting and submit-shape compilation from recorded command streams.",
+    "CopyScope-local resource declaration collection and barrier synthesis for prefix or suffix queue ownership transitions.",
+    "Translate task dependencies tied to record-complete events, serial-control translate ordering, and non-syncpoint host-side prerequisites.",
+    "Present preprocessing that snapshots source texture state for late present execution.",
+    "Debug validation that checks user-authored SyncPoint and Barrier contracts for missing signals, duplicate signals, and illegal CopyScope boundary conflicts."
+  ],
+  "implementation_checkpoints": [
+    {
+      "id": "CP-01",
+      "title": "Introduce public SyncPoint contract and one-shot publication model",
+      "status": "planned",
+      "priority": "critical",
+      "what_must_be_true_after_this_checkpoint": [
+        "A translated payload can describe SyncPoint signal and wait records without knowing the final queue timeline handle or value at preprocess time.",
+        "GPUCPU SyncPoint can surface host completion for readback and explicit CPU waits without participating in payload readiness.",
+        "Each SyncPoint is enforced as single-assignment."
+      ]
+    },
+    {
+      "id": "CP-02",
+      "title": "Split native command buffers on recorded SyncPoint operations and CopyScope boundaries",
+      "status": "planned",
+      "priority": "critical",
+      "what_must_be_true_after_this_checkpoint": [
+        "Recorded Wait(syncpoint) and Signal(syncpoint) can flush the current Vulkan command buffer and allocator submit-context into a payload boundary.",
+        "CopyScope expands into prefix or copy or suffix payloads with private GPU-only SyncPoints and generated barriers.",
+        "Translate can reopen a fresh command buffer without terminating the higher-level CommandList translation."
+      ]
+    },
+    {
+      "id": "CP-03",
+      "title": "Make SubmissionThread the SyncPoint publisher and readiness gate",
+      "status": "planned",
+      "priority": "critical",
+      "what_must_be_true_after_this_checkpoint": [
+        "SubmissionThread scans per-queue pending payloads in deterministic queue order and skips payloads whose SyncPoint waits are unresolved.",
+        "Payload readiness checks only unresolved SyncPoint waits.",
+        "Resolved queue timeline handles and values are published only when the producer payload is actually submitted.",
+        "A full scan with pending payloads and zero progress is treated as an illegal dependency cycle or missing signal."
+      ]
+    },
+    {
+      "id": "CP-04",
+      "title": "Delete SubmissionKey-based preprocess synchronization and multi-frame producer inference",
+      "status": "planned",
+      "priority": "high",
+      "what_must_be_true_after_this_checkpoint": [
+        "SubmissionKey producer graphs are no longer required for queue-submit synchronization ownership.",
+        "Preprocess no longer owns implicit multi-frame producer tracking or queue-submit dependency resolution.",
+        "User-authored SyncPoint plus Barrier contracts or CopyScope sugar are the only sources of cross-queue GPU synchronization."
+      ]
+    },
+    {
+      "id": "CP-05",
+      "title": "Move NRD frame ownership fully to translate",
+      "status": "planned",
+      "priority": "critical",
+      "what_must_be_true_after_this_checkpoint": [
+        "NRD main-thread API builds immutable packets only.",
+        "NRD integration mutable state is translate-thread-owned and no longer races under frame overlap."
+      ]
+    },
+    {
+      "id": "CP-06",
+      "title": "Validate translate and editor runtime after ownership change",
+      "status": "planned",
+      "priority": "critical",
+      "what_must_be_true_after_this_checkpoint": [
+        "testscripts/windows/test_rhi_translate.ps1 passes with the new syncpoint payload flow.",
+        "Editor runtime validation with MOER_RT_FRAME_PROBE=1 still reaches GraphDispatchEnd, PresentSubmitEnd, and PresentWindowEnd under raytracing or NRD-enabled paths."
+      ]
+    }
+  ],
+  "files_likely_affected": [
+    "source/runtime/render/rhi/RHICommand.h",
+    "source/runtime/render/rhi/RHICommandList.cpp",
+    "source/runtime/render/rhi/RHIImpl.h",
+    "source/runtime/render/rhi/RHIExecutor.cpp",
+    "source/runtime/render/rhi/vulkan/VulkanSubmissionShared.h",
+    "source/runtime/render/rhi/vulkan/VulkanSubmissionExecutorPrivate.h",
+    "source/runtime/render/rhi/vulkan/VulkanSubmissionPreprocess.cpp",
+    "source/runtime/render/rhi/vulkan/VulkanTranslateAssembly.cpp",
+    "source/runtime/render/rhi/vulkan/VulkanTranslateTask.cpp",
+    "source/runtime/render/rhi/vulkan/VulkanQueue.cpp",
+    "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.h",
+    "source/runtime/render/rhi/vulkan/VulkanSubmissionRuntime.cpp",
+    "source/runtime/render/rhi/vulkan/extension/VulkanNrdExtension.cpp",
+    "source/runtime/render/renderer/raytracing/RaytracingRenderer.cpp",
+    "source/test/RHITest/rhi_translate_multiqueue_test.cpp"
+  ],
+  "validation": [
+    "Update this checkpoint and docs/milestones/rhi/refactor_milestone.json together on every replan.",
+    "Run testscripts/windows/test_rhi_translate.ps1 first after each landing that changes payload assembly, submission readiness, or syncpoint publication.",
+    "Run testscripts/windows/test_all.ps1 after milestone-sized landings.",
+    "Run testscripts/windows/test_editor.ps1 with MOER_RT_FRAME_PROBE=1 when NRD or frame-overlap ownership changes land."
+  ],
+  "current_execution_state": {
+    "status": "design_only",
+    "code_changed": false,
+    "latest_conclusion": [
+      "Current preprocess and assembly still own cross-queue syncpoint backpatching through SubmissionKey graphs and signal_syncpoint_by_key maps.",
+      "Current submission runtime still resolves waits from a global resolved_syncpoints map rather than from payload-local SyncPoint records and still lacks a fail-fast zero-progress rule.",
+      "Current public command recording still exposes EventRef-driven readback completion and CopyScope lacks resource declaration semantics required for SyncPoint plus Barrier sugar.",
+      "Current NRD interface still shares mutable integration-facing state between main-thread frame setup and translate execution."
+    ],
+    "next_execution_step": "Implement CP-01 and CP-02 first so public SyncPoint recording, GPUCPU host completion, and CopyScope sugar boundaries exist before deleting preprocess-owned producer resolution."
+  }
+}

@@ -175,7 +175,7 @@ void CompositionPass::AddPass(RenderGraph& _graph, const RTGraphFrameResources& 
     _graph.AddPass(
         MOER_TEXT("RT.Composition.Dispatch"),
         dispatch_params,
-        kRTGraphComputePassFlags,
+        s_rt_graph_graphics_compute_pass,
         [this, command, resources](RHICommandList& cmd_list, RGContext) {
             RecordComposition(cmd_list, *command, *resources);
         }

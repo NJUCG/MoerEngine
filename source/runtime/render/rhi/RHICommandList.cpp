@@ -1,4 +1,4 @@
-﻿//
+//
 // Created by 17152 on 2023/9/21.
 //
 #include "PixelFormat.h"
@@ -22,22 +22,6 @@ bool IsValidPrimaryQueueType(EQueueType queue_type) {
     return queue_type == EQueueType::Graphics || queue_type == EQueueType::Compute;
 }
 
-bool IsCopyScopeCompatibleCommand(const Command& command) {
-    switch (command.Type()) {
-        case Command::EType::UploadBuffer:
-        case Command::EType::CopyBackBuffer:
-        case Command::EType::BufferToBuffer:
-        case Command::EType::BufferToTexture:
-        case Command::EType::TextureToBuffer:
-        case Command::EType::UploadTexture:
-        case Command::EType::TextureToTexture:
-        case Command::EType::CopyBackTexture:
-            return true;
-        default:
-            return false;
-    }
-}
-
 bool IsFrameTickCommand(const Command* command) {
     if (command == nullptr || command->Type() != Command::EType::Custom) {
         return false;
@@ -52,11 +36,10 @@ bool HasSubmitSideEffects(
     const Array<SignalEvent>&           signal_events,
     const Array<QueryToken>&            query_tokens,
     const Array<GPUEvent>&              gpu_events,
-    bool                                tick_profiling,
     bool                                delete_resources
 ) {
     return !callbacks.empty() || !wait_events.empty() || !signal_events.empty() ||
-           !query_tokens.empty() || !gpu_events.empty() || tick_profiling || delete_resources;
+           !query_tokens.empty() || !gpu_events.empty() || delete_resources;
 }
 
 Array<RHISubmitSegment> BuildSubmitSegments(
@@ -65,46 +48,19 @@ Array<RHISubmitSegment> BuildSubmitSegments(
     bool                             has_side_effects
 ) {
     Array<RHISubmitSegment> segments{};
-    size_t                 parent_begin = 0;
-
     for (size_t cmd_index = 0; cmd_index < commands.size(); ++cmd_index) {
         const Command* command = commands[cmd_index].get();
         if (IsFrameTickCommand(command) && cmd_index + 1 != commands.size()) {
             LOG_ERROR(MOER_TEXT("CommandList::TickFrame must be the last top-level command in a CommandList"));
             assert(false && "TickFrame must be the last top-level command");
         }
-
-        if (command == nullptr || command->Type() != Command::EType::CopyScope) {
-            continue;
-        }
-
-        if (parent_begin != cmd_index) {
-            segments.emplace_back(RHISubmitSegment{
-                .queue = root_queue,
-                .begin = parent_begin,
-                .end = cmd_index,
-                .copy_scope_index = RHISubmitSegment::NoCopyScope,
-            });
-        }
-
-        const auto* copy_scope = static_cast<const CopyScopeCmd*>(command);
-        if (!copy_scope->Empty()) {
-            segments.emplace_back(RHISubmitSegment{
-                .queue = EQueueType::Copy,
-                .begin = 0,
-                .end = 0,
-                .copy_scope_index = cmd_index,
-            });
-        }
-        parent_begin = cmd_index + 1;
     }
 
-    if (parent_begin != commands.size()) {
+    if (!commands.empty()) {
         segments.emplace_back(RHISubmitSegment{
             .queue = root_queue,
-            .begin = parent_begin,
+            .begin = 0,
             .end = commands.size(),
-            .copy_scope_index = RHISubmitSegment::NoCopyScope,
         });
     }
 
@@ -113,7 +69,6 @@ Array<RHISubmitSegment> BuildSubmitSegments(
             .queue = root_queue,
             .begin = 0,
             .end = 0,
-            .copy_scope_index = RHISubmitSegment::NoCopyScope,
         });
     }
 
@@ -152,21 +107,6 @@ CommandList::CommandList(EQueueType _queue_type) : queue_type(_queue_type) {
     }
 }
 
-void CommandList::EnsureNoActiveCopyScope(StringView _api_name) const {
-    if (!b_copy_scope_active) {
-        return;
-    }
-    LOG_ERROR(MOER_TEXT("{} cannot be called while a CopyCommandScope is active"), _api_name);
-    assert(false && "CommandList API used while a CopyCommandScope is active");
-}
-
-void CommandList::FinalizeCopyScope(Array<UniquePtr<Command>>&& _commands) {
-    b_copy_scope_active = false;
-    if (_commands.empty()) {
-        return;
-    }
-    commands.emplace_back(MakeUnique<CopyScopeCmd>(std::move(_commands)));
-}
 // void CommandList::ArgSetter::SetBuffer(uint64 _index, BufferView _buffer) {
 //     auto idx          = handle.GetBindingIdx(_index);
 //     temp_args[_index] = _buffer;
@@ -236,7 +176,6 @@ void CommandList::ComputeDispatcher::Dispatch(
     StringView _name,
     ProfileSection   _section
 ) {
-    cmd_list.EnsureNoActiveCopyScope(MOER_TEXT("ComputeDispatcher::Dispatch"));
     MOER_ASSERT(
         pso.handle.IsValid(),
         "Compute dispatch requires a valid PSO: {}",
@@ -251,7 +190,6 @@ void CommandList::ComputeDispatcher::DispatchIndirect(
     StringView _name,
     ProfileSection   _section
 ) {
-    cmd_list.EnsureNoActiveCopyScope(MOER_TEXT("ComputeDispatcher::DispatchIndirect"));
     MOER_ASSERT(
         pso.handle.IsValid(),
         "Indirect compute dispatch requires a valid PSO: {}",
@@ -262,20 +200,9 @@ void CommandList::ComputeDispatcher::DispatchIndirect(
 }
 
 CmdSubmit CommandList::Submit() {
-    if (b_copy_scope_active) {
-        LOG_ERROR(MOER_TEXT("CommandList::Submit called while a CopyCommandScope is still active"));
-        assert(false && "CommandList::Submit called while a CopyCommandScope is still active");
-    }
     if (b_buffer_overlap_active) {
         LOG_ERROR(MOER_TEXT("CommandList::Submit called while a BufferOverlap scope is still active"));
         assert(false && "CommandList::Submit called while a BufferOverlap scope is still active");
-    }
-    if (queue_type != EQueueType::Graphics && preprocess_mode == ERHISubmitPreprocessMode::InferStateAndSync) {
-        LOG_ERROR(
-            MOER_TEXT("Auto-inferred RHICommandList submissions are Graphics-only, queue={}"),
-            static_cast<uint32>(queue_type)
-        );
-        assert(false && "Auto-inferred RHICommandList submissions are Graphics-only");
     }
     CmdSubmit submit(
         std::move(commands),
@@ -297,16 +224,13 @@ CmdSubmit CommandList::Submit() {
             submit.signal_events,
             submit.query_tokens,
             submit.gpu_events,
-            submit_tick_profiling,
             submit_delete_resources
         )
     );
     submit.record_complete_event = std::move(record_complete_event);
-    submit.preprocess_mode    = preprocess_mode;
     submit.explicit_tracked_textures = std::move(explicit_tracked_textures);
     submit.explicit_tracked_buffers = std::move(explicit_tracked_buffers);
     submit.translate_execution_class = translate_execution_class;
-    submit.b_tick_profiling   = submit_tick_profiling;
     submit.b_delete_resources = submit_delete_resources;
     commands.clear();
     callbacks.clear();
@@ -317,11 +241,9 @@ CmdSubmit CommandList::Submit() {
     query_tokens.clear();
     gpu_events.clear();
     record_complete_event = nullptr;
-    preprocess_mode = ERHISubmitPreprocessMode::InferStateAndSync;
     explicit_tracked_textures.clear();
     explicit_tracked_buffers.clear();
     translate_execution_class = ERHITranslateExecutionClass::Parallel;
-    submit_tick_profiling   = false;
     submit_delete_resources = false;
     b_buffer_overlap_active = false;
     buffer_overlap_handle   = 0;
@@ -331,11 +253,10 @@ CmdSubmit CommandList::Submit() {
 bool CommandList::IsEmpty() const {
     return commands.empty() && callbacks.empty() && cached_args.empty() &&
            submit_wait_events.empty() && submit_signal_events.empty() &&
-           !submit_tick_profiling && !submit_delete_resources;
+           !submit_delete_resources;
 }
 
 void CommandList::CopyFrom(BufferView _src, BufferView _dst, StringView _name) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::CopyFrom"));
     commands.push_back(
         MakeUnique<CopyBufferCmd>(
             reinterpret_cast<uint64>(_src.GetBuffer()),
@@ -348,7 +269,6 @@ void CommandList::CopyFrom(BufferView _src, BufferView _dst, StringView _name) {
     );
 }
 void CommandList::CopyFrom(TextureView _src, TextureView _dst, StringView _name) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::CopyFrom"));
     commands.push_back(
         MakeUnique<CopyTextureCmd>(
             _src.texture->GetFormat(),
@@ -364,7 +284,6 @@ void CommandList::CopyFrom(TextureView _src, TextureView _dst, StringView _name)
     );
 }
 void CommandList::CopyFrom(TextureView _src, BufferView _dst, StringView _name) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::CopyFrom"));
     commands.push_back(
         MakeUnique<CopyTextureToBufferCmd>(
             _src.texture->GetFormat(),
@@ -380,7 +299,6 @@ void CommandList::CopyFrom(TextureView _src, BufferView _dst, StringView _name) 
     );
 }
 void CommandList::CopyFrom(BufferView _src, TextureView _dst, StringView _name) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::CopyFrom"));
     commands.push_back(
         MakeUnique<CopyBufferToTextureCmd>(
             _dst.texture->GetFormat(),
@@ -398,7 +316,6 @@ void CommandList::CopyFrom(BufferView _src, TextureView _dst, StringView _name) 
 
 // Be careful with the Lifetime of the data!
 void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, StringView _name) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::CopyFrom"));
     uint3 extent = uint3(
         std::max(uint(_texture.extent.x) >> _texture.mip_level, 1u),
         std::max(uint(_texture.extent.y) >> _texture.mip_level, 1u),
@@ -420,7 +337,6 @@ void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, StringVi
 
 // Be careful with the Lifetime of the data!
 void CommandList::CopyFrom(std::span<byte> _data, BufferView _buffer, StringView _name) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::CopyFrom"));
     if (_data.size() == 0) {
         return;
     }
@@ -448,7 +364,6 @@ SyncPointRef CommandList::ReadbackCopy(
     std::span<byte>  _data,
     StringView _name
 ) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::CopyFrom"));
     if (_src.GetBuffer() == nullptr || _data.empty()) {
         GraphEventRef empty_event = GraphEvent::CreateGraphEvent();
         empty_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
@@ -473,7 +388,6 @@ SyncPointRef CommandList::ReadbackCopy(
     std::span<byte>  _data,
     StringView _name
 ) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::CopyFrom"));
     bool b_valid_size = _data.size() > 0 && _src.GetTexture();
     if (!b_valid_size) {
         GraphEventRef empty_event = GraphEvent::CreateGraphEvent();
@@ -500,7 +414,6 @@ SyncPointRef CommandList::ReadbackCopy(
 }
 
 void CommandList::CopyFrom(Array<byte>&& _data, BufferView _dst, StringView _name) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::CopyFrom"));
     if (_data.size() == 0) {
         return;
     }
@@ -516,7 +429,6 @@ void CommandList::CopyFrom(Array<byte>&& _data, BufferView _dst, StringView _nam
 }
 
 void CommandList::CopyFrom(Array<byte>&& _data, TextureView _dst, StringView _name) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::CopyFrom"));
     if (_data.size() == 0) {
         return;
     }
@@ -541,7 +453,6 @@ void CommandList::SetRenderCmds(
     Array<MeshDrawData>&&           _mesh_data,
     std::optional<StringView> _name
 ) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::SetRenderCmds"));
     if (_handle.IsValid() == false) {
         LOG_ERROR(
             MOER_TEXT("Attempt to dispatch a compute with invalid PSO. Please check if the PSO is created ")
@@ -563,7 +474,6 @@ void CommandList::SetMultiRenderCmds(
     DrawBatch&&      _batch,
     StringView _name
 ) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::SetMultiRenderCmds"));
     commands.push_back(MakeUnique<MultiDrawCmd>(std::move(_batch), std::move(_pass_info), _name));
 }
 
@@ -576,7 +486,6 @@ void CommandList::SetMultiRenderCmds(
 // }
 
 void CommandList::UpdateBindlessArray(BindlessArrayRef _array) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::UpdateBindlessArray"));
     assert(_array && "Bindless array is null");
 
     // One-shot deferred GPU initialization on first use
@@ -588,22 +497,18 @@ void CommandList::UpdateBindlessArray(BindlessArrayRef _array) {
 }
 
 void CommandList::ClearResource(BufferView _buffer, uint _value) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::ClearResource"));
     commands.emplace_back(MakeUnique<ClearResourceCmd>(_buffer, _value));
 }
 
 void CommandList::ClearResource(TextureView _texture, float4 _color) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::ClearResource"));
     commands.emplace_back(MakeUnique<ClearResourceCmd>(_texture, _color));
 }
 
 void CommandList::ClearResource(TextureView _texture, uint _value) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::ClearResource"));
     commands.emplace_back(MakeUnique<ClearResourceCmd>(_texture, _value));
 }
 
 void CommandList::PushScope(StringView _name) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::PushScope"));
     commands.push_back(MakeUnique<ScopeCmd>(_name, true, false));
     scope_stack.push(_name);
 }
@@ -614,7 +519,6 @@ QueryToken CommandList::CreateQueryToken(QueryKind _kind, StringView _name) {
 }
 
 QueryToken CommandList::BeginTimestampQuery(StringView _name) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::BeginTimestampQuery"));
     QueryToken token = CreateQueryToken(QueryKind::Timestamp, _name);
     query_tokens.emplace_back(token);
     commands.push_back(MakeUnique<QueryCmd>(token, QueryCmd::EOp::BeginTimestamp, _name));
@@ -622,7 +526,6 @@ QueryToken CommandList::BeginTimestampQuery(StringView _name) {
 }
 
 void CommandList::EndTimestampQuery(const QueryToken& _token) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::EndTimestampQuery"));
     if (!_token.Valid()) {
         return;
     }
@@ -636,7 +539,6 @@ void CommandList::EndTimestampQuery(const QueryToken& _token) {
 }
 
 QueryToken CommandList::BeginOcclusionQuery(StringView _name) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::BeginOcclusionQuery"));
     QueryToken token = CreateQueryToken(QueryKind::Occlusion, _name);
     query_tokens.emplace_back(token);
     commands.push_back(MakeUnique<QueryCmd>(token, QueryCmd::EOp::BeginOcclusion, _name));
@@ -644,7 +546,6 @@ QueryToken CommandList::BeginOcclusionQuery(StringView _name) {
 }
 
 void CommandList::EndOcclusionQuery(const QueryToken& _token) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::EndOcclusionQuery"));
     if (!_token.Valid()) {
         return;
     }
@@ -659,7 +560,15 @@ void CommandList::EndOcclusionQuery(const QueryToken& _token) {
 
 void CommandList::PushScopeWithTimeScope(StringView _name) {
     PushScope(_name);
-    timed_scope_query_stack.push(BeginTimestampQuery(_name));
+    QueryToken token = BeginTimestampQuery(_name);
+    timed_scope_query_stack.push(token);
+    gpu_events.push_back(GPUEvent{
+        .type = GPUEvent::EType::BeginEvent,
+        .name = String(_name),
+        .query = token,
+        .depth = ++event_depth,
+        .timestamp_ns = 0
+    });
 #if MOER_TRACE_ENABLED && MOER_TRACE_GPU_ENABLED
     Utf8String trace_scope_name = PlatformToUtf8(_name);
     gpu_trace_scope_tokens.push(
@@ -675,7 +584,6 @@ void CommandList::PushScopeWithTimeScope(StringView _name) {
 }
 
 void CommandList::PopScope() {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::PopScope"));
     assert(!scope_stack.empty() && "PopScope called with empty scope stack");
     if (scope_stack.empty()) {
         return;
@@ -690,10 +598,20 @@ void CommandList::PopScopeWithTimeScope() {
         return;
     }
     PopScope();
+    QueryToken token{};
     if (!timed_scope_query_stack.empty()) {
-        QueryToken token = timed_scope_query_stack.top();
+        token = timed_scope_query_stack.top();
         timed_scope_query_stack.pop();
         EndTimestampQuery(token);
+    }
+    if (token.Valid() && event_depth > 0) {
+        gpu_events.push_back(GPUEvent{
+            .type = GPUEvent::EType::EndEvent,
+            .name = String(),
+            .query = token,
+            .depth = event_depth--,
+            .timestamp_ns = 0
+        });
     }
 #if MOER_TRACE_ENABLED && MOER_TRACE_GPU_ENABLED
     if (!gpu_trace_scope_tokens.empty()) {
@@ -706,12 +624,10 @@ void CommandList::PopScopeWithTimeScope() {
 #pragma region[ raytracing ]
 
 void CommandList::BuildAccelerationStructures(Array<AccelerationStructureBuildParam>&& _geometries) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::BuildAccelerationStructures"));
     commands.emplace_back(MakeUnique<BuildAccelerationStructuresCmd>(std::move(_geometries)));
 }
 
 void CommandList::UpdateRaytracingScene(RaytracingSceneRef _scene) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::UpdateRaytracingScene"));
     UniquePtr<Command> command = _scene->UpdateScene();
     if (command) {
         commands.emplace_back(std::move(command));
@@ -719,7 +635,6 @@ void CommandList::UpdateRaytracingScene(RaytracingSceneRef _scene) {
 }
 
 void CommandList::UpdateRaytracingScene(UniquePtr<Command>&& _prepared_update) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::UpdateRaytracingScene"));
     assert(_prepared_update && _prepared_update->Type() == Command::EType::BuildTLAS);
     commands.emplace_back(std::move(_prepared_update));
 }
@@ -736,13 +651,11 @@ void CommandList::UpdateRaytracingScene(UniquePtr<Command>&& _prepared_update) {
 #pragma region[ custom commands ]
 
 void CommandList::AddCustomCommand(UniquePtr<Command>&& _cmd, StringView _name) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::AddCustomCommand"));
     commands.push_back(std::move(_cmd));
     commands.back()->name = _name;
 }
 
 CommandList& CommandList::TranslateFence(RHITranslateFence _fence) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::TranslateFence"));
     if (!_fence.event) {
         LOG_ERROR(MOER_TEXT("CommandList::TranslateFence requires a valid GraphEventRef-backed fence"));
         assert(false && "TranslateFence requires a valid event");
@@ -757,7 +670,6 @@ CommandList& CommandList::LambdaCommand(
     std::function<void()>&& _callback,
     StringView        _name
 ) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::LambdaCommand"));
     if (!_callback) {
         LOG_ERROR(MOER_TEXT("CommandList::LambdaCommand requires a valid callback"));
         assert(false && "LambdaCommand requires a valid callback");
@@ -771,30 +683,25 @@ CommandList& CommandList::LambdaCommand(
 #pragma endregion
 
 void CommandList::AddCallback(std::function<void()>&& _callback) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::AddCallback"));
     callbacks.emplace_back(std::move(_callback));
 }
 
 CommandList& CommandList::Wait(Fence* _fence, uint64 _wait_value) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::Wait"));
     submit_wait_events.emplace_back(uint64(_fence), _wait_value);
     return *this;
 }
 
 CommandList& CommandList::Wait(WaitEvent _event) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::Wait"));
     submit_wait_events.emplace_back(_event);
     return *this;
 }
 
 CommandList& CommandList::Signal(Fence* _fence, uint64 _signal_value) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::Signal"));
     submit_signal_events.emplace_back(uint64(_fence), _signal_value);
     return *this;
 }
 
 CommandList& CommandList::Wait(SyncPointRef _sync_point) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::Wait"));
     if (_sync_point) {
         submit_wait_sync_points.emplace_back(std::move(_sync_point));
     }
@@ -802,7 +709,6 @@ CommandList& CommandList::Wait(SyncPointRef _sync_point) {
 }
 
 CommandList& CommandList::Signal(SyncPointRef _sync_point) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::Signal"));
     if (_sync_point) {
         submit_signal_sync_points.emplace_back(std::move(_sync_point));
     }
@@ -810,7 +716,6 @@ CommandList& CommandList::Signal(SyncPointRef _sync_point) {
 }
 
 CommandList& CommandList::SetTranslateExecutionClass(ERHITranslateExecutionClass _execution_class) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::SetTranslateExecutionClass"));
     translate_execution_class = _execution_class;
     return *this;
 }
@@ -819,15 +724,12 @@ CommandList& CommandList::SetExplicitTrackedState(
     Array<TrackedTextureState>&& tracked_textures,
     Array<TrackedBufferState>&&  tracked_buffers
 ) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::SetExplicitTrackedState"));
-    preprocess_mode = ERHISubmitPreprocessMode::ExplicitStateNoSync;
     explicit_tracked_textures = std::move(tracked_textures);
     explicit_tracked_buffers = std::move(tracked_buffers);
     return *this;
 }
 
 CommandList& CommandList::SetRecordCompleteEvent(GraphEventRef _event) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::SetRecordCompleteEvent"));
     record_complete_event = std::move(_event);
     return *this;
 }
@@ -836,32 +738,22 @@ CommandList& CommandList::SetTrackedState(
     Array<TrackedTextureState>&& _textures,
     Array<TrackedBufferState>&&  _buffers
 ) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::SetTrackedState"));
     commands.emplace_back(MakeUnique<SetTrackedStateCmd>(std::move(_textures), std::move(_buffers)));
     return *this;
 }
 
 CommandList& CommandList::DeleteResources() {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::DeleteResources"));
     submit_delete_resources = true;
     return *this;
 }
 
-CommandList& CommandList::TickProfiling() {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::TickProfiling"));
-    submit_tick_profiling = true;
-    return *this;
-}
-
 CommandList& CommandList::TickFrame() {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::TickFrame"));
     if (!commands.empty() && IsFrameTickCommand(commands.back().get())) {
         LOG_ERROR(MOER_TEXT("CommandList::TickFrame can only be recorded once per CommandList"));
         assert(false && "TickFrame must not be recorded twice");
         return *this;
     }
     commands.emplace_back(MakeUnique<FrameTickCmd>());
-    submit_tick_profiling = true;
     translate_execution_class = ERHITranslateExecutionClass::SerialControl;
     return *this;
 }
@@ -1038,7 +930,6 @@ void CommandList::BeginBarriers(
     EQueueType              _dst_queue,
     ETrackedStateUpdateMode _tracked_state
 ) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::BeginBarriers"));
     commands.push_back(
         MakeUnique<BarrierCmd>(
             _barrier_cnt,
@@ -1105,7 +996,7 @@ void CommandList::ImportResourcesFromQueue(
     (void)_src_queue;
     (void)_textures_to_import;
     (void)_buffers_to_import;
-    LOG_ERROR(MOER_TEXT("CommandList::ImportResourcesFromQueue has been removed. Use CopyScope."));
+    LOG_ERROR(MOER_TEXT("CommandList::ImportResourcesFromQueue has been removed. Use explicit barriers."));
     assert(false && "CommandList::ImportResourcesFromQueue has been removed");
 }
 
@@ -1117,7 +1008,7 @@ void CommandList::ExportResourcesToQueue(
     (void)_dst_queue;
     (void)_textures_to_export;
     (void)_buffers_to_export;
-    LOG_ERROR(MOER_TEXT("CommandList::ExportResourcesToQueue has been removed. Use CopyScope."));
+    LOG_ERROR(MOER_TEXT("CommandList::ExportResourcesToQueue has been removed. Use explicit barriers."));
     assert(false && "CommandList::ExportResourcesToQueue has been removed");
 }
 
@@ -1127,7 +1018,6 @@ ArrayArgReference CommandList::RegisterArgs(ArrayArguments&& _args) {
 }
 
 void CommandList::PushGPUEvent(GPUEvent&& event) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::PushGPUEvent"));
     gpu_events.push_back(std::move(event));
 }
 
@@ -1137,27 +1027,7 @@ Array<GPUEvent> CommandList::StealGPUEvents() {
     return result;
 }
 
-// CopyCommandScope
-
-CopyCommandScope CommandList::BeginCopyScope() {
-    assert(
-        (queue_type == EQueueType::Graphics || queue_type == EQueueType::Compute) &&
-        "BeginCopyScope is only valid on Graphics or Compute CommandLists"
-    );
-    if (b_copy_scope_active) {
-        LOG_ERROR(MOER_TEXT("Nested CopyCommandScope is not allowed"));
-        assert(false && "Nested CopyCommandScope is not allowed");
-    }
-    if (!scope_stack.empty() || !timed_scope_query_stack.empty() || event_depth != 0) {
-        LOG_ERROR(MOER_TEXT("CopyCommandScope cannot begin while GPU scopes, queries, or GPU events are active"));
-        assert(false && "CopyCommandScope cannot cross active scopes or queries");
-    }
-    b_copy_scope_active = true;
-    return CopyCommandScope(*this);
-}
-
 void CommandList::BeginBufferOverlap(BufferView _buffer) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::BeginBufferOverlap"));
     if (_buffer.GetBuffer() == nullptr) {
         LOG_ERROR(MOER_TEXT("BeginBufferOverlap requires a valid buffer"));
         assert(false && "BeginBufferOverlap requires a valid buffer");
@@ -1174,7 +1044,6 @@ void CommandList::BeginBufferOverlap(BufferView _buffer) {
 }
 
 void CommandList::EndBufferOverlap(BufferView _buffer) {
-    EnsureNoActiveCopyScope(MOER_TEXT("CommandList::EndBufferOverlap"));
     if (!b_buffer_overlap_active) {
         LOG_ERROR(MOER_TEXT("EndBufferOverlap called without matching BeginBufferOverlap"));
         assert(false && "EndBufferOverlap called without matching BeginBufferOverlap");
@@ -1189,205 +1058,6 @@ void CommandList::EndBufferOverlap(BufferView _buffer) {
     commands.emplace_back(MakeUnique<BufferOverlapCmd>(buffer_overlap_handle, false));
     b_buffer_overlap_active = false;
     buffer_overlap_handle   = 0;
-}
-
-// CopyCommandScope private constructor, called only by CommandList::BeginCopyScope.
-CopyCommandScope::CopyCommandScope(CommandList& _cmd_list) : cmd_list(&_cmd_list) {}
-
-// Move constructor transfers ownership; the moved-from object becomes a no-op sentinel.
-CopyCommandScope::CopyCommandScope(CopyCommandScope&& other) noexcept :
-    cmd_list(other.cmd_list),
-    copy_commands(std::move(other.copy_commands)) {
-    other.cmd_list = nullptr;
-}
-
-// Destructor inserts the scope-end marker and closes the scope.
-CopyCommandScope::~CopyCommandScope() {
-    if (cmd_list) {
-        cmd_list->FinalizeCopyScope(std::move(copy_commands));
-        cmd_list = nullptr;
-    }
-}
-
-void CopyCommandScope::PushCopyCommand(UniquePtr<Command>&& _cmd) {
-    assert(cmd_list && "CopyCommandScope is not active");
-    assert(_cmd && "CopyCommandScope command is null");
-    if (!_cmd) {
-        return;
-    }
-    if (!IsCopyScopeCompatibleCommand(*_cmd)) {
-        LOG_ERROR(MOER_TEXT("CopyCommandScope only accepts copy/upload/readback commands, got={}"), uint(_cmd->Type()));
-        assert(false && "CopyCommandScope only accepts copy commands");
-        return;
-    }
-    copy_commands.emplace_back(std::move(_cmd));
-}
-
-// All CopyFrom overloads simply forward to the parent CommandList.
-// The CopyScopeBegin/End markers bracket these commands in the stream; the
-// executor translator detects them and routes the enclosed commands to the
-// copy queue command buffer with auto-generated acquire/release barriers.
-
-void CopyCommandScope::CopyFrom(BufferView _src, BufferView _dst, StringView _name) {
-    PushCopyCommand(MakeUnique<CopyBufferCmd>(
-        reinterpret_cast<uint64>(_src.GetBuffer()),
-        reinterpret_cast<uint64>(_dst.GetBuffer()),
-        _src.byte_offset,
-        _dst.byte_offset,
-        _src.GetByteSize(),
-        _name
-    ));
-}
-void CopyCommandScope::CopyFrom(TextureView _src, TextureView _dst, StringView _name) {
-    PushCopyCommand(MakeUnique<CopyTextureCmd>(
-        _src.texture->GetFormat(),
-        reinterpret_cast<uint64>(_src.texture),
-        reinterpret_cast<uint64>(_dst.texture),
-        _src.mip_level,
-        _dst.mip_level,
-        _src.offset,
-        _dst.offset,
-        _src.extent,
-        _name
-    ));
-}
-void CopyCommandScope::CopyFrom(TextureView _src, BufferView _dst, StringView _name) {
-    PushCopyCommand(MakeUnique<CopyTextureToBufferCmd>(
-        _src.texture->GetFormat(),
-        reinterpret_cast<uint64>(_src.texture),
-        reinterpret_cast<uint64>(_dst.GetBuffer()),
-        _src.offset,
-        _dst.byte_offset,
-        _src.extent,
-        _src.mip_level,
-        _src.array_layer,
-        _name
-    ));
-}
-void CopyCommandScope::CopyFrom(BufferView _src, TextureView _dst, StringView _name) {
-    PushCopyCommand(MakeUnique<CopyBufferToTextureCmd>(
-        _dst.texture->GetFormat(),
-        reinterpret_cast<uint64>(_src.GetBuffer()),
-        reinterpret_cast<uint64>(_dst.texture),
-        _src.byte_offset,
-        _dst.offset,
-        _dst.extent,
-        _dst.mip_level,
-        _dst.array_layer,
-        _name
-    ));
-}
-void CopyCommandScope::CopyFrom(std::span<byte> _data, BufferView _dst, StringView _name) {
-    if (_data.empty()) {
-        return;
-    }
-    PushCopyCommand(MakeUnique<UploadBufferCmd>(
-        reinterpret_cast<uint64>(_dst.GetBuffer()),
-        _dst.GetByteOffset(),
-        _data.size_bytes(),
-        _data.data(),
-        _name
-    ));
-}
-void CopyCommandScope::CopyFrom(std::span<byte> _data, TextureView _dst, StringView _name) {
-    if (_data.empty()) {
-        return;
-    }
-    uint3 extent = uint3(
-        std::max(uint(_dst.extent.x) >> _dst.mip_level, 1u),
-        std::max(uint(_dst.extent.y) >> _dst.mip_level, 1u),
-        std::max(uint(_dst.extent.z) >> _dst.mip_level, 1u)
-    );
-    PushCopyCommand(MakeUnique<UploadTextureCmd>(
-        _dst.texture->GetFormat(),
-        reinterpret_cast<uint64>(_dst.texture),
-        _dst.mip_level,
-        _dst.array_layer,
-        _dst.offset,
-        extent,
-        _data.data(),
-        _name
-    ));
-}
-void CopyCommandScope::CopyFrom(Array<byte>&& _data, BufferView _dst, StringView _name) {
-    if (_data.empty()) {
-        return;
-    }
-    PushCopyCommand(MakeUnique<UploadBufferCmd>(
-        reinterpret_cast<uint64>(_dst.GetBuffer()),
-        _dst.GetByteOffset(),
-        _data.size(),
-        std::move(_data),
-        _name
-    ));
-}
-void CopyCommandScope::CopyFrom(Array<byte>&& _data, TextureView _dst, StringView _name) {
-    if (_data.empty()) {
-        return;
-    }
-    PushCopyCommand(MakeUnique<UploadTextureCmd>(
-        _dst.texture->GetFormat(),
-        reinterpret_cast<uint64>(_dst.texture),
-        _dst.mip_level,
-        _dst.array_layer,
-        _dst.offset,
-        _dst.extent,
-        std::move(_data),
-        _name
-    ));
-}
-void CopyCommandScope::CopyFrom(BufferView _src, std::span<byte> _data, StringView _name) {
-    (void)ReadbackCopy(_src, _data, _name);
-}
-void CopyCommandScope::CopyFrom(TextureView _src, std::span<byte> _data, StringView _name) {
-    (void)ReadbackCopy(_src, _data, _name);
-}
-
-SyncPointRef CopyCommandScope::ReadbackCopy(
-    BufferView       _src,
-    std::span<byte>  _data,
-    StringView _name
-) {
-    if (_src.GetBuffer() == nullptr || _data.empty()) {
-        GraphEventRef empty_event = GraphEvent::CreateGraphEvent();
-        empty_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
-        return SyncPoint::Create(ESyncPointMode::GPUCPU, empty_event);
-    }
-    GraphEventRef completion_event = GraphEvent::CreateGraphEvent();
-    PushCopyCommand(MakeUnique<CopyBackBufferCmd>(
-        reinterpret_cast<uint64>(_src.GetBuffer()),
-        _src.GetByteOffset(),
-        _src.GetByteSize(),
-        _data.data(),
-        completion_event,
-        _name
-    ));
-    return SyncPoint::Create(ESyncPointMode::GPUCPU, completion_event);
-}
-
-SyncPointRef CopyCommandScope::ReadbackCopy(
-    TextureView      _src,
-    std::span<byte>  _data,
-    StringView _name
-) {
-    if (_data.empty() || !_src.GetTexture()) {
-        GraphEventRef empty_event = GraphEvent::CreateGraphEvent();
-        empty_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
-        return SyncPoint::Create(ESyncPointMode::GPUCPU, empty_event);
-    }
-    uint mip_size = _src.GetTexture()->GetMipByteSize(_src.mip_level);
-    assert(mip_size <= _data.size() && "Fatal: Copy back data size is less than texture mip size");
-    GraphEventRef completion_event = GraphEvent::CreateGraphEvent();
-    PushCopyCommand(MakeUnique<CopyBackTextureCmd>(
-        reinterpret_cast<uint64>(_src.texture),
-        _src.mip_level,
-        _src.offset,
-        _src.extent,
-        std::span<byte>(_data.data(), mip_size),
-        completion_event,
-        _name
-    ));
-    return SyncPoint::Create(ESyncPointMode::GPUCPU, completion_event);
 }
 
 } // namespace Moer::Render

@@ -479,6 +479,7 @@ public:
     class Buffer* GetBuffer() const {
         return buffer;
     }
+    RENDER_API bool IsWholeResource() const;
 
     class Buffer* buffer;
     uint64        byte_offset;
@@ -583,6 +584,7 @@ public:
     Texture*       GetTexture() const {
         return texture;
     }
+    bool IsWholeResource() const;
     TextureView Slice(uint layer, uint count = 1) const;
 };
 

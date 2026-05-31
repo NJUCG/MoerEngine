@@ -91,9 +91,35 @@ void RuntimeAssets::RecordTextureUploads() {
 
         CommandList                   cmd_list(EQueueType::Graphics);
         Array<std::function<void()>> deferred_callbacks{};
+        auto upload_texture = [&](std::span<Moer::byte> data, TextureView view) {
+            cmd_list.Barriers(
+                {BarrierCreateInfo::Transition(
+                    view,
+                    ETextureState::UNDEFINED,
+                    ETextureState::TRANSFER_DST,
+                    EPassType::Copy
+                )},
+                EQueueType::Graphics,
+                EQueueType::Graphics,
+                ETrackedStateUpdateMode::Update
+            );
+            cmd_list.CopyFrom(data, view);
+            cmd_list.Barriers(
+                {BarrierCreateInfo::Transition(
+                    view,
+                    MakeBarrierState(ETextureState::TRANSFER_DST, EPassType::Copy),
+                    BarrierState{
+                        .stage = ERHIPipelineStageFlags::PS_ALL_COMMANDS,
+                        .access = ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_SAMPLED_READ
+                    }
+                )},
+                EQueueType::Graphics,
+                EQueueType::Graphics,
+                ETrackedStateUpdateMode::Update
+            );
+        };
         if (std::filesystem::exists(texture_path)) {
             {
-                CopyCommandScope copy_scope = cmd_list.BeginCopyScope();
                 for (auto& entry : std::filesystem::directory_iterator(texture_path)) {
                     const String texture_path_text = String(entry.path().native());
                     LOG_INFO(MOER_TEXT("Load texture {}"), texture_path_text);
@@ -126,8 +152,8 @@ void RuntimeAssets::RecordTextureUploads() {
                             PF_R8G8B8A8_UNORM,
                             ETextureUsageFlags::SAMPLED
                         );
-                        copy_scope.CopyFrom(
-                            std::span<Moer::byte>((Moer::byte*)data, width * height * 4), texture
+                        upload_texture(
+                            std::span<Moer::byte>((Moer::byte*)data, width * height * 4), texture->GetView()
                         );
                         deferred_callbacks.emplace_back([data]() {
                             stbi_image_free(data);
@@ -168,11 +194,11 @@ void RuntimeAssets::RecordTextureUploads() {
                             // CalcMaxMipCount(uint2(width, height)) // TODO: 缁檈xr鐢熸垚mipmap
                             1 // 涓存椂瑙ｅ喅鏂规锛屼笉鐢熸垚mipmap
                         );
-                        copy_scope.CopyFrom(
+                        upload_texture(
                             std::span<Moer::byte>(
                                 (Moer::byte*)data, width * height * 4 * sizeof(float)
                             ),
-                            texture
+                            texture->GetView()
                         );
                         deferred_callbacks.emplace_back([data]() {
                             free(data);

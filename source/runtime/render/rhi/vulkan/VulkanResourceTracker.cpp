@@ -270,7 +270,12 @@ auto VkTracker::WriteTexture(VulkanTexture* _texture, ETextureState _state, EPas
                 ShaderStageForPass(_type)
             };
         default:
-            return ReadTexture(_texture, _state, _type);
+            auto read_state = ReadTexture(_texture, _state, _type);
+            return {
+                VK_ACCESS_2_MEMORY_WRITE_BIT,
+                std::get<1>(read_state),
+                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+            };
     }
 }
 
@@ -584,7 +589,8 @@ void VkTracker::InitFromSeed(const TrackerSeed& seed) {
         } else {
             // Use WriteTexture for write end-states, ReadTexture for read end-states.
             // has_writer records whether the last access in the previous submit was a write.
-            const EPassType pass_type = queue_to_pass_type(entry.owner_queue);
+            const bool      foreign_queue = entry.owner_queue != EQueueType::Ignore && entry.owner_queue != queue_type;
+            const EPassType pass_type     = queue_to_pass_type(foreign_queue ? queue_type : entry.owner_queue);
             std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2> result;
             if (entry.has_writer) {
                 result = WriteTexture(entry.texture, entry.texture_state, pass_type);
@@ -594,6 +600,10 @@ void VkTracker::InitFromSeed(const TrackerSeed& seed) {
             src_access = static_cast<VkAccessFlagBits2>(std::get<0>(result));
             src_layout = std::get<1>(result);
             src_stage  = static_cast<VkPipelineStageFlagBits2>(std::get<2>(result));
+            if (foreign_queue) {
+                src_access = VK_ACCESS_2_NONE;
+                src_stage  = VK_PIPELINE_STAGE_2_NONE;
+            }
         }
 
         // Decompose to per-mip entries (same convention as RecordState)
@@ -646,7 +656,8 @@ void VkTracker::InitFromSeed(const TrackerSeed& seed) {
             state.src_access = VK_ACCESS_2_NONE;
             state.src_stage  = VK_PIPELINE_STAGE_2_NONE;
         } else {
-            const EPassType pass_type = queue_to_pass_type(entry.owner_queue);
+            const bool      foreign_queue = entry.owner_queue != EQueueType::Ignore && entry.owner_queue != queue_type;
+            const EPassType pass_type     = queue_to_pass_type(foreign_queue ? queue_type : entry.owner_queue);
             std::tuple<VkAccessFlags2, VkPipelineStageFlags2> result;
             if (entry.has_writer) {
                 result = WriteBuffer(entry.buffer, entry.buffer_state, pass_type);
@@ -655,6 +666,10 @@ void VkTracker::InitFromSeed(const TrackerSeed& seed) {
             }
             state.src_access = static_cast<VkAccessFlagBits2>(std::get<0>(result));
             state.src_stage  = static_cast<VkPipelineStageFlagBits2>(std::get<1>(result));
+            if (foreign_queue) {
+                state.src_access = VK_ACCESS_2_NONE;
+                state.src_stage  = VK_PIPELINE_STAGE_2_NONE;
+            }
         }
         buffer_states.emplace(entry.buffer, state);
         RHITRACE_BARRIER_LOG(
@@ -1083,7 +1098,10 @@ void VkTracker::ResolveBarriers() {
             auto& state = it->second;
             const bool same_state = state.src_access == state.dst_access && state.src_stage == state.dst_stage;
             const bool write_after_write = IsWriteState(state.src_access) && IsWriteState(state.dst_access);
-            if (same_state && !write_after_write) {
+            const bool queue_transfer = state.src_queue_family != VK_QUEUE_FAMILY_IGNORED &&
+                                        state.dst_queue_family != VK_QUEUE_FAMILY_IGNORED &&
+                                        state.src_queue_family != state.dst_queue_family;
+            if (!queue_transfer && same_state && !write_after_write) {
                 state.dst_access       = VK_ACCESS_2_NONE;
                 state.dst_stage        = VK_PIPELINE_STAGE_2_NONE;
                 state.src_queue_family = VK_QUEUE_FAMILY_IGNORED;
@@ -1166,7 +1184,10 @@ void VkTracker::ResolveBarriers() {
                                     state.src_layout == state.dst_layout;
             const bool write_after_write = IsWriteState(state.src_layout, state.src_access) &&
                                            IsWriteState(state.dst_layout, state.dst_access);
-            if (same_state && !write_after_write) {
+            const bool queue_transfer = state.src_queue_family != VK_QUEUE_FAMILY_IGNORED &&
+                                        state.dst_queue_family != VK_QUEUE_FAMILY_IGNORED &&
+                                        state.src_queue_family != state.dst_queue_family;
+            if (!queue_transfer && same_state && !write_after_write) {
                 state.dst_access       = VK_ACCESS_2_NONE;
                 state.dst_stage        = VK_PIPELINE_STAGE_2_NONE;
                 state.dst_layout       = VK_IMAGE_LAYOUT_UNDEFINED;

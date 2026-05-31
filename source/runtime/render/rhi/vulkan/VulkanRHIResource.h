@@ -998,6 +998,7 @@ public:
 
     std::mutex                 geom_mutex;
     UnorderedMap<uint64, uint> related_geometries;
+    uint                       related_geometry_instance_count = 0;
     bool                       b_tlas_update_pending = false;
 
 private:

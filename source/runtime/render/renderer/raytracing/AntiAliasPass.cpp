@@ -146,7 +146,7 @@ void AntialiasPass::AddPass(
     _graph.AddPass(
         MOER_TEXT("RT.AntiAlias.Dispatch"),
         dispatch_params,
-        kRTGraphComputePassFlags,
+        s_rt_graph_graphics_compute_pass,
         [this, command, resources](RHICommandList& cmd_list, RGContext) {
             RecordTAA(cmd_list, *command, *resources);
         }

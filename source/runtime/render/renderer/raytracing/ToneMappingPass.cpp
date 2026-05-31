@@ -370,7 +370,7 @@ void ToneMappingPass::AddPasses(
     _graph.AddPass(
         MOER_TEXT("RT.ToneMapping.Histogram"),
         histogram_params,
-        kRTGraphComputePassFlags,
+        s_rt_graph_graphics_compute_pass,
         [this, resources](RHICommandList& cmd_list, RGContext) {
             ComputeHistogram(cmd_list, resources->src_tex);
         }
@@ -383,7 +383,7 @@ void ToneMappingPass::AddPasses(
     _graph.AddPass(
         MOER_TEXT("RT.ToneMapping.Exposure"),
         exposure_params,
-        kRTGraphComputePassFlags,
+        s_rt_graph_graphics_compute_pass,
         [this](RHICommandList& cmd_list, RGContext) {
             ComputeExposure(cmd_list);
         }

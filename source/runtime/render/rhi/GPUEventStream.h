@@ -71,7 +71,7 @@ private:
         double tick_period_ns{0.0};
     };
 
-    uint64 ConvertTimestampToNsLocked(EQueueType queue, const TimestampQueryResult& result);
+    uint64 ConvertTimestampToNsLocked(EQueueType queue, const TimestampQueryResult& result, bool use_end_tick);
     void TryResolveReadyFramesLocked();
 
     Array<PendingSubmit>               pending_submits;

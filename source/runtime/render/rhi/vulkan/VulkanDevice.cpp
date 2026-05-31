@@ -1112,7 +1112,7 @@ bool VulkanDevice::TryConvertCooperativeVectorMatrix(
 
     const VkResult result = vkConvertCooperativeVectorMatrixNV(m_device, &info);
     if (result != VK_SUCCESS) {
-        log_error(string_VkResult(result));
+        log_error(VK_TYPE_TO_STRING(VkResult, result));
         return false;
     }
     if (required_dst_size > _dst_data.size_bytes()) {

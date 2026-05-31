@@ -2,11 +2,10 @@
 
 #include "RTResource.h"
 #include "rendergraph/RenderGraph.h"
-#include "misc/STL.h"
 
 namespace Moer::Render::Raytracing {
 
-static constexpr ERGPassFlags kRTGraphComputePassFlags = ERGPassFlags::Graphics | ERGPassFlags::ComputeShader;
+static constexpr ERGPassFlags s_rt_graph_graphics_compute_pass = ERGPassFlags::Graphics | ERGPassFlags::ComputeShader;
 
 struct RTGraphFrameResources {
     bool current_frame{};

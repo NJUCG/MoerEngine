@@ -82,7 +82,21 @@ RasterRenderer::RasterRenderer(
     );
 #endif
 
+    cmd_list.Barriers(
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        EPassType::Graphics,
+        ETrackedStateUpdateMode::Update,
+        WriteBindlessArray{bindless_array, EBufferState::UNORDERED_ACCESS}
+    );
     cmd_list.UpdateBindlessArray(bindless_array);
+    cmd_list.Barriers(
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        EPassType::Graphics,
+        ETrackedStateUpdateMode::Update,
+        ReadBindlessArray{bindless_array, EBufferState::SHADER_RESOURCE}
+    );
     {
         Array<CommandList> init_cmd_lists{};
         init_cmd_lists.emplace_back(std::move(cmd_list));
@@ -284,10 +298,7 @@ bool RasterRenderer::RunSingle(
 
     if (scene.IsReady()) {
 
-        // 处理场景加载过程中遗留的命令
-        // The gfx CommandList contains a CopyScope for all CPU→GPU uploads.
-        // The executor splits the stream at scope boundaries, routes the enclosed
-        // commands to the copy queue, and auto-generates acquire/release barriers.
+        // Submit scene-loading uploads before frame graph execution.
         auto&& scene_cmd_list = scene.PopPendingCommandList();
         if (!scene_cmd_list.gfx_queue_cmd_list.IsEmpty()) {
             pre_frame_cmd_lists.emplace_back(std::move(scene_cmd_list.gfx_queue_cmd_list));
@@ -296,7 +307,21 @@ bool RasterRenderer::RunSingle(
         if (first_load) {
             first_load = false;
 
+            cmd_list.Barriers(
+                EQueueType::Graphics,
+                EQueueType::Graphics,
+                EPassType::Graphics,
+                ETrackedStateUpdateMode::Update,
+                WriteBindlessArray{bindless_array, EBufferState::UNORDERED_ACCESS}
+            );
             cmd_list.UpdateBindlessArray(bindless_array);
+            cmd_list.Barriers(
+                EQueueType::Graphics,
+                EQueueType::Graphics,
+                EPassType::Graphics,
+                ETrackedStateUpdateMode::Update,
+                ReadBindlessArray{bindless_array, EBufferState::SHADER_RESOURCE}
+            );
 
             if (!cmd_list.IsEmpty()) {
                 pre_frame_cmd_lists.emplace_back(std::move(cmd_list));
@@ -422,8 +447,38 @@ bool RasterRenderer::RunSingle(
                 hooks.on_publish_scene_output(scene_output);
             }
             if (hooks.on_render_gui) {
+                cmd_list.Barriers(
+                    {BarrierCreateInfo::Transition(
+                        raster_context.textures.output.tex->GetView(),
+                        MakeBarrierState(ETextureState::TRANSFER_SRC, EPassType::Copy),
+                        MakeBarrierState(ETextureState::TRANSFER_DST, EPassType::Copy)
+                    )},
+                    EQueueType::Graphics,
+                    EQueueType::Graphics,
+                    ETrackedStateUpdateMode::Update
+                );
                 cmd_list.ClearResource(raster_context.textures.output.tex->GetView(), float4(0.f, 0.f, 0.f, 1.f));
+                cmd_list.Barriers(
+                    {BarrierCreateInfo::Transition(
+                        raster_context.textures.output.tex->GetView(),
+                        MakeBarrierState(ETextureState::TRANSFER_DST, EPassType::Copy),
+                        MakeBarrierState(ETextureState::RENDER_TARGET, EPassType::Graphics)
+                    )},
+                    EQueueType::Graphics,
+                    EQueueType::Graphics,
+                    ETrackedStateUpdateMode::Update
+                );
                 hooks.on_render_gui(cmd_list, raster_context.textures.output.tex);
+                cmd_list.Barriers(
+                    {BarrierCreateInfo::Transition(
+                        raster_context.textures.output.tex->GetView(),
+                        MakeBarrierState(ETextureState::RENDER_TARGET, EPassType::Graphics),
+                        MakeBarrierState(ETextureState::TRANSFER_SRC, EPassType::Copy)
+                    )},
+                    EQueueType::Graphics,
+                    EQueueType::Graphics,
+                    ETrackedStateUpdateMode::Update
+                );
                 default_output_texture = raster_context.textures.output.tex;
                 gui_rendered = true;
             }
@@ -446,13 +501,43 @@ bool RasterRenderer::RunSingle(
     device.FlushDebugMessages();
 
     if (!editor_config->play_mode_enabled && hooks.on_render_gui && !gui_rendered) {
+        cmd_list.Barriers(
+            {BarrierCreateInfo::Transition(
+                default_output_texture->GetView(),
+                MakeBarrierState(ETextureState::TRANSFER_SRC, EPassType::Copy),
+                MakeBarrierState(ETextureState::TRANSFER_DST, EPassType::Copy)
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
+        );
         cmd_list.ClearResource(default_output_texture->GetView(), float4(0.f, 0.f, 0.f, 1.f));
+        cmd_list.Barriers(
+            {BarrierCreateInfo::Transition(
+                default_output_texture->GetView(),
+                MakeBarrierState(ETextureState::TRANSFER_DST, EPassType::Copy),
+                MakeBarrierState(ETextureState::RENDER_TARGET, EPassType::Graphics)
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
+        );
         hooks.on_render_gui(cmd_list, default_output_texture);
+        cmd_list.Barriers(
+            {BarrierCreateInfo::Transition(
+                default_output_texture->GetView(),
+                MakeBarrierState(ETextureState::RENDER_TARGET, EPassType::Graphics),
+                MakeBarrierState(ETextureState::TRANSFER_SRC, EPassType::Copy)
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
+        );
     }
 
     time++;
     RHIPresentRequest present_request = presentation_surface->CreatePresentRequest(default_output_texture);
-    cmd_list.Signal(timeline, time).DeleteResources().TickProfiling().TickFrame();
+    cmd_list.Signal(timeline, time).DeleteResources().TickFrame();
     const bool should_close_now = WindowContext::ShouldClose(WindowContext::GetMainWindow());
     if (should_close_now) {
         skip_present = true;

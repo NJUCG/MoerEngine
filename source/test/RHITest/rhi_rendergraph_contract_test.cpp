@@ -563,7 +563,7 @@ int RunRenderGraphContractFoundationTest() {
     PooledTexturePool texture_pool{3};
     PooledBufferPool  buffer_pool{3};
     RGTransientResourceAllocator allocator{texture_pool, buffer_pool};
-    RenderGraph       graph;
+    RenderGraph       graph(MOER_TEXT("RG.ContractFoundation"));
 
     RGTexture* texture = graph.CreateTexture(
         MOER_TEXT("rg_contract_texture"),
@@ -588,9 +588,11 @@ int RunRenderGraphContractFoundationTest() {
 
     auto* access_array_params = graph.Alloc<RGAccessArrayParams>();
     auto* serial_params       = graph.Alloc<RGSerialParams>();
+    auto* main_thread_params  = graph.Alloc<RGSerialParams>();
     std::atomic_bool     resources_allocated{false};
     std::atomic_uint32_t write_execution_count{0};
     std::atomic_uint32_t serial_execution_count{0};
+    std::atomic_uint32_t main_thread_execution_count{0};
 
     access_array_params->textures       = graph.Alloc<RGTextureAccessArray>(2);
     access_array_params->buffers        = graph.Alloc<RGBufferAccessArray>(2);
@@ -631,21 +633,24 @@ int RunRenderGraphContractFoundationTest() {
             write_params->prepared_value = 42;
         }
     );
-    graph.AddPass(
-        MOER_TEXT("WriteContractResources"),
-        write_params,
-        ERGPassFlags::Graphics,
-        [write_params,
-         texture,
-         buffer,
-         &resources_allocated,
-         &write_execution_count](RHICommandList&, RGContext) {
-            resources_allocated = texture->IsAllocated() && buffer->IsAllocated();
-            if (write_params->prepared_value == 42) {
-                ++write_execution_count;
+    {
+        RG_EVENT_SCOPE(graph, MOER_TEXT("Contract.WriteScope{}"), 7);
+        graph.AddPass(
+            MOER_TEXT("WriteContractResources"),
+            write_params,
+            ERGPassFlags::Graphics,
+            [write_params,
+             texture,
+             buffer,
+             &resources_allocated,
+             &write_execution_count](RHICommandList&, RGContext) {
+                resources_allocated = texture->IsAllocated() && buffer->IsAllocated();
+                if (write_params->prepared_value == 42) {
+                    ++write_execution_count;
+                }
             }
-        }
-    );
+        );
+    }
 
     graph.AddPass(
         MOER_TEXT("SerialContractFence"),
@@ -657,17 +662,39 @@ int RunRenderGraphContractFoundationTest() {
     );
 
     graph.AddPass(
-        MOER_TEXT("ReadAccessArrays"),
-        access_array_params,
-        ERGPassFlags::Compute,
-        [](RHICommandList&, RGContext) {}
+        MOER_TEXT("MainThreadContractFence"),
+        main_thread_params,
+        ERGPassFlags::None,
+        [&main_thread_execution_count](RGContext context) {
+            (void)context.Graph();
+            ++main_thread_execution_count;
+        }
     );
+
+    {
+        RG_EVENT_SCOPE(graph, MOER_TEXT("Contract.ReadScope"));
+        graph.AddPass(
+            MOER_TEXT("ReadAccessArrays"),
+            access_array_params,
+            ERGPassFlags::Compute,
+            [](RHICommandList&, RGContext) {}
+        );
+    }
 
     if (graph.GetPasses()[0].texture_accesses.size() != 1 ||
         graph.GetPasses()[0].buffer_accesses.size() != 1 ||
-        graph.GetPasses()[2].texture_accesses.size() != 3 ||
-        graph.GetPasses()[2].buffer_accesses.size() != 3) {
+        graph.GetPasses()[3].texture_accesses.size() != 3 ||
+        graph.GetPasses()[3].buffer_accesses.size() != 3) {
         LOG_ERROR(MOER_TEXT("RenderGraph pass accesses were not finalized when AddPass returned"));
+        return 1;
+    }
+    if (graph.Name() != MOER_TEXT("RG.ContractFoundation") ||
+        graph.GetPasses()[0].event_scopes.size() != 1 ||
+        graph.GetPasses()[0].event_scopes[0] != MOER_TEXT("Contract.WriteScope7") ||
+        !graph.GetPasses()[1].event_scopes.empty() ||
+        graph.GetPasses()[3].event_scopes.size() != 1 ||
+        graph.GetPasses()[3].event_scopes[0] != MOER_TEXT("Contract.ReadScope")) {
+        LOG_ERROR(MOER_TEXT("RenderGraph event scope capture is invalid"));
         return 1;
     }
 
@@ -686,22 +713,33 @@ int RunRenderGraphContractFoundationTest() {
         plan.execution_batches[2].queue != EQueueType::Compute ||
         plan.execution_batches[0].first_pass != 0 || plan.execution_batches[0].pass_count != 1 ||
         plan.execution_batches[1].first_pass != 1 || plan.execution_batches[1].pass_count != 1 ||
-        plan.execution_batches[2].first_pass != 2 || plan.execution_batches[2].pass_count != 1) {
+        plan.execution_batches[2].first_pass != 3 || plan.execution_batches[2].pass_count != 1 ||
+        !plan.execution_batches[0].async_record || plan.execution_batches[1].async_record ||
+        !plan.execution_batches[2].async_record) {
         LOG_ERROR(MOER_TEXT("RenderGraph foundation compiled wrong execution batches"));
         return 1;
     }
-    if (!HasHazard(plan, 0, 2, texture, ERGResourceKind::Texture) ||
-        !HasHazard(plan, 0, 2, buffer, ERGResourceKind::Buffer)) {
+    if (!plan.execution_batches[0].signal_sync_point || plan.execution_batches[1].signal_sync_point ||
+        plan.execution_batches[2].signal_sync_point ||
+        plan.execution_batches[0].wait_sync_point_batches.size() != 0 ||
+        plan.execution_batches[1].wait_sync_point_batches.size() != 0 ||
+        plan.execution_batches[2].wait_sync_point_batches.size() != 1 ||
+        plan.execution_batches[2].wait_sync_point_batches[0] != 0) {
+        LOG_ERROR(MOER_TEXT("RenderGraph foundation compiled wrong queue syncpoint plan"));
+        return 1;
+    }
+    if (!HasHazard(plan, 0, 3, texture, ERGResourceKind::Texture) ||
+        !HasHazard(plan, 0, 3, buffer, ERGResourceKind::Buffer)) {
         LOG_ERROR(MOER_TEXT("RenderGraph foundation compiled wrong hazard edges"));
         return 1;
     }
-    const RGCompiledHazardEdge* texture_edge = FindHazard(plan, 0, 2, texture, ERGResourceKind::Texture);
+    const RGCompiledHazardEdge* texture_edge = FindHazard(plan, 0, 3, texture, ERGResourceKind::Texture);
     if (!texture_edge || !RGCompiledHazardHasFlag(*texture_edge, ERGCompiledHazardFlag::AccessConflict) ||
         !RGCompiledHazardHasFlag(*texture_edge, ERGCompiledHazardFlag::OwnerTransfer)) {
         LOG_ERROR(MOER_TEXT("RenderGraph foundation did not mark the texture owner-transfer hazard"));
         return 1;
     }
-    const RGCompiledHazardEdge* buffer_edge = FindHazard(plan, 0, 2, buffer, ERGResourceKind::Buffer);
+    const RGCompiledHazardEdge* buffer_edge = FindHazard(plan, 0, 3, buffer, ERGResourceKind::Buffer);
     if (!buffer_edge || !RGCompiledHazardHasFlag(*buffer_edge, ERGCompiledHazardFlag::AccessConflict) ||
         !RGCompiledHazardHasFlag(*buffer_edge, ERGCompiledHazardFlag::OwnerTransfer)) {
         LOG_ERROR(MOER_TEXT("RenderGraph foundation did not mark the buffer owner-transfer hazard"));
@@ -709,17 +747,17 @@ int RunRenderGraphContractFoundationTest() {
     }
     const RGResource& texture_resource = *texture;
     const RGResource& buffer_resource  = *buffer;
-    if (texture_resource.compile.first_pass != 0 || texture_resource.compile.last_pass != 2 ||
+    if (texture_resource.compile.first_pass != 0 || texture_resource.compile.last_pass != 3 ||
         texture_resource.compile.access_write || buffer_resource.compile.first_pass != 0 ||
-        buffer_resource.compile.last_pass != 2 || buffer_resource.compile.access_write) {
+        buffer_resource.compile.last_pass != 3 || buffer_resource.compile.access_write) {
         LOG_ERROR(MOER_TEXT("RenderGraph foundation compiled wrong resource lifetime metadata"));
         return 1;
     }
     const RGPass& write_pass = graph.GetPasses()[0];
-    const RGPass& read_pass  = graph.GetPasses()[2];
+    const RGPass& read_pass  = graph.GetPasses()[3];
     if (read_pass.compile.last_pass != 0 ||
         read_pass.compile.last_pass_by_queue[static_cast<size_t>(EQueueType::Graphics)] != 0 ||
-        write_pass.compile.next_pass_by_queue[static_cast<size_t>(EQueueType::Compute)] != 2) {
+        write_pass.compile.next_pass_by_queue[static_cast<size_t>(EQueueType::Compute)] != 3) {
         LOG_ERROR(MOER_TEXT("RenderGraph foundation compiled wrong pass dependency metadata"));
         return 1;
     }
@@ -736,7 +774,7 @@ int RunRenderGraphContractFoundationTest() {
         LOG_ERROR(MOER_TEXT("RenderGraph transient resources were not allocated before execution"));
         return 1;
     }
-    if (write_execution_count != 1 || serial_execution_count != 1) {
+    if (write_execution_count != 1 || serial_execution_count != 1 || main_thread_execution_count != 1) {
         LOG_ERROR(MOER_TEXT("RenderGraph setup or execution lambda order is invalid"));
         return 1;
     }
@@ -913,7 +951,8 @@ int RunRenderGraphTextureCopyReadbackTest() {
             )
         },
         EQueueType::Graphics,
-        EQueueType::Graphics
+        EQueueType::Graphics,
+        ETrackedStateUpdateMode::Update
     );
     SyncPointRef source_event = readback_cmd.ReadbackCopy(
         source_texture->GetView(),
@@ -1028,6 +1067,7 @@ int RunRenderGraphDispatchBindlessReadbackTest() {
                 EQueueType::Graphics,
                 EQueueType::Graphics,
                 EPassType::Compute,
+                ETrackedStateUpdateMode::Update,
                 WriteBindlessArray{bindless_array, EBufferState::UNORDERED_ACCESS}
             );
             cmd_list.UpdateBindlessArray(bindless_array);
@@ -1035,6 +1075,7 @@ int RunRenderGraphDispatchBindlessReadbackTest() {
                 EQueueType::Graphics,
                 EQueueType::Graphics,
                 EPassType::Compute,
+                ETrackedStateUpdateMode::Update,
                 ReadBindlessArray{bindless_array, EBufferState::SHADER_RESOURCE}
             );
         }
@@ -1610,6 +1651,7 @@ int RunRenderGraphRayQuerySceneBindlessReadbackTest() {
                 EQueueType::Graphics,
                 EQueueType::Graphics,
                 EPassType::Compute,
+                ETrackedStateUpdateMode::Update,
                 WriteBindlessArray{bindless_array, EBufferState::UNORDERED_ACCESS}
             );
             cmd_list.UpdateBindlessArray(bindless_array);
@@ -1617,6 +1659,7 @@ int RunRenderGraphRayQuerySceneBindlessReadbackTest() {
                 EQueueType::Graphics,
                 EQueueType::Graphics,
                 EPassType::Compute,
+                ETrackedStateUpdateMode::Update,
                 ReadBindlessArray{bindless_array, EBufferState::SHADER_RESOURCE}
             );
         }
@@ -2189,6 +2232,7 @@ int RunRenderGraphRayQueryGBufferOutputReadbackTest() {
                 EQueueType::Graphics,
                 EQueueType::Graphics,
                 EPassType::Compute,
+                ETrackedStateUpdateMode::Update,
                 WriteBindlessArray{bindless_array, EBufferState::UNORDERED_ACCESS}
             );
             cmd_list.UpdateBindlessArray(bindless_array);
@@ -2196,6 +2240,7 @@ int RunRenderGraphRayQueryGBufferOutputReadbackTest() {
                 EQueueType::Graphics,
                 EQueueType::Graphics,
                 EPassType::Compute,
+                ETrackedStateUpdateMode::Update,
                 ReadBindlessArray{bindless_array, EBufferState::SHADER_RESOURCE}
             );
         }
@@ -2373,7 +2418,8 @@ int RunRenderGraphRayQueryGBufferOutputReadbackTest() {
             BarrierCreateInfo::Transition(clip_depth->GetView(), ETextureState::TRANSFER_SRC, ETextureState::TRANSFER_SRC, EPassType::Copy)
         },
         EQueueType::Graphics,
-        EQueueType::Graphics
+        EQueueType::Graphics,
+        ETrackedStateUpdateMode::Update
     );
     for (TextureRef& visualize_output : visualize_outputs) {
         readback_cmd.Barriers(
@@ -2381,7 +2427,8 @@ int RunRenderGraphRayQueryGBufferOutputReadbackTest() {
                 visualize_output->GetView(), ETextureState::TRANSFER_SRC, ETextureState::TRANSFER_SRC, EPassType::Copy
             )},
             EQueueType::Graphics,
-            EQueueType::Graphics
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
         );
     }
     SyncPointRef view_depth_event = readback_cmd.ReadbackCopy(

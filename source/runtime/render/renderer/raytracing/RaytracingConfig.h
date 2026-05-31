@@ -100,7 +100,7 @@ struct ExportConfig {
 };
 
 struct RTProcessLightConfig {
-    bool parallel_mode = 0;
+    bool parallel_mode = true;
     int  num_threads   = 4;
 };
 struct RaytracingConfig {

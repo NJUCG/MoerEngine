@@ -4,9 +4,9 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
-#include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/ShaderParameters.h"
+#include "trace/Trace.h"
 
 namespace Moer::Render::Raytracing {
 
@@ -163,75 +163,89 @@ LightingPass::LightingPass(ShaderManager& _manager) {
 }
 
 LightingPass::PreparedCommand LightingPass::Prepare(const RTContext& _rt_ctx) const {
+    TRACE_SCOPE_CAT("Raytracing.Lighting.Prepare", "Frame");
     //process
     const DI::ReSTIRDIRuntimeConfig& restir_di_runtime_config = _rt_ctx.is_ctx.GetReSTIRDIRuntimeConfig();
 
     const ImportanceSamplingContext& is_ctx = _rt_ctx.is_ctx;
 
     PreparedCommand command{};
-    command.constants.frame_idx        = _rt_ctx.is_ctx.GetFrameIdx();
-    command.constants.main_view        = _rt_ctx.main_view;
-    command.constants.prev_view        = _rt_ctx.prev_view;
-    command.constants.enable_prev_tlas = true;
-    command.constants.di_params        = is_ctx.GetReSTIRDIRuntimeConfig().common_params;
-    command.constants.local_light_pdf_size =
-        _rt_ctx.local_light_pdf_tex ? _rt_ctx.local_light_pdf_tex->GetExtent().xy : uint2(0);
-    command.constants.env_pdf_size     = _rt_ctx.env_pdf_tex ? _rt_ctx.env_pdf_tex->GetExtent().xy : uint2(0);
-    command.constants.bindless_handles = _rt_ctx.GetBindlessHandles();
+    {
+        TRACE_SCOPE_CAT("Raytracing.Lighting.Prepare.BaseConstants", "Frame");
+        command.constants.frame_idx        = _rt_ctx.is_ctx.GetFrameIdx();
+        command.constants.main_view        = _rt_ctx.main_view;
+        command.constants.prev_view        = _rt_ctx.prev_view;
+        command.constants.enable_prev_tlas = true;
+        command.constants.di_params        = is_ctx.GetReSTIRDIRuntimeConfig().common_params;
+        command.constants.local_light_pdf_size =
+            _rt_ctx.local_light_pdf_tex ? _rt_ctx.local_light_pdf_tex->GetExtent().xy : uint2(0);
+        command.constants.env_pdf_size     = _rt_ctx.env_pdf_tex ? _rt_ctx.env_pdf_tex->GetExtent().xy : uint2(0);
+        command.constants.bindless_handles = _rt_ctx.GetBindlessHandles();
+    }
 
     // static constexpr uint offset_of_prev_view           = offsetof(ResampleConstants, prev_view);
     // static constexpr uint offset_of_main_view           = offsetof(ViewParam, near_far);
-    command.constants.di_params                                 = restir_di_runtime_config.common_params;
-    command.constants.restir_di_params.initial_sample_params    = is_ctx.GetDIInitialSampleParams();
-    command.constants.restir_di_params.temporal_resample_params = is_ctx.GetDITemporalResampleParams();
-    command.constants.restir_di_params.spatial_resample_params  = is_ctx.GetDISpatialResampleParams();
-    command.constants.restir_di_params.reservoir_buffer_params  = restir_di_runtime_config.reservoir_buffer_params;
-    command.constants.restir_di_params.shading_params           = is_ctx.GetDIShadingParams();
-    command.constants.restir_di_params.buffer_indices           = is_ctx.GetReSTIRDIBufferIndices();
+    {
+        TRACE_SCOPE_CAT("Raytracing.Lighting.Prepare.ReSTIR", "Frame");
+        command.constants.di_params                                 = restir_di_runtime_config.common_params;
+        command.constants.restir_di_params.initial_sample_params    = is_ctx.GetDIInitialSampleParams();
+        command.constants.restir_di_params.temporal_resample_params = is_ctx.GetDITemporalResampleParams();
+        command.constants.restir_di_params.spatial_resample_params  = is_ctx.GetDISpatialResampleParams();
+        command.constants.restir_di_params.reservoir_buffer_params  = restir_di_runtime_config.reservoir_buffer_params;
+        command.constants.restir_di_params.shading_params           = is_ctx.GetDIShadingParams();
+        command.constants.restir_di_params.buffer_indices           = is_ctx.GetReSTIRDIBufferIndices();
+    }
 
-    command.constants.light_buffer_params           = is_ctx.GetLightBufferParams();
-    command.constants.local_light_ris_buffer_params = is_ctx.GetLocalLightRISBufferParams();
-    command.constants.env_light_ris_buffer_params   = is_ctx.GetEnvLightRISBufferParams();
+    {
+        TRACE_SCOPE_CAT("Raytracing.Lighting.Prepare.SceneLighting", "Frame");
+        command.constants.light_buffer_params           = is_ctx.GetLightBufferParams();
+        command.constants.local_light_ris_buffer_params = is_ctx.GetLocalLightRISBufferParams();
+        command.constants.env_light_ris_buffer_params   = is_ctx.GetEnvLightRISBufferParams();
 
-    command.constants.grid_params             = is_ctx.GetGridParams();
-    command.constants.scene_params            = _rt_ctx.scene_params;
-    command.constants.enable_accumulation     = 1;
-    command.constants.discount_native_samples = 1;
-    command.constants.visualize_cells         = 0;
+        command.constants.grid_params             = is_ctx.GetGridParams();
+        command.constants.scene_params            = _rt_ctx.scene_params;
+        command.constants.enable_accumulation     = 1;
+        command.constants.discount_native_samples = 1;
+        command.constants.visualize_cells         = 0;
 
-    command.constants.denoiser_mode               = _rt_ctx.config.denoiser_mode;
-    command.constants.reblur_diff_hit_dist_params = _rt_ctx.config.reblur_diffuse_hit_dist_params;
-    command.constants.reblur_spec_hit_dist_params = _rt_ctx.config.reblur_specular_hit_dist_params;
+        command.constants.denoiser_mode               = _rt_ctx.config.denoiser_mode;
+        command.constants.reblur_diff_hit_dist_params = _rt_ctx.config.reblur_diffuse_hit_dist_params;
+        command.constants.reblur_spec_hit_dist_params = _rt_ctx.config.reblur_specular_hit_dist_params;
+    }
 
     auto div_ceil = [](uint _a, uint _b) -> uint {
         return (_a + _b - 1) / _b;
     };
 
-    command.has_local_lights = is_ctx.GetLightBufferParams().local_light_region.light_cnt != 0;
-    command.has_env_lights   = is_ctx.GetLightBufferParams().env_light.light_cnt != 0;
-    command.presample_light_dispatch = uint3(
-        div_ceil(is_ctx.GetLocalLightRISBufferParams().tile_size, DI_PRESAMPLE_GRID_SIZE),
-        is_ctx.GetLocalLightRISBufferParams().tile_cnt,
-        1
-    );
-    command.presample_env_dispatch = uint3(
-        div_ceil(is_ctx.GetEnvLightRISBufferParams().tile_size, DI_PRESAMPLE_GRID_SIZE),
-        is_ctx.GetEnvLightRISBufferParams().tile_cnt,
-        1
-    );
-    command.presample_grid_dispatch = uint3(
-        div_ceil(is_ctx.GetGridRuntimeConfig().num_light_slot, DI_PRESAMPLE_GRID_SIZE),
-        1,
-        1
-    );
-    uint2 screen_dispatch = _rt_ctx.frame_rt.diffuse_lighting->GetExtent().xy;
-    screen_dispatch.x     = div_ceil(screen_dispatch.x, DI_SCREEN_TILE_SIZE);
-    screen_dispatch.y     = div_ceil(screen_dispatch.y, DI_SCREEN_TILE_SIZE);
-    command.screen_dispatch = uint3(screen_dispatch, 1);
+    {
+        TRACE_SCOPE_CAT("Raytracing.Lighting.Prepare.DispatchSizes", "Frame");
+        command.has_local_lights = is_ctx.GetLightBufferParams().local_light_region.light_cnt != 0;
+        command.has_env_lights   = is_ctx.GetLightBufferParams().env_light.light_cnt != 0;
+        command.presample_light_dispatch = uint3(
+            div_ceil(is_ctx.GetLocalLightRISBufferParams().tile_size, DI_PRESAMPLE_GRID_SIZE),
+            is_ctx.GetLocalLightRISBufferParams().tile_cnt,
+            1
+        );
+        command.presample_env_dispatch = uint3(
+            div_ceil(is_ctx.GetEnvLightRISBufferParams().tile_size, DI_PRESAMPLE_GRID_SIZE),
+            is_ctx.GetEnvLightRISBufferParams().tile_cnt,
+            1
+        );
+        command.presample_grid_dispatch = uint3(
+            div_ceil(is_ctx.GetGridRuntimeConfig().num_light_slot, DI_PRESAMPLE_GRID_SIZE),
+            1,
+            1
+        );
+        uint2 screen_dispatch = _rt_ctx.frame_rt.diffuse_lighting->GetExtent().xy;
+        screen_dispatch.x     = div_ceil(screen_dispatch.x, DI_SCREEN_TILE_SIZE);
+        screen_dispatch.y     = div_ceil(screen_dispatch.y, DI_SCREEN_TILE_SIZE);
+        command.screen_dispatch = uint3(screen_dispatch, 1);
+    }
     return command;
 }
 
 LightingPass::RecordResources LightingPass::CaptureResources(const RTContext& _rt_ctx) {
+    TRACE_SCOPE_CAT("Raytracing.Lighting.CaptureResources", "Frame");
     const bool b_current_frame = _rt_ctx.b_current_frame;
     RaytracingTlasRef tlas = _rt_ctx.rt_scene ? _rt_ctx.rt_scene->GetTlas() : RaytracingTlasRef{};
     RaytracingTlasRef prev_tlas = _rt_ctx.rt_scene ? _rt_ctx.rt_scene->GetPrevTlas() : RaytracingTlasRef{};
@@ -310,36 +324,53 @@ void LightingPass::RecordDispatch(
 }
 
 void LightingPass::AddPasses(RenderGraph& _graph, const RTGraphFrameResources& _rg, const RTContext& _rt_ctx) {
-    auto* command   = _graph.Alloc<PreparedCommand>(Prepare(_rt_ctx));
-    auto* resources = _graph.Alloc<RecordResources>(CaptureResources(_rt_ctx));
-    RGBuffer* constants = _graph.ImportBuffer(MOER_TEXT("RT.Lighting.resample_params"), resample_params, EQueueType::Graphics);
-    RGBuffer* tlas_buffer = ImportRTTlasBufferIfValid(_graph, MOER_TEXT("RT.Lighting.tlas_buffer"), resources->tlas);
-    RGBuffer* prev_tlas_buffer = resources->prev_tlas.Get() == resources->tlas.Get() ?
-                                     tlas_buffer :
-                                     ImportRTTlasBufferIfValid(
-                                         _graph,
-                                         MOER_TEXT("RT.Lighting.prev_tlas_buffer"),
-                                         resources->prev_tlas
-                                     );
+    TRACE_SCOPE_CAT("Raytracing.Lighting.AddPasses", "Frame");
+    auto* command = [&]() {
+        TRACE_SCOPE_CAT("Raytracing.Lighting.AddPasses.Prepare", "Frame");
+        return _graph.Alloc<PreparedCommand>(Prepare(_rt_ctx));
+    }();
+    auto* resources = [&]() {
+        TRACE_SCOPE_CAT("Raytracing.Lighting.AddPasses.CaptureResources", "Frame");
+        return _graph.Alloc<RecordResources>(CaptureResources(_rt_ctx));
+    }();
+    RGBuffer* constants{};
+    RGBuffer* tlas_buffer{};
+    RGBuffer* prev_tlas_buffer{};
+    {
+        TRACE_SCOPE_CAT("Raytracing.Lighting.AddPasses.ImportResources", "Frame");
+        constants = _graph.ImportBuffer(MOER_TEXT("RT.Lighting.resample_params"), resample_params, EQueueType::Graphics);
+        tlas_buffer = ImportRTTlasBufferIfValid(_graph, MOER_TEXT("RT.Lighting.tlas_buffer"), resources->tlas);
+        prev_tlas_buffer = resources->prev_tlas.Get() == resources->tlas.Get() ?
+                               tlas_buffer :
+                               ImportRTTlasBufferIfValid(
+                                   _graph,
+                                   MOER_TEXT("RT.Lighting.prev_tlas_buffer"),
+                                   resources->prev_tlas
+                               );
+    }
 
     auto* upload_params      = _graph.Alloc<RGLightingUploadParams>();
     upload_params->constants = RGBufferView{.buffer = constants};
-    _graph.AddPass(
-        MOER_TEXT("RT.Lighting.UploadConstants"),
-        upload_params,
-        ERGPassFlags::Graphics,
-        [this, command](RHICommandList& cmd_list, RGContext) {
-            RecordConstantsUpload(cmd_list, *command);
-        }
-    );
+    {
+        TRACE_SCOPE_CAT("Raytracing.Lighting.AddPasses.UploadPass", "Frame");
+        _graph.AddPass(
+            MOER_TEXT("RT.Lighting.UploadConstants"),
+            upload_params,
+            ERGPassFlags::Graphics,
+            [this, command](RHICommandList& cmd_list, RGContext) {
+                RecordConstantsUpload(cmd_list, *command);
+            }
+        );
+    }
 
     auto add_dispatch = [&](StringView name, ELightingDispatch dispatch) {
+        TRACE_SCOPE_CAT("Raytracing.Lighting.AddPasses.DispatchPass", "Frame");
         auto* params = _graph.Alloc<RGLightingDispatchParams>();
         FillLightingDispatchParams(_graph, *params, constants, tlas_buffer, prev_tlas_buffer, _rg, *resources);
         _graph.AddPass(
             name,
             params,
-            kRTGraphComputePassFlags,
+            s_rt_graph_graphics_compute_pass,
             [this, command, resources, dispatch](RHICommandList& cmd_list, RGContext) {
                 RecordDispatch(cmd_list, *command, *resources, dispatch);
             }

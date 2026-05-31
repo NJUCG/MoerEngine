@@ -64,7 +64,6 @@ public:
         Scope,
         Query,
         Custom,
-        CopyScope,
         BufferOverlap
     };
 
@@ -74,7 +73,7 @@ public:
         MOER_TEXT("ShaderDispatch"),  MOER_TEXT("BuildAccel"),          MOER_TEXT("BuildTLAS"),      MOER_TEXT("TraceRay"),
         MOER_TEXT("Barrier"),         MOER_TEXT("SetTrackedState"),     MOER_TEXT("QueueTransfer"),  MOER_TEXT("SetDrawState"),
         MOER_TEXT("SetGeometryPassDrawState"), MOER_TEXT("MultiDraw"),  MOER_TEXT("UpdateBindlessArray"), MOER_TEXT("ClearResource"),
-        MOER_TEXT("Scope"),           MOER_TEXT("Query"),               MOER_TEXT("Custom"),         MOER_TEXT("CopyScope"),
+        MOER_TEXT("Scope"),           MOER_TEXT("Query"),               MOER_TEXT("Custom"),
         MOER_TEXT("BufferOverlap")
     };
 
@@ -186,25 +185,13 @@ enum class ERHITranslateExecutionClass : uint8_t {
     SerialControl = 1,
 };
 
-enum class ERHISubmitPreprocessMode : uint8_t {
-    InferStateAndSync = 0,
-    ExplicitStateNoSync = 1,
-};
-
 struct RHISubmitSegment {
-    static constexpr size_t NoCopyScope = static_cast<size_t>(-1);
-
     EQueueType queue{EQueueType::Ignore};
     size_t     begin{0};
     size_t     end{0};
-    size_t     copy_scope_index{NoCopyScope};
-
-    bool UsesCopyScope() const {
-        return copy_scope_index != NoCopyScope;
-    }
 
     bool IsEmpty() const {
-        return !UsesCopyScope() && begin == end;
+        return begin == end;
     }
 };
 
@@ -565,7 +552,6 @@ struct CmdSubmit {
     Array<QueryToken>  query_tokens;
     Array<GPUEvent>    gpu_events;
     GraphEventRef      record_complete_event{nullptr};
-    ERHISubmitPreprocessMode preprocess_mode{ERHISubmitPreprocessMode::InferStateAndSync};
     Array<TrackedTextureState> explicit_tracked_textures{};
     Array<TrackedBufferState>  explicit_tracked_buffers{};
     ERHITranslateExecutionClass translate_execution_class{ERHITranslateExecutionClass::Parallel};
@@ -608,11 +594,6 @@ struct CmdSubmit {
         return std::move(*this);
     }
 
-    CmdSubmit&& TickProfiling() {
-        b_tick_profiling = true;
-        return std::move(*this);
-    }
-
     CmdSubmit(CmdSubmit&& _other) noexcept {
         cmds               = std::move(_other.cmds);
         callbacks          = std::move(_other.callbacks);
@@ -623,7 +604,6 @@ struct CmdSubmit {
         query_tokens       = std::move(_other.query_tokens);
         gpu_events         = std::move(_other.gpu_events);
         record_complete_event = std::move(_other.record_complete_event);
-        preprocess_mode    = _other.preprocess_mode;
         explicit_tracked_textures = std::move(_other.explicit_tracked_textures);
         explicit_tracked_buffers = std::move(_other.explicit_tracked_buffers);
         cached_args        = std::move(_other.cached_args);
@@ -644,7 +624,6 @@ struct CmdSubmit {
         query_tokens       = std::move(_other.query_tokens);
         gpu_events         = std::move(_other.gpu_events);
         record_complete_event = std::move(_other.record_complete_event);
-        preprocess_mode    = _other.preprocess_mode;
         explicit_tracked_textures = std::move(_other.explicit_tracked_textures);
         explicit_tracked_buffers = std::move(_other.explicit_tracked_buffers);
         cached_args        = std::move(_other.cached_args);
@@ -846,101 +825,7 @@ concept is_arg = std::is_same_v<std::remove_reference_t<TInArg>(), BufferView> |
                  std::is_same_v<std::remove_reference_t<TInArg>(), Buffer*> ||
                  std::is_same_v<std::remove_reference_t<TInArg>(), Texture*>;
 
-// Forward declaration
 class CommandList;
-
-/**
- * §2.3 CopyCommandScope
- *
- * RAII object returned by CommandList::BeginCopyScope().
- * Copy commands recorded through this scope are embedded in the parent Graphics/Compute
- * CommandList as a tagged section. The executor splits the command list at submit time:
- *   gfx section → copy queue section → gfx section
- * and auto-generates acquire/release barriers at scope boundaries.
- *
- * Constraints:
- * - Only Graphics / Compute CommandList can call BeginCopyScope()
- * - Only copy / upload / readback commands allowed inside a scope
- * - Multiple scopes per CommandList are allowed; nesting is not
- */
-class RENDER_API CopyCommandScope {
-public:
-    ~CopyCommandScope();
-
-    CopyCommandScope(CopyCommandScope&&) noexcept;
-    CopyCommandScope& operator=(CopyCommandScope&&) = delete;
-    CopyCommandScope(const CopyCommandScope&)        = delete;
-    CopyCommandScope& operator=(const CopyCommandScope&) = delete;
-
-    void CopyFrom(
-        BufferView       _src,
-        BufferView       _dst,
-        StringView _name = Command::typenames[(uint)Command::EType::BufferToBuffer]
-    );
-    void CopyFrom(
-        TextureView      _src,
-        TextureView      _dst,
-        StringView _name = Command::typenames[(uint)Command::EType::TextureToTexture]
-    );
-    void CopyFrom(
-        TextureView      _src,
-        BufferView       _dst,
-        StringView _name = Command::typenames[(uint)Command::EType::TextureToBuffer]
-    );
-    void CopyFrom(
-        BufferView       _src,
-        TextureView      _dst,
-        StringView _name = Command::typenames[(uint)Command::EType::BufferToTexture]
-    );
-    void CopyFrom(
-        std::span<byte>  _data,
-        BufferView       _dst,
-        StringView _name = Command::typenames[(uint)Command::EType::UploadBuffer]
-    );
-    void CopyFrom(
-        std::span<byte>  _data,
-        TextureView      _dst,
-        StringView _name = Command::typenames[(uint)Command::EType::UploadTexture]
-    );
-    void CopyFrom(
-        Array<byte>&&    _data,
-        BufferView       _dst,
-        StringView _name = Command::typenames[(uint)Command::EType::UploadBuffer]
-    );
-    void CopyFrom(
-        Array<byte>&&    _data,
-        TextureView      _dst,
-        StringView _name = Command::typenames[(uint)Command::EType::UploadTexture]
-    );
-    void CopyFrom(
-        BufferView       _src,
-        std::span<byte>  _data,
-        StringView _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
-    );
-    void CopyFrom(
-        TextureView      _src,
-        std::span<byte>  _data,
-        StringView _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
-    );
-    SyncPointRef ReadbackCopy(
-        BufferView       _src,
-        std::span<byte>  _data,
-        StringView _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
-    );
-    SyncPointRef ReadbackCopy(
-        TextureView      _src,
-        std::span<byte>  _data,
-        StringView _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
-    );
-
-private:
-    explicit CopyCommandScope(CommandList& _cmd_list);
-    void PushCopyCommand(UniquePtr<Command>&& _cmd);
-    CommandList* cmd_list{nullptr};
-    Array<UniquePtr<Command>> copy_commands{};
-
-    friend class CommandList;
-};
 
 class CommandList {
 
@@ -1656,18 +1541,6 @@ public:
         static constexpr uint32_t value = std::is_same_v<T, First> + CountType<T, Rest...>::value;
     };
 
-    void Barriers(std::span<const BarrierCreateInfo> barriers, EQueueType src_queue, EQueueType dst_queue) {
-        Barriers(barriers, src_queue, dst_queue, ETrackedStateUpdateMode::Update);
-    }
-
-    void Barriers(
-        std::initializer_list<BarrierCreateInfo> barriers,
-        EQueueType                               src_queue,
-        EQueueType                               dst_queue
-    ) {
-        Barriers(std::span<const BarrierCreateInfo>(barriers.begin(), barriers.size()), src_queue, dst_queue);
-    }
-
     void Barriers(
         std::span<const BarrierCreateInfo> barriers,
         EQueueType                         src_queue,
@@ -1696,14 +1569,6 @@ public:
         );
     }
 
-    void Barriers(std::span<const BarrierCreateInfo> barriers) {
-        Barriers(barriers, queue_type, queue_type, ETrackedStateUpdateMode::Update);
-    }
-
-    void Barriers(std::initializer_list<BarrierCreateInfo> barriers) {
-        Barriers(std::span<const BarrierCreateInfo>(barriers.begin(), barriers.size()));
-    }
-
     void Barriers(
         std::span<const BarrierCreateInfo> barriers,
         ETrackedStateUpdateMode            tracked_state
@@ -1716,11 +1581,6 @@ public:
         ETrackedStateUpdateMode                  tracked_state
     ) {
         Barriers(std::span<const BarrierCreateInfo>(barriers.begin(), barriers.size()), tracked_state);
-    }
-
-    template<typename... T>
-    void Barriers(EQueueType src_queue, EQueueType dst_queue, EPassType pass_type, T... args) {
-        Barriers(src_queue, dst_queue, pass_type, ETrackedStateUpdateMode::Update, args...);
     }
 
     template<typename... T>
@@ -1798,7 +1658,6 @@ public:
         return record_complete_event;
     }
     RENDER_API CommandList& DeleteResources();
-    RENDER_API CommandList& TickProfiling();
     RENDER_API CommandList& TickFrame();
 
     RENDER_API ArrayArgReference RegisterArgs(ArrayArguments&& _args);
@@ -1807,18 +1666,6 @@ public:
 
     RENDER_API bool IsEmpty() const;
 
-    /**
-     * §2.3 BeginCopyScope
-     *
-     * Creates a CopyCommandScope that embeds copy operations in this Graphics/Compute
-     * CommandList as a tagged section. The executor splits the command list at submit
-     * time and automatically generates acquire/release barriers at scope boundaries.
-     * Unknown resources (first use inside CopyScope) skip the gfx→copy release barrier.
-     *
-     * Only callable on Graphics or Compute queue CommandLists.
-     * Multiple scopes per CommandList are allowed; nesting is not.
-     */
-    RENDER_API CopyCommandScope BeginCopyScope();
     RENDER_API void             BeginBufferOverlap(BufferView _buffer);
     RENDER_API void             EndBufferOverlap(BufferView _buffer);
 
@@ -1827,7 +1674,6 @@ private:
     friend ComputeDispatcher;
     friend class CommandQueue;
     friend class GPUEventScope;
-    friend class CopyCommandScope;
     RENDER_API void SetRenderCmds(
         PipelineHandle&  _handle,
         ArrayArguments&& _args,
@@ -1899,8 +1745,6 @@ private:
 #pragma endregion
 
     QueryToken CreateQueryToken(QueryKind _kind, StringView _name);
-    void       EnsureNoActiveCopyScope(StringView _api_name) const;
-    void       FinalizeCopyScope(Array<UniquePtr<Command>>&& _commands);
 
     RENDER_API void PushGPUEvent(GPUEvent&& event);
     RENDER_API Array<GPUEvent> StealGPUEvents();
@@ -1915,11 +1759,9 @@ private:
     TCachedArgArray              cached_args;
     Array<QueryToken>            query_tokens;
     GraphEventRef                record_complete_event{nullptr};
-    ERHISubmitPreprocessMode     preprocess_mode{ERHISubmitPreprocessMode::InferStateAndSync};
     Array<TrackedTextureState>   explicit_tracked_textures{};
     Array<TrackedBufferState>    explicit_tracked_buffers{};
     ERHITranslateExecutionClass  translate_execution_class{ERHITranslateExecutionClass::Parallel};
-    bool                         submit_tick_profiling{false};
     bool                         submit_delete_resources{false};
     EQueueType                   queue_type{EQueueType::Graphics};
     Stack<String>                scope_stack;
@@ -1929,7 +1771,6 @@ private:
 #endif
     Array<GPUEvent>              gpu_events;
     uint32                       event_depth{0};
-    bool                         b_copy_scope_active{false};
     bool                         b_buffer_overlap_active{false};
     uint64                       buffer_overlap_handle{0};
 };

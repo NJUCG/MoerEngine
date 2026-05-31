@@ -1,18 +1,17 @@
 #include "PreprocessLightPass.h"
 
 #include "misc/STL.h"
-#include "misc/Timer.h"
-#include "platform/Platform.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "scene/Scene.h"
 #include "ShaderUtils.h"
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/lighting/ShaderParameters.h"
+#include "taskgraph/TaskGraph.h"
+#include "trace/Trace.h"
 
 #include <algorithm>
 #include <cmath>
-#include <ranges>
 
 namespace Moer::Render::Raytracing {
 
@@ -50,31 +49,67 @@ bool HasUploadWork(const PrepareLightPass::PreparedCommand& command) {
     return !command.primitive_to_light.empty() || !command.tasks.empty() || !command.prim_light_infos.empty();
 }
 
-} // namespace
+uint RoundUpToChunk(uint value, uint chunk) {
+    return (value + chunk - 1) & ~(chunk - 1);
+}
 
-template<typename T>
-struct CachelineStruct {
-    union {
-        byte padding[PLATFORM_CACHELINE_SIZE];
-        T    data;
-    };
-    CachelineStruct() noexcept {
-        memset(padding, 0, sizeof(padding));
-    }
-    CachelineStruct(const T& _data) : data(_data) {}
-    CachelineStruct(const CachelineStruct& _rhs) : data(_rhs.data) {}
-    CachelineStruct& operator=(const CachelineStruct& _rhs) {
-        data = _rhs.data;
-        return *this;
-    }
+constexpr uint s_prepare_light_parallel_threshold = 256;
 
-    operator T&() {
-        return data;
-    }
-    operator const T&() const {
-        return data;
-    }
+struct SceneLightCandidate {
+    bool                 valid             = false;
+    entt::entity         entity            = entt::null;
+    ELightType           type              = ELightType::None;
+    uint                 prev_light_offset = uint(-1);
+    PolymorphicLightInfo info{};
 };
+
+uint ResolvePrepareWorkerCount(const RTContext& rt_ctx, uint item_count) {
+    if (!rt_ctx.b_parallel_process_light || item_count < s_prepare_light_parallel_threshold) {
+        return 1;
+    }
+
+    uint worker_count = TaskGraph::GetInterface().GetWorkerThreadCount();
+    if (worker_count == 0) {
+        return 1;
+    }
+
+    const uint requested_count = std::max(1u, rt_ctx.num_threads);
+    worker_count              = std::min(worker_count, requested_count);
+    worker_count              = std::min(worker_count, item_count);
+    return std::max(1u, worker_count);
+}
+
+template<typename FunctionType>
+void RunPrepareRanges(uint item_count, uint worker_count, FunctionType&& function) {
+    if (item_count == 0) {
+        return;
+    }
+
+    if (worker_count <= 1) {
+        function(0, 0, item_count);
+        return;
+    }
+
+    const uint chunk_size = (item_count + worker_count - 1) / worker_count;
+
+    GraphEventArray events;
+    events.reserve(worker_count);
+    for (uint worker_index = 0; worker_index < worker_count; ++worker_index) {
+        const uint begin = worker_index * chunk_size;
+        const uint end   = std::min(begin + chunk_size, item_count);
+        if (begin >= end) {
+            break;
+        }
+
+        events.push_back(LambdaTask::Dispatch([worker_index, begin, end, &function]() {
+            function(worker_index, begin, end);
+        }));
+    }
+
+    TaskGraph::GetInterface().WaitUntilTasksComplete(events, EThread::UNKNOWN_THREAD);
+}
+
+} // namespace
 
 PrepareLightPass::PrepareLightPass(RenderDevice& _device, ShaderManager& _manager, Scene& _scene) :
     device(_device),
@@ -85,44 +120,6 @@ PrepareLightPass::PrepareLightPass(RenderDevice& _device, ShaderManager& _manage
             "pipelines/raytracing/lighting/precompute/PrepareLights.hlsl"
         )
     ) {}
-
-void PrepareLightPass::CountEmissiveInstances(uint& _num_emissive_meshes, uint& _num_emissive_triangles) {
-    _num_emissive_meshes    = 0;
-    _num_emissive_triangles = 0;
-
-    auto& r = scene.r();
-
-    // Count every renderable entity.
-    r.view<const ecs::CRenderable>().each([&](const auto entity, const ecs::CRenderable& c_renderable) {
-        // Fetch the mesh component.
-        if (!r.valid(c_renderable.mesh_entt) || !r.all_of<ecs::CMesh>(c_renderable.mesh_entt)) {
-            return; // Skip invalid mesh
-        }
-
-        const ecs::CMesh& c_mesh = r.get<ecs::CMesh>(c_renderable.mesh_entt);
-
-        // Iterate over every primitive in the mesh.
-        for (const entt::entity primitive_entt : c_mesh.primitive_entts) {
-            if (!r.valid(primitive_entt) || !r.all_of<ecs::CPrimitive>(primitive_entt)) {
-                continue; // Skip invalid primitive
-            }
-
-            const ecs::CPrimitive& c_primitive = r.get<ecs::CPrimitive>(primitive_entt);
-
-            // Fetch the material.
-            if (!r.valid(c_primitive.material_entt) || !r.all_of<ecs::CMaterial>(c_primitive.material_entt)) {
-                continue; // Skip invalid material
-            }
-
-            const ecs::CMaterial& c_material = r.get<ecs::CMaterial>(c_primitive.material_entt);
-
-            if (c_material.emissive_factor != float3(0.f)) {
-                _num_emissive_meshes++;
-                _num_emissive_triangles += c_primitive.index_count / 3;
-            }
-        }
-    });
-}
 
 static uint LightPriority(entt::entity entity, const Moer::Scene& scene) {
     auto& r = scene.r();
@@ -315,6 +312,52 @@ static bool ConvertLight(entt::entity entity, const Moer::Scene& scene, Polymorp
     return true;
 }
 
+void PrepareLightPass::RebuildEmissivePrimitiveCache() {
+    TRACE_SCOPE_CAT("Raytracing.ProcessLights.RebuildEmissivePrimitiveCache", "Frame");
+
+    auto& r = scene.r();
+    const uint primitive_count = scene.GetCpuScene().GetPrimitiveCount();
+
+    cached_emissive_primitives.clear();
+    cached_primitive_to_light = Array<uint>(std::max(1u, primitive_count), s_invalid_light_idx);
+    cached_emissive_triangle_count = 0;
+    cached_primitive_count = primitive_count;
+    cached_primitive_to_light_dirty = true;
+    cached_primitive_to_light_upload_target = nullptr;
+
+    r.view<const ecs::CPrimitive>().each([&](const auto primitive_entt, const ecs::CPrimitive& c_primitive) {
+        if (!r.valid(c_primitive.material_entt) || !r.all_of<ecs::CMaterial>(c_primitive.material_entt)) {
+            return;
+        }
+
+        const ecs::CMaterial& c_material = r.get<ecs::CMaterial>(c_primitive.material_entt);
+        if (c_material.emissive_factor == float3(0.f)) {
+            return;
+        }
+
+        const uint primitive_id = scene.GetCpuScene().GetPrimitiveId(primitive_entt);
+        if (primitive_id == UINT_MAX) {
+            LOG_ERROR(MOER_TEXT("Primitive entity {} not found in CpuScene"), entt::to_integral(primitive_entt));
+            return;
+        }
+
+        EmissivePrimitiveEntry entry{};
+        entry.primitive_id       = primitive_id;
+        entry.light_offset       = cached_emissive_triangle_count;
+        entry.num_triangles      = c_primitive.index_count / 3;
+        entry.index_start_idx    = c_primitive.index.is_valid ? c_primitive.index.start_idx : 0;
+        entry.first_instance_idx = scene.GetCpuScene().GetFirstInstanceIndex(primitive_id);
+
+        if (primitive_id >= cached_primitive_to_light.size()) {
+            cached_primitive_to_light.resize(primitive_id + 1, s_invalid_light_idx);
+        }
+        cached_primitive_to_light[primitive_id] = entry.light_offset;
+
+        cached_emissive_triangle_count += entry.num_triangles;
+        cached_emissive_primitives.emplace_back(entry);
+    });
+}
+
 PrepareLightPass::PreparedCommand PrepareLightPass::Prepare(RTContext& _rt_ctx) {
 
     TRACE_SCOPE_CAT("Raytracing.ProcessLights", "Frame");
@@ -324,388 +367,200 @@ PrepareLightPass::PreparedCommand PrepareLightPass::Prepare(RTContext& _rt_ctx) 
 
     uint light_buf_offset = 0;
 
-    UnorderedMap<uint, uint> primitive_to_light_offset_map;
-
     auto& r = scene.r();
-    r.view<const ecs::CPrimitive>().each([&](const auto primitive_entt, const ecs::CPrimitive& c_primitive) {
-        // 获取材质
-        if (!r.valid(c_primitive.material_entt) || !r.all_of<ecs::CMaterial>(c_primitive.material_entt)) {
-            return;
-        }
-
-        const ecs::CMaterial& c_material = r.get<ecs::CMaterial>(c_primitive.material_entt);
-
-        // 检查自发光（对应原始代码的 emissive_factor 检查）
-        if (c_material.emissive_factor == float3(0.f)) {
-            uint primitive_id = scene.GetCpuScene().GetPrimitiveId(primitive_entt);
-            if (primitive_id != UINT_MAX) {
-                primitive_to_light_offset_map.erase(primitive_id);
-            }
-            return;
-        }
-
-        // 获取 primitive_id
-        uint primitive_id = scene.GetCpuScene().GetPrimitiveId(primitive_entt);
-        if (primitive_id == UINT_MAX) {
-            LOG_ERROR(MOER_TEXT("Primitive entity {} not found in CpuScene"), entt::to_integral(primitive_entt));
-            return;
-        }
-
-        // 检查是否已经处理过
-        uint64 primitive_hash = static_cast<uint64>(primitive_id);
-        auto   iter           = instance_light_buffer_offsets.find(primitive_hash);
-
-        // 创建 Task
-        PrepareLightsTask task{};
-        task.primitive_id      = primitive_id;
-        task.light_offset      = light_buf_offset;
-        task.num_triangles     = c_primitive.index_count / 3;
-        task.prev_light_offset = iter == instance_light_buffer_offsets.end() ? -1 : iter->second;
-
-        task.index_start_idx    = c_primitive.index.is_valid ? c_primitive.index.start_idx : 0;
-        task.first_instance_idx = scene.GetCpuScene().GetFirstInstanceIndex(primitive_id);
-
-        primitive_to_light_offset_map[primitive_id]   = light_buf_offset;
-        instance_light_buffer_offsets[primitive_hash] = light_buf_offset;
-
-        light_buf_offset += task.num_triangles;
-        tasks.emplace_back(task);
-    });
-
-    uint num_prim_lights = light_buf_offset;
-    // Convert primitive_to_light_offset_map to an indexed array.
-    uint max_primitive_id = 0;
-    if (!primitive_to_light_offset_map.empty()) {
-        for (const auto& [primitive_id, light_offset] : primitive_to_light_offset_map) {
-            max_primitive_id = std::max(max_primitive_id, primitive_id);
-        }
-    }
-    uint num_primitives = scene.GetCpuScene().GetPrimitiveCount();
-    max_primitive_id    = std::max(max_primitive_id, num_primitives > 0 ? num_primitives - 1 : 0);
-
-    Array<uint> primitive_to_light(max_primitive_id + 1, s_invalid_light_idx);
-    for (const auto& [primitive_id, light_offset] : primitive_to_light_offset_map) {
-        if (primitive_id <= max_primitive_id) {
-            primitive_to_light[primitive_id] = light_offset;
-        }
+    const uint primitive_count = scene.GetCpuScene().GetPrimitiveCount();
+    if (cached_primitive_count != primitive_count) {
+        RebuildEmissivePrimitiveCache();
     }
 
-    // 3. 处理场景光源（Directional Light, Point Light 等）
+    const uint num_emissive_meshes    = static_cast<uint>(cached_emissive_primitives.size());
+    const uint num_emissive_triangles = cached_emissive_triangle_count;
+    {
+        TRACE_SCOPE_CAT("Raytracing.ProcessLights.BuildEmissiveTasksFromCache", "Frame");
+        for (const EmissivePrimitiveEntry& entry : cached_emissive_primitives) {
+            const auto iter = instance_light_buffer_offsets.find(static_cast<uint64>(entry.primitive_id));
 
-    Timer timer;
-    timer.Start();
+            PrepareLightsTask task{};
+            task.primitive_id       = entry.primitive_id;
+            task.light_offset       = entry.light_offset;
+            task.num_triangles      = entry.num_triangles;
+            task.prev_light_offset  = iter == instance_light_buffer_offsets.end() ? uint(-1) : iter->second;
+            task.index_start_idx    = entry.index_start_idx;
+            task.first_instance_idx = entry.first_instance_idx;
+
+            instance_light_buffer_offsets[static_cast<uint64>(entry.primitive_id)] = entry.light_offset;
+
+            tasks.emplace_back(task);
+        }
+        light_buf_offset = cached_emissive_triangle_count;
+    }
 
     uint num_finite_prim_lights   = 0;
     uint num_infinite_prim_lights = 0;
     uint num_is_env_lights        = 0;
 
-    auto                light_view = scene.r().view<const ecs::CLight>();
-    Array<entt::entity> light_entities(light_view.begin(), light_view.end());
+    Array<entt::entity> light_entities{};
+    {
+        TRACE_SCOPE_CAT("Raytracing.ProcessLights.CollectLightEntities", "Frame");
+        auto light_view = scene.r().view<const ecs::CLight>();
+        light_entities  = Array<entt::entity>(light_view.begin(), light_view.end());
+    }
 
-    // 下面注释掉的这一段代码，是原来的多线程处理光线的代码
-    // - 场景管理在重构后，目前没有时间进行迁移，所以保留此处的注释
+    {
+        TRACE_SCOPE_CAT("Raytracing.ProcessLights.SortLights", "Frame");
+        std::ranges::sort(light_entities, [&](entt::entity _lhs, entt::entity _rhs) {
+            return LightPriority(_lhs, scene) < LightPriority(_rhs, scene);
+        });
+    }
 
-    // uint chunk_size    = 1024;
-    // uint parrallel_cnt = std::max(_rt_ctx.num_threads, 1u);
-    // parrallel_cnt      = std::min(parrallel_cnt, (uint)light_entities_src.size() / chunk_size + 1);
-    // if (_rt_ctx.b_parallel_process_light) {
-    //     Array<CachelineStruct<uint2>> light_cnt(
-    //         parrallel_cnt,
-    //         CachelineStruct<uint2>(uint2(0.f))
-    //     ); // normal light, inf light
+    Array<SceneLightCandidate> scene_light_candidates(light_entities.size());
+    {
+        const uint worker_count = ResolvePrepareWorkerCount(_rt_ctx, static_cast<uint>(light_entities.size()));
+        TRACE_SCOPE_CAT(
+            worker_count > 1 ? "Raytracing.ProcessLights.ConvertSceneLights.Parallel" :
+                               "Raytracing.ProcessLights.ConvertSceneLights.Serial",
+            "Frame"
+        );
+        RunPrepareRanges(static_cast<uint>(light_entities.size()), worker_count, [&](uint, uint begin, uint end) {
+            for (uint index = begin; index < end; ++index) {
+                const entt::entity entity = light_entities[index];
+                PolymorphicLightInfo light_info{};
+                if (!ConvertLight(entity, scene, light_info)) {
+                    continue;
+                }
 
-    //     Array<StaticArray<Array<CachelineStruct<uint>>, 2>> entity_idx_parrallel(parrallel_cnt);
-    //     Array<UnorderedMap<uint64, uint>>                   prev_light_buffer_offsets_parallel(parrallel_cnt);
-    //     for (uint i = 0; i < parrallel_cnt; i++) {
-    //         // reserve space for normal lights
-    //         entity_idx_parrallel[i][0].reserve(light_entities_src.size() / parrallel_cnt);
-    //     }
-
-    //     ParallelFor(parrallel_cnt, [&](uint _idx) {
-    //         uint region_start = _idx * light_entities_src.size() / parrallel_cnt;
-    //         uint region_end =
-    //             std::min((_idx + 1) * light_entities_src.size() / parrallel_cnt, light_entities_src.size());
-    //         uint norm_light_cnt = 0;
-    //         uint inf_light_cnt  = 0;
-    //         for (uint i = region_start; i < region_end; i++) {
-    //             Entity            entity     = light_entities_src[i];
-    //             LightComponentRef light_data = LightComponentManager::Get().Get(entity);
-
-    //             PolymorphicLightInfo light_info{};
-
-    //             if (!ConvertLight(*light_data, light_info)) {
-    //                 continue;
-    //             }
-
-    //             if (light_data->GetType() == ELightComponentType::DIRECTIONAL) {
-    //                 inf_light_cnt++;
-
-    //             } else if (light_data->GetType() == ELightComponentType::ENVIRONMENT) {
-    //                 continue;
-    //             } else {
-    //                 norm_light_cnt++;
-    //             }
-
-    //             switch (light_data->GetType()) {
-    //                 case ELightComponentType::DIRECTIONAL: {
-    //                     // tasks_parrallel[_idx][1].emplace_back(task);
-    //                     // prim_light_infos_parrallel[_idx][1].emplace_back(light_info);
-    //                     entity_idx_parrallel[_idx][1].emplace_back(i);
-    //                     break;
-    //                 }
-    //                 case ELightComponentType::ENVIRONMENT: {
-    //                     break;
-    //                 }
-    //                 default: {
-    //                     // tasks_parrallel[_idx][0].emplace_back(task);
-    //                     // prim_light_infos_parrallel[_idx][0].emplace_back(light_info);
-    //                     entity_idx_parrallel[_idx][0].emplace_back(i);
-    //                     break;
-    //                 }
-    //             }
-    //         }
-    //         light_cnt[_idx].data.x = norm_light_cnt;
-    //         light_cnt[_idx].data.y = inf_light_cnt;
-    //     });
-
-    //     // calculate offsets
-    //     for (uint i = 1; i < parrallel_cnt; i++) {
-    //         light_cnt[i].data.x += light_cnt[i - 1].data.x;
-    //     }
-    //     num_finite_prim_lights = light_cnt[parrallel_cnt - 1].data.x;
-
-    //     light_cnt[0].data.y += light_cnt[parrallel_cnt - 1].data.x;
-    //     for (uint i = 1; i < parrallel_cnt; i++) {
-    //         light_cnt[i].data.y += light_cnt[i - 1].data.y;
-    //     }
-    //     num_infinite_prim_lights = light_cnt[parrallel_cnt - 1].data.y - num_finite_prim_lights;
-
-    //     uint total_task_cnt = light_cnt[parrallel_cnt - 1].data.y;
-
-    //     uint task_offset = tasks.size();
-    //     tasks.resize(total_task_cnt + task_offset);
-    //     tasks.reserve(total_task_cnt + task_offset + 1);
-    //     prim_light_infos.resize(total_task_cnt);
-    //     prim_light_infos.reserve(total_task_cnt + 1);
-    //     timer.Stop();
-    //     float sort_time = timer.ElapsedMilliseconds();
-    //     timer.Start();
-    //     ParallelFor(parrallel_cnt, [&](uint _idx) {
-    //         for (uint light_type = 0; light_type < 2; light_type++) {
-    //             if (entity_idx_parrallel[_idx][light_type].size() > 0) {
-    //                 uint cur_offset =
-    //                     light_cnt[_idx].data[light_type] - entity_idx_parrallel[_idx][light_type].size();
-    //                 uint cur_task_offset = light_cnt[_idx].data[light_type] -
-    //                                        entity_idx_parrallel[_idx][light_type].size() + task_offset;
-    //                 uint total_light_offset = cur_offset + light_buf_offset;
-    //                 for (uint i = 0; i < entity_idx_parrallel[_idx][light_type].size(); i++) {
-    //                     PrepareLightsTask task{};
-    //                     task.light_offset     = total_light_offset + i;
-    //                     task.primitive_id = (cur_offset + i) | g_task_prim_light_bit;
-    //                     task.num_triangles    = 1;
-    //                     Entity entity = light_entities_src[entity_idx_parrallel[_idx][light_type][i].data];
-    //                     auto   light_data = LightComponentManager::Get().Get(entity);
-
-    //                     uint64 key  = uint64(light_data.Get());
-    //                     auto   iter = primitive_light_buffer_offsets.find(key);
-    //                     task.prev_light_offset =
-    //                         iter == primitive_light_buffer_offsets.end() ? -1 : iter->second;
-    //                     tasks[cur_task_offset + i]                    = task;
-    //                     prev_light_buffer_offsets_parallel[_idx][key] = total_light_offset + i;
-    //                 }
-
-    //                 for (uint i = 0; i < entity_idx_parrallel[_idx][light_type].size(); i++) {
-    //                     PolymorphicLightInfo& light_info = prim_light_infos[cur_offset + i];
-    //                     if (!ConvertLight(
-    //                             *LightComponentManager::Get().Get(
-    //                                 light_entities_src[entity_idx_parrallel[_idx][light_type][i].data]
-    //                             ),
-    //                             light_info
-    //                         )) {
-    //                         assert(false && "ConvertLight");
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //     });
-
-    //     timer.Stop();
-    //     float convert_time = timer.ElapsedMilliseconds();
-
-    //     // merge prev light buffer offsets
-    //     for (uint i = 0; i < parrallel_cnt; i++) {
-    //         primitive_light_buffer_offsets.insert(
-    //             prev_light_buffer_offsets_parallel[i].begin(), prev_light_buffer_offsets_parallel[i].end()
-    //         );
-    //     }
-
-    //     light_buf_offset += light_cnt[parrallel_cnt - 1].data.y;
-
-    //     if (auto cur_env = this->scene.GetCurrentEnvMap(); cur_env.texture) {
-    //         auto                 env_comp = LightComponentManager::Get().Get(cur_env.entity);
-    //         PolymorphicLightInfo light_info{};
-    //         auto                 pre_iter = primitive_light_buffer_offsets.find(uint64(env_comp.Get()));
-    //         if (ConvertLight(*env_comp, light_info)) {
-    //             PrepareLightsTask task{};
-    //             task.primitive_id = prim_light_infos.size() | g_task_prim_light_bit;
-    //             task.light_offset     = light_buf_offset;
-    //             task.num_triangles    = 1;
-    //             task.prev_light_offset =
-    //                 pre_iter == primitive_light_buffer_offsets.end() ? -1 : pre_iter->second;
-    //             primitive_light_buffer_offsets[uint64(env_comp.Get())] = light_buf_offset;
-    //             light_buf_offset += task.num_triangles;
-    //             tasks.emplace_back(task);
-    //             prim_light_infos.emplace_back(light_info);
-
-    //             num_is_env_lights++;
-    //         }
-    //     }
-    // } else {
-    //     Array<Entity> light_entities(light_entities_src.begin(), light_entities_src.end());
-    //     std::ranges::sort(light_entities, [&](Entity _lhs, Entity _rhs) {
-    //         return LightPriority(LightComponentManager::Get().Get(_lhs)) <
-    //                LightPriority(LightComponentManager::Get().Get(_rhs));
-    //     });
-
-    //     std::span<Entity> view = light_entities;
-
-    //     for (auto entity : view) {
-    //         LightComponentRef light_data = LightComponentManager::Get().Get(entity);
-
-    //         PolymorphicLightInfo light_info{};
-
-    //         if (!ConvertLight(*light_data, light_info)) {
-    //             continue;
-    //         }
-
-    //         auto pre_iter = primitive_light_buffer_offsets.find(uint64(light_data.Get()));
-
-    //         PrepareLightsTask task{};
-    //         task.primitive_id  = prim_light_infos.size() | g_task_prim_light_bit;
-    //         task.light_offset      = light_buf_offset;
-    //         task.num_triangles     = 1;
-    //         task.prev_light_offset = pre_iter == primitive_light_buffer_offsets.end() ? -1 : pre_iter->second;
-
-    //         primitive_light_buffer_offsets[uint64(light_data.Get())] = light_buf_offset;
-    //         light_buf_offset += task.num_triangles;
-    //         tasks.emplace_back(task);
-    //         prim_light_infos.emplace_back(light_info);
-
-    //         if (light_data->GetType() == ELightComponentType::DIRECTIONAL) {
-    //             num_infinite_prim_lights++;
-    //         } else if (light_data->GetType() == ELightComponentType::ENVIRONMENT) {
-    //             num_is_env_lights++;
-    //         } else {
-    //             num_finite_prim_lights++;
-    //         }
-    //     }
-    // }
-
-    std::ranges::sort(light_entities, [&](entt::entity _lhs, entt::entity _rhs) {
-        return LightPriority(_lhs, scene) < LightPriority(_rhs, scene);
-    });
-
-    // 处理每个光源
-    for (auto entity : light_entities) {
-        PolymorphicLightInfo light_info{};
-
-        // 转换光源
-        if (!ConvertLight(entity, scene, light_info)) {
-            continue;
-        }
-
-        // 查找上一帧的 offset
-        auto pre_iter = primitive_light_buffer_offsets.find(uint64(entity));
-
-        // 创建 Task
-        PrepareLightsTask task{};
-        task.primitive_id      = prim_light_infos.size() | g_task_prim_light_bit;
-        task.light_offset      = light_buf_offset;
-        task.num_triangles     = 1;
-        task.prev_light_offset = pre_iter == primitive_light_buffer_offsets.end() ? -1 : pre_iter->second;
-
-        primitive_light_buffer_offsets[uint64(entity)] = light_buf_offset;
-        light_buf_offset += task.num_triangles;
-        tasks.emplace_back(task);
-        prim_light_infos.emplace_back(light_info);
-
-        // 统计光源类型
-        auto c_light = scene.r().get<ecs::CLight>(entity);
-        switch (c_light.type) {
-            case Moer::ELightType::Directional: {
-                num_infinite_prim_lights++;
-                break;
+                const auto pre_iter = primitive_light_buffer_offsets.find(uint64(entity));
+                scene_light_candidates[index] = SceneLightCandidate{
+                    .valid             = true,
+                    .entity            = entity,
+                    .type              = scene.r().get<ecs::CLight>(entity).type,
+                    .prev_light_offset = pre_iter == primitive_light_buffer_offsets.end() ? uint(-1) : pre_iter->second,
+                    .info              = light_info
+                };
             }
-            case Moer::ELightType::Environment: {
-                num_is_env_lights++;
-                break;
+        });
+    }
+
+    {
+        TRACE_SCOPE_CAT("Raytracing.ProcessLights.MergeSceneLights", "Frame");
+        prim_light_infos.reserve(scene_light_candidates.size());
+        for (const SceneLightCandidate& candidate : scene_light_candidates) {
+            if (!candidate.valid) {
+                continue;
             }
-            default: {
-                num_finite_prim_lights++;
-                break;
+
+            PrepareLightsTask task{};
+            task.primitive_id      = prim_light_infos.size() | g_task_prim_light_bit;
+            task.light_offset      = light_buf_offset;
+            task.num_triangles     = 1;
+            task.prev_light_offset = candidate.prev_light_offset;
+
+            primitive_light_buffer_offsets[uint64(candidate.entity)] = light_buf_offset;
+            light_buf_offset += task.num_triangles;
+            tasks.emplace_back(task);
+            prim_light_infos.emplace_back(candidate.info);
+
+            switch (candidate.type) {
+                case Moer::ELightType::Directional: {
+                    num_infinite_prim_lights++;
+                    break;
+                }
+                case Moer::ELightType::Environment: {
+                    num_is_env_lights++;
+                    break;
+                }
+                default: {
+                    num_finite_prim_lights++;
+                    break;
+                }
             }
         }
     }
 
     // Handle env lighting from RTContext directly. rt_ctx.env_map is not assigned here, so use env_pdf_tex for dimensions.
-    if (_rt_ctx.scene_params.enable_env_map && _rt_ctx.env_pdf_tex) {
-        PolymorphicLightInfo light_info{};
-        light_info.color_type_flags = (uint)EPolyLightType::ELEnv << g_poly_morphic_light_type_shift;
+    {
+        TRACE_SCOPE_CAT("Raytracing.ProcessLights.AddEnvironmentLight", "Frame");
+        if (_rt_ctx.scene_params.enable_env_map && _rt_ctx.env_pdf_tex) {
+            PolymorphicLightInfo light_info{};
+            light_info.color_type_flags = (uint)EPolyLightType::ELEnv << g_poly_morphic_light_type_shift;
 
-        float3 color_scale = float3(_rt_ctx.scene_params.env_map_scale);
-        PackPolyLightColor(color_scale, light_info);
+            float3 color_scale = float3(_rt_ctx.scene_params.env_map_scale);
+            PackPolyLightColor(color_scale, light_info);
 
-        light_info.direction1 = _rt_ctx.scene_params.env_map_handle;
-        uint3 env_extent      = _rt_ctx.env_pdf_tex->GetExtent();
-        light_info.direction2 = env_extent.x | (env_extent.y << 16);
-        light_info.scalars    = Fp32ToFp16(_rt_ctx.scene_params.env_map_rotation);
-        light_info.scalars |= g_poly_morphic_light_env_is_scalar_bit;
+            light_info.direction1 = _rt_ctx.scene_params.env_map_handle;
+            uint3 env_extent      = _rt_ctx.env_pdf_tex->GetExtent();
+            light_info.direction2 = env_extent.x | (env_extent.y << 16);
+            light_info.scalars    = Fp32ToFp16(_rt_ctx.scene_params.env_map_rotation);
+            light_info.scalars |= g_poly_morphic_light_env_is_scalar_bit;
 
-        constexpr uint64 env_light_key = ~0ull;
-        auto             pre_iter      = primitive_light_buffer_offsets.find(env_light_key);
+            constexpr uint64 env_light_key = ~0ull;
+            auto             pre_iter      = primitive_light_buffer_offsets.find(env_light_key);
 
-        PrepareLightsTask task{};
-        task.primitive_id      = prim_light_infos.size() | g_task_prim_light_bit;
-        task.light_offset      = light_buf_offset;
-        task.num_triangles     = 1;
-        task.prev_light_offset = pre_iter == primitive_light_buffer_offsets.end() ? -1 : pre_iter->second;
+            PrepareLightsTask task{};
+            task.primitive_id      = prim_light_infos.size() | g_task_prim_light_bit;
+            task.light_offset      = light_buf_offset;
+            task.num_triangles     = 1;
+            task.prev_light_offset = pre_iter == primitive_light_buffer_offsets.end() ? -1 : pre_iter->second;
 
-        primitive_light_buffer_offsets[env_light_key] = light_buf_offset;
-        light_buf_offset += task.num_triangles;
-        tasks.emplace_back(task);
-        prim_light_infos.emplace_back(light_info);
+            primitive_light_buffer_offsets[env_light_key] = light_buf_offset;
+            light_buf_offset += task.num_triangles;
+            tasks.emplace_back(task);
+            prim_light_infos.emplace_back(light_info);
 
-        num_is_env_lights++;
+            num_is_env_lights++;
+        }
     }
 
-    timer.Stop();
+    {
+        TRACE_SCOPE_CAT("Raytracing.ProcessLights.CreateBuffersIfNeeded", "Frame");
+        static constexpr uint s_mesh_alloc_chunk      = 128;
+        static constexpr uint s_triangle_alloc_chunk  = 1024;
+        static constexpr uint s_primitive_alloc_chunk = 128;
+        _rt_ctx.CreateBuffersIfNeeded(
+            RoundUpToChunk(num_emissive_meshes, s_mesh_alloc_chunk),
+            RoundUpToChunk(num_emissive_triangles, s_triangle_alloc_chunk),
+            RoundUpToChunk(static_cast<uint>(prim_light_infos.size()), s_primitive_alloc_chunk),
+            std::max(1u, static_cast<uint>(cached_primitive_to_light.size()))
+        );
+    }
+
+    const bool upload_primitive_to_light = cached_primitive_to_light_dirty ||
+                                           cached_primitive_to_light_upload_target !=
+                                               _rt_ctx.primitive_to_light_buf.Get();
 
     PrepareLightsParams param{};
-    param.num_tasks = tasks.size();
+    {
+        TRACE_SCOPE_CAT("Raytracing.ProcessLights.BuildParams", "Frame");
+        param.num_tasks = tasks.size();
 
-    param.primitive_buf_hdl  = _rt_ctx.GetBindlessHandles().primitive_buf_hdl;
-    param.instance_buf_hdl   = _rt_ctx.GetBindlessHandles().instance_buf_hdl;
-    param.material_buf_hdl   = _rt_ctx.GetBindlessHandles().material_buf_hdl;
-    param.position_buf_hdl   = _rt_ctx.GetBindlessHandles().position_buf_hdl;
-    param.index_buf_hdl      = _rt_ctx.GetBindlessHandles().index_buf_hdl;
-    param.texcoord0_buf_hdl  = _rt_ctx.GetBindlessHandles().texcoord0_buf_hdl;
-    param.primitive_to_light = _rt_ctx.GetBindlessHandles().primitive_to_light;
+        param.primitive_buf_hdl  = _rt_ctx.GetBindlessHandles().primitive_buf_hdl;
+        param.instance_buf_hdl   = _rt_ctx.GetBindlessHandles().instance_buf_hdl;
+        param.material_buf_hdl   = _rt_ctx.GetBindlessHandles().material_buf_hdl;
+        param.position_buf_hdl   = _rt_ctx.GetBindlessHandles().position_buf_hdl;
+        param.index_buf_hdl      = _rt_ctx.GetBindlessHandles().index_buf_hdl;
+        param.texcoord0_buf_hdl  = _rt_ctx.GetBindlessHandles().texcoord0_buf_hdl;
+        param.primitive_to_light = _rt_ctx.GetBindlessHandles().primitive_to_light;
 
-    uint max_lights_in_buffer = uint(_rt_ctx.light_data_buf->GetNumElement() / 2);
-    param.cur_light_offset    = max_lights_in_buffer * b_odd_frame;
-    param.prev_light_offset   = max_lights_in_buffer * !b_odd_frame;
+        uint max_lights_in_buffer = uint(_rt_ctx.light_data_buf->GetNumElement() / 2);
+        param.cur_light_offset    = max_lights_in_buffer * b_odd_frame;
+        param.prev_light_offset   = max_lights_in_buffer * !b_odd_frame;
 
-    _rt_ctx.is_ctx.SetLightBufferParams(
-        param.cur_light_offset,
-        num_finite_prim_lights + num_prim_lights,
-        num_infinite_prim_lights,
-        num_is_env_lights
-    );
+        _rt_ctx.is_ctx.SetLightBufferParams(
+            param.cur_light_offset,
+            num_finite_prim_lights + num_emissive_triangles,
+            num_infinite_prim_lights,
+            num_is_env_lights
+        );
+    }
 
     b_odd_frame = !b_odd_frame;
 
     PreparedCommand command{};
-    command.primitive_to_light   = std::move(primitive_to_light);
+    if (upload_primitive_to_light) {
+        command.primitive_to_light = cached_primitive_to_light;
+        cached_primitive_to_light_dirty = false;
+        cached_primitive_to_light_upload_target = _rt_ctx.primitive_to_light_buf.Get();
+    }
     command.tasks                = std::move(tasks);
     command.prim_light_infos     = std::move(prim_light_infos);
     command.params               = param;
@@ -797,8 +652,13 @@ void PrepareLightPass::RecordGenerateMips(CommandList& _cmd_list, RecordResource
     _resources.shader_utils->GenerateMips(_cmd_list, mips, ETextureState::SHADER_RESOURCE);
 }
 
-void PrepareLightPass::AddPasses(RenderGraph& _graph, const RTGraphFrameResources& _rg, RTContext& _rt_ctx) {
-    auto* command   = _graph.Alloc<PreparedCommand>(Prepare(_rt_ctx));
+void PrepareLightPass::AddPasses(
+    RenderGraph& _graph,
+    const RTGraphFrameResources& _rg,
+    RTContext& _rt_ctx,
+    PreparedCommand&& _command
+) {
+    auto* command   = _graph.Alloc<PreparedCommand>(std::move(_command));
     auto* resources = _graph.Alloc<RecordResources>(CaptureResources(_rt_ctx));
 
     if (HasUploadWork(*command)) {
@@ -822,7 +682,7 @@ void PrepareLightPass::AddPasses(RenderGraph& _graph, const RTGraphFrameResource
     _graph.AddPass(
         MOER_TEXT("RT.PrepareLights.Clear"),
         clear_params,
-        ERGPassFlags::Graphics,
+        s_rt_graph_graphics_compute_pass,
         [this, resources](RHICommandList& cmd_list, RGContext) {
             RecordClears(cmd_list, *resources);
         }
@@ -839,7 +699,7 @@ void PrepareLightPass::AddPasses(RenderGraph& _graph, const RTGraphFrameResource
         _graph.AddPass(
             MOER_TEXT("RT.PrepareLights.Dispatch"),
             dispatch_params,
-            kRTGraphComputePassFlags,
+            s_rt_graph_graphics_compute_pass,
             [this, command, resources](RHICommandList& cmd_list, RGContext) {
                 RecordPrepareLights(cmd_list, *command, *resources);
             }
@@ -852,7 +712,7 @@ void PrepareLightPass::AddPasses(RenderGraph& _graph, const RTGraphFrameResource
         _graph.AddPass(
             MOER_TEXT("RT.PrepareLights.GenerateMips"),
             mip_params,
-            kRTGraphComputePassFlags,
+            s_rt_graph_graphics_compute_pass,
             [this, resources](RHICommandList& cmd_list, RGContext) {
                 RecordGenerateMips(cmd_list, *resources);
             }

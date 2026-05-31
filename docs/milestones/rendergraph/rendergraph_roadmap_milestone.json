@@ -137,6 +137,10 @@
     {
       "id": "AR-17",
       "rule": "RenderGraph has two record stages: RG record writes abstract commands into RHICommandList, and RHI backend translate/platform-record writes native command lists. Ordinary AddPass lambdas never receive platform command-list handles; PlatformCommandList external passes are emitted as typed RHI platform callback commands and executed by backend visitors during translate."
+    },
+    {
+      "id": "AR-18",
+      "rule": "RenderGraph resource identity is typed object identity. RGTextureView and RGBufferView carry RGTexture* and RGBuffer*, pools are external allocation services, and compile derives state from resource-owned finest subresource or buffer range partitions."
     }
   ],
   "stages": [
@@ -150,6 +154,18 @@
         "The legacy RenderGraph API is marked for replacement, not compatibility wrapping.",
         "Pass access declarations can express macro-declared fixed single texture/buffer views, graph-allocated dynamic texture/buffer access arrays, texture subresources, buffer ranges, bindless explicit resource usage, explicit queue intent, and external imports/exports.",
         "The RG allocator and cross-CommandList GPU trace scope contracts are frozen before implementation starts."
+      ]
+    },
+    {
+      "id": "resource_object_compile",
+      "title": "Replace handles, graph-owned pools, global phases, and coarse range tracking",
+      "status": "completed",
+      "checkpoint_file": "docs/milestones/rendergraph/rendergraph_resource_object_compile_checkpoint.json",
+      "exit_gate": [
+        "RenderGraphHandle is removed from the public RenderGraph contract.",
+        "RenderGraph no longer stores PooledTexturePool or PooledBufferPool members.",
+        "RenderGraph no longer uses a global phase enum to gate setup, compile, or dispatch.",
+        "Compile metadata is derived from RGTexture and RGBuffer finest state range partitions after transient allocation is resolved."
       ]
     },
     {
@@ -213,6 +229,7 @@
   ],
   "execution_order": [
     "contract_replacement",
+    "resource_object_compile",
     "barrier_queue_sync",
     "resource_reuse",
     "async_record_submit",
@@ -245,6 +262,20 @@
       "notes": [
         "The old RHIGraphicsCommandList-era Builder/AddGraphicPass skeleton is replaced in source/runtime/render/rendergraph.",
         "The current implementation runs AddSetupPass work before Compile, parses macro-declared single-resource views plus graph-allocated dynamic texture/buffer access arrays after setup, supports serial None-flag passes and parallel queue-flag passes, compiles deterministic hazard metadata from declared accesses, and carries command-list record-complete GraphEventRef dependencies into RHIExecutor preprocess/translate; full barrier lowering, queue handoff compilation, external platform passes, GPU scopes, and complete RG submit orchestration remain later checkpoints."
+      ]
+    },
+    "resource_object_compile": {
+      "status": "completed",
+      "implemented_checkpoint_scope": [
+        "CP-01 typed RGTexture/RGBuffer public resource identity",
+        "CP-02 external RGTransientResourceAllocator for pooled physical allocation",
+        "CP-03 removal of ERGPhase and graph-owned pool members",
+        "CP-04 resource-owned finest texture subresource and buffer byte-range state partitions",
+        "CP-05 CMake build plus testscripts/windows/test_rhi_translate.ps1 validation"
+      ],
+      "notes": [
+        "RenderGraphHandle was removed. Views, accesses, exports, compiled hazards, renderer code, and focused tests now reference RGTexture, RGBuffer, or RGResource object identity directly.",
+        "Compile remains private and Dispatch owns setup, compile, transient allocation, recording, final tracked-state emission, and release sequencing."
       ]
     }
   }

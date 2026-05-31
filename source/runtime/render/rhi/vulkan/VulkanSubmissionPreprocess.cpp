@@ -107,7 +107,8 @@ static ResourceKey MakeAccelKey(uint64 handle) {
 static constexpr uint64 kGlobalAccelBuildSyncHandle = std::numeric_limits<uint64>::max();
 
 static const char* SegmentOriginName(const RHISubmitSegment& segment) {
-    return segment.UsesCopyScope() ? "CopyScope" : "Inline";
+    (void)segment;
+    return "Inline";
 }
 
 static const char* ResourceTypeName(ETrackedResourceType type) {
@@ -1351,22 +1352,6 @@ private:
     DirtyWrittenResources* dirty_written_resources{nullptr};
 };
 
-static Array<const Command*> GetSegmentCommandPointers(
-    const CmdSubmit&        submit,
-    const RHISubmitSegment& segment_info
-) {
-    Array<const Command*> commands{};
-    if (!segment_info.UsesCopyScope()) {
-        return commands;
-    }
-    const auto* copy_scope = static_cast<const CopyScopeCmd*>(submit.cmds[segment_info.copy_scope_index].get());
-    commands.reserve(copy_scope->Commands().size());
-    for (const auto& cmd : copy_scope->Commands()) {
-        commands.emplace_back(cmd.get());
-    }
-    return commands;
-}
-
 static Array<GraphEventRef> CollectSegmentFenceEvents(
     const CmdSubmit&        submit,
     const RHISubmitSegment& segment
@@ -1378,14 +1363,6 @@ static Array<GraphEventRef> CollectSegmentFenceEvents(
         }
     };
 
-    if (segment.UsesCopyScope()) {
-        const auto* copy_scope = static_cast<const CopyScopeCmd*>(submit.cmds[segment.copy_scope_index].get());
-        for (const auto& cmd : copy_scope->Commands()) {
-            append_fence_event(cmd.get());
-        }
-        return fence_events;
-    }
-
     for (size_t cmd_index = segment.begin; cmd_index < segment.end; ++cmd_index) {
         append_fence_event(submit.cmds[cmd_index].get());
     }
@@ -1393,9 +1370,6 @@ static Array<GraphEventRef> CollectSegmentFenceEvents(
 }
 
 static bool SegmentContainsFrameTick(const CmdSubmit& submit, const RHISubmitSegment& segment) {
-    if (segment.UsesCopyScope()) {
-        return false;
-    }
     for (size_t cmd_index = segment.begin; cmd_index < segment.end; ++cmd_index) {
         if (TryGetFrameTickCmd(submit.cmds[cmd_index].get()) != nullptr) {
             return true;
@@ -1798,19 +1772,13 @@ static PreprocessTranslateStore PreprocessFrameOps(
                 source_plan.source_key   = source_key;
                 source_plan.parent_queue = submit_op->queue;
 
-                if (submit.preprocess_mode == ERHISubmitPreprocessMode::ExplicitStateNoSync) {
-                    std::optional<SubmissionKey> last_explicit_segment_key{};
+                {
                     for (size_t segment_index = 0; segment_index < segments.size(); ++segment_index) {
                         const RHISubmitSegment& segment = segments[segment_index];
                         const bool include = !segment.IsEmpty() || (segments.size() == 1 && has_side_effects);
                         if (!include) {
                             continue;
                         }
-                        MOER_ASSERT(
-                            !segment.UsesCopyScope(),
-                            "Explicit RenderGraph submits must not contain CopyScope segments"
-                        );
-
                         TranslateInfo translate_info{};
                         translate_info.key = SubmissionKey{op_seq, next_segment_submit_idx++};
                         translate_info.source_key = source_key;
@@ -1918,7 +1886,6 @@ static PreprocessTranslateStore PreprocessFrameOps(
                             }
                             dependency_state = {};
                         }
-                        last_explicit_segment_key = translate_info.key;
                         preprocess_store.Add(std::move(translate_info));
                     }
 
@@ -1937,250 +1904,6 @@ static PreprocessTranslateStore PreprocessFrameOps(
                     preprocess_store.AddSourcePlan(std::move(source_plan));
                     continue;
                 }
-
-                std::optional<SubmissionKey> previous_gpu_segment_key{};
-                EQueueType previous_gpu_segment_queue = EQueueType::Ignore;
-                GraphEventRef source_last_translate_event{nullptr};
-
-                for (size_t segment_index = 0; segment_index < segments.size(); ++segment_index) {
-                    const auto& segment = segments[segment_index];
-                    const bool include =
-                        !segment.IsEmpty() || (segments.size() == 1 && has_side_effects);
-
-                    if (!include) {
-                        continue;
-                    }
-
-                    TranslateInfo translate_info{};
-                    translate_info.key = SubmissionKey{op_seq, next_segment_submit_idx++};
-                    translate_info.source_key = source_key;
-                    translate_info.queue = segment.queue;
-                    translate_info.segment = segment;
-                    translate_info.include = true;
-                    translate_info.completion_event = GraphEvent::CreateGraphEvent();
-
-                    AppendUniqueDependency(
-                        translate_info.task_dependencies,
-                        submit.record_complete_event
-                    );
-                    AppendUniqueDependency(
-                        translate_info.task_dependencies,
-                        dependency_state.last_fence_event
-                    );
-                    if (submit.translate_execution_class != ERHITranslateExecutionClass::Parallel) {
-                        AppendUniqueDependency(
-                            translate_info.task_dependencies,
-                            dependency_state.last_translate_event
-                        );
-                    }
-
-                    ResourceAccessCollector collector(
-                        translate_info.queue,
-                        submit.cached_args,
-                        &dirty_written_resources
-                    );
-                    if (!segment.UsesCopyScope()) {
-                        translate_info.digest = collector.CollectGraphicsSegment(
-                            submit,
-                            segment.begin,
-                            segment.end
-                        );
-                    } else {
-                        Array<const Command*> command_ptrs = GetSegmentCommandPointers(submit, segment);
-                        translate_info.digest = collector.Collect(
-                            std::span<const Command* const>(command_ptrs.data(), command_ptrs.size())
-                        );
-                    }
-                    TraceDigest(
-                        translate_info.key,
-                        translate_info.queue,
-                        translate_info.segment,
-                        translate_info.digest
-                    );
-
-                    ResourceStateSnapshot segment_state{};
-                    EnsureDigestStateLoaded(segment_state, translate_info.digest);
-                    translate_info.initial_state_snapshot = segment_state;
-
-                    if (previous_gpu_segment_key.has_value() &&
-                        previous_gpu_segment_queue != translate_info.queue) {
-                        UnorderedSet<SubmissionKey, SubmissionKeyHash> local_waits{};
-                        AddLogicalDependency(
-                            preprocess_store.dependency_graph,
-                            translate_info.key,
-                            local_waits,
-                            previous_gpu_segment_key.value()
-                        );
-                        RHITRACE_LOG(
-                            verbose,
-                            "[RHITrace][PreprocessWait] submit=({}, {}) queue={} depends_on=({}, {}) reason=segment_queue_change from={}",
-                            translate_info.key.op_seq,
-                            translate_info.key.submit_idx,
-                            QueueTypeName(translate_info.queue),
-                            previous_gpu_segment_key->op_seq,
-                            previous_gpu_segment_key->submit_idx,
-                            QueueTypeName(previous_gpu_segment_queue)
-                        );
-                    }
-
-                    UnorderedSet<ResourceKey, ResourceKeyHash> imported_resources{};
-                    UnorderedSet<SubmissionKey, SubmissionKeyHash> dependency_keys{};
-                    for (const auto& [resource_key, access] : translate_info.digest) {
-                        if (!access.read && !access.write) {
-                            continue;
-                        }
-
-                        auto process_cross_queue_resource =
-                            [&](const ResourceKey& canonical_key) {
-                                const auto state_it =
-                                    translate_info.initial_state_snapshot.find(canonical_key);
-                                if (state_it == translate_info.initial_state_snapshot.end()) {
-                                    return;
-                                }
-
-                                const auto& resource_state = state_it->second;
-                                if (!resource_state.known ||
-                                    resource_state.owner_queue == EQueueType::Ignore ||
-                                    resource_state.owner_queue == translate_info.queue ||
-                                    !resource_state.last_submission.has_value()) {
-                                    return;
-                                }
-
-                                AddLogicalDependency(
-                                    preprocess_store.dependency_graph,
-                                    translate_info.key,
-                                    dependency_keys,
-                                    resource_state.last_submission.value()
-                                );
-                                const bool imported = AppendPrefixImport(
-                                    translate_info,
-                                    imported_resources,
-                                    canonical_key,
-                                    resource_state,
-                                    access,
-                                    resource_state.owner_queue
-                                );
-                                if (imported) {
-                                    auto& seed_state =
-                                        translate_info.initial_state_snapshot[canonical_key];
-                                    seed_state.known       = false;
-                                    seed_state.has_writer  = false;
-                                    seed_state.owner_queue = EQueueType::Ignore;
-                                    if (access.texture_state.has_value()) {
-                                        seed_state.texture_state = access.texture_state.value();
-                                    }
-                                    if (access.buffer_state.has_value()) {
-                                        seed_state.buffer_state = access.buffer_state.value();
-                                    }
-                                }
-
-                                auto* producer_result =
-                                    preprocess_store.FindMutable(resource_state.last_submission.value());
-                                if (producer_result != nullptr) {
-                                    auto& exported_resources = exported_resources_by_submit
-                                        [resource_state.last_submission.value()];
-                                    AppendSuffixExport(
-                                        *producer_result,
-                                        exported_resources,
-                                        canonical_key,
-                                        resource_state,
-                                        translate_info.queue
-                                    );
-                                }
-                            };
-
-                        if (IsTextureKey(resource_key)) {
-                            ForEachTextureSubresourceKey(resource_key, process_cross_queue_resource);
-                        } else {
-                            process_cross_queue_resource(resource_key);
-                        }
-                    }
-
-                    ApplyDigestToState(
-                        translate_info.digest,
-                        translate_info.queue,
-                        translate_info.key,
-                        segment_state
-                    );
-                    translate_info.last_state_snapshot = segment_state;
-                    RHITRACE_LOG(
-                        basic,
-                        "[RHITrace][PreprocessSegment] submit=({}, {}) source=({}, {}) queue={} segment={} digest_count={} wait_count={} import_tex={} import_buf={} export_tex={} export_buf={}",
-                        translate_info.key.op_seq,
-                        translate_info.key.submit_idx,
-                        translate_info.source_key.op_seq,
-                        translate_info.source_key.submit_idx,
-                        QueueTypeName(translate_info.queue),
-                        SegmentOriginName(translate_info.segment),
-                        translate_info.digest.size(),
-                        preprocess_store.dependency_graph.Count(translate_info.key),
-                        translate_info.prefix_import_textures.size(),
-                        translate_info.prefix_import_buffers.size(),
-                        translate_info.suffix_export_textures.size(),
-                        translate_info.suffix_export_buffers.size()
-                    );
-
-                    source_plan.segments.emplace_back(SourceSubmitSegmentPlan{
-                        .key = translate_info.key,
-                        .queue = translate_info.queue,
-                        .inherit_source_wait_events = false,
-                        .inherit_source_signal_events_and_callbacks = false,
-                        .inherit_source_runtime_payload = false,
-                        .include = true
-                    });
-                    source_last_translate_event = ChainGraphEvents(
-                        source_last_translate_event,
-                        translate_info.completion_event
-                    );
-                    dependency_state.last_translate_event = ChainGraphEvents(
-                        dependency_state.last_translate_event,
-                        translate_info.completion_event
-                    );
-                    previous_gpu_segment_key = translate_info.key;
-                    previous_gpu_segment_queue = translate_info.queue;
-                    CommitPersistentResourceStates(translate_info.last_state_snapshot);
-                    ApplyDigestToDirtyWrittenResources(
-                        dirty_written_resources,
-                        translate_info.digest
-                    );
-
-                    for (const GraphEventRef& fence_event : CollectSegmentFenceEvents(submit, segment)) {
-                        dependency_state.last_fence_event = ChainGraphEvents(
-                            dependency_state.last_fence_event,
-                            fence_event
-                        );
-                    }
-                    if (SegmentContainsFrameTick(submit, segment)) {
-                        if (segment_index + 1 != segments.size()) {
-                            LOG_ERROR(MOER_TEXT("FrameTick must terminate the recorded CommandList segment sequence"));
-                            assert(false && "FrameTick must terminate the segment sequence");
-                        }
-                        dependency_state = {};
-                    }
-                    preprocess_store.Add(std::move(translate_info));
-                }
-
-                if (!source_plan.segments.empty()) {
-                    for (auto& segment_plan : source_plan.segments) {
-                        segment_plan.inherit_source_wait_events = true;
-                        break;
-                    }
-                    for (auto segment_iter = source_plan.segments.rbegin();
-                         segment_iter != source_plan.segments.rend();
-                         ++segment_iter) {
-                        segment_iter->inherit_source_signal_events_and_callbacks = true;
-                        break;
-                    }
-                    for (auto segment_iter = source_plan.segments.rbegin();
-                         segment_iter != source_plan.segments.rend();
-                         ++segment_iter) {
-                        if (segment_iter->queue != EQueueType::Copy) {
-                            segment_iter->inherit_source_runtime_payload = true;
-                            break;
-                        }
-                    }
-                }
-                preprocess_store.AddSourcePlan(std::move(source_plan));
             }
         } else if (const auto* present_op = std::get_if<ExecutorPresentOp>(&op)) {
             PresentCandidateMetadata present_result{.op_seq = op_seq};

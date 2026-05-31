@@ -8,7 +8,6 @@
 #include "string/Format.h"
 #include "taskgraph/ThreadManager.h"
 
-#include "../vulkan/RHICmdReorderer.h"
 #include <algorithm>
 #include <config.h>
 #include <filesystem>
@@ -1536,17 +1535,6 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
 
     auto allocator = RequestCommandResourceAllocator();
     auto cmd_list  = allocator->GetCommandList();
-
-    //FunctionTable function_table{
-    //    .is_resource_write       = &IsBufferTextureWrite,
-    //    .is_resource_read        = &IsBufferTextureRead,
-    //    .is_texture_sampled      = &IsTextureSampled,
-    //    .is_resource_in_bindless = &IsResourceInBindlessArray};
-    //CmdReorderer reorderer{function_table};
-    //for (const auto& cmd : _submit.cmds) {
-    //    reorderer.AcceptCmd(cmd.get());
-    //}
-    //const auto& cmd_lists = reorderer.m_cmd_lists;
 
     cmd_list->Begin();
     if (!_submit.cmds.empty()) {

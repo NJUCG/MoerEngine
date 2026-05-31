@@ -11,6 +11,7 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
+#include "rhi/RHIImpl.h"
 #include "rhi/RHIResource.h"
 #include "rhi/vulkan/VulkanDevice.h"
 #include "shader/ShaderResourceManager.h"
@@ -70,6 +71,87 @@ std::span<byte> ToByteSpan(std::vector<T>& values) {
 template<typename T, size_t Size>
 std::span<byte> ToByteSpan(std::array<T, Size>& values) {
     return std::span<byte>(reinterpret_cast<byte*>(values.data()), values.size() * sizeof(T));
+}
+
+void BufferBarrierUpdate(
+    CommandList&  command_list,
+    BufferView    buffer,
+    EBufferState  src_state,
+    EBufferState  dst_state,
+    EPassType     pass_type
+) {
+    command_list.Barriers(
+        {BarrierCreateInfo::Transition(buffer, src_state, dst_state, pass_type)},
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        ETrackedStateUpdateMode::Update
+    );
+}
+
+void TextureBarrierUpdate(
+    CommandList&   command_list,
+    TextureView    texture,
+    ETextureState  src_state,
+    ETextureState  dst_state,
+    EPassType      pass_type
+) {
+    command_list.Barriers(
+        {BarrierCreateInfo::Transition(texture, src_state, dst_state, pass_type)},
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        ETrackedStateUpdateMode::Update
+    );
+}
+
+void UploadBufferWithState(
+    CommandList&  command_list,
+    std::span<byte> data,
+    BufferView    buffer,
+    EBufferState  final_state,
+    EPassType     final_pass_type,
+    StringView    name
+) {
+    BufferBarrierUpdate(command_list, buffer, EBufferState::UNDEFINED, EBufferState::TRANSFER_DST, EPassType::Copy);
+    command_list.CopyFrom(data, buffer, name);
+    command_list.Barriers(
+        {BarrierCreateInfo::Transition(
+            buffer,
+            MakeBarrierState(EBufferState::TRANSFER_DST, EPassType::Copy),
+            MakeBarrierState(final_state, final_pass_type)
+        )},
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        ETrackedStateUpdateMode::Update
+    );
+}
+
+void UploadTextureWithState(
+    CommandList&   command_list,
+    std::span<byte> data,
+    TextureView    texture,
+    ETextureState  final_state,
+    EPassType      final_pass_type,
+    StringView     name
+) {
+    const ETrackedStateUpdateMode tracked_state = texture.IsWholeResource() ? ETrackedStateUpdateMode::Update :
+                                                                           ETrackedStateUpdateMode::Skip;
+    command_list.Barriers(
+        {BarrierCreateInfo::Transition(texture, ETextureState::UNDEFINED, ETextureState::TRANSFER_DST, EPassType::Copy)},
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        tracked_state
+    );
+    command_list.CopyFrom(data, texture, name);
+    command_list.Barriers(
+        {BarrierCreateInfo::Transition(
+            texture,
+            MakeBarrierState(ETextureState::TRANSFER_DST, EPassType::Copy),
+            MakeBarrierState(final_state, final_pass_type)
+        )},
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        tracked_state
+    );
 }
 
 void SubmitAndWait(Array<CommandList>&& command_lists) {
@@ -236,12 +318,48 @@ bool RecordRaytracingCoverageIfSupported(
     instance.visible_mask = RTVM_ALL;
     scene->MarkModified(instance.instance_id);
 
+    command_list.Barriers(
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        EPassType::Raytracing,
+        ETrackedStateUpdateMode::Update,
+        WriteRaytracingGeometry{geometry, EBufferState::ACCELERATION_STRUCTURE_WRITE}
+    );
     command_list.BuildAccelerationStructures({AccelerationStructureBuildParam{
         .geometry = geometry,
         .mode     = ERaytracingBuildMode::BUILD,
     }});
-    command_list.UpdateRaytracingScene(scene);
-    command_list.Compute(*ray_query_pipeline, scene->GetTlas()).Dispatch(1u, MOER_TEXT("RGBaselineRayQuery"));
+    command_list.Barriers(
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        EPassType::Raytracing,
+        ETrackedStateUpdateMode::Update,
+        ReadRaytracingGeometry{geometry, EBufferState::ACCELERATION_STRUCTURE_READ}
+    );
+
+    UniquePtr<Command> update_command = scene->UpdateScene();
+    if (update_command) {
+        assert(update_command->Type() == Command::EType::BuildTLAS);
+        const auto* update_tlas_cmd = static_cast<const UpdateRaytracingSceneCmd*>(update_command.get());
+        RaytracingTlasRef tlas(reinterpret_cast<RaytracingTlas*>(update_tlas_cmd->TlasHandle()));
+        command_list.Barriers(
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            EPassType::Raytracing,
+            ETrackedStateUpdateMode::Update,
+            WriteRaytracingTlas{tlas, EBufferState::ACCELERATION_STRUCTURE_WRITE},
+            ReadRaytracingGeometry{geometry, EBufferState::ACCELERATION_STRUCTURE_READ}
+        );
+        command_list.UpdateRaytracingScene(std::move(update_command));
+        command_list.Barriers(
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            EPassType::Raytracing,
+            ETrackedStateUpdateMode::Update,
+            ReadRaytracingTlas{tlas, EBufferState::ACCELERATION_STRUCTURE_READ}
+        );
+        command_list.Compute(*ray_query_pipeline, tlas).Dispatch(1u, MOER_TEXT("RGBaselineRayQuery"));
+    }
     return true;
 }
 
@@ -346,19 +464,39 @@ int RunRHICommandListRGBaselineTest() {
     std::array<uint32_t, 3> rt_indices{0u, 1u, 2u};
 
     CommandList setup_cmd(EQueueType::Graphics);
-    {
-        auto copy_scope = setup_cmd.BeginCopyScope();
-        copy_scope.CopyFrom(ToByteSpan(src_values), src_buffer->GetView(), MOER_TEXT("RGBaselineUploadSourceBuffer"));
-        copy_scope.CopyFrom(ToByteSpan(upload_texture_bytes), upload_texture->GetView(), MOER_TEXT("RGBaselineUploadTexture"));
-        copy_scope.CopyFrom(ToByteSpan(upload_texture_bytes), pixel_upload_buffer->GetView(), MOER_TEXT("RGBaselineUploadPixelBuffer"));
-        copy_scope.CopyFrom(ToByteSpan(rt_vertices), vertex_buffer->GetView(), MOER_TEXT("RGBaselineUploadRTVertices"));
-        copy_scope.CopyFrom(ToByteSpan(rt_indices), index_buffer->GetView(), MOER_TEXT("RGBaselineUploadRTIndices"));
-    }
+    UploadBufferWithState(setup_cmd, ToByteSpan(src_values), src_buffer->GetView(), EBufferState::SHADER_RESOURCE, EPassType::Compute, MOER_TEXT("RGBaselineUploadSourceBuffer"));
+    UploadTextureWithState(setup_cmd, ToByteSpan(upload_texture_bytes), upload_texture->GetView(), ETextureState::TRANSFER_SRC, EPassType::Copy, MOER_TEXT("RGBaselineUploadTexture"));
+    UploadBufferWithState(setup_cmd, ToByteSpan(upload_texture_bytes), pixel_upload_buffer->GetView(), EBufferState::TRANSFER_SRC, EPassType::Copy, MOER_TEXT("RGBaselineUploadPixelBuffer"));
+    UploadBufferWithState(setup_cmd, ToByteSpan(rt_vertices), vertex_buffer->GetView(), EBufferState::ACCELERATION_STRUCTURE_BUILD_INPUT, EPassType::Raytracing, MOER_TEXT("RGBaselineUploadRTVertices"));
+    UploadBufferWithState(setup_cmd, ToByteSpan(rt_indices), index_buffer->GetView(), EBufferState::ACCELERATION_STRUCTURE_BUILD_INPUT, EPassType::Raytracing, MOER_TEXT("RGBaselineUploadRTIndices"));
     setup_cmd.PushScopeWithTimeScope(MOER_TEXT("RGBaseline.SetupCopy"));
+    BufferBarrierUpdate(setup_cmd, scratch_buffer->GetView(), EBufferState::UNDEFINED, EBufferState::TRANSFER_DST, EPassType::Copy);
+    BufferBarrierUpdate(setup_cmd, compute_buffer->GetView(), EBufferState::UNDEFINED, EBufferState::TRANSFER_DST, EPassType::Copy);
+    BufferBarrierUpdate(setup_cmd, copied_compute_buffer->GetView(), EBufferState::UNDEFINED, EBufferState::TRANSFER_DST, EPassType::Copy);
+    TextureBarrierUpdate(setup_cmd, raster_target->GetView(), ETextureState::UNDEFINED, ETextureState::TRANSFER_DST, EPassType::Copy);
+    TextureBarrierUpdate(setup_cmd, copied_texture->GetView(), ETextureState::UNDEFINED, ETextureState::TRANSFER_DST, EPassType::Copy);
+    TextureBarrierUpdate(setup_cmd, buffer_texture->GetView(), ETextureState::UNDEFINED, ETextureState::TRANSFER_DST, EPassType::Copy);
     setup_cmd.ClearResource(scratch_buffer->GetView(), 0u);
     setup_cmd.ClearResource(compute_buffer->GetView(), 0u);
     setup_cmd.ClearResource(copied_compute_buffer->GetView(), 0u);
     setup_cmd.ClearResource(raster_target->GetView(), float4(0.0f, 0.0f, 0.0f, 1.0f));
+    setup_cmd.Barriers(
+        {
+            BarrierCreateInfo::Transition(
+                compute_buffer->GetView(),
+                MakeBarrierState(EBufferState::TRANSFER_DST, EPassType::Copy),
+                MakeBarrierState(EBufferState::UNORDERED_ACCESS, EPassType::Compute)
+            ),
+            BarrierCreateInfo::Transition(
+                raster_target->GetView(),
+                MakeBarrierState(ETextureState::TRANSFER_DST, EPassType::Copy),
+                MakeBarrierState(ETextureState::RENDER_TARGET, EPassType::Graphics)
+            ),
+        },
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        ETrackedStateUpdateMode::Update
+    );
     setup_cmd.CopyFrom(upload_texture->GetView(), copied_texture->GetView(), MOER_TEXT("RGBaselineTextureToTexture"));
     setup_cmd.CopyFrom(pixel_upload_buffer->GetView(), buffer_texture->GetView(), MOER_TEXT("RGBaselineBufferToTexture"));
     setup_cmd.PopScopeWithTimeScope();
@@ -380,6 +518,16 @@ int RunRHICommandListRGBaselineTest() {
         )
         .Dispatch((baseline_element_count + 63u) / 64u, MOER_TEXT("RGBaselineComputeDispatch"));
     compute_cmd.EndTimestampQuery(compute_query);
+    compute_cmd.Barriers(
+        {BarrierCreateInfo::Transition(
+            compute_buffer->GetView(),
+            MakeBarrierState(EBufferState::UNORDERED_ACCESS, EPassType::Compute),
+            MakeBarrierState(EBufferState::TRANSFER_SRC, EPassType::Copy)
+        )},
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        ETrackedStateUpdateMode::Update
+    );
     compute_cmd.CopyFrom(compute_buffer->GetView(), copied_compute_buffer->GetView(), MOER_TEXT("RGBaselineBufferToBuffer"));
     compute_cmd.PopScopeWithTimeScope();
 
@@ -440,13 +588,13 @@ int RunRHICommandListRGBaselineTest() {
             ),
             BarrierCreateInfo::Transition(
                 raster_target->GetView(),
-                ETextureState::RENDER_TARGET,
-                ETextureState::TRANSFER_SRC,
-                EPassType::Copy
+                MakeBarrierState(ETextureState::RENDER_TARGET, EPassType::Graphics),
+                MakeBarrierState(ETextureState::TRANSFER_SRC, EPassType::Copy)
             )
         },
         EQueueType::Graphics,
-        EQueueType::Graphics
+        EQueueType::Graphics,
+        ETrackedStateUpdateMode::Update
     );
     SyncPointRef compute_readback_event = readback_cmd.ReadbackCopy(
         copied_compute_buffer->GetView(),

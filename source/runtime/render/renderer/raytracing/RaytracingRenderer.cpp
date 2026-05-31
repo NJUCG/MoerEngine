@@ -77,9 +77,20 @@ struct RGRaytracingNrdParams {
 
 struct RGRaytracingShowTextureParams {
     DEFINE_RG_TEXTURE_ACCESS(selected_texture, ETextureState::SHADER_RESOURCE);
-    DEFINE_RG_TEXTURE_ACCESS(ldr_color, ETextureState::UNORDERED_ACCESS);
+    DEFINE_RG_TEXTURE_ACCESS(ldr_color, ETextureState::RENDER_TARGET);
 
     DEFINE_RG_PARAMETER_ACCESS(selected_texture, ldr_color);
+};
+
+struct RGRaytracingGuiClearParams {
+    DEFINE_RG_TEXTURE_ACCESS(output, ETextureState::TRANSFER_DST);
+    DEFINE_RG_PARAMETER_ACCESS(output);
+};
+
+struct RGRaytracingGuiRenderParams {
+    DEFINE_RG_TEXTURE_ACCESS(scene_output, ETextureState::SHADER_RESOURCE);
+    DEFINE_RG_TEXTURE_ACCESS(output, ETextureState::RENDER_TARGET);
+    DEFINE_RG_PARAMETER_ACCESS(scene_output, output);
 };
 
 struct RGRaytracingCommandParams {
@@ -152,7 +163,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         MOER_TEXT("combine_output"),
         Extent2D(resolution.x, resolution.y),
         presentation_surface->GetFormat(),
-        ETextureUsageFlags::COLOR_ATTACHMENT
+        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC
     );
 
     auto create_frame_buffers = [&](uint2 _new_extent) {
@@ -167,7 +178,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             MOER_TEXT("combine_output"),
             Extent2D(_new_extent.x, _new_extent.y),
             presentation_surface->GetFormat(),
-            ETextureUsageFlags::COLOR_ATTACHMENT
+            ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC
         );
     };
 
@@ -248,13 +259,22 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
         pulse_main_thread(MOER_TEXT("Begin"));
 
-        PumpAsyncLoads();
+        {
+            TRACE_SCOPE_CAT("Raytracing.PumpAsyncLoads", "Frame");
+            PumpAsyncLoads();
+        }
 
         RaytracingConfig& ui_config = editor_config->raytracing_config;
 
-        LogSceneLoadStatus(*editor_config);
+        {
+            TRACE_SCOPE_CAT("Raytracing.LogSceneLoadStatus", "Frame");
+            LogSceneLoadStatus(*editor_config);
+        }
 
-        auto window_state = TickWindowContext(hooks);
+        auto window_state = [&]() {
+            TRACE_SCOPE_CAT("Raytracing.WindowTick", "Frame");
+            return TickWindowContext(hooks);
+        }();
         bool skip_present = false;
 
         pulse_main_thread(MOER_TEXT("WindowTick"));
@@ -293,6 +313,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         }
 
         if (hooks.on_tick_ui) {
+            TRACE_SCOPE_CAT("Raytracing.TickUI", "Frame");
             hooks.on_tick_ui();
         }
 
@@ -305,35 +326,43 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         bool               advance_post_process_history = false;
         bool               advance_rt_scene             = false;
         float              post_process_frame_time      = 0.f;
+        TextureRef         final_color{};
+        TextureRef         present_output{};
+        bool               gui_rendered_in_graph        = false;
 
         if (scene.IsReady() && runtime_assets.IsReady()) {
+            TRACE_SCOPE_CAT("Raytracing.SceneReadyFrame", "Frame");
             pulse_main_thread(MOER_TEXT("SceneReady"));
 
-            // 处理场景加载过程中遗留的命令
-            // The gfx CommandList contains a CopyScope for all CPU→GPU uploads.
-            // The executor splits the stream at scope boundaries, routes the enclosed
-            // commands to the copy queue, and auto-generates acquire/release barriers.
-            auto&& scene_cmd_list = scene.PopPendingCommandList();
-            if (!scene_cmd_list.gfx_queue_cmd_list.IsEmpty()) {
-                pre_frame_cmd_lists.emplace_back(std::move(scene_cmd_list.gfx_queue_cmd_list));
+            // Submit scene-loading uploads before frame graph execution.
+            {
+                TRACE_SCOPE_CAT("Raytracing.SceneUploads.PopPendingCommandList", "Frame");
+                auto&& scene_cmd_list = scene.PopPendingCommandList();
+                if (!scene_cmd_list.gfx_queue_cmd_list.IsEmpty()) {
+                    pre_frame_cmd_lists.emplace_back(std::move(scene_cmd_list.gfx_queue_cmd_list));
+                }
             }
 
             // load scene
             if (first_load) {
+                TRACE_SCOPE_CAT("Raytracing.FirstLoad", "Frame");
                 first_load = false;
 
                 b_new_env_map = true;
                 // calculate bounding box
-                scene_bounding.min = float3(0.f);
-                scene_bounding.max = float3(0.f);
+                {
+                    TRACE_SCOPE_CAT("Raytracing.FirstLoad.SceneBounds", "Frame");
+                    scene_bounding.min = float3(0.f);
+                    scene_bounding.max = float3(0.f);
 
-                scene.r().view<ecs::CRenderable, ecs::CTransform>().each(
-                    [&](auto entity_id, const auto& c_renderable, const auto& c_transform) {
-                        if (c_transform.d_aabb.IsValid()) {
-                            scene_bounding.Expand(c_transform.d_aabb);
+                    scene.r().view<ecs::CRenderable, ecs::CTransform>().each(
+                        [&](auto entity_id, const auto& c_renderable, const auto& c_transform) {
+                            if (c_transform.d_aabb.IsValid()) {
+                                scene_bounding.Expand(c_transform.d_aabb);
+                            }
                         }
-                    }
-                );
+                    );
+                }
 
                 // new_cell size
                 float3 extent = scene_bounding.max - scene_bounding.min;
@@ -342,11 +371,15 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 float cell_size                 = max_extent * 2 / is_ctx.GetGridConfig().grid_size.x;
                 ui_config.grid_config.cell_size = cell_size;
 
-                rt_scene = scene.GetGpuSceneRes().rt_scene;
+                {
+                    TRACE_SCOPE_CAT("Raytracing.FirstLoad.BindSceneResources", "Frame");
+                    rt_scene = scene.GetGpuSceneRes().rt_scene;
 
-                rt_ctx->SetBindlessHandles(scene.GetGpuSceneRes());
-                rt_ctx->SetRaytracingScene(rt_scene);
+                    rt_ctx->SetBindlessHandles(scene.GetGpuSceneRes());
+                    rt_ctx->SetRaytracingScene(rt_scene);
+                }
                 if (hooks.on_register_renderer_config_section) {
+                    TRACE_SCOPE_CAT("Raytracing.FirstLoad.RegisterUI", "Frame");
 
                     auto& debug_queue = gfx_queue;
 
@@ -406,34 +439,51 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             }
 
             if (b_new_env_map) {
+                TRACE_SCOPE_CAT("Raytracing.EnvMap.Update", "Frame");
                 auto src_env_map = runtime_assets.GetDefaultEnvMap();
-                env_map          = device.CreateTexture(
-                    src_env_map->GetName(),
-                    Extent3D(src_env_map->GetExtent()),
-                    PF_R16G16B16A16_SFLOAT,
-                    ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS,
-                    src_env_map->GetNumMips()
-                );
-                sd_utils.SampleTextureCS(
-                    cmd_list, src_env_map->GetView(0, 1), env_map->GetView(0, 1), src_env_map->GetFormat()
-                );
-
-                Sampler sampler{SF_CUBIC, SAM_REPEAT};
-                env_tex_with_hdl.tex = env_map;
-                env_tex_with_hdl.hdl =
-                    bindless_array->AllocateTexture(env_map->GetView(0, env_map->GetNumMips()), sampler);
-
-                for (int i = 0; i < env_map->GetNumMips(); ++i) {
-                    env_mips.push_back(env_map->GetView(i));
+                {
+                    TRACE_SCOPE_CAT("Raytracing.EnvMap.CreateTexture", "Frame");
+                    env_map = device.CreateTexture(
+                        src_env_map->GetName(),
+                        Extent3D(src_env_map->GetExtent()),
+                        PF_R16G16B16A16_SFLOAT,
+                        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS,
+                        src_env_map->GetNumMips()
+                    );
                 }
-                sd_utils.GenerateMips(cmd_list, env_mips);
+                {
+                    TRACE_SCOPE_CAT("Raytracing.EnvMap.RecordSample", "Frame");
+                    sd_utils.SampleTextureCS(
+                        cmd_list, src_env_map->GetView(0, 1), env_map->GetView(0, 1), src_env_map->GetFormat()
+                    );
+                }
+
+                {
+                    TRACE_SCOPE_CAT("Raytracing.EnvMap.Bindless", "Frame");
+                    Sampler sampler{SF_CUBIC, SAM_REPEAT};
+                    env_tex_with_hdl.tex = env_map;
+                    env_tex_with_hdl.hdl =
+                        bindless_array->AllocateTexture(env_map->GetView(0, env_map->GetNumMips()), sampler);
+                }
+
+                {
+                    TRACE_SCOPE_CAT("Raytracing.EnvMap.RecordMips", "Frame");
+                    for (int i = 0; i < env_map->GetNumMips(); ++i) {
+                        env_mips.push_back(env_map->GetView(i));
+                    }
+                    sd_utils.GenerateMips(cmd_list, env_mips);
+                }
                 b_new_env_map = false;
 
-                rt_ctx->LoadDefaultResources(runtime_assets);
-                rt_ctx->CreateEnvMapResources(env_tex_with_hdl, cmd_list);
+                {
+                    TRACE_SCOPE_CAT("Raytracing.EnvMap.CreatePdfResources", "Frame");
+                    rt_ctx->LoadDefaultResources(runtime_assets);
+                    rt_ctx->CreateEnvMapResources(env_tex_with_hdl, cmd_list);
+                }
             }
 
             if (!tone_mapping_pass) {
+                TRACE_SCOPE_CAT("Raytracing.CreateToneMappingPass", "Frame");
                 ToneMappingPass::CreateInfo info{};
                 info.color_lut    = rt_ctx->default_res.black_tex;
                 tone_mapping_pass = MakeUnique<ToneMappingPass>(device, manager, scene, info);
@@ -443,11 +493,13 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
             // prepare frame
             {
+                TRACE_SCOPE_CAT("Raytracing.CameraTick", "Frame");
                 camera.Tick(editor_config);
             }
 
             // update light direction from ui data
             {
+                TRACE_SCOPE_CAT("Raytracing.UpdateDirectionalLight", "Frame");
                 b_export = ui_config.export_cfg.b_export;
 
                 auto light_entity = scene.GetMainDirectionalLightEntity();
@@ -540,82 +592,98 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 rt_ctx->num_threads              = ui_config.process_light_cfg.num_threads;
             }
 
-            is_ctx.TickFrame(time);
-            visualize_config.visualize_mode = ui_config.final_color;
-            const bool uses_post_process_output =
-                b_final_show_texture || ui_config.final_color == Render::EFinalColor::EFC_SceneColor;
-            const float2 pixel_jitter =
-                uses_post_process_output ? antialias_pass->GetPixelOffset() : float2(0.f);
-
-            uint num_emissive_meshes, num_emissive_triangles;
-            prepare_light_pass->CountEmissiveInstances(num_emissive_meshes, num_emissive_triangles);
-
-            static constexpr uint s_mesh_alloc_chunk      = 128;
-            static constexpr uint s_triangle_alloc_chunk  = 1024;
-            static constexpr uint s_primitive_alloc_chunk = 128;
-            uint                  max_primitives          = scene.GetCpuScene().GetPrimitiveCount();
-            rt_ctx->CreateBuffersIfNeeded(
-                (num_emissive_meshes + s_mesh_alloc_chunk - 1) & ~(s_mesh_alloc_chunk - 1),
-                (num_emissive_triangles + s_triangle_alloc_chunk - 1) & ~(s_triangle_alloc_chunk - 1),
-                (scene.GetCpuScene().GetLightCount() + s_primitive_alloc_chunk - 1) &
-                    ~(s_primitive_alloc_chunk - 1),
-                max_primitives
-            );
-
-            rt_ctx->Tick(camera, pixel_jitter);
-
-            UniquePtr<Command> update_rt_scene_command{};
-            if (rt_scene) {
-                update_rt_scene_command = rt_scene->UpdateScene();
+            {
+                TRACE_SCOPE_CAT("Raytracing.ImportanceSampling.TickFrame", "Frame");
+                is_ctx.TickFrame(time);
+            }
+            bool   uses_post_process_output = false;
+            float2 pixel_jitter             = float2(0.f);
+            {
+                TRACE_SCOPE_CAT("Raytracing.ResolveFrameModes", "Frame");
+                visualize_config.visualize_mode = ui_config.final_color;
+                uses_post_process_output =
+                    b_final_show_texture || ui_config.final_color == Render::EFinalColor::EFC_SceneColor;
+                pixel_jitter = uses_post_process_output ? antialias_pass->GetPixelOffset() : float2(0.f);
             }
 
-            RenderGraph                 raytracing_graph;
-            const RTGraphFrameResources rg_rt = ImportRTGraphFrameResources(raytracing_graph, *rt_ctx);
-            RGTexture*                  current_view_depth = rg_rt.current_view_depth;
-
-            if (auto low_discrepancy_command = rt_ctx->PrepareLowDiscrepancySequence(); low_discrepancy_command.enabled) {
-                auto* params                = raytracing_graph.Alloc<RGRaytracingLowDiscrepancyParams>();
-                params->neighbor_offset_buf = RGBufferView{
-                    .buffer = rg_rt.neighbor_offset_buf,
-                };
-                auto* command = raytracing_graph.Alloc<RTContext::LowDiscrepancySequenceCommand>(
-                    low_discrepancy_command
-                );
-                raytracing_graph.AddPass(
-                    MOER_TEXT("RT.GenerateLowDiscrepancySequence"),
-                    params,
-                    s_rg_graphics_compute_pass,
-                    [context = rt_ctx.get(), command](CommandList& graph_cmd_list, RGContext) {
-                        context->RecordLowDiscrepancySequence(graph_cmd_list, *command);
-                    }
-                );
+            PrepareLightPass::PreparedCommand prepare_lights_command{};
+            {
+                TRACE_SCOPE_CAT("Raytracing.PrepareLights.PrepareFrame", "Frame");
+                prepare_lights_command = prepare_light_pass->Prepare(*rt_ctx);
             }
 
             {
-                auto* params = raytracing_graph.Alloc<RGRaytracingCommandParams>();
-                raytracing_graph.AddPass(
-                    MOER_TEXT("RT.UpdateBindlessArray"),
-                    params,
-                    s_rg_graphics_compute_pass,
-                    [bdls = bindless_array](CommandList& graph_cmd_list, RGContext) {
-                        graph_cmd_list.Barriers(
-                            EQueueType::Graphics,
-                            EQueueType::Graphics,
-                            EPassType::Compute,
-                            WriteBindlessArray{bdls, EBufferState::UNORDERED_ACCESS}
-                        );
-                        graph_cmd_list.UpdateBindlessArray(bdls);
-                        graph_cmd_list.Barriers(
-                            EQueueType::Graphics,
-                            EQueueType::Graphics,
-                            EPassType::Compute,
-                            ReadBindlessArray{bdls, EBufferState::SHADER_RESOURCE}
-                        );
-                    }
-                );
+                TRACE_SCOPE_CAT("Raytracing.Frame.RTContextTick", "Frame");
+                rt_ctx->Tick(camera, pixel_jitter);
+            }
+
+            UniquePtr<Command> update_rt_scene_command{};
+            {
+                TRACE_SCOPE_CAT("Raytracing.RTScene.UpdateCommand", "Frame");
+                if (rt_scene) {
+                    update_rt_scene_command = rt_scene->UpdateScene();
+                }
+            }
+
+            RenderGraph                 raytracing_graph(MOER_TEXT("RT.RenderGraph"));
+            RTGraphFrameResources       rg_rt{};
+            {
+                TRACE_SCOPE_CAT("Raytracing.GraphBuild.ImportFrameResources", "Frame");
+                rg_rt = ImportRTGraphFrameResources(raytracing_graph, *rt_ctx);
+            }
+            RGTexture*                  current_view_depth = rg_rt.current_view_depth;
+
+            {
+                TRACE_SCOPE_CAT("Raytracing.GraphBuild.FrameSetup", "Frame");
+                RG_EVENT_SCOPE(raytracing_graph, MOER_TEXT("RT.FrameSetup"));
+                if (auto low_discrepancy_command = rt_ctx->PrepareLowDiscrepancySequence(); low_discrepancy_command.enabled) {
+                    auto* params                = raytracing_graph.Alloc<RGRaytracingLowDiscrepancyParams>();
+                    params->neighbor_offset_buf = RGBufferView{
+                        .buffer = rg_rt.neighbor_offset_buf,
+                    };
+                    auto* command = raytracing_graph.Alloc<RTContext::LowDiscrepancySequenceCommand>(
+                        low_discrepancy_command
+                    );
+                    raytracing_graph.AddPass(
+                        MOER_TEXT("RT.GenerateLowDiscrepancySequence"),
+                        params,
+                        s_rg_graphics_compute_pass,
+                        [context = rt_ctx.get(), command](CommandList& graph_cmd_list, RGContext) {
+                            context->RecordLowDiscrepancySequence(graph_cmd_list, *command);
+                        }
+                    );
+                }
+
+                {
+                    auto* params = raytracing_graph.Alloc<RGRaytracingCommandParams>();
+                    raytracing_graph.AddPass(
+                        MOER_TEXT("RT.UpdateBindlessArray"),
+                        params,
+                        s_rg_graphics_compute_pass,
+                        [bdls = bindless_array](CommandList& graph_cmd_list, RGContext) {
+                            graph_cmd_list.Barriers(
+                                EQueueType::Graphics,
+                                EQueueType::Graphics,
+                                EPassType::Compute,
+                                ETrackedStateUpdateMode::Update,
+                                WriteBindlessArray{bdls, EBufferState::UNORDERED_ACCESS}
+                            );
+                            graph_cmd_list.UpdateBindlessArray(bdls);
+                            graph_cmd_list.Barriers(
+                                EQueueType::Graphics,
+                                EQueueType::Graphics,
+                                EPassType::Compute,
+                                ETrackedStateUpdateMode::Update,
+                                ReadBindlessArray{bdls, EBufferState::SHADER_RESOURCE}
+                            );
+                        }
+                    );
+                }
             }
 
             if (update_rt_scene_command) {
+                TRACE_SCOPE_CAT("Raytracing.GraphBuild.SceneUpdate", "Frame");
+                RG_EVENT_SCOPE(raytracing_graph, MOER_TEXT("RT.SceneUpdate"));
                 assert(update_rt_scene_command->Type() == Command::EType::BuildTLAS);
                 const auto* update_cmd = static_cast<const UpdateRaytracingSceneCmd*>(update_rt_scene_command.get());
                 RaytracingTlasRef tlas(reinterpret_cast<RaytracingTlas*>(update_cmd->TlasHandle()));
@@ -655,15 +723,28 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 );
             }
 
-            prepare_light_pass->AddPasses(raytracing_graph, rg_rt, *rt_ctx);
-            g_buffer_pass->AddPasses(raytracing_graph, rg_rt, *rt_ctx);
-            lighting_pass->AddPasses(raytracing_graph, rg_rt, *rt_ctx);
+            {
+                TRACE_SCOPE_CAT("Raytracing.GraphBuild.PrepareLights", "Frame");
+                RG_EVENT_SCOPE(raytracing_graph, MOER_TEXT("RT.PrepareLights"));
+                prepare_light_pass->AddPasses(raytracing_graph, rg_rt, *rt_ctx, std::move(prepare_lights_command));
+            }
+            {
+                TRACE_SCOPE_CAT("Raytracing.GraphBuild.GBuffer", "Frame");
+                RG_EVENT_SCOPE(raytracing_graph, MOER_TEXT("RT.GBuffer"));
+                g_buffer_pass->AddPasses(raytracing_graph, rg_rt, *rt_ctx);
+            }
+            {
+                TRACE_SCOPE_CAT("Raytracing.GraphBuild.Lighting", "Frame");
+                RG_EVENT_SCOPE(raytracing_graph, MOER_TEXT("RT.Lighting"));
+                lighting_pass->AddPasses(raytracing_graph, rg_rt, *rt_ctx);
+            }
 
 //////////////////////////////////////////////////////////////////////////
 // NRD
 //////////////////////////////////////////////////////////////////////////
 #if WITH_NRD
             {
+                TRACE_SCOPE_CAT("Raytracing.GraphBuild.NRD", "Frame");
                 nrd::Denoiser denoiser = nrd::Denoiser::MAX_NUM;
                 switch (ui_config.denoiser_cfg.denoiser_type) {
                     case s_denoiser_mode_reblur:
@@ -727,21 +808,30 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                     params->denoised_specular_lighting = RGTextureView{
                         .texture = rg_rt.denoised_specular_lighting,
                     };
-                    raytracing_graph.AddPass(
-                        MOER_TEXT("RT.NRD"),
-                        params,
-                        s_rg_graphics_compute_pass,
-                        [nrd = nrd_interface.get(), denoiser](CommandList& graph_cmd_list, RGContext) {
-                            nrd->Denoise(graph_cmd_list, denoiser, MOER_TEXT("Radiance Denoising"));
-                        }
-                    );
+                    {
+                        RG_EVENT_SCOPE(raytracing_graph, MOER_TEXT("RT.Denoiser"));
+                        raytracing_graph.AddPass(
+                            MOER_TEXT("RT.NRD"),
+                            params,
+                            s_rg_graphics_compute_pass,
+                            [nrd = nrd_interface.get(), denoiser](CommandList& graph_cmd_list, RGContext) {
+                                nrd->Denoise(graph_cmd_list, denoiser, MOER_TEXT("Radiance Denoising"));
+                            }
+                        );
+                    }
                 }
             }
 #endif
 
-            composition_pass->AddPass(raytracing_graph, rg_rt, *rt_ctx);
+            {
+                TRACE_SCOPE_CAT("Raytracing.GraphBuild.Composition", "Frame");
+                RG_EVENT_SCOPE(raytracing_graph, MOER_TEXT("RT.Composition"));
+                composition_pass->AddPass(raytracing_graph, rg_rt, *rt_ctx);
+            }
 
             if (uses_post_process_output) {
+                TRACE_SCOPE_CAT("Raytracing.GraphBuild.PostProcess", "Frame");
+                RG_EVENT_SCOPE(raytracing_graph, MOER_TEXT("RT.PostProcess"));
                 antialias_pass->AddPass(
                     raytracing_graph,
                     rg_rt,
@@ -764,9 +854,15 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 b_feedback_valid = false;
             }
 
-            visualize_pass->AddPass(raytracing_graph, rg_rt, *rt_ctx, visualize_config);
+            {
+                TRACE_SCOPE_CAT("Raytracing.GraphBuild.Visualize", "Frame");
+                RG_EVENT_SCOPE(raytracing_graph, MOER_TEXT("RT.Visualize"));
+                visualize_pass->AddPass(raytracing_graph, rg_rt, *rt_ctx, visualize_config);
+            }
 
             if (b_final_show_texture && material_textures.contains(selected_material_texture_name)) {
+                TRACE_SCOPE_CAT("Raytracing.GraphBuild.ShowTexture", "Frame");
+                RG_EVENT_SCOPE(raytracing_graph, MOER_TEXT("RT.ShowTexture"));
                 TextureRef        texture          = material_textures[selected_material_texture_name].tex;
                 RGTexture* selected_texture = ImportRTTextureIfValid(
                     raytracing_graph, MOER_TEXT("RT.selected_material_texture"), texture
@@ -783,7 +879,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 raytracing_graph.AddPass(
                     MOER_TEXT("RT.ShowTexture"),
                     params,
-                    s_rg_graphics_compute_pass,
+                    ERGPassFlags::Graphics,
                     [shader_utils = &sd_utils,
                      bdls = bindless_array,
                      show_texture_params,
@@ -799,22 +895,86 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                     }
                 );
             }
-            if (!cmd_list.IsEmpty()) {
-                pre_frame_cmd_lists.emplace_back(std::move(cmd_list));
-                cmd_list = CommandList(EQueueType::Graphics);
+
+            RGTexture* final_color_rg = b_final_show_texture ? rg_rt.ldr_color : rg_rt.debug_color;
+            {
+                TRACE_SCOPE_CAT("Raytracing.GraphBuild.ResolveOutput", "Frame");
+                final_color     = b_final_show_texture ? rt_ctx->frame_rt.ldr_color : rt_ctx->frame_rt.debug_color;
+                present_output  = final_color;
             }
-            if (!pre_frame_cmd_lists.empty()) {
-                pulse_main_thread(MOER_TEXT("PreFrameSubmitBegin"));
-                RHIExecutor::Get().Submit(std::move(pre_frame_cmd_lists), ERHIExecSubmitFlags::None);
-                pre_frame_cmd_lists.clear();
-                pulse_main_thread(MOER_TEXT("PreFrameSubmitEnd"));
+
+            RGTexture* gui_output_rg = nullptr;
+            if (!editor_config->play_mode_enabled) {
+                TRACE_SCOPE_CAT("Raytracing.GraphBuild.EditorOutput", "Frame");
+                if (hooks.on_publish_scene_output) {
+                    TRACE_SCOPE_CAT("Raytracing.GraphBuild.PublishSceneOutput", "Frame");
+                    hooks.on_publish_scene_output(final_color);
+                }
+                if (hooks.on_render_gui) {
+                    TRACE_SCOPE_CAT("Raytracing.GraphBuild.GUI", "Frame");
+                    RG_EVENT_SCOPE(raytracing_graph, MOER_TEXT("RT.GUI"));
+
+                    gui_rendered_in_graph = true;
+                    present_output        = combine_output;
+                    gui_output_rg = raytracing_graph.ImportTexture(
+                        MOER_TEXT("RT.combine_output"), combine_output, EQueueType::Graphics
+                    );
+
+                    auto* clear_params   = raytracing_graph.Alloc<RGRaytracingGuiClearParams>();
+                    clear_params->output = RTWholeTextureView(gui_output_rg);
+                    raytracing_graph.AddPass(
+                        MOER_TEXT("RT.GUI.Clear"),
+                        clear_params,
+                        ERGPassFlags::Graphics | ERGPassFlags::Serial,
+                        [gui_output = combine_output](CommandList& graph_cmd_list, RGContext) {
+                            graph_cmd_list.ClearResource(gui_output->GetView(), float4(0.f, 0.f, 0.f, 1.f));
+                        }
+                    );
+
+                    auto* gui_params          = raytracing_graph.Alloc<RGRaytracingGuiRenderParams>();
+                    gui_params->scene_output  = RTWholeTextureView(final_color_rg);
+                    gui_params->output        = RTWholeTextureView(gui_output_rg);
+                    raytracing_graph.AddPass(
+                        MOER_TEXT("RT.GUI.Render"),
+                        gui_params,
+                        ERGPassFlags::Graphics | ERGPassFlags::Serial,
+                        [render_gui = hooks.on_render_gui, gui_output = combine_output](
+                            CommandList& graph_cmd_list,
+                            RGContext
+                        ) {
+                            render_gui(graph_cmd_list, gui_output);
+                        }
+                    );
+                }
             }
-            raytracing_graph.ExportTexture(rg_rt.debug_color, ETextureState::SAMPLED, EQueueType::Graphics);
-            if (uses_post_process_output || b_final_show_texture) {
-                raytracing_graph.ExportTexture(rg_rt.ldr_color, ETextureState::SAMPLED, EQueueType::Graphics);
+            {
+                TRACE_SCOPE_CAT("Raytracing.PreFrameSubmit", "Frame");
+                if (!cmd_list.IsEmpty()) {
+                    pre_frame_cmd_lists.emplace_back(std::move(cmd_list));
+                    cmd_list = CommandList(EQueueType::Graphics);
+                }
+                if (!pre_frame_cmd_lists.empty()) {
+                    pulse_main_thread(MOER_TEXT("PreFrameSubmitBegin"));
+                    RHIExecutor::Get().Submit(std::move(pre_frame_cmd_lists), ERHIExecSubmitFlags::None);
+                    pre_frame_cmd_lists.clear();
+                    pulse_main_thread(MOER_TEXT("PreFrameSubmitEnd"));
+                }
+            }
+            {
+                TRACE_SCOPE_CAT("Raytracing.GraphBuild.ExportTextures", "Frame");
+                raytracing_graph.ExportTexture(rg_rt.debug_color, ETextureState::SAMPLED, EQueueType::Graphics);
+                if (uses_post_process_output || b_final_show_texture) {
+                    raytracing_graph.ExportTexture(rg_rt.ldr_color, ETextureState::SAMPLED, EQueueType::Graphics);
+                }
+                if (gui_output_rg) {
+                    raytracing_graph.ExportTexture(gui_output_rg, ETextureState::TRANSFER_SRC, EQueueType::Graphics);
+                }
             }
             pulse_main_thread(MOER_TEXT("GraphDispatchBegin"));
-            raytracing_graph.Dispatch();
+            {
+                TRACE_SCOPE_CAT("Raytracing.GraphDispatch", "Frame");
+                raytracing_graph.Dispatch();
+            }
             pulse_main_thread(MOER_TEXT("GraphDispatchEnd"));
             advance_rt_frame             = true;
             advance_post_process_history = uses_post_process_output;
@@ -829,8 +989,9 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             //////////////////////////////////////////////////////////////////////////
 
             if (b_export) {
+                TRACE_SCOPE_CAT("Raytracing.Export", "Frame");
                 FenceRef export_fence = device.CreateFence();
-                cmd_list.TickProfiling().Signal(export_fence, 1);
+                cmd_list.Signal(export_fence, 1);
                 Array<CommandList> export_cmd_lists{};
                 export_cmd_lists.emplace_back(std::move(cmd_list));
                 RHIExecutor::Get().Submit(std::move(export_cmd_lists), ERHIExecSubmitFlags::FlushGPU);
@@ -851,61 +1012,110 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
         // rt_scene->MarkModified(0);
         // cmd_list.UpdateRaytracingScene(rt_scene);
-        TextureRef final_color =
-            b_final_show_texture ? rt_ctx->frame_rt.ldr_color : rt_ctx->frame_rt.debug_color;
-        TextureRef present_output = final_color;
+        if (!final_color) {
+            TRACE_SCOPE_CAT("Raytracing.Frame.ResolveOutput", "Frame");
+            final_color = b_final_show_texture ? rt_ctx->frame_rt.ldr_color : rt_ctx->frame_rt.debug_color;
+            present_output = final_color;
+        }
 
-        if (!editor_config->play_mode_enabled) {
+        if (!gui_rendered_in_graph && !editor_config->play_mode_enabled) {
+            TRACE_SCOPE_CAT("Raytracing.Frame.EditorOutput", "Frame");
             if (hooks.on_publish_scene_output) {
+                TRACE_SCOPE_CAT("Raytracing.Frame.PublishSceneOutput", "Frame");
                 hooks.on_publish_scene_output(final_color);
             }
             if (hooks.on_render_gui) {
+                TRACE_SCOPE_CAT("Raytracing.Frame.RenderGUI", "Frame");
+                cmd_list.Barriers(
+                    {BarrierCreateInfo::Transition(
+                        combine_output->GetView(),
+                        MakeBarrierState(ETextureState::TRANSFER_SRC, EPassType::Copy),
+                        MakeBarrierState(ETextureState::TRANSFER_DST, EPassType::Copy)
+                    )},
+                    EQueueType::Graphics,
+                    EQueueType::Graphics,
+                    ETrackedStateUpdateMode::Update
+                );
                 cmd_list.ClearResource(combine_output->GetView(), float4(0.f, 0.f, 0.f, 1.f));
+                cmd_list.Barriers(
+                    {BarrierCreateInfo::Transition(
+                        combine_output->GetView(),
+                        MakeBarrierState(ETextureState::TRANSFER_DST, EPassType::Copy),
+                        MakeBarrierState(ETextureState::RENDER_TARGET, EPassType::Graphics)
+                    )},
+                    EQueueType::Graphics,
+                    EQueueType::Graphics,
+                    ETrackedStateUpdateMode::Update
+                );
                 hooks.on_render_gui(cmd_list, combine_output);
+                cmd_list.Barriers(
+                    {BarrierCreateInfo::Transition(
+                        combine_output->GetView(),
+                        MakeBarrierState(ETextureState::RENDER_TARGET, EPassType::Graphics),
+                        MakeBarrierState(ETextureState::TRANSFER_SRC, EPassType::Copy)
+                    )},
+                    EQueueType::Graphics,
+                    EQueueType::Graphics,
+                    ETrackedStateUpdateMode::Update
+                );
                 present_output = combine_output;
             }
         }
 
-        const bool should_close_now = WindowContext::ShouldClose(WindowContext::GetMainWindow());
+        bool should_close_now = false;
+        {
+            TRACE_SCOPE_CAT("Raytracing.Frame.CheckClose", "Frame");
+            should_close_now = WindowContext::ShouldClose(WindowContext::GetMainWindow());
+        }
         if (should_close_now) {
             // Avoid extra present work in the closing frame to reduce shutdown deadlock risk.
             skip_present = true;
         }
 
         time++;
-        RHIPresentRequest present_request = presentation_surface->CreatePresentRequest(present_output);
-        cmd_list.Signal(timeline, time).DeleteResources().TickProfiling().TickFrame();
-        Array<CommandList> frame_cmd_lists = std::move(pre_frame_cmd_lists);
-        frame_cmd_lists.emplace_back(std::move(cmd_list));
-        pulse_main_thread(MOER_TEXT("PresentSubmitBegin"));
-        RHIExecutor::Get().Submit(
-            std::move(frame_cmd_lists),
-            ERHIExecSubmitFlags::FlushGPU,
-            skip_present ? nullptr : &present_request
-        );
+        {
+            TRACE_SCOPE_CAT("Raytracing.Frame.PresentSubmit", "Frame");
+            RHIPresentRequest present_request = presentation_surface->CreatePresentRequest(present_output);
+            cmd_list.Signal(timeline, time).DeleteResources().TickFrame();
+            Array<CommandList> frame_cmd_lists = std::move(pre_frame_cmd_lists);
+            frame_cmd_lists.emplace_back(std::move(cmd_list));
+            pulse_main_thread(MOER_TEXT("PresentSubmitBegin"));
+            RHIExecutor::Get().Submit(
+                std::move(frame_cmd_lists),
+                ERHIExecSubmitFlags::FlushGPU,
+                skip_present ? nullptr : &present_request
+            );
+        }
         if (advance_rt_frame) {
+            TRACE_SCOPE_CAT("Raytracing.Frame.AdvanceRTFrame", "Frame");
             rt_ctx->AdvanceFrame();
             if (advance_post_process_history) {
+                TRACE_SCOPE_CAT("Raytracing.Frame.AdvancePostProcess", "Frame");
                 tone_mapping_pass->AdvanceFrame(post_process_frame_time);
                 antialias_pass->AdvanceFrame();
                 b_feedback_valid = true;
             }
         }
         if (advance_rt_scene && rt_scene) {
+            TRACE_SCOPE_CAT("Raytracing.Frame.AdvanceRTScene", "Frame");
             rt_scene->AdvanceFrame();
         }
         pulse_main_thread(MOER_TEXT("PresentSubmitEnd"));
         cmd_list = CommandList(EQueueType::Graphics);
 
         if (!skip_present && !editor_config->play_mode_enabled && hooks.on_present_windows) {
+            TRACE_SCOPE_CAT("Raytracing.Frame.PresentWindows", "Frame");
             hooks.on_present_windows();
             pulse_main_thread(MOER_TEXT("PresentWindowEnd"));
         }
         if (should_close_now) {
             break;
         }
-        if (hooks.on_is_need_reload && hooks.on_is_need_reload()) {
-            break;
+        if (hooks.on_is_need_reload) {
+            TRACE_SCOPE_CAT("Raytracing.Frame.CheckReload", "Frame");
+            if (hooks.on_is_need_reload()) {
+                break;
+            }
         }
     }
 
@@ -1008,7 +1218,7 @@ void RaytracingRenderer::DumpTextureToFile(
     }
     if (size != 0) {
         FenceRef export_fence = _device.CreateFence();
-        cmd_list.TickProfiling().Signal(export_fence, 1);
+        cmd_list.Signal(export_fence, 1);
         Array<CommandList> export_cmd_lists{};
         export_cmd_lists.emplace_back(std::move(cmd_list));
         RHIExecutor::Get().Submit(std::move(export_cmd_lists), ERHIExecSubmitFlags::FlushGPU);

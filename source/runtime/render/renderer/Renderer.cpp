@@ -69,7 +69,21 @@ void Renderer::ReleaseResources() {
     presentation_surface->Sync();
     device.WaitIdle();
 
+    cmd_list.Barriers(
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        EPassType::Graphics,
+        ETrackedStateUpdateMode::Update,
+        WriteBindlessArray{bindless_array, EBufferState::UNORDERED_ACCESS}
+    );
     cmd_list.UpdateBindlessArray(bindless_array);
+    cmd_list.Barriers(
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        EPassType::Graphics,
+        ETrackedStateUpdateMode::Update,
+        ReadBindlessArray{bindless_array, EBufferState::SHADER_RESOURCE}
+    );
     const uint64 cleanup_signal_value = ++time;
     cmd_list.DeleteResources().Signal(timeline, cleanup_signal_value);
     Array<CommandList> cleanup_cmd_lists{};

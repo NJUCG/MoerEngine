@@ -42,11 +42,66 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
 
     const Sampler default_sampler = Sampler(ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_REPEAT);
 
-    // All CPU→GPU uploads are recorded as a CopyScope inside the gfx CommandList.
-    // The executor splits the stream at scope boundaries, routes the enclosed commands
-    // to the copy queue, and auto-generates acquire/release barriers.
+    CommandList& upload_cmd = m_pending_cmd_lists.gfx_queue_cmd_list;
+    auto upload_texture = [&](std::span<byte> data, TextureView view) {
+        const ETrackedStateUpdateMode tracked_state = view.IsWholeResource() ? ETrackedStateUpdateMode::Update :
+                                                                               ETrackedStateUpdateMode::Skip;
+        upload_cmd.Barriers(
+            {BarrierCreateInfo::Transition(
+                view,
+                ETextureState::UNDEFINED,
+                ETextureState::TRANSFER_DST,
+                EPassType::Copy
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            tracked_state
+        );
+        upload_cmd.CopyFrom(data, view);
+        upload_cmd.Barriers(
+            {BarrierCreateInfo::Transition(
+                view,
+                MakeBarrierState(ETextureState::TRANSFER_DST, EPassType::Copy),
+                BarrierState{
+                    .stage = ERHIPipelineStageFlags::PS_ALL_COMMANDS,
+                    .access = ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_SAMPLED_READ
+                }
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            tracked_state
+        );
+    };
+
+    auto upload_buffer = [&](std::span<byte> data, BufferView view, StringView name) {
+        upload_cmd.Barriers(
+            {BarrierCreateInfo::Transition(
+                view,
+                EBufferState::UNDEFINED,
+                EBufferState::TRANSFER_DST,
+                EPassType::Copy
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
+        );
+        upload_cmd.CopyFrom(data, view, name);
+        upload_cmd.Barriers(
+            {BarrierCreateInfo::Transition(
+                view,
+                MakeBarrierState(EBufferState::TRANSFER_DST, EPassType::Copy),
+                BarrierState{
+                    .stage = ERHIPipelineStageFlags::PS_ALL_COMMANDS,
+                    .access = ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_RESOURCE_VIEW
+                }
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
+        );
+    };
+
     {
-        auto copy_scope = m_pending_cmd_lists.gfx_queue_cmd_list.BeginCopyScope();
 
         {
             auto view = m_logical_scene.r().view<const ecs::CTexture, const ecs::CName>();
@@ -75,16 +130,24 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
                     c_texture.array_layer_count
                 );
 
-                // 2. Copy Data (inside CopyScope — routed to copy queue by executor)
+                // 2. Copy Data
                 uint64 offset = 0;
                 for (uint i = 0; i < c_texture.mip_level_count * c_texture.array_layer_count; i++) {
                     uint mip_level_byte_size = tex_with_hdl.tex->GetMipByteSize(i);
-                    copy_scope.CopyFrom(
+                    upload_texture(
                         std::span<byte>((byte*)c_texture.data.data() + offset, mip_level_byte_size),
                         tex_with_hdl.tex->GetView(i, 1)
                     );
                     offset += mip_level_byte_size;
                 }
+                Array<TrackedTextureState> texture_states{};
+                texture_states.emplace_back(TrackedTextureState{
+                    .texture = tex_with_hdl.tex->GetView(0, static_cast<uint8>(tex_with_hdl.tex->GetNumMips())),
+                    .state = ETextureState::SAMPLED,
+                    .owner_queue = upload_cmd.GetQueueType(),
+                    .access_write = false,
+                });
+                upload_cmd.SetTrackedState(std::move(texture_states), Array<TrackedBufferState>{});
 
                 // 3. Get Bindless Handle
                 tex_with_hdl.hdl = bdls->AllocateTexture(
@@ -194,12 +257,12 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
         );
 
         /**
-         * MARK: 上传所有Buffers (inside CopyScope — routed to copy queue by executor)
+         * MARK: 上传所有Buffers
          *
          * 此处按照 Res 中顺序进行上传
          */
 
-        copy_scope.CopyFrom(
+        upload_buffer(
             std::span<byte>(
                 (byte*)m_cpu_scene.m_light_buf.data(), m_cpu_scene.m_light_buf.size() * sizeof(GLight)
             ),
@@ -207,7 +270,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
             MOER_TEXT("CopyFrom GpuScene::LightBuffer")
         );
 
-        copy_scope.CopyFrom(
+        upload_buffer(
             std::span<byte>(
                 (byte*)m_cpu_scene.m_material_buf.data(), m_cpu_scene.m_material_buf.size() * sizeof(GMaterial)
             ),
@@ -215,7 +278,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
             MOER_TEXT("CopyFrom GpuScene::MaterialBuffer")
         );
 
-        copy_scope.CopyFrom(
+        upload_buffer(
             std::span<byte>(
                 (byte*)m_cpu_scene.m_draw_cmd_buf.data(),
                 m_cpu_scene.m_draw_cmd_buf.size() * sizeof(Render::DrawIndexedCmdData)
@@ -224,7 +287,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
             MOER_TEXT("CopyFrom GpuScene::DrawCmdBuffer")
         );
 
-        copy_scope.CopyFrom(
+        upload_buffer(
             std::span<byte>(
                 (byte*)m_cpu_scene.m_primitive_buf.data(), m_cpu_scene.m_primitive_buf.size() * sizeof(GPrimitive)
             ),
@@ -232,7 +295,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
             MOER_TEXT("CopyFrom GpuScene::PrimitiveBuffer")
         );
 
-        copy_scope.CopyFrom(
+        upload_buffer(
             std::span<byte>(
                 (byte*)m_cpu_scene.m_instance_buf.data(), m_cpu_scene.m_instance_buf.size() * sizeof(GInstance)
             ),
@@ -240,7 +303,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
             MOER_TEXT("CopyFrom GpuScene::InstanceBuffer")
         );
 
-        copy_scope.CopyFrom(
+        upload_buffer(
             std::span<byte>(
                 (byte*)m_cpu_scene.mega_buf().position.data(),
                 m_cpu_scene.mega_buf().position.size() * sizeof(float3)
@@ -249,7 +312,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
             MOER_TEXT("CopyFrom GpuScene::PositionMegaBuffer")
         );
 
-        copy_scope.CopyFrom(
+        upload_buffer(
             std::span<byte>(
                 (byte*)m_cpu_scene.mega_buf().packed_normal.data(),
                 m_cpu_scene.mega_buf().packed_normal.size() * sizeof(uint32)
@@ -258,7 +321,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
             MOER_TEXT("CopyFrom GpuScene::NormalMegaBuffer")
         );
 
-        copy_scope.CopyFrom(
+        upload_buffer(
             std::span<byte>(
                 (byte*)m_cpu_scene.mega_buf().packed_tangent.data(),
                 m_cpu_scene.mega_buf().packed_tangent.size() * sizeof(uint32)
@@ -267,7 +330,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
             MOER_TEXT("CopyFrom GpuScene::TangentMegaBuffer")
         );
 
-        copy_scope.CopyFrom(
+        upload_buffer(
             std::span<byte>(
                 (byte*)m_cpu_scene.mega_buf().texcoord0.data(),
                 m_cpu_scene.mega_buf().texcoord0.size() * sizeof(float2)
@@ -276,7 +339,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
             MOER_TEXT("CopyFrom GpuScene::Texcoord0MegaBuffer")
         );
 
-        copy_scope.CopyFrom(
+        upload_buffer(
             std::span<byte>(
                 (byte*)m_cpu_scene.mega_buf().index.data(), m_cpu_scene.mega_buf().index.size() * sizeof(uint32)
             ),
@@ -312,14 +375,9 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
             buf_with_hdl.hdl = bdls->AllocateBuffer(buf_with_hdl.buf->GetView());
         }
 
-        // NOTE: UpdateBindlessArray 需要在 Graphics/Compute Queue 中执行，不能在 Copy Queue 中执行
-        // 这里只分配了 handle，实际的 bindless array 更新应该在后续的 Graphics Queue 命令中完成
-        // cmd_list.UpdateBindlessArray(bdls);
+    }
 
-    } // ~CopyCommandScope() — executor auto-generates copy→gfx acquire barrier here
-
-    // InitRaytracingScene runs on the gfx queue (after copy scope, ownership returned)
-    // gfx_queue交给主线程执行
+    // InitRaytracingScene runs on the graphics queue.
     InitRaytracingScene(m_pending_cmd_lists.gfx_queue_cmd_list);
 }
 
@@ -465,20 +523,21 @@ void GpuScene::InitRaytracingScene(CommandList& cmd_list) {
         build_input_barriers.reserve(2);
         build_input_barriers.push_back(BarrierCreateInfo::Transition(
             position_buf_ref->GetView(),
-            EBufferState::ACCELERATION_STRUCTURE_BUILD_INPUT,
+            EBufferState::SHADER_RESOURCE,
             EBufferState::ACCELERATION_STRUCTURE_BUILD_INPUT,
             EPassType::Raytracing
         ));
         build_input_barriers.push_back(BarrierCreateInfo::Transition(
             index_buf_ref->GetView(),
-            EBufferState::ACCELERATION_STRUCTURE_BUILD_INPUT,
+            EBufferState::SHADER_RESOURCE,
             EBufferState::ACCELERATION_STRUCTURE_BUILD_INPUT,
             EPassType::Raytracing
         ));
         cmd_list.Barriers(
             std::span<const BarrierCreateInfo>(build_input_barriers.data(), build_input_barriers.size()),
             EQueueType::Graphics,
-            EQueueType::Graphics
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
         );
 
         for (const RaytracingGeometryRef& geometry : built_geometries) {
@@ -486,17 +545,40 @@ void GpuScene::InitRaytracingScene(CommandList& cmd_list) {
                 EQueueType::Graphics,
                 EQueueType::Graphics,
                 EPassType::Raytracing,
+                ETrackedStateUpdateMode::Update,
                 WriteRaytracingGeometry{geometry, EBufferState::ACCELERATION_STRUCTURE_WRITE}
             );
         }
 
         cmd_list.BuildAccelerationStructures(std::move(build_params));
 
+        Array<BarrierCreateInfo> restore_input_barriers{};
+        restore_input_barriers.reserve(2);
+        restore_input_barriers.push_back(BarrierCreateInfo::Transition(
+            position_buf_ref->GetView(),
+            EBufferState::ACCELERATION_STRUCTURE_BUILD_INPUT,
+            EBufferState::SHADER_RESOURCE,
+            EPassType::Raytracing
+        ));
+        restore_input_barriers.push_back(BarrierCreateInfo::Transition(
+            index_buf_ref->GetView(),
+            EBufferState::ACCELERATION_STRUCTURE_BUILD_INPUT,
+            EBufferState::SHADER_RESOURCE,
+            EPassType::Raytracing
+        ));
+        cmd_list.Barriers(
+            std::span<const BarrierCreateInfo>(restore_input_barriers.data(), restore_input_barriers.size()),
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
+        );
+
         for (const RaytracingGeometryRef& geometry : built_geometries) {
             cmd_list.Barriers(
                 EQueueType::Graphics,
                 EQueueType::Graphics,
                 EPassType::Raytracing,
+                ETrackedStateUpdateMode::Update,
                 ReadRaytracingGeometry{geometry, EBufferState::ACCELERATION_STRUCTURE_READ}
             );
         }
@@ -538,13 +620,38 @@ void GpuScene::UpdateRaytracingScene(CommandList& cmd_list) {
 
 void GpuScene::RestoreDrawCommands(CommandList& cmd_list) {
     // 从 CPU 数据重新上传 draw_cmd_buf，恢复原始 instance_cnt
+    const BufferView draw_cmd_view = m_res.draw_cmd_buf.buf->GetView();
+    cmd_list.Barriers(
+        {BarrierCreateInfo::Transition(
+            draw_cmd_view,
+            EBufferState::UNDEFINED,
+            EBufferState::TRANSFER_DST,
+            EPassType::Copy
+        )},
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        ETrackedStateUpdateMode::Update
+    );
     cmd_list.CopyFrom(
         std::span<byte>(
             (byte*)m_cpu_scene.m_draw_cmd_buf.data(),
             m_cpu_scene.m_draw_cmd_buf.size() * sizeof(Render::DrawIndexedCmdData)
         ),
-        m_res.draw_cmd_buf.buf->GetView(),
+        draw_cmd_view,
         MOER_TEXT("RestoreDrawCommands")
+    );
+    cmd_list.Barriers(
+        {BarrierCreateInfo::Transition(
+            draw_cmd_view,
+            MakeBarrierState(EBufferState::TRANSFER_DST, EPassType::Copy),
+            BarrierState{
+                .stage = ERHIPipelineStageFlags::PS_ALL_COMMANDS,
+                .access = ERHIAccessFlags::SHADER_READ | ERHIAccessFlags::SHADER_RESOURCE_VIEW
+            }
+        )},
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        ETrackedStateUpdateMode::Update
     );
 }
 

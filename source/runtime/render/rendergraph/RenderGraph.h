@@ -5,6 +5,7 @@
 #include "RenderGraphPass.h"
 #include "RenderGraphResourcePool.h"
 #include "misc/STL.h"
+#include "string/Format.h"
 #include "string/String.h"
 
 #include <cassert>
@@ -43,6 +44,9 @@ struct RGCompiledExecutionBatch {
     uint32_t           first_pass{0};
     uint32_t           pass_count{0};
     uint32_t           workload{0};
+    bool               async_record{true};
+    bool               signal_sync_point{false};
+    Moer::Array<uint32_t> wait_sync_point_batches{};
 };
 
 enum class ERGCompiledHazardFlag : uint8_t {
@@ -65,6 +69,27 @@ struct RGCompiledPlan {
 
 class RenderGraph;
 
+class RENDER_API RGEventScope {
+public:
+    RGEventScope(RenderGraph& graph, String name);
+    ~RGEventScope();
+
+    RGEventScope(const RGEventScope&)            = delete;
+    RGEventScope& operator=(const RGEventScope&) = delete;
+
+private:
+    RenderGraph* m_graph{nullptr};
+};
+
+inline String RGFormatEventScopeName(StringView name) {
+    return String(name);
+}
+
+template<typename... Args>
+String RGFormatEventScopeName(FormatString<Args...> format, Args&&... args) {
+    return Printf(format, std::forward<Args>(args)...);
+}
+
 class RENDER_API RGTransientResourceAllocator {
 public:
     RGTransientResourceAllocator(PooledTexturePool& texture_pool, PooledBufferPool& buffer_pool);
@@ -81,10 +106,18 @@ private:
 
 class RENDER_API RenderGraph {
 public:
-    RenderGraph() = default;
+    RenderGraph();
+    explicit RenderGraph(StringView name);
     RenderGraph(const RenderGraph&)            = delete;
     RenderGraph& operator=(const RenderGraph&) = delete;
     ~RenderGraph();
+
+    const String& Name() const {
+        return m_name;
+    }
+
+    void PushEventScope(String name);
+    void PopEventScope();
 
     template<typename T, typename... Args>
         requires std::is_constructible_v<T, Args...>
@@ -129,21 +162,28 @@ public:
     template<typename T, typename Execute>
     void AddPass(StringView name, T* parameters, ERGPassFlags flags, Execute&& execute) {
         assert(!m_compiled && "RenderGraph passes must be added before compile");
+        ValidateBuildThread();
         assert(parameters && "RenderGraph pass parameters must be graph-owned");
         using ExecuteType                  = std::remove_cvref_t<Execute>;
-        constexpr bool is_parallel_execute = std::is_invocable_v<ExecuteType&, RHICommandList&, RGContext>;
+        constexpr bool is_record_execute   = std::is_invocable_v<ExecuteType&, RHICommandList&, RGContext>;
+        constexpr bool is_main_execute     = std::is_invocable_v<ExecuteType&, RGContext>;
         static_assert(
-            is_parallel_execute,
-            "AddPass lambda must be [](RHICommandList&, RGContext); use ERGPassFlags::Serial for ordered main-thread execution"
+            is_record_execute != is_main_execute,
+            "AddPass lambda must be either [](RHICommandList&, RGContext) for RHI recording or [](RGContext) for main-thread execution"
         );
-        assert(RGPassHasQueue(flags) && "RenderGraph passes require one queue flag");
+        constexpr bool main_thread_execute = is_main_execute && !is_record_execute;
+        assert(
+            (main_thread_execute ? RGPassHasValidQueueFlags(flags) : RGPassHasQueue(flags)) &&
+            "RenderGraph RHI recording passes require one queue flag; main-thread passes may use ERGPassFlags::None"
+        );
         const bool serial = RGPassIsSerial(flags);
+        assert(!(main_thread_execute && serial) && "Main-thread RG passes do not use ERGPassFlags::Serial");
 
         Moer::Array<RGTextureAccess> texture_accesses{};
         Moer::Array<RGBufferAccess>  buffer_accesses{};
         if constexpr (RGParameterAccessProvider<T>) {
-            assert(!serial && "Serial RenderGraph passes must not declare RG resource access");
-            if (!serial) {
+            assert(!main_thread_execute && "Only RHI recording RG passes may declare RG resource access");
+            if (!main_thread_execute) {
                 RGParameterAccessCollector collector{RGPassQueue(flags)};
                 parameters->DeclareRGAccess(collector);
                 texture_accesses = collector.Textures();
@@ -155,8 +195,13 @@ public:
                                             RHICommandList* cmd_list,
                                             RGContext       context
                                         ) mutable {
-            assert(cmd_list != nullptr);
-            execute(*cmd_list, context);
+            if constexpr (is_record_execute) {
+                assert(cmd_list != nullptr);
+                execute(*cmd_list, context);
+            } else {
+                assert(cmd_list == nullptr);
+                execute(context);
+            }
         };
 
         AddPassInternal(
@@ -166,6 +211,7 @@ public:
             static_cast<uint32_t>(sizeof(T)),
             flags,
             serial,
+            main_thread_execute,
             std::move(texture_accesses),
             std::move(buffer_accesses),
             std::move(pass_execute)
@@ -217,11 +263,12 @@ private:
         uint32_t                       size,
         ERGPassFlags                   flags,
         bool                           serial,
+        bool                           main_thread,
         Moer::Array<RGTextureAccess>&& texture_accesses,
         Moer::Array<RGBufferAccess>&&  buffer_accesses,
         RGPass::Execute&&              execute
     );
-    void       RunSetupPasses();
+    GraphEventRef RunSetupPassesAsync();
     void       Compile(RGTransientResourceAllocator& allocator);
     void       DispatchBatched();
     void       EmitFinalTrackedStates(RHICommandList& cmd_list) const;
@@ -230,11 +277,15 @@ private:
     RGTexture* AddTexture(Moer::UniquePtr<RGTexture> texture);
     RGBuffer*  AddBuffer(Moer::UniquePtr<RGBuffer> buffer);
     void       ValidateSetup() const;
+    void       ValidateBuildThread() const;
     void       BuildResourceStateRanges();
     void       BuildCompileMetadata();
+    void       BuildExecutionBatches();
 
     bool                          m_setup_executed{false};
     bool                          m_compiled{false};
+    String                        m_name{MOER_TEXT("RenderGraph")};
+    Moer::Array<String>           m_scope_stack{};
     Moer::Array<Moer::UniquePtr<RGTexture>> m_textures{};
     Moer::Array<Moer::UniquePtr<RGBuffer>>  m_buffers{};
     Moer::Array<RGResource*>       m_resources{};
@@ -245,5 +296,13 @@ private:
 };
 
 } // namespace Moer::Render
+
+#define MOER_RG_EVENT_SCOPE_VAR_JOIN_IMPL(a, b) a##b
+#define MOER_RG_EVENT_SCOPE_VAR_JOIN(a, b) MOER_RG_EVENT_SCOPE_VAR_JOIN_IMPL(a, b)
+#define RG_EVENT_SCOPE(rendergraph, formatstring, ...)                                                \
+    ::Moer::Render::RGEventScope MOER_RG_EVENT_SCOPE_VAR_JOIN(_moer_rg_event_scope_, __LINE__)(      \
+        (rendergraph),                                                                                \
+        ::Moer::Render::RGFormatEventScopeName((formatstring) __VA_OPT__(, ) __VA_ARGS__)             \
+    )
 
 #endif // !MOER_ENGINE_RENDER_GRAPH

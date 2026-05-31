@@ -332,12 +332,36 @@ ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) 
             MOER_TEXT("ImGUI::TransparentTexture"),
             Extent2D(1, 1),
             PF_R8G8B8A8_UNORM,
-            ETextureUsageFlags::SAMPLED
+            ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::SAMPLED
         );
         FenceRef upload_fence = rd_device.CreateFence();
 
         CommandList cmd_list;
-        cmd_list.CopyFrom(std::span<std::byte>(transparent_pixels.data(), transparent_pixels.size()), transparent_texture);
+        cmd_list.Barriers(
+            {BarrierCreateInfo::Transition(
+                transparent_texture->GetView(),
+                ETextureState::UNDEFINED,
+                ETextureState::TRANSFER_DST,
+                EPassType::Copy
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
+        );
+        cmd_list.CopyFrom(
+            std::span<std::byte>(transparent_pixels.data(), transparent_pixels.size()),
+            transparent_texture->GetView()
+        );
+        cmd_list.Barriers(
+            {BarrierCreateInfo::Transition(
+                transparent_texture->GetView(),
+                MakeBarrierState(ETextureState::TRANSFER_DST, EPassType::Copy),
+                MakeBarrierState(ETextureState::SAMPLED, EPassType::Graphics)
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
+        );
         cmd_list.Signal(upload_fence, 1);
 
         Array<CommandList> upload_cmd_lists{};
@@ -368,12 +392,33 @@ ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) 
                 MOER_TEXT("ImGUI::FontTexture"),
                 Extent2D(width, height),
                 PF_R8G8B8A8_UNORM,
-                ETextureUsageFlags::SAMPLED
+                ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::SAMPLED
             );
         FenceRef       upload_fence = rd_device.CreateFence();
 
         CommandList cmd_list;
-        cmd_list.CopyFrom(std::span<std::byte>((std::byte*)pixels, upload_size), font_tex);
+        cmd_list.Barriers(
+            {BarrierCreateInfo::Transition(
+                font_tex->GetView(),
+                ETextureState::UNDEFINED,
+                ETextureState::TRANSFER_DST,
+                EPassType::Copy
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
+        );
+        cmd_list.CopyFrom(std::span<std::byte>((std::byte*)pixels, upload_size), font_tex->GetView());
+        cmd_list.Barriers(
+            {BarrierCreateInfo::Transition(
+                font_tex->GetView(),
+                MakeBarrierState(ETextureState::TRANSFER_DST, EPassType::Copy),
+                MakeBarrierState(ETextureState::SAMPLED, EPassType::Graphics)
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
+        );
         cmd_list.Signal(upload_fence, 1);
 
         Array<CommandList> upload_cmd_lists{};
@@ -495,10 +540,26 @@ void ImGUIRenderBackend::RenderGUI(CommandList& _cmd_list, const TextureView& _f
         main_draw_data->DisplaySize.x <= 0.0f || main_draw_data->DisplaySize.y <= 0.0f;
 
     if (!b_window_minimized) {
+        current_framebuffer_texture = _framebuffer.GetTexture();
         PrepareDrawDataTextures(*this, main_draw_data);
+        _cmd_list.Barriers(
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            EPassType::Graphics,
+            ETrackedStateUpdateMode::Update,
+            WriteBindlessArray{bindless_array, EBufferState::UNORDERED_ACCESS}
+        );
         _cmd_list.UpdateBindlessArray(bindless_array);
+        _cmd_list.Barriers(
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            EPassType::Graphics,
+            ETrackedStateUpdateMode::Update,
+            ReadBindlessArray{bindless_array, EBufferState::SHADER_RESOURCE}
+        );
         auto& rd_device = RenderDevice::Get();
         GUIRender(main_draw_data, _framebuffer, _cmd_list);
+        current_framebuffer_texture = nullptr;
     }
     EndPlatformFrameIfNeeded();
 }
@@ -577,6 +638,12 @@ void ImGUIRenderBackend::DrainRenderOutputUpdates() {
 
 uint ImGUIRenderBackend::ResolveTextureHandle(uint64_t texture_id) {
     if (!IsRenderOutputTextureId(texture_id)) {
+        if (current_framebuffer_texture != nullptr) {
+            if (auto iter = registered_images.find(current_framebuffer_texture);
+                iter != registered_images.end() && iter->second == static_cast<uint>(texture_id)) {
+                return transparent_texture_handle;
+            }
+        }
         return static_cast<uint>(texture_id);
     }
 
@@ -587,6 +654,9 @@ uint ImGUIRenderBackend::ResolveTextureHandle(uint64_t texture_id) {
 
     const RenderOutputResource& output = render_output_snapshot[handle.slot_index];
     if (output.generation != handle.generation || !output.resource.GetTexture()) {
+        return transparent_texture_handle;
+    }
+    if (output.resource.GetTexture() == current_framebuffer_texture) {
         return transparent_texture_handle;
     }
 
@@ -621,6 +691,7 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
     ImGUIData&          backend_data   = *GetGUIBackendData();
     ImGUIRenderBackend& render_backend = *backend_data.render_backend;
     auto&               device         = RenderDevice::Get();
+    render_backend.current_framebuffer_texture = _frame_buffer.GetTexture();
 
     GuiViewportData* viewport_data = (GuiViewportData*)draw_data->OwnerViewport->RendererUserData;
 
@@ -680,7 +751,7 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
         RetireGuiBuffer(backend_data, render_buffers->arg_buffer);
         uint32_t new_size = 128 + total_cmd_cnt;
         render_buffers->arg_buffer = device.CreateBuffer<ImGUIArg>(
-            MOER_TEXT("GUI::ImGUI Arg Buffer"), new_size, EBufferUsageFlags::TRANSFER_DST
+            MOER_TEXT("GUI::ImGUI Arg Buffer"), new_size, EBufferUsageFlags::TEXTURE_BUFFER | EBufferUsageFlags::TRANSFER_DST
         );
     }
 
@@ -770,6 +841,26 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
     auto idx_view = render_buffers->idx_buffer->GetView();
     auto arg_view = render_buffers->arg_buffer->GetView();
     // Array<ImGUIArg> copy_back_args(render_buffers->arg_buffer->GetNumElement());
+    _cmdlist.Barriers(
+        {BarrierCreateInfo::Transition(
+             vtx_view,
+             MakeBarrierState(EBufferState::VERTEX_BUFFER, EPassType::Graphics),
+             MakeBarrierState(EBufferState::TRANSFER_DST, EPassType::Copy)
+         ),
+         BarrierCreateInfo::Transition(
+             idx_view,
+             MakeBarrierState(EBufferState::INDEX_BUFFER, EPassType::Graphics),
+             MakeBarrierState(EBufferState::TRANSFER_DST, EPassType::Copy)
+         ),
+         BarrierCreateInfo::Transition(
+             arg_view,
+             MakeBarrierState(EBufferState::SHADER_RESOURCE, EPassType::Graphics),
+             MakeBarrierState(EBufferState::TRANSFER_DST, EPassType::Copy)
+         )},
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        ETrackedStateUpdateMode::Update
+    );
     _cmdlist.CopyFrom(
         std::span<Moer::byte>((Moer::byte*)vertices.data(), vertices.size() * sizeof(ImDrawVert)), vtx_view
     );
@@ -778,6 +869,26 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
     );
     _cmdlist.CopyFrom(
         std::span<Moer::byte>((Moer::byte*)args.data(), args.size() * sizeof(ImGUIArg)), arg_view
+    );
+    _cmdlist.Barriers(
+        {BarrierCreateInfo::Transition(
+             vtx_view,
+             MakeBarrierState(EBufferState::TRANSFER_DST, EPassType::Copy),
+             MakeBarrierState(EBufferState::VERTEX_BUFFER, EPassType::Graphics)
+         ),
+         BarrierCreateInfo::Transition(
+             idx_view,
+             MakeBarrierState(EBufferState::TRANSFER_DST, EPassType::Copy),
+             MakeBarrierState(EBufferState::INDEX_BUFFER, EPassType::Graphics)
+         ),
+         BarrierCreateInfo::Transition(
+             arg_view,
+             MakeBarrierState(EBufferState::TRANSFER_DST, EPassType::Copy),
+             MakeBarrierState(EBufferState::SHADER_RESOURCE, EPassType::Graphics)
+         )},
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        ETrackedStateUpdateMode::Update
     );
     // _cmdlist.CopyFrom(arg_view, std::span<Moer::byte>((Moer::byte*)copy_back_args.data(), copy_back_args.size() * sizeof(ImGUIArg)));
     assert(backend_data.rast_psos.contains(_frame_buffer.format) && "Unsupported GUI format");
@@ -796,6 +907,8 @@ void GUIRender(void* _draw_data, const TextureView& _frame_buffer, CommandList& 
             std::move(draw_meshes),
             ColorAttachment(_frame_buffer.GetTexture(), EAttachmentAction::AC_LOAD_STORE)
         );
+
+    render_backend.current_framebuffer_texture = nullptr;
 
     _cmdlist.AddCallback([vtx(std::move(vertices)), idx(std::move(indices)), arg(std::move(args))
                           //   copy_back_args(std::move(copy_back_args))
@@ -945,7 +1058,22 @@ void GuiSwapbuffer(ImGuiViewport* _viewport, void*) {
     }
 
     CommandList cmd_list(EQueueType::Graphics);
-    cmd_list.UpdateBindlessArray(GetGUIBackendData()->render_backend->bindless_array);
+    auto bindless_array = GetGUIBackendData()->render_backend->bindless_array;
+    cmd_list.Barriers(
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        EPassType::Graphics,
+        ETrackedStateUpdateMode::Update,
+        WriteBindlessArray{bindless_array, EBufferState::UNORDERED_ACCESS}
+    );
+    cmd_list.UpdateBindlessArray(bindless_array);
+    cmd_list.Barriers(
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        EPassType::Graphics,
+        ETrackedStateUpdateMode::Update,
+        ReadBindlessArray{bindless_array, EBufferState::SHADER_RESOURCE}
+    );
     GuiRenderWindow(_viewport, &cmd_list);
     cmd_list.DeleteResources();
 

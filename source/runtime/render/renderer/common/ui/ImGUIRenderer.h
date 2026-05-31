@@ -56,6 +56,7 @@ public:
 
     TextureRef transparent_texture;
     uint       transparent_texture_handle = 0;
+    Texture*   current_framebuffer_texture = nullptr;
 };
 } // namespace Moer::Render
 

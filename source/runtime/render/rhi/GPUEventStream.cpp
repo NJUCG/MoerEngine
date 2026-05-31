@@ -479,7 +479,7 @@ void GPUEventStream::ResolveCompleted(WaitEvent completion) {
                 continue;
             }
             auto ts_result = std::get<TimestampQueryResult>(query_result.payload);
-            event.timestamp_ns = ConvertTimestampToNsLocked(submit.queue, ts_result);
+            event.timestamp_ns = ConvertTimestampToNsLocked(submit.queue, ts_result, IsEndEvent(event.type));
         }
         submit.resolved = true;
     }
@@ -487,21 +487,26 @@ void GPUEventStream::ResolveCompleted(WaitEvent completion) {
     TryResolveReadyFramesLocked();
 }
 
-uint64 GPUEventStream::ConvertTimestampToNsLocked(EQueueType queue, const TimestampQueryResult& result) {
+uint64 GPUEventStream::ConvertTimestampToNsLocked(
+    EQueueType                    queue,
+    const TimestampQueryResult&   result,
+    bool                          use_end_tick
+) {
     const size_t queue_index = static_cast<size_t>(queue);
+    const uint64 selected_tick = use_end_tick ? result.end_tick : result.begin_tick;
     if (queue_index >= timestamp_domains.size() || result.tick_period_ns <= 0.0) {
-        return result.begin_tick;
+        return selected_tick;
     }
 
     TimestampDomain& domain = timestamp_domains[queue_index];
-    if (!domain.valid || result.begin_tick < domain.anchor_tick || domain.tick_period_ns != result.tick_period_ns) {
+    if (!domain.valid || selected_tick < domain.anchor_tick || domain.tick_period_ns != result.tick_period_ns) {
         domain.valid = true;
-        domain.anchor_tick = result.begin_tick;
+        domain.anchor_tick = selected_tick;
         domain.anchor_time_ns = SteadyNowNs();
         domain.tick_period_ns = result.tick_period_ns;
     }
 
-    const long double delta_ticks = static_cast<long double>(result.begin_tick - domain.anchor_tick);
+    const long double delta_ticks = static_cast<long double>(selected_tick - domain.anchor_tick);
     const long double delta_ns = delta_ticks * static_cast<long double>(domain.tick_period_ns);
     return domain.anchor_time_ns + static_cast<uint64>(std::max<long double>(0.0, delta_ns));
 }

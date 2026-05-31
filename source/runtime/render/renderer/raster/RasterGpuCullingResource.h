@@ -76,7 +76,21 @@ struct GpuCullingBuffers {
             }
 
             if (need_bindless_update) {
+                cmd_list.Barriers(
+                    EQueueType::Graphics,
+                    EQueueType::Graphics,
+                    EPassType::Compute,
+                    ETrackedStateUpdateMode::Update,
+                    WriteBindlessArray{bdls, EBufferState::UNORDERED_ACCESS}
+                );
                 cmd_list.UpdateBindlessArray(bdls);
+                cmd_list.Barriers(
+                    EQueueType::Graphics,
+                    EQueueType::Graphics,
+                    EPassType::Compute,
+                    ETrackedStateUpdateMode::Update,
+                    ReadBindlessArray{bdls, EBufferState::SHADER_RESOURCE}
+                );
             }
         }
     };

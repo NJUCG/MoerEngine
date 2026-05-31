@@ -650,8 +650,10 @@ bool DecodeTraceCsvCapture(std::span<const uint8_t> bytes, StringView path, Prof
 
     std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     Array<ProfileEvent> raw_events{};
+    Utf8String          session_name{};
     size_t              cursor = 0;
     bool                consumed_header = false;
+    bool                checked_bom = false;
     while (cursor <= text.size()) {
         const size_t line_end = text.find('\n', cursor);
         std::string_view line = line_end == std::string_view::npos ? text.substr(cursor) : text.substr(cursor, line_end - cursor);
@@ -659,7 +661,23 @@ bool DecodeTraceCsvCapture(std::span<const uint8_t> bytes, StringView path, Prof
         if (!line.empty() && line.back() == '\r') {
             line.remove_suffix(1);
         }
+        if (!checked_bom) {
+            checked_bom = true;
+            if (line.size() >= 3 && static_cast<uint8_t>(line[0]) == 0xEF &&
+                static_cast<uint8_t>(line[1]) == 0xBB && static_cast<uint8_t>(line[2]) == 0xBF) {
+                line.remove_prefix(3);
+            }
+        }
+        line = TrimCsvField(line);
         if (line.empty()) {
+            continue;
+        }
+        if (line.front() == '#') {
+            static constexpr std::string_view session_name_prefix = "#session_name=";
+            if (line.starts_with(session_name_prefix)) {
+                const std::string_view value = line.substr(session_name_prefix.size());
+                session_name = Utf8String(Utf8String::native_view_type(value.data(), value.size()));
+            }
             continue;
         }
         if (!consumed_header) {
@@ -682,7 +700,7 @@ bool DecodeTraceCsvCapture(std::span<const uint8_t> bytes, StringView path, Prof
     if (clear_before_load) {
         store.Reset();
     }
-    store.SetSessionName(PathFilenameToProfilerString(path));
+    store.SetSessionName(session_name.empty() ? PathFilenameToProfilerString(path) : std::move(session_name));
     store.AppendEvents(raw_events);
     return true;
 }

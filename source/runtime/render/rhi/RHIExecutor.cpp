@@ -1,6 +1,7 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHI.h"
 #include "rhi/RHIExecutorBackend.h"
+#include "rhi/RHIImpl.h"
 #include "Core.h"
 #include "taskgraph/GraphTask.h"
 #include "vulkan/VulkanSubmissionExecutor.h"
@@ -21,6 +22,34 @@ std::shared_ptr<RHIBackendExecutor> CreateBackendExecutor(ERHIType rhi_type) {
             LOG_ERROR(MOER_TEXT("RHIExecutor got an unsupported RHI type"));
             assert(false && "Unsupported RHI type in RHIExecutor backend creation");
             return {};
+    }
+}
+
+bool IsFrameTickCommand(const Command* command) {
+    if (command == nullptr || command->Type() != Command::EType::Custom) {
+        return false;
+    }
+    const auto* custom_cmd = static_cast<const CustomCmd*>(command);
+    return custom_cmd->CustomId() == CustomCmd::CustomCmdId::CUSTOM_FRAME_TICK;
+}
+
+bool BatchContainsFrameTick(const RHIBackendSubmissionBatch& batch) {
+    for (const RHIBackendSubmissionBatchEntry& entry : batch.submits) {
+        for (const UniquePtr<Command>& command : entry.submit.cmds) {
+            if (IsFrameTickCommand(command.get())) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void EnableFrameProfiling(RHIBackendSubmissionBatch& batch) {
+    if (!BatchContainsFrameTick(batch)) {
+        return;
+    }
+    for (RHIBackendSubmissionBatchEntry& entry : batch.submits) {
+        entry.submit.b_tick_profiling = true;
     }
 }
 
@@ -222,6 +251,8 @@ void RHIExecutor::EnqueuePendingLocked() {
     if (!has_work) {
         return;
     }
+
+    EnableFrameProfiling(batch);
 
     GetBackendExecutorLocked()->Enqueue(std::move(batch));
 }

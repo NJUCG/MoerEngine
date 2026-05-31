@@ -2,15 +2,11 @@
 
 #include "Configs.h"
 #include "PixelFormat.h"
-#include "PreprocessLightPass.h"
 #include "ShaderUtils.h"
-#include "config/ConfigManager.h"
 #include "math/Function.h"
 #include "renderer/common/RuntimeAssets.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
-#include <cstdio>
-#include <filesystem>
 #include <stb_image.h>
 #include <utility>
 
@@ -19,6 +15,7 @@
 #include "scene/Scene.h"
 #include "shaderheaders/shared/lighting/ShaderParameters.h"
 #include "tinyexr.h"
+#include "trace/Trace.h"
 
 namespace Moer::Render::Raytracing {
 
@@ -294,6 +291,7 @@ void RTContext::RecordLowDiscrepancySequence(
 }
 
 void RTContext::CreateEnvMapResources(TextureWithHandle _env_tex, CommandList& _cmd_list) {
+    TRACE_SCOPE_CAT("Raytracing.RTContext.CreateEnvMapResources", "Frame");
 
     uint2         extent = _env_tex.tex->GetExtent().xy;
     RenderDevice& device = RenderDevice::Get();
@@ -332,11 +330,13 @@ void RTContext::CreateBuffersIfNeeded(
     uint _num_prim_lights,
     uint _max_primitives
 ) {
+    TRACE_SCOPE_CAT("Raytracing.RTContext.CreateBuffersIfNeeded", "Frame");
 
     RenderDevice& device   = RenderDevice::Get();
-    uint          task_num = _num_emissive_meshes + _num_prim_lights;
+    uint          task_num = Max(1u, _num_emissive_meshes + _num_prim_lights);
 
     if (!task_buf || task_num > task_buf->GetNumElement()) {
+        TRACE_SCOPE_CAT("Raytracing.RTContext.CreateBuffersIfNeeded.TaskBuffer", "Frame");
         task_buf = device.CreateBuffer<PrepareLightsTask>(
             MOER_TEXT("Raytracing::task_buf"), task_num, EBufferUsageFlags::UNORDERED_ACCESS
         );
@@ -346,12 +346,11 @@ void RTContext::CreateBuffersIfNeeded(
     max_emissive_meshes    = _num_emissive_meshes;
     max_emissive_triangles = _num_emissive_triangles;
 
-    uint max_local_lights  = max_emissive_triangles + max_prim_lights;
+    uint max_local_lights  = Max(1u, max_emissive_triangles + max_prim_lights);
     uint light_buf_element = max_local_lights * 2;
-    // Keep at least one double-buffered light element even when the scene has no lights.
-    assert(light_buf_element > 0 && "light_buf_element must be greater than 0");
 
     if (!light_mapping_buf || light_buf_element > light_data_buf->GetNumElement()) {
+        TRACE_SCOPE_CAT("Raytracing.RTContext.CreateBuffersIfNeeded.LightBuffers", "Frame");
         light_mapping_buf = device.CreateBuffer<uint>(
             MOER_TEXT("Raytracing::light_mapping_buf"), light_buf_element, EBufferUsageFlags::UNORDERED_ACCESS
         );
@@ -364,6 +363,7 @@ void RTContext::CreateBuffersIfNeeded(
     }
 
     if (!prim_light_buf || max_prim_lights > prim_light_buf->GetNumElement()) {
+        TRACE_SCOPE_CAT("Raytracing.RTContext.CreateBuffersIfNeeded.PrimLightBuffer", "Frame");
         // max_prim_lights can be zero, but the buffer must still contain one element.
         uint prim_light_buf_size = max_prim_lights > 0 ? max_prim_lights : 1u;
         prim_light_buf           = device.CreateBuffer<PolymorphicLightInfo>(
@@ -375,6 +375,7 @@ void RTContext::CreateBuffersIfNeeded(
     // The scene must contain at least one primitive.
     assert(_max_primitives > 0 && "_max_primitives must be greater than 0");
     if (!primitive_to_light_buf || _max_primitives > primitive_to_light_buf->GetNumElement()) {
+        TRACE_SCOPE_CAT("Raytracing.RTContext.CreateBuffersIfNeeded.PrimitiveToLightBuffer", "Frame");
         primitive_to_light_buf = device.CreateBuffer<uint>(
             MOER_TEXT("Raytracing::primitive_to_light_buf"), _max_primitives, EBufferUsageFlags::UNORDERED_ACCESS
         );
@@ -389,6 +390,7 @@ void RTContext::CreateBuffersIfNeeded(
 
         if (!local_light_pdf_tex || texture_height != local_light_pdf_tex->GetExtent().y ||
             texture_width != local_light_pdf_tex->GetExtent().x) {
+            TRACE_SCOPE_CAT("Raytracing.RTContext.CreateBuffersIfNeeded.LocalLightPdf", "Frame");
             local_light_pdf_mips.clear();
             local_light_pdf_tex = device.CreateTexture(
                 MOER_TEXT("local_light_pdf_tex"),
@@ -443,51 +445,56 @@ void RTContext::SetEnvMapInfos(float _scale, float _rotation) {
 }
 
 void RTContext::Tick(Camera& _camera, float2 _jitter) {
+    TRACE_SCOPE_CAT("Raytracing.RTContext.Tick", "Frame");
     auto& device = RenderDevice::Get();
     prev_view    = main_view;
 
-    float2 render_extent = float2(frame_rt.ldr_color->GetExtent().xy);
-    float2 delta         = 2.f / render_extent;
+    {
+        TRACE_SCOPE_CAT("Raytracing.RTContext.Tick.ViewConstants", "Frame");
+        float2 render_extent = float2(frame_rt.ldr_color->GetExtent().xy);
+        float2 delta         = 2.f / render_extent;
 
-    main_view.view2world = Transpose(_camera.GetToWorldMatrix());
-    main_view.world2view = Transpose(_camera.GetViewMatrix());
+        main_view.view2world = Transpose(_camera.GetToWorldMatrix());
+        main_view.world2view = Transpose(_camera.GetViewMatrix());
 
-    float4x4 view = _camera.GetViewMatrix();
-    float4x4 proj = _camera.GetProjectionMatrix();
+        float4x4 view = _camera.GetViewMatrix();
+        float4x4 proj = _camera.GetProjectionMatrix();
 
-    // float4 test_prev = float4(0, 0, -1, 1);
-    // test_prev        = proj * test_prev;
-    // //apply jitter
-    // proj[0][3] += _jitter.x * delta.x;
-    // proj[1][3] += _jitter.y * delta.y;
+        // float4 test_prev = float4(0, 0, -1, 1);
+        // test_prev        = proj * test_prev;
+        // //apply jitter
+        // proj[0][3] += _jitter.x * delta.x;
+        // proj[1][3] += _jitter.y * delta.y;
 
-    // float4 test = float4(0, 0, -1, 1);
-    // test        = proj * test;
+        // float4 test = float4(0, 0, -1, 1);
+        // test        = proj * test;
 
-    float4x4 jitter_matrix = MakeTranslation(_jitter.x * delta.x, -_jitter.y * delta.y, 0.f);
-    proj                   = jitter_matrix * proj;
+        float4x4 jitter_matrix = MakeTranslation(_jitter.x * delta.x, -_jitter.y * delta.y, 0.f);
+        proj                   = jitter_matrix * proj;
 
-    main_view.view2clip  = Transpose(proj);
-    main_view.clip2view  = Transpose(Inverse(proj));
-    main_view.clip2world = Transpose(Inverse(proj * view));
-    main_view.world2clip = Transpose(proj * view);
+        main_view.view2clip  = Transpose(proj);
+        main_view.clip2view  = Transpose(Inverse(proj));
+        main_view.clip2world = Transpose(Inverse(proj * view));
+        main_view.world2clip = Transpose(proj * view);
 
-    // main_view.world2clip        = Transpose(_camera->GetViewProjectionMatrix());
-    // main_view.view2clip         = Transpose(_camera->GetProjectionMatrix());
-    // main_view.clip2view         = Transpose(_camera->GetProjectionMatrixInv());
-    // main_view.clip2world        = Transpose(_camera->GetViewProjectionMatrixInv());
-    main_view.frustum  = _camera.GetFrustum();
-    main_view.near_far = float2(_camera.GetNearClip(), _camera.GetFarClip());
-    main_view.rect              = render_extent;
-    main_view.inv_rect          = float2(1.f / main_view.rect.x, 1.f / main_view.rect.y);
-    main_view.dir_or_pos        = float4(_camera.GetPosition(), 1.f);
-    main_view.clip2window_scale = float2(0.5f * main_view.rect.x, -0.5f * main_view.rect.y);
-    main_view.clip2window_bias  = float2(0.5f * main_view.rect.x, 0.5f * main_view.rect.y);
-    main_view.window2clip_scale = float2(2.f / main_view.rect.x, -2.f / main_view.rect.y);
-    main_view.window2clip_bias  = float2(-1.f, 1.f);
-    main_view.jitter            = _jitter;
+        // main_view.world2clip        = Transpose(_camera->GetViewProjectionMatrix());
+        // main_view.view2clip         = Transpose(_camera->GetProjectionMatrix());
+        // main_view.clip2view         = Transpose(_camera->GetProjectionMatrixInv());
+        // main_view.clip2world        = Transpose(_camera->GetViewProjectionMatrixInv());
+        main_view.frustum  = _camera.GetFrustum();
+        main_view.near_far = float2(_camera.GetNearClip(), _camera.GetFarClip());
+        main_view.rect              = render_extent;
+        main_view.inv_rect          = float2(1.f / main_view.rect.x, 1.f / main_view.rect.y);
+        main_view.dir_or_pos        = float4(_camera.GetPosition(), 1.f);
+        main_view.clip2window_scale = float2(0.5f * main_view.rect.x, -0.5f * main_view.rect.y);
+        main_view.clip2window_bias  = float2(0.5f * main_view.rect.x, 0.5f * main_view.rect.y);
+        main_view.window2clip_scale = float2(2.f / main_view.rect.x, -2.f / main_view.rect.y);
+        main_view.window2clip_bias  = float2(-1.f, 1.f);
+        main_view.jitter            = _jitter;
+    }
     //restir
     {
+        TRACE_SCOPE_CAT("Raytracing.RTContext.Tick.ReSTIRBuffers", "Frame");
 
         if (!light_reservoir_buf ||
             is_ctx.GetReSTIRDIRuntimeConfig().reservoir_buffer_params.block_array_pitch *

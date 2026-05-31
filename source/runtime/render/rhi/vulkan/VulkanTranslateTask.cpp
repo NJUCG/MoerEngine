@@ -31,7 +31,6 @@ TranslateResult DispatchSingleTranslate(
             auto& queue = static_cast<VkCommandQueue&>(RenderDevice::Get().GetCommandQueue(queue_type));
             result.recorded_submit = queue.Translate(
                 std::move(submit),
-                nullptr,
                 std::move(initial_seed),
                 allocator_override
             );
@@ -39,7 +38,7 @@ TranslateResult DispatchSingleTranslate(
         }
         case EQueueType::Copy: {
             auto& queue = static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
-            result.recorded_submit = queue.Translate(std::move(submit), nullptr, allocator_override);
+            result.recorded_submit = queue.Translate(std::move(submit), allocator_override);
             break;
         }
         default:

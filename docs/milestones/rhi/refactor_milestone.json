@@ -6,6 +6,7 @@
     ".github/skills/strict-engineering/SKILL.md",
     "docs/RHI_Submission_Rework_Design.md",
     "docs/RHI_Translate_Scheduler_Design.md",
+    "docs/milestones/rhi/barrier_state_api_checkpoint.json",
     "docs/checkpoints/rhi_translate_scheduler_checkpoints.json",
     "docs/checkpoints/submission_interrupt_payload_refactor_checkpoints.json",
     "docs/checkpoints/vulkan_submission_executor_split_checkpoint.json"
@@ -141,6 +142,9 @@
   ],
   "current_stage_state": {
     "active_stage": "M2",
+    "active_design_docs": [
+      "docs/milestones/rhi/barrier_state_api_checkpoint.json"
+    ],
     "completed_in_m2": [
       "CP-01",
       "CP-02",
@@ -161,7 +165,21 @@
         "result": "failed",
         "log_dir": "logs/run_20260421_234009",
         "scope": "RHI passed; Editor failed with early exit outside the current executor slice."
+      },
+      {
+        "script": "testscripts/windows/test_rhi_translate.ps1",
+        "date": "2026-05-14",
+        "result": "passed",
+        "log_dir": "logs/run_20260514_003147",
+        "scope": "BarrierCreateInfo unification, tracked-state skip semantics, RuntimeAssets build fix, and Vulkan submission runtime build recovery."
+      },
+      {
+        "script": "testscripts/windows/test_editor.ps1 -TimeoutSec 8",
+        "date": "2026-05-14",
+        "result": "failed",
+        "log_dir": "logs/run_20260514_003208",
+        "scope": "Editor launch reached Vulkan initialization, then Windows reported moer_renderd.dll exception 0x80000003; triage remains separate from focused RHI validation."
       }
     ]
-  ]
+  }
 }

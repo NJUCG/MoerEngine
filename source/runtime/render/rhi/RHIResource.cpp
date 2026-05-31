@@ -57,6 +57,16 @@ TextureView::TextureView(Texture* _tex, EPixelFormat _fmt, uint8 _mip_level, uin
     //calculate extent
 }
 
+bool TextureView::IsWholeResource() const {
+    if (texture == nullptr) {
+        return false;
+    }
+    const uint8 resolved_mips = num_mips == kRemainingSubresource ? uint8(texture->GetNumMips() - mip_level) : num_mips;
+    const uint8 resolved_arrays = num_array == kRemainingSubresource ? uint8(texture->GetNumArray() - array_layer) : num_array;
+    return mip_level == 0 && array_layer == 0 && resolved_mips == texture->GetNumMips() &&
+           resolved_arrays == texture->GetNumArray();
+}
+
 //in case of const TextureView, so return copy
 TextureView TextureView::Slice(uint layer, uint count) const {
     TextureView copy = *this;
@@ -79,6 +89,11 @@ BufferView::BufferView(Buffer* _buffer, EPixelFormat _fmt) :
     num_elements(_buffer->GetNumElement()),
     stride(_buffer->GetStride()),
     format(_fmt) {}
+
+bool BufferView::IsWholeResource() const {
+    return buffer != nullptr && byte_offset == 0 && GetByteSize() == buffer->GetByteSize();
+}
+
 BufferView Buffer::GetView(uint64_t _byte_offset, uint64_t _byte_size) {
     if (_byte_size == UINT64_MAX && _byte_offset == 0) {
         return BufferView(this, info.format);

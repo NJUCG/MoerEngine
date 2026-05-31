@@ -9,7 +9,6 @@
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanPipelineResourceCache.h"
-#include "VulkanPlatform.h"
 #include "VulkanRHIResource.h"
 #include "VulkanSwapChain.h"
 #include <type_traits>
@@ -22,8 +21,8 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include "rhi/RHIResourceInitilizer.h"
-#include "vulkan/vk_enum_string_helper.h"
+#include "taskgraph/TaskGraph.h"
+#include "trace/Trace.h"
 #include "vulkan/vulkan_core.h"
 
 #if WITH_CUDA
@@ -2783,9 +2782,9 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
 
         // TLAS instance buffer must be 16-byte aligned (Vulkan spec requirement)
         // Add extra padding for alignment and use 256-byte alignment for AMD GPU compatibility
-        constexpr uint64 kInstanceBufferAlignment = 256;
+        constexpr uint64 instance_buffer_alignment = 256;
         const uint64 base_instance_buffer_size = sizeof(VkAccelerationStructureInstanceKHR) * 1000;
-        const uint64 aligned_instance_buffer_size = base_instance_buffer_size + kInstanceBufferAlignment;
+        const uint64 aligned_instance_buffer_size = base_instance_buffer_size + instance_buffer_alignment;
 
         VkBufferCreateInfo buffer_ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         buffer_ci.size = aligned_instance_buffer_size;
@@ -2867,7 +2866,11 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         assert(geometry && "Invalid geometry");
         auto iter = related_geometries.find(uint64(geometry));
         if(iter != related_geometries.end()){
-            iter->second++;
+            if (iter->second <= 1) {
+                related_geometries.erase(iter);
+            } else {
+                --iter->second;
+            }
         }
 
     }
@@ -2887,6 +2890,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
     }
 
     UniquePtr<Command> VulkanRaytracingScene::UpdateScene(){
+        TRACE_SCOPE_CAT("Vulkan.RaytracingScene.UpdateScene", "Frame");
         const bool has_instance_updates = !temp_update_instance_ids.empty();
         const bool needs_instance_buffer_refit = instance_capacity < instances.size();
         const bool needs_initial_build = !tlas || !scratch_buffer;
@@ -2894,7 +2898,6 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             return nullptr;
         }
 
-        related_geometries.clear();
         temp_update_instances.clear();
 
         if (tlas) {
@@ -2916,11 +2919,16 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
 
         bool b_full_refit = false;
         if (needs_instance_buffer_refit) {
+            TRACE_SCOPE_CAT("Vulkan.RaytracingScene.UpdateScene.RefitInstanceBuffer", "Frame");
             RefitInstanceBuffer();
             b_full_refit = true;
         }
 
-        const bool b_need_force_build = RefitTLASAndScratchBuffer();
+        bool b_need_force_build = false;
+        {
+            TRACE_SCOPE_CAT("Vulkan.RaytracingScene.UpdateScene.RefitTLASAndScratch", "Frame");
+            b_need_force_build = RefitTLASAndScratchBuffer();
+        }
 
         if (b_full_refit) {
             temp_update_instance_ids.clear();
@@ -2930,41 +2938,62 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             }
         }
 
-        temp_update_instances.resize(temp_update_instance_ids.size() * sizeof(VkAccelerationStructureInstanceKHR));
-        for (uint update_index = 0; update_index < temp_update_instance_ids.size(); ++update_index) {
-            const uint idx = temp_update_instance_ids[update_index];
-            VulkanRaytracingGeometry* geometry = ResourceCast(instances[idx].geom);
-            assert(geometry && "Invalid geometry");
-            const Array<RaytracingSegment>& segments = geometry->GetInfo().segments;
-            VkAccelerationStructureInstanceKHR& vk_instance = vk_instances[idx];
-            const RaytracingInstance& instance = instances[idx];
-            vk_instance.instanceCustomIndex = instance.custom_index;
-            vk_instance.mask = instance.visible_mask;
-            vk_instance.instanceShaderBindingTableRecordOffset = instance.material_ref.sbt_offset;
-            vk_instance.flags = METoRTInstanceFlags(segments[instance.segment_idx], instance);
-            vk_instance.accelerationStructureReference = geometry->blas_address;
-            std::memcpy(&vk_instance.transform, &instance.transform, sizeof(vk_instance.transform));
-            std::memcpy(
-                temp_update_instances.data() + update_index * sizeof(VkAccelerationStructureInstanceKHR),
-                &vk_instance,
-                sizeof(VkAccelerationStructureInstanceKHR)
-            );
+        {
+            TRACE_SCOPE_CAT("Vulkan.RaytracingScene.UpdateScene.PackInstances", "Frame");
+            temp_update_instances.resize(temp_update_instance_ids.size() * sizeof(VkAccelerationStructureInstanceKHR));
+            auto pack_instance = [&](uint update_index) {
+                const uint idx = temp_update_instance_ids[update_index];
+                VulkanRaytracingGeometry* geometry = ResourceCast(instances[idx].geom);
+                assert(geometry && "Invalid geometry");
+                const Array<RaytracingSegment>& segments = geometry->GetInfo().segments;
+                VkAccelerationStructureInstanceKHR& vk_instance = vk_instances[idx];
+                const RaytracingInstance& instance = instances[idx];
+                vk_instance.instanceCustomIndex = instance.custom_index;
+                vk_instance.mask = instance.visible_mask;
+                vk_instance.instanceShaderBindingTableRecordOffset = instance.material_ref.sbt_offset;
+                vk_instance.flags = METoRTInstanceFlags(segments[instance.segment_idx], instance);
+                vk_instance.accelerationStructureReference = geometry->blas_address;
+                std::memcpy(&vk_instance.transform, &instance.transform, sizeof(vk_instance.transform));
+                std::memcpy(
+                    temp_update_instances.data() + update_index * sizeof(VkAccelerationStructureInstanceKHR),
+                    &vk_instance,
+                    sizeof(VkAccelerationStructureInstanceKHR)
+                );
+            };
+
+            static constexpr uint s_parallel_pack_threshold = 256;
+            if (temp_update_instance_ids.size() >= s_parallel_pack_threshold) {
+                TRACE_SCOPE_CAT("Vulkan.RaytracingScene.UpdateScene.PackInstances.Parallel", "Frame");
+                ParallelFor(static_cast<uint32_t>(temp_update_instance_ids.size()), pack_instance);
+            } else {
+                TRACE_SCOPE_CAT("Vulkan.RaytracingScene.UpdateScene.PackInstances.Serial", "Frame");
+                for (uint update_index = 0; update_index < temp_update_instance_ids.size(); ++update_index) {
+                    pack_instance(update_index);
+                }
+            }
         }
 
-        for (const RaytracingInstance& instance : instances) {
-            VulkanRaytracingGeometry* geometry = ResourceCast(instance.geom);
-            if (geometry == nullptr) {
-                continue;
+        if (related_geometries.empty() || related_geometry_instance_count != instances.size()) {
+            TRACE_SCOPE_CAT("Vulkan.RaytracingScene.UpdateScene.RebuildRelatedGeometries", "Frame");
+            related_geometries.clear();
+            for (const RaytracingInstance& instance : instances) {
+                VulkanRaytracingGeometry* geometry = ResourceCast(instance.geom);
+                if (geometry == nullptr) {
+                    continue;
+                }
+                auto pair = related_geometries.try_emplace(uint64(geometry), 1);
+                if (!pair.second) {
+                    ++pair.first->second;
+                }
             }
-            auto pair = related_geometries.try_emplace(uint64(geometry), 1);
-            if (!pair.second) {
-                ++pair.first->second;
-            }
+            related_geometry_instance_count = static_cast<uint>(instances.size());
         }
+
+        UnorderedMap<uint64, uint> command_related_geometries = related_geometries;
 
         b_tlas_update_pending = true;
         return MakeUnique<UpdateRaytracingSceneCmd>(
-            std::move(related_geometries),
+            std::move(command_related_geometries),
             uint64(this),
             uint64(instance_buffer.Get()),
             uint64(scratch_buffer.Get()),
@@ -3008,9 +3037,9 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
 
         // TLAS instance buffer must be 16-byte aligned (Vulkan spec requirement)
         // Add extra padding for alignment and use 256-byte alignment for AMD GPU compatibility
-        constexpr uint64 kInstanceBufferAlignment = 256;
+        constexpr uint64 instance_buffer_alignment = 256;
         const uint64 base_instance_buffer_size = sizeof(VkAccelerationStructureInstanceKHR) * instance_capacity;
-        const uint64 aligned_instance_buffer_size = base_instance_buffer_size + kInstanceBufferAlignment;
+        const uint64 aligned_instance_buffer_size = base_instance_buffer_size + instance_buffer_alignment;
 
         VkBufferCreateInfo buffer_ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         buffer_ci.size = aligned_instance_buffer_size;
@@ -3042,8 +3071,8 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         geometry.geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
         geometry.geometry.instances.arrayOfPointers = VK_FALSE;
         // Use 16-byte aligned device address for TLAS instance data (Vulkan spec requirement)
-        constexpr uint64 kInstanceDataAlignment = 256;  // 256-byte for AMD GPU compatibility
-        uint64 aligned_device_address = Moer::AlignUp(instance_buffer->DeviceAddress(), kInstanceDataAlignment);
+        constexpr uint64 instance_data_alignment = 256;  // 256-byte for AMD GPU compatibility
+        uint64 aligned_device_address = Moer::AlignUp(instance_buffer->DeviceAddress(), instance_data_alignment);
         geometry.geometry.instances.data.deviceAddress = aligned_device_address;
 
         build_info.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
@@ -3287,28 +3316,28 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
     VkGeometryFlagsKHR VulkanRHIRayTracingAccelerationStructure::METoGeometryFlagsKHR(ERayTracingGeometryFlags _me_flags) {
         VkGeometryFlagsKHR vk_flags = 0;
 
-        auto TranslateFlag = [&vk_flags, &_me_flags](ERayTracingGeometryFlags _search_me_flags, VkGeometryFlagsKHR _added_if_found, VkGeometryFlagsKHR _added_if_not_found = 0) {
+        auto translate_flag = [&vk_flags, &_me_flags](ERayTracingGeometryFlags _search_me_flags, VkGeometryFlagsKHR _added_if_found, VkGeometryFlagsKHR _added_if_not_found = 0) {
             const bool has_flag = (_me_flags & _search_me_flags) == _search_me_flags;
             vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
         };
-        TranslateFlag(ERayTracingGeometryFlags::GEOMETRY_OPAQUE, VK_GEOMETRY_OPAQUE_BIT_KHR);
-        TranslateFlag(ERayTracingGeometryFlags::NO_DUPLICATE_ANY_HIT_INVOCATION, VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR);
+        translate_flag(ERayTracingGeometryFlags::GEOMETRY_OPAQUE, VK_GEOMETRY_OPAQUE_BIT_KHR);
+        translate_flag(ERayTracingGeometryFlags::NO_DUPLICATE_ANY_HIT_INVOCATION, VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR);
         return vk_flags;
     }
 
     VkBuildAccelerationStructureFlagsKHR VulkanRHIRayTracingAccelerationStructure::METoVKBuildAccelerationStructureFlagsKHR(ERayTracingAccelerationStructureBuildFlags _me_flags) {
         VkBuildAccelerationStructureFlagsKHR vk_flags = 0;
 
-        auto TranslateFlag = [&vk_flags, &_me_flags](ERayTracingAccelerationStructureBuildFlags _search_me_flags, VkBuildAccelerationStructureFlagsKHR _added_if_found, VkBuildAccelerationStructureFlagsKHR _added_if_not_found = 0) {
+        auto translate_flag = [&vk_flags, &_me_flags](ERayTracingAccelerationStructureBuildFlags _search_me_flags, VkBuildAccelerationStructureFlagsKHR _added_if_found, VkBuildAccelerationStructureFlagsKHR _added_if_not_found = 0) {
             const bool has_flag = (_me_flags & _search_me_flags) == _search_me_flags;
             vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
         };
 
-        TranslateFlag(ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE, VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR);
-        TranslateFlag(ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_BUILD, VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR);
-        TranslateFlag(ERayTracingAccelerationStructureBuildFlags::ALLOW_COMPACTION, VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR);
-        TranslateFlag(ERayTracingAccelerationStructureBuildFlags::ALLOW_UPDATE, VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR);
-        TranslateFlag(ERayTracingAccelerationStructureBuildFlags::MINIMIZE_MEMORY, VK_BUILD_ACCELERATION_STRUCTURE_LOW_MEMORY_BIT_KHR);
+        translate_flag(ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE, VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR);
+        translate_flag(ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_BUILD, VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR);
+        translate_flag(ERayTracingAccelerationStructureBuildFlags::ALLOW_COMPACTION, VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR);
+        translate_flag(ERayTracingAccelerationStructureBuildFlags::ALLOW_UPDATE, VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR);
+        translate_flag(ERayTracingAccelerationStructureBuildFlags::MINIMIZE_MEMORY, VK_BUILD_ACCELERATION_STRUCTURE_LOW_MEMORY_BIT_KHR);
 
         return vk_flags;
     }
@@ -3316,15 +3345,15 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
     VkGeometryInstanceFlagsKHR VulkanRHIRayTracingAccelerationStructure::METoVKGeometryInstanceFlagsKHR(ERayTracingInstanceFlags _me_flags) {
         VkGeometryInstanceFlagsKHR vk_flags = 0;
 
-        auto TranslateFlag = [&vk_flags, &_me_flags](ERayTracingInstanceFlags _search_me_flags, VkGeometryInstanceFlagsKHR _added_if_found, VkGeometryInstanceFlagsKHR _added_if_not_found = 0) {
+        auto translate_flag = [&vk_flags, &_me_flags](ERayTracingInstanceFlags _search_me_flags, VkGeometryInstanceFlagsKHR _added_if_found, VkGeometryInstanceFlagsKHR _added_if_not_found = 0) {
             const bool has_flag = (_me_flags & _search_me_flags) == _search_me_flags;
             vk_flags |= has_flag ? _added_if_found : _added_if_not_found;
         };
 
-        TranslateFlag(ERayTracingInstanceFlags::FORCE_OPAQUE, VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR);
-        TranslateFlag(ERayTracingInstanceFlags::FORCE_NO_OPAQUE, VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR, VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR);
-        TranslateFlag(ERayTracingInstanceFlags::TRIANGLE_CULL_DISABLE, VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR);
-        TranslateFlag(ERayTracingInstanceFlags::TRIANGLE_FRONT_COUNTERCLOCKWISE, VK_GEOMETRY_INSTANCE_TRIANGLE_FRONT_COUNTERCLOCKWISE_BIT_KHR);
+        translate_flag(ERayTracingInstanceFlags::FORCE_OPAQUE, VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR);
+        translate_flag(ERayTracingInstanceFlags::FORCE_NO_OPAQUE, VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR, VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR);
+        translate_flag(ERayTracingInstanceFlags::TRIANGLE_CULL_DISABLE, VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR);
+        translate_flag(ERayTracingInstanceFlags::TRIANGLE_FRONT_COUNTERCLOCKWISE, VK_GEOMETRY_INSTANCE_TRIANGLE_FRONT_COUNTERCLOCKWISE_BIT_KHR);
 
         return vk_flags;
     }

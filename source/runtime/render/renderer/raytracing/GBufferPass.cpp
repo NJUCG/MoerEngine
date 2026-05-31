@@ -191,7 +191,7 @@ void GBufferPass::AddPasses(RenderGraph& _graph, const RTGraphFrameResources& _r
     _graph.AddPass(
         MOER_TEXT("RT.GBuffer.Trace"),
         trace_params,
-        kRTGraphComputePassFlags,
+        s_rt_graph_graphics_compute_pass,
         [this, command, resources](RHICommandList& cmd_list, RGContext) {
             RecordTraceGBuffer(cmd_list, *command, *resources);
         }
@@ -205,7 +205,7 @@ void GBufferPass::AddPasses(RenderGraph& _graph, const RTGraphFrameResources& _r
     _graph.AddPass(
         MOER_TEXT("RT.GBuffer.PostProcess"),
         post_params,
-        kRTGraphComputePassFlags,
+        s_rt_graph_graphics_compute_pass,
         [this, command, resources](RHICommandList& cmd_list, RGContext) {
             RecordPostProcessGBuffer(cmd_list, *command, *resources);
         }

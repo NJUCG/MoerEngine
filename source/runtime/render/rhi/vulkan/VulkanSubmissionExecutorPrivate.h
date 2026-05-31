@@ -11,7 +11,6 @@
 #include "VulkanRHITrace.h"
 #include "VulkanSubmissionRuntime.h"
 #include "VulkanTranslateTask.h"
-#include "RHICmdReorderer.h"
 #include "log/LogSystem.h"
 #include "platform/Platform.h"
 #include "rhi/RHI.h"

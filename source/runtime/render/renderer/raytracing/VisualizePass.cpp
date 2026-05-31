@@ -173,7 +173,7 @@ void VisualizePass::AddPass(
     _graph.AddPass(
         MOER_TEXT("RT.Visualize.Dispatch"),
         dispatch_params,
-        kRTGraphComputePassFlags,
+        ERGPassFlags::Graphics | ERGPassFlags::ComputeShader,
         [this, command, resources](RHICommandList& cmd_list, RGContext) {
             RecordVisualize(cmd_list, *command, *resources);
         }
