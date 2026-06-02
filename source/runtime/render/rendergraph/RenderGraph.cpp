@@ -132,7 +132,20 @@ bool IsCrossQueueTransition(Render::EQueueType src_queue, Render::EQueueType dst
            src_queue != dst_queue;
 }
 
+void RenameTextureForDebug(const RGTexture& texture) {
+    if (texture.IsAllocated()) {
+        texture.RHI()->SetName(texture.name);
+    }
+}
+
+void RenameBufferForDebug(const RGBuffer& buffer) {
+    if (buffer.IsAllocated()) {
+        buffer.RHI()->SetName(buffer.name);
+    }
+}
+
 void AddTextureQueueImport(RHICommandList& cmd_list, const RGCompiledTextureTransition& transition) {
+    RenameTextureForDebug(*transition.texture);
     Moer::Array<ImportTexture> textures{};
     textures.emplace_back(ImportTexture{
         .texture = transition.texture->GetView(transition.range),
@@ -147,6 +160,7 @@ void AddTextureQueueImport(RHICommandList& cmd_list, const RGCompiledTextureTran
 }
 
 void AddBufferQueueImport(RHICommandList& cmd_list, const RGCompiledBufferTransition& transition) {
+    RenameBufferForDebug(*transition.buffer);
     Moer::Array<ImportTexture> textures{};
     Moer::Array<ImportBuffer>  buffers{};
     buffers.emplace_back(ImportBuffer{
@@ -161,10 +175,11 @@ void AddBufferQueueImport(RHICommandList& cmd_list, const RGCompiledBufferTransi
 }
 
 void AddTextureQueueExport(RHICommandList& cmd_list, const RGCompiledTextureTransition& transition) {
+    RenameTextureForDebug(*transition.texture);
     Moer::Array<ExportTexture> textures{};
     textures.emplace_back(ExportTexture{
         .texture = transition.texture->GetView(transition.range),
-        .state = transition.state
+        .state = transition.src_state
     });
     Moer::Array<ExportBuffer> buffers{};
     cmd_list.AddCustomCommand(
@@ -174,11 +189,12 @@ void AddTextureQueueExport(RHICommandList& cmd_list, const RGCompiledTextureTran
 }
 
 void AddBufferQueueExport(RHICommandList& cmd_list, const RGCompiledBufferTransition& transition) {
+    RenameBufferForDebug(*transition.buffer);
     Moer::Array<ExportTexture> textures{};
     Moer::Array<ExportBuffer>  buffers{};
     buffers.emplace_back(ExportBuffer{
         .buffer = transition.buffer->GetView(transition.range),
-        .state = transition.state
+        .state = transition.src_state
     });
     cmd_list.AddCustomCommand(
         MakeUnique<QueueTransferCmd>(transition.dst_queue, std::move(textures), std::move(buffers)),
@@ -363,6 +379,7 @@ void EmitRGPassTransitions(RHICommandList& cmd_list, const RGPass& pass) {
         if (transition.texture == nullptr || !transition.texture->IsAllocated()) {
             continue;
         }
+        RenameTextureForDebug(*transition.texture);
         const Render::EQueueType src_queue = transition.src_queue == Render::EQueueType::Ignore ?
                                                  transition.dst_queue :
                                                  transition.src_queue;
@@ -381,6 +398,7 @@ void EmitRGPassTransitions(RHICommandList& cmd_list, const RGPass& pass) {
         if (transition.buffer == nullptr || !transition.buffer->IsAllocated()) {
             continue;
         }
+        RenameBufferForDebug(*transition.buffer);
         const Render::EQueueType src_queue = transition.src_queue == Render::EQueueType::Ignore ?
                                                  transition.dst_queue :
                                                  transition.src_queue;
@@ -426,10 +444,6 @@ EPassType PassTypeForQueue(Render::EQueueType queue) {
     }
 }
 
-bool PersistentAccessWrites(Render::ERHIResourceLastAccessKind access_kind) {
-    return access_kind == Render::ERHIResourceLastAccessKind::Write;
-}
-
 void SeedImportedTextureStateRange(RGTexture& texture, RGTextureStateRange& state_range) {
     if (!texture.imported || !texture.IsAllocated()) {
         return;
@@ -467,9 +481,8 @@ void SeedImportedTextureStateRange(RGTexture& texture, RGTextureStateRange& stat
     if (!initialized) {
         return;
     }
-    state_range.state      = initial_state.state;
-    state_range.queue      = initial_state.owner_queue;
-    state_range.last_write = PersistentAccessWrites(initial_state.last_access_kind);
+    state_range.state = initial_state.state;
+    state_range.queue = initial_state.owner_queue;
 }
 
 void SeedImportedBufferStateRanges(RGBuffer& buffer) {
@@ -488,9 +501,44 @@ void SeedImportedBufferStateRanges(RGBuffer& buffer) {
     }
 
     for (RGBufferStateRange& state_range : buffer.state_ranges) {
-        state_range.state      = persistent.state;
-        state_range.queue      = persistent.owner_queue;
-        state_range.last_write = PersistentAccessWrites(persistent.last_access_kind);
+        state_range.state = persistent.state;
+        state_range.queue = persistent.owner_queue;
+    }
+}
+
+void SeedAliasTextureStateRanges(RGTexture& texture) {
+    if (texture.alias_initial_state_ranges.empty()) {
+        return;
+    }
+    for (RGTextureStateRange& state_range : texture.state_ranges) {
+        for (const RGTextureStateRange& alias_range : texture.alias_initial_state_ranges) {
+            if (!alias_range.range.Contains(state_range.range)) {
+                continue;
+            }
+            state_range.state     = alias_range.state;
+            state_range.queue     = alias_range.queue;
+            state_range.last_pass = alias_range.last_pass;
+            state_range.alias_initial = true;
+            break;
+        }
+    }
+}
+
+void SeedAliasBufferStateRanges(RGBuffer& buffer) {
+    if (buffer.alias_initial_state_ranges.empty()) {
+        return;
+    }
+    for (RGBufferStateRange& state_range : buffer.state_ranges) {
+        for (const RGBufferStateRange& alias_range : buffer.alias_initial_state_ranges) {
+            if (!alias_range.range.Contains(state_range.range)) {
+                continue;
+            }
+            state_range.state     = alias_range.state;
+            state_range.queue     = alias_range.queue;
+            state_range.last_pass = alias_range.last_pass;
+            state_range.alias_initial = true;
+            break;
+        }
     }
 }
 
@@ -659,37 +707,176 @@ RGTransientResourceAllocator& RGTransientResourceAllocator::Global() {
 void RGTransientResourceAllocator::Allocate(RenderGraph& graph) {
     WaitLastRenderGraphEvents();
 
-    Moer::Array<PooledTextureAllocationRequest> texture_requests{};
-    Moer::Array<RGTexture*>                     texture_resources{};
-    Moer::Array<PooledBufferAllocationRequest>  buffer_requests{};
-    Moer::Array<RGBuffer*>                      buffer_resources{};
+    struct TextureAliasSlot {
+        PooledTextureRef                  resource{};
+        uint32_t                          available_after{invalid_pass};
+        Moer::Array<RGTextureStateRange>  final_ranges{};
+    };
 
-    for (Moer::UniquePtr<RGTexture>& texture : graph.m_textures) {
-        if (texture->imported || texture->IsAllocated()) {
+    struct BufferAliasSlot {
+        PooledBufferRef                  resource{};
+        uint32_t                         available_after{invalid_pass};
+        Moer::Array<RGBufferStateRange>  final_ranges{};
+    };
+
+    const auto reset_transient_metadata = [&]() {
+        for (Moer::UniquePtr<RGTexture>& texture : graph.m_textures) {
+            if (!texture->imported) {
+                texture->compile.Reset();
+                texture->transient.ResetCompileState();
+                texture->alias_initial_state_ranges.clear();
+            }
+        }
+        for (Moer::UniquePtr<RGBuffer>& buffer : graph.m_buffers) {
+            if (!buffer->imported) {
+                buffer->compile.Reset();
+                buffer->transient.ResetCompileState();
+                buffer->alias_initial_state_ranges.clear();
+            }
+        }
+    };
+
+    const auto record_texture_access = [&](uint32_t pass_index, const RGTextureAccess& access) {
+        RGTexture& texture = *access.texture;
+        if (texture.imported) {
+            return;
+        }
+        texture.compile.RecordAccess(pass_index);
+        const RGTextureRange access_range = NormalizeTextureRange(texture, access.range);
+        for (RGTextureStateRange& state_range : texture.state_ranges) {
+            if (!state_range.range.Overlaps(access_range)) {
+                continue;
+            }
+            state_range.state     = access.state;
+            state_range.queue     = access.queue;
+            state_range.last_pass = pass_index;
+        }
+    };
+
+    const auto record_buffer_access = [&](uint32_t pass_index, const RGBufferAccess& access) {
+        RGBuffer& buffer = *access.buffer;
+        if (buffer.imported) {
+            return;
+        }
+        buffer.compile.RecordAccess(pass_index);
+        const RGBufferRange access_range = NormalizeBufferRange(buffer, access.range);
+        for (RGBufferStateRange& state_range : buffer.state_ranges) {
+            if (!state_range.range.Overlaps(access_range)) {
+                continue;
+            }
+            state_range.state     = access.state;
+            state_range.queue     = access.queue;
+            state_range.last_pass = pass_index;
+        }
+    };
+
+    reset_transient_metadata();
+    for (uint32_t pass_index = 0; pass_index < graph.m_passes.size(); ++pass_index) {
+        const RGPass& pass = graph.m_passes[pass_index];
+        if (pass.main_thread) {
             continue;
         }
-        texture_requests.push_back(PooledTextureAllocationRequest{texture->name, texture->Desc()});
+        for (const RGTextureAccess& access : pass.texture_accesses) {
+            record_texture_access(pass_index, access);
+        }
+        for (const RGBufferAccess& access : pass.buffer_accesses) {
+            record_buffer_access(pass_index, access);
+        }
+    }
+
+    Moer::Array<RGTexture*> texture_resources{};
+    Moer::Array<RGBuffer*>  buffer_resources{};
+
+    for (Moer::UniquePtr<RGTexture>& texture : graph.m_textures) {
+        if (texture->imported || texture->IsAllocated() || texture->compile.first_pass == invalid_pass) {
+            continue;
+        }
         texture_resources.push_back(texture.get());
     }
     for (Moer::UniquePtr<RGBuffer>& buffer : graph.m_buffers) {
-        if (buffer->imported || buffer->IsAllocated()) {
+        if (buffer->imported || buffer->IsAllocated() || buffer->compile.first_pass == invalid_pass) {
             continue;
         }
-        buffer_requests.push_back(PooledBufferAllocationRequest{buffer->name, buffer->Desc()});
         buffer_resources.push_back(buffer.get());
     }
 
-    Moer::Array<PooledTextureAllocationResult> texture_allocations =
-        m_texture_pool.AllocateBatch(texture_requests);
-    assert(texture_allocations.size() == texture_resources.size());
-    for (uint32_t index = 0; index < texture_allocations.size(); ++index) {
-        texture_resources[index]->Bind(std::move(texture_allocations[index].texture));
+    std::sort(texture_resources.begin(), texture_resources.end(), [](const RGTexture* lhs, const RGTexture* rhs) {
+        if (lhs->compile.first_pass != rhs->compile.first_pass) {
+            return lhs->compile.first_pass < rhs->compile.first_pass;
+        }
+        return lhs->Index() < rhs->Index();
+    });
+    std::sort(buffer_resources.begin(), buffer_resources.end(), [](const RGBuffer* lhs, const RGBuffer* rhs) {
+        if (lhs->compile.first_pass != rhs->compile.first_pass) {
+            return lhs->compile.first_pass < rhs->compile.first_pass;
+        }
+        return lhs->Index() < rhs->Index();
+    });
+
+    Moer::Array<TextureAliasSlot> texture_slots{};
+    for (RGTexture* texture : texture_resources) {
+        TextureAliasSlot* alias_slot = nullptr;
+        if (!texture->exported) {
+            for (TextureAliasSlot& slot : texture_slots) {
+                if (slot.available_after < texture->compile.first_pass && slot.resource &&
+                    slot.resource->Desc() == texture->Desc()) {
+                    alias_slot = &slot;
+                    break;
+                }
+            }
+        }
+        if (alias_slot == nullptr) {
+            PooledTextureRef resource = m_texture_pool.Allocate(texture->name, texture->Desc());
+            texture->Bind(resource);
+            if (!texture->exported) {
+                texture_slots.push_back(
+                    TextureAliasSlot{
+                        .resource = std::move(resource),
+                        .available_after = texture->compile.last_pass,
+                        .final_ranges = texture->state_ranges
+                    }
+                );
+            }
+            continue;
+        }
+
+        texture->Bind(alias_slot->resource);
+        texture->alias_initial_state_ranges = alias_slot->final_ranges;
+        alias_slot->available_after = texture->compile.last_pass;
+        alias_slot->final_ranges    = texture->state_ranges;
     }
 
-    Moer::Array<PooledBufferAllocationResult> buffer_allocations = m_buffer_pool.AllocateBatch(buffer_requests);
-    assert(buffer_allocations.size() == buffer_resources.size());
-    for (uint32_t index = 0; index < buffer_allocations.size(); ++index) {
-        buffer_resources[index]->Bind(std::move(buffer_allocations[index].buffer));
+    Moer::Array<BufferAliasSlot> buffer_slots{};
+    for (RGBuffer* buffer : buffer_resources) {
+        BufferAliasSlot* alias_slot = nullptr;
+        if (!buffer->exported) {
+            for (BufferAliasSlot& slot : buffer_slots) {
+                if (slot.available_after < buffer->compile.first_pass && slot.resource &&
+                    slot.resource->Desc() == buffer->Desc()) {
+                    alias_slot = &slot;
+                    break;
+                }
+            }
+        }
+        if (alias_slot == nullptr) {
+            PooledBufferRef resource = m_buffer_pool.Allocate(buffer->name, buffer->Desc());
+            buffer->Bind(resource);
+            if (!buffer->exported) {
+                buffer_slots.push_back(
+                    BufferAliasSlot{
+                        .resource = std::move(resource),
+                        .available_after = buffer->compile.last_pass,
+                        .final_ranges = buffer->state_ranges
+                    }
+                );
+            }
+            continue;
+        }
+
+        buffer->Bind(alias_slot->resource);
+        buffer->alias_initial_state_ranges = alias_slot->final_ranges;
+        alias_slot->available_after = buffer->compile.last_pass;
+        alias_slot->final_ranges    = buffer->state_ranges;
     }
 }
 
@@ -914,6 +1101,10 @@ void RenderGraph::Compile(RGTransientResourceAllocator& allocator) {
     {
         TRACE_SCOPE_CAT("RenderGraph.Compile.ValidateSetup", "RenderGraph");
         ValidateSetup();
+    }
+    {
+        TRACE_SCOPE_CAT("RenderGraph.Compile.BuildAllocationStateRanges", "RenderGraph");
+        BuildResourceStateRanges();
     }
     {
         TRACE_SCOPE_CAT("RenderGraph.Compile.Allocate", "RenderGraph");
@@ -1248,8 +1439,8 @@ RGBuffer* RenderGraph::AddBuffer(Moer::UniquePtr<RGBuffer> buffer) {
 }
 
 void RenderGraph::ValidateSetup() const {
-    Moer::Array<bool> has_texture_write_before_pass(m_resources.size(), false);
-    Moer::Array<bool> has_buffer_write_before_pass(m_resources.size(), false);
+    Moer::Array<bool> has_texture_content_before_pass(m_resources.size(), false);
+    Moer::Array<bool> has_buffer_content_before_pass(m_resources.size(), false);
 
     for (const auto& pass : m_passes) {
         assert(RGPassHasValidQueueFlags(pass.flags));
@@ -1268,30 +1459,30 @@ void RenderGraph::ValidateSetup() const {
         }
         for (const auto& access : pass.texture_accesses) {
             const RGTexture& texture = *access.texture;
-            if (!RGTextureStateWrites(access.state) && !texture.imported &&
-                !has_texture_write_before_pass[texture.Index()]) {
+            if (!RGTextureStateInitializesContent(access.state) && !texture.imported &&
+                !has_texture_content_before_pass[texture.Index()]) {
                 MOER_ASSERT(
                     false,
                     "Graph-created texture resource {} read before any pass writes to it",
                     texture.Index()
                 );
             }
-            if (RGTextureStateWrites(access.state)) {
-                has_texture_write_before_pass[texture.Index()] = true;
+            if (RGTextureStateInitializesContent(access.state)) {
+                has_texture_content_before_pass[texture.Index()] = true;
             }
         }
         for (const auto& access : pass.buffer_accesses) {
             const RGBuffer& buffer = *access.buffer;
-            if (!RGBufferStateWrites(access.state) && !buffer.imported &&
-                !has_buffer_write_before_pass[buffer.Index()]) {
+            if (!RGBufferStateInitializesContent(access.state) && !buffer.imported &&
+                !has_buffer_content_before_pass[buffer.Index()]) {
                 MOER_ASSERT(
                     false,
                     "Graph-created buffer resource {} read before any pass writes to it",
                     buffer.Index()
                 );
             }
-            if (RGBufferStateWrites(access.state)) {
-                has_buffer_write_before_pass[buffer.Index()] = true;
+            if (RGBufferStateInitializesContent(access.state)) {
+                has_buffer_content_before_pass[buffer.Index()] = true;
             }
         }
     }
@@ -1317,6 +1508,13 @@ void RenderGraph::BuildResourceStateRanges() {
             for (uint32_t array_index = 1; array_index < array_count; ++array_index) {
                 AddBoundary(array_boundaries, array_index);
             }
+        }
+
+        for (const RGTextureStateRange& alias_range : texture->alias_initial_state_ranges) {
+            AddBoundary(mip_boundaries, alias_range.range.mip_min);
+            AddBoundary(mip_boundaries, alias_range.range.mip_min + alias_range.range.mip_count);
+            AddBoundary(array_boundaries, alias_range.range.array_min);
+            AddBoundary(array_boundaries, alias_range.range.array_min + alias_range.range.array_count);
         }
 
         for (const RGPass& pass : m_passes) {
@@ -1363,6 +1561,9 @@ void RenderGraph::BuildResourceStateRanges() {
         for (RGTextureStateRange& state_range : texture->state_ranges) {
             SeedImportedTextureStateRange(*texture, state_range);
         }
+        if (!texture->imported) {
+            SeedAliasTextureStateRanges(*texture);
+        }
     }
 
     for (Moer::UniquePtr<RGBuffer>& buffer : m_buffers) {
@@ -1379,6 +1580,10 @@ void RenderGraph::BuildResourceStateRanges() {
                 AddBoundary(boundaries, range.offset + range.size);
             }
         }
+        for (const RGBufferStateRange& alias_range : buffer->alias_initial_state_ranges) {
+            AddBoundary(boundaries, alias_range.range.offset);
+            AddBoundary(boundaries, alias_range.range.offset + alias_range.range.size);
+        }
 
         SortUnique(boundaries);
         for (uint32_t boundary_index = 0; boundary_index + 1 < boundaries.size(); ++boundary_index) {
@@ -1392,6 +1597,9 @@ void RenderGraph::BuildResourceStateRanges() {
             );
         }
         SeedImportedBufferStateRanges(*buffer);
+        if (!buffer->imported) {
+            SeedAliasBufferStateRanges(*buffer);
+        }
     }
 
 }
@@ -1701,8 +1909,7 @@ void RenderGraph::BuildCompileMetadata() {
 
     auto process_texture_access = [&](uint32_t pass_index, const RGTextureAccess& access) {
         RGTexture& texture = *access.texture;
-        const bool writes = RGTextureStateWrites(access.state);
-        texture.compile.RecordAccess(pass_index, writes);
+        texture.compile.RecordAccess(pass_index);
         const RGTextureRange access_range = NormalizeTextureRange(texture, access.range);
 
         for (RGTextureStateRange& state_range : texture.state_ranges) {
@@ -1718,7 +1925,17 @@ void RenderGraph::BuildCompileMetadata() {
                 .src_queue = state_range.queue == Render::EQueueType::Ignore ? access.queue : state_range.queue,
                 .dst_queue = access.queue
             });
-            if (state_range.last_pass != invalid_pass && (state_range.last_write || writes)) {
+            if (state_range.last_pass != invalid_pass && state_range.alias_initial) {
+                add_dependency(
+                    state_range.last_pass,
+                    pass_index,
+                    texture,
+                    ERGCompiledHazardFlag::AliasReuse,
+                    state_range.queue,
+                    access.queue
+                );
+            }
+            if (state_range.last_pass != invalid_pass && !RGTextureStatesMergeable(state_range.state, access.state)) {
                 add_dependency(
                     state_range.last_pass,
                     pass_index,
@@ -1743,7 +1960,7 @@ void RenderGraph::BuildCompileMetadata() {
             state_range.state      = access.state;
             state_range.queue      = access.queue;
             state_range.last_pass  = pass_index;
-            state_range.last_write = writes;
+            state_range.alias_initial = false;
         }
         if (texture.transient.enabled) {
             texture.transient.SetOwner(access.queue, pass_index);
@@ -1752,8 +1969,7 @@ void RenderGraph::BuildCompileMetadata() {
 
     auto process_buffer_access = [&](uint32_t pass_index, const RGBufferAccess& access) {
         RGBuffer& buffer = *access.buffer;
-        const bool writes = RGBufferStateWrites(access.state);
-        buffer.compile.RecordAccess(pass_index, writes);
+        buffer.compile.RecordAccess(pass_index);
         const RGBufferRange access_range = NormalizeBufferRange(buffer, access.range);
 
         for (RGBufferStateRange& state_range : buffer.state_ranges) {
@@ -1769,7 +1985,17 @@ void RenderGraph::BuildCompileMetadata() {
                 .src_queue = state_range.queue == Render::EQueueType::Ignore ? access.queue : state_range.queue,
                 .dst_queue = access.queue
             });
-            if (state_range.last_pass != invalid_pass && (state_range.last_write || writes)) {
+            if (state_range.last_pass != invalid_pass && state_range.alias_initial) {
+                add_dependency(
+                    state_range.last_pass,
+                    pass_index,
+                    buffer,
+                    ERGCompiledHazardFlag::AliasReuse,
+                    state_range.queue,
+                    access.queue
+                );
+            }
+            if (state_range.last_pass != invalid_pass && !RGBufferStatesMergeable(state_range.state, access.state)) {
                 add_dependency(
                     state_range.last_pass,
                     pass_index,
@@ -1794,7 +2020,7 @@ void RenderGraph::BuildCompileMetadata() {
             state_range.state      = access.state;
             state_range.queue      = access.queue;
             state_range.last_pass  = pass_index;
-            state_range.last_write = writes;
+            state_range.alias_initial = false;
         }
         if (buffer.transient.enabled) {
             buffer.transient.SetOwner(access.queue, pass_index);

@@ -1324,7 +1324,36 @@ int RunProfilerMain(int argc, const char** argv) {
         ui_renderer->EndGUIFrame();
 
         CommandList cmd_list{};
+
+        // Transition output from TRANSFER_SRC (state after previous Present blit) to
+        // RENDER_TARGET (state expected by the GUI render pass).
+        // On the first frame the texture is UNDEFINED; the tracker emits the correct
+        // UNDEFINED -> RENDER_TARGET barrier regardless of the declared source state.
+        cmd_list.Barriers(
+            {BarrierCreateInfo::Transition(
+                output->GetView(),
+                MakeBarrierState(ETextureState::TRANSFER_SRC, EPassType::Copy),
+                MakeBarrierState(ETextureState::RENDER_TARGET, EPassType::Graphics)
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
+        );
+
         ui_renderer->RenderGUI(cmd_list, output->GetView());
+
+        // Transition output from RENDER_TARGET (state after GUI render pass) to
+        // TRANSFER_SRC (state expected by the Present blit).
+        cmd_list.Barriers(
+            {BarrierCreateInfo::Transition(
+                output->GetView(),
+                MakeBarrierState(ETextureState::RENDER_TARGET, EPassType::Graphics),
+                MakeBarrierState(ETextureState::TRANSFER_SRC, EPassType::Copy)
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
+        );
 
         ++frame_time;
         cmd_list.Signal(timeline, frame_time).DeleteResources().TickFrame();

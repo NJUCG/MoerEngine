@@ -76,6 +76,7 @@ void VulkanInterruptRuntime::EnqueuePayload(UniquePtr<VulkanSubmitPayload>&& pay
 }
 
 void VulkanInterruptRuntime::Shutdown() {
+    DrainQueuedPayloadsForShutdown();
     Stop();
     if (interrupt_thread != nullptr) {
         MoerDelete(interrupt_thread);
@@ -107,6 +108,37 @@ void VulkanInterruptRuntime::Stop() {
         }
     }
     queue_cv.notify_all();
+}
+
+void VulkanInterruptRuntime::DrainQueuedPayloadsForShutdown() {
+    while (running.load(std::memory_order_acquire)) {
+        UniquePtr<VulkanSubmitPayload> payload{};
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex);
+            if (task_queue.empty()) {
+                return;
+            }
+
+            const size_t task_count = task_queue.size();
+            for (size_t index = 0; index < task_count; ++index) {
+                UniquePtr<VulkanSubmitPayload> candidate = std::move(task_queue.front());
+                task_queue.pop_front();
+                if (candidate && IsPayloadReady(*candidate)) {
+                    payload = std::move(candidate);
+                    break;
+                }
+                task_queue.emplace_back(std::move(candidate));
+            }
+        }
+
+        if (payload) {
+            ProcessPayload(*payload);
+            UnlockPayloadCompletion(*payload);
+            continue;
+        }
+
+        std::this_thread::sleep_for(idle_poll_interval);
+    }
 }
 
 void VulkanInterruptRuntime::RunInterruptThread() {

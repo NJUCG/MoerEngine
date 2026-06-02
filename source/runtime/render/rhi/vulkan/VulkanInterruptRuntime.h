@@ -33,6 +33,7 @@ private:
     class InterruptRunnable;
 
     void   Stop();
+    void   DrainQueuedPayloadsForShutdown();
     void   RunInterruptThread();
     bool   TryAcquireReadyPayload(UniquePtr<VulkanSubmitPayload>& payload);
     bool   IsPayloadReady(VulkanSubmitPayload& payload);

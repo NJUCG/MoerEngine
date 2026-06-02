@@ -21,6 +21,7 @@ Requirements:
 | `windows/test_taskgraph.ps1` | `TestTaskGraph.exe`, `TestTaskPipe.exe` | TaskGraph / TaskPipe regression suite with structured testcase parsing |
 | `windows/test_rhi_translate.ps1` | `TestRHITranslate.exe` | RHI multi-queue translate tests with descriptor-heap capability probe and validation blocker parsing |
 | `windows/test_editor.ps1` | `MoerEditor.exe` | Launch editor, run for N seconds, then kill and inspect the log |
+| `windows/test_profiler.ps1` | `MoerProfiler.exe` | Launch profiler, run for N seconds, then kill and inspect the log for Vulkan validation errors |
 | `windows/test_all.ps1` | multiple executables | Run the Windows validation suite in sequence, single summary |
 | `windows/common.ps1` | — | Shared PowerShell library, dot-sourced by the Windows scripts |
 
@@ -31,11 +32,13 @@ Usage from the repo root:
 .\testscripts\windows\test_rhi_translate.ps1
 .\testscripts\windows\test_taskgraph.ps1
 .\testscripts\windows\test_editor.ps1
+.\testscripts\windows\test_profiler.ps1
 
 .\testscripts\windows\test_all.ps1 -Config Release
 .\testscripts\windows\test_all.ps1 -Config RelWithDebInfo
 .\testscripts\windows\test_all.ps1 -ExtraArgs @("-DENABLE_VALIDATION=1", "-DDEBUG_QUEUES=1")
 .\testscripts\windows\test_editor.ps1 -TimeoutSec 30
+.\testscripts\windows\test_profiler.ps1 -TimeoutSec 20 -CaptureFile "C:\captures\session.mpd"
 ```
 
 If PowerShell execution policy blocks the scripts:
@@ -73,6 +76,8 @@ logs/
     ├── rhi_translate.log           ← Full stdout+stderr of TestRHITranslate
     ├── moereditor.log              ← Full stdout+stderr of MoerEditor
     ├── moereditor_crash.txt        ← Lines that triggered error detection (if any)
+    ├── moerprofiler.log            ← Full stdout+stderr of MoerProfiler
+    ├── moerprofiler_crash.txt      ← Lines that triggered error detection (if any)
     └── *.dmp / *.mdmp              ← Minidumps copied from bin dir (if any)
 ```
 

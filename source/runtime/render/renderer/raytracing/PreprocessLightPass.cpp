@@ -526,7 +526,7 @@ PrepareLightPass::PreparedCommand PrepareLightPass::Prepare(RTContext& _rt_ctx) 
 
     const bool upload_primitive_to_light = cached_primitive_to_light_dirty ||
                                            cached_primitive_to_light_upload_target !=
-                                               _rt_ctx.primitive_to_light_buf.Get();
+                                               RTRHI(_rt_ctx.primitive_to_light_buf).Get();
 
     PrepareLightsParams param{};
     {
@@ -559,7 +559,7 @@ PrepareLightPass::PreparedCommand PrepareLightPass::Prepare(RTContext& _rt_ctx) 
     if (upload_primitive_to_light) {
         command.primitive_to_light = cached_primitive_to_light;
         cached_primitive_to_light_dirty = false;
-        cached_primitive_to_light_upload_target = _rt_ctx.primitive_to_light_buf.Get();
+        cached_primitive_to_light_upload_target = RTRHI(_rt_ctx.primitive_to_light_buf).Get();
     }
     command.tasks                = std::move(tasks);
     command.prim_light_infos     = std::move(prim_light_infos);
@@ -570,12 +570,12 @@ PrepareLightPass::PreparedCommand PrepareLightPass::Prepare(RTContext& _rt_ctx) 
 
 PrepareLightPass::RecordResources PrepareLightPass::CaptureResources(RTContext& _rt_ctx) {
     return RecordResources{
-        .primitive_to_light_buf = _rt_ctx.primitive_to_light_buf,
-        .task_buf               = _rt_ctx.task_buf,
-        .prim_light_buf         = _rt_ctx.prim_light_buf,
-        .light_mapping_buf      = _rt_ctx.light_mapping_buf,
-        .light_data_buf         = _rt_ctx.light_data_buf,
-        .local_light_pdf_tex    = _rt_ctx.local_light_pdf_tex,
+        .primitive_to_light_buf = RTRHI(_rt_ctx.primitive_to_light_buf),
+        .task_buf               = RTRHI(_rt_ctx.task_buf),
+        .prim_light_buf         = RTRHI(_rt_ctx.prim_light_buf),
+        .light_mapping_buf      = RTRHI(_rt_ctx.light_mapping_buf),
+        .light_data_buf         = RTRHI(_rt_ctx.light_data_buf),
+        .local_light_pdf_tex    = RTRHI(_rt_ctx.local_light_pdf_tex),
         .local_light_pdf_mips   = _rt_ctx.local_light_pdf_mips,
         .bindless_array         = _rt_ctx.GetBindlessArray(),
         .shader_utils           = &_rt_ctx.sd_utils

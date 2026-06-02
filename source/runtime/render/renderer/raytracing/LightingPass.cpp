@@ -255,16 +255,18 @@ LightingPass::RecordResources LightingPass::CaptureResources(const RTContext& _r
     return RecordResources{
         .tlas                    = tlas,
         .prev_tlas               = prev_tlas,
-        .light_reservoir_buf     = _rt_ctx.light_reservoir_buf,
-        .diffuse_lighting        = _rt_ctx.frame_rt.diffuse_lighting,
-        .specular_lighting       = _rt_ctx.frame_rt.specular_lighting,
-        .temporal_sample_pos     = _rt_ctx.frame_rt.temporal_sample_pos,
-        .gradients               = _rt_ctx.frame_rt.gradients,
-        .restir_luminance        = b_current_frame ? _rt_ctx.frame_rt.restir_luminance : _rt_ctx.frame_rt.prev_luminance,
-        .prev_diffuse_lighting   = _rt_ctx.frame_rt.prev_diffuse_lighting,
-        .ris_buf                 = _rt_ctx.ris_buf,
-        .ris_light_data_buf      = _rt_ctx.ris_light_data_buf,
-        .neighbor_offset_buf     = _rt_ctx.neighbor_offset_buf,
+        .light_reservoir_buf     = RTRHI(_rt_ctx.light_reservoir_buf),
+        .diffuse_lighting        = RTRHI(_rt_ctx.frame_rt.diffuse_lighting),
+        .specular_lighting       = RTRHI(_rt_ctx.frame_rt.specular_lighting),
+        .temporal_sample_pos     = RTRHI(_rt_ctx.frame_rt.temporal_sample_pos),
+        .gradients               = RTRHI(_rt_ctx.frame_rt.gradients),
+        .restir_luminance        = RTRHI(
+            b_current_frame ? _rt_ctx.frame_rt.restir_luminance : _rt_ctx.frame_rt.prev_luminance
+        ),
+        .prev_diffuse_lighting   = RTRHI(_rt_ctx.frame_rt.prev_diffuse_lighting),
+        .ris_buf                 = RTRHI(_rt_ctx.ris_buf),
+        .ris_light_data_buf      = RTRHI(_rt_ctx.ris_light_data_buf),
+        .neighbor_offset_buf     = RTRHI(_rt_ctx.neighbor_offset_buf),
         .bindless_array          = _rt_ctx.GetBindlessArray()
     };
 }

@@ -326,7 +326,7 @@ void ToneMappingPass::AddPasses(
     RGBuffer* exposure = _graph.ImportBuffer(MOER_TEXT("RT.ToneMapping.exposure"), exposure_buffer, EQueueType::Graphics);
     RGTexture* source  = RTGraphTextureForFrameTexture(_rg, _rt_ctx, _src_tex);
     RGTexture* target  = RTGraphTextureForFrameTexture(_rg, _rt_ctx, _target);
-    RGTexture* lut     = ImportRTTextureIfValid(_graph, MOER_TEXT("RT.ToneMapping.color_lut"), color_lut);
+    RGTexture* lut     = ImportExternalRTTextureIfValid(_graph, MOER_TEXT("RT.ToneMapping.color_lut"), color_lut);
 
     auto* upload_params      = _graph.Alloc<RGToneMappingUploadParams>();
     upload_params->constants = RGBufferView{.buffer = constants};

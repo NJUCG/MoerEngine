@@ -73,6 +73,14 @@ bool RGBufferRange::Overlaps(const RGBufferRange& other) const {
 }
 
 bool RGTextureStateWrites(Render::ETextureState state) {
+    return RGTextureStateInitializesContent(state);
+}
+
+bool RGBufferStateWrites(Render::EBufferState state) {
+    return RGBufferStateInitializesContent(state);
+}
+
+bool RGTextureStateInitializesContent(Render::ETextureState state) {
     switch (state) {
         case Render::ETextureState::TRANSFER_DST:
         case Render::ETextureState::RENDER_TARGET:
@@ -84,7 +92,7 @@ bool RGTextureStateWrites(Render::ETextureState state) {
     }
 }
 
-bool RGBufferStateWrites(Render::EBufferState state) {
+bool RGBufferStateInitializesContent(Render::EBufferState state) {
     switch (state) {
         case Render::EBufferState::TRANSFER_DST:
         case Render::EBufferState::UNORDERED_ACCESS:
@@ -93,6 +101,41 @@ bool RGBufferStateWrites(Render::EBufferState state) {
         default:
             return false;
     }
+}
+
+bool RGTextureStatesCompatible(Render::ETextureState previous, Render::ETextureState next) {
+    if (previous == Render::ETextureState::UNDEFINED || next == Render::ETextureState::UNDEFINED) {
+        return true;
+    }
+    if (previous == next) {
+        return true;
+    }
+    const bool previous_shader_read = previous == Render::ETextureState::SHADER_RESOURCE ||
+                                      previous == Render::ETextureState::SAMPLED;
+    const bool next_shader_read = next == Render::ETextureState::SHADER_RESOURCE ||
+                                  next == Render::ETextureState::SAMPLED;
+    return previous_shader_read && next_shader_read;
+}
+
+bool RGBufferStatesCompatible(Render::EBufferState previous, Render::EBufferState next) {
+    if (previous == Render::EBufferState::UNDEFINED || next == Render::EBufferState::UNDEFINED) {
+        return true;
+    }
+    return previous == next;
+}
+
+bool RGTextureStatesMergeable(Render::ETextureState previous, Render::ETextureState next) {
+    if (!RGTextureStatesCompatible(previous, next)) {
+        return false;
+    }
+    return !RGTextureStateInitializesContent(previous) && !RGTextureStateInitializesContent(next);
+}
+
+bool RGBufferStatesMergeable(Render::EBufferState previous, Render::EBufferState next) {
+    if (!RGBufferStatesCompatible(previous, next)) {
+        return false;
+    }
+    return !RGBufferStateInitializesContent(previous) && !RGBufferStateInitializesContent(next);
 }
 
 void RGTransientResource::ResetCompileState() {
@@ -114,17 +157,15 @@ void RGTransientResource::SetOwner(Render::EQueueType queue, uint32_t pass_index
 }
 
 void RGResourceCompileInfo::Reset() {
-    first_pass   = invalid_pass;
-    last_pass    = invalid_pass;
-    access_write = false;
+    first_pass = invalid_pass;
+    last_pass  = invalid_pass;
 }
 
-void RGResourceCompileInfo::RecordAccess(uint32_t pass_index, bool writes) {
+void RGResourceCompileInfo::RecordAccess(uint32_t pass_index) {
     if (first_pass == invalid_pass) {
         first_pass = pass_index;
     }
     last_pass = pass_index;
-    access_write = writes;
 }
 
 RGResource::RGResource(
@@ -157,6 +198,7 @@ void RGTexture::Bind(PooledTextureRef texture) {
 void RGTexture::ReleaseTransient() {
     if (!imported) {
         m_texture.reset();
+        alias_initial_state_ranges.clear();
     }
 }
 
@@ -186,6 +228,7 @@ void RGBuffer::Bind(PooledBufferRef buffer) {
 void RGBuffer::ReleaseTransient() {
     if (!imported) {
         m_buffer.reset();
+        alias_initial_state_ranges.clear();
     }
 }
 

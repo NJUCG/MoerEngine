@@ -458,14 +458,11 @@ void GPUEventStream::ResolveCompleted(WaitEvent completion) {
             continue;
         }
 
+        bool waiting_for_query = false;
         for (GPUEvent& event : submit.events) {
             if (!event.query.IsReady()) {
-                LOG_ERROR(
-                    MOER_TEXT("GPUEventStream saw unresolved query future for event '{}' on queue {}"),
-                    event.name,
-                    int(submit.queue)
-                );
-                continue;
+                waiting_for_query = true;
+                break;
             }
             QueryResult query_result = event.query.GetFuture().Get();
             if (query_result.status != QueryStatus::Ready ||
@@ -480,6 +477,9 @@ void GPUEventStream::ResolveCompleted(WaitEvent completion) {
             }
             auto ts_result = std::get<TimestampQueryResult>(query_result.payload);
             event.timestamp_ns = ConvertTimestampToNsLocked(submit.queue, ts_result, IsEndEvent(event.type));
+        }
+        if (waiting_for_query) {
+            continue;
         }
         submit.resolved = true;
     }

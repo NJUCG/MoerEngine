@@ -36,6 +36,24 @@ public:
     const Render::TextureRef& RHI() const {
         return m_texture;
     }
+    Render::Texture* Get() const {
+        return m_texture.Get();
+    }
+    uint32_t GetNumMips() const {
+        return m_texture->GetNumMips();
+    }
+    uint3 GetExtent() const {
+        return m_texture->GetExtent();
+    }
+    EPixelFormat GetFormat() const {
+        return m_texture->GetFormat();
+    }
+    Render::TextureView GetView(uint8 mip_idx = 0u, uint8 mip_num = 1u) const {
+        return m_texture->GetView(mip_idx, mip_num);
+    }
+    Render::TextureView GetView(EPixelFormat format, uint8 mip_idx = 0u, uint8 mip_num = 1u) const {
+        return m_texture->GetView(format, mip_idx, mip_num);
+    }
     PooledTexturePool* Owner() const {
         return m_owner;
     }
@@ -79,6 +97,24 @@ public:
     }
     const Render::BufferRef& RHI() const {
         return m_buffer;
+    }
+    Render::Buffer* Get() const {
+        return m_buffer.Get();
+    }
+    uint GetNumElement() const {
+        return m_buffer->GetNumElement();
+    }
+    uint64 GetByteSize() const {
+        return m_buffer->GetByteSize();
+    }
+    uint GetStride() const {
+        return m_buffer->GetStride();
+    }
+    Render::BufferView GetView(uint64 byte_offset = 0, uint64 byte_size = UINT64_MAX) const {
+        return m_buffer->GetView(byte_offset, byte_size);
+    }
+    Render::BufferView GetView(EPixelFormat format, uint64 byte_offset = 0, uint64 byte_size = UINT64_MAX) const {
+        return m_buffer->GetView(format, byte_offset, byte_size);
     }
     PooledBufferPool* Owner() const {
         return m_owner;

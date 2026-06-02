@@ -208,11 +208,11 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
     rt_ctx->SetResolution(resolution);
     AntialiasPass::CreateInfo antialias_pass_info{
-        .motion              = rt_ctx->frame_rt.motion,
-        .feedback_color_ping = rt_ctx->frame_rt.feedback_color_ping,
-        .feedback_color_pong = rt_ctx->frame_rt.feedback_color_pong,
-        .resolved_color      = rt_ctx->frame_rt.resolved_color,
-        .hdr_color           = rt_ctx->frame_rt.hdr_color
+        .motion              = RTRHI(rt_ctx->frame_rt.motion),
+        .feedback_color_ping = RTRHI(rt_ctx->frame_rt.feedback_color_ping),
+        .feedback_color_pong = RTRHI(rt_ctx->frame_rt.feedback_color_pong),
+        .resolved_color      = RTRHI(rt_ctx->frame_rt.resolved_color),
+        .hdr_color           = RTRHI(rt_ctx->frame_rt.hdr_color)
     };
     UniquePtr<AntialiasPass> antialias_pass =
         MakeUnique<AntialiasPass>(device, manager, scene, antialias_pass_info);
@@ -297,11 +297,11 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 nrd_plugin->RecreateInterface(std::move(nrd_interface), resolution.x, resolution.y);
 #endif
 
-            antialias_pass_info.motion              = rt_ctx->frame_rt.motion;
-            antialias_pass_info.feedback_color_ping = rt_ctx->frame_rt.feedback_color_ping;
-            antialias_pass_info.feedback_color_pong = rt_ctx->frame_rt.feedback_color_pong;
-            antialias_pass_info.resolved_color      = rt_ctx->frame_rt.resolved_color;
-            antialias_pass_info.hdr_color           = rt_ctx->frame_rt.hdr_color;
+            antialias_pass_info.motion              = RTRHI(rt_ctx->frame_rt.motion);
+            antialias_pass_info.feedback_color_ping = RTRHI(rt_ctx->frame_rt.feedback_color_ping);
+            antialias_pass_info.feedback_color_pong = RTRHI(rt_ctx->frame_rt.feedback_color_pong);
+            antialias_pass_info.resolved_color      = RTRHI(rt_ctx->frame_rt.resolved_color);
+            antialias_pass_info.hdr_color           = RTRHI(rt_ctx->frame_rt.hdr_color);
             antialias_pass   = MakeUnique<AntialiasPass>(device, manager, scene, antialias_pass_info);
             b_feedback_valid = false;
 
@@ -628,8 +628,8 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             RenderGraph                 raytracing_graph(MOER_TEXT("RT.RenderGraph"));
             RTGraphFrameResources       rg_rt{};
             {
-                TRACE_SCOPE_CAT("Raytracing.GraphBuild.ImportFrameResources", "Frame");
-                rg_rt = ImportRTGraphFrameResources(raytracing_graph, *rt_ctx);
+                TRACE_SCOPE_CAT("Raytracing.GraphBuild.RegisterFrameResources", "Frame");
+                rg_rt = RegisterRTGraphFrameResources(raytracing_graph, *rt_ctx);
             }
             RGTexture*                  current_view_depth = rg_rt.current_view_depth;
 
@@ -766,24 +766,28 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                         Transpose(camera.GetViewMatrix()),
                         Transpose(camera.GetProjectionMatrix())
                     );
-                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::MOTION_VECTOR, frame_rt.motion);
+                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::MOTION_VECTOR, RTRHI(frame_rt.motion));
                     nrd_interface->SetInput(
                         Ext::NRDInterface::EResourceSlot::NORMAL_ROUGHNESS,
-                        frame_rt.normal_roughness
+                        RTRHI(frame_rt.normal_roughness)
                     );
                     nrd_interface->SetInput(
                         Ext::NRDInterface::EResourceSlot::VIEW_Z,
-                        b_current_frame ? frame_rt.view_depth : frame_rt.prev_view_depth
+                        RTRHI(b_current_frame ? frame_rt.view_depth : frame_rt.prev_view_depth)
                     );
-                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_DIFFUSE, frame_rt.diffuse_lighting);
-                    nrd_interface->SetInput(Ext::NRDInterface::EResourceSlot::IN_SPECULAR, frame_rt.specular_lighting);
+                    nrd_interface->SetInput(
+                        Ext::NRDInterface::EResourceSlot::IN_DIFFUSE, RTRHI(frame_rt.diffuse_lighting)
+                    );
+                    nrd_interface->SetInput(
+                        Ext::NRDInterface::EResourceSlot::IN_SPECULAR, RTRHI(frame_rt.specular_lighting)
+                    );
                     nrd_interface->SetOutput(
                         Ext::NRDInterface::EResourceSlot::OUT_DIFFUSE,
-                        frame_rt.denoised_diffuse_lighting
+                        RTRHI(frame_rt.denoised_diffuse_lighting)
                     );
                     nrd_interface->SetOutput(
                         Ext::NRDInterface::EResourceSlot::OUT_SPECULAR,
-                        frame_rt.denoised_specular_lighting
+                        RTRHI(frame_rt.denoised_specular_lighting)
                     );
 
                     auto* params   = raytracing_graph.Alloc<RGRaytracingNrdParams>();
@@ -838,8 +842,8 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                     *rt_ctx,
                     aa_params,
                     b_feedback_valid,
-                    rt_ctx->frame_rt.hdr_color,
-                    rt_ctx->frame_rt.resolved_color
+                    RTRHI(rt_ctx->frame_rt.hdr_color),
+                    RTRHI(rt_ctx->frame_rt.resolved_color)
                 );
 
                 tone_mapping_pass->AddPasses(
@@ -847,8 +851,8 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                     rg_rt,
                     *rt_ctx,
                     tone_params,
-                    rt_ctx->frame_rt.resolved_color,
-                    rt_ctx->frame_rt.ldr_color
+                    RTRHI(rt_ctx->frame_rt.resolved_color),
+                    RTRHI(rt_ctx->frame_rt.ldr_color)
                 );
             } else {
                 b_feedback_valid = false;
@@ -864,7 +868,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 TRACE_SCOPE_CAT("Raytracing.GraphBuild.ShowTexture", "Frame");
                 RG_EVENT_SCOPE(raytracing_graph, MOER_TEXT("RT.ShowTexture"));
                 TextureRef        texture          = material_textures[selected_material_texture_name].tex;
-                RGTexture* selected_texture = ImportRTTextureIfValid(
+                RGTexture* selected_texture = ImportExternalRTTextureIfValid(
                     raytracing_graph, MOER_TEXT("RT.selected_material_texture"), texture
                 );
                 auto* params             = raytracing_graph.Alloc<RGRaytracingShowTextureParams>();
@@ -884,7 +888,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                      bdls = bindless_array,
                      show_texture_params,
                      texture,
-                     dst_texture = rt_ctx->frame_rt.ldr_color](CommandList& graph_cmd_list, RGContext) {
+                     dst_texture = RTRHI(rt_ctx->frame_rt.ldr_color)](CommandList& graph_cmd_list, RGContext) {
                         shader_utils->ShowTexture(
                             graph_cmd_list,
                             bdls,
@@ -899,7 +903,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             RGTexture* final_color_rg = b_final_show_texture ? rg_rt.ldr_color : rg_rt.debug_color;
             {
                 TRACE_SCOPE_CAT("Raytracing.GraphBuild.ResolveOutput", "Frame");
-                final_color     = b_final_show_texture ? rt_ctx->frame_rt.ldr_color : rt_ctx->frame_rt.debug_color;
+                final_color     = RTRHI(b_final_show_texture ? rt_ctx->frame_rt.ldr_color : rt_ctx->frame_rt.debug_color);
                 present_output  = final_color;
             }
 
@@ -1014,7 +1018,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         // cmd_list.UpdateRaytracingScene(rt_scene);
         if (!final_color) {
             TRACE_SCOPE_CAT("Raytracing.Frame.ResolveOutput", "Frame");
-            final_color = b_final_show_texture ? rt_ctx->frame_rt.ldr_color : rt_ctx->frame_rt.debug_color;
+            final_color = RTRHI(b_final_show_texture ? rt_ctx->frame_rt.ldr_color : rt_ctx->frame_rt.debug_color);
             present_output = final_color;
         }
 

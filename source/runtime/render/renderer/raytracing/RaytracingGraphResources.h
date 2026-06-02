@@ -62,11 +62,19 @@ struct RTGraphFrameResources {
     RGTexture* previous_normal{};
 };
 
-inline RGTexture* ImportRTTextureIfValid(RenderGraph& graph, StringView name, const TextureRef& texture) {
+inline RGTexture* RegisterRTTextureIfValid(RenderGraph& graph, StringView name, const PooledTextureRef& texture) {
+    return texture ? graph.RegisterTexture(name, texture, EQueueType::Graphics) : nullptr;
+}
+
+inline RGBuffer* RegisterRTBufferIfValid(RenderGraph& graph, StringView name, const PooledBufferRef& buffer) {
+    return buffer ? graph.RegisterBuffer(name, buffer, EQueueType::Graphics) : nullptr;
+}
+
+inline RGTexture* ImportExternalRTTextureIfValid(RenderGraph& graph, StringView name, const TextureRef& texture) {
     return texture ? graph.ImportTexture(name, texture, EQueueType::Graphics) : nullptr;
 }
 
-inline RGBuffer* ImportRTBufferIfValid(RenderGraph& graph, StringView name, const BufferRef& buffer) {
+inline RGBuffer* ImportExternalRTBufferIfValid(RenderGraph& graph, StringView name, const BufferRef& buffer) {
     return buffer ? graph.ImportBuffer(name, buffer, EQueueType::Graphics) : nullptr;
 }
 
@@ -81,11 +89,11 @@ inline BufferRef RTUnderlyingBuffer(const RaytracingTlasRef& tlas) {
 }
 
 inline RGBuffer* ImportRTGeometryBufferIfValid(RenderGraph& graph, StringView name, const RaytracingGeometryRef& geometry) {
-    return ImportRTBufferIfValid(graph, name, RTUnderlyingBuffer(geometry));
+    return ImportExternalRTBufferIfValid(graph, name, RTUnderlyingBuffer(geometry));
 }
 
 inline RGBuffer* ImportRTTlasBufferIfValid(RenderGraph& graph, StringView name, const RaytracingTlasRef& tlas) {
-    return ImportRTBufferIfValid(graph, name, RTUnderlyingBuffer(tlas));
+    return ImportExternalRTBufferIfValid(graph, name, RTUnderlyingBuffer(tlas));
 }
 
 inline RGTexture* RTCurrentFrameTexture(bool current_frame, RGTexture* current, RGTexture* previous) {
@@ -109,49 +117,49 @@ inline RGTextureView RTWholeTextureView(RGTexture* texture) {
     };
 }
 
-inline RTGraphFrameResources ImportRTGraphFrameResources(RenderGraph& graph, const RTContext& rt_ctx) {
+inline RTGraphFrameResources RegisterRTGraphFrameResources(RenderGraph& graph, const RTContext& rt_ctx) {
     const FrameResources& frame_rt = rt_ctx.frame_rt;
     RTGraphFrameResources resources{
         .current_frame = rt_ctx.b_current_frame,
-        .view_depth = ImportRTTextureIfValid(graph, MOER_TEXT("RT.view_depth"), frame_rt.view_depth),
-        .diffuse_albedo = ImportRTTextureIfValid(graph, MOER_TEXT("RT.diffuse_albedo"), frame_rt.diffuse_albedo),
-        .specular_roughness = ImportRTTextureIfValid(graph, MOER_TEXT("RT.specular_roughness"), frame_rt.specular_roughness),
-        .normal = ImportRTTextureIfValid(graph, MOER_TEXT("RT.normal"), frame_rt.normal),
-        .emission = ImportRTTextureIfValid(graph, MOER_TEXT("RT.emission"), frame_rt.emission),
-        .motion = ImportRTTextureIfValid(graph, MOER_TEXT("RT.motion"), frame_rt.motion),
-        .clip_depth = ImportRTTextureIfValid(graph, MOER_TEXT("RT.clip_depth"), frame_rt.clip_depth),
-        .prev_view_depth = ImportRTTextureIfValid(graph, MOER_TEXT("RT.prev_view_depth"), frame_rt.prev_view_depth),
-        .prev_diffuse_albedo = ImportRTTextureIfValid(graph, MOER_TEXT("RT.prev_diffuse_albedo"), frame_rt.prev_diffuse_albedo),
-        .prev_specular_roughness = ImportRTTextureIfValid(graph, MOER_TEXT("RT.prev_specular_roughness"), frame_rt.prev_specular_roughness),
-        .prev_normal = ImportRTTextureIfValid(graph, MOER_TEXT("RT.prev_normal"), frame_rt.prev_normal),
-        .normal_roughness = ImportRTTextureIfValid(graph, MOER_TEXT("RT.normal_roughness"), frame_rt.normal_roughness),
-        .diffuse_lighting = ImportRTTextureIfValid(graph, MOER_TEXT("RT.diffuse_lighting"), frame_rt.diffuse_lighting),
-        .prev_diffuse_lighting = ImportRTTextureIfValid(graph, MOER_TEXT("RT.prev_diffuse_lighting"), frame_rt.prev_diffuse_lighting),
-        .specular_lighting = ImportRTTextureIfValid(graph, MOER_TEXT("RT.specular_lighting"), frame_rt.specular_lighting),
-        .prev_specular_lighting = ImportRTTextureIfValid(graph, MOER_TEXT("RT.prev_specular_lighting"), frame_rt.prev_specular_lighting),
-        .temporal_sample_pos = ImportRTTextureIfValid(graph, MOER_TEXT("RT.temporal_sample_pos"), frame_rt.temporal_sample_pos),
-        .gradients = ImportRTTextureIfValid(graph, MOER_TEXT("RT.gradients"), frame_rt.gradients),
-        .restir_luminance = ImportRTTextureIfValid(graph, MOER_TEXT("RT.restir_luminance"), frame_rt.restir_luminance),
-        .prev_luminance = ImportRTTextureIfValid(graph, MOER_TEXT("RT.prev_luminance"), frame_rt.prev_luminance),
-        .denoised_diffuse_lighting = ImportRTTextureIfValid(graph, MOER_TEXT("RT.denoised_diffuse_lighting"), frame_rt.denoised_diffuse_lighting),
-        .denoised_specular_lighting = ImportRTTextureIfValid(graph, MOER_TEXT("RT.denoised_specular_lighting"), frame_rt.denoised_specular_lighting),
-        .debug_color = ImportRTTextureIfValid(graph, MOER_TEXT("RT.debug_color"), frame_rt.debug_color),
-        .ldr_color = ImportRTTextureIfValid(graph, MOER_TEXT("RT.ldr_color"), frame_rt.ldr_color),
-        .hdr_color = ImportRTTextureIfValid(graph, MOER_TEXT("RT.hdr_color"), frame_rt.hdr_color),
-        .feedback_color_ping = ImportRTTextureIfValid(graph, MOER_TEXT("RT.feedback_color_ping"), frame_rt.feedback_color_ping),
-        .feedback_color_pong = ImportRTTextureIfValid(graph, MOER_TEXT("RT.feedback_color_pong"), frame_rt.feedback_color_pong),
-        .resolved_color = ImportRTTextureIfValid(graph, MOER_TEXT("RT.resolved_color"), frame_rt.resolved_color),
-        .local_light_pdf_tex = ImportRTTextureIfValid(graph, MOER_TEXT("RT.local_light_pdf_tex"), rt_ctx.local_light_pdf_tex),
-        .env_pdf_tex = ImportRTTextureIfValid(graph, MOER_TEXT("RT.env_pdf_tex"), rt_ctx.env_pdf_tex),
-        .light_mapping_buf = ImportRTBufferIfValid(graph, MOER_TEXT("RT.light_mapping_buf"), rt_ctx.light_mapping_buf),
-        .prim_light_buf = ImportRTBufferIfValid(graph, MOER_TEXT("RT.prim_light_buf"), rt_ctx.prim_light_buf),
-        .task_buf = ImportRTBufferIfValid(graph, MOER_TEXT("RT.task_buf"), rt_ctx.task_buf),
-        .primitive_to_light_buf = ImportRTBufferIfValid(graph, MOER_TEXT("RT.primitive_to_light_buf"), rt_ctx.primitive_to_light_buf),
-        .light_data_buf = ImportRTBufferIfValid(graph, MOER_TEXT("RT.light_data_buf"), rt_ctx.light_data_buf),
-        .ris_buf = ImportRTBufferIfValid(graph, MOER_TEXT("RT.ris_buf"), rt_ctx.ris_buf),
-        .ris_light_data_buf = ImportRTBufferIfValid(graph, MOER_TEXT("RT.ris_light_data_buf"), rt_ctx.ris_light_data_buf),
-        .neighbor_offset_buf = ImportRTBufferIfValid(graph, MOER_TEXT("RT.neighbor_offset_buf"), rt_ctx.neighbor_offset_buf),
-        .light_reservoir_buf = ImportRTBufferIfValid(graph, MOER_TEXT("RT.light_reservoir_buf"), rt_ctx.light_reservoir_buf)
+        .view_depth = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.view_depth"), frame_rt.view_depth),
+        .diffuse_albedo = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.diffuse_albedo"), frame_rt.diffuse_albedo),
+        .specular_roughness = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.specular_roughness"), frame_rt.specular_roughness),
+        .normal = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.normal"), frame_rt.normal),
+        .emission = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.emission"), frame_rt.emission),
+        .motion = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.motion"), frame_rt.motion),
+        .clip_depth = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.clip_depth"), frame_rt.clip_depth),
+        .prev_view_depth = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.prev_view_depth"), frame_rt.prev_view_depth),
+        .prev_diffuse_albedo = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.prev_diffuse_albedo"), frame_rt.prev_diffuse_albedo),
+        .prev_specular_roughness = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.prev_specular_roughness"), frame_rt.prev_specular_roughness),
+        .prev_normal = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.prev_normal"), frame_rt.prev_normal),
+        .normal_roughness = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.normal_roughness"), frame_rt.normal_roughness),
+        .diffuse_lighting = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.diffuse_lighting"), frame_rt.diffuse_lighting),
+        .prev_diffuse_lighting = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.prev_diffuse_lighting"), frame_rt.prev_diffuse_lighting),
+        .specular_lighting = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.specular_lighting"), frame_rt.specular_lighting),
+        .prev_specular_lighting = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.prev_specular_lighting"), frame_rt.prev_specular_lighting),
+        .temporal_sample_pos = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.temporal_sample_pos"), frame_rt.temporal_sample_pos),
+        .gradients = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.gradients"), frame_rt.gradients),
+        .restir_luminance = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.restir_luminance"), frame_rt.restir_luminance),
+        .prev_luminance = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.prev_luminance"), frame_rt.prev_luminance),
+        .denoised_diffuse_lighting = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.denoised_diffuse_lighting"), frame_rt.denoised_diffuse_lighting),
+        .denoised_specular_lighting = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.denoised_specular_lighting"), frame_rt.denoised_specular_lighting),
+        .debug_color = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.debug_color"), frame_rt.debug_color),
+        .ldr_color = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.ldr_color"), frame_rt.ldr_color),
+        .hdr_color = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.hdr_color"), frame_rt.hdr_color),
+        .feedback_color_ping = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.feedback_color_ping"), frame_rt.feedback_color_ping),
+        .feedback_color_pong = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.feedback_color_pong"), frame_rt.feedback_color_pong),
+        .resolved_color = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.resolved_color"), frame_rt.resolved_color),
+        .local_light_pdf_tex = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.local_light_pdf_tex"), rt_ctx.local_light_pdf_tex),
+        .env_pdf_tex = RegisterRTTextureIfValid(graph, MOER_TEXT("RT.env_pdf_tex"), rt_ctx.env_pdf_tex),
+        .light_mapping_buf = RegisterRTBufferIfValid(graph, MOER_TEXT("RT.light_mapping_buf"), rt_ctx.light_mapping_buf),
+        .prim_light_buf = RegisterRTBufferIfValid(graph, MOER_TEXT("RT.prim_light_buf"), rt_ctx.prim_light_buf),
+        .task_buf = RegisterRTBufferIfValid(graph, MOER_TEXT("RT.task_buf"), rt_ctx.task_buf),
+        .primitive_to_light_buf = RegisterRTBufferIfValid(graph, MOER_TEXT("RT.primitive_to_light_buf"), rt_ctx.primitive_to_light_buf),
+        .light_data_buf = RegisterRTBufferIfValid(graph, MOER_TEXT("RT.light_data_buf"), rt_ctx.light_data_buf),
+        .ris_buf = RegisterRTBufferIfValid(graph, MOER_TEXT("RT.ris_buf"), rt_ctx.ris_buf),
+        .ris_light_data_buf = RegisterRTBufferIfValid(graph, MOER_TEXT("RT.ris_light_data_buf"), rt_ctx.ris_light_data_buf),
+        .neighbor_offset_buf = RegisterRTBufferIfValid(graph, MOER_TEXT("RT.neighbor_offset_buf"), rt_ctx.neighbor_offset_buf),
+        .light_reservoir_buf = RegisterRTBufferIfValid(graph, MOER_TEXT("RT.light_reservoir_buf"), rt_ctx.light_reservoir_buf)
     };
 
     resources.current_view_depth = RTCurrentFrameTexture(resources.current_frame, resources.view_depth, resources.prev_view_depth);
@@ -171,10 +179,10 @@ inline RGTexture* ImportedRTFeedbackTexture(
     const RTContext&             rt_ctx,
     const TextureRef&            texture
 ) {
-    if (texture == rt_ctx.frame_rt.feedback_color_ping) {
+    if (texture == RTRHI(rt_ctx.frame_rt.feedback_color_ping)) {
         return resources.feedback_color_ping;
     }
-    assert(texture == rt_ctx.frame_rt.feedback_color_pong);
+    assert(texture == RTRHI(rt_ctx.frame_rt.feedback_color_pong));
     return resources.feedback_color_pong;
 }
 
@@ -188,94 +196,94 @@ inline RGTexture* RTGraphTextureForFrameTexture(
     }
 
     const FrameResources& frame_rt = rt_ctx.frame_rt;
-    if (texture == frame_rt.view_depth) {
+    if (texture == RTRHI(frame_rt.view_depth)) {
         return resources.view_depth;
     }
-    if (texture == frame_rt.diffuse_albedo) {
+    if (texture == RTRHI(frame_rt.diffuse_albedo)) {
         return resources.diffuse_albedo;
     }
-    if (texture == frame_rt.specular_roughness) {
+    if (texture == RTRHI(frame_rt.specular_roughness)) {
         return resources.specular_roughness;
     }
-    if (texture == frame_rt.normal) {
+    if (texture == RTRHI(frame_rt.normal)) {
         return resources.normal;
     }
-    if (texture == frame_rt.emission) {
+    if (texture == RTRHI(frame_rt.emission)) {
         return resources.emission;
     }
-    if (texture == frame_rt.motion) {
+    if (texture == RTRHI(frame_rt.motion)) {
         return resources.motion;
     }
-    if (texture == frame_rt.clip_depth) {
+    if (texture == RTRHI(frame_rt.clip_depth)) {
         return resources.clip_depth;
     }
-    if (texture == frame_rt.prev_view_depth) {
+    if (texture == RTRHI(frame_rt.prev_view_depth)) {
         return resources.prev_view_depth;
     }
-    if (texture == frame_rt.prev_diffuse_albedo) {
+    if (texture == RTRHI(frame_rt.prev_diffuse_albedo)) {
         return resources.prev_diffuse_albedo;
     }
-    if (texture == frame_rt.prev_specular_roughness) {
+    if (texture == RTRHI(frame_rt.prev_specular_roughness)) {
         return resources.prev_specular_roughness;
     }
-    if (texture == frame_rt.prev_normal) {
+    if (texture == RTRHI(frame_rt.prev_normal)) {
         return resources.prev_normal;
     }
-    if (texture == frame_rt.normal_roughness) {
+    if (texture == RTRHI(frame_rt.normal_roughness)) {
         return resources.normal_roughness;
     }
-    if (texture == frame_rt.diffuse_lighting) {
+    if (texture == RTRHI(frame_rt.diffuse_lighting)) {
         return resources.diffuse_lighting;
     }
-    if (texture == frame_rt.prev_diffuse_lighting) {
+    if (texture == RTRHI(frame_rt.prev_diffuse_lighting)) {
         return resources.prev_diffuse_lighting;
     }
-    if (texture == frame_rt.specular_lighting) {
+    if (texture == RTRHI(frame_rt.specular_lighting)) {
         return resources.specular_lighting;
     }
-    if (texture == frame_rt.prev_specular_lighting) {
+    if (texture == RTRHI(frame_rt.prev_specular_lighting)) {
         return resources.prev_specular_lighting;
     }
-    if (texture == frame_rt.temporal_sample_pos) {
+    if (texture == RTRHI(frame_rt.temporal_sample_pos)) {
         return resources.temporal_sample_pos;
     }
-    if (texture == frame_rt.gradients) {
+    if (texture == RTRHI(frame_rt.gradients)) {
         return resources.gradients;
     }
-    if (texture == frame_rt.restir_luminance) {
+    if (texture == RTRHI(frame_rt.restir_luminance)) {
         return resources.restir_luminance;
     }
-    if (texture == frame_rt.prev_luminance) {
+    if (texture == RTRHI(frame_rt.prev_luminance)) {
         return resources.prev_luminance;
     }
-    if (texture == frame_rt.denoised_diffuse_lighting) {
+    if (texture == RTRHI(frame_rt.denoised_diffuse_lighting)) {
         return resources.denoised_diffuse_lighting;
     }
-    if (texture == frame_rt.denoised_specular_lighting) {
+    if (texture == RTRHI(frame_rt.denoised_specular_lighting)) {
         return resources.denoised_specular_lighting;
     }
-    if (texture == frame_rt.debug_color) {
+    if (texture == RTRHI(frame_rt.debug_color)) {
         return resources.debug_color;
     }
-    if (texture == frame_rt.ldr_color) {
+    if (texture == RTRHI(frame_rt.ldr_color)) {
         return resources.ldr_color;
     }
-    if (texture == frame_rt.hdr_color) {
+    if (texture == RTRHI(frame_rt.hdr_color)) {
         return resources.hdr_color;
     }
-    if (texture == frame_rt.feedback_color_ping) {
+    if (texture == RTRHI(frame_rt.feedback_color_ping)) {
         return resources.feedback_color_ping;
     }
-    if (texture == frame_rt.feedback_color_pong) {
+    if (texture == RTRHI(frame_rt.feedback_color_pong)) {
         return resources.feedback_color_pong;
     }
-    if (texture == frame_rt.resolved_color) {
+    if (texture == RTRHI(frame_rt.resolved_color)) {
         return resources.resolved_color;
     }
-    if (texture == rt_ctx.local_light_pdf_tex) {
+    if (rt_ctx.local_light_pdf_tex && texture == RTRHI(rt_ctx.local_light_pdf_tex)) {
         return resources.local_light_pdf_tex;
     }
-    if (texture == rt_ctx.env_pdf_tex) {
+    if (rt_ctx.env_pdf_tex && texture == RTRHI(rt_ctx.env_pdf_tex)) {
         return resources.env_pdf_tex;
     }
 

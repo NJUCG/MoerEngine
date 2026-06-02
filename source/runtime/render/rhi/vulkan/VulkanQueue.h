@@ -189,7 +189,7 @@ struct ProfilerStorage {
 
     void BeginProfilerSession(VulkanCmdList& _cmd, StringView _name);
     void EndProfilerSession(VulkanCmdList& _cmd, StringView _name);
-    void VisitQueryCmd(VulkanCmdList& _cmd, const QueryCmd& _query_cmd);
+    void VisitQueryCmd(const QueryCmd& _query_cmd);
 
     struct ResolvedGpuSample {
         String name{};

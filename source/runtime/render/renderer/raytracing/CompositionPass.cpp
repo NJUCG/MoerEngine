@@ -87,21 +87,21 @@ CompositionPass::RecordResources CompositionPass::CaptureResources(const RTConte
     bool        b_current_frame = _rt_ctx.b_current_frame;
     const auto& frame_rt        = _rt_ctx.frame_rt;
     return RecordResources{
-        .hdr_color                   = frame_rt.hdr_color,
-        .motion                      = frame_rt.motion,
-        .view_depth                  = b_current_frame ? frame_rt.view_depth : frame_rt.prev_view_depth,
-        .diffuse_albedo              = b_current_frame ? frame_rt.diffuse_albedo : frame_rt.prev_diffuse_albedo,
-        .specular_roughness          = b_current_frame ? frame_rt.specular_roughness : frame_rt.prev_specular_roughness,
-        .normal                      = b_current_frame ? frame_rt.normal : frame_rt.prev_normal,
-        .emission                    = frame_rt.emission,
-        .diffuse_lighting            = frame_rt.diffuse_lighting,
-        .specular_lighting           = frame_rt.specular_lighting,
+        .hdr_color                   = RTRHI(frame_rt.hdr_color),
+        .motion                      = RTRHI(frame_rt.motion),
+        .view_depth                  = RTRHI(b_current_frame ? frame_rt.view_depth : frame_rt.prev_view_depth),
+        .diffuse_albedo              = RTRHI(b_current_frame ? frame_rt.diffuse_albedo : frame_rt.prev_diffuse_albedo),
+        .specular_roughness          = RTRHI(b_current_frame ? frame_rt.specular_roughness : frame_rt.prev_specular_roughness),
+        .normal                      = RTRHI(b_current_frame ? frame_rt.normal : frame_rt.prev_normal),
+        .emission                    = RTRHI(frame_rt.emission),
+        .diffuse_lighting            = RTRHI(frame_rt.diffuse_lighting),
+        .specular_lighting           = RTRHI(frame_rt.specular_lighting),
 #if WITH_NRD
-        .denoised_diffuse_lighting   = frame_rt.denoised_diffuse_lighting,
-        .denoised_specular_lighting  = frame_rt.denoised_specular_lighting,
+        .denoised_diffuse_lighting   = RTRHI(frame_rt.denoised_diffuse_lighting),
+        .denoised_specular_lighting  = RTRHI(frame_rt.denoised_specular_lighting),
 #else
-        .denoised_diffuse_lighting   = frame_rt.diffuse_lighting,
-        .denoised_specular_lighting  = frame_rt.specular_lighting,
+        .denoised_diffuse_lighting   = RTRHI(frame_rt.diffuse_lighting),
+        .denoised_specular_lighting  = RTRHI(frame_rt.specular_lighting),
 #endif
         .bindless_array              = _rt_ctx.GetBindlessArray()
     };

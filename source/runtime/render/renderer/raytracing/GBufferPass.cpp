@@ -102,14 +102,14 @@ GBufferPass::RecordResources GBufferPass::CaptureResources(const RTContext& _rt_
     const FrameResources& frame_rt        = _rt_ctx.frame_rt;
     bool                  b_current_frame = _rt_ctx.b_current_frame;
     return RecordResources{
-        .view_depth         = b_current_frame ? frame_rt.view_depth : frame_rt.prev_view_depth,
-        .diffuse_albedo     = b_current_frame ? frame_rt.diffuse_albedo : frame_rt.prev_diffuse_albedo,
-        .specular_roughness = b_current_frame ? frame_rt.specular_roughness : frame_rt.prev_specular_roughness,
-        .normal             = b_current_frame ? frame_rt.normal : frame_rt.prev_normal,
-        .emission           = frame_rt.emission,
-        .motion             = frame_rt.motion,
-        .clip_depth         = frame_rt.clip_depth,
-        .normal_roughness   = frame_rt.normal_roughness,
+        .view_depth         = RTRHI(b_current_frame ? frame_rt.view_depth : frame_rt.prev_view_depth),
+        .diffuse_albedo     = RTRHI(b_current_frame ? frame_rt.diffuse_albedo : frame_rt.prev_diffuse_albedo),
+        .specular_roughness = RTRHI(b_current_frame ? frame_rt.specular_roughness : frame_rt.prev_specular_roughness),
+        .normal             = RTRHI(b_current_frame ? frame_rt.normal : frame_rt.prev_normal),
+        .emission           = RTRHI(frame_rt.emission),
+        .motion             = RTRHI(frame_rt.motion),
+        .clip_depth         = RTRHI(frame_rt.clip_depth),
+        .normal_roughness   = RTRHI(frame_rt.normal_roughness),
         .tlas               = _rt_ctx.rt_scene ? _rt_ctx.rt_scene->GetTlas() : RaytracingTlasRef{},
         .bindless_array     = _rt_ctx.GetBindlessArray()
     };

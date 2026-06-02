@@ -7,6 +7,7 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "rendergraph/RenderGraphResourcePool.h"
 #include "shader/ShaderResourceManager.h"
 #include "vulkan/VulkanDevice.h"
 
@@ -68,6 +69,12 @@ void RenderDevice::Init(DeviceInitInfo&& _info) {
     Get().impl->PostInit();
 }
 void RenderDevice::Dispose() {
+    if (!Get().impl) {
+        return;
+    }
+
+    PooledTexturePool::Global().Reset();
+    PooledBufferPool::Global().Reset();
     Get().impl.reset();
 }
 CommandQueue& RenderDevice::GetCommandQueue(EQueueType _type) {

@@ -52,6 +52,7 @@
 namespace Moer::Render::Tests {
 int RunRHICommandListRGBaselineTest();
 int RunRenderGraphContractFoundationTest();
+int RunRenderGraphTransientAliasReuseTest();
 int RunRenderGraphTextureCopyReadbackTest();
 int RunRenderGraphDispatchBindlessReadbackTest();
 int RunRenderGraphRayQueryTriangleHitTest();
@@ -175,6 +176,36 @@ GPUEvent MakeResolvedGpuEvent(
         .depth = depth,
         .timestamp_ns = timestamp_ns,
     };
+}
+
+GPUEvent MakeQueryGpuEvent(
+    GPUEvent::EType type,
+    StringView name,
+    uint32 depth,
+    const QueryToken& query
+) {
+    return GPUEvent{
+        .type = type,
+        .name = String(name),
+        .query = query,
+        .depth = depth,
+        .timestamp_ns = 0,
+    };
+}
+
+void ResolveTimestampToken(const QueryToken& token, uint64 tick) {
+    QueryResult result{};
+    result.kind     = QueryKind::Timestamp;
+    result.status   = QueryStatus::Ready;
+    result.query_id = token.id;
+    result.name     = token.name;
+    result.payload = TimestampQueryResult{
+        .begin_tick = tick,
+        .end_tick = tick,
+        .tick_period_ns = 1.0,
+        .duration_ns = 0.0,
+    };
+    token.Resolve(std::move(result));
 }
 constexpr uint32_t kExplicitCopyIterations = 8;
 
@@ -2718,6 +2749,52 @@ int RunGpuEventStreamCrossSubmitAggregationTest() {
     return 0;
 }
 
+int RunGpuEventStreamPendingQueryRetryTest() {
+    auto& stream = GPUEventStream::Get();
+    stream.ResetForTesting();
+
+    CommandList token_source(EQueueType::Graphics);
+    QueryToken begin_gpu = token_source.BeginTimestampQuery(MOER_TEXT("PendingRetry.GPU.Begin"));
+    QueryToken begin_event = token_source.BeginTimestampQuery(MOER_TEXT("PendingRetry.Event.Begin"));
+    QueryToken end_event = token_source.BeginTimestampQuery(MOER_TEXT("PendingRetry.Event.End"));
+    QueryToken end_gpu = token_source.BeginTimestampQuery(MOER_TEXT("PendingRetry.GPU.End"));
+    QueryToken frame_boundary = token_source.BeginTimestampQuery(MOER_TEXT("PendingRetry.FrameBoundary"));
+
+    Array<GPUEvent> events{};
+    events.emplace_back(MakeQueryGpuEvent(GPUEvent::EType::BeginGPU, MOER_TEXT("GPU"), 0, begin_gpu));
+    events.emplace_back(MakeQueryGpuEvent(GPUEvent::EType::BeginEvent, MOER_TEXT("PendingRetryOuter"), 1, begin_event));
+    events.emplace_back(MakeQueryGpuEvent(GPUEvent::EType::EndEvent, MOER_TEXT(""), 1, end_event));
+    events.emplace_back(MakeQueryGpuEvent(GPUEvent::EType::EndGPU, MOER_TEXT(""), 0, end_gpu));
+    events.emplace_back(MakeQueryGpuEvent(GPUEvent::EType::FrameBoundary, MOER_TEXT("FrameBoundary"), 0, frame_boundary));
+
+    const WaitEvent completion{0x1234u, 1u};
+    stream.EnqueueSubmit(std::move(events), EQueueType::Graphics, completion);
+    stream.EndFrame();
+
+    stream.ResolveCompleted(WaitEvent{completion.timeline_handle, completion.value + 1u});
+    if (!stream.FormatLastResolvedFrame().empty()) {
+        LOG_ERROR(MOER_TEXT("GPUEventStream resolved a frame before query futures were ready"));
+        return 1;
+    }
+
+    ResolveTimestampToken(begin_gpu, 100);
+    ResolveTimestampToken(begin_event, 110);
+    ResolveTimestampToken(end_event, 170);
+    ResolveTimestampToken(end_gpu, 200);
+    ResolveTimestampToken(frame_boundary, 210);
+
+    stream.ResolveCompleted(completion);
+    const std::string frame_text = stream.FormatLastResolvedFrame();
+    if (frame_text.empty() || frame_text.find("valid=true") == std::string::npos ||
+        frame_text.find("PendingRetryOuter") == std::string::npos) {
+        LOG_ERROR(MOER_TEXT("GPUEventStream did not retry pending query futures correctly:\n{}"), frame_text);
+        return 1;
+    }
+
+    LOG_INFO(MOER_TEXT("GPUEventStream pending-query retry frame debug:\n{}"), frame_text);
+    return 0;
+}
+
 int RunGpuEventStreamBoundaryValidationTest() {
     auto& stream = GPUEventStream::Get();
     stream.ResetForTesting();
@@ -3073,6 +3150,14 @@ int main(int argc, char** argv) {
         return shutdown_and_return(rg_contract_ret);
     }
 
+    const int rg_alias_ret = RunNamedTestCase(
+        "RenderGraphTransientAliasReuse",
+        TestCases::RunRenderGraphTransientAliasReuseTest
+    );
+    if (rg_alias_ret != 0) {
+        return shutdown_and_return(rg_alias_ret);
+    }
+
     const int rg_texture_readback_ret = RunNamedTestCase(
         "RenderGraphTextureCopyReadback",
         TestCases::RunRenderGraphTextureCopyReadbackTest
@@ -3187,6 +3272,12 @@ int main(int argc, char** argv) {
         RunNamedTestCase("GPUEventStreamCrossSubmitAggregation", RunGpuEventStreamCrossSubmitAggregationTest);
     if (gpu_event_cross_submit_ret != 0) {
         return shutdown_and_return(gpu_event_cross_submit_ret);
+    }
+
+    const int gpu_event_pending_query_retry_ret =
+        RunNamedTestCase("GPUEventStreamPendingQueryRetry", RunGpuEventStreamPendingQueryRetryTest);
+    if (gpu_event_pending_query_retry_ret != 0) {
+        return shutdown_and_return(gpu_event_pending_query_retry_ret);
     }
 
     const int gpu_event_boundary_validation_ret =

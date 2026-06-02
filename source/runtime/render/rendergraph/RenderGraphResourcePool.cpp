@@ -39,6 +39,9 @@ bool PooledTexture::CanReuse(const PooledTextureDesc& desc) const {
 void PooledTexture::MarkUsed(StringView name) {
     m_name        = String(name);
     m_idle_frames = 0;
+    if (m_texture.Get() != nullptr) {
+        m_texture->SetName(name);
+    }
 }
 
 bool PooledTexture::TickIdle(uint32_t retire_after_idle_frames) {
@@ -69,6 +72,9 @@ bool PooledBuffer::CanReuse(const PooledBufferDesc& desc) const {
 void PooledBuffer::MarkUsed(StringView name) {
     m_name        = String(name);
     m_idle_frames = 0;
+    if (m_buffer.Get() != nullptr) {
+        m_buffer->SetName(name);
+    }
 }
 
 bool PooledBuffer::TickIdle(uint32_t retire_after_idle_frames) {

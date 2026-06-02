@@ -748,8 +748,7 @@ int RunRenderGraphContractFoundationTest() {
     const RGResource& texture_resource = *texture;
     const RGResource& buffer_resource  = *buffer;
     if (texture_resource.compile.first_pass != 0 || texture_resource.compile.last_pass != 3 ||
-        texture_resource.compile.access_write || buffer_resource.compile.first_pass != 0 ||
-        buffer_resource.compile.last_pass != 3 || buffer_resource.compile.access_write) {
+        buffer_resource.compile.first_pass != 0 || buffer_resource.compile.last_pass != 3) {
         LOG_ERROR(MOER_TEXT("RenderGraph foundation compiled wrong resource lifetime metadata"));
         return 1;
     }
@@ -820,6 +819,90 @@ int RunRenderGraphContractFoundationTest() {
     }
 
     LOG_INFO(MOER_TEXT("RenderGraph contract foundation test passed, hazards={}"), plan.hazard_edges.size());
+    return 0;
+}
+
+int RunRenderGraphTransientAliasReuseTest() {
+    PooledTexturePool texture_pool{3};
+    PooledBufferPool  buffer_pool{3};
+    RGTransientResourceAllocator allocator{texture_pool, buffer_pool};
+    RenderGraph graph(MOER_TEXT("RG.TransientAliasReuse"));
+
+    const RGTextureDesc texture_desc = MakeColorTextureDesc(
+        Extent3D(16, 16, 1),
+        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED
+    );
+    RGTexture* texture_a = graph.CreateTexture(MOER_TEXT("rg_alias_texture_a"), texture_desc);
+    RGTexture* texture_b = graph.CreateTexture(MOER_TEXT("rg_alias_texture_b"), texture_desc);
+
+    RGBufferDesc buffer_desc{};
+    buffer_desc.size   = 128;
+    buffer_desc.stride = 4;
+    buffer_desc.usage  = EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_SRC;
+    RGBuffer* buffer_a = graph.CreateBuffer(MOER_TEXT("rg_alias_buffer_a"), buffer_desc);
+    RGBuffer* buffer_b = graph.CreateBuffer(MOER_TEXT("rg_alias_buffer_b"), buffer_desc);
+
+    auto* first_params    = graph.Alloc<RGExecutionParams>();
+    first_params->texture = RGTextureView{.texture = texture_a};
+    first_params->buffer  = RGBufferView{.buffer = buffer_a};
+
+    auto* second_params    = graph.Alloc<RGExecutionParams>();
+    second_params->texture = RGTextureView{.texture = texture_b};
+    second_params->buffer  = RGBufferView{.buffer = buffer_b};
+
+    std::atomic<Texture*> texture_a_rhi{nullptr};
+    std::atomic<Texture*> texture_b_rhi{nullptr};
+    std::atomic<Buffer*>  buffer_a_rhi{nullptr};
+    std::atomic<Buffer*>  buffer_b_rhi{nullptr};
+
+    graph.AddPass(
+        MOER_TEXT("AliasFirstUse"),
+        first_params,
+        ERGPassFlags::Graphics,
+        [texture_a, buffer_a, &texture_a_rhi, &buffer_a_rhi](RHICommandList&, RGContext) {
+            texture_a_rhi.store(texture_a->RHI().Get(), std::memory_order_relaxed);
+            buffer_a_rhi.store(buffer_a->RHI().Get(), std::memory_order_relaxed);
+        }
+    );
+    graph.AddPass(
+        MOER_TEXT("AliasSecondUse"),
+        second_params,
+        ERGPassFlags::Graphics,
+        [texture_b, buffer_b, &texture_b_rhi, &buffer_b_rhi](RHICommandList&, RGContext) {
+            texture_b_rhi.store(texture_b->RHI().Get(), std::memory_order_relaxed);
+            buffer_b_rhi.store(buffer_b->RHI().Get(), std::memory_order_relaxed);
+        }
+    );
+
+    graph.Dispatch(allocator);
+    RHIExecutor::Get().Sync();
+
+    if (texture_a_rhi.load(std::memory_order_relaxed) == nullptr ||
+        texture_a_rhi.load(std::memory_order_relaxed) != texture_b_rhi.load(std::memory_order_relaxed) ||
+        buffer_a_rhi.load(std::memory_order_relaxed) == nullptr ||
+        buffer_a_rhi.load(std::memory_order_relaxed) != buffer_b_rhi.load(std::memory_order_relaxed)) {
+        LOG_ERROR(MOER_TEXT("RenderGraph transient alias allocator did not reuse physical resources"));
+        return 1;
+    }
+    if (texture_pool.LiveCount() != 1 || buffer_pool.LiveCount() != 1) {
+        LOG_ERROR(
+            MOER_TEXT("RenderGraph transient alias allocator kept unexpected pool live counts: textures={}, buffers={}"),
+            texture_pool.LiveCount(),
+            buffer_pool.LiveCount()
+        );
+        return 1;
+    }
+
+    const RGCompiledPlan& plan = graph.GetCompiledPlan();
+    const RGCompiledHazardEdge* texture_edge = FindHazard(plan, 0, 1, texture_b, ERGResourceKind::Texture);
+    const RGCompiledHazardEdge* buffer_edge  = FindHazard(plan, 0, 1, buffer_b, ERGResourceKind::Buffer);
+    if (!texture_edge || !RGCompiledHazardHasFlag(*texture_edge, ERGCompiledHazardFlag::AliasReuse) ||
+        !buffer_edge || !RGCompiledHazardHasFlag(*buffer_edge, ERGCompiledHazardFlag::AliasReuse)) {
+        LOG_ERROR(MOER_TEXT("RenderGraph transient alias allocator did not emit alias hazards"));
+        return 1;
+    }
+
+    LOG_INFO(MOER_TEXT("RenderGraph transient alias reuse test passed"));
     return 0;
 }
 

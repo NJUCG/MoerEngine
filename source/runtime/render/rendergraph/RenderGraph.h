@@ -51,7 +51,8 @@ struct RGCompiledExecutionBatch {
 
 enum class ERGCompiledHazardFlag : uint8_t {
     AccessConflict = 1 << 0,
-    OwnerTransfer  = 1 << 1
+    OwnerTransfer  = 1 << 1,
+    AliasReuse     = 1 << 2
 };
 
 constexpr uint8_t RGCompiledHazardFlagMask(ERGCompiledHazardFlag flag) {

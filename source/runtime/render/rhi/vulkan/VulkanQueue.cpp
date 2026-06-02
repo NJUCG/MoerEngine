@@ -1785,6 +1785,7 @@ class VkCmdVisitor : VulkanDeviceObject {
     VulkanAllocator&       allocator;
     VkTracker&             tracker;
     const TCachedArgArray& cached_args;
+    VulkanQueryRuntime*    query_runtime = nullptr;
     ProfilerStorage*       profiler = nullptr;
     EQueueType             current_queue{EQueueType::Graphics};
 
@@ -1795,6 +1796,7 @@ public:
         VkTracker&             _tracker,
         VulkanCmdList&         _cmd_list,
         const TCachedArgArray& _cached_args,
+        VulkanQueryRuntime*    _query_runtime,
         ProfilerStorage*       _profiler = nullptr,
         EQueueType             _queue = EQueueType::Graphics
     ) :
@@ -1803,6 +1805,7 @@ public:
         tracker(_tracker),
         cmd_list(_cmd_list),
         cached_args(_cached_args),
+        query_runtime(_query_runtime),
         profiler(_profiler),
         current_queue(_queue) {}
 
@@ -2975,10 +2978,12 @@ public:
     }
 
     void Visit(const QueryCmd& _cmd) {
-        if (!profiler) {
-            return;
+        if (query_runtime != nullptr) {
+            query_runtime->HandleQueryCommand(cmd_list, _cmd);
         }
-        profiler->VisitQueryCmd(cmd_list, _cmd);
+        if (profiler != nullptr) {
+            profiler->VisitQueryCmd(_cmd);
+        }
     }
 
     void InsertAccelerationStructureScratchBarrier(VulkanBuffer* scratch_buffer) {
@@ -3590,8 +3595,7 @@ void ProfilerStorage::EndProfilerSession(VulkanCmdList& _cmd_list, StringView _n
     pending_samples.emplace_back(PendingProfilerSample{.name = key, .token = token});
 }
 
-void ProfilerStorage::VisitQueryCmd(VulkanCmdList& _cmd, const QueryCmd& _query_cmd) {
-    query_runtime.HandleQueryCommand(_cmd, _query_cmd);
+void ProfilerStorage::VisitQueryCmd(const QueryCmd& _query_cmd) {
     if (!active) {
         return;
     }
@@ -3676,6 +3680,7 @@ VulkanRecordedSubmit VkCommandQueue::Translate(
         tracker,
         active_cmd_list,
         recorded.submit->cached_args,
+        &query_runtime,
         local_profiler.get(),
         queue.GetType()
     );
@@ -4074,6 +4079,7 @@ VulkanRecordedSubmit VkCopyQueue::Translate(
         vk_tracker,
         vk_cmd_list,
         recorded.submit->cached_args,
+        nullptr,
         nullptr,
         EQueueType::Copy
     );

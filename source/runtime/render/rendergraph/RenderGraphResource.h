@@ -63,10 +63,9 @@ struct RGResourceCompileInfo {
 
     uint32_t first_pass{invalid_pass};
     uint32_t last_pass{invalid_pass};
-    bool     access_write{false};
 
     void Reset();
-    void RecordAccess(uint32_t pass_index, bool writes);
+    void RecordAccess(uint32_t pass_index);
 };
 
 struct RGTextureStateRange {
@@ -74,7 +73,7 @@ struct RGTextureStateRange {
     Render::ETextureState state{Render::ETextureState::UNDEFINED};
     Render::EQueueType    queue{Render::EQueueType::Ignore};
     uint32_t              last_pass{RGResourceCompileInfo::invalid_pass};
-    bool                  last_write{false};
+    bool                  alias_initial{false};
 };
 
 struct RGBufferStateRange {
@@ -82,7 +81,7 @@ struct RGBufferStateRange {
     Render::EBufferState state{Render::EBufferState::UNDEFINED};
     Render::EQueueType   queue{Render::EQueueType::Ignore};
     uint32_t             last_pass{RGResourceCompileInfo::invalid_pass};
-    bool                 last_write{false};
+    bool                 alias_initial{false};
 };
 
 class RGResource {
@@ -129,6 +128,7 @@ public:
 
     Render::ETextureState            final_state{Render::ETextureState::UNDEFINED};
     Moer::Array<RGTextureStateRange> state_ranges{};
+    Moer::Array<RGTextureStateRange> alias_initial_state_ranges{};
 
 private:
     RGTextureDesc    m_desc{};
@@ -158,6 +158,7 @@ public:
 
     Render::EBufferState            final_state{Render::EBufferState::UNDEFINED};
     Moer::Array<RGBufferStateRange> state_ranges{};
+    Moer::Array<RGBufferStateRange> alias_initial_state_ranges{};
 
 private:
     RGBufferDesc    m_desc{};
@@ -166,6 +167,12 @@ private:
 
 RENDER_API bool RGTextureStateWrites(Render::ETextureState state);
 RENDER_API bool RGBufferStateWrites(Render::EBufferState state);
+RENDER_API bool RGTextureStateInitializesContent(Render::ETextureState state);
+RENDER_API bool RGBufferStateInitializesContent(Render::EBufferState state);
+RENDER_API bool RGTextureStatesCompatible(Render::ETextureState previous, Render::ETextureState next);
+RENDER_API bool RGBufferStatesCompatible(Render::EBufferState previous, Render::EBufferState next);
+RENDER_API bool RGTextureStatesMergeable(Render::ETextureState previous, Render::ETextureState next);
+RENDER_API bool RGBufferStatesMergeable(Render::EBufferState previous, Render::EBufferState next);
 
 struct RGTextureAccess {
     RGTexture*            texture{nullptr};

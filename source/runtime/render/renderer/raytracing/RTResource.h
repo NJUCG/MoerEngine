@@ -5,6 +5,7 @@
 #include "ShaderUtils.h"
 #include "misc/STL.h"
 #include "renderer/common/RuntimeAssets.h"
+#include "rendergraph/RenderGraphResourcePool.h"
 #include "rhi/RHIResource.h"
 #include "scene/Scene.h"
 #include "scene/camera/Camera.h"
@@ -16,6 +17,8 @@
 
 #include "scene/GpuScene.h"
 
+#include <cassert>
+
 #ifndef WITH_NRD
 #define WITH_NRD 0
 #endif
@@ -23,38 +26,48 @@
 namespace Moer::Render::Raytracing {
 
 struct FrameResources {
-    TextureRef view_depth;
-    TextureRef diffuse_albedo;
-    TextureRef specular_roughness;
-    TextureRef normal;
-    TextureRef emission;
-    TextureRef motion;
-    TextureRef clip_depth;
+    PooledTextureRef view_depth;
+    PooledTextureRef diffuse_albedo;
+    PooledTextureRef specular_roughness;
+    PooledTextureRef normal;
+    PooledTextureRef emission;
+    PooledTextureRef motion;
+    PooledTextureRef clip_depth;
 
-    TextureRef prev_view_depth;
-    TextureRef prev_diffuse_albedo;
-    TextureRef prev_specular_roughness;
-    TextureRef prev_normal;
+    PooledTextureRef prev_view_depth;
+    PooledTextureRef prev_diffuse_albedo;
+    PooledTextureRef prev_specular_roughness;
+    PooledTextureRef prev_normal;
 
-    TextureRef normal_roughness; // for denoising
-    TextureRef diffuse_lighting;
-    TextureRef prev_diffuse_lighting;
-    TextureRef specular_lighting;
-    TextureRef prev_specular_lighting;
-    TextureRef temporal_sample_pos;
-    TextureRef gradients;
-    TextureRef restir_luminance;
-    TextureRef prev_luminance;
-    TextureRef denoised_diffuse_lighting;
-    TextureRef denoised_specular_lighting;
+    PooledTextureRef normal_roughness;
+    PooledTextureRef diffuse_lighting;
+    PooledTextureRef prev_diffuse_lighting;
+    PooledTextureRef specular_lighting;
+    PooledTextureRef prev_specular_lighting;
+    PooledTextureRef temporal_sample_pos;
+    PooledTextureRef gradients;
+    PooledTextureRef restir_luminance;
+    PooledTextureRef prev_luminance;
+    PooledTextureRef denoised_diffuse_lighting;
+    PooledTextureRef denoised_specular_lighting;
 
-    TextureRef debug_color;
-    TextureRef ldr_color;
-    TextureRef hdr_color;
-    TextureRef feedback_color_ping;
-    TextureRef feedback_color_pong;
-    TextureRef resolved_color;
+    PooledTextureRef debug_color;
+    PooledTextureRef ldr_color;
+    PooledTextureRef hdr_color;
+    PooledTextureRef feedback_color_ping;
+    PooledTextureRef feedback_color_pong;
+    PooledTextureRef resolved_color;
 };
+
+inline const TextureRef& RTRHI(const PooledTextureRef& texture) {
+    assert(texture && texture->IsAllocated());
+    return texture->RHI();
+}
+
+inline const BufferRef& RTRHI(const PooledBufferRef& buffer) {
+    assert(buffer && buffer->IsAllocated());
+    return buffer->RHI();
+}
 
 struct DefaultResources {
     TextureRef black_tex;
@@ -138,26 +151,26 @@ public:
     ViewParam main_view{};
     ViewParam prev_view{};
 
-    BufferRef light_mapping_buf;
-    BufferRef prim_light_buf;
-    BufferRef task_buf;
-    BufferRef primitive_to_light_buf; // primitive_id -> light_offset 映射
+    PooledBufferRef light_mapping_buf;
+    PooledBufferRef prim_light_buf;
+    PooledBufferRef task_buf;
+    PooledBufferRef primitive_to_light_buf;
     // polymorphic light info
-    BufferRef light_data_buf;
+    PooledBufferRef light_data_buf;
 
-    BufferRef ris_buf;
-    BufferRef ris_light_data_buf;
+    PooledBufferRef ris_buf;
+    PooledBufferRef ris_light_data_buf;
 
-    BufferRef neighbor_offset_buf; // for spatial resampling
-    bool      b_has_neighbor_offset = false;
+    PooledBufferRef neighbor_offset_buf;
+    bool            b_has_neighbor_offset = false;
 
-    BufferRef light_reservoir_buf;
+    PooledBufferRef light_reservoir_buf;
 
     TextureRef env_map = nullptr;
 
-    TextureRef         env_pdf_tex;
+    PooledTextureRef   env_pdf_tex;
     Array<TextureView> env_pdf_mips;
-    TextureRef         local_light_pdf_tex;
+    PooledTextureRef   local_light_pdf_tex;
     Array<TextureView> local_light_pdf_mips;
 
     uint max_emissive_meshes;

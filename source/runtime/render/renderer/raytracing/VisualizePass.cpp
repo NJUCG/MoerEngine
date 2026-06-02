@@ -86,19 +86,20 @@ VisualizePass::RecordResources VisualizePass::CaptureResources(
 ) {
     const bool b_current_frame = _ctx.b_current_frame;
     return RecordResources{
-        .ldr_color         = _ctx.frame_rt.ldr_color,
-        .diffuse_lighting  = _ctx.frame_rt.diffuse_lighting,
-        .specular_lighting = _ctx.frame_rt.specular_lighting,
-        .view_depth        = b_current_frame ? _ctx.frame_rt.view_depth : _ctx.frame_rt.prev_view_depth,
-        .clip_depth        = _ctx.frame_rt.clip_depth,
-        .emission          = _ctx.frame_rt.emission,
-        .normal            = b_current_frame ? _ctx.frame_rt.normal : _ctx.frame_rt.prev_normal,
-        .specular_roughness = b_current_frame ? _ctx.frame_rt.specular_roughness :
-                                                   _ctx.frame_rt.prev_specular_roughness,
-        .motion            = _ctx.frame_rt.motion,
-        .normal_roughness  = _ctx.frame_rt.normal_roughness,
-        .prev_view_depth   = b_current_frame ? _ctx.frame_rt.prev_view_depth : _ctx.frame_rt.view_depth,
-        .debug_color       = _ctx.frame_rt.debug_color
+        .ldr_color         = RTRHI(_ctx.frame_rt.ldr_color),
+        .diffuse_lighting  = RTRHI(_ctx.frame_rt.diffuse_lighting),
+        .specular_lighting = RTRHI(_ctx.frame_rt.specular_lighting),
+        .view_depth        = RTRHI(b_current_frame ? _ctx.frame_rt.view_depth : _ctx.frame_rt.prev_view_depth),
+        .clip_depth        = RTRHI(_ctx.frame_rt.clip_depth),
+        .emission          = RTRHI(_ctx.frame_rt.emission),
+        .normal            = RTRHI(b_current_frame ? _ctx.frame_rt.normal : _ctx.frame_rt.prev_normal),
+        .specular_roughness = RTRHI(
+            b_current_frame ? _ctx.frame_rt.specular_roughness : _ctx.frame_rt.prev_specular_roughness
+        ),
+        .motion            = RTRHI(_ctx.frame_rt.motion),
+        .normal_roughness  = RTRHI(_ctx.frame_rt.normal_roughness),
+        .prev_view_depth   = RTRHI(b_current_frame ? _ctx.frame_rt.prev_view_depth : _ctx.frame_rt.view_depth),
+        .debug_color       = RTRHI(_ctx.frame_rt.debug_color)
     };
 }
 
