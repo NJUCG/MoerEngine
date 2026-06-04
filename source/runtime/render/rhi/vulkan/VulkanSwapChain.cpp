@@ -120,12 +120,11 @@ void VkSwapchain::WaitFrameInFlight() {
 }
 
 void VkSwapchain::WaitFrameInFlight(uint64 _image_idx) {
-    // if (_image_idx < max_frames_in_flight) {
-    //     return;
-    // }
-    auto frame_offset = _image_idx % max_frames_in_flight;
-    vkWaitForFences(device.GetDevice(), 1, &in_flight_fences[frame_offset], VK_TRUE, UINT64_MAX);
-    vkResetFences(device.GetDevice(), 1, &in_flight_fences[frame_offset]);
+    // Main thread must not access VkFence directly (thread model: Executor on
+    // main thread only, fences are managed by InterruptThread/SubmissionThread).
+    // Use the RHIExecutor swapchain sync which waits on a GraphEventRef signaled
+    // by the InterruptThread rather than polling the VkFence.
+    RHIExecutor::Get().Sync(this);
 }
 
 VkFence VkSwapchain::GetInFlightFence(uint64 _index) {
@@ -292,11 +291,21 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
             );
         }
     } else if (!in_flight_fences.empty()) {
-        VK_CHECK_RESULT(vkResetFences(
-            device.GetDevice(),
-            static_cast<uint32_t>(in_flight_fences.size()),
-            in_flight_fences.data()
-        ));
+        // Main thread must not access VkFence directly.  Destroy old fences
+        // (all GPU work completed via Sync() before CreateOrRecreate) and
+        // create fresh ones so no fence is ever shared between threads.
+        for (uint i = 0; i < in_flight_fences.size(); i++) {
+            vkDestroyFence(device.GetDevice(), in_flight_fences[i], VK_NULL_HANDLE);
+        }
+        in_flight_fences.clear();
+        in_flight_fences.resize(max_frames_in_flight);
+        VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        for (uint i = 0; i < max_frames_in_flight; i++) {
+            vkCreateFence(device.GetDevice(), &fence_info, VK_NULL_HANDLE, &in_flight_fences[i]);
+            device.SetResourceName(
+                uint64(in_flight_fences[i]), VK_OBJECT_TYPE_FENCE, Printf(MOER_TEXT("InFlightFence_{}"), i)
+            );
+        }
     }
     image_idx = 0;
 }

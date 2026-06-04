@@ -215,22 +215,21 @@ struct SubmissionPresentContext::Impl {
             return;
         }
 
+        // Wait on our user-space timeline instead of busy-polling VkFence.
+        // This avoids racing with the InterruptThread which also polls the same
+        // fence.  The timeline is signaled by the InterruptThread via
+        // ResolvePresentCompletion once the fence is ready.
+        const uint64 wait_value = present_index - swapchain.max_frames_in_flight + 1;
+        if (timeline) {
+            timeline->Wait(wait_value);
+        }
+
+        // Reset the VkFence so it can be reused for the next present submission.
+        // This runs on the SubmissionThread (NOT the main thread), so it does not
+        // violate the thread model.
         VkFence fence = swapchain.GetInFlightFence(present_index);
-        while (true) {
-            const VkResult result = vkGetFenceStatus(command_queue.vk_device.GetDevice(), fence);
-            if (result == VK_SUCCESS) {
-                vkResetFences(command_queue.vk_device.GetDevice(), 1, &fence);
-                return;
-            }
-            if (result != VK_NOT_READY) {
-                LOG_ERROR(
-                    MOER_TEXT("vkGetFenceStatus failed on present fence slot {} with result {}"),
-                    present_index % swapchain.max_frames_in_flight,
-                    int(result)
-                );
-                return;
-            }
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        if (fence != VK_NULL_HANDLE) {
+            vkResetFences(command_queue.vk_device.GetDevice(), 1, &fence);
         }
     }
 
