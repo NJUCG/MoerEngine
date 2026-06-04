@@ -941,7 +941,6 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             r.emplace<ecs::CTagRootNode>(root_node_entt);
 
             r.emplace<ecs::CNode>(root_node_entt);
-            r.emplace<ecs::CNode>(root_node_entt);
 
             // root_node_entt的深度默认为0，之后的depth会在UEmplaceNodeYToX中计算
         }
@@ -997,8 +996,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 child_entities.emplace_back(child_entity);
 
                 // add CNode to child
-                auto& c_child_node      = r.emplace<ecs::CNode>(child_entity);
-                auto& c_child_transform = r.emplace<ecs::CNode>(child_entity);
+                auto& c_child_node = r.emplace<ecs::CNode>(child_entity);
 
                 out_logical_scene.UEmplaceNodeToParent(x, c_node, child_entity, c_child_node);
             }
