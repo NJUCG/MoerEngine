@@ -19,6 +19,7 @@ public:
     virtual void SetFocusMode(WindowHandle*, bool _focused)                          = 0;
     virtual void GetWindowSize(WindowHandle*, int32_t* width, int32_t* height) const = 0;
     virtual void SetTitle(WindowHandle*, const char* _new_title)                     = 0;
+    virtual void RequestClose(WindowHandle*)                                          = 0;
     virtual bool ShouldClose(WindowHandle*) const                                    = 0;
 
     virtual Render::SwapchainSurfaceInfo CreateSwapchainSurfaceInfo(const WindowHandle&) const = 0;

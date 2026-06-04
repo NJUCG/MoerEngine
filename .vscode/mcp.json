@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "moerengine": {
+      "type": "stdio",
+      "command": "${workspaceFolder}/3rdparty/python312/x64/python.exe",
+      "args": [
+        "${workspaceFolder}/tools/mcp/launcher.py"
+      ],
+      "cwd": "${workspaceFolder}"
+    }
+  }
+}

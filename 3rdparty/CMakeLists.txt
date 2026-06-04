@@ -1,10 +1,10 @@
 
 set(third_party_folder "3rdparty")
 
-include(${moer_root_dir}/cmake/functions.cmake)
-if (WIN32)
-    include(${CMAKE_CURRENT_SOURCE_DIR}/dxc.cmake)
-endif()
+include(${moer_root_dir}/tools/cmake/functions.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/dxc.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/pybind11.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/python312.cmake)
 
 # spdlog
 set(SPDLOG_USE_STD_FORMAT ON)
@@ -135,6 +135,5 @@ if (WITH_NRD AND WIN32)
     include(NRD.cmake)
 endif()
 
-if (WIN32)
-    include(SPIRV-Cross.cmake)
-endif()
+include(SPIRV-Cross.cmake)
+include(libhv.cmake)

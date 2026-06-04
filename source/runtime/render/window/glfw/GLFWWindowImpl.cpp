@@ -234,7 +234,7 @@ void GLFWWindowImpl::TickCursorState() {
                          WindowInput::Get().mouse_button_state[MouseButtons::Right] ||
                          WindowInput::Get().mouse_button_state[MouseButtons::Middle];
 
-    // is_active <=> cursor is hovering on the SceneColor window
+    // is_active <=> SceneColor has captured camera input
     if (WindowInput::Get().is_active && b_should_hide) {
         SetCursorHide();
     } else {
@@ -274,6 +274,10 @@ void GLFWWindowImpl::GetWindowSize(WindowHandle* _window, int32_t* width, int32_
 
 void GLFWWindowImpl::SetTitle(WindowHandle* _window, const char* _new_title) {
     glfwSetWindowTitle((GLFWwindow*)_window->window, _new_title);
+}
+
+void GLFWWindowImpl::RequestClose(WindowHandle* _window) {
+    glfwSetWindowShouldClose((GLFWwindow*)_window->window, GLFW_TRUE);
 }
 
 bool GLFWWindowImpl::ShouldClose(WindowHandle* _window) const {

@@ -10,10 +10,14 @@
 
 ## 目录
 
-- [目录](#目录)
 - [1. 如何构建](#1-如何构建)
 - [2. 如何使用](#2-如何使用)
+  - [2.1 特性](#21-特性)
+  - [2.2 如何渲染场景](#22-如何渲染场景)
+  - [2.3 如何移动摄像机](#23-如何移动摄像机)
 - [3. 效果图](#3-效果图)
+  - [3.1 光追渲染器](#31-光追渲染器)
+  - [3.2 光栅化渲染器](#32-光栅化渲染器)
 - [4. 如何贡献](#4-如何贡献)
 - [开源协议](#开源协议)
 
@@ -32,7 +36,10 @@
     cp template.MoerEngine.toml MoerEngine.toml
     
     # 构建
-    cmake -B build
+    # Clang + ninja
+    cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+    # # MSVC
+    # cmake -B build
     cmake --build build -j16 # change 16 to your cpu core count
     
     # 运行
@@ -41,14 +48,38 @@
 
 ## 2. 如何使用
 
-### 2.1 如何渲染场景
+### 2.1 特性
+
+* 光栅化渲染器
+  * 光照：延迟渲染、PBR着色、级联阴影
+  * 后处理：屏幕空间AO、光线追踪AO、屏幕空间反射、泛光、自动曝光
+  * 抗锯齿与降噪：FXAA、SMAA、TAA、双边滤波
+  * GPU Driven：顶点拉取 Vertex Pulling、视锥剔除
+  * 其他：CUDA、TensorRT (ONNX) 支持
+* 光追渲染器
+  * ReSTIR DI
+  * 降噪：NVIDIA Real-time Denoiser
+  * 后处理：TAA、MSAA、自动曝光、Color LUT
+* RHI
+  * 后端：Vulkan、D3D12(部分支持)
+  * 指令：聚合命令驱动、多队列提交
+  * 资源状态跟踪与Barrier管理
+  * Bindless
+* 场景与编辑
+  * ECS（基于EnTT）
+  * 分层：逻辑场景、渲染场景
+  * 节点树、模型、光源的增删改查
+  * 缓存、可持久化
+  * 多种编辑方式：GUI、Python脚本、Http接口、MCP
+
+### 2.2 如何渲染场景
 
 - 方法一：GUI
-  - 打开MoerEditor后，点击 `OpenScene` 打开文件选择器，并根据右下角支持格式来选择不同格式的场景
+  - 打开MoerEditor后，点击左上角 `File -> OpenScene` 打开文件选择器，并根据右下角支持格式来选择不同格式的场景
 - 方法二：配置文件
   - `MoerEditor.exe` 会使用同目录下的 `MoerEngine.toml` 作为配置文件。这个配置文件包含了启动时的默认场景
 
-### 2.2 如何移动摄像机
+### 2.3 如何移动摄像机
 
 - MoerEngine的摄像机控制逻辑与UnrealEngine类似
   - 长按右键时，通过 `W/A/S/D/Q/E` 来移动摄像机
@@ -60,7 +91,7 @@
 
 ## 3. 效果图
 
-### RayTracing Renderer
+### 3.1 光追渲染器
 
 ![image-20251229200054104](README/image-20251229200054104.png)
 
@@ -76,9 +107,9 @@
 
 ![image-20251229195717156](README/image-20251229195717156.png)
 
-### Raster Renderer
+### 3.2 光栅化渲染器
 
-![image-20251229140647045](README/image-20251229140647045.png)
+![image-20260521113633858](README/image-20260521113633858.png)
 
 ![image-20251229125126217](README/image-20251229125126217.png)
 
@@ -113,6 +144,7 @@ MoerEngine源代码采用Apache-2.0 License授权。
 * [glfw](https://github.com/glfw/glfw): Zlib License
 * [imgui](https://github.com/ocornut/imgui): MIT License
 * [JSON for Modern C++](https://github.com/nlohmann/json): MIT License
+* [libhv](https://github.com/ithewei/libhv): BSD-3-Clause License
 * [meshoptimizer](https://github.com/zeux/meshoptimizer): MIT License
 * [metis](https://github.com/KarypisLab/METIS/): Apache-2.0 License
 * [minhook](https://github.com/TsudaKageyu/minhook): BSD 2-Clause License
@@ -120,6 +152,8 @@ MoerEngine源代码采用Apache-2.0 License授权。
 * [nativefiledialog-extended](https://github.com/btzy/nativefiledialog-extended): Zlib License
 * [NRI](https://github.com/NVIDIA-RTX/NRI): MIT License
 * [perfetto](https://github.com/google/perfetto): Apache-2.0 license
+* [pybind11](https://github.com/pybind/pybind11): BSD 3-Clause License
+* [Python3.12](https://www.python.org/): Python Software Foundation License Version 2（仓库内附带的 Windows 二进制与相关附加声明见 `3rdparty/python312/x64/LICENSE.txt`）
 * [smaa](https://github.com/iryoku/smaa): MIT License
 * [spdlog](https://github.com/gabime/spdlog): MIT License
 * [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross): Apache-2.0 License

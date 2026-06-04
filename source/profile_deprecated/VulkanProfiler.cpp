@@ -39,7 +39,11 @@ uint64_t VkTmpAllocate_Hook_1(
     // if (!g_in_hook)
     // {
     //     g_in_hook = true;
-    if (IsProfileAcceptingEvents()) {
+    auto* ring = g_rings[(int)MemorySource::VulkanTmp];
+    if(ring)
+    {
+        static thread_local moodycamel::ProducerToken token(*g_rings[(size_t)MemorySource::VulkanTmp]);
+
         void* p = reinterpret_cast<void*>(handle);// not a address pointer
         EventRecord rec;
         rec.ts_us = now_us();
@@ -57,7 +61,7 @@ uint64_t VkTmpAllocate_Hook_1(
 
         capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 1);
 
-        EnqueueProfileEvent(MemorySource::VulkanTmp, rec);
+        ring->enqueue(token, rec);
     }
         
 
@@ -77,7 +81,11 @@ uint64_t VkTmpAllocate_Hook_2(
     // if (!g_in_hook)
     // {
     //     g_in_hook = true;
-    if (IsProfileAcceptingEvents()) {
+    auto* ring = g_rings[(int)MemorySource::VulkanTmp];
+    if(ring)
+    {
+        static thread_local moodycamel::ProducerToken token(*g_rings[(size_t)MemorySource::VulkanTmp]);
+
         void* p = reinterpret_cast<void*>(handle);// not a address pointer
         EventRecord rec;
         rec.ts_us = now_us();
@@ -92,7 +100,7 @@ uint64_t VkTmpAllocate_Hook_2(
         
         capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 1);
 
-        EnqueueProfileEvent(MemorySource::VulkanTmp, rec);
+        ring->enqueue(token, rec);
     }
     //     g_in_hook = false;
     // }
@@ -108,7 +116,11 @@ void VkTmpDeAllocate_Hook(
     // if (!g_in_hook)
     // {
     //     g_in_hook = true;
-    if (IsProfileAcceptingEvents()) {
+    auto* ring = g_rings[(int)MemorySource::VulkanTmp];
+    if(ring)
+    {
+        static thread_local moodycamel::ProducerToken token(*g_rings[(size_t)MemorySource::VulkanTmp]);
+
         void* p = reinterpret_cast<void*>(_handle);
 
         EventRecord rec;
@@ -120,7 +132,7 @@ void VkTmpDeAllocate_Hook(
         rec.frame_count = 0;
         rec.sequence = g_global_sequence.fetch_add(1, std::memory_order_relaxed);
 
-        EnqueueProfileEvent(MemorySource::VulkanTmp, rec);
+        ring->enqueue(token, rec);
     }  
     //     g_in_hook = false;
     // }
@@ -154,8 +166,11 @@ VkResult VKAPI_PTR Detour_vkAllocateMemory(
         pAllocator,
         pMemory);
 
-    if (result == VK_SUCCESS && IsProfileAcceptingEvents())// && !g_in_hook)
+    auto* ring = g_rings[(int)MemorySource::Vulkan];
+    if (result == VK_SUCCESS && ring)// && !g_in_hook)
     {
+        static thread_local moodycamel::ProducerToken token(*g_rings[(size_t)MemorySource::Vulkan]);
+
         //g_in_hook = true;
 
         uint64_t size = pAllocateInfo->allocationSize;
@@ -176,7 +191,7 @@ VkResult VKAPI_PTR Detour_vkAllocateMemory(
             rec.frame_count,
             1);
 
-        EnqueueProfileEvent(MemorySource::Vulkan, rec);
+        ring->enqueue(token, rec); 
 
         //g_in_hook = false;
     }
@@ -192,7 +207,11 @@ void VKAPI_PTR Detour_vkFreeMemory(
     // if (!g_in_hook)
     // {
     //     g_in_hook = true;
-    if (IsProfileAcceptingEvents()) {
+    auto* ring = g_rings[(int)MemorySource::Vulkan];
+    if(ring)
+    {
+        static thread_local moodycamel::ProducerToken token(*g_rings[(size_t)MemorySource::Vulkan]);
+
         void* p = reinterpret_cast<void*>(memory);
         uint64_t size = 0;
 
@@ -211,7 +230,7 @@ void VKAPI_PTR Detour_vkFreeMemory(
             rec.frame_count,
             1);
 
-        EnqueueProfileEvent(MemorySource::Vulkan, rec);
+        ring->enqueue(token, rec);
     }
         //g_in_hook = false;
     //}

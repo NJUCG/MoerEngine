@@ -6,3 +6,6 @@
 
 # sponza以submodule的形式引入，作为默认场景
 !/sponza/
+
+# mizuki用于测试用例，是一个占用200KB的小模型
+!/mizuki/

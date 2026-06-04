@@ -65,19 +65,19 @@ PsOutput main(VsOutput input) : SV_TARGET {
     ArrayBuffer material_buf = ArrayBuffer(param.material_buf_hdl);
     Moer::GMaterial mat = material_buf.Load<Moer::GMaterial>(input.material_id);
 
-    float3 base_color = GetTextureData<float3>(
+    float3 base_color = SampleTextureAndApplyFactor(
         mat.albedo_map_hdl,
         input.texcoord0,
         mat.albedo_factor.xyz,
         MISSING_TEXTURE_COLOR
     );
-    float2 metallic_roughness = GetTextureData<float2>(
+    float2 metallic_roughness = SampleTextureAndApplyFactor(
         mat.metallic_roughness_map_hdl,
         input.texcoord0,
         float2(mat.metallic_factor, mat.roughness_factor),
         float2(mat.metallic_factor, mat.roughness_factor)
     );
-    float material_ao = GetTextureData<float>(mat.ao_map_hdl, input.texcoord0, 1.0, 1.0);
+    float material_ao = SampleTextureAndApplyFactor(mat.ao_map_hdl, input.texcoord0, 1.0, 1.0);
     float3 shading_normal = GetNormalFromNormalMap(
         mat.normal_map_hdl,
         input.texcoord0,

@@ -74,7 +74,7 @@ struct GPrimitive {
 };
 
 /**
- * GInstance 和 CNode&CTransform 是一一对应的
+ * GInstance 和 CNode 是一一对应的
  * 
  * primitive_id: 反向映射到 Primitive/DrawIndex
  * - 因为目前HLSL标准不存在SV_DrawID这种用于定位DrawCall Index的变量

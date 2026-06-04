@@ -19,6 +19,7 @@ public:
     virtual void  SetFocusMode(WindowHandle*, bool _focused) override;
     virtual void  GetWindowSize(WindowHandle*, int32_t* width, int32_t* height) const override;
     virtual void  SetTitle(WindowHandle*, const char* _new_title) override;
+    virtual void  RequestClose(WindowHandle*) override;
     virtual bool  ShouldClose(WindowHandle*) const override;
     virtual Render::SwapchainSurfaceInfo CreateSwapchainSurfaceInfo(const WindowHandle&) const override;
     virtual void* GetInteropHandle(const WindowHandle*, EWindowInteropHandleType type) const override;

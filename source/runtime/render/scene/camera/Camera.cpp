@@ -310,8 +310,6 @@ void Camera::Initialize(
     float            near_clip,
     float            far_clip
 ) {
-    fov_y = k_fov_default;
-
     SetWorldTransform(to_world_transform);
     SetProjectionFactor(fov_y, aspect_ratio, near_clip, far_clip);
     ResetJitterMatrix();
@@ -327,8 +325,6 @@ void Camera::Initialize(
     float    near_clip,
     float    far_clip
 ) {
-    fov_y = k_fov_default;
-
     m_position             = position;
     m_yaw                  = yaw;
     m_pitch                = pitch;
@@ -442,27 +438,28 @@ void Camera::UpdatePlanesAndFrustum() {
      * - Drag `both mouse buttons` or `middle button` to move the camera
      */
 void Camera::Tick(const SharedPtr<EditorConfig> config) {
-    // float aspect_ratio, float config_camera_speed, float config_camera_fov
-
-    if (config->aspect_ratio <= EPS) {
-        this->SetAspectRatio(WindowInput::Get().aspect_ratio);
+    const uint2 scene_color_resolution = WindowInput::Get().m_scene_color_resolution;
+    if (scene_color_resolution.x > 0 && scene_color_resolution.y > 0) {
+        this->SetAspectRatio(static_cast<float>(scene_color_resolution.x) / scene_color_resolution.y);
     } else {
-        this->SetAspectRatio(config->aspect_ratio);
+        this->SetAspectRatio(WindowInput::Get().aspect_ratio);
     }
 
-    const float near_clip_log10 = log10f(this->GetNearClip());
-    const float far_clip_log10  = log10f(this->GetFarClip());
-    if (Compare(config->camera_near_clip_log10, near_clip_log10) != 0) {
-        this->SetNearClip(powf(10.f, config->camera_near_clip_log10));
-    }
-    if (Compare(config->camera_far_clip_log10, far_clip_log10) != 0) {
-        this->SetFarClip(powf(10.f, config->camera_far_clip_log10));
+    if (config->camera_projection_override_enabled) {
+        const float near_clip_log10 = log10f(this->GetNearClip());
+        const float far_clip_log10  = log10f(this->GetFarClip());
+        if (Compare(config->camera_near_clip_log10, near_clip_log10) != 0) {
+            this->SetNearClip(powf(10.f, config->camera_near_clip_log10));
+        }
+        if (Compare(config->camera_far_clip_log10, far_clip_log10) != 0) {
+            this->SetFarClip(powf(10.f, config->camera_far_clip_log10));
+        }
     }
 
     if (!WindowInput::Get().is_cursor_hiding) {
 
-        // fov & aspect_ratio
-        if (config->camera_fovy >= k_fov_min && config->camera_fovy <= k_fov_max) {
+        if (config->camera_projection_override_enabled && config->camera_fovy >= k_fov_min &&
+            config->camera_fovy <= k_fov_max) {
             this->SetFov(config->camera_fovy);
         } else if (!IsZero(WindowInput::Get().scroll_offset)) {
             float coef;

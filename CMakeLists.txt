@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.26.0)
 
 # 加载用户配置
-include("${CMAKE_SOURCE_DIR}/cmake/load_config.cmake")
+include("${CMAKE_SOURCE_DIR}/tools/cmake/load_config.cmake")
 
 # 项目相关
 if (WITH_CUDA)
@@ -74,7 +74,7 @@ endif()
 
 # 子目录：3rdparty
 
-include(${CMAKE_SOURCE_DIR}/cmake/functions.cmake)
+include(${CMAKE_SOURCE_DIR}/tools/cmake/functions.cmake)
 add_subdirectory_silent("3rdparty")
 
 # 子目录：source

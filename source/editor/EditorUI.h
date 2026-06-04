@@ -1,26 +1,56 @@
 #pragma once
 
-#include "Core.h"
 #include "misc/Traits.h"
+#include "remote/RemoteModuleController.h"
 #include "renderer/EditorConfig.h"
 #include "renderer/common/UIRenderer.h"
-#include "renderer/common/ui/synapse/Synapse.h"
 #include "rhi/RHIResource.h"
 
-#if WITH_PROFILE
-#include "runtime_profiler/RuntimeProfiler.h"
-#endif
+#include "inspector_ui/InspectorUI.h"
+#include "raster_ui/RasterUI.h"
+#include "raytracing_ui/RaytracingUI.h"
+#include "scene_editing_ui/SceneEditingUI.h"
+#include "subui/RemoteExamplesUI.h"
+
+#include <entt/entity/entity.hpp>
+#include <string>
 
 namespace Moer {
 
+class Scene;
+
+/**
+ * EditorUI 是编辑器主界面的窗口协调器。
+ *
+ * 结构:
+ * - Scene Color / Hierarchy / Inspector / Config / SceneEditing 五类顶层窗口
+ * - RasterUI / RaytracingUI / InspectorUI / SceneEditingUI 四个子模块
+ * - 少量 editor 状态: 选中节点、scene color 区域、renderer reload 状态
+ *
+ * 改这里:
+ * - 改主窗口布局和 docking: EditorUI.cpp
+ * - 改 Inspector / SceneEditing 细节: inspector_ui 目录 + scene_editing_ui 目录
+ * - 改 renderer 配置面板: raster_ui 目录 + raytracing_ui 目录 + Editor.cpp 回调
+ *
+ * 用法:
+ * - 每帧先 TickUI(scene) 组装 ImGui
+ * - 再 RenderGUI() 输出到 UI framebuffer
+ * - 独立平台窗口由 PresentWindows() 收尾
+ *
+ * 边界约束:
+ * - 这里只负责窗口编排、菜单和 editor 级状态，不直接改 runtime 内部实现层
+ * - Scene 相关 UI 应优先通过 Scene 正式 API 或 SceneEditing 完成，不直接访问 registry / LogicalScene
+ */
 class EditorUI {
 
 public:
-    using RendererConfigDrawFunc = std::function<void(Synapse::Context&)>;
-
-    EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfig> editor_config);
+    EditorUI(
+        UniquePtr<Render::UIRenderer>         renderer,
+        SharedPtr<EditorConfig>               editor_config,
+        const remote::RemoteModuleController& remote_controller
+    );
     ~EditorUI() = default;
-    void TickUI();
+    void TickUI(Scene& scene);
     void RenderGUI(Render::CommandList& cmd_list, const Render::TextureView& final_output);
     void PresentWindows();
 
@@ -40,51 +70,67 @@ public:
         return m_scene_color_resolution.x / m_scene_color_resolution.y;
     }
 
-    void PublishSceneRenderOutput(Render::TextureView resource);
-    void RegisterRendererConfigSection(
-        std::string renderer_name,
-        std::string section_name,
-        RendererConfigDrawFunc&& func
-    );
-    void UnregisterRendererConfigSection(std::string renderer_name, std::string section_name);
-    void RegisterOverlayFunc(std::string _name, std::function<void()>&& _func);
-    void UnregisterOverlayFunc(std::string _name);
-    void BindConsoleWindowState(std::function<bool()> getter, std::function<void(bool)> setter);
+    void SetShowRenderConfigSubUI(bool show) {
+        m_b_show_render_config_sub_ui = show;
+    }
+
+    bool                IsSeperateWindow() const;
+    Render::TextureView GetWindowFrameBuffer();
+
+    void RegisterUIFunc(std::string _name, std::function<void()>&& _func);
+    void UnregisterUIFunc(std::string _name);
+
+public: // Sub UI
+    RasterUI       m_raster_ui;
+    RaytracingUI   m_raytracing_ui;
+    SceneEditingUI m_scene_editing_ui;
+    RemoteExamplesUI m_remote_examples_ui;
 
 private:
     void ResetState(); // reset m_b_need_reload, etc..
+    void ShowFileMenu(Scene& scene, bool is_scene_loading);
     void ShowSceneColor();
-    void ShowConfig();
-    void ShowOverlay();
-    void ApplyInputSnapshot();
-    void ApplyPlayInput();
+    void ShowConfig(Scene& scene);
+    void ShowSceneEditing(Scene& scene);
+    void ShowHierarchy(Scene& scene);
+    void ShowInspector(Scene& scene);
+#if WITH_PROFILE
+    void ShowMemoryProfiler(bool* p_open);
+    void DrawPassAndChildren(const char* parent_name, int depth);
+#endif
 
 private:
-    bool   m_b_show_scene_color = true;
-    bool   m_b_show_config      = true;
+    bool   m_b_show_scene_color           = true;
+    bool   m_b_show_hierarchy             = true;
+    bool   m_b_show_inspector             = true;
+    bool   m_b_show_config                = true;
+    bool   m_b_show_scene_editing         = true;
+    bool   m_b_scene_color_mouse_captured = false;
     float2 m_scene_color_resolution; // TODO: why float2? not uint2?
     float2 m_scene_color_pos;
     bool   m_b_show = true;
-    bool   m_scene_color_hovered = false;
-    bool   m_scene_color_focused = false;
-    bool   m_scene_color_input_active = false;
-    Render::UIRenderer::RenderOutputSlotHandle m_scene_render_output_slot;
 
-    bool m_b_need_reload = false;
+    bool        m_b_need_reload               = false;
+    bool        m_b_show_render_config_sub_ui = true; // 当前 renderer 的专属配置面板是否可见。
+    std::string m_last_file_action_status;
+
+    // Hierarchy selection state
+    entt::entity m_selected_node = entt::null;
 
 #if WITH_PROFILE
-    RuntimeProfiler m_runtime_profiler;
+    bool   m_b_show_memory_profiler = false;
+    float2 m_memory_profiler_pos{};
+    float2 m_memory_profiler_resolution{300, 200};
 #endif
 
-    SharedPtr<EditorConfig> m_config;
+    SharedPtr<EditorConfig>        m_config;
+    remote::RemoteModuleController m_remote_controller;
 
     UniquePtr<Render::UIRenderer> m_ui_renderer;
-    UniquePtr<Synapse::Context>   m_synapse_context;
+    InspectorUI                   m_inspector_ui;
 
-    UnorderedMap<std::string, UnorderedMap<std::string, RendererConfigDrawFunc>> m_renderer_config_sections;
-    UnorderedMap<std::string, std::function<void()>> m_overlay_func_map;
-    std::function<bool()>                            m_get_console_window_visible;
-    std::function<void(bool)>                        m_set_console_window_visible;
+    // Custom Func
+    UnorderedMap<std::string, std::function<void()>> m_show_func_map;
 };
 
 } // namespace Moer

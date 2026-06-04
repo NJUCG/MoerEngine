@@ -36,7 +36,10 @@ void* Detour_Malloc(size_t size) {
     // g_in_hook = true;
 
     void* p = orig_Malloc(size);
-    if (p) {
+    auto* ring = g_rings[(int)MemorySource::Editor];
+    if (ring && p) { 
+        static thread_local moodycamel::ProducerToken token(*g_rings[(size_t)MemorySource::Editor]);
+
         EventRecord rec;
         rec.ts_us = now_us();
         rec.source = MemorySource::Editor;
@@ -47,7 +50,7 @@ void* Detour_Malloc(size_t size) {
         
         capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 2);
 
-        EnqueueProfileEvent(MemorySource::Editor, rec);
+        ring->enqueue(token, rec);
     }
 
     //g_in_hook = false;
@@ -56,7 +59,10 @@ void* Detour_Malloc(size_t size) {
 
 void* Detour_Calloc(size_t count, size_t size) {
     void* p = orig_Calloc(count, size);
-    if (p) {
+    auto* ring = g_rings[(int)MemorySource::Editor];
+    if (ring && p) {
+        static thread_local moodycamel::ProducerToken token(*g_rings[(size_t)MemorySource::Editor]);
+
         EventRecord rec;
         rec.ts_us = now_us();
         rec.source = MemorySource::Editor;
@@ -67,7 +73,7 @@ void* Detour_Calloc(size_t count, size_t size) {
 
         capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 2);
 
-        EnqueueProfileEvent(MemorySource::Editor, rec);
+        ring->enqueue(token, rec);
     }
     return p;
 }
@@ -78,14 +84,18 @@ void* Detour_ReAlloc(void* p, size_t newsize) {
         return orig_ReAlloc(p, newsize);
     }
     if (p) {
-        EventRecord rec;
-        rec.ts_us = now_us();
-        rec.source = MemorySource::Editor;
-        rec.action = MemoryAction::Free;
-        rec.ptr = p;
-        rec.sequence = g_global_sequence.fetch_add(1, std::memory_order_relaxed);
+        auto* ring = g_rings[(int)MemorySource::Editor];
+        if (ring) {
+            static thread_local moodycamel::ProducerToken token(*g_rings[(size_t)MemorySource::Editor]);
 
-        EnqueueProfileEvent(MemorySource::Editor, rec);
+            EventRecord rec;
+            rec.ts_us = now_us();
+            rec.action = MemoryAction::Free;
+            rec.ptr = p;
+            rec.sequence = g_global_sequence.fetch_add(1, std::memory_order_relaxed);
+
+            ring->enqueue(token, rec);
+        }
     }
 
     // 2. 调用原 realloc
@@ -93,17 +103,21 @@ void* Detour_ReAlloc(void* p, size_t newsize) {
 
     // 3. 记录新分配的地址
     if (new_p && newsize > 0) {
-        EventRecord rec;
-        rec.ts_us = now_us();
-        rec.source = MemorySource::Editor;
-        rec.action = MemoryAction::Alloc;
-        rec.size = newsize;
-        rec.ptr = new_p;
-        rec.sequence = g_global_sequence.fetch_add(1, std::memory_order_relaxed);
+        auto* ring = g_rings[(int)MemorySource::Editor];
+        if (ring) {
+            static thread_local moodycamel::ProducerToken token(*g_rings[(size_t)MemorySource::Editor]);
 
-        capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 2);
+            EventRecord rec;
+            rec.ts_us = now_us();
+            rec.action = MemoryAction::Alloc;
+            rec.size = newsize;
+            rec.ptr = new_p;
+            rec.sequence = g_global_sequence.fetch_add(1, std::memory_order_relaxed);
 
-        EnqueueProfileEvent(MemorySource::Editor, rec);
+            capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 2);
+
+            ring->enqueue(token, rec);
+        }
     }
     return new_p;
 }
@@ -121,17 +135,22 @@ void Detour_Free1(void* p)
         orig_Free1(p);
         return;
     }
-    EventRecord rec;
-    rec.ts_us = now_us();
-    rec.source = MemorySource::Editor;
-    rec.action = MemoryAction::Free;
-    rec.size = 0;
-    rec.ptr = p;
-    rec.sequence = g_global_sequence.fetch_add(1, std::memory_order_relaxed);
-    
-    capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 2);
+    auto* ring = g_rings[(int)MemorySource::Editor];
+    if (ring) { 
+        static thread_local moodycamel::ProducerToken token(*g_rings[(size_t)MemorySource::Editor]);
 
-    EnqueueProfileEvent(MemorySource::Editor, rec);
+        EventRecord rec;
+        rec.ts_us = now_us();
+        rec.source = MemorySource::Editor;
+        rec.action = MemoryAction::Free;
+        rec.size = 0;
+        rec.ptr = p;
+        rec.sequence = g_global_sequence.fetch_add(1, std::memory_order_relaxed);
+        
+        capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 2);
+
+        ring->enqueue(token, rec);
+    }
 
     orig_Free1(p);
 
@@ -150,17 +169,22 @@ void Detour_Free2(void* p, size_t size)
         orig_Free2(p, size);
         return;
     }
-    EventRecord rec;
-    rec.ts_us = now_us();
-    rec.source = MemorySource::Editor;
-    rec.action = MemoryAction::Free;
-    rec.size = size;
-    rec.ptr = p;
-    rec.sequence = g_global_sequence.fetch_add(1, std::memory_order_relaxed);
-    
-    capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 2);
+    auto* ring = g_rings[(int)MemorySource::Editor];
+    if (ring) { 
+        static thread_local moodycamel::ProducerToken token(*g_rings[(size_t)MemorySource::Editor]);
 
-    EnqueueProfileEvent(MemorySource::Editor, rec);
+        EventRecord rec;
+        rec.ts_us = now_us();
+        rec.source = MemorySource::Editor;
+        rec.action = MemoryAction::Free;
+        rec.size = size;
+        rec.ptr = p;
+        rec.sequence = g_global_sequence.fetch_add(1, std::memory_order_relaxed);
+        
+        capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 2);
+
+        ring->enqueue(token, rec);
+    }
 
     orig_Free2(p, size);
 
@@ -174,7 +198,10 @@ void* Detour_MallocAligned(size_t size, size_t alignment) {
     // g_in_hook = true;
 
     void* p = orig_MallocAligned(size, alignment);
-    if (p) {
+    auto* ring = g_rings[(int)MemorySource::Editor];
+    if (ring && p) { 
+        static thread_local moodycamel::ProducerToken token(*g_rings[(size_t)MemorySource::Editor]);
+
         EventRecord rec;
         rec.ts_us = now_us();
         rec.source = MemorySource::Editor;
@@ -185,7 +212,7 @@ void* Detour_MallocAligned(size_t size, size_t alignment) {
         
         capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 2);
 
-        EnqueueProfileEvent(MemorySource::Editor, rec);
+        ring->enqueue(token, rec);
     }
 
     //g_in_hook = false;
@@ -194,7 +221,10 @@ void* Detour_MallocAligned(size_t size, size_t alignment) {
 void* Detour_MallocN(size_t count, size_t size) {
     void* p = orig_MallocN(count, size);
 
-    if (p) {
+    auto* ring = g_rings[(int)MemorySource::Editor];
+    if (ring && p) { 
+        static thread_local moodycamel::ProducerToken token(*g_rings[(size_t)MemorySource::Editor]);
+
         EventRecord rec;
         rec.ts_us = now_us();
         rec.source = MemorySource::Editor;
@@ -206,7 +236,7 @@ void* Detour_MallocN(size_t count, size_t size) {
         
         capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 2);
 
-        EnqueueProfileEvent(MemorySource::Editor, rec);
+        ring->enqueue(token, rec); 
     }
 
     return p;
@@ -215,7 +245,10 @@ void* Detour_MallocN(size_t count, size_t size) {
 void* Detour_CallocAligned(size_t count, size_t size, size_t alignment)
 {
     void* p = orig_CallocAligned(count, size, alignment);
-    if (p) {
+    auto* ring = g_rings[(int)MemorySource::Editor];
+    if (ring && p) {
+        static thread_local moodycamel::ProducerToken token(*g_rings[(size_t)MemorySource::Editor]);
+
         EventRecord rec;
         rec.ts_us = now_us();
         rec.source = MemorySource::Editor;
@@ -226,7 +259,7 @@ void* Detour_CallocAligned(size_t count, size_t size, size_t alignment)
         
         capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 2);
 
-        EnqueueProfileEvent(MemorySource::Editor, rec);
+        ring->enqueue(token, rec);
     }
     return p;
 }

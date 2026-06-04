@@ -47,7 +47,6 @@ target_include_directories(${target_name}
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/volk>
-	PUBLIC $<BUILD_INTERFACE:${MOER_DXC_INCLUDE_DIR}>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanMemoryAllocator>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/imgui>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/smaa>

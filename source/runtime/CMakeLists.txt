@@ -6,11 +6,15 @@ set(moer_runtime_dir ${moer_source_dir}/runtime)
 
 set(moer_runtime_core_dir ${moer_runtime_dir}/core)
 set(moer_runtime_render_dir ${moer_runtime_dir}/render)
+set(moer_runtime_scripting_dir ${moer_runtime_dir}/scripting)
+set(moer_runtime_remote_dir ${moer_runtime_dir}/remote)
 
 if(NOT TARGET Moer::Core)
     add_subdirectory(core)
 endif()
 add_subdirectory(render)
+add_subdirectory(scripting)
+add_subdirectory(remote)
 
 # CONFIGURE_DEPENDS，指如果文件变化了，则自动重新GLOB
 # 这里不能递归GLOB，因为子文件夹内是其他模块
@@ -29,4 +33,6 @@ target_include_directories(${target_name}
 target_link_libraries(${target_name}
     PUBLIC Moer::Core
     PUBLIC Moer::Render
+    PUBLIC Moer::scripting
+    PUBLIC Moer::remote
 )

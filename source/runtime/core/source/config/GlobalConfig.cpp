@@ -47,6 +47,11 @@ GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_p
     c.engine.scene.material_info_log_lines =
         config.at_path("engine.scene.material_info_log_lines").value_or(-1); // -1 to log all
 
+    c.engine.remote.enable         = config.at_path("engine.remote.enable").value_or(false);
+    c.engine.remote.bind_address   = config.at_path("engine.remote.bind_address").value_or("127.0.0.1");
+    c.engine.remote.http_port      = config.at_path("engine.remote.http_port").value_or(18080);
+    c.engine.remote.websocket_port = config.at_path("engine.remote.websocket_port").value_or(18081);
+
     return c;
 }
 

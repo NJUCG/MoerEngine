@@ -61,6 +61,13 @@ struct CORE_API GlobalConfig {
             int         material_info_log_lines; // -1 to log all
         } scene;
 
+        struct Remote {
+            bool        enable;
+            std::string bind_address;
+            uint        http_port;
+            uint        websocket_port;
+        } remote;
+
     } engine;
 
     static GlobalConfig LoadConfigFromTomlFile(const std::string_view& toml_path);

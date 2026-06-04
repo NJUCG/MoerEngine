@@ -60,9 +60,9 @@ typedef enum {
 
 struct RENDER_API WindowInput {
     // inject
-    bool  is_active = true;
-    uint2 m_scene_color_resolution;
-    uint2 m_scene_color_pos;
+    bool  is_active = true; // camera input is captured by SceneColor or active through the F toggle
+    uint2 m_scene_color_resolution = uint2(0u, 0u);
+    uint2 m_scene_color_pos        = uint2(0u, 0u);
 
     // cursor
     float cursor_last_x  = 0.0f;
@@ -104,7 +104,8 @@ struct RENDER_API WindowInput {
 
     StaticArray<bool, MouseButtons::MouseButtonCount> mouse_button_state      = {false};
     StaticArray<bool, KeyButtons::KeyButtonCount>     key_button_state        = {false}; // Press or Release
-    StaticArray<bool, KeyButtons::KeyButtonCount>     key_button_switch_state = {false
+    StaticArray<bool, KeyButtons::KeyButtonCount>     key_button_switch_state = {
+        false
     }; // Press once to switch state
 
     StaticArray<bool, MouseButtons::MouseButtonCount> native_mouse_button_down = {false};

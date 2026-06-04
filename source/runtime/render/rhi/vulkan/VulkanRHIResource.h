@@ -509,6 +509,10 @@ public:
         return m_descriptor_sets_layout;
     }
 
+    bool UsesStencilAttachment() const {
+        return b_uses_stencil_attachment;
+    }
+
     void InitDescriptorSetLayouts(
         Moer::Array<Moer::Render::TDescriptorSetLayoutBindingArray>& _descriptor_bindings
     );
@@ -542,6 +546,7 @@ protected:
     // descriptor sets
     Moer::Render::VulkanDescriptorSetsLayout* m_descriptor_sets_layout = nullptr;
     EType                                     m_type;
+    bool                                      b_uses_stencil_attachment = false;
 };
 
 #pragma endregion

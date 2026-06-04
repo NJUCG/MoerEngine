@@ -3,45 +3,22 @@
 ## 目录
 
 - [1. 依赖](#1-依赖)
-  - [1.1 安装依赖具体步骤](#11-安装依赖具体步骤)
 - [2. MoerEngine](#2-moerengine)
 - [3. CUDA等AI组件支持](#3-cuda等ai组件支持)
   - [3.1 注意事项](#31-注意事项)
 - [4. NRD降噪器支持](#4-nrd降噪器支持)
+- [5. 其他](#5-其他)
+  - [5.1 安装依赖具体步骤](#51-安装依赖具体步骤)
 
 ## 1. 依赖
 
-* 操作系统
-  * Windows 10 or 11
-* 编译器（二选一）
-  * MSVC 版本19.38-19.44
-  * Clang ([download link](https://github.com/llvm/llvm-project/releases)) + ninja ([download link](https://github.com/ninja-build/ninja))
-    * 推荐使用Clang。原因是Clang编译速度比较快，并且对应LSP的IntelliSense比较强，支持Cursor等IDE
+* 操作系统：Windows 10 or 11
+* 编译器：Clang ([download link](https://github.com/llvm/llvm-project/releases)) + ninja ([download link](https://github.com/ninja-build/ninja))
+  * 备选：MSVC
 * Vulkan SDK 1.3 ([download link](https://vulkan.lunarg.com/sdk/home))
-  * 推荐使用Vulkan SDK 1.3，Vulkan SDK 1.4版本会导致无法使用DebugPrintfEXT（待解决）
 * CMake >= 3.26.0 且 < 4.0.0 ([download link](https://github.com/Kitware/CMake/releases/tag/v3.31.9))
 * Git ([download link](https://git-scm.com/downloads))
-
-### 1.1 安装依赖具体步骤
-
-* 安装MSVC
-  * 下载 [Visual Studio Installer](https://visualstudio.microsoft.com/zh-hans/downloads/)
-  * 在 VS Installer 中，选择对应版本VS（推荐2022），**并勾选 使用C++的桌面开发**
-    * 如果找不到 Visual Studio 2022，可以在 [此网页](https://visualstudio.microsoft.com/zh-hans/vs/older-downloads/) 中选择2022并进行下载
-  * 安装完毕后，在开始菜单搜索 `x64 Native Tools Command Prompt for VS 2022` 并打开。在此终端中输入 `cl`，如出现类似下图内容，则安装成功
-  * ![image-20260316150018048](BUILD/image-20260316150018048.png)
-* 安装Clang
-  * 进入 [LLVM-Project Github Releases](https://github.com/llvm/llvm-project/releases)
-  * 选择 `LLVM-22.x.x-win64.exe`，下载并根据指引安装
-  * 安装完毕后，添加 `LLVM/bin` 到 `PATH` 环境变量
-  * 在终端中输入 `clang --version`，若出现类似下图内容，则安装成功
-  * ![image-20260316145302647](BUILD/image-20260316145302647.png)
-* 安装Ninja
-  * 进入 [ninja Github Releases](https://github.com/ninja-build/ninja/releases)
-  * 选择 `ninja-win.zip`，下载，并解压到对应目录
-  * 解压后，添加该目录到 `PATH` 环境变量
-  * 在终端输入 `ninja --version`，若出现类似下图内容，则安装成功
-  * ![image-20260316145516938](BUILD/image-20260316145516938.png)
+* 注：MSVC、Clang、Ninja的具体编译方法见文档末尾
 
 ## 2. MoerEngine
 
@@ -63,14 +40,16 @@
   cp template.MoerEngine.toml MoerEngine.toml
   
   # 构建
-  cmake -B build
-  # 如果使用clang+ninja，可替换为：cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+  # Clang + ninja
+  cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+  # # MSVC
+  # cmake -B build
   cmake --build build -j16 # change 16 to your cpu core count
   
   # 运行
   ./target/bin/Debug/MoerEditor.exe
   ```
-
+  
   - 如果安装了 [just](https://github.com/casey/just)，你可以参考根目录下的 `template.justfile` 文件来编写你自己的脚本
   
 - 方法二：Rider
@@ -148,3 +127,26 @@
    ```
 
    * 观察日志，若generate的日志出现了 `WITH_NRD=1`，则成功启用NRD；若日志中为 `WITH_NRD=0`，则没有启用NRD
+
+## 5. 其他
+
+### 5.1 安装依赖具体步骤
+
+* 安装Clang
+  * 进入 [LLVM-Project Github Releases](https://github.com/llvm/llvm-project/releases)
+  * 选择 `LLVM-22.x.x-win64.exe`，下载并根据指引安装
+  * 安装完毕后，添加 `LLVM/bin` 到 `PATH` 环境变量
+  * 在终端中输入 `clang --version`，若出现类似下图内容，则安装成功
+  * ![image-20260316145302647](BUILD/image-20260316145302647.png)
+* 安装Ninja
+  * 进入 [ninja Github Releases](https://github.com/ninja-build/ninja/releases)
+  * 选择 `ninja-win.zip`，下载，并解压到对应目录
+  * 解压后，添加该目录到 `PATH` 环境变量
+  * 在终端输入 `ninja --version`，若出现类似下图内容，则安装成功
+  * ![image-20260316145516938](BUILD/image-20260316145516938.png)
+* 安装MSVC
+  * 下载 [Visual Studio Installer](https://visualstudio.microsoft.com/zh-hans/downloads/)
+  * 在 VS Installer 中，选择对应版本VS（推荐2022），**并勾选 使用C++的桌面开发**
+    * 如果找不到 Visual Studio 2022，可以在 [此网页](https://visualstudio.microsoft.com/zh-hans/vs/older-downloads/) 中选择2022并进行下载
+  * 安装完毕后，在开始菜单搜索 `x64 Native Tools Command Prompt for VS 2022` 并打开。在此终端中输入 `cl`，如出现类似下图内容，则安装成功
+  * ![image-20260316150018048](BUILD/image-20260316150018048.png)

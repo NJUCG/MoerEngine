@@ -1,8 +1,15 @@
 set(moer_test_folder "test")
 
-if (WIN32)
-    add_subdirectory(math)
-endif()
+add_subdirectory(math)
+add_subdirectory(remote)
+add_subdirectory(scripting)
+
+set(test_target TestEngineOnly)
+add_executable(${test_target} "TestEngineOnly.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Runtime
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
 # add_executable(RuntimeTest EngineTest.cpp)
 # target_include_directories(RuntimeTest

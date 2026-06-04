@@ -288,6 +288,25 @@ static bool FormatHasStencil(EPixelFormat format) {
            format == PF_D16_UNORM_S8_UINT || format == PF_S8_UINT;
 }
 
+static bool PipelineUsesStencilAttachment(const PipelineHandle& pipeline) {
+    if (!pipeline.IsValid()) {
+        return false;
+    }
+
+    auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(pipeline.handle);
+    return vk_pso->UsesStencilAttachment();
+}
+
+static bool DrawBatchUsesStencilAttachment(const DrawBatch& draw_batch) {
+    for (const DrawBatchElement& draw_cmd : draw_batch.draw_cmds) {
+        if (PipelineUsesStencilAttachment(draw_cmd.handle)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 VkRenderingAttachmentInfo FromDepthAttachmentInfo(const DepthAttachment& _attachment) {
     VkRenderingAttachmentInfo attachment_info{};
     attachment_info.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -2123,10 +2142,11 @@ public:
             }
         }
         std::optional<VkRenderingAttachmentInfo> depth_stencil_attachment;
-        bool                                     has_stencil = false;
+        bool                                     uses_stencil_attachment = false;
         if (pass_info.depth_attachment.Valid()) {
             depth_stencil_attachment = FromDepthAttachmentInfo(pass_info.depth_attachment);
-            has_stencil              = FormatHasStencil(pass_info.depth_attachment.target->GetFormat());
+            uses_stencil_attachment  = FormatHasStencil(pass_info.depth_attachment.target->GetFormat()) &&
+                                      PipelineUsesStencilAttachment(_cmd.Pipeline());
         }
 
         VkRenderingInfo dynamic_rendering_info{
@@ -2141,7 +2161,7 @@ public:
             .pColorAttachments    = color_attachments.data(),
             .pDepthAttachment =
                 depth_stencil_attachment.has_value() ? &depth_stencil_attachment.value() : nullptr,
-            .pStencilAttachment = (depth_stencil_attachment.has_value() && has_stencil) ?
+            .pStencilAttachment = (depth_stencil_attachment.has_value() && uses_stencil_attachment) ?
                                       &depth_stencil_attachment.value() :
                                       nullptr
         };
@@ -2303,10 +2323,11 @@ public:
             color_attachments[i] = FromColorAttachmentInfo(pass_info.color_attachments[i]);
         }
         std::optional<VkRenderingAttachmentInfo> depth_stencil_attachment;
-        bool                                     has_stencil = false;
+        bool                                     uses_stencil_attachment = false;
         if (pass_info.depth_attachment.Valid()) {
             depth_stencil_attachment = FromDepthAttachmentInfo(pass_info.depth_attachment);
-            has_stencil              = FormatHasStencil(pass_info.depth_attachment.target->GetFormat());
+            uses_stencil_attachment  = FormatHasStencil(pass_info.depth_attachment.target->GetFormat()) &&
+                                      DrawBatchUsesStencilAttachment(_cmd.draw_batch);
         }
 
         VkRenderingInfo dynamic_rendering_info{
@@ -2321,7 +2342,7 @@ public:
             .pColorAttachments    = color_attachments.data(),
             .pDepthAttachment =
                 depth_stencil_attachment.has_value() ? &depth_stencil_attachment.value() : nullptr,
-            .pStencilAttachment = (depth_stencil_attachment.has_value() && has_stencil) ?
+            .pStencilAttachment = (depth_stencil_attachment.has_value() && uses_stencil_attachment) ?
                                       &depth_stencil_attachment.value() :
                                       nullptr
         };

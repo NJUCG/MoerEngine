@@ -1,8 +1,5 @@
 #include "ProfileTypes.h"
 
-#include "../runtime/core/include/profile/ProfileDump.h"
-#include "../runtime/core/include/profile/ProfileDumpTemplates.h"
-
 void FlameProfiler::Begin(const char* name) {
     GetStack().push_back({name, NowUs()});
 }
@@ -17,20 +14,34 @@ void FlameProfiler::End() {
     auto [name, start] = stack.back();
     stack.pop_back();
 
-    const uint64_t thread_id = static_cast<uint64_t>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
-    const uint32_t depth = static_cast<uint32_t>(stack.size());
-    DUMP_STREAM(Moer::ProfileDump::Templates::CpuScopeTemplate)
-        << thread_id
-        << name
-        << static_cast<int64_t>(start)
-        << static_cast<int64_t>(now - start)
-        << depth;
+    FlameEvent e;
+    e.name = name;
+    e.start_us = start;
+    e.duration_us = now - start;
+    e.thread_id = (uint32_t)std::hash<std::thread::id>{}(std::this_thread::get_id());
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_events.push_back(e);
+    //printf("[profiler] push_back m_events:%d\n", m_events.size());
 }
 
 void FlameProfiler::Save(const std::string& path) {
-    Moer::ProfileDump::OverrideOutputFileForCurrentSession(path);
-    Moer::ProfileDump::FlushThreadLocal();
-    Moer::ProfileDump::FlushAll();
+    //std::lock_guard<std::mutex> lock(m_mutex);
+    std::ofstream f(path);
+    f << "{\"traceEvents\":[\n";
+    printf("[profiler] m_events:%zd\n", m_events.size());
+    for (size_t i = 0; i < m_events.size(); i++) {
+        auto& e = m_events[i];
+        f << "{\"name\":\"" << e.name << "\","
+            << "\"ph\":\"X\","
+            << "\"ts\":" << e.start_us << ","
+            << "\"dur\":" << e.duration_us << ","
+            << "\"pid\":0,"
+            << "\"tid\":" << e.thread_id << "}";
+        if (i + 1 < m_events.size()) f << ",";
+        f << "\n";
+    }
+    f << "]}\n";
 }
 
 const char* GetSourceStr(MemorySource s) {

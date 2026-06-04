@@ -3,7 +3,6 @@
 #include "VulkanProfiler.h"
 #include "MemoryProfiler.h"
 #include "MinHook.h"
-#include "taskgraph/ThreadManager.h"
 
 #pragma comment(lib,"psapi.lib")
 #pragma comment(lib, "dbghelp.lib")
@@ -14,7 +13,6 @@ static constexpr size_t LOG_BATCH_FLUSH = 0;
 
 moodycamel::ConcurrentQueue<EventRecord>* g_rings[(int)MemorySource::MAX_SOURCES] = { nullptr };
 std::atomic<uint64_t> g_global_sequence{0};
-static std::atomic<bool> g_profile_accepting_events{false};
 
 std::priority_queue<EventRecord, std::vector<EventRecord>, RecordComparator> g_reorder_buffer;
 uint64_t g_expected_sequence = 0;
@@ -22,7 +20,7 @@ const size_t MAX_REORDER_WINDOW = 4096;
 
 static std::atomic<bool> g_dbghelp_inited(false);
 
-static RunnableThread* g_worker = nullptr;
+static std::thread g_worker;
 static std::atomic<bool> g_worker_running(false);
 
 std::string log_path = get_log_path() + "\\profiler.log";
@@ -62,28 +60,6 @@ PROFILE_API size_t Profile_GetPeakBytesBySource(MemorySource source) {
 
 PROFILE_API size_t Profile_GetBytesBySource(MemorySource source) {
     return g_metrics.bytes[(size_t)source].load();
-}
-
-bool IsProfileAcceptingEvents() {
-    return g_profile_accepting_events.load(std::memory_order_acquire);
-}
-
-bool EnqueueProfileEvent(MemorySource source, const EventRecord& record) {
-    if (!IsProfileAcceptingEvents()) {
-        return false;
-    }
-
-    const size_t source_index = static_cast<size_t>(source);
-    if (source_index >= static_cast<size_t>(MemorySource::MAX_SOURCES)) {
-        return false;
-    }
-
-    auto* ring = g_rings[source_index];
-    if (!ring) {
-        return false;
-    }
-
-    return ring->enqueue(record);
 }
 
 //类似UDP，新增缓冲区
@@ -136,25 +112,6 @@ static void worker_thread_func() {
         }
     }
 }
-
-class ProfileWorkerRunnable final : public Runnable {
-public:
-    uint32_t Run() override {
-        worker_thread_func();
-        return 0;
-    }
-    void Init() override {}
-    void Stop() override {
-        g_worker_running.store(false, std::memory_order_release);
-    }
-    void Exit() override {}
-    ThreadIndex GetIndex() override {
-        return EThread::UNKNOWN_THREAD;
-    }
-};
-
-static ProfileWorkerRunnable g_worker_runnable;
-
 void process_record_logical(const EventRecord& rec) {
     const uint8_t s_idx = static_cast<uint8_t>(rec.source);
     if (s_idx >= (uint8_t)MemorySource::MAX_SOURCES) return;
@@ -539,18 +496,13 @@ void ProfileExitFunc() {
     static std::atomic<bool> s_saved = false;
     if (s_saved.exchange(true)) return;
 
-    g_profile_accepting_events.store(false, std::memory_order_release);
     remove_hooks();
 
     // stop worker
     //std::this_thread::sleep_for(std::chrono::milliseconds(3000));
     
     g_worker_running.store(false, std::memory_order_release);
-    if (g_worker != nullptr) {
-        g_worker->Join();
-        MoerDelete(g_worker);
-        g_worker = nullptr;
-    }
+    if (g_worker.joinable()) g_worker.join();
 
     // cleanup
     if (g_log_ofs.is_open()) {
@@ -563,6 +515,13 @@ void ProfileExitFunc() {
         g_dbghelp_inited.store(false);
     }
 
+    for (int i = 0; i < (int)MemorySource::MAX_SOURCES; i++) {
+        if (g_rings[i]) {
+            delete g_rings[i];
+            g_rings[i] = nullptr;
+        }
+    }
+    
     FlameProfiler::Get().Save(get_log_path() + "/frame_trace.json");
     FlameProfiler::Get().Clear();
     
@@ -635,14 +594,9 @@ void* PatternScan(BYTE* base, size_t size, const BYTE* pattern, const char* mask
 
 void ProfileInitDynamic()
 {
-    if (g_worker != nullptr) return;
-
     // start worker
     g_worker_running.store(true);
-    g_worker = RunnableThread::Create(
-        &g_worker_runnable,
-        ThreadAttributes{.affinity = Affinity{}, .name = MOER_ASCII_TEXT("ProfileWorkerThread")}
-    );
+    g_worker = std::thread(worker_thread_func);
 }
 
 void install_hooks_static() {
@@ -692,7 +646,6 @@ void ProfileInitFunc()
     g_rings[(int)MemorySource::Editor]    = new moodycamel::ConcurrentQueue<EventRecord>(1 << 20); // Editor内存操作最频繁
     g_rings[(int)MemorySource::Vulkan]    = new moodycamel::ConcurrentQueue<EventRecord>(1 << 16); // Vulkan分配相对少
     g_rings[(int)MemorySource::VulkanTmp] = new moodycamel::ConcurrentQueue<EventRecord>(1 << 16);
-    g_profile_accepting_events.store(true, std::memory_order_release);
 
     if (!InitSymbolEngine()) {
         printf("[Profiler] Failed to initialize Symbol Engine, PDB hooks will fail.\n");
@@ -716,7 +669,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hModule);
 
+        //std::thread(ProfileInitFunc).detach(); //异步玄学挂的上
         ProfileInitFunc(); //同步玄学挂的上
+        //std::thread(ProfileInitDynamic).detach();//异步可能挂不上
 
     }
     return TRUE;
