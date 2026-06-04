@@ -368,7 +368,7 @@ ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) 
         upload_cmd_lists.emplace_back(std::move(cmd_list));
         RHIExecutor::Get().Submit(std::move(upload_cmd_lists), ERHIExecSubmitFlags::FlushGPU);
         upload_fence->Wait(1);
-        rd_device.GetCommandQueue(EQueueType::Graphics).Sync();
+        // Executor already guarantees GPU-side ordering; no Queue::Sync needed.
         transparent_texture_handle = bindless_array->AllocateTexture(
             transparent_texture,
             Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE)
@@ -425,7 +425,7 @@ ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) 
         upload_cmd_lists.emplace_back(std::move(cmd_list));
         RHIExecutor::Get().Submit(std::move(upload_cmd_lists), ERHIExecSubmitFlags::FlushGPU);
         upload_fence->Wait(1);
-        rd_device.GetCommandQueue(EQueueType::Graphics).Sync();
+        // Executor already guarantees GPU-side ordering; no Queue::Sync needed.
         render_backend_data->font_texture = font_tex;
         uint handle = bindless_array->AllocateTexture(font_tex, Sampler(SF_CUBIC, SAM_REPEAT));
         registered_images.try_emplace(font_tex, handle);

@@ -1001,7 +1001,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 RHIExecutor::Get().Submit(std::move(export_cmd_lists), ERHIExecSubmitFlags::FlushGPU);
                 cmd_list = CommandList(EQueueType::Graphics);
                 export_fence->Wait(1);
-                gfx_queue.Sync();
+                // Executor-managed fence already guarantees GPU completion.
                 DumpTextureToFile(
                     ui_config.export_cfg,
                     rt_ctx->frame_rt,
@@ -1125,7 +1125,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
     if (time > 0) {
         timeline->Wait(time);
-        gfx_queue.Sync();
+        // Executor-managed timeline already guarantees GPU completion.
     }
     thread_heartbeat.Unregister(main_thread_heartbeat);
     const auto& allocated_buf = rt_ctx->GetAllocatedBdlsBuf();
@@ -1227,7 +1227,7 @@ void RaytracingRenderer::DumpTextureToFile(
         export_cmd_lists.emplace_back(std::move(cmd_list));
         RHIExecutor::Get().Submit(std::move(export_cmd_lists), ERHIExecSubmitFlags::FlushGPU);
         export_fence->Wait(1);
-        _gfx_queue.Sync();
+        // Executor-managed fence already guarantees GPU completion.
         if (hdr) {
             // export to exr
             // cast r16g16b16a16_sfloat to r32g32b32a32_sfloat

@@ -125,7 +125,7 @@ void RasterRenderer::ReleaseRasterResources() {
 
     if (time > 0) {
         timeline->Wait(time);
-        gfx_queue.Sync();
+        // Executor-managed timeline already guarantees GPU completion.
     }
 
     raster_context_ptr->FreeFrameBuffers(true);
