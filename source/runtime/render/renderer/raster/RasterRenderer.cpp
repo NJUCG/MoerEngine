@@ -285,7 +285,7 @@ bool RasterRenderer::RunSingle(
 
     // MARK: 2. Tick UI
     if (hooks.on_tick_ui) {
-        hooks.on_tick_ui();
+        hooks.on_tick_ui(scene);
     }
 
     config_ui.RegisterFrameBuffers(raster_context.GetDisplayableFrameBuffersView());

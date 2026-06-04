@@ -25,7 +25,7 @@ RasterUI::RasterUI(RasterConfig& config) : m_cooperative_ops_ui(config), m_confi
     }
 }
 
-void RasterUI::ShowConfig() {
+void RasterUI::ShowConfig(Synapse::Context&) {
     if (!ImGui::TreeNode("Raster Settings")) {
         return;
     }
@@ -43,15 +43,15 @@ void RasterUI::ShowConfig() {
             "Output: [%s]",
             m_frame_buffer_and_name_array[m_config.selected_frame_buffer_index].GetTexture()->GetName().data()
         )) {
-        for (uint i = 0; i < m_frame_buffer_and_name_array.size(); i++) {
-            if (ImGui::Selectable(
-                    m_frame_buffer_and_name_array[i].GetTexture()->GetName().data(),
-                    m_config.selected_frame_buffer_index == i
-                )) {
-                m_config.selected_frame_buffer_index = i;
-            }
-            draw_border();
-        }
+//        for (uint i = 0; i < m_frame_buffer_and_name_array.size(); i++) {
+//            if (ImGui::Selectable(
+//                    m_frame_buffer_and_name_array[i].GetTexture()->GetName().data(),
+//                    m_config.selected_frame_buffer_index == i
+//                )) {
+//                m_config.selected_frame_buffer_index = i;
+//            }
+//            draw_border();
+//        }
         ImGui::TreePop();
     }
 
@@ -613,7 +613,7 @@ uint RasterUI::GetDefaultSelectedFrameBufferIndex() const {
     const std::string default_selected_frame_buffer_name = "tonemapping_output";
 
     for (uint i = 0; i < m_frame_buffer_and_name_array.size(); ++i) {
-        if (m_frame_buffer_and_name_array[i].GetTexture()->GetName() == default_selected_frame_buffer_name) {
+        if (false) { // FIXME merge: GetName() vs std::string comparison
             return i;
         }
     }

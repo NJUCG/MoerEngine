@@ -74,7 +74,11 @@
       "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File \"F:\\\\Github_Data\\\\MoerEngine\\\\testscripts\\\\windows\\\\test_rhi_translate.ps1\")",
       "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File \"F:\\\\Github_Data\\\\MoerEngine\\\\testscripts\\\\windows\\\\test_editor.ps1\")",
       "Bash(cmake --build build --target TestRHITranslate --config Debug -j4)",
-      "Bash(powershell -ExecutionPolicy Bypass -File testscripts/windows/test_rhi_translate.ps1)"
+      "Bash(powershell -ExecutionPolicy Bypass -File testscripts/windows/test_rhi_translate.ps1)",
+      "Bash(just --version)",
+      "Bash(cmake --version)",
+      "Bash(clang++ --version)",
+      "Bash(ninja --version)"
     ]
   }
 }

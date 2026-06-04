@@ -25,9 +25,6 @@ void WindowContext::SetTitle(WindowHandle* window, const char* new_title) {
     WindowImpl::GetInstance().SetTitle(window, new_title);
 };
 
-void WindowContext::RequestClose(WindowHandle* window) {
-    WindowImpl::GetInstance().RequestClose(window);
-};
 
 bool WindowContext::ShouldClose(WindowHandle* window) {
     return WindowImpl::GetInstance().ShouldClose(window);

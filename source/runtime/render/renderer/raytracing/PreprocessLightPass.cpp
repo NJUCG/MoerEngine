@@ -230,9 +230,9 @@ static bool CanConvert(entt::entity entity, const Moer::Scene& scene) {
     const auto& c_light = r.get<ecs::CLight>(entity);
     switch (c_light.type) {
         case Moer::ELightType::Directional:
-            return r.all_of<ecs::CLightDirectional, ecs::CTransform>(entity);
+            return r.all_of<ecs::CLightDirectional, ecs::CNode>(entity);
         case Moer::ELightType::Point:
-            return r.all_of<ecs::CLightPoint, ecs::CTransform>(entity);
+            return r.all_of<ecs::CLightPoint, ecs::CNode>(entity);
         case Moer::ELightType::Spot:
             // TODO: CLightSpot 还未实现
             return false;

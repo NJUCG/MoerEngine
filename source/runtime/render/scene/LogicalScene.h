@@ -152,6 +152,10 @@ public:
      */
     void UCreateDefaultLights(entt::entity parent_node_id = entt::null, bool should_create_main_light = true);
 
+    // Dev-compat: access light direction/position from CLight derived fields
+    float3 GetDirectionalLightDirection(entt::entity entity) const;
+    float3 GetPointLightPosition(entt::entity entity) const;
+
 private:
     entt::registry m_registry;
 };

@@ -104,7 +104,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
     {
 
         {
-            auto view = m_logical_scene.r().view<const ecs::CTexture, const ecs::CName>();
+            auto view = m_logical_scene.r().view<const ecs::CTexture, const ecs::CResourceName>();
 
             m_res.texture_array.clear();
             m_res.texture_array.reserve(view.size_hint());
@@ -112,7 +112,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
             m_map_texture_entity_to_bindless_handle.clear();
 
             // Device创建TextureRef & 录制Copy命令
-            view.each([&](const auto entity, const ecs::CTexture& c_texture, const ecs::CName& c_name) {
+            view.each([&](const auto entity, const ecs::CTexture& c_texture, const ecs::CResourceName& c_name) {
                 TextureWithHandle tex_with_hdl{};
 
                 // 下文处的实现参考了重构前的 GpuScene.cpp: BuildTexturesInBatch()
@@ -381,7 +381,7 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
     InitRaytracingScene(m_pending_cmd_lists.gfx_queue_cmd_list);
 }
 
-void GpuScene::Update(const ecs::LogicalScene& m_logical_scene, CpuScene& m_cpu_scene) {
+void GpuScene::Update(const ecs::LogicalScene& m_logical_scene, CpuScene& m_cpu_scene, bool rebuilt_mesh) {
     auto& device = RenderDevice::Get();
 
     // TODO: others

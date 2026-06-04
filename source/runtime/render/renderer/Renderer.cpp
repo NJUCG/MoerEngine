@@ -139,7 +139,7 @@ void Renderer::LogSceneLoadStatus(const EditorConfig& config) const {
 
 void Renderer::PumpAsyncLoads() {
     runtime_assets.SubmitPendingUploads();
-    scene.AdoptPendingAsyncLoad();
+    // Note: AdoptPendingAsyncLoad was removed in main's Scene refactor.
 }
 
 } // namespace Moer::Render

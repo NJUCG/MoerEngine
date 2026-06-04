@@ -275,8 +275,7 @@ void CpuScene::InitializeMeshes() {
             const entt::entity entity = node_queue.front();
             node_queue.pop();
 
-            const ecs::CNode&      c_node      = r.get<ecs::CNode>(entity);
-            const ecs::CTransform& c_transform = r.get<ecs::CTransform>(entity);
+            const ecs::CNode& c_node = r.get<ecs::CNode>(entity);
 
             // next
             if (c_node.first_child_entt != entt::null) {
@@ -301,7 +300,7 @@ void CpuScene::InitializeMeshes() {
                     m_primitive_id_to_transform_entt_arrays[primitive_id].emplace_back(
                         GInstance{
                             .world_transform =
-                                Transpose(c_transform.d_world_transform), // HLSL列主序，需要转置
+                                Transpose(c_node.d_world_transform), // HLSL列主序，需要转置
                             .primitive_id = primitive_id                  // 存储 Primitive ID 用于反向映射
                         }
                     );

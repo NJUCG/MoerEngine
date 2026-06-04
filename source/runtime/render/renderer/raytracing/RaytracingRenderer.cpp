@@ -314,7 +314,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
         if (hooks.on_tick_ui) {
             TRACE_SCOPE_CAT("Raytracing.TickUI", "Frame");
-            hooks.on_tick_ui();
+            hooks.on_tick_ui(scene);
         }
 
         timer.Stop();
@@ -355,7 +355,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                     scene_bounding.min = float3(0.f);
                     scene_bounding.max = float3(0.f);
 
-                    scene.r().view<ecs::CRenderable, ecs::CTransform>().each(
+                    scene.r().view<ecs::CRenderable, ecs::CNode>().each(
                         [&](auto entity_id, const auto& c_renderable, const auto& c_transform) {
                             if (c_transform.d_aabb.IsValid()) {
                                 scene_bounding.Expand(c_transform.d_aabb);
@@ -504,12 +504,12 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
                 auto light_entity = scene.GetMainDirectionalLightEntity();
                 if (light_entity != entt::null && scene.r().valid(light_entity) &&
-                    scene.r().all_of<ecs::CLightDirectional, ecs::CTransform>(light_entity)) {
+                    scene.r().all_of<ecs::CLightDirectional, ecs::CNode>(light_entity)) {
                     auto& c_light_dir     = scene.r().get<ecs::CLightDirectional>(light_entity);
                     c_light_dir.color     = float3(0.9f, 0.65f, 0.4f);
                     c_light_dir.intensity = ui_config.exposure;
 
-                    auto& c_transform    = scene.r().get<ecs::CTransform>(light_entity);
+                    auto& c_transform    = scene.r().get<ecs::CNode>(light_entity);
                     c_transform.rotation = Quaternion(float3(0.f, 0.f, -1.f), -ui_config.sun_direction);
                     c_transform.is_dirty = true;
                 }

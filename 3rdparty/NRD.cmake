@@ -42,7 +42,18 @@ set(NRD_NORMAL_ENCODING "0" CACHE STRING "")
 set(NRD_ROUGHNESS_ENCODING "1" CACHE STRING "")
 message(STATUS NRD_DXC_PATH=${NRD_DXC_PATH})
 
+# NRD's CMakeLists.txt adds -fPIC for Clang when MSVC is false,
+# but clang on Windows targeting MSVC doesn't support -fPIC.
+if (WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(NRD_MSVC_OVERRIDE ${MSVC})
+    set(MSVC TRUE)
+endif()
+
 add_subdirectory(${NRD_ROOT} ${CMAKE_CURRENT_BINARY_DIR}/NRD)
+
+if (WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(MSVC ${NRD_MSVC_OVERRIDE})
+endif()
 
 target_compile_options(
     NRD
@@ -52,7 +63,7 @@ target_compile_options(
 add_dependencies(NRD NRI copy_dll_dxc)
 
 # post build
-set(NRD_ENCODING_FILE "${NRD_ROOT}/Shaders/Include/NRDEncoding.hlsli")
+set(NRD_ENCODING_FILE "${NRD_ROOT}/Shaders/NRDConfig.hlsli")
 set(MOER_SHADER_NRD_DIR "${moer_shader_dir}/external/nrd")
 add_custom_command(
     OUTPUT "${MOER_SHADER_NRD_DIR}/NRDEncoding.hlsli"
