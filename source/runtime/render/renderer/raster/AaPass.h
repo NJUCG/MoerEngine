@@ -210,11 +210,28 @@ public:
             PF_R8G8_UNORM,
             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
         );
+        context.cmd_list.Barriers(
+            {BarrierCreateInfo::Transition(
+                smaa_area_tex.tex->GetView(),
+                ETextureState::UNDEFINED,
+                ETextureState::TRANSFER_DST,
+                EPassType::Copy
+            )},
+            EQueueType::Graphics, EQueueType::Graphics, ETrackedStateUpdateMode::Update
+        );
         context.cmd_list.CopyFrom(
             std::span<byte>(
                 (byte*)&SmaaPrecomputedTextures::areaTexBytes, sizeof(SmaaPrecomputedTextures::areaTexBytes)
             ),
             smaa_area_tex.tex
+        );
+        context.cmd_list.Barriers(
+            {BarrierCreateInfo::Transition(
+                smaa_area_tex.tex->GetView(),
+                MakeBarrierState(ETextureState::TRANSFER_DST, EPassType::Copy),
+                MakeBarrierState(ETextureState::SAMPLED, EPassType::Graphics)
+            )},
+            EQueueType::Graphics, EQueueType::Graphics, ETrackedStateUpdateMode::Update
         );
         smaa_area_tex.hdl = context.bdls->AllocateTexture(smaa_area_tex.tex, linear_sampler);
 
@@ -225,12 +242,29 @@ public:
             PF_R8_UNORM,
             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
         );
+        context.cmd_list.Barriers(
+            {BarrierCreateInfo::Transition(
+                smaa_search_tex.tex->GetView(),
+                ETextureState::UNDEFINED,
+                ETextureState::TRANSFER_DST,
+                EPassType::Copy
+            )},
+            EQueueType::Graphics, EQueueType::Graphics, ETrackedStateUpdateMode::Update
+        );
         context.cmd_list.CopyFrom(
             std::span<byte>(
                 (byte*)&SmaaPrecomputedTextures::searchTexBytes,
                 sizeof(SmaaPrecomputedTextures::searchTexBytes)
             ),
             smaa_search_tex.tex
+        );
+        context.cmd_list.Barriers(
+            {BarrierCreateInfo::Transition(
+                smaa_search_tex.tex->GetView(),
+                MakeBarrierState(ETextureState::TRANSFER_DST, EPassType::Copy),
+                MakeBarrierState(ETextureState::SAMPLED, EPassType::Graphics)
+            )},
+            EQueueType::Graphics, EQueueType::Graphics, ETrackedStateUpdateMode::Update
         );
         smaa_search_tex.hdl = context.bdls->AllocateTexture(smaa_search_tex.tex, linear_sampler);
     }

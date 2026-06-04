@@ -354,7 +354,31 @@ private:
         int                height,
         StringView         debug_name
     ) {
+        // Explicit barrier: initial UNDEFINED -> TRANSFER_DST for the copy.
+        // Use Skip mode because callers may pass partial views (e.g. cubemap slices).
+        cmd_list.Barriers(
+            {BarrierCreateInfo::Transition(
+                target,
+                ETextureState::UNDEFINED,
+                ETextureState::TRANSFER_DST,
+                EPassType::Copy
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Skip
+        );
         cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)data, width * height * 4), target, debug_name);
+        // Explicit barrier: TRANSFER_DST -> SAMPLED for shader read
+        cmd_list.Barriers(
+            {BarrierCreateInfo::Transition(
+                target,
+                MakeBarrierState(ETextureState::TRANSFER_DST, EPassType::Copy),
+                MakeBarrierState(ETextureState::SAMPLED, EPassType::Graphics)
+            )},
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Skip
+        );
         cmd_list.AddCallback([data]() {
             stbi_image_free(data);
         });

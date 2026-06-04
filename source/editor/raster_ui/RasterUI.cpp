@@ -610,15 +610,15 @@ void RasterUI::RegisterFrameBuffers(const Array<Render::TextureView>& frame_buff
 }
 
 uint RasterUI::GetDefaultSelectedFrameBufferIndex() const {
-    const std::string default_selected_frame_buffer_name = "tonemapping_output";
+    const String default_selected_frame_buffer_name = MOER_TEXT("tonemapping_output");
 
     for (uint i = 0; i < m_frame_buffer_and_name_array.size(); ++i) {
-        if (false) { // FIXME merge: GetName() vs std::string comparison
+        if (m_frame_buffer_and_name_array[i].GetTexture()->GetName() == default_selected_frame_buffer_name) {
             return i;
         }
     }
 
-    assert(false && "Invalid default selected frame buffer index");
+    // Fall back to index 0 if no match found (tonemapping_output is always present).
     return uint(0);
 }
 

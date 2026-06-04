@@ -20,6 +20,19 @@ T GetTextureData(int bindless_handle, float2 uv, T default_value, T missing_valu
   }
 }
 
+// Compatibility wrapper: main renamed GetTextureData -> SampleTextureAndApplyFactor
+// with different default-value semantics (handle >= 0 valid, multiplies by factor).
+template <typename T>
+T SampleTextureAndApplyFactor(int bindless_handle, float2 uv, T factor, T missing_value) {
+    T sample_value = (T)1.0;
+    if (bindless_handle >= 0) {
+        sample_value = TextureHandle(bindless_handle).Sample2D<T>(uv);
+    } else {
+        sample_value = missing_value;
+    }
+    return sample_value * factor;
+}
+
 float3 GetNormalFromNormalMap(int normal_map, float2 uv, float3 normal, float3 tangent) {
   if (normal_map >= 0) {
     float3 normal_in_tbn = normalize((TextureHandle(normal_map).Sample2D<float3>(uv) * 2.0) - 1.0); // Mipmap采样后的法线需要normalize
