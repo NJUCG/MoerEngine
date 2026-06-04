@@ -1,21 +1,12 @@
 #pragma once
 
-#include "remote/RemoteModuleController.h"
+#include "command/EngineCommandProcessor.h"
 #include "renderer/Renderer.h"
-#include "scripting/ScriptExecutionFuture.h"
-#include "scripting/ScriptExecutionRequest.h"
-
-namespace Moer::scripting {
-class ScriptHost;
-}
-
-namespace Moer::remote {
-class RemoteModule;
-}
 
 namespace Moer {
 
 class EditorUI;
+class ConsoleSystem;
 class RuntimeAssets;
 
 class RENDER_API Engine {
@@ -23,36 +14,22 @@ public:
     Engine();
     virtual ~Engine();
 
-    void Init(int argc, const char** argv);
-    void Run(const Render::EngineHooks& hooks);
-    void RequestExit();
-
-    // 提供给 Editor 等外部系统的 Remote 控制句柄
-    remote::RemoteModuleController GetRemoteModuleController() const;
-
-    scripting::ScriptExecutionFuture SubmitScriptExecution(scripting::ScriptExecutionRequest request);
-    void                             ShutDown();
-
-    uint2& GetResolution() {
-        return m_editor_config->GetResolution();
-    }
-
-    SharedPtr<EditorConfig> GetEditorConfig() {
-        return m_editor_config;
-    }
+    void Init(const SharedPtr<EditorConfig>& editor_config, bool fullscreen);
+    void Run();
+    void ShutDown();
 
 private:
-    void Init3rdParty();
-    void ShutDown3rdParty();
-
     SharedPtr<EditorConfig>  m_editor_config;
+    UniquePtr<EditorUI>      m_editor_ui;
+    SharedPtr<ConsoleSystem> m_console_system;
     UniquePtr<RuntimeAssets> m_runtime_assets;
 
-    UniquePtr<scripting::ScriptHost> m_script_host;
-    UniquePtr<remote::RemoteModule>  m_remote_module;
-    UniquePtr<Render::Renderer>      m_renderer;
+    UniquePtr<Render::Renderer>    m_renderer;
+    Command::EngineCommandProcessor m_command_processor;
 
-    bool m_has_shutdown = false;
+    bool render_device_initialized = false;
+    bool runtime_supported = false;
+    bool has_shutdown = false;
 };
 
 } // namespace Moer

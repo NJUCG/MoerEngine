@@ -1,3 +1,13 @@
+// clang MSVC STL compat: MSVC STL headers (via pybind11) reference _invalid_parameter
+
+#if defined(__clang__) && defined(_WIN32) && !defined(__clang_cl__)
+
+#include <cstdint>
+
+namespace { void _invalid_parameter(const wchar_t*,const wchar_t*,const wchar_t*,unsigned,uintptr_t){} }
+
+#endif
+
 #include "scripting/ScriptingModule.h"
 
 // 修改这里的 pybind11 绑定时，也要同步维护同目录下的 stubs/moer/__init__.pyi。

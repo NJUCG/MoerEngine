@@ -1,513 +1,259 @@
 #include "EditorUI.h"
 
 // Runtime
+#include "file/FileDialog.h"
 #include "log/LogSystem.h"
+#include "string/StringConvert.h"
+#include "trace/Trace.h"
 #include "window/WindowInput.h"
 
 // Editor
-#include "EditorUIStyle.h"
 #include "scene/Scene.h"
-#include "scene_editing_ui/SceneFileDialog.h"
-#include "window/WindowContext.h"
+#include "scene/SceneGlobalEntry.h"
 
 // 3rd party (std)
 #include <algorithm>
-#include <imgui.h>
-#include <imgui_internal.h>
+#include <array>
+#include <cstdlib>
+#include <filesystem>
+#include <iterator>
 #include <string_view>
 
-#if WITH_PROFILE
-#include "Profile.h"
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <shellapi.h>
 #endif
 
 using namespace Moer::Render;
 
 namespace Moer {
-
 namespace {
 
-std::string GetSceneFileName(std::string_view scene_path) {
-    if (scene_path.empty()) {
-        return "No Scene";
+bool AnyCameraMouseButtonDown(const Render::ImGuiIOInputSnapshot& input) {
+    return input.mouse_button_down[MouseButtons::Left] || input.mouse_button_down[MouseButtons::Middle] ||
+           input.mouse_button_down[MouseButtons::Right];
+}
+
+void ClearCameraInput(WindowInput& input) {
+    input.camera_forward  = false;
+    input.camera_backward = false;
+    input.camera_left     = false;
+    input.camera_right    = false;
+    input.camera_up       = false;
+    input.camera_down     = false;
+    input.speed_up        = false;
+    input.speed_down      = false;
+    input.reset_speed     = false;
+}
+
+void StoreSelectedPlatformPath(StringView selected_path, void* user_data) {
+    *static_cast<String*>(user_data) = String(selected_path);
+}
+
+bool LaunchProfilerProcess(const std::filesystem::path& capture_path = {}) {
+#if defined(_WIN32)
+    PlatformChar module_path[MAX_PATH]{};
+    const DWORD module_length = GetModuleFileNameW(nullptr, module_path, static_cast<DWORD>(std::size(module_path)));
+    if (module_length == 0 || module_length >= std::size(module_path)) {
+        LOG_WARNING(MOER_TEXT("Failed to resolve MoerEditor executable path."));
+        return false;
     }
 
-    const size_t last_slash = scene_path.find_last_of("\\/");
-    return last_slash == std::string::npos ? std::string(scene_path) :
-                                             std::string(scene_path.substr(last_slash + 1));
-}
-
-std::string TruncateMenuValue(std::string_view value) {
-    constexpr size_t k_max_display_length      = 15;
-    constexpr size_t k_truncated_prefix_length = 10;
-
-    if (value.size() <= k_max_display_length) {
-        return std::string(value);
+    const std::filesystem::path editor_path   = std::filesystem::path(module_path);
+    const std::filesystem::path profiler_path = editor_path.parent_path() / std::filesystem::path(MOER_TEXT("MoerProfiler.exe"));
+    String parameters{};
+    if (!capture_path.empty()) {
+        const String capture_path_text = String(capture_path.native());
+        parameters.reserve(capture_path_text.size() + 2);
+        parameters.push_back(MOER_TEXT('"'));
+        parameters += capture_path_text;
+        parameters.push_back(MOER_TEXT('"'));
     }
-
-    return std::string(value.substr(0, k_truncated_prefix_length)) + "...";
+    HINSTANCE result = ShellExecuteW(
+        nullptr,
+        MOER_TEXT("open"),
+        profiler_path.c_str(),
+        parameters.empty() ? nullptr : parameters.c_str(),
+        profiler_path.parent_path().c_str(),
+        SW_SHOWNORMAL
+    );
+    if (reinterpret_cast<intptr_t>(result) <= 32) {
+        LOG_WARNING(MOER_TEXT("Failed to launch MoerProfiler: {}"), String(profiler_path.native()));
+        return false;
+    }
+    return true;
+#else
+    (void)capture_path;
+    LOG_WARNING(MOER_TEXT("Launching MoerProfiler from Editor is only implemented on Windows."));
+    return false;
+#endif
 }
 
-std::string BuildFileMenuLabel(std::string_view scene_path) {
-    return "File: [" + TruncateMenuValue(GetSceneFileName(scene_path)) + "]";
-}
+void OpenProfilerCapturePicker() {
+    static constexpr std::array<FileDialog::Filter, 3> capture_filters = {{
+        {MOER_ASCII_TEXT("Profiler Capture"), MOER_ASCII_TEXT("mpd,mrtc,csv,bin")},
+        {MOER_ASCII_TEXT("Trace CSV"), MOER_ASCII_TEXT("csv")},
+        {MOER_ASCII_TEXT("All Files"), MOER_ASCII_TEXT("*")},
+    }};
 
-std::string BuildRenderMethodMenuLabel(ERenderMethod render_method) {
-    return "Render Method: [" + std::string(k_render_method_names[static_cast<uint>(render_method)]) + "]";
+    String selected_path{};
+    const FileDialog::EOpenFileStatus result = FileDialog::OpenFile(FileDialog::OpenFileRequest{
+        .filters = capture_filters,
+        .callback = StoreSelectedPlatformPath,
+        .user_data = &selected_path,
+    });
+    if (result == FileDialog::EOpenFileStatus::Success) {
+        LaunchProfilerProcess(std::filesystem::path(selected_path.Native()));
+    } else if (result == FileDialog::EOpenFileStatus::Error) {
+        LOG_WARNING(MOER_TEXT("Failed to open profiler capture picker."));
+    }
 }
 
 } // namespace
 
-EditorUI::EditorUI(
-    UniquePtr<Render::UIRenderer>         renderer,
-    SharedPtr<EditorConfig>               editor_config,
-    const remote::RemoteModuleController& remote_controller
-) :
+EditorUI::EditorUI(UniquePtr<Render::UIRenderer> renderer, SharedPtr<EditorConfig> editor_config) :
     m_ui_renderer(std::move(renderer)),
-    m_config(editor_config),
-    m_remote_controller(remote_controller),
-    m_raster_ui(editor_config->raster_config),
-    m_raytracing_ui(editor_config->raytracing_config),
-    m_scene_editing_ui(editor_config->scene_test_case_config) {
-
-    auto has_saved_window_settings = [](const char* window_name) {
-        return ImGui::FindWindowSettingsByID(ImHashStr(window_name)) != nullptr;
-    };
-
-    m_b_show_scene_color   = has_saved_window_settings("Scene Color");
-    m_b_show_hierarchy     = has_saved_window_settings("Hierarchy");
-    m_b_show_inspector     = has_saved_window_settings("Inspector");
-    m_b_show_config        = has_saved_window_settings("Configs");
-    m_b_show_scene_editing = has_saved_window_settings("Scene Editing");
-#if WITH_PROFILE
-    m_b_show_memory_profiler = has_saved_window_settings("Memory Profiler");
-#endif
-
-    // Init Style
-    EditorUIStyle::ApplyDefaultStyle();
+    m_config(editor_config) {
+    m_synapse_context = MakeUnique<Synapse::Context>();
+    m_synapse_context->ApplyDefaultTheme();
 }
 
-#if WITH_PROFILE
-void EditorUI::DrawPassAndChildren(const char* parent_name, int depth) {
-    for (int i = 0; i < g_pass_history_count; i++) {
-        auto& h = g_pass_history[i];
-        if (!h.active)
-            continue;
-        if (strcmp(h.parent_name, parent_name) != 0)
-            continue;
-        if (h.avg_ms < 0.001f && h.max_ms < 0.001f)
-            continue;
+void EditorUI::TickUI() {
+    m_scene_color_hovered = false;
+    m_scene_color_focused = false;
 
-        ImGui::TableNextRow();
-
-        ImGui::TableSetColumnIndex(0);
-        ImGui::Indent((1 + depth) * 20.0f);
-        ImGui::Text("%s", h.name);
-        ImGui::Unindent((1 + depth) * 20.0f);
-
-        ImGui::TableSetColumnIndex(1);
-        if (h.avg_ms > 5.0f)
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%.4f", h.avg_ms);
-        else if (h.avg_ms > 2.0f)
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "%.4f", h.avg_ms);
-        else
-            ImGui::Text("%.4f", h.avg_ms);
-
-        ImGui::TableSetColumnIndex(2);
-        ImGui::Text("%.4f", h.max_ms);
-
-        ImGui::TableSetColumnIndex(3);
-        float ordered[60];
-        for (int j = 0; j < 60; j++) {
-            ordered[j] = h.samples[(h.write_idx + j) % 60];
-        }
-        char plot_label[64];
-        snprintf(plot_label, sizeof(plot_label), "##pass_%d", i);
-        float plot_max = h.max_ms > 0.0f ? h.max_ms * 1.2f : 1.0f;
-        ImGui::PlotLines(plot_label, ordered, 60, 0, nullptr, 0.0f, plot_max, ImVec2(-1, 28));
-
-        DrawPassAndChildren(h.name, depth + 1);
-    }
-}
-
-void EditorUI::ShowMemoryProfiler(bool* p_open) {
-    Profile_TickSample();
-
-    if (!ImGui::Begin("Memory Profiler", p_open)) {
-        ImGui::End();
-        return;
-    }
-
-    if (ImGui::CollapsingHeader("Real-time Metrics", ImGuiTreeNodeFlags_DefaultOpen)) {
-        if (ImGui::BeginTable("MetricsTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-            ImGui::TableSetupColumn("Source");
-            ImGui::TableSetupColumn("Current (MB)");
-            ImGui::TableSetupColumn("Peak (MB)");
-            ImGui::TableSetupColumn("Color", ImGuiTableColumnFlags_WidthFixed, 40.0f);
-            ImGui::TableHeadersRow();
-
-            for (int i = 0; i < SOURCE_COUNT; ++i) {
-                const auto& config    = g_UIConfigs[i];
-                float       currentMB = Profile_GetBytesBySource(config.source) / 1048576.0f;
-                float       peakMB    = Profile_GetPeakBytesBySource(config.source) / 1048576.0f;
-
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::Text("%s", config.label);
-
-                ImGui::TableSetColumnIndex(1);
-                ImGui::Text("%.3f", currentMB);
-
-                ImGui::TableSetColumnIndex(2);
-                ImGui::Text("%.3f", peakMB);
-
-                ImGui::TableSetColumnIndex(3);
-                ImGui::ColorButton(
-                    config.label, config.color, ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoInputs
-                );
-            }
-            ImGui::EndTable();
-        }
-    }
-
-    ImGui::Spacing();
-
-    if (ImGui::CollapsingHeader("Live Memory Graph")) {
-        static float view_max_y = 5.0f;
-
-        std::vector<TimePoint> snapshot;
-        {
-            std::lock_guard<std::mutex> lock(g_history_mtx);
-            if (g_history_data.empty())
-                return;
-            snapshot.assign(g_history_data.begin(), g_history_data.end());
-        }
-
-        float plot_width = ImGui::GetContentRegionAvail().x;
-        for (int s = 0; s < SOURCE_COUNT; ++s) {
-            struct PlotContext {
-                int                     s_idx;
-                std::vector<TimePoint>* d;
-            };
-            PlotContext ctx = {s, &snapshot};
-
-            auto getter = [](void* data, int idx) -> float {
-                auto* p = (PlotContext*)data;
-                return p->d->operator[](idx).values[p->s_idx];
-            };
-
-            float last_val = snapshot.back().values[s];
-            if (last_val * 1.2f > view_max_y)
-                view_max_y = last_val * 1.2f;
-
-            ImGui::PushStyleColor(ImGuiCol_PlotLines, g_UIConfigs[s].color);
-            ImGui::PlotLines(
-                "##", getter, &ctx, (int)snapshot.size(), 0, nullptr, 0.0f, view_max_y, ImVec2(plot_width, 80)
-            );
-            ImGui::PopStyleColor();
-
-            ImGui::SameLine();
-            ImGui::Text("%s: %.2f MB", g_UIConfigs[s].label, last_val);
-        }
-    }
-
-    ImGui::Spacing();
-
-    if (ImGui::CollapsingHeader("GPU Pass Timing", ImGuiTreeNodeFlags_DefaultOpen)) {
-        std::lock_guard<std::mutex> lock(g_pass_history_mtx);
-
-        if (g_pass_history_count == 0) {
-            ImGui::TextDisabled("No GPU data yet...");
+    if (m_config->play_mode_enabled) {
+        if (WindowInput::Get().native_key_pressed[KeyButtons::F8]) {
+            m_config->play_mode_enabled       = false;
+            m_config->play_mode_capture_input = false;
+            WindowInput::Get().force_cursor_hidden = false;
+            WindowInput::Get().play_mode_camera_control = false;
+            m_scene_color_input_active = false;
+            m_scene_color_focused = false;
         } else {
-            ImGui::BeginTable(
-                "PassTable",
-                4,
-                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
-                ImVec2(0, 300)
-            );
-            ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthFixed, 260);
-            ImGui::TableSetupColumn("Avg ms", ImGuiTableColumnFlags_WidthFixed, 70);
-            ImGui::TableSetupColumn("Max ms", ImGuiTableColumnFlags_WidthFixed, 70);
-            ImGui::TableSetupColumn("Last 60 frames", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableHeadersRow();
-
-            DrawPassAndChildren("", 0);
-
-            ImGui::EndTable();
+            WindowInput& input          = WindowInput::Get();
+            m_scene_color_pos          = {0.0f, 0.0f};
+            m_scene_color_resolution   = {input.width, input.height};
+        // m_config->aspect_ratio = 1.0f;  // aspect_ratio removed from EditorConfig
+            m_scene_color_hovered      = true;
+            m_scene_color_focused      = true;
+            ApplyPlayInput();
+            return;
         }
     }
 
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    ImGui::Text("Memory Hotspots Export:");
-
-    if (ImGui::Button("Quick Dump (Hex Only)")) {
-        WriteHotspots(false);
-    }
-
-    ImGui::SameLine();
-
-    if (ImGui::Button("Full Dump (With Symbols)")) {
-        WriteHotspots(true);
-    }
-
-    ImGui::Spacing();
-    ImGui::End();
-}
-#endif
-
-void EditorUI::TickUI(Scene& scene) {
-
-    ResetState();
+    // 注：Resolution表示整个窗口的大小（不包含windows标题栏）；SceneColor只表示场景渲染区域的大小
+    // 更新SceneColor的分辨率
+    // m_config->aspect_ratio = 1.0f;  // aspect_ratio removed from EditorConfig
 
     m_ui_renderer->BeginGUIFrame();
+    m_synapse_context->BeginFrame(m_ui_renderer->GetInputSnapshot());
+    Synapse::Context& ui = *m_synapse_context;
 
-    static bool               opt_fullscreen  = true;
-    static bool               opt_padding     = false;
-    static ImGuiDockNodeFlags dockspace_flags = ImGuiDockNodeFlags_None;
-    // ImGui::DockSpaceOverViewport(ImGui::GetMainViewport());
-    // We are using the ImGuiWindowFlags_NoDocking flag to make the parent window not dockable into,
-    // because it would be confusing to have two docking targets within each others.
-    ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar;
-    if (opt_fullscreen) {
-        const ImGuiViewport* viewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(viewport->WorkPos);
-        ImGui::SetNextWindowSize(viewport->WorkSize);
-        ImGui::SetNextWindowViewport(viewport->ID);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
-                        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
-        window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
-        window_flags |= ImGuiWindowFlags_NoBackground;
-    } else {
-        dockspace_flags &= ~ImGuiDockNodeFlags_PassthruCentralNode;
+    const Render::ImGuiIOInputSnapshot& input_snapshot = ui.GetInputSnapshot();
+
+    if (input_snapshot.f5_pressed && !m_config->play_mode_enabled) {
+        m_config->play_mode_enabled       = true;
+        m_config->play_mode_capture_input = true;
     }
 
-    // When using ImGuiDockNodeFlags_PassthruCentralNode, DockSpace() will render our background
-    // and handle the pass-thru hole, so we ask Begin() to not render a background.
-    if (dockspace_flags & ImGuiDockNodeFlags_PassthruCentralNode)
-        window_flags |= ImGuiWindowFlags_NoBackground;
-
-    // Important: note that we proceed even if Begin() returns false (aka window is collapsed).
-    // This is because we want to keep our DockSpace() active. If a DockSpace() is inactive,
-    // all active windows docked into it will lose their parent and become undocked.
-    // We cannot preserve the docking relationship between an active window and an inactive docking, otherwise
-    // any change of dockspace/settings would lead to windows being stuck in limbo and never being visible.
-    if (!opt_padding)
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    ImGui::Begin("Editor Menu", &m_b_show, window_flags);
-    if (!opt_padding)
-        ImGui::PopStyleVar();
-
-    if (opt_fullscreen)
-        ImGui::PopStyleVar(2);
-
-    // Submit the DockSpace
-    ImGuiIO&   io               = ImGui::GetIO();
-    const bool is_scene_loading = !scene.IsReady() && scene.IsStartLoading();
-    if (io.ConfigFlags & ImGuiConfigFlags_DockingEnable) {
-        ImGuiID dockspace_id = ImGui::GetID("Docking Main");
-        ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
-    }
-    if (ImGui::BeginMenuBar()) {
-        ShowFileMenu(scene, is_scene_loading);
-
-        const auto        last_selected_render_method = m_config->selected_render_method;
-        const std::string render_method_menu_label =
-            BuildRenderMethodMenuLabel(m_config->selected_render_method);
-        if (ImGui::BeginMenu(render_method_menu_label.c_str())) {
-            for (int i = 0; i < IM_ARRAYSIZE(k_render_method_names); i++) {
-                const bool is_selected = (m_config->selected_render_method == static_cast<ERenderMethod>(i));
-                if (ImGui::MenuItem(
-                        k_render_method_names[i].data(), nullptr, is_selected, !is_scene_loading
-                    )) {
-                    m_config->selected_render_method = static_cast<ERenderMethod>(i);
+    if (ui.BeginMainDockspace(Synapse::DockspaceDesc{
+            .open            = &m_b_show,
+#if WITH_PROFILE
+            .enable_profiler = m_runtime_profiler.IsOpen(),
+#else
+            .enable_profiler = false,
+#endif
+        })) {
+        if (ui.BeginMenuBar()) {
+            if (ui.BeginMenu("Menu")) {
+                if (ui.MenuItem("Exit")) {
+                    exit(0);
                 }
-                if (is_selected) {
-                    ImGui::SetItemDefaultFocus();
+                ui.EndMenu();
+            }
+            if (ui.BeginMenu("Window")) {
+
+                ui.MenuItem("Scene Color", &m_b_show_scene_color);
+                ui.MenuItem("Configs", &m_b_show_config);
+                if (m_get_console_window_visible && m_set_console_window_visible) {
+                    bool show_console = m_get_console_window_visible();
+                    if (ui.MenuItem("Console", &show_console)) {
+                        m_set_console_window_visible(show_console);
+                    }
+                }
+#if WITH_PROFILE
+                bool show_runtime_profiler = m_runtime_profiler.IsOpen();
+                if (ui.MenuItem("runtime_profiler", &show_runtime_profiler)) {
+                    m_runtime_profiler.SetOpen(show_runtime_profiler);
+                }
+#endif
+                ui.EndMenu();
+            }
+            ui.Separator();
+            if (!m_config->play_mode_enabled) {
+                if (ui.IconButton(Synapse::EIcon::Play, "Play (F5)")) {
+                    m_config->play_mode_enabled       = true;
+                    m_config->play_mode_capture_input = true;
+                }
+            } else {
+                if (ui.IconButton(Synapse::EIcon::Stop, "Stop Play")) {
+                    m_config->play_mode_enabled       = false;
+                    m_config->play_mode_capture_input = false;
                 }
             }
-            ImGui::EndMenu();
-        }
-        if (last_selected_render_method != m_config->selected_render_method) {
-            m_b_need_reload = true;
-            SetShowRenderConfigSubUI(false);
-        }
+            ui.SameLine();
+            const Trace::Stats trace_stats = Trace::GetStats();
+            if (ui.IconButton(
+                    Synapse::EIcon::Record,
+                    trace_stats.recording ? "Stop Trace" : "Start Trace",
+                    trace_stats.recording
+                )) {
+                if (trace_stats.recording) {
+                    Trace::StopRecording();
+                } else {
+                    Trace::StartRecording();
+                }
+            }
+            ui.SameLine();
+            if (ui.IconButton(Synapse::EIcon::Profiler, "Open MoerProfiler")) {
+                ui.OpenPopup("EditorProfilerLaunchPopup");
+            }
+            if (ui.BeginPopup("EditorProfilerLaunchPopup")) {
+                if (ui.MenuItem("Open Profiler")) {
+                    LaunchProfilerProcess();
+                }
 
-        if (ImGui::BeginMenu("Window")) {
+                const Utf8String trace_csv_path = Trace::GetCsvPath();
+                ui.BeginDisabled(trace_csv_path.empty());
+                if (ui.MenuItem("Open Current Trace")) {
+                    LaunchProfilerProcess(std::filesystem::path(trace_csv_path.c_str()));
+                }
+                ui.EndDisabled();
 
-            ImGui::MenuItem("Scene Color", nullptr, &m_b_show_scene_color);
-            ImGui::MenuItem("Hierarchy", nullptr, &m_b_show_hierarchy);
-            ImGui::MenuItem("Inspector", nullptr, &m_b_show_inspector);
-            ImGui::MenuItem("Configs", nullptr, &m_b_show_config);
-            ImGui::MenuItem("Scene Editing", nullptr, &m_b_show_scene_editing);
-            // ImGui::MenuItem("Demo", nullptr, &m_b_show_demo);
-#if WITH_PROFILE
-            ImGui::MenuItem("Memory Profiler", nullptr, &m_b_show_memory_profiler);
-#endif
-            ImGui::EndMenu();
+                if (ui.MenuItem("Open Trace...")) {
+                    OpenProfilerCapturePicker();
+                }
+                ui.EndPopup();
+            }
+            ui.EndMenuBar();
         }
-        ImGui::EndMenuBar();
     }
-    ImGui::End();
-#if WITH_PROFILE
-    if (m_b_show_memory_profiler) {
-        ShowMemoryProfiler(&m_b_show_memory_profiler);
-    }
-#endif
+    ui.EndMainDockspace();
+    ResetState();
     ShowSceneColor();
-    ShowHierarchy(scene);
-    ShowInspector(scene);
-    ShowConfig(scene);
-    m_remote_examples_ui.ShowWindow(m_remote_controller);
-    ShowSceneEditing(scene);
+    ShowConfig();
+#if WITH_PROFILE
+    m_runtime_profiler.TickUI();
+#endif
+    ShowOverlay();
 
+    ApplyInputSnapshot();
+    m_synapse_context->EndFrame();
     m_ui_renderer->EndGUIFrame();
-}
-
-void EditorUI::ShowSceneEditing(Scene& scene) {
-    m_scene_editing_ui.ShowWindow(&m_b_show_scene_editing, scene);
-}
-
-void EditorUI::ShowFileMenu(Scene& scene, bool is_scene_loading) {
-    const std::string file_menu_label = BuildFileMenuLabel(m_config->scene_path);
-    if (!ImGui::BeginMenu(file_menu_label.c_str())) {
-        return;
-    }
-
-    if (ImGui::MenuItem("Open Scene...", nullptr, false, !is_scene_loading)) {
-        std::string selected_path;
-        switch (OpenSceneFileDialog(selected_path)) {
-            case ESceneFileDialogResult::Selected:
-                LOG_INFO("User selected file: {}", selected_path);
-                m_b_need_reload           = true;
-                m_config->scene_path      = std::move(selected_path);
-                m_last_file_action_status = "Open Scene requested";
-                break;
-            case ESceneFileDialogResult::Cancelled:
-                LOG_INFO("User pressed cancel.");
-                break;
-            case ESceneFileDialogResult::Error:
-                m_last_file_action_status = "Open Scene failed. Check log.";
-                break;
-        }
-    }
-
-    if (ImGui::MenuItem("Import Into Current Scene...", nullptr, false, scene.IsReady())) {
-        std::string selected_path;
-        if (OpenSceneFileDialog(selected_path) == ESceneFileDialogResult::Selected) {
-            const Scene::ImportSceneFromFileResult result = scene.ImportSceneFromFileSync(selected_path);
-            if (result) {
-                m_last_file_action_status =
-                    "Imported scene entities: " + std::to_string(result.imported_entity_count);
-            } else {
-                m_last_file_action_status = "Import failed: " + result.error_message;
-            }
-        }
-    }
-
-    if (ImGui::BeginMenu("Scene Cache")) {
-        if (ImGui::MenuItem("Save State Cache")) {
-            if (scene.SaveStateCache()) {
-                m_last_file_action_status = "State cache saved";
-            } else {
-                m_last_file_action_status = "Save State failed. Check log.";
-            }
-        }
-
-        const bool can_restore_source_scene = scene.IsReady() && !scene.GetSourceFilePath().empty();
-
-        if (ImGui::MenuItem("Load State Cache", nullptr, false, can_restore_source_scene)) {
-            m_b_need_reload           = true;
-            m_last_file_action_status = "Load Cache requested";
-        }
-
-        if (ImGui::MenuItem("Reset To Source Scene", nullptr, false, can_restore_source_scene)) {
-            if (scene.ResetToSourceScene()) {
-                m_b_need_reload           = true;
-                m_last_file_action_status = "Reset Cache requested";
-            } else {
-                m_last_file_action_status = "Reset failed. Check log.";
-            }
-        }
-
-        ImGui::EndMenu();
-    }
-
-    ImGui::Separator();
-    if (ImGui::MenuItem("Exit")) {
-        WindowContext::RequestClose(WindowContext::GetMainWindow());
-    }
-    ImGui::EndMenu();
-}
-
-void EditorUI::ShowHierarchy(Scene& scene) {
-    if (!m_b_show_hierarchy) {
-        return;
-    }
-
-    if (!ImGui::Begin("Hierarchy", &m_b_show_hierarchy)) {
-        ImGui::End();
-        return;
-    }
-
-    if (!scene.IsReady()) {
-        ImGui::TextDisabled("scene加载中");
-        ImGui::End();
-        return;
-    }
-
-    if (!scene.IsValidNodeEntity(m_selected_node)) {
-        m_selected_node = entt::null;
-    }
-
-    const entt::entity root_entt = scene.GetRootNodeEntity();
-    if (!scene.IsValidNodeEntity(root_entt)) {
-        ImGui::TextDisabled("Root node not found.");
-        ImGui::End();
-        return;
-    }
-
-    auto draw_node = [&](auto& self, entt::entity entity) -> void {
-        const std::string  label        = scene.GetNodeDisplayName(entity);
-        const bool         selected     = (m_selected_node == entity);
-        const bool         has_children = scene.GetNodeChildCount(entity) > 0;
-        ImGuiTreeNodeFlags tree_flags   = ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_OpenOnArrow;
-
-        if (selected) {
-            tree_flags |= ImGuiTreeNodeFlags_Selected;
-        }
-        if (!has_children) {
-            tree_flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
-        }
-
-        ImGui::PushID(static_cast<int>(entt::to_integral(entity)));
-        ImGui::SetNextItemOpen(false, ImGuiCond_Once);
-        const bool is_open = ImGui::TreeNodeEx(label.c_str(), tree_flags);
-        if (ImGui::IsItemClicked()) {
-            m_selected_node = entity;
-        }
-
-        if (has_children && is_open) {
-            scene.ForEachNodeChild(entity, [&](entt::entity child_entt) {
-                self(self, child_entt);
-            });
-            ImGui::TreePop();
-        }
-        ImGui::PopID();
-    };
-
-    scene.ForEachNodeChild(root_entt, [&](entt::entity child_entt) {
-        draw_node(draw_node, child_entt);
-    });
-
-    ImGui::End();
-}
-
-void EditorUI::ShowInspector(Scene& scene) {
-    m_inspector_ui.ShowWindow(&m_b_show_inspector, &scene, m_selected_node);
 }
 
 void EditorUI::RenderGUI(Render::CommandList& cmd_list, const Render::TextureView& final_output) {
@@ -518,249 +264,305 @@ void EditorUI::PresentWindows() {
     m_ui_renderer->PresentWindows();
 }
 
-bool EditorUI::IsSeperateWindow() const {
-    auto* current_window = ImGui::FindWindowByName("Scene Color");
-    if (!current_window) {
-        return false;
-    }
-    return current_window->ParentWindow == nullptr;
-}
-
-TextureView EditorUI::GetWindowFrameBuffer() {
-    auto* current_window = ImGui::FindWindowByName("Scene Color");
-    if (current_window && current_window->ParentWindow == nullptr && current_window->Viewport) {
-        return m_ui_renderer->GetWindowFrameBuffer(current_window->Viewport);
-    }
-    return TextureView();
+void EditorUI::PublishSceneRenderOutput(Render::TextureView resource) {
+    m_ui_renderer->PublishRenderOutput(m_scene_render_output_slot, resource);
 }
 
 void EditorUI::ShowSceneColor() {
-    ImGuiIO&         io           = ImGui::GetIO();
-    ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_MenuBar;
-
-    const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
     if (!m_b_show_scene_color) {
-        m_b_scene_color_mouse_captured              = false;
-        WindowInput::Get().is_active                = false;
-        WindowInput::Get().m_scene_color_resolution = uint2(0u, 0u);
-        WindowInput::Get().m_scene_color_pos        = uint2(0u, 0u);
+        m_scene_color_input_active = false;
+        m_scene_color_focused = false;
         return;
     }
-    if (!ImGui::Begin("Scene Color", &m_b_show_scene_color, window_flags)) {
-        // Should not call ImGui::End() here
-        m_b_scene_color_mouse_captured              = false;
-        WindowInput::Get().is_active                = false;
-        WindowInput::Get().m_scene_color_resolution = uint2(0u, 0u);
-        WindowInput::Get().m_scene_color_pos        = uint2(0u, 0u);
+    const Synapse::SceneViewportState scene_view =
+        m_synapse_context->DrawSceneViewportPanel("Scene Color", &m_b_show_scene_color, *m_ui_renderer);
+    if (!scene_view.visible) {
+        m_scene_color_input_active = false;
+        m_scene_color_focused = false;
         return;
     }
-
-    float2 scene_size = {0, 0};
-
-    static float2 xy_ratio = {16, 9};
-    // auto          menu_rect = ImGui::GetCurrentWindow()->MenuBarRect();
-
-    auto* current_window      = ImGui::FindWindowByName("Scene Color");
-    bool  m_b_separate_window = current_window->ParentWindow == nullptr;
-    auto  menu_rect           = current_window->MenuBarRect();
-    auto  menu_bar            = current_window->MenuBarHeight();
-
-    scene_size.x = current_window->Size.x;
-    scene_size.y = current_window->Size.y + current_window->Pos.y - menu_rect.Max.y; // what is this?
-
-    auto   window_rect = current_window->Rect(); // this is main window rect
-    ImRect parent_rect{};
-
-    if (m_b_separate_window) {
-
-        parent_rect = {
-            current_window->Pos.x,
-            current_window->Pos.y,
-            current_window->Pos.x + current_window->Size.x,
-            current_window->Pos.y + current_window->Size.y
-        };
-
-        float2 local_pos = {window_rect.Min.x - parent_rect.Min.x, menu_rect.Max.y - parent_rect.Min.y};
-
-        m_scene_color_resolution = {scene_size.x, scene_size.y};
-        m_scene_color_pos        = {local_pos.x, local_pos.y};
-    } else {
-        parent_rect = current_window->ParentWindow->Rect();
-
-        float2 local_pos = {
-            window_rect.Min.x - parent_rect.Min.x, menu_rect.Max.y + menu_bar - parent_rect.Min.y
-        };
-
-        m_scene_color_resolution = {scene_size.x, scene_size.y};
-        m_scene_color_pos        = {local_pos.x, local_pos.y};
+    m_scene_color_resolution = scene_view.content_resolution;
+    m_scene_color_pos        = scene_view.content_pos;
+    m_scene_color_hovered    = scene_view.hovered;
+    m_scene_color_focused    = scene_view.focused;
+    if (scene_view.input_started) {
+        m_scene_color_input_active = true;
     }
-
-    WindowInput::Get().m_scene_color_resolution = uint2(
-        m_scene_color_resolution.x > 0.f ? static_cast<uint>(m_scene_color_resolution.x) : 0u,
-        m_scene_color_resolution.y > 0.f ? static_cast<uint>(m_scene_color_resolution.y) : 0u
-    );
-    WindowInput::Get().m_scene_color_pos = uint2(
-        m_scene_color_pos.x > 0.f ? static_cast<uint>(m_scene_color_pos.x) : 0u,
-        m_scene_color_pos.y > 0.f ? static_cast<uint>(m_scene_color_pos.y) : 0u
-    );
-
-    // inject. Needs to be refactored (camera control)
-    // 鼠标按下起点在SceneColor内时，才捕获本次拖拽并控制摄像机
-    static constexpr float border = 4.f;
-
-    const float  scene_color_top = menu_rect.Max.y + (m_b_separate_window ? 0.f : menu_bar);
-    const ImVec2 scene_color_min = ImVec2(window_rect.Min.x + border, scene_color_top + border);
-    const ImVec2 scene_color_max = ImVec2(
-        window_rect.Min.x + m_scene_color_resolution.x - border,
-        scene_color_top + m_scene_color_resolution.y - border
-    );
-    const ImVec2 mouse_pos = ImGui::GetMousePos();
-
-    const bool b_scene_color_hovered = mouse_pos.x > scene_color_min.x && mouse_pos.x < scene_color_max.x &&
-                                       mouse_pos.y > scene_color_min.y && mouse_pos.y < scene_color_max.y;
-
-    const bool b_mouse_clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                                 ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
-                                 ImGui::IsMouseClicked(ImGuiMouseButton_Right);
-    const bool b_mouse_down    = WindowInput::Get().mouse_button_state[MouseButtons::Left] ||
-                                 WindowInput::Get().mouse_button_state[MouseButtons::Middle] ||
-                                 WindowInput::Get().mouse_button_state[MouseButtons::Right];
-
-    if (!b_mouse_down) {
-        m_b_scene_color_mouse_captured = false;
-    } else if (!m_b_scene_color_mouse_captured && b_mouse_clicked && b_scene_color_hovered) {
-        m_b_scene_color_mouse_captured     = true;
-        WindowInput::Get().is_cursor_dirty = true;
-        WindowInput::Get().cursor_delta_x  = 0.f;
-        WindowInput::Get().cursor_delta_y  = 0.f;
+    if (!scene_view.focused || !scene_view.mouse_down) {
+        m_scene_color_input_active = false;
     }
-
-    WindowInput::Get().is_active =
-        m_b_scene_color_mouse_captured ||
-        (b_scene_color_hovered && WindowInput::Get().key_button_switch_state[KeyButtons::F]);
-
-    ImGui::End();
+    m_scene_render_output_slot = scene_view.render_output_slot;
 }
 
-void EditorUI::ShowConfig(Scene& scene) {
-    ImGuiIO&         io           = ImGui::GetIO();
-    ImGuiWindowFlags window_flags = ImGuiWindowFlags_None;
+void EditorUI::ShowConfig() {
+    Synapse::Context& ui = *m_synapse_context;
 
     if (!m_b_show_config) {
         return;
     }
-    if (!ImGui::Begin("Configs", &m_b_show_config, window_flags)) {
+    if (!ui.BeginPanel(Synapse::PanelDesc{.name = "Configs", .open = &m_b_show_config})) {
         return;
     }
 
-    ImGui::PushItemWidth(120); // 设置所有组件width为120
+    ui.PushItemWidth(ui.GetTheme().item_width);
 
-    EditorUIStyle::ShowStyleSelector("Style##Default");
+    if (ui.TreeNode("Trace")) {
+        const Moer::Trace::Stats trace_stats = Moer::Trace::GetStats();
+        ui.Text("Enabled: %s", trace_stats.enabled ? "Yes" : "No");
+        ui.Text("Recording: %s", trace_stats.recording ? "On" : "Off");
+        if (trace_stats.recording) {
+            if (ui.Button("Stop Trace")) {
+                Moer::Trace::StopRecording();
+            }
+        } else {
+            if (ui.Button("Start Trace")) {
+                Moer::Trace::StartRecording();
+            }
+        }
+        ui.Text("Connected: %s", trace_stats.connected ? "Yes" : "No");
+        ui.Text("Queued Events: %llu", static_cast<unsigned long long>(trace_stats.queued_events));
+        ui.Text("Dropped Events: %llu", static_cast<unsigned long long>(trace_stats.dropped_events));
+        ui.TreePop();
+    }
 
     // MARK: Common Configs
 
     /////////////////////////////////////////////////// Begin Disabled Here
     // 避免场景加载一半，切换场景或渲染器，导致崩溃
-    const bool is_scene_loading = !scene.IsReady() && scene.IsStartLoading();
-    ImGui::BeginDisabled(is_scene_loading);
+    Scene* scene = SceneGlobalEntry::Get().GetScene();
 
-    if (!m_last_file_action_status.empty()) {
-        ImGui::TextDisabled("File Action: %s", m_last_file_action_status.c_str());
+    bool is_scene_found_but_not_ready = false;
+    if (scene) {
+        is_scene_found_but_not_ready = !scene->IsReady() && scene->IsStartLoading();
+    } else {
+        LOG_WARNING(MOER_TEXT("Please bind a scene by `SceneGlobalEntry::Get().BindScene(scene)`"));
+    }
+    ui.BeginDisabled(is_scene_found_but_not_ready);
+
+    // Render Method
+    {
+        auto last_selected_render_method = m_config->selected_render_method;
+        if (ui.BeginCombo(
+                "Render Method",
+                k_render_method_names[static_cast<uint>(m_config->selected_render_method)].data()
+            )) {
+            for (int i = 0; i < static_cast<int>(std::size(k_render_method_names)); i++) {
+                const bool is_selected = (m_config->selected_render_method == static_cast<ERenderMethod>(i));
+                if (ui.Selectable(k_render_method_names[i].data(), is_selected)) {
+                    m_config->selected_render_method = static_cast<ERenderMethod>(i);
+                }
+                if (is_selected) {
+                    ui.SetItemDefaultFocus();
+                }
+            }
+            ui.EndCombo();
+        }
+        if (last_selected_render_method != m_config->selected_render_method) {
+            m_b_need_reload = true;
+        }
     }
 
-    if (ImGui::TreeNode("Camera")) {
-        ImGui::SliderFloat("Speed (log10)", &m_config->camera_speed_log10, -1.f, 2.6f);
+    { // Scene Path
+        size_t      last_slash = m_config->scene_path.find_last_of("/\\");
+        std::string scene_name = (last_slash == std::string::npos) ?
+                                     m_config->scene_path :
+                                     m_config->scene_path.substr(last_slash + 1);
+        if (ui.Button("Open Scene")) {
+            static constexpr std::array<FileDialog::Filter, 5> scene_filters = {{{
+                MOER_ASCII_TEXT("All Support Formats"),
+                MOER_ASCII_TEXT("glb,gltf,fbx,obj,dae")
+            }, {
+                MOER_ASCII_TEXT("glTF 2.0"),
+                MOER_ASCII_TEXT("glb,gltf")
+            }, {
+                MOER_ASCII_TEXT("FBX"),
+                MOER_ASCII_TEXT("fbx")
+            }, {
+                MOER_ASCII_TEXT("Wavefront"),
+                MOER_ASCII_TEXT("obj")
+            }, {
+                MOER_ASCII_TEXT("Moer Renderer Scene (WIP)"),
+                MOER_ASCII_TEXT("json")
+            }}};
+            String selected_scene_path{};
+            const FileDialog::EOpenFileStatus result = FileDialog::OpenFile(FileDialog::OpenFileRequest{
+                .filters = scene_filters,
+                .callback = StoreSelectedPlatformPath,
+                .user_data = &selected_scene_path,
+            });
+            if (result == FileDialog::EOpenFileStatus::Success) {
+                LOG_INFO(MOER_TEXT("User selected file: {}"), selected_scene_path);
 
-        ImGui::Checkbox("Override Projection", &m_config->camera_projection_override_enabled);
-
-        if (!m_config->camera_projection_override_enabled) {
-            ImGui::TextDisabled("Using scene camera projection.");
+                // Prepare for reload
+                m_b_need_reload      = true;
+                m_config->scene_path = PlatformToUtf8(selected_scene_path).Native();
+            } else if (result == FileDialog::EOpenFileStatus::Cancelled) {
+                LOG_INFO(MOER_TEXT("User pressed cancel."));
+            }
         }
+        ui.SameLine();
+        ui.Text("Current: [%s]", scene_name.c_str());
+    }
 
-        ImGui::BeginDisabled(!m_config->camera_projection_override_enabled);
-        ImGui::SliderFloat("Fov Y", &m_config->camera_fovy, 1.f, 160.f);
+    if (ui.TreeNode("Camera")) {
 
-        ImGui::SliderFloat("Near Clip (log10)", &m_config->camera_near_clip_log10, -4.f, 0.99f);
-        ImGui::SliderFloat("Far Clip (log10)", &m_config->camera_far_clip_log10, 0.f, 4.f);
+        ui.SliderFloat("Speed (log10)", &m_config->camera_speed_log10, -1.f, 2.6f);
+        ui.SliderFloat("Fov Y", &m_config->camera_fovy, 1.f, 160.f);
+
+        ui.SliderFloat("Near Clip (log10)", &m_config->camera_near_clip_log10, -4.f, 0.99f);
+        ui.SliderFloat("Far Clip (log10)", &m_config->camera_far_clip_log10, 0.f, 4.f);
         m_config->camera_near_clip_log10 =
             std::min(m_config->camera_near_clip_log10, m_config->camera_far_clip_log10 - 0.1f);
-        ImGui::EndDisabled();
 
-        ImGui::TreePop();
+        ui.TreePop();
     }
 
-    const bool remote_enabled = m_remote_controller.IsEnabled();
-    if (ImGui::TreeNode("Remote", "Remote Module: [%s]", remote_enabled ? "Running" : "Closed")) {
-        ImGui::BeginDisabled(!m_remote_controller.IsValid());
-        if (ImGui::Button(remote_enabled ? "Disable" : "Enable")) {
-            m_remote_controller.SetEnabled(!remote_enabled);
+    const std::string active_renderer = std::string(
+        k_render_method_names[static_cast<uint>(m_config->selected_render_method)]
+    );
+    if (const auto renderer_iter = m_renderer_config_sections.find(active_renderer);
+        renderer_iter != m_renderer_config_sections.end() && !renderer_iter->second.empty()) {
+        Array<std::string> section_names;
+        section_names.reserve(renderer_iter->second.size());
+        for (const auto& [section_name, func] : renderer_iter->second) {
+            section_names.push_back(section_name);
         }
-        ImGui::EndDisabled();
+        std::sort(section_names.begin(), section_names.end());
 
-        if (remote_enabled) {
-            const auto remote_config = m_remote_controller.GetConfigSnapshot();
-
-            ImGui::Text("Bind Address: %s", remote_config.bind_address.c_str());
-            ImGui::Text("HTTP Port: %u", remote_config.http_port);
-            ImGui::Text("WebSocket Port: %u", remote_config.websocket_port);
-
-            if (ImGui::Button("Open Remote Examples")) {
-                m_remote_examples_ui.Open();
+        ui.SeparatorText(active_renderer.c_str());
+        for (const std::string& section_name : section_names) {
+            auto section_iter = renderer_iter->second.find(section_name);
+            if (section_iter == renderer_iter->second.end()) {
+                continue;
             }
-        } else {
-            m_remote_examples_ui.Close();
-        }
-
-        ImGui::TreePop();
-    }
-
-    if (m_b_show_render_config_sub_ui) {
-        ImGui::Separator();
-        switch (m_config->selected_render_method) {
-            case ERenderMethod::Raster:
-                m_raster_ui.ShowConfig();
-                break;
-            case ERenderMethod::Raytracing:
-                m_raytracing_ui.ShowConfig();
-                break;
-            default:
-                break;
+            if (ui.TreeNode(section_name.c_str())) {
+                section_iter->second(ui);
+                ui.TreePop();
+            }
         }
     }
 
-    ImGui::Separator();
+    ui.Separator();
 
-    ImGui::EndDisabled();
-    if (is_scene_loading) {
-        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Scene is loading... Please wait.");
+    ui.EndDisabled();
+    if (is_scene_found_but_not_ready) {
+        ui.TextColored({1.0f, 0.4f, 0.4f, 1.0f}, "Scene is loading... Please wait.");
     }
     /////////////////////////////////////////////////// End Disabled Here
 
-    ImGui::Text("Infos: ");
-    ImGui::Text("\tFPS: %.1f", io.Framerate);
-    ImGui::Text("\tFrame Time: %.1f ms", 1000.0f / io.Framerate);
+    const float framerate = ui.GetFramerate();
+    ui.Text("Infos: ");
+    ui.Text("\tFPS: %.1f", framerate);
+    ui.Text("\tFrame Time: %.1f ms", 1000.0f / framerate);
 
-    // Custom Func
-    for (auto& [name, func] : m_show_func_map) {
-        ImGui::Separator();
-        func();
-    }
+    ui.PopItemWidth();
 
-    ImGui::PopItemWidth(); // 和PushItemWidt相对应
-
-    ImGui::End();
+    ui.EndPanel();
 }
 
 void EditorUI::ResetState() {
     m_b_need_reload = false;
 }
 
-void EditorUI::RegisterUIFunc(std::string _name, std::function<void()>&& _func) {
-    m_show_func_map[_name] = std::move(_func);
+void EditorUI::RegisterRendererConfigSection(
+    std::string renderer_name,
+    std::string section_name,
+    RendererConfigDrawFunc&& func
+) {
+    m_renderer_config_sections[std::move(renderer_name)][std::move(section_name)] = std::move(func);
 }
 
-void EditorUI::UnregisterUIFunc(std::string _name) {
-    m_show_func_map.erase(_name);
+void EditorUI::UnregisterRendererConfigSection(std::string renderer_name, std::string section_name) {
+    auto renderer_iter = m_renderer_config_sections.find(renderer_name);
+    if (renderer_iter == m_renderer_config_sections.end()) {
+        return;
+    }
+
+    renderer_iter->second.erase(section_name);
+    if (renderer_iter->second.empty()) {
+        m_renderer_config_sections.erase(renderer_iter);
+    }
+}
+
+void EditorUI::RegisterOverlayFunc(std::string _name, std::function<void()>&& _func) {
+    m_overlay_func_map[_name] = std::move(_func);
+}
+
+void EditorUI::UnregisterOverlayFunc(std::string _name) {
+    m_overlay_func_map.erase(_name);
+}
+
+void EditorUI::BindConsoleWindowState(std::function<bool()> getter, std::function<void(bool)> setter) {
+    m_get_console_window_visible = std::move(getter);
+    m_set_console_window_visible = std::move(setter);
+}
+
+void EditorUI::ShowOverlay() {
+    for (auto& [name, func] : m_overlay_func_map) {
+        func();
+    }
+}
+
+void EditorUI::ApplyInputSnapshot() {
+    const Render::ImGuiIOInputSnapshot& input_snapshot = m_ui_renderer->GetInputSnapshot();
+    if (!AnyCameraMouseButtonDown(input_snapshot)) {
+        m_scene_color_input_active = false;
+    }
+    const bool scene_camera_active = m_scene_color_focused && m_scene_color_input_active;
+
+    Render::ApplyImGuiIOInputToWindowInput(
+        input_snapshot,
+        Render::ImGuiIOInputApplyParams{
+            .scene_active            = scene_camera_active,
+            .play_capture            = m_config->play_mode_enabled && m_config->play_mode_capture_input,
+            .external_key_block      = false,
+            .external_cursor_visible = false,
+        }
+    );
+}
+
+void EditorUI::ApplyPlayInput() {
+    WindowInput& input = WindowInput::Get();
+
+    input.is_active                = true;
+    input.force_cursor_hidden      = true;
+    input.force_cursor_visible     = false;
+    input.play_mode_camera_control = true;
+    input.block_camera_keyboard_input = false;
+
+    input.cursor_last_x = input.native_mouse_pos.x;
+    input.cursor_last_y = input.native_mouse_pos.y;
+    if (input.is_cursor_dirty) {
+        input.cursor_delta_x = 0.0f;
+        input.cursor_delta_y = 0.0f;
+        input.is_cursor_dirty = false;
+    } else {
+        input.cursor_delta_x = input.native_mouse_delta.x;
+        input.cursor_delta_y = input.native_mouse_delta.y;
+    }
+    input.scroll_offset = 0.0f;
+
+    for (uint32_t i = 0; i < MouseButtons::MouseButtonCount; ++i) {
+        input.mouse_button_state[i] = input.native_mouse_button_down[i];
+    }
+
+    for (uint32_t i = 0; i < KeyButtons::KeyButtonCount; ++i) {
+        input.key_button_state[i] = input.native_key_down[i];
+        if (input.native_key_released[i]) {
+            input.key_button_switch_state[i] = !input.key_button_switch_state[i];
+        }
+    }
+
+    ClearCameraInput(input);
+    input.camera_forward  = input.native_key_down[KeyButtons::W];
+    input.camera_backward = input.native_key_down[KeyButtons::S];
+    input.camera_left     = input.native_key_down[KeyButtons::A];
+    input.camera_right    = input.native_key_down[KeyButtons::D];
+    input.camera_up       = input.native_key_down[KeyButtons::E];
+    input.camera_down     = input.native_key_down[KeyButtons::Q];
+    input.speed_up        = input.native_key_down[KeyButtons::UP];
+    input.speed_down      = input.native_key_down[KeyButtons::DOWN];
+    input.reset_speed     = input.native_key_down[KeyButtons::F];
 }
 
 } // namespace Moer
