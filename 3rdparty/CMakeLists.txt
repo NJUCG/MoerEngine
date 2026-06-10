@@ -11,7 +11,9 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/python312.cmake)
 # include(${CMAKE_CURRENT_SOURCE_DIR}/rtxmg.cmake)
 
 # spdlog
-set(SPDLOG_USE_STD_FORMAT ON)
+set(SPDLOG_USE_STD_FORMAT ON CACHE BOOL "Use std::format in spdlog" FORCE)
+set(SPDLOG_WCHAR_SUPPORT ON CACHE BOOL "Support wchar api in spdlog" FORCE)
+set(SPDLOG_WCHAR_CONSOLE ON CACHE BOOL "Support wchar console output in spdlog" FORCE)
 set(SPDLOG_BUILD_SHARED ON) # 需要build shared，否则Moer::Core模块设置log_level为debug，但是Moer::Render模块使用spdlog静态库时，log_level又是info，导致日志无法输出（一个经典的静态库/动态库问题）
 set(SPDLOG_SANITIZE_ADDRESS ON)
 add_subdirectory(spdlog)
