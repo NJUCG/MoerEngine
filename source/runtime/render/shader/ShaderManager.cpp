@@ -119,12 +119,42 @@ void ShaderManager::LoadCache(std::filesystem::path _path) {
         return;
     }
 
-    std::ifstream fs(_path, std::ios::binary);
-    InputStream   stream(fs);
-    //MARK. not implemented
-    // stream >> shader_resources_cache;
-}
+    if (std::filesystem::file_size(file_path) == 0) {
+        return;
+    }
 
+    std::ifstream fs(file_path, std::ios::binary);
+    if (!fs.is_open()) {
+        return;
+    }
+
+    auto rebuild_loaded_shader_cache_runtime_state = [](ShaderResourcesCache& cache) {
+        auto get_next_shader_key_offset = [](const TypedShaderCache& typed_cache) {
+            uint64 next_key_offset = 0;
+
+            for (const auto& [shader_input, shader_key] : typed_cache.shader_cache_map) {
+                next_key_offset = std::max(next_key_offset, shader_key.hash + 1);
+            }
+            for (const auto& [shader_key, shader_entry] : typed_cache.shader_entry_cache) {
+                next_key_offset = std::max(next_key_offset, shader_key.hash + 1);
+            }
+
+            return next_key_offset;
+        };
+
+        for (auto& typed_cache : cache.code_cache) {
+            typed_cache.key_offset = get_next_shader_key_offset(typed_cache);
+        }
+    };
+
+    ShaderResourcesCache loaded_cache;
+    InputStream          stream(fs);
+    stream >> loaded_cache;
+    if (!fs.fail()) {
+        rebuild_loaded_shader_cache_runtime_state(loaded_cache);
+        shader_resources_cache = std::move(loaded_cache);
+    }
+}
 Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
 
     ShaderCompilerInput input{
