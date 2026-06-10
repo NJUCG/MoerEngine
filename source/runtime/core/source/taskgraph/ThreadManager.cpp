@@ -163,7 +163,7 @@ RunnableThread::RunnableThread(Runnable* _in_runnable, ThreadAttributes _attribu
     create_event.Wait();
     this->name = _attributes.name;
 
-    SPDLOG_INFO("[{}] {} thread created", name, this->id);
+    // SPDLOG_DEBUG("[{}] {} thread created", name, this->id);
 }
 
 uint32_t RunnableThread::Run() {

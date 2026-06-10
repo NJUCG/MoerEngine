@@ -34,6 +34,7 @@ std::string BuildDebugLogSiteKey(std::source_location location) {
     stream << location.file_name() << ':' << location.line();
     return stream.str();
 }
+
 } // namespace
 
 // 返回屏幕空间全屏三角形绘制共用的 draw 参数。
@@ -159,10 +160,13 @@ void RasterTool::TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig
 // 执行 Scene 同步阶段积累的 copy/gfx command list。
 void RasterTool::ExecuteScenePendingCommands(Scene& scene, RenderDevice& device, CommandQueue& gfx_queue) {
     auto&& scene_cmd_list = scene.PopPendingCommandList();
-    auto   copy_evt       = device.GetCopyQueue().Execute(scene_cmd_list.copy_queue_cmd_list.Submit());
+
+    auto copy_evt = device.GetCopyQueue().Execute(scene_cmd_list.copy_queue_cmd_list.Submit());
     device.GetCopyQueue().Sync(copy_evt.timeline);
+
     gfx_queue.Execute(scene_cmd_list.gfx_queue_cmd_list.Submit());
     gfx_queue.Sync();
+
     scene.ConsumePendingGpuSceneCommands();
 }
 

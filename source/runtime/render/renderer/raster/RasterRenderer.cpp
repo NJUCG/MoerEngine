@@ -18,12 +18,15 @@
 #include "SsrPass.h"
 #include "TonemappingPass.h"
 #include "debug/RenderDocApi.h"
-#include "misc/Timer.h"
+#include "misc/ScopedLogTimer.h"
 #include "scene/testcase/SceneTestCaseDispatcher.h"
 #include "scene/testcase/SceneTestCaseRunner.h"
 #include "window/WindowContext.h"
 
 #include <chrono>
+#include <optional>
+#include <string_view>
+#include <utility>
 
 #if WITH_CUDA
 #include "CudaPass.h"
@@ -48,6 +51,7 @@ RasterRenderer::RasterRenderer(
 ) :
     // Super
     Renderer(_resolution, _config, _hooks) {
+    ScopedLogTimer startup_timer("[Startup][RasterRenderer] RasterRenderer::Constructor() total");
 
     raster_context_ptr =
         MakeUnique<RasterContext>(device, manager, gfx_queue, bindless_array, cmd_list, scene, resolution);
@@ -242,7 +246,6 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
     // MARK: 3. Run Render Passes
 
     if (scene.IsReady()) {
-
         // 处理场景加载过程中遗留的命令
         RasterTool::ExecuteScenePendingCommands(scene, device, gfx_queue);
 
@@ -251,7 +254,6 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
             // 随手加一句，避免出错（重构完毕后可以尝试去除）
             cmd_list.UpdateBindlessArray(bindless_array);
-
             gfx_queue.Execute(cmd_list.Submit());
             gfx_queue.Sync();
         }

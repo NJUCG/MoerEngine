@@ -2,6 +2,7 @@
 
 // Runtime
 #include "config/ConfigManager.h"
+#include "misc/ScopedLogTimer.h"
 #include "remote/RemoteConfig.h"
 #include "remote/RemoteModule.h"
 #include "rhi/RHI.h"
@@ -53,6 +54,8 @@ Engine::~Engine() {
 }
 
 void Engine::Init(int argc, const char** argv) {
+    ScopedLogTimer startup_timer("[Startup][Engine] Engine::Init total");
+
     // Init LogSystem
     LogSystem::Init(); // for LOG_DEBUG & LOG_TRACE when debug mode
 

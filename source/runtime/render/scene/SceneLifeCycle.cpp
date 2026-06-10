@@ -3,6 +3,7 @@
 
 #include "loader/LoaderInterface.h"
 #include "log/LogSystem.h"
+#include "misc/ScopedLogTimer.h"
 #include "rhi/RHI.h"
 #include "scene/NodeNameUtils.h"
 #include "scene/cache/SceneCache.h"
@@ -116,6 +117,8 @@ Scene::Scene() {
 }
 
 void Scene::LoadSceneInternal(const std::filesystem::path& file_path) {
+    ScopedLogTimer startup_timer("[Startup][Scene] LoadSceneInternal total");
+
     // start
     this->m_scene_load_info.Reset();
     this->m_scene_load_info.StartLoading();
@@ -126,8 +129,9 @@ void Scene::LoadSceneInternal(const std::filesystem::path& file_path) {
 
     // 1. logical scene
     SceneLoadRequest request{};
-    request.file_path        = file_path;
-    SceneImportResult result = LoaderInterface::LoadScene(request);
+    request.file_path = file_path;
+    SceneImportResult result{};
+    result = LoaderInterface::LoadScene(request);
 
     // failed in LogicalScene loading
     if (!result) {

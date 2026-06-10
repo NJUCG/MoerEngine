@@ -1,4 +1,5 @@
 #include "RuntimeAssets.h"
+#include "misc/ScopedLogTimer.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
@@ -27,7 +28,7 @@ RuntimeAssets::RuntimeAssets(std::filesystem::path _assets_path, Render::RenderD
     load_event        = LambdaTask::Create([this, evt]() {
                      TaskGraph::GetInterface().WaitUntilTaskComplete(evt, EThread::UNKNOWN_THREAD);
                      CompleteAndImportResources();
-                 }).Dispatch();
+                        }).Dispatch();
 }
 
 Render::TextureRef RuntimeAssets::GetTexture(std::string_view _name) const {
@@ -47,6 +48,8 @@ Render::TextureRef RuntimeAssets::GetDefaultEnvMap() const {
 }
 
 void RuntimeAssets::LoadTextures() {
+    ScopedLogTimer startup_timer("[Startup][RuntimeAssets] LoadTextures total");
+
     // Load textures
     using namespace Render;
     Array<ExportTexture> exp_textures;
@@ -62,7 +65,7 @@ void RuntimeAssets::LoadTextures() {
         CommandList cmd_list;
         if (std::filesystem::exists(texture_path)) {
             for (auto& entry : std::filesystem::directory_iterator(texture_path)) {
-                LOG_INFO("Load texture {}", entry.path().string());
+                // LOG_DEBUG("Load texture {}", entry.path().string());
                 if (entry.path().extension() == ".png") {
                     FILE* file = nullptr;
                     fopen_s(&file, entry.path().string().c_str(), "rb");
