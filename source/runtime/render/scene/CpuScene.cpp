@@ -112,6 +112,7 @@ void CpuScene::Update() {
     r.clear<ecs::CTagNeedUpdateMaterial>();
     r.clear<ecs::CTagNeedUpdateTransform>();
     r.clear<ecs::CTagNeedRebuildMesh>();
+    r.clear<ecs::CTagNeedRebuildRtBlas>();
 }
 
 uint CpuScene::GetPrimitiveId(entt::entity primitive_entt) const {

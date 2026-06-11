@@ -33,6 +33,17 @@ static void MarkSceneMeshRebuild(Scene& scene) {
     registry.emplace_or_replace<ecs::CTagNeedRebuildMesh>(*it);
 }
 
+static void MarkSceneRtBlasRebuild(Scene& scene) {
+    auto& registry = scene.r();
+    auto  view     = registry.view<ecs::CTagRootNode>();
+    auto  it       = view.begin();
+    if (it == view.end()) {
+        return;
+    }
+
+    registry.emplace_or_replace<ecs::CTagNeedRebuildRtBlas>(*it);
+}
+
 static void CollectNodeSubtreePostOrder(
     const entt::registry& registry,
     entt::entity          entity,
@@ -302,6 +313,7 @@ entt::entity Scene::CreatePrimitive(const PrimitiveCreateInfo& create_info) {
     entt::entity entity = logical_scene().UCreatePrimitive(create_info);
     if (entity != entt::null) {
         MarkSceneMeshRebuild(*this);
+        MarkSceneRtBlasRebuild(*this);
     }
     return entity;
 }
@@ -311,6 +323,7 @@ entt::entity Scene::CreateMesh(const MeshCreateInfo& create_info) {
     entt::entity entity = logical_scene().UCreateMesh(create_info);
     if (entity != entt::null) {
         MarkSceneMeshRebuild(*this);
+        MarkSceneRtBlasRebuild(*this);
     }
     return entity;
 }

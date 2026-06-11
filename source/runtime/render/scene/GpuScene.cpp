@@ -415,7 +415,12 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
     InitRaytracingScene(m_pending_cmd_lists.gfx_queue_cmd_list); // gfx_queue交给主线程执行
 }
 
-void GpuScene::Update(const ecs::LogicalScene& m_logical_scene, CpuScene& m_cpu_scene, bool rebuilt_mesh) {
+void GpuScene::Update(
+    const ecs::LogicalScene& m_logical_scene,
+    CpuScene&                m_cpu_scene,
+    bool                     rebuilt_mesh,
+    bool                     rebuilt_rt_blas
+) {
     UpdateLightBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
     UpdateMaterialBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
 
@@ -430,7 +435,11 @@ void GpuScene::Update(const ecs::LogicalScene& m_logical_scene, CpuScene& m_cpu_
         UpdateIndexMegaBuffer(m_pending_cmd_lists.gfx_queue_cmd_list);
 
         // Renderable 结构变化会改变 TLAS instance 数量，当前直接整批重建 RT scene
-        InitRaytracingScene(m_pending_cmd_lists.gfx_queue_cmd_list);
+        if (rebuilt_rt_blas) {
+            InitRaytracingScene(m_pending_cmd_lists.gfx_queue_cmd_list);
+        } else {
+            RebuildRaytracingSceneTlas(m_pending_cmd_lists.gfx_queue_cmd_list);
+        }
         return;
     }
 
@@ -773,6 +782,41 @@ void GpuScene::InitRaytracingScene(CommandList& cmd_list) {
     // 这个函数会在 非主线程 被执行，在这里提交命令，会导致gfx_queue死锁
     // RenderDevice::Get().GetCommandQueue(EQueueType::Graphics).Execute(cmd_list.Submit());
     // RenderDevice::Get().GetCommandQueue(EQueueType::Graphics).Sync();
+}
+
+void GpuScene::RebuildRaytracingSceneTlas(CommandList& cmd_list) {
+    auto& device    = RenderDevice::Get();
+    auto& cpu_scene = m_cpu_scene;
+
+    const uint primitive_count = cpu_scene.GetPrimitiveCount();
+    if (m_primitive_id_to_blas.size() != primitive_count) {
+        InitRaytracingScene(cmd_list);
+        return;
+    }
+
+    m_res.rt_scene = device.CreateRaytracingScene();
+
+    for (uint primitive_id = 0; primitive_id < primitive_count; ++primitive_id) {
+        RaytracingGeometryRef& blas_ref = m_primitive_id_to_blas[primitive_id];
+        if (!blas_ref.IsValid()) {
+            continue;
+        }
+
+        const uint instance_count = cpu_scene.GetInstanceCountForPrimitive(primitive_id);
+        for (uint instance_idx = 0; instance_idx < instance_count; ++instance_idx) {
+            const GInstance& ginst = cpu_scene.GetInstanceForPrimitive(primitive_id, instance_idx);
+
+            auto& instance = m_res.rt_scene->AddInstance();
+            instance.geom  = blas_ref;
+            instance.transform        = ginst.world_transform.ToTransposedMatrix3x4f();
+            instance.flag.need_create = true;
+            instance.custom_index     = static_cast<uint>(m_res.rt_scene->GetInstanceCount() - 1);
+            instance.visible_mask     = RTVM_ALL;
+            m_res.rt_scene->MarkModified(instance.instance_id);
+        }
+    }
+
+    cmd_list.UpdateRaytracingScene(m_res.rt_scene);
 }
 
 void GpuScene::UpdateRaytracingScene(CommandList& cmd_list) {

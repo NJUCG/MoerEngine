@@ -232,4 +232,7 @@ struct CTagNeedDestroyLight {};
 // Mesh resource 结构变化兜底：覆盖 CPrimitive / CMesh / CRenderable instance cache / CtxMegaBuffers 的全量同步。
 struct CTagNeedRebuildMesh {};
 
+// RT BLAS 几何结构变化兜底：仅在 primitive / mesh 资源真的发生变化时标记
+struct CTagNeedRebuildRtBlas {};
+
 } // namespace Moer::ecs

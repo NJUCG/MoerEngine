@@ -130,6 +130,7 @@ public:
         bool created_transform = false;
         bool destroyed_light   = false;
         bool rebuilt_mesh      = false;
+        bool rebuilt_rt_blas   = false;
 
         explicit operator bool() const {
             return did_sync;

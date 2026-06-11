@@ -33,7 +33,12 @@ public:
     GpuScene(const GpuScene&)            = delete;
     GpuScene& operator=(const GpuScene&) = delete;
 
-    void Update(const ecs::LogicalScene& logical_scene, CpuScene& cpu_scene, bool rebuilt_mesh);
+    void Update(
+        const ecs::LogicalScene& logical_scene,
+        CpuScene&                cpu_scene,
+        bool                     rebuilt_mesh,
+        bool                     rebuilt_rt_blas
+    );
 
 private:
     /**
@@ -127,6 +132,8 @@ public:
      * 更新 Raytracing Scene，更新所有 instance 的 transform
      */
     void UpdateRaytracingScene(CommandList& cmd_list);
+
+    void RebuildRaytracingSceneTlas(CommandList& cmd_list);
 
     /**
      * 获取 Raytracing Scene 引用
