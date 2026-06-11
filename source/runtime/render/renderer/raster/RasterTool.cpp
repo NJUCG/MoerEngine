@@ -29,10 +29,57 @@ constexpr StaticArray<std::string_view, CSM_MAX_CASCADES> s_shadow_draw_scope_na
     "Raster Shadow Draw CSM3"
 };
 
+constexpr std::string_view s_rt_scene_build_blas_scope_name  = "RTScene BuildBLAS";
+constexpr std::string_view s_rt_scene_build_tlas_scope_name  = "RTScene BuildTLAS";
+constexpr std::string_view s_rt_scene_update_tlas_scope_name = "RTScene UpdateTLAS";
+
 std::string BuildDebugLogSiteKey(std::source_location location) {
     std::ostringstream stream;
     stream << location.file_name() << ':' << location.line();
     return stream.str();
+}
+
+double FindGpuTime(const ProfileData& profile_data, std::string_view name) {
+    for (const auto& entry : profile_data.gpu_entries) {
+        if (entry.name == name) {
+            return entry.time;
+        }
+    }
+    return -1.0;
+}
+
+void LogRtSceneProfiling(CommandQueue& gfx_queue) {
+    const auto profile_data = gfx_queue.GetProfilerEntry();
+    if (profile_data.gpu_entries.empty()) {
+        return;
+    }
+
+    const double graphics_exec = FindGpuTime(profile_data, "Graphics Exec");
+    const double build_blas    = FindGpuTime(profile_data, s_rt_scene_build_blas_scope_name);
+    const double build_tlas    = FindGpuTime(profile_data, s_rt_scene_build_tlas_scope_name);
+    const double update_tlas   = FindGpuTime(profile_data, s_rt_scene_update_tlas_scope_name);
+    if (build_blas < 0.0 && build_tlas < 0.0 && update_tlas < 0.0) {
+        return;
+    }
+
+    std::ostringstream stream;
+    stream.setf(std::ios::fixed);
+    stream.precision(3);
+    stream << "[RTSceneProfile] ScenePending GPU(ms)";
+    if (graphics_exec >= 0.0) {
+        stream << " GraphicsExec=" << graphics_exec;
+    }
+    if (build_blas >= 0.0) {
+        stream << " BuildBLAS=" << build_blas;
+    }
+    if (build_tlas >= 0.0) {
+        stream << " BuildTLAS=" << build_tlas;
+    }
+    if (update_tlas >= 0.0) {
+        stream << " UpdateTLAS=" << update_tlas;
+    }
+
+    LOG_DEBUG("{}", stream.str());
 }
 
 } // namespace
@@ -98,14 +145,7 @@ void RasterTool::TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig
         return;
     }
 
-    auto find_gpu_time = [&profile_data](std::string_view name) -> double {
-        for (const auto& entry : profile_data.gpu_entries) {
-            if (entry.name == name) {
-                return entry.time;
-            }
-        }
-        return -1.0;
-    };
+    auto find_gpu_time = [&profile_data](std::string_view name) -> double { return FindGpuTime(profile_data, name); };
 
     auto sum_gpu_times = [&find_gpu_time](std::span<const std::string_view> names) -> double {
         double total = 0.0;
@@ -164,8 +204,9 @@ void RasterTool::ExecuteScenePendingCommands(Scene& scene, RenderDevice& device,
     auto copy_evt = device.GetCopyQueue().Execute(scene_cmd_list.copy_queue_cmd_list.Submit());
     device.GetCopyQueue().Sync(copy_evt.timeline);
 
-    gfx_queue.Execute(scene_cmd_list.gfx_queue_cmd_list.Submit());
+    gfx_queue.Execute(scene_cmd_list.gfx_queue_cmd_list.Submit().TickProfiling());
     gfx_queue.Sync();
+    // LogRtSceneProfiling(gfx_queue);
 
     scene.ConsumePendingGpuSceneCommands();
 }

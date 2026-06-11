@@ -87,6 +87,34 @@ struct GInstance {
 };
 
 /**
+ * GRtInstance: RT 专用的 per-renderable instance 数据
+ *
+ * 与 GInstance 的区别：
+ * - GInstance 是 raster 侧 per-CPrimitive 的 instance（与 draw call 1:1）
+ * - GRtInstance 是 RT 侧 per-renderable 的 instance（与 TLAS instance 1:1）
+ *
+ * primitive_table_offset:
+ *   指向 rt_primitive_table buffer 的起始偏移。
+ *   shader 侧用 GeometryIndex() 加上此偏移查询 primitive_id。
+ *
+ *   GeometryIndex() 与 CPrimitive 的对应关系：
+ *   一个 BLAS 对应一个 CMesh，该 CMesh 包含 N 个 CPrimitive。
+ *   每个 CPrimitive 在 BLAS 中对应一个 geometry（按 CMesh.primitive_entts
+ *   的顺序添加），因此 GeometryIndex() 返回值 = 该 CPrimitive 在
+ *   CMesh.primitive_entts 中的下标。
+ *
+ *   查询 primitive_id：
+ *     primitive_id = rt_primitive_table[primitive_table_offset + GeometryIndex()]
+ */
+struct GRtInstance {
+    float4x4 world_transform;         // 从 CNode 拷贝（避免依赖 raster 侧 m_instance_buf 排列）
+    uint     primitive_table_offset;   // rt_primitive_table[] 的起始偏移
+    uint     primitive_count;          // 该 mesh 包含的 CPrimitive 数量
+    uint     first_primitive_id;       // 该 mesh 第一个 CPrimitive 的 primitive_id
+    uint     _padding_rt_instance;
+};
+
+/**
  * GMaterial 和 CMaterial 是一一对应的
  */
 struct GMaterial {

@@ -162,6 +162,10 @@ struct GBufferPassParams {
     uint packed_tangent_buf_hdl; // CtxMegaBuffers.packed_tangent
     uint texcoord0_buf_hdl;      // CtxMegaBuffers.texcoord0
     uint index_buf_hdl;          // CtxMegaBuffers.index
+
+    // RT 专用（mesh-level BLAS 方案）
+    uint rt_instance_buf_hdl;          // GRtInstance[]（per-renderable）
+    uint rt_primitive_table_buf_hdl;   // uint[]（GeometryIndex → primitive_id 映射表）
 };
 
 struct RaytracingBindlessHandles {
@@ -198,6 +202,10 @@ struct RaytracingBindlessHandles {
 
     uint index_buf_hdl;
 
+    // RT 专用（mesh-level BLAS 方案）
+    uint rt_instance_buf_hdl;
+    uint rt_primitive_table_buf_hdl;
+
     //lighting
     uint poly_light_data;
     uint light_index;
@@ -206,9 +214,6 @@ struct RaytracingBindlessHandles {
     uint primitive_to_light;
     uint local_light_pdf;
     uint env_pdf;
-
-    uint padding0;
-    uint padding1;
 };
 
 struct SceneGlobalParams {

@@ -57,7 +57,7 @@ bool ProcessAnyHit(
 ) {
 
     Moer::GeometryRecord geom =
-        Moer::GetGeometryRecordFrom(param, instance_id, prim_id, barycentrics, Moer::EGA_UV, b_backface);
+        Moer::GetGeometryRecordFrom(param, instance_id, geom_id, prim_id, barycentrics, Moer::EGA_UV, b_backface);
 
     Moer::MaterialSample mat_sample =
         Moer::SampleGeometryMaterial(geom, 0.f, 0.f, 0.f, Moer::EMA_BaseColor | Moer::EMA_Transmission);
@@ -144,6 +144,7 @@ float3 UintHashToColor(uint _idx) {
         Moer::GeometryRecord geom = Moer::GetGeometryRecordFrom(
             param,
             payload.instance_id,
+            payload.geom_id,
             payload.prim_id,
             payload.barycentrics,
             Moer::EGA_All,

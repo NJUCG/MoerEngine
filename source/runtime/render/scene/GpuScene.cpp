@@ -1,6 +1,7 @@
 #include "GpuScene.h"
 
 #include "CpuScene.h"
+#include "misc/ScopedLogTimer.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
@@ -57,6 +58,10 @@ static void UploadByteBuffer(
         cmd_list.UpdateBindlessArray(bindless_array);
     }
 }
+
+static constexpr std::string_view s_rt_scene_build_blas_scope_name  = "RTScene BuildBLAS";
+static constexpr std::string_view s_rt_scene_build_tlas_scope_name  = "RTScene BuildTLAS";
+static constexpr std::string_view s_rt_scene_update_tlas_scope_name = "RTScene UpdateTLAS";
 
 /**
  * 这里存在着一点耦合问题：GpuScene需要修改CpuScene创建好的数据
@@ -673,32 +678,25 @@ void GpuScene::InitRaytracingScene(CommandList& cmd_list) {
     auto& cpu_scene = m_cpu_scene;
 
     /**
-     * RT Scene 数据结构说明（与 Raster 保持一致）
-     * 
-     * 1. 思路：RT scene 和光栅化保持一致，都是 primitive 紧凑排列，instance 紧凑排列
-     *    - Primitive 按 primitive_id 顺序排列（0, 1, 2, ...）
-     *    - Instance 按 primitive_id 分组，每组内按 instance_idx 顺序排列
-     *    - 与 CpuScene::m_instance_buf 的顺序完全一致（按 primitive_id 扁平化）
-     * 
+     * RT Scene 数据结构说明（mesh-level BLAS 方案）
+     *
+     * 1. 思路：1 CMesh = 1 BLAS，每个 CPrimitive 在 BLAS 中对应一个 geometry。
+     *    1 CRenderable = 1 TLAS instance。
+     *
      * 2. 对应关系：
-     *    - RaytracingScene：整个场景只有一个 RaytracingScene 对象（m_res.rt_scene）
-     *    - TLAS：每个 RaytracingScene 包含一个 TLAS（Top-Level Acceleration Structure）
-     *            - TLAS 是顶层加速结构，包含所有 TLAS Instance
-     *            - 场景中只有一个 TLAS（可能还有 prev_tlas 用于双缓冲）
-     *    - TLAS Instance：每个 (CPrimitive, CNode) 对对应一个 TLAS Instance
-     *            - TLAS Instance 存储在 RaytracingScene::instances 数组中
-     *            - TLAS Instance 顺序 = m_instance_buf 顺序 = GInstance[] 顺序
-     *            - 每个 TLAS Instance 的 custom_index = 该 Instance 在 m_instance_buf 中的索引
-     *            - 每个 TLAS Instance 引用一个 BLAS（通过 instance.geom）
-     *    - BLAS：每个 CPrimitive 对应一个 BLAS，存储在 m_primitive_id_to_blas[primitive_id]
-     * 
-     * 3. Shader 调用 ray trace inline 时，如何访问（对应 GBufferRT 中 ray_query 的取值）：
-     *    - CandidateInstanceID()：    instance_buf的索引。来自 instance.custom_index
-     *    - CandidateGeometryIndex()： === 0
-     *    - CandidatePrimitiveIndex()：Primitive的三角形索引（0-based）
+     *    - BLAS：每个 CMesh 对应一个 BLAS（m_mesh_entt_to_blas[mesh_entt]）
+     *            BLAS 内的 geometry 按 CMesh.primitive_entts 顺序添加
+     *    - TLAS Instance：每个 CRenderable+CNode 对对应一个 TLAS Instance
+     *            custom_index = GRtInstance[] 索引
+     *    - GRtInstance：RT 专用 per-renderable 数据，存储 world_transform 和
+     *            primitive_table_offset（用于 GeometryIndex → primitive_id 查表）
+     *
+     * 3. Shader 调用 ray trace inline 时的取值：
+     *    - InstanceID()       → GRtInstance[] 索引（per-renderable）
+     *    - GeometryIndex()    → 命中了 BLAS 中的第几个 CPrimitive
+     *    - PrimitiveIndex()   → 该 CPrimitive 内的三角形索引（0-based）
      */
 
-    // 获取共享的 vertex 和 index buffers
     BufferRef position_buf_ref = m_res.position_buf.buf;
     BufferRef index_buf_ref    = m_res.index_buf.buf;
 
@@ -706,77 +704,136 @@ void GpuScene::InitRaytracingScene(CommandList& cmd_list) {
 
     m_res.rt_scene = device.CreateRaytracingScene();
 
-    // 与 Raster 一致：按 primitive_id 建 BLAS，TLAS Instance 顺序 = m_instance_buf 顺序
-    const uint primitive_count = cpu_scene.GetPrimitiveCount();
-    m_primitive_id_to_blas.clear();
-    m_primitive_id_to_blas.resize(primitive_count);
+    // BLAS 构建：按 CMesh 遍历，每个 CPrimitive 作为 BLAS 中的一个 geometry
+    m_mesh_entt_to_blas.clear();
+    m_rt_primitive_table_cache.clear();
+    m_mesh_entt_to_primitive_table_offset.clear();
 
-    r.view<const ecs::CPrimitive>().each([&](const auto primitive_entt, const ecs::CPrimitive& c_primitive) {
-        const uint primitive_id = cpu_scene.GetPrimitiveId(primitive_entt);
-        if (primitive_id == UINT_MAX || primitive_id >= primitive_count) {
-            return;
-        }
+    {
+        r.view<const ecs::CMesh>().each([&](const auto mesh_entt, const ecs::CMesh& c_mesh) {
+            RaytracingGeometryInfo rt_geo_info{};
+            rt_geo_info.build_flags   = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE;
+            rt_geo_info.vertex_format = PF_R32G32B32_SFLOAT;
+            rt_geo_info.index_type    = IET_UINT32;
 
-        if (!c_primitive.position.is_valid || !c_primitive.index.is_valid) {
-            return;
-        }
+            uint primitive_table_offset = static_cast<uint>(m_rt_primitive_table_cache.size());
+            m_mesh_entt_to_primitive_table_offset[mesh_entt] = primitive_table_offset;
 
-        uint vtx_offset = c_primitive.position.start_idx;
-        uint vtx_count  = c_primitive.vertex_count;
-        uint idx_offset = c_primitive.index.start_idx;
-        uint idx_count  = c_primitive.index_count;
+            bool has_valid_primitive = false;
 
-        RaytracingGeometryInfo rt_geo_info{};
-        rt_geo_info.build_flags   = ERayTracingAccelerationStructureBuildFlags::PREFER_FAST_TRACE;
-        rt_geo_info.vertex_format = PF_R32G32B32_SFLOAT;
-        rt_geo_info.index_type    = IET_UINT32;
+            // 每个 CPrimitive 作为 BLAS 中的一个 geometry
+            // 添加顺序必须与 primitive_entts 一致，因为 GeometryIndex() 返回的就是添加顺序
+            for (uint i = 0; i < c_mesh.primitive_entts.size(); ++i) {
+                entt::entity prim_entt = c_mesh.primitive_entts[i];
+                const auto*  c_primitive = r.try_get<const ecs::CPrimitive>(prim_entt);
+                if (!c_primitive || !c_primitive->position.is_valid || !c_primitive->index.is_valid) {
+                    m_rt_primitive_table_cache.push_back(UINT_MAX);
+                    continue;
+                }
 
-        rt_geo_info.segments.emplace_back(
-            0,
-            0,
-            vtx_offset,
-            vtx_count,
-            sizeof(float3),
-            idx_offset / 3,
-            idx_count / 3,
-            position_buf_ref,
-            index_buf_ref,
-            RTGT_TRIANGLES,
-            ERayTracingGeometryFlags::GEOMETRY_OPAQUE,
-            false,
-            false,
-            false
-        );
+                uint primitive_id = cpu_scene.GetPrimitiveId(prim_entt);
+                m_rt_primitive_table_cache.push_back(primitive_id);
 
-        RaytracingGeometryRef blas           = device.CreateRaytracingGeometry(rt_geo_info);
-        m_primitive_id_to_blas[primitive_id] = blas;
-        build_params.push_back({blas, ERaytracingBuildMode::BUILD});
-    });
+                uint vtx_offset = c_primitive->position.start_idx;
+                uint vtx_count  = c_primitive->vertex_count;
+                uint idx_offset = c_primitive->index.start_idx;
+                uint idx_count  = c_primitive->index_count;
 
-    // TLAS：按 primitive_id 升序、再按 instance_idx，与 m_instance_buf 顺序一致
-    for (uint primitive_id = 0; primitive_id < primitive_count; ++primitive_id) {
-        RaytracingGeometryRef& blas_ref = m_primitive_id_to_blas[primitive_id];
-        if (!blas_ref.IsValid()) {
-            continue;
-        }
+                rt_geo_info.segments.emplace_back(
+                    0,
+                    0,
+                    vtx_offset,
+                    vtx_count,
+                    sizeof(float3),
+                    idx_offset / 3,
+                    idx_count / 3,
+                    position_buf_ref,
+                    index_buf_ref,
+                    RTGT_TRIANGLES,
+                    ERayTracingGeometryFlags::GEOMETRY_OPAQUE,
+                    false,
+                    false,
+                    false
+                );
+                has_valid_primitive = true;
+            }
 
-        const uint instance_count = cpu_scene.GetInstanceCountForPrimitive(primitive_id);
-        for (uint instance_idx = 0; instance_idx < instance_count; ++instance_idx) {
-            const GInstance& ginst = cpu_scene.GetInstanceForPrimitive(primitive_id, instance_idx);
-
-            auto& instance = m_res.rt_scene->AddInstance();
-            instance.geom  = blas_ref;
-            // Vulkan TLAS 需要 3x4 行主序（M 的前三行）；ginst.world_transform 存的是列主序 M（即 r0..r3 为 M 的列）
-            instance.transform        = ginst.world_transform.ToTransposedMatrix3x4f();
-            instance.flag.need_create = true;
-            instance.custom_index     = static_cast<uint>(m_res.rt_scene->GetInstanceCount() - 1);
-            instance.visible_mask     = RTVM_ALL;
-            m_res.rt_scene->MarkModified(instance.instance_id);
-        }
+            if (has_valid_primitive) {
+                RaytracingGeometryRef blas    = device.CreateRaytracingGeometry(rt_geo_info);
+                m_mesh_entt_to_blas[mesh_entt] = blas;
+                build_params.push_back({blas, ERaytracingBuildMode::BUILD});
+            }
+        });
     }
 
-    cmd_list.BuildAccelerationStructures(std::move(build_params));
-    cmd_list.UpdateRaytracingScene(m_res.rt_scene);
+    // TLAS 构建：按 CRenderable+CNode 遍历，每个 renderable 建一个 TLAS instance
+    m_rt_instance_cache.clear();
+
+    {
+        r.view<const ecs::CRenderable, const ecs::CNode>().each(
+            [&](const auto entt, const ecs::CRenderable& renderable, const ecs::CNode& node) {
+                if (renderable.mesh_entt == entt::null) return;
+                auto it = m_mesh_entt_to_blas.find(renderable.mesh_entt);
+                if (it == m_mesh_entt_to_blas.end()) return;
+
+                const auto& c_mesh = r.get<const ecs::CMesh>(renderable.mesh_entt);
+                uint tlas_idx = static_cast<uint>(m_rt_instance_cache.size());
+
+                auto& instance = m_res.rt_scene->AddInstance();
+                instance.geom  = it->second;
+                instance.transform        = node.d_world_transform.ToTransposedMatrix3x4f();
+                instance.flag.need_create = true;
+                instance.custom_index     = tlas_idx;
+                instance.visible_mask     = RTVM_ALL;
+                m_res.rt_scene->MarkModified(instance.instance_id);
+
+                GRtInstance rt_inst{};
+                rt_inst.world_transform       = node.d_world_transform;
+                rt_inst.primitive_table_offset = m_mesh_entt_to_primitive_table_offset[renderable.mesh_entt];
+                rt_inst.primitive_count        = static_cast<uint>(c_mesh.primitive_entts.size());
+                rt_inst.first_primitive_id     = (c_mesh.primitive_entts.empty())
+                    ? UINT_MAX
+                    : cpu_scene.GetPrimitiveId(c_mesh.primitive_entts[0]);
+                m_rt_instance_cache.push_back(rt_inst);
+            }
+        );
+    }
+
+    const uint blas_count          = static_cast<uint>(build_params.size());
+    const uint tlas_instance_count = m_res.rt_scene->GetInstanceCount();
+
+    // 上传 RT 专用 buffers
+    UploadByteBuffer(
+        cmd_list, m_bindless_array, m_res.rt_instance_buf,
+        "GpuScene::RtInstanceBuffer",
+        m_rt_instance_cache.data(),
+        m_rt_instance_cache.size() * sizeof(GRtInstance),
+        EBufferUsageFlags::UNORDERED_ACCESS
+    );
+    UploadByteBuffer(
+        cmd_list, m_bindless_array, m_res.rt_primitive_table_buf,
+        "GpuScene::RtPrimitiveTableBuffer",
+        m_rt_primitive_table_cache.data(),
+        m_rt_primitive_table_cache.size() * sizeof(uint32),
+        EBufferUsageFlags::UNORDERED_ACCESS
+    );
+
+    {
+        cmd_list.PushScopeWithTimeScope(s_rt_scene_build_blas_scope_name);
+        cmd_list.BuildAccelerationStructures(std::move(build_params));
+        cmd_list.PopScopeWithTimeScope();
+
+        cmd_list.PushScopeWithTimeScope(s_rt_scene_build_tlas_scope_name);
+        cmd_list.UpdateRaytracingScene(m_res.rt_scene);
+        cmd_list.PopScopeWithTimeScope();
+    }
+
+    LOG_DEBUG(
+        "[RTSceneProfile] Build summary: mesh_blas_count={} tlas_instance_count={} primitive_table_size={}",
+        blas_count,
+        tlas_instance_count,
+        m_rt_primitive_table_cache.size()
+    );
 
     // 这里不应该提交命令！
     // 这个函数会在 非主线程 被执行，在这里提交命令，会导致gfx_queue死锁
@@ -786,64 +843,102 @@ void GpuScene::InitRaytracingScene(CommandList& cmd_list) {
 
 void GpuScene::RebuildRaytracingSceneTlas(CommandList& cmd_list) {
     auto& device    = RenderDevice::Get();
+    auto& r         = m_logical_scene.r();
     auto& cpu_scene = m_cpu_scene;
 
-    const uint primitive_count = cpu_scene.GetPrimitiveCount();
-    if (m_primitive_id_to_blas.size() != primitive_count) {
+    if (m_mesh_entt_to_blas.empty()) {
         InitRaytracingScene(cmd_list);
         return;
     }
 
     m_res.rt_scene = device.CreateRaytracingScene();
+    m_rt_instance_cache.clear();
 
-    for (uint primitive_id = 0; primitive_id < primitive_count; ++primitive_id) {
-        RaytracingGeometryRef& blas_ref = m_primitive_id_to_blas[primitive_id];
-        if (!blas_ref.IsValid()) {
-            continue;
-        }
+    {
 
-        const uint instance_count = cpu_scene.GetInstanceCountForPrimitive(primitive_id);
-        for (uint instance_idx = 0; instance_idx < instance_count; ++instance_idx) {
-            const GInstance& ginst = cpu_scene.GetInstanceForPrimitive(primitive_id, instance_idx);
+        r.view<const ecs::CRenderable, const ecs::CNode>().each(
+            [&](const auto entt, const ecs::CRenderable& renderable, const ecs::CNode& node) {
+                if (renderable.mesh_entt == entt::null) return;
+                auto it = m_mesh_entt_to_blas.find(renderable.mesh_entt);
+                if (it == m_mesh_entt_to_blas.end()) return;
 
-            auto& instance = m_res.rt_scene->AddInstance();
-            instance.geom  = blas_ref;
-            instance.transform        = ginst.world_transform.ToTransposedMatrix3x4f();
-            instance.flag.need_create = true;
-            instance.custom_index     = static_cast<uint>(m_res.rt_scene->GetInstanceCount() - 1);
-            instance.visible_mask     = RTVM_ALL;
-            m_res.rt_scene->MarkModified(instance.instance_id);
-        }
+                const auto& c_mesh = r.get<const ecs::CMesh>(renderable.mesh_entt);
+                uint tlas_idx = static_cast<uint>(m_rt_instance_cache.size());
+
+                auto& instance = m_res.rt_scene->AddInstance();
+                instance.geom  = it->second;
+                instance.transform        = node.d_world_transform.ToTransposedMatrix3x4f();
+                instance.flag.need_create = true;
+                instance.custom_index     = tlas_idx;
+                instance.visible_mask     = RTVM_ALL;
+                m_res.rt_scene->MarkModified(instance.instance_id);
+
+                GRtInstance rt_inst{};
+                rt_inst.world_transform       = node.d_world_transform;
+                rt_inst.primitive_table_offset = m_mesh_entt_to_primitive_table_offset[renderable.mesh_entt];
+                rt_inst.primitive_count        = static_cast<uint>(c_mesh.primitive_entts.size());
+                rt_inst.first_primitive_id     = (c_mesh.primitive_entts.empty())
+                    ? UINT_MAX
+                    : cpu_scene.GetPrimitiveId(c_mesh.primitive_entts[0]);
+                m_rt_instance_cache.push_back(rt_inst);
+            }
+        );
     }
 
-    cmd_list.UpdateRaytracingScene(m_res.rt_scene);
+    // 重新上传 rt_instance_buf（renderable 数量可能变了）
+    UploadByteBuffer(
+        cmd_list, m_bindless_array, m_res.rt_instance_buf,
+        "GpuScene::RtInstanceBuffer",
+        m_rt_instance_cache.data(),
+        m_rt_instance_cache.size() * sizeof(GRtInstance),
+        EBufferUsageFlags::UNORDERED_ACCESS
+    );
+
+    {
+        cmd_list.PushScopeWithTimeScope(s_rt_scene_build_tlas_scope_name);
+        cmd_list.UpdateRaytracingScene(m_res.rt_scene);
+        cmd_list.PopScopeWithTimeScope();
+    }
 }
 
 void GpuScene::UpdateRaytracingScene(CommandList& cmd_list) {
-    auto& cpu_scene = m_cpu_scene;
+    auto& r             = m_logical_scene.r();
+    uint  tlas_instance_idx = 0;
 
-    // 与 InitRaytracingScene 相同顺序：按 primitive_id、再 instance_idx，用 CpuScene getter 更新 transform
-    const uint primitive_count   = cpu_scene.GetPrimitiveCount();
-    uint       tlas_instance_idx = 0;
+    // 按 CRenderable+CNode 遍历，顺序与 Init/Rebuild 一致
+    r.view<const ecs::CRenderable, const ecs::CNode>().each(
+        [&](const auto entt, const ecs::CRenderable& renderable, const ecs::CNode& node) {
+            if (renderable.mesh_entt == entt::null) return;
+            if (m_mesh_entt_to_blas.find(renderable.mesh_entt) == m_mesh_entt_to_blas.end()) return;
 
-    for (uint primitive_id = 0; primitive_id < primitive_count; ++primitive_id) {
-        if (!m_primitive_id_to_blas[primitive_id].IsValid()) {
-            continue;
-        }
-
-        const uint instance_count = cpu_scene.GetInstanceCountForPrimitive(primitive_id);
-        for (uint instance_idx = 0; instance_idx < instance_count; ++instance_idx) {
             if (tlas_instance_idx < m_res.rt_scene->GetInstanceCount()) {
-                const GInstance& ginst    = cpu_scene.GetInstanceForPrimitive(primitive_id, instance_idx);
-                auto&            instance = m_res.rt_scene->GetInstance(tlas_instance_idx);
-                instance.transform        = ginst.world_transform.ToTransposedMatrix3x4f();
+                auto& instance     = m_res.rt_scene->GetInstance(tlas_instance_idx);
+                instance.transform = node.d_world_transform.ToTransposedMatrix3x4f();
                 m_res.rt_scene->MarkModified(instance.instance_id);
+
+                // 同步更新 rt_instance_cache 中的 world_transform
+                if (tlas_instance_idx < m_rt_instance_cache.size()) {
+                    m_rt_instance_cache[tlas_instance_idx].world_transform = node.d_world_transform;
+                }
             }
             tlas_instance_idx++;
         }
+    );
+
+    // 重新上传 rt_instance_buf（world_transform 变了）
+    if (!m_rt_instance_cache.empty()) {
+        UploadByteBuffer(
+            cmd_list, m_bindless_array, m_res.rt_instance_buf,
+            "GpuScene::RtInstanceBuffer",
+            m_rt_instance_cache.data(),
+            m_rt_instance_cache.size() * sizeof(GRtInstance),
+            EBufferUsageFlags::UNORDERED_ACCESS
+        );
     }
 
+    cmd_list.PushScopeWithTimeScope(s_rt_scene_update_tlas_scope_name);
     cmd_list.UpdateRaytracingScene(m_res.rt_scene);
+    cmd_list.PopScopeWithTimeScope();
 }
 
 void GpuScene::RestoreDrawCommands(CommandList& cmd_list) {
