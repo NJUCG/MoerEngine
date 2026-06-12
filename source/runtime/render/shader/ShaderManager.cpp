@@ -94,7 +94,8 @@ void ShaderResourcesCache::RegisterCache(const ShaderCompilerInput& _input, Shad
             uint64(_input.shader_name_hash),
             _input.entry_point,
             _input.relative_source_file_path,
-            key
+            key,
+            std::move(_output.source_dependencies)
         );
     }
 }
@@ -187,7 +188,19 @@ void ShaderManager::LoadCache(std::filesystem::path _path) {
 
     ShaderResourcesCache loaded_cache;
     InputStream          stream(fs);
-    stream >> loaded_cache;
+
+    try {
+        stream >> loaded_cache;
+    } catch (const std::exception& e) {
+        LOG_WARNING(
+            "[Startup][Shader] LoadCache caught exception during deserialization (cache format may have changed): {}",
+            e.what()
+        );
+        return;
+    } catch (...) {
+        LOG_WARNING("[Startup][Shader] LoadCache caught unknown exception during deserialization, discarding cache");
+        return;
+    }
 
     if (fs.fail()) {
         LOG_WARNING("[Startup][Shader] LoadCache failed to deserialize shader cache: {}", file_path.string());
