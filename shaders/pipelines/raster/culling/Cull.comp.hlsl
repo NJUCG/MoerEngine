@@ -27,6 +27,82 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 [[vk::binding(4, 0)]] RWStructuredBuffer<Moer::DrawIndexedCmdData> draw_commands;
 [[vk::binding(5, 0)]] RWStructuredBuffer<Moer::GpuCullingCounterData> counters;
 [[vk::binding(6, 0)]] ConstantBuffer<Moer::CullData> cull_data;
+[[vk::binding(7, 0)]] StructuredBuffer<Moer::GClusterGroup> cluster_groups;
+
+// --------------------------------------------------------------------------
+// Cluster LOD 选择（平铺遍历方案，每个 cluster 独立 O(1) 判断）
+//
+// DAG 双向关系：
+//   refined_id     → 子方向（更精细）：该 cluster 是从哪个 group 简化来的
+//                    叶子 cluster: refined_id = -1
+//   parent_group_id → 父方向（更粗糙）：哪个 group 能替代该 group
+//                    根 cluster: parent_group_id = -1
+//
+// 自动 LOD 判断逻辑（两个条件联合保证切面无重叠、无空洞）：
+//   条件 1 (group_needs_detail)：
+//     "我所在 group 的简化误差 > 阈值"（进一步简化不可接受，我这层需要保留）
+//     根节点强制为 true（没有更粗的 LOD，无法进一步简化）
+//   条件 2 (child_is_acceptable)：
+//     "我替代的子 group（refined_id 指向的 group）的简化误差 <= 阈值"
+//     （用我替代子层是合理的）
+//     叶子节点（refined_id = -1）默认为 true
+//
+// TODO: 当 cluster 规模到百万级时，改为自顶向下 DAG 遍历以减少总线程数
+// --------------------------------------------------------------------------
+
+// 按照 clusterlod.h 文档公式计算归一化屏幕空间误差 [0,1]
+// 注意：center 来自 GClusterGroup.simplified_center（mesh 局部坐标），
+//       camera_pos 来自 CullData（世界坐标）。
+// TODO: 当 mesh 带有非单位 transform 时，需要将 center 变换到世界空间
+float ComputeScreenError(float3 center, float radius, float error,
+                          float3 camera_pos, float znear, float proj_11) {
+    float dist = max(length(center - camera_pos) - radius, znear);
+    return error / dist * (proj_11 * 0.5);
+}
+
+bool IsClusterLodActive(Moer::GPrimitive prim) {
+    if (prim.cluster_group_id < 0) return true; // 无 LOD 数据（如旧缓存场景），始终渲染
+
+    if ((cull_params.flags & Moer::CULL_FLAG_ENABLE_CLUSTER_LOD) == 0) {
+        // LOD 数据未就绪（如 shadow pass 不传 LOD 参数）—— 仅渲染叶子 cluster
+        return prim.cluster_refined_id < 0;
+    }
+
+    Moer::GClusterGroup my_group = cluster_groups[prim.cluster_group_id];
+    bool is_root = (my_group.parent_group_id < 0); // DAG 根节点：没有更粗的 LOD 来替代它
+
+    // 强制 LOD 层级模式：渲染指定 depth 的 cluster，
+    // 如果该 mesh 的最大深度不足请求层级，回退到根节点（最粗层级）
+    if (cull_data.force_lod_level >= 0) {
+        if (my_group.depth == cull_data.force_lod_level) return true;
+        if (is_root && my_group.depth < cull_data.force_lod_level) return true;
+        return false;
+    }
+
+    // 自动 LOD 选择
+    float my_screen_error = ComputeScreenError(
+        my_group.simplified_center, my_group.simplified_radius,
+        my_group.simplified_error,
+        cull_data.camera_position, cull_data.camera_znear, cull_data.camera_proj_11);
+
+    // 条件 1："我所在 group 的简化误差 > 阈值"（进一步简化不可接受，我这层需要保留）
+    // 根节点强制为 true：没有更粗的 LOD，无法进一步简化
+    bool group_needs_detail = is_root || (my_screen_error > cull_data.lod_error_threshold);
+
+    // 条件 2："我替代的子 group 的简化误差 <= 阈值"（用我替代子层是合理的）
+    // 叶子节点无子 group，默认为 true
+    bool child_is_acceptable = true;
+    if (prim.cluster_refined_id >= 0) {
+        Moer::GClusterGroup refined_group = cluster_groups[prim.cluster_refined_id];
+        float child_screen_error = ComputeScreenError(
+            refined_group.simplified_center, refined_group.simplified_radius,
+            refined_group.simplified_error,
+            cull_data.camera_position, cull_data.camera_znear, cull_data.camera_proj_11);
+        child_is_acceptable = (child_screen_error <= cull_data.lod_error_threshold);
+    }
+
+    return group_needs_detail && child_is_acceptable;
+}
 
 // Tests whether a world-space AABB intersects the current frustum conservatively.
 bool AABBInsideFrustum(float3 aabb_min, float3 aabb_max) {
@@ -144,16 +220,19 @@ bool AABBOccludedByPreviousHiZ(float3 aabb_min, float3 aabb_max) {
 
 #endif
 
-bool IsInstanceVisible(Moer::GInstance inst, Moer::GPrimitive prim, out bool frustum_culled, out bool occlusion_culled) {
+bool IsInstanceVisible(Moer::GInstance inst, Moer::GPrimitive prim, out bool frustum_culled, out bool occlusion_culled, out bool lod_culled) {
     float3 world_min, world_max;
     TransformAABB(inst.world_transform, prim.aabb_min, prim.aabb_max, world_min, world_max);
 
     frustum_culled   = false;
     occlusion_culled = false;
+    lod_culled       = false;
 
-    if (!AABBInsideFrustum(world_min, world_max)) {
-        frustum_culled = true;
-        return false;
+    if ((cull_params.flags & Moer::CULL_FLAG_ENABLE_FRUSTUM) != 0) {
+        if (!AABBInsideFrustum(world_min, world_max)) {
+            frustum_culled = true;
+            return false;
+        }
     }
 
 #if ENABLE_HIZ_OCCLUSION
@@ -177,30 +256,45 @@ void main(uint tid : SV_DispatchThreadID) {
     
     // 获取 primitive 的 local AABB
     Moer::GPrimitive prim = primitives[tid];
+
+    // Step 0: Cluster LOD 选择（per-primitive，O(1) 判断）
+    // 如果该 cluster 在当前 LOD 切面下不应渲染，跳过所有 instance
+    // 注意：不计入 total_instances_before，LOD 选择是预过滤，不是几何剔除
+    if (!IsClusterLodActive(prim)) {
+        InterlockedAdd(counters[0].lod_culled_instances, inst_count);
+        return;
+    }
     
     uint visible_count    = 0;
     uint frustum_culled   = 0;
     uint occlusion_culled = 0;
+    uint lod_culled       = 0;
     
     for (uint i = 0; i < inst_count; i++) {
         Moer::GInstance inst = instances[first_inst + i];
 
         bool is_frustum_culled;
         bool is_occlusion_culled;
-        if (IsInstanceVisible(inst, prim, is_frustum_culled, is_occlusion_culled)) {
+        bool is_lod_culled;
+        if (IsInstanceVisible(inst, prim, is_frustum_culled, is_occlusion_culled, is_lod_culled)) {
             visible_count++;
         } else if (is_frustum_culled) {
             frustum_culled++;
         } else if (is_occlusion_culled) {
             occlusion_culled++;
+        } else if (is_lod_culled) {
+            lod_culled++;
         }
     }
     
+    // TODO: 当 cluster 规模到百万级时，这里的全局 atomic 争用会成为瓶颈。
+    //       优化方案：用 WaveActiveSum() 先做 wave 内归约，再由单线程 atomic 写入，争用降低 32~64 倍。
     InterlockedAdd(counters[0].total_draws, 1);
     InterlockedAdd(counters[0].total_instances_before, inst_count);
     InterlockedAdd(counters[0].total_instances_after, visible_count);
     InterlockedAdd(counters[0].frustum_culled_instances, frustum_culled);
     InterlockedAdd(counters[0].occlusion_culled_instances, occlusion_culled);
+    InterlockedAdd(counters[0].lod_culled_instances, lod_culled);
 
     if (visible_count == 0) {
         return;
@@ -219,7 +313,8 @@ void main(uint tid : SV_DispatchThreadID) {
 
         bool is_frustum_culled;
         bool is_occlusion_culled;
-        if (IsInstanceVisible(inst, prim, is_frustum_culled, is_occlusion_culled)) {
+        bool is_lod_culled;
+        if (IsInstanceVisible(inst, prim, is_frustum_culled, is_occlusion_culled, is_lod_culled)) {
             visible_instance_ids[visible_instance_offset + write_offset] = first_inst + i;
             write_offset++;
         }

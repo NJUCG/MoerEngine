@@ -40,6 +40,9 @@ struct GeometryPassBindlessParam {
     // about material & alpha test
     uint  enable_alpha_test;
     float alpha_test_blend_pixel_cutoff;
+
+    // debug visualization mode: 0=off, 1=cluster ID, 2=frac(UV), 3=vertex normal
+    uint  debug_visualization_mode;
 };
 
 // MARK: Main Content End

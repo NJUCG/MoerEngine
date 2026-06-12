@@ -40,8 +40,30 @@ struct ClusterData {
     Box3D aabb = Box3D();
 };
 
+struct ClusterGroupData {
+    float3 simplified_center = float3(0.f, 0.f, 0.f);
+    float  simplified_radius = 0.f;
+    float  simplified_error  = 0.f;
+    int    depth             = 0; // DAG 层级（0=leaf, 1+=简化层级）
+};
+
 struct ClusterBuildResult {
+    // 所有 LOD 层级的 cluster（叶子在前，按 depth 顺序排列）
     Array<ClusterData> clusters;
+
+    // 每个 cluster 对应的 LOD group 信息
+    Array<int> cluster_group_ids;      // cluster → group index
+    Array<int> cluster_refined_ids;    // cluster → refined group index (-1 for leaf)
+
+    // Group 数据（用于运行时 LOD 选择）
+    Array<ClusterGroupData> groups;
+
+    // 每个 group 的父 group ID（即在 DAG 中替代该 group 的更粗层级 group），
+    // -1 表示该 group 是 DAG 根节点（最粗层级，无法被替代）
+    Array<int> group_parent_ids;
+
+    // 叶子 cluster 数量（clusters[0..num_leaf_clusters) 为叶子）
+    uint32 num_leaf_clusters = 0;
 };
 
 class ClusterBuilder {

@@ -40,6 +40,7 @@ public:
     DEFINE_SHADER_BUFFER(draw_commands);
     DEFINE_SHADER_BUFFER(counters);
     DEFINE_SHADER_BUFFER(cull_data);
+    DEFINE_SHADER_BUFFER(cluster_groups);
     DEFINE_SHADER_CONSTANT_STRUCT(CullParams, cull_params);
 
     DEFINE_SHADER_ARGS(
@@ -50,6 +51,7 @@ public:
         draw_commands,
         counters,
         cull_data,
+        cluster_groups,
         cull_params
     );
 };
@@ -66,6 +68,7 @@ public:
     DEFINE_SHADER_BUFFER(draw_commands);
     DEFINE_SHADER_BUFFER(counters);
     DEFINE_SHADER_BUFFER(cull_data);
+    DEFINE_SHADER_BUFFER(cluster_groups);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_CONSTANT_STRUCT(CullParams, cull_params);
 
@@ -77,6 +80,7 @@ public:
         draw_commands,
         counters,
         cull_data,
+        cluster_groups,
         bdls,
         cull_params
     );
@@ -91,7 +95,10 @@ public:
 class CullingPass {
 public:
     struct CullingOptions {
-        bool enable_hiz_occlusion;
+        bool  enable_frustum_culling;
+        bool  enable_hiz_occlusion;
+        float lod_error_threshold;
+        int   force_lod_level;     // -1 = auto, 0 = leaf, 1+ = 简化层级
     };
 
     // Stores the CPU-visible counters copied back from the GPU culling pass.
@@ -102,6 +109,7 @@ public:
         uint32_t total_draws                = 0; // 总 Draw 数量
         uint32_t frustum_culled_instances   = 0; // 被视锥剔除的实例数
         uint32_t occlusion_culled_instances = 0; // 被Hi-Z遮挡剔除的实例数
+        uint32_t lod_culled_instances       = 0; // 被 Cluster LOD 剔除的实例数
     };
 
 public:
@@ -118,6 +126,12 @@ public:
         m_cull_data_buffer = context.device.CreateBuffer<byte>(
             "Raster::GpuCulling::CullData", sizeof(CullData), EBufferUsageFlags::CONSTANT_BUFFER
         );
+
+        m_cluster_group_dummy_buf = context.device.CreateBuffer<byte>(
+            "Raster::GpuCulling::ClusterGroupDummy",
+            sizeof(GClusterGroup),
+            EBufferUsageFlags::UNORDERED_ACCESS
+        );
     }
 
     // Builds a visibility set from the main camera frustum.
@@ -128,7 +142,7 @@ public:
         GpuCullingBuffers::VisibilitySet& visibility_set,
         CullStatistics*                   out_stats          = nullptr,
         std::string_view                  profile_scope_name = {},
-        CullingOptions                    options            = CullingOptions{false}
+        CullingOptions                    options            = {true, false, 1.0f, -1}
     ) {
         const uint draw_count = gpu_scene_res.draw_cmd_buf.buf->GetNumElement();
 
@@ -137,12 +151,20 @@ public:
         params.draw_count = draw_count;
         camera.GetPlanes(data.frustum_planes);
 
+        if (options.enable_frustum_culling) {
+            params.flags |= CULL_FLAG_ENABLE_FRUSTUM;
+        }
+
         FillHiZOcclusionParams(context, options, params, data);
+
+        const float viewport_height = static_cast<float>(context.textures.depth_linear_sampler.GetSize().y);
+        FillClusterLodParams(camera, gpu_scene_res, options, viewport_height, params, data);
 
         Process(context, gpu_scene_res, params, data, visibility_set, out_stats, profile_scope_name);
     }
 
-    // Builds a visibility set from an explicit view-projection matrix.
+    // Builds a visibility set from an explicit view-projection matrix (shadow pass).
+    // LOD 数据不由此路径填充，shader 将回退到叶子 cluster 渲染。
     void Process(
         RasterContext&                    context,
         const float4x4&                   view_proj,
@@ -150,7 +172,7 @@ public:
         GpuCullingBuffers::VisibilitySet& visibility_set,
         CullStatistics*                   out_stats          = nullptr,
         std::string_view                  profile_scope_name = {},
-        CullingOptions                    options            = CullingOptions{false}
+        CullingOptions                    options            = {true, false, 1.0f, -1}
     ) {
         const uint draw_count = gpu_scene_res.draw_cmd_buf.buf->GetNumElement();
 
@@ -158,6 +180,10 @@ public:
         CullData   data{};
         params.draw_count = draw_count;
         ExtractFrustumPlanes(view_proj, data.frustum_planes);
+
+        if (options.enable_frustum_culling) {
+            params.flags |= CULL_FLAG_ENABLE_FRUSTUM;
+        }
 
         FillHiZOcclusionParams(context, options, params, data);
 
@@ -174,12 +200,37 @@ private:
         stats.total_draws                = counters.total_draws;
         stats.frustum_culled_instances   = counters.frustum_culled_instances;
         stats.occlusion_culled_instances = counters.occlusion_culled_instances;
+        stats.lod_culled_instances       = counters.lod_culled_instances;
         return stats;
     }
 
     static bool CanUseHiZOcclusion(const RasterContext& context, const CullingOptions& options) {
         return options.enable_hiz_occlusion && context.hiz_data.previous_valid &&
                context.textures.hiz_previous.tex != nullptr && context.hiz_data.mip_count > 0;
+    }
+
+    // LOD 过滤始终执行（Nanite 模型：LOD 选择是正确性要求，不是可选优化）。
+    // 当 cluster_group_buf 不存在时跳过（shader 通过 cluster_group_id < 0 回退到全部渲染）。
+    static void FillClusterLodParams(
+        const Camera&        camera,
+        const GpuScene::Res& gpu_scene_res,
+        const CullingOptions& options,
+        float                viewport_height,
+        CullParams&          params,
+        CullData&            data
+    ) {
+        if (gpu_scene_res.cluster_group_buf.buf == nullptr) {
+            return;
+        }
+
+        params.flags |= CULL_FLAG_ENABLE_CLUSTER_LOD;
+        data.camera_position      = camera.GetPosition();
+        data.camera_znear         = camera.GetNearClip();
+        data.camera_proj_11       = camera.GetProjectionMatrix()[1][1];
+        // clusterlod.h 的 ComputeScreenError 返回归一化屏幕空间 [0,1]，
+        // UI 中阈值单位为像素，需除以视口高度转换为归一化单位
+        data.lod_error_threshold  = options.lod_error_threshold / std::max(viewport_height, 1.0f);
+        data.force_lod_level      = options.force_lod_level;
     }
 
     // 将上一帧Hi-Z资源写入 push constants，并把上一帧view-proj写入 cbuffer
@@ -265,6 +316,11 @@ private:
             context.cmd_list.PushScopeWithTimeScope(profile_scope_name);
         }
 
+        const auto cluster_group_view =
+            gpu_scene_res.cluster_group_buf.buf != nullptr
+                ? gpu_scene_res.cluster_group_buf.buf->GetView()
+                : m_cluster_group_dummy_buf->GetView();
+
         if ((params.flags & CULL_FLAG_ENABLE_HIZ_OCCLUSION) != 0u) {
             context.cmd_list
                 .Compute(
@@ -276,6 +332,7 @@ private:
                     visibility_set.draw_cmd_buf->GetView(),                // UAV: draw_commands
                     visibility_set.counter_buf->GetView(),                 // UAV: counters
                     m_cull_data_buffer->GetView(),                         // CBV: cull_data
+                    cluster_group_view,                                    // SRV: cluster_groups
                     context.bdls,                                          // Bindless heap for Hi-Z mip views
                     params                                                 // Push constant: cull_params
                 )
@@ -291,6 +348,7 @@ private:
                     visibility_set.draw_cmd_buf->GetView(),                // UAV: draw_commands
                     visibility_set.counter_buf->GetView(),                 // UAV: counters
                     m_cull_data_buffer->GetView(),                         // CBV: cull_data
+                    cluster_group_view,                                    // SRV: cluster_groups
                     params                                                 // Push constant: cull_params
                 )
                 .Dispatch(uint3(dispatch_count, 1, 1), "Culling");
@@ -310,6 +368,7 @@ private:
     CullPipeline             m_pso;
     HiZOcclusionCullPipeline m_hiz_occlusion_pso;
     BufferRef                m_cull_data_buffer;
+    BufferRef                m_cluster_group_dummy_buf;
     GpuCullingCounterData    m_readback_counters{};
 };
 

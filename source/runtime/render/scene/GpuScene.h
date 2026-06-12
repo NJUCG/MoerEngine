@@ -95,6 +95,9 @@ public:
         // raytracing scene
         RaytracingSceneRef rt_scene;
 
+        // Cluster LOD Group buffer
+        BufferWithHandle cluster_group_buf;          // GClusterGroup[]，LOD 运行时选择数据
+
         // RT 专用（mesh-level BLAS 方案）
         BufferWithHandle rt_instance_buf;           // GRtInstance[]，per-renderable
         BufferWithHandle rt_primitive_table_buf;     // uint[]，GeometryIndex → primitive_id 映射表

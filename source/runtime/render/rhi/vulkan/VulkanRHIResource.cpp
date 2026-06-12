@@ -2360,8 +2360,9 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                 geometry.geometry.triangles.vertexFormat = g_platform_pixel_formats[_info.vertex_format].format;
                 geometry.geometry.triangles.vertexStride = segment.vertex_stride;
                 geometry.geometry.triangles.vertexData.deviceAddress = vtx_addr + segment.vertex_offset;
-                // 下一个变量maxVertex，定义了允许的最大顶点索引值。此处应为 first_vertex + vertex_count
-                geometry.geometry.triangles.maxVertex = segment.first_vertex - segment.vertex_count;
+                // maxVertex: Vulkan spec 要求为 vertexData 中可被寻址的最高顶点索引。
+                // 由于 firstVertex 会加到每个 index 上，最高绝对索引 = first_vertex + vertex_count - 1。
+                geometry.geometry.triangles.maxVertex = segment.first_vertex + segment.vertex_count - 1;
                 geometry.geometry.triangles.indexType = VulkanEnumTranslator::METoVKIndexType(_info.index_type);
                 geometry.geometry.triangles.indexData.deviceAddress = idx_addr + segment.index_offset; 
                 geometry.geometry.triangles.transformData.deviceAddress = 0;

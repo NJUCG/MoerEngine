@@ -542,8 +542,6 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
     enabled_cascade_layers = ui_config.shadow_csm_num_of_cascades;
     assert(enabled_cascade_layers <= CSM_MAX_CASCADES);
 
-    const bool use_gpu_culling = ui_config.enable_frustum_culling;
-
     PrepareCSMResources(context, ui_config);
 
     // Light
@@ -664,16 +662,14 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
         context.lighting_data.scale_data[cascade_index]        = shadow_candidate.scale_data;
         context.csm_data.world2shadow_clip[cascade_index]      = shadow_candidate.world2shadow_clip;
 
-        if (use_gpu_culling) {
-            m_culling_pass.Process(
-                context,
-                context.lighting_data.world2shadow_clip[cascade_index],
-                context.scene.gpu_scene_res(),
-                context.gpu_culling_buffers.shadow,
-                nullptr,
-                RasterTool::GetShadowCullingProfileScopeName(cascade_index)
-            );
-        }
+        m_culling_pass.Process(
+            context,
+            context.lighting_data.world2shadow_clip[cascade_index],
+            context.scene.gpu_scene_res(),
+            context.gpu_culling_buffers.shadow,
+            nullptr,
+            RasterTool::GetShadowCullingProfileScopeName(cascade_index)
+        );
 
         RenderShadow(
             context,
@@ -681,7 +677,6 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
             context.lighting_data.world2shadow_clip[cascade_index],
             Rect2D(0, 0, ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
             context.csm_data.shadow_map_textures[cascade_index].tex->GetView(),
-            use_gpu_culling,
             std::format("Shadow Depth Pass - {}", cascade_index),
             cascade_index
         );
@@ -781,13 +776,21 @@ void ShadowDepthPass::RenderPointShadows(
 
         TextureView face_view = TextureView(cube_res.tex.Get()).Slice(face, 1);
 
+        m_culling_pass.Process(
+            context,
+            view_proj,
+            context.scene.gpu_scene_res(),
+            context.gpu_culling_buffers.shadow,
+            nullptr,
+            RasterTool::GetShadowCullingProfileScopeName(face)
+        );
+
         RenderShadow(
             context,
             config,
             view_proj,
             Rect2D(0, 0, config.shadow_csm_sm_size, config.shadow_csm_sm_size),
             face_view,
-            false,
             std::format("PointShadow L{} F{}", light_idx, face),
             std::nullopt
         );
@@ -800,7 +803,6 @@ void ShadowDepthPass::RenderShadow(
     const float4x4&     view_proj,
     const Rect2D&       rect,
     TextureView         depth_view,
-    bool                use_gpu_culling,
     std::string_view    pass_name,
     std::optional<uint> csm_profile_layer
 ) {
@@ -809,8 +811,8 @@ void ShadowDepthPass::RenderShadow(
 
     const auto& gpu_scene_res           = context.scene.gpu_scene_res();
     param.instance_buf_hdl              = gpu_scene_res.instance_buf.hdl;
-    param.visible_instance_id_buf_hdl   = 0;
-    param.use_visible_instance_id_remap = 0;
+    param.visible_instance_id_buf_hdl   = context.gpu_culling_buffers.shadow.visible_instance_id_buf.hdl;
+    param.use_visible_instance_id_remap = 1;
     param.primitive_buf_hdl             = gpu_scene_res.primitive_buf.hdl;
     param.position_buf_hdl              = gpu_scene_res.position_buf.hdl;
     param.packed_normal_buf_hdl         = gpu_scene_res.packed_normal_buf.hdl;
@@ -821,11 +823,6 @@ void ShadowDepthPass::RenderShadow(
     param.enable_alpha_test             = config.geometry_enable_alpha_test ? 1 : 0;
     param.alpha_test_blend_pixel_cutoff = config.geometry_alpha_test_blend_pixel_cutoff;
 
-    if (use_gpu_culling) {
-        param.visible_instance_id_buf_hdl   = context.gpu_culling_buffers.shadow.visible_instance_id_buf.hdl;
-        param.use_visible_instance_id_remap = 1;
-    }
-
     if (csm_profile_layer.has_value()) {
         context.cmd_list.PushScopeWithTimeScope(
             RasterTool::GetShadowDrawProfileScopeName(csm_profile_layer.value())
@@ -834,34 +831,16 @@ void ShadowDepthPass::RenderShadow(
 
     auto draw = context.cmd_list.Gfx(m_pso, context.bdls, param);
 
-    if (use_gpu_culling) {
-        const auto& visibility = context.gpu_culling_buffers.shadow;
-
-        draw.DrawIndirect(
-            pass_name,
-            rect,
-            {},
-            IndexBuffer{gpu_scene_res.index_buf.buf->GetView(), EIndexElementType::IET_UINT32},
-            visibility.draw_cmd_buf->GetView(),
-            visibility.GetDrawCountView(),
-            visibility.draw_cmd_buf->GetStride(),
-            visibility.max_draw_count,
-            DepthAttachment(depth_view.GetTexture())
-        );
-        if (csm_profile_layer.has_value()) {
-            context.cmd_list.PopScopeWithTimeScope();
-        }
-        return;
-    }
-
+    const auto& visibility = context.gpu_culling_buffers.shadow;
     draw.DrawIndirect(
         pass_name,
         rect,
         {},
         IndexBuffer{gpu_scene_res.index_buf.buf->GetView(), EIndexElementType::IET_UINT32},
-        gpu_scene_res.draw_cmd_buf.buf->GetView(),
-        gpu_scene_res.draw_cmd_buf.buf->GetNumElement(),
-        gpu_scene_res.draw_cmd_buf.buf->GetStride(),
+        visibility.draw_cmd_buf->GetView(),
+        visibility.GetDrawCountView(),
+        visibility.draw_cmd_buf->GetStride(),
+        visibility.max_draw_count,
         DepthAttachment(depth_view.GetTexture())
     );
 

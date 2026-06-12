@@ -186,7 +186,7 @@ void RasterTool::TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig
     }
 
     const auto& culling_stats = raster_config.culling_stats;
-    if (raster_config.enable_frustum_culling && culling_stats.total_instances_before > 0) {
+    if (culling_stats.total_instances_before > 0) {
         stream << " | CullStats inst=" << culling_stats.total_instances_after << "/"
                << culling_stats.total_instances_before << " draws=" << culling_stats.visible_draws << "/"
                << culling_stats.total_draws << " frustum=" << culling_stats.frustum_culled_instances

@@ -140,6 +140,10 @@ struct RasterConfig {
     float geometry_alpha_test_blend_pixel_cutoff = 0.5f;  // 当AlphaMode为BLEND时，低于该值的像素会被丢弃
     bool  enable_frustum_culling                 = true;  // GPU视锥剔除
     bool  enable_occlusion_culling               = true;  // GPU Hi-Z遮挡剔除
+    float cluster_lod_error_threshold            = 1.0f;  // Cluster LOD 屏幕空间误差阈值（像素）
+    int   force_lod_level                        = -1;    // 强制 LOD 层级（-1=auto, 0=leaf, 1+=简化层级）
+    // Debug 可视化模式：0=关闭，1=Cluster ID，2=frac(UV)，3=顶点法线
+    int   geometry_debug_visualization           = 0;
 
     // MARK: Culling Statistics (只读，由GPU更新)
     struct CullingStats {
@@ -149,6 +153,7 @@ struct RasterConfig {
         uint total_draws                = 0;
         uint frustum_culled_instances   = 0;
         uint occlusion_culled_instances = 0;
+        uint lod_culled_instances       = 0;
 
         float GetCullingRatio() const {
             if (total_instances_before == 0)

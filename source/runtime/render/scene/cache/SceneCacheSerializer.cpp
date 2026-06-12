@@ -13,7 +13,7 @@ namespace Moer {
 
 namespace {
 
-constexpr uint32 k_logical_scene_payload_version = 3;
+constexpr uint32 k_logical_scene_payload_version = 5; // v5: parent_group_id in ClusterGroupInfo
 constexpr uint64 k_null_entity_id                = std::numeric_limits<uint64>::max();
 
 enum ESceneCacheComponentFlag : uint64 {
@@ -445,7 +445,9 @@ bool WritePrimitive(
            writer.WritePod(primitive.packed_normal) && writer.WritePod(primitive.packed_tangent) &&
            writer.WritePod(primitive.texcoord0) && writer.WritePod(primitive.index_count) &&
            writer.WritePod(primitive.index) && WriteRawValue(writer, primitive.aabb) &&
-           WriteEntityRef(writer, entity_to_local_id, primitive.material_entt);
+           WriteEntityRef(writer, entity_to_local_id, primitive.material_entt) &&
+           writer.WritePod(primitive.cluster_group_id) &&
+           writer.WritePod(primitive.cluster_refined_id);
 }
 
 // 读取 primitive 组件及材质引用
@@ -458,7 +460,9 @@ bool ReadPrimitive(
            reader.ReadPod(out_primitive.packed_normal) && reader.ReadPod(out_primitive.packed_tangent) &&
            reader.ReadPod(out_primitive.texcoord0) && reader.ReadPod(out_primitive.index_count) &&
            reader.ReadPod(out_primitive.index) && ReadRawValue(reader, out_primitive.aabb) &&
-           ReadEntityRef(reader, local_id_to_entity, out_primitive.material_entt);
+           ReadEntityRef(reader, local_id_to_entity, out_primitive.material_entt) &&
+           reader.ReadPod(out_primitive.cluster_group_id) &&
+           reader.ReadPod(out_primitive.cluster_refined_id);
 }
 
 // 写入 mesh 的 primitive 引用列表
@@ -473,6 +477,19 @@ bool WriteMesh(
     }
     for (entt::entity primitive_entt : mesh.primitive_entts) {
         if (!WriteEntityRef(writer, entity_to_local_id, primitive_entt)) {
+            return false;
+        }
+    }
+    // Cluster LOD data
+    if (!writer.WritePod(mesh.num_leaf_clusters)) return false;
+    const uint64 group_count = static_cast<uint64>(mesh.cluster_groups.size());
+    if (!writer.WritePod(group_count)) return false;
+    for (const auto& g : mesh.cluster_groups) {
+        if (!WriteRawValue(writer, g.simplified_center) ||
+            !writer.WritePod(g.simplified_radius) ||
+            !writer.WritePod(g.simplified_error) ||
+            !writer.WritePod(g.depth) ||
+            !writer.WritePod(g.parent_group_id)) {
             return false;
         }
     }
@@ -496,6 +513,20 @@ bool ReadMesh(
     out_mesh.primitive_entts.resize(static_cast<size_t>(count));
     for (entt::entity& primitive_entt : out_mesh.primitive_entts) {
         if (!ReadEntityRef(reader, local_id_to_entity, primitive_entt)) {
+            return false;
+        }
+    }
+    // Cluster LOD data
+    if (!reader.ReadPod(out_mesh.num_leaf_clusters)) return false;
+    uint64 group_count = 0;
+    if (!reader.ReadPod(group_count)) return false;
+    out_mesh.cluster_groups.resize(static_cast<size_t>(group_count));
+    for (auto& g : out_mesh.cluster_groups) {
+        if (!ReadRawValue(reader, g.simplified_center) ||
+            !reader.ReadPod(g.simplified_radius) ||
+            !reader.ReadPod(g.simplified_error) ||
+            !reader.ReadPod(g.depth) ||
+            !reader.ReadPod(g.parent_group_id)) {
             return false;
         }
     }

@@ -213,6 +213,14 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
         EBufferUsageFlags::UNORDERED_ACCESS
     );
 
+    if (!m_cpu_scene.m_cluster_group_buf.empty()) {
+        m_res.cluster_group_buf.buf = device.CreateBuffer<byte>(
+            "GpuScene::ClusterGroupBuffer",
+            m_cpu_scene.m_cluster_group_buf.size() * sizeof(GClusterGroup),
+            EBufferUsageFlags::UNORDERED_ACCESS
+        );
+    }
+
     m_res.position_buf.buf = device.CreateBuffer<byte>(
         "GpuScene::PositionMegaBuffer",
         m_cpu_scene.mega_buf().position.size() * sizeof(float3),
@@ -289,6 +297,17 @@ GpuScene::GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array) :
         m_res.instance_buf.buf->GetView(),
         "CopyFrom GpuScene::InstanceBuffer"
     );
+
+    if (m_res.cluster_group_buf.buf != nullptr && !m_cpu_scene.m_cluster_group_buf.empty()) {
+        m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
+            std::span<byte>(
+                (byte*)m_cpu_scene.m_cluster_group_buf.data(),
+                m_cpu_scene.m_cluster_group_buf.size() * sizeof(GClusterGroup)
+            ),
+            m_res.cluster_group_buf.buf->GetView(),
+            "CopyFrom GpuScene::ClusterGroupBuffer"
+        );
+    }
 
     m_pending_cmd_lists.copy_queue_cmd_list.CopyFrom(
         std::span<byte>(
@@ -721,9 +740,12 @@ void GpuScene::InitRaytracingScene(CommandList& cmd_list) {
 
             bool has_valid_primitive = false;
 
-            // 每个 CPrimitive 作为 BLAS 中的一个 geometry
-            // 添加顺序必须与 primitive_entts 一致，因为 GeometryIndex() 返回的就是添加顺序
-            for (uint i = 0; i < c_mesh.primitive_entts.size(); ++i) {
+            // 只添加叶子 cluster 到 BLAS（非叶子是简化几何体，会和叶子重叠导致 RT 结果错误）
+            // 叶子 cluster 在 primitive_entts 最前面且连续：[0, num_leaf_clusters)
+            const uint leaf_count = c_mesh.num_leaf_clusters > 0
+                                        ? c_mesh.num_leaf_clusters
+                                        : static_cast<uint>(c_mesh.primitive_entts.size());
+            for (uint i = 0; i < leaf_count; ++i) {
                 entt::entity prim_entt = c_mesh.primitive_entts[i];
                 const auto*  c_primitive = r.try_get<const ecs::CPrimitive>(prim_entt);
                 if (!c_primitive || !c_primitive->position.is_valid || !c_primitive->index.is_valid) {
@@ -787,10 +809,15 @@ void GpuScene::InitRaytracingScene(CommandList& cmd_list) {
                 instance.visible_mask     = RTVM_ALL;
                 m_res.rt_scene->MarkModified(instance.instance_id);
 
+                // BLAS 只含叶子 cluster，primitive_count 应与 BLAS 中的 geometry 数量一致
+                const uint leaf_count_for_inst = c_mesh.num_leaf_clusters > 0
+                    ? c_mesh.num_leaf_clusters
+                    : static_cast<uint>(c_mesh.primitive_entts.size());
+
                 GRtInstance rt_inst{};
                 rt_inst.world_transform       = node.d_world_transform;
                 rt_inst.primitive_table_offset = m_mesh_entt_to_primitive_table_offset[renderable.mesh_entt];
-                rt_inst.primitive_count        = static_cast<uint>(c_mesh.primitive_entts.size());
+                rt_inst.primitive_count        = leaf_count_for_inst;
                 rt_inst.first_primitive_id     = (c_mesh.primitive_entts.empty())
                     ? UINT_MAX
                     : cpu_scene.GetPrimitiveId(c_mesh.primitive_entts[0]);
@@ -873,10 +900,15 @@ void GpuScene::RebuildRaytracingSceneTlas(CommandList& cmd_list) {
                 instance.visible_mask     = RTVM_ALL;
                 m_res.rt_scene->MarkModified(instance.instance_id);
 
+                // BLAS 只含叶子 cluster，primitive_count 应与 BLAS 中的 geometry 数量一致
+                const uint leaf_count_for_inst = c_mesh.num_leaf_clusters > 0
+                    ? c_mesh.num_leaf_clusters
+                    : static_cast<uint>(c_mesh.primitive_entts.size());
+
                 GRtInstance rt_inst{};
                 rt_inst.world_transform       = node.d_world_transform;
                 rt_inst.primitive_table_offset = m_mesh_entt_to_primitive_table_offset[renderable.mesh_entt];
-                rt_inst.primitive_count        = static_cast<uint>(c_mesh.primitive_entts.size());
+                rt_inst.primitive_count        = leaf_count_for_inst;
                 rt_inst.first_primitive_id     = (c_mesh.primitive_entts.empty())
                     ? UINT_MAX
                     : cpu_scene.GetPrimitiveId(c_mesh.primitive_entts[0]);

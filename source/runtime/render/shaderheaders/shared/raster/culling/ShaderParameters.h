@@ -20,6 +20,8 @@ namespace Moer {
 
 static const uint CULL_MAX_HIZ_MIPS              = 16u;
 static const uint CULL_FLAG_ENABLE_HIZ_OCCLUSION = 1u << 0u;
+static const uint CULL_FLAG_ENABLE_CLUSTER_LOD   = 1u << 1u;
+static const uint CULL_FLAG_ENABLE_FRUSTUM       = 1u << 2u;
 
 // Defines the shared counter layout used by GPU culling readback and shaders.
 struct GpuCullingCounterData {
@@ -31,6 +33,7 @@ struct GpuCullingCounterData {
     uint total_draws;
     uint frustum_culled_instances;
     uint occlusion_culled_instances;
+    uint lod_culled_instances;
 };
 
 struct CullParams {
@@ -44,6 +47,13 @@ struct CullData {
     float4   frustum_planes[6];
     float4x4 previous_view_proj;
     uint4    hiz_info;
+    // Cluster LOD 参数
+    float3   camera_position;
+    float    camera_znear;
+    float    camera_proj_11;     // projection[1][1] = 1 / tan(fovY/2)
+    float    lod_error_threshold; // 屏幕空间误差阈值（归一化单位，UI 像素值 / viewport_height）
+    int      force_lod_level;    // 强制 LOD 层级（-1 = auto, 0 = leaf, 1+ = 简化层级）
+    uint     _pad_lod1;
 };
 
 struct HiZBuildParam {

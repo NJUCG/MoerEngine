@@ -160,7 +160,8 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
     }
 
     // MARK: Load Meshes
-    gtl::flat_hash_map<const aiMesh*, Array<entt::entity>> mesh_entity_map;
+    gtl::flat_hash_map<const aiMesh*, Array<entt::entity>>    mesh_entity_map;
+    gtl::flat_hash_map<const aiMesh*, ClusterBuildResult>     mesh_cluster_build_results;
     {
         uint32 source_vtx_cnt = 0;
         uint32 source_idx_cnt = 0;
@@ -181,7 +182,8 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         Array<MeshClusterStats> mesh_cluster_stats;
         mesh_cluster_stats.reserve(ai_scene->mNumMeshes);
 
-        const ClusterBuilder cluster_builder;
+        ClusterBuildConfig cfg;
+        const ClusterBuilder cluster_builder(cfg);
 
         auto make_buffer_view = [&](uint32 existing_size, uint32 stride) {
             return ecs::CPrimitive::BufferView{
@@ -278,9 +280,18 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             auto& primitive_entities = mesh_entity_map[mesh];
             primitive_entities.reserve(cluster_build_data.clusters.size());
 
-            for (const auto& cluster : cluster_build_data.clusters) {
-                const auto primitive_entity = emit_cluster_primitive(cluster);
+            for (size_t ci = 0; ci < cluster_build_data.clusters.size(); ++ci) {
+                const auto& cluster          = cluster_build_data.clusters[ci];
+                const auto  primitive_entity = emit_cluster_primitive(cluster);
                 primitive_entities.emplace_back(primitive_entity);
+
+                // Cluster LOD 字段暂存到 CPrimitive（group_id 为 aiMesh 本地索引，
+                // 后续创建 CMesh 时会加上全局偏移）
+                auto& c_prim = r.get<ecs::CPrimitive>(primitive_entity);
+                if (!cluster_build_data.cluster_group_ids.empty()) {
+                    c_prim.cluster_group_id   = cluster_build_data.cluster_group_ids[ci];
+                    c_prim.cluster_refined_id = cluster_build_data.cluster_refined_ids[ci];
+                }
 
                 mesh_stats.cluster_count += 1;
                 mesh_stats.cluster_vertex_count += static_cast<uint32>(cluster.positions.size());
@@ -291,6 +302,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 cluster_cnt += 1;
             }
 
+            mesh_cluster_build_results[mesh] = std::move(cluster_build_data);
             mesh_cluster_stats.emplace_back(mesh_stats);
         }
 
@@ -877,6 +889,14 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
 
         // 在CMesh Entity上添加CMesh组件
         auto& c_mesh = r.emplace<ecs::CMesh>(mesh_entity);
+
+        // 多个 aiMesh 合并到一个 CMesh 时，必须保证 primitive_entts 的布局为：
+        //   [所有叶子 cluster | 所有非叶子 cluster]
+        // 这是 RT Scene（BLAS 只取前 num_leaf_clusters 个）和 Culling Pass 的正确性前提。
+        // 因此先分别收集叶子和非叶子，最后统一追加。
+        Array<entt::entity> all_leaf_entts;
+        Array<entt::entity> all_nonleaf_entts;
+
         for (uint i = 0; i < node->mNumMeshes; i++) {
             auto* mesh = ai_scene->mMeshes[node->mMeshes[i]];
 
@@ -885,10 +905,57 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 "Mesh entity not found in mesh_entity_map. Perhaps internal code error."
             );
 
-            for (const auto primitive_entity : mesh_entity_map[mesh]) {
-                c_mesh.primitive_entts.emplace_back(primitive_entity);
+            // 合并 cluster group 数据：将本 aiMesh 的 group 追加到 CMesh，
+            // 并偏移 CPrimitive 中的 group_id / refined_id
+            const int group_offset = static_cast<int>(c_mesh.cluster_groups.size());
+
+            uint32 this_mesh_leaf_count = 0;
+            if (mesh_cluster_build_results.contains(mesh)) {
+                const auto& build_result = mesh_cluster_build_results[mesh];
+                this_mesh_leaf_count = build_result.num_leaf_clusters;
+                c_mesh.num_leaf_clusters += this_mesh_leaf_count;
+
+                for (size_t gi = 0; gi < build_result.groups.size(); ++gi) {
+                    const auto& g = build_result.groups[gi];
+                    int parent_id = (gi < build_result.group_parent_ids.size())
+                                        ? build_result.group_parent_ids[gi]
+                                        : -1;
+                    // 偏移 parent_group_id（多个 aiMesh 合并到一个 CMesh 时需要）
+                    if (parent_id >= 0) parent_id += group_offset;
+
+                    c_mesh.cluster_groups.push_back(ecs::CMesh::ClusterGroupInfo{
+                        .simplified_center = g.simplified_center,
+                        .simplified_radius = g.simplified_radius,
+                        .simplified_error  = g.simplified_error,
+                        .depth             = g.depth,
+                        .parent_group_id   = parent_id
+                    });
+                }
+            }
+
+            const auto& entities = mesh_entity_map[mesh];
+            for (uint32 ei = 0; ei < entities.size(); ++ei) {
+                const auto primitive_entity = entities[ei];
+
+                // 偏移 group ID（多个 aiMesh 合并到一个 CMesh 时需要）
+                if (group_offset > 0) {
+                    auto& c_prim = r.get<ecs::CPrimitive>(primitive_entity);
+                    if (c_prim.cluster_group_id >= 0)   c_prim.cluster_group_id   += group_offset;
+                    if (c_prim.cluster_refined_id >= 0) c_prim.cluster_refined_id += group_offset;
+                }
+
+                if (ei < this_mesh_leaf_count) {
+                    all_leaf_entts.emplace_back(primitive_entity);
+                } else {
+                    all_nonleaf_entts.emplace_back(primitive_entity);
+                }
             }
         }
+
+        // 先叶子后非叶子，保证 primitive_entts[0..num_leaf_clusters) 全为叶子
+        c_mesh.primitive_entts.reserve(all_leaf_entts.size() + all_nonleaf_entts.size());
+        c_mesh.primitive_entts.insert(c_mesh.primitive_entts.end(), all_leaf_entts.begin(), all_leaf_entts.end());
+        c_mesh.primitive_entts.insert(c_mesh.primitive_entts.end(), all_nonleaf_entts.begin(), all_nonleaf_entts.end());
     };
 
     // MARK: Camera

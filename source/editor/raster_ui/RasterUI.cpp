@@ -78,18 +78,35 @@ void RasterUI::ShowConfig() {
 
         toggle_button("Occlusion Cull", m_config.enable_occlusion_culling);
 
+        ImGui::SliderFloat("LOD Threshold (px)", &m_config.cluster_lod_error_threshold, 0.1f, 16.0f);
+
+        ImGui::SliderInt("Force LOD Level", &m_config.force_lod_level, -1, 8, 
+            m_config.force_lod_level < 0 ? "Auto" : "%d");
+
+        static const char* debug_vis_names[] = { "Off", "Cluster ID", "frac(UV)", "Vertex Normal" };
+        ImGui::Combo("Debug Visualization", &m_config.geometry_debug_visualization, debug_vis_names, 4);
+
         // Culling Statistics
-        if (m_config.enable_frustum_culling) {
+        {
             ImGui::Separator();
             ImGui::Text("Culling Statistics:");
             ImGui::Indent();
 
-            if (m_config.culling_stats.total_instances_before == 0) {
+            if (m_config.culling_stats.total_instances_before == 0 &&
+                m_config.culling_stats.lod_culled_instances == 0) {
                 ImGui::TextDisabled("  Waiting for data...");
             } else {
                 const auto& stats = m_config.culling_stats;
+
+                // LOD 信息（独立展示，不混入剔除条形图）
+                const uint lod_active = stats.total_instances_before;
+                const uint lod_total  = lod_active + stats.lod_culled_instances;
+                ImGui::TextColored(ImVec4(0.51f, 0.39f, 0.82f, 1.0f),
+                    "LOD active: %u / %u primitives", lod_active, lod_total);
+
+                // 几何剔除统计（基于 LOD active 的 instance）
                 ImGui::Text(
-                    "Instances: %u / %u visible (frustum %u, occlusion %u)",
+                    "Culling: %u / %u visible\n(frustum %u, occlusion %u)",
                     stats.total_instances_after,
                     stats.total_instances_before,
                     stats.frustum_culled_instances,
@@ -106,8 +123,8 @@ void RasterUI::ShowConfig() {
                 ImGui::InvisibleButton("##CullingRatioBar", bar_size);
 
                 const float total           = float(stats.total_instances_before);
-                const float frustum_width   = bar_size.x * float(stats.frustum_culled_instances) / total;
-                const float occlusion_width = bar_size.x * float(stats.occlusion_culled_instances) / total;
+                const float frustum_width   = total > 0 ? bar_size.x * float(stats.frustum_culled_instances) / total : 0;
+                const float occlusion_width = total > 0 ? bar_size.x * float(stats.occlusion_culled_instances) / total : 0;
                 float       rendered_width  = bar_size.x - frustum_width - occlusion_width;
                 if (rendered_width < 0.0f) {
                     rendered_width = 0.0f;

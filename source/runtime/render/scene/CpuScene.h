@@ -137,6 +137,9 @@ private:
     // primitive_buf 与 draw_cmd_buf 是对应的，index相同则对应相同primitive
     Array<GInstance> m_instance_buf; // N:1 GPrimitive
 
+    // Cluster LOD Group buffer：所有 mesh 的 cluster group 汇总
+    Array<GClusterGroup> m_cluster_group_buf;
+
     struct InstanceSlot {
         uint primitive_id              = UINT_MAX;
         uint instance_idx_in_primitive = UINT_MAX;

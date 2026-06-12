@@ -137,11 +137,29 @@ struct CPrimitive {
 
     entt::entity material_entt = entt::null;
 
+    // Cluster LOD 字段（由 ClusterBuilder 填写，-1 表示无 LOD 数据）
+    int cluster_group_id   = -1; // 所属 group ID（在 CMesh.cluster_groups 中的索引）
+    int cluster_refined_id = -1; // refined group ID（指向更精细的 group，-1 表示叶子 cluster）
+
     uint64 d_primitive_hash = 0; // derived
 };
 
 struct CMesh {
     Array<entt::entity> primitive_entts;
+    // 内存布局：[叶子 cluster × num_leaf_clusters | L1 cluster | L2 cluster | ...]
+    // 叶子 cluster 在最前面且连续，便于 RT scene 直接取用
+
+    uint32 num_leaf_clusters = 0; // 叶子 cluster 数量，primitive_entts[0..num_leaf_clusters) 为叶子
+
+    // Cluster LOD Group 数据
+    struct ClusterGroupInfo {
+        float3 simplified_center = float3(0.f, 0.f, 0.f);
+        float  simplified_radius = 0.f;
+        float  simplified_error  = 0.f;
+        int    depth             = 0;  // DAG 层级（0=leaf, 1+=简化层级）
+        int    parent_group_id   = -1; // 父 group（更粗层级），-1 表示根节点
+    };
+    Array<ClusterGroupInfo> cluster_groups;
 
     uint64 d_mesh_hash = 0;
 

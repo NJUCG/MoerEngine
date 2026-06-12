@@ -134,6 +134,7 @@ VsOutput main(
     output.tangent        = context.out_tangent;
     output.texcoord0      = context.out_texcoord0;
     output.material_id    = context.out_material_id;
+    output.primitive_id   = context.primitive_id;
 
 #else
 
