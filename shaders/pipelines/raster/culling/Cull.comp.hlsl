@@ -50,17 +50,24 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 // TODO: 当 cluster 规模到百万级时，改为自顶向下 DAG 遍历以减少总线程数
 // --------------------------------------------------------------------------
 
-// 按照 clusterlod.h 文档公式计算归一化屏幕空间误差 [0,1]
-// 注意：center 来自 GClusterGroup.simplified_center（mesh 局部坐标），
-//       camera_pos 来自 CullData（世界坐标）。
-// TODO: 当 mesh 带有非单位 transform 时，需要将 center 变换到世界空间
-float ComputeScreenError(float3 center, float radius, float error,
-                          float3 camera_pos, float znear, float proj_11) {
-    float dist = max(length(center - camera_pos) - radius, znear);
-    return error / dist * (proj_11 * 0.5);
+// 从 world transform 矩阵中提取最大轴向缩放系数，
+// 用于将局部空间的 radius/error 保守地缩放到世界空间
+float GetMaxAxisScale(float4x4 m) {
+    float sx = length(float3(m[0][0], m[1][0], m[2][0]));
+    float sy = length(float3(m[0][1], m[1][1], m[2][1]));
+    float sz = length(float3(m[0][2], m[1][2], m[2][2]));
+    return max(max(sx, sy), sz);
 }
 
-bool IsClusterLodActive(Moer::GPrimitive prim) {
+// 按照 clusterlod.h 文档公式计算归一化屏幕空间误差 [0,1]
+// 所有输入参数均需为世界空间
+float ComputeScreenError(float3 world_center, float world_radius, float world_error,
+                          float3 camera_pos, float znear, float proj_11) {
+    float dist = max(length(world_center - camera_pos) - world_radius, znear);
+    return world_error / dist * (proj_11 * 0.5);
+}
+
+bool IsClusterLodActive(Moer::GPrimitive prim, float4x4 world_transform) {
     if (prim.cluster_group_id < 0) return true; // 无 LOD 数据（如旧缓存场景），始终渲染
 
     if ((cull_params.flags & Moer::CULL_FLAG_ENABLE_CLUSTER_LOD) == 0) {
@@ -79,10 +86,15 @@ bool IsClusterLodActive(Moer::GPrimitive prim) {
         return false;
     }
 
+    // 将局部空间的 bounding sphere 变换到世界空间
+    float max_scale = GetMaxAxisScale(world_transform);
+    float3 world_center = mul(world_transform, float4(my_group.simplified_center, 1.0)).xyz;
+    float world_radius = my_group.simplified_radius * max_scale;
+    float world_error = my_group.simplified_error * max_scale;
+
     // 自动 LOD 选择
     float my_screen_error = ComputeScreenError(
-        my_group.simplified_center, my_group.simplified_radius,
-        my_group.simplified_error,
+        world_center, world_radius, world_error,
         cull_data.camera_position, cull_data.camera_znear, cull_data.camera_proj_11);
 
     // 条件 1："我所在 group 的简化误差 > 阈值"（进一步简化不可接受，我这层需要保留）
@@ -94,9 +106,11 @@ bool IsClusterLodActive(Moer::GPrimitive prim) {
     bool child_is_acceptable = true;
     if (prim.cluster_refined_id >= 0) {
         Moer::GClusterGroup refined_group = cluster_groups[prim.cluster_refined_id];
+        float3 child_world_center = mul(world_transform, float4(refined_group.simplified_center, 1.0)).xyz;
         float child_screen_error = ComputeScreenError(
-            refined_group.simplified_center, refined_group.simplified_radius,
-            refined_group.simplified_error,
+            child_world_center,
+            refined_group.simplified_radius * max_scale,
+            refined_group.simplified_error * max_scale,
             cull_data.camera_position, cull_data.camera_znear, cull_data.camera_proj_11);
         child_is_acceptable = (child_screen_error <= cull_data.lod_error_threshold);
     }
@@ -251,8 +265,8 @@ void main(uint tid : SV_DispatchThreadID) {
     if (tid >= cull_params.draw_count) return;
     
     Moer::DrawIndexedCmdData src_cmd = source_draw_commands[tid];
-    uint first_inst = src_cmd.first_instance;
-    uint inst_count = src_cmd.instance_cnt;
+    uint first_inst_idx = src_cmd.first_instance;
+    uint inst_count     = src_cmd.instance_cnt;
     
     // 获取 primitive 的 local AABB
     Moer::GPrimitive prim = primitives[tid];
@@ -260,7 +274,9 @@ void main(uint tid : SV_DispatchThreadID) {
     // Step 0: Cluster LOD 选择（per-primitive，O(1) 判断）
     // 如果该 cluster 在当前 LOD 切面下不应渲染，跳过所有 instance
     // 注意：不计入 total_instances_before，LOD 选择是预过滤，不是几何剔除
-    if (!IsClusterLodActive(prim)) {
+    // 使用第一个 instance 的 world_transform 将 bounding sphere 从局部空间变换到世界空间
+    Moer::GInstance first_inst = instances[first_inst_idx];
+    if (!IsClusterLodActive(prim, first_inst.world_transform)) {
         InterlockedAdd(counters[0].lod_culled_instances, inst_count);
         return;
     }
@@ -271,7 +287,7 @@ void main(uint tid : SV_DispatchThreadID) {
     uint lod_culled       = 0;
     
     for (uint i = 0; i < inst_count; i++) {
-        Moer::GInstance inst = instances[first_inst + i];
+        Moer::GInstance inst = instances[first_inst_idx + i];
 
         bool is_frustum_culled;
         bool is_occlusion_culled;
@@ -309,13 +325,13 @@ void main(uint tid : SV_DispatchThreadID) {
 
     uint write_offset = 0;
     for (uint i = 0; i < inst_count; i++) {
-        Moer::GInstance inst = instances[first_inst + i];
+        Moer::GInstance inst = instances[first_inst_idx + i];
 
         bool is_frustum_culled;
         bool is_occlusion_culled;
         bool is_lod_culled;
         if (IsInstanceVisible(inst, prim, is_frustum_culled, is_occlusion_culled, is_lod_culled)) {
-            visible_instance_ids[visible_instance_offset + write_offset] = first_inst + i;
+            visible_instance_ids[visible_instance_offset + write_offset] = first_inst_idx + i;
             write_offset++;
         }
     }
