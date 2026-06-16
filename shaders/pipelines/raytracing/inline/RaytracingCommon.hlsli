@@ -91,6 +91,9 @@ enum EMaterialAttribute {
 // │ 所有使用 GetGeometryRecordFrom 的调用点必须传入正确的 _geometry_inde x。   │
 // │ 如果你在新增 ray trace 调用，务必使用 GeometryIndex() 传入此参数。          │
 // └──────────────────────────────────────────────────────────────────────────┘
+bool IsValidBindlessHandle(uint _handle) {
+    return int(_handle) >= 0;
+}
 GeometryRecord GetGeometryRecordFrom(
     Moer::GBufferPassParams _param,
     uint _instance_idx,                // = InstanceID()，GRtInstance[] 索引（per-renderable）
@@ -232,7 +235,7 @@ MaterialSample SampleGeometryMaterial(
     float4 transmission       = 0.f;
 
     // Albedo / BaseColor 纹理
-    bool has_base_color = _attribs & EMA_BaseColor && mat.albedo_map_hdl > 0;
+    bool has_base_color = _attribs & EMA_BaseColor && IsValidBindlessHandle(mat.albedo_map_hdl);
     if (has_base_color) {
         TextureHandle albedo_tex = TextureHandle(mat.albedo_map_hdl);
         if (_mip >= 0.f) {
@@ -243,7 +246,7 @@ MaterialSample SampleGeometryMaterial(
     }
 
     // Emissive 纹理
-    if (_attribs & EMA_Emissive && mat.emissive_map_hdl > 0) {
+    if (_attribs & EMA_Emissive && IsValidBindlessHandle(mat.emissive_map_hdl)) {
         TextureHandle emissive_tex = TextureHandle(mat.emissive_map_hdl);
         if (_mip >= 0.f) {
             emissive *= emissive_tex.SampleLevel<float4>(_geo_record.texcoord, _mip);
@@ -254,7 +257,7 @@ MaterialSample SampleGeometryMaterial(
     }
 
     // Normal 纹理
-    if (_attribs & EMA_Normal && mat.normal_map_hdl > 0) {
+    if (_attribs & EMA_Normal && IsValidBindlessHandle(mat.normal_map_hdl)) {
         TextureHandle normal_tex = TextureHandle(mat.normal_map_hdl);
         if (_mip >= 0.f) {
             normal = normal_tex.SampleLevel<float4>(_geo_record.texcoord, _mip);
@@ -267,7 +270,7 @@ MaterialSample SampleGeometryMaterial(
     }
 
     // MetallicRoughness 纹理
-    if (_attribs & EMA_MetalRough && mat.metallic_roughness_map_hdl > 0) {
+    if (_attribs & EMA_MetalRough && IsValidBindlessHandle(mat.metallic_roughness_map_hdl)) {
         TextureHandle metal_rough_tex = TextureHandle(mat.metallic_roughness_map_hdl);
         if (_mip >= 0.f) {
             metallic_roughness = metal_rough_tex.SampleLevel<float4>(_geo_record.texcoord, _mip);
