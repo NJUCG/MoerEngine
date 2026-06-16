@@ -71,6 +71,25 @@ struct GPrimitive {
     uint packed_tangent_start_idx; // in element (uint)
     uint texcoord0_start_idx;      // in element (float2)
     uint index_start_idx;          // in uint（index buffer的元素是以uint为单位，而非uint3）
+
+    // Cluster LOD 字段
+    int cluster_group_id;    // 该 cluster 所属的 group ID（在 GClusterGroup[] 中的索引），-1 表示无 LOD
+    int cluster_refined_id;  // 对应 clodCluster::refined —— 指向更精细的 group（-1 表示叶子 cluster）
+};
+
+/**
+ * GClusterGroup: Cluster LOD Group 的 GPU 侧数据，用于运行时 LOD 选择
+ *
+ * 每个 group 存储其简化后的 bounding sphere 和误差值。
+ * LOD 选择通过比较 screen-space error 与阈值来决定是否展开该 group 的子 cluster。
+ */
+struct GClusterGroup {
+    float3 simplified_center;
+    float  simplified_radius;
+    float  simplified_error;
+    int    depth;           // DAG 层级（0=leaf, 1+=简化层级），用于 debug 强制 LOD 选择
+    int    parent_group_id; // 父 group（更粗层级），-1 表示根节点（最粗，无法被替代）
+    uint   _pad1;
 };
 
 /**
@@ -84,6 +103,34 @@ struct GPrimitive {
 struct GInstance {
     float4x4 world_transform;
     uint     primitive_id; // Primitive ID (DrawIndex)，用于反向映射
+};
+
+/**
+ * GRtInstance: RT 专用的 per-renderable instance 数据
+ *
+ * 与 GInstance 的区别：
+ * - GInstance 是 raster 侧 per-CPrimitive 的 instance（与 draw call 1:1）
+ * - GRtInstance 是 RT 侧 per-renderable 的 instance（与 TLAS instance 1:1）
+ *
+ * primitive_table_offset:
+ *   指向 rt_primitive_table buffer 的起始偏移。
+ *   shader 侧用 GeometryIndex() 加上此偏移查询 primitive_id。
+ *
+ *   GeometryIndex() 与 CPrimitive 的对应关系：
+ *   一个 BLAS 对应一个 CMesh，BLAS 中只包含叶子 cluster（leaf clusters）。
+ *   每个叶子 CPrimitive 在 BLAS 中对应一个 geometry（按 CMesh.primitive_entts
+ *   的顺序，取前 num_leaf_clusters 个），因此 GeometryIndex() 返回值 =
+ *   该叶子 CPrimitive 在 CMesh.primitive_entts 中的下标。
+ *
+ *   查询 primitive_id：
+ *     primitive_id = rt_primitive_table[primitive_table_offset + GeometryIndex()]
+ */
+struct GRtInstance {
+    float4x4 world_transform;         // 从 CNode 拷贝（避免依赖 raster 侧 m_instance_buf 排列）
+    uint     primitive_table_offset;   // rt_primitive_table[] 的起始偏移
+    uint     primitive_count;          // BLAS 中叶子 cluster 的数量（= GeometryIndex 有效范围）
+    uint     first_primitive_id;       // 该 mesh 第一个叶子 CPrimitive 的 primitive_id
+    uint     _padding_rt_instance;
 };
 
 /**

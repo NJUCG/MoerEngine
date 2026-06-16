@@ -64,12 +64,14 @@ target_link_libraries(${pipe_test_target}
 )
 set_target_properties(${pipe_test_target} PROPERTIES FOLDER ${moer_test_folder})
 
-# add_executable(MeshProcessTest "MeshProcessTest.cpp")
-# target_include_directories(MeshProcessTest 
-#     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
-#     PRIVATE $<BUILD_INTERFACE:${moer_third_party_dir}/AssetLoad/assimp/include>)
-# target_link_libraries(MeshProcessTest PRIVATE render MeshProcess AssetLoad)
-# set_target_properties(MeshProcessTest PROPERTIES FOLDER ${moer_test_folder})
+add_executable(MeshProcessTest "MeshProcessTest.cpp")
+target_link_libraries(MeshProcessTest
+    PRIVATE Moer::Core
+    PRIVATE AssetLoad
+    PRIVATE meshoptimizer
+    PRIVATE metis
+)
+set_target_properties(MeshProcessTest PROPERTIES FOLDER ${moer_test_folder})
 
 # add_executable(VulkanRTRHITest VulkanRTRHITest.cpp)
 # target_include_directories(VulkanRTRHITest

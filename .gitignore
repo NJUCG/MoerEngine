@@ -12,8 +12,8 @@
 /build/*
 /target/*
 /.cache/
-build_vs2022
-cmake-build-*/
+/build_vs2022
+/cmake-build-*/
 
 # 2.1 Python Cache
 __pycache__/
@@ -33,3 +33,6 @@ __pycache__/
 /*.log
 .VSCodeCounter/
 /docs/temp
+
+# 6. 3rdparty
+/3rdparty/rtxmg/

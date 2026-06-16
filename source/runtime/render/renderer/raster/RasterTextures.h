@@ -133,6 +133,30 @@ struct RasterTextures {
     RASTER_TEXTURES_TABLE_DOWNSAMPLED
 #undef X
 
+    TextureWithHandle hiz_current;
+    TextureWithHandle hiz_previous;
+
+    static uint GetHiZMipCount(const uint2& size) {
+        uint max_dim   = size.x > size.y ? size.x : size.y;
+        uint mip_count = 1;
+
+        while (max_dim > 1) {
+            max_dim >>= 1;
+            mip_count++;
+        }
+
+        return mip_count;
+    }
+
+    static TexConfig CreateHiZConfig(const uint2& size) {
+        TexConfig cfg = TexConfig::Default(PF_R16_SFLOAT)
+                            .Usage(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS)
+                            .Mips(GetHiZMipCount(size))
+                            .IndivisualMips()
+                            .SamplerConfig(SF_NEAREST, SAM_CLAMP_TO_EDGE);
+        return cfg;
+    }
+
     void CreateFrameBuffers(RenderDevice& device, const uint2& size) {
         // Full-resolution textures
 #define X(TYPE, NAME, TEXTYPE, CONFIG)                                                  \
@@ -154,6 +178,14 @@ struct RasterTextures {
     }
             RASTER_TEXTURES_TABLE_DOWNSAMPLED
 #undef X
+        }
+
+        {
+            TexConfig hiz_cfg = CreateHiZConfig(size);
+            AssetTool::CreateRasterResource<Tex2DTag>(hiz_current, device, "hiz_current", size, hiz_cfg, false);
+            AssetTool::CreateRasterResource<Tex2DTag>(
+                hiz_previous, device, "hiz_previous", size, hiz_cfg, false
+            );
         }
     }
 
@@ -188,6 +220,12 @@ struct RasterTextures {
         RASTER_TEXTURES_TABLE_DOWNSAMPLED
 #undef X
 
+        {
+            TexConfig hiz_cfg = CreateHiZConfig(hiz_current.GetSize());
+            AssetTool::AllocateRasterResourceHandle(bindless_array, hiz_current, hiz_cfg);
+            AssetTool::AllocateRasterResourceHandle(bindless_array, hiz_previous, hiz_cfg);
+        }
+
         cmd_list.UpdateBindlessArray(bindless_array);
     }
 
@@ -208,6 +246,9 @@ struct RasterTextures {
     AssetTool::FreeRasterResourceHandle(bindless_array, NAME##_half);
         RASTER_TEXTURES_TABLE_DOWNSAMPLED
 #undef X
+
+        AssetTool::FreeRasterResourceHandle(bindless_array, hiz_current);
+        AssetTool::FreeRasterResourceHandle(bindless_array, hiz_previous);
     }
 
     Array<TextureView> GetDisplayableFrameBuffersView() {

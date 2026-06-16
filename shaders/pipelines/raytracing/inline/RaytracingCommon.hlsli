@@ -72,15 +72,33 @@ enum EMaterialAttribute {
     EMA_All = 0x1f
 };
 
+// ┌──────────────────────────────────────────────────────────────────────────┐
+// │ 重要变更说明（2026-06-11）：                                               │
+// │                                                                          │
+// │ RT Scene 从 1 CPrimitive = 1 BLAS 改为 1 CMesh = 1 BLAS。                │
+// │                                                                          │
+// │ 改动前：                                                                 │
+// │   - InstanceID() → GInstance[] 索引 → .primitive_id → GPrimitive         │
+// │   - GeometryIndex() 恒为 0，未使用                                       │
+// │                                                                         │
+// │ 改动后：                                                                 │
+// │   - InstanceID() → GRtInstance[] 索引（per-renderable，与 TLAS inst 1:1）│
+// │   - GeometryIndex() → 该 CMesh 的 BLAS 中命中了哪个 CPrimitive            │
+// │     （= CMesh.primitive_entts 的下标）                                   │
+// │   - primitive_id = rt_primitive_table                                   │
+// │       [rt_instance.primitive_table_offset + GeometryIndex()]            │
+// │                                                                         │
+// │ 所有使用 GetGeometryRecordFrom 的调用点必须传入正确的 _geometry_inde x。   │
+// │ 如果你在新增 ray trace 调用，务必使用 GeometryIndex() 传入此参数。          │
+// └──────────────────────────────────────────────────────────────────────────┘
 bool IsValidBindlessHandle(uint _handle) {
     return int(_handle) >= 0;
 }
-
 GeometryRecord GetGeometryRecordFrom(
-    Moer::GBufferPassParams
-         _param, // push constant（bindless handles：instance_buf, primitive_buf, material_buf, MegaBuffers）
-    uint _instance_idx,                // = InstanceID()，GInstance[] 索引
-    uint _prim_idx,                    // 三角形在该 Primitive 内的索引（0-based）
+    Moer::GBufferPassParams _param,
+    uint _instance_idx,                // = InstanceID()，GRtInstance[] 索引（per-renderable）
+    uint _geometry_index,              // = GeometryIndex()，命中了 BLAS 中第几个 CPrimitive
+    uint _prim_idx,                    // = PrimitiveIndex()，该 CPrimitive 内的三角形索引（0-based）
     float2          _ray_barycentrics, // 命中重心坐标 (u, v)
     EGeometryAttrib _attrib,           // 需要读取的顶点属性掩码
     bool            _b_backface = false
@@ -88,13 +106,23 @@ GeometryRecord GetGeometryRecordFrom(
 
     GeometryRecord geo_record = (GeometryRecord)0;
 
-    // 1. 加载 GInstance → 获取 world_transform 和 primitive_id
-    // 新架构：_instance_idx 直接对应 GInstance[] 索引（因为 TLAS 构建时每个 CPrimitive 对应一个 Instance）
-    ArrayBuffer instance_buf = ArrayBuffer(_param.instance_buf_hdl);
-    geo_record.instance      = instance_buf.Load<Moer::GInstance>(_instance_idx);
-    uint primitive_id        = geo_record.instance.primitive_id;
+    // 1. 加载 GRtInstance → 获取 CPrimitive 映射表偏移和 world_transform
+    ArrayBuffer rt_instance_buf = ArrayBuffer(_param.rt_instance_buf_hdl);
+    Moer::GRtInstance rt_inst   = rt_instance_buf.Load<Moer::GRtInstance>(_instance_idx);
 
-    // 2. 加载 GPrimitive → 获取 material_idx 和 MegaBuffer 起始索引
+    // 2. 通过 GeometryIndex 查映射表 → 获取 primitive_id
+    // GeometryIndex() = 命中的 CPrimitive 在 CMesh.primitive_entts 中的下标。
+    // 有效范围 [0, rt_inst.primitive_count)。
+    ArrayBuffer prim_table_buf = ArrayBuffer(_param.rt_primitive_table_buf_hdl);
+    uint primitive_id = prim_table_buf.Load<uint>(
+        rt_inst.primitive_table_offset + _geometry_index
+    );
+
+    // 3. 填充 GInstance（world_transform 从 GRtInstance 获取）
+    geo_record.instance.world_transform = rt_inst.world_transform;
+    geo_record.instance.primitive_id    = primitive_id;
+
+    // 4. 加载 GPrimitive → 获取 material_idx 和 MegaBuffer 起始索引
     ArrayBuffer primitive_buf = ArrayBuffer(_param.primitive_buf_hdl);
     geo_record.primitive      = primitive_buf.Load<Moer::GPrimitive>(primitive_id);
 

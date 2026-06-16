@@ -54,6 +54,10 @@ void RTContext::SetBindlessHandles(const GpuScene::Res& gpu_scene_res) {
     bindless_handles.packed_tangent_buf_hdl = gpu_scene_res.packed_tangent_buf.hdl;
     bindless_handles.texcoord0_buf_hdl      = gpu_scene_res.texcoord0_buf.hdl;
     bindless_handles.index_buf_hdl          = gpu_scene_res.index_buf.hdl;
+
+    // RT 专用（mesh-level BLAS 方案）
+    bindless_handles.rt_instance_buf_hdl        = gpu_scene_res.rt_instance_buf.hdl;
+    bindless_handles.rt_primitive_table_buf_hdl = gpu_scene_res.rt_primitive_table_buf.hdl;
 }
 
 void RTContext::FillFrameResources(uint2 _resolution) {

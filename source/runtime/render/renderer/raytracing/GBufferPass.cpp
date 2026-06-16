@@ -49,6 +49,10 @@ void GBufferPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     params.texcoord0_buf_hdl      = bindless_handles.texcoord0_buf_hdl;
     params.index_buf_hdl          = bindless_handles.index_buf_hdl;
 
+    // RT 专用（mesh-level BLAS 方案）
+    params.rt_instance_buf_hdl        = bindless_handles.rt_instance_buf_hdl;
+    params.rt_primitive_table_buf_hdl = bindless_handles.rt_primitive_table_buf_hdl;
+
     constants.main_view = _rt_ctx.main_view;
     constants.prev_view = _rt_ctx.prev_view;
     upload_data.resize(sizeof(GBufferConstants));

@@ -6,6 +6,7 @@
 namespace Moer::Render::Raster {
 
 class RasterContext;
+class HiZBuildPass;
 class ShadowDepthPass;
 class GeometryPass;
 class DirectionalShadowMaskPass;
@@ -64,6 +65,7 @@ private:
     UniquePtr<RasterContext> raster_context_ptr; // For forward declaration
 
     // Pass
+    UniquePtr<HiZBuildPass>                hiz_build_pass;
     UniquePtr<ShadowDepthPass>             shadow_depth_pass;
     UniquePtr<DirectionalShadowMaskPass>   directional_shadow_mask_pass;
     UniquePtr<GeometryPass>                geometry_pass;

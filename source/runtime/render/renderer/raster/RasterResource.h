@@ -15,6 +15,7 @@
 #include "RasterTextures.h"
 
 #include <cstdint>
+#include <utility>
 
 namespace Moer::Render::Raster {
 
@@ -112,6 +113,12 @@ public:
 
     GpuCullingBuffers gpu_culling_buffers;
 
+    struct HiZData {
+        bool     previous_valid = false;
+        uint     mip_count      = 0;
+        float4x4 previous_view_proj{};
+    } hiz_data;
+
     // RayTracing
     RaytracingSceneRef rt_scene() {
         return scene.GetGpuSceneRes().rt_scene;
@@ -201,6 +208,8 @@ public:
 
     void CreateFrameBuffers() {
         textures.CreateFrameBuffers(device, resolution);
+        hiz_data.previous_valid = false;
+        hiz_data.mip_count      = textures.hiz_current.tex ? textures.hiz_current.tex->GetNumMips() : 0;
     }
 
     //功能：加载外部纹理并在这一步Create它们的buffer
@@ -214,6 +223,19 @@ public:
 
     void FreeFrameBuffers(bool is_free_external_assets) {
         textures.FreeFrameBuffers(bdls, is_free_external_assets);
+        hiz_data.previous_valid = false;
+        hiz_data.mip_count      = 0;
+    }
+
+    void InvalidateHiZHistory() {
+        hiz_data.previous_valid = false;
+    }
+
+    void CommitHiZHistory(const float4x4& current_view_proj) {
+        std::swap(textures.hiz_current, textures.hiz_previous);
+        hiz_data.previous_valid   = true;
+        hiz_data.previous_view_proj = current_view_proj;
+        hiz_data.mip_count        = textures.hiz_previous.tex ? textures.hiz_previous.tex->GetNumMips() : 0;
     }
 
     Array<TextureView> GetDisplayableFrameBuffersView() {

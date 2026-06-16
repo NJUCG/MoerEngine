@@ -71,34 +71,46 @@ public:
     }
 
     void Process(RasterContext& context, RasterConfig& ui_config, const Camera& camera) {
-        const auto& gpu_scene_res   = context.scene.gpu_scene_res();
-        const bool  use_gpu_culling = ui_config.enable_frustum_culling;
+        const auto& gpu_scene_res = context.scene.gpu_scene_res();
 
-        if (use_gpu_culling) {
-            CullingPass::CullStatistics stats;
-            m_culling_pass.Process(
-                context,
-                camera,
-                gpu_scene_res,
-                context.gpu_culling_buffers.geometry,
-                &stats,
-                RasterTool::GetGeometryCullingProfileScopeName()
-            );
+        const bool use_occlusion_culling = ui_config.enable_occlusion_culling &&
+                                           context.hiz_data.previous_valid &&
+                                           context.textures.hiz_previous.tex != nullptr &&
+                                           context.hiz_data.mip_count > 0;
 
-            ui_config.culling_stats.total_instances_before = stats.total_instances_before;
-            ui_config.culling_stats.total_instances_after  = stats.total_instances_after;
-            ui_config.culling_stats.visible_draws          = stats.visible_draws;
-            ui_config.culling_stats.total_draws            = stats.total_draws;
-        } else {
-            ui_config.culling_stats = RasterConfig::CullingStats{};
-        }
+        // Culling pass 始终运行（Nanite 模型：LOD 选择 + 可选的 frustum/occlusion 剔除）
+        CullingPass::CullStatistics stats;
+        CullingPass::CullingOptions culling_options{
+            ui_config.enable_frustum_culling,
+            use_occlusion_culling,
+            ui_config.cluster_lod_error_threshold,
+            ui_config.force_lod_level
+        };
+
+        m_culling_pass.Process(
+            context,
+            camera,
+            gpu_scene_res,
+            context.gpu_culling_buffers.geometry,
+            &stats,
+            RasterTool::GetGeometryCullingProfileScopeName(),
+            culling_options
+        );
+
+        ui_config.culling_stats.total_instances_before     = stats.total_instances_before;
+        ui_config.culling_stats.total_instances_after      = stats.total_instances_after;
+        ui_config.culling_stats.visible_draws              = stats.visible_draws;
+        ui_config.culling_stats.total_draws                = stats.total_draws;
+        ui_config.culling_stats.frustum_culled_instances   = stats.frustum_culled_instances;
+        ui_config.culling_stats.occlusion_culled_instances = stats.occlusion_culled_instances;
+        ui_config.culling_stats.lod_culled_instances       = stats.lod_culled_instances;
 
         GeometryPassBindlessParam param;
         param.world2clip = Transpose(camera.GetViewProjectionMatrix());
 
         param.instance_buf_hdl              = gpu_scene_res.instance_buf.hdl;
-        param.visible_instance_id_buf_hdl   = 0;
-        param.use_visible_instance_id_remap = 0;
+        param.visible_instance_id_buf_hdl   = context.gpu_culling_buffers.geometry.visible_instance_id_buf.hdl;
+        param.use_visible_instance_id_remap = 1;
         param.primitive_buf_hdl             = gpu_scene_res.primitive_buf.hdl;
         param.position_buf_hdl              = gpu_scene_res.position_buf.hdl;
         param.packed_normal_buf_hdl         = gpu_scene_res.packed_normal_buf.hdl;
@@ -108,12 +120,7 @@ public:
 
         param.enable_alpha_test             = ui_config.geometry_enable_alpha_test ? 1 : 0;
         param.alpha_test_blend_pixel_cutoff = ui_config.geometry_alpha_test_blend_pixel_cutoff;
-
-        if (use_gpu_culling) {
-            param.visible_instance_id_buf_hdl =
-                context.gpu_culling_buffers.geometry.visible_instance_id_buf.hdl;
-            param.use_visible_instance_id_remap = 1;
-        }
+        param.debug_visualization_mode      = static_cast<uint>(ui_config.geometry_debug_visualization);
 
         auto rect2d = context.textures.base_color.GetRect2D();
         assert(
@@ -124,35 +131,16 @@ public:
         context.cmd_list.PushScopeWithTimeScope(RasterTool::GetGeometryDrawProfileScopeName());
         auto draw = context.cmd_list.Gfx(m_pso, context.bdls, param);
 
-        if (use_gpu_culling) {
-            const auto& visibility = context.gpu_culling_buffers.geometry;
-
-            draw.DrawIndirect(
-                "Geometry Pass",
-                rect2d,
-                {},
-                IndexBuffer{gpu_scene_res.index_buf.buf->GetView(), EIndexElementType::IET_UINT32},
-                visibility.draw_cmd_buf->GetView(),
-                visibility.GetDrawCountView(),
-                visibility.draw_cmd_buf->GetStride(),
-                visibility.max_draw_count,
-                DepthAttachment(context.textures.depth_linear_sampler.tex->GetView().GetTexture()),
-                ColorAttachment(context.textures.base_color.tex),
-                ColorAttachment(context.textures.normal.tex),
-                ColorAttachment(context.textures.metal_rough_ao.tex)
-            );
-            context.cmd_list.PopScopeWithTimeScope();
-            return;
-        }
-
+        const auto& visibility = context.gpu_culling_buffers.geometry;
         draw.DrawIndirect(
             "Geometry Pass",
             rect2d,
             {},
             IndexBuffer{gpu_scene_res.index_buf.buf->GetView(), EIndexElementType::IET_UINT32},
-            gpu_scene_res.draw_cmd_buf.buf->GetView(),
-            gpu_scene_res.draw_cmd_buf.buf->GetNumElement(),
-            gpu_scene_res.draw_cmd_buf.buf->GetStride(),
+            visibility.draw_cmd_buf->GetView(),
+            visibility.GetDrawCountView(),
+            visibility.draw_cmd_buf->GetStride(),
+            visibility.max_draw_count,
             DepthAttachment(context.textures.depth_linear_sampler.tex->GetView().GetTexture()),
             ColorAttachment(context.textures.base_color.tex),
             ColorAttachment(context.textures.normal.tex),

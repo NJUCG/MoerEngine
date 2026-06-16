@@ -6,7 +6,6 @@
 #include "serialize/Serializer.h"
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderCompiler.h"
-#include "shader/ShaderCompiler.h" // Added to ensure ShaderCompiler is fully defined
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
 #include <fstream>
@@ -15,6 +14,57 @@
 
 namespace Moer::Render {
 using std::move;
+
+namespace {
+
+std::string_view GetShaderTypeName(EShaderType shader_type) {
+    switch (shader_type) {
+        case ST_VERTEX: return "vertex";
+        case ST_GEOMETRY: return "geometry";
+        case ST_FRAGMENT: return "fragment";
+        case ST_COMPUTE: return "compute";
+        case ST_MESH: return "mesh";
+        case ST_AMPLIFICATION: return "amplification";
+        case ST_RAY_GEN: return "ray_gen";
+        case ST_RAY_MISS: return "ray_miss";
+        case ST_RAY_CLOSESTHIT: return "ray_closest_hit";
+        case ST_RAY_CALLABLE: return "ray_callable";
+        case ST_RAY_INTERSECTION: return "ray_intersection";
+        case ST_RAY_ANYHIT: return "ray_any_hit";
+        default: return "unknown";
+    }
+}
+
+uint64 GetNextShaderKeyOffset(const TypedShaderCache& cache) {
+    uint64 next_key_offset = 0;
+
+    for (const auto& [shader_input, shader_key] : cache.shader_cache_map) {
+        next_key_offset = std::max(next_key_offset, shader_key.hash + 1);
+    }
+    for (const auto& [shader_key, shader_entry] : cache.shader_entry_cache) {
+        next_key_offset = std::max(next_key_offset, shader_key.hash + 1);
+    }
+
+    return next_key_offset;
+}
+
+void RebuildLoadedShaderCacheRuntimeState(ShaderResourcesCache& cache) {
+    for (auto& typed_cache : cache.code_cache) {
+        typed_cache.key_offset = GetNextShaderKeyOffset(typed_cache);
+    }
+}
+
+uint64 CountCachedShaders(const ShaderResourcesCache& cache) {
+    uint64 cached_shader_count = 0;
+
+    for (const auto& typed_cache : cache.code_cache) {
+        cached_shader_count += typed_cache.shader_cache.size();
+    }
+
+    return cached_shader_count;
+}
+
+} // namespace
 
 #pragma region[Shader Resource Cache]
 
@@ -44,7 +94,8 @@ void ShaderResourcesCache::RegisterCache(const ShaderCompilerInput& _input, Shad
             uint64(_input.shader_name_hash),
             _input.entry_point,
             _input.relative_source_file_path,
-            key
+            key,
+            std::move(_output.source_dependencies)
         );
     }
 }
@@ -116,13 +167,53 @@ void ShaderManager::LoadCache(std::filesystem::path _path) {
         //create file
         std::ofstream fs(file_path, std::ios::binary);
         fs.close();
+        LOG_DEBUG("[Startup][Shader] LoadCache created empty cache file: {}", file_path.string());
         return;
     }
 
-    std::ifstream fs(_path, std::ios::binary);
-    InputStream   stream(fs);
-    //MARK. not implemented
-    // stream >> shader_resources_cache;
+    if (std::filesystem::file_size(file_path) == 0) {
+        LOG_DEBUG("[Startup][Shader] LoadCache skipped empty cache file");
+        return;
+    }
+
+    std::ifstream fs(file_path, std::ios::binary);
+    if (!fs.is_open()) {
+        LOG_WARNING(
+            "[Startup][Shader] LoadCache failed to open cache file for reading. requested='{}', actual_open_path='{}'",
+            file_path.string(),
+            file_path.string()
+        );
+        return;
+    }
+
+    ShaderResourcesCache loaded_cache;
+    InputStream          stream(fs);
+
+    try {
+        stream >> loaded_cache;
+    } catch (const std::exception& e) {
+        LOG_WARNING(
+            "[Startup][Shader] LoadCache caught exception during deserialization (cache format may have changed): {}",
+            e.what()
+        );
+        return;
+    } catch (...) {
+        LOG_WARNING("[Startup][Shader] LoadCache caught unknown exception during deserialization, discarding cache");
+        return;
+    }
+
+    if (fs.fail()) {
+        LOG_WARNING("[Startup][Shader] LoadCache failed to deserialize shader cache: {}", file_path.string());
+        return;
+    }
+
+    RebuildLoadedShaderCacheRuntimeState(loaded_cache);
+    shader_resources_cache = std::move(loaded_cache);
+
+    LOG_DEBUG(
+        "[Startup][Shader] LoadCache loaded {} cached shaders",
+        CountCachedShaders(shader_resources_cache)
+    );
 }
 
 Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
@@ -176,8 +267,22 @@ Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
     if (it.first != nullptr) {
         return *it.first;
     }
+
+    const std::string     shader_path       = input.relative_source_file_path;
+    const std::string     entry_point       = input.entry_point;
+    const uint32_t        mutation_id       = input.mutation_id;
+    const std::string_view shader_type_name = GetShaderTypeName(_type);
+
     auto&& output = ShaderCompiler::Compile(std::move(input));
+
     if (!output.b_succeeded) {
+        LOG_WARNING(
+            "Shader compile failed: type={}, path={}, entry={}, mutation_id={}",
+            shader_type_name,
+            shader_path,
+            entry_point,
+            mutation_id
+        );
         for (const auto& error : output.errors) {
             std::string error_string = get_all_removed_target_strings(
                 error,

@@ -33,7 +33,12 @@ public:
     GpuScene(const GpuScene&)            = delete;
     GpuScene& operator=(const GpuScene&) = delete;
 
-    void Update(const ecs::LogicalScene& logical_scene, CpuScene& cpu_scene, bool rebuilt_mesh);
+    void Update(
+        const ecs::LogicalScene& logical_scene,
+        CpuScene&                cpu_scene,
+        bool                     rebuilt_mesh,
+        bool                     rebuilt_rt_blas
+    );
 
 private:
     /**
@@ -89,6 +94,13 @@ public:
 
         // raytracing scene
         RaytracingSceneRef rt_scene;
+
+        // Cluster LOD Group buffer
+        BufferWithHandle cluster_group_buf;          // GClusterGroup[]，LOD 运行时选择数据
+
+        // RT 专用（mesh-level BLAS 方案）
+        BufferWithHandle rt_instance_buf;           // GRtInstance[]，per-renderable
+        BufferWithHandle rt_primitive_table_buf;     // uint[]，GeometryIndex → primitive_id 映射表
     };
 
     struct PendingCommandList {
@@ -128,6 +140,8 @@ public:
      */
     void UpdateRaytracingScene(CommandList& cmd_list);
 
+    void RebuildRaytracingSceneTlas(CommandList& cmd_list);
+
     /**
      * 获取 Raytracing Scene 引用
      */
@@ -151,8 +165,15 @@ private:
 
     UnorderedMap<entt::entity, uint> m_map_texture_entity_to_bindless_handle;
 
-    // Raytracing Scene Cache: BLAS 按 primitive_id 顺序存储，与 CpuScene 的 primitive 顺序一致
-    Array<RaytracingGeometryRef> m_primitive_id_to_blas;
+    // RT Scene Cache: BLAS 按 CMesh 存储（1 CMesh = 1 BLAS，每个 CPrimitive 对应一个 geometry）
+    UnorderedMap<entt::entity, RaytracingGeometryRef> m_mesh_entt_to_blas;
+
+    // CPU 侧映射缓存，用于 TLAS-only rebuild / update 时复用
+    Array<GRtInstance> m_rt_instance_cache;
+    Array<uint32>      m_rt_primitive_table_cache;
+
+    // 每个 mesh_entt 在 m_rt_primitive_table_cache 中的起始偏移
+    UnorderedMap<entt::entity, uint32> m_mesh_entt_to_primitive_table_offset;
 
     // 将gfx queue的数据存下来，等待主线程执行
     PendingCommandList m_pending_cmd_lists;

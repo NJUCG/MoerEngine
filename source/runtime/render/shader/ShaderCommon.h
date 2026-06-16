@@ -84,6 +84,23 @@ struct hash<Moer::Render::ShaderEntryKey> {
 } // namespace std
 //Shader Compiled Hash
 namespace Moer::Render {
+
+// 记录一个 shader 源文件（主文件或 include 文件）的路径和编译时时间戳，
+// 用于缓存失效判断：当文件时间戳比缓存中的更新时，对应 shader 需要重编译。
+struct ShaderFileDependency {
+    std::string path;
+    long long   timestamp = 0;
+
+    Moer::OutputStream& operator<<(Moer::OutputStream& _stream) const {
+        _stream << path << timestamp;
+        return _stream;
+    }
+    Moer::InputStream& operator>>(Moer::InputStream& _stream) {
+        _stream >> path >> timestamp;
+        return _stream;
+    }
+};
+
 struct Shader {
     ShaderParametersInfoMap            reflection;
     uint32_t                           mutation_id;
@@ -93,12 +110,15 @@ struct Shader {
     std::string                        entry_name;
     std::string                        shader_path;
     ShaderEntryKey                     shader_key;
-    //need included files to validate cache
+
+    // 主文件 + 所有 #include 文件的路径和编译时时间戳
+    Moer::Array<ShaderFileDependency>  source_dependencies;
 
     Moer::OutputStream& operator<<(Moer::OutputStream& _stream) const {
         _stream << compiled_hash << type << mutation_id << shader_name_hash << entry_name << shader_path
                 << shader_key;
         _stream << reflection.reflect_map;
+        _stream << source_dependencies;
         return _stream;
     }
 
@@ -106,6 +126,7 @@ struct Shader {
         _stream >> compiled_hash >> type >> mutation_id >> shader_name_hash >> entry_name >> shader_path >>
             shader_key;
         _stream >> reflection.reflect_map;
+        _stream >> source_dependencies;
         return _stream;
     }
 };
@@ -145,10 +166,8 @@ struct ShaderCompilerOutput {
     bool      cached                      = false;
     long long source_file_last_write_time = 0;
 
-    // ShaderCompilerOutput(ShaderCompilerOutput&&)                 = default;
-    // ShaderCompilerOutput(const ShaderCompilerOutput&)            = default;
-    // ShaderCompilerOutput& operator=(ShaderCompilerOutput&&)      = default;
-    // ShaderCompilerOutput& operator=(const ShaderCompilerOutput&) = default;
+    // 主文件 + 所有 #include 文件的路径和编译时时间戳（由 DXC TrackingIncludeHandler 收集）
+    Moer::Array<ShaderFileDependency> source_dependencies;
 };
 
 /**

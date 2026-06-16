@@ -40,7 +40,62 @@
 using Microsoft::WRL::ComPtr;
 using ShaderParametersInfoMap   = Moer::Render::ShaderParametersInfoMap;
 using ShaderCompilerEnvironment = Moer::Render::ShaderCompilerEnvironment;
+using ShaderFileDependency      = Moer::Render::ShaderFileDependency;
 using ReflectParamInfo          = Moer::Render::ReflectParamInfo;
+
+// 包装默认 IDxcIncludeHandler，在每次 LoadSource 时记录被 include 文件的路径和时间戳。
+// 用于构建 shader cache 的依赖列表，以便后续判断缓存是否因源文件变更而过期。
+class TrackingIncludeHandler final : public IDxcIncludeHandler {
+public:
+    explicit TrackingIncludeHandler(IDxcIncludeHandler* wrapped) : m_wrapped(wrapped) {
+        if (m_wrapped) m_wrapped->AddRef();
+    }
+    ~TrackingIncludeHandler() {
+        if (m_wrapped) m_wrapped->Release();
+    }
+
+    HRESULT STDMETHODCALLTYPE LoadSource(LPCWSTR pFilename, IDxcBlob** ppIncludeSource) override {
+        HRESULT hr = m_wrapped->LoadSource(pFilename, ppIncludeSource);
+        if (SUCCEEDED(hr) && pFilename) {
+            std::filesystem::path fpath(pFilename);
+            ShaderFileDependency dep;
+            try {
+                auto canonical = std::filesystem::canonical(fpath);
+                dep.path      = canonical.generic_string();
+                dep.timestamp = std::filesystem::last_write_time(canonical).time_since_epoch().count();
+            } catch (...) {
+                dep.path      = fpath.generic_string();
+                dep.timestamp = 0;
+            }
+            m_included_files.push_back(std::move(dep));
+        }
+        return hr;
+    }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppvObject) override {
+        if (riid == __uuidof(IUnknown) || riid == __uuidof(IDxcIncludeHandler)) {
+            *ppvObject = static_cast<IDxcIncludeHandler*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppvObject = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++m_ref_count; }
+    ULONG STDMETHODCALLTYPE Release() override {
+        ULONG ref = --m_ref_count;
+        if (ref == 0) delete this;
+        return ref;
+    }
+
+    Moer::Array<ShaderFileDependency> TakeIncludedFiles() { return std::move(m_included_files); }
+
+private:
+    IDxcIncludeHandler*               m_wrapped = nullptr;
+    ULONG                             m_ref_count = 1;
+    Moer::Array<ShaderFileDependency> m_included_files;
+};
+
 struct DXCompiler::Impl {
     Impl();
     ~Impl();
@@ -300,11 +355,13 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         for (size_t i = 0; i < arguments.size(); ++i) {
             arguments_wchar[i] = arguments[i].data();
         }
+
+        auto* tracking_handler = new TrackingIncludeHandler(include_handler.Get());
         HRESULT hres = compiler->Compile(
             &buffer,
             (LPCWSTR*)arguments_wchar.data(),
             (uint32_t)arguments_wchar.size(),
-            include_handler.Get(),
+            tracking_handler,
             IID_PPV_ARGS(&result)
         );
         uint64_t result_hash[2] = {0, 0};
@@ -339,6 +396,7 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
                 error_stream << "Shader compilation failed :\n"
                              << (const char*)error_blob->GetBufferPointer();
                 push_back_error_message((const char*)error_blob->GetBufferPointer());
+                tracking_handler->Release();
                 return;
             }
         }
@@ -351,7 +409,8 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         }
 
         auto fill_succuss_data =
-            [&_output, &last_write_time, &file_path, &result, &file_data, &_input, &result_hash]() {
+            [&_output, &last_write_time, &file_path, &result, &file_data, &_input, &result_hash,
+             tracking_handler]() {
                 IDxcBlob* code;
                 result->GetResult(&code);
                 const uint8_t* data = (uint8_t*)code->GetBufferPointer();
@@ -368,9 +427,21 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
                 _output.target_info                 = _input.target_info;
                 _output.cached                      = false;
                 _output.source_file_last_write_time = last_write_time.time_since_epoch().count();
+
+                // 收集主文件 + include 文件的依赖信息
+                _output.source_dependencies.clear();
+                _output.source_dependencies.push_back(ShaderFileDependency{
+                    .path      = file_path.generic_string(),
+                    .timestamp = last_write_time.time_since_epoch().count(),
+                });
+                auto included = tracking_handler->TakeIncludedFiles();
+                for (auto& dep : included) {
+                    _output.source_dependencies.push_back(std::move(dep));
+                }
             };
 
         fill_succuss_data();
+        tracking_handler->Release();
     }
 }
 

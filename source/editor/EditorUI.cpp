@@ -5,6 +5,7 @@
 #include "window/WindowInput.h"
 
 // Editor
+#include "EditorUISettings.h"
 #include "EditorUIStyle.h"
 #include "scene/Scene.h"
 #include "scene_editing_ui/SceneFileDialog.h"
@@ -69,18 +70,32 @@ EditorUI::EditorUI(
     m_raytracing_ui(editor_config->raytracing_config),
     m_scene_editing_ui(editor_config->scene_test_case_config) {
 
+    const EditorWindowVisibilitySettings& window_visibility_settings =
+        EditorUISettings::LoadWindowVisibilitySettings();
+
     auto has_saved_window_settings = [](const char* window_name) {
         return ImGui::FindWindowSettingsByID(ImHashStr(window_name)) != nullptr;
     };
 
-    m_b_show_scene_color   = has_saved_window_settings("Scene Color");
-    m_b_show_hierarchy     = has_saved_window_settings("Hierarchy");
-    m_b_show_inspector     = has_saved_window_settings("Inspector");
-    m_b_show_config        = has_saved_window_settings("Configs");
-    m_b_show_scene_editing = has_saved_window_settings("Scene Editing");
+    if (window_visibility_settings.loaded) {
+        m_b_show_scene_color   = window_visibility_settings.scene_color;
+        m_b_show_hierarchy     = window_visibility_settings.hierarchy;
+        m_b_show_inspector     = window_visibility_settings.inspector;
+        m_b_show_config        = window_visibility_settings.config;
+        m_b_show_scene_editing = window_visibility_settings.scene_editing;
 #if WITH_PROFILE
-    m_b_show_memory_profiler = has_saved_window_settings("Memory Profiler");
+        m_b_show_memory_profiler = window_visibility_settings.memory_profiler;
 #endif
+    } else {
+        m_b_show_scene_color   = has_saved_window_settings("Scene Color");
+        m_b_show_hierarchy     = has_saved_window_settings("Hierarchy");
+        m_b_show_inspector     = has_saved_window_settings("Inspector");
+        m_b_show_config        = has_saved_window_settings("Configs");
+        m_b_show_scene_editing = has_saved_window_settings("Scene Editing");
+#if WITH_PROFILE
+        m_b_show_memory_profiler = has_saved_window_settings("Memory Profiler");
+#endif
+    }
 
     // Init Style
     EditorUIStyle::ApplyDefaultStyle();
@@ -364,6 +379,8 @@ void EditorUI::TickUI(Scene& scene) {
     m_remote_examples_ui.ShowWindow(m_remote_controller);
     ShowSceneEditing(scene);
 
+    SyncWindowVisibilitySettings();
+
     m_ui_renderer->EndGUIFrame();
 }
 
@@ -547,11 +564,11 @@ void EditorUI::ShowSceneColor() {
         return;
     }
     if (!ImGui::Begin("Scene Color", &m_b_show_scene_color, window_flags)) {
-        // Should not call ImGui::End() here
         m_b_scene_color_mouse_captured              = false;
         WindowInput::Get().is_active                = false;
         WindowInput::Get().m_scene_color_resolution = uint2(0u, 0u);
         WindowInput::Get().m_scene_color_pos        = uint2(0u, 0u);
+        ImGui::End();
         return;
     }
 
@@ -650,6 +667,7 @@ void EditorUI::ShowConfig(Scene& scene) {
         return;
     }
     if (!ImGui::Begin("Configs", &m_b_show_config, window_flags)) {
+        ImGui::End();
         return;
     }
 
@@ -753,6 +771,24 @@ void EditorUI::ShowConfig(Scene& scene) {
 
 void EditorUI::ResetState() {
     m_b_need_reload = false;
+}
+
+// 新增顶层 Sub UI 时，需要同步更新 EditorUISettings.h 中记录的持久化路径
+void EditorUI::SyncWindowVisibilitySettings() {
+    EditorWindowVisibilitySettings settings;
+    settings.loaded        = true;
+    settings.scene_color   = m_b_show_scene_color;
+    settings.hierarchy     = m_b_show_hierarchy;
+    settings.inspector     = m_b_show_inspector;
+    settings.config        = m_b_show_config;
+    settings.scene_editing = m_b_show_scene_editing;
+#if WITH_PROFILE
+    settings.memory_profiler = m_b_show_memory_profiler;
+#else
+    settings.memory_profiler = EditorUISettings::GetWindowVisibilitySettings().memory_profiler;
+#endif
+
+    EditorUISettings::StoreWindowVisibilitySettings(settings);
 }
 
 void EditorUI::RegisterUIFunc(std::string _name, std::function<void()>&& _func) {

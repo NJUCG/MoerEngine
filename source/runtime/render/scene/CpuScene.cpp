@@ -112,6 +112,7 @@ void CpuScene::Update() {
     r.clear<ecs::CTagNeedUpdateMaterial>();
     r.clear<ecs::CTagNeedUpdateTransform>();
     r.clear<ecs::CTagNeedRebuildMesh>();
+    r.clear<ecs::CTagNeedRebuildRtBlas>();
 }
 
 uint CpuScene::GetPrimitiveId(entt::entity primitive_entt) const {
@@ -341,6 +342,7 @@ void CpuScene::InitializeMeshes() {
     m_primitive_buf.clear();
     m_draw_cmd_buf.clear();
     m_instance_buf.clear();
+    m_cluster_group_buf.clear();
 
     m_map_primitive_entity_to_id.clear();
     m_map_transform_entity_to_instance_slots.clear();
@@ -389,6 +391,10 @@ void CpuScene::InitializeMeshes() {
             g_primitive.aabb_min = c_primitive.aabb.min;
             g_primitive.aabb_max = c_primitive.aabb.max;
 
+            // Cluster LOD 字段（暂存本地 group_id，之后在 CMesh 遍历时偏移为全局索引）
+            g_primitive.cluster_group_id   = c_primitive.cluster_group_id;
+            g_primitive.cluster_refined_id = c_primitive.cluster_refined_id;
+
             // 验证 AABB 有效性
             if (!c_primitive.aabb.IsValid()) {
                 LOG_WARNING(
@@ -410,6 +416,40 @@ void CpuScene::InitializeMeshes() {
             m_primitive_id_to_transform_entt_arrays.emplace_back(); // prepare instance id array
 
             // m_draw_cmd_buf 在Instance收集完毕后再填充
+        });
+    }
+
+    // Cluster LOD: 收集所有 CMesh 的 cluster group 到全局 m_cluster_group_buf，
+    // 并偏移 GPrimitive 中的 group_id / refined_id 为全局索引
+    {
+        r.view<const ecs::CMesh>().each([&](const auto mesh_entity, const ecs::CMesh& c_mesh) {
+            if (c_mesh.cluster_groups.empty()) return;
+
+            const int global_group_offset = static_cast<int>(m_cluster_group_buf.size());
+
+            for (const auto& g : c_mesh.cluster_groups) {
+                int parent_id = g.parent_group_id;
+                // 偏移为全局索引（多 mesh 场景下）
+                if (parent_id >= 0) parent_id += global_group_offset;
+
+                m_cluster_group_buf.push_back(GClusterGroup{
+                    .simplified_center = g.simplified_center,
+                    .simplified_radius = g.simplified_radius,
+                    .simplified_error  = g.simplified_error,
+                    .depth             = g.depth,
+                    .parent_group_id   = parent_id,
+                });
+            }
+
+            // 偏移该 mesh 下所有 primitive 的 group ID
+            for (const auto prim_entt : c_mesh.primitive_entts) {
+                auto it = m_map_primitive_entity_to_id.find(prim_entt);
+                if (it == m_map_primitive_entity_to_id.end()) continue;
+
+                GPrimitive& gp = m_primitive_buf[it->second];
+                if (gp.cluster_group_id >= 0)   gp.cluster_group_id   += global_group_offset;
+                if (gp.cluster_refined_id >= 0) gp.cluster_refined_id += global_group_offset;
+            }
         });
     }
 
@@ -571,6 +611,7 @@ void CpuScene::InitializeMeshes() {
 
         assert(m_draw_cmd_buf.size() == m_primitive_buf.size());
     }
+
 }
 
 // 检查本帧是否存在 renderable 结构变化请求

@@ -449,16 +449,20 @@ float3 GetEnvMapRadiance(float3 _dir) {
 }
 
 uint GetLightIndex(uint _instance_idx, uint _geom_idx, uint _prim_idx) {
-    uint light_idx = s_invalid_light_idx;
+    // _instance_idx = InstanceID()，索引 GRtInstance[]
+    // _geom_idx     = GeometryIndex()，命中了 BLAS 中第几个 CPrimitive
 
-    // 从 GInstance 获取 primitive_id
-    ArrayBuffer     instance_buf = ArrayBuffer(resample_params.bindless_handles.instance_buf_hdl);
-    Moer::GInstance instance     = instance_buf.Load<Moer::GInstance>(_instance_idx);
-    uint            primitive_id = instance.primitive_id;
+    // 1. 加载 GRtInstance
+    ArrayBuffer       rt_instance_buf = ArrayBuffer(resample_params.bindless_handles.rt_instance_buf_hdl);
+    Moer::GRtInstance rt_inst         = rt_instance_buf.Load<Moer::GRtInstance>(_instance_idx);
 
-    // 使用 primitive_to_light 映射
+    // 2. GeometryIndex → primitive_id（通过 CPrimitive 映射表）
+    ArrayBuffer prim_table_buf = ArrayBuffer(resample_params.bindless_handles.rt_primitive_table_buf_hdl);
+    uint        primitive_id   = prim_table_buf.Load<uint>(rt_inst.primitive_table_offset + _geom_idx);
+
+    // 3. 查 primitive_to_light 映射
     ArrayBuffer primitive_to_light_arr = ArrayBuffer(resample_params.bindless_handles.primitive_to_light);
-    light_idx                          = primitive_to_light_arr.Load<uint>(primitive_id);
+    uint        light_idx              = primitive_to_light_arr.Load<uint>(primitive_id);
 
     if (light_idx == s_invalid_light_idx)
         return light_idx;
@@ -585,9 +589,11 @@ bool EvalTransparentMaterial(
     gbuffer_params.packed_tangent_buf_hdl = resample_params.bindless_handles.packed_tangent_buf_hdl;
     gbuffer_params.texcoord0_buf_hdl      = resample_params.bindless_handles.texcoord0_buf_hdl;
     gbuffer_params.index_buf_hdl          = resample_params.bindless_handles.index_buf_hdl;
+    gbuffer_params.rt_instance_buf_hdl        = resample_params.bindless_handles.rt_instance_buf_hdl;
+    gbuffer_params.rt_primitive_table_buf_hdl = resample_params.bindless_handles.rt_primitive_table_buf_hdl;
 
     Moer::GeometryRecord geom =
-        Moer::GetGeometryRecordFrom(gbuffer_params, _instance_id, _tri_id, _ray_barycentrics, Moer::EGA_UV);
+        Moer::GetGeometryRecordFrom(gbuffer_params, _instance_id, _geom_id, _tri_id, _ray_barycentrics, Moer::EGA_UV);
 
     Moer::MaterialSample mat =
         Moer::SampleGeometryMaterial(geom, 0.f, 0.f, 0.f, Moer::EMA_BaseColor | Moer::EMA_Transmission);

@@ -223,7 +223,7 @@ public:
         std::string_view name,
         const uint2&     size,
         TexConfig&       cfg,
-        bool             is_verbose = true
+        bool             is_verbose = false // 如果需要debug，请将此设置为true，以打印资源创建日志
     ) {
         if (cfg.is_asset) {
             // 资源纹理不在这里创建
@@ -236,24 +236,21 @@ public:
                 cfg.type = TexType::TEX_TYPE_DEPTH;
                 cfg.dim  = ETextureDimension::TEX_2D;
 
-                target.tex = device.CreateDepthBuffer(
-                    name, Extent2D(size.x, size.y), cfg.format, 1, cfg.usage
-                );
+                target.tex =
+                    device.CreateDepthBuffer(name, Extent2D(size.x, size.y), cfg.format, 1, cfg.usage);
             } else if constexpr (std::is_same_v<IntentTag, TexCubeTag>) {
                 cfg.type = TexType::TEX_TYPE_CUBE;
                 cfg.dim  = ETextureDimension::TEX_CUBE;
                 cfg.size = {0, 0, 6};
 
-                target.tex = device.CreateCubeMap(
-                    name, Extent2D(size.x, size.y), cfg.format, cfg.usage, cfg.mip_cnt
-                );
+                target.tex =
+                    device.CreateCubeMap(name, Extent2D(size.x, size.y), cfg.format, cfg.usage, cfg.mip_cnt);
             } else if constexpr (std::is_same_v<IntentTag, Tex2DTag>) {
                 cfg.type = TexType::TEX_TYPE_2D;
                 cfg.dim  = ETextureDimension::TEX_2D;
 
-                target.tex = device.CreateTexture(
-                    name, Extent2D(size.x, size.y), cfg.format, cfg.usage, cfg.mip_cnt
-                );
+                target.tex =
+                    device.CreateTexture(name, Extent2D(size.x, size.y), cfg.format, cfg.usage, cfg.mip_cnt);
             } else {
                 static_assert(always_false<T_Holder>, "Unsupported Tex IntentTag");
             }

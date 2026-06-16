@@ -94,6 +94,9 @@ private:
     void ShowSceneEditing(Scene& scene);
     void ShowHierarchy(Scene& scene);
     void ShowInspector(Scene& scene);
+
+    // 同步顶层子窗口开关到 ImGui ini 自定义段
+    void SyncWindowVisibilitySettings();
 #if WITH_PROFILE
     void ShowMemoryProfiler(bool* p_open);
     void DrawPassAndChildren(const char* parent_name, int depth);

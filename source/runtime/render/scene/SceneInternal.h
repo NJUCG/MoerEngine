@@ -15,6 +15,7 @@ inline void ClearSceneSyncTags(entt::registry& registry) {
     registry.clear<ecs::CTagNeedCreateTransform>();
     registry.clear<ecs::CTagNeedDestroyLight>();
     registry.clear<ecs::CTagNeedRebuildMesh>();
+    registry.clear<ecs::CTagNeedRebuildRtBlas>();
 }
 
 } // namespace Moer::SceneInternal

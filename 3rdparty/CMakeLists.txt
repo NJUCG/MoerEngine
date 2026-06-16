@@ -7,8 +7,13 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/dxc.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/pybind11.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/python312.cmake)
 
+# RTXMG是CLAS拓展的Sample，而不是SDK，所以不应该直接接入。此处RTXMG相关代码暂时废弃
+# include(${CMAKE_CURRENT_SOURCE_DIR}/rtxmg.cmake)
+
 # spdlog
-set(SPDLOG_USE_STD_FORMAT ON)
+set(SPDLOG_USE_STD_FORMAT ON CACHE BOOL "Use std::format in spdlog" FORCE)
+set(SPDLOG_WCHAR_SUPPORT ON CACHE BOOL "Support wchar api in spdlog" FORCE)
+set(SPDLOG_WCHAR_CONSOLE ON CACHE BOOL "Support wchar console output in spdlog" FORCE)
 set(SPDLOG_BUILD_SHARED ON) # 需要build shared，否则Moer::Core模块设置log_level为debug，但是Moer::Render模块使用spdlog静态库时，log_level又是info，导致日志无法输出（一个经典的静态库/动态库问题）
 set(SPDLOG_SANITIZE_ADDRESS ON)
 add_subdirectory(spdlog)
@@ -67,9 +72,6 @@ target_compile_options(mimalloc-static PRIVATE "$<$<COMPILE_LANG_AND_ID:CXX,Clan
 set_target_folder(mimalloc-static ${third_party_folder}/mimalloc)
 
 # message(STATUS "Found mimalloc installed at: ${MIMALLOC_LIBRARY_DIR} (${MIMALLOC_VERSION_DIR})")
-# mesh process
-add_subdirectory(MeshProcess)
-set_target_folder(MeshProcess ${third_party_folder})
 
 # volk
 if (WIN32)
@@ -125,6 +127,18 @@ set_target_folder(entt ${third_party_folder}/entt)
 # gtl
 include(gtl.cmake)
 set_target_folder(gtl ${third_party_folder}/gtl)
+
+# gklib
+include(gklib.cmake)
+set_target_folder(GKlib ${third_party_folder}/gklib)
+
+# meshoptimizer
+include(meshoptimizer.cmake)
+set_target_folder(meshoptimizer ${third_party_folder}/meshoptimizer)
+
+# metis
+include(metis.cmake)
+set_target_folder(metis ${third_party_folder}/metis)
 
 if (WITH_NRD)
     # NRI, NRD, SPIRV-Cross

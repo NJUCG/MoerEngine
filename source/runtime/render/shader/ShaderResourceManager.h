@@ -243,11 +243,34 @@ struct ShaderResourcesCache {
     void RegisterCache(const ShaderCompilerInput& _input, ShaderCompilerOutput&& _output);
 
     std::pair<Shader*, bool> TryGetShader(const ShaderCompilerInput& _input) {
-        auto it = code_cache[_input.target_info.shader_type].shader_cache.find(_input);
-        if (it != code_cache[_input.target_info.shader_type].shader_cache.end()) {
-            return {it->second.get(), true};
+        auto& cache = code_cache[_input.target_info.shader_type].shader_cache;
+        auto  it    = cache.find(_input);
+        if (it != cache.end()) {
+            Shader* shader = it->second.get();
+            if (!shader->source_dependencies.empty() && !ValidateDependencies(*shader)) {
+                cache.erase(it);
+                return {nullptr, false};
+            }
+            return {shader, true};
         }
         return {nullptr, false};
+    }
+
+    // 检查 shader 的所有源文件依赖的时间戳是否与编译时一致。
+    // 任何一个文件被修改过（时间戳不同），则返回 false 表示缓存过期。
+    static bool ValidateDependencies(const Shader& shader) {
+        for (const auto& dep : shader.source_dependencies) {
+            try {
+                auto current_ts =
+                    std::filesystem::last_write_time(dep.path).time_since_epoch().count();
+                if (current_ts != dep.timestamp) {
+                    return false;
+                }
+            } catch (...) {
+                return false;
+            }
+        }
+        return true;
     }
 
     ShaderEntry& GetShaderEntry(const Shader& _shader) {

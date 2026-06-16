@@ -1,5 +1,7 @@
 #include "Parser.h"
 
+#include "ClusterBuilder.h"
+
 #include <assimp/Importer.hpp>
 #include <assimp/pbrmaterial.h>
 #include <assimp/postprocess.h>
@@ -135,7 +137,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
     auto& uv0_buf   = mega_bufs.texcoord0;
     auto& idx_buf   = mega_bufs.index;
 
-    // MARK: Prepare Buffers
+    // MARK: 准备Mesh&Bufs
 
     {
         // 先遍历一遍所有mesh，初始化每个buf大小
@@ -158,79 +160,110 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
     }
 
     // MARK: Load Meshes
-    gtl::flat_hash_map<aiMesh*, entt::entity> mesh_entity_map;
+    gtl::flat_hash_map<const aiMesh*, Array<entt::entity>>    mesh_entity_map;
+    gtl::flat_hash_map<const aiMesh*, ClusterBuildResult>     mesh_cluster_build_results;
     {
-        uint32 vtx_cnt = 0;
-        uint32 idx_cnt = 0;
+        uint32 source_vtx_cnt = 0;
+        uint32 source_idx_cnt = 0;
+        uint32 vtx_cnt        = 0;
+        uint32 idx_cnt        = 0;
+        uint32 cluster_cnt    = 0;
+
+        struct MeshClusterStats {
+            uint32 source_mesh_index   = 0;
+            uint32 source_vertex_count = 0;
+            uint32 source_index_count  = 0;
+
+            uint32 cluster_count        = 0;
+            uint32 cluster_vertex_count = 0;
+            uint32 cluster_index_count  = 0;
+        };
+
+        Array<MeshClusterStats> mesh_cluster_stats;
+        mesh_cluster_stats.reserve(ai_scene->mNumMeshes);
+
+        ClusterBuildConfig cfg;
+        const ClusterBuilder cluster_builder(cfg);
+
+        auto make_buffer_view = [&](uint32 existing_size, uint32 stride) {
+            return ecs::CPrimitive::BufferView{
+                .start_idx = existing_size, .stride = stride, .is_valid = true
+            };
+        };
+
+        // 先把 aiMesh 提取为中间输入数据，再交给 ClusterBuilder 构建 cluster
+        auto extract_mesh_data = [&](const aiMesh* mesh, uint32 mesh_index) {
+            ImportedMeshData imported_mesh{};
+            imported_mesh.source_mesh       = mesh;
+            imported_mesh.source_mesh_index = mesh_index;
+            imported_mesh.flattened_indices.reserve(mesh->mNumFaces * 3);
+
+            for (uint32 face_index = 0; face_index < mesh->mNumFaces; ++face_index) {
+                const aiFace& face = mesh->mFaces[face_index];
+                assert(
+                    face.mNumIndices == 3 &&
+                    "Parser currently assumes aiProcess_Triangulate produced triangles only."
+                );
+
+                imported_mesh.flattened_indices.emplace_back(face.mIndices[0]);
+                imported_mesh.flattened_indices.emplace_back(face.mIndices[1]);
+                imported_mesh.flattened_indices.emplace_back(face.mIndices[2]);
+            }
+
+            return imported_mesh;
+        };
+
+        // Parser 负责把 builder 的结果落回 LogicalScene 语义
+        auto emit_cluster_primitive = [&](const ClusterData& cluster) {
+            const auto entity = r.create();
+
+            auto& c_primitive = r.emplace<ecs::CPrimitive>(entity);
+            c_primitive.aabb  = cluster.aabb;
+
+            c_primitive.vertex_count = static_cast<uint32>(cluster.positions.size());
+            c_primitive.index_count  = static_cast<uint32>(cluster.indices.size());
+
+            if (!cluster.positions.empty()) {
+                c_primitive.position = make_buffer_view(static_cast<uint32>(pos_buf.size()), sizeof(float3));
+                pos_buf.insert(pos_buf.end(), cluster.positions.begin(), cluster.positions.end());
+            }
+
+            if (!cluster.packed_normals.empty()) {
+                c_primitive.packed_normal =
+                    make_buffer_view(static_cast<uint32>(nor_buf.size()), sizeof(uint32));
+                nor_buf.insert(nor_buf.end(), cluster.packed_normals.begin(), cluster.packed_normals.end());
+            }
+
+            if (!cluster.packed_tangents.empty()) {
+                c_primitive.packed_tangent =
+                    make_buffer_view(static_cast<uint32>(tan_buf.size()), sizeof(uint32));
+                tan_buf.insert(tan_buf.end(), cluster.packed_tangents.begin(), cluster.packed_tangents.end());
+            }
+
+            if (!cluster.texcoord0.empty()) {
+                c_primitive.texcoord0 = make_buffer_view(static_cast<uint32>(uv0_buf.size()), sizeof(float2));
+                uv0_buf.insert(uv0_buf.end(), cluster.texcoord0.begin(), cluster.texcoord0.end());
+            }
+
+            if (!cluster.indices.empty()) {
+                c_primitive.index = make_buffer_view(static_cast<uint32>(idx_buf.size()), sizeof(uint32));
+                idx_buf.insert(idx_buf.end(), cluster.indices.begin(), cluster.indices.end());
+            }
+
+            return entity;
+        };
 
         for (uint i = 0; i < ai_scene->mNumMeshes; i++) {
             auto* mesh = ai_scene->mMeshes[i];
 
-            auto make_buffer_view = [&](uint32 existing_size, uint32 current_size, uint32 stride) {
-                return ecs::CPrimitive::BufferView{
-                    .start_idx = existing_size,
-                    .stride    = stride,
-                    .is_valid  = true // 该mesh是否存在这个顶点属性
-                };
+            MeshClusterStats mesh_stats{
+                .source_mesh_index   = i,
+                .source_vertex_count = mesh->mNumVertices,
+                .source_index_count  = mesh->mNumFaces * 3
             };
 
-            const auto entity = r.create();
-
-            auto& c_primitive = r.emplace<ecs::CPrimitive>(entity);
-
-            // bounding box
-
-            c_primitive.aabb = Box3D(
-                float3(mesh->mAABB.mMin.x, mesh->mAABB.mMin.y, mesh->mAABB.mMin.z),
-                float3(mesh->mAABB.mMax.x, mesh->mAABB.mMax.y, mesh->mAABB.mMax.z)
-            );
-
-            // mesh
-
-            c_primitive.vertex_count = mesh->mNumVertices;
-            c_primitive.index_count  = mesh->mNumFaces * 3;
-
-            mesh_entity_map[mesh] = entity;
-
-            if (mesh->HasPositions()) {
-                c_primitive.position = make_buffer_view(pos_buf.size(), mesh->mNumVertices, sizeof(float3));
-
-                for (uint j = 0; j < mesh->mNumVertices; j++) {
-                    const auto& pos = mesh->mVertices[j];
-                    pos_buf.emplace_back(pos.x, pos.y, pos.z);
-                }
-            }
-
-            if (mesh->HasNormals()) {
-                c_primitive.packed_normal =
-                    make_buffer_view(nor_buf.size(), mesh->mNumVertices, sizeof(uint32));
-
-                for (uint j = 0; j < mesh->mNumVertices; j++) {
-                    const auto& nor    = mesh->mNormals[j];
-                    float3      normal = {nor.x, nor.y, nor.z};
-                    nor_buf.emplace_back(Pack_Normal(normal));
-                }
-            }
-
-            if (mesh->HasTangentsAndBitangents()) {
-                c_primitive.packed_tangent =
-                    make_buffer_view(tan_buf.size(), mesh->mNumVertices, sizeof(uint32));
-
-                for (uint j = 0; j < mesh->mNumVertices; j++) {
-                    const auto& tan     = mesh->mTangents[j];
-                    float3      tangent = {tan.x, tan.y, tan.z};
-                    tan_buf.emplace_back(Pack_Normal(tangent));
-                }
-            }
-
-            if (mesh->HasTextureCoords(0)) {
-                c_primitive.texcoord0 = make_buffer_view(uv0_buf.size(), mesh->mNumVertices, sizeof(float2));
-
-                for (uint j = 0; j < mesh->mNumVertices; j++) {
-                    const auto& uv0 = mesh->mTextureCoords[0][j];
-                    uv0_buf.emplace_back(uv0.x, uv0.y);
-                }
-            }
+            source_vtx_cnt += mesh_stats.source_vertex_count;
+            source_idx_cnt += mesh_stats.source_index_count;
 
             // TODO: Support TexCoord1
             if (mesh->HasTextureCoords(1)) {
@@ -241,22 +274,90 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 }
             }
 
-            {
-                c_primitive.index = make_buffer_view(idx_buf.size(), mesh->mNumFaces * 3, sizeof(uint32));
+            ImportedMeshData   imported_mesh      = extract_mesh_data(mesh, i);
+            ClusterBuildResult cluster_build_data = cluster_builder.Build(imported_mesh);
 
-                for (uint j = 0; j < mesh->mNumFaces; j++) {
-                    const auto& face = mesh->mFaces[j];
-                    idx_buf.emplace_back(face.mIndices[0]);
-                    idx_buf.emplace_back(face.mIndices[1]);
-                    idx_buf.emplace_back(face.mIndices[2]);
+            auto& primitive_entities = mesh_entity_map[mesh];
+            primitive_entities.reserve(cluster_build_data.clusters.size());
+
+            for (size_t ci = 0; ci < cluster_build_data.clusters.size(); ++ci) {
+                const auto& cluster          = cluster_build_data.clusters[ci];
+                const auto  primitive_entity = emit_cluster_primitive(cluster);
+                primitive_entities.emplace_back(primitive_entity);
+
+                // Cluster LOD 字段暂存到 CPrimitive（group_id 为 aiMesh 本地索引，
+                // 后续创建 CMesh 时会加上全局偏移）
+                auto& c_prim = r.get<ecs::CPrimitive>(primitive_entity);
+                if (!cluster_build_data.cluster_group_ids.empty()) {
+                    c_prim.cluster_group_id   = cluster_build_data.cluster_group_ids[ci];
+                    c_prim.cluster_refined_id = cluster_build_data.cluster_refined_ids[ci];
                 }
+
+                mesh_stats.cluster_count += 1;
+                mesh_stats.cluster_vertex_count += static_cast<uint32>(cluster.positions.size());
+                mesh_stats.cluster_index_count += static_cast<uint32>(cluster.indices.size());
+
+                vtx_cnt += static_cast<uint32>(cluster.positions.size());
+                idx_cnt += static_cast<uint32>(cluster.indices.size());
+                cluster_cnt += 1;
             }
 
-            vtx_cnt += mesh->mNumVertices;
-            idx_cnt += mesh->mNumFaces * 3;
+            mesh_cluster_build_results[mesh] = std::move(cluster_build_data);
+            mesh_cluster_stats.emplace_back(mesh_stats);
         }
 
-        LOG_INFO("Meshed Loaded: {} meshes, {} vertices, {} indices", ai_scene->mNumMeshes, vtx_cnt, idx_cnt);
+        LOG_INFO(
+            "Meshed Loaded: {} meshes, {} cluster primitives, {} vertices, {} indices",
+            ai_scene->mNumMeshes,
+            cluster_cnt,
+            vtx_cnt,
+            idx_cnt
+        );
+
+        {
+            std::stringstream cluster_ss;
+            const double      avg_cluster_per_mesh =
+                ai_scene->mNumMeshes > 0 ? double(cluster_cnt) / double(ai_scene->mNumMeshes) : 0.0;
+            const double avg_cluster_vertex_count =
+                cluster_cnt > 0 ? double(vtx_cnt) / double(cluster_cnt) : 0.0;
+            const double avg_cluster_index_count =
+                cluster_cnt > 0 ? double(idx_cnt) / double(cluster_cnt) : 0.0;
+            const double vertex_duplication_ratio =
+                source_vtx_cnt > 0 ? double(vtx_cnt) / double(source_vtx_cnt) : 0.0;
+            const double index_duplication_ratio =
+                source_idx_cnt > 0 ? double(idx_cnt) / double(source_idx_cnt) : 0.0;
+
+            cluster_ss << "\nCluster Build Stats:\n";
+            cluster_ss << "\tSource Mesh Count: " << ai_scene->mNumMeshes << "\n";
+            cluster_ss << "\tCluster Primitive Count: " << cluster_cnt << "\n";
+            cluster_ss << "\tAvg Clusters Per Mesh: " << avg_cluster_per_mesh << "\n";
+            cluster_ss << "\tAvg Cluster Vertex Count: " << avg_cluster_vertex_count << "\n";
+            cluster_ss << "\tAvg Cluster Index Count: " << avg_cluster_index_count << "\n";
+            cluster_ss << "\tVertex Duplication Ratio: " << vertex_duplication_ratio << "x"
+                       << " (source=" << source_vtx_cnt << ", cluster=" << vtx_cnt << ")\n";
+            cluster_ss << "\tIndex Duplication Ratio: " << index_duplication_ratio << "x"
+                       << " (source=" << source_idx_cnt << ", cluster=" << idx_cnt << ")\n";
+
+            for (const auto& mesh_stats : mesh_cluster_stats) {
+                const double avg_mesh_cluster_vertex_count =
+                    mesh_stats.cluster_count > 0 ?
+                        double(mesh_stats.cluster_vertex_count) / double(mesh_stats.cluster_count) :
+                        0.0;
+                const double avg_mesh_cluster_index_count =
+                    mesh_stats.cluster_count > 0 ?
+                        double(mesh_stats.cluster_index_count) / double(mesh_stats.cluster_count) :
+                        0.0;
+
+                cluster_ss << "\tMesh[" << mesh_stats.source_mesh_index
+                           << "]: source_vertices=" << mesh_stats.source_vertex_count
+                           << ", source_indices=" << mesh_stats.source_index_count
+                           << ", clusters=" << mesh_stats.cluster_count
+                           << ", avg_cluster_vertices=" << avg_mesh_cluster_vertex_count
+                           << ", avg_cluster_indices=" << avg_mesh_cluster_index_count << "\n";
+            }
+
+            LOG_INFO("{}", cluster_ss.str());
+        }
     }
 
     // MARK: Build Primitive Hash
@@ -673,25 +774,27 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
     // MARK: 在CPrimitive上挂载Material Entity
     {
         // 遍历所有 mesh，将对应的 material entity 挂载到 primitive 上
-        for (const auto& [mesh, primitive_entity] : mesh_entity_map) {
-            if (!r.valid(primitive_entity) || !r.all_of<ecs::CPrimitive>(primitive_entity)) {
-                continue;
-            }
+        for (const auto& [mesh, primitive_entities] : mesh_entity_map) {
+            for (const auto primitive_entity : primitive_entities) {
+                if (!r.valid(primitive_entity) || !r.all_of<ecs::CPrimitive>(primitive_entity)) {
+                    continue;
+                }
 
-            auto& c_primitive = r.get<ecs::CPrimitive>(primitive_entity);
+                auto& c_primitive = r.get<ecs::CPrimitive>(primitive_entity);
 
-            // 通过 mesh->mMaterialIndex 找到对应的 material entity
-            uint material_index = mesh->mMaterialIndex;
-            if (material_index_to_entity_map.contains(material_index)) {
-                c_primitive.material_entt = material_index_to_entity_map[material_index];
-            } else {
-                LOG_WARNING(
-                    "Mesh material index {} out of range. Total materials: {}. "
-                    "Primitive will have null material.",
-                    material_index,
-                    ai_scene->mNumMaterials
-                );
-                c_primitive.material_entt = entt::null;
+                // 通过 mesh->mMaterialIndex 找到对应的 material entity
+                uint material_index = mesh->mMaterialIndex;
+                if (material_index_to_entity_map.contains(material_index)) {
+                    c_primitive.material_entt = material_index_to_entity_map[material_index];
+                } else {
+                    LOG_WARNING(
+                        "Mesh material index {} out of range. Total materials: {}. "
+                        "Primitive will have null material.",
+                        material_index,
+                        ai_scene->mNumMaterials
+                    );
+                    c_primitive.material_entt = entt::null;
+                }
             }
         }
     }
@@ -786,6 +889,14 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
 
         // 在CMesh Entity上添加CMesh组件
         auto& c_mesh = r.emplace<ecs::CMesh>(mesh_entity);
+
+        // 多个 aiMesh 合并到一个 CMesh 时，必须保证 primitive_entts 的布局为：
+        //   [所有叶子 cluster | 所有非叶子 cluster]
+        // 这是 RT Scene（BLAS 只取前 num_leaf_clusters 个）和 Culling Pass 的正确性前提。
+        // 因此先分别收集叶子和非叶子，最后统一追加。
+        Array<entt::entity> all_leaf_entts;
+        Array<entt::entity> all_nonleaf_entts;
+
         for (uint i = 0; i < node->mNumMeshes; i++) {
             auto* mesh = ai_scene->mMeshes[node->mMeshes[i]];
 
@@ -794,8 +905,57 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 "Mesh entity not found in mesh_entity_map. Perhaps internal code error."
             );
 
-            c_mesh.primitive_entts.emplace_back(mesh_entity_map[mesh]);
+            // 合并 cluster group 数据：将本 aiMesh 的 group 追加到 CMesh，
+            // 并偏移 CPrimitive 中的 group_id / refined_id
+            const int group_offset = static_cast<int>(c_mesh.cluster_groups.size());
+
+            uint32 this_mesh_leaf_count = 0;
+            if (mesh_cluster_build_results.contains(mesh)) {
+                const auto& build_result = mesh_cluster_build_results[mesh];
+                this_mesh_leaf_count = build_result.num_leaf_clusters;
+                c_mesh.num_leaf_clusters += this_mesh_leaf_count;
+
+                for (size_t gi = 0; gi < build_result.groups.size(); ++gi) {
+                    const auto& g = build_result.groups[gi];
+                    int parent_id = (gi < build_result.group_parent_ids.size())
+                                        ? build_result.group_parent_ids[gi]
+                                        : -1;
+                    // 偏移 parent_group_id（多个 aiMesh 合并到一个 CMesh 时需要）
+                    if (parent_id >= 0) parent_id += group_offset;
+
+                    c_mesh.cluster_groups.push_back(ecs::CMesh::ClusterGroupInfo{
+                        .simplified_center = g.simplified_center,
+                        .simplified_radius = g.simplified_radius,
+                        .simplified_error  = g.simplified_error,
+                        .depth             = g.depth,
+                        .parent_group_id   = parent_id
+                    });
+                }
+            }
+
+            const auto& entities = mesh_entity_map[mesh];
+            for (uint32 ei = 0; ei < entities.size(); ++ei) {
+                const auto primitive_entity = entities[ei];
+
+                // 偏移 group ID（多个 aiMesh 合并到一个 CMesh 时需要）
+                if (group_offset > 0) {
+                    auto& c_prim = r.get<ecs::CPrimitive>(primitive_entity);
+                    if (c_prim.cluster_group_id >= 0)   c_prim.cluster_group_id   += group_offset;
+                    if (c_prim.cluster_refined_id >= 0) c_prim.cluster_refined_id += group_offset;
+                }
+
+                if (ei < this_mesh_leaf_count) {
+                    all_leaf_entts.emplace_back(primitive_entity);
+                } else {
+                    all_nonleaf_entts.emplace_back(primitive_entity);
+                }
+            }
         }
+
+        // 先叶子后非叶子，保证 primitive_entts[0..num_leaf_clusters) 全为叶子
+        c_mesh.primitive_entts.reserve(all_leaf_entts.size() + all_nonleaf_entts.size());
+        c_mesh.primitive_entts.insert(c_mesh.primitive_entts.end(), all_leaf_entts.begin(), all_leaf_entts.end());
+        c_mesh.primitive_entts.insert(c_mesh.primitive_entts.end(), all_nonleaf_entts.begin(), all_nonleaf_entts.end());
     };
 
     // MARK: Camera
