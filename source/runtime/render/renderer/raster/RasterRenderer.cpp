@@ -32,18 +32,20 @@ namespace Moer::Render::Raster {
 
 RasterRenderer::RasterRenderer(
     uint2&                        _resolution,
+    uint2&                        _render_resolution,
     const SharedPtr<EditorConfig> _config,
     const EngineHooks&            _hooks,
     ::Moer::RuntimeAssets&        _runtime_assets
 ) :
     // Super
-    Renderer(_resolution, _config, _hooks, _runtime_assets) {
+    Renderer(_resolution, _render_resolution, _config, _hooks, _runtime_assets) {
 
-    raster_context_ptr =
-        MakeUnique<RasterContext>(device, manager, gfx_queue, bindless_array, cmd_list, scene, resolution);
+    raster_context_ptr = MakeUnique<RasterContext>(
+        device, manager, gfx_queue, bindless_array, cmd_list, scene, render_resolution
+    );
     auto& raster_context = *raster_context_ptr;
 
-    raster_context.CreateFrameBuffers();
+    raster_context.CreateFrameBuffers(resolution);
     raster_context.UploadExternalFrameBuffers();
     raster_context.AllocateFrameBuffers();
 
@@ -254,30 +256,8 @@ bool RasterRenderer::RunSingle(
         std::this_thread::yield(); // FIXME: 这个东西有用吗？
         skip_present = true;
 
-    } else if (window_state == EWindowState::SizeChanged) {
-        LOG_INFO(MOER_TEXT("Size Changed."));
-
-        raster_context.FreeFrameBuffers(false);
-        raster_context.CreateFrameBuffers();
-        // raster_context.UploadExternalFrameBuffers(); // 窗口大小变化时，外部纹理不会变化，所以不需要上传
-        raster_context.AllocateFrameBuffers();
-
-#if WITH_CUDA
-        tensor_rt_pass->RecreateResource(
-            raster_context,
-            raster_context.textures.ao_output_ambient_only.tex,
-            raster_context.textures.depth_linear_sampler.tex->CastToTextureRef(),
-            // 下面这个color，需要传入lighting_output，而非ao_output，因为模型的输入需要不带ao的color
-            raster_context.textures.lighting_output.tex,
-            raster_context.textures.camera_motion_vector.tex,
-            raster_context.textures.ao_output_ambient_only_1.tex
-        );
-#endif
-
-        config_ui.RegisterFrameBuffers(raster_context.GetDisplayableFrameBuffersView());
-
-    } else if (window_state == EWindowState::Default) {
-        // do nothing
+    } else if (window_state == EWindowState::SizeChanged || window_state == EWindowState::Default) {
+        // 分辨率变化的具体处理推迟到 TickUI 之后，因为 render_resolution 可能在此期间改变
 
     } else {
         assert(false);
@@ -286,6 +266,42 @@ bool RasterRenderer::RunSingle(
     // MARK: 2. Tick UI
     if (hooks.on_tick_ui) {
         hooks.on_tick_ui(scene);
+    }
+
+    // MARK: 2.5 检查窗口尺寸与实际场景渲染尺寸是否发生变化，需要时重建 framebuffer
+    if (!skip_present) {
+        const bool window_size_changed   = (window_state == EWindowState::SizeChanged);
+        const bool render_resolution_changed =
+            raster_context.GetFramebufferRenderResolution().x != render_resolution.x ||
+            raster_context.GetFramebufferRenderResolution().y != render_resolution.y;
+        const bool render_resolution_valid =
+            render_resolution.x > 0 && render_resolution.y > 0;
+
+        if ((window_size_changed || render_resolution_changed) && render_resolution_valid) {
+            LOG_INFO(
+                MOER_TEXT("Raster recreate framebuffers: window_size_changed={}, render_resolution_changed={}")
+                , window_size_changed
+                , render_resolution_changed
+            );
+
+            raster_context.FreeFrameBuffers(false);
+            raster_context.CreateFrameBuffers(resolution);
+            // raster_context.UploadExternalFrameBuffers(); // 窗口大小变化时，外部纹理不会变化，所以不需要上传
+            raster_context.AllocateFrameBuffers();
+
+#if WITH_CUDA
+            tensor_rt_pass->RecreateResource(
+                raster_context,
+                raster_context.textures.ao_output_ambient_only.tex,
+                raster_context.textures.depth_linear_sampler.tex->CastToTextureRef(),
+                // 下面这个color，需要传入lighting_output，而非ao_output，因为模型的输入需要不带ao的color
+                raster_context.textures.lighting_output.tex,
+                raster_context.textures.camera_motion_vector.tex,
+                raster_context.textures.ao_output_ambient_only_1.tex
+            );
+#endif
+
+        }
     }
 
     config_ui.RegisterFrameBuffers(raster_context.GetDisplayableFrameBuffersView());

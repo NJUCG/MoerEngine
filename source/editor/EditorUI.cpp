@@ -245,6 +245,26 @@ void EditorUI::TickUI() {
     ui.EndMainDockspace();
     ResetState();
     ShowSceneColor();
+
+    // 将 SceneColor 面板的实际内容尺寸同步给渲染器，作为实际场景渲染分辨率
+    m_config->SetRenderResolution(
+        static_cast<uint>(m_scene_color_resolution.x),
+        static_cast<uint>(m_scene_color_resolution.y)
+    );
+
+    // 同步到 WindowInput，供 Camera 计算正确的 aspect ratio
+    {
+        WindowInput& input          = WindowInput::Get();
+        input.m_scene_color_resolution = {
+            static_cast<uint>(m_scene_color_resolution.x),
+            static_cast<uint>(m_scene_color_resolution.y)
+        };
+        input.m_scene_color_pos = {
+            static_cast<uint>(m_scene_color_pos.x),
+            static_cast<uint>(m_scene_color_pos.y)
+        };
+    }
+
     ShowConfig();
 #if WITH_PROFILE
     m_runtime_profiler.TickUI();
