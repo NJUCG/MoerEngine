@@ -18,7 +18,7 @@ struct EditorConfig {
     ERenderMethod selected_render_method = ERenderMethod::Raster;
     std::string   scene_path             = "";
 
-    bool  camera_projection_override_enabled = false;
+    bool  camera_projection_override_enabled = true;
     float camera_speed_log10     = log10f(25.f);
     float camera_fovy            = 60.f;
     float camera_far_clip_log10  = 3.f;

@@ -407,12 +407,21 @@ void EditorUI::ShowConfig() {
     if (ui.TreeNode("Camera")) {
 
         ui.SliderFloat("Speed (log10)", &m_config->camera_speed_log10, -1.f, 2.6f);
-        ui.SliderFloat("Fov Y", &m_config->camera_fovy, 1.f, 160.f);
 
-        ui.SliderFloat("Near Clip (log10)", &m_config->camera_near_clip_log10, -4.f, 0.99f);
-        ui.SliderFloat("Far Clip (log10)", &m_config->camera_far_clip_log10, 0.f, 4.f);
+        ui.Checkbox("Override Projection", &m_config->camera_projection_override_enabled);
+
+        bool projection_changed = false;
+        projection_changed |= ui.SliderFloat("Fov Y", &m_config->camera_fovy, 1.f, 160.f);
+        projection_changed |=
+            ui.SliderFloat("Near Clip (log10)", &m_config->camera_near_clip_log10, -4.f, 0.99f);
+        projection_changed |=
+            ui.SliderFloat("Far Clip (log10)", &m_config->camera_far_clip_log10, 0.f, 4.f);
         m_config->camera_near_clip_log10 =
             std::min(m_config->camera_near_clip_log10, m_config->camera_far_clip_log10 - 0.1f);
+
+        if (projection_changed) {
+            m_config->camera_projection_override_enabled = true;
+        }
 
         ui.TreePop();
     }
