@@ -362,6 +362,30 @@ bool RasterRenderer::RunSingle(
         shadow_depth_pass->Process(raster_context, raster_config, camera);
         cmd_list.PopScopeWithTimeScope();
 
+        // Transition CSM shadow maps from depth-write to sampled so the shadow mask pass can read them.
+        if (raster_config.shadow_map_mode == EShadowMapMode::CSM ||
+            raster_config.shadow_map_mode == EShadowMapMode::CSM_AUTO) {
+            Array<BarrierCreateInfo> shadow_map_transitions;
+            for (uint i = 0; i < raster_config.shadow_csm_num_of_cascades; i++) {
+                auto* shadow_tex = raster_context.csm_data.shadow_map_textures[i].tex.Get();
+                if (shadow_tex != nullptr) {
+                    shadow_map_transitions.emplace_back(BarrierCreateInfo::Transition(
+                        shadow_tex->GetView(),
+                        MakeBarrierState(ETextureState::DEPTH_STENCIL_WRITE, EPassType::Graphics),
+                        MakeBarrierState(ETextureState::SAMPLED, EPassType::Graphics)
+                    ));
+                }
+            }
+            if (!shadow_map_transitions.empty()) {
+                cmd_list.Barriers(
+                    shadow_map_transitions,
+                    EQueueType::Graphics,
+                    EQueueType::Graphics,
+                    ETrackedStateUpdateMode::Update
+                );
+            }
+        }
+
         // Update Global Lighting Data
         UpdateGlobalLightingData(raster_context, raster_config, camera);
 
