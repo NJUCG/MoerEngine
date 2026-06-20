@@ -418,6 +418,19 @@ void ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterCo
                 shadow_map_texture.hdl
             );
 
+            // Newly-created shadow maps start in UNDEFINED layout. Transition to depth-write
+            // layout before the first rendering pass uses them as depth attachments.
+            context.cmd_list.Barriers(
+                {BarrierCreateInfo::Transition(
+                    shadow_map_texture.tex->GetView(),
+                    MakeBarrierState(ETextureState::UNDEFINED, EPassType::Graphics),
+                    MakeBarrierState(ETextureState::DEPTH_STENCIL_WRITE, EPassType::Graphics)
+                )},
+                EQueueType::Graphics,
+                EQueueType::Graphics,
+                ETrackedStateUpdateMode::Update
+            );
+
             context.cmd_list.Barriers(
                 EQueueType::Graphics,
                 EQueueType::Graphics,
