@@ -443,8 +443,39 @@ bool RasterRenderer::RunSingle(
         if (editor_config->play_mode_enabled) {
             default_output_texture = scene_output.GetTexture();
         } else {
+            // The selected debug texture was just written as a color/depth attachment by its
+            // producer pass. Transition it to SAMPLED so the UI can sample it, then transition
+            // it back to a writable state so the next frame can render into it again.
+            const bool is_depth_output =
+                scene_output.GetTexture()->GetFormat() == PF_D32_SFLOAT ||
+                scene_output.GetTexture()->GetFormat() == PF_D32_SFLOAT_S8_UINT ||
+                scene_output.GetTexture()->GetFormat() == PF_D24_UNORM_S8_UINT ||
+                scene_output.GetTexture()->GetFormat() == PF_D16_UNORM_S8_UINT ||
+                scene_output.GetTexture()->GetFormat() == PF_D16_UNORM;
+            const ETextureState scene_output_write_state =
+                is_depth_output ? ETextureState::DEPTH_STENCIL_WRITE : ETextureState::RENDER_TARGET;
+
+            TextureView scene_output_whole_view(
+                scene_output.GetTexture(),
+                scene_output.GetTexture()->GetFormat(),
+                0,
+                scene_output.GetTexture()->GetNumMips()
+            );
+
+            bool scene_output_published = false;
             if (hooks.on_publish_scene_output) {
+                cmd_list.Barriers(
+                    {BarrierCreateInfo::Transition(
+                        scene_output_whole_view,
+                        MakeBarrierState(scene_output_write_state, EPassType::Graphics),
+                        MakeBarrierState(ETextureState::SAMPLED, EPassType::Graphics)
+                    )},
+                    EQueueType::Graphics,
+                    EQueueType::Graphics,
+                    ETrackedStateUpdateMode::Update
+                );
                 hooks.on_publish_scene_output(scene_output);
+                scene_output_published = true;
             }
             if (hooks.on_render_gui) {
                 cmd_list.Barriers(
@@ -469,6 +500,18 @@ bool RasterRenderer::RunSingle(
                     ETrackedStateUpdateMode::Update
                 );
                 hooks.on_render_gui(cmd_list, raster_context.textures.output.tex);
+                if (scene_output_published) {
+                    cmd_list.Barriers(
+                        {BarrierCreateInfo::Transition(
+                            scene_output_whole_view,
+                            MakeBarrierState(ETextureState::SAMPLED, EPassType::Graphics),
+                            MakeBarrierState(scene_output_write_state, EPassType::Graphics)
+                        )},
+                        EQueueType::Graphics,
+                        EQueueType::Graphics,
+                        ETrackedStateUpdateMode::Update
+                    );
+                }
                 cmd_list.Barriers(
                     {BarrierCreateInfo::Transition(
                         raster_context.textures.output.tex->GetView(),

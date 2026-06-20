@@ -1,6 +1,7 @@
 #include "RasterUI.h"
 
 #include "config/ConfigManager.h"
+#include "string/StringConvert.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -41,17 +42,17 @@ void RasterUI::ShowConfig(Synapse::Context&) {
     if (ImGui::TreeNode(
             "Output Frame Buffer",
             "Output: [%s]",
-            m_frame_buffer_and_name_array[m_config.selected_frame_buffer_index].GetTexture()->GetName().data()
+            PlatformToUtf8(m_frame_buffer_and_name_array[m_config.selected_frame_buffer_index].GetTexture()->GetName())
+                .c_str()
         )) {
-//        for (uint i = 0; i < m_frame_buffer_and_name_array.size(); i++) {
-//            if (ImGui::Selectable(
-//                    m_frame_buffer_and_name_array[i].GetTexture()->GetName().data(),
-//                    m_config.selected_frame_buffer_index == i
-//                )) {
-//                m_config.selected_frame_buffer_index = i;
-//            }
-//            draw_border();
-//        }
+        for (uint i = 0; i < m_frame_buffer_and_name_array.size(); i++) {
+            const auto name_utf8 =
+                PlatformToUtf8(m_frame_buffer_and_name_array[i].GetTexture()->GetName());
+            if (ImGui::Selectable(name_utf8.c_str(), m_config.selected_frame_buffer_index == i)) {
+                m_config.selected_frame_buffer_index = i;
+            }
+            draw_border();
+        }
         ImGui::TreePop();
     }
 
