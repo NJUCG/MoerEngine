@@ -69,13 +69,13 @@ PsOutput main(VsOutput input) : SV_TARGET {
         mat.albedo_map_hdl,
         input.texcoord0,
         mat.albedo_factor.xyz,
-        MISSING_TEXTURE_COLOR
+        float3(1.0, 1.0, 1.0)
     );
     float2 metallic_roughness = SampleTextureAndApplyFactor(
         mat.metallic_roughness_map_hdl,
         input.texcoord0,
         float2(mat.metallic_factor, mat.roughness_factor),
-        float2(mat.metallic_factor, mat.roughness_factor)
+        float2(1.0, 1.0)
     );
     float material_ao = SampleTextureAndApplyFactor(mat.ao_map_hdl, input.texcoord0, 1.0, 1.0);
     float3 shading_normal = GetNormalFromNormalMap(
@@ -84,11 +84,11 @@ PsOutput main(VsOutput input) : SV_TARGET {
         normalize(input.normal),
         normalize(input.tangent)
     );
-    
+
     PsOutput output;
-    output.base_color = float4(base_color, 0.0);
+    output.base_color = float4(base_color, 1.0);
     output.normal = float4(Raster::PackNormal(shading_normal), 1.0);
-    output.metal_rough_ao = float4(metallic_roughness, material_ao, 0.0);
+    output.metal_rough_ao = float4(metallic_roughness.x, metallic_roughness.y, material_ao, 1.0);
 
     return output;
 }
