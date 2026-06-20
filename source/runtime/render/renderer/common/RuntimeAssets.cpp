@@ -85,7 +85,11 @@ void RuntimeAssets::RecordTextureUploads() {
         };
 
         auto make_texture_name = [](const std::filesystem::path& path) {
-            const auto& native_name = path.filename().native();
+            // FIX: path.filename() returns a temporary path object; native() returns a
+            // reference to its internal string. Capturing that by const& leaves us with a
+            // dangling reference, so the resulting StringView reads empty/garbage data.
+            // Copy the filename string before building the engine String.
+            const std::filesystem::path::string_type native_name = path.filename().native();
             return String(StringView(native_name.data(), native_name.size()));
         };
 
