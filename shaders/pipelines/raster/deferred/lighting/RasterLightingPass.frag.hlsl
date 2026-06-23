@@ -5,6 +5,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 #include "materials/Brdf.hlsli"
 #include "pipelines/raster/deferred/lighting/Lighting.hlsli"
+#include "pipelines/raster/deferred/lighting/ProbeGI.hlsli"
 #include "pipelines/raster/deferred/lighting/shadows/CSM.hlsli"
 
 #include "shared/raster/ShaderParameters.h"
@@ -67,6 +68,8 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
 
     float3 color = light_ctx.GetResult();
 
+    color += ProbeGIEvaluateDiffuse(lighting_data, position, N, brdf_ctx.albedo, metallic);
+
     if (param.enable_extra_ambient) {
         color += param.extra_ambient_intensity * param.extra_ambient_color * brdf_ctx.albedo;
     }
@@ -79,6 +82,10 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
             || lighting_data.shadow_map_mode == Moer::EShadowMapMode::CSM_AUTO)
     ) {
         color = get_cascade_visualize_color(lighting_data, position);
+    }
+
+    if (lighting_data.probe_volume_config.y != 0 && ProbeGIIsEnabled(lighting_data)) {
+        color = ProbeGIGetDebugColor(lighting_data, position, N);
     }
 
     return float4(color, 1.0);

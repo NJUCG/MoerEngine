@@ -251,6 +251,63 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+    // MARK: Probe GI
+    if (ImGui::TreeNode("Probe GI", "Probe GI: [%s]", m_config.probe_gi_enabled ? "Enable" : "Disable")) {
+        auto clamp_probe_counts = [&]() {
+            auto clamp_int = [](int value, int low, int high) {
+                return value < low ? low : (value > high ? high : value);
+            };
+
+            m_config.probe_gi_count_x = clamp_int(m_config.probe_gi_count_x, 1, 16);
+            m_config.probe_gi_count_y = clamp_int(m_config.probe_gi_count_y, 1, 16);
+            m_config.probe_gi_count_z = clamp_int(m_config.probe_gi_count_z, 1, 16);
+
+            auto probe_count = [&]() {
+                return m_config.probe_gi_count_x * m_config.probe_gi_count_y * m_config.probe_gi_count_z;
+            };
+
+            while (probe_count() > static_cast<int>(Render::RASTER_PROBE_MAX_COUNT)) {
+                if (m_config.probe_gi_count_z >= m_config.probe_gi_count_x &&
+                    m_config.probe_gi_count_z >= m_config.probe_gi_count_y && m_config.probe_gi_count_z > 1) {
+                    --m_config.probe_gi_count_z;
+                } else if (m_config.probe_gi_count_x >= m_config.probe_gi_count_y &&
+                           m_config.probe_gi_count_x > 1) {
+                    --m_config.probe_gi_count_x;
+                } else if (m_config.probe_gi_count_y > 1) {
+                    --m_config.probe_gi_count_y;
+                } else {
+                    break;
+                }
+            }
+        };
+
+        ImGui::Checkbox("Enable Probe GI", &m_config.probe_gi_enabled);
+        ImGui::SliderInt("Probe Count X", &m_config.probe_gi_count_x, 1, 16);
+        ImGui::SliderInt("Probe Count Y", &m_config.probe_gi_count_y, 1, 16);
+        ImGui::SliderInt("Probe Count Z", &m_config.probe_gi_count_z, 1, 16);
+        clamp_probe_counts();
+
+        const int probe_total = m_config.probe_gi_count_x * m_config.probe_gi_count_y * m_config.probe_gi_count_z;
+        ImGui::Text("Probe Count: %d / %u", probe_total, Render::RASTER_PROBE_MAX_COUNT);
+
+        ImGui::SliderFloat3("Volume Origin", (float*)&m_config.probe_gi_volume_origin, -32.0f, 32.0f);
+        ImGui::SliderFloat3("Volume Extent", (float*)&m_config.probe_gi_volume_extent, 0.5f, 64.0f);
+        ImGui::SliderFloat("Intensity", &m_config.probe_gi_intensity, 0.0f, 2.0f);
+        ImGui::SliderFloat("Normal Bias", &m_config.probe_gi_normal_bias, 0.0f, 1.0f);
+        ImGui::SliderFloat("Sky Intensity", &m_config.probe_gi_sky_intensity, 0.0f, 2.0f);
+        ImGui::SliderFloat("Directional Bounce", &m_config.probe_gi_directional_bounce, 0.0f, 0.25f);
+        ImGui::ColorEdit3("Sky Color", (float*)&m_config.probe_gi_sky_color);
+        ImGui::ColorEdit3("Ground Color", (float*)&m_config.probe_gi_ground_color);
+
+        static const char* s_probe_gi_debug_modes[] = {"Off", "Volume Cells", "Irradiance"};
+        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 3);
+        if (m_config.probe_gi_debug_mode != 0) {
+            ImGui::SliderFloat("Debug Scale", &m_config.probe_gi_debug_scale, 0.0f, 8.0f);
+        }
+
+        ImGui::TreePop();
+    }
+
     // MARK: Tonemapping
     // Tonemapping究极重要，所以放到最开头，以提示用户调节选项
     if (ImGui::TreeNode("Tonemapping")) {
