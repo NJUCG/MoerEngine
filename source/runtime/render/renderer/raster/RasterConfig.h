@@ -207,6 +207,12 @@ struct RasterConfig {
     float3 probe_gi_ground_color         = float3(0.12f, 0.10f, 0.08f);
     int    probe_gi_debug_mode           = 0; // 0=off, 1=volume cells, 2=irradiance
     float  probe_gi_debug_scale          = 2.0f;
+    bool   probe_gi_gizmo_enabled        = true;
+    int    probe_gi_gizmo_color_mode     = 0; // 0=fixed color, 1=probe irradiance
+    float  probe_gi_gizmo_size           = 0.22f;
+    float  probe_gi_gizmo_thickness      = 0.018f;
+    float  probe_gi_gizmo_intensity      = 1.2f;
+    float3 probe_gi_gizmo_fixed_color    = float3(0.05f, 0.95f, 1.0f);
 
     // MARK: Tonemapping
     float tonemapping_exposure_ev      = -2.7f;

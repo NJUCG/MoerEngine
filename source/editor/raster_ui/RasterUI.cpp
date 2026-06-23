@@ -305,6 +305,19 @@ void RasterUI::ShowConfig() {
             ImGui::SliderFloat("Debug Scale", &m_config.probe_gi_debug_scale, 0.0f, 8.0f);
         }
 
+        ImGui::Separator();
+        ImGui::Checkbox("Show Probe Gizmos", &m_config.probe_gi_gizmo_enabled);
+        if (m_config.probe_gi_gizmo_enabled) {
+            static const char* s_probe_gizmo_color_modes[] = {"Fixed Color", "Irradiance"};
+            ImGui::Combo("Gizmo Color", &m_config.probe_gi_gizmo_color_mode, s_probe_gizmo_color_modes, 2);
+            ImGui::SliderFloat("Gizmo Size", &m_config.probe_gi_gizmo_size, 0.02f, 1.0f);
+            ImGui::SliderFloat("Gizmo Thickness", &m_config.probe_gi_gizmo_thickness, 0.002f, 0.08f);
+            ImGui::SliderFloat("Gizmo Intensity", &m_config.probe_gi_gizmo_intensity, 0.1f, 8.0f);
+            if (m_config.probe_gi_gizmo_color_mode == 0) {
+                ImGui::ColorEdit3("Gizmo Fixed Color", (float*)&m_config.probe_gi_gizmo_fixed_color);
+            }
+        }
+
         ImGui::TreePop();
     }
 

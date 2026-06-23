@@ -9,6 +9,7 @@
 #include "GeometryPass.h"
 #include "HiZBuildPass.h"
 #include "LightingPass.h"
+#include "ProbeGizmoPass.h"
 #include "ProbeUpdatePass.h"
 #include "RasterResource.h"
 #include "RasterTextures.h"
@@ -69,6 +70,7 @@ RasterRenderer::RasterRenderer(
     shadow_depth_pass            = MakeUnique<ShadowDepthPass>(raster_context);
     directional_shadow_mask_pass = MakeUnique<DirectionalShadowMaskPass>(raster_context);
     probe_update_pass            = MakeUnique<ProbeUpdatePass>(raster_context);
+    probe_gizmo_pass             = MakeUnique<ProbeGizmoPass>(raster_context);
     geometry_pass                = MakeUnique<GeometryPass>(raster_context);
     lighting_pass                = MakeUnique<LightingPass>(raster_context);
     skybox_pass                  = MakeUnique<SkyboxPass>(raster_context);
@@ -330,6 +332,8 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         //Env&Atmo Pass
         skybox_pass->Process(raster_context, raster_config, camera);
+
+        probe_gizmo_pass->Process(raster_context, raster_config, camera);
 
         // Post Process Passes
         // - Ambient Occlusion

@@ -11,6 +11,7 @@ class ShadowDepthPass;
 class GeometryPass;
 class DirectionalShadowMaskPass;
 class ProbeUpdatePass;
+class ProbeGizmoPass;
 class LightingPass;
 class SkyboxPass;
 class AoPass;
@@ -70,6 +71,7 @@ private:
     UniquePtr<ShadowDepthPass>             shadow_depth_pass;
     UniquePtr<DirectionalShadowMaskPass>   directional_shadow_mask_pass;
     UniquePtr<ProbeUpdatePass>             probe_update_pass;
+    UniquePtr<ProbeGizmoPass>              probe_gizmo_pass;
     UniquePtr<GeometryPass>                geometry_pass;
     UniquePtr<LightingPass>                lighting_pass;
     UniquePtr<SkyboxPass>                  skybox_pass;

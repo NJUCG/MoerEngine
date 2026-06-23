@@ -45,6 +45,14 @@ struct ProbeUpdateParam {
     float4 main_light_color;     // rgb = light color, w = light intensity
 };
 
+struct ProbeGizmoParam {
+    float4x4 world2clip;
+    uint4    probe_volume_config; // x = enabled, y = color mode, z = probe buffer handle, w = probe count
+    float4   gizmo_config;        // x = axis half-size, y = color intensity, z = axis thickness, w = reserved
+    float4   fixed_color;         // rgb = fixed gizmo color, w = alpha
+    float4   camera_position;     // xyz = camera position, w = reserved
+};
+
 struct MaterialPassBindlessParam {
     float3 extra_ambient_color;
     float  extra_ambient_intensity;
