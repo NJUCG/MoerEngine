@@ -174,6 +174,8 @@ void RasterRenderer::UpdateGlobalLightingData(
         lighting_data->brdf_G_is_ibl             = ui_config.shading_brdf_G_is_ibl ? 1 : 0;
     }
 
+    context.probe_volume.FillLightingData(*lighting_data);
+
     context.cmd_list.CopyFrom(
         std::span<byte>((byte*)lighting_data, sizeof(LightingData)),
         context.lighting_data_buffer.buf->GetView()
@@ -304,6 +306,8 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         cmd_list.PushScopeWithTimeScope(RasterTool::GetShadowDepthPassProfileScopeName());
         shadow_depth_pass->Process(raster_context, raster_config, camera);
         cmd_list.PopScopeWithTimeScope();
+
+        raster_context.probe_volume.Update(cmd_list, raster_config, scene, time);
 
         // Update Global Lighting Data
         UpdateGlobalLightingData(raster_context, raster_config, camera);

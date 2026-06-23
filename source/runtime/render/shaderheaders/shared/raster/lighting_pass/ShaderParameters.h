@@ -22,6 +22,17 @@ namespace Moer {
 
 // MARK: Main Content Begin
 
+#ifdef __cplusplus
+static constexpr uint RASTER_PROBE_MAX_COUNT = 512;
+#else
+static const uint RASTER_PROBE_MAX_COUNT = 512;
+#endif
+
+struct ProbeGridProbeData {
+    float4 world_position; // xyz = probe center, w = validity
+    float4 irradiance;     // rgb = diffuse irradiance, w = confidence
+};
+
 struct MaterialPassBindlessParam {
     float3 extra_ambient_color;
     float  extra_ambient_intensity;
@@ -83,6 +94,12 @@ struct LightingData {
     // Skybox
     uint  skybox_exposure_correct_enabled; // 是否启用Skybox曝光校正，找到第一个平行光，乘上它的颜色
     float skybox_exposure_correct_factor;  // 曝光校正因子
+    // Probe GI
+    float4 probe_volume_origin;  // xyz = min corner, w = normal bias
+    float4 probe_volume_spacing; // xyz = cell spacing, w = intensity
+    float4 probe_volume_extent;  // xyz = volume extent, w = debug scale
+    uint4  probe_volume_counts;  // xyz = probe counts, w = total probe count
+    uint4  probe_volume_config;  // x = enabled, y = debug mode, z = probe buffer handle, w = reserved
 };
 
 struct DirectionalShadowMaskPassBindlessParam {

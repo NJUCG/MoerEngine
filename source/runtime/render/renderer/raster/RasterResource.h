@@ -13,6 +13,7 @@
 #include "RasterCompileTimeConstants.h"
 #include "RasterGpuCullingResource.h"
 #include "RasterTextures.h"
+#include "ProbeVolumeResource.h"
 
 #include <cstdint>
 #include <utility>
@@ -53,7 +54,8 @@ public:
     // MARK: Hold ownership
     RasterTextures   textures;
     BufferWithHandle lighting_data_buffer; //帧级别光照数据
-    LightingData     lighting_data;
+    LightingData         lighting_data;
+    ProbeVolumeResource  probe_volume;
 
     // Shadow Data
     struct CSMData {
@@ -186,6 +188,7 @@ public:
 
         // other resources
         CreateLightingData();
+        probe_volume.Create(device, bdls);
     }
 
     void Update(float delta_time) {

@@ -192,6 +192,22 @@ struct RasterConfig {
     EBrdfGMode   shading_brdf_G_mode               = EBrdfGMode::VIS_UE4;
     bool         shading_brdf_G_is_ibl             = false; // 是否使用IBL的Fresnel近似
 
+    // MARK: Probe GI
+    bool   probe_gi_enabled              = true;
+    int    probe_gi_count_x              = 8;
+    int    probe_gi_count_y              = 4;
+    int    probe_gi_count_z              = 8;
+    float3 probe_gi_volume_origin        = float3(-8.0f, 0.0f, -8.0f);
+    float3 probe_gi_volume_extent        = float3(16.0f, 6.0f, 16.0f);
+    float  probe_gi_intensity            = 0.18f;
+    float  probe_gi_normal_bias          = 0.12f;
+    float  probe_gi_sky_intensity        = 0.35f;
+    float  probe_gi_directional_bounce   = 0.04f;
+    float3 probe_gi_sky_color            = float3(0.50f, 0.62f, 0.95f);
+    float3 probe_gi_ground_color         = float3(0.12f, 0.10f, 0.08f);
+    int    probe_gi_debug_mode           = 0; // 0=off, 1=volume cells, 2=irradiance
+    float  probe_gi_debug_scale          = 2.0f;
+
     // MARK: Tonemapping
     float tonemapping_exposure_ev      = -2.7f;
     bool  tonemapping_reinhard_enabled = true;

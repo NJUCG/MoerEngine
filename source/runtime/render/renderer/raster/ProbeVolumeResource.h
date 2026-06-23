@@ -1,0 +1,66 @@
+#pragma once
+
+#include "RasterConfig.h"
+#include "misc/STL.h"
+#include "misc/Traits.h"
+#include "rhi/RHIResource.h"
+#include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
+
+namespace Moer {
+class Scene;
+}
+
+namespace Moer::Render {
+class CommandList;
+class RenderDevice;
+}
+
+namespace Moer::Render::Raster {
+
+class ProbeVolumeResource {
+public:
+    void Create(RenderDevice& device, BindlessArrayRef& bdls);
+    void Destroy(BindlessArrayRef& bdls);
+
+    void Update(CommandList& cmd_list, const RasterConfig& config, const Scene& scene, uint64 frame_index);
+    void FillLightingData(LightingData& lighting_data) const;
+
+    uint GetProbeCount() const {
+        return m_snapshot.total_count;
+    }
+
+    uint GetBufferHandle() const {
+        return m_probe_buffer.hdl;
+    }
+
+private:
+    struct Snapshot {
+        bool   enabled      = false;
+        uint   debug_mode   = 0;
+        uint   count_x      = 1;
+        uint   count_y      = 1;
+        uint   count_z      = 1;
+        uint   total_count  = 1;
+        float3 origin       = float3(0.0f);
+        float3 extent       = float3(1.0f);
+        float3 spacing      = float3(1.0f);
+        float  intensity    = 0.0f;
+        float  normal_bias  = 0.0f;
+        float  debug_scale  = 1.0f;
+        float  sky_intensity = 0.0f;
+        float  directional_bounce = 0.0f;
+        float3 sky_color    = float3(0.0f);
+        float3 ground_color = float3(0.0f);
+    };
+
+    Snapshot BuildSnapshot(const RasterConfig& config) const;
+    void     BuildProbeData(const Snapshot& snapshot, const Scene& scene, uint64 frame_index);
+    bool     HasSnapshotChanged(const Snapshot& snapshot) const;
+
+    BufferWithHandle         m_probe_buffer;
+    Array<ProbeGridProbeData> m_cpu_probes;
+    Snapshot                 m_snapshot;
+    bool                     m_has_snapshot = false;
+};
+
+} // namespace Moer::Render::Raster
