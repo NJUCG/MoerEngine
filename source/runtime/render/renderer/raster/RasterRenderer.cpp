@@ -9,6 +9,7 @@
 #include "GeometryPass.h"
 #include "HiZBuildPass.h"
 #include "LightingPass.h"
+#include "ProbeUpdatePass.h"
 #include "RasterResource.h"
 #include "RasterTextures.h"
 #include "RasterTool.h"
@@ -67,6 +68,7 @@ RasterRenderer::RasterRenderer(
     hiz_build_pass               = MakeUnique<HiZBuildPass>(raster_context);
     shadow_depth_pass            = MakeUnique<ShadowDepthPass>(raster_context);
     directional_shadow_mask_pass = MakeUnique<DirectionalShadowMaskPass>(raster_context);
+    probe_update_pass            = MakeUnique<ProbeUpdatePass>(raster_context);
     geometry_pass                = MakeUnique<GeometryPass>(raster_context);
     lighting_pass                = MakeUnique<LightingPass>(raster_context);
     skybox_pass                  = MakeUnique<SkyboxPass>(raster_context);
@@ -307,7 +309,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         shadow_depth_pass->Process(raster_context, raster_config, camera);
         cmd_list.PopScopeWithTimeScope();
 
-        raster_context.probe_volume.Update(cmd_list, raster_config, scene, time);
+        probe_update_pass->Process(raster_context, raster_config, scene, time);
 
         // Update Global Lighting Data
         UpdateGlobalLightingData(raster_context, raster_config, camera);

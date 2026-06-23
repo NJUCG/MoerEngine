@@ -19,11 +19,21 @@ namespace Moer::Render::Raster {
 
 class ProbeVolumeResource {
 public:
+    struct UpdateInfo {
+        bool             enabled = false;
+        uint             probe_count = 0;
+        ProbeUpdateParam param{};
+    };
+
     void Create(RenderDevice& device, BindlessArrayRef& bdls);
     void Destroy(BindlessArrayRef& bdls);
 
-    void Update(CommandList& cmd_list, const RasterConfig& config, const Scene& scene, uint64 frame_index);
+    UpdateInfo PrepareUpdate(const RasterConfig& config, const Scene& scene, uint64 frame_index);
     void FillLightingData(LightingData& lighting_data) const;
+
+    BufferView GetProbeBufferView() const {
+        return m_probe_buffer.buf->GetView();
+    }
 
     uint GetProbeCount() const {
         return m_snapshot.total_count;
@@ -54,13 +64,12 @@ private:
     };
 
     Snapshot BuildSnapshot(const RasterConfig& config) const;
-    void     BuildProbeData(const Snapshot& snapshot, const Scene& scene, uint64 frame_index);
+    ProbeUpdateParam BuildUpdateParam(const Snapshot& snapshot, const Scene& scene, uint64 frame_index) const;
     bool     HasSnapshotChanged(const Snapshot& snapshot) const;
 
-    BufferWithHandle         m_probe_buffer;
-    Array<ProbeGridProbeData> m_cpu_probes;
-    Snapshot                 m_snapshot;
-    bool                     m_has_snapshot = false;
+    BufferWithHandle m_probe_buffer;
+    Snapshot         m_snapshot;
+    bool             m_has_snapshot = false;
 };
 
 } // namespace Moer::Render::Raster

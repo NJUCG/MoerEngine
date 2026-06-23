@@ -34,10 +34,6 @@ float3 SanitizeExtent(float3 extent) {
     return Max(extent, float3(0.1f));
 }
 
-float SafeSaturate(float value) {
-    return Clamp(value, 0.0f, 1.0f);
-}
-
 float3 SafeNormalize(float3 value, float3 fallback) {
     if (SquaredLengthf(value) <= 1e-6f) {
         return fallback;
@@ -82,7 +78,6 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
         EBufferUsageFlags::UNORDERED_ACCESS
     );
     m_probe_buffer.hdl = bdls->AllocateBuffer(m_probe_buffer.buf->GetView());
-    m_cpu_probes.resize(RASTER_PROBE_MAX_COUNT);
 
     LOG_DEBUG(
         "[ProbeGI] Created probe buffer: max_count={}, byte_size={}, bindless_handle={}",
@@ -98,7 +93,6 @@ void ProbeVolumeResource::Destroy(BindlessArrayRef& bdls) {
         m_probe_buffer.hdl = 0;
     }
     m_probe_buffer.buf = nullptr;
-    m_cpu_probes.clear();
     m_has_snapshot = false;
 }
 
@@ -160,55 +154,31 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
            !NearlyEqual(m_snapshot.ground_color, snapshot.ground_color);
 }
 
-void ProbeVolumeResource::BuildProbeData(const Snapshot& snapshot, const Scene& scene, uint64 frame_index) {
+ProbeUpdateParam
+ProbeVolumeResource::BuildUpdateParam(const Snapshot& snapshot, const Scene& scene, uint64 frame_index) const {
     float3 main_light_direction;
     float  main_light_intensity = 0.0f;
     float3 main_light_color     = GetMainLightColor(scene, main_light_direction, main_light_intensity);
 
-    const float3 up                  = float3(0.0f, 1.0f, 0.0f);
-    const float  sun_height          = SafeSaturate(Dotf(-main_light_direction, up));
-    const float3 directional_bounce  = main_light_color * main_light_intensity * snapshot.directional_bounce *
-                                      (0.35f + 0.65f * sun_height);
-    const float  frame_phase         = static_cast<float>(frame_index % 1024) * 0.0009765625f;
-
-    uint probe_index = 0;
-    for (uint z = 0; z < snapshot.count_z; ++z) {
-        const float z01 = snapshot.count_z > 1 ? float(z) / float(snapshot.count_z - 1) : 0.5f;
-        for (uint y = 0; y < snapshot.count_y; ++y) {
-            const float y01 = snapshot.count_y > 1 ? float(y) / float(snapshot.count_y - 1) : 0.5f;
-            for (uint x = 0; x < snapshot.count_x; ++x) {
-                const float x01 = snapshot.count_x > 1 ? float(x) / float(snapshot.count_x - 1) : 0.5f;
-
-                const float3 position = snapshot.origin +
-                                        float3(
-                                            snapshot.spacing.x * float(x),
-                                            snapshot.spacing.y * float(y),
-                                            snapshot.spacing.z * float(z)
-                                        );
-
-                const float lateral_variation =
-                    0.92f + 0.08f * std::sin((x01 * 3.17f + z01 * 2.41f + frame_phase) * PI);
-                const float3 sky_term =
-                    (snapshot.ground_color * (1.0f - y01) + snapshot.sky_color * y01) * snapshot.sky_intensity;
-                const float3 bounced_term = directional_bounce * (0.35f + 0.65f * (1.0f - y01));
-                const float3 irradiance   = Max((sky_term + bounced_term) * lateral_variation, float3(0.0f));
-
-                ProbeGridProbeData& probe = m_cpu_probes[probe_index++];
-                probe.world_position      = float4(position, 1.0f);
-                probe.irradiance          = float4(irradiance, 1.0f);
-            }
-        }
-    }
+    ProbeUpdateParam param{};
+    param.probe_volume_counts  = uint4(snapshot.count_x, snapshot.count_y, snapshot.count_z, snapshot.total_count);
+    param.probe_volume_origin  = float4(snapshot.origin.x, snapshot.origin.y, snapshot.origin.z, 0.0f);
+    param.probe_volume_spacing = float4(snapshot.spacing.x, snapshot.spacing.y, snapshot.spacing.z, snapshot.intensity);
+    param.probe_sky_color      = float4(snapshot.sky_color.x, snapshot.sky_color.y, snapshot.sky_color.z, snapshot.sky_intensity);
+    param.probe_ground_color =
+        float4(snapshot.ground_color.x, snapshot.ground_color.y, snapshot.ground_color.z, snapshot.directional_bounce);
+    param.main_light_direction =
+        float4(main_light_direction.x, main_light_direction.y, main_light_direction.z, float(frame_index % 1024u) / 1024.0f);
+    param.main_light_color = float4(main_light_color.x, main_light_color.y, main_light_color.z, main_light_intensity);
+    return param;
 }
 
-void ProbeVolumeResource::Update(
-    CommandList&         cmd_list,
-    const RasterConfig&  config,
-    const Scene&         scene,
-    const uint64         frame_index
-) {
+ProbeVolumeResource::UpdateInfo
+ProbeVolumeResource::PrepareUpdate(const RasterConfig& config, const Scene& scene, const uint64 frame_index) {
+    UpdateInfo update_info{};
+
     if (m_probe_buffer.buf == nullptr) {
-        return;
+        return update_info;
     }
 
     const Snapshot snapshot = BuildSnapshot(config);
@@ -221,21 +191,12 @@ void ProbeVolumeResource::Update(
         if (changed) {
             LOG_DEBUG("[ProbeGI] Probe volume disabled.");
         }
-        return;
+        return update_info;
     }
-
-    BuildProbeData(snapshot, scene, frame_index);
-
-    const uint64 upload_byte_size = sizeof(ProbeGridProbeData) * snapshot.total_count;
-    cmd_list.CopyFrom(
-        std::span<byte>((byte*)m_cpu_probes.data(), upload_byte_size),
-        m_probe_buffer.buf->GetView(0, upload_byte_size),
-        "ProbeGI Upload Probe Buffer"
-    );
 
     if (changed) {
         LOG_DEBUG(
-            "[ProbeGI] Probe volume updated: count=({}, {}, {}) total={}, origin={}, extent={}, intensity={}",
+            "[ProbeGI] Probe volume update scheduled: count=({}, {}, {}) total={}, origin={}, extent={}, intensity={}",
             snapshot.count_x,
             snapshot.count_y,
             snapshot.count_z,
@@ -245,6 +206,11 @@ void ProbeVolumeResource::Update(
             snapshot.intensity
         );
     }
+
+    update_info.enabled     = true;
+    update_info.probe_count = snapshot.total_count;
+    update_info.param       = BuildUpdateParam(snapshot, scene, frame_index);
+    return update_info;
 }
 
 void ProbeVolumeResource::FillLightingData(LightingData& lighting_data) const {

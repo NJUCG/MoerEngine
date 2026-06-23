@@ -24,13 +24,25 @@ namespace Moer {
 
 #ifdef __cplusplus
 static constexpr uint RASTER_PROBE_MAX_COUNT = 512;
+static constexpr uint RASTER_PROBE_UPDATE_GROUP_SIZE = 64;
 #else
 static const uint RASTER_PROBE_MAX_COUNT = 512;
+static const uint RASTER_PROBE_UPDATE_GROUP_SIZE = 64;
 #endif
 
 struct ProbeGridProbeData {
     float4 world_position; // xyz = probe center, w = validity
     float4 irradiance;     // rgb = diffuse irradiance, w = confidence
+};
+
+struct ProbeUpdateParam {
+    uint4  probe_volume_counts;  // xyz = probe counts, w = total probe count
+    float4 probe_volume_origin;  // xyz = min corner, w = unused
+    float4 probe_volume_spacing; // xyz = cell spacing, w = GI intensity
+    float4 probe_sky_color;      // rgb = sky tint, w = sky intensity
+    float4 probe_ground_color;   // rgb = ground tint, w = directional bounce strength
+    float4 main_light_direction; // xyz = world-space light direction, w = temporal phase
+    float4 main_light_color;     // rgb = light color, w = light intensity
 };
 
 struct MaterialPassBindlessParam {

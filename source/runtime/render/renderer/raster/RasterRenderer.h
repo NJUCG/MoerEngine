@@ -10,6 +10,7 @@ class HiZBuildPass;
 class ShadowDepthPass;
 class GeometryPass;
 class DirectionalShadowMaskPass;
+class ProbeUpdatePass;
 class LightingPass;
 class SkyboxPass;
 class AoPass;
@@ -68,6 +69,7 @@ private:
     UniquePtr<HiZBuildPass>                hiz_build_pass;
     UniquePtr<ShadowDepthPass>             shadow_depth_pass;
     UniquePtr<DirectionalShadowMaskPass>   directional_shadow_mask_pass;
+    UniquePtr<ProbeUpdatePass>             probe_update_pass;
     UniquePtr<GeometryPass>                geometry_pass;
     UniquePtr<LightingPass>                lighting_pass;
     UniquePtr<SkyboxPass>                  skybox_pass;
