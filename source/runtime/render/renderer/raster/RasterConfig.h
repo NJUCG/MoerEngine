@@ -199,10 +199,10 @@ struct RasterConfig {
     int    probe_gi_count_z              = 8;
     float3 probe_gi_volume_origin        = float3(-8.0f, 0.0f, -8.0f);
     float3 probe_gi_volume_extent        = float3(16.0f, 6.0f, 16.0f);
-    float  probe_gi_intensity            = 0.35f;
+    float  probe_gi_intensity            = 0.16f;
     float  probe_gi_normal_bias          = 0.12f;
-    float  probe_gi_sky_intensity        = 0.55f;
-    float  probe_gi_directional_bounce   = 0.12f;
+    float  probe_gi_sky_intensity        = 0.35f;
+    float  probe_gi_directional_bounce   = 0.06f;
     float3 probe_gi_sky_color            = float3(0.48f, 0.62f, 0.95f);
     float3 probe_gi_ground_color         = float3(0.35f, 0.27f, 0.18f);
     int    probe_gi_debug_mode           = 0; // 0=off, 1=volume cells, 2=irradiance, 3=contribution

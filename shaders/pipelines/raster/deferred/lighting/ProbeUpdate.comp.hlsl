@@ -46,12 +46,12 @@ float3 ProbeGetGridCoord01(uint3 coord, uint3 counts) {
     const float wall_bounce_mask = saturate(abs(coord01.x - 0.5) * 2.0) * saturate(1.0 - coord01.y * 0.75);
 
     const float3 sky_gradient =
-        lerp(param.probe_ground_color.rgb, param.probe_sky_color.rgb * 1.15, coord01.y) * param.probe_sky_color.a;
-    const float3 directional_bounce = sun_bounce * (0.45 + 1.05 * low_volume_weight);
+        lerp(param.probe_ground_color.rgb * 0.70, param.probe_sky_color.rgb * 0.85, coord01.y) * param.probe_sky_color.a;
+    const float3 directional_bounce = sun_bounce * (0.25 + 0.55 * low_volume_weight);
     const float3 local_color_bounce =
         lerp(float3(0.65, 0.26, 0.17), float3(0.12, 0.42, 0.72), smoothstep(0.0, 1.0, coord01.x)) *
-        wall_bounce_mask * param.probe_sky_color.a * 0.35;
-    const float3 ground_bounce = param.probe_ground_color.rgb * low_volume_weight * param.probe_sky_color.a * 0.70;
+        wall_bounce_mask * param.probe_sky_color.a * 0.16;
+    const float3 ground_bounce = param.probe_ground_color.rgb * low_volume_weight * param.probe_sky_color.a * 0.30;
     const float3 irradiance =
         max((sky_gradient + directional_bounce + ground_bounce + local_color_bounce) * lateral_variation, float3(0.0, 0.0, 0.0));
 
