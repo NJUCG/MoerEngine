@@ -25,6 +25,41 @@ Moer::ProbeGridProbeData ProbeGILoadProbe(Moer::LightingData lighting_data, uint
     return probe_buffer.Load<Moer::ProbeGridProbeData>(probe_index);
 }
 
+float2 ProbeGIEncodeOctahedral(float3 direction) {
+    float3 n = direction / max(abs(direction.x) + abs(direction.y) + abs(direction.z), 1e-5);
+    if (n.z < 0.0) {
+        float2 sign_xy = float2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+        n.xy = (1.0 - abs(n.yx)) * sign_xy;
+    }
+    return saturate(n.xy * 0.5 + 0.5);
+}
+
+uint ProbeGIGetVisibilityAtlasIndex(uint probe_index, float3 probe_to_surface_dir) {
+    const uint dim = Moer::RASTER_PROBE_VISIBILITY_ATLAS_DIM;
+    float2 uv = ProbeGIEncodeOctahedral(probe_to_surface_dir);
+    uint2 texel = min(uint2(uv * float(dim)), uint2(dim - 1u, dim - 1u));
+    return probe_index * Moer::RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT + texel.y * dim + texel.x;
+}
+
+float4 ProbeGILoadDirectionalVisibility(
+    Moer::LightingData lighting_data,
+    uint probe_index,
+    Moer::ProbeGridProbeData probe,
+    float3 probe_to_surface_dir
+) {
+    if (lighting_data.probe_volume_config.w == 0u) {
+        return probe.visibility;
+    }
+
+    ArrayBuffer visibility_buffer = ArrayBuffer(lighting_data.probe_volume_config.w);
+    Moer::ProbeGridVisibilityTexel visibility_texel =
+        visibility_buffer.Load<Moer::ProbeGridVisibilityTexel>(
+            ProbeGIGetVisibilityAtlasIndex(probe_index, probe_to_surface_dir)
+        );
+
+    return lerp(probe.visibility, visibility_texel.moments, saturate(visibility_texel.moments.w));
+}
+
 float3 ProbeGILoadIrradiance(Moer::LightingData lighting_data, uint probe_index) {
     Moer::ProbeGridProbeData probe = ProbeGILoadProbe(lighting_data, probe_index);
     return probe.irradiance.rgb * probe.irradiance.a;
@@ -43,6 +78,7 @@ bool ProbeGIIsInsideVolume(Moer::LightingData lighting_data, float3 world_pos) {
 
 float ProbeGIGetVisibilityWeight(
     Moer::LightingData lighting_data,
+    uint probe_index,
     Moer::ProbeGridProbeData probe,
     float3 world_pos,
     float3 normal
@@ -54,12 +90,16 @@ float ProbeGIGetVisibilityWeight(
         return 1.0;
     }
 
-    float3 surface_to_probe = -probe_to_surface / receiver_distance;
+    float3 probe_to_surface_dir = probe_to_surface / receiver_distance;
+    float3 surface_to_probe = -probe_to_surface_dir;
     float  normal_weight = saturate(dot(normal, surface_to_probe));
     normal_weight = max(normal_weight * normal_weight, lighting_data.probe_volume_visibility.z);
 
-    float mean_distance = max(probe.visibility.x, 1e-3);
-    float mean_distance_sq = max(probe.visibility.y, mean_distance * mean_distance);
+    float4 directional_visibility =
+        ProbeGILoadDirectionalVisibility(lighting_data, probe_index, probe, probe_to_surface_dir);
+
+    float mean_distance = max(directional_visibility.x, 1e-3);
+    float mean_distance_sq = max(directional_visibility.y, mean_distance * mean_distance);
     float variance = max(mean_distance_sq - mean_distance * mean_distance, 0.015);
 
     float biased_receiver_distance = max(receiver_distance - lighting_data.probe_volume_visibility.x, 0.0);
@@ -67,9 +107,9 @@ float ProbeGIGetVisibilityWeight(
     float chebyshev = variance / (variance + distance_delta * distance_delta);
     chebyshev = pow(saturate(chebyshev), max(lighting_data.probe_volume_visibility.y, 0.1));
 
-    float open_weight = lerp(lighting_data.probe_volume_visibility.z, 1.0, saturate(probe.visibility.z));
+    float open_weight = lerp(lighting_data.probe_volume_visibility.z, 1.0, saturate(directional_visibility.z));
     float traced_weight = normal_weight * chebyshev * open_weight;
-    return lerp(1.0, traced_weight, saturate(lighting_data.probe_volume_visibility.w * probe.visibility.w));
+    return lerp(1.0, traced_weight, saturate(lighting_data.probe_volume_visibility.w * directional_visibility.w));
 }
 
 void ProbeGIAccumulateProbe(
@@ -84,7 +124,7 @@ void ProbeGIAccumulateProbe(
 ) {
     Moer::ProbeGridProbeData probe = ProbeGILoadProbe(lighting_data, probe_index);
     float3 irradiance = probe.irradiance.rgb * probe.irradiance.a;
-    float visibility_weight = ProbeGIGetVisibilityWeight(lighting_data, probe, world_pos, normal);
+    float visibility_weight = ProbeGIGetVisibilityWeight(lighting_data, probe_index, probe, world_pos, normal);
     float final_weight = trilinear_weight * visibility_weight;
 
     raw_irradiance += irradiance * trilinear_weight;
@@ -234,9 +274,15 @@ float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, 
         uint3 counts = ProbeGIGetCounts(lighting_data);
         float3 local = ProbeGIGetLocalCoord(lighting_data, world_pos);
         uint3 coord = min(uint3(round(clamp(local, float3(0.0, 0.0, 0.0), float3(counts - uint3(1, 1, 1))))), counts - uint3(1, 1, 1));
-        Moer::ProbeGridProbeData probe = ProbeGILoadProbe(lighting_data, ProbeGIGetProbeIndex(coord, counts));
-        float open_ratio = saturate(probe.visibility.z);
-        float mean_distance = saturate(probe.visibility.x / max(max(lighting_data.probe_volume_extent.x, lighting_data.probe_volume_extent.y), lighting_data.probe_volume_extent.z));
+        uint probe_index = ProbeGIGetProbeIndex(coord, counts);
+        Moer::ProbeGridProbeData probe = ProbeGILoadProbe(lighting_data, probe_index);
+        float3 probe_to_surface = world_pos - probe.world_position.xyz;
+        float receiver_distance = length(probe_to_surface);
+        float3 probe_to_surface_dir = receiver_distance > 1e-4 ? probe_to_surface / receiver_distance : float3(0.0, 1.0, 0.0);
+        float4 directional_visibility =
+            ProbeGILoadDirectionalVisibility(lighting_data, probe_index, probe, probe_to_surface_dir);
+        float open_ratio = saturate(directional_visibility.z);
+        float mean_distance = saturate(directional_visibility.x / max(max(lighting_data.probe_volume_extent.x, lighting_data.probe_volume_extent.y), lighting_data.probe_volume_extent.z));
         return float3(1.0 - open_ratio, open_ratio, mean_distance) * lighting_data.probe_volume_extent.w;
     }
 

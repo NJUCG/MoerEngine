@@ -5,12 +5,11 @@
 [[vk::push_constant]] ConstantBuffer<Moer::ProbeUpdateParam> param;
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<Moer::ProbeGridProbeData> rw_probe_data;
+[[vk::binding(1, 0)]] RWStructuredBuffer<Moer::ProbeGridVisibilityTexel> rw_visibility_atlas;
 
 #if PROBE_GI_USE_RAY_QUERY
-[[vk::binding(1, 0)]] RaytracingAccelerationStructure tlas;
+[[vk::binding(2, 0)]] RaytracingAccelerationStructure tlas;
 #endif
-
-static const uint PROBE_GI_MAX_TRACE_RAYS = 32u;
 
 float ProbeSafeSaturate(float value) {
     return saturate(value);
@@ -24,13 +23,27 @@ float3 ProbeGetGridCoord01(uint3 coord, uint3 counts) {
     );
 }
 
-float3 ProbeFibonacciDirection(uint sample_index, uint sample_count, float temporal_phase) {
-    const float sample_count_f = max(float(sample_count), 1.0);
-    const float sample_id = float(sample_index);
-    const float z = 1.0 - 2.0 * ((sample_id + 0.5) / sample_count_f);
-    const float radius = sqrt(max(0.0, 1.0 - z * z));
-    const float phi = (sample_id + temporal_phase * sample_count_f) * 2.39996323;
-    return float3(cos(phi) * radius, z, sin(phi) * radius);
+float3 ProbeDecodeOctahedral(float2 encoded) {
+    float2 f = encoded * 2.0 - 1.0;
+    float3 n = float3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
+    if (n.z < 0.0) {
+        float2 sign_xy = float2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+        float2 folded = (1.0 - abs(n.yx)) * sign_xy;
+        n = float3(folded.x, folded.y, n.z);
+    }
+    return normalize(n);
+}
+
+float3 ProbeGetAtlasDirection(uint atlas_texel_index) {
+    const uint dim = Moer::RASTER_PROBE_VISIBILITY_ATLAS_DIM;
+    const uint x = atlas_texel_index % dim;
+    const uint y = atlas_texel_index / dim;
+    const float2 uv = (float2(x, y) + 0.5) / float(dim);
+    return ProbeDecodeOctahedral(uv);
+}
+
+uint ProbeGetVisibilityAtlasIndex(uint probe_index, uint atlas_texel_index) {
+    return probe_index * Moer::RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT + atlas_texel_index;
 }
 
 float3 ProbeEstimateMissRadiance(float3 direction, float3 sun_bounce) {
@@ -109,29 +122,30 @@ void ProbeTraceVisibilityRay(float3 origin, float3 direction, float tmin, float 
 
     const float max_trace_distance = max(param.probe_trace_config.x, 0.1);
     const float trace_bias = max(param.probe_trace_config.y, 0.02);
-    const uint ray_count = clamp(uint(param.probe_trace_config.z), 1u, PROBE_GI_MAX_TRACE_RAYS);
+    const uint trace_texel_count =
+        clamp(uint(param.probe_trace_config.z), 1u, Moer::RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT);
 
     float  distance_sum = 0.0;
     float  distance_sq_sum = 0.0;
     float  open_sum = 0.0;
     float3 ray_radiance_sum = float3(0.0, 0.0, 0.0);
 
-    [loop] for (uint ray_index = 0u; ray_index < PROBE_GI_MAX_TRACE_RAYS; ++ray_index) {
-        if (ray_index >= ray_count) {
-            break;
-        }
-
-        const float3 ray_direction = ProbeFibonacciDirection(ray_index, ray_count, param.main_light_direction.w);
+    [loop] for (uint atlas_texel_index = 0u;
+                atlas_texel_index < Moer::RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT;
+                ++atlas_texel_index) {
+        const float3 ray_direction = ProbeGetAtlasDirection(atlas_texel_index);
         float hit_distance = max_trace_distance;
         float visible = 1.0;
-        ProbeTraceVisibilityRay(
-            position + ray_direction * trace_bias,
-            ray_direction,
-            0.0,
-            max_trace_distance,
-            hit_distance,
-            visible
-        );
+        if (atlas_texel_index < trace_texel_count) {
+            ProbeTraceVisibilityRay(
+                position + ray_direction * trace_bias,
+                ray_direction,
+                0.0,
+                max_trace_distance,
+                hit_distance,
+                visible
+            );
+        }
 
         const float normalized_hit = saturate(hit_distance / max_trace_distance);
         const float3 miss_radiance = ProbeEstimateMissRadiance(ray_direction, sun_bounce);
@@ -142,9 +156,15 @@ void ProbeTraceVisibilityRay(float3 origin, float3 direction, float tmin, float 
         distance_sum += hit_distance;
         distance_sq_sum += hit_distance * hit_distance;
         open_sum += visible;
+
+        const float texel_confidence =
+            (atlas_texel_index < trace_texel_count) ? saturate(param.probe_trace_config.w) : 0.0;
+        Moer::ProbeGridVisibilityTexel visibility_texel;
+        visibility_texel.moments = float4(hit_distance, hit_distance * hit_distance, visible, texel_confidence);
+        rw_visibility_atlas[ProbeGetVisibilityAtlasIndex(probe_index, atlas_texel_index)] = visibility_texel;
     }
 
-    const float inv_ray_count = 1.0 / float(ray_count);
+    const float inv_ray_count = 1.0 / float(Moer::RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT);
     const float mean_distance = distance_sum * inv_ray_count;
     const float mean_distance_sq = distance_sq_sum * inv_ray_count;
     const float open_ratio = open_sum * inv_ray_count;

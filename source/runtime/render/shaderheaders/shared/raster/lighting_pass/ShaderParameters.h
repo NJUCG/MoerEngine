@@ -26,15 +26,25 @@ namespace Moer {
 #ifdef __cplusplus
 static constexpr uint RASTER_PROBE_MAX_COUNT = 512;
 static constexpr uint RASTER_PROBE_UPDATE_GROUP_SIZE = 64;
+static constexpr uint RASTER_PROBE_VISIBILITY_ATLAS_DIM = 8;
+static constexpr uint RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT =
+    RASTER_PROBE_VISIBILITY_ATLAS_DIM * RASTER_PROBE_VISIBILITY_ATLAS_DIM;
 #else
 static const uint RASTER_PROBE_MAX_COUNT = 512;
 static const uint RASTER_PROBE_UPDATE_GROUP_SIZE = 64;
+static const uint RASTER_PROBE_VISIBILITY_ATLAS_DIM = 8;
+static const uint RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT =
+    RASTER_PROBE_VISIBILITY_ATLAS_DIM * RASTER_PROBE_VISIBILITY_ATLAS_DIM;
 #endif
 
 struct ProbeGridProbeData {
     float4 world_position; // xyz = probe center, w = validity
     float4 irradiance;     // rgb = diffuse irradiance, w = confidence
     float4 visibility;     // x = mean ray distance, y = mean distance squared, z = open ratio, w = traced confidence
+};
+
+struct ProbeGridVisibilityTexel {
+    float4 moments; // x = mean distance, y = mean distance squared, z = open ratio, w = confidence
 };
 
 struct ProbeUpdateParam {
@@ -124,7 +134,7 @@ struct LightingData {
     float4 probe_volume_spacing; // xyz = cell spacing, w = intensity
     float4 probe_volume_extent;  // xyz = volume extent, w = debug scale
     uint4  probe_volume_counts;  // xyz = probe counts, w = total probe count
-    uint4  probe_volume_config;  // x = enabled, y = debug mode, z = probe buffer handle, w = reserved
+    uint4  probe_volume_config;  // x = enabled, y = debug mode, z = probe buffer handle, w = visibility atlas handle
     float4 probe_volume_visibility; // x = bias, y = power, z = min weight, w = strength
 };
 

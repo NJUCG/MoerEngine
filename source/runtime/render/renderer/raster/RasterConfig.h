@@ -202,7 +202,7 @@ struct RasterConfig {
     float  probe_gi_intensity            = 0.16f;
     float  probe_gi_normal_bias          = 0.12f;
     float  probe_gi_trace_distance       = 12.0f;
-    int    probe_gi_trace_ray_count      = 16;
+    int    probe_gi_trace_ray_count      = 64;
     float  probe_gi_visibility_bias      = 0.25f;
     float  probe_gi_visibility_power     = 1.8f;
     float  probe_gi_visibility_min_weight = 0.08f;

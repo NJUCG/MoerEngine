@@ -35,12 +35,20 @@ public:
         return m_probe_buffer.buf->GetView();
     }
 
+    BufferView GetVisibilityAtlasBufferView() const {
+        return m_visibility_atlas_buffer.buf->GetView();
+    }
+
     uint GetProbeCount() const {
         return m_snapshot.total_count;
     }
 
     uint GetBufferHandle() const {
         return m_probe_buffer.hdl;
+    }
+
+    uint GetVisibilityAtlasHandle() const {
+        return m_visibility_atlas_buffer.hdl;
     }
 
 private:
@@ -74,6 +82,7 @@ private:
     bool     HasSnapshotChanged(const Snapshot& snapshot) const;
 
     BufferWithHandle m_probe_buffer;
+    BufferWithHandle m_visibility_atlas_buffer;
     Snapshot         m_snapshot;
     bool             m_has_snapshot = false;
 };

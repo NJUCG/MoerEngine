@@ -13,8 +13,9 @@ public:
     DEFINE_COMPUTE_PIPELINE_CLASS(ProbeUpdatePipeline);
 
     DEFINE_SHADER_BUFFER(rw_probe_data);
+    DEFINE_SHADER_BUFFER(rw_visibility_atlas);
     DEFINE_SHADER_CONSTANT_STRUCT(ProbeUpdateParam, param);
-    DEFINE_SHADER_ARGS(rw_probe_data, param);
+    DEFINE_SHADER_ARGS(rw_probe_data, rw_visibility_atlas, param);
 };
 
 class ProbeUpdateRayQueryPipeline : public ComputePipeline {
@@ -22,9 +23,10 @@ public:
     DEFINE_COMPUTE_PIPELINE_CLASS(ProbeUpdateRayQueryPipeline);
 
     DEFINE_SHADER_BUFFER(rw_probe_data);
+    DEFINE_SHADER_BUFFER(rw_visibility_atlas);
     DEFINE_SHADER_TLAS(tlas);
     DEFINE_SHADER_CONSTANT_STRUCT(ProbeUpdateParam, param);
-    DEFINE_SHADER_ARGS(rw_probe_data, tlas, param);
+    DEFINE_SHADER_ARGS(rw_probe_data, rw_visibility_atlas, tlas, param);
 
     MUTATION_BOOL(PROBE_GI_USE_RAY_QUERY);
 };
@@ -62,6 +64,7 @@ public:
                 .Compute(
                     probe_update_ray_query_pipeline,
                     context.probe_volume.GetProbeBufferView(),
+                    context.probe_volume.GetVisibilityAtlasBufferView(),
                     rt_scene->GetTlas(),
                     update_info.param
                 )
@@ -71,7 +74,13 @@ public:
         }
 
         update_info.param.probe_trace_config.w = 0.0f;
-        context.cmd_list.Compute(probe_update_pipeline, context.probe_volume.GetProbeBufferView(), update_info.param)
+        context.cmd_list
+            .Compute(
+                probe_update_pipeline,
+                context.probe_volume.GetProbeBufferView(),
+                context.probe_volume.GetVisibilityAtlasBufferView(),
+                update_info.param
+            )
             .Dispatch(uint3(dispatch_count, 1, 1), "Probe GI Fallback Update Pass");
         RasterTool::LogDebugEverySeconds("[ProbeGI] TLAS unavailable, using fallback probe update.", 3.0);
     }

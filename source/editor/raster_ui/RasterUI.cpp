@@ -295,7 +295,12 @@ void RasterUI::ShowConfig() {
         ImGui::SliderFloat("Intensity", &m_config.probe_gi_intensity, 0.0f, 32.0f);
         ImGui::SliderFloat("Normal Bias", &m_config.probe_gi_normal_bias, 0.0f, 1.0f);
         ImGui::SliderFloat("Trace Distance", &m_config.probe_gi_trace_distance, 0.5f, 64.0f);
-        ImGui::SliderInt("Trace Rays", &m_config.probe_gi_trace_ray_count, 1, 32);
+        ImGui::SliderInt(
+            "Trace Rays",
+            &m_config.probe_gi_trace_ray_count,
+            1,
+            static_cast<int>(Render::RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT)
+        );
         ImGui::SliderFloat("Visibility Bias", &m_config.probe_gi_visibility_bias, 0.0f, 2.0f);
         ImGui::SliderFloat("Visibility Power", &m_config.probe_gi_visibility_power, 0.25f, 8.0f);
         ImGui::SliderFloat("Visibility Min Weight", &m_config.probe_gi_visibility_min_weight, 0.0f, 1.0f);

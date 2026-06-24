@@ -79,11 +79,24 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
     );
     m_probe_buffer.hdl = bdls->AllocateBuffer(m_probe_buffer.buf->GetView());
 
+    constexpr uint visibility_atlas_byte_size =
+        sizeof(ProbeGridVisibilityTexel) * RASTER_PROBE_MAX_COUNT * RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT;
+    m_visibility_atlas_buffer.buf = device.CreateBuffer<byte>(
+        "Raster::ProbeVolume::VisibilityAtlas",
+        visibility_atlas_byte_size,
+        EBufferUsageFlags::UNORDERED_ACCESS
+    );
+    m_visibility_atlas_buffer.hdl = bdls->AllocateBuffer(m_visibility_atlas_buffer.buf->GetView());
+
     LOG_DEBUG(
-        "[ProbeGI] Created probe buffer: max_count={}, byte_size={}, bindless_handle={}",
+        "[ProbeGI] Created probe buffers: max_count={}, probe_byte_size={}, probe_handle={}, visibility_dim={}x{}, visibility_byte_size={}, visibility_handle={}",
         RASTER_PROBE_MAX_COUNT,
         buffer_byte_size,
-        m_probe_buffer.hdl
+        m_probe_buffer.hdl,
+        RASTER_PROBE_VISIBILITY_ATLAS_DIM,
+        RASTER_PROBE_VISIBILITY_ATLAS_DIM,
+        visibility_atlas_byte_size,
+        m_visibility_atlas_buffer.hdl
     );
 }
 
@@ -92,7 +105,12 @@ void ProbeVolumeResource::Destroy(BindlessArrayRef& bdls) {
         bdls->UnbindBuffer(m_probe_buffer.hdl);
         m_probe_buffer.hdl = 0;
     }
+    if (m_visibility_atlas_buffer.hdl != 0) {
+        bdls->UnbindBuffer(m_visibility_atlas_buffer.hdl);
+        m_visibility_atlas_buffer.hdl = 0;
+    }
     m_probe_buffer.buf = nullptr;
+    m_visibility_atlas_buffer.buf = nullptr;
     m_has_snapshot = false;
 }
 
@@ -119,7 +137,8 @@ ProbeVolumeResource::Snapshot ProbeVolumeResource::BuildSnapshot(const RasterCon
     snapshot.intensity          = Max(config.probe_gi_intensity, 0.0f);
     snapshot.normal_bias        = Max(config.probe_gi_normal_bias, 0.0f);
     snapshot.trace_distance     = Max(config.probe_gi_trace_distance, 0.1f);
-    snapshot.trace_ray_count    = static_cast<uint>(Clamp(config.probe_gi_trace_ray_count, 1, 32));
+    snapshot.trace_ray_count =
+        static_cast<uint>(Clamp(config.probe_gi_trace_ray_count, 1, int(RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT)));
     snapshot.visibility_bias    = Max(config.probe_gi_visibility_bias, 0.0f);
     snapshot.visibility_power   = Max(config.probe_gi_visibility_power, 0.1f);
     snapshot.visibility_min_weight = Clamp(config.probe_gi_visibility_min_weight, 0.0f, 1.0f);
@@ -191,7 +210,7 @@ ProbeVolumeResource::UpdateInfo
 ProbeVolumeResource::PrepareUpdate(const RasterConfig& config, const Scene& scene, const uint64 frame_index) {
     UpdateInfo update_info{};
 
-    if (m_probe_buffer.buf == nullptr) {
+    if (m_probe_buffer.buf == nullptr || m_visibility_atlas_buffer.buf == nullptr) {
         return update_info;
     }
 
@@ -231,7 +250,10 @@ ProbeVolumeResource::PrepareUpdate(const RasterConfig& config, const Scene& scen
 
 void ProbeVolumeResource::FillLightingData(LightingData& lighting_data) const {
     const uint enabled =
-        (m_has_snapshot && m_snapshot.enabled && m_probe_buffer.hdl != 0 && m_snapshot.total_count > 0) ? 1u : 0u;
+        (m_has_snapshot && m_snapshot.enabled && m_probe_buffer.hdl != 0 && m_visibility_atlas_buffer.hdl != 0 &&
+         m_snapshot.total_count > 0) ?
+            1u :
+            0u;
 
     lighting_data.probe_volume_origin =
         float4(m_snapshot.origin.x, m_snapshot.origin.y, m_snapshot.origin.z, m_snapshot.normal_bias);
@@ -241,7 +263,8 @@ void ProbeVolumeResource::FillLightingData(LightingData& lighting_data) const {
         float4(m_snapshot.extent.x, m_snapshot.extent.y, m_snapshot.extent.z, m_snapshot.debug_scale);
     lighting_data.probe_volume_counts =
         uint4(m_snapshot.count_x, m_snapshot.count_y, m_snapshot.count_z, m_snapshot.total_count);
-    lighting_data.probe_volume_config = uint4(enabled, m_snapshot.debug_mode, m_probe_buffer.hdl, 0u);
+    lighting_data.probe_volume_config =
+        uint4(enabled, m_snapshot.debug_mode, m_probe_buffer.hdl, m_visibility_atlas_buffer.hdl);
     lighting_data.probe_volume_visibility = float4(
         m_snapshot.visibility_bias,
         m_snapshot.visibility_power,

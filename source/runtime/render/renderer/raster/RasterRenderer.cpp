@@ -186,6 +186,7 @@ void RasterRenderer::UpdateGlobalLightingData(
         stream << "[ProbeGI] Runtime lighting params: enabled=" << lighting_data->probe_volume_config.x
                << " debug=" << lighting_data->probe_volume_config.y
                << " buffer=" << lighting_data->probe_volume_config.z
+               << " visibility_atlas=" << lighting_data->probe_volume_config.w
                << " count=" << lighting_data->probe_volume_counts.w
                << " intensity=" << lighting_data->probe_volume_spacing.w
                << " trace_distance=" << ui_config.probe_gi_trace_distance
