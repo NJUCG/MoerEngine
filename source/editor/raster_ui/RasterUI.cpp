@@ -292,10 +292,10 @@ void RasterUI::ShowConfig() {
 
         ImGui::SliderFloat3("Volume Origin", (float*)&m_config.probe_gi_volume_origin, -32.0f, 32.0f);
         ImGui::SliderFloat3("Volume Extent", (float*)&m_config.probe_gi_volume_extent, 0.5f, 64.0f);
-        ImGui::SliderFloat("Intensity", &m_config.probe_gi_intensity, 0.0f, 4.0f);
+        ImGui::SliderFloat("Intensity", &m_config.probe_gi_intensity, 0.0f, 32.0f);
         ImGui::SliderFloat("Normal Bias", &m_config.probe_gi_normal_bias, 0.0f, 1.0f);
-        ImGui::SliderFloat("Sky Intensity", &m_config.probe_gi_sky_intensity, 0.0f, 4.0f);
-        ImGui::SliderFloat("Directional Bounce", &m_config.probe_gi_directional_bounce, 0.0f, 1.0f);
+        ImGui::SliderFloat("Sky Intensity", &m_config.probe_gi_sky_intensity, 0.0f, 8.0f);
+        ImGui::SliderFloat("Directional Bounce", &m_config.probe_gi_directional_bounce, 0.0f, 4.0f);
         ImGui::ColorEdit3("Sky Color", (float*)&m_config.probe_gi_sky_color);
         ImGui::ColorEdit3("Ground Color", (float*)&m_config.probe_gi_ground_color);
 

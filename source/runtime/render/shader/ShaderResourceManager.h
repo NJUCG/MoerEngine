@@ -247,7 +247,7 @@ struct ShaderResourcesCache {
         auto  it    = cache.find(_input);
         if (it != cache.end()) {
             Shader* shader = it->second.get();
-            if (!shader->source_dependencies.empty() && !ValidateDependencies(*shader)) {
+            if (shader->source_dependencies.empty() || !ValidateDependencies(*shader)) {
                 cache.erase(it);
                 return {nullptr, false};
             }

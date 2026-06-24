@@ -83,10 +83,12 @@ float3 ProbeGIEvaluateDiffuse(
     float direct_shadow
 ) {
     float3 irradiance = ProbeGISampleIrradiance(lighting_data, world_pos, normal);
-    float diffuse_weight = 0.35 + 0.65 * (1.0 - saturate(metallic));
-    float normal_weight = 0.35 + 0.65 * saturate(normal.y * 0.5 + 0.5);
-    float shadow_visibility = lerp(1.20, 0.45, saturate(direct_shadow));
-    return irradiance * albedo * diffuse_weight * lighting_data.probe_volume_spacing.w * normal_weight * shadow_visibility;
+    float diffuse_weight = 0.55 + 0.45 * (1.0 - saturate(metallic));
+    float normal_weight = 0.55 + 0.45 * saturate(normal.y * 0.5 + 0.5);
+    float shadow_visibility = lerp(1.25, 0.18, saturate(direct_shadow));
+    float3 surface_tint = lerp(float3(1.0, 1.0, 1.0), albedo, 0.70);
+    return irradiance * surface_tint * diffuse_weight * lighting_data.probe_volume_spacing.w *
+           normal_weight * shadow_visibility;
 }
 
 float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, float3 normal) {

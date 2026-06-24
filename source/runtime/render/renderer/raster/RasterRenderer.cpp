@@ -27,6 +27,7 @@
 
 #include <chrono>
 #include <optional>
+#include <sstream>
 #include <string_view>
 #include <utility>
 
@@ -179,6 +180,20 @@ void RasterRenderer::UpdateGlobalLightingData(
     }
 
     context.probe_volume.FillLightingData(*lighting_data);
+
+    if (ui_config.probe_gi_enabled) {
+        std::ostringstream stream;
+        stream << "[ProbeGI] Runtime lighting params: enabled=" << lighting_data->probe_volume_config.x
+               << " debug=" << lighting_data->probe_volume_config.y
+               << " buffer=" << lighting_data->probe_volume_config.z
+               << " count=" << lighting_data->probe_volume_counts.w
+               << " intensity=" << lighting_data->probe_volume_spacing.w
+               << " sky=" << ui_config.probe_gi_sky_intensity
+               << " bounce=" << ui_config.probe_gi_directional_bounce
+               << " origin=" << ui_config.probe_gi_volume_origin.ToString(2)
+               << " extent=" << ui_config.probe_gi_volume_extent.ToString(2);
+        RasterTool::LogDebugEverySeconds(stream.str(), 2.0);
+    }
 
     context.cmd_list.CopyFrom(
         std::span<byte>((byte*)lighting_data, sizeof(LightingData)),

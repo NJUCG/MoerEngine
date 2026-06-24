@@ -13,6 +13,7 @@
 
 #ifdef __cplusplus
 //#define CONST constexpr
+#include <cstddef>
 #include "misc/Traits.h"
 namespace Moer::Render {
 #else
@@ -114,6 +115,8 @@ struct LightingData {
     // Skybox
     uint  skybox_exposure_correct_enabled; // 是否启用Skybox曝光校正，找到第一个平行光，乘上它的颜色
     float skybox_exposure_correct_factor;  // 曝光校正因子
+    float2 skybox_exposure_padding; // pad next float4 to a cbuffer 16B register
+
     // Probe GI
     float4 probe_volume_origin;  // xyz = min corner, w = normal bias
     float4 probe_volume_spacing; // xyz = cell spacing, w = intensity
@@ -121,6 +124,11 @@ struct LightingData {
     uint4  probe_volume_counts;  // xyz = probe counts, w = total probe count
     uint4  probe_volume_config;  // x = enabled, y = debug mode, z = probe buffer handle, w = reserved
 };
+
+#ifdef __cplusplus
+static_assert(offsetof(LightingData, probe_volume_origin) % 16 == 0);
+static_assert(sizeof(LightingData) % 16 == 0);
+#endif
 
 struct DirectionalShadowMaskPassBindlessParam {
     uint normal_hdl;
