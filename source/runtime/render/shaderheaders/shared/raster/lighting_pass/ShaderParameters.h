@@ -34,6 +34,7 @@ static const uint RASTER_PROBE_UPDATE_GROUP_SIZE = 64;
 struct ProbeGridProbeData {
     float4 world_position; // xyz = probe center, w = validity
     float4 irradiance;     // rgb = diffuse irradiance, w = confidence
+    float4 visibility;     // x = mean ray distance, y = mean distance squared, z = open ratio, w = traced confidence
 };
 
 struct ProbeUpdateParam {
@@ -44,6 +45,7 @@ struct ProbeUpdateParam {
     float4 probe_ground_color;   // rgb = ground tint, w = directional bounce strength
     float4 main_light_direction; // xyz = world-space light direction, w = temporal phase
     float4 main_light_color;     // rgb = light color, w = light intensity
+    float4 probe_trace_config;   // x = max ray distance, y = trace bias, z = ray count, w = ray query enabled
 };
 
 struct ProbeGizmoParam {
@@ -123,9 +125,11 @@ struct LightingData {
     float4 probe_volume_extent;  // xyz = volume extent, w = debug scale
     uint4  probe_volume_counts;  // xyz = probe counts, w = total probe count
     uint4  probe_volume_config;  // x = enabled, y = debug mode, z = probe buffer handle, w = reserved
+    float4 probe_volume_visibility; // x = bias, y = power, z = min weight, w = strength
 };
 
 #ifdef __cplusplus
+static_assert(sizeof(ProbeUpdateParam) <= 128);
 static_assert(offsetof(LightingData, probe_volume_origin) % 16 == 0);
 static_assert(sizeof(LightingData) % 16 == 0);
 #endif

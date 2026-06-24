@@ -201,14 +201,20 @@ struct RasterConfig {
     float3 probe_gi_volume_extent        = float3(16.0f, 6.0f, 16.0f);
     float  probe_gi_intensity            = 0.16f;
     float  probe_gi_normal_bias          = 0.12f;
+    float  probe_gi_trace_distance       = 12.0f;
+    int    probe_gi_trace_ray_count      = 16;
+    float  probe_gi_visibility_bias      = 0.25f;
+    float  probe_gi_visibility_power     = 1.8f;
+    float  probe_gi_visibility_min_weight = 0.08f;
+    float  probe_gi_visibility_strength  = 0.85f;
     float  probe_gi_sky_intensity        = 0.35f;
     float  probe_gi_directional_bounce   = 0.06f;
     float3 probe_gi_sky_color            = float3(0.48f, 0.62f, 0.95f);
     float3 probe_gi_ground_color         = float3(0.35f, 0.27f, 0.18f);
-    int    probe_gi_debug_mode           = 0; // 0=off, 1=volume cells, 2=irradiance, 3=contribution
+    int    probe_gi_debug_mode           = 0; // 0=off, 1=volume cells, 2=irradiance, 3=contribution, 4=visibility
     float  probe_gi_debug_scale          = 1.0f;
     bool   probe_gi_gizmo_enabled        = false;
-    int    probe_gi_gizmo_color_mode     = 0; // 0=fixed color, 1=probe irradiance
+    int    probe_gi_gizmo_color_mode     = 0; // 0=fixed color, 1=probe irradiance, 2=visibility
     float  probe_gi_gizmo_size           = 0.22f;
     float  probe_gi_gizmo_thickness      = 0.018f;
     float  probe_gi_gizmo_intensity      = 1.2f;

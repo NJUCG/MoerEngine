@@ -99,7 +99,7 @@ void ProbeVolumeResource::Destroy(BindlessArrayRef& bdls) {
 ProbeVolumeResource::Snapshot ProbeVolumeResource::BuildSnapshot(const RasterConfig& config) const {
     Snapshot snapshot{};
     snapshot.enabled     = config.probe_gi_enabled;
-    snapshot.debug_mode  = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 3));
+    snapshot.debug_mode  = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 4));
     snapshot.count_x     = ClampProbeCount(config.probe_gi_count_x);
     snapshot.count_y     = ClampProbeCount(config.probe_gi_count_y);
     snapshot.count_z     = ClampProbeCount(config.probe_gi_count_z);
@@ -118,6 +118,12 @@ ProbeVolumeResource::Snapshot ProbeVolumeResource::BuildSnapshot(const RasterCon
 
     snapshot.intensity          = Max(config.probe_gi_intensity, 0.0f);
     snapshot.normal_bias        = Max(config.probe_gi_normal_bias, 0.0f);
+    snapshot.trace_distance     = Max(config.probe_gi_trace_distance, 0.1f);
+    snapshot.trace_ray_count    = static_cast<uint>(Clamp(config.probe_gi_trace_ray_count, 1, 32));
+    snapshot.visibility_bias    = Max(config.probe_gi_visibility_bias, 0.0f);
+    snapshot.visibility_power   = Max(config.probe_gi_visibility_power, 0.1f);
+    snapshot.visibility_min_weight = Clamp(config.probe_gi_visibility_min_weight, 0.0f, 1.0f);
+    snapshot.visibility_strength   = Clamp(config.probe_gi_visibility_strength, 0.0f, 1.0f);
     snapshot.debug_scale        = Max(config.probe_gi_debug_scale, 0.0f);
     snapshot.sky_intensity      = Max(config.probe_gi_sky_intensity, 0.0f);
     snapshot.directional_bounce = Max(config.probe_gi_directional_bounce, 0.0f);
@@ -147,6 +153,12 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
            !NearlyEqual(m_snapshot.extent, snapshot.extent) || !NearlyEqual(m_snapshot.spacing, snapshot.spacing) ||
            !NearlyEqual(m_snapshot.intensity, snapshot.intensity) ||
            !NearlyEqual(m_snapshot.normal_bias, snapshot.normal_bias) ||
+           !NearlyEqual(m_snapshot.trace_distance, snapshot.trace_distance) ||
+           m_snapshot.trace_ray_count != snapshot.trace_ray_count ||
+           !NearlyEqual(m_snapshot.visibility_bias, snapshot.visibility_bias) ||
+           !NearlyEqual(m_snapshot.visibility_power, snapshot.visibility_power) ||
+           !NearlyEqual(m_snapshot.visibility_min_weight, snapshot.visibility_min_weight) ||
+           !NearlyEqual(m_snapshot.visibility_strength, snapshot.visibility_strength) ||
            !NearlyEqual(m_snapshot.debug_scale, snapshot.debug_scale) ||
            !NearlyEqual(m_snapshot.sky_intensity, snapshot.sky_intensity) ||
            !NearlyEqual(m_snapshot.directional_bounce, snapshot.directional_bounce) ||
@@ -170,6 +182,8 @@ ProbeVolumeResource::BuildUpdateParam(const Snapshot& snapshot, const Scene& sce
     param.main_light_direction =
         float4(main_light_direction.x, main_light_direction.y, main_light_direction.z, float(frame_index % 1024u) / 1024.0f);
     param.main_light_color = float4(main_light_color.x, main_light_color.y, main_light_color.z, main_light_intensity);
+    param.probe_trace_config =
+        float4(snapshot.trace_distance, snapshot.visibility_bias, float(snapshot.trace_ray_count), 0.0f);
     return param;
 }
 
@@ -196,14 +210,16 @@ ProbeVolumeResource::PrepareUpdate(const RasterConfig& config, const Scene& scen
 
     if (changed) {
         LOG_DEBUG(
-            "[ProbeGI] Probe volume update scheduled: count=({}, {}, {}) total={}, origin={}, extent={}, intensity={}",
+            "[ProbeGI] Probe volume update scheduled: count=({}, {}, {}) total={}, origin={}, extent={}, intensity={}, trace_distance={}, trace_rays={}",
             snapshot.count_x,
             snapshot.count_y,
             snapshot.count_z,
             snapshot.total_count,
             snapshot.origin.ToString(2),
             snapshot.extent.ToString(2),
-            snapshot.intensity
+            snapshot.intensity,
+            snapshot.trace_distance,
+            snapshot.trace_ray_count
         );
     }
 
@@ -226,6 +242,12 @@ void ProbeVolumeResource::FillLightingData(LightingData& lighting_data) const {
     lighting_data.probe_volume_counts =
         uint4(m_snapshot.count_x, m_snapshot.count_y, m_snapshot.count_z, m_snapshot.total_count);
     lighting_data.probe_volume_config = uint4(enabled, m_snapshot.debug_mode, m_probe_buffer.hdl, 0u);
+    lighting_data.probe_volume_visibility = float4(
+        m_snapshot.visibility_bias,
+        m_snapshot.visibility_power,
+        m_snapshot.visibility_min_weight,
+        m_snapshot.visibility_strength
+    );
 }
 
 } // namespace Moer::Render::Raster

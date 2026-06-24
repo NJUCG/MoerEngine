@@ -294,13 +294,25 @@ void RasterUI::ShowConfig() {
         ImGui::SliderFloat3("Volume Extent", (float*)&m_config.probe_gi_volume_extent, 0.5f, 64.0f);
         ImGui::SliderFloat("Intensity", &m_config.probe_gi_intensity, 0.0f, 32.0f);
         ImGui::SliderFloat("Normal Bias", &m_config.probe_gi_normal_bias, 0.0f, 1.0f);
+        ImGui::SliderFloat("Trace Distance", &m_config.probe_gi_trace_distance, 0.5f, 64.0f);
+        ImGui::SliderInt("Trace Rays", &m_config.probe_gi_trace_ray_count, 1, 32);
+        ImGui::SliderFloat("Visibility Bias", &m_config.probe_gi_visibility_bias, 0.0f, 2.0f);
+        ImGui::SliderFloat("Visibility Power", &m_config.probe_gi_visibility_power, 0.25f, 8.0f);
+        ImGui::SliderFloat("Visibility Min Weight", &m_config.probe_gi_visibility_min_weight, 0.0f, 1.0f);
+        ImGui::SliderFloat("Visibility Strength", &m_config.probe_gi_visibility_strength, 0.0f, 1.0f);
         ImGui::SliderFloat("Sky Intensity", &m_config.probe_gi_sky_intensity, 0.0f, 8.0f);
         ImGui::SliderFloat("Directional Bounce", &m_config.probe_gi_directional_bounce, 0.0f, 4.0f);
         ImGui::ColorEdit3("Sky Color", (float*)&m_config.probe_gi_sky_color);
         ImGui::ColorEdit3("Ground Color", (float*)&m_config.probe_gi_ground_color);
 
-        static const char* s_probe_gi_debug_modes[] = {"Off", "Volume Cells", "Irradiance", "Contribution"};
-        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 4);
+        static const char* s_probe_gi_debug_modes[] = {
+            "Off",
+            "Volume Cells",
+            "Irradiance",
+            "Contribution",
+            "Visibility",
+        };
+        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 5);
         if (m_config.probe_gi_debug_mode != 0) {
             ImGui::SliderFloat("Debug Scale", &m_config.probe_gi_debug_scale, 0.0f, 8.0f);
         }
@@ -308,8 +320,8 @@ void RasterUI::ShowConfig() {
         ImGui::Separator();
         ImGui::Checkbox("Show Probe Gizmos", &m_config.probe_gi_gizmo_enabled);
         if (m_config.probe_gi_gizmo_enabled) {
-            static const char* s_probe_gizmo_color_modes[] = {"Fixed Color", "Irradiance"};
-            ImGui::Combo("Gizmo Color", &m_config.probe_gi_gizmo_color_mode, s_probe_gizmo_color_modes, 2);
+            static const char* s_probe_gizmo_color_modes[] = {"Fixed Color", "Irradiance", "Visibility"};
+            ImGui::Combo("Gizmo Color", &m_config.probe_gi_gizmo_color_mode, s_probe_gizmo_color_modes, 3);
             ImGui::SliderFloat("Gizmo Size", &m_config.probe_gi_gizmo_size, 0.02f, 1.0f);
             ImGui::SliderFloat("Gizmo Thickness", &m_config.probe_gi_gizmo_thickness, 0.002f, 0.08f);
             ImGui::SliderFloat("Gizmo Intensity", &m_config.probe_gi_gizmo_intensity, 0.1f, 8.0f);

@@ -56,6 +56,12 @@ private:
         float3 spacing      = float3(1.0f);
         float  intensity    = 0.0f;
         float  normal_bias  = 0.0f;
+        float  trace_distance = 0.0f;
+        uint   trace_ray_count = 1;
+        float  visibility_bias = 0.0f;
+        float  visibility_power = 1.0f;
+        float  visibility_min_weight = 0.0f;
+        float  visibility_strength = 0.0f;
         float  debug_scale  = 1.0f;
         float  sky_intensity = 0.0f;
         float  directional_bounce = 0.0f;

@@ -188,6 +188,12 @@ void RasterRenderer::UpdateGlobalLightingData(
                << " buffer=" << lighting_data->probe_volume_config.z
                << " count=" << lighting_data->probe_volume_counts.w
                << " intensity=" << lighting_data->probe_volume_spacing.w
+               << " trace_distance=" << ui_config.probe_gi_trace_distance
+               << " trace_rays=" << ui_config.probe_gi_trace_ray_count
+               << " visibility=(" << lighting_data->probe_volume_visibility.x << ", "
+               << lighting_data->probe_volume_visibility.y << ", "
+               << lighting_data->probe_volume_visibility.z << ", "
+               << lighting_data->probe_volume_visibility.w << ")"
                << " sky=" << ui_config.probe_gi_sky_intensity
                << " bounce=" << ui_config.probe_gi_directional_bounce
                << " origin=" << ui_config.probe_gi_volume_origin.ToString(2)

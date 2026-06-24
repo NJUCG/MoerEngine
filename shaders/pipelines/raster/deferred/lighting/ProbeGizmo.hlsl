@@ -67,6 +67,11 @@ float3 ProbeGizmoGetColor(Moer::ProbeGridProbeData probe, uint axis_index) {
         float3 irradiance_vis = irradiance / (1.0 + irradiance_peak);
         return max(irradiance_vis * param.gizmo_config.y, axis_tint * 0.08);
     }
+    if (param.probe_volume_config.y == 2u) {
+        float open_ratio = saturate(probe.visibility.z);
+        float mean_distance = saturate(probe.visibility.x / 16.0);
+        return float3(1.0 - open_ratio, open_ratio, mean_distance) * param.gizmo_config.y;
+    }
 
     return fixed_color * (0.55 + axis_tint * 0.45) * param.gizmo_config.y;
 }
