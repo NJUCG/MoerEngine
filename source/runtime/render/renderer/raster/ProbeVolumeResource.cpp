@@ -99,7 +99,7 @@ void ProbeVolumeResource::Destroy(BindlessArrayRef& bdls) {
 ProbeVolumeResource::Snapshot ProbeVolumeResource::BuildSnapshot(const RasterConfig& config) const {
     Snapshot snapshot{};
     snapshot.enabled     = config.probe_gi_enabled;
-    snapshot.debug_mode  = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 2));
+    snapshot.debug_mode  = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 3));
     snapshot.count_x     = ClampProbeCount(config.probe_gi_count_x);
     snapshot.count_y     = ClampProbeCount(config.probe_gi_count_y);
     snapshot.count_z     = ClampProbeCount(config.probe_gi_count_z);

@@ -79,11 +79,14 @@ float3 ProbeGIEvaluateDiffuse(
     float3 world_pos,
     float3 normal,
     float3 albedo,
-    float metallic
+    float metallic,
+    float direct_shadow
 ) {
     float3 irradiance = ProbeGISampleIrradiance(lighting_data, world_pos, normal);
-    float diffuse_weight = 1.0 - saturate(metallic);
-    return irradiance * albedo * diffuse_weight * lighting_data.probe_volume_spacing.w * (1.0 / PI);
+    float diffuse_weight = 0.35 + 0.65 * (1.0 - saturate(metallic));
+    float normal_weight = 0.35 + 0.65 * saturate(normal.y * 0.5 + 0.5);
+    float shadow_visibility = lerp(1.20, 0.45, saturate(direct_shadow));
+    return irradiance * albedo * diffuse_weight * lighting_data.probe_volume_spacing.w * normal_weight * shadow_visibility;
 }
 
 float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, float3 normal) {
@@ -93,7 +96,8 @@ float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, 
 
     const uint debug_mode = lighting_data.probe_volume_config.y;
     if (debug_mode == 2u) {
-        return ProbeGISampleIrradiance(lighting_data, world_pos, normal) * lighting_data.probe_volume_extent.w;
+        return ProbeGISampleIrradiance(lighting_data, world_pos, normal) * lighting_data.probe_volume_spacing.w *
+               lighting_data.probe_volume_extent.w;
     }
 
     if (!ProbeGIIsInsideVolume(lighting_data, world_pos)) {

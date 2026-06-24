@@ -292,15 +292,15 @@ void RasterUI::ShowConfig() {
 
         ImGui::SliderFloat3("Volume Origin", (float*)&m_config.probe_gi_volume_origin, -32.0f, 32.0f);
         ImGui::SliderFloat3("Volume Extent", (float*)&m_config.probe_gi_volume_extent, 0.5f, 64.0f);
-        ImGui::SliderFloat("Intensity", &m_config.probe_gi_intensity, 0.0f, 2.0f);
+        ImGui::SliderFloat("Intensity", &m_config.probe_gi_intensity, 0.0f, 4.0f);
         ImGui::SliderFloat("Normal Bias", &m_config.probe_gi_normal_bias, 0.0f, 1.0f);
-        ImGui::SliderFloat("Sky Intensity", &m_config.probe_gi_sky_intensity, 0.0f, 2.0f);
-        ImGui::SliderFloat("Directional Bounce", &m_config.probe_gi_directional_bounce, 0.0f, 0.25f);
+        ImGui::SliderFloat("Sky Intensity", &m_config.probe_gi_sky_intensity, 0.0f, 4.0f);
+        ImGui::SliderFloat("Directional Bounce", &m_config.probe_gi_directional_bounce, 0.0f, 1.0f);
         ImGui::ColorEdit3("Sky Color", (float*)&m_config.probe_gi_sky_color);
         ImGui::ColorEdit3("Ground Color", (float*)&m_config.probe_gi_ground_color);
 
-        static const char* s_probe_gi_debug_modes[] = {"Off", "Volume Cells", "Irradiance"};
-        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 3);
+        static const char* s_probe_gi_debug_modes[] = {"Off", "Volume Cells", "Irradiance", "Contribution"};
+        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 4);
         if (m_config.probe_gi_debug_mode != 0) {
             ImGui::SliderFloat("Debug Scale", &m_config.probe_gi_debug_scale, 0.0f, 8.0f);
         }
