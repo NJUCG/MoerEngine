@@ -325,8 +325,8 @@ void RasterUI::ShowConfig() {
         ImGui::Separator();
         ImGui::Checkbox("Show Probe Gizmos", &m_config.probe_gi_gizmo_enabled);
         if (m_config.probe_gi_gizmo_enabled) {
-            static const char* s_probe_gizmo_color_modes[] = {"Fixed Color", "Irradiance", "Visibility"};
-            ImGui::Combo("Gizmo Color", &m_config.probe_gi_gizmo_color_mode, s_probe_gizmo_color_modes, 3);
+            static const char* s_probe_gizmo_color_modes[] = {"Fixed Color", "Irradiance", "Visibility", "State"};
+            ImGui::Combo("Gizmo Color", &m_config.probe_gi_gizmo_color_mode, s_probe_gizmo_color_modes, 4);
             ImGui::SliderFloat("Gizmo Size", &m_config.probe_gi_gizmo_size, 0.02f, 1.0f);
             ImGui::SliderFloat("Gizmo Thickness", &m_config.probe_gi_gizmo_thickness, 0.002f, 0.08f);
             ImGui::SliderFloat("Gizmo Intensity", &m_config.probe_gi_gizmo_intensity, 0.1f, 8.0f);

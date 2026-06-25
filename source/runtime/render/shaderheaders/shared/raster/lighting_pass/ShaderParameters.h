@@ -29,16 +29,24 @@ static constexpr uint RASTER_PROBE_UPDATE_GROUP_SIZE = 64;
 static constexpr uint RASTER_PROBE_VISIBILITY_ATLAS_DIM = 8;
 static constexpr uint RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT =
     RASTER_PROBE_VISIBILITY_ATLAS_DIM * RASTER_PROBE_VISIBILITY_ATLAS_DIM;
+static constexpr uint RASTER_PROBE_STATE_INVALID = 0;
+static constexpr uint RASTER_PROBE_STATE_ACTIVE = 1;
+static constexpr uint RASTER_PROBE_STATE_RELOCATED = 2;
+static constexpr uint RASTER_PROBE_STATE_NEAR_SURFACE = 3;
 #else
 static const uint RASTER_PROBE_MAX_COUNT = 512;
 static const uint RASTER_PROBE_UPDATE_GROUP_SIZE = 64;
 static const uint RASTER_PROBE_VISIBILITY_ATLAS_DIM = 8;
 static const uint RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT =
     RASTER_PROBE_VISIBILITY_ATLAS_DIM * RASTER_PROBE_VISIBILITY_ATLAS_DIM;
+static const uint RASTER_PROBE_STATE_INVALID = 0;
+static const uint RASTER_PROBE_STATE_ACTIVE = 1;
+static const uint RASTER_PROBE_STATE_RELOCATED = 2;
+static const uint RASTER_PROBE_STATE_NEAR_SURFACE = 3;
 #endif
 
 struct ProbeGridProbeData {
-    float4 world_position; // xyz = probe center, w = validity
+    float4 world_position; // xyz = probe center, w = RASTER_PROBE_STATE_*
     float4 irradiance;     // rgb = diffuse irradiance, w = confidence
     float4 visibility;     // x = mean ray distance, y = mean distance squared, z = open ratio, w = traced confidence
 };

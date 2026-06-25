@@ -47,7 +47,7 @@ public:
         param.world2clip          = Transpose(camera.GetViewProjectionMatrix());
         param.probe_volume_config = uint4(
             1u,
-            static_cast<uint>(Clamp(config.probe_gi_gizmo_color_mode, 0, 2)),
+            static_cast<uint>(Clamp(config.probe_gi_gizmo_color_mode, 0, 3)),
             context.probe_volume.GetBufferHandle(),
             probe_count
         );

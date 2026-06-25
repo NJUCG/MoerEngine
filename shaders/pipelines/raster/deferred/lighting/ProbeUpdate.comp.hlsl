@@ -177,7 +177,7 @@ void ProbeTraceVisibilityRay(float3 origin, float3 direction, float tmin, float 
     const float3 irradiance = lerp(fallback_irradiance, traced_irradiance, trace_blend);
 
     Moer::ProbeGridProbeData probe;
-    probe.world_position      = float4(position, 1.0);
+    probe.world_position      = float4(position, float(Moer::RASTER_PROBE_STATE_ACTIVE));
     probe.irradiance          = float4(irradiance, 1.0);
     probe.visibility          = float4(mean_distance, mean_distance_sq, open_ratio, trace_blend);
     rw_probe_data[probe_index] = probe;

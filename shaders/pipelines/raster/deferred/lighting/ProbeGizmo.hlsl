@@ -60,6 +60,20 @@ float3 ProbeGizmoGetAxisSide(float3 axis, float3 probe_position) {
 float3 ProbeGizmoGetColor(Moer::ProbeGridProbeData probe, uint axis_index) {
     float3 axis_tint = ProbeGizmoGetAxis(axis_index);
     float3 fixed_color = max(param.fixed_color.rgb, float3(0.0, 0.0, 0.0));
+    uint probe_state = uint(round(max(probe.world_position.w, 0.0)));
+
+    if (param.probe_volume_config.y == 3u) {
+        if (probe_state == Moer::RASTER_PROBE_STATE_INVALID) {
+            return float3(1.0, 0.05, 0.02) * param.gizmo_config.y;
+        }
+        if (probe_state == Moer::RASTER_PROBE_STATE_RELOCATED) {
+            return float3(1.0, 0.72, 0.08) * param.gizmo_config.y;
+        }
+        if (probe_state == Moer::RASTER_PROBE_STATE_NEAR_SURFACE) {
+            return float3(0.85, 0.20, 1.0) * param.gizmo_config.y;
+        }
+        return float3(0.10, 0.95, 0.45) * param.gizmo_config.y;
+    }
 
     if (param.probe_volume_config.y == 1u) {
         float3 irradiance = max(probe.irradiance.rgb * probe.irradiance.a, float3(0.0, 0.0, 0.0));
@@ -73,7 +87,8 @@ float3 ProbeGizmoGetColor(Moer::ProbeGridProbeData probe, uint axis_index) {
         return float3(1.0 - open_ratio, open_ratio, mean_distance) * param.gizmo_config.y;
     }
 
-    return fixed_color * (0.55 + axis_tint * 0.45) * param.gizmo_config.y;
+    float state_tint = probe_state == Moer::RASTER_PROBE_STATE_INVALID ? 0.25 : 1.0;
+    return fixed_color * (0.55 + axis_tint * 0.45) * param.gizmo_config.y * state_tint;
 }
 
 ProbeGizmoVSOutput ProbeGizmoVS(uint vertex_id : SV_VertexID, uint probe_index : SV_InstanceID) {

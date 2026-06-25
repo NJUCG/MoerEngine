@@ -25,6 +25,21 @@ Moer::ProbeGridProbeData ProbeGILoadProbe(Moer::LightingData lighting_data, uint
     return probe_buffer.Load<Moer::ProbeGridProbeData>(probe_index);
 }
 
+uint ProbeGIGetProbeState(Moer::ProbeGridProbeData probe) {
+    return uint(round(max(probe.world_position.w, 0.0)));
+}
+
+float ProbeGIGetProbeStateWeight(Moer::ProbeGridProbeData probe) {
+    const uint state = ProbeGIGetProbeState(probe);
+    if (state == Moer::RASTER_PROBE_STATE_INVALID) {
+        return 0.0;
+    }
+    if (state == Moer::RASTER_PROBE_STATE_NEAR_SURFACE) {
+        return 0.35;
+    }
+    return 1.0;
+}
+
 float2 ProbeGIEncodeOctahedral(float3 direction) {
     float3 n = direction / max(abs(direction.x) + abs(direction.y) + abs(direction.z), 1e-5);
     if (n.z < 0.0) {
@@ -123,11 +138,16 @@ void ProbeGIAccumulateProbe(
     inout float3 raw_irradiance
 ) {
     Moer::ProbeGridProbeData probe = ProbeGILoadProbe(lighting_data, probe_index);
+    float state_weight = ProbeGIGetProbeStateWeight(probe);
+    if (state_weight <= 0.0 || trilinear_weight <= 0.0) {
+        return;
+    }
+
     float3 irradiance = probe.irradiance.rgb * probe.irradiance.a;
     float visibility_weight = ProbeGIGetVisibilityWeight(lighting_data, probe_index, probe, world_pos, normal);
-    float final_weight = trilinear_weight * visibility_weight;
+    float final_weight = trilinear_weight * visibility_weight * state_weight;
 
-    raw_irradiance += irradiance * trilinear_weight;
+    raw_irradiance += irradiance * trilinear_weight * state_weight;
     weighted_irradiance += irradiance * final_weight;
     visibility_weight_sum += final_weight;
 }
