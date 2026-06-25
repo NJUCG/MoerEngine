@@ -219,7 +219,9 @@ ProbePlacementResult ProbeClassifyAndRelocate(
 
     ProbePlacementResult placement =
         ProbeClassifyAndRelocate(grid_position, trace_texel_count, max_trace_distance, trace_bias);
-    const float3 position = placement.position;
+    const float3 volume_min = param.probe_volume_origin.xyz;
+    const float3 volume_max = param.probe_volume_origin.xyz + param.probe_volume_spacing.xyz * float3(counts - uint3(1, 1, 1));
+    const float3 position = clamp(placement.position, volume_min, volume_max);
 
     float  distance_sum = 0.0;
     float  distance_sq_sum = 0.0;
