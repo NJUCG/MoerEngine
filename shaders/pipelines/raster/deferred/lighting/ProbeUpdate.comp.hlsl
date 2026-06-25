@@ -292,8 +292,7 @@ ProbePlacementResult ProbeClassifyAndRelocate(
         }
     }
 
-    const float probe_confidence = probe_state == Moer::RASTER_PROBE_STATE_INVALID ? 0.0 :
-        (probe_state == Moer::RASTER_PROBE_STATE_NEAR_SURFACE ? 0.35 : 1.0);
+    const float probe_confidence = probe_state == Moer::RASTER_PROBE_STATE_INVALID ? 0.0 : 1.0;
 
     const float3 fallback_irradiance =
         max((sky_gradient + directional_bounce + ground_bounce + local_color_bounce) * lateral_variation, float3(0.0, 0.0, 0.0));
