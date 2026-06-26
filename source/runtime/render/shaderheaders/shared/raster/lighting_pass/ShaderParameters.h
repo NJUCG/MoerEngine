@@ -36,6 +36,8 @@ static constexpr uint RASTER_PROBE_STATE_INVALID = 0;
 static constexpr uint RASTER_PROBE_STATE_ACTIVE = 1;
 static constexpr uint RASTER_PROBE_STATE_RELOCATED = 2;
 static constexpr uint RASTER_PROBE_STATE_NEAR_SURFACE = 3;
+static constexpr uint RASTER_PROBE_GIZMO_DRAW_MODE_PROBES = 1;
+static constexpr uint RASTER_PROBE_GIZMO_DRAW_MODE_BOUNDS = 2;
 #else
 static const uint RASTER_PROBE_MAX_COUNT = 512;
 static const uint RASTER_PROBE_UPDATE_GROUP_SIZE = 64;
@@ -49,6 +51,8 @@ static const uint RASTER_PROBE_STATE_INVALID = 0;
 static const uint RASTER_PROBE_STATE_ACTIVE = 1;
 static const uint RASTER_PROBE_STATE_RELOCATED = 2;
 static const uint RASTER_PROBE_STATE_NEAR_SURFACE = 3;
+static const uint RASTER_PROBE_GIZMO_DRAW_MODE_PROBES = 1;
+static const uint RASTER_PROBE_GIZMO_DRAW_MODE_BOUNDS = 2;
 #endif
 
 struct ProbeGridProbeData {
@@ -78,8 +82,8 @@ struct ProbeUpdateParam {
 
 struct ProbeGizmoParam {
     float4x4 world2clip;
-    uint4    probe_volume_config; // x = enabled, y = color mode, z = probe buffer handle, w = probe count
-    float4   gizmo_config;        // x = axis half-size, y = color intensity, z = axis thickness, w = reserved
+    uint4    probe_volume_config; // probes: x = mode, y = color mode, z = probe buffer handle, w = probe count; bounds: x = mode, yzw = origin bits
+    float4   gizmo_config;        // probes: x = axis half-size, y = color intensity, z = axis thickness; bounds: xyz = extent, w = line thickness
     float4   fixed_color;         // rgb = fixed gizmo color, w = alpha
     float4   camera_position;     // xyz = camera position, w = reserved
 };

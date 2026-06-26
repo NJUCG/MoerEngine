@@ -57,6 +57,73 @@ float3 ProbeGizmoGetAxisSide(float3 axis, float3 probe_position) {
     return ProbeGizmoSafeNormalize(side, float3(0.0, 1.0, 0.0));
 }
 
+float3 ProbeGizmoGetBoundsOrigin() {
+    return float3(
+        asfloat(param.probe_volume_config.y),
+        asfloat(param.probe_volume_config.z),
+        asfloat(param.probe_volume_config.w)
+    );
+}
+
+void ProbeGizmoGetBoundsEdge(uint edge_index, out float3 edge_start, out float3 edge_end) {
+    const float3 origin = ProbeGizmoGetBoundsOrigin();
+    const float3 extent = max(param.gizmo_config.xyz, float3(0.001, 0.001, 0.001));
+
+    float3 corner_a = float3(0.0, 0.0, 0.0);
+    float3 corner_b = float3(0.0, 0.0, 0.0);
+
+    if (edge_index < 4u) {
+        const float y = float(edge_index & 1u);
+        const float z = float((edge_index >> 1u) & 1u);
+        corner_a = float3(0.0, y, z);
+        corner_b = float3(1.0, y, z);
+    } else if (edge_index < 8u) {
+        const uint local_edge = edge_index - 4u;
+        const float x = float(local_edge & 1u);
+        const float z = float((local_edge >> 1u) & 1u);
+        corner_a = float3(x, 0.0, z);
+        corner_b = float3(x, 1.0, z);
+    } else {
+        const uint local_edge = edge_index - 8u;
+        const float x = float(local_edge & 1u);
+        const float y = float((local_edge >> 1u) & 1u);
+        corner_a = float3(x, y, 0.0);
+        corner_b = float3(x, y, 1.0);
+    }
+
+    edge_start = origin + extent * corner_a;
+    edge_end = origin + extent * corner_b;
+}
+
+ProbeGizmoVSOutput ProbeVolumeBoundsVS(uint vertex_id) {
+    ProbeGizmoVSOutput output = (ProbeGizmoVSOutput)0;
+
+    const uint edge_index = min(vertex_id / 6u, 11u);
+    const uint quad_vertex = vertex_id % 6u;
+
+    float3 edge_start;
+    float3 edge_end;
+    ProbeGizmoGetBoundsEdge(edge_index, edge_start, edge_end);
+
+    const float3 edge_mid = (edge_start + edge_end) * 0.5;
+    const float3 edge_dir = ProbeGizmoSafeNormalize(edge_end - edge_start, float3(1.0, 0.0, 0.0));
+    const float3 view_dir = ProbeGizmoSafeNormalize(param.camera_position.xyz - edge_mid, float3(0.0, 0.0, 1.0));
+    float3 side = cross(edge_dir, view_dir);
+    if (dot(side, side) < 1e-6) {
+        side = abs(edge_dir.y) > 0.5 ? float3(1.0, 0.0, 0.0) : float3(0.0, 1.0, 0.0);
+    }
+    side = ProbeGizmoSafeNormalize(side, float3(0.0, 1.0, 0.0));
+
+    const float endpoint_t = (quad_vertex == 0u || quad_vertex == 1u || quad_vertex == 4u) ? 0.0 : 1.0;
+    const float side_sign = (quad_vertex == 0u || quad_vertex == 2u || quad_vertex == 3u) ? -1.0 : 1.0;
+    const float3 world_position =
+        lerp(edge_start, edge_end, endpoint_t) + side * side_sign * max(param.gizmo_config.w, 0.001);
+
+    output.position = mul(param.world2clip, float4(world_position, 1.0));
+    output.color = float4(max(param.fixed_color.rgb, float3(0.0, 0.0, 0.0)), param.fixed_color.a);
+    return output;
+}
+
 float3 ProbeGizmoGetColor(Moer::ProbeGridProbeData probe, uint axis_index) {
     float3 axis_tint = ProbeGizmoGetAxis(axis_index);
     float3 fixed_color = max(param.fixed_color.rgb, float3(0.0, 0.0, 0.0));
@@ -92,6 +159,10 @@ float3 ProbeGizmoGetColor(Moer::ProbeGridProbeData probe, uint axis_index) {
 }
 
 ProbeGizmoVSOutput ProbeGizmoVS(uint vertex_id : SV_VertexID, uint probe_index : SV_InstanceID) {
+    if (param.probe_volume_config.x == Moer::RASTER_PROBE_GIZMO_DRAW_MODE_BOUNDS) {
+        return ProbeVolumeBoundsVS(vertex_id);
+    }
+
     ProbeGizmoVSOutput output = (ProbeGizmoVSOutput)0;
 
     const uint safe_probe_index = min(probe_index, max(param.probe_volume_config.w, 1u) - 1u);

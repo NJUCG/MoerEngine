@@ -290,8 +290,46 @@ void RasterUI::ShowConfig() {
         const int probe_total = m_config.probe_gi_count_x * m_config.probe_gi_count_y * m_config.probe_gi_count_z;
         ImGui::Text("Probe Count: %d / %u", probe_total, Render::RASTER_PROBE_MAX_COUNT);
 
-        ImGui::SliderFloat3("Volume Origin", (float*)&m_config.probe_gi_volume_origin, -32.0f, 32.0f);
-        ImGui::SliderFloat3("Volume Extent", (float*)&m_config.probe_gi_volume_extent, 0.5f, 64.0f);
+        auto sanitize_volume_size = [](float3 value) {
+            return float3(
+                value.x < 0.1f ? 0.1f : value.x,
+                value.y < 0.1f ? 0.1f : value.y,
+                value.z < 0.1f ? 0.1f : value.z
+            );
+        };
+
+        float3 volume_size = sanitize_volume_size(m_config.probe_gi_volume_extent);
+        float3 volume_center = float3(
+            m_config.probe_gi_volume_origin.x + volume_size.x * 0.5f,
+            m_config.probe_gi_volume_origin.y + volume_size.y * 0.5f,
+            m_config.probe_gi_volume_origin.z + volume_size.z * 0.5f
+        );
+
+        const bool center_changed = ImGui::SliderFloat3("Volume Center", (float*)&volume_center, -64.0f, 64.0f);
+        const bool size_changed = ImGui::SliderFloat3("Volume Size", (float*)&volume_size, 0.5f, 128.0f);
+        if (center_changed || size_changed) {
+            volume_size = sanitize_volume_size(volume_size);
+            m_config.probe_gi_volume_extent = volume_size;
+            m_config.probe_gi_volume_origin = float3(
+                volume_center.x - volume_size.x * 0.5f,
+                volume_center.y - volume_size.y * 0.5f,
+                volume_center.z - volume_size.z * 0.5f
+            );
+        }
+
+        const float3 volume_max = float3(
+            m_config.probe_gi_volume_origin.x + m_config.probe_gi_volume_extent.x,
+            m_config.probe_gi_volume_origin.y + m_config.probe_gi_volume_extent.y,
+            m_config.probe_gi_volume_origin.z + m_config.probe_gi_volume_extent.z
+        );
+        ImGui::Text(
+            "Volume Min: (%.2f, %.2f, %.2f)",
+            m_config.probe_gi_volume_origin.x,
+            m_config.probe_gi_volume_origin.y,
+            m_config.probe_gi_volume_origin.z
+        );
+        ImGui::Text("Volume Max: (%.2f, %.2f, %.2f)", volume_max.x, volume_max.y, volume_max.z);
+
         ImGui::SliderFloat("Intensity", &m_config.probe_gi_intensity, 0.0f, 32.0f);
         ImGui::SliderFloat("Normal Bias", &m_config.probe_gi_normal_bias, 0.0f, 1.0f);
         ImGui::SliderFloat("Trace Distance", &m_config.probe_gi_trace_distance, 0.5f, 64.0f);
@@ -325,6 +363,11 @@ void RasterUI::ShowConfig() {
         }
 
         ImGui::Separator();
+        ImGui::Checkbox("Show Volume Bounds", &m_config.probe_gi_volume_bounds_enabled);
+        if (m_config.probe_gi_volume_bounds_enabled) {
+            ImGui::SliderFloat("Bounds Thickness", &m_config.probe_gi_volume_bounds_thickness, 0.002f, 0.12f);
+            ImGui::ColorEdit3("Bounds Color", (float*)&m_config.probe_gi_volume_bounds_color);
+        }
         ImGui::Checkbox("Show Probe Gizmos", &m_config.probe_gi_gizmo_enabled);
         if (m_config.probe_gi_gizmo_enabled) {
             static const char* s_probe_gizmo_color_modes[] = {"Fixed Color", "Irradiance", "Visibility", "State"};

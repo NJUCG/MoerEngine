@@ -199,6 +199,9 @@ struct RasterConfig {
     int    probe_gi_count_z              = 8;
     float3 probe_gi_volume_origin        = float3(-8.0f, 0.0f, -8.0f);
     float3 probe_gi_volume_extent        = float3(16.0f, 6.0f, 16.0f);
+    bool   probe_gi_volume_bounds_enabled = true;
+    float  probe_gi_volume_bounds_thickness = 0.025f;
+    float3 probe_gi_volume_bounds_color   = float3(1.0f, 0.78f, 0.18f);
     float  probe_gi_intensity            = 0.16f;
     float  probe_gi_normal_bias          = 0.12f;
     float  probe_gi_trace_distance       = 12.0f;

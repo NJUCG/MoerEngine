@@ -7,7 +7,14 @@
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 
+#include <bit>
+
 namespace Moer::Render::Raster {
+
+inline uint ProbeGizmoPackFloat(float value) {
+    static_assert(sizeof(uint) == sizeof(float));
+    return std::bit_cast<uint>(value);
+}
 
 class ProbeGizmoPipeline : public RasterPipeline {
 public:
@@ -38,44 +45,84 @@ public:
 
     void Process(RasterContext& context, const RasterConfig& config, const Camera& camera) {
         const uint probe_count = context.probe_volume.GetProbeCount();
-        if (!config.probe_gi_enabled || !config.probe_gi_gizmo_enabled || probe_count == 0 ||
-            context.probe_volume.GetBufferHandle() == 0) {
+        const bool draw_probes = config.probe_gi_enabled && config.probe_gi_gizmo_enabled && probe_count != 0 &&
+                                 context.probe_volume.GetBufferHandle() != 0;
+        const bool draw_bounds = config.probe_gi_enabled && config.probe_gi_volume_bounds_enabled;
+        if (!draw_probes && !draw_bounds) {
             return;
         }
 
-        ProbeGizmoParam param{};
-        param.world2clip          = Transpose(camera.GetViewProjectionMatrix());
-        param.probe_volume_config = uint4(
-            1u,
-            static_cast<uint>(Clamp(config.probe_gi_gizmo_color_mode, 0, 3)),
-            context.probe_volume.GetBufferHandle(),
-            probe_count
-        );
-        param.gizmo_config = float4(
-            Max(config.probe_gi_gizmo_size, 0.01f),
-            Max(config.probe_gi_gizmo_intensity, 0.0f),
-            Max(config.probe_gi_gizmo_thickness, 0.001f),
-            0.0f
-        );
-        param.fixed_color = float4(
-            config.probe_gi_gizmo_fixed_color.x,
-            config.probe_gi_gizmo_fixed_color.y,
-            config.probe_gi_gizmo_fixed_color.z,
-            0.65f
-        );
-        param.camera_position = float4(camera.GetPosition().x, camera.GetPosition().y, camera.GetPosition().z, 0.0f);
-
-        RasterTool::LogDebugEverySeconds("[ProbeGI] Probe gizmo pass active.", 3.0);
-
-        context.cmd_list.Gfx(m_pipeline, context.bdls, param)
-            .Draw(
-                "Probe GI Gizmo Pass",
-                context.textures.lighting_output.GetRect2D(),
-                Array<SingleDrawParam>{SingleDrawParam{18, probe_count, 0, 0, 0}},
-                ColorAttachment{
-                    context.textures.lighting_output.tex, EAttachmentAction::AC_LOAD_STORE, float4(0, 0, 0, 0)
-                }
+        if (draw_probes) {
+            ProbeGizmoParam param{};
+            param.world2clip          = Transpose(camera.GetViewProjectionMatrix());
+            param.probe_volume_config = uint4(
+                RASTER_PROBE_GIZMO_DRAW_MODE_PROBES,
+                static_cast<uint>(Clamp(config.probe_gi_gizmo_color_mode, 0, 3)),
+                context.probe_volume.GetBufferHandle(),
+                probe_count
             );
+            param.gizmo_config = float4(
+                Max(config.probe_gi_gizmo_size, 0.01f),
+                Max(config.probe_gi_gizmo_intensity, 0.0f),
+                Max(config.probe_gi_gizmo_thickness, 0.001f),
+                0.0f
+            );
+            param.fixed_color = float4(
+                config.probe_gi_gizmo_fixed_color.x,
+                config.probe_gi_gizmo_fixed_color.y,
+                config.probe_gi_gizmo_fixed_color.z,
+                0.65f
+            );
+            param.camera_position = float4(camera.GetPosition().x, camera.GetPosition().y, camera.GetPosition().z, 0.0f);
+
+            RasterTool::LogDebugEverySeconds("[ProbeGI] Probe gizmo pass active.", 3.0);
+
+            context.cmd_list.Gfx(m_pipeline, context.bdls, param)
+                .Draw(
+                    "Probe GI Gizmo Pass",
+                    context.textures.lighting_output.GetRect2D(),
+                    Array<SingleDrawParam>{SingleDrawParam{18, probe_count, 0, 0, 0}},
+                    ColorAttachment{
+                        context.textures.lighting_output.tex, EAttachmentAction::AC_LOAD_STORE, float4(0, 0, 0, 0)
+                    }
+                );
+        }
+
+        if (draw_bounds) {
+            ProbeGizmoParam param{};
+            param.world2clip = Transpose(camera.GetViewProjectionMatrix());
+            param.probe_volume_config = uint4(
+                RASTER_PROBE_GIZMO_DRAW_MODE_BOUNDS,
+                ProbeGizmoPackFloat(config.probe_gi_volume_origin.x),
+                ProbeGizmoPackFloat(config.probe_gi_volume_origin.y),
+                ProbeGizmoPackFloat(config.probe_gi_volume_origin.z)
+            );
+            param.gizmo_config = float4(
+                Max(config.probe_gi_volume_extent.x, 0.1f),
+                Max(config.probe_gi_volume_extent.y, 0.1f),
+                Max(config.probe_gi_volume_extent.z, 0.1f),
+                Max(config.probe_gi_volume_bounds_thickness, 0.001f)
+            );
+            param.fixed_color = float4(
+                config.probe_gi_volume_bounds_color.x,
+                config.probe_gi_volume_bounds_color.y,
+                config.probe_gi_volume_bounds_color.z,
+                0.75f
+            );
+            param.camera_position = float4(camera.GetPosition().x, camera.GetPosition().y, camera.GetPosition().z, 0.0f);
+
+            RasterTool::LogDebugEverySeconds("[ProbeGI] Probe volume bounds pass active.", 3.0);
+
+            context.cmd_list.Gfx(m_pipeline, context.bdls, param)
+                .Draw(
+                    "Probe GI Volume Bounds Pass",
+                    context.textures.lighting_output.GetRect2D(),
+                    Array<SingleDrawParam>{SingleDrawParam{72, 1, 0, 0, 0}},
+                    ColorAttachment{
+                        context.textures.lighting_output.tex, EAttachmentAction::AC_LOAD_STORE, float4(0, 0, 0, 0)
+                    }
+                );
+        }
     }
 
 private:
