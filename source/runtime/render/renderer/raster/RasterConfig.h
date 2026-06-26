@@ -207,6 +207,8 @@ struct RasterConfig {
     float  probe_gi_visibility_power     = 1.8f;
     float  probe_gi_visibility_min_weight = 0.08f;
     float  probe_gi_visibility_strength  = 0.85f;
+    float  probe_gi_irradiance_hysteresis = 0.92f;
+    float  probe_gi_visibility_hysteresis = 0.90f;
     float  probe_gi_sky_intensity        = 0.35f;
     float  probe_gi_directional_bounce   = 0.06f;
     float3 probe_gi_sky_color            = float3(0.48f, 0.62f, 0.95f);

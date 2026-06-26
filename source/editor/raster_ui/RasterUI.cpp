@@ -305,6 +305,8 @@ void RasterUI::ShowConfig() {
         ImGui::SliderFloat("Visibility Power", &m_config.probe_gi_visibility_power, 0.25f, 8.0f);
         ImGui::SliderFloat("Visibility Min Weight", &m_config.probe_gi_visibility_min_weight, 0.0f, 1.0f);
         ImGui::SliderFloat("Visibility Strength", &m_config.probe_gi_visibility_strength, 0.0f, 1.0f);
+        ImGui::SliderFloat("Irradiance Hysteresis", &m_config.probe_gi_irradiance_hysteresis, 0.0f, 0.99f);
+        ImGui::SliderFloat("Visibility Hysteresis", &m_config.probe_gi_visibility_hysteresis, 0.0f, 0.99f);
         ImGui::SliderFloat("Sky Intensity", &m_config.probe_gi_sky_intensity, 0.0f, 8.0f);
         ImGui::SliderFloat("Directional Bounce", &m_config.probe_gi_directional_bounce, 0.0f, 4.0f);
         ImGui::ColorEdit3("Sky Color", (float*)&m_config.probe_gi_sky_color);

@@ -112,6 +112,7 @@ void ProbeVolumeResource::Destroy(BindlessArrayRef& bdls) {
     m_probe_buffer.buf = nullptr;
     m_visibility_atlas_buffer.buf = nullptr;
     m_has_snapshot = false;
+    m_history_valid = false;
 }
 
 ProbeVolumeResource::Snapshot ProbeVolumeResource::BuildSnapshot(const RasterConfig& config) const {
@@ -143,6 +144,8 @@ ProbeVolumeResource::Snapshot ProbeVolumeResource::BuildSnapshot(const RasterCon
     snapshot.visibility_power   = Max(config.probe_gi_visibility_power, 0.1f);
     snapshot.visibility_min_weight = Clamp(config.probe_gi_visibility_min_weight, 0.0f, 1.0f);
     snapshot.visibility_strength   = Clamp(config.probe_gi_visibility_strength, 0.0f, 1.0f);
+    snapshot.irradiance_hysteresis = Clamp(config.probe_gi_irradiance_hysteresis, 0.0f, 0.99f);
+    snapshot.visibility_hysteresis = Clamp(config.probe_gi_visibility_hysteresis, 0.0f, 0.99f);
     snapshot.debug_scale        = Max(config.probe_gi_debug_scale, 0.0f);
     snapshot.sky_intensity      = Max(config.probe_gi_sky_intensity, 0.0f);
     snapshot.directional_bounce = Max(config.probe_gi_directional_bounce, 0.0f);
@@ -178,6 +181,8 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
            !NearlyEqual(m_snapshot.visibility_power, snapshot.visibility_power) ||
            !NearlyEqual(m_snapshot.visibility_min_weight, snapshot.visibility_min_weight) ||
            !NearlyEqual(m_snapshot.visibility_strength, snapshot.visibility_strength) ||
+           !NearlyEqual(m_snapshot.irradiance_hysteresis, snapshot.irradiance_hysteresis) ||
+           !NearlyEqual(m_snapshot.visibility_hysteresis, snapshot.visibility_hysteresis) ||
            !NearlyEqual(m_snapshot.debug_scale, snapshot.debug_scale) ||
            !NearlyEqual(m_snapshot.sky_intensity, snapshot.sky_intensity) ||
            !NearlyEqual(m_snapshot.directional_bounce, snapshot.directional_bounce) ||
@@ -185,16 +190,48 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
            !NearlyEqual(m_snapshot.ground_color, snapshot.ground_color);
 }
 
-ProbeUpdateParam
-ProbeVolumeResource::BuildUpdateParam(const Snapshot& snapshot, const Scene& scene, uint64 frame_index) const {
+bool ProbeVolumeResource::RequiresHistoryReset(const Snapshot& snapshot) const {
+    if (!m_has_snapshot || !m_history_valid) {
+        return true;
+    }
+
+    return m_snapshot.enabled != snapshot.enabled || m_snapshot.count_x != snapshot.count_x ||
+           m_snapshot.count_y != snapshot.count_y || m_snapshot.count_z != snapshot.count_z ||
+           !NearlyEqual(m_snapshot.origin, snapshot.origin) || !NearlyEqual(m_snapshot.extent, snapshot.extent) ||
+           !NearlyEqual(m_snapshot.spacing, snapshot.spacing) ||
+           !NearlyEqual(m_snapshot.trace_distance, snapshot.trace_distance) ||
+           m_snapshot.trace_ray_count != snapshot.trace_ray_count ||
+           !NearlyEqual(m_snapshot.visibility_bias, snapshot.visibility_bias) ||
+           !NearlyEqual(m_snapshot.sky_intensity, snapshot.sky_intensity) ||
+           !NearlyEqual(m_snapshot.directional_bounce, snapshot.directional_bounce) ||
+           !NearlyEqual(m_snapshot.sky_color, snapshot.sky_color) ||
+           !NearlyEqual(m_snapshot.ground_color, snapshot.ground_color);
+}
+
+ProbeUpdateParam ProbeVolumeResource::BuildUpdateParam(
+    const Snapshot& snapshot,
+    const Scene&    scene,
+    uint64          frame_index,
+    bool            history_valid
+) const {
     float3 main_light_direction;
     float  main_light_intensity = 0.0f;
     float3 main_light_color     = GetMainLightColor(scene, main_light_direction, main_light_intensity);
 
     ProbeUpdateParam param{};
     param.probe_volume_counts  = uint4(snapshot.count_x, snapshot.count_y, snapshot.count_z, snapshot.total_count);
-    param.probe_volume_origin  = float4(snapshot.origin.x, snapshot.origin.y, snapshot.origin.z, 0.0f);
-    param.probe_volume_spacing = float4(snapshot.spacing.x, snapshot.spacing.y, snapshot.spacing.z, snapshot.intensity);
+    param.probe_volume_origin  = float4(
+        snapshot.origin.x,
+        snapshot.origin.y,
+        snapshot.origin.z,
+        history_valid ? snapshot.irradiance_hysteresis : 0.0f
+    );
+    param.probe_volume_spacing = float4(
+        snapshot.spacing.x,
+        snapshot.spacing.y,
+        snapshot.spacing.z,
+        history_valid ? snapshot.visibility_hysteresis : 0.0f
+    );
     param.probe_sky_color      = float4(snapshot.sky_color.x, snapshot.sky_color.y, snapshot.sky_color.z, snapshot.sky_intensity);
     param.probe_ground_color =
         float4(snapshot.ground_color.x, snapshot.ground_color.y, snapshot.ground_color.z, snapshot.directional_bounce);
@@ -214,13 +251,15 @@ ProbeVolumeResource::PrepareUpdate(const RasterConfig& config, const Scene& scen
         return update_info;
     }
 
-    const Snapshot snapshot = BuildSnapshot(config);
-    const bool     changed  = HasSnapshotChanged(snapshot);
+    const Snapshot snapshot      = BuildSnapshot(config);
+    const bool     changed       = HasSnapshotChanged(snapshot);
+    const bool     reset_history = RequiresHistoryReset(snapshot);
 
     m_snapshot     = snapshot;
     m_has_snapshot = true;
 
     if (!snapshot.enabled) {
+        m_history_valid = false;
         if (changed) {
             LOG_DEBUG("[ProbeGI] Probe volume disabled.");
         }
@@ -229,7 +268,7 @@ ProbeVolumeResource::PrepareUpdate(const RasterConfig& config, const Scene& scen
 
     if (changed) {
         LOG_DEBUG(
-            "[ProbeGI] Probe volume update scheduled: count=({}, {}, {}) total={}, origin={}, extent={}, intensity={}, trace_distance={}, trace_rays={}",
+            "[ProbeGI] Probe volume update scheduled: count=({}, {}, {}) total={}, origin={}, extent={}, intensity={}, trace_distance={}, trace_rays={}, history_reset={}, hysteresis=({}, {})",
             snapshot.count_x,
             snapshot.count_y,
             snapshot.count_z,
@@ -238,13 +277,17 @@ ProbeVolumeResource::PrepareUpdate(const RasterConfig& config, const Scene& scen
             snapshot.extent.ToString(2),
             snapshot.intensity,
             snapshot.trace_distance,
-            snapshot.trace_ray_count
+            snapshot.trace_ray_count,
+            reset_history ? 1 : 0,
+            snapshot.irradiance_hysteresis,
+            snapshot.visibility_hysteresis
         );
     }
 
     update_info.enabled     = true;
     update_info.probe_count = snapshot.total_count;
-    update_info.param       = BuildUpdateParam(snapshot, scene, frame_index);
+    update_info.param       = BuildUpdateParam(snapshot, scene, frame_index, !reset_history);
+    m_history_valid         = true;
     return update_info;
 }
 

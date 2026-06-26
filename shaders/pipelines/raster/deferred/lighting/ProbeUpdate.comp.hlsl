@@ -47,6 +47,10 @@ float3 ProbeGetAtlasDirection(uint atlas_texel_index) {
     return ProbeDecodeOctahedral(uv);
 }
 
+uint ProbeDecodeState(float state_value) {
+    return uint(round(max(state_value, 0.0)));
+}
+
 uint ProbeGetVisibilityAtlasIndex(uint probe_index, uint atlas_texel_index) {
     return probe_index * Moer::RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT + atlas_texel_index;
 }
@@ -222,10 +226,14 @@ ProbePlacementResult ProbeClassifyAndRelocate(
     const float3 volume_min = param.probe_volume_origin.xyz;
     const float3 volume_max = param.probe_volume_origin.xyz + param.probe_volume_spacing.xyz * float3(counts - uint3(1, 1, 1));
     const float3 position = clamp(placement.position, volume_min, volume_max);
+    const float irradiance_history_weight = saturate(param.probe_volume_origin.w);
+    const float visibility_history_weight = saturate(param.probe_volume_spacing.w);
+    const Moer::ProbeGridProbeData history_probe = rw_probe_data[probe_index];
 
     float  distance_sum = 0.0;
     float  distance_sq_sum = 0.0;
     float  open_sum = 0.0;
+    float  current_open_sum = 0.0;
     float3 ray_radiance_sum = float3(0.0, 0.0, 0.0);
     float  close_hit_sum = 0.0;
     float  very_close_hit_sum = 0.0;
@@ -263,21 +271,33 @@ ProbePlacementResult ProbeClassifyAndRelocate(
                                   (0.25 + 0.75 * normalized_hit);
 
         ray_radiance_sum += lerp(hit_bounce, miss_radiance, visible);
-        distance_sum += hit_distance;
-        distance_sq_sum += hit_distance * hit_distance;
-        open_sum += visible;
+        current_open_sum += visible;
 
         const float texel_confidence =
             (atlas_texel_index < trace_texel_count) ? saturate(param.probe_trace_config.w) : 0.0;
+        const uint visibility_atlas_index = ProbeGetVisibilityAtlasIndex(probe_index, atlas_texel_index);
+        float4 final_visibility_moments = float4(hit_distance, hit_distance * hit_distance, visible, texel_confidence);
+        if (visibility_history_weight > 0.0 && texel_confidence > 0.0) {
+            const Moer::ProbeGridVisibilityTexel history_texel = rw_visibility_atlas[visibility_atlas_index];
+            const float history_valid = history_texel.moments.w > 0.0 ? 1.0 : 0.0;
+            final_visibility_moments.xyz =
+                lerp(final_visibility_moments.xyz, history_texel.moments.xyz, visibility_history_weight * history_valid);
+        }
+
+        distance_sum += final_visibility_moments.x;
+        distance_sq_sum += final_visibility_moments.y;
+        open_sum += final_visibility_moments.z;
+
         Moer::ProbeGridVisibilityTexel visibility_texel;
-        visibility_texel.moments = float4(hit_distance, hit_distance * hit_distance, visible, texel_confidence);
-        rw_visibility_atlas[ProbeGetVisibilityAtlasIndex(probe_index, atlas_texel_index)] = visibility_texel;
+        visibility_texel.moments = final_visibility_moments;
+        rw_visibility_atlas[visibility_atlas_index] = visibility_texel;
     }
 
     const float inv_ray_count = 1.0 / float(Moer::RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT);
     const float mean_distance = distance_sum * inv_ray_count;
     const float mean_distance_sq = distance_sq_sum * inv_ray_count;
     const float open_ratio = open_sum * inv_ray_count;
+    const float current_open_ratio = current_open_sum * inv_ray_count;
     const float inv_trace_count = 1.0 / float(trace_texel_count);
     const float close_hit_ratio = close_hit_sum * inv_trace_count;
     const float very_close_hit_ratio = very_close_hit_sum * inv_trace_count;
@@ -285,7 +305,7 @@ ProbePlacementResult ProbeClassifyAndRelocate(
     uint probe_state = placement.state;
     if (trace_blend > 0.0) {
         if (probe_state != Moer::RASTER_PROBE_STATE_INVALID &&
-            (very_close_hit_ratio > 0.55 || (close_hit_ratio > 0.88 && open_ratio < 0.08))) {
+            (very_close_hit_ratio > 0.55 || (close_hit_ratio > 0.88 && current_open_ratio < 0.08))) {
             probe_state = Moer::RASTER_PROBE_STATE_INVALID;
         } else if (probe_state == Moer::RASTER_PROBE_STATE_ACTIVE && close_hit_ratio > 0.16) {
             probe_state = Moer::RASTER_PROBE_STATE_NEAR_SURFACE;
@@ -299,12 +319,18 @@ ProbePlacementResult ProbeClassifyAndRelocate(
     const float3 fallback_irradiance =
         max((sky_gradient + directional_bounce + ground_bounce + local_color_bounce) * lateral_variation, float3(0.0, 0.0, 0.0));
     const float3 traced_irradiance =
-        ray_radiance_sum * inv_ray_count + directional_bounce * 0.25 + local_color_bounce * (1.0 - open_ratio) * 0.70;
+        ray_radiance_sum * inv_ray_count + directional_bounce * 0.25 + local_color_bounce * (1.0 - current_open_ratio) * 0.70;
     const float3 irradiance = lerp(fallback_irradiance, traced_irradiance, trace_blend);
+
+    float3 final_irradiance = irradiance;
+    if (irradiance_history_weight > 0.0 && probe_confidence > 0.0 && history_probe.irradiance.a > 0.0 &&
+        ProbeDecodeState(history_probe.world_position.w) != Moer::RASTER_PROBE_STATE_INVALID) {
+        final_irradiance = lerp(irradiance, history_probe.irradiance.rgb, irradiance_history_weight);
+    }
 
     Moer::ProbeGridProbeData probe;
     probe.world_position      = float4(position, float(probe_state));
-    probe.irradiance          = float4(irradiance, probe_confidence);
+    probe.irradiance          = float4(final_irradiance, probe_confidence);
     probe.visibility          = float4(mean_distance, mean_distance_sq, open_ratio, trace_blend);
     rw_probe_data[probe_index] = probe;
 }

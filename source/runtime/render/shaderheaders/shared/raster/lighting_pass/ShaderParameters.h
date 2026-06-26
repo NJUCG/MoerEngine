@@ -57,8 +57,8 @@ struct ProbeGridVisibilityTexel {
 
 struct ProbeUpdateParam {
     uint4  probe_volume_counts;  // xyz = probe counts, w = total probe count
-    float4 probe_volume_origin;  // xyz = min corner, w = unused
-    float4 probe_volume_spacing; // xyz = cell spacing, w = GI intensity
+    float4 probe_volume_origin;  // xyz = min corner, w = irradiance history weight
+    float4 probe_volume_spacing; // xyz = cell spacing, w = visibility history weight
     float4 probe_sky_color;      // rgb = sky tint, w = sky intensity
     float4 probe_ground_color;   // rgb = ground tint, w = directional bounce strength
     float4 main_light_direction; // xyz = world-space light direction, w = temporal phase

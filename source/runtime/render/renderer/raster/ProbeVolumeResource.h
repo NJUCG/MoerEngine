@@ -70,6 +70,8 @@ private:
         float  visibility_power = 1.0f;
         float  visibility_min_weight = 0.0f;
         float  visibility_strength = 0.0f;
+        float  irradiance_hysteresis = 0.0f;
+        float  visibility_hysteresis = 0.0f;
         float  debug_scale  = 1.0f;
         float  sky_intensity = 0.0f;
         float  directional_bounce = 0.0f;
@@ -78,13 +80,20 @@ private:
     };
 
     Snapshot BuildSnapshot(const RasterConfig& config) const;
-    ProbeUpdateParam BuildUpdateParam(const Snapshot& snapshot, const Scene& scene, uint64 frame_index) const;
-    bool     HasSnapshotChanged(const Snapshot& snapshot) const;
+    ProbeUpdateParam BuildUpdateParam(
+        const Snapshot& snapshot,
+        const Scene&    scene,
+        uint64          frame_index,
+        bool            history_valid
+    ) const;
+    bool HasSnapshotChanged(const Snapshot& snapshot) const;
+    bool RequiresHistoryReset(const Snapshot& snapshot) const;
 
     BufferWithHandle m_probe_buffer;
     BufferWithHandle m_visibility_atlas_buffer;
     Snapshot         m_snapshot;
     bool             m_has_snapshot = false;
+    bool             m_history_valid = false;
 };
 
 } // namespace Moer::Render::Raster
