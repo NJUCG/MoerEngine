@@ -14,8 +14,9 @@ public:
 
     DEFINE_SHADER_BUFFER(rw_probe_data);
     DEFINE_SHADER_BUFFER(rw_visibility_atlas);
+    DEFINE_SHADER_BUFFER(rw_irradiance_atlas);
     DEFINE_SHADER_CONSTANT_STRUCT(ProbeUpdateParam, param);
-    DEFINE_SHADER_ARGS(rw_probe_data, rw_visibility_atlas, param);
+    DEFINE_SHADER_ARGS(rw_probe_data, rw_visibility_atlas, rw_irradiance_atlas, param);
 };
 
 class ProbeUpdateRayQueryPipeline : public ComputePipeline {
@@ -24,9 +25,10 @@ public:
 
     DEFINE_SHADER_BUFFER(rw_probe_data);
     DEFINE_SHADER_BUFFER(rw_visibility_atlas);
+    DEFINE_SHADER_BUFFER(rw_irradiance_atlas);
     DEFINE_SHADER_TLAS(tlas);
     DEFINE_SHADER_CONSTANT_STRUCT(ProbeUpdateParam, param);
-    DEFINE_SHADER_ARGS(rw_probe_data, rw_visibility_atlas, tlas, param);
+    DEFINE_SHADER_ARGS(rw_probe_data, rw_visibility_atlas, rw_irradiance_atlas, tlas, param);
 
     MUTATION_BOOL(PROBE_GI_USE_RAY_QUERY);
 };
@@ -65,6 +67,7 @@ public:
                     probe_update_ray_query_pipeline,
                     context.probe_volume.GetProbeBufferView(),
                     context.probe_volume.GetVisibilityAtlasBufferView(),
+                    context.probe_volume.GetIrradianceAtlasBufferView(),
                     rt_scene->GetTlas(),
                     update_info.param
                 )
@@ -79,6 +82,7 @@ public:
                 probe_update_pipeline,
                 context.probe_volume.GetProbeBufferView(),
                 context.probe_volume.GetVisibilityAtlasBufferView(),
+                context.probe_volume.GetIrradianceAtlasBufferView(),
                 update_info.param
             )
             .Dispatch(uint3(dispatch_count, 1, 1), "Probe GI Fallback Update Pass");

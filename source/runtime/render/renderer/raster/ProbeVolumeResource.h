@@ -39,6 +39,10 @@ public:
         return m_visibility_atlas_buffer.buf->GetView();
     }
 
+    BufferView GetIrradianceAtlasBufferView() const {
+        return m_irradiance_atlas_buffer.buf->GetView();
+    }
+
     uint GetProbeCount() const {
         return m_snapshot.total_count;
     }
@@ -49,6 +53,10 @@ public:
 
     uint GetVisibilityAtlasHandle() const {
         return m_visibility_atlas_buffer.hdl;
+    }
+
+    uint GetIrradianceAtlasHandle() const {
+        return m_irradiance_atlas_buffer.hdl;
     }
 
 private:
@@ -91,6 +99,7 @@ private:
 
     BufferWithHandle m_probe_buffer;
     BufferWithHandle m_visibility_atlas_buffer;
+    BufferWithHandle m_irradiance_atlas_buffer;
     Snapshot         m_snapshot;
     bool             m_has_snapshot = false;
     bool             m_history_valid = false;

@@ -29,6 +29,9 @@ static constexpr uint RASTER_PROBE_UPDATE_GROUP_SIZE = 64;
 static constexpr uint RASTER_PROBE_VISIBILITY_ATLAS_DIM = 8;
 static constexpr uint RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT =
     RASTER_PROBE_VISIBILITY_ATLAS_DIM * RASTER_PROBE_VISIBILITY_ATLAS_DIM;
+static constexpr uint RASTER_PROBE_IRRADIANCE_ATLAS_DIM = 8;
+static constexpr uint RASTER_PROBE_IRRADIANCE_ATLAS_TEXEL_COUNT =
+    RASTER_PROBE_IRRADIANCE_ATLAS_DIM * RASTER_PROBE_IRRADIANCE_ATLAS_DIM;
 static constexpr uint RASTER_PROBE_STATE_INVALID = 0;
 static constexpr uint RASTER_PROBE_STATE_ACTIVE = 1;
 static constexpr uint RASTER_PROBE_STATE_RELOCATED = 2;
@@ -39,6 +42,9 @@ static const uint RASTER_PROBE_UPDATE_GROUP_SIZE = 64;
 static const uint RASTER_PROBE_VISIBILITY_ATLAS_DIM = 8;
 static const uint RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT =
     RASTER_PROBE_VISIBILITY_ATLAS_DIM * RASTER_PROBE_VISIBILITY_ATLAS_DIM;
+static const uint RASTER_PROBE_IRRADIANCE_ATLAS_DIM = 8;
+static const uint RASTER_PROBE_IRRADIANCE_ATLAS_TEXEL_COUNT =
+    RASTER_PROBE_IRRADIANCE_ATLAS_DIM * RASTER_PROBE_IRRADIANCE_ATLAS_DIM;
 static const uint RASTER_PROBE_STATE_INVALID = 0;
 static const uint RASTER_PROBE_STATE_ACTIVE = 1;
 static const uint RASTER_PROBE_STATE_RELOCATED = 2;
@@ -53,6 +59,10 @@ struct ProbeGridProbeData {
 
 struct ProbeGridVisibilityTexel {
     float4 moments; // x = mean distance, y = mean distance squared, z = open ratio, w = confidence
+};
+
+struct ProbeGridIrradianceTexel {
+    float4 irradiance; // rgb = directional diffuse irradiance, w = confidence
 };
 
 struct ProbeUpdateParam {
@@ -144,6 +154,7 @@ struct LightingData {
     uint4  probe_volume_counts;  // xyz = probe counts, w = total probe count
     uint4  probe_volume_config;  // x = enabled, y = debug mode, z = probe buffer handle, w = visibility atlas handle
     float4 probe_volume_visibility; // x = bias, y = power, z = min weight, w = strength
+    uint4  probe_volume_atlas_config; // x = irradiance atlas handle, yzw = reserved
 };
 
 #ifdef __cplusplus

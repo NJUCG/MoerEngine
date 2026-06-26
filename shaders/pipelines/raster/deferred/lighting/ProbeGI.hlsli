@@ -56,6 +56,13 @@ uint ProbeGIGetVisibilityAtlasIndex(uint probe_index, float3 probe_to_surface_di
     return probe_index * Moer::RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT + texel.y * dim + texel.x;
 }
 
+uint ProbeGIGetIrradianceAtlasIndex(uint probe_index, float3 sample_direction) {
+    const uint dim = Moer::RASTER_PROBE_IRRADIANCE_ATLAS_DIM;
+    float2 uv = ProbeGIEncodeOctahedral(sample_direction);
+    uint2 texel = min(uint2(uv * float(dim)), uint2(dim - 1u, dim - 1u));
+    return probe_index * Moer::RASTER_PROBE_IRRADIANCE_ATLAS_TEXEL_COUNT + texel.y * dim + texel.x;
+}
+
 float4 ProbeGILoadDirectionalVisibility(
     Moer::LightingData lighting_data,
     uint probe_index,
@@ -78,6 +85,26 @@ float4 ProbeGILoadDirectionalVisibility(
 float3 ProbeGILoadIrradiance(Moer::LightingData lighting_data, uint probe_index) {
     Moer::ProbeGridProbeData probe = ProbeGILoadProbe(lighting_data, probe_index);
     return probe.irradiance.rgb * probe.irradiance.a;
+}
+
+float3 ProbeGILoadDirectionalIrradiance(
+    Moer::LightingData lighting_data,
+    uint probe_index,
+    Moer::ProbeGridProbeData probe,
+    float3 normal
+) {
+    const float3 aggregate_irradiance = probe.irradiance.rgb * probe.irradiance.a;
+    if (lighting_data.probe_volume_atlas_config.x == 0u) {
+        return aggregate_irradiance;
+    }
+
+    ArrayBuffer irradiance_buffer = ArrayBuffer(lighting_data.probe_volume_atlas_config.x);
+    Moer::ProbeGridIrradianceTexel irradiance_texel =
+        irradiance_buffer.Load<Moer::ProbeGridIrradianceTexel>(
+            ProbeGIGetIrradianceAtlasIndex(probe_index, normalize(normal))
+        );
+
+    return lerp(aggregate_irradiance, irradiance_texel.irradiance.rgb, saturate(irradiance_texel.irradiance.w));
 }
 
 float3 ProbeGIGetLocalCoord(Moer::LightingData lighting_data, float3 world_pos) {
@@ -143,7 +170,7 @@ void ProbeGIAccumulateProbe(
         return;
     }
 
-    float3 irradiance = probe.irradiance.rgb * probe.irradiance.a;
+    float3 irradiance = ProbeGILoadDirectionalIrradiance(lighting_data, probe_index, probe, normal);
     float visibility_weight = ProbeGIGetVisibilityWeight(lighting_data, probe_index, probe, world_pos, normal);
     float final_weight = trilinear_weight * visibility_weight * state_weight;
 

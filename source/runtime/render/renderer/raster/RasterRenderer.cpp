@@ -187,6 +187,7 @@ void RasterRenderer::UpdateGlobalLightingData(
                << " debug=" << lighting_data->probe_volume_config.y
                << " buffer=" << lighting_data->probe_volume_config.z
                << " visibility_atlas=" << lighting_data->probe_volume_config.w
+               << " irradiance_atlas=" << lighting_data->probe_volume_atlas_config.x
                << " count=" << lighting_data->probe_volume_counts.w
                << " intensity=" << lighting_data->probe_volume_spacing.w
                << " trace_distance=" << ui_config.probe_gi_trace_distance

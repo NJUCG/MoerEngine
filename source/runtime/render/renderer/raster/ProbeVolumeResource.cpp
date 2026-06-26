@@ -88,15 +88,28 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
     );
     m_visibility_atlas_buffer.hdl = bdls->AllocateBuffer(m_visibility_atlas_buffer.buf->GetView());
 
+    constexpr uint irradiance_atlas_byte_size =
+        sizeof(ProbeGridIrradianceTexel) * RASTER_PROBE_MAX_COUNT * RASTER_PROBE_IRRADIANCE_ATLAS_TEXEL_COUNT;
+    m_irradiance_atlas_buffer.buf = device.CreateBuffer<byte>(
+        "Raster::ProbeVolume::IrradianceAtlas",
+        irradiance_atlas_byte_size,
+        EBufferUsageFlags::UNORDERED_ACCESS
+    );
+    m_irradiance_atlas_buffer.hdl = bdls->AllocateBuffer(m_irradiance_atlas_buffer.buf->GetView());
+
     LOG_DEBUG(
-        "[ProbeGI] Created probe buffers: max_count={}, probe_byte_size={}, probe_handle={}, visibility_dim={}x{}, visibility_byte_size={}, visibility_handle={}",
+        "[ProbeGI] Created probe buffers: max_count={}, probe_byte_size={}, probe_handle={}, visibility_dim={}x{}, visibility_byte_size={}, visibility_handle={}, irradiance_dim={}x{}, irradiance_byte_size={}, irradiance_handle={}",
         RASTER_PROBE_MAX_COUNT,
         buffer_byte_size,
         m_probe_buffer.hdl,
         RASTER_PROBE_VISIBILITY_ATLAS_DIM,
         RASTER_PROBE_VISIBILITY_ATLAS_DIM,
         visibility_atlas_byte_size,
-        m_visibility_atlas_buffer.hdl
+        m_visibility_atlas_buffer.hdl,
+        RASTER_PROBE_IRRADIANCE_ATLAS_DIM,
+        RASTER_PROBE_IRRADIANCE_ATLAS_DIM,
+        irradiance_atlas_byte_size,
+        m_irradiance_atlas_buffer.hdl
     );
 }
 
@@ -109,8 +122,13 @@ void ProbeVolumeResource::Destroy(BindlessArrayRef& bdls) {
         bdls->UnbindBuffer(m_visibility_atlas_buffer.hdl);
         m_visibility_atlas_buffer.hdl = 0;
     }
+    if (m_irradiance_atlas_buffer.hdl != 0) {
+        bdls->UnbindBuffer(m_irradiance_atlas_buffer.hdl);
+        m_irradiance_atlas_buffer.hdl = 0;
+    }
     m_probe_buffer.buf = nullptr;
     m_visibility_atlas_buffer.buf = nullptr;
+    m_irradiance_atlas_buffer.buf = nullptr;
     m_has_snapshot = false;
     m_history_valid = false;
 }
@@ -247,7 +265,8 @@ ProbeVolumeResource::UpdateInfo
 ProbeVolumeResource::PrepareUpdate(const RasterConfig& config, const Scene& scene, const uint64 frame_index) {
     UpdateInfo update_info{};
 
-    if (m_probe_buffer.buf == nullptr || m_visibility_atlas_buffer.buf == nullptr) {
+    if (m_probe_buffer.buf == nullptr || m_visibility_atlas_buffer.buf == nullptr ||
+        m_irradiance_atlas_buffer.buf == nullptr) {
         return update_info;
     }
 
@@ -294,7 +313,7 @@ ProbeVolumeResource::PrepareUpdate(const RasterConfig& config, const Scene& scen
 void ProbeVolumeResource::FillLightingData(LightingData& lighting_data) const {
     const uint enabled =
         (m_has_snapshot && m_snapshot.enabled && m_probe_buffer.hdl != 0 && m_visibility_atlas_buffer.hdl != 0 &&
-         m_snapshot.total_count > 0) ?
+         m_irradiance_atlas_buffer.hdl != 0 && m_snapshot.total_count > 0) ?
             1u :
             0u;
 
@@ -314,6 +333,7 @@ void ProbeVolumeResource::FillLightingData(LightingData& lighting_data) const {
         m_snapshot.visibility_min_weight,
         m_snapshot.visibility_strength
     );
+    lighting_data.probe_volume_atlas_config = uint4(m_irradiance_atlas_buffer.hdl, 0u, 0u, 0u);
 }
 
 } // namespace Moer::Render::Raster

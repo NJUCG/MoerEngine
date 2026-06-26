@@ -6,9 +6,10 @@
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<Moer::ProbeGridProbeData> rw_probe_data;
 [[vk::binding(1, 0)]] RWStructuredBuffer<Moer::ProbeGridVisibilityTexel> rw_visibility_atlas;
+[[vk::binding(2, 0)]] RWStructuredBuffer<Moer::ProbeGridIrradianceTexel> rw_irradiance_atlas;
 
 #if PROBE_GI_USE_RAY_QUERY
-[[vk::binding(2, 0)]] RaytracingAccelerationStructure tlas;
+[[vk::binding(3, 0)]] RaytracingAccelerationStructure tlas;
 #endif
 
 float ProbeSafeSaturate(float value) {
@@ -53,6 +54,10 @@ uint ProbeDecodeState(float state_value) {
 
 uint ProbeGetVisibilityAtlasIndex(uint probe_index, uint atlas_texel_index) {
     return probe_index * Moer::RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT + atlas_texel_index;
+}
+
+uint ProbeGetIrradianceAtlasIndex(uint probe_index, uint atlas_texel_index) {
+    return probe_index * Moer::RASTER_PROBE_IRRADIANCE_ATLAS_TEXEL_COUNT + atlas_texel_index;
 }
 
 float ProbeGetMinSpacing() {
@@ -269,12 +274,30 @@ ProbePlacementResult ProbeClassifyAndRelocate(
         const float3 miss_radiance = ProbeEstimateMissRadiance(ray_direction, sun_bounce);
         const float3 hit_bounce = (ground_bounce * 0.45 + local_color_bounce * 1.25 + directional_bounce * 0.20) *
                                   (0.25 + 0.75 * normalized_hit);
+        const float3 directional_irradiance = lerp(hit_bounce, miss_radiance, visible);
 
-        ray_radiance_sum += lerp(hit_bounce, miss_radiance, visible);
+        ray_radiance_sum += directional_irradiance;
         current_open_sum += visible;
 
         const float texel_confidence =
             (atlas_texel_index < trace_texel_count) ? saturate(param.probe_trace_config.w) : 0.0;
+
+        const uint irradiance_atlas_index = ProbeGetIrradianceAtlasIndex(probe_index, atlas_texel_index);
+        float3 final_directional_irradiance = directional_irradiance;
+        if (irradiance_history_weight > 0.0 && texel_confidence > 0.0) {
+            const Moer::ProbeGridIrradianceTexel history_irradiance_texel = rw_irradiance_atlas[irradiance_atlas_index];
+            const float history_valid = history_irradiance_texel.irradiance.w > 0.0 ? 1.0 : 0.0;
+            final_directional_irradiance = lerp(
+                final_directional_irradiance,
+                history_irradiance_texel.irradiance.rgb,
+                irradiance_history_weight * history_valid
+            );
+        }
+
+        Moer::ProbeGridIrradianceTexel irradiance_texel;
+        irradiance_texel.irradiance = float4(final_directional_irradiance, texel_confidence);
+        rw_irradiance_atlas[irradiance_atlas_index] = irradiance_texel;
+
         const uint visibility_atlas_index = ProbeGetVisibilityAtlasIndex(probe_index, atlas_texel_index);
         float4 final_visibility_moments = float4(hit_distance, hit_distance * hit_distance, visible, texel_confidence);
         if (visibility_history_weight > 0.0 && texel_confidence > 0.0) {
