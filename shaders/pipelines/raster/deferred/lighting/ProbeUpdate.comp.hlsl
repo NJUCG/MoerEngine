@@ -1,15 +1,27 @@
+#include "core/common/Bindless.hlsl"
+#include "core/common/Common.hlsl"
+
+BINDLESS_BINDINGS(3, 2, 4, 5);
+
 #include "core/math/Math.hlsli"
+#include "core/math/STL.hlsli"
+#include "materials/Material.hlsli"
+#include "shared/Geometry.h"
 #include "shared/ShaderParameters.h"
 #include "shared/raster/ShaderParameters.h"
+#include "shared/utils/MoerMath.hlsli"
+#include "shared/utils/Packing.h"
+#include "pipelines/raytracing/inline/RaytracingCommon.hlsli"
 
 [[vk::push_constant]] ConstantBuffer<Moer::ProbeUpdateParam> param;
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<Moer::ProbeGridProbeData> rw_probe_data;
 [[vk::binding(1, 0)]] RWStructuredBuffer<Moer::ProbeGridVisibilityTexel> rw_visibility_atlas;
 [[vk::binding(2, 0)]] RWStructuredBuffer<Moer::ProbeGridIrradianceTexel> rw_irradiance_atlas;
+[[vk::binding(3, 0)]] StructuredBuffer<Moer::GBufferPassParams> probe_scene_data;
 
 #if PROBE_GI_USE_RAY_QUERY
-[[vk::binding(3, 0)]] RaytracingAccelerationStructure tlas;
+[[vk::binding(4, 0)]] RaytracingAccelerationStructure tlas;
 #endif
 
 float ProbeSafeSaturate(float value) {
@@ -79,8 +91,30 @@ float3 ProbeEstimateMissRadiance(float3 direction, float3 sun_bounce) {
     return sky_ground + sun_bounce * sun_alignment;
 }
 
+struct ProbeTraceResult {
+    float  hit_distance;
+    float  visible;
+    uint   instance_id;
+    uint   geometry_index;
+    uint   primitive_index;
+    uint   backface;
+    float2 barycentrics;
+};
+
+ProbeTraceResult ProbeMakeMissTrace(float tmax) {
+    ProbeTraceResult result;
+    result.hit_distance   = tmax;
+    result.visible        = 1.0;
+    result.instance_id    = ~0u;
+    result.geometry_index = 0u;
+    result.primitive_index = 0u;
+    result.backface       = 0u;
+    result.barycentrics   = float2(0.0, 0.0);
+    return result;
+}
+
 #if PROBE_GI_USE_RAY_QUERY
-void ProbeTraceVisibilityRay(float3 origin, float3 direction, float tmin, float tmax, out float hit_distance, out float visible) {
+ProbeTraceResult ProbeTraceRay(float3 origin, float3 direction, float tmin, float tmax) {
     RayDesc ray_desc;
     ray_desc.Origin = origin;
     ray_desc.Direction = direction;
@@ -94,20 +128,75 @@ void ProbeTraceVisibilityRay(float3 origin, float3 direction, float tmin, float 
     ray_query.TraceRayInline(tlas, RAY_FLAG_NONE, Moer::RTVM_ALL, ray_desc);
     ray_query.Proceed();
 
+    ProbeTraceResult result = ProbeMakeMissTrace(tmax);
     if (ray_query.CommittedStatus() == COMMITTED_NOTHING) {
-        hit_distance = tmax;
-        visible = 1.0;
-    } else {
-        hit_distance = max(ray_query.CommittedRayT(), tmin);
-        visible = 0.0;
+        return result;
     }
+
+    result.hit_distance    = max(ray_query.CommittedRayT(), tmin);
+    result.visible         = 0.0;
+    result.instance_id     = ray_query.CommittedInstanceID();
+    result.geometry_index  = ray_query.CommittedGeometryIndex();
+    result.primitive_index = ray_query.CommittedPrimitiveIndex();
+    result.backface        = ray_query.CommittedTriangleFrontFace() ? 0u : 1u;
+    result.barycentrics    = ray_query.CommittedTriangleBarycentrics();
+    return result;
 }
 #else
-void ProbeTraceVisibilityRay(float3 origin, float3 direction, float tmin, float tmax, out float hit_distance, out float visible) {
-    hit_distance = tmax;
-    visible = 1.0;
+ProbeTraceResult ProbeTraceRay(float3 origin, float3 direction, float tmin, float tmax) {
+    return ProbeMakeMissTrace(tmax);
 }
 #endif
+
+float3 ProbeEstimateHitMaterialRadiance(
+    ProbeTraceResult trace_result,
+    float3 ray_direction,
+    float normalized_hit_distance,
+    float3 fallback_hit_bounce,
+    float direct_light_energy
+) {
+#if PROBE_GI_USE_RAY_QUERY
+    if (trace_result.instance_id == ~0u) {
+        return fallback_hit_bounce;
+    }
+
+    const Moer::GBufferPassParams scene_params = probe_scene_data[0];
+    Moer::GeometryRecord geom = Moer::GetGeometryRecordFrom(
+        scene_params,
+        trace_result.instance_id,
+        trace_result.geometry_index,
+        trace_result.primitive_index,
+        trace_result.barycentrics,
+        Moer::EGA_UV | Moer::EGA_Normal | Moer::EGA_Tangent,
+        trace_result.backface != 0u
+    );
+    Moer::MaterialSample material = Moer::SampleGeometryMaterial(
+        geom,
+        float2(0.0, 0.0),
+        float2(0.0, 0.0),
+        2.0,
+        Moer::EMA_BaseColor | Moer::EMA_Normal | Moer::EMA_MetalRough | Moer::EMA_Emissive
+    );
+
+    const float3 surface_normal = ProbeSafeNormalize(material.normal, -ray_direction);
+    const float facing_probe = saturate(dot(surface_normal, -ray_direction));
+    const float n_dot_light = saturate(dot(surface_normal, -param.main_light_direction.xyz));
+    const float diffuse_energy = 1.0 - saturate(material.metalness) * 0.85;
+    const float rough_bounce = 0.35 + 0.65 * saturate(material.roughness);
+    const float distance_energy = 0.30 + 0.70 * saturate(normalized_hit_distance);
+
+    const float3 direct_bounce =
+        param.main_light_color.rgb * direct_light_energy * param.probe_ground_color.w * n_dot_light;
+    const float3 indirect_bounce = fallback_hit_bounce * (0.35 + 0.65 * facing_probe);
+    const float3 material_bounce =
+        material.diffuse_albedo * (direct_bounce + indirect_bounce) * diffuse_energy * rough_bounce * distance_energy +
+        material.emissive * 0.35;
+
+    return max(lerp(fallback_hit_bounce, material_bounce, 0.85), float3(0.0, 0.0, 0.0));
+#else
+    return fallback_hit_bounce;
+#endif
+}
 
 struct ProbePlacementResult {
     float3 position;
@@ -144,9 +233,10 @@ ProbePlacementResult ProbeClassifyAndRelocate(
         }
 
         const float3 ray_direction = ProbeGetAtlasDirection(atlas_texel_index);
-        float hit_distance = max_trace_distance;
-        float visible = 1.0;
-        ProbeTraceVisibilityRay(grid_position, ray_direction, 0.001, max_trace_distance, hit_distance, visible);
+        const ProbeTraceResult trace_result =
+            ProbeTraceRay(grid_position, ray_direction, 0.001, max_trace_distance);
+        const float hit_distance = trace_result.hit_distance;
+        const float visible = trace_result.visible;
 
         const float hit = 1.0 - visible;
         const float close_hit =
@@ -249,18 +339,17 @@ ProbePlacementResult ProbeClassifyAndRelocate(
                 atlas_texel_index < Moer::RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT;
                 ++atlas_texel_index) {
         const float3 ray_direction = ProbeGetAtlasDirection(atlas_texel_index);
-        float hit_distance = max_trace_distance;
-        float visible = 1.0;
+        ProbeTraceResult trace_result = ProbeMakeMissTrace(max_trace_distance);
         if (atlas_texel_index < trace_texel_count) {
-            ProbeTraceVisibilityRay(
+            trace_result = ProbeTraceRay(
                 position + ray_direction * trace_bias,
                 ray_direction,
                 0.0,
-                max_trace_distance,
-                hit_distance,
-                visible
+                max_trace_distance
             );
         }
+        const float hit_distance = trace_result.hit_distance;
+        const float visible = trace_result.visible;
 
         const float hit = 1.0 - visible;
         const float close_hit =
@@ -274,7 +363,9 @@ ProbePlacementResult ProbeClassifyAndRelocate(
         const float3 miss_radiance = ProbeEstimateMissRadiance(ray_direction, sun_bounce);
         const float3 hit_bounce = (ground_bounce * 0.45 + local_color_bounce * 1.25 + directional_bounce * 0.20) *
                                   (0.25 + 0.75 * normalized_hit);
-        const float3 directional_irradiance = lerp(hit_bounce, miss_radiance, visible);
+        const float3 material_hit_bounce =
+            ProbeEstimateHitMaterialRadiance(trace_result, ray_direction, normalized_hit, hit_bounce, direct_light_energy);
+        const float3 directional_irradiance = lerp(material_hit_bounce, miss_radiance, visible);
 
         ray_radiance_sum += directional_irradiance;
         current_open_sum += visible;

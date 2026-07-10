@@ -8,6 +8,7 @@
 #include "scene/Scene.h"
 
 #include <cmath>
+#include <cstring>
 
 namespace Moer::Render::Raster {
 namespace {
@@ -97,8 +98,16 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
     );
     m_irradiance_atlas_buffer.hdl = bdls->AllocateBuffer(m_irradiance_atlas_buffer.buf->GetView());
 
+    constexpr uint scene_data_byte_size = sizeof(GBufferPassParams);
+    m_scene_data_buffer = device.CreateBuffer<byte>(
+        "Raster::ProbeVolume::SceneData",
+        scene_data_byte_size,
+        EBufferUsageFlags::UNORDERED_ACCESS
+    );
+    m_scene_data_upload.resize(scene_data_byte_size);
+
     LOG_DEBUG(
-        "[ProbeGI] Created probe buffers: max_count={}, probe_byte_size={}, probe_handle={}, visibility_dim={}x{}, visibility_byte_size={}, visibility_handle={}, irradiance_dim={}x{}, irradiance_byte_size={}, irradiance_handle={}",
+        "[ProbeGI] Created probe buffers: max_count={}, probe_byte_size={}, probe_handle={}, visibility_dim={}x{}, visibility_byte_size={}, visibility_handle={}, irradiance_dim={}x{}, irradiance_byte_size={}, irradiance_handle={}, scene_data_byte_size={}",
         RASTER_PROBE_MAX_COUNT,
         buffer_byte_size,
         m_probe_buffer.hdl,
@@ -109,7 +118,8 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
         RASTER_PROBE_IRRADIANCE_ATLAS_DIM,
         RASTER_PROBE_IRRADIANCE_ATLAS_DIM,
         irradiance_atlas_byte_size,
-        m_irradiance_atlas_buffer.hdl
+        m_irradiance_atlas_buffer.hdl,
+        scene_data_byte_size
     );
 }
 
@@ -129,8 +139,40 @@ void ProbeVolumeResource::Destroy(BindlessArrayRef& bdls) {
     m_probe_buffer.buf = nullptr;
     m_visibility_atlas_buffer.buf = nullptr;
     m_irradiance_atlas_buffer.buf = nullptr;
+    m_scene_data_buffer = nullptr;
+    m_scene_data_upload.clear();
     m_has_snapshot = false;
     m_history_valid = false;
+}
+
+void ProbeVolumeResource::UpdateSceneData(CommandList& cmd_list, const Scene& scene) {
+    if (m_scene_data_buffer == nullptr) {
+        return;
+    }
+
+    const auto& gpu_scene_res = scene.GetGpuSceneRes();
+
+    GBufferPassParams params{};
+    params.instance_buf_hdl  = gpu_scene_res.instance_buf.hdl;
+    params.primitive_buf_hdl = gpu_scene_res.primitive_buf.hdl;
+    params.material_buf_hdl  = gpu_scene_res.material_buf.hdl;
+
+    params.position_buf_hdl       = gpu_scene_res.position_buf.hdl;
+    params.packed_normal_buf_hdl  = gpu_scene_res.packed_normal_buf.hdl;
+    params.packed_tangent_buf_hdl = gpu_scene_res.packed_tangent_buf.hdl;
+    params.texcoord0_buf_hdl      = gpu_scene_res.texcoord0_buf.hdl;
+    params.index_buf_hdl          = gpu_scene_res.index_buf.hdl;
+
+    params.rt_instance_buf_hdl        = gpu_scene_res.rt_instance_buf.hdl;
+    params.rt_primitive_table_buf_hdl = gpu_scene_res.rt_primitive_table_buf.hdl;
+
+    m_scene_data_upload.resize(sizeof(GBufferPassParams));
+    std::memcpy(m_scene_data_upload.data(), &params, sizeof(GBufferPassParams));
+    cmd_list.CopyFrom(
+        std::move(m_scene_data_upload),
+        m_scene_data_buffer->GetView(),
+        "Raster::ProbeVolume::SceneData Upload"
+    );
 }
 
 ProbeVolumeResource::Snapshot ProbeVolumeResource::BuildSnapshot(const RasterConfig& config) const {

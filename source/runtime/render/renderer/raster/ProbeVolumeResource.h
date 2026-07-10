@@ -4,6 +4,7 @@
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "rhi/RHIResource.h"
+#include "shaderheaders/shared/ShaderParameters.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 
 namespace Moer {
@@ -29,6 +30,7 @@ public:
     void Destroy(BindlessArrayRef& bdls);
 
     UpdateInfo PrepareUpdate(const RasterConfig& config, const Scene& scene, uint64 frame_index);
+    void UpdateSceneData(CommandList& cmd_list, const Scene& scene);
     void FillLightingData(LightingData& lighting_data) const;
 
     BufferView GetProbeBufferView() const {
@@ -41,6 +43,10 @@ public:
 
     BufferView GetIrradianceAtlasBufferView() const {
         return m_irradiance_atlas_buffer.buf->GetView();
+    }
+
+    BufferView GetSceneDataBufferView() const {
+        return m_scene_data_buffer->GetView();
     }
 
     uint GetProbeCount() const {
@@ -100,6 +106,8 @@ private:
     BufferWithHandle m_probe_buffer;
     BufferWithHandle m_visibility_atlas_buffer;
     BufferWithHandle m_irradiance_atlas_buffer;
+    BufferRef        m_scene_data_buffer;
+    Array<byte>      m_scene_data_upload;
     Snapshot         m_snapshot;
     bool             m_has_snapshot = false;
     bool             m_history_valid = false;

@@ -15,8 +15,10 @@ public:
     DEFINE_SHADER_BUFFER(rw_probe_data);
     DEFINE_SHADER_BUFFER(rw_visibility_atlas);
     DEFINE_SHADER_BUFFER(rw_irradiance_atlas);
+    DEFINE_SHADER_BUFFER(probe_scene_data);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_CONSTANT_STRUCT(ProbeUpdateParam, param);
-    DEFINE_SHADER_ARGS(rw_probe_data, rw_visibility_atlas, rw_irradiance_atlas, param);
+    DEFINE_SHADER_ARGS(rw_probe_data, rw_visibility_atlas, rw_irradiance_atlas, probe_scene_data, bdls, param);
 };
 
 class ProbeUpdateRayQueryPipeline : public ComputePipeline {
@@ -26,9 +28,11 @@ public:
     DEFINE_SHADER_BUFFER(rw_probe_data);
     DEFINE_SHADER_BUFFER(rw_visibility_atlas);
     DEFINE_SHADER_BUFFER(rw_irradiance_atlas);
+    DEFINE_SHADER_BUFFER(probe_scene_data);
     DEFINE_SHADER_TLAS(tlas);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_CONSTANT_STRUCT(ProbeUpdateParam, param);
-    DEFINE_SHADER_ARGS(rw_probe_data, rw_visibility_atlas, rw_irradiance_atlas, tlas, param);
+    DEFINE_SHADER_ARGS(rw_probe_data, rw_visibility_atlas, rw_irradiance_atlas, probe_scene_data, tlas, bdls, param);
 
     MUTATION_BOOL(PROBE_GI_USE_RAY_QUERY);
 };
@@ -59,6 +63,8 @@ public:
         const uint dispatch_count =
             (update_info.probe_count + RASTER_PROBE_UPDATE_GROUP_SIZE - 1u) / RASTER_PROBE_UPDATE_GROUP_SIZE;
 
+        context.probe_volume.UpdateSceneData(context.cmd_list, scene);
+
         RaytracingSceneRef rt_scene = context.rt_scene();
         if (rt_scene && rt_scene->GetTlas()) {
             update_info.param.probe_trace_config.w = 1.0f;
@@ -68,7 +74,9 @@ public:
                     context.probe_volume.GetProbeBufferView(),
                     context.probe_volume.GetVisibilityAtlasBufferView(),
                     context.probe_volume.GetIrradianceAtlasBufferView(),
+                    context.probe_volume.GetSceneDataBufferView(),
                     rt_scene->GetTlas(),
+                    context.bdls,
                     update_info.param
                 )
                 .Dispatch(uint3(dispatch_count, 1, 1), "Probe GI DDGI Ray Query Update Pass");
@@ -83,6 +91,8 @@ public:
                 context.probe_volume.GetProbeBufferView(),
                 context.probe_volume.GetVisibilityAtlasBufferView(),
                 context.probe_volume.GetIrradianceAtlasBufferView(),
+                context.probe_volume.GetSceneDataBufferView(),
+                context.bdls,
                 update_info.param
             )
             .Dispatch(uint3(dispatch_count, 1, 1), "Probe GI Fallback Update Pass");
