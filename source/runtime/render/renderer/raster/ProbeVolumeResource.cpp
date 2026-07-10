@@ -7,6 +7,7 @@
 #include "scene/LogicalComponents.h"
 #include "scene/Scene.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -235,6 +236,9 @@ void ProbeVolumeResource::Destroy(BindlessArrayRef& bdls) {
     m_has_snapshot = false;
     m_history_valid.fill(false);
     m_brick_history_valid.fill(false);
+    m_brick_last_update_frame.fill(0);
+    m_last_scheduled_brick_count = 0;
+    m_last_scheduled_probe_count = 0;
 }
 
 void ProbeVolumeResource::UpdateSceneData(CommandList& cmd_list, const Scene& scene) {
@@ -296,13 +300,16 @@ void ProbeVolumeResource::UpdateSceneData(CommandList& cmd_list, const Scene& sc
 }
 
 ProbeVolumeResource::Snapshot
-ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_position) const {
+ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_position, uint64 frame_index) const {
     Snapshot snapshot{};
     snapshot.enabled                    = config.probe_gi_enabled;
     snapshot.sparse_bricks_enabled     = config.probe_gi_sparse_bricks_enabled;
     snapshot.brick_resident_distance   = Max(config.probe_gi_brick_resident_distance, 0.1f);
     snapshot.brick_resident_hysteresis = Max(config.probe_gi_brick_resident_hysteresis, 0.0f);
-    snapshot.debug_mode                = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 5));
+    snapshot.update_scheduler_enabled  = config.probe_gi_update_scheduler_enabled;
+    snapshot.update_brick_budget =
+        static_cast<uint>(Clamp(config.probe_gi_update_brick_budget, 1, int(RASTER_PROBE_MAX_BRICK_COUNT)));
+    snapshot.debug_mode = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 6));
     snapshot.trace_distance     = Max(config.probe_gi_trace_distance, 0.1f);
     snapshot.trace_ray_count =
         static_cast<uint>(Clamp(config.probe_gi_trace_ray_count, 1, int(RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT)));
@@ -393,6 +400,13 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
                     );
                     const float3 brick_center = volume.origin + volume.spacing * brick_center_coord;
                     const float distance_sq = SquaredLengthf(camera_position - brick_center);
+                    brick.camera_distance_sq = distance_sq;
+                    brick.update_age = m_brick_history_valid[brick_index] ?
+                                           static_cast<uint>(std::min<uint64>(
+                                               frame_index - m_brick_last_update_frame[brick_index],
+                                               255u
+                                           )) :
+                                           255u;
                     float resident_distance = snapshot.brick_resident_distance;
                     if (snapshot.sparse_bricks_enabled && m_has_snapshot &&
                         m_snapshot.sparse_bricks_enabled && brick_index < m_snapshot.brick_count) {
@@ -468,6 +482,8 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
         m_snapshot.total_count != snapshot.total_count ||
         !NearlyEqual(m_snapshot.brick_resident_distance, snapshot.brick_resident_distance) ||
         !NearlyEqual(m_snapshot.brick_resident_hysteresis, snapshot.brick_resident_hysteresis) ||
+        m_snapshot.update_scheduler_enabled != snapshot.update_scheduler_enabled ||
+        m_snapshot.update_brick_budget != snapshot.update_brick_budget ||
         !NearlyEqual(m_snapshot.trace_distance, snapshot.trace_distance) ||
            m_snapshot.trace_ray_count != snapshot.trace_ray_count ||
            !NearlyEqual(m_snapshot.visibility_bias, snapshot.visibility_bias) ||
@@ -538,7 +554,6 @@ bool ProbeVolumeResource::RequiresHistoryReset(const Snapshot& snapshot, uint vo
 
 void ProbeVolumeResource::StageVolumeUpload(const Snapshot& snapshot) {
     m_gpu_volume_descs.fill({});
-    m_gpu_brick_descs.fill({});
     for (uint volume_index = 0; volume_index < snapshot.volume_count; ++volume_index) {
         const VolumeSnapshot& volume = snapshot.volumes[volume_index];
         ProbeVolumeGpuDesc&   desc   = m_gpu_volume_descs[volume_index];
@@ -558,21 +573,27 @@ void ProbeVolumeResource::StageVolumeUpload(const Snapshot& snapshot) {
         );
     }
 
+    m_volume_data_upload.resize(sizeof(m_gpu_volume_descs));
+    std::memcpy(m_volume_data_upload.data(), m_gpu_volume_descs.data(), sizeof(m_gpu_volume_descs));
+    StageBrickUpload(snapshot);
+    m_page_table_upload.resize(sizeof(snapshot.page_table));
+    std::memcpy(m_page_table_upload.data(), snapshot.page_table.data(), sizeof(snapshot.page_table));
+}
+
+void ProbeVolumeResource::StageBrickUpload(const Snapshot& snapshot) {
+    m_gpu_brick_descs.fill({});
     for (uint brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
         const BrickSnapshot& brick = snapshot.bricks[brick_index];
         ProbeBrickGpuDesc&   desc  = m_gpu_brick_descs[brick_index];
         desc.coord_volume = uint4(brick.coord.x, brick.coord.y, brick.coord.z, brick.volume_index);
         desc.probe_range =
             uint4(brick.probe_offset, brick.probe_count, brick.resident ? 1u : 0u, brick.page_index);
-        desc.local_counts = uint4(brick.local_counts.x, brick.local_counts.y, brick.local_counts.z, 0u);
+        desc.local_counts =
+            uint4(brick.local_counts.x, brick.local_counts.y, brick.local_counts.z, brick.update_age);
     }
 
-    m_volume_data_upload.resize(sizeof(m_gpu_volume_descs));
-    std::memcpy(m_volume_data_upload.data(), m_gpu_volume_descs.data(), sizeof(m_gpu_volume_descs));
     m_brick_data_upload.resize(sizeof(m_gpu_brick_descs));
     std::memcpy(m_brick_data_upload.data(), m_gpu_brick_descs.data(), sizeof(m_gpu_brick_descs));
-    m_page_table_upload.resize(sizeof(snapshot.page_table));
-    std::memcpy(m_page_table_upload.data(), snapshot.page_table.data(), sizeof(snapshot.page_table));
 }
 
 ProbeUpdateParam ProbeVolumeResource::BuildUpdateParam(
@@ -613,8 +634,15 @@ ProbeUpdateParam ProbeVolumeResource::BuildUpdateParam(
 }
 
 ProbeVolumeResource::UpdateInfo
-ProbeVolumeResource::PrepareUpdate(const RasterConfig& config, const Scene& scene, float3 camera_position) {
+ProbeVolumeResource::PrepareUpdate(
+    const RasterConfig& config,
+    const Scene&        scene,
+    float3              camera_position,
+    uint64              frame_index
+) {
     UpdateInfo update_info{};
+    m_last_scheduled_brick_count = 0;
+    m_last_scheduled_probe_count = 0;
 
     if (m_probe_buffer.buf == nullptr || m_volume_buffer.buf == nullptr || m_brick_buffer.buf == nullptr ||
         m_page_table_buffer.buf == nullptr ||
@@ -622,12 +650,13 @@ ProbeVolumeResource::PrepareUpdate(const RasterConfig& config, const Scene& scen
         return update_info;
     }
 
-    const Snapshot snapshot = BuildSnapshot(config, camera_position);
-    const bool     changed  = HasSnapshotChanged(snapshot);
+    Snapshot   snapshot = BuildSnapshot(config, camera_position, frame_index);
+    const bool changed  = HasSnapshotChanged(snapshot);
 
     if (!snapshot.enabled || snapshot.volume_count == 0 || snapshot.total_count == 0) {
         m_history_valid.fill(false);
         m_brick_history_valid.fill(false);
+        m_brick_last_update_frame.fill(0);
         m_snapshot     = snapshot;
         m_has_snapshot = true;
         if (changed) {
@@ -642,7 +671,7 @@ ProbeVolumeResource::PrepareUpdate(const RasterConfig& config, const Scene& scen
     update_info.enabled              = true;
     update_info.volume_count         = snapshot.volume_count;
     update_info.resident_brick_count = snapshot.resident_brick_count;
-    update_info.total_probe_count    = snapshot.resident_probe_count;
+    update_info.resident_probe_count = snapshot.resident_probe_count;
 
     StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT> volume_history_reset{};
     StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT> next_history_valid{};
@@ -677,26 +706,73 @@ ProbeVolumeResource::PrepareUpdate(const RasterConfig& config, const Scene& scen
         }
     }
 
+    Array<uint> resident_candidates;
+    resident_candidates.reserve(snapshot.resident_brick_count);
     for (uint brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
         const BrickSnapshot& brick = snapshot.bricks[brick_index];
-        if (!brick.resident || update_info.job_count >= update_info.jobs.size()) {
+        if (!brick.resident) {
             continue;
         }
 
-        const VolumeSnapshot& volume = snapshot.volumes[brick.volume_index];
-        const bool history_valid =
+        resident_candidates.push_back(brick_index);
+        next_brick_history_valid[brick_index] =
             !volume_history_reset[brick.volume_index] && m_brick_history_valid[brick_index];
+    }
+
+    std::sort(
+        resident_candidates.begin(),
+        resident_candidates.end(),
+        [&](uint lhs_index, uint rhs_index) {
+            const BrickSnapshot& lhs = snapshot.bricks[lhs_index];
+            const BrickSnapshot& rhs = snapshot.bricks[rhs_index];
+            const bool lhs_mandatory =
+                volume_history_reset[lhs.volume_index] || !m_brick_history_valid[lhs_index];
+            const bool rhs_mandatory =
+                volume_history_reset[rhs.volume_index] || !m_brick_history_valid[rhs_index];
+            if (lhs_mandatory != rhs_mandatory) {
+                return lhs_mandatory;
+            }
+            if (lhs.update_age != rhs.update_age) {
+                return lhs.update_age > rhs.update_age;
+            }
+            if (!NearlyEqual(lhs.camera_distance_sq, rhs.camera_distance_sq)) {
+                return lhs.camera_distance_sq < rhs.camera_distance_sq;
+            }
+            return lhs_index < rhs_index;
+        }
+    );
+
+    for (uint brick_index : resident_candidates) {
+        BrickSnapshot& brick = snapshot.bricks[brick_index];
+        const bool mandatory =
+            volume_history_reset[brick.volume_index] || !m_brick_history_valid[brick_index];
+        if (snapshot.update_scheduler_enabled && !mandatory &&
+            update_info.job_count >= snapshot.update_brick_budget) {
+            ++update_info.deferred_brick_count;
+            continue;
+        }
+        if (update_info.job_count >= update_info.jobs.size()) {
+            break;
+        }
+
+        const VolumeSnapshot& volume = snapshot.volumes[brick.volume_index];
         UpdateJob& job = update_info.jobs[update_info.job_count++];
         job.volume_index = brick.volume_index;
         job.brick_index  = brick_index;
         job.probe_count  = brick.probe_count;
-        job.param = BuildUpdateParam(snapshot, volume, brick.volume_index, brick_index, scene, history_valid);
+        job.param = BuildUpdateParam(snapshot, volume, brick.volume_index, brick_index, scene, !mandatory);
+        update_info.scheduled_probe_count += brick.probe_count;
         next_brick_history_valid[brick_index] = true;
+        m_brick_last_update_frame[brick_index] = frame_index;
+        brick.update_age = 0;
     }
+
+    m_last_scheduled_brick_count = update_info.job_count;
+    m_last_scheduled_probe_count = update_info.scheduled_probe_count;
 
     if (changed) {
         LOG_DEBUG(
-            "[ProbeGI] Multi-volume brick residency updated: active_volumes={}, resident_bricks={}/{}, resident_probes={}/{}, sparse={}, resident_distance={}, resident_hysteresis={}, trace_distance={}, trace_rays={}, history_hysteresis=({}, {}).",
+            "[ProbeGI] Multi-volume brick residency updated: active_volumes={}, resident_bricks={}/{}, resident_probes={}/{}, sparse={}, resident_distance={}, resident_hysteresis={}, scheduler={}, update_budget={}, scheduled_bricks={}, scheduled_probes={}, deferred_bricks={}, trace_distance={}, trace_rays={}, history_hysteresis=({}, {}).",
             snapshot.volume_count,
             snapshot.resident_brick_count,
             snapshot.brick_count,
@@ -705,12 +781,19 @@ ProbeVolumeResource::PrepareUpdate(const RasterConfig& config, const Scene& scen
             snapshot.sparse_bricks_enabled ? 1 : 0,
             snapshot.brick_resident_distance,
             snapshot.brick_resident_hysteresis,
+            snapshot.update_scheduler_enabled ? 1 : 0,
+            snapshot.update_brick_budget,
+            update_info.job_count,
+            update_info.scheduled_probe_count,
+            update_info.deferred_brick_count,
             snapshot.trace_distance,
             snapshot.trace_ray_count,
             snapshot.irradiance_hysteresis,
             snapshot.visibility_hysteresis
         );
         StageVolumeUpload(snapshot);
+    } else if (snapshot.debug_mode == 6u) {
+        StageBrickUpload(snapshot);
     }
 
     m_snapshot            = snapshot;

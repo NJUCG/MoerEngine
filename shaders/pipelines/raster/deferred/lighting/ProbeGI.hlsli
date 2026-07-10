@@ -615,7 +615,7 @@ float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, 
         return float3(0.02, 0.02, 0.02);
     }
 
-    if (debug_mode == 4u || debug_mode == 5u) {
+    if (debug_mode == 4u || debug_mode == 5u || debug_mode == 6u) {
         uint3 counts = ProbeGIGetCounts(volume);
         float3 local = ProbeGIGetLocalCoord(volume, biased_pos);
         uint3 coord = min(uint3(round(clamp(local, float3(0.0, 0.0, 0.0), float3(counts - uint3(1, 1, 1))))), counts - uint3(1, 1, 1));
@@ -628,6 +628,24 @@ float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, 
             const float brick_tint = frac(float(brick_index) * 0.61803398875);
             return lerp(float3(0.05, 0.80, 0.35), float3(0.05, 0.65, 1.00), brick_tint) *
                    lighting_data.probe_system_debug.x;
+        }
+
+        if (debug_mode == 6u) {
+            if (brick_index == Moer::RASTER_PROBE_PAGE_INVALID) {
+                return float3(0.12, 0.01, 0.10) * lighting_data.probe_system_debug.x;
+            }
+
+            ArrayBuffer brick_buffer = ArrayBuffer(lighting_data.probe_system_counts.z);
+            const Moer::ProbeBrickGpuDesc brick =
+                brick_buffer.Load<Moer::ProbeBrickGpuDesc>(brick_index);
+            const float age01 = saturate(float(brick.local_counts.w) / 16.0);
+            const float3 fresh_color = float3(0.02, 0.85, 0.60);
+            const float3 middle_color = float3(1.00, 0.82, 0.06);
+            const float3 stale_color = float3(0.95, 0.04, 0.02);
+            const float3 age_color = age01 < 0.5 ?
+                                         lerp(fresh_color, middle_color, age01 * 2.0) :
+                                         lerp(middle_color, stale_color, (age01 - 0.5) * 2.0);
+            return age_color * lighting_data.probe_system_debug.x;
         }
 
         uint probe_index = ProbeGIGetProbeIndex(lighting_data, volume, coord);

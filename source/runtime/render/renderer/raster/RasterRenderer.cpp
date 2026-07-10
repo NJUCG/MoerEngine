@@ -182,6 +182,9 @@ void RasterRenderer::UpdateGlobalLightingData(
     context.probe_volume.FillLightingData(*lighting_data);
 
     if (ui_config.probe_gi_enabled) {
+        const uint resident_bricks  = context.probe_volume.GetResidentBrickCount();
+        const uint scheduled_bricks = context.probe_volume.GetScheduledBrickCount();
+        const uint deferred_bricks  = resident_bricks > scheduled_bricks ? resident_bricks - scheduled_bricks : 0u;
         std::ostringstream stream;
         stream << "[ProbeGI] Runtime lighting params: enabled=" << lighting_data->probe_system_config.x
                << " debug=" << lighting_data->probe_system_config.y
@@ -195,10 +198,16 @@ void RasterRenderer::UpdateGlobalLightingData(
                << " probes=" << lighting_data->probe_system_counts.y
                << " brick_buffer=" << lighting_data->probe_system_counts.z
                << " page_table=" << lighting_data->probe_system_counts.w
-               << " resident_bricks=" << context.probe_volume.GetResidentBrickCount() << "/"
+               << " resident_bricks=" << resident_bricks << "/"
                << context.probe_volume.GetBrickCount()
                << " resident_probes=" << context.probe_volume.GetResidentProbeCount() << "/"
                << context.probe_volume.GetProbeCount()
+               << " scheduler=" << (ui_config.probe_gi_update_scheduler_enabled ? 1 : 0)
+               << " update_budget=" << ui_config.probe_gi_update_brick_budget
+               << " scheduled_bricks=" << scheduled_bricks << "/" << resident_bricks
+               << " scheduled_probes=" << context.probe_volume.GetScheduledProbeCount() << "/"
+               << context.probe_volume.GetResidentProbeCount()
+               << " deferred_bricks=" << deferred_bricks
                << " intensity=" << ui_config.probe_gi_intensity
                << " trace_distance=" << ui_config.probe_gi_trace_distance
                << " trace_rays=" << ui_config.probe_gi_trace_ray_count
@@ -342,7 +351,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         shadow_depth_pass->Process(raster_context, raster_config, camera);
         cmd_list.PopScopeWithTimeScope();
 
-        probe_update_pass->Process(raster_context, raster_config, scene, camera);
+        probe_update_pass->Process(raster_context, raster_config, scene, camera, time);
 
         // Update Global Lighting Data
         UpdateGlobalLightingData(raster_context, raster_config, camera);

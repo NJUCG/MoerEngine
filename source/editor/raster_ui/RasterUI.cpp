@@ -342,6 +342,15 @@ void RasterUI::ShowConfig() {
                 16.0f
             );
         }
+        ImGui::Checkbox("Update Scheduler", &m_config.probe_gi_update_scheduler_enabled);
+        if (m_config.probe_gi_update_scheduler_enabled) {
+            ImGui::SliderInt(
+                "Brick Update Budget",
+                &m_config.probe_gi_update_brick_budget,
+                1,
+                static_cast<int>(Render::RASTER_PROBE_MAX_BRICK_COUNT)
+            );
+        }
 
         auto sanitize_volume_size = [](float3 value) {
             return float3(
@@ -412,8 +421,9 @@ void RasterUI::ShowConfig() {
             "Contribution",
             "Visibility",
             "Brick Residency",
+            "Update Age",
         };
-        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 6);
+        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 7);
         if (m_config.probe_gi_debug_mode != 0) {
             ImGui::SliderFloat("Debug Scale", &m_config.probe_gi_debug_scale, 0.0f, 8.0f);
         }

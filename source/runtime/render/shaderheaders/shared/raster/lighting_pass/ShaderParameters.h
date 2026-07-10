@@ -117,7 +117,7 @@ struct ProbeVolumeGpuDesc {
 struct ProbeBrickGpuDesc {
     uint4 coord_volume; // xyz = logical brick coordinate, w = compact volume index
     uint4 probe_range;  // x = physical probe offset, y = local probe count, z = resident state, w = page index
-    uint4 local_counts; // xyz = valid probe counts inside this brick, w = reserved
+    uint4 local_counts; // xyz = valid probe counts inside this brick, w = frames since last update (clamped)
 };
 
 struct ProbeUpdateParam {

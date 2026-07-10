@@ -85,11 +85,17 @@ public:
         );
     }
 
-    void Process(RasterContext& context, const RasterConfig& config, const Scene& scene, const Camera& camera) {
+    void Process(
+        RasterContext&     context,
+        const RasterConfig& config,
+        const Scene&        scene,
+        const Camera&       camera,
+        uint64              frame_index
+    ) {
         ProbeVolumeResource::UpdateInfo update_info =
-            context.probe_volume.PrepareUpdate(config, scene, camera.GetPosition());
+            context.probe_volume.PrepareUpdate(config, scene, camera.GetPosition(), frame_index);
 
-        if (!update_info.enabled || update_info.job_count == 0 || update_info.total_probe_count == 0) {
+        if (!update_info.enabled || update_info.job_count == 0 || update_info.scheduled_probe_count == 0) {
             return;
         }
 

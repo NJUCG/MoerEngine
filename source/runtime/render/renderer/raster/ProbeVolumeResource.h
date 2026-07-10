@@ -28,18 +28,25 @@ public:
     };
 
     struct UpdateInfo {
-        bool                                                enabled              = false;
-        uint                                                volume_count         = 0;
-        uint                                                job_count            = 0;
-        uint                                                resident_brick_count = 0;
-        uint                                                total_probe_count    = 0;
+        bool                                                enabled               = false;
+        uint                                                volume_count          = 0;
+        uint                                                job_count             = 0;
+        uint                                                resident_brick_count  = 0;
+        uint                                                resident_probe_count  = 0;
+        uint                                                scheduled_probe_count = 0;
+        uint                                                deferred_brick_count  = 0;
         StaticArray<UpdateJob, RASTER_PROBE_MAX_BRICK_COUNT> jobs{};
     };
 
     void Create(RenderDevice& device, BindlessArrayRef& bdls);
     void Destroy(BindlessArrayRef& bdls);
 
-    UpdateInfo PrepareUpdate(const RasterConfig& config, const Scene& scene, float3 camera_position);
+    UpdateInfo PrepareUpdate(
+        const RasterConfig& config,
+        const Scene&        scene,
+        float3              camera_position,
+        uint64              frame_index
+    );
     void UpdateSceneData(CommandList& cmd_list, const Scene& scene);
     void FillLightingData(LightingData& lighting_data) const;
 
@@ -99,6 +106,14 @@ public:
         return m_snapshot.resident_probe_count;
     }
 
+    uint GetScheduledBrickCount() const {
+        return m_last_scheduled_brick_count;
+    }
+
+    uint GetScheduledProbeCount() const {
+        return m_last_scheduled_probe_count;
+    }
+
     const ProbeBrickGpuDesc& GetBrickDesc(uint brick_index) const {
         return m_gpu_brick_descs[brick_index];
     }
@@ -141,13 +156,15 @@ public:
 
 private:
     struct BrickSnapshot {
-        uint3 coord         = uint3(0u);
-        uint3 local_counts  = uint3(1u);
-        uint  volume_index  = 0;
-        uint  probe_offset  = 0;
-        uint  probe_count   = 0;
-        uint  page_index    = 0;
-        bool  resident      = true;
+        uint3 coord              = uint3(0u);
+        uint3 local_counts       = uint3(1u);
+        uint  volume_index       = 0;
+        uint  probe_offset       = 0;
+        uint  probe_count        = 0;
+        uint  page_index         = 0;
+        bool  resident           = true;
+        uint  update_age         = 0;
+        float camera_distance_sq = 0.0f;
     };
 
     struct VolumeSnapshot {
@@ -180,6 +197,8 @@ private:
         uint   total_count                = 0;
         float  brick_resident_distance    = 0.0f;
         float  brick_resident_hysteresis  = 0.0f;
+        bool   update_scheduler_enabled   = false;
+        uint   update_brick_budget        = 1;
         float  trace_distance             = 0.0f;
         uint   trace_ray_count            = 1;
         float  visibility_bias            = 0.0f;
@@ -198,7 +217,7 @@ private:
         StaticArray<uint, RASTER_PROBE_MAX_BRICK_COUNT> page_table{};
     };
 
-    Snapshot BuildSnapshot(const RasterConfig& config, float3 camera_position) const;
+    Snapshot BuildSnapshot(const RasterConfig& config, float3 camera_position, uint64 frame_index) const;
     ProbeUpdateParam BuildUpdateParam(
         const Snapshot& snapshot,
         const VolumeSnapshot& volume,
@@ -210,6 +229,7 @@ private:
     bool HasSnapshotChanged(const Snapshot& snapshot) const;
     bool RequiresHistoryReset(const Snapshot& snapshot, uint volume_index) const;
     void StageVolumeUpload(const Snapshot& snapshot);
+    void StageBrickUpload(const Snapshot& snapshot);
 
     BufferWithHandle m_probe_buffer;
     BufferWithHandle m_volume_buffer;
@@ -230,6 +250,9 @@ private:
     bool             m_has_snapshot = false;
     StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT> m_history_valid{};
     StaticArray<bool, RASTER_PROBE_MAX_BRICK_COUNT> m_brick_history_valid{};
+    StaticArray<uint64, RASTER_PROBE_MAX_BRICK_COUNT> m_brick_last_update_frame{};
+    uint             m_last_scheduled_brick_count = 0;
+    uint             m_last_scheduled_probe_count = 0;
 };
 
 } // namespace Moer::Render::Raster
