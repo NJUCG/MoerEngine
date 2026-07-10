@@ -12,6 +12,10 @@ add_library(Moer::scripting ALIAS ${target_name})
 
 target_compile_definitions(${target_name} PRIVATE SCRIPTING_MODULE_SHARED_LIB)
 
+if (MSVC)
+    target_compile_options(${target_name} PRIVATE /bigobj)
+endif()
+
 set_target_properties(${target_name} PROPERTIES FOLDER "runtime")
 
 target_include_directories(${target_name}
