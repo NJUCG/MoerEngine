@@ -29,7 +29,16 @@ static constexpr uint RASTER_PROBE_MAX_COUNT_PER_VOLUME = 512;
 static constexpr uint RASTER_PROBE_MAX_COUNT =
     RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_COUNT_PER_VOLUME;
 static constexpr uint RASTER_PROBE_BRICK_DIM = 4;
-static constexpr uint RASTER_PROBE_MAX_BRICKS_PER_VOLUME = 64;
+static constexpr uint RASTER_PROBE_MAX_FINE_BRICKS_PER_AXIS = 4;
+static constexpr uint RASTER_PROBE_MAX_SUBDIVISION_LEVEL = 2;
+static constexpr uint RASTER_PROBE_CELL_BRICK_DIM = 2;
+static constexpr uint RASTER_PROBE_MAX_CELLS_PER_VOLUME = 8;
+static constexpr uint RASTER_PROBE_MAX_CELL_COUNT =
+    RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_CELLS_PER_VOLUME;
+static constexpr uint RASTER_PROBE_MAX_PAGES_PER_VOLUME = 128;
+static constexpr uint RASTER_PROBE_MAX_PAGE_COUNT =
+    RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_PAGES_PER_VOLUME;
+static constexpr uint RASTER_PROBE_MAX_BRICKS_PER_VOLUME = RASTER_PROBE_MAX_PAGES_PER_VOLUME;
 static constexpr uint RASTER_PROBE_MAX_BRICK_COUNT =
     RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_BRICKS_PER_VOLUME;
 static constexpr uint RASTER_PROBE_PAGE_INVALID = 0xffffffffu;
@@ -62,7 +71,16 @@ static const uint RASTER_PROBE_MAX_COUNT_PER_VOLUME = 512;
 static const uint RASTER_PROBE_MAX_COUNT =
     RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_COUNT_PER_VOLUME;
 static const uint RASTER_PROBE_BRICK_DIM = 4;
-static const uint RASTER_PROBE_MAX_BRICKS_PER_VOLUME = 64;
+static const uint RASTER_PROBE_MAX_FINE_BRICKS_PER_AXIS = 4;
+static const uint RASTER_PROBE_MAX_SUBDIVISION_LEVEL = 2;
+static const uint RASTER_PROBE_CELL_BRICK_DIM = 2;
+static const uint RASTER_PROBE_MAX_CELLS_PER_VOLUME = 8;
+static const uint RASTER_PROBE_MAX_CELL_COUNT =
+    RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_CELLS_PER_VOLUME;
+static const uint RASTER_PROBE_MAX_PAGES_PER_VOLUME = 128;
+static const uint RASTER_PROBE_MAX_PAGE_COUNT =
+    RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_PAGES_PER_VOLUME;
+static const uint RASTER_PROBE_MAX_BRICKS_PER_VOLUME = RASTER_PROBE_MAX_PAGES_PER_VOLUME;
 static const uint RASTER_PROBE_MAX_BRICK_COUNT =
     RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_BRICKS_PER_VOLUME;
 static const uint RASTER_PROBE_PAGE_INVALID = 0xffffffffu;
@@ -112,12 +130,24 @@ struct ProbeVolumeGpuDesc {
     uint4  counts;            // xyz = local grid counts, w = local probe count
     uint4  allocation;        // x = logical probe base, y = config index, z = page table base, w = brick count
     float4 visibility;        // x = bias, y = power, z = min weight, w = strength
+    uint4  hierarchy;         // x = first cell, y = cell count, z = max subdivision level, w = layout generation
+};
+
+struct ProbeCellGpuDesc {
+    float4 origin_spacing; // xyz = cell min probe position, w = minimum base probe spacing
+    float4 extent;         // xyz = span from first to last probe, w = reserved
+    uint4  coord_volume;   // xyz = logical cell coordinate, w = compact volume index
+    uint4  brick_range;    // x = first brick descriptor, y = brick count, z = requested count, w = resident count
+    uint4  hierarchy;      // x = min level, y = max level, z = config index, w = layout generation
 };
 
 struct ProbeBrickGpuDesc {
     uint4 coord_volume; // xyz = logical brick coordinate, w = compact volume index
     uint4 probe_range;  // x = physical probe offset, y = local probe count, z = resident state, w = page index
     uint4 local_counts; // xyz = valid probe counts inside this brick, w = frames since last update (clamped)
+    uint4 hierarchy;    // x = cell index, y = subdivision level, z = parent page, w = virtual page
+    uint4 neighbor_pages_0; // x/y = -X/+X, z/w = -Y/+Y virtual pages
+    uint4 neighbor_pages_1; // x/y = -Z/+Z virtual pages, z = layout generation, w = flags
 };
 
 struct ProbeUpdateParam {
@@ -206,12 +236,17 @@ struct LightingData {
     uint4 probe_system_config; // x = enabled, y = debug mode, z = probe buffer, w = volume descriptor buffer
     uint4 probe_system_counts; // x = volume count, y = probe count, z = brick buffer, w = page table buffer
     uint4 probe_system_atlas;  // x = visibility buffer, y = irradiance buffer, z = irradiance texture, w = visibility texture
+    uint4 probe_system_hierarchy; // x = cell buffer, y = cell count, z = max level, w = layout generation
     float4 probe_system_debug; // x = debug scale, yzw = reserved
 };
 
 #ifdef __cplusplus
 static_assert(sizeof(ProbeUpdateParam) <= 128);
+static_assert(sizeof(ProbeVolumeGpuDesc) == 112);
+static_assert(sizeof(ProbeCellGpuDesc) == 80);
+static_assert(sizeof(ProbeBrickGpuDesc) == 96);
 static_assert(sizeof(ProbeVolumeGpuDesc) % 16 == 0);
+static_assert(sizeof(ProbeCellGpuDesc) % 16 == 0);
 static_assert(sizeof(ProbeBrickGpuDesc) % 16 == 0);
 static_assert(offsetof(LightingData, probe_system_config) % 16 == 0);
 static_assert(sizeof(LightingData) % 16 == 0);

@@ -198,6 +198,10 @@ void RasterRenderer::UpdateGlobalLightingData(
                << " probes=" << lighting_data->probe_system_counts.y
                << " brick_buffer=" << lighting_data->probe_system_counts.z
                << " page_table=" << lighting_data->probe_system_counts.w
+               << " cell_buffer=" << lighting_data->probe_system_hierarchy.x
+               << " cells=" << lighting_data->probe_system_hierarchy.y
+               << " max_level=" << lighting_data->probe_system_hierarchy.z
+               << " layout_generation=" << lighting_data->probe_system_hierarchy.w
                << " requested_bricks=" << context.probe_volume.GetRequestedBrickCount() << "/"
                << context.probe_volume.GetBrickCount()
                << " requested_probes=" << context.probe_volume.GetRequestedProbeCount() << "/"

@@ -90,6 +90,14 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
     );
     m_volume_buffer.hdl = bdls->AllocateBuffer(m_volume_buffer.buf->GetView());
 
+    constexpr uint cell_buffer_byte_size = sizeof(ProbeCellGpuDesc) * RASTER_PROBE_MAX_CELL_COUNT;
+    m_cell_buffer.buf = device.CreateBuffer<byte>(
+        "Raster::ProbeVolume::CellDescriptors",
+        cell_buffer_byte_size,
+        EBufferUsageFlags::UNORDERED_ACCESS
+    );
+    m_cell_buffer.hdl = bdls->AllocateBuffer(m_cell_buffer.buf->GetView());
+
     constexpr uint brick_buffer_byte_size = sizeof(ProbeBrickGpuDesc) * RASTER_PROBE_MAX_BRICK_COUNT;
     m_brick_buffer.buf = device.CreateBuffer<byte>(
         "Raster::ProbeVolume::BrickDescriptors",
@@ -98,7 +106,7 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
     );
     m_brick_buffer.hdl = bdls->AllocateBuffer(m_brick_buffer.buf->GetView());
 
-    constexpr uint page_table_byte_size = sizeof(uint) * RASTER_PROBE_MAX_BRICK_COUNT;
+    constexpr uint page_table_byte_size = sizeof(uint) * RASTER_PROBE_MAX_PAGE_COUNT;
     m_page_table_buffer.buf = device.CreateBuffer<byte>(
         "Raster::ProbeVolume::BrickPageTable",
         page_table_byte_size,
@@ -159,16 +167,20 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
     m_scene_data_upload.resize(scene_data_byte_size);
 
     LOG_DEBUG(
-        "[ProbeGI] Created probe buffers: max_volumes={}, max_count={}, probe_byte_size={}, probe_handle={}, volume_desc_byte_size={}, volume_desc_handle={}, max_bricks={}, brick_desc_byte_size={}, brick_desc_handle={}, page_table_byte_size={}, page_table_handle={}, visibility_dim={}x{}, visibility_byte_size={}, visibility_handle={}, irradiance_dim={}x{}, irradiance_byte_size={}, irradiance_handle={}, atlas_texture={}x{}, visibility_texture_handle={}, irradiance_texture_handle={}, scene_data_byte_size={}",
+        "[ProbeGI] Created probe buffers: max_volumes={}, max_count={}, probe_byte_size={}, probe_handle={}, volume_desc_byte_size={}, volume_desc_handle={}, max_cells={}, cell_desc_byte_size={}, cell_desc_handle={}, max_bricks={}, brick_desc_byte_size={}, brick_desc_handle={}, max_pages={}, page_table_byte_size={}, page_table_handle={}, visibility_dim={}x{}, visibility_byte_size={}, visibility_handle={}, irradiance_dim={}x{}, irradiance_byte_size={}, irradiance_handle={}, atlas_texture={}x{}, visibility_texture_handle={}, irradiance_texture_handle={}, scene_data_byte_size={}",
         RASTER_PROBE_VOLUME_MAX_COUNT,
         RASTER_PROBE_MAX_COUNT,
         buffer_byte_size,
         m_probe_buffer.hdl,
         volume_buffer_byte_size,
         m_volume_buffer.hdl,
+        RASTER_PROBE_MAX_CELL_COUNT,
+        cell_buffer_byte_size,
+        m_cell_buffer.hdl,
         RASTER_PROBE_MAX_BRICK_COUNT,
         brick_buffer_byte_size,
         m_brick_buffer.hdl,
+        RASTER_PROBE_MAX_PAGE_COUNT,
         page_table_byte_size,
         m_page_table_buffer.hdl,
         RASTER_PROBE_VISIBILITY_ATLAS_DIM,
@@ -196,6 +208,10 @@ void ProbeVolumeResource::Destroy(BindlessArrayRef& bdls) {
         bdls->UnbindBuffer(m_volume_buffer.hdl);
         m_volume_buffer.hdl = 0;
     }
+    if (m_cell_buffer.hdl != 0) {
+        bdls->UnbindBuffer(m_cell_buffer.hdl);
+        m_cell_buffer.hdl = 0;
+    }
     if (m_brick_buffer.hdl != 0) {
         bdls->UnbindBuffer(m_brick_buffer.hdl);
         m_brick_buffer.hdl = 0;
@@ -222,6 +238,7 @@ void ProbeVolumeResource::Destroy(BindlessArrayRef& bdls) {
     }
     m_probe_buffer.buf = nullptr;
     m_volume_buffer.buf = nullptr;
+    m_cell_buffer.buf = nullptr;
     m_brick_buffer.buf = nullptr;
     m_page_table_buffer.buf = nullptr;
     m_visibility_atlas_buffer.buf = nullptr;
@@ -231,6 +248,7 @@ void ProbeVolumeResource::Destroy(BindlessArrayRef& bdls) {
     m_scene_data_buffer = nullptr;
     m_scene_data_upload.clear();
     m_volume_data_upload.clear();
+    m_cell_data_upload.clear();
     m_brick_data_upload.clear();
     m_page_table_upload.clear();
     m_has_snapshot = false;
@@ -239,14 +257,24 @@ void ProbeVolumeResource::Destroy(BindlessArrayRef& bdls) {
     m_brick_last_update_frame.fill(0);
     m_physical_allocations.fill({});
     m_physical_allocator.Reset(0u);
+    m_layout_generation = 0u;
     m_last_scheduled_brick_count = 0;
     m_last_scheduled_probe_count = 0;
 }
 
 void ProbeVolumeResource::UpdateSceneData(CommandList& cmd_list, const Scene& scene) {
-    if (m_scene_data_buffer == nullptr || m_volume_buffer.buf == nullptr || m_brick_buffer.buf == nullptr ||
-        m_page_table_buffer.buf == nullptr) {
+    if (m_scene_data_buffer == nullptr || m_volume_buffer.buf == nullptr || m_cell_buffer.buf == nullptr ||
+        m_brick_buffer.buf == nullptr || m_page_table_buffer.buf == nullptr) {
         return;
+    }
+
+    if (!m_cell_data_upload.empty()) {
+        cmd_list.CopyFrom(
+            std::move(m_cell_data_upload),
+            m_cell_buffer.buf->GetView(),
+            "Raster::ProbeVolume::Cell Descriptor Upload"
+        );
+        m_cell_data_upload.clear();
     }
 
     if (!m_volume_data_upload.empty()) {
@@ -318,7 +346,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
         int(min_physical_probe_capacity),
         int(RASTER_PROBE_MAX_COUNT)
     ));
-    snapshot.debug_mode = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 7));
+    snapshot.debug_mode = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 8));
     snapshot.trace_distance     = Max(config.probe_gi_trace_distance, 0.1f);
     snapshot.trace_ray_count =
         static_cast<uint>(Clamp(config.probe_gi_trace_ray_count, 1, int(RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT)));
@@ -360,7 +388,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
 
         volume.total_count = volume.count_x * volume.count_y * volume.count_z;
         volume.probe_offset = snapshot.total_count;
-        volume.page_table_offset = snapshot.volume_count * RASTER_PROBE_MAX_BRICKS_PER_VOLUME;
+        volume.page_table_offset = config_index * RASTER_PROBE_MAX_PAGES_PER_VOLUME;
         volume.origin       = volume_config.origin;
         volume.extent       = SanitizeExtent(volume_config.extent);
         volume.spacing      = float3(
@@ -379,70 +407,124 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
             (volume.count_y + RASTER_PROBE_BRICK_DIM - 1u) / RASTER_PROBE_BRICK_DIM,
             (volume.count_z + RASTER_PROBE_BRICK_DIM - 1u) / RASTER_PROBE_BRICK_DIM
         );
+        const uint3 cell_counts = ProbeAdaptiveLayout::GetCellCounts(brick_counts);
+        volume.first_cell_index = snapshot.cell_count;
         uint  nearest_brick_index = RASTER_PROBE_PAGE_INVALID;
         float nearest_distance_sq = std::numeric_limits<float>::max();
-        for (uint brick_z = 0; brick_z < brick_counts.z; ++brick_z) {
-            for (uint brick_y = 0; brick_y < brick_counts.y; ++brick_y) {
-                for (uint brick_x = 0; brick_x < brick_counts.x; ++brick_x) {
-                    const uint logical_brick_index =
-                        brick_x + brick_y * brick_counts.x + brick_z * brick_counts.x * brick_counts.y;
-                    const uint page_index = volume.page_table_offset + logical_brick_index;
-                    const uint brick_index = snapshot.brick_count;
+        for (uint cell_z = 0; cell_z < cell_counts.z; ++cell_z) {
+            for (uint cell_y = 0; cell_y < cell_counts.y; ++cell_y) {
+                for (uint cell_x = 0; cell_x < cell_counts.x; ++cell_x) {
+                    const uint cell_index = snapshot.cell_count;
+                    CellSnapshot& cell = snapshot.cells[cell_index];
+                    cell.coord             = uint3(cell_x, cell_y, cell_z);
+                    cell.volume_index      = snapshot.volume_count;
+                    cell.config_index      = config_index;
+                    cell.first_brick_index = snapshot.brick_count;
+                    cell.min_probe_spacing = Min(volume.spacing.x, Min(volume.spacing.y, volume.spacing.z));
 
-                    BrickSnapshot& brick = snapshot.bricks[brick_index];
-                    brick.coord           = uint3(brick_x, brick_y, brick_z);
-                    brick.volume_index    = snapshot.volume_count;
-                    brick.page_index      = page_index;
+                    const uint3 cell_brick_begin = cell.coord * RASTER_PROBE_CELL_BRICK_DIM;
+                    const uint3 cell_brick_end = Min(
+                        cell_brick_begin + uint3(RASTER_PROBE_CELL_BRICK_DIM),
+                        brick_counts
+                    );
+                    const uint3 cell_probe_begin = cell_brick_begin * RASTER_PROBE_BRICK_DIM;
+                    const uint3 cell_probe_end = Min(
+                        cell_brick_end * RASTER_PROBE_BRICK_DIM,
+                        uint3(volume.count_x, volume.count_y, volume.count_z)
+                    );
+                    const uint3 cell_probe_counts = cell_probe_end - cell_probe_begin;
+                    cell.origin = volume.origin + volume.spacing * float3(cell_probe_begin);
+                    cell.extent = volume.spacing * float3(
+                        cell_probe_counts.x > 0u ? cell_probe_counts.x - 1u : 0u,
+                        cell_probe_counts.y > 0u ? cell_probe_counts.y - 1u : 0u,
+                        cell_probe_counts.z > 0u ? cell_probe_counts.z - 1u : 0u
+                    );
 
-                    const uint3 brick_start = brick.coord * RASTER_PROBE_BRICK_DIM;
-                    brick.local_counts = uint3(
-                        Min(RASTER_PROBE_BRICK_DIM, volume.count_x - brick_start.x),
-                        Min(RASTER_PROBE_BRICK_DIM, volume.count_y - brick_start.y),
-                        Min(RASTER_PROBE_BRICK_DIM, volume.count_z - brick_start.z)
-                    );
-                    brick.probe_count = brick.local_counts.x * brick.local_counts.y * brick.local_counts.z;
-                    const float3 brick_center_coord(
-                        float(brick_start.x) + float(brick.local_counts.x - 1u) * 0.5f,
-                        float(brick_start.y) + float(brick.local_counts.y - 1u) * 0.5f,
-                        float(brick_start.z) + float(brick.local_counts.z - 1u) * 0.5f
-                    );
-                    const float3 brick_center = volume.origin + volume.spacing * brick_center_coord;
-                    const float distance_sq = SquaredLengthf(camera_position - brick_center);
-                    brick.camera_distance_sq = distance_sq;
-                    brick.update_age = m_brick_history_valid[brick_index] ?
-                                           static_cast<uint>(std::min<uint64>(
-                                               frame_index - m_brick_last_update_frame[brick_index],
-                                               255u
-                                           )) :
-                                           255u;
-                    float resident_distance = snapshot.brick_resident_distance;
-                    if (snapshot.sparse_bricks_enabled && m_has_snapshot &&
-                        m_snapshot.sparse_bricks_enabled && brick_index < m_snapshot.brick_count) {
-                        const BrickSnapshot& previous_brick = m_snapshot.bricks[brick_index];
-                        const bool same_brick = previous_brick.volume_index == brick.volume_index &&
-                                                previous_brick.coord == brick.coord &&
-                                                previous_brick.local_counts == brick.local_counts;
-                        if (same_brick && previous_brick.requested_resident) {
-                            resident_distance += snapshot.brick_resident_hysteresis;
+                    for (uint brick_z = cell_brick_begin.z; brick_z < cell_brick_end.z; ++brick_z) {
+                        for (uint brick_y = cell_brick_begin.y; brick_y < cell_brick_end.y; ++brick_y) {
+                            for (uint brick_x = cell_brick_begin.x; brick_x < cell_brick_end.x; ++brick_x) {
+                                const uint brick_index = snapshot.brick_count;
+                                BrickSnapshot& brick   = snapshot.bricks[brick_index];
+                                brick.coord             = uint3(brick_x, brick_y, brick_z);
+                                brick.volume_index      = snapshot.volume_count;
+                                brick.cell_index        = cell_index;
+                                brick.subdivision_level = 0u;
+
+                                const ProbeBrickVirtualKey virtual_key{config_index, 0u, brick.coord};
+                                brick.page_index        = ProbeAdaptiveLayout::GetVirtualPageIndex(virtual_key);
+                                brick.parent_page_index = ProbeAdaptiveLayout::GetParentPageIndex(virtual_key);
+                                brick.neighbor_pages_0 = uint4(
+                                    ProbeAdaptiveLayout::GetNeighborPageIndex(virtual_key, -1, 0, 0, brick_counts),
+                                    ProbeAdaptiveLayout::GetNeighborPageIndex(virtual_key, 1, 0, 0, brick_counts),
+                                    ProbeAdaptiveLayout::GetNeighborPageIndex(virtual_key, 0, -1, 0, brick_counts),
+                                    ProbeAdaptiveLayout::GetNeighborPageIndex(virtual_key, 0, 1, 0, brick_counts)
+                                );
+                                brick.neighbor_pages_1 = uint4(
+                                    ProbeAdaptiveLayout::GetNeighborPageIndex(virtual_key, 0, 0, -1, brick_counts),
+                                    ProbeAdaptiveLayout::GetNeighborPageIndex(virtual_key, 0, 0, 1, brick_counts),
+                                    RASTER_PROBE_PAGE_INVALID,
+                                    0u
+                                );
+
+                                const uint3 brick_start = brick.coord * RASTER_PROBE_BRICK_DIM;
+                                brick.local_counts = uint3(
+                                    Min(RASTER_PROBE_BRICK_DIM, volume.count_x - brick_start.x),
+                                    Min(RASTER_PROBE_BRICK_DIM, volume.count_y - brick_start.y),
+                                    Min(RASTER_PROBE_BRICK_DIM, volume.count_z - brick_start.z)
+                                );
+                                brick.probe_count =
+                                    brick.local_counts.x * brick.local_counts.y * brick.local_counts.z;
+                                const float3 brick_center_coord(
+                                    float(brick_start.x) + float(brick.local_counts.x - 1u) * 0.5f,
+                                    float(brick_start.y) + float(brick.local_counts.y - 1u) * 0.5f,
+                                    float(brick_start.z) + float(brick.local_counts.z - 1u) * 0.5f
+                                );
+                                const float3 brick_center = volume.origin + volume.spacing * brick_center_coord;
+                                const float distance_sq = SquaredLengthf(camera_position - brick_center);
+                                brick.camera_distance_sq = distance_sq;
+                                brick.update_age = m_brick_history_valid[brick_index] ?
+                                                       static_cast<uint>(std::min<uint64>(
+                                                           frame_index - m_brick_last_update_frame[brick_index],
+                                                           255u
+                                                       )) :
+                                                       255u;
+                                float resident_distance = snapshot.brick_resident_distance;
+                                if (snapshot.sparse_bricks_enabled && m_has_snapshot &&
+                                    m_snapshot.sparse_bricks_enabled && brick_index < m_snapshot.brick_count) {
+                                    const BrickSnapshot& previous_brick = m_snapshot.bricks[brick_index];
+                                    const bool same_brick = previous_brick.volume_index == brick.volume_index &&
+                                                            previous_brick.coord == brick.coord &&
+                                                            previous_brick.page_index == brick.page_index &&
+                                                            previous_brick.local_counts == brick.local_counts;
+                                    if (same_brick && previous_brick.requested_resident) {
+                                        resident_distance += snapshot.brick_resident_hysteresis;
+                                    }
+                                }
+                                brick.requested_resident = !snapshot.sparse_bricks_enabled ||
+                                                           distance_sq <= resident_distance * resident_distance;
+
+                                if (distance_sq < nearest_distance_sq) {
+                                    nearest_distance_sq = distance_sq;
+                                    nearest_brick_index = brick_index;
+                                }
+
+                                if (brick.requested_resident) {
+                                    ++snapshot.requested_brick_count;
+                                    snapshot.requested_probe_count += brick.probe_count;
+                                    ++volume.requested_brick_count;
+                                    volume.requested_probe_count += brick.probe_count;
+                                    ++cell.requested_brick_count;
+                                }
+                                snapshot.total_count += brick.probe_count;
+                                ++snapshot.brick_count;
+                                ++volume.brick_count;
+                                ++cell.brick_count;
+                            }
                         }
                     }
-                    brick.requested_resident = !snapshot.sparse_bricks_enabled ||
-                                               distance_sq <= resident_distance * resident_distance;
 
-                    if (distance_sq < nearest_distance_sq) {
-                        nearest_distance_sq = distance_sq;
-                        nearest_brick_index = brick_index;
-                    }
-
-                    if (brick.requested_resident) {
-                        ++snapshot.requested_brick_count;
-                        snapshot.requested_probe_count += brick.probe_count;
-                        ++volume.requested_brick_count;
-                        volume.requested_probe_count += brick.probe_count;
-                    }
-                    snapshot.total_count += brick.probe_count;
-                    ++snapshot.brick_count;
-                    ++volume.brick_count;
+                    ++snapshot.cell_count;
+                    ++volume.cell_count;
                 }
             }
         }
@@ -455,6 +537,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
             snapshot.requested_probe_count += nearest_brick.probe_count;
             ++volume.requested_brick_count;
             volume.requested_probe_count += nearest_brick.probe_count;
+            ++snapshot.cells[nearest_brick.cell_index].requested_brick_count;
         }
 
         ++snapshot.volume_count;
@@ -485,7 +568,9 @@ bool ProbeVolumeResource::RequiresPhysicalAllocatorReset(const Snapshot& snapsho
         const BrickSnapshot& current  = snapshot.bricks[brick_index];
         if (previous.coord != current.coord || previous.local_counts != current.local_counts ||
             previous.volume_index != current.volume_index || previous.probe_count != current.probe_count ||
-            previous.page_index != current.page_index) {
+            previous.page_index != current.page_index || previous.cell_index != current.cell_index ||
+            previous.subdivision_level != current.subdivision_level ||
+            previous.parent_page_index != current.parent_page_index) {
             return true;
         }
     }
@@ -538,6 +623,9 @@ void ProbeVolumeResource::ApplyPhysicalResidency(Snapshot& snapshot) {
     for (uint volume_index = 0; volume_index < snapshot.volume_count; ++volume_index) {
         snapshot.volumes[volume_index].resident_brick_count = 0;
         snapshot.volumes[volume_index].resident_probe_count = 0;
+    }
+    for (uint cell_index = 0; cell_index < snapshot.cell_count; ++cell_index) {
+        snapshot.cells[cell_index].resident_brick_count = 0;
     }
 
     Array<uint> requested_candidates;
@@ -596,8 +684,13 @@ void ProbeVolumeResource::ApplyPhysicalResidency(Snapshot& snapshot) {
 
     const bool allocator_reset = RequiresPhysicalAllocatorReset(snapshot);
     if (allocator_reset) {
+        ++m_layout_generation;
+        if (m_layout_generation == 0u) {
+            ++m_layout_generation;
+        }
         ResetPhysicalAllocator(snapshot.physical_probe_capacity);
     }
+    snapshot.layout_generation = m_layout_generation;
 
     for (uint brick_index = 0; brick_index < m_physical_allocations.size(); ++brick_index) {
         if (brick_index >= snapshot.brick_count || !selected_bricks[brick_index]) {
@@ -690,6 +783,7 @@ void ProbeVolumeResource::ApplyPhysicalResidency(Snapshot& snapshot) {
         VolumeSnapshot& volume = snapshot.volumes[brick.volume_index];
         ++volume.resident_brick_count;
         volume.resident_probe_count += brick.probe_count;
+        ++snapshot.cells[brick.cell_index].resident_brick_count;
     }
 
     snapshot.free_physical_probe_count =
@@ -717,7 +811,10 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
     if (m_snapshot.enabled != snapshot.enabled ||
         m_snapshot.sparse_bricks_enabled != snapshot.sparse_bricks_enabled ||
         m_snapshot.debug_mode != snapshot.debug_mode ||
-        m_snapshot.volume_count != snapshot.volume_count || m_snapshot.brick_count != snapshot.brick_count ||
+        m_snapshot.volume_count != snapshot.volume_count || m_snapshot.cell_count != snapshot.cell_count ||
+        m_snapshot.brick_count != snapshot.brick_count ||
+        m_snapshot.max_subdivision_level != snapshot.max_subdivision_level ||
+        m_snapshot.layout_generation != snapshot.layout_generation ||
         m_snapshot.requested_brick_count != snapshot.requested_brick_count ||
         m_snapshot.requested_probe_count != snapshot.requested_probe_count ||
         m_snapshot.resident_brick_count != snapshot.resident_brick_count ||
@@ -733,17 +830,17 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
         m_snapshot.update_scheduler_enabled != snapshot.update_scheduler_enabled ||
         m_snapshot.update_brick_budget != snapshot.update_brick_budget ||
         !NearlyEqual(m_snapshot.trace_distance, snapshot.trace_distance) ||
-           m_snapshot.trace_ray_count != snapshot.trace_ray_count ||
-           !NearlyEqual(m_snapshot.visibility_bias, snapshot.visibility_bias) ||
-           !NearlyEqual(m_snapshot.visibility_power, snapshot.visibility_power) ||
-           !NearlyEqual(m_snapshot.visibility_min_weight, snapshot.visibility_min_weight) ||
-           !NearlyEqual(m_snapshot.visibility_strength, snapshot.visibility_strength) ||
-           !NearlyEqual(m_snapshot.irradiance_hysteresis, snapshot.irradiance_hysteresis) ||
-           !NearlyEqual(m_snapshot.visibility_hysteresis, snapshot.visibility_hysteresis) ||
-           !NearlyEqual(m_snapshot.debug_scale, snapshot.debug_scale) ||
-           !NearlyEqual(m_snapshot.sky_intensity, snapshot.sky_intensity) ||
-           !NearlyEqual(m_snapshot.directional_bounce, snapshot.directional_bounce) ||
-           !NearlyEqual(m_snapshot.sky_color, snapshot.sky_color) ||
+        m_snapshot.trace_ray_count != snapshot.trace_ray_count ||
+        !NearlyEqual(m_snapshot.visibility_bias, snapshot.visibility_bias) ||
+        !NearlyEqual(m_snapshot.visibility_power, snapshot.visibility_power) ||
+        !NearlyEqual(m_snapshot.visibility_min_weight, snapshot.visibility_min_weight) ||
+        !NearlyEqual(m_snapshot.visibility_strength, snapshot.visibility_strength) ||
+        !NearlyEqual(m_snapshot.irradiance_hysteresis, snapshot.irradiance_hysteresis) ||
+        !NearlyEqual(m_snapshot.visibility_hysteresis, snapshot.visibility_hysteresis) ||
+        !NearlyEqual(m_snapshot.debug_scale, snapshot.debug_scale) ||
+        !NearlyEqual(m_snapshot.sky_intensity, snapshot.sky_intensity) ||
+        !NearlyEqual(m_snapshot.directional_bounce, snapshot.directional_bounce) ||
+        !NearlyEqual(m_snapshot.sky_color, snapshot.sky_color) ||
         !NearlyEqual(m_snapshot.ground_color, snapshot.ground_color)) {
         return true;
     }
@@ -754,7 +851,8 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
         if (lhs.config_index != rhs.config_index || lhs.count_x != rhs.count_x || lhs.count_y != rhs.count_y ||
             lhs.count_z != rhs.count_z || lhs.total_count != rhs.total_count ||
             lhs.probe_offset != rhs.probe_offset || lhs.page_table_offset != rhs.page_table_offset ||
-            lhs.brick_count != rhs.brick_count ||
+            lhs.brick_count != rhs.brick_count || lhs.first_cell_index != rhs.first_cell_index ||
+            lhs.cell_count != rhs.cell_count || lhs.max_subdivision_level != rhs.max_subdivision_level ||
             lhs.requested_brick_count != rhs.requested_brick_count ||
             lhs.requested_probe_count != rhs.requested_probe_count ||
             lhs.resident_brick_count != rhs.resident_brick_count ||
@@ -766,12 +864,30 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
         }
     }
 
+    for (uint cell_index = 0; cell_index < snapshot.cell_count; ++cell_index) {
+        const CellSnapshot& lhs = m_snapshot.cells[cell_index];
+        const CellSnapshot& rhs = snapshot.cells[cell_index];
+        if (lhs.coord != rhs.coord || lhs.volume_index != rhs.volume_index ||
+            lhs.config_index != rhs.config_index || lhs.first_brick_index != rhs.first_brick_index ||
+            lhs.brick_count != rhs.brick_count ||
+            lhs.requested_brick_count != rhs.requested_brick_count ||
+            lhs.resident_brick_count != rhs.resident_brick_count ||
+            lhs.min_subdivision_level != rhs.min_subdivision_level ||
+            lhs.max_subdivision_level != rhs.max_subdivision_level || !NearlyEqual(lhs.origin, rhs.origin) ||
+            !NearlyEqual(lhs.extent, rhs.extent) || !NearlyEqual(lhs.min_probe_spacing, rhs.min_probe_spacing)) {
+            return true;
+        }
+    }
+
     for (uint brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
         const BrickSnapshot& lhs = m_snapshot.bricks[brick_index];
         const BrickSnapshot& rhs = snapshot.bricks[brick_index];
         if (lhs.coord != rhs.coord || lhs.local_counts != rhs.local_counts ||
             lhs.volume_index != rhs.volume_index || lhs.probe_offset != rhs.probe_offset ||
             lhs.probe_count != rhs.probe_count || lhs.page_index != rhs.page_index ||
+            lhs.cell_index != rhs.cell_index || lhs.subdivision_level != rhs.subdivision_level ||
+            lhs.parent_page_index != rhs.parent_page_index ||
+            lhs.neighbor_pages_0 != rhs.neighbor_pages_0 || lhs.neighbor_pages_1 != rhs.neighbor_pages_1 ||
             lhs.requested_resident != rhs.requested_resident || lhs.resident != rhs.resident) {
             return true;
         }
@@ -792,6 +908,9 @@ bool ProbeVolumeResource::RequiresHistoryReset(const Snapshot& snapshot, uint vo
            previous.count_z != current.count_z || previous.total_count != current.total_count ||
            previous.probe_offset != current.probe_offset ||
            previous.page_table_offset != current.page_table_offset || previous.brick_count != current.brick_count ||
+           previous.first_cell_index != current.first_cell_index ||
+           previous.cell_count != current.cell_count ||
+           previous.max_subdivision_level != current.max_subdivision_level ||
            !NearlyEqual(previous.origin, current.origin) ||
            !NearlyEqual(previous.extent, current.extent) || !NearlyEqual(previous.spacing, current.spacing) ||
            !NearlyEqual(m_snapshot.trace_distance, snapshot.trace_distance) ||
@@ -822,13 +941,46 @@ void ProbeVolumeResource::StageVolumeUpload(const Snapshot& snapshot) {
             snapshot.visibility_min_weight,
             snapshot.visibility_strength
         );
+        desc.hierarchy = uint4(
+            volume.first_cell_index,
+            volume.cell_count,
+            volume.max_subdivision_level,
+            snapshot.layout_generation
+        );
     }
 
     m_volume_data_upload.resize(sizeof(m_gpu_volume_descs));
     std::memcpy(m_volume_data_upload.data(), m_gpu_volume_descs.data(), sizeof(m_gpu_volume_descs));
+    StageCellUpload(snapshot);
     StageBrickUpload(snapshot);
     m_page_table_upload.resize(sizeof(snapshot.page_table));
     std::memcpy(m_page_table_upload.data(), snapshot.page_table.data(), sizeof(snapshot.page_table));
+}
+
+void ProbeVolumeResource::StageCellUpload(const Snapshot& snapshot) {
+    m_gpu_cell_descs.fill({});
+    for (uint cell_index = 0; cell_index < snapshot.cell_count; ++cell_index) {
+        const CellSnapshot& cell = snapshot.cells[cell_index];
+        ProbeCellGpuDesc&   desc = m_gpu_cell_descs[cell_index];
+        desc.origin_spacing = float4(cell.origin.x, cell.origin.y, cell.origin.z, cell.min_probe_spacing);
+        desc.extent = float4(cell.extent.x, cell.extent.y, cell.extent.z, 0.0f);
+        desc.coord_volume = uint4(cell.coord.x, cell.coord.y, cell.coord.z, cell.volume_index);
+        desc.brick_range = uint4(
+            cell.first_brick_index,
+            cell.brick_count,
+            cell.requested_brick_count,
+            cell.resident_brick_count
+        );
+        desc.hierarchy = uint4(
+            cell.min_subdivision_level,
+            cell.max_subdivision_level,
+            cell.config_index,
+            snapshot.layout_generation
+        );
+    }
+
+    m_cell_data_upload.resize(sizeof(m_gpu_cell_descs));
+    std::memcpy(m_cell_data_upload.data(), m_gpu_cell_descs.data(), sizeof(m_gpu_cell_descs));
 }
 
 void ProbeVolumeResource::StageBrickUpload(const Snapshot& snapshot) {
@@ -841,6 +993,19 @@ void ProbeVolumeResource::StageBrickUpload(const Snapshot& snapshot) {
             uint4(brick.probe_offset, brick.probe_count, brick.resident ? 1u : 0u, brick.page_index);
         desc.local_counts =
             uint4(brick.local_counts.x, brick.local_counts.y, brick.local_counts.z, brick.update_age);
+        desc.hierarchy = uint4(
+            brick.cell_index,
+            brick.subdivision_level,
+            brick.parent_page_index,
+            brick.page_index
+        );
+        desc.neighbor_pages_0 = brick.neighbor_pages_0;
+        desc.neighbor_pages_1 = uint4(
+            brick.neighbor_pages_1.x,
+            brick.neighbor_pages_1.y,
+            snapshot.layout_generation,
+            brick.neighbor_pages_1.w
+        );
     }
 
     m_brick_data_upload.resize(sizeof(m_gpu_brick_descs));
@@ -895,8 +1060,8 @@ ProbeVolumeResource::PrepareUpdate(
     m_last_scheduled_brick_count = 0;
     m_last_scheduled_probe_count = 0;
 
-    if (m_probe_buffer.buf == nullptr || m_volume_buffer.buf == nullptr || m_brick_buffer.buf == nullptr ||
-        m_page_table_buffer.buf == nullptr ||
+    if (m_probe_buffer.buf == nullptr || m_volume_buffer.buf == nullptr || m_cell_buffer.buf == nullptr ||
+        m_brick_buffer.buf == nullptr || m_page_table_buffer.buf == nullptr ||
         m_visibility_atlas_buffer.buf == nullptr || m_irradiance_atlas_buffer.buf == nullptr) {
         return update_info;
     }
@@ -936,7 +1101,7 @@ ProbeVolumeResource::PrepareUpdate(
 
         if (changed || volume_reset) {
             LOG_DEBUG(
-                "[ProbeGI] Volume residency updated: slot={}, config_index={}, count=({}, {}, {}) total={}, logical_offset={}, requested_bricks={}/{}, requested_probes={}, resident_bricks={}/{}, resident_probes={}, page_table_offset={}, origin={}, extent={}, spacing={}, intensity={}, blend_distance={}, history_reset={}",
+                "[ProbeGI] Volume residency updated: slot={}, config_index={}, count=({}, {}, {}) total={}, logical_offset={}, cells={} range=[{}, {}), max_level={}, requested_bricks={}/{}, requested_probes={}, resident_bricks={}/{}, resident_probes={}, page_table_offset={}, origin={}, extent={}, spacing={}, intensity={}, blend_distance={}, history_reset={}",
                 volume_index,
                 volume.config_index,
                 volume.count_x,
@@ -944,6 +1109,10 @@ ProbeVolumeResource::PrepareUpdate(
                 volume.count_z,
                 volume.total_count,
                 volume.probe_offset,
+                volume.cell_count,
+                volume.first_cell_index,
+                volume.first_cell_index + volume.cell_count,
+                volume.max_subdivision_level,
                 volume.requested_brick_count,
                 volume.brick_count,
                 volume.requested_probe_count,
@@ -1027,8 +1196,11 @@ ProbeVolumeResource::PrepareUpdate(
 
     if (changed) {
         LOG_DEBUG(
-            "[ProbeGI] Multi-volume brick residency updated: active_volumes={}, requested_bricks={}/{}, requested_probes={}, resident_bricks={}/{}, resident_probes={}/{}, physical_allocations={}, physical_probes={}/{}, free_physical_probes={}, capacity_evicted_bricks={}, allocator_compacted={}, sparse={}, resident_distance={}, resident_hysteresis={}, scheduler={}, update_budget={}, scheduled_bricks={}, scheduled_probes={}, deferred_bricks={}, trace_distance={}, trace_rays={}, history_hysteresis=({}, {}).",
+            "[ProbeGI] Multi-volume brick residency updated: active_volumes={}, cells={}, max_level={}, layout_generation={}, requested_bricks={}/{}, requested_probes={}, resident_bricks={}/{}, resident_probes={}/{}, physical_allocations={}, physical_probes={}/{}, free_physical_probes={}, capacity_evicted_bricks={}, allocator_compacted={}, sparse={}, resident_distance={}, resident_hysteresis={}, scheduler={}, update_budget={}, scheduled_bricks={}, scheduled_probes={}, deferred_bricks={}, trace_distance={}, trace_rays={}, history_hysteresis=({}, {}).",
             snapshot.volume_count,
+            snapshot.cell_count,
+            snapshot.max_subdivision_level,
+            snapshot.layout_generation,
             snapshot.requested_brick_count,
             snapshot.brick_count,
             snapshot.requested_probe_count,
@@ -1070,7 +1242,8 @@ ProbeVolumeResource::PrepareUpdate(
 void ProbeVolumeResource::FillLightingData(LightingData& lighting_data) const {
     const uint enabled =
         (m_has_snapshot && m_snapshot.enabled && m_probe_buffer.hdl != 0 && m_volume_buffer.hdl != 0 &&
-         m_brick_buffer.hdl != 0 && m_page_table_buffer.hdl != 0 && m_visibility_atlas_buffer.hdl != 0 &&
+         m_cell_buffer.hdl != 0 && m_brick_buffer.hdl != 0 && m_page_table_buffer.hdl != 0 &&
+         m_visibility_atlas_buffer.hdl != 0 &&
          m_irradiance_atlas_buffer.hdl != 0 &&
          m_snapshot.volume_count > 0 && m_snapshot.total_count > 0) ?
             1u :
@@ -1089,6 +1262,12 @@ void ProbeVolumeResource::FillLightingData(LightingData& lighting_data) const {
         m_irradiance_atlas_buffer.hdl,
         m_irradiance_atlas_texture.hdl,
         m_visibility_atlas_texture.hdl
+    );
+    lighting_data.probe_system_hierarchy = uint4(
+        m_cell_buffer.hdl,
+        m_snapshot.cell_count,
+        m_snapshot.max_subdivision_level,
+        m_snapshot.layout_generation
     );
     lighting_data.probe_system_debug = float4(m_snapshot.debug_scale, 0.0f, 0.0f, 0.0f);
 }

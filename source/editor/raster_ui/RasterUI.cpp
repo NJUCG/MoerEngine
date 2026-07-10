@@ -327,6 +327,12 @@ void RasterUI::ShowConfig() {
             Render::RASTER_PROBE_BRICK_DIM,
             Render::RASTER_PROBE_BRICK_DIM
         );
+        ImGui::Text(
+            "Cell Size: %u x %u x %u Bricks",
+            Render::RASTER_PROBE_CELL_BRICK_DIM,
+            Render::RASTER_PROBE_CELL_BRICK_DIM,
+            Render::RASTER_PROBE_CELL_BRICK_DIM
+        );
         ImGui::SliderInt(
             "Physical Probe Capacity",
             &m_config.probe_gi_physical_probe_capacity,
@@ -431,8 +437,9 @@ void RasterUI::ShowConfig() {
             "Brick Residency",
             "Update Age",
             "Physical Allocation",
+            "Cell Layout",
         };
-        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 8);
+        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 9);
         if (m_config.probe_gi_debug_mode != 0) {
             ImGui::SliderFloat("Debug Scale", &m_config.probe_gi_debug_scale, 0.0f, 8.0f);
         }

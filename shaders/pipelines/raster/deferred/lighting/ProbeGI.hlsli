@@ -7,7 +7,8 @@ bool ProbeGIIsEnabled(Moer::LightingData lighting_data) {
     return lighting_data.probe_system_config.x != 0u && lighting_data.probe_system_config.z != 0u &&
            lighting_data.probe_system_config.w != 0u && lighting_data.probe_system_counts.x > 0u &&
            lighting_data.probe_system_counts.y > 0u && lighting_data.probe_system_counts.z != 0u &&
-           lighting_data.probe_system_counts.w != 0u;
+           lighting_data.probe_system_counts.w != 0u && lighting_data.probe_system_hierarchy.x != 0u &&
+           lighting_data.probe_system_hierarchy.y > 0u;
 }
 
 Moer::ProbeVolumeGpuDesc ProbeGILoadVolume(Moer::LightingData lighting_data, uint volume_index) {
@@ -29,12 +30,10 @@ uint ProbeGIGetBrickIndex(
     uint3 coord
 ) {
     const uint3 counts = ProbeGIGetCounts(volume);
-    const uint3 brick_counts =
-        (counts + uint3(Moer::RASTER_PROBE_BRICK_DIM - 1u, Moer::RASTER_PROBE_BRICK_DIM - 1u, Moer::RASTER_PROBE_BRICK_DIM - 1u)) /
-        Moer::RASTER_PROBE_BRICK_DIM;
     const uint3 brick_coord = coord / Moer::RASTER_PROBE_BRICK_DIM;
     const uint logical_brick_index =
-        brick_coord.x + brick_coord.y * brick_counts.x + brick_coord.z * brick_counts.x * brick_counts.y;
+        brick_coord.x + brick_coord.y * Moer::RASTER_PROBE_MAX_FINE_BRICKS_PER_AXIS +
+        brick_coord.z * Moer::RASTER_PROBE_MAX_FINE_BRICKS_PER_AXIS * Moer::RASTER_PROBE_MAX_FINE_BRICKS_PER_AXIS;
 
     ArrayBuffer page_table = ArrayBuffer(lighting_data.probe_system_counts.w);
     const uint brick_index = page_table.Load<uint>(volume.allocation.z + logical_brick_index);
@@ -615,7 +614,7 @@ float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, 
         return float3(0.02, 0.02, 0.02);
     }
 
-    if (debug_mode == 4u || debug_mode == 5u || debug_mode == 6u || debug_mode == 7u) {
+    if (debug_mode == 4u || debug_mode == 5u || debug_mode == 6u || debug_mode == 7u || debug_mode == 8u) {
         uint3 counts = ProbeGIGetCounts(volume);
         float3 local = ProbeGIGetLocalCoord(volume, biased_pos);
         uint3 coord = min(uint3(round(clamp(local, float3(0.0, 0.0, 0.0), float3(counts - uint3(1, 1, 1))))), counts - uint3(1, 1, 1));
@@ -661,6 +660,32 @@ float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, 
                 6.28318530718 * (allocation_tint + float3(0.00, 0.33, 0.67))
             );
             return physical_color * lighting_data.probe_system_debug.x;
+        }
+
+        if (debug_mode == 8u) {
+            if (brick_index == Moer::RASTER_PROBE_PAGE_INVALID ||
+                lighting_data.probe_system_hierarchy.x == 0u) {
+                return float3(0.03, 0.01, 0.04) * lighting_data.probe_system_debug.x;
+            }
+
+            ArrayBuffer brick_buffer = ArrayBuffer(lighting_data.probe_system_counts.z);
+            const Moer::ProbeBrickGpuDesc brick =
+                brick_buffer.Load<Moer::ProbeBrickGpuDesc>(brick_index);
+            const uint cell_index = brick.hierarchy.x;
+            if (cell_index >= lighting_data.probe_system_hierarchy.y) {
+                return float3(0.35, 0.0, 0.35) * lighting_data.probe_system_debug.x;
+            }
+
+            ArrayBuffer cell_buffer = ArrayBuffer(lighting_data.probe_system_hierarchy.x);
+            const Moer::ProbeCellGpuDesc cell = cell_buffer.Load<Moer::ProbeCellGpuDesc>(cell_index);
+            const float cell_tint = frac(float(
+                cell.coord_volume.x + cell.coord_volume.y * 7u + cell.coord_volume.z * 37u +
+                cell.coord_volume.w * 101u
+            ) * 0.61803398875);
+            const float3 cell_color = 0.55 + 0.45 * cos(
+                6.28318530718 * (cell_tint + float3(0.00, 0.33, 0.67))
+            );
+            return cell_color * lighting_data.probe_system_debug.x;
         }
 
         uint probe_index = ProbeGIGetProbeIndex(lighting_data, volume, coord);

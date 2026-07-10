@@ -246,7 +246,7 @@ struct RasterConfig {
     float3 probe_gi_sky_color            = float3(0.48f, 0.62f, 0.95f);
     float3 probe_gi_ground_color         = float3(0.35f, 0.27f, 0.18f);
     int    probe_gi_debug_mode =
-        0; // 0=off, 1=cells, 2=irradiance, 3=contribution, 4=visibility, 5=brick residency, 6=update age, 7=physical allocation
+        0; // 0=off, 1=volume cells, 2=irradiance, 3=contribution, 4=visibility, 5=brick residency, 6=update age, 7=physical allocation, 8=cell layout
     float  probe_gi_debug_scale          = 1.0f;
     bool   probe_gi_gizmo_enabled        = false;
     int    probe_gi_gizmo_color_mode     = 0; // 0=fixed color, 1=probe irradiance, 2=visibility, 3=state
