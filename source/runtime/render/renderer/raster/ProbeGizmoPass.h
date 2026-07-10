@@ -47,7 +47,8 @@ public:
         const uint probe_count = context.probe_volume.GetProbeCount();
         const bool draw_probes = config.probe_gi_enabled && config.probe_gi_gizmo_enabled && probe_count != 0 &&
                                  context.probe_volume.GetBufferHandle() != 0;
-        const bool draw_bounds = config.probe_gi_enabled && config.probe_gi_volume_bounds_enabled;
+        const bool draw_bounds = config.probe_gi_enabled && config.probe_gi_volume_bounds_enabled &&
+                                 context.probe_volume.GetVolumeCount() != 0;
         if (!draw_probes && !draw_bounds) {
             return;
         }
@@ -89,43 +90,58 @@ public:
         }
 
         if (draw_bounds) {
-            ProbeGizmoParam param{};
-            param.world2clip = Transpose(camera.GetViewProjectionMatrix());
-            param.probe_volume_config = uint4(
-                RASTER_PROBE_GIZMO_DRAW_MODE_BOUNDS,
-                ProbeGizmoPackFloat(config.probe_gi_volume_origin.x),
-                ProbeGizmoPackFloat(config.probe_gi_volume_origin.y),
-                ProbeGizmoPackFloat(config.probe_gi_volume_origin.z)
-            );
-            param.gizmo_config = float4(
-                Max(config.probe_gi_volume_extent.x, 0.1f),
-                Max(config.probe_gi_volume_extent.y, 0.1f),
-                Max(config.probe_gi_volume_extent.z, 0.1f),
-                Max(config.probe_gi_volume_bounds_thickness, 0.001f)
-            );
-            param.fixed_color = float4(
-                config.probe_gi_volume_bounds_color.x,
-                config.probe_gi_volume_bounds_color.y,
-                config.probe_gi_volume_bounds_color.z,
-                0.75f
-            );
-            param.camera_position = float4(camera.GetPosition().x, camera.GetPosition().y, camera.GetPosition().z, 0.0f);
+            for (uint volume_index = 0; volume_index < context.probe_volume.GetVolumeCount(); ++volume_index) {
+                const ProbeVolumeGpuDesc& volume = context.probe_volume.GetVolumeDesc(volume_index);
+                const float3 volume_color = GetVolumeBoundsColor(config, volume_index);
 
-            RasterTool::LogDebugEverySeconds("[ProbeGI] Probe volume bounds pass active.", 3.0);
-
-            context.cmd_list.Gfx(m_pipeline, context.bdls, param)
-                .Draw(
-                    "Probe GI Volume Bounds Pass",
-                    context.textures.lighting_output.GetRect2D(),
-                    Array<SingleDrawParam>{SingleDrawParam{72, 1, 0, 0, 0}},
-                    ColorAttachment{
-                        context.textures.lighting_output.tex, EAttachmentAction::AC_LOAD_STORE, float4(0, 0, 0, 0)
-                    }
+                ProbeGizmoParam param{};
+                param.world2clip = Transpose(camera.GetViewProjectionMatrix());
+                param.probe_volume_config = uint4(
+                    RASTER_PROBE_GIZMO_DRAW_MODE_BOUNDS,
+                    ProbeGizmoPackFloat(volume.origin_bias.x),
+                    ProbeGizmoPackFloat(volume.origin_bias.y),
+                    ProbeGizmoPackFloat(volume.origin_bias.z)
                 );
+                param.gizmo_config = float4(
+                    Max(volume.extent_blend.x, 0.1f),
+                    Max(volume.extent_blend.y, 0.1f),
+                    Max(volume.extent_blend.z, 0.1f),
+                    Max(config.probe_gi_volume_bounds_thickness, 0.001f)
+                );
+                param.fixed_color = float4(volume_color.x, volume_color.y, volume_color.z, 0.75f);
+                param.camera_position =
+                    float4(camera.GetPosition().x, camera.GetPosition().y, camera.GetPosition().z, 0.0f);
+
+                context.cmd_list.Gfx(m_pipeline, context.bdls, param)
+                    .Draw(
+                        "Probe GI Volume Bounds Pass",
+                        context.textures.lighting_output.GetRect2D(),
+                        Array<SingleDrawParam>{SingleDrawParam{72, 1, 0, 0, 0}},
+                        ColorAttachment{
+                            context.textures.lighting_output.tex,
+                            EAttachmentAction::AC_LOAD_STORE,
+                            float4(0, 0, 0, 0)
+                        }
+                    );
+            }
+            RasterTool::LogDebugEverySeconds("[ProbeGI] Multi-volume bounds pass active.", 3.0);
         }
     }
 
 private:
+    static float3 GetVolumeBoundsColor(const RasterConfig& config, uint volume_index) {
+        if (volume_index == 0u) {
+            return config.probe_gi_volume_bounds_color;
+        }
+        if (volume_index == 1u) {
+            return float3(0.20f, 0.65f, 1.0f);
+        }
+        if (volume_index == 2u) {
+            return float3(0.30f, 1.0f, 0.35f);
+        }
+        return float3(0.95f, 0.30f, 0.82f);
+    }
+
     ProbeGizmoPipeline m_pipeline;
 };
 

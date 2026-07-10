@@ -329,15 +329,16 @@ ProbePlacementResult ProbeClassifyAndRelocate(
     return result;
 }
 
-[numthreads(64, 1, 1)] void main(uint probe_index : SV_DispatchThreadID) {
-    const uint total_probe_count = param.probe_volume_counts.w;
-    if (probe_index >= total_probe_count) {
+[numthreads(64, 1, 1)] void main(uint local_probe_index : SV_DispatchThreadID) {
+    const uint3 counts = max(param.probe_volume_counts.xyz, uint3(1, 1, 1));
+    const uint local_probe_count = counts.x * counts.y * counts.z;
+    if (local_probe_index >= local_probe_count) {
         return;
     }
 
-    const uint3 counts = max(param.probe_volume_counts.xyz, uint3(1, 1, 1));
-    const uint  x      = probe_index % counts.x;
-    const uint  yz     = probe_index / counts.x;
+    const uint  probe_index = param.probe_volume_counts.w + local_probe_index;
+    const uint  x      = local_probe_index % counts.x;
+    const uint  yz     = local_probe_index / counts.x;
     const uint  y      = yz % counts.y;
     const uint  z      = yz / counts.y;
     const uint3 coord  = uint3(x, y, z);

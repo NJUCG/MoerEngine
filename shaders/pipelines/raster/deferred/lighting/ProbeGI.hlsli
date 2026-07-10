@@ -4,15 +4,21 @@
 #include "shared/raster/ShaderParameters.h"
 
 bool ProbeGIIsEnabled(Moer::LightingData lighting_data) {
-    return lighting_data.probe_volume_config.x != 0 && lighting_data.probe_volume_config.z != 0 &&
-           lighting_data.probe_volume_counts.w > 0;
+    return lighting_data.probe_system_config.x != 0u && lighting_data.probe_system_config.z != 0u &&
+           lighting_data.probe_system_config.w != 0u && lighting_data.probe_system_counts.x > 0u &&
+           lighting_data.probe_system_counts.y > 0u;
 }
 
-uint3 ProbeGIGetCounts(Moer::LightingData lighting_data) {
+Moer::ProbeVolumeGpuDesc ProbeGILoadVolume(Moer::LightingData lighting_data, uint volume_index) {
+    ArrayBuffer volume_buffer = ArrayBuffer(lighting_data.probe_system_config.w);
+    return volume_buffer.Load<Moer::ProbeVolumeGpuDesc>(volume_index);
+}
+
+uint3 ProbeGIGetCounts(Moer::ProbeVolumeGpuDesc volume) {
     return uint3(
-        max(lighting_data.probe_volume_counts.x, 1u),
-        max(lighting_data.probe_volume_counts.y, 1u),
-        max(lighting_data.probe_volume_counts.z, 1u)
+        max(volume.counts.x, 1u),
+        max(volume.counts.y, 1u),
+        max(volume.counts.z, 1u)
     );
 }
 
@@ -21,7 +27,7 @@ uint ProbeGIGetProbeIndex(uint3 coord, uint3 counts) {
 }
 
 Moer::ProbeGridProbeData ProbeGILoadProbe(Moer::LightingData lighting_data, uint probe_index) {
-    ArrayBuffer probe_buffer = ArrayBuffer(lighting_data.probe_volume_config.z);
+    ArrayBuffer probe_buffer = ArrayBuffer(lighting_data.probe_system_config.z);
     return probe_buffer.Load<Moer::ProbeGridProbeData>(probe_index);
 }
 
@@ -183,15 +189,15 @@ float4 ProbeGILoadDirectionalVisibility(
     Moer::ProbeGridProbeData probe,
     float3 probe_to_surface_dir
 ) {
-    if (lighting_data.probe_volume_atlas_config.z != 0u) {
-        TextureHandle visibility_texture = TextureHandle(lighting_data.probe_volume_atlas_config.z);
+    if (lighting_data.probe_system_atlas.w != 0u) {
+        TextureHandle visibility_texture = TextureHandle(lighting_data.probe_system_atlas.w);
         const float2 atlas_uv = ProbeGIGetAtlasTextureUv(probe_index, probe_to_surface_dir);
         const float4 visibility_moments = visibility_texture.Sample2D<float4>(atlas_uv);
         return lerp(probe.visibility, visibility_moments, saturate(visibility_moments.w));
     }
 
-    if (lighting_data.probe_volume_config.w != 0u) {
-        ArrayBuffer visibility_buffer = ArrayBuffer(lighting_data.probe_volume_config.w);
+    if (lighting_data.probe_system_atlas.x != 0u) {
+        ArrayBuffer visibility_buffer = ArrayBuffer(lighting_data.probe_system_atlas.x);
         const float4 visibility_moments =
             ProbeGISampleVisibilityAtlasBilinear(visibility_buffer, probe_index, probe_to_surface_dir);
         return lerp(probe.visibility, visibility_moments, saturate(visibility_moments.w));
@@ -212,15 +218,15 @@ float3 ProbeGILoadDirectionalIrradiance(
     float3 normal
 ) {
     const float3 aggregate_irradiance = probe.irradiance.rgb * probe.irradiance.a;
-    if (lighting_data.probe_volume_atlas_config.y != 0u) {
-        TextureHandle irradiance_texture = TextureHandle(lighting_data.probe_volume_atlas_config.y);
+    if (lighting_data.probe_system_atlas.z != 0u) {
+        TextureHandle irradiance_texture = TextureHandle(lighting_data.probe_system_atlas.z);
         const float2 atlas_uv = ProbeGIGetAtlasTextureUv(probe_index, normalize(normal));
         const float4 irradiance_texel = irradiance_texture.Sample2D<float4>(atlas_uv);
         return lerp(aggregate_irradiance, irradiance_texel.rgb, saturate(irradiance_texel.w));
     }
 
-    if (lighting_data.probe_volume_atlas_config.x != 0u) {
-        ArrayBuffer irradiance_buffer = ArrayBuffer(lighting_data.probe_volume_atlas_config.x);
+    if (lighting_data.probe_system_atlas.y != 0u) {
+        ArrayBuffer irradiance_buffer = ArrayBuffer(lighting_data.probe_system_atlas.y);
         const float4 irradiance_texel =
             ProbeGISampleIrradianceAtlasBilinear(irradiance_buffer, probe_index, normalize(normal));
         return lerp(aggregate_irradiance, irradiance_texel.rgb, saturate(irradiance_texel.w));
@@ -229,19 +235,36 @@ float3 ProbeGILoadDirectionalIrradiance(
     return aggregate_irradiance;
 }
 
-float3 ProbeGIGetLocalCoord(Moer::LightingData lighting_data, float3 world_pos) {
-    float3 spacing = max(lighting_data.probe_volume_spacing.xyz, float3(1e-4, 1e-4, 1e-4));
-    return (world_pos - lighting_data.probe_volume_origin.xyz) / spacing;
+float3 ProbeGIGetLocalCoord(Moer::ProbeVolumeGpuDesc volume, float3 world_pos) {
+    float3 spacing = max(volume.spacing_intensity.xyz, float3(1e-4, 1e-4, 1e-4));
+    return (world_pos - volume.origin_bias.xyz) / spacing;
 }
 
-bool ProbeGIIsInsideVolume(Moer::LightingData lighting_data, float3 world_pos) {
-    float3 volume_min = lighting_data.probe_volume_origin.xyz;
-    float3 volume_max = volume_min + lighting_data.probe_volume_extent.xyz;
+bool ProbeGIIsInsideVolume(Moer::ProbeVolumeGpuDesc volume, float3 world_pos) {
+    float3 volume_min = volume.origin_bias.xyz;
+    float3 volume_max = volume_min + volume.extent_blend.xyz;
     return all(world_pos >= volume_min) && all(world_pos <= volume_max);
+}
+
+float ProbeGIGetVolumeBlendWeight(Moer::ProbeVolumeGpuDesc volume, float3 world_pos) {
+    const float3 distance_to_min = world_pos - volume.origin_bias.xyz;
+    const float3 distance_to_max = volume.origin_bias.xyz + volume.extent_blend.xyz - world_pos;
+    const float edge_distance = min(
+        min(distance_to_min.x, min(distance_to_min.y, distance_to_min.z)),
+        min(distance_to_max.x, min(distance_to_max.y, distance_to_max.z))
+    );
+    const float edge_fade = saturate(edge_distance / max(volume.extent_blend.w, 0.01));
+    const float max_spacing = max(
+        volume.spacing_intensity.x,
+        max(volume.spacing_intensity.y, volume.spacing_intensity.z)
+    );
+    const float density = rcp(max(max_spacing, 1e-3));
+    return max(edge_fade, 0.01) * density * density;
 }
 
 float ProbeGIGetVisibilityWeight(
     Moer::LightingData lighting_data,
+    Moer::ProbeVolumeGpuDesc volume,
     uint probe_index,
     Moer::ProbeGridProbeData probe,
     float3 world_pos,
@@ -257,7 +280,7 @@ float ProbeGIGetVisibilityWeight(
     float3 probe_to_surface_dir = probe_to_surface / receiver_distance;
     float3 surface_to_probe = -probe_to_surface_dir;
     float  normal_weight = saturate(dot(normal, surface_to_probe));
-    normal_weight = max(normal_weight * normal_weight, lighting_data.probe_volume_visibility.z);
+    normal_weight = max(normal_weight * normal_weight, volume.visibility.z);
 
     float4 directional_visibility =
         ProbeGILoadDirectionalVisibility(lighting_data, probe_index, probe, probe_to_surface_dir);
@@ -266,18 +289,19 @@ float ProbeGIGetVisibilityWeight(
     float mean_distance_sq = max(directional_visibility.y, mean_distance * mean_distance);
     float variance = max(mean_distance_sq - mean_distance * mean_distance, 0.015);
 
-    float biased_receiver_distance = max(receiver_distance - lighting_data.probe_volume_visibility.x, 0.0);
+    float biased_receiver_distance = max(receiver_distance - volume.visibility.x, 0.0);
     float distance_delta = max(biased_receiver_distance - mean_distance, 0.0);
     float chebyshev = variance / (variance + distance_delta * distance_delta);
-    chebyshev = pow(saturate(chebyshev), max(lighting_data.probe_volume_visibility.y, 0.1));
+    chebyshev = pow(saturate(chebyshev), max(volume.visibility.y, 0.1));
 
-    float open_weight = lerp(lighting_data.probe_volume_visibility.z, 1.0, saturate(directional_visibility.z));
+    float open_weight = lerp(volume.visibility.z, 1.0, saturate(directional_visibility.z));
     float traced_weight = normal_weight * chebyshev * open_weight;
-    return lerp(1.0, traced_weight, saturate(lighting_data.probe_volume_visibility.w * directional_visibility.w));
+    return lerp(1.0, traced_weight, saturate(volume.visibility.w * directional_visibility.w));
 }
 
 void ProbeGIAccumulateProbe(
     Moer::LightingData lighting_data,
+    Moer::ProbeVolumeGpuDesc volume,
     uint probe_index,
     float trilinear_weight,
     float3 world_pos,
@@ -293,7 +317,7 @@ void ProbeGIAccumulateProbe(
     }
 
     float3 irradiance = ProbeGILoadDirectionalIrradiance(lighting_data, probe_index, probe, normal);
-    float visibility_weight = ProbeGIGetVisibilityWeight(lighting_data, probe_index, probe, world_pos, normal);
+    float visibility_weight = ProbeGIGetVisibilityWeight(lighting_data, volume, probe_index, probe, world_pos, normal);
     float final_weight = trilinear_weight * visibility_weight * state_weight;
 
     raw_irradiance += irradiance * trilinear_weight * state_weight;
@@ -301,20 +325,21 @@ void ProbeGIAccumulateProbe(
     visibility_weight_sum += final_weight;
 }
 
-float3 ProbeGISampleIrradiance(Moer::LightingData lighting_data, float3 world_pos, float3 normal) {
-    if (!ProbeGIIsEnabled(lighting_data)) {
+float3 ProbeGISampleVolumeIrradiance(
+    Moer::LightingData lighting_data,
+    Moer::ProbeVolumeGpuDesc volume,
+    float3 world_pos,
+    float3 normal
+) {
+    float3 biased_pos = world_pos + normal * volume.origin_bias.w;
+    if (!ProbeGIIsInsideVolume(volume, biased_pos)) {
         return float3(0.0, 0.0, 0.0);
     }
 
-    float3 biased_pos = world_pos + normal * lighting_data.probe_volume_origin.w;
-    if (!ProbeGIIsInsideVolume(lighting_data, biased_pos)) {
-        return float3(0.0, 0.0, 0.0);
-    }
-
-    uint3 counts = ProbeGIGetCounts(lighting_data);
+    uint3 counts = ProbeGIGetCounts(volume);
     uint3 max_coord = counts - uint3(1, 1, 1);
     float3 max_coord_f = float3(max_coord.x, max_coord.y, max_coord.z);
-    float3 local = clamp(ProbeGIGetLocalCoord(lighting_data, biased_pos), float3(0.0, 0.0, 0.0), max_coord_f);
+    float3 local = clamp(ProbeGIGetLocalCoord(volume, biased_pos), float3(0.0, 0.0, 0.0), max_coord_f);
 
     uint3 base_coord = uint3(floor(local));
     uint3 next_coord = min(base_coord + uint3(1, 1, 1), max_coord);
@@ -326,7 +351,8 @@ float3 ProbeGISampleIrradiance(Moer::LightingData lighting_data, float3 world_po
 
     ProbeGIAccumulateProbe(
         lighting_data,
-        ProbeGIGetProbeIndex(base_coord, counts),
+        volume,
+        volume.allocation.x + ProbeGIGetProbeIndex(base_coord, counts),
         (1.0 - weight.x) * (1.0 - weight.y) * (1.0 - weight.z),
         biased_pos,
         normal,
@@ -336,7 +362,8 @@ float3 ProbeGISampleIrradiance(Moer::LightingData lighting_data, float3 world_po
     );
     ProbeGIAccumulateProbe(
         lighting_data,
-        ProbeGIGetProbeIndex(uint3(next_coord.x, base_coord.y, base_coord.z), counts),
+        volume,
+        volume.allocation.x + ProbeGIGetProbeIndex(uint3(next_coord.x, base_coord.y, base_coord.z), counts),
         weight.x * (1.0 - weight.y) * (1.0 - weight.z),
         biased_pos,
         normal,
@@ -346,7 +373,8 @@ float3 ProbeGISampleIrradiance(Moer::LightingData lighting_data, float3 world_po
     );
     ProbeGIAccumulateProbe(
         lighting_data,
-        ProbeGIGetProbeIndex(uint3(base_coord.x, next_coord.y, base_coord.z), counts),
+        volume,
+        volume.allocation.x + ProbeGIGetProbeIndex(uint3(base_coord.x, next_coord.y, base_coord.z), counts),
         (1.0 - weight.x) * weight.y * (1.0 - weight.z),
         biased_pos,
         normal,
@@ -356,7 +384,8 @@ float3 ProbeGISampleIrradiance(Moer::LightingData lighting_data, float3 world_po
     );
     ProbeGIAccumulateProbe(
         lighting_data,
-        ProbeGIGetProbeIndex(uint3(next_coord.x, next_coord.y, base_coord.z), counts),
+        volume,
+        volume.allocation.x + ProbeGIGetProbeIndex(uint3(next_coord.x, next_coord.y, base_coord.z), counts),
         weight.x * weight.y * (1.0 - weight.z),
         biased_pos,
         normal,
@@ -366,7 +395,8 @@ float3 ProbeGISampleIrradiance(Moer::LightingData lighting_data, float3 world_po
     );
     ProbeGIAccumulateProbe(
         lighting_data,
-        ProbeGIGetProbeIndex(uint3(base_coord.x, base_coord.y, next_coord.z), counts),
+        volume,
+        volume.allocation.x + ProbeGIGetProbeIndex(uint3(base_coord.x, base_coord.y, next_coord.z), counts),
         (1.0 - weight.x) * (1.0 - weight.y) * weight.z,
         biased_pos,
         normal,
@@ -376,7 +406,8 @@ float3 ProbeGISampleIrradiance(Moer::LightingData lighting_data, float3 world_po
     );
     ProbeGIAccumulateProbe(
         lighting_data,
-        ProbeGIGetProbeIndex(uint3(next_coord.x, base_coord.y, next_coord.z), counts),
+        volume,
+        volume.allocation.x + ProbeGIGetProbeIndex(uint3(next_coord.x, base_coord.y, next_coord.z), counts),
         weight.x * (1.0 - weight.y) * weight.z,
         biased_pos,
         normal,
@@ -386,7 +417,8 @@ float3 ProbeGISampleIrradiance(Moer::LightingData lighting_data, float3 world_po
     );
     ProbeGIAccumulateProbe(
         lighting_data,
-        ProbeGIGetProbeIndex(uint3(base_coord.x, next_coord.y, next_coord.z), counts),
+        volume,
+        volume.allocation.x + ProbeGIGetProbeIndex(uint3(base_coord.x, next_coord.y, next_coord.z), counts),
         (1.0 - weight.x) * weight.y * weight.z,
         biased_pos,
         normal,
@@ -396,7 +428,8 @@ float3 ProbeGISampleIrradiance(Moer::LightingData lighting_data, float3 world_po
     );
     ProbeGIAccumulateProbe(
         lighting_data,
-        ProbeGIGetProbeIndex(next_coord, counts),
+        volume,
+        volume.allocation.x + ProbeGIGetProbeIndex(next_coord, counts),
         weight.x * weight.y * weight.z,
         biased_pos,
         normal,
@@ -405,7 +438,35 @@ float3 ProbeGISampleIrradiance(Moer::LightingData lighting_data, float3 world_po
         raw_irradiance
     );
 
-    return lerp(raw_irradiance, weighted_irradiance, saturate(lighting_data.probe_volume_visibility.w));
+    return lerp(raw_irradiance, weighted_irradiance, saturate(volume.visibility.w));
+}
+
+float3 ProbeGISampleIrradiance(Moer::LightingData lighting_data, float3 world_pos, float3 normal) {
+    if (!ProbeGIIsEnabled(lighting_data)) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    float3 irradiance_sum = float3(0.0, 0.0, 0.0);
+    float  volume_weight_sum = 0.0;
+
+    [unroll] for (uint volume_index = 0u; volume_index < Moer::RASTER_PROBE_VOLUME_MAX_COUNT; ++volume_index) {
+        if (volume_index >= lighting_data.probe_system_counts.x) {
+            continue;
+        }
+
+        const Moer::ProbeVolumeGpuDesc volume = ProbeGILoadVolume(lighting_data, volume_index);
+        const float3 biased_pos = world_pos + normal * volume.origin_bias.w;
+        if (!ProbeGIIsInsideVolume(volume, biased_pos)) {
+            continue;
+        }
+
+        const float volume_weight = ProbeGIGetVolumeBlendWeight(volume, biased_pos);
+        const float3 volume_irradiance = ProbeGISampleVolumeIrradiance(lighting_data, volume, world_pos, normal);
+        irradiance_sum += volume_irradiance * max(volume.spacing_intensity.w, 0.0) * volume_weight;
+        volume_weight_sum += volume_weight;
+    }
+
+    return volume_weight_sum > 1e-5 ? irradiance_sum / volume_weight_sum : float3(0.0, 0.0, 0.0);
 }
 
 float3 ProbeGIEvaluateDiffuse(
@@ -421,8 +482,56 @@ float3 ProbeGIEvaluateDiffuse(
     float normal_weight = 0.35 + 0.65 * saturate(normal.y * 0.5 + 0.5);
     float shadow_fill = lerp(0.42, 0.08, saturate(direct_shadow));
     float3 surface_tint = lerp(float3(1.0, 1.0, 1.0), albedo, 0.85);
-    return irradiance * surface_tint * diffuse_weight * lighting_data.probe_volume_spacing.w *
-           normal_weight * shadow_fill;
+    return irradiance * surface_tint * diffuse_weight * normal_weight * shadow_fill;
+}
+
+bool ProbeGISelectVolume(
+    Moer::LightingData lighting_data,
+    float3 world_pos,
+    float3 normal,
+    out Moer::ProbeVolumeGpuDesc selected_volume,
+    out uint selected_volume_index,
+    out float3 selected_biased_pos
+) {
+    selected_volume = (Moer::ProbeVolumeGpuDesc)0;
+    selected_volume_index = 0u;
+    selected_biased_pos = world_pos;
+    float best_weight = -1.0;
+
+    [unroll] for (uint volume_index = 0u; volume_index < Moer::RASTER_PROBE_VOLUME_MAX_COUNT; ++volume_index) {
+        if (volume_index >= lighting_data.probe_system_counts.x) {
+            continue;
+        }
+
+        const Moer::ProbeVolumeGpuDesc volume = ProbeGILoadVolume(lighting_data, volume_index);
+        const float3 biased_pos = world_pos + normal * volume.origin_bias.w;
+        if (!ProbeGIIsInsideVolume(volume, biased_pos)) {
+            continue;
+        }
+
+        const float weight = ProbeGIGetVolumeBlendWeight(volume, biased_pos);
+        if (weight > best_weight) {
+            best_weight = weight;
+            selected_volume = volume;
+            selected_volume_index = volume_index;
+            selected_biased_pos = biased_pos;
+        }
+    }
+
+    return best_weight >= 0.0;
+}
+
+float3 ProbeGIGetVolumeDebugTint(uint volume_index) {
+    if (volume_index == 0u) {
+        return float3(0.10, 0.85, 1.00);
+    }
+    if (volume_index == 1u) {
+        return float3(1.00, 0.62, 0.10);
+    }
+    if (volume_index == 2u) {
+        return float3(0.35, 1.00, 0.28);
+    }
+    return float3(0.95, 0.25, 0.82);
 }
 
 float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, float3 normal) {
@@ -430,41 +539,43 @@ float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, 
         return float3(0.0, 0.0, 0.0);
     }
 
-    const uint debug_mode = lighting_data.probe_volume_config.y;
+    const uint debug_mode = lighting_data.probe_system_config.y;
     if (debug_mode == 2u) {
-        return ProbeGISampleIrradiance(lighting_data, world_pos, normal) * lighting_data.probe_volume_spacing.w *
-               lighting_data.probe_volume_extent.w;
+        return ProbeGISampleIrradiance(lighting_data, world_pos, normal) * lighting_data.probe_system_debug.x;
     }
-    if (debug_mode == 4u) {
-        if (!ProbeGIIsInsideVolume(lighting_data, world_pos)) {
-            return float3(0.02, 0.02, 0.02);
-        }
 
-        uint3 counts = ProbeGIGetCounts(lighting_data);
-        float3 local = ProbeGIGetLocalCoord(lighting_data, world_pos);
+    Moer::ProbeVolumeGpuDesc volume;
+    uint selected_volume_index;
+    float3 biased_pos;
+    if (!ProbeGISelectVolume(lighting_data, world_pos, normal, volume, selected_volume_index, biased_pos)) {
+        return float3(0.02, 0.02, 0.02);
+    }
+
+    if (debug_mode == 4u) {
+        uint3 counts = ProbeGIGetCounts(volume);
+        float3 local = ProbeGIGetLocalCoord(volume, biased_pos);
         uint3 coord = min(uint3(round(clamp(local, float3(0.0, 0.0, 0.0), float3(counts - uint3(1, 1, 1))))), counts - uint3(1, 1, 1));
-        uint probe_index = ProbeGIGetProbeIndex(coord, counts);
+        uint probe_index = volume.allocation.x + ProbeGIGetProbeIndex(coord, counts);
         Moer::ProbeGridProbeData probe = ProbeGILoadProbe(lighting_data, probe_index);
-        float3 probe_to_surface = world_pos - probe.world_position.xyz;
+        float3 probe_to_surface = biased_pos - probe.world_position.xyz;
         float receiver_distance = length(probe_to_surface);
         float3 probe_to_surface_dir = receiver_distance > 1e-4 ? probe_to_surface / receiver_distance : float3(0.0, 1.0, 0.0);
         float4 directional_visibility =
             ProbeGILoadDirectionalVisibility(lighting_data, probe_index, probe, probe_to_surface_dir);
         float open_ratio = saturate(directional_visibility.z);
-        float mean_distance = saturate(directional_visibility.x / max(max(lighting_data.probe_volume_extent.x, lighting_data.probe_volume_extent.y), lighting_data.probe_volume_extent.z));
-        return float3(1.0 - open_ratio, open_ratio, mean_distance) * lighting_data.probe_volume_extent.w;
+        float mean_distance = saturate(
+            directional_visibility.x / max(max(volume.extent_blend.x, volume.extent_blend.y), volume.extent_blend.z)
+        );
+        return float3(1.0 - open_ratio, open_ratio, mean_distance) * lighting_data.probe_system_debug.x;
     }
 
-    if (!ProbeGIIsInsideVolume(lighting_data, world_pos)) {
-        return float3(0.02, 0.02, 0.02);
-    }
-
-    float3 local = ProbeGIGetLocalCoord(lighting_data, world_pos);
-    float3 coord01 = saturate((world_pos - lighting_data.probe_volume_origin.xyz) / lighting_data.probe_volume_extent.xyz);
+    float3 local = ProbeGIGetLocalCoord(volume, biased_pos);
+    float3 coord01 = saturate((biased_pos - volume.origin_bias.xyz) / volume.extent_blend.xyz);
     float3 cell_frac = abs(frac(local) - 0.5);
     float grid_line = 1.0 - smoothstep(0.42, 0.49, max(max(cell_frac.x, cell_frac.y), cell_frac.z));
-    float3 volume_color = lerp(coord01 * 0.35, float3(0.1, 0.85, 1.0), grid_line);
-    return volume_color * lighting_data.probe_volume_extent.w;
+    float3 volume_tint = ProbeGIGetVolumeDebugTint(selected_volume_index);
+    float3 volume_color = lerp(coord01 * 0.25 + volume_tint * 0.20, volume_tint, grid_line);
+    return volume_color * lighting_data.probe_system_debug.x;
 }
 
 #endif // MOER_RASTER_DEFERRED_LIGHTING_PROBE_GI_HLSLI

@@ -253,28 +253,26 @@ void RasterUI::ShowConfig() {
 
     // MARK: Probe GI
     if (ImGui::TreeNode("Probe GI", "Probe GI: [%s]", m_config.probe_gi_enabled ? "Enable" : "Disable")) {
-        auto clamp_probe_counts = [&]() {
+        auto clamp_probe_counts = [&](ProbeVolumeConfig& volume) {
             auto clamp_int = [](int value, int low, int high) {
                 return value < low ? low : (value > high ? high : value);
             };
 
-            m_config.probe_gi_count_x = clamp_int(m_config.probe_gi_count_x, 1, 16);
-            m_config.probe_gi_count_y = clamp_int(m_config.probe_gi_count_y, 1, 16);
-            m_config.probe_gi_count_z = clamp_int(m_config.probe_gi_count_z, 1, 16);
+            volume.count_x = clamp_int(volume.count_x, 1, 16);
+            volume.count_y = clamp_int(volume.count_y, 1, 16);
+            volume.count_z = clamp_int(volume.count_z, 1, 16);
 
             auto probe_count = [&]() {
-                return m_config.probe_gi_count_x * m_config.probe_gi_count_y * m_config.probe_gi_count_z;
+                return volume.count_x * volume.count_y * volume.count_z;
             };
 
-            while (probe_count() > static_cast<int>(Render::RASTER_PROBE_MAX_COUNT)) {
-                if (m_config.probe_gi_count_z >= m_config.probe_gi_count_x &&
-                    m_config.probe_gi_count_z >= m_config.probe_gi_count_y && m_config.probe_gi_count_z > 1) {
-                    --m_config.probe_gi_count_z;
-                } else if (m_config.probe_gi_count_x >= m_config.probe_gi_count_y &&
-                           m_config.probe_gi_count_x > 1) {
-                    --m_config.probe_gi_count_x;
-                } else if (m_config.probe_gi_count_y > 1) {
-                    --m_config.probe_gi_count_y;
+            while (probe_count() > static_cast<int>(Render::RASTER_PROBE_MAX_COUNT_PER_VOLUME)) {
+                if (volume.count_z >= volume.count_x && volume.count_z >= volume.count_y && volume.count_z > 1) {
+                    --volume.count_z;
+                } else if (volume.count_x >= volume.count_y && volume.count_x > 1) {
+                    --volume.count_x;
+                } else if (volume.count_y > 1) {
+                    --volume.count_y;
                 } else {
                     break;
                 }
@@ -282,13 +280,47 @@ void RasterUI::ShowConfig() {
         };
 
         ImGui::Checkbox("Enable Probe GI", &m_config.probe_gi_enabled);
-        ImGui::SliderInt("Probe Count X", &m_config.probe_gi_count_x, 1, 16);
-        ImGui::SliderInt("Probe Count Y", &m_config.probe_gi_count_y, 1, 16);
-        ImGui::SliderInt("Probe Count Z", &m_config.probe_gi_count_z, 1, 16);
-        clamp_probe_counts();
+        ImGui::SliderInt(
+            "Volume Count",
+            &m_config.probe_gi_volume_count,
+            1,
+            static_cast<int>(Render::RASTER_PROBE_VOLUME_MAX_COUNT)
+        );
+        m_config.probe_gi_volume_count =
+            Max(1, Min(m_config.probe_gi_volume_count, static_cast<int>(Render::RASTER_PROBE_VOLUME_MAX_COUNT)));
+        m_config.probe_gi_selected_volume =
+            Max(0, Min(m_config.probe_gi_selected_volume, m_config.probe_gi_volume_count - 1));
+        ImGui::SliderInt(
+            "Selected Volume",
+            &m_config.probe_gi_selected_volume,
+            0,
+            m_config.probe_gi_volume_count - 1
+        );
 
-        const int probe_total = m_config.probe_gi_count_x * m_config.probe_gi_count_y * m_config.probe_gi_count_z;
-        ImGui::Text("Probe Count: %d / %u", probe_total, Render::RASTER_PROBE_MAX_COUNT);
+        ProbeVolumeConfig& selected_volume = m_config.probe_gi_volumes[m_config.probe_gi_selected_volume];
+        ImGui::Checkbox("Volume Enabled", &selected_volume.enabled);
+        ImGui::SliderInt("Probe Count X", &selected_volume.count_x, 1, 16);
+        ImGui::SliderInt("Probe Count Y", &selected_volume.count_y, 1, 16);
+        ImGui::SliderInt("Probe Count Z", &selected_volume.count_z, 1, 16);
+        clamp_probe_counts(selected_volume);
+
+        int active_volume_count = 0;
+        int probe_total = 0;
+        for (int volume_index = 0; volume_index < m_config.probe_gi_volume_count; ++volume_index) {
+            ProbeVolumeConfig& volume = m_config.probe_gi_volumes[volume_index];
+            clamp_probe_counts(volume);
+            if (volume.enabled) {
+                ++active_volume_count;
+                probe_total += volume.count_x * volume.count_y * volume.count_z;
+            }
+        }
+        ImGui::Text(
+            "Active Volumes: %d / %d, Probes: %d / %u",
+            active_volume_count,
+            m_config.probe_gi_volume_count,
+            probe_total,
+            Render::RASTER_PROBE_MAX_COUNT
+        );
 
         auto sanitize_volume_size = [](float3 value) {
             return float3(
@@ -298,35 +330,37 @@ void RasterUI::ShowConfig() {
             );
         };
 
-        float3 volume_size = sanitize_volume_size(m_config.probe_gi_volume_extent);
+        float3 volume_size = sanitize_volume_size(selected_volume.extent);
         float3 volume_center = float3(
-            m_config.probe_gi_volume_origin.x + volume_size.x * 0.5f,
-            m_config.probe_gi_volume_origin.y + volume_size.y * 0.5f,
-            m_config.probe_gi_volume_origin.z + volume_size.z * 0.5f
+            selected_volume.origin.x + volume_size.x * 0.5f,
+            selected_volume.origin.y + volume_size.y * 0.5f,
+            selected_volume.origin.z + volume_size.z * 0.5f
         );
 
         const bool center_changed = ImGui::SliderFloat3("Volume Center", (float*)&volume_center, -64.0f, 64.0f);
         const bool size_changed = ImGui::SliderFloat3("Volume Size", (float*)&volume_size, 0.5f, 128.0f);
         if (center_changed || size_changed) {
             volume_size = sanitize_volume_size(volume_size);
-            m_config.probe_gi_volume_extent = volume_size;
-            m_config.probe_gi_volume_origin = float3(
+            selected_volume.extent = volume_size;
+            selected_volume.origin = float3(
                 volume_center.x - volume_size.x * 0.5f,
                 volume_center.y - volume_size.y * 0.5f,
                 volume_center.z - volume_size.z * 0.5f
             );
         }
+        ImGui::SliderFloat("Volume Intensity Scale", &selected_volume.intensity_scale, 0.0f, 4.0f);
+        ImGui::SliderFloat("Volume Blend Distance", &selected_volume.blend_distance, 0.01f, 32.0f);
 
         const float3 volume_max = float3(
-            m_config.probe_gi_volume_origin.x + m_config.probe_gi_volume_extent.x,
-            m_config.probe_gi_volume_origin.y + m_config.probe_gi_volume_extent.y,
-            m_config.probe_gi_volume_origin.z + m_config.probe_gi_volume_extent.z
+            selected_volume.origin.x + selected_volume.extent.x,
+            selected_volume.origin.y + selected_volume.extent.y,
+            selected_volume.origin.z + selected_volume.extent.z
         );
         ImGui::Text(
             "Volume Min: (%.2f, %.2f, %.2f)",
-            m_config.probe_gi_volume_origin.x,
-            m_config.probe_gi_volume_origin.y,
-            m_config.probe_gi_volume_origin.z
+            selected_volume.origin.x,
+            selected_volume.origin.y,
+            selected_volume.origin.z
         );
         ImGui::Text("Volume Max: (%.2f, %.2f, %.2f)", volume_max.x, volume_max.y, volume_max.z);
 

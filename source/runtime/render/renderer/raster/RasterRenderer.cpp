@@ -183,23 +183,25 @@ void RasterRenderer::UpdateGlobalLightingData(
 
     if (ui_config.probe_gi_enabled) {
         std::ostringstream stream;
-        stream << "[ProbeGI] Runtime lighting params: enabled=" << lighting_data->probe_volume_config.x
-               << " debug=" << lighting_data->probe_volume_config.y
-               << " buffer=" << lighting_data->probe_volume_config.z
-               << " visibility_atlas=" << lighting_data->probe_volume_config.w
-               << " irradiance_atlas=" << lighting_data->probe_volume_atlas_config.x
-               << " count=" << lighting_data->probe_volume_counts.w
-               << " intensity=" << lighting_data->probe_volume_spacing.w
+        stream << "[ProbeGI] Runtime lighting params: enabled=" << lighting_data->probe_system_config.x
+               << " debug=" << lighting_data->probe_system_config.y
+               << " probe_buffer=" << lighting_data->probe_system_config.z
+               << " volume_buffer=" << lighting_data->probe_system_config.w
+               << " visibility_atlas=" << lighting_data->probe_system_atlas.x
+               << " irradiance_atlas=" << lighting_data->probe_system_atlas.y
+               << " irradiance_texture=" << lighting_data->probe_system_atlas.z
+               << " visibility_texture=" << lighting_data->probe_system_atlas.w
+               << " volumes=" << lighting_data->probe_system_counts.x
+               << " probes=" << lighting_data->probe_system_counts.y
+               << " intensity=" << ui_config.probe_gi_intensity
                << " trace_distance=" << ui_config.probe_gi_trace_distance
                << " trace_rays=" << ui_config.probe_gi_trace_ray_count
-               << " visibility=(" << lighting_data->probe_volume_visibility.x << ", "
-               << lighting_data->probe_volume_visibility.y << ", "
-               << lighting_data->probe_volume_visibility.z << ", "
-               << lighting_data->probe_volume_visibility.w << ")"
+               << " visibility=(" << ui_config.probe_gi_visibility_bias << ", "
+               << ui_config.probe_gi_visibility_power << ", "
+               << ui_config.probe_gi_visibility_min_weight << ", "
+               << ui_config.probe_gi_visibility_strength << ")"
                << " sky=" << ui_config.probe_gi_sky_intensity
-               << " bounce=" << ui_config.probe_gi_directional_bounce
-               << " origin=" << ui_config.probe_gi_volume_origin.ToString(2)
-               << " extent=" << ui_config.probe_gi_volume_extent.ToString(2);
+               << " bounce=" << ui_config.probe_gi_directional_bounce;
         RasterTool::LogDebugEverySeconds(stream.str(), 2.0);
     }
 

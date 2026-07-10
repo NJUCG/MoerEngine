@@ -85,9 +85,9 @@ float4 main(float2 in_uv : TEXCOORD0) : SV_TARGET {
         color = get_cascade_visualize_color(lighting_data, position);
     }
 
-    if (lighting_data.probe_volume_config.y == 3 && ProbeGIIsEnabled(lighting_data)) {
-        color = probe_gi * lighting_data.probe_volume_extent.w;
-    } else if (lighting_data.probe_volume_config.y != 0 && ProbeGIIsEnabled(lighting_data)) {
+    if (lighting_data.probe_system_config.y == 3 && ProbeGIIsEnabled(lighting_data)) {
+        color = probe_gi * lighting_data.probe_system_debug.x;
+    } else if (lighting_data.probe_system_config.y != 0 && ProbeGIIsEnabled(lighting_data)) {
         color = ProbeGIGetDebugColor(lighting_data, position, N);
     }
 

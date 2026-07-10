@@ -24,7 +24,10 @@ namespace Moer {
 // MARK: Main Content Begin
 
 #ifdef __cplusplus
-static constexpr uint RASTER_PROBE_MAX_COUNT = 512;
+static constexpr uint RASTER_PROBE_VOLUME_MAX_COUNT = 4;
+static constexpr uint RASTER_PROBE_MAX_COUNT_PER_VOLUME = 512;
+static constexpr uint RASTER_PROBE_MAX_COUNT =
+    RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_COUNT_PER_VOLUME;
 static constexpr uint RASTER_PROBE_UPDATE_GROUP_SIZE = 64;
 static constexpr uint RASTER_PROBE_VISIBILITY_ATLAS_DIM = 8;
 static constexpr uint RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT =
@@ -49,7 +52,10 @@ static constexpr uint RASTER_PROBE_STATE_NEAR_SURFACE = 3;
 static constexpr uint RASTER_PROBE_GIZMO_DRAW_MODE_PROBES = 1;
 static constexpr uint RASTER_PROBE_GIZMO_DRAW_MODE_BOUNDS = 2;
 #else
-static const uint RASTER_PROBE_MAX_COUNT = 512;
+static const uint RASTER_PROBE_VOLUME_MAX_COUNT = 4;
+static const uint RASTER_PROBE_MAX_COUNT_PER_VOLUME = 512;
+static const uint RASTER_PROBE_MAX_COUNT =
+    RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_COUNT_PER_VOLUME;
 static const uint RASTER_PROBE_UPDATE_GROUP_SIZE = 64;
 static const uint RASTER_PROBE_VISIBILITY_ATLAS_DIM = 8;
 static const uint RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT =
@@ -89,8 +95,17 @@ struct ProbeGridIrradianceTexel {
     float4 irradiance; // rgb = directional diffuse irradiance, w = confidence
 };
 
+struct ProbeVolumeGpuDesc {
+    float4 origin_bias;       // xyz = min corner, w = normal bias
+    float4 spacing_intensity; // xyz = probe spacing, w = GI intensity
+    float4 extent_blend;      // xyz = volume extent, w = boundary blend distance
+    uint4  counts;            // xyz = local grid counts, w = local probe count
+    uint4  allocation;        // x = global probe offset, y = config/cascade index, zw = reserved
+    float4 visibility;        // x = bias, y = power, z = min weight, w = strength
+};
+
 struct ProbeUpdateParam {
-    uint4  probe_volume_counts;  // xyz = probe counts, w = total probe count
+    uint4  probe_volume_counts;  // xyz = local probe counts, w = global probe offset
     float4 probe_volume_origin;  // xyz = min corner, w = irradiance history weight
     float4 probe_volume_spacing; // xyz = cell spacing, w = visibility history weight
     float4 probe_sky_color;      // rgb = sky tint, w = sky intensity
@@ -172,18 +187,16 @@ struct LightingData {
     float2 skybox_exposure_padding; // pad next float4 to a cbuffer 16B register
 
     // Probe GI
-    float4 probe_volume_origin;  // xyz = min corner, w = normal bias
-    float4 probe_volume_spacing; // xyz = cell spacing, w = intensity
-    float4 probe_volume_extent;  // xyz = volume extent, w = debug scale
-    uint4  probe_volume_counts;  // xyz = probe counts, w = total probe count
-    uint4  probe_volume_config;  // x = enabled, y = debug mode, z = probe buffer handle, w = visibility atlas handle
-    float4 probe_volume_visibility; // x = bias, y = power, z = min weight, w = strength
-    uint4  probe_volume_atlas_config; // x = irradiance buffer, y = irradiance texture, z = visibility texture, w = reserved
+    uint4 probe_system_config; // x = enabled, y = debug mode, z = probe buffer, w = volume descriptor buffer
+    uint4 probe_system_counts; // x = active volume count, y = total probe count, zw = reserved
+    uint4 probe_system_atlas;  // x = visibility buffer, y = irradiance buffer, z = irradiance texture, w = visibility texture
+    float4 probe_system_debug; // x = debug scale, yzw = reserved
 };
 
 #ifdef __cplusplus
 static_assert(sizeof(ProbeUpdateParam) <= 128);
-static_assert(offsetof(LightingData, probe_volume_origin) % 16 == 0);
+static_assert(sizeof(ProbeVolumeGpuDesc) % 16 == 0);
+static_assert(offsetof(LightingData, probe_system_config) % 16 == 0);
 static_assert(sizeof(LightingData) % 16 == 0);
 #endif
 

@@ -79,50 +79,63 @@ public:
     void Process(RasterContext& context, const RasterConfig& config, const Scene& scene, uint64 frame_index) {
         ProbeVolumeResource::UpdateInfo update_info = context.probe_volume.PrepareUpdate(config, scene, frame_index);
 
-        if (!update_info.enabled || update_info.probe_count == 0) {
+        if (!update_info.enabled || update_info.volume_count == 0 || update_info.total_probe_count == 0) {
             return;
         }
-
-        const uint dispatch_count =
-            (update_info.probe_count + RASTER_PROBE_UPDATE_GROUP_SIZE - 1u) / RASTER_PROBE_UPDATE_GROUP_SIZE;
 
         context.probe_volume.UpdateSceneData(context.cmd_list, scene);
 
         RaytracingSceneRef rt_scene = context.rt_scene();
-        if (rt_scene && rt_scene->GetTlas()) {
-            update_info.param.probe_trace_config.w = 1.0f;
+        const bool rt_available = rt_scene && rt_scene->GetTlas();
+        for (uint volume_index = 0; volume_index < update_info.volume_count; ++volume_index) {
+            ProbeVolumeResource::UpdateJob& job = update_info.jobs[volume_index];
+            if (job.probe_count == 0) {
+                continue;
+            }
+
+            const uint dispatch_count =
+                (job.probe_count + RASTER_PROBE_UPDATE_GROUP_SIZE - 1u) / RASTER_PROBE_UPDATE_GROUP_SIZE;
+
+            if (rt_available) {
+                job.param.probe_trace_config.w = 1.0f;
+                context.cmd_list
+                    .Compute(
+                        probe_update_ray_query_pipeline,
+                        context.probe_volume.GetProbeBufferView(),
+                        context.probe_volume.GetVisibilityAtlasBufferView(),
+                        context.probe_volume.GetIrradianceAtlasBufferView(),
+                        context.probe_volume.GetSceneDataBufferView(),
+                        context.probe_volume.GetVisibilityAtlasTextureView(),
+                        context.probe_volume.GetIrradianceAtlasTextureView(),
+                        rt_scene->GetTlas(),
+                        context.bdls,
+                        job.param
+                    )
+                    .Dispatch(uint3(dispatch_count, 1, 1), "Probe GI DDGI Volume Ray Query Update Pass");
+                continue;
+            }
+
+            job.param.probe_trace_config.w = 0.0f;
             context.cmd_list
                 .Compute(
-                    probe_update_ray_query_pipeline,
+                    probe_update_pipeline,
                     context.probe_volume.GetProbeBufferView(),
                     context.probe_volume.GetVisibilityAtlasBufferView(),
                     context.probe_volume.GetIrradianceAtlasBufferView(),
                     context.probe_volume.GetSceneDataBufferView(),
                     context.probe_volume.GetVisibilityAtlasTextureView(),
                     context.probe_volume.GetIrradianceAtlasTextureView(),
-                    rt_scene->GetTlas(),
                     context.bdls,
-                    update_info.param
+                    job.param
                 )
-                .Dispatch(uint3(dispatch_count, 1, 1), "Probe GI DDGI Ray Query Update Pass");
+                .Dispatch(uint3(dispatch_count, 1, 1), "Probe GI Fallback Volume Update Pass");
+        }
+
+        if (rt_available) {
             RasterTool::LogDebugEverySeconds("[ProbeGI] DDGI ray-query probe update active.", 3.0);
             return;
         }
 
-        update_info.param.probe_trace_config.w = 0.0f;
-        context.cmd_list
-            .Compute(
-                probe_update_pipeline,
-                context.probe_volume.GetProbeBufferView(),
-                context.probe_volume.GetVisibilityAtlasBufferView(),
-                context.probe_volume.GetIrradianceAtlasBufferView(),
-                context.probe_volume.GetSceneDataBufferView(),
-                context.probe_volume.GetVisibilityAtlasTextureView(),
-                context.probe_volume.GetIrradianceAtlasTextureView(),
-                context.bdls,
-                update_info.param
-            )
-            .Dispatch(uint3(dispatch_count, 1, 1), "Probe GI Fallback Update Pass");
         RasterTool::LogDebugEverySeconds("[ProbeGI] TLAS unavailable, using fallback probe update.", 3.0);
     }
 

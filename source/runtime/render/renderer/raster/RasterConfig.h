@@ -132,6 +132,17 @@ struct CooperativeOpsStatus {
     std::string vector_runtime_status = "Idle";
 };
 
+struct ProbeVolumeConfig {
+    bool   enabled         = true;
+    int    count_x         = 8;
+    int    count_y         = 4;
+    int    count_z         = 8;
+    float3 origin          = float3(-8.0f, 0.0f, -8.0f);
+    float3 extent          = float3(16.0f, 6.0f, 16.0f);
+    float  intensity_scale = 1.0f;
+    float  blend_distance  = 1.5f;
+};
+
 struct RasterConfig {
 
     // MARK: Geometry
@@ -194,11 +205,23 @@ struct RasterConfig {
 
     // MARK: Probe GI
     bool   probe_gi_enabled              = true;
-    int    probe_gi_count_x              = 8;
-    int    probe_gi_count_y              = 4;
-    int    probe_gi_count_z              = 8;
-    float3 probe_gi_volume_origin        = float3(-8.0f, 0.0f, -8.0f);
-    float3 probe_gi_volume_extent        = float3(16.0f, 6.0f, 16.0f);
+    int    probe_gi_volume_count         = 2;
+    int    probe_gi_selected_volume      = 0;
+    StaticArray<ProbeVolumeConfig, Render::RASTER_PROBE_VOLUME_MAX_COUNT> probe_gi_volumes = {
+        ProbeVolumeConfig{},
+        ProbeVolumeConfig{
+            true,
+            8,
+            4,
+            8,
+            float3(-16.0f, -4.0f, -16.0f),
+            float3(32.0f, 14.0f, 32.0f),
+            0.85f,
+            3.0f
+        },
+        ProbeVolumeConfig{false},
+        ProbeVolumeConfig{false}
+    };
     bool   probe_gi_volume_bounds_enabled = true;
     float  probe_gi_volume_bounds_thickness = 0.025f;
     float3 probe_gi_volume_bounds_color   = float3(1.0f, 0.78f, 0.18f);
