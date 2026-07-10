@@ -22,21 +22,24 @@ class ProbeVolumeResource {
 public:
     struct UpdateJob {
         uint             volume_index = 0;
+        uint             brick_index  = 0;
         uint             probe_count  = 0;
         ProbeUpdateParam param{};
     };
 
     struct UpdateInfo {
-        bool                                                   enabled           = false;
-        uint                                                   volume_count      = 0;
-        uint                                                   total_probe_count = 0;
-        StaticArray<UpdateJob, RASTER_PROBE_VOLUME_MAX_COUNT> jobs{};
+        bool                                                enabled              = false;
+        uint                                                volume_count         = 0;
+        uint                                                job_count            = 0;
+        uint                                                resident_brick_count = 0;
+        uint                                                total_probe_count    = 0;
+        StaticArray<UpdateJob, RASTER_PROBE_MAX_BRICK_COUNT> jobs{};
     };
 
     void Create(RenderDevice& device, BindlessArrayRef& bdls);
     void Destroy(BindlessArrayRef& bdls);
 
-    UpdateInfo PrepareUpdate(const RasterConfig& config, const Scene& scene, uint64 frame_index);
+    UpdateInfo PrepareUpdate(const RasterConfig& config, const Scene& scene, float3 camera_position);
     void UpdateSceneData(CommandList& cmd_list, const Scene& scene);
     void FillLightingData(LightingData& lighting_data) const;
 
@@ -88,6 +91,18 @@ public:
         return m_snapshot.brick_count;
     }
 
+    uint GetResidentBrickCount() const {
+        return m_snapshot.resident_brick_count;
+    }
+
+    uint GetResidentProbeCount() const {
+        return m_snapshot.resident_probe_count;
+    }
+
+    const ProbeBrickGpuDesc& GetBrickDesc(uint brick_index) const {
+        return m_gpu_brick_descs[brick_index];
+    }
+
     const ProbeVolumeGpuDesc& GetVolumeDesc(uint volume_index) const {
         return m_gpu_volume_descs[volume_index];
     }
@@ -132,56 +147,64 @@ private:
         uint  probe_offset  = 0;
         uint  probe_count   = 0;
         uint  page_index    = 0;
+        bool  resident      = true;
     };
 
     struct VolumeSnapshot {
-        uint   config_index = 0;
-        uint   count_x      = 1;
-        uint   count_y      = 1;
-        uint   count_z      = 1;
-        uint   total_count  = 1;
-        uint   probe_offset = 0;
-        uint   page_table_offset = 0;
-        uint   brick_count  = 0;
-        float3 origin       = float3(0.0f);
-        float3 extent       = float3(1.0f);
-        float3 spacing      = float3(1.0f);
-        float  intensity      = 0.0f;
-        float  normal_bias    = 0.0f;
-        float  blend_distance = 0.0f;
+        uint   config_index         = 0;
+        uint   count_x              = 1;
+        uint   count_y              = 1;
+        uint   count_z              = 1;
+        uint   total_count          = 1;
+        uint   probe_offset         = 0;
+        uint   page_table_offset    = 0;
+        uint   brick_count          = 0;
+        uint   resident_brick_count = 0;
+        uint   resident_probe_count = 0;
+        float3 origin               = float3(0.0f);
+        float3 extent               = float3(1.0f);
+        float3 spacing              = float3(1.0f);
+        float  intensity            = 0.0f;
+        float  normal_bias          = 0.0f;
+        float  blend_distance       = 0.0f;
     };
 
     struct Snapshot {
-        bool   enabled      = false;
-        uint   debug_mode   = 0;
-        uint   volume_count = 0;
-        uint   brick_count  = 0;
-        uint   total_count  = 0;
-        float  trace_distance = 0.0f;
-        uint   trace_ray_count = 1;
-        float  visibility_bias = 0.0f;
-        float  visibility_power = 1.0f;
-        float  visibility_min_weight = 0.0f;
-        float  visibility_strength = 0.0f;
-        float  irradiance_hysteresis = 0.0f;
-        float  visibility_hysteresis = 0.0f;
-        float  debug_scale  = 1.0f;
-        float  sky_intensity = 0.0f;
-        float  directional_bounce = 0.0f;
-        float3 sky_color    = float3(0.0f);
-        float3 ground_color = float3(0.0f);
+        bool   enabled                    = false;
+        bool   sparse_bricks_enabled      = false;
+        uint   debug_mode                 = 0;
+        uint   volume_count               = 0;
+        uint   brick_count                = 0;
+        uint   resident_brick_count       = 0;
+        uint   resident_probe_count       = 0;
+        uint   total_count                = 0;
+        float  brick_resident_distance    = 0.0f;
+        float  brick_resident_hysteresis  = 0.0f;
+        float  trace_distance             = 0.0f;
+        uint   trace_ray_count            = 1;
+        float  visibility_bias            = 0.0f;
+        float  visibility_power           = 1.0f;
+        float  visibility_min_weight      = 0.0f;
+        float  visibility_strength        = 0.0f;
+        float  irradiance_hysteresis      = 0.0f;
+        float  visibility_hysteresis      = 0.0f;
+        float  debug_scale                = 1.0f;
+        float  sky_intensity              = 0.0f;
+        float  directional_bounce         = 0.0f;
+        float3 sky_color                  = float3(0.0f);
+        float3 ground_color               = float3(0.0f);
         StaticArray<VolumeSnapshot, RASTER_PROBE_VOLUME_MAX_COUNT> volumes{};
         StaticArray<BrickSnapshot, RASTER_PROBE_MAX_BRICK_COUNT> bricks{};
         StaticArray<uint, RASTER_PROBE_MAX_BRICK_COUNT> page_table{};
     };
 
-    Snapshot BuildSnapshot(const RasterConfig& config) const;
+    Snapshot BuildSnapshot(const RasterConfig& config, float3 camera_position) const;
     ProbeUpdateParam BuildUpdateParam(
         const Snapshot& snapshot,
         const VolumeSnapshot& volume,
         uint            volume_index,
+        uint            brick_index,
         const Scene&    scene,
-        uint64          frame_index,
         bool            history_valid
     ) const;
     bool HasSnapshotChanged(const Snapshot& snapshot) const;
@@ -206,6 +229,7 @@ private:
     Snapshot         m_snapshot;
     bool             m_has_snapshot = false;
     StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT> m_history_valid{};
+    StaticArray<bool, RASTER_PROBE_MAX_BRICK_COUNT> m_brick_history_valid{};
 };
 
 } // namespace Moer::Render::Raster

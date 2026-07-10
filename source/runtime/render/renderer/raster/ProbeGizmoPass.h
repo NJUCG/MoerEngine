@@ -45,7 +45,8 @@ public:
 
     void Process(RasterContext& context, const RasterConfig& config, const Camera& camera) {
         const uint probe_count = context.probe_volume.GetProbeCount();
-        const bool draw_probes = config.probe_gi_enabled && config.probe_gi_gizmo_enabled && probe_count != 0 &&
+        const bool draw_probes = config.probe_gi_enabled && config.probe_gi_gizmo_enabled &&
+                                 context.probe_volume.GetResidentProbeCount() != 0 &&
                                  context.probe_volume.GetBufferHandle() != 0;
         const bool draw_bounds = config.probe_gi_enabled && config.probe_gi_volume_bounds_enabled &&
                                  context.probe_volume.GetVolumeCount() != 0;
@@ -78,11 +79,23 @@ public:
 
             RasterTool::LogDebugEverySeconds("[ProbeGI] Probe gizmo pass active.", 3.0);
 
+            Array<SingleDrawParam> resident_draws;
+            resident_draws.reserve(context.probe_volume.GetResidentBrickCount());
+            for (uint brick_index = 0; brick_index < context.probe_volume.GetBrickCount(); ++brick_index) {
+                const ProbeBrickGpuDesc& brick = context.probe_volume.GetBrickDesc(brick_index);
+                if (brick.probe_range.z == 0u || brick.probe_range.y == 0u) {
+                    continue;
+                }
+                resident_draws.emplace_back(
+                    SingleDrawParam{18, brick.probe_range.y, 0, 0, brick.probe_range.x}
+                );
+            }
+
             context.cmd_list.Gfx(m_pipeline, context.bdls, param)
                 .Draw(
                     "Probe GI Gizmo Pass",
                     context.textures.lighting_output.GetRect2D(),
-                    Array<SingleDrawParam>{SingleDrawParam{18, probe_count, 0, 0, 0}},
+                    std::move(resident_draws),
                     ColorAttachment{
                         context.textures.lighting_output.tex, EAttachmentAction::AC_LOAD_STORE, float4(0, 0, 0, 0)
                     }

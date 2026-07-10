@@ -23,7 +23,7 @@ uint3 ProbeGIGetCounts(Moer::ProbeVolumeGpuDesc volume) {
     );
 }
 
-uint ProbeGIGetProbeIndex(
+uint ProbeGIGetBrickIndex(
     Moer::LightingData lighting_data,
     Moer::ProbeVolumeGpuDesc volume,
     uint3 coord
@@ -44,10 +44,22 @@ uint ProbeGIGetProbeIndex(
 
     ArrayBuffer brick_buffer = ArrayBuffer(lighting_data.probe_system_counts.z);
     const Moer::ProbeBrickGpuDesc brick = brick_buffer.Load<Moer::ProbeBrickGpuDesc>(brick_index);
-    if (brick.probe_range.z == 0u) {
+    return brick.probe_range.z != 0u ? brick_index : Moer::RASTER_PROBE_PAGE_INVALID;
+}
+
+uint ProbeGIGetProbeIndex(
+    Moer::LightingData lighting_data,
+    Moer::ProbeVolumeGpuDesc volume,
+    uint3 coord
+) {
+    const uint brick_index = ProbeGIGetBrickIndex(lighting_data, volume, coord);
+    if (brick_index == Moer::RASTER_PROBE_PAGE_INVALID) {
         return Moer::RASTER_PROBE_PAGE_INVALID;
     }
 
+    const uint3 brick_coord = coord / Moer::RASTER_PROBE_BRICK_DIM;
+    ArrayBuffer brick_buffer = ArrayBuffer(lighting_data.probe_system_counts.z);
+    const Moer::ProbeBrickGpuDesc brick = brick_buffer.Load<Moer::ProbeBrickGpuDesc>(brick_index);
     const uint3 local_coord = coord - brick_coord * Moer::RASTER_PROBE_BRICK_DIM;
     if (any(local_coord >= brick.local_counts.xyz)) {
         return Moer::RASTER_PROBE_PAGE_INVALID;
@@ -339,16 +351,17 @@ void ProbeGIAccumulateProbe(
     float3 world_pos,
     float3 normal,
     inout float3 weighted_irradiance,
-    inout float visibility_weight_sum,
+    inout float resident_weight_sum,
     inout float3 raw_irradiance
 ) {
-    if (probe_index == Moer::RASTER_PROBE_PAGE_INVALID) {
+    if (probe_index == Moer::RASTER_PROBE_PAGE_INVALID || trilinear_weight <= 0.0) {
         return;
     }
+    resident_weight_sum += trilinear_weight;
 
     Moer::ProbeGridProbeData probe = ProbeGILoadProbe(lighting_data, probe_index);
     float state_weight = ProbeGIGetProbeStateWeight(probe);
-    if (state_weight <= 0.0 || trilinear_weight <= 0.0) {
+    if (state_weight <= 0.0) {
         return;
     }
 
@@ -358,15 +371,16 @@ void ProbeGIAccumulateProbe(
 
     raw_irradiance += irradiance * trilinear_weight * state_weight;
     weighted_irradiance += irradiance * final_weight;
-    visibility_weight_sum += final_weight;
 }
 
 float3 ProbeGISampleVolumeIrradiance(
     Moer::LightingData lighting_data,
     Moer::ProbeVolumeGpuDesc volume,
     float3 world_pos,
-    float3 normal
+    float3 normal,
+    out float resident_coverage
 ) {
+    resident_coverage = 0.0;
     float3 biased_pos = world_pos + normal * volume.origin_bias.w;
     if (!ProbeGIIsInsideVolume(volume, biased_pos)) {
         return float3(0.0, 0.0, 0.0);
@@ -383,7 +397,7 @@ float3 ProbeGISampleVolumeIrradiance(
 
     float3 weighted_irradiance = float3(0.0, 0.0, 0.0);
     float3 raw_irradiance = float3(0.0, 0.0, 0.0);
-    float visibility_weight_sum = 0.0;
+    float resident_weight_sum = 0.0;
 
     ProbeGIAccumulateProbe(
         lighting_data,
@@ -393,7 +407,7 @@ float3 ProbeGISampleVolumeIrradiance(
         biased_pos,
         normal,
         weighted_irradiance,
-        visibility_weight_sum,
+        resident_weight_sum,
         raw_irradiance
     );
     ProbeGIAccumulateProbe(
@@ -404,7 +418,7 @@ float3 ProbeGISampleVolumeIrradiance(
         biased_pos,
         normal,
         weighted_irradiance,
-        visibility_weight_sum,
+        resident_weight_sum,
         raw_irradiance
     );
     ProbeGIAccumulateProbe(
@@ -415,7 +429,7 @@ float3 ProbeGISampleVolumeIrradiance(
         biased_pos,
         normal,
         weighted_irradiance,
-        visibility_weight_sum,
+        resident_weight_sum,
         raw_irradiance
     );
     ProbeGIAccumulateProbe(
@@ -426,7 +440,7 @@ float3 ProbeGISampleVolumeIrradiance(
         biased_pos,
         normal,
         weighted_irradiance,
-        visibility_weight_sum,
+        resident_weight_sum,
         raw_irradiance
     );
     ProbeGIAccumulateProbe(
@@ -437,7 +451,7 @@ float3 ProbeGISampleVolumeIrradiance(
         biased_pos,
         normal,
         weighted_irradiance,
-        visibility_weight_sum,
+        resident_weight_sum,
         raw_irradiance
     );
     ProbeGIAccumulateProbe(
@@ -448,7 +462,7 @@ float3 ProbeGISampleVolumeIrradiance(
         biased_pos,
         normal,
         weighted_irradiance,
-        visibility_weight_sum,
+        resident_weight_sum,
         raw_irradiance
     );
     ProbeGIAccumulateProbe(
@@ -459,7 +473,7 @@ float3 ProbeGISampleVolumeIrradiance(
         biased_pos,
         normal,
         weighted_irradiance,
-        visibility_weight_sum,
+        resident_weight_sum,
         raw_irradiance
     );
     ProbeGIAccumulateProbe(
@@ -470,10 +484,18 @@ float3 ProbeGISampleVolumeIrradiance(
         biased_pos,
         normal,
         weighted_irradiance,
-        visibility_weight_sum,
+        resident_weight_sum,
         raw_irradiance
     );
 
+    resident_coverage = saturate(resident_weight_sum);
+    if (resident_coverage <= 1e-5) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    const float inverse_coverage = rcp(resident_coverage);
+    raw_irradiance *= inverse_coverage;
+    weighted_irradiance *= inverse_coverage;
     return lerp(raw_irradiance, weighted_irradiance, saturate(volume.visibility.w));
 }
 
@@ -496,8 +518,14 @@ float3 ProbeGISampleIrradiance(Moer::LightingData lighting_data, float3 world_po
             continue;
         }
 
-        const float volume_weight = ProbeGIGetVolumeBlendWeight(volume, biased_pos);
-        const float3 volume_irradiance = ProbeGISampleVolumeIrradiance(lighting_data, volume, world_pos, normal);
+        float resident_coverage = 0.0;
+        const float3 volume_irradiance =
+            ProbeGISampleVolumeIrradiance(lighting_data, volume, world_pos, normal, resident_coverage);
+        if (resident_coverage <= 1e-5) {
+            continue;
+        }
+
+        const float volume_weight = ProbeGIGetVolumeBlendWeight(volume, biased_pos) * resident_coverage;
         irradiance_sum += volume_irradiance * max(volume.spacing_intensity.w, 0.0) * volume_weight;
         volume_weight_sum += volume_weight;
     }
@@ -587,11 +615,25 @@ float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, 
         return float3(0.02, 0.02, 0.02);
     }
 
-    if (debug_mode == 4u) {
+    if (debug_mode == 4u || debug_mode == 5u) {
         uint3 counts = ProbeGIGetCounts(volume);
         float3 local = ProbeGIGetLocalCoord(volume, biased_pos);
         uint3 coord = min(uint3(round(clamp(local, float3(0.0, 0.0, 0.0), float3(counts - uint3(1, 1, 1))))), counts - uint3(1, 1, 1));
+        uint brick_index = ProbeGIGetBrickIndex(lighting_data, volume, coord);
+        if (debug_mode == 5u) {
+            if (brick_index == Moer::RASTER_PROBE_PAGE_INVALID) {
+                return float3(0.90, 0.03, 0.02) * lighting_data.probe_system_debug.x;
+            }
+
+            const float brick_tint = frac(float(brick_index) * 0.61803398875);
+            return lerp(float3(0.05, 0.80, 0.35), float3(0.05, 0.65, 1.00), brick_tint) *
+                   lighting_data.probe_system_debug.x;
+        }
+
         uint probe_index = ProbeGIGetProbeIndex(lighting_data, volume, coord);
+        if (probe_index == Moer::RASTER_PROBE_PAGE_INVALID) {
+            return float3(0.30, 0.01, 0.01) * lighting_data.probe_system_debug.x;
+        }
         Moer::ProbeGridProbeData probe = ProbeGILoadProbe(lighting_data, probe_index);
         float3 probe_to_surface = biased_pos - probe.world_position.xyz;
         float receiver_distance = length(probe_to_surface);

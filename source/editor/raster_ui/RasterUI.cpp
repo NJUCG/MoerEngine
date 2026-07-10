@@ -321,6 +321,27 @@ void RasterUI::ShowConfig() {
             probe_total,
             Render::RASTER_PROBE_MAX_COUNT
         );
+        ImGui::Text(
+            "Brick Size: %u x %u x %u",
+            Render::RASTER_PROBE_BRICK_DIM,
+            Render::RASTER_PROBE_BRICK_DIM,
+            Render::RASTER_PROBE_BRICK_DIM
+        );
+        ImGui::Checkbox("Sparse Brick Residency", &m_config.probe_gi_sparse_bricks_enabled);
+        if (m_config.probe_gi_sparse_bricks_enabled) {
+            ImGui::SliderFloat(
+                "Brick Resident Distance",
+                &m_config.probe_gi_brick_resident_distance,
+                0.5f,
+                128.0f
+            );
+            ImGui::SliderFloat(
+                "Brick Resident Hysteresis",
+                &m_config.probe_gi_brick_resident_hysteresis,
+                0.0f,
+                16.0f
+            );
+        }
 
         auto sanitize_volume_size = [](float3 value) {
             return float3(
@@ -390,8 +411,9 @@ void RasterUI::ShowConfig() {
             "Irradiance",
             "Contribution",
             "Visibility",
+            "Brick Residency",
         };
-        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 5);
+        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 6);
         if (m_config.probe_gi_debug_mode != 0) {
             ImGui::SliderFloat("Debug Scale", &m_config.probe_gi_debug_scale, 0.0f, 8.0f);
         }

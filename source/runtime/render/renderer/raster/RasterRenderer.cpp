@@ -195,7 +195,10 @@ void RasterRenderer::UpdateGlobalLightingData(
                << " probes=" << lighting_data->probe_system_counts.y
                << " brick_buffer=" << lighting_data->probe_system_counts.z
                << " page_table=" << lighting_data->probe_system_counts.w
-               << " resident_bricks=" << context.probe_volume.GetBrickCount()
+               << " resident_bricks=" << context.probe_volume.GetResidentBrickCount() << "/"
+               << context.probe_volume.GetBrickCount()
+               << " resident_probes=" << context.probe_volume.GetResidentProbeCount() << "/"
+               << context.probe_volume.GetProbeCount()
                << " intensity=" << ui_config.probe_gi_intensity
                << " trace_distance=" << ui_config.probe_gi_trace_distance
                << " trace_rays=" << ui_config.probe_gi_trace_ray_count
@@ -339,7 +342,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         shadow_depth_pass->Process(raster_context, raster_config, camera);
         cmd_list.PopScopeWithTimeScope();
 
-        probe_update_pass->Process(raster_context, raster_config, scene, time);
+        probe_update_pass->Process(raster_context, raster_config, scene, camera);
 
         // Update Global Lighting Data
         UpdateGlobalLightingData(raster_context, raster_config, camera);

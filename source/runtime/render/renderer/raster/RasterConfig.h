@@ -204,9 +204,12 @@ struct RasterConfig {
     bool         shading_brdf_G_is_ibl             = false; // 是否使用IBL的Fresnel近似
 
     // MARK: Probe GI
-    bool   probe_gi_enabled              = true;
-    int    probe_gi_volume_count         = 2;
-    int    probe_gi_selected_volume      = 0;
+    bool   probe_gi_enabled                   = true;
+    int    probe_gi_volume_count              = 2;
+    int    probe_gi_selected_volume           = 0;
+    bool   probe_gi_sparse_bricks_enabled     = false;
+    float  probe_gi_brick_resident_distance   = 12.0f;
+    float  probe_gi_brick_resident_hysteresis = 2.0f;
     StaticArray<ProbeVolumeConfig, Render::RASTER_PROBE_VOLUME_MAX_COUNT> probe_gi_volumes = {
         ProbeVolumeConfig{},
         ProbeVolumeConfig{
@@ -239,7 +242,8 @@ struct RasterConfig {
     float  probe_gi_directional_bounce   = 0.06f;
     float3 probe_gi_sky_color            = float3(0.48f, 0.62f, 0.95f);
     float3 probe_gi_ground_color         = float3(0.35f, 0.27f, 0.18f);
-    int    probe_gi_debug_mode           = 0; // 0=off, 1=volume cells, 2=irradiance, 3=contribution, 4=visibility
+    int    probe_gi_debug_mode =
+        0; // 0=off, 1=cells, 2=irradiance, 3=contribution, 4=visibility, 5=brick residency
     float  probe_gi_debug_scale          = 1.0f;
     bool   probe_gi_gizmo_enabled        = false;
     int    probe_gi_gizmo_color_mode     = 0; // 0=fixed color, 1=probe irradiance, 2=visibility, 3=state

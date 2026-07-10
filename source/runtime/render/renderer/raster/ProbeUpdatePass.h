@@ -3,6 +3,7 @@
 #include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
+#include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 
@@ -20,7 +21,6 @@ public:
     DEFINE_SHADER_TEX(rw_irradiance_atlas_texture);
     DEFINE_SHADER_BUFFER(probe_volume_data);
     DEFINE_SHADER_BUFFER(probe_brick_data);
-    DEFINE_SHADER_BUFFER(probe_page_table);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_CONSTANT_STRUCT(ProbeUpdateParam, param);
     DEFINE_SHADER_ARGS(
@@ -32,7 +32,6 @@ public:
         rw_irradiance_atlas_texture,
         probe_volume_data,
         probe_brick_data,
-        probe_page_table,
         bdls,
         param
     );
@@ -51,7 +50,6 @@ public:
     DEFINE_SHADER_TLAS(tlas);
     DEFINE_SHADER_BUFFER(probe_volume_data);
     DEFINE_SHADER_BUFFER(probe_brick_data);
-    DEFINE_SHADER_BUFFER(probe_page_table);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_CONSTANT_STRUCT(ProbeUpdateParam, param);
     DEFINE_SHADER_ARGS(
@@ -64,7 +62,6 @@ public:
         tlas,
         probe_volume_data,
         probe_brick_data,
-        probe_page_table,
         bdls,
         param
     );
@@ -88,10 +85,11 @@ public:
         );
     }
 
-    void Process(RasterContext& context, const RasterConfig& config, const Scene& scene, uint64 frame_index) {
-        ProbeVolumeResource::UpdateInfo update_info = context.probe_volume.PrepareUpdate(config, scene, frame_index);
+    void Process(RasterContext& context, const RasterConfig& config, const Scene& scene, const Camera& camera) {
+        ProbeVolumeResource::UpdateInfo update_info =
+            context.probe_volume.PrepareUpdate(config, scene, camera.GetPosition());
 
-        if (!update_info.enabled || update_info.volume_count == 0 || update_info.total_probe_count == 0) {
+        if (!update_info.enabled || update_info.job_count == 0 || update_info.total_probe_count == 0) {
             return;
         }
 
@@ -99,8 +97,8 @@ public:
 
         RaytracingSceneRef rt_scene = context.rt_scene();
         const bool rt_available = rt_scene && rt_scene->GetTlas();
-        for (uint volume_index = 0; volume_index < update_info.volume_count; ++volume_index) {
-            ProbeVolumeResource::UpdateJob& job = update_info.jobs[volume_index];
+        for (uint job_index = 0; job_index < update_info.job_count; ++job_index) {
+            ProbeVolumeResource::UpdateJob& job = update_info.jobs[job_index];
             if (job.probe_count == 0) {
                 continue;
             }
@@ -122,11 +120,10 @@ public:
                         rt_scene->GetTlas(),
                         context.probe_volume.GetVolumeBufferView(),
                         context.probe_volume.GetBrickBufferView(),
-                        context.probe_volume.GetPageTableBufferView(),
                         context.bdls,
                         job.param
                     )
-                    .Dispatch(uint3(dispatch_count, 1, 1), "Probe GI DDGI Volume Ray Query Update Pass");
+                    .Dispatch(uint3(dispatch_count, 1, 1), "Probe GI DDGI Resident Brick Ray Query Update Pass");
                 continue;
             }
 
@@ -142,19 +139,18 @@ public:
                     context.probe_volume.GetIrradianceAtlasTextureView(),
                     context.probe_volume.GetVolumeBufferView(),
                     context.probe_volume.GetBrickBufferView(),
-                    context.probe_volume.GetPageTableBufferView(),
                     context.bdls,
                     job.param
                 )
-                .Dispatch(uint3(dispatch_count, 1, 1), "Probe GI Fallback Volume Update Pass");
+                .Dispatch(uint3(dispatch_count, 1, 1), "Probe GI Fallback Resident Brick Update Pass");
         }
 
         if (rt_available) {
-            RasterTool::LogDebugEverySeconds("[ProbeGI] DDGI ray-query probe update active.", 3.0);
+            RasterTool::LogDebugEverySeconds("[ProbeGI] DDGI ray-query resident-brick update active.", 3.0);
             return;
         }
 
-        RasterTool::LogDebugEverySeconds("[ProbeGI] TLAS unavailable, using fallback probe update.", 3.0);
+        RasterTool::LogDebugEverySeconds("[ProbeGI] TLAS unavailable, using fallback resident-brick update.", 3.0);
     }
 
 private:

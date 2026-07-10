@@ -28,7 +28,6 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
 
 [[vk::binding(7, 0)]] StructuredBuffer<Moer::ProbeVolumeGpuDesc> probe_volume_data;
 [[vk::binding(8, 0)]] StructuredBuffer<Moer::ProbeBrickGpuDesc> probe_brick_data;
-[[vk::binding(9, 0)]] StructuredBuffer<uint> probe_page_table;
 
 float ProbeSafeSaturate(float value) {
     return saturate(value);
@@ -76,34 +75,6 @@ uint ProbeGetVisibilityAtlasIndex(uint probe_index, uint atlas_texel_index) {
 
 uint ProbeGetIrradianceAtlasIndex(uint probe_index, uint atlas_texel_index) {
     return probe_index * Moer::RASTER_PROBE_IRRADIANCE_ATLAS_TEXEL_COUNT + atlas_texel_index;
-}
-
-uint ProbeGetPhysicalProbeIndex(uint3 coord, Moer::ProbeVolumeGpuDesc volume) {
-    const uint3 counts = max(volume.counts.xyz, uint3(1, 1, 1));
-    const uint3 brick_counts =
-        (counts + uint3(Moer::RASTER_PROBE_BRICK_DIM - 1u, Moer::RASTER_PROBE_BRICK_DIM - 1u, Moer::RASTER_PROBE_BRICK_DIM - 1u)) /
-        Moer::RASTER_PROBE_BRICK_DIM;
-    const uint3 brick_coord = coord / Moer::RASTER_PROBE_BRICK_DIM;
-    const uint logical_brick_index =
-        brick_coord.x + brick_coord.y * brick_counts.x + brick_coord.z * brick_counts.x * brick_counts.y;
-    const uint brick_index = probe_page_table[volume.allocation.z + logical_brick_index];
-    if (brick_index == Moer::RASTER_PROBE_PAGE_INVALID) {
-        return Moer::RASTER_PROBE_PAGE_INVALID;
-    }
-
-    const Moer::ProbeBrickGpuDesc brick = probe_brick_data[brick_index];
-    if (brick.probe_range.z == 0u) {
-        return Moer::RASTER_PROBE_PAGE_INVALID;
-    }
-
-    const uint3 local_coord = coord - brick_coord * Moer::RASTER_PROBE_BRICK_DIM;
-    if (any(local_coord >= brick.local_counts.xyz)) {
-        return Moer::RASTER_PROBE_PAGE_INVALID;
-    }
-
-    const uint local_index = local_coord.x + local_coord.y * brick.local_counts.x +
-                             local_coord.z * brick.local_counts.x * brick.local_counts.y;
-    return brick.probe_range.x + local_index;
 }
 
 uint2 ProbeGetAtlasTextureTileOrigin(uint probe_index) {
@@ -362,22 +333,30 @@ ProbePlacementResult ProbeClassifyAndRelocate(
 }
 
 [numthreads(64, 1, 1)] void main(uint local_probe_index : SV_DispatchThreadID) {
-    const uint3 counts = max(param.probe_volume_counts.xyz, uint3(1, 1, 1));
-    const uint local_probe_count = counts.x * counts.y * counts.z;
+    const uint brick_index = uint(round(max(param.main_light_direction.w, 0.0)));
+    const Moer::ProbeBrickGpuDesc brick = probe_brick_data[brick_index];
+    if (brick.probe_range.z == 0u || brick.coord_volume.w != param.probe_volume_counts.w) {
+        return;
+    }
+
+    const Moer::ProbeVolumeGpuDesc volume = probe_volume_data[param.probe_volume_counts.w];
+    const uint3 counts = max(volume.counts.xyz, uint3(1, 1, 1));
+    const uint3 local_counts = max(brick.local_counts.xyz, uint3(1, 1, 1));
+    const uint local_probe_count = local_counts.x * local_counts.y * local_counts.z;
     if (local_probe_index >= local_probe_count) {
         return;
     }
 
-    const uint  x      = local_probe_index % counts.x;
-    const uint  yz     = local_probe_index / counts.x;
-    const uint  y      = yz % counts.y;
-    const uint  z      = yz / counts.y;
-    const uint3 coord  = uint3(x, y, z);
-    const Moer::ProbeVolumeGpuDesc volume = probe_volume_data[param.probe_volume_counts.w];
-    const uint probe_index = ProbeGetPhysicalProbeIndex(coord, volume);
-    if (probe_index == Moer::RASTER_PROBE_PAGE_INVALID) {
+    const uint  x      = local_probe_index % local_counts.x;
+    const uint  yz     = local_probe_index / local_counts.x;
+    const uint  y      = yz % local_counts.y;
+    const uint  z      = yz / local_counts.y;
+    const uint3 local_coord = uint3(x, y, z);
+    const uint3 coord = brick.coord_volume.xyz * Moer::RASTER_PROBE_BRICK_DIM + local_coord;
+    if (any(coord >= counts)) {
         return;
     }
+    const uint probe_index = brick.probe_range.x + local_probe_index;
 
     const float3 coord01  = ProbeGetGridCoord01(coord, counts);
     const float3 grid_position = param.probe_volume_origin.xyz + param.probe_volume_spacing.xyz * float3(coord);
@@ -389,8 +368,9 @@ ProbePlacementResult ProbeClassifyAndRelocate(
     const float3 sun_bounce =
         param.main_light_color.rgb * direct_light_energy * param.probe_ground_color.w * (0.35 + 0.65 * sun_lift);
 
+    const float brick_phase = frac(float(brick_index) * 0.61803398875);
     const float lateral_variation =
-        0.88 + 0.12 * sin((coord01.x * 3.17 + coord01.z * 2.41 + param.main_light_direction.w) * PI);
+        0.88 + 0.12 * sin((coord01.x * 3.17 + coord01.z * 2.41 + brick_phase) * PI);
     const float low_volume_weight = pow(saturate(1.0 - coord01.y), 1.35);
     const float wall_bounce_mask = saturate(abs(coord01.x - 0.5) * 2.0) * saturate(1.0 - coord01.y * 0.75);
 

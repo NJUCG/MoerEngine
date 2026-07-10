@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace Moer::Render::Raster {
 namespace {
@@ -233,6 +234,7 @@ void ProbeVolumeResource::Destroy(BindlessArrayRef& bdls) {
     m_page_table_upload.clear();
     m_has_snapshot = false;
     m_history_valid.fill(false);
+    m_brick_history_valid.fill(false);
 }
 
 void ProbeVolumeResource::UpdateSceneData(CommandList& cmd_list, const Scene& scene) {
@@ -293,10 +295,14 @@ void ProbeVolumeResource::UpdateSceneData(CommandList& cmd_list, const Scene& sc
     );
 }
 
-ProbeVolumeResource::Snapshot ProbeVolumeResource::BuildSnapshot(const RasterConfig& config) const {
+ProbeVolumeResource::Snapshot
+ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_position) const {
     Snapshot snapshot{};
-    snapshot.enabled    = config.probe_gi_enabled;
-    snapshot.debug_mode = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 4));
+    snapshot.enabled                    = config.probe_gi_enabled;
+    snapshot.sparse_bricks_enabled     = config.probe_gi_sparse_bricks_enabled;
+    snapshot.brick_resident_distance   = Max(config.probe_gi_brick_resident_distance, 0.1f);
+    snapshot.brick_resident_hysteresis = Max(config.probe_gi_brick_resident_hysteresis, 0.0f);
+    snapshot.debug_mode                = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 5));
     snapshot.trace_distance     = Max(config.probe_gi_trace_distance, 0.1f);
     snapshot.trace_ray_count =
         static_cast<uint>(Clamp(config.probe_gi_trace_ray_count, 1, int(RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT)));
@@ -357,6 +363,8 @@ ProbeVolumeResource::Snapshot ProbeVolumeResource::BuildSnapshot(const RasterCon
             (volume.count_y + RASTER_PROBE_BRICK_DIM - 1u) / RASTER_PROBE_BRICK_DIM,
             (volume.count_z + RASTER_PROBE_BRICK_DIM - 1u) / RASTER_PROBE_BRICK_DIM
         );
+        uint  nearest_brick_index = RASTER_PROBE_PAGE_INVALID;
+        float nearest_distance_sq = std::numeric_limits<float>::max();
         for (uint brick_z = 0; brick_z < brick_counts.z; ++brick_z) {
             for (uint brick_y = 0; brick_y < brick_counts.y; ++brick_y) {
                 for (uint brick_x = 0; brick_x < brick_counts.x; ++brick_x) {
@@ -378,13 +386,55 @@ ProbeVolumeResource::Snapshot ProbeVolumeResource::BuildSnapshot(const RasterCon
                         Min(RASTER_PROBE_BRICK_DIM, volume.count_z - brick_start.z)
                     );
                     brick.probe_count = brick.local_counts.x * brick.local_counts.y * brick.local_counts.z;
+                    const float3 brick_center_coord(
+                        float(brick_start.x) + float(brick.local_counts.x - 1u) * 0.5f,
+                        float(brick_start.y) + float(brick.local_counts.y - 1u) * 0.5f,
+                        float(brick_start.z) + float(brick.local_counts.z - 1u) * 0.5f
+                    );
+                    const float3 brick_center = volume.origin + volume.spacing * brick_center_coord;
+                    const float distance_sq = SquaredLengthf(camera_position - brick_center);
+                    float resident_distance = snapshot.brick_resident_distance;
+                    if (snapshot.sparse_bricks_enabled && m_has_snapshot &&
+                        m_snapshot.sparse_bricks_enabled && brick_index < m_snapshot.brick_count) {
+                        const BrickSnapshot& previous_brick = m_snapshot.bricks[brick_index];
+                        const bool same_brick = previous_brick.volume_index == brick.volume_index &&
+                                                previous_brick.coord == brick.coord &&
+                                                previous_brick.local_counts == brick.local_counts;
+                        if (same_brick && previous_brick.resident) {
+                            resident_distance += snapshot.brick_resident_hysteresis;
+                        }
+                    }
+                    brick.resident = !snapshot.sparse_bricks_enabled ||
+                                     distance_sq <= resident_distance * resident_distance;
 
-                    snapshot.page_table[page_index] = brick_index;
+                    if (distance_sq < nearest_distance_sq) {
+                        nearest_distance_sq = distance_sq;
+                        nearest_brick_index = brick_index;
+                    }
+
+                    if (brick.resident) {
+                        snapshot.page_table[page_index] = brick_index;
+                        ++snapshot.resident_brick_count;
+                        snapshot.resident_probe_count += brick.probe_count;
+                        ++volume.resident_brick_count;
+                        volume.resident_probe_count += brick.probe_count;
+                    }
                     snapshot.total_count += brick.probe_count;
                     ++snapshot.brick_count;
                     ++volume.brick_count;
                 }
             }
+        }
+
+        if (snapshot.sparse_bricks_enabled && volume.resident_brick_count == 0u &&
+            nearest_brick_index != RASTER_PROBE_PAGE_INVALID) {
+            BrickSnapshot& nearest_brick = snapshot.bricks[nearest_brick_index];
+            nearest_brick.resident = true;
+            snapshot.page_table[nearest_brick.page_index] = nearest_brick_index;
+            ++snapshot.resident_brick_count;
+            snapshot.resident_probe_count += nearest_brick.probe_count;
+            ++volume.resident_brick_count;
+            volume.resident_probe_count += nearest_brick.probe_count;
         }
 
         ++snapshot.volume_count;
@@ -409,9 +459,15 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
         return true;
     }
 
-    if (m_snapshot.enabled != snapshot.enabled || m_snapshot.debug_mode != snapshot.debug_mode ||
+    if (m_snapshot.enabled != snapshot.enabled ||
+        m_snapshot.sparse_bricks_enabled != snapshot.sparse_bricks_enabled ||
+        m_snapshot.debug_mode != snapshot.debug_mode ||
         m_snapshot.volume_count != snapshot.volume_count || m_snapshot.brick_count != snapshot.brick_count ||
+        m_snapshot.resident_brick_count != snapshot.resident_brick_count ||
+        m_snapshot.resident_probe_count != snapshot.resident_probe_count ||
         m_snapshot.total_count != snapshot.total_count ||
+        !NearlyEqual(m_snapshot.brick_resident_distance, snapshot.brick_resident_distance) ||
+        !NearlyEqual(m_snapshot.brick_resident_hysteresis, snapshot.brick_resident_hysteresis) ||
         !NearlyEqual(m_snapshot.trace_distance, snapshot.trace_distance) ||
            m_snapshot.trace_ray_count != snapshot.trace_ray_count ||
            !NearlyEqual(m_snapshot.visibility_bias, snapshot.visibility_bias) ||
@@ -434,10 +490,22 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
         if (lhs.config_index != rhs.config_index || lhs.count_x != rhs.count_x || lhs.count_y != rhs.count_y ||
             lhs.count_z != rhs.count_z || lhs.total_count != rhs.total_count ||
             lhs.probe_offset != rhs.probe_offset || lhs.page_table_offset != rhs.page_table_offset ||
-            lhs.brick_count != rhs.brick_count || !NearlyEqual(lhs.origin, rhs.origin) ||
+            lhs.brick_count != rhs.brick_count || lhs.resident_brick_count != rhs.resident_brick_count ||
+            lhs.resident_probe_count != rhs.resident_probe_count || !NearlyEqual(lhs.origin, rhs.origin) ||
             !NearlyEqual(lhs.extent, rhs.extent) || !NearlyEqual(lhs.spacing, rhs.spacing) ||
             !NearlyEqual(lhs.intensity, rhs.intensity) || !NearlyEqual(lhs.normal_bias, rhs.normal_bias) ||
             !NearlyEqual(lhs.blend_distance, rhs.blend_distance)) {
+            return true;
+        }
+    }
+
+    for (uint brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
+        const BrickSnapshot& lhs = m_snapshot.bricks[brick_index];
+        const BrickSnapshot& rhs = snapshot.bricks[brick_index];
+        if (lhs.coord != rhs.coord || lhs.local_counts != rhs.local_counts ||
+            lhs.volume_index != rhs.volume_index || lhs.probe_offset != rhs.probe_offset ||
+            lhs.probe_count != rhs.probe_count || lhs.page_index != rhs.page_index ||
+            lhs.resident != rhs.resident) {
             return true;
         }
     }
@@ -494,7 +562,8 @@ void ProbeVolumeResource::StageVolumeUpload(const Snapshot& snapshot) {
         const BrickSnapshot& brick = snapshot.bricks[brick_index];
         ProbeBrickGpuDesc&   desc  = m_gpu_brick_descs[brick_index];
         desc.coord_volume = uint4(brick.coord.x, brick.coord.y, brick.coord.z, brick.volume_index);
-        desc.probe_range  = uint4(brick.probe_offset, brick.probe_count, 1u, brick.page_index);
+        desc.probe_range =
+            uint4(brick.probe_offset, brick.probe_count, brick.resident ? 1u : 0u, brick.page_index);
         desc.local_counts = uint4(brick.local_counts.x, brick.local_counts.y, brick.local_counts.z, 0u);
     }
 
@@ -510,8 +579,8 @@ ProbeUpdateParam ProbeVolumeResource::BuildUpdateParam(
     const Snapshot& snapshot,
     const VolumeSnapshot& volume,
     uint            volume_index,
+    uint            brick_index,
     const Scene&    scene,
-    uint64          frame_index,
     bool            history_valid
 ) const {
     float3 main_light_direction;
@@ -536,7 +605,7 @@ ProbeUpdateParam ProbeVolumeResource::BuildUpdateParam(
     param.probe_ground_color =
         float4(snapshot.ground_color.x, snapshot.ground_color.y, snapshot.ground_color.z, snapshot.directional_bounce);
     param.main_light_direction =
-        float4(main_light_direction.x, main_light_direction.y, main_light_direction.z, float(frame_index % 1024u) / 1024.0f);
+        float4(main_light_direction.x, main_light_direction.y, main_light_direction.z, float(brick_index));
     param.main_light_color = float4(main_light_color.x, main_light_color.y, main_light_color.z, main_light_intensity);
     param.probe_trace_config =
         float4(snapshot.trace_distance, snapshot.visibility_bias, float(snapshot.trace_ray_count), 0.0f);
@@ -544,7 +613,7 @@ ProbeUpdateParam ProbeVolumeResource::BuildUpdateParam(
 }
 
 ProbeVolumeResource::UpdateInfo
-ProbeVolumeResource::PrepareUpdate(const RasterConfig& config, const Scene& scene, const uint64 frame_index) {
+ProbeVolumeResource::PrepareUpdate(const RasterConfig& config, const Scene& scene, float3 camera_position) {
     UpdateInfo update_info{};
 
     if (m_probe_buffer.buf == nullptr || m_volume_buffer.buf == nullptr || m_brick_buffer.buf == nullptr ||
@@ -553,11 +622,12 @@ ProbeVolumeResource::PrepareUpdate(const RasterConfig& config, const Scene& scen
         return update_info;
     }
 
-    const Snapshot snapshot = BuildSnapshot(config);
+    const Snapshot snapshot = BuildSnapshot(config, camera_position);
     const bool     changed  = HasSnapshotChanged(snapshot);
 
     if (!snapshot.enabled || snapshot.volume_count == 0 || snapshot.total_count == 0) {
         m_history_valid.fill(false);
+        m_brick_history_valid.fill(false);
         m_snapshot     = snapshot;
         m_has_snapshot = true;
         if (changed) {
@@ -569,23 +639,23 @@ ProbeVolumeResource::PrepareUpdate(const RasterConfig& config, const Scene& scen
         return update_info;
     }
 
-    update_info.enabled           = true;
-    update_info.volume_count      = snapshot.volume_count;
-    update_info.total_probe_count = snapshot.total_count;
+    update_info.enabled              = true;
+    update_info.volume_count         = snapshot.volume_count;
+    update_info.resident_brick_count = snapshot.resident_brick_count;
+    update_info.total_probe_count    = snapshot.resident_probe_count;
 
+    StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT> volume_history_reset{};
     StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT> next_history_valid{};
+    StaticArray<bool, RASTER_PROBE_MAX_BRICK_COUNT>  next_brick_history_valid{};
     for (uint volume_index = 0; volume_index < snapshot.volume_count; ++volume_index) {
-        const bool reset_history = RequiresHistoryReset(snapshot, volume_index);
+        const bool volume_reset = RequiresHistoryReset(snapshot, volume_index);
         const VolumeSnapshot& volume = snapshot.volumes[volume_index];
-        UpdateJob&            job    = update_info.jobs[volume_index];
-        job.volume_index = volume_index;
-        job.probe_count  = volume.total_count;
-        job.param        = BuildUpdateParam(snapshot, volume, volume_index, scene, frame_index, !reset_history);
+        volume_history_reset[volume_index] = volume_reset;
         next_history_valid[volume_index] = true;
 
-        if (changed || reset_history) {
+        if (changed || volume_reset) {
             LOG_DEBUG(
-                "[ProbeGI] Volume update scheduled: slot={}, config_index={}, count=({}, {}, {}) total={}, offset={}, bricks={}, page_table_offset={}, origin={}, extent={}, spacing={}, intensity={}, blend_distance={}, history_reset={}",
+                "[ProbeGI] Volume residency updated: slot={}, config_index={}, count=({}, {}, {}) total={}, offset={}, resident_bricks={}/{}, resident_probes={}, page_table_offset={}, origin={}, extent={}, spacing={}, intensity={}, blend_distance={}, history_reset={}",
                 volume_index,
                 volume.config_index,
                 volume.count_x,
@@ -593,26 +663,48 @@ ProbeVolumeResource::PrepareUpdate(const RasterConfig& config, const Scene& scen
                 volume.count_z,
                 volume.total_count,
                 volume.probe_offset,
+                volume.resident_brick_count,
                 volume.brick_count,
+                volume.resident_probe_count,
                 volume.page_table_offset,
                 volume.origin.ToString(2),
                 volume.extent.ToString(2),
                 volume.spacing.ToString(2),
                 volume.intensity,
                 volume.blend_distance,
-                reset_history ? 1 : 0
+                volume_reset ? 1 : 0
             );
         }
     }
 
+    for (uint brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
+        const BrickSnapshot& brick = snapshot.bricks[brick_index];
+        if (!brick.resident || update_info.job_count >= update_info.jobs.size()) {
+            continue;
+        }
+
+        const VolumeSnapshot& volume = snapshot.volumes[brick.volume_index];
+        const bool history_valid =
+            !volume_history_reset[brick.volume_index] && m_brick_history_valid[brick_index];
+        UpdateJob& job = update_info.jobs[update_info.job_count++];
+        job.volume_index = brick.volume_index;
+        job.brick_index  = brick_index;
+        job.probe_count  = brick.probe_count;
+        job.param = BuildUpdateParam(snapshot, volume, brick.volume_index, brick_index, scene, history_valid);
+        next_brick_history_valid[brick_index] = true;
+    }
+
     if (changed) {
         LOG_DEBUG(
-            "[ProbeGI] Multi-volume brick layout updated: active_volumes={}, resident_bricks={}/{}, total_probes={}/{}, trace_distance={}, trace_rays={}, hysteresis=({}, {}).",
+            "[ProbeGI] Multi-volume brick residency updated: active_volumes={}, resident_bricks={}/{}, resident_probes={}/{}, sparse={}, resident_distance={}, resident_hysteresis={}, trace_distance={}, trace_rays={}, history_hysteresis=({}, {}).",
             snapshot.volume_count,
+            snapshot.resident_brick_count,
             snapshot.brick_count,
-            RASTER_PROBE_MAX_BRICK_COUNT,
+            snapshot.resident_probe_count,
             snapshot.total_count,
-            RASTER_PROBE_MAX_COUNT,
+            snapshot.sparse_bricks_enabled ? 1 : 0,
+            snapshot.brick_resident_distance,
+            snapshot.brick_resident_hysteresis,
             snapshot.trace_distance,
             snapshot.trace_ray_count,
             snapshot.irradiance_hysteresis,
@@ -621,9 +713,10 @@ ProbeVolumeResource::PrepareUpdate(const RasterConfig& config, const Scene& scen
         StageVolumeUpload(snapshot);
     }
 
-    m_snapshot       = snapshot;
-    m_has_snapshot   = true;
-    m_history_valid  = next_history_valid;
+    m_snapshot            = snapshot;
+    m_has_snapshot        = true;
+    m_history_valid       = next_history_valid;
+    m_brick_history_valid = next_brick_history_valid;
     return update_info;
 }
 
