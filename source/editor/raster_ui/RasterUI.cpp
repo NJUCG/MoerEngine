@@ -327,6 +327,14 @@ void RasterUI::ShowConfig() {
             Render::RASTER_PROBE_BRICK_DIM,
             Render::RASTER_PROBE_BRICK_DIM
         );
+        ImGui::SliderInt(
+            "Physical Probe Capacity",
+            &m_config.probe_gi_physical_probe_capacity,
+            static_cast<int>(
+                Render::RASTER_PROBE_BRICK_DIM * Render::RASTER_PROBE_BRICK_DIM * Render::RASTER_PROBE_BRICK_DIM
+            ),
+            static_cast<int>(Render::RASTER_PROBE_MAX_COUNT)
+        );
         ImGui::Checkbox("Sparse Brick Residency", &m_config.probe_gi_sparse_bricks_enabled);
         if (m_config.probe_gi_sparse_bricks_enabled) {
             ImGui::SliderFloat(
@@ -422,8 +430,9 @@ void RasterUI::ShowConfig() {
             "Visibility",
             "Brick Residency",
             "Update Age",
+            "Physical Allocation",
         };
-        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 7);
+        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 8);
         if (m_config.probe_gi_debug_mode != 0) {
             ImGui::SliderFloat("Debug Scale", &m_config.probe_gi_debug_scale, 0.0f, 8.0f);
         }

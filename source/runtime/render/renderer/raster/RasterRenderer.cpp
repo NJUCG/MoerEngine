@@ -198,10 +198,19 @@ void RasterRenderer::UpdateGlobalLightingData(
                << " probes=" << lighting_data->probe_system_counts.y
                << " brick_buffer=" << lighting_data->probe_system_counts.z
                << " page_table=" << lighting_data->probe_system_counts.w
+               << " requested_bricks=" << context.probe_volume.GetRequestedBrickCount() << "/"
+               << context.probe_volume.GetBrickCount()
+               << " requested_probes=" << context.probe_volume.GetRequestedProbeCount() << "/"
+               << context.probe_volume.GetProbeCount()
                << " resident_bricks=" << resident_bricks << "/"
                << context.probe_volume.GetBrickCount()
                << " resident_probes=" << context.probe_volume.GetResidentProbeCount() << "/"
                << context.probe_volume.GetProbeCount()
+               << " physical_allocations=" << context.probe_volume.GetPhysicalAllocationCount()
+               << " physical_probes=" << context.probe_volume.GetAllocatedPhysicalProbeCount() << "/"
+               << context.probe_volume.GetPhysicalProbeCapacity()
+               << " free_physical_probes=" << context.probe_volume.GetFreePhysicalProbeCount()
+               << " capacity_evicted_bricks=" << context.probe_volume.GetCapacityEvictedBrickCount()
                << " scheduler=" << (ui_config.probe_gi_update_scheduler_enabled ? 1 : 0)
                << " update_budget=" << ui_config.probe_gi_update_brick_budget
                << " scheduled_bricks=" << scheduled_bricks << "/" << resident_bricks

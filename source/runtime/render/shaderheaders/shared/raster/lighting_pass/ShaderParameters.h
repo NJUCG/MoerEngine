@@ -110,7 +110,7 @@ struct ProbeVolumeGpuDesc {
     float4 spacing_intensity; // xyz = probe spacing, w = GI intensity
     float4 extent_blend;      // xyz = volume extent, w = boundary blend distance
     uint4  counts;            // xyz = local grid counts, w = local probe count
-    uint4  allocation;        // x = physical probe base, y = config index, z = page table base, w = brick count
+    uint4  allocation;        // x = logical probe base, y = config index, z = page table base, w = brick count
     float4 visibility;        // x = bias, y = power, z = min weight, w = strength
 };
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ProbePhysicalAllocator.h"
 #include "RasterConfig.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
@@ -106,6 +107,34 @@ public:
         return m_snapshot.resident_probe_count;
     }
 
+    uint GetRequestedBrickCount() const {
+        return m_snapshot.requested_brick_count;
+    }
+
+    uint GetRequestedProbeCount() const {
+        return m_snapshot.requested_probe_count;
+    }
+
+    uint GetPhysicalProbeCapacity() const {
+        return m_snapshot.physical_probe_capacity;
+    }
+
+    uint GetAllocatedPhysicalProbeCount() const {
+        return m_snapshot.allocated_physical_probe_count;
+    }
+
+    uint GetPhysicalAllocationCount() const {
+        return m_snapshot.physical_allocation_count;
+    }
+
+    uint GetFreePhysicalProbeCount() const {
+        return m_snapshot.free_physical_probe_count;
+    }
+
+    uint GetCapacityEvictedBrickCount() const {
+        return m_snapshot.capacity_evicted_brick_count;
+    }
+
     uint GetScheduledBrickCount() const {
         return m_last_scheduled_brick_count;
     }
@@ -159,10 +188,11 @@ private:
         uint3 coord              = uint3(0u);
         uint3 local_counts       = uint3(1u);
         uint  volume_index       = 0;
-        uint  probe_offset       = 0;
+        uint  probe_offset       = RASTER_PROBE_PAGE_INVALID;
         uint  probe_count        = 0;
         uint  page_index         = 0;
-        bool  resident           = true;
+        bool  requested_resident = true;
+        bool  resident           = false;
         uint  update_age         = 0;
         float camera_distance_sq = 0.0f;
     };
@@ -176,6 +206,8 @@ private:
         uint   probe_offset         = 0;
         uint   page_table_offset    = 0;
         uint   brick_count          = 0;
+        uint   requested_brick_count = 0;
+        uint   requested_probe_count = 0;
         uint   resident_brick_count = 0;
         uint   resident_probe_count = 0;
         float3 origin               = float3(0.0f);
@@ -192,9 +224,17 @@ private:
         uint   debug_mode                 = 0;
         uint   volume_count               = 0;
         uint   brick_count                = 0;
+        uint   requested_brick_count      = 0;
+        uint   requested_probe_count      = 0;
         uint   resident_brick_count       = 0;
         uint   resident_probe_count       = 0;
         uint   total_count                = 0;
+        uint   physical_probe_capacity    = RASTER_PROBE_MAX_COUNT;
+        uint   allocated_physical_probe_count = 0;
+        uint   physical_allocation_count  = 0;
+        uint   free_physical_probe_count  = RASTER_PROBE_MAX_COUNT;
+        uint   capacity_evicted_brick_count = 0;
+        bool   allocator_compacted        = false;
         float  brick_resident_distance    = 0.0f;
         float  brick_resident_hysteresis  = 0.0f;
         bool   update_scheduler_enabled   = false;
@@ -226,6 +266,10 @@ private:
         const Scene&    scene,
         bool            history_valid
     ) const;
+    bool RequiresPhysicalAllocatorReset(const Snapshot& snapshot) const;
+    void ApplyPhysicalResidency(Snapshot& snapshot);
+    void ResetPhysicalAllocator(uint physical_probe_capacity);
+    void ReleasePhysicalAllocation(uint brick_index);
     bool HasSnapshotChanged(const Snapshot& snapshot) const;
     bool RequiresHistoryReset(const Snapshot& snapshot, uint volume_index) const;
     void StageVolumeUpload(const Snapshot& snapshot);
@@ -251,6 +295,8 @@ private:
     StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT> m_history_valid{};
     StaticArray<bool, RASTER_PROBE_MAX_BRICK_COUNT> m_brick_history_valid{};
     StaticArray<uint64, RASTER_PROBE_MAX_BRICK_COUNT> m_brick_last_update_frame{};
+    StaticArray<ProbePhysicalAllocator::Allocation, RASTER_PROBE_MAX_BRICK_COUNT> m_physical_allocations{};
+    ProbePhysicalAllocator m_physical_allocator;
     uint             m_last_scheduled_brick_count = 0;
     uint             m_last_scheduled_probe_count = 0;
 };

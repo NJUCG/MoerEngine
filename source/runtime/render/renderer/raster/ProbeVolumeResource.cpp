@@ -237,6 +237,8 @@ void ProbeVolumeResource::Destroy(BindlessArrayRef& bdls) {
     m_history_valid.fill(false);
     m_brick_history_valid.fill(false);
     m_brick_last_update_frame.fill(0);
+    m_physical_allocations.fill({});
+    m_physical_allocator.Reset(0u);
     m_last_scheduled_brick_count = 0;
     m_last_scheduled_probe_count = 0;
 }
@@ -309,7 +311,14 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
     snapshot.update_scheduler_enabled  = config.probe_gi_update_scheduler_enabled;
     snapshot.update_brick_budget =
         static_cast<uint>(Clamp(config.probe_gi_update_brick_budget, 1, int(RASTER_PROBE_MAX_BRICK_COUNT)));
-    snapshot.debug_mode = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 6));
+    constexpr uint min_physical_probe_capacity =
+        RASTER_PROBE_BRICK_DIM * RASTER_PROBE_BRICK_DIM * RASTER_PROBE_BRICK_DIM;
+    snapshot.physical_probe_capacity = static_cast<uint>(Clamp(
+        config.probe_gi_physical_probe_capacity,
+        int(min_physical_probe_capacity),
+        int(RASTER_PROBE_MAX_COUNT)
+    ));
+    snapshot.debug_mode = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 7));
     snapshot.trace_distance     = Max(config.probe_gi_trace_distance, 0.1f);
     snapshot.trace_ray_count =
         static_cast<uint>(Clamp(config.probe_gi_trace_ray_count, 1, int(RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT)));
@@ -383,7 +392,6 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
                     BrickSnapshot& brick = snapshot.bricks[brick_index];
                     brick.coord           = uint3(brick_x, brick_y, brick_z);
                     brick.volume_index    = snapshot.volume_count;
-                    brick.probe_offset    = snapshot.total_count;
                     brick.page_index      = page_index;
 
                     const uint3 brick_start = brick.coord * RASTER_PROBE_BRICK_DIM;
@@ -414,24 +422,23 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
                         const bool same_brick = previous_brick.volume_index == brick.volume_index &&
                                                 previous_brick.coord == brick.coord &&
                                                 previous_brick.local_counts == brick.local_counts;
-                        if (same_brick && previous_brick.resident) {
+                        if (same_brick && previous_brick.requested_resident) {
                             resident_distance += snapshot.brick_resident_hysteresis;
                         }
                     }
-                    brick.resident = !snapshot.sparse_bricks_enabled ||
-                                     distance_sq <= resident_distance * resident_distance;
+                    brick.requested_resident = !snapshot.sparse_bricks_enabled ||
+                                               distance_sq <= resident_distance * resident_distance;
 
                     if (distance_sq < nearest_distance_sq) {
                         nearest_distance_sq = distance_sq;
                         nearest_brick_index = brick_index;
                     }
 
-                    if (brick.resident) {
-                        snapshot.page_table[page_index] = brick_index;
-                        ++snapshot.resident_brick_count;
-                        snapshot.resident_probe_count += brick.probe_count;
-                        ++volume.resident_brick_count;
-                        volume.resident_probe_count += brick.probe_count;
+                    if (brick.requested_resident) {
+                        ++snapshot.requested_brick_count;
+                        snapshot.requested_probe_count += brick.probe_count;
+                        ++volume.requested_brick_count;
+                        volume.requested_probe_count += brick.probe_count;
                     }
                     snapshot.total_count += brick.probe_count;
                     ++snapshot.brick_count;
@@ -440,15 +447,14 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
             }
         }
 
-        if (snapshot.sparse_bricks_enabled && volume.resident_brick_count == 0u &&
+        if (snapshot.sparse_bricks_enabled && volume.requested_brick_count == 0u &&
             nearest_brick_index != RASTER_PROBE_PAGE_INVALID) {
             BrickSnapshot& nearest_brick = snapshot.bricks[nearest_brick_index];
-            nearest_brick.resident = true;
-            snapshot.page_table[nearest_brick.page_index] = nearest_brick_index;
-            ++snapshot.resident_brick_count;
-            snapshot.resident_probe_count += nearest_brick.probe_count;
-            ++volume.resident_brick_count;
-            volume.resident_probe_count += nearest_brick.probe_count;
+            nearest_brick.requested_resident = true;
+            ++snapshot.requested_brick_count;
+            snapshot.requested_probe_count += nearest_brick.probe_count;
+            ++volume.requested_brick_count;
+            volume.requested_probe_count += nearest_brick.probe_count;
         }
 
         ++snapshot.volume_count;
@@ -468,6 +474,241 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
     return snapshot;
 }
 
+bool ProbeVolumeResource::RequiresPhysicalAllocatorReset(const Snapshot& snapshot) const {
+    if (!m_has_snapshot || m_physical_allocator.GetCapacity() != snapshot.physical_probe_capacity ||
+        m_snapshot.brick_count != snapshot.brick_count) {
+        return true;
+    }
+
+    for (uint brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
+        const BrickSnapshot& previous = m_snapshot.bricks[brick_index];
+        const BrickSnapshot& current  = snapshot.bricks[brick_index];
+        if (previous.coord != current.coord || previous.local_counts != current.local_counts ||
+            previous.volume_index != current.volume_index || previous.probe_count != current.probe_count ||
+            previous.page_index != current.page_index) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void ProbeVolumeResource::ResetPhysicalAllocator(uint physical_probe_capacity) {
+    m_physical_allocations.fill({});
+    m_physical_allocator.Reset(physical_probe_capacity);
+    m_brick_history_valid.fill(false);
+    m_brick_last_update_frame.fill(0);
+    LOG_DEBUG("[ProbeGI] Physical Probe allocator reset: capacity={}.", physical_probe_capacity);
+}
+
+void ProbeVolumeResource::ReleasePhysicalAllocation(uint brick_index) {
+    if (brick_index >= m_physical_allocations.size()) {
+        return;
+    }
+
+    ProbePhysicalAllocator::Allocation& allocation = m_physical_allocations[brick_index];
+    if (allocation.valid && allocation.probe_count > 0u) {
+        LOG_DEBUG(
+            "[ProbeGI] Physical Probe range released: brick={}, offset={}, count={}.",
+            brick_index,
+            allocation.probe_offset,
+            allocation.probe_count
+        );
+        if (!m_physical_allocator.Release(allocation)) {
+            LOG_ERROR(
+                "[ProbeGI] Physical Probe allocator rejected release: brick={}, offset={}, count={}.",
+                brick_index,
+                allocation.probe_offset,
+                allocation.probe_count
+            );
+        }
+    }
+    allocation = {};
+    m_brick_history_valid[brick_index] = false;
+    m_brick_last_update_frame[brick_index] = 0;
+}
+
+void ProbeVolumeResource::ApplyPhysicalResidency(Snapshot& snapshot) {
+    snapshot.page_table.fill(RASTER_PROBE_PAGE_INVALID);
+    snapshot.resident_brick_count = 0;
+    snapshot.resident_probe_count = 0;
+    snapshot.allocated_physical_probe_count = 0;
+    snapshot.physical_allocation_count = 0;
+    snapshot.capacity_evicted_brick_count = 0;
+    for (uint volume_index = 0; volume_index < snapshot.volume_count; ++volume_index) {
+        snapshot.volumes[volume_index].resident_brick_count = 0;
+        snapshot.volumes[volume_index].resident_probe_count = 0;
+    }
+
+    Array<uint> requested_candidates;
+    requested_candidates.reserve(snapshot.requested_brick_count);
+    StaticArray<uint, RASTER_PROBE_VOLUME_MAX_COUNT> nearest_requested_brick;
+    nearest_requested_brick.fill(RASTER_PROBE_PAGE_INVALID);
+    if (snapshot.enabled) {
+        for (uint brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
+            const BrickSnapshot& brick = snapshot.bricks[brick_index];
+            if (!brick.requested_resident) {
+                continue;
+            }
+            requested_candidates.push_back(brick_index);
+            uint& nearest_index = nearest_requested_brick[brick.volume_index];
+            if (nearest_index == RASTER_PROBE_PAGE_INVALID ||
+                brick.camera_distance_sq < snapshot.bricks[nearest_index].camera_distance_sq) {
+                nearest_index = brick_index;
+            }
+        }
+    }
+
+    std::sort(
+        requested_candidates.begin(),
+        requested_candidates.end(),
+        [&](uint lhs_index, uint rhs_index) {
+            const BrickSnapshot& lhs = snapshot.bricks[lhs_index];
+            const BrickSnapshot& rhs = snapshot.bricks[rhs_index];
+            const bool lhs_volume_anchor = nearest_requested_brick[lhs.volume_index] == lhs_index;
+            const bool rhs_volume_anchor = nearest_requested_brick[rhs.volume_index] == rhs_index;
+            if (lhs_volume_anchor != rhs_volume_anchor) {
+                return lhs_volume_anchor;
+            }
+            if (lhs_volume_anchor && lhs.volume_index != rhs.volume_index) {
+                return lhs.volume_index < rhs.volume_index;
+            }
+            if (!NearlyEqual(lhs.camera_distance_sq, rhs.camera_distance_sq)) {
+                return lhs.camera_distance_sq < rhs.camera_distance_sq;
+            }
+            return lhs_index < rhs_index;
+        }
+    );
+
+    StaticArray<bool, RASTER_PROBE_MAX_BRICK_COUNT> selected_bricks{};
+    uint selected_probe_count = 0;
+    for (uint brick_index : requested_candidates) {
+        const uint probe_count = snapshot.bricks[brick_index].probe_count;
+        if (selected_probe_count + probe_count > snapshot.physical_probe_capacity) {
+            continue;
+        }
+        selected_bricks[brick_index] = true;
+        selected_probe_count += probe_count;
+    }
+    snapshot.capacity_evicted_brick_count =
+        static_cast<uint>(requested_candidates.size()) -
+        static_cast<uint>(std::count(selected_bricks.begin(), selected_bricks.end(), true));
+
+    const bool allocator_reset = RequiresPhysicalAllocatorReset(snapshot);
+    if (allocator_reset) {
+        ResetPhysicalAllocator(snapshot.physical_probe_capacity);
+    }
+
+    for (uint brick_index = 0; brick_index < m_physical_allocations.size(); ++brick_index) {
+        if (brick_index >= snapshot.brick_count || !selected_bricks[brick_index]) {
+            ReleasePhysicalAllocation(brick_index);
+        }
+    }
+
+    bool allocation_failed = false;
+    for (uint brick_index : requested_candidates) {
+        if (!selected_bricks[brick_index]) {
+            continue;
+        }
+
+        ProbePhysicalAllocator::Allocation& allocation = m_physical_allocations[brick_index];
+        const uint probe_count = snapshot.bricks[brick_index].probe_count;
+        if (allocation.valid && allocation.probe_count == probe_count) {
+            continue;
+        }
+        if (allocation.valid) {
+            ReleasePhysicalAllocation(brick_index);
+        }
+
+        ProbePhysicalAllocator::Allocation new_allocation;
+        if (!m_physical_allocator.Allocate(probe_count, new_allocation)) {
+            allocation_failed = true;
+            break;
+        }
+        allocation = new_allocation;
+        m_brick_history_valid[brick_index] = false;
+        m_brick_last_update_frame[brick_index] = 0;
+        LOG_DEBUG(
+            "[ProbeGI] Physical Probe range assigned: brick={}, volume={}, offset={}, count={}.",
+            brick_index,
+            snapshot.bricks[brick_index].volume_index,
+            allocation.probe_offset,
+            probe_count
+        );
+    }
+
+    if (allocation_failed) {
+        snapshot.allocator_compacted = true;
+        ResetPhysicalAllocator(snapshot.physical_probe_capacity);
+        for (uint brick_index : requested_candidates) {
+            if (!selected_bricks[brick_index]) {
+                continue;
+            }
+            const uint probe_count = snapshot.bricks[brick_index].probe_count;
+            ProbePhysicalAllocator::Allocation allocation;
+            if (!m_physical_allocator.Allocate(probe_count, allocation)) {
+                LOG_ERROR(
+                    "[ProbeGI] Physical Probe allocator failed after compaction: brick={}, probe_count={}, capacity={}.",
+                    brick_index,
+                    probe_count,
+                    snapshot.physical_probe_capacity
+                );
+                selected_bricks[brick_index] = false;
+                continue;
+            }
+            m_physical_allocations[brick_index] = allocation;
+            LOG_DEBUG(
+                "[ProbeGI] Physical Probe range reassigned after compaction: brick={}, volume={}, offset={}, count={}.",
+                brick_index,
+                snapshot.bricks[brick_index].volume_index,
+                allocation.probe_offset,
+                probe_count
+            );
+        }
+    }
+
+    for (uint brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
+        BrickSnapshot& brick = snapshot.bricks[brick_index];
+        const ProbePhysicalAllocator::Allocation& allocation = m_physical_allocations[brick_index];
+        brick.resident = selected_bricks[brick_index] && allocation.valid;
+        if (!brick.resident) {
+            brick.probe_offset = RASTER_PROBE_PAGE_INVALID;
+            brick.update_age = 255u;
+            continue;
+        }
+
+        brick.probe_offset = allocation.probe_offset;
+        if (!m_brick_history_valid[brick_index]) {
+            brick.update_age = 255u;
+        }
+        snapshot.page_table[brick.page_index] = brick_index;
+        ++snapshot.resident_brick_count;
+        snapshot.resident_probe_count += brick.probe_count;
+        ++snapshot.physical_allocation_count;
+        snapshot.allocated_physical_probe_count += brick.probe_count;
+
+        VolumeSnapshot& volume = snapshot.volumes[brick.volume_index];
+        ++volume.resident_brick_count;
+        volume.resident_probe_count += brick.probe_count;
+    }
+
+    snapshot.free_physical_probe_count =
+        snapshot.physical_probe_capacity - snapshot.allocated_physical_probe_count;
+    const uint allocator_free_probe_count = m_physical_allocator.GetFreeProbeCount();
+    if (allocator_free_probe_count != snapshot.free_physical_probe_count) {
+        LOG_ERROR(
+            "[ProbeGI] Physical Probe allocator accounting mismatch: allocated={}, free_ranges={}, expected_free={}, capacity={}.",
+            snapshot.allocated_physical_probe_count,
+            allocator_free_probe_count,
+            snapshot.free_physical_probe_count,
+            snapshot.physical_probe_capacity
+        );
+    }
+    if (!m_physical_allocator.Validate()) {
+        LOG_ERROR("[ProbeGI] Physical Probe allocator invariant validation failed.");
+    }
+}
+
 bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
     if (!m_has_snapshot) {
         return true;
@@ -477,9 +718,16 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
         m_snapshot.sparse_bricks_enabled != snapshot.sparse_bricks_enabled ||
         m_snapshot.debug_mode != snapshot.debug_mode ||
         m_snapshot.volume_count != snapshot.volume_count || m_snapshot.brick_count != snapshot.brick_count ||
+        m_snapshot.requested_brick_count != snapshot.requested_brick_count ||
+        m_snapshot.requested_probe_count != snapshot.requested_probe_count ||
         m_snapshot.resident_brick_count != snapshot.resident_brick_count ||
         m_snapshot.resident_probe_count != snapshot.resident_probe_count ||
         m_snapshot.total_count != snapshot.total_count ||
+        m_snapshot.physical_probe_capacity != snapshot.physical_probe_capacity ||
+        m_snapshot.allocated_physical_probe_count != snapshot.allocated_physical_probe_count ||
+        m_snapshot.physical_allocation_count != snapshot.physical_allocation_count ||
+        m_snapshot.free_physical_probe_count != snapshot.free_physical_probe_count ||
+        m_snapshot.capacity_evicted_brick_count != snapshot.capacity_evicted_brick_count ||
         !NearlyEqual(m_snapshot.brick_resident_distance, snapshot.brick_resident_distance) ||
         !NearlyEqual(m_snapshot.brick_resident_hysteresis, snapshot.brick_resident_hysteresis) ||
         m_snapshot.update_scheduler_enabled != snapshot.update_scheduler_enabled ||
@@ -506,7 +754,10 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
         if (lhs.config_index != rhs.config_index || lhs.count_x != rhs.count_x || lhs.count_y != rhs.count_y ||
             lhs.count_z != rhs.count_z || lhs.total_count != rhs.total_count ||
             lhs.probe_offset != rhs.probe_offset || lhs.page_table_offset != rhs.page_table_offset ||
-            lhs.brick_count != rhs.brick_count || lhs.resident_brick_count != rhs.resident_brick_count ||
+            lhs.brick_count != rhs.brick_count ||
+            lhs.requested_brick_count != rhs.requested_brick_count ||
+            lhs.requested_probe_count != rhs.requested_probe_count ||
+            lhs.resident_brick_count != rhs.resident_brick_count ||
             lhs.resident_probe_count != rhs.resident_probe_count || !NearlyEqual(lhs.origin, rhs.origin) ||
             !NearlyEqual(lhs.extent, rhs.extent) || !NearlyEqual(lhs.spacing, rhs.spacing) ||
             !NearlyEqual(lhs.intensity, rhs.intensity) || !NearlyEqual(lhs.normal_bias, rhs.normal_bias) ||
@@ -521,7 +772,7 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
         if (lhs.coord != rhs.coord || lhs.local_counts != rhs.local_counts ||
             lhs.volume_index != rhs.volume_index || lhs.probe_offset != rhs.probe_offset ||
             lhs.probe_count != rhs.probe_count || lhs.page_index != rhs.page_index ||
-            lhs.resident != rhs.resident) {
+            lhs.requested_resident != rhs.requested_resident || lhs.resident != rhs.resident) {
             return true;
         }
     }
@@ -650,7 +901,8 @@ ProbeVolumeResource::PrepareUpdate(
         return update_info;
     }
 
-    Snapshot   snapshot = BuildSnapshot(config, camera_position, frame_index);
+    Snapshot snapshot = BuildSnapshot(config, camera_position, frame_index);
+    ApplyPhysicalResidency(snapshot);
     const bool changed  = HasSnapshotChanged(snapshot);
 
     if (!snapshot.enabled || snapshot.volume_count == 0 || snapshot.total_count == 0) {
@@ -684,7 +936,7 @@ ProbeVolumeResource::PrepareUpdate(
 
         if (changed || volume_reset) {
             LOG_DEBUG(
-                "[ProbeGI] Volume residency updated: slot={}, config_index={}, count=({}, {}, {}) total={}, offset={}, resident_bricks={}/{}, resident_probes={}, page_table_offset={}, origin={}, extent={}, spacing={}, intensity={}, blend_distance={}, history_reset={}",
+                "[ProbeGI] Volume residency updated: slot={}, config_index={}, count=({}, {}, {}) total={}, logical_offset={}, requested_bricks={}/{}, requested_probes={}, resident_bricks={}/{}, resident_probes={}, page_table_offset={}, origin={}, extent={}, spacing={}, intensity={}, blend_distance={}, history_reset={}",
                 volume_index,
                 volume.config_index,
                 volume.count_x,
@@ -692,6 +944,9 @@ ProbeVolumeResource::PrepareUpdate(
                 volume.count_z,
                 volume.total_count,
                 volume.probe_offset,
+                volume.requested_brick_count,
+                volume.brick_count,
+                volume.requested_probe_count,
                 volume.resident_brick_count,
                 volume.brick_count,
                 volume.resident_probe_count,
@@ -772,12 +1027,21 @@ ProbeVolumeResource::PrepareUpdate(
 
     if (changed) {
         LOG_DEBUG(
-            "[ProbeGI] Multi-volume brick residency updated: active_volumes={}, resident_bricks={}/{}, resident_probes={}/{}, sparse={}, resident_distance={}, resident_hysteresis={}, scheduler={}, update_budget={}, scheduled_bricks={}, scheduled_probes={}, deferred_bricks={}, trace_distance={}, trace_rays={}, history_hysteresis=({}, {}).",
+            "[ProbeGI] Multi-volume brick residency updated: active_volumes={}, requested_bricks={}/{}, requested_probes={}, resident_bricks={}/{}, resident_probes={}/{}, physical_allocations={}, physical_probes={}/{}, free_physical_probes={}, capacity_evicted_bricks={}, allocator_compacted={}, sparse={}, resident_distance={}, resident_hysteresis={}, scheduler={}, update_budget={}, scheduled_bricks={}, scheduled_probes={}, deferred_bricks={}, trace_distance={}, trace_rays={}, history_hysteresis=({}, {}).",
             snapshot.volume_count,
+            snapshot.requested_brick_count,
+            snapshot.brick_count,
+            snapshot.requested_probe_count,
             snapshot.resident_brick_count,
             snapshot.brick_count,
             snapshot.resident_probe_count,
             snapshot.total_count,
+            snapshot.physical_allocation_count,
+            snapshot.allocated_physical_probe_count,
+            snapshot.physical_probe_capacity,
+            snapshot.free_physical_probe_count,
+            snapshot.capacity_evicted_brick_count,
+            snapshot.allocator_compacted ? 1 : 0,
             snapshot.sparse_bricks_enabled ? 1 : 0,
             snapshot.brick_resident_distance,
             snapshot.brick_resident_hysteresis,

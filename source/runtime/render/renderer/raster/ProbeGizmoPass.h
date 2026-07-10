@@ -44,7 +44,7 @@ public:
     }
 
     void Process(RasterContext& context, const RasterConfig& config, const Camera& camera) {
-        const uint probe_count = context.probe_volume.GetProbeCount();
+        const uint probe_count = context.probe_volume.GetPhysicalProbeCapacity();
         const bool draw_probes = config.probe_gi_enabled && config.probe_gi_gizmo_enabled &&
                                  context.probe_volume.GetResidentProbeCount() != 0 &&
                                  context.probe_volume.GetBufferHandle() != 0;
