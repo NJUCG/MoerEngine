@@ -44,6 +44,18 @@ public:
         return m_probe_buffer.buf->GetView();
     }
 
+    BufferView GetVolumeBufferView() const {
+        return m_volume_buffer.buf->GetView();
+    }
+
+    BufferView GetBrickBufferView() const {
+        return m_brick_buffer.buf->GetView();
+    }
+
+    BufferView GetPageTableBufferView() const {
+        return m_page_table_buffer.buf->GetView();
+    }
+
     BufferView GetVisibilityAtlasBufferView() const {
         return m_visibility_atlas_buffer.buf->GetView();
     }
@@ -70,6 +82,10 @@ public:
 
     uint GetVolumeCount() const {
         return m_snapshot.volume_count;
+    }
+
+    uint GetBrickCount() const {
+        return m_snapshot.brick_count;
     }
 
     const ProbeVolumeGpuDesc& GetVolumeDesc(uint volume_index) const {
@@ -100,7 +116,24 @@ public:
         return m_volume_buffer.hdl;
     }
 
+    uint GetBrickBufferHandle() const {
+        return m_brick_buffer.hdl;
+    }
+
+    uint GetPageTableBufferHandle() const {
+        return m_page_table_buffer.hdl;
+    }
+
 private:
+    struct BrickSnapshot {
+        uint3 coord         = uint3(0u);
+        uint3 local_counts  = uint3(1u);
+        uint  volume_index  = 0;
+        uint  probe_offset  = 0;
+        uint  probe_count   = 0;
+        uint  page_index    = 0;
+    };
+
     struct VolumeSnapshot {
         uint   config_index = 0;
         uint   count_x      = 1;
@@ -108,6 +141,8 @@ private:
         uint   count_z      = 1;
         uint   total_count  = 1;
         uint   probe_offset = 0;
+        uint   page_table_offset = 0;
+        uint   brick_count  = 0;
         float3 origin       = float3(0.0f);
         float3 extent       = float3(1.0f);
         float3 spacing      = float3(1.0f);
@@ -120,6 +155,7 @@ private:
         bool   enabled      = false;
         uint   debug_mode   = 0;
         uint   volume_count = 0;
+        uint   brick_count  = 0;
         uint   total_count  = 0;
         float  trace_distance = 0.0f;
         uint   trace_ray_count = 1;
@@ -135,12 +171,15 @@ private:
         float3 sky_color    = float3(0.0f);
         float3 ground_color = float3(0.0f);
         StaticArray<VolumeSnapshot, RASTER_PROBE_VOLUME_MAX_COUNT> volumes{};
+        StaticArray<BrickSnapshot, RASTER_PROBE_MAX_BRICK_COUNT> bricks{};
+        StaticArray<uint, RASTER_PROBE_MAX_BRICK_COUNT> page_table{};
     };
 
     Snapshot BuildSnapshot(const RasterConfig& config) const;
     ProbeUpdateParam BuildUpdateParam(
         const Snapshot& snapshot,
         const VolumeSnapshot& volume,
+        uint            volume_index,
         const Scene&    scene,
         uint64          frame_index,
         bool            history_valid
@@ -151,6 +190,8 @@ private:
 
     BufferWithHandle m_probe_buffer;
     BufferWithHandle m_volume_buffer;
+    BufferWithHandle m_brick_buffer;
+    BufferWithHandle m_page_table_buffer;
     BufferWithHandle m_visibility_atlas_buffer;
     BufferWithHandle m_irradiance_atlas_buffer;
     TextureWithHandle m_visibility_atlas_texture;
@@ -158,7 +199,10 @@ private:
     BufferRef        m_scene_data_buffer;
     Array<byte>      m_scene_data_upload;
     Array<byte>      m_volume_data_upload;
+    Array<byte>      m_brick_data_upload;
+    Array<byte>      m_page_table_upload;
     StaticArray<ProbeVolumeGpuDesc, RASTER_PROBE_VOLUME_MAX_COUNT> m_gpu_volume_descs{};
+    StaticArray<ProbeBrickGpuDesc, RASTER_PROBE_MAX_BRICK_COUNT> m_gpu_brick_descs{};
     Snapshot         m_snapshot;
     bool             m_has_snapshot = false;
     StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT> m_history_valid{};

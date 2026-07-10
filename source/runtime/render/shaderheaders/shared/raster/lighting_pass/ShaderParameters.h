@@ -28,6 +28,11 @@ static constexpr uint RASTER_PROBE_VOLUME_MAX_COUNT = 4;
 static constexpr uint RASTER_PROBE_MAX_COUNT_PER_VOLUME = 512;
 static constexpr uint RASTER_PROBE_MAX_COUNT =
     RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_COUNT_PER_VOLUME;
+static constexpr uint RASTER_PROBE_BRICK_DIM = 4;
+static constexpr uint RASTER_PROBE_MAX_BRICKS_PER_VOLUME = 64;
+static constexpr uint RASTER_PROBE_MAX_BRICK_COUNT =
+    RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_BRICKS_PER_VOLUME;
+static constexpr uint RASTER_PROBE_PAGE_INVALID = 0xffffffffu;
 static constexpr uint RASTER_PROBE_UPDATE_GROUP_SIZE = 64;
 static constexpr uint RASTER_PROBE_VISIBILITY_ATLAS_DIM = 8;
 static constexpr uint RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT =
@@ -56,6 +61,11 @@ static const uint RASTER_PROBE_VOLUME_MAX_COUNT = 4;
 static const uint RASTER_PROBE_MAX_COUNT_PER_VOLUME = 512;
 static const uint RASTER_PROBE_MAX_COUNT =
     RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_COUNT_PER_VOLUME;
+static const uint RASTER_PROBE_BRICK_DIM = 4;
+static const uint RASTER_PROBE_MAX_BRICKS_PER_VOLUME = 64;
+static const uint RASTER_PROBE_MAX_BRICK_COUNT =
+    RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_BRICKS_PER_VOLUME;
+static const uint RASTER_PROBE_PAGE_INVALID = 0xffffffffu;
 static const uint RASTER_PROBE_UPDATE_GROUP_SIZE = 64;
 static const uint RASTER_PROBE_VISIBILITY_ATLAS_DIM = 8;
 static const uint RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT =
@@ -100,12 +110,18 @@ struct ProbeVolumeGpuDesc {
     float4 spacing_intensity; // xyz = probe spacing, w = GI intensity
     float4 extent_blend;      // xyz = volume extent, w = boundary blend distance
     uint4  counts;            // xyz = local grid counts, w = local probe count
-    uint4  allocation;        // x = global probe offset, y = config/cascade index, zw = reserved
+    uint4  allocation;        // x = physical probe base, y = config index, z = page table base, w = brick count
     float4 visibility;        // x = bias, y = power, z = min weight, w = strength
 };
 
+struct ProbeBrickGpuDesc {
+    uint4 coord_volume; // xyz = logical brick coordinate, w = compact volume index
+    uint4 probe_range;  // x = physical probe offset, y = local probe count, z = resident state, w = page index
+    uint4 local_counts; // xyz = valid probe counts inside this brick, w = reserved
+};
+
 struct ProbeUpdateParam {
-    uint4  probe_volume_counts;  // xyz = local probe counts, w = global probe offset
+    uint4  probe_volume_counts;  // xyz = local probe counts, w = compact volume index
     float4 probe_volume_origin;  // xyz = min corner, w = irradiance history weight
     float4 probe_volume_spacing; // xyz = cell spacing, w = visibility history weight
     float4 probe_sky_color;      // rgb = sky tint, w = sky intensity
@@ -188,7 +204,7 @@ struct LightingData {
 
     // Probe GI
     uint4 probe_system_config; // x = enabled, y = debug mode, z = probe buffer, w = volume descriptor buffer
-    uint4 probe_system_counts; // x = active volume count, y = total probe count, zw = reserved
+    uint4 probe_system_counts; // x = volume count, y = probe count, z = brick buffer, w = page table buffer
     uint4 probe_system_atlas;  // x = visibility buffer, y = irradiance buffer, z = irradiance texture, w = visibility texture
     float4 probe_system_debug; // x = debug scale, yzw = reserved
 };
@@ -196,6 +212,7 @@ struct LightingData {
 #ifdef __cplusplus
 static_assert(sizeof(ProbeUpdateParam) <= 128);
 static_assert(sizeof(ProbeVolumeGpuDesc) % 16 == 0);
+static_assert(sizeof(ProbeBrickGpuDesc) % 16 == 0);
 static_assert(offsetof(LightingData, probe_system_config) % 16 == 0);
 static_assert(sizeof(LightingData) % 16 == 0);
 #endif

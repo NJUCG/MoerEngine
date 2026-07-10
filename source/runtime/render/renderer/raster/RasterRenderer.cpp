@@ -193,6 +193,9 @@ void RasterRenderer::UpdateGlobalLightingData(
                << " visibility_texture=" << lighting_data->probe_system_atlas.w
                << " volumes=" << lighting_data->probe_system_counts.x
                << " probes=" << lighting_data->probe_system_counts.y
+               << " brick_buffer=" << lighting_data->probe_system_counts.z
+               << " page_table=" << lighting_data->probe_system_counts.w
+               << " resident_bricks=" << context.probe_volume.GetBrickCount()
                << " intensity=" << ui_config.probe_gi_intensity
                << " trace_distance=" << ui_config.probe_gi_trace_distance
                << " trace_rays=" << ui_config.probe_gi_trace_ray_count

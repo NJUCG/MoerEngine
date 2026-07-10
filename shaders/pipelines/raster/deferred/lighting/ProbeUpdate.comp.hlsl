@@ -26,6 +26,10 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
 [[vk::binding(6, 0)]] RaytracingAccelerationStructure tlas;
 #endif
 
+[[vk::binding(7, 0)]] StructuredBuffer<Moer::ProbeVolumeGpuDesc> probe_volume_data;
+[[vk::binding(8, 0)]] StructuredBuffer<Moer::ProbeBrickGpuDesc> probe_brick_data;
+[[vk::binding(9, 0)]] StructuredBuffer<uint> probe_page_table;
+
 float ProbeSafeSaturate(float value) {
     return saturate(value);
 }
@@ -72,6 +76,34 @@ uint ProbeGetVisibilityAtlasIndex(uint probe_index, uint atlas_texel_index) {
 
 uint ProbeGetIrradianceAtlasIndex(uint probe_index, uint atlas_texel_index) {
     return probe_index * Moer::RASTER_PROBE_IRRADIANCE_ATLAS_TEXEL_COUNT + atlas_texel_index;
+}
+
+uint ProbeGetPhysicalProbeIndex(uint3 coord, Moer::ProbeVolumeGpuDesc volume) {
+    const uint3 counts = max(volume.counts.xyz, uint3(1, 1, 1));
+    const uint3 brick_counts =
+        (counts + uint3(Moer::RASTER_PROBE_BRICK_DIM - 1u, Moer::RASTER_PROBE_BRICK_DIM - 1u, Moer::RASTER_PROBE_BRICK_DIM - 1u)) /
+        Moer::RASTER_PROBE_BRICK_DIM;
+    const uint3 brick_coord = coord / Moer::RASTER_PROBE_BRICK_DIM;
+    const uint logical_brick_index =
+        brick_coord.x + brick_coord.y * brick_counts.x + brick_coord.z * brick_counts.x * brick_counts.y;
+    const uint brick_index = probe_page_table[volume.allocation.z + logical_brick_index];
+    if (brick_index == Moer::RASTER_PROBE_PAGE_INVALID) {
+        return Moer::RASTER_PROBE_PAGE_INVALID;
+    }
+
+    const Moer::ProbeBrickGpuDesc brick = probe_brick_data[brick_index];
+    if (brick.probe_range.z == 0u) {
+        return Moer::RASTER_PROBE_PAGE_INVALID;
+    }
+
+    const uint3 local_coord = coord - brick_coord * Moer::RASTER_PROBE_BRICK_DIM;
+    if (any(local_coord >= brick.local_counts.xyz)) {
+        return Moer::RASTER_PROBE_PAGE_INVALID;
+    }
+
+    const uint local_index = local_coord.x + local_coord.y * brick.local_counts.x +
+                             local_coord.z * brick.local_counts.x * brick.local_counts.y;
+    return brick.probe_range.x + local_index;
 }
 
 uint2 ProbeGetAtlasTextureTileOrigin(uint probe_index) {
@@ -336,12 +368,16 @@ ProbePlacementResult ProbeClassifyAndRelocate(
         return;
     }
 
-    const uint  probe_index = param.probe_volume_counts.w + local_probe_index;
     const uint  x      = local_probe_index % counts.x;
     const uint  yz     = local_probe_index / counts.x;
     const uint  y      = yz % counts.y;
     const uint  z      = yz / counts.y;
     const uint3 coord  = uint3(x, y, z);
+    const Moer::ProbeVolumeGpuDesc volume = probe_volume_data[param.probe_volume_counts.w];
+    const uint probe_index = ProbeGetPhysicalProbeIndex(coord, volume);
+    if (probe_index == Moer::RASTER_PROBE_PAGE_INVALID) {
+        return;
+    }
 
     const float3 coord01  = ProbeGetGridCoord01(coord, counts);
     const float3 grid_position = param.probe_volume_origin.xyz + param.probe_volume_spacing.xyz * float3(coord);

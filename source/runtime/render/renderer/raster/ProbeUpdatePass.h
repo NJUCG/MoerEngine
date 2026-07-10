@@ -18,6 +18,9 @@ public:
     DEFINE_SHADER_BUFFER(probe_scene_data);
     DEFINE_SHADER_TEX(rw_visibility_atlas_texture);
     DEFINE_SHADER_TEX(rw_irradiance_atlas_texture);
+    DEFINE_SHADER_BUFFER(probe_volume_data);
+    DEFINE_SHADER_BUFFER(probe_brick_data);
+    DEFINE_SHADER_BUFFER(probe_page_table);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_CONSTANT_STRUCT(ProbeUpdateParam, param);
     DEFINE_SHADER_ARGS(
@@ -27,6 +30,9 @@ public:
         probe_scene_data,
         rw_visibility_atlas_texture,
         rw_irradiance_atlas_texture,
+        probe_volume_data,
+        probe_brick_data,
+        probe_page_table,
         bdls,
         param
     );
@@ -43,6 +49,9 @@ public:
     DEFINE_SHADER_TEX(rw_visibility_atlas_texture);
     DEFINE_SHADER_TEX(rw_irradiance_atlas_texture);
     DEFINE_SHADER_TLAS(tlas);
+    DEFINE_SHADER_BUFFER(probe_volume_data);
+    DEFINE_SHADER_BUFFER(probe_brick_data);
+    DEFINE_SHADER_BUFFER(probe_page_table);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_CONSTANT_STRUCT(ProbeUpdateParam, param);
     DEFINE_SHADER_ARGS(
@@ -53,6 +62,9 @@ public:
         rw_visibility_atlas_texture,
         rw_irradiance_atlas_texture,
         tlas,
+        probe_volume_data,
+        probe_brick_data,
+        probe_page_table,
         bdls,
         param
     );
@@ -108,6 +120,9 @@ public:
                         context.probe_volume.GetVisibilityAtlasTextureView(),
                         context.probe_volume.GetIrradianceAtlasTextureView(),
                         rt_scene->GetTlas(),
+                        context.probe_volume.GetVolumeBufferView(),
+                        context.probe_volume.GetBrickBufferView(),
+                        context.probe_volume.GetPageTableBufferView(),
                         context.bdls,
                         job.param
                     )
@@ -125,6 +140,9 @@ public:
                     context.probe_volume.GetSceneDataBufferView(),
                     context.probe_volume.GetVisibilityAtlasTextureView(),
                     context.probe_volume.GetIrradianceAtlasTextureView(),
+                    context.probe_volume.GetVolumeBufferView(),
+                    context.probe_volume.GetBrickBufferView(),
+                    context.probe_volume.GetPageTableBufferView(),
                     context.bdls,
                     job.param
                 )

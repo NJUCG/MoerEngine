@@ -6,7 +6,8 @@
 bool ProbeGIIsEnabled(Moer::LightingData lighting_data) {
     return lighting_data.probe_system_config.x != 0u && lighting_data.probe_system_config.z != 0u &&
            lighting_data.probe_system_config.w != 0u && lighting_data.probe_system_counts.x > 0u &&
-           lighting_data.probe_system_counts.y > 0u;
+           lighting_data.probe_system_counts.y > 0u && lighting_data.probe_system_counts.z != 0u &&
+           lighting_data.probe_system_counts.w != 0u;
 }
 
 Moer::ProbeVolumeGpuDesc ProbeGILoadVolume(Moer::LightingData lighting_data, uint volume_index) {
@@ -22,8 +23,39 @@ uint3 ProbeGIGetCounts(Moer::ProbeVolumeGpuDesc volume) {
     );
 }
 
-uint ProbeGIGetProbeIndex(uint3 coord, uint3 counts) {
-    return coord.x + coord.y * counts.x + coord.z * counts.x * counts.y;
+uint ProbeGIGetProbeIndex(
+    Moer::LightingData lighting_data,
+    Moer::ProbeVolumeGpuDesc volume,
+    uint3 coord
+) {
+    const uint3 counts = ProbeGIGetCounts(volume);
+    const uint3 brick_counts =
+        (counts + uint3(Moer::RASTER_PROBE_BRICK_DIM - 1u, Moer::RASTER_PROBE_BRICK_DIM - 1u, Moer::RASTER_PROBE_BRICK_DIM - 1u)) /
+        Moer::RASTER_PROBE_BRICK_DIM;
+    const uint3 brick_coord = coord / Moer::RASTER_PROBE_BRICK_DIM;
+    const uint logical_brick_index =
+        brick_coord.x + brick_coord.y * brick_counts.x + brick_coord.z * brick_counts.x * brick_counts.y;
+
+    ArrayBuffer page_table = ArrayBuffer(lighting_data.probe_system_counts.w);
+    const uint brick_index = page_table.Load<uint>(volume.allocation.z + logical_brick_index);
+    if (brick_index == Moer::RASTER_PROBE_PAGE_INVALID) {
+        return Moer::RASTER_PROBE_PAGE_INVALID;
+    }
+
+    ArrayBuffer brick_buffer = ArrayBuffer(lighting_data.probe_system_counts.z);
+    const Moer::ProbeBrickGpuDesc brick = brick_buffer.Load<Moer::ProbeBrickGpuDesc>(brick_index);
+    if (brick.probe_range.z == 0u) {
+        return Moer::RASTER_PROBE_PAGE_INVALID;
+    }
+
+    const uint3 local_coord = coord - brick_coord * Moer::RASTER_PROBE_BRICK_DIM;
+    if (any(local_coord >= brick.local_counts.xyz)) {
+        return Moer::RASTER_PROBE_PAGE_INVALID;
+    }
+
+    const uint local_index = local_coord.x + local_coord.y * brick.local_counts.x +
+                             local_coord.z * brick.local_counts.x * brick.local_counts.y;
+    return brick.probe_range.x + local_index;
 }
 
 Moer::ProbeGridProbeData ProbeGILoadProbe(Moer::LightingData lighting_data, uint probe_index) {
@@ -310,6 +342,10 @@ void ProbeGIAccumulateProbe(
     inout float visibility_weight_sum,
     inout float3 raw_irradiance
 ) {
+    if (probe_index == Moer::RASTER_PROBE_PAGE_INVALID) {
+        return;
+    }
+
     Moer::ProbeGridProbeData probe = ProbeGILoadProbe(lighting_data, probe_index);
     float state_weight = ProbeGIGetProbeStateWeight(probe);
     if (state_weight <= 0.0 || trilinear_weight <= 0.0) {
@@ -352,7 +388,7 @@ float3 ProbeGISampleVolumeIrradiance(
     ProbeGIAccumulateProbe(
         lighting_data,
         volume,
-        volume.allocation.x + ProbeGIGetProbeIndex(base_coord, counts),
+        ProbeGIGetProbeIndex(lighting_data, volume, base_coord),
         (1.0 - weight.x) * (1.0 - weight.y) * (1.0 - weight.z),
         biased_pos,
         normal,
@@ -363,7 +399,7 @@ float3 ProbeGISampleVolumeIrradiance(
     ProbeGIAccumulateProbe(
         lighting_data,
         volume,
-        volume.allocation.x + ProbeGIGetProbeIndex(uint3(next_coord.x, base_coord.y, base_coord.z), counts),
+        ProbeGIGetProbeIndex(lighting_data, volume, uint3(next_coord.x, base_coord.y, base_coord.z)),
         weight.x * (1.0 - weight.y) * (1.0 - weight.z),
         biased_pos,
         normal,
@@ -374,7 +410,7 @@ float3 ProbeGISampleVolumeIrradiance(
     ProbeGIAccumulateProbe(
         lighting_data,
         volume,
-        volume.allocation.x + ProbeGIGetProbeIndex(uint3(base_coord.x, next_coord.y, base_coord.z), counts),
+        ProbeGIGetProbeIndex(lighting_data, volume, uint3(base_coord.x, next_coord.y, base_coord.z)),
         (1.0 - weight.x) * weight.y * (1.0 - weight.z),
         biased_pos,
         normal,
@@ -385,7 +421,7 @@ float3 ProbeGISampleVolumeIrradiance(
     ProbeGIAccumulateProbe(
         lighting_data,
         volume,
-        volume.allocation.x + ProbeGIGetProbeIndex(uint3(next_coord.x, next_coord.y, base_coord.z), counts),
+        ProbeGIGetProbeIndex(lighting_data, volume, uint3(next_coord.x, next_coord.y, base_coord.z)),
         weight.x * weight.y * (1.0 - weight.z),
         biased_pos,
         normal,
@@ -396,7 +432,7 @@ float3 ProbeGISampleVolumeIrradiance(
     ProbeGIAccumulateProbe(
         lighting_data,
         volume,
-        volume.allocation.x + ProbeGIGetProbeIndex(uint3(base_coord.x, base_coord.y, next_coord.z), counts),
+        ProbeGIGetProbeIndex(lighting_data, volume, uint3(base_coord.x, base_coord.y, next_coord.z)),
         (1.0 - weight.x) * (1.0 - weight.y) * weight.z,
         biased_pos,
         normal,
@@ -407,7 +443,7 @@ float3 ProbeGISampleVolumeIrradiance(
     ProbeGIAccumulateProbe(
         lighting_data,
         volume,
-        volume.allocation.x + ProbeGIGetProbeIndex(uint3(next_coord.x, base_coord.y, next_coord.z), counts),
+        ProbeGIGetProbeIndex(lighting_data, volume, uint3(next_coord.x, base_coord.y, next_coord.z)),
         weight.x * (1.0 - weight.y) * weight.z,
         biased_pos,
         normal,
@@ -418,7 +454,7 @@ float3 ProbeGISampleVolumeIrradiance(
     ProbeGIAccumulateProbe(
         lighting_data,
         volume,
-        volume.allocation.x + ProbeGIGetProbeIndex(uint3(base_coord.x, next_coord.y, next_coord.z), counts),
+        ProbeGIGetProbeIndex(lighting_data, volume, uint3(base_coord.x, next_coord.y, next_coord.z)),
         (1.0 - weight.x) * weight.y * weight.z,
         biased_pos,
         normal,
@@ -429,7 +465,7 @@ float3 ProbeGISampleVolumeIrradiance(
     ProbeGIAccumulateProbe(
         lighting_data,
         volume,
-        volume.allocation.x + ProbeGIGetProbeIndex(next_coord, counts),
+        ProbeGIGetProbeIndex(lighting_data, volume, next_coord),
         weight.x * weight.y * weight.z,
         biased_pos,
         normal,
@@ -555,7 +591,7 @@ float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, 
         uint3 counts = ProbeGIGetCounts(volume);
         float3 local = ProbeGIGetLocalCoord(volume, biased_pos);
         uint3 coord = min(uint3(round(clamp(local, float3(0.0, 0.0, 0.0), float3(counts - uint3(1, 1, 1))))), counts - uint3(1, 1, 1));
-        uint probe_index = volume.allocation.x + ProbeGIGetProbeIndex(coord, counts);
+        uint probe_index = ProbeGIGetProbeIndex(lighting_data, volume, coord);
         Moer::ProbeGridProbeData probe = ProbeGILoadProbe(lighting_data, probe_index);
         float3 probe_to_surface = biased_pos - probe.world_position.xyz;
         float receiver_distance = length(probe_to_surface);
