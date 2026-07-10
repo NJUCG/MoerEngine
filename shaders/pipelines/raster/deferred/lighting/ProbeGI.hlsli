@@ -63,6 +63,108 @@ uint ProbeGIGetIrradianceAtlasIndex(uint probe_index, float3 sample_direction) {
     return probe_index * Moer::RASTER_PROBE_IRRADIANCE_ATLAS_TEXEL_COUNT + texel.y * dim + texel.x;
 }
 
+int2 ProbeGIFoldOctahedralTexel(int2 texel, uint dim) {
+    const int max_texel = int(dim) - 1;
+    int2 folded = texel;
+
+    [unroll] for (uint fold_index = 0u; fold_index < 2u; ++fold_index) {
+        if (folded.x < 0) {
+            folded.x = max_texel;
+            folded.y = max_texel - folded.y;
+        } else if (folded.x > max_texel) {
+            folded.x = 0;
+            folded.y = max_texel - folded.y;
+        }
+
+        if (folded.y < 0) {
+            folded.y = max_texel;
+            folded.x = max_texel - folded.x;
+        } else if (folded.y > max_texel) {
+            folded.y = 0;
+            folded.x = max_texel - folded.x;
+        }
+    }
+
+    return clamp(folded, int2(0, 0), int2(max_texel, max_texel));
+}
+
+uint ProbeGIGetAtlasTexelOffset(int2 texel, uint dim) {
+    const int2 folded = ProbeGIFoldOctahedralTexel(texel, dim);
+    return uint(folded.y) * dim + uint(folded.x);
+}
+
+float2 ProbeGIGetAtlasTexelPosition(float3 direction, uint dim) {
+    return ProbeGIEncodeOctahedral(direction) * float(dim) - 0.5;
+}
+
+float4 ProbeGILoadVisibilityAtlasTexel(ArrayBuffer visibility_buffer, uint probe_index, int2 texel) {
+    const uint dim = Moer::RASTER_PROBE_VISIBILITY_ATLAS_DIM;
+    const uint atlas_index =
+        probe_index * Moer::RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT + ProbeGIGetAtlasTexelOffset(texel, dim);
+    return visibility_buffer.Load<Moer::ProbeGridVisibilityTexel>(atlas_index).moments;
+}
+
+float4 ProbeGILoadIrradianceAtlasTexel(ArrayBuffer irradiance_buffer, uint probe_index, int2 texel) {
+    const uint dim = Moer::RASTER_PROBE_IRRADIANCE_ATLAS_DIM;
+    const uint atlas_index =
+        probe_index * Moer::RASTER_PROBE_IRRADIANCE_ATLAS_TEXEL_COUNT + ProbeGIGetAtlasTexelOffset(texel, dim);
+    return irradiance_buffer.Load<Moer::ProbeGridIrradianceTexel>(atlas_index).irradiance;
+}
+
+float4 ProbeGISampleVisibilityAtlasBilinear(ArrayBuffer visibility_buffer, uint probe_index, float3 probe_to_surface_dir) {
+    const uint dim = Moer::RASTER_PROBE_VISIBILITY_ATLAS_DIM;
+    const float2 texel_pos = ProbeGIGetAtlasTexelPosition(probe_to_surface_dir, dim);
+    const int2 base_texel = int2(floor(texel_pos));
+    const float2 frac_texel = saturate(texel_pos - float2(base_texel));
+
+    const float w00 = (1.0 - frac_texel.x) * (1.0 - frac_texel.y);
+    const float w10 = frac_texel.x * (1.0 - frac_texel.y);
+    const float w01 = (1.0 - frac_texel.x) * frac_texel.y;
+    const float w11 = frac_texel.x * frac_texel.y;
+
+    const float4 v00 = ProbeGILoadVisibilityAtlasTexel(visibility_buffer, probe_index, base_texel);
+    const float4 v10 = ProbeGILoadVisibilityAtlasTexel(visibility_buffer, probe_index, base_texel + int2(1, 0));
+    const float4 v01 = ProbeGILoadVisibilityAtlasTexel(visibility_buffer, probe_index, base_texel + int2(0, 1));
+    const float4 v11 = ProbeGILoadVisibilityAtlasTexel(visibility_buffer, probe_index, base_texel + int2(1, 1));
+
+    const float confidence = saturate(v00.w * w00 + v10.w * w10 + v01.w * w01 + v11.w * w11);
+    if (confidence <= 1e-4) {
+        return float4(0.0, 0.0, 0.0, 0.0);
+    }
+
+    const float3 moments =
+        (v00.xyz * v00.w * w00 + v10.xyz * v10.w * w10 + v01.xyz * v01.w * w01 + v11.xyz * v11.w * w11) /
+        confidence;
+    return float4(moments, confidence);
+}
+
+float4 ProbeGISampleIrradianceAtlasBilinear(ArrayBuffer irradiance_buffer, uint probe_index, float3 sample_direction) {
+    const uint dim = Moer::RASTER_PROBE_IRRADIANCE_ATLAS_DIM;
+    const float2 texel_pos = ProbeGIGetAtlasTexelPosition(sample_direction, dim);
+    const int2 base_texel = int2(floor(texel_pos));
+    const float2 frac_texel = saturate(texel_pos - float2(base_texel));
+
+    const float w00 = (1.0 - frac_texel.x) * (1.0 - frac_texel.y);
+    const float w10 = frac_texel.x * (1.0 - frac_texel.y);
+    const float w01 = (1.0 - frac_texel.x) * frac_texel.y;
+    const float w11 = frac_texel.x * frac_texel.y;
+
+    const float4 i00 = ProbeGILoadIrradianceAtlasTexel(irradiance_buffer, probe_index, base_texel);
+    const float4 i10 = ProbeGILoadIrradianceAtlasTexel(irradiance_buffer, probe_index, base_texel + int2(1, 0));
+    const float4 i01 = ProbeGILoadIrradianceAtlasTexel(irradiance_buffer, probe_index, base_texel + int2(0, 1));
+    const float4 i11 = ProbeGILoadIrradianceAtlasTexel(irradiance_buffer, probe_index, base_texel + int2(1, 1));
+
+    const float confidence = saturate(i00.w * w00 + i10.w * w10 + i01.w * w01 + i11.w * w11);
+    if (confidence <= 1e-4) {
+        return float4(0.0, 0.0, 0.0, 0.0);
+    }
+
+    const float3 irradiance =
+        (i00.rgb * i00.w * w00 + i10.rgb * i10.w * w10 + i01.rgb * i01.w * w01 + i11.rgb * i11.w * w11) /
+        confidence;
+    return float4(irradiance, confidence);
+}
+
 float4 ProbeGILoadDirectionalVisibility(
     Moer::LightingData lighting_data,
     uint probe_index,
@@ -74,12 +176,9 @@ float4 ProbeGILoadDirectionalVisibility(
     }
 
     ArrayBuffer visibility_buffer = ArrayBuffer(lighting_data.probe_volume_config.w);
-    Moer::ProbeGridVisibilityTexel visibility_texel =
-        visibility_buffer.Load<Moer::ProbeGridVisibilityTexel>(
-            ProbeGIGetVisibilityAtlasIndex(probe_index, probe_to_surface_dir)
-        );
-
-    return lerp(probe.visibility, visibility_texel.moments, saturate(visibility_texel.moments.w));
+    const float4 visibility_moments =
+        ProbeGISampleVisibilityAtlasBilinear(visibility_buffer, probe_index, probe_to_surface_dir);
+    return lerp(probe.visibility, visibility_moments, saturate(visibility_moments.w));
 }
 
 float3 ProbeGILoadIrradiance(Moer::LightingData lighting_data, uint probe_index) {
@@ -99,12 +198,10 @@ float3 ProbeGILoadDirectionalIrradiance(
     }
 
     ArrayBuffer irradiance_buffer = ArrayBuffer(lighting_data.probe_volume_atlas_config.x);
-    Moer::ProbeGridIrradianceTexel irradiance_texel =
-        irradiance_buffer.Load<Moer::ProbeGridIrradianceTexel>(
-            ProbeGIGetIrradianceAtlasIndex(probe_index, normalize(normal))
-        );
+    const float4 irradiance_texel =
+        ProbeGISampleIrradianceAtlasBilinear(irradiance_buffer, probe_index, normalize(normal));
 
-    return lerp(aggregate_irradiance, irradiance_texel.irradiance.rgb, saturate(irradiance_texel.irradiance.w));
+    return lerp(aggregate_irradiance, irradiance_texel.rgb, saturate(irradiance_texel.w));
 }
 
 float3 ProbeGIGetLocalCoord(Moer::LightingData lighting_data, float3 world_pos) {
