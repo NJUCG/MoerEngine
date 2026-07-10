@@ -19,9 +19,11 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
 [[vk::binding(1, 0)]] RWStructuredBuffer<Moer::ProbeGridVisibilityTexel> rw_visibility_atlas;
 [[vk::binding(2, 0)]] RWStructuredBuffer<Moer::ProbeGridIrradianceTexel> rw_irradiance_atlas;
 [[vk::binding(3, 0)]] StructuredBuffer<Moer::GBufferPassParams> probe_scene_data;
+[[vk::binding(4, 0)]] RWTexture2D<float4> rw_visibility_atlas_texture;
+[[vk::binding(5, 0)]] RWTexture2D<float4> rw_irradiance_atlas_texture;
 
 #if PROBE_GI_USE_RAY_QUERY
-[[vk::binding(4, 0)]] RaytracingAccelerationStructure tlas;
+[[vk::binding(6, 0)]] RaytracingAccelerationStructure tlas;
 #endif
 
 float ProbeSafeSaturate(float value) {
@@ -70,6 +72,59 @@ uint ProbeGetVisibilityAtlasIndex(uint probe_index, uint atlas_texel_index) {
 
 uint ProbeGetIrradianceAtlasIndex(uint probe_index, uint atlas_texel_index) {
     return probe_index * Moer::RASTER_PROBE_IRRADIANCE_ATLAS_TEXEL_COUNT + atlas_texel_index;
+}
+
+uint2 ProbeGetAtlasTextureTileOrigin(uint probe_index) {
+    const uint tile_x = probe_index % Moer::RASTER_PROBE_ATLAS_TILE_COLUMNS;
+    const uint tile_y = probe_index / Moer::RASTER_PROBE_ATLAS_TILE_COLUMNS;
+    return uint2(tile_x, tile_y) * Moer::RASTER_PROBE_ATLAS_TILE_STRIDE;
+}
+
+uint2 ProbeGetAtlasTextureInteriorCoord(uint probe_index, uint texel_x, uint texel_y) {
+    return ProbeGetAtlasTextureTileOrigin(probe_index) +
+           uint2(texel_x + Moer::RASTER_PROBE_ATLAS_TILE_BORDER, texel_y + Moer::RASTER_PROBE_ATLAS_TILE_BORDER);
+}
+
+void ProbeWriteAtlasTexelWithBorder(
+    RWTexture2D<float4> atlas_texture,
+    uint probe_index,
+    uint texel_x,
+    uint texel_y,
+    float4 value
+) {
+    const uint dim = Moer::RASTER_PROBE_IRRADIANCE_ATLAS_DIM;
+    const uint max_texel = dim - 1u;
+    const uint stride = Moer::RASTER_PROBE_ATLAS_TILE_STRIDE;
+    const uint border = Moer::RASTER_PROBE_ATLAS_TILE_BORDER;
+    const uint2 tile_origin = ProbeGetAtlasTextureTileOrigin(probe_index);
+
+    atlas_texture[ProbeGetAtlasTextureInteriorCoord(probe_index, texel_x, texel_y)] = value;
+
+    if (texel_x == 0u) {
+        atlas_texture[tile_origin + uint2(stride - 1u, border + max_texel - texel_y)] = value;
+    }
+    if (texel_x == max_texel) {
+        atlas_texture[tile_origin + uint2(0u, border + max_texel - texel_y)] = value;
+    }
+    if (texel_y == 0u) {
+        atlas_texture[tile_origin + uint2(border + max_texel - texel_x, stride - 1u)] = value;
+    }
+    if (texel_y == max_texel) {
+        atlas_texture[tile_origin + uint2(border + max_texel - texel_x, 0u)] = value;
+    }
+
+    if (texel_x == 0u && texel_y == 0u) {
+        atlas_texture[tile_origin + uint2(0u, 0u)] = value;
+    }
+    if (texel_x == max_texel && texel_y == 0u) {
+        atlas_texture[tile_origin + uint2(stride - 1u, 0u)] = value;
+    }
+    if (texel_x == 0u && texel_y == max_texel) {
+        atlas_texture[tile_origin + uint2(0u, stride - 1u)] = value;
+    }
+    if (texel_x == max_texel && texel_y == max_texel) {
+        atlas_texture[tile_origin + uint2(stride - 1u, stride - 1u)] = value;
+    }
 }
 
 float ProbeGetMinSpacing() {
@@ -405,6 +460,23 @@ ProbePlacementResult ProbeClassifyAndRelocate(
         Moer::ProbeGridVisibilityTexel visibility_texel;
         visibility_texel.moments = final_visibility_moments;
         rw_visibility_atlas[visibility_atlas_index] = visibility_texel;
+
+        const uint atlas_texel_x = atlas_texel_index % Moer::RASTER_PROBE_IRRADIANCE_ATLAS_DIM;
+        const uint atlas_texel_y = atlas_texel_index / Moer::RASTER_PROBE_IRRADIANCE_ATLAS_DIM;
+        ProbeWriteAtlasTexelWithBorder(
+            rw_irradiance_atlas_texture,
+            probe_index,
+            atlas_texel_x,
+            atlas_texel_y,
+            irradiance_texel.irradiance
+        );
+        ProbeWriteAtlasTexelWithBorder(
+            rw_visibility_atlas_texture,
+            probe_index,
+            atlas_texel_x,
+            atlas_texel_y,
+            visibility_texel.moments
+        );
     }
 
     const float inv_ray_count = 1.0 / float(Moer::RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT);

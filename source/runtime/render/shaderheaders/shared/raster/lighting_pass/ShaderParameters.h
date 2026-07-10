@@ -32,6 +32,16 @@ static constexpr uint RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT =
 static constexpr uint RASTER_PROBE_IRRADIANCE_ATLAS_DIM = 8;
 static constexpr uint RASTER_PROBE_IRRADIANCE_ATLAS_TEXEL_COUNT =
     RASTER_PROBE_IRRADIANCE_ATLAS_DIM * RASTER_PROBE_IRRADIANCE_ATLAS_DIM;
+static constexpr uint RASTER_PROBE_ATLAS_TILE_BORDER = 1;
+static constexpr uint RASTER_PROBE_ATLAS_TILE_STRIDE =
+    RASTER_PROBE_IRRADIANCE_ATLAS_DIM + RASTER_PROBE_ATLAS_TILE_BORDER * 2;
+static constexpr uint RASTER_PROBE_ATLAS_TILE_COLUMNS = 32;
+static constexpr uint RASTER_PROBE_ATLAS_TILE_ROWS =
+    (RASTER_PROBE_MAX_COUNT + RASTER_PROBE_ATLAS_TILE_COLUMNS - 1) / RASTER_PROBE_ATLAS_TILE_COLUMNS;
+static constexpr uint RASTER_PROBE_ATLAS_TEXTURE_WIDTH =
+    RASTER_PROBE_ATLAS_TILE_COLUMNS * RASTER_PROBE_ATLAS_TILE_STRIDE;
+static constexpr uint RASTER_PROBE_ATLAS_TEXTURE_HEIGHT =
+    RASTER_PROBE_ATLAS_TILE_ROWS * RASTER_PROBE_ATLAS_TILE_STRIDE;
 static constexpr uint RASTER_PROBE_STATE_INVALID = 0;
 static constexpr uint RASTER_PROBE_STATE_ACTIVE = 1;
 static constexpr uint RASTER_PROBE_STATE_RELOCATED = 2;
@@ -47,6 +57,16 @@ static const uint RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT =
 static const uint RASTER_PROBE_IRRADIANCE_ATLAS_DIM = 8;
 static const uint RASTER_PROBE_IRRADIANCE_ATLAS_TEXEL_COUNT =
     RASTER_PROBE_IRRADIANCE_ATLAS_DIM * RASTER_PROBE_IRRADIANCE_ATLAS_DIM;
+static const uint RASTER_PROBE_ATLAS_TILE_BORDER = 1;
+static const uint RASTER_PROBE_ATLAS_TILE_STRIDE =
+    RASTER_PROBE_IRRADIANCE_ATLAS_DIM + RASTER_PROBE_ATLAS_TILE_BORDER * 2;
+static const uint RASTER_PROBE_ATLAS_TILE_COLUMNS = 32;
+static const uint RASTER_PROBE_ATLAS_TILE_ROWS =
+    (RASTER_PROBE_MAX_COUNT + RASTER_PROBE_ATLAS_TILE_COLUMNS - 1) / RASTER_PROBE_ATLAS_TILE_COLUMNS;
+static const uint RASTER_PROBE_ATLAS_TEXTURE_WIDTH =
+    RASTER_PROBE_ATLAS_TILE_COLUMNS * RASTER_PROBE_ATLAS_TILE_STRIDE;
+static const uint RASTER_PROBE_ATLAS_TEXTURE_HEIGHT =
+    RASTER_PROBE_ATLAS_TILE_ROWS * RASTER_PROBE_ATLAS_TILE_STRIDE;
 static const uint RASTER_PROBE_STATE_INVALID = 0;
 static const uint RASTER_PROBE_STATE_ACTIVE = 1;
 static const uint RASTER_PROBE_STATE_RELOCATED = 2;
@@ -158,7 +178,7 @@ struct LightingData {
     uint4  probe_volume_counts;  // xyz = probe counts, w = total probe count
     uint4  probe_volume_config;  // x = enabled, y = debug mode, z = probe buffer handle, w = visibility atlas handle
     float4 probe_volume_visibility; // x = bias, y = power, z = min weight, w = strength
-    uint4  probe_volume_atlas_config; // x = irradiance atlas handle, yzw = reserved
+    uint4  probe_volume_atlas_config; // x = irradiance buffer, y = irradiance texture, z = visibility texture, w = reserved
 };
 
 #ifdef __cplusplus

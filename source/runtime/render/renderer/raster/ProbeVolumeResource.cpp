@@ -98,6 +98,32 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
     );
     m_irradiance_atlas_buffer.hdl = bdls->AllocateBuffer(m_irradiance_atlas_buffer.buf->GetView());
 
+    const ETextureUsageFlags atlas_usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS;
+    const Extent3D           atlas_size(
+                  RASTER_PROBE_ATLAS_TEXTURE_WIDTH,
+                  RASTER_PROBE_ATLAS_TEXTURE_HEIGHT,
+                  1
+              );
+    const Sampler atlas_sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE);
+
+    m_visibility_atlas_texture.tex = device.CreateTexture(
+        "Raster::ProbeVolume::VisibilityTextureAtlas",
+        atlas_size,
+        PF_R16G16B16A16_SFLOAT,
+        atlas_usage
+    );
+    m_visibility_atlas_texture.hdl =
+        bdls->AllocateTexture(m_visibility_atlas_texture.tex->GetView(), atlas_sampler);
+
+    m_irradiance_atlas_texture.tex = device.CreateTexture(
+        "Raster::ProbeVolume::IrradianceTextureAtlas",
+        atlas_size,
+        PF_R16G16B16A16_SFLOAT,
+        atlas_usage
+    );
+    m_irradiance_atlas_texture.hdl =
+        bdls->AllocateTexture(m_irradiance_atlas_texture.tex->GetView(), atlas_sampler);
+
     constexpr uint scene_data_byte_size = sizeof(GBufferPassParams);
     m_scene_data_buffer = device.CreateBuffer<byte>(
         "Raster::ProbeVolume::SceneData",
@@ -107,7 +133,7 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
     m_scene_data_upload.resize(scene_data_byte_size);
 
     LOG_DEBUG(
-        "[ProbeGI] Created probe buffers: max_count={}, probe_byte_size={}, probe_handle={}, visibility_dim={}x{}, visibility_byte_size={}, visibility_handle={}, irradiance_dim={}x{}, irradiance_byte_size={}, irradiance_handle={}, scene_data_byte_size={}",
+        "[ProbeGI] Created probe buffers: max_count={}, probe_byte_size={}, probe_handle={}, visibility_dim={}x{}, visibility_byte_size={}, visibility_handle={}, irradiance_dim={}x{}, irradiance_byte_size={}, irradiance_handle={}, atlas_texture={}x{}, visibility_texture_handle={}, irradiance_texture_handle={}, scene_data_byte_size={}",
         RASTER_PROBE_MAX_COUNT,
         buffer_byte_size,
         m_probe_buffer.hdl,
@@ -119,6 +145,10 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
         RASTER_PROBE_IRRADIANCE_ATLAS_DIM,
         irradiance_atlas_byte_size,
         m_irradiance_atlas_buffer.hdl,
+        RASTER_PROBE_ATLAS_TEXTURE_WIDTH,
+        RASTER_PROBE_ATLAS_TEXTURE_HEIGHT,
+        m_visibility_atlas_texture.hdl,
+        m_irradiance_atlas_texture.hdl,
         scene_data_byte_size
     );
 }
@@ -136,9 +166,19 @@ void ProbeVolumeResource::Destroy(BindlessArrayRef& bdls) {
         bdls->UnbindBuffer(m_irradiance_atlas_buffer.hdl);
         m_irradiance_atlas_buffer.hdl = 0;
     }
+    if (m_visibility_atlas_texture.hdl != 0) {
+        bdls->UnbindTexture(m_visibility_atlas_texture.hdl);
+        m_visibility_atlas_texture.hdl = 0;
+    }
+    if (m_irradiance_atlas_texture.hdl != 0) {
+        bdls->UnbindTexture(m_irradiance_atlas_texture.hdl);
+        m_irradiance_atlas_texture.hdl = 0;
+    }
     m_probe_buffer.buf = nullptr;
     m_visibility_atlas_buffer.buf = nullptr;
     m_irradiance_atlas_buffer.buf = nullptr;
+    m_visibility_atlas_texture.tex = nullptr;
+    m_irradiance_atlas_texture.tex = nullptr;
     m_scene_data_buffer = nullptr;
     m_scene_data_upload.clear();
     m_has_snapshot = false;
@@ -375,7 +415,8 @@ void ProbeVolumeResource::FillLightingData(LightingData& lighting_data) const {
         m_snapshot.visibility_min_weight,
         m_snapshot.visibility_strength
     );
-    lighting_data.probe_volume_atlas_config = uint4(m_irradiance_atlas_buffer.hdl, 0u, 0u, 0u);
+    lighting_data.probe_volume_atlas_config =
+        uint4(m_irradiance_atlas_buffer.hdl, m_irradiance_atlas_texture.hdl, m_visibility_atlas_texture.hdl, 0u);
 }
 
 } // namespace Moer::Render::Raster

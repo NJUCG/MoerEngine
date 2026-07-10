@@ -97,6 +97,18 @@ float2 ProbeGIGetAtlasTexelPosition(float3 direction, uint dim) {
     return ProbeGIEncodeOctahedral(direction) * float(dim) - 0.5;
 }
 
+float2 ProbeGIGetAtlasTextureUv(uint probe_index, float3 direction) {
+    const float2 oct_uv = ProbeGIEncodeOctahedral(direction);
+    const uint tile_x = probe_index % Moer::RASTER_PROBE_ATLAS_TILE_COLUMNS;
+    const uint tile_y = probe_index / Moer::RASTER_PROBE_ATLAS_TILE_COLUMNS;
+    const float2 tile_origin = float2(tile_x, tile_y) * float(Moer::RASTER_PROBE_ATLAS_TILE_STRIDE);
+    const float2 atlas_pixel =
+        tile_origin + float(Moer::RASTER_PROBE_ATLAS_TILE_BORDER) +
+        oct_uv * float(Moer::RASTER_PROBE_IRRADIANCE_ATLAS_DIM);
+    return atlas_pixel /
+           float2(Moer::RASTER_PROBE_ATLAS_TEXTURE_WIDTH, Moer::RASTER_PROBE_ATLAS_TEXTURE_HEIGHT);
+}
+
 float4 ProbeGILoadVisibilityAtlasTexel(ArrayBuffer visibility_buffer, uint probe_index, int2 texel) {
     const uint dim = Moer::RASTER_PROBE_VISIBILITY_ATLAS_DIM;
     const uint atlas_index =
@@ -171,14 +183,21 @@ float4 ProbeGILoadDirectionalVisibility(
     Moer::ProbeGridProbeData probe,
     float3 probe_to_surface_dir
 ) {
-    if (lighting_data.probe_volume_config.w == 0u) {
-        return probe.visibility;
+    if (lighting_data.probe_volume_atlas_config.z != 0u) {
+        TextureHandle visibility_texture = TextureHandle(lighting_data.probe_volume_atlas_config.z);
+        const float2 atlas_uv = ProbeGIGetAtlasTextureUv(probe_index, probe_to_surface_dir);
+        const float4 visibility_moments = visibility_texture.Sample2D<float4>(atlas_uv);
+        return lerp(probe.visibility, visibility_moments, saturate(visibility_moments.w));
     }
 
-    ArrayBuffer visibility_buffer = ArrayBuffer(lighting_data.probe_volume_config.w);
-    const float4 visibility_moments =
-        ProbeGISampleVisibilityAtlasBilinear(visibility_buffer, probe_index, probe_to_surface_dir);
-    return lerp(probe.visibility, visibility_moments, saturate(visibility_moments.w));
+    if (lighting_data.probe_volume_config.w != 0u) {
+        ArrayBuffer visibility_buffer = ArrayBuffer(lighting_data.probe_volume_config.w);
+        const float4 visibility_moments =
+            ProbeGISampleVisibilityAtlasBilinear(visibility_buffer, probe_index, probe_to_surface_dir);
+        return lerp(probe.visibility, visibility_moments, saturate(visibility_moments.w));
+    }
+
+    return probe.visibility;
 }
 
 float3 ProbeGILoadIrradiance(Moer::LightingData lighting_data, uint probe_index) {
@@ -193,15 +212,21 @@ float3 ProbeGILoadDirectionalIrradiance(
     float3 normal
 ) {
     const float3 aggregate_irradiance = probe.irradiance.rgb * probe.irradiance.a;
-    if (lighting_data.probe_volume_atlas_config.x == 0u) {
-        return aggregate_irradiance;
+    if (lighting_data.probe_volume_atlas_config.y != 0u) {
+        TextureHandle irradiance_texture = TextureHandle(lighting_data.probe_volume_atlas_config.y);
+        const float2 atlas_uv = ProbeGIGetAtlasTextureUv(probe_index, normalize(normal));
+        const float4 irradiance_texel = irradiance_texture.Sample2D<float4>(atlas_uv);
+        return lerp(aggregate_irradiance, irradiance_texel.rgb, saturate(irradiance_texel.w));
     }
 
-    ArrayBuffer irradiance_buffer = ArrayBuffer(lighting_data.probe_volume_atlas_config.x);
-    const float4 irradiance_texel =
-        ProbeGISampleIrradianceAtlasBilinear(irradiance_buffer, probe_index, normalize(normal));
+    if (lighting_data.probe_volume_atlas_config.x != 0u) {
+        ArrayBuffer irradiance_buffer = ArrayBuffer(lighting_data.probe_volume_atlas_config.x);
+        const float4 irradiance_texel =
+            ProbeGISampleIrradianceAtlasBilinear(irradiance_buffer, probe_index, normalize(normal));
+        return lerp(aggregate_irradiance, irradiance_texel.rgb, saturate(irradiance_texel.w));
+    }
 
-    return lerp(aggregate_irradiance, irradiance_texel.rgb, saturate(irradiance_texel.w));
+    return aggregate_irradiance;
 }
 
 float3 ProbeGIGetLocalCoord(Moer::LightingData lighting_data, float3 world_pos) {

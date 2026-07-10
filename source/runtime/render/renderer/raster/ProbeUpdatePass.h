@@ -16,9 +16,20 @@ public:
     DEFINE_SHADER_BUFFER(rw_visibility_atlas);
     DEFINE_SHADER_BUFFER(rw_irradiance_atlas);
     DEFINE_SHADER_BUFFER(probe_scene_data);
+    DEFINE_SHADER_TEX(rw_visibility_atlas_texture);
+    DEFINE_SHADER_TEX(rw_irradiance_atlas_texture);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_CONSTANT_STRUCT(ProbeUpdateParam, param);
-    DEFINE_SHADER_ARGS(rw_probe_data, rw_visibility_atlas, rw_irradiance_atlas, probe_scene_data, bdls, param);
+    DEFINE_SHADER_ARGS(
+        rw_probe_data,
+        rw_visibility_atlas,
+        rw_irradiance_atlas,
+        probe_scene_data,
+        rw_visibility_atlas_texture,
+        rw_irradiance_atlas_texture,
+        bdls,
+        param
+    );
 };
 
 class ProbeUpdateRayQueryPipeline : public ComputePipeline {
@@ -29,10 +40,22 @@ public:
     DEFINE_SHADER_BUFFER(rw_visibility_atlas);
     DEFINE_SHADER_BUFFER(rw_irradiance_atlas);
     DEFINE_SHADER_BUFFER(probe_scene_data);
+    DEFINE_SHADER_TEX(rw_visibility_atlas_texture);
+    DEFINE_SHADER_TEX(rw_irradiance_atlas_texture);
     DEFINE_SHADER_TLAS(tlas);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
     DEFINE_SHADER_CONSTANT_STRUCT(ProbeUpdateParam, param);
-    DEFINE_SHADER_ARGS(rw_probe_data, rw_visibility_atlas, rw_irradiance_atlas, probe_scene_data, tlas, bdls, param);
+    DEFINE_SHADER_ARGS(
+        rw_probe_data,
+        rw_visibility_atlas,
+        rw_irradiance_atlas,
+        probe_scene_data,
+        rw_visibility_atlas_texture,
+        rw_irradiance_atlas_texture,
+        tlas,
+        bdls,
+        param
+    );
 
     MUTATION_BOOL(PROBE_GI_USE_RAY_QUERY);
 };
@@ -75,6 +98,8 @@ public:
                     context.probe_volume.GetVisibilityAtlasBufferView(),
                     context.probe_volume.GetIrradianceAtlasBufferView(),
                     context.probe_volume.GetSceneDataBufferView(),
+                    context.probe_volume.GetVisibilityAtlasTextureView(),
+                    context.probe_volume.GetIrradianceAtlasTextureView(),
                     rt_scene->GetTlas(),
                     context.bdls,
                     update_info.param
@@ -92,6 +117,8 @@ public:
                 context.probe_volume.GetVisibilityAtlasBufferView(),
                 context.probe_volume.GetIrradianceAtlasBufferView(),
                 context.probe_volume.GetSceneDataBufferView(),
+                context.probe_volume.GetVisibilityAtlasTextureView(),
+                context.probe_volume.GetIrradianceAtlasTextureView(),
                 context.bdls,
                 update_info.param
             )

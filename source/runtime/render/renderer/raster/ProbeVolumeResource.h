@@ -45,6 +45,14 @@ public:
         return m_irradiance_atlas_buffer.buf->GetView();
     }
 
+    TextureView GetVisibilityAtlasTextureView() const {
+        return m_visibility_atlas_texture.tex->GetView();
+    }
+
+    TextureView GetIrradianceAtlasTextureView() const {
+        return m_irradiance_atlas_texture.tex->GetView();
+    }
+
     BufferView GetSceneDataBufferView() const {
         return m_scene_data_buffer->GetView();
     }
@@ -63,6 +71,14 @@ public:
 
     uint GetIrradianceAtlasHandle() const {
         return m_irradiance_atlas_buffer.hdl;
+    }
+
+    uint GetVisibilityAtlasTextureHandle() const {
+        return m_visibility_atlas_texture.hdl;
+    }
+
+    uint GetIrradianceAtlasTextureHandle() const {
+        return m_irradiance_atlas_texture.hdl;
     }
 
 private:
@@ -106,6 +122,8 @@ private:
     BufferWithHandle m_probe_buffer;
     BufferWithHandle m_visibility_atlas_buffer;
     BufferWithHandle m_irradiance_atlas_buffer;
+    TextureWithHandle m_visibility_atlas_texture;
+    TextureWithHandle m_irradiance_atlas_texture;
     BufferRef        m_scene_data_buffer;
     Array<byte>      m_scene_data_upload;
     Snapshot         m_snapshot;
