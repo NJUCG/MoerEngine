@@ -159,7 +159,8 @@ float3 ProbeGizmoGetColor(Moer::ProbeGridProbeData probe, uint axis_index) {
 }
 
 ProbeGizmoVSOutput ProbeGizmoVS(uint vertex_id : SV_VertexID, uint probe_index : SV_InstanceID) {
-    if (param.probe_volume_config.x == Moer::RASTER_PROBE_GIZMO_DRAW_MODE_BOUNDS) {
+    if (param.probe_volume_config.x == Moer::RASTER_PROBE_GIZMO_DRAW_MODE_BOUNDS ||
+        param.probe_volume_config.x == Moer::RASTER_PROBE_GIZMO_DRAW_MODE_ADAPTIVE_CELL_BOUNDS) {
         return ProbeVolumeBoundsVS(vertex_id);
     }
 
@@ -184,5 +185,7 @@ ProbeGizmoVSOutput ProbeGizmoVS(uint vertex_id : SV_VertexID, uint probe_index :
 }
 
 float4 ProbeGizmoPS(ProbeGizmoVSOutput input) : SV_TARGET {
-    return float4(saturate(input.color.rgb), input.color.a);
+    const float hdr_intensity =
+        param.probe_volume_config.x == Moer::RASTER_PROBE_GIZMO_DRAW_MODE_ADAPTIVE_CELL_BOUNDS ? 4.0 : 1.0;
+    return float4(max(input.color.rgb, float3(0.0, 0.0, 0.0)) * hdr_intensity, input.color.a);
 }

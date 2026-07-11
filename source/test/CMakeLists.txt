@@ -25,6 +25,13 @@ target_link_libraries(${test_target}
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
+set(test_target TestProbeGeometryClassifier)
+add_executable(${test_target} "ProbeGeometryClassifierTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+
 # add_executable(RuntimeTest EngineTest.cpp)
 # target_include_directories(RuntimeTest
 #     PRIVATE $<BUILD_INTERFACE:${moer_source_dir}/runtime>

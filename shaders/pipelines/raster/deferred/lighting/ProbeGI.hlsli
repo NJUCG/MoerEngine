@@ -46,6 +46,30 @@ uint ProbeGIGetBrickIndex(
     return brick.probe_range.z != 0u ? brick_index : Moer::RASTER_PROBE_PAGE_INVALID;
 }
 
+uint ProbeGIGetCellIndex(Moer::ProbeVolumeGpuDesc volume, uint3 coord) {
+    const uint3 counts = ProbeGIGetCounts(volume);
+    const uint3 fine_brick_counts =
+        (counts + uint3(
+            Moer::RASTER_PROBE_BRICK_DIM - 1u,
+            Moer::RASTER_PROBE_BRICK_DIM - 1u,
+            Moer::RASTER_PROBE_BRICK_DIM - 1u
+        )) / Moer::RASTER_PROBE_BRICK_DIM;
+    const uint3 cell_counts =
+        (fine_brick_counts + uint3(
+            Moer::RASTER_PROBE_CELL_BRICK_DIM - 1u,
+            Moer::RASTER_PROBE_CELL_BRICK_DIM - 1u,
+            Moer::RASTER_PROBE_CELL_BRICK_DIM - 1u
+        )) /
+        Moer::RASTER_PROBE_CELL_BRICK_DIM;
+    const uint3 cell_coord =
+        (coord / Moer::RASTER_PROBE_BRICK_DIM) / Moer::RASTER_PROBE_CELL_BRICK_DIM;
+    const uint local_cell_index =
+        cell_coord.x + cell_coord.y * cell_counts.x + cell_coord.z * cell_counts.x * cell_counts.y;
+    return local_cell_index < volume.hierarchy.y ?
+               volume.hierarchy.x + local_cell_index :
+               Moer::RASTER_PROBE_PAGE_INVALID;
+}
+
 uint ProbeGIGetProbeIndex(
     Moer::LightingData lighting_data,
     Moer::ProbeVolumeGpuDesc volume,
@@ -614,7 +638,8 @@ float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, 
         return float3(0.02, 0.02, 0.02);
     }
 
-    if (debug_mode == 4u || debug_mode == 5u || debug_mode == 6u || debug_mode == 7u || debug_mode == 8u) {
+    if (debug_mode == 4u || debug_mode == 5u || debug_mode == 6u || debug_mode == 7u || debug_mode == 8u ||
+        debug_mode == 9u) {
         uint3 counts = ProbeGIGetCounts(volume);
         float3 local = ProbeGIGetLocalCoord(volume, biased_pos);
         uint3 coord = min(uint3(round(clamp(local, float3(0.0, 0.0, 0.0), float3(counts - uint3(1, 1, 1))))), counts - uint3(1, 1, 1));
@@ -663,16 +688,13 @@ float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, 
         }
 
         if (debug_mode == 8u) {
-            if (brick_index == Moer::RASTER_PROBE_PAGE_INVALID ||
-                lighting_data.probe_system_hierarchy.x == 0u) {
+            if (lighting_data.probe_system_hierarchy.x == 0u) {
                 return float3(0.03, 0.01, 0.04) * lighting_data.probe_system_debug.x;
             }
 
-            ArrayBuffer brick_buffer = ArrayBuffer(lighting_data.probe_system_counts.z);
-            const Moer::ProbeBrickGpuDesc brick =
-                brick_buffer.Load<Moer::ProbeBrickGpuDesc>(brick_index);
-            const uint cell_index = brick.hierarchy.x;
-            if (cell_index >= lighting_data.probe_system_hierarchy.y) {
+            const uint cell_index = ProbeGIGetCellIndex(volume, coord);
+            if (cell_index == Moer::RASTER_PROBE_PAGE_INVALID ||
+                cell_index >= lighting_data.probe_system_hierarchy.y) {
                 return float3(0.35, 0.0, 0.35) * lighting_data.probe_system_debug.x;
             }
 
@@ -686,6 +708,30 @@ float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, 
                 6.28318530718 * (cell_tint + float3(0.00, 0.33, 0.67))
             );
             return cell_color * lighting_data.probe_system_debug.x;
+        }
+
+        if (debug_mode == 9u) {
+            if (lighting_data.probe_system_hierarchy.x == 0u) {
+                return float3(0.03, 0.01, 0.04) * lighting_data.probe_system_debug.x;
+            }
+
+            const uint cell_index = ProbeGIGetCellIndex(volume, coord);
+            if (cell_index == Moer::RASTER_PROBE_PAGE_INVALID ||
+                cell_index >= lighting_data.probe_system_hierarchy.y) {
+                return float3(0.35, 0.0, 0.35) * lighting_data.probe_system_debug.x;
+            }
+
+            ArrayBuffer cell_buffer = ArrayBuffer(lighting_data.probe_system_hierarchy.x);
+            const Moer::ProbeCellGpuDesc cell = cell_buffer.Load<Moer::ProbeCellGpuDesc>(cell_index);
+            const float3 fine_color = float3(0.95, 0.10, 0.04);
+            const float3 medium_color = float3(1.00, 0.72, 0.05);
+            const float3 coarse_color = float3(0.04, 0.32, 1.00);
+            const uint desired_level = min(cell.geometry.z, Moer::RASTER_PROBE_MAX_SUBDIVISION_LEVEL);
+            const float3 level_color = desired_level == 0u ?
+                                           fine_color :
+                                           (desired_level == 1u ? medium_color : coarse_color);
+            const float occupancy_weight = 0.45 + 0.55 * sqrt(saturate(cell.extent.w));
+            return level_color * occupancy_weight * lighting_data.probe_system_debug.x;
         }
 
         uint probe_index = ProbeGIGetProbeIndex(lighting_data, volume, coord);

@@ -2,6 +2,7 @@
 
 #include "log/LogSystem.h"
 #include "math/Function.h"
+#include "math/Transform.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "scene/LogicalComponents.h"
@@ -50,6 +51,33 @@ bool NearlyEqual(float lhs, float rhs) {
 
 bool NearlyEqual(float3 lhs, float3 rhs) {
     return NearlyEqual(lhs.x, rhs.x) && NearlyEqual(lhs.y, rhs.y) && NearlyEqual(lhs.z, rhs.z);
+}
+
+bool IsFinite(float3 value) {
+    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+Box3D TransformBounds(const Box3D& local_bounds, const float4x4& world_transform) {
+    Box3D bounds;
+    if (!local_bounds.IsValid() || !IsFinite(local_bounds.min) || !IsFinite(local_bounds.max)) {
+        return bounds;
+    }
+
+    const float3& min = local_bounds.min;
+    const float3& max = local_bounds.max;
+    const Transform transform(world_transform);
+    bounds.Expand(transform * float3(min.x, min.y, min.z));
+    bounds.Expand(transform * float3(max.x, min.y, min.z));
+    bounds.Expand(transform * float3(min.x, max.y, min.z));
+    bounds.Expand(transform * float3(max.x, max.y, min.z));
+    bounds.Expand(transform * float3(min.x, min.y, max.z));
+    bounds.Expand(transform * float3(max.x, min.y, max.z));
+    bounds.Expand(transform * float3(min.x, max.y, max.z));
+    bounds.Expand(transform * float3(max.x, max.y, max.z));
+    if (!IsFinite(bounds.min) || !IsFinite(bounds.max)) {
+        return Box3D();
+    }
+    return bounds;
 }
 
 float3 GetMainLightColor(const Scene& scene, float3& out_direction, float& out_intensity) {
@@ -257,9 +285,94 @@ void ProbeVolumeResource::Destroy(BindlessArrayRef& bdls) {
     m_brick_last_update_frame.fill(0);
     m_physical_allocations.fill({});
     m_physical_allocator.Reset(0u);
+    m_scene_geometry_bounds.clear();
+    m_scene_geometry_cache_valid = false;
+    m_scene_geometry_generation = 0u;
     m_layout_generation = 0u;
     m_last_scheduled_brick_count = 0;
     m_last_scheduled_probe_count = 0;
+}
+
+void ProbeVolumeResource::RefreshSceneGeometry(const Scene& scene) {
+    if (!scene.IsReady()) {
+        if (m_scene_geometry_cache_valid || !m_scene_geometry_bounds.empty()) {
+            m_scene_geometry_bounds.clear();
+            m_scene_geometry_cache_valid = false;
+            ++m_scene_geometry_generation;
+            if (m_scene_geometry_generation == 0u) {
+                ++m_scene_geometry_generation;
+            }
+            LOG_DEBUG(
+                "[ProbeGI] Geometry cache invalidated while the scene is not ready: generation={}.",
+                m_scene_geometry_generation
+            );
+        }
+        return;
+    }
+
+    const Scene::TickState& tick_state = scene.GetLastTickState();
+    const bool geometry_changed = tick_state.updated_transform || tick_state.created_transform ||
+                                  tick_state.rebuilt_mesh || tick_state.rebuilt_rt_blas;
+    if (m_scene_geometry_cache_valid && !geometry_changed) {
+        return;
+    }
+
+    Array<Box3D> rebuilt_bounds;
+    rebuilt_bounds.reserve(m_scene_geometry_bounds.size());
+    uint renderable_instance_count = 0u;
+    uint leaf_primitive_count      = 0u;
+    uint skipped_invalid_count     = 0u;
+
+    const auto& registry = scene.r();
+    registry.view<const ecs::CRenderable, const ecs::CNode>().each(
+        [&](const auto, const ecs::CRenderable& renderable, const ecs::CNode& node) {
+            if (renderable.mesh_entt == entt::null || !registry.valid(renderable.mesh_entt) ||
+                !registry.all_of<ecs::CMesh>(renderable.mesh_entt)) {
+                ++skipped_invalid_count;
+                return;
+            }
+
+            ++renderable_instance_count;
+            const auto& mesh = registry.get<const ecs::CMesh>(renderable.mesh_entt);
+            const uint leaf_count = mesh.num_leaf_clusters > 0u ?
+                                        Min(
+                                            mesh.num_leaf_clusters,
+                                            static_cast<uint>(mesh.primitive_entts.size())
+                                        ) :
+                                        static_cast<uint>(mesh.primitive_entts.size());
+            leaf_primitive_count += leaf_count;
+            for (uint primitive_index = 0u; primitive_index < leaf_count; ++primitive_index) {
+                const entt::entity primitive_entity = mesh.primitive_entts[primitive_index];
+                if (!registry.valid(primitive_entity) || !registry.all_of<ecs::CPrimitive>(primitive_entity)) {
+                    ++skipped_invalid_count;
+                    continue;
+                }
+
+                const auto& primitive = registry.get<const ecs::CPrimitive>(primitive_entity);
+                const Box3D world_bounds = TransformBounds(primitive.aabb, node.d_world_transform);
+                if (!world_bounds.IsValid()) {
+                    ++skipped_invalid_count;
+                    continue;
+                }
+                rebuilt_bounds.push_back(world_bounds);
+            }
+        }
+    );
+
+    m_scene_geometry_bounds = std::move(rebuilt_bounds);
+    m_scene_geometry_cache_valid = true;
+    ++m_scene_geometry_generation;
+    if (m_scene_geometry_generation == 0u) {
+        ++m_scene_geometry_generation;
+    }
+    LOG_DEBUG(
+        "[ProbeGI] Geometry cache rebuilt: generation={}, renderable_instances={}, leaf_primitives={}, valid_world_bounds={}, skipped_invalid={}.",
+        m_scene_geometry_generation,
+        renderable_instance_count,
+        leaf_primitive_count,
+        m_scene_geometry_bounds.size(),
+        skipped_invalid_count
+    );
 }
 
 void ProbeVolumeResource::UpdateSceneData(CommandList& cmd_list, const Scene& scene) {
@@ -334,6 +447,21 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
     Snapshot snapshot{};
     snapshot.enabled                    = config.probe_gi_enabled;
     snapshot.sparse_bricks_enabled     = config.probe_gi_sparse_bricks_enabled;
+    snapshot.adaptive_placement_enabled =
+        snapshot.enabled && config.probe_gi_adaptive_placement_enabled;
+    snapshot.adaptive_geometry_padding = Max(config.probe_gi_adaptive_geometry_padding, 0.0f);
+    snapshot.adaptive_fine_occupancy = Clamp(
+        config.probe_gi_adaptive_fine_occupancy,
+        1.0f / float(RASTER_PROBE_OCCUPANCY_VOXEL_COUNT),
+        1.0f
+    );
+    snapshot.adaptive_fine_primitives =
+        static_cast<uint>(Clamp(config.probe_gi_adaptive_fine_primitives, 1, 512));
+    snapshot.geometry_generation =
+        snapshot.adaptive_placement_enabled ? m_scene_geometry_generation : 0u;
+    snapshot.geometry_primitive_count = snapshot.adaptive_placement_enabled ?
+                                            static_cast<uint>(m_scene_geometry_bounds.size()) :
+                                            0u;
     snapshot.brick_resident_distance   = Max(config.probe_gi_brick_resident_distance, 0.1f);
     snapshot.brick_resident_hysteresis = Max(config.probe_gi_brick_resident_hysteresis, 0.0f);
     snapshot.update_scheduler_enabled  = config.probe_gi_update_scheduler_enabled;
@@ -346,7 +474,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
         int(min_physical_probe_capacity),
         int(RASTER_PROBE_MAX_COUNT)
     ));
-    snapshot.debug_mode = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 8));
+    snapshot.debug_mode = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 9));
     snapshot.trace_distance     = Max(config.probe_gi_trace_distance, 0.1f);
     snapshot.trace_ray_count =
         static_cast<uint>(Clamp(config.probe_gi_trace_ray_count, 1, int(RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT)));
@@ -408,6 +536,8 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
             (volume.count_z + RASTER_PROBE_BRICK_DIM - 1u) / RASTER_PROBE_BRICK_DIM
         );
         const uint3 cell_counts = ProbeAdaptiveLayout::GetCellCounts(brick_counts);
+        const Box3D volume_bounds(volume.origin, volume.origin + volume.extent);
+        const std::span<const Box3D> geometry_bounds(m_scene_geometry_bounds);
         volume.first_cell_index = snapshot.cell_count;
         uint  nearest_brick_index = RASTER_PROBE_PAGE_INVALID;
         float nearest_distance_sq = std::numeric_limits<float>::max();
@@ -439,6 +569,37 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
                         cell_probe_counts.y > 0u ? cell_probe_counts.y - 1u : 0u,
                         cell_probe_counts.z > 0u ? cell_probe_counts.z - 1u : 0u
                     );
+
+                    ProbeGeometryCellStats geometry_stats{};
+                    if (snapshot.adaptive_placement_enabled) {
+                        const Box3D cell_bounds = ProbeGeometryClassifier::BuildCellInfluenceBounds(
+                            cell.origin,
+                            cell.extent,
+                            volume.spacing,
+                            volume_bounds
+                        );
+                        geometry_stats = ProbeGeometryClassifier::Analyze(
+                            cell_bounds,
+                            geometry_bounds,
+                            snapshot.adaptive_geometry_padding,
+                            snapshot.adaptive_fine_occupancy,
+                            snapshot.adaptive_fine_primitives
+                        );
+                    } else {
+                        geometry_stats.desired_subdivision_level = 0u;
+                    }
+                    cell.geometry_primitive_count = geometry_stats.intersecting_primitive_count;
+                    cell.occupied_voxel_count = geometry_stats.occupied_voxel_count;
+                    cell.desired_subdivision_level = geometry_stats.desired_subdivision_level;
+                    cell.geometry_generation = snapshot.geometry_generation;
+                    cell.geometry_occupancy = geometry_stats.occupancy;
+                    if (cell.desired_subdivision_level == 0u) {
+                        ++snapshot.fine_cell_count;
+                    } else if (cell.desired_subdivision_level == 1u) {
+                        ++snapshot.medium_cell_count;
+                    } else {
+                        ++snapshot.coarse_cell_count;
+                    }
 
                     for (uint brick_z = cell_brick_begin.z; brick_z < cell_brick_end.z; ++brick_z) {
                         for (uint brick_y = cell_brick_begin.y; brick_y < cell_brick_end.y; ++brick_y) {
@@ -810,6 +971,7 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
 
     if (m_snapshot.enabled != snapshot.enabled ||
         m_snapshot.sparse_bricks_enabled != snapshot.sparse_bricks_enabled ||
+        m_snapshot.adaptive_placement_enabled != snapshot.adaptive_placement_enabled ||
         m_snapshot.debug_mode != snapshot.debug_mode ||
         m_snapshot.volume_count != snapshot.volume_count || m_snapshot.cell_count != snapshot.cell_count ||
         m_snapshot.brick_count != snapshot.brick_count ||
@@ -825,6 +987,14 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
         m_snapshot.physical_allocation_count != snapshot.physical_allocation_count ||
         m_snapshot.free_physical_probe_count != snapshot.free_physical_probe_count ||
         m_snapshot.capacity_evicted_brick_count != snapshot.capacity_evicted_brick_count ||
+        m_snapshot.geometry_generation != snapshot.geometry_generation ||
+        m_snapshot.geometry_primitive_count != snapshot.geometry_primitive_count ||
+        m_snapshot.fine_cell_count != snapshot.fine_cell_count ||
+        m_snapshot.medium_cell_count != snapshot.medium_cell_count ||
+        m_snapshot.coarse_cell_count != snapshot.coarse_cell_count ||
+        !NearlyEqual(m_snapshot.adaptive_geometry_padding, snapshot.adaptive_geometry_padding) ||
+        !NearlyEqual(m_snapshot.adaptive_fine_occupancy, snapshot.adaptive_fine_occupancy) ||
+        m_snapshot.adaptive_fine_primitives != snapshot.adaptive_fine_primitives ||
         !NearlyEqual(m_snapshot.brick_resident_distance, snapshot.brick_resident_distance) ||
         !NearlyEqual(m_snapshot.brick_resident_hysteresis, snapshot.brick_resident_hysteresis) ||
         m_snapshot.update_scheduler_enabled != snapshot.update_scheduler_enabled ||
@@ -873,8 +1043,13 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
             lhs.requested_brick_count != rhs.requested_brick_count ||
             lhs.resident_brick_count != rhs.resident_brick_count ||
             lhs.min_subdivision_level != rhs.min_subdivision_level ||
-            lhs.max_subdivision_level != rhs.max_subdivision_level || !NearlyEqual(lhs.origin, rhs.origin) ||
-            !NearlyEqual(lhs.extent, rhs.extent) || !NearlyEqual(lhs.min_probe_spacing, rhs.min_probe_spacing)) {
+            lhs.max_subdivision_level != rhs.max_subdivision_level ||
+            lhs.geometry_primitive_count != rhs.geometry_primitive_count ||
+            lhs.occupied_voxel_count != rhs.occupied_voxel_count ||
+            lhs.desired_subdivision_level != rhs.desired_subdivision_level ||
+            lhs.geometry_generation != rhs.geometry_generation || !NearlyEqual(lhs.origin, rhs.origin) ||
+            !NearlyEqual(lhs.extent, rhs.extent) || !NearlyEqual(lhs.min_probe_spacing, rhs.min_probe_spacing) ||
+            !NearlyEqual(lhs.geometry_occupancy, rhs.geometry_occupancy)) {
             return true;
         }
     }
@@ -963,7 +1138,7 @@ void ProbeVolumeResource::StageCellUpload(const Snapshot& snapshot) {
         const CellSnapshot& cell = snapshot.cells[cell_index];
         ProbeCellGpuDesc&   desc = m_gpu_cell_descs[cell_index];
         desc.origin_spacing = float4(cell.origin.x, cell.origin.y, cell.origin.z, cell.min_probe_spacing);
-        desc.extent = float4(cell.extent.x, cell.extent.y, cell.extent.z, 0.0f);
+        desc.extent = float4(cell.extent.x, cell.extent.y, cell.extent.z, cell.geometry_occupancy);
         desc.coord_volume = uint4(cell.coord.x, cell.coord.y, cell.coord.z, cell.volume_index);
         desc.brick_range = uint4(
             cell.first_brick_index,
@@ -976,6 +1151,12 @@ void ProbeVolumeResource::StageCellUpload(const Snapshot& snapshot) {
             cell.max_subdivision_level,
             cell.config_index,
             snapshot.layout_generation
+        );
+        desc.geometry = uint4(
+            cell.geometry_primitive_count,
+            cell.occupied_voxel_count,
+            cell.desired_subdivision_level,
+            cell.geometry_generation
         );
     }
 
@@ -1066,9 +1247,37 @@ ProbeVolumeResource::PrepareUpdate(
         return update_info;
     }
 
+    if (config.probe_gi_enabled && config.probe_gi_adaptive_placement_enabled) {
+        RefreshSceneGeometry(scene);
+    } else {
+        m_scene_geometry_cache_valid = false;
+    }
+
     Snapshot snapshot = BuildSnapshot(config, camera_position, frame_index);
     ApplyPhysicalResidency(snapshot);
     const bool changed  = HasSnapshotChanged(snapshot);
+    bool adaptive_layout_changed =
+        !m_has_snapshot || m_snapshot.adaptive_placement_enabled != snapshot.adaptive_placement_enabled ||
+        m_snapshot.geometry_generation != snapshot.geometry_generation ||
+        m_snapshot.geometry_primitive_count != snapshot.geometry_primitive_count ||
+        m_snapshot.cell_count != snapshot.cell_count ||
+        !NearlyEqual(m_snapshot.adaptive_geometry_padding, snapshot.adaptive_geometry_padding) ||
+        !NearlyEqual(m_snapshot.adaptive_fine_occupancy, snapshot.adaptive_fine_occupancy) ||
+        m_snapshot.adaptive_fine_primitives != snapshot.adaptive_fine_primitives;
+    if (!adaptive_layout_changed) {
+        for (uint cell_index = 0u; cell_index < snapshot.cell_count; ++cell_index) {
+            const CellSnapshot& previous = m_snapshot.cells[cell_index];
+            const CellSnapshot& current  = snapshot.cells[cell_index];
+            if (previous.coord != current.coord || previous.volume_index != current.volume_index ||
+                previous.geometry_primitive_count != current.geometry_primitive_count ||
+                previous.occupied_voxel_count != current.occupied_voxel_count ||
+                previous.desired_subdivision_level != current.desired_subdivision_level ||
+                !NearlyEqual(previous.geometry_occupancy, current.geometry_occupancy)) {
+                adaptive_layout_changed = true;
+                break;
+            }
+        }
+    }
 
     if (!snapshot.enabled || snapshot.volume_count == 0 || snapshot.total_count == 0) {
         m_history_valid.fill(false);
@@ -1126,6 +1335,37 @@ ProbeVolumeResource::PrepareUpdate(
                 volume.intensity,
                 volume.blend_distance,
                 volume_reset ? 1 : 0
+            );
+        }
+    }
+
+    if (adaptive_layout_changed && snapshot.adaptive_placement_enabled) {
+        LOG_DEBUG(
+            "[ProbeGI] Adaptive Cell analysis updated: geometry_generation={}, world_primitive_bounds={}, cells={}, fine={}, medium={}, coarse={}, padding={}, fine_occupancy_threshold={}, fine_primitive_threshold={}. Level 0 Brick sampling remains active until hierarchy fallback is enabled.",
+            snapshot.geometry_generation,
+            snapshot.geometry_primitive_count,
+            snapshot.cell_count,
+            snapshot.fine_cell_count,
+            snapshot.medium_cell_count,
+            snapshot.coarse_cell_count,
+            snapshot.adaptive_geometry_padding,
+            snapshot.adaptive_fine_occupancy,
+            snapshot.adaptive_fine_primitives
+        );
+        for (uint cell_index = 0u; cell_index < snapshot.cell_count; ++cell_index) {
+            const CellSnapshot& cell = snapshot.cells[cell_index];
+            LOG_DEBUG(
+                "[ProbeGI] Adaptive Cell: index={}, volume={}, coord=({}, {}, {}), primitives={}, occupied_voxels={}/{}, occupancy={}, desired_level={}.",
+                cell_index,
+                cell.volume_index,
+                cell.coord.x,
+                cell.coord.y,
+                cell.coord.z,
+                cell.geometry_primitive_count,
+                cell.occupied_voxel_count,
+                RASTER_PROBE_OCCUPANCY_VOXEL_COUNT,
+                cell.geometry_occupancy,
+                cell.desired_subdivision_level
             );
         }
     }

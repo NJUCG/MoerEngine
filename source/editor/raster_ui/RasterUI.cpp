@@ -333,6 +333,27 @@ void RasterUI::ShowConfig() {
             Render::RASTER_PROBE_CELL_BRICK_DIM,
             Render::RASTER_PROBE_CELL_BRICK_DIM
         );
+        ImGui::Checkbox("Adaptive Placement Analysis", &m_config.probe_gi_adaptive_placement_enabled);
+        if (m_config.probe_gi_adaptive_placement_enabled) {
+            ImGui::SliderFloat(
+                "Geometry Padding",
+                &m_config.probe_gi_adaptive_geometry_padding,
+                0.0f,
+                4.0f
+            );
+            ImGui::SliderFloat(
+                "Fine Occupancy Threshold",
+                &m_config.probe_gi_adaptive_fine_occupancy,
+                1.0f / float(Render::RASTER_PROBE_OCCUPANCY_VOXEL_COUNT),
+                1.0f
+            );
+            ImGui::SliderInt(
+                "Fine Primitive Threshold",
+                &m_config.probe_gi_adaptive_fine_primitives,
+                1,
+                512
+            );
+        }
         ImGui::SliderInt(
             "Physical Probe Capacity",
             &m_config.probe_gi_physical_probe_capacity,
@@ -438,8 +459,9 @@ void RasterUI::ShowConfig() {
             "Update Age",
             "Physical Allocation",
             "Cell Layout",
+            "Adaptive Level",
         };
-        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 9);
+        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 10);
         if (m_config.probe_gi_debug_mode != 0) {
             ImGui::SliderFloat("Debug Scale", &m_config.probe_gi_debug_scale, 0.0f, 8.0f);
         }

@@ -32,6 +32,9 @@ static constexpr uint RASTER_PROBE_BRICK_DIM = 4;
 static constexpr uint RASTER_PROBE_MAX_FINE_BRICKS_PER_AXIS = 4;
 static constexpr uint RASTER_PROBE_MAX_SUBDIVISION_LEVEL = 2;
 static constexpr uint RASTER_PROBE_CELL_BRICK_DIM = 2;
+static constexpr uint RASTER_PROBE_OCCUPANCY_GRID_DIM = 4;
+static constexpr uint RASTER_PROBE_OCCUPANCY_VOXEL_COUNT =
+    RASTER_PROBE_OCCUPANCY_GRID_DIM * RASTER_PROBE_OCCUPANCY_GRID_DIM * RASTER_PROBE_OCCUPANCY_GRID_DIM;
 static constexpr uint RASTER_PROBE_MAX_CELLS_PER_VOLUME = 8;
 static constexpr uint RASTER_PROBE_MAX_CELL_COUNT =
     RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_CELLS_PER_VOLUME;
@@ -65,6 +68,7 @@ static constexpr uint RASTER_PROBE_STATE_RELOCATED = 2;
 static constexpr uint RASTER_PROBE_STATE_NEAR_SURFACE = 3;
 static constexpr uint RASTER_PROBE_GIZMO_DRAW_MODE_PROBES = 1;
 static constexpr uint RASTER_PROBE_GIZMO_DRAW_MODE_BOUNDS = 2;
+static constexpr uint RASTER_PROBE_GIZMO_DRAW_MODE_ADAPTIVE_CELL_BOUNDS = 3;
 #else
 static const uint RASTER_PROBE_VOLUME_MAX_COUNT = 4;
 static const uint RASTER_PROBE_MAX_COUNT_PER_VOLUME = 512;
@@ -74,6 +78,9 @@ static const uint RASTER_PROBE_BRICK_DIM = 4;
 static const uint RASTER_PROBE_MAX_FINE_BRICKS_PER_AXIS = 4;
 static const uint RASTER_PROBE_MAX_SUBDIVISION_LEVEL = 2;
 static const uint RASTER_PROBE_CELL_BRICK_DIM = 2;
+static const uint RASTER_PROBE_OCCUPANCY_GRID_DIM = 4;
+static const uint RASTER_PROBE_OCCUPANCY_VOXEL_COUNT =
+    RASTER_PROBE_OCCUPANCY_GRID_DIM * RASTER_PROBE_OCCUPANCY_GRID_DIM * RASTER_PROBE_OCCUPANCY_GRID_DIM;
 static const uint RASTER_PROBE_MAX_CELLS_PER_VOLUME = 8;
 static const uint RASTER_PROBE_MAX_CELL_COUNT =
     RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_CELLS_PER_VOLUME;
@@ -107,6 +114,7 @@ static const uint RASTER_PROBE_STATE_RELOCATED = 2;
 static const uint RASTER_PROBE_STATE_NEAR_SURFACE = 3;
 static const uint RASTER_PROBE_GIZMO_DRAW_MODE_PROBES = 1;
 static const uint RASTER_PROBE_GIZMO_DRAW_MODE_BOUNDS = 2;
+static const uint RASTER_PROBE_GIZMO_DRAW_MODE_ADAPTIVE_CELL_BOUNDS = 3;
 #endif
 
 struct ProbeGridProbeData {
@@ -135,10 +143,11 @@ struct ProbeVolumeGpuDesc {
 
 struct ProbeCellGpuDesc {
     float4 origin_spacing; // xyz = cell min probe position, w = minimum base probe spacing
-    float4 extent;         // xyz = span from first to last probe, w = reserved
+    float4 extent;         // xyz = span from first to last probe, w = geometry occupancy ratio
     uint4  coord_volume;   // xyz = logical cell coordinate, w = compact volume index
     uint4  brick_range;    // x = first brick descriptor, y = brick count, z = requested count, w = resident count
     uint4  hierarchy;      // x = min level, y = max level, z = config index, w = layout generation
+    uint4  geometry;       // x = intersecting primitives, y = occupied 4^3 voxels, z = desired level, w = geometry generation
 };
 
 struct ProbeBrickGpuDesc {
@@ -243,7 +252,7 @@ struct LightingData {
 #ifdef __cplusplus
 static_assert(sizeof(ProbeUpdateParam) <= 128);
 static_assert(sizeof(ProbeVolumeGpuDesc) == 112);
-static_assert(sizeof(ProbeCellGpuDesc) == 80);
+static_assert(sizeof(ProbeCellGpuDesc) == 96);
 static_assert(sizeof(ProbeBrickGpuDesc) == 96);
 static_assert(sizeof(ProbeVolumeGpuDesc) % 16 == 0);
 static_assert(sizeof(ProbeCellGpuDesc) % 16 == 0);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ProbeGeometryClassifier.h"
 #include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
@@ -50,7 +51,10 @@ public:
                                  context.probe_volume.GetBufferHandle() != 0;
         const bool draw_bounds = config.probe_gi_enabled && config.probe_gi_volume_bounds_enabled &&
                                  context.probe_volume.GetVolumeCount() != 0;
-        if (!draw_probes && !draw_bounds) {
+        const bool draw_adaptive_cells =
+            config.probe_gi_enabled && config.probe_gi_adaptive_placement_enabled &&
+            config.probe_gi_debug_mode == 9 && context.probe_volume.GetCellCount() != 0;
+        if (!draw_probes && !draw_bounds && !draw_adaptive_cells) {
             return;
         }
 
@@ -106,42 +110,106 @@ public:
             for (uint volume_index = 0; volume_index < context.probe_volume.GetVolumeCount(); ++volume_index) {
                 const ProbeVolumeGpuDesc& volume = context.probe_volume.GetVolumeDesc(volume_index);
                 const float3 volume_color = GetVolumeBoundsColor(config, volume_index);
-
-                ProbeGizmoParam param{};
-                param.world2clip = Transpose(camera.GetViewProjectionMatrix());
-                param.probe_volume_config = uint4(
+                DrawBounds(
+                    context,
+                    camera,
+                    float3(volume.origin_bias.x, volume.origin_bias.y, volume.origin_bias.z),
+                    float3(volume.extent_blend.x, volume.extent_blend.y, volume.extent_blend.z),
+                    volume_color,
+                    Max(config.probe_gi_volume_bounds_thickness, 0.001f),
+                    0.75f,
                     RASTER_PROBE_GIZMO_DRAW_MODE_BOUNDS,
-                    ProbeGizmoPackFloat(volume.origin_bias.x),
-                    ProbeGizmoPackFloat(volume.origin_bias.y),
-                    ProbeGizmoPackFloat(volume.origin_bias.z)
+                    "Probe GI Volume Bounds Pass"
                 );
-                param.gizmo_config = float4(
-                    Max(volume.extent_blend.x, 0.1f),
-                    Max(volume.extent_blend.y, 0.1f),
-                    Max(volume.extent_blend.z, 0.1f),
-                    Max(config.probe_gi_volume_bounds_thickness, 0.001f)
-                );
-                param.fixed_color = float4(volume_color.x, volume_color.y, volume_color.z, 0.75f);
-                param.camera_position =
-                    float4(camera.GetPosition().x, camera.GetPosition().y, camera.GetPosition().z, 0.0f);
-
-                context.cmd_list.Gfx(m_pipeline, context.bdls, param)
-                    .Draw(
-                        "Probe GI Volume Bounds Pass",
-                        context.textures.lighting_output.GetRect2D(),
-                        Array<SingleDrawParam>{SingleDrawParam{72, 1, 0, 0, 0}},
-                        ColorAttachment{
-                            context.textures.lighting_output.tex,
-                            EAttachmentAction::AC_LOAD_STORE,
-                            float4(0, 0, 0, 0)
-                        }
-                    );
             }
             RasterTool::LogDebugEverySeconds("[ProbeGI] Multi-volume bounds pass active.", 3.0);
+        }
+
+        if (draw_adaptive_cells) {
+            for (uint cell_index = 0u; cell_index < context.probe_volume.GetCellCount(); ++cell_index) {
+                const ProbeCellGpuDesc& cell = context.probe_volume.GetCellDesc(cell_index);
+                const uint volume_index = cell.coord_volume.w;
+                if (volume_index >= context.probe_volume.GetVolumeCount()) {
+                    continue;
+                }
+
+                const ProbeVolumeGpuDesc& volume = context.probe_volume.GetVolumeDesc(volume_index);
+                const float3 volume_origin(volume.origin_bias.x, volume.origin_bias.y, volume.origin_bias.z);
+                const float3 volume_extent(volume.extent_blend.x, volume.extent_blend.y, volume.extent_blend.z);
+                const Box3D volume_bounds(volume_origin, volume_origin + volume_extent);
+                const Box3D cell_bounds = ProbeGeometryClassifier::BuildCellInfluenceBounds(
+                    float3(cell.origin_spacing.x, cell.origin_spacing.y, cell.origin_spacing.z),
+                    float3(cell.extent.x, cell.extent.y, cell.extent.z),
+                    float3(
+                        volume.spacing_intensity.x,
+                        volume.spacing_intensity.y,
+                        volume.spacing_intensity.z
+                    ),
+                    volume_bounds
+                );
+                if (!cell_bounds.IsValid()) {
+                    continue;
+                }
+
+                DrawBounds(
+                    context,
+                    camera,
+                    cell_bounds.min,
+                    cell_bounds.GetExtent(),
+                    GetAdaptiveCellColor(cell.geometry.z),
+                    Max(config.probe_gi_volume_bounds_thickness * 1.5f, 0.002f),
+                    0.95f,
+                    RASTER_PROBE_GIZMO_DRAW_MODE_ADAPTIVE_CELL_BOUNDS,
+                    "Probe GI Adaptive Cell Bounds Pass"
+                );
+            }
+            RasterTool::LogDebugEverySeconds("[ProbeGI] Adaptive Cell bounds pass active.", 3.0);
         }
     }
 
 private:
+    void DrawBounds(
+        RasterContext& context,
+        const Camera&  camera,
+        float3         origin,
+        float3         extent,
+        float3         color,
+        float          thickness,
+        float          alpha,
+        uint           draw_mode,
+        const char*    pass_name
+    ) {
+        ProbeGizmoParam param{};
+        param.world2clip = Transpose(camera.GetViewProjectionMatrix());
+        param.probe_volume_config = uint4(
+            draw_mode,
+            ProbeGizmoPackFloat(origin.x),
+            ProbeGizmoPackFloat(origin.y),
+            ProbeGizmoPackFloat(origin.z)
+        );
+        param.gizmo_config = float4(
+            Max(extent.x, 0.1f),
+            Max(extent.y, 0.1f),
+            Max(extent.z, 0.1f),
+            Max(thickness, 0.001f)
+        );
+        param.fixed_color = float4(color.x, color.y, color.z, Clamp(alpha, 0.0f, 1.0f));
+        param.camera_position =
+            float4(camera.GetPosition().x, camera.GetPosition().y, camera.GetPosition().z, 0.0f);
+
+        context.cmd_list.Gfx(m_pipeline, context.bdls, param)
+            .Draw(
+                pass_name,
+                context.textures.lighting_output.GetRect2D(),
+                Array<SingleDrawParam>{SingleDrawParam{72, 1, 0, 0, 0}},
+                ColorAttachment{
+                    context.textures.lighting_output.tex,
+                    EAttachmentAction::AC_LOAD_STORE,
+                    float4(0, 0, 0, 0)
+                }
+            );
+    }
+
     static float3 GetVolumeBoundsColor(const RasterConfig& config, uint volume_index) {
         if (volume_index == 0u) {
             return config.probe_gi_volume_bounds_color;
@@ -153,6 +221,16 @@ private:
             return float3(0.30f, 1.0f, 0.35f);
         }
         return float3(0.95f, 0.30f, 0.82f);
+    }
+
+    static float3 GetAdaptiveCellColor(uint subdivision_level) {
+        if (subdivision_level == 0u) {
+            return float3(0.95f, 0.10f, 0.04f);
+        }
+        if (subdivision_level == 1u) {
+            return float3(1.0f, 0.72f, 0.05f);
+        }
+        return float3(0.04f, 0.32f, 1.0f);
     }
 
     ProbeGizmoPipeline m_pipeline;

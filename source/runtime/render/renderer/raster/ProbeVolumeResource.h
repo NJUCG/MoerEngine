@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ProbeAdaptiveLayout.h"
+#include "ProbeGeometryClassifier.h"
 #include "ProbePhysicalAllocator.h"
 #include "RasterConfig.h"
 #include "misc/STL.h"
@@ -253,14 +254,20 @@ private:
         uint   resident_brick_count   = 0;
         uint   min_subdivision_level  = 0;
         uint   max_subdivision_level  = 0;
+        uint   geometry_primitive_count = 0;
+        uint   occupied_voxel_count     = 0;
+        uint   desired_subdivision_level = RASTER_PROBE_MAX_SUBDIVISION_LEVEL;
+        uint   geometry_generation       = 0;
         float3 origin                 = float3(0.0f);
         float3 extent                 = float3(0.0f);
         float  min_probe_spacing      = 0.0f;
+        float  geometry_occupancy     = 0.0f;
     };
 
     struct Snapshot {
         bool   enabled                    = false;
         bool   sparse_bricks_enabled      = false;
+        bool   adaptive_placement_enabled = false;
         uint   debug_mode                 = 0;
         uint   volume_count               = 0;
         uint   cell_count                 = 0;
@@ -277,7 +284,15 @@ private:
         uint   physical_allocation_count  = 0;
         uint   free_physical_probe_count  = RASTER_PROBE_MAX_COUNT;
         uint   capacity_evicted_brick_count = 0;
+        uint   geometry_generation        = 0;
+        uint   geometry_primitive_count   = 0;
+        uint   fine_cell_count            = 0;
+        uint   medium_cell_count          = 0;
+        uint   coarse_cell_count          = 0;
         bool   allocator_compacted        = false;
+        float  adaptive_geometry_padding  = 0.0f;
+        float  adaptive_fine_occupancy    = 0.25f;
+        uint   adaptive_fine_primitives   = 64u;
         float  brick_resident_distance    = 0.0f;
         float  brick_resident_hysteresis  = 0.0f;
         bool   update_scheduler_enabled   = false;
@@ -302,6 +317,7 @@ private:
     };
 
     Snapshot BuildSnapshot(const RasterConfig& config, float3 camera_position, uint64 frame_index) const;
+    void RefreshSceneGeometry(const Scene& scene);
     ProbeUpdateParam BuildUpdateParam(
         const Snapshot& snapshot,
         const VolumeSnapshot& volume,
@@ -345,6 +361,9 @@ private:
     StaticArray<uint64, RASTER_PROBE_MAX_BRICK_COUNT> m_brick_last_update_frame{};
     StaticArray<ProbePhysicalAllocator::Allocation, RASTER_PROBE_MAX_BRICK_COUNT> m_physical_allocations{};
     ProbePhysicalAllocator m_physical_allocator;
+    Array<Box3D>     m_scene_geometry_bounds;
+    bool             m_scene_geometry_cache_valid = false;
+    uint             m_scene_geometry_generation  = 0;
     uint             m_layout_generation         = 0;
     uint             m_last_scheduled_brick_count = 0;
     uint             m_last_scheduled_probe_count = 0;
