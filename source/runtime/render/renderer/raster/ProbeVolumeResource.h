@@ -306,6 +306,7 @@ private:
         float  adaptive_geometry_padding  = 0.0f;
         float  adaptive_fine_occupancy    = 0.25f;
         uint   adaptive_fine_primitives   = 64u;
+        float  adaptive_transition_width  = 1.5f;
         float  brick_resident_distance    = 0.0f;
         float  brick_resident_hysteresis  = 0.0f;
         bool   update_scheduler_enabled   = false;

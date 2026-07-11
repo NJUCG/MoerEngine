@@ -156,6 +156,24 @@ public:
             level_probe_counts.z > 1u ? volume_extent.z / float(level_probe_counts.z - 1u) : volume_extent.z
         );
     }
+
+    static constexpr bool ShouldRequestLevel(
+        uint desired_subdivision_level,
+        uint subdivision_level,
+        bool hierarchy_enabled
+    ) {
+        if (subdivision_level > RASTER_PROBE_MAX_SUBDIVISION_LEVEL) {
+            return false;
+        }
+        if (!hierarchy_enabled) {
+            return subdivision_level == 0u;
+        }
+        const uint clamped_desired_level =
+            desired_subdivision_level < RASTER_PROBE_MAX_SUBDIVISION_LEVEL ?
+                desired_subdivision_level :
+                RASTER_PROBE_MAX_SUBDIVISION_LEVEL;
+        return subdivision_level >= clamped_desired_level;
+    }
 };
 
 static_assert(

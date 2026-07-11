@@ -24,29 +24,87 @@ uint3 ProbeGIGetCounts(Moer::ProbeVolumeGpuDesc volume) {
     );
 }
 
-uint ProbeGIGetBrickIndex(
+uint ProbeGIGetLevelScale(uint subdivision_level) {
+    return 1u << min(subdivision_level, Moer::RASTER_PROBE_MAX_SUBDIVISION_LEVEL);
+}
+
+uint3 ProbeGIGetLevelCounts(Moer::ProbeVolumeGpuDesc volume, uint subdivision_level) {
+    const uint scale = ProbeGIGetLevelScale(subdivision_level);
+    return max(
+        (ProbeGIGetCounts(volume) + uint3(scale - 1u, scale - 1u, scale - 1u)) / scale,
+        uint3(1u, 1u, 1u)
+    );
+}
+
+float3 ProbeGIGetLevelSpacing(Moer::ProbeVolumeGpuDesc volume, uint subdivision_level) {
+    const uint3 counts = ProbeGIGetLevelCounts(volume, subdivision_level);
+    return float3(
+        counts.x > 1u ? volume.extent_blend.x / float(counts.x - 1u) : volume.extent_blend.x,
+        counts.y > 1u ? volume.extent_blend.y / float(counts.y - 1u) : volume.extent_blend.y,
+        counts.z > 1u ? volume.extent_blend.z / float(counts.z - 1u) : volume.extent_blend.z
+    );
+}
+
+uint ProbeGIGetLevelGridDim(uint subdivision_level) {
+    return max(
+        Moer::RASTER_PROBE_MAX_FINE_BRICKS_PER_AXIS >>
+            min(subdivision_level, Moer::RASTER_PROBE_MAX_SUBDIVISION_LEVEL),
+        1u
+    );
+}
+
+uint ProbeGIGetLevelPageOffset(uint subdivision_level) {
+    uint page_offset = 0u;
+    [unroll] for (uint level = 0u; level < Moer::RASTER_PROBE_MAX_SUBDIVISION_LEVEL; ++level) {
+        if (level < subdivision_level) {
+            const uint dim = ProbeGIGetLevelGridDim(level);
+            page_offset += dim * dim * dim;
+        }
+    }
+    return page_offset;
+}
+
+uint ProbeGIGetBrickIndexAtLevel(
     Moer::LightingData lighting_data,
     Moer::ProbeVolumeGpuDesc volume,
-    uint3 coord
+    uint3 coord,
+    uint subdivision_level
 ) {
-    const uint3 counts = ProbeGIGetCounts(volume);
+    const uint level = min(subdivision_level, volume.hierarchy.z);
+    const uint3 counts = ProbeGIGetLevelCounts(volume, level);
+    if (any(coord >= counts)) {
+        return Moer::RASTER_PROBE_PAGE_INVALID;
+    }
+
     const uint3 brick_coord = coord / Moer::RASTER_PROBE_BRICK_DIM;
-    const uint logical_brick_index =
-        brick_coord.x + brick_coord.y * Moer::RASTER_PROBE_MAX_FINE_BRICKS_PER_AXIS +
-        brick_coord.z * Moer::RASTER_PROBE_MAX_FINE_BRICKS_PER_AXIS * Moer::RASTER_PROBE_MAX_FINE_BRICKS_PER_AXIS;
+    const uint level_grid_dim = ProbeGIGetLevelGridDim(level);
+    const uint virtual_page = volume.allocation.z + ProbeGIGetLevelPageOffset(level) +
+                              brick_coord.x + brick_coord.y * level_grid_dim +
+                              brick_coord.z * level_grid_dim * level_grid_dim;
 
     ArrayBuffer page_table = ArrayBuffer(lighting_data.probe_system_counts.w);
-    const uint brick_index = page_table.Load<uint>(volume.allocation.z + logical_brick_index);
+    const uint brick_index = page_table.Load<uint>(virtual_page);
     if (brick_index == Moer::RASTER_PROBE_PAGE_INVALID) {
         return Moer::RASTER_PROBE_PAGE_INVALID;
     }
 
     ArrayBuffer brick_buffer = ArrayBuffer(lighting_data.probe_system_counts.z);
     const Moer::ProbeBrickGpuDesc brick = brick_buffer.Load<Moer::ProbeBrickGpuDesc>(brick_index);
-    return brick.probe_range.z != 0u ? brick_index : Moer::RASTER_PROBE_PAGE_INVALID;
+    const bool descriptor_matches = brick.probe_range.z != 0u && brick.hierarchy.y == level &&
+                                    brick.hierarchy.w == virtual_page &&
+                                    brick.neighbor_pages_1.z == lighting_data.probe_system_hierarchy.w;
+    return descriptor_matches ? brick_index : Moer::RASTER_PROBE_PAGE_INVALID;
 }
 
-uint ProbeGIGetCellIndex(Moer::ProbeVolumeGpuDesc volume, uint3 coord) {
+uint ProbeGIGetBrickIndex(
+    Moer::LightingData lighting_data,
+    Moer::ProbeVolumeGpuDesc volume,
+    uint3 coord
+) {
+    return ProbeGIGetBrickIndexAtLevel(lighting_data, volume, coord, 0u);
+}
+
+uint3 ProbeGIGetCellCounts(Moer::ProbeVolumeGpuDesc volume) {
     const uint3 counts = ProbeGIGetCounts(volume);
     const uint3 fine_brick_counts =
         (counts + uint3(
@@ -54,15 +112,22 @@ uint ProbeGIGetCellIndex(Moer::ProbeVolumeGpuDesc volume, uint3 coord) {
             Moer::RASTER_PROBE_BRICK_DIM - 1u,
             Moer::RASTER_PROBE_BRICK_DIM - 1u
         )) / Moer::RASTER_PROBE_BRICK_DIM;
-    const uint3 cell_counts =
-        (fine_brick_counts + uint3(
+    return (fine_brick_counts + uint3(
             Moer::RASTER_PROBE_CELL_BRICK_DIM - 1u,
             Moer::RASTER_PROBE_CELL_BRICK_DIM - 1u,
             Moer::RASTER_PROBE_CELL_BRICK_DIM - 1u
         )) /
         Moer::RASTER_PROBE_CELL_BRICK_DIM;
+}
+
+uint3 ProbeGIGetCellCoord(uint3 coord) {
+    return (coord / Moer::RASTER_PROBE_BRICK_DIM) / Moer::RASTER_PROBE_CELL_BRICK_DIM;
+}
+
+uint ProbeGIGetCellIndex(Moer::ProbeVolumeGpuDesc volume, uint3 coord) {
+    const uint3 cell_counts = ProbeGIGetCellCounts(volume);
     const uint3 cell_coord =
-        (coord / Moer::RASTER_PROBE_BRICK_DIM) / Moer::RASTER_PROBE_CELL_BRICK_DIM;
+        min(ProbeGIGetCellCoord(coord), cell_counts - uint3(1u, 1u, 1u));
     const uint local_cell_index =
         cell_coord.x + cell_coord.y * cell_counts.x + cell_coord.z * cell_counts.x * cell_counts.y;
     return local_cell_index < volume.hierarchy.y ?
@@ -70,12 +135,14 @@ uint ProbeGIGetCellIndex(Moer::ProbeVolumeGpuDesc volume, uint3 coord) {
                Moer::RASTER_PROBE_PAGE_INVALID;
 }
 
-uint ProbeGIGetProbeIndex(
+uint ProbeGIGetProbeIndexAtLevel(
     Moer::LightingData lighting_data,
     Moer::ProbeVolumeGpuDesc volume,
-    uint3 coord
+    uint3 coord,
+    uint subdivision_level
 ) {
-    const uint brick_index = ProbeGIGetBrickIndex(lighting_data, volume, coord);
+    const uint brick_index =
+        ProbeGIGetBrickIndexAtLevel(lighting_data, volume, coord, subdivision_level);
     if (brick_index == Moer::RASTER_PROBE_PAGE_INVALID) {
         return Moer::RASTER_PROBE_PAGE_INVALID;
     }
@@ -91,6 +158,14 @@ uint ProbeGIGetProbeIndex(
     const uint local_index = local_coord.x + local_coord.y * brick.local_counts.x +
                              local_coord.z * brick.local_counts.x * brick.local_counts.y;
     return brick.probe_range.x + local_index;
+}
+
+uint ProbeGIGetProbeIndex(
+    Moer::LightingData lighting_data,
+    Moer::ProbeVolumeGpuDesc volume,
+    uint3 coord
+) {
+    return ProbeGIGetProbeIndexAtLevel(lighting_data, volume, coord, 0u);
 }
 
 Moer::ProbeGridProbeData ProbeGILoadProbe(Moer::LightingData lighting_data, uint probe_index) {
@@ -302,9 +377,20 @@ float3 ProbeGILoadDirectionalIrradiance(
     return aggregate_irradiance;
 }
 
-float3 ProbeGIGetLocalCoord(Moer::ProbeVolumeGpuDesc volume, float3 world_pos) {
-    float3 spacing = max(volume.spacing_intensity.xyz, float3(1e-4, 1e-4, 1e-4));
+float3 ProbeGIGetLocalCoordAtLevel(
+    Moer::ProbeVolumeGpuDesc volume,
+    float3 world_pos,
+    uint subdivision_level
+) {
+    const float3 spacing = max(
+        ProbeGIGetLevelSpacing(volume, subdivision_level),
+        float3(1e-4, 1e-4, 1e-4)
+    );
     return (world_pos - volume.origin_bias.xyz) / spacing;
+}
+
+float3 ProbeGIGetLocalCoord(Moer::ProbeVolumeGpuDesc volume, float3 world_pos) {
+    return ProbeGIGetLocalCoordAtLevel(volume, world_pos, 0u);
 }
 
 bool ProbeGIIsInsideVolume(Moer::ProbeVolumeGpuDesc volume, float3 world_pos) {
@@ -380,7 +466,6 @@ void ProbeGIAccumulateProbe(
     if (probe_index == Moer::RASTER_PROBE_PAGE_INVALID || trilinear_weight <= 0.0) {
         return;
     }
-    resident_weight_sum += trilinear_weight;
 
     Moer::ProbeGridProbeData probe = ProbeGILoadProbe(lighting_data, probe_index);
     float state_weight = ProbeGIGetProbeStateWeight(probe);
@@ -388,19 +473,23 @@ void ProbeGIAccumulateProbe(
         return;
     }
 
+    const float usable_weight = trilinear_weight * state_weight;
+    resident_weight_sum += usable_weight;
+
     float3 irradiance = ProbeGILoadDirectionalIrradiance(lighting_data, probe_index, probe, normal);
     float visibility_weight = ProbeGIGetVisibilityWeight(lighting_data, volume, probe_index, probe, world_pos, normal);
-    float final_weight = trilinear_weight * visibility_weight * state_weight;
+    float final_weight = usable_weight * visibility_weight;
 
-    raw_irradiance += irradiance * trilinear_weight * state_weight;
+    raw_irradiance += irradiance * usable_weight;
     weighted_irradiance += irradiance * final_weight;
 }
 
-float3 ProbeGISampleVolumeIrradiance(
+float3 ProbeGISampleVolumeLevelIrradiance(
     Moer::LightingData lighting_data,
     Moer::ProbeVolumeGpuDesc volume,
     float3 world_pos,
     float3 normal,
+    uint subdivision_level,
     out float resident_coverage
 ) {
     resident_coverage = 0.0;
@@ -409,10 +498,15 @@ float3 ProbeGISampleVolumeIrradiance(
         return float3(0.0, 0.0, 0.0);
     }
 
-    uint3 counts = ProbeGIGetCounts(volume);
+    const uint level = min(subdivision_level, volume.hierarchy.z);
+    uint3 counts = ProbeGIGetLevelCounts(volume, level);
     uint3 max_coord = counts - uint3(1, 1, 1);
     float3 max_coord_f = float3(max_coord.x, max_coord.y, max_coord.z);
-    float3 local = clamp(ProbeGIGetLocalCoord(volume, biased_pos), float3(0.0, 0.0, 0.0), max_coord_f);
+    float3 local = clamp(
+        ProbeGIGetLocalCoordAtLevel(volume, biased_pos, level),
+        float3(0.0, 0.0, 0.0),
+        max_coord_f
+    );
 
     uint3 base_coord = uint3(floor(local));
     uint3 next_coord = min(base_coord + uint3(1, 1, 1), max_coord);
@@ -425,7 +519,7 @@ float3 ProbeGISampleVolumeIrradiance(
     ProbeGIAccumulateProbe(
         lighting_data,
         volume,
-        ProbeGIGetProbeIndex(lighting_data, volume, base_coord),
+        ProbeGIGetProbeIndexAtLevel(lighting_data, volume, base_coord, level),
         (1.0 - weight.x) * (1.0 - weight.y) * (1.0 - weight.z),
         biased_pos,
         normal,
@@ -436,7 +530,12 @@ float3 ProbeGISampleVolumeIrradiance(
     ProbeGIAccumulateProbe(
         lighting_data,
         volume,
-        ProbeGIGetProbeIndex(lighting_data, volume, uint3(next_coord.x, base_coord.y, base_coord.z)),
+        ProbeGIGetProbeIndexAtLevel(
+            lighting_data,
+            volume,
+            uint3(next_coord.x, base_coord.y, base_coord.z),
+            level
+        ),
         weight.x * (1.0 - weight.y) * (1.0 - weight.z),
         biased_pos,
         normal,
@@ -447,7 +546,12 @@ float3 ProbeGISampleVolumeIrradiance(
     ProbeGIAccumulateProbe(
         lighting_data,
         volume,
-        ProbeGIGetProbeIndex(lighting_data, volume, uint3(base_coord.x, next_coord.y, base_coord.z)),
+        ProbeGIGetProbeIndexAtLevel(
+            lighting_data,
+            volume,
+            uint3(base_coord.x, next_coord.y, base_coord.z),
+            level
+        ),
         (1.0 - weight.x) * weight.y * (1.0 - weight.z),
         biased_pos,
         normal,
@@ -458,7 +562,12 @@ float3 ProbeGISampleVolumeIrradiance(
     ProbeGIAccumulateProbe(
         lighting_data,
         volume,
-        ProbeGIGetProbeIndex(lighting_data, volume, uint3(next_coord.x, next_coord.y, base_coord.z)),
+        ProbeGIGetProbeIndexAtLevel(
+            lighting_data,
+            volume,
+            uint3(next_coord.x, next_coord.y, base_coord.z),
+            level
+        ),
         weight.x * weight.y * (1.0 - weight.z),
         biased_pos,
         normal,
@@ -469,7 +578,12 @@ float3 ProbeGISampleVolumeIrradiance(
     ProbeGIAccumulateProbe(
         lighting_data,
         volume,
-        ProbeGIGetProbeIndex(lighting_data, volume, uint3(base_coord.x, base_coord.y, next_coord.z)),
+        ProbeGIGetProbeIndexAtLevel(
+            lighting_data,
+            volume,
+            uint3(base_coord.x, base_coord.y, next_coord.z),
+            level
+        ),
         (1.0 - weight.x) * (1.0 - weight.y) * weight.z,
         biased_pos,
         normal,
@@ -480,7 +594,12 @@ float3 ProbeGISampleVolumeIrradiance(
     ProbeGIAccumulateProbe(
         lighting_data,
         volume,
-        ProbeGIGetProbeIndex(lighting_data, volume, uint3(next_coord.x, base_coord.y, next_coord.z)),
+        ProbeGIGetProbeIndexAtLevel(
+            lighting_data,
+            volume,
+            uint3(next_coord.x, base_coord.y, next_coord.z),
+            level
+        ),
         weight.x * (1.0 - weight.y) * weight.z,
         biased_pos,
         normal,
@@ -491,7 +610,12 @@ float3 ProbeGISampleVolumeIrradiance(
     ProbeGIAccumulateProbe(
         lighting_data,
         volume,
-        ProbeGIGetProbeIndex(lighting_data, volume, uint3(base_coord.x, next_coord.y, next_coord.z)),
+        ProbeGIGetProbeIndexAtLevel(
+            lighting_data,
+            volume,
+            uint3(base_coord.x, next_coord.y, next_coord.z),
+            level
+        ),
         (1.0 - weight.x) * weight.y * weight.z,
         biased_pos,
         normal,
@@ -502,7 +626,7 @@ float3 ProbeGISampleVolumeIrradiance(
     ProbeGIAccumulateProbe(
         lighting_data,
         volume,
-        ProbeGIGetProbeIndex(lighting_data, volume, next_coord),
+        ProbeGIGetProbeIndexAtLevel(lighting_data, volume, next_coord, level),
         weight.x * weight.y * weight.z,
         biased_pos,
         normal,
@@ -520,6 +644,304 @@ float3 ProbeGISampleVolumeIrradiance(
     raw_irradiance *= inverse_coverage;
     weighted_irradiance *= inverse_coverage;
     return lerp(raw_irradiance, weighted_irradiance, saturate(volume.visibility.w));
+}
+
+void ProbeGIConsiderCoarserNeighbor(
+    Moer::LightingData lighting_data,
+    Moer::ProbeVolumeGpuDesc volume,
+    Moer::ProbeCellGpuDesc cell,
+    uint3 cell_counts,
+    int3 neighbor_offset,
+    float3 biased_pos,
+    uint desired_level,
+    inout uint transition_level,
+    inout float transition_weight
+) {
+    const int3 neighbor_coord = int3(cell.coord_volume.xyz) + neighbor_offset;
+    if (any(neighbor_coord < int3(0, 0, 0)) || any(neighbor_coord >= int3(cell_counts))) {
+        return;
+    }
+
+    const uint3 neighbor_coord_u = uint3(neighbor_coord);
+    const uint local_neighbor_index = neighbor_coord_u.x + neighbor_coord_u.y * cell_counts.x +
+                                      neighbor_coord_u.z * cell_counts.x * cell_counts.y;
+    if (local_neighbor_index >= volume.hierarchy.y) {
+        return;
+    }
+
+    ArrayBuffer cell_buffer = ArrayBuffer(lighting_data.probe_system_hierarchy.x);
+    const Moer::ProbeCellGpuDesc neighbor =
+        cell_buffer.Load<Moer::ProbeCellGpuDesc>(volume.hierarchy.x + local_neighbor_index);
+    const uint neighbor_level = min(neighbor.geometry.z, volume.hierarchy.z);
+    if (neighbor.coord_volume.w != cell.coord_volume.w || neighbor_level <= desired_level) {
+        return;
+    }
+
+    const uint axis = neighbor_offset.x != 0 ? 0u : (neighbor_offset.y != 0 ? 1u : 2u);
+    const bool positive_side = neighbor_offset[axis] > 0;
+    const float current_edge = positive_side ?
+                                   cell.origin_spacing[axis] + cell.extent[axis] :
+                                   cell.origin_spacing[axis];
+    const float neighbor_edge = positive_side ?
+                                    neighbor.origin_spacing[axis] :
+                                    neighbor.origin_spacing[axis] + neighbor.extent[axis];
+    const float boundary = 0.5 * (current_edge + neighbor_edge);
+    const float transition_scale = max(lighting_data.probe_system_debug.y, 0.0);
+    if (transition_scale <= 1e-5) {
+        return;
+    }
+
+    const float transition_width = max(volume.spacing_intensity[axis] * transition_scale, 1e-4);
+    const float candidate_weight =
+        1.0 - smoothstep(0.0, transition_width, abs(biased_pos[axis] - boundary));
+    if (candidate_weight > transition_weight + 1e-5 ||
+        (abs(candidate_weight - transition_weight) <= 1e-5 && neighbor_level > transition_level)) {
+        transition_level = neighbor_level;
+        transition_weight = candidate_weight;
+    }
+}
+
+void ProbeGIResolveAdaptiveLevels(
+    Moer::LightingData lighting_data,
+    Moer::ProbeVolumeGpuDesc volume,
+    float3 biased_pos,
+    out uint desired_level,
+    out uint transition_level,
+    out float transition_weight
+) {
+    desired_level = 0u;
+    transition_level = 0u;
+    transition_weight = 0.0;
+    if (volume.hierarchy.z == 0u || volume.hierarchy.y == 0u ||
+        lighting_data.probe_system_hierarchy.x == 0u) {
+        return;
+    }
+
+    const uint3 counts = ProbeGIGetCounts(volume);
+    const uint3 max_coord = counts - uint3(1u, 1u, 1u);
+    const float3 local = clamp(
+        ProbeGIGetLocalCoord(volume, biased_pos),
+        float3(0.0, 0.0, 0.0),
+        float3(max_coord)
+    );
+    const uint3 coord = min(uint3(floor(local)), max_coord);
+    const uint cell_index = ProbeGIGetCellIndex(volume, coord);
+    if (cell_index == Moer::RASTER_PROBE_PAGE_INVALID ||
+        cell_index >= lighting_data.probe_system_hierarchy.y) {
+        return;
+    }
+
+    ArrayBuffer cell_buffer = ArrayBuffer(lighting_data.probe_system_hierarchy.x);
+    const Moer::ProbeCellGpuDesc cell = cell_buffer.Load<Moer::ProbeCellGpuDesc>(cell_index);
+    desired_level = min(cell.geometry.z, volume.hierarchy.z);
+    transition_level = desired_level;
+
+    const uint3 cell_counts = ProbeGIGetCellCounts(volume);
+    ProbeGIConsiderCoarserNeighbor(
+        lighting_data,
+        volume,
+        cell,
+        cell_counts,
+        int3(-1, 0, 0),
+        biased_pos,
+        desired_level,
+        transition_level,
+        transition_weight
+    );
+    ProbeGIConsiderCoarserNeighbor(
+        lighting_data,
+        volume,
+        cell,
+        cell_counts,
+        int3(1, 0, 0),
+        biased_pos,
+        desired_level,
+        transition_level,
+        transition_weight
+    );
+    ProbeGIConsiderCoarserNeighbor(
+        lighting_data,
+        volume,
+        cell,
+        cell_counts,
+        int3(0, -1, 0),
+        biased_pos,
+        desired_level,
+        transition_level,
+        transition_weight
+    );
+    ProbeGIConsiderCoarserNeighbor(
+        lighting_data,
+        volume,
+        cell,
+        cell_counts,
+        int3(0, 1, 0),
+        biased_pos,
+        desired_level,
+        transition_level,
+        transition_weight
+    );
+    ProbeGIConsiderCoarserNeighbor(
+        lighting_data,
+        volume,
+        cell,
+        cell_counts,
+        int3(0, 0, -1),
+        biased_pos,
+        desired_level,
+        transition_level,
+        transition_weight
+    );
+    ProbeGIConsiderCoarserNeighbor(
+        lighting_data,
+        volume,
+        cell,
+        cell_counts,
+        int3(0, 0, 1),
+        biased_pos,
+        desired_level,
+        transition_level,
+        transition_weight
+    );
+}
+
+float3 ProbeGISampleHierarchyFromLevel(
+    Moer::LightingData lighting_data,
+    Moer::ProbeVolumeGpuDesc volume,
+    float3 world_pos,
+    float3 normal,
+    uint start_level,
+    out float resolved_coverage,
+    out float resolved_level
+) {
+    float3 irradiance_sum = float3(0.0, 0.0, 0.0);
+    float remaining_coverage = 1.0;
+    float level_weight_sum = 0.0;
+    resolved_coverage = 0.0;
+    resolved_level = float(min(start_level, volume.hierarchy.z));
+
+    [unroll] for (uint level = 0u; level <= Moer::RASTER_PROBE_MAX_SUBDIVISION_LEVEL; ++level) {
+        if (level < start_level || level > volume.hierarchy.z || remaining_coverage <= 1e-5) {
+            continue;
+        }
+
+        float level_coverage = 0.0;
+        const float3 level_irradiance = ProbeGISampleVolumeLevelIrradiance(
+            lighting_data,
+            volume,
+            world_pos,
+            normal,
+            level,
+            level_coverage
+        );
+        const float contribution = remaining_coverage * saturate(level_coverage);
+        irradiance_sum += level_irradiance * contribution;
+        level_weight_sum += float(level) * contribution;
+        resolved_coverage += contribution;
+        remaining_coverage *= 1.0 - saturate(level_coverage);
+    }
+
+    if (resolved_coverage <= 1e-5) {
+        resolved_coverage = 0.0;
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    const float inverse_coverage = rcp(resolved_coverage);
+    resolved_level = level_weight_sum * inverse_coverage;
+    return irradiance_sum * inverse_coverage;
+}
+
+float3 ProbeGISampleVolumeHierarchy(
+    Moer::LightingData lighting_data,
+    Moer::ProbeVolumeGpuDesc volume,
+    float3 world_pos,
+    float3 normal,
+    out float resident_coverage,
+    out float resolved_level,
+    out float transition_weight
+) {
+    resident_coverage = 0.0;
+    resolved_level = 0.0;
+    transition_weight = 0.0;
+    const float3 biased_pos = world_pos + normal * volume.origin_bias.w;
+    if (!ProbeGIIsInsideVolume(volume, biased_pos)) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    uint desired_level;
+    uint transition_level;
+    ProbeGIResolveAdaptiveLevels(
+        lighting_data,
+        volume,
+        biased_pos,
+        desired_level,
+        transition_level,
+        transition_weight
+    );
+
+    float primary_coverage = 0.0;
+    float primary_resolved_level = float(desired_level);
+    const float3 primary_irradiance = ProbeGISampleHierarchyFromLevel(
+        lighting_data,
+        volume,
+        world_pos,
+        normal,
+        desired_level,
+        primary_coverage,
+        primary_resolved_level
+    );
+    if (transition_level <= desired_level || transition_weight <= 1e-5) {
+        resident_coverage = primary_coverage;
+        resolved_level = primary_resolved_level;
+        transition_weight = 0.0;
+        return primary_irradiance;
+    }
+
+    float transition_coverage = 0.0;
+    float transition_resolved_level = float(transition_level);
+    const float3 transition_irradiance = ProbeGISampleHierarchyFromLevel(
+        lighting_data,
+        volume,
+        world_pos,
+        normal,
+        transition_level,
+        transition_coverage,
+        transition_resolved_level
+    );
+    const float primary_weight = primary_coverage * (1.0 - transition_weight);
+    const float coarse_weight = transition_coverage * transition_weight;
+    const float combined_weight = primary_weight + coarse_weight;
+    if (combined_weight <= 1e-5) {
+        transition_weight = 0.0;
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    resident_coverage = saturate(combined_weight);
+    resolved_level =
+        (primary_resolved_level * primary_weight + transition_resolved_level * coarse_weight) /
+        combined_weight;
+    return (primary_irradiance * primary_weight + transition_irradiance * coarse_weight) /
+           combined_weight;
+}
+
+float3 ProbeGISampleVolumeIrradiance(
+    Moer::LightingData lighting_data,
+    Moer::ProbeVolumeGpuDesc volume,
+    float3 world_pos,
+    float3 normal,
+    out float resident_coverage
+) {
+    float resolved_level;
+    float transition_weight;
+    return ProbeGISampleVolumeHierarchy(
+        lighting_data,
+        volume,
+        world_pos,
+        normal,
+        resident_coverage,
+        resolved_level,
+        transition_weight
+    );
 }
 
 float3 ProbeGISampleIrradiance(Moer::LightingData lighting_data, float3 world_pos, float3 normal) {
@@ -639,7 +1061,7 @@ float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, 
     }
 
     if (debug_mode == 4u || debug_mode == 5u || debug_mode == 6u || debug_mode == 7u || debug_mode == 8u ||
-        debug_mode == 9u) {
+        debug_mode == 9u || debug_mode == 10u) {
         uint3 counts = ProbeGIGetCounts(volume);
         float3 local = ProbeGIGetLocalCoord(volume, biased_pos);
         uint3 coord = min(uint3(round(clamp(local, float3(0.0, 0.0, 0.0), float3(counts - uint3(1, 1, 1))))), counts - uint3(1, 1, 1));
@@ -732,6 +1154,38 @@ float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, 
                                            (desired_level == 1u ? medium_color : coarse_color);
             const float occupancy_weight = 0.45 + 0.55 * sqrt(saturate(cell.extent.w));
             return level_color * occupancy_weight * lighting_data.probe_system_debug.x;
+        }
+
+        if (debug_mode == 10u) {
+            float resident_coverage;
+            float resolved_level;
+            float transition_weight;
+            ProbeGISampleVolumeHierarchy(
+                lighting_data,
+                volume,
+                world_pos,
+                normal,
+                resident_coverage,
+                resolved_level,
+                transition_weight
+            );
+            if (resident_coverage <= 1e-5) {
+                return float3(0.85, 0.01, 0.02) * lighting_data.probe_system_debug.x;
+            }
+
+            const float3 fine_color = float3(0.04, 0.90, 0.30);
+            const float3 medium_color = float3(1.00, 0.72, 0.04);
+            const float3 coarse_color = float3(0.04, 0.34, 1.00);
+            const float3 resolve_color = resolved_level < 1.0 ?
+                                             lerp(fine_color, medium_color, saturate(resolved_level)) :
+                                             lerp(medium_color, coarse_color, saturate(resolved_level - 1.0));
+            const float3 transition_color = lerp(
+                resolve_color,
+                float3(1.0, 1.0, 1.0),
+                transition_weight * 0.18
+            );
+            return transition_color * (0.35 + 0.65 * resident_coverage) *
+                   lighting_data.probe_system_debug.x;
         }
 
         uint probe_index = ProbeGIGetProbeIndex(lighting_data, volume, coord);

@@ -216,6 +216,7 @@ struct RasterConfig {
     float  probe_gi_adaptive_fine_occupancy     = 0.25f;
     int    probe_gi_adaptive_fine_primitives    = 64;
     bool   probe_gi_adaptive_hierarchy_enabled  = true;
+    float  probe_gi_adaptive_transition_width   = 1.5f;
     bool   probe_gi_update_scheduler_enabled  = false;
     int    probe_gi_update_brick_budget       = 2;
     StaticArray<ProbeVolumeConfig, Render::RASTER_PROBE_VOLUME_MAX_COUNT> probe_gi_volumes = {
@@ -251,7 +252,7 @@ struct RasterConfig {
     float3 probe_gi_sky_color            = float3(0.48f, 0.62f, 0.95f);
     float3 probe_gi_ground_color         = float3(0.35f, 0.27f, 0.18f);
     int    probe_gi_debug_mode =
-        0; // 0=off, 1=volume cells, 2=irradiance, 3=contribution, 4=visibility, 5=brick residency, 6=update age, 7=physical allocation, 8=cell layout, 9=adaptive level
+        0; // 0=off, 1=volume cells, 2=irradiance, 3=contribution, 4=visibility, 5=brick residency, 6=update age, 7=physical allocation, 8=cell layout, 9=adaptive level, 10=hierarchy resolve
     float  probe_gi_debug_scale          = 1.0f;
     bool   probe_gi_gizmo_enabled        = false;
     int    probe_gi_gizmo_color_mode     = 0; // 0=fixed color, 1=probe irradiance, 2=visibility, 3=state

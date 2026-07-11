@@ -337,6 +337,14 @@ void RasterUI::ShowConfig() {
             "Adaptive Hierarchy Sampling",
             &m_config.probe_gi_adaptive_hierarchy_enabled
         );
+        if (m_config.probe_gi_adaptive_hierarchy_enabled) {
+            ImGui::SliderFloat(
+                "Hierarchy Transition Width",
+                &m_config.probe_gi_adaptive_transition_width,
+                0.0f,
+                4.0f
+            );
+        }
         ImGui::Checkbox("Adaptive Placement Analysis", &m_config.probe_gi_adaptive_placement_enabled);
         if (m_config.probe_gi_adaptive_placement_enabled) {
             ImGui::SliderFloat(
@@ -464,8 +472,9 @@ void RasterUI::ShowConfig() {
             "Physical Allocation",
             "Cell Layout",
             "Adaptive Level",
+            "Hierarchy Resolve",
         };
-        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 10);
+        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 11);
         if (m_config.probe_gi_debug_mode != 0) {
             ImGui::SliderFloat("Debug Scale", &m_config.probe_gi_debug_scale, 0.0f, 8.0f);
         }

@@ -246,7 +246,7 @@ struct LightingData {
     uint4 probe_system_counts; // x = volume count, y = probe count, z = brick buffer, w = page table buffer
     uint4 probe_system_atlas;  // x = visibility buffer, y = irradiance buffer, z = irradiance texture, w = visibility texture
     uint4 probe_system_hierarchy; // x = cell buffer, y = cell count, z = max level, w = layout generation
-    float4 probe_system_debug; // x = debug scale, yzw = reserved
+    float4 probe_system_debug; // x = debug scale, y = hierarchy transition width in base Probe spacings, zw = reserved
 };
 
 #ifdef __cplusplus

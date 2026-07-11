@@ -130,6 +130,32 @@ bool TestLevelProbeLayout() {
            );
 }
 
+bool TestAdaptiveLevelRequests() {
+    return Expect(
+               ProbeAdaptiveLayout::ShouldRequestLevel(0u, 0u, true) &&
+                   ProbeAdaptiveLayout::ShouldRequestLevel(0u, 1u, true) &&
+                   ProbeAdaptiveLayout::ShouldRequestLevel(0u, 2u, true),
+               "fine cells must retain both parent fallback levels"
+           ) &&
+           Expect(
+               !ProbeAdaptiveLayout::ShouldRequestLevel(1u, 0u, true) &&
+                   ProbeAdaptiveLayout::ShouldRequestLevel(1u, 1u, true) &&
+                   ProbeAdaptiveLayout::ShouldRequestLevel(1u, 2u, true),
+               "medium cells must request level 1 and the root"
+           ) &&
+           Expect(
+               !ProbeAdaptiveLayout::ShouldRequestLevel(2u, 0u, true) &&
+                   !ProbeAdaptiveLayout::ShouldRequestLevel(2u, 1u, true) &&
+                   ProbeAdaptiveLayout::ShouldRequestLevel(2u, 2u, true),
+               "coarse cells must request only the root"
+           ) &&
+           Expect(
+               ProbeAdaptiveLayout::ShouldRequestLevel(2u, 0u, false) &&
+                   !ProbeAdaptiveLayout::ShouldRequestLevel(0u, 1u, false),
+               "disabled hierarchy must preserve legacy level 0 residency"
+           );
+}
+
 bool TestInvalidKeys() {
     return Expect(
                ProbeAdaptiveLayout::GetVirtualPageIndex(
@@ -154,7 +180,7 @@ bool TestInvalidKeys() {
 int main() {
     const bool passed =
         TestStableLevelRanges() && TestParentAndNeighbors() && TestCellPartition() &&
-        TestLevelProbeLayout() && TestInvalidKeys();
+        TestLevelProbeLayout() && TestAdaptiveLevelRequests() && TestInvalidKeys();
     if (!passed) {
         return 1;
     }

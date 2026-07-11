@@ -458,6 +458,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
     );
     snapshot.adaptive_fine_primitives =
         static_cast<uint>(Clamp(config.probe_gi_adaptive_fine_primitives, 1, 512));
+    snapshot.adaptive_transition_width = Clamp(config.probe_gi_adaptive_transition_width, 0.0f, 4.0f);
     snapshot.geometry_generation =
         snapshot.adaptive_placement_enabled ? m_scene_geometry_generation : 0u;
     snapshot.geometry_primitive_count = snapshot.adaptive_placement_enabled ?
@@ -475,7 +476,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
         int(min_physical_probe_capacity),
         int(RASTER_PROBE_MAX_COUNT)
     ));
-    snapshot.debug_mode = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 9));
+    snapshot.debug_mode = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 10));
     snapshot.trace_distance     = Max(config.probe_gi_trace_distance, 0.1f);
     snapshot.trace_ray_count =
         static_cast<uint>(Clamp(config.probe_gi_trace_ray_count, 1, int(RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT)));
@@ -732,7 +733,11 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
                         ++snapshot.coarse_cell_count;
                     }
 
-                    const bool request_fine_level = true;
+                    const bool request_fine_level = ProbeAdaptiveLayout::ShouldRequestLevel(
+                        cell.desired_subdivision_level,
+                        0u,
+                        snapshot.hierarchy_enabled
+                    );
                     for (uint brick_z = cell_brick_begin.z; brick_z < cell_brick_end.z; ++brick_z) {
                         for (uint brick_y = cell_brick_begin.y; brick_y < cell_brick_end.y; ++brick_y) {
                             for (uint brick_x = cell_brick_begin.x; brick_x < cell_brick_end.x; ++brick_x) {
@@ -757,7 +762,11 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
                             1u,
                             cell.coord,
                             cell_index,
-                            cell.desired_subdivision_level <= 1u,
+                            ProbeAdaptiveLayout::ShouldRequestLevel(
+                                cell.desired_subdivision_level,
+                                1u,
+                                snapshot.hierarchy_enabled
+                            ),
                             false
                         );
                     }
@@ -773,7 +782,11 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
                 RASTER_PROBE_MAX_SUBDIVISION_LEVEL,
                 uint3(0u),
                 RASTER_PROBE_PAGE_INVALID,
-                true,
+                ProbeAdaptiveLayout::ShouldRequestLevel(
+                    RASTER_PROBE_MAX_SUBDIVISION_LEVEL,
+                    RASTER_PROBE_MAX_SUBDIVISION_LEVEL,
+                    snapshot.hierarchy_enabled
+                ),
                 false
             );
         }
@@ -1103,6 +1116,7 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
         !NearlyEqual(m_snapshot.adaptive_geometry_padding, snapshot.adaptive_geometry_padding) ||
         !NearlyEqual(m_snapshot.adaptive_fine_occupancy, snapshot.adaptive_fine_occupancy) ||
         m_snapshot.adaptive_fine_primitives != snapshot.adaptive_fine_primitives ||
+        !NearlyEqual(m_snapshot.adaptive_transition_width, snapshot.adaptive_transition_width) ||
         !NearlyEqual(m_snapshot.brick_resident_distance, snapshot.brick_resident_distance) ||
         !NearlyEqual(m_snapshot.brick_resident_hysteresis, snapshot.brick_resident_hysteresis) ||
         m_snapshot.update_scheduler_enabled != snapshot.update_scheduler_enabled ||
@@ -1390,7 +1404,8 @@ ProbeVolumeResource::PrepareUpdate(
         m_snapshot.cell_count != snapshot.cell_count ||
         !NearlyEqual(m_snapshot.adaptive_geometry_padding, snapshot.adaptive_geometry_padding) ||
         !NearlyEqual(m_snapshot.adaptive_fine_occupancy, snapshot.adaptive_fine_occupancy) ||
-        m_snapshot.adaptive_fine_primitives != snapshot.adaptive_fine_primitives;
+        m_snapshot.adaptive_fine_primitives != snapshot.adaptive_fine_primitives ||
+        !NearlyEqual(m_snapshot.adaptive_transition_width, snapshot.adaptive_transition_width);
     if (!adaptive_layout_changed) {
         for (uint cell_index = 0u; cell_index < snapshot.cell_count; ++cell_index) {
             const CellSnapshot& previous = m_snapshot.cells[cell_index];
@@ -1478,7 +1493,7 @@ ProbeVolumeResource::PrepareUpdate(
 
     if (adaptive_layout_changed && snapshot.adaptive_placement_enabled) {
         LOG_DEBUG(
-            "[ProbeGI] Adaptive Cell analysis updated: hierarchy={}, geometry_generation={}, world_primitive_bounds={}, cells={}, fine={}, medium={}, coarse={}, padding={}, fine_occupancy_threshold={}, fine_primitive_threshold={}, requested_levels=({}, {}, {}).",
+            "[ProbeGI] Adaptive Cell analysis updated: hierarchy={}, geometry_generation={}, world_primitive_bounds={}, cells={}, fine={}, medium={}, coarse={}, padding={}, fine_occupancy_threshold={}, fine_primitive_threshold={}, transition_width={}, requested_levels=({}, {}, {}).",
             snapshot.hierarchy_enabled ? 1 : 0,
             snapshot.geometry_generation,
             snapshot.geometry_primitive_count,
@@ -1489,6 +1504,7 @@ ProbeVolumeResource::PrepareUpdate(
             snapshot.adaptive_geometry_padding,
             snapshot.adaptive_fine_occupancy,
             snapshot.adaptive_fine_primitives,
+            snapshot.adaptive_transition_width,
             snapshot.level_requested_brick_count[0],
             snapshot.level_requested_brick_count[1],
             snapshot.level_requested_brick_count[2]
@@ -1666,7 +1682,8 @@ void ProbeVolumeResource::FillLightingData(LightingData& lighting_data) const {
         m_snapshot.max_subdivision_level,
         m_snapshot.layout_generation
     );
-    lighting_data.probe_system_debug = float4(m_snapshot.debug_scale, 0.0f, 0.0f, 0.0f);
+    lighting_data.probe_system_debug =
+        float4(m_snapshot.debug_scale, m_snapshot.adaptive_transition_width, 0.0f, 0.0f);
 }
 
 } // namespace Moer::Render::Raster
