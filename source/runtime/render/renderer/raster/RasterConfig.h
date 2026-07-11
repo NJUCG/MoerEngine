@@ -215,6 +215,7 @@ struct RasterConfig {
     float  probe_gi_adaptive_geometry_padding  = 0.25f;
     float  probe_gi_adaptive_fine_occupancy     = 0.25f;
     int    probe_gi_adaptive_fine_primitives    = 64;
+    bool   probe_gi_adaptive_hierarchy_enabled  = true;
     bool   probe_gi_update_scheduler_enabled  = false;
     int    probe_gi_update_brick_budget       = 2;
     StaticArray<ProbeVolumeConfig, Render::RASTER_PROBE_VOLUME_MAX_COUNT> probe_gi_volumes = {

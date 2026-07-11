@@ -23,6 +23,12 @@ struct ProbeBrickVirtualKey {
 
 class ProbeAdaptiveLayout {
 public:
+    static constexpr uint GetLevelScale(uint subdivision_level) {
+        return subdivision_level <= RASTER_PROBE_MAX_SUBDIVISION_LEVEL ?
+                   (1u << subdivision_level) :
+                   0u;
+    }
+
     static constexpr uint GetLevelGridDim(uint subdivision_level) {
         if (subdivision_level > RASTER_PROBE_MAX_SUBDIVISION_LEVEL) {
             return 0u;
@@ -119,6 +125,35 @@ public:
             fine_brick_coord.x / cell_dim,
             fine_brick_coord.y / cell_dim,
             fine_brick_coord.z / cell_dim
+        );
+    }
+
+    static uint3 GetLevelProbeCounts(uint3 base_probe_counts, uint subdivision_level) {
+        const uint scale = GetLevelScale(subdivision_level);
+        if (scale == 0u) {
+            return uint3(0u);
+        }
+        return uint3(
+            (base_probe_counts.x + scale - 1u) / scale,
+            (base_probe_counts.y + scale - 1u) / scale,
+            (base_probe_counts.z + scale - 1u) / scale
+        );
+    }
+
+    static uint3 GetLevelBrickCounts(uint3 base_probe_counts, uint subdivision_level) {
+        const uint3 level_probe_counts = GetLevelProbeCounts(base_probe_counts, subdivision_level);
+        return uint3(
+            (level_probe_counts.x + RASTER_PROBE_BRICK_DIM - 1u) / RASTER_PROBE_BRICK_DIM,
+            (level_probe_counts.y + RASTER_PROBE_BRICK_DIM - 1u) / RASTER_PROBE_BRICK_DIM,
+            (level_probe_counts.z + RASTER_PROBE_BRICK_DIM - 1u) / RASTER_PROBE_BRICK_DIM
+        );
+    }
+
+    static float3 GetLevelSpacing(float3 volume_extent, uint3 level_probe_counts) {
+        return float3(
+            level_probe_counts.x > 1u ? volume_extent.x / float(level_probe_counts.x - 1u) : volume_extent.x,
+            level_probe_counts.y > 1u ? volume_extent.y / float(level_probe_counts.y - 1u) : volume_extent.y,
+            level_probe_counts.z > 1u ? volume_extent.z / float(level_probe_counts.z - 1u) : volume_extent.z
         );
     }
 };

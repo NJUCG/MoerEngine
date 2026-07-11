@@ -97,6 +97,10 @@ public:
         return m_snapshot.total_count;
     }
 
+    uint GetHierarchyProbeCount() const {
+        return m_snapshot.hierarchy_probe_count;
+    }
+
     uint GetVolumeCount() const {
         return m_snapshot.volume_count;
     }
@@ -226,6 +230,7 @@ private:
         uint   count_y              = 1;
         uint   count_z              = 1;
         uint   total_count          = 1;
+        uint   hierarchy_probe_count = 0;
         uint   probe_offset         = 0;
         uint   page_table_offset    = 0;
         uint   brick_count          = 0;
@@ -236,6 +241,9 @@ private:
         uint   requested_probe_count = 0;
         uint   resident_brick_count = 0;
         uint   resident_probe_count = 0;
+        StaticArray<uint, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_brick_count{};
+        StaticArray<uint, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_requested_brick_count{};
+        StaticArray<uint, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_resident_brick_count{};
         float3 origin               = float3(0.0f);
         float3 extent               = float3(1.0f);
         float3 spacing              = float3(1.0f);
@@ -268,6 +276,7 @@ private:
         bool   enabled                    = false;
         bool   sparse_bricks_enabled      = false;
         bool   adaptive_placement_enabled = false;
+        bool   hierarchy_enabled          = false;
         uint   debug_mode                 = 0;
         uint   volume_count               = 0;
         uint   cell_count                 = 0;
@@ -279,6 +288,7 @@ private:
         uint   resident_brick_count       = 0;
         uint   resident_probe_count       = 0;
         uint   total_count                = 0;
+        uint   hierarchy_probe_count      = 0;
         uint   physical_probe_capacity    = RASTER_PROBE_MAX_COUNT;
         uint   allocated_physical_probe_count = 0;
         uint   physical_allocation_count  = 0;
@@ -289,6 +299,9 @@ private:
         uint   fine_cell_count            = 0;
         uint   medium_cell_count          = 0;
         uint   coarse_cell_count          = 0;
+        StaticArray<uint, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_brick_count{};
+        StaticArray<uint, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_requested_brick_count{};
+        StaticArray<uint, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_resident_brick_count{};
         bool   allocator_compacted        = false;
         float  adaptive_geometry_padding  = 0.0f;
         float  adaptive_fine_occupancy    = 0.25f;

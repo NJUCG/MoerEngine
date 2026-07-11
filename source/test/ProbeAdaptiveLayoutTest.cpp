@@ -1,5 +1,6 @@
 #include "renderer/raster/ProbeAdaptiveLayout.h"
 
+#include <cmath>
 #include <iostream>
 
 namespace {
@@ -19,6 +20,10 @@ bool Expect(bool condition, const char* message) {
 
 bool Equal(uint3 lhs, uint3 rhs) {
     return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z;
+}
+
+bool NearlyEqual(float lhs, float rhs) {
+    return std::abs(lhs - rhs) <= 1e-6f;
 }
 
 bool TestStableLevelRanges() {
@@ -90,6 +95,41 @@ bool TestCellPartition() {
            );
 }
 
+bool TestLevelProbeLayout() {
+    const uint3 base_counts(16u, 9u, 1u);
+    const uint3 level_0_counts = ProbeAdaptiveLayout::GetLevelProbeCounts(base_counts, 0u);
+    const uint3 level_1_counts = ProbeAdaptiveLayout::GetLevelProbeCounts(base_counts, 1u);
+    const uint3 level_2_counts = ProbeAdaptiveLayout::GetLevelProbeCounts(base_counts, 2u);
+    const uint3 level_1_bricks = ProbeAdaptiveLayout::GetLevelBrickCounts(base_counts, 1u);
+    const uint3 level_2_bricks = ProbeAdaptiveLayout::GetLevelBrickCounts(base_counts, 2u);
+    const Moer::float3 level_1_spacing =
+        ProbeAdaptiveLayout::GetLevelSpacing(Moer::float3(15.0f, 8.0f, 6.0f), level_1_counts);
+
+    return Expect(Equal(level_0_counts, base_counts), "level 0 counts must preserve the base grid") &&
+           Expect(
+               Equal(level_1_counts, uint3(8u, 5u, 1u)),
+               "level 1 counts must ceil-divide the base grid by two"
+           ) &&
+           Expect(
+               Equal(level_2_counts, uint3(4u, 3u, 1u)),
+               "level 2 counts must ceil-divide the base grid by four"
+           ) &&
+           Expect(
+               Equal(level_1_bricks, uint3(2u, 2u, 1u)),
+               "level 1 probes must fit the fixed 2x2x2 virtual page grid"
+           ) &&
+           Expect(
+               Equal(level_2_bricks, uint3(1u, 1u, 1u)),
+               "level 2 probes must fit the root virtual page"
+           ) &&
+           Expect(
+               NearlyEqual(level_1_spacing.x * float(level_1_counts.x - 1u), 15.0f) &&
+                   NearlyEqual(level_1_spacing.y * float(level_1_counts.y - 1u), 8.0f) &&
+                   NearlyEqual(level_1_spacing.z, 6.0f),
+               "coarse spacing must preserve both volume endpoints and singleton axes"
+           );
+}
+
 bool TestInvalidKeys() {
     return Expect(
                ProbeAdaptiveLayout::GetVirtualPageIndex(
@@ -113,7 +153,8 @@ bool TestInvalidKeys() {
 
 int main() {
     const bool passed =
-        TestStableLevelRanges() && TestParentAndNeighbors() && TestCellPartition() && TestInvalidKeys();
+        TestStableLevelRanges() && TestParentAndNeighbors() && TestCellPartition() &&
+        TestLevelProbeLayout() && TestInvalidKeys();
     if (!passed) {
         return 1;
     }

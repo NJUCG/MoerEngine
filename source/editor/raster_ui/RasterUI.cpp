@@ -333,6 +333,10 @@ void RasterUI::ShowConfig() {
             Render::RASTER_PROBE_CELL_BRICK_DIM,
             Render::RASTER_PROBE_CELL_BRICK_DIM
         );
+        ImGui::Checkbox(
+            "Adaptive Hierarchy Sampling",
+            &m_config.probe_gi_adaptive_hierarchy_enabled
+        );
         ImGui::Checkbox("Adaptive Placement Analysis", &m_config.probe_gi_adaptive_placement_enabled);
         if (m_config.probe_gi_adaptive_placement_enabled) {
             ImGui::SliderFloat(

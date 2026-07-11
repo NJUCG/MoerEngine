@@ -202,14 +202,16 @@ void RasterRenderer::UpdateGlobalLightingData(
                << " cells=" << lighting_data->probe_system_hierarchy.y
                << " max_level=" << lighting_data->probe_system_hierarchy.z
                << " layout_generation=" << lighting_data->probe_system_hierarchy.w
+               << " base_probes=" << context.probe_volume.GetProbeCount()
+               << " hierarchy_probes=" << context.probe_volume.GetHierarchyProbeCount()
                << " requested_bricks=" << context.probe_volume.GetRequestedBrickCount() << "/"
                << context.probe_volume.GetBrickCount()
                << " requested_probes=" << context.probe_volume.GetRequestedProbeCount() << "/"
-               << context.probe_volume.GetProbeCount()
+               << context.probe_volume.GetHierarchyProbeCount()
                << " resident_bricks=" << resident_bricks << "/"
                << context.probe_volume.GetBrickCount()
                << " resident_probes=" << context.probe_volume.GetResidentProbeCount() << "/"
-               << context.probe_volume.GetProbeCount()
+               << context.probe_volume.GetHierarchyProbeCount()
                << " physical_allocations=" << context.probe_volume.GetPhysicalAllocationCount()
                << " physical_probes=" << context.probe_volume.GetAllocatedPhysicalProbeCount() << "/"
                << context.probe_volume.GetPhysicalProbeCapacity()

@@ -339,8 +339,7 @@ ProbePlacementResult ProbeClassifyAndRelocate(
         return;
     }
 
-    const Moer::ProbeVolumeGpuDesc volume = probe_volume_data[param.probe_volume_counts.w];
-    const uint3 counts = max(volume.counts.xyz, uint3(1, 1, 1));
+    const uint3 counts = max(param.probe_volume_counts.xyz, uint3(1, 1, 1));
     const uint3 local_counts = max(brick.local_counts.xyz, uint3(1, 1, 1));
     const uint local_probe_count = local_counts.x * local_counts.y * local_counts.z;
     if (local_probe_index >= local_probe_count) {
