@@ -45,7 +45,7 @@ public:
     }
 
     void Process(RasterContext& context, const RasterConfig& config, const Camera& camera) {
-        const uint probe_count = context.probe_volume.GetPhysicalProbeCapacity();
+        const uint probe_count = context.probe_volume.GetPhysicalAllocatorCapacity();
         const bool draw_probes = config.probe_gi_enabled && config.probe_gi_gizmo_enabled &&
                                  context.probe_volume.GetResidentProbeCount() != 0 &&
                                  context.probe_volume.GetBufferHandle() != 0;
@@ -87,7 +87,11 @@ public:
             resident_draws.reserve(context.probe_volume.GetResidentBrickCount());
             for (uint brick_index = 0; brick_index < context.probe_volume.GetBrickCount(); ++brick_index) {
                 const ProbeBrickGpuDesc& brick = context.probe_volume.GetBrickDesc(brick_index);
-                if (brick.probe_range.z == 0u || brick.probe_range.y == 0u) {
+                const uint streaming_state =
+                    (brick.neighbor_pages_1.w & RASTER_PROBE_STREAMING_STATE_FLAG_MASK) >>
+                    RASTER_PROBE_STREAMING_STATE_FLAG_SHIFT;
+                if (brick.probe_range.z == 0u || brick.probe_range.y == 0u ||
+                    streaming_state != RASTER_PROBE_STREAMING_RESIDENT) {
                     continue;
                 }
                 resident_draws.emplace_back(

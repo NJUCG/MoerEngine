@@ -212,11 +212,25 @@ void RasterRenderer::UpdateGlobalLightingData(
                << context.probe_volume.GetBrickCount()
                << " resident_probes=" << context.probe_volume.GetResidentProbeCount() << "/"
                << context.probe_volume.GetHierarchyProbeCount()
+               << " published_bricks=" << context.probe_volume.GetPublishedBrickCount()
+               << " pending_load_bricks=" << context.probe_volume.GetPendingLoadBrickCount()
+               << " cached_bricks=" << context.probe_volume.GetCachedBrickCount()
                << " physical_allocations=" << context.probe_volume.GetPhysicalAllocationCount()
                << " physical_probes=" << context.probe_volume.GetAllocatedPhysicalProbeCount() << "/"
-               << context.probe_volume.GetPhysicalProbeCapacity()
+               << context.probe_volume.GetPhysicalAllocatorCapacity()
+               << " target_physical_capacity=" << context.probe_volume.GetPhysicalProbeCapacity()
                << " free_physical_probes=" << context.probe_volume.GetFreePhysicalProbeCount()
+               << " retiring_allocations=" << context.probe_volume.GetRetiringAllocationCount()
+               << " retiring_probes=" << context.probe_volume.GetRetiringProbeCount()
                << " capacity_evicted_bricks=" << context.probe_volume.GetCapacityEvictedBrickCount()
+               << " streaming=" << (ui_config.probe_gi_streaming_enabled ? 1 : 0)
+               << " stream_budgets=(" << ui_config.probe_gi_streaming_load_budget << ", "
+               << ui_config.probe_gi_streaming_eviction_budget << ")"
+               << " loaded_bricks=" << context.probe_volume.GetStreamingLoadedBrickCount()
+               << " evicted_bricks=" << context.probe_volume.GetStreamingEvictedBrickCount()
+               << " reclaimed_allocations="
+               << context.probe_volume.GetStreamingReclaimedAllocationCount()
+               << " allocation_stalls=" << context.probe_volume.GetStreamingAllocationStallCount()
                << " scheduler=" << (ui_config.probe_gi_update_scheduler_enabled ? 1 : 0)
                << " update_budget=" << ui_config.probe_gi_update_brick_budget
                << " scheduled_bricks=" << scheduled_bricks << "/" << resident_bricks
@@ -475,6 +489,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         hooks.on_render_gui(cmd_list, default_output_texture);
     }
 
+    raster_context.probe_volume.TrackFrameSubmission(cmd_list, time);
     time++;
     /***
         currently using a phony timeline (any timeline signaled by copy queue) to remove error message from validation layer caused by host synced copy operations

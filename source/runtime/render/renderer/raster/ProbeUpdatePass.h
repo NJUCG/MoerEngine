@@ -95,11 +95,15 @@ public:
         ProbeVolumeResource::UpdateInfo update_info =
             context.probe_volume.PrepareUpdate(config, scene, camera.GetPosition(), frame_index);
 
-        if (!update_info.enabled || update_info.job_count == 0 || update_info.scheduled_probe_count == 0) {
+        if (!update_info.enabled) {
             return;
         }
 
         context.probe_volume.UpdateSceneData(context.cmd_list, scene);
+
+        if (update_info.job_count == 0 || update_info.scheduled_probe_count == 0) {
+            return;
+        }
 
         RaytracingSceneRef rt_scene = context.rt_scene();
         const bool rt_available = rt_scene && rt_scene->GetTlas();

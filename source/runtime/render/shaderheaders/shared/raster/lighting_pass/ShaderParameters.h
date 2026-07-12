@@ -29,6 +29,8 @@ static constexpr uint RASTER_PROBE_MAX_COUNT_PER_VOLUME = 512;
 static constexpr uint RASTER_PROBE_MAX_COUNT =
     RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_COUNT_PER_VOLUME;
 static constexpr uint RASTER_PROBE_BRICK_DIM = 4;
+static constexpr uint RASTER_PROBE_BRICK_PROBE_CAPACITY =
+    RASTER_PROBE_BRICK_DIM * RASTER_PROBE_BRICK_DIM * RASTER_PROBE_BRICK_DIM;
 static constexpr uint RASTER_PROBE_MAX_FINE_BRICKS_PER_AXIS = 4;
 static constexpr uint RASTER_PROBE_MAX_SUBDIVISION_LEVEL = 2;
 static constexpr uint RASTER_PROBE_CELL_BRICK_DIM = 2;
@@ -45,6 +47,18 @@ static constexpr uint RASTER_PROBE_MAX_BRICKS_PER_VOLUME = RASTER_PROBE_MAX_PAGE
 static constexpr uint RASTER_PROBE_MAX_BRICK_COUNT =
     RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_BRICKS_PER_VOLUME;
 static constexpr uint RASTER_PROBE_PAGE_INVALID = 0xffffffffu;
+static constexpr uint RASTER_PROBE_PAGE_BRICK_BITS = 10u;
+static constexpr uint RASTER_PROBE_PAGE_BRICK_MASK = (1u << RASTER_PROBE_PAGE_BRICK_BITS) - 1u;
+static constexpr uint RASTER_PROBE_PAGE_GENERATION_SHIFT = RASTER_PROBE_PAGE_BRICK_BITS;
+static constexpr uint RASTER_PROBE_PAGE_GENERATION_BITS = 20u;
+static constexpr uint RASTER_PROBE_PAGE_GENERATION_MASK =
+    (1u << RASTER_PROBE_PAGE_GENERATION_BITS) - 1u;
+static constexpr uint RASTER_PROBE_PAGE_STATE_SHIFT = 30u;
+static constexpr uint RASTER_PROBE_PAGE_STATE_MASK = 0x3u;
+static constexpr uint RASTER_PROBE_STREAMING_UNMAPPED = 0u;
+static constexpr uint RASTER_PROBE_STREAMING_PENDING_LOAD = 1u;
+static constexpr uint RASTER_PROBE_STREAMING_RESIDENT = 2u;
+static constexpr uint RASTER_PROBE_STREAMING_RETIRING = 3u;
 static constexpr uint RASTER_PROBE_UPDATE_GROUP_SIZE = 64;
 static constexpr uint RASTER_PROBE_VISIBILITY_ATLAS_DIM = 8;
 static constexpr uint RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT =
@@ -74,6 +88,10 @@ static constexpr uint RASTER_PROBE_DIRTY_REASON_MASK =
     RASTER_PROBE_DIRTY_GEOMETRY | RASTER_PROBE_DIRTY_DYNAMIC |
     RASTER_PROBE_DIRTY_LIGHT | RASTER_PROBE_DIRTY_MATERIAL;
 static constexpr uint RASTER_PROBE_DIRTY_SCHEDULED = 1u << 8u;
+static constexpr uint RASTER_PROBE_STREAMING_STATE_FLAG_SHIFT = 16u;
+static constexpr uint RASTER_PROBE_STREAMING_STATE_FLAG_MASK =
+    RASTER_PROBE_PAGE_STATE_MASK << RASTER_PROBE_STREAMING_STATE_FLAG_SHIFT;
+static constexpr uint RASTER_PROBE_STREAMING_CACHED = 1u << 18u;
 static constexpr uint RASTER_PROBE_GIZMO_DRAW_MODE_PROBES = 1;
 static constexpr uint RASTER_PROBE_GIZMO_DRAW_MODE_BOUNDS = 2;
 static constexpr uint RASTER_PROBE_GIZMO_DRAW_MODE_ADAPTIVE_CELL_BOUNDS = 3;
@@ -83,6 +101,8 @@ static const uint RASTER_PROBE_MAX_COUNT_PER_VOLUME = 512;
 static const uint RASTER_PROBE_MAX_COUNT =
     RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_COUNT_PER_VOLUME;
 static const uint RASTER_PROBE_BRICK_DIM = 4;
+static const uint RASTER_PROBE_BRICK_PROBE_CAPACITY =
+    RASTER_PROBE_BRICK_DIM * RASTER_PROBE_BRICK_DIM * RASTER_PROBE_BRICK_DIM;
 static const uint RASTER_PROBE_MAX_FINE_BRICKS_PER_AXIS = 4;
 static const uint RASTER_PROBE_MAX_SUBDIVISION_LEVEL = 2;
 static const uint RASTER_PROBE_CELL_BRICK_DIM = 2;
@@ -99,6 +119,18 @@ static const uint RASTER_PROBE_MAX_BRICKS_PER_VOLUME = RASTER_PROBE_MAX_PAGES_PE
 static const uint RASTER_PROBE_MAX_BRICK_COUNT =
     RASTER_PROBE_VOLUME_MAX_COUNT * RASTER_PROBE_MAX_BRICKS_PER_VOLUME;
 static const uint RASTER_PROBE_PAGE_INVALID = 0xffffffffu;
+static const uint RASTER_PROBE_PAGE_BRICK_BITS = 10u;
+static const uint RASTER_PROBE_PAGE_BRICK_MASK = (1u << RASTER_PROBE_PAGE_BRICK_BITS) - 1u;
+static const uint RASTER_PROBE_PAGE_GENERATION_SHIFT = RASTER_PROBE_PAGE_BRICK_BITS;
+static const uint RASTER_PROBE_PAGE_GENERATION_BITS = 20u;
+static const uint RASTER_PROBE_PAGE_GENERATION_MASK =
+    (1u << RASTER_PROBE_PAGE_GENERATION_BITS) - 1u;
+static const uint RASTER_PROBE_PAGE_STATE_SHIFT = 30u;
+static const uint RASTER_PROBE_PAGE_STATE_MASK = 0x3u;
+static const uint RASTER_PROBE_STREAMING_UNMAPPED = 0u;
+static const uint RASTER_PROBE_STREAMING_PENDING_LOAD = 1u;
+static const uint RASTER_PROBE_STREAMING_RESIDENT = 2u;
+static const uint RASTER_PROBE_STREAMING_RETIRING = 3u;
 static const uint RASTER_PROBE_UPDATE_GROUP_SIZE = 64;
 static const uint RASTER_PROBE_VISIBILITY_ATLAS_DIM = 8;
 static const uint RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT =
@@ -128,6 +160,10 @@ static const uint RASTER_PROBE_DIRTY_REASON_MASK =
     RASTER_PROBE_DIRTY_GEOMETRY | RASTER_PROBE_DIRTY_DYNAMIC |
     RASTER_PROBE_DIRTY_LIGHT | RASTER_PROBE_DIRTY_MATERIAL;
 static const uint RASTER_PROBE_DIRTY_SCHEDULED = 1u << 8u;
+static const uint RASTER_PROBE_STREAMING_STATE_FLAG_SHIFT = 16u;
+static const uint RASTER_PROBE_STREAMING_STATE_FLAG_MASK =
+    RASTER_PROBE_PAGE_STATE_MASK << RASTER_PROBE_STREAMING_STATE_FLAG_SHIFT;
+static const uint RASTER_PROBE_STREAMING_CACHED = 1u << 18u;
 static const uint RASTER_PROBE_GIZMO_DRAW_MODE_PROBES = 1;
 static const uint RASTER_PROBE_GIZMO_DRAW_MODE_BOUNDS = 2;
 static const uint RASTER_PROBE_GIZMO_DRAW_MODE_ADAPTIVE_CELL_BOUNDS = 3;
@@ -168,11 +204,11 @@ struct ProbeCellGpuDesc {
 
 struct ProbeBrickGpuDesc {
     uint4 coord_volume; // xyz = logical brick coordinate, w = compact volume index
-    uint4 probe_range;  // x = physical probe offset, y = local probe count, z = resident state, w = page index
+    uint4 probe_range;  // x = physical probe offset, y = local probe count, z = physical mapping valid, w = page generation
     uint4 local_counts; // xyz = valid probe counts inside this brick, w = frames since last update (clamped)
     uint4 hierarchy;    // x = cell index, y = subdivision level, z = parent page, w = virtual page
     uint4 neighbor_pages_0; // x/y = -X/+X, z/w = -Y/+Y virtual pages
-    uint4 neighbor_pages_1; // x/y = -Z/+Z virtual pages, z = layout generation, w = flags
+    uint4 neighbor_pages_1; // x/y = -Z/+Z virtual pages, z = layout generation, w = dirty/streaming flags
 };
 
 struct ProbeUpdateParam {

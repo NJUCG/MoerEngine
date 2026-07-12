@@ -112,6 +112,9 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
         return;
     }
 
+    m_physical_allocation_pages.fill(RASTER_PROBE_PAGE_INVALID);
+    m_gpu_completion_state = MakeShared<GpuCompletionState>();
+
     constexpr uint buffer_byte_size = sizeof(ProbeGridProbeData) * RASTER_PROBE_MAX_COUNT;
     m_probe_buffer.buf = device.CreateBuffer<byte>(
         "Raster::ProbeVolume::ProbeData",
@@ -294,7 +297,16 @@ void ProbeVolumeResource::Destroy(BindlessArrayRef& bdls) {
     m_brick_history_valid.fill(false);
     m_brick_last_update_frame.fill(0);
     m_physical_allocations.fill({});
+    m_physical_allocation_pages.fill(RASTER_PROBE_PAGE_INVALID);
+    m_physical_allocation_generations.fill(0u);
+    m_brick_load_submission.fill(0u);
+    m_brick_load_awaiting_submission.fill(false);
+    m_page_generations.fill(0u);
     m_physical_allocator.Reset(0u);
+    m_retirement_queue.Clear();
+    m_gpu_completion_state = nullptr;
+    m_last_submitted_submission = 0u;
+    m_pending_physical_capacity = 0u;
     m_scene_geometry_bounds.clear();
     m_scene_geometry_instances.clear();
     m_frame_dirty_regions.clear();
@@ -588,6 +600,35 @@ void ProbeVolumeResource::UpdateSceneData(CommandList& cmd_list, const Scene& sc
     );
 }
 
+void ProbeVolumeResource::TrackFrameSubmission(CommandList& cmd_list, uint64 frame_index) {
+    if (m_gpu_completion_state == nullptr) {
+        m_gpu_completion_state = MakeShared<GpuCompletionState>();
+    }
+
+    const uint64 submission = frame_index + 1u;
+    m_last_submitted_submission = Max(m_last_submitted_submission, submission);
+    for (uint brick_index = 0u; brick_index < m_brick_load_awaiting_submission.size(); ++brick_index) {
+        if (!m_brick_load_awaiting_submission[brick_index]) {
+            continue;
+        }
+        m_brick_load_submission[brick_index] = submission;
+        m_brick_load_awaiting_submission[brick_index] = false;
+    }
+
+    SharedPtr<GpuCompletionState> completion_state = m_gpu_completion_state;
+    cmd_list.AddCallback([completion_state, submission]() {
+        uint64 completed = completion_state->completed_submission.load(std::memory_order_relaxed);
+        while (completed < submission &&
+               !completion_state->completed_submission.compare_exchange_weak(
+                   completed,
+                   submission,
+                   std::memory_order_release,
+                   std::memory_order_relaxed
+               )) {
+        }
+    });
+}
+
 ProbeVolumeResource::Snapshot
 ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_position, uint64 frame_index) const {
     Snapshot snapshot{};
@@ -617,14 +658,28 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
     snapshot.update_scheduler_enabled  = config.probe_gi_update_scheduler_enabled;
     snapshot.update_brick_budget =
         static_cast<uint>(Clamp(config.probe_gi_update_brick_budget, 1, int(RASTER_PROBE_MAX_BRICK_COUNT)));
-    constexpr uint min_physical_probe_capacity =
-        RASTER_PROBE_BRICK_DIM * RASTER_PROBE_BRICK_DIM * RASTER_PROBE_BRICK_DIM;
-    snapshot.physical_probe_capacity = static_cast<uint>(Clamp(
+    const uint clamped_physical_probe_capacity = static_cast<uint>(Clamp(
         config.probe_gi_physical_probe_capacity,
-        int(min_physical_probe_capacity),
+        int(RASTER_PROBE_BRICK_PROBE_CAPACITY),
         int(RASTER_PROBE_MAX_COUNT)
     ));
-    snapshot.debug_mode = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 11));
+    snapshot.physical_probe_capacity = Max(
+        (clamped_physical_probe_capacity / RASTER_PROBE_BRICK_PROBE_CAPACITY) *
+            RASTER_PROBE_BRICK_PROBE_CAPACITY,
+        RASTER_PROBE_BRICK_PROBE_CAPACITY
+    );
+    snapshot.streaming_enabled = config.probe_gi_streaming_enabled;
+    snapshot.streaming_load_budget = static_cast<uint>(Clamp(
+        config.probe_gi_streaming_load_budget,
+        1,
+        int(RASTER_PROBE_MAX_BRICK_COUNT)
+    ));
+    snapshot.streaming_eviction_budget = static_cast<uint>(Clamp(
+        config.probe_gi_streaming_eviction_budget,
+        1,
+        int(RASTER_PROBE_MAX_BRICK_COUNT)
+    ));
+    snapshot.debug_mode = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 12));
     snapshot.trace_distance     = Max(config.probe_gi_trace_distance, 0.1f);
     snapshot.trace_ray_count =
         static_cast<uint>(Clamp(config.probe_gi_trace_ray_count, 1, int(RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT)));
@@ -976,7 +1031,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
 }
 
 bool ProbeVolumeResource::RequiresPhysicalAllocatorReset(const Snapshot& snapshot) const {
-    if (!m_has_snapshot || m_physical_allocator.GetCapacity() != snapshot.physical_probe_capacity ||
+    if (!m_has_snapshot || m_snapshot.physical_probe_capacity != snapshot.physical_probe_capacity ||
         m_snapshot.brick_count != snapshot.brick_count) {
         return true;
     }
@@ -998,6 +1053,10 @@ bool ProbeVolumeResource::RequiresPhysicalAllocatorReset(const Snapshot& snapsho
 
 void ProbeVolumeResource::ResetPhysicalAllocator(uint physical_probe_capacity) {
     m_physical_allocations.fill({});
+    m_physical_allocation_pages.fill(RASTER_PROBE_PAGE_INVALID);
+    m_physical_allocation_generations.fill(0u);
+    m_brick_load_submission.fill(0u);
+    m_brick_load_awaiting_submission.fill(false);
     m_physical_allocator.Reset(physical_probe_capacity);
     m_brick_history_valid.fill(false);
     m_brick_last_update_frame.fill(0);
@@ -1005,22 +1064,42 @@ void ProbeVolumeResource::ResetPhysicalAllocator(uint physical_probe_capacity) {
     LOG_DEBUG("[ProbeGI] Physical Probe allocator reset: capacity={}.", physical_probe_capacity);
 }
 
-void ProbeVolumeResource::ReleasePhysicalAllocation(uint brick_index) {
+uint ProbeVolumeResource::AdvancePageGeneration(uint virtual_page) {
+    if (virtual_page >= m_page_generations.size()) {
+        return 1u;
+    }
+    m_page_generations[virtual_page] = NextProbePageGeneration(m_page_generations[virtual_page]);
+    return m_page_generations[virtual_page];
+}
+
+void ProbeVolumeResource::RetirePhysicalAllocation(uint brick_index, uint virtual_page) {
     if (brick_index >= m_physical_allocations.size()) {
         return;
     }
 
     ProbePhysicalAllocator::Allocation& allocation = m_physical_allocations[brick_index];
     if (allocation.valid && allocation.probe_count > 0u) {
+        if (virtual_page == RASTER_PROBE_PAGE_INVALID) {
+            virtual_page = m_physical_allocation_pages[brick_index];
+        }
         LOG_DEBUG(
-            "[ProbeGI] Physical Probe range released: brick={}, offset={}, count={}.",
+            "[ProbeGI] Physical Probe range retired: brick={}, page={}, generation={}, offset={}, count={}, safe_after_submission={}.",
             brick_index,
+            virtual_page,
+            m_physical_allocation_generations[brick_index],
             allocation.probe_offset,
-            allocation.probe_count
+            allocation.probe_count,
+            m_last_submitted_submission
         );
-        if (!m_physical_allocator.Release(allocation)) {
+        if (!m_retirement_queue.Enqueue(ProbeRetirementQueue::Entry{
+                allocation,
+                brick_index,
+                virtual_page,
+                m_physical_allocation_generations[brick_index],
+                m_last_submitted_submission,
+            })) {
             LOG_ERROR(
-                "[ProbeGI] Physical Probe allocator rejected release: brick={}, offset={}, count={}.",
+                "[ProbeGI] Physical Probe retirement rejected: brick={}, offset={}, count={}.",
                 brick_index,
                 allocation.probe_offset,
                 allocation.probe_count
@@ -1028,15 +1107,51 @@ void ProbeVolumeResource::ReleasePhysicalAllocation(uint brick_index) {
         }
     }
     allocation = {};
+    m_physical_allocation_pages[brick_index] = RASTER_PROBE_PAGE_INVALID;
+    m_physical_allocation_generations[brick_index] = 0u;
+    m_brick_load_submission[brick_index] = 0u;
+    m_brick_load_awaiting_submission[brick_index] = false;
     m_brick_history_valid[brick_index] = false;
     m_brick_last_update_frame[brick_index] = 0;
     m_brick_pending_dirty_reasons[brick_index] = 0u;
 }
 
-void ProbeVolumeResource::ApplyPhysicalResidency(Snapshot& snapshot) {
+void ProbeVolumeResource::CollectRetiredAllocations(Snapshot& snapshot) {
+    const uint64 completed_submission = m_gpu_completion_state != nullptr ?
+                                            m_gpu_completion_state->completed_submission.load(
+                                                std::memory_order_acquire
+                                            ) :
+                                            0u;
+    const ProbeRetirementQueue::CollectResult collected =
+        m_retirement_queue.Collect(completed_submission, m_physical_allocator);
+    snapshot.streaming_reclaimed_allocation_count += collected.allocation_count;
+    if (collected.allocation_count != 0u || collected.failed_count != 0u) {
+        LOG_DEBUG(
+            "[ProbeGI] Physical Probe retire collection: completed_submission={}, reclaimed_allocations={}, reclaimed_probes={}, failed={}, remaining_allocations={}, remaining_probes={}.",
+            completed_submission,
+            collected.allocation_count,
+            collected.probe_count,
+            collected.failed_count,
+            m_retirement_queue.GetAllocationCount(),
+            m_retirement_queue.GetProbeCount()
+        );
+    }
+    if (collected.failed_count != 0u) {
+        LOG_ERROR("[ProbeGI] Physical Probe allocator rejected {} retired ranges.", collected.failed_count);
+    }
+}
+
+void ProbeVolumeResource::ApplyPhysicalResidency(
+    Snapshot& snapshot,
+    const StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT>& volume_history_reset
+) {
     snapshot.page_table.fill(RASTER_PROBE_PAGE_INVALID);
     snapshot.resident_brick_count = 0;
     snapshot.resident_probe_count = 0;
+    snapshot.published_brick_count = 0;
+    snapshot.pending_load_brick_count = 0;
+    snapshot.cached_brick_count = 0;
+    snapshot.retiring_brick_count = 0;
     snapshot.level_resident_brick_count.fill(0u);
     snapshot.allocated_physical_probe_count = 0;
     snapshot.physical_allocation_count = 0;
@@ -1049,6 +1164,8 @@ void ProbeVolumeResource::ApplyPhysicalResidency(Snapshot& snapshot) {
     for (uint cell_index = 0; cell_index < snapshot.cell_count; ++cell_index) {
         snapshot.cells[cell_index].resident_brick_count = 0;
     }
+
+    CollectRetiredAllocations(snapshot);
 
     Array<uint> requested_candidates;
     requested_candidates.reserve(snapshot.requested_brick_count);
@@ -1096,14 +1213,14 @@ void ProbeVolumeResource::ApplyPhysicalResidency(Snapshot& snapshot) {
     );
 
     StaticArray<bool, RASTER_PROBE_MAX_BRICK_COUNT> selected_bricks{};
-    uint selected_probe_count = 0;
+    uint selected_physical_probe_count = 0;
     for (uint brick_index : requested_candidates) {
-        const uint probe_count = snapshot.bricks[brick_index].probe_count;
-        if (selected_probe_count + probe_count > snapshot.physical_probe_capacity) {
+        if (selected_physical_probe_count + RASTER_PROBE_BRICK_PROBE_CAPACITY >
+            snapshot.physical_probe_capacity) {
             continue;
         }
         selected_bricks[brick_index] = true;
-        selected_probe_count += probe_count;
+        selected_physical_probe_count += RASTER_PROBE_BRICK_PROBE_CAPACITY;
     }
     snapshot.capacity_evicted_brick_count =
         static_cast<uint>(requested_candidates.size()) -
@@ -1115,85 +1232,182 @@ void ProbeVolumeResource::ApplyPhysicalResidency(Snapshot& snapshot) {
         if (m_layout_generation == 0u) {
             ++m_layout_generation;
         }
-        ResetPhysicalAllocator(snapshot.physical_probe_capacity);
     }
     snapshot.layout_generation = m_layout_generation;
 
-    for (uint brick_index = 0; brick_index < m_physical_allocations.size(); ++brick_index) {
-        if (brick_index >= snapshot.brick_count || !selected_bricks[brick_index]) {
-            ReleasePhysicalAllocation(brick_index);
+    auto same_brick_identity = [&](uint brick_index) {
+        if (!m_has_snapshot || brick_index >= m_snapshot.brick_count ||
+            brick_index >= snapshot.brick_count) {
+            return false;
+        }
+        const BrickSnapshot& previous = m_snapshot.bricks[brick_index];
+        const BrickSnapshot& current  = snapshot.bricks[brick_index];
+        return previous.coord == current.coord && previous.local_counts == current.local_counts &&
+               previous.volume_index == current.volume_index &&
+               previous.probe_count == current.probe_count && previous.page_index == current.page_index &&
+               previous.cell_index == current.cell_index &&
+               previous.subdivision_level == current.subdivision_level &&
+               previous.parent_page_index == current.parent_page_index;
+    };
+
+    const uint current_allocator_capacity = m_physical_allocator.GetCapacity();
+    if (current_allocator_capacity == 0u && m_retirement_queue.Empty()) {
+        ResetPhysicalAllocator(snapshot.physical_probe_capacity);
+    } else if (current_allocator_capacity != snapshot.physical_probe_capacity) {
+        m_pending_physical_capacity = snapshot.physical_probe_capacity;
+    }
+
+    for (uint brick_index = 0u; brick_index < m_physical_allocations.size(); ++brick_index) {
+        if (!m_physical_allocations[brick_index].valid) {
+            continue;
+        }
+        const bool binding_matches = same_brick_identity(brick_index) &&
+                                     m_physical_allocation_pages[brick_index] ==
+                                         snapshot.bricks[brick_index].page_index;
+        if (!binding_matches || m_pending_physical_capacity != 0u) {
+            const uint old_page = brick_index < m_snapshot.brick_count ?
+                                      m_snapshot.bricks[brick_index].page_index :
+                                      m_physical_allocation_pages[brick_index];
+            RetirePhysicalAllocation(brick_index, old_page);
         }
     }
 
-    bool allocation_failed = false;
-    for (uint brick_index : requested_candidates) {
-        if (!selected_bricks[brick_index]) {
-            continue;
+    Array<uint> eviction_candidates;
+    for (uint brick_index = 0u; brick_index < snapshot.brick_count; ++brick_index) {
+        if (m_physical_allocations[brick_index].valid && !selected_bricks[brick_index]) {
+            eviction_candidates.push_back(brick_index);
         }
+    }
+    std::sort(
+        eviction_candidates.begin(),
+        eviction_candidates.end(),
+        [&](uint lhs_index, uint rhs_index) {
+            const BrickSnapshot& lhs = snapshot.bricks[lhs_index];
+            const BrickSnapshot& rhs = snapshot.bricks[rhs_index];
+            if (lhs.requested_resident != rhs.requested_resident) {
+                return !lhs.requested_resident;
+            }
+            if (lhs.subdivision_level != rhs.subdivision_level) {
+                return lhs.subdivision_level < rhs.subdivision_level;
+            }
+            if (!NearlyEqual(lhs.camera_distance_sq, rhs.camera_distance_sq)) {
+                return lhs.camera_distance_sq > rhs.camera_distance_sq;
+            }
+            return lhs_index > rhs_index;
+        }
+    );
 
-        ProbePhysicalAllocator::Allocation& allocation = m_physical_allocations[brick_index];
-        const uint probe_count = snapshot.bricks[brick_index].probe_count;
-        if (allocation.valid && allocation.probe_count == probe_count) {
-            continue;
-        }
-        if (allocation.valid) {
-            ReleasePhysicalAllocation(brick_index);
-        }
-
-        ProbePhysicalAllocator::Allocation new_allocation;
-        if (!m_physical_allocator.Allocate(probe_count, new_allocation)) {
-            allocation_failed = true;
+    const uint eviction_budget = snapshot.streaming_enabled ?
+                                     snapshot.streaming_eviction_budget :
+                                     RASTER_PROBE_MAX_BRICK_COUNT;
+    for (uint brick_index : eviction_candidates) {
+        if (snapshot.streaming_evicted_brick_count >= eviction_budget) {
             break;
         }
-        allocation = new_allocation;
-        m_brick_history_valid[brick_index] = false;
-        m_brick_last_update_frame[brick_index] = 0;
-        LOG_DEBUG(
-            "[ProbeGI] Physical Probe range assigned: brick={}, volume={}, offset={}, count={}.",
-            brick_index,
-            snapshot.bricks[brick_index].volume_index,
-            allocation.probe_offset,
-            probe_count
-        );
+        RetirePhysicalAllocation(brick_index, snapshot.bricks[brick_index].page_index);
+        ++snapshot.streaming_evicted_brick_count;
     }
 
-    if (allocation_failed) {
-        snapshot.allocator_compacted = true;
-        ResetPhysicalAllocator(snapshot.physical_probe_capacity);
+    CollectRetiredAllocations(snapshot);
+
+    if (m_pending_physical_capacity != 0u && m_retirement_queue.Empty()) {
+        const bool has_active_allocations = std::any_of(
+            m_physical_allocations.begin(),
+            m_physical_allocations.end(),
+            [](const ProbePhysicalAllocator::Allocation& allocation) { return allocation.valid; }
+        );
+        if (!has_active_allocations) {
+            const uint new_capacity = m_pending_physical_capacity;
+            m_pending_physical_capacity = 0u;
+            ResetPhysicalAllocator(new_capacity);
+        }
+    }
+
+    for (uint brick_index = 0u; brick_index < snapshot.brick_count; ++brick_index) {
+        if (!m_physical_allocations[brick_index].valid ||
+            !volume_history_reset[snapshot.bricks[brick_index].volume_index]) {
+            continue;
+        }
+        const uint virtual_page = snapshot.bricks[brick_index].page_index;
+        const uint generation = AdvancePageGeneration(virtual_page);
+        m_physical_allocation_generations[brick_index] = generation;
+        m_brick_load_submission[brick_index] = 0u;
+        m_brick_load_awaiting_submission[brick_index] = false;
+        m_brick_history_valid[brick_index] = false;
+        m_brick_last_update_frame[brick_index] = 0u;
+    }
+
+    const uint load_budget = snapshot.streaming_enabled ?
+                                 snapshot.streaming_load_budget :
+                                 RASTER_PROBE_MAX_BRICK_COUNT;
+    if (m_pending_physical_capacity == 0u) {
         for (uint brick_index : requested_candidates) {
-            if (!selected_bricks[brick_index]) {
+            if (!selected_bricks[brick_index] || m_physical_allocations[brick_index].valid) {
                 continue;
             }
-            const uint probe_count = snapshot.bricks[brick_index].probe_count;
+            if (snapshot.streaming_loaded_brick_count >= load_budget) {
+                break;
+            }
+
             ProbePhysicalAllocator::Allocation allocation;
-            if (!m_physical_allocator.Allocate(probe_count, allocation)) {
-                LOG_ERROR(
-                    "[ProbeGI] Physical Probe allocator failed after compaction: brick={}, probe_count={}, capacity={}.",
-                    brick_index,
-                    probe_count,
-                    snapshot.physical_probe_capacity
-                );
-                selected_bricks[brick_index] = false;
-                continue;
+            if (!m_physical_allocator.Allocate(RASTER_PROBE_BRICK_PROBE_CAPACITY, allocation)) {
+                ++snapshot.streaming_allocation_stall_count;
+                break;
             }
             m_physical_allocations[brick_index] = allocation;
+            m_physical_allocation_pages[brick_index] = snapshot.bricks[brick_index].page_index;
+            m_physical_allocation_generations[brick_index] =
+                AdvancePageGeneration(snapshot.bricks[brick_index].page_index);
+            m_brick_load_submission[brick_index] = 0u;
+            m_brick_load_awaiting_submission[brick_index] = false;
+            m_brick_history_valid[brick_index] = false;
+            m_brick_last_update_frame[brick_index] = 0u;
+            ++snapshot.streaming_loaded_brick_count;
             LOG_DEBUG(
-                "[ProbeGI] Physical Probe range reassigned after compaction: brick={}, volume={}, offset={}, count={}.",
+                "[ProbeGI] Physical Probe tile loading: brick={}, volume={}, page={}, generation={}, offset={}, tile_probes={}, local_probes={}.",
                 brick_index,
                 snapshot.bricks[brick_index].volume_index,
+                snapshot.bricks[brick_index].page_index,
+                m_physical_allocation_generations[brick_index],
                 allocation.probe_offset,
-                probe_count
+                allocation.probe_count,
+                snapshot.bricks[brick_index].probe_count
             );
         }
     }
 
+    const uint64 completed_submission = m_gpu_completion_state != nullptr ?
+                                            m_gpu_completion_state->completed_submission.load(
+                                                std::memory_order_acquire
+                                            ) :
+                                            0u;
+
     for (uint brick_index = 0; brick_index < snapshot.brick_count; ++brick_index) {
         BrickSnapshot& brick = snapshot.bricks[brick_index];
         const ProbePhysicalAllocator::Allocation& allocation = m_physical_allocations[brick_index];
-        brick.resident = selected_bricks[brick_index] && allocation.valid;
+        brick.resident = allocation.valid &&
+                         m_physical_allocation_pages[brick_index] == brick.page_index;
+        brick.cached = brick.resident && !selected_bricks[brick_index];
+        brick.page_generation = brick.resident ?
+                                    m_physical_allocation_generations[brick_index] :
+                                    NormalizeProbePageGeneration(m_page_generations[brick.page_index]);
         if (!brick.resident) {
             brick.probe_offset = RASTER_PROBE_PAGE_INVALID;
             brick.update_age = 255u;
+            if (selected_bricks[brick_index]) {
+                brick.streaming_state = RASTER_PROBE_STREAMING_PENDING_LOAD;
+                ++snapshot.pending_load_brick_count;
+            } else if (m_retirement_queue.ContainsVirtualPage(brick.page_index)) {
+                brick.streaming_state = RASTER_PROBE_STREAMING_RETIRING;
+                ++snapshot.retiring_brick_count;
+            } else {
+                brick.streaming_state = RASTER_PROBE_STREAMING_UNMAPPED;
+            }
+            snapshot.page_table[brick.page_index] = PackProbePageEntry(
+                brick_index,
+                brick.page_generation,
+                brick.streaming_state
+            );
             continue;
         }
 
@@ -1201,12 +1415,29 @@ void ProbeVolumeResource::ApplyPhysicalResidency(Snapshot& snapshot) {
         if (!m_brick_history_valid[brick_index]) {
             brick.update_age = 255u;
         }
-        snapshot.page_table[brick.page_index] = brick_index;
+        const uint64 load_submission = m_brick_load_submission[brick_index];
+        const bool published = load_submission != 0u && load_submission <= completed_submission;
+        brick.streaming_state = published ?
+                                    RASTER_PROBE_STREAMING_RESIDENT :
+                                    RASTER_PROBE_STREAMING_PENDING_LOAD;
+        if (published) {
+            ++snapshot.published_brick_count;
+        } else {
+            ++snapshot.pending_load_brick_count;
+        }
+        if (brick.cached) {
+            ++snapshot.cached_brick_count;
+        }
+        snapshot.page_table[brick.page_index] = PackProbePageEntry(
+            brick_index,
+            brick.page_generation,
+            brick.streaming_state
+        );
         ++snapshot.resident_brick_count;
         snapshot.resident_probe_count += brick.probe_count;
         ++snapshot.level_resident_brick_count[brick.subdivision_level];
         ++snapshot.physical_allocation_count;
-        snapshot.allocated_physical_probe_count += brick.probe_count;
+        snapshot.allocated_physical_probe_count += allocation.probe_count;
 
         VolumeSnapshot& volume = snapshot.volumes[brick.volume_index];
         ++volume.resident_brick_count;
@@ -1217,16 +1448,21 @@ void ProbeVolumeResource::ApplyPhysicalResidency(Snapshot& snapshot) {
         }
     }
 
-    snapshot.free_physical_probe_count =
-        snapshot.physical_probe_capacity - snapshot.allocated_physical_probe_count;
-    const uint allocator_free_probe_count = m_physical_allocator.GetFreeProbeCount();
-    if (allocator_free_probe_count != snapshot.free_physical_probe_count) {
+    snapshot.physical_allocator_capacity = m_physical_allocator.GetCapacity();
+    snapshot.free_physical_probe_count = m_physical_allocator.GetFreeProbeCount();
+    snapshot.retiring_allocation_count = m_retirement_queue.GetAllocationCount();
+    snapshot.retiring_probe_count = m_retirement_queue.GetProbeCount();
+    const uint accounted_probe_count = snapshot.allocated_physical_probe_count +
+                                       snapshot.retiring_probe_count +
+                                       snapshot.free_physical_probe_count;
+    if (accounted_probe_count != snapshot.physical_allocator_capacity) {
         LOG_ERROR(
-            "[ProbeGI] Physical Probe allocator accounting mismatch: allocated={}, free_ranges={}, expected_free={}, capacity={}.",
+            "[ProbeGI] Physical Probe allocator accounting mismatch: resident={}, retiring={}, free={}, accounted={}, capacity={}.",
             snapshot.allocated_physical_probe_count,
-            allocator_free_probe_count,
+            snapshot.retiring_probe_count,
             snapshot.free_physical_probe_count,
-            snapshot.physical_probe_capacity
+            accounted_probe_count,
+            snapshot.physical_allocator_capacity
         );
     }
     if (!m_physical_allocator.Validate()) {
@@ -1253,12 +1489,24 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
         m_snapshot.requested_probe_count != snapshot.requested_probe_count ||
         m_snapshot.resident_brick_count != snapshot.resident_brick_count ||
         m_snapshot.resident_probe_count != snapshot.resident_probe_count ||
+        m_snapshot.published_brick_count != snapshot.published_brick_count ||
+        m_snapshot.pending_load_brick_count != snapshot.pending_load_brick_count ||
+        m_snapshot.cached_brick_count != snapshot.cached_brick_count ||
+        m_snapshot.retiring_brick_count != snapshot.retiring_brick_count ||
         m_snapshot.total_count != snapshot.total_count ||
         m_snapshot.hierarchy_probe_count != snapshot.hierarchy_probe_count ||
         m_snapshot.physical_probe_capacity != snapshot.physical_probe_capacity ||
+        m_snapshot.physical_allocator_capacity != snapshot.physical_allocator_capacity ||
         m_snapshot.allocated_physical_probe_count != snapshot.allocated_physical_probe_count ||
         m_snapshot.physical_allocation_count != snapshot.physical_allocation_count ||
         m_snapshot.free_physical_probe_count != snapshot.free_physical_probe_count ||
+        m_snapshot.retiring_allocation_count != snapshot.retiring_allocation_count ||
+        m_snapshot.retiring_probe_count != snapshot.retiring_probe_count ||
+        m_snapshot.streaming_loaded_brick_count != snapshot.streaming_loaded_brick_count ||
+        m_snapshot.streaming_evicted_brick_count != snapshot.streaming_evicted_brick_count ||
+        m_snapshot.streaming_reclaimed_allocation_count !=
+            snapshot.streaming_reclaimed_allocation_count ||
+        m_snapshot.streaming_allocation_stall_count != snapshot.streaming_allocation_stall_count ||
         m_snapshot.capacity_evicted_brick_count != snapshot.capacity_evicted_brick_count ||
         m_snapshot.geometry_generation != snapshot.geometry_generation ||
         m_snapshot.geometry_primitive_count != snapshot.geometry_primitive_count ||
@@ -1275,6 +1523,9 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
         !NearlyEqual(m_snapshot.dirty_influence_scale, snapshot.dirty_influence_scale) ||
         !NearlyEqual(m_snapshot.brick_resident_distance, snapshot.brick_resident_distance) ||
         !NearlyEqual(m_snapshot.brick_resident_hysteresis, snapshot.brick_resident_hysteresis) ||
+        m_snapshot.streaming_enabled != snapshot.streaming_enabled ||
+        m_snapshot.streaming_load_budget != snapshot.streaming_load_budget ||
+        m_snapshot.streaming_eviction_budget != snapshot.streaming_eviction_budget ||
         m_snapshot.update_scheduler_enabled != snapshot.update_scheduler_enabled ||
         m_snapshot.update_brick_budget != snapshot.update_brick_budget ||
         !NearlyEqual(m_snapshot.trace_distance, snapshot.trace_distance) ||
@@ -1346,7 +1597,9 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
             lhs.cell_index != rhs.cell_index || lhs.subdivision_level != rhs.subdivision_level ||
             lhs.parent_page_index != rhs.parent_page_index ||
             lhs.neighbor_pages_0 != rhs.neighbor_pages_0 || lhs.neighbor_pages_1 != rhs.neighbor_pages_1 ||
-            lhs.requested_resident != rhs.requested_resident || lhs.resident != rhs.resident) {
+            lhs.requested_resident != rhs.requested_resident || lhs.resident != rhs.resident ||
+            lhs.page_generation != rhs.page_generation ||
+            lhs.streaming_state != rhs.streaming_state || lhs.cached != rhs.cached) {
             return true;
         }
     }
@@ -1457,7 +1710,7 @@ void ProbeVolumeResource::StageBrickUpload(const Snapshot& snapshot) {
         ProbeBrickGpuDesc&   desc  = m_gpu_brick_descs[brick_index];
         desc.coord_volume = uint4(brick.coord.x, brick.coord.y, brick.coord.z, brick.volume_index);
         desc.probe_range =
-            uint4(brick.probe_offset, brick.probe_count, brick.resident ? 1u : 0u, brick.page_index);
+            uint4(brick.probe_offset, brick.probe_count, brick.resident ? 1u : 0u, brick.page_generation);
         desc.local_counts =
             uint4(brick.local_counts.x, brick.local_counts.y, brick.local_counts.z, brick.update_age);
         desc.hierarchy = uint4(
@@ -1471,7 +1724,7 @@ void ProbeVolumeResource::StageBrickUpload(const Snapshot& snapshot) {
             brick.neighbor_pages_1.x,
             brick.neighbor_pages_1.y,
             snapshot.layout_generation,
-            brick.dirty_flags
+            PackProbeStreamingFlags(brick.dirty_flags, brick.streaming_state, brick.cached)
         );
     }
 
@@ -1562,7 +1815,11 @@ ProbeVolumeResource::PrepareUpdate(
     RefreshGlobalDirtyEvents(scene, dirty_tracking_enabled);
 
     Snapshot snapshot = BuildSnapshot(config, camera_position, frame_index);
-    ApplyPhysicalResidency(snapshot);
+    StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT> volume_history_reset{};
+    for (uint volume_index = 0u; volume_index < snapshot.volume_count; ++volume_index) {
+        volume_history_reset[volume_index] = RequiresHistoryReset(snapshot, volume_index);
+    }
+    ApplyPhysicalResidency(snapshot, volume_history_reset);
     ApplyDirtyEvents(snapshot);
     const bool changed  = HasSnapshotChanged(snapshot);
     bool adaptive_layout_changed =
@@ -1612,11 +1869,10 @@ ProbeVolumeResource::PrepareUpdate(
     update_info.resident_probe_count = snapshot.resident_probe_count;
     update_info.dirty_brick_count    = m_last_dirty_brick_count;
 
-    StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT> volume_history_reset{};
     StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT> next_history_valid{};
     StaticArray<bool, RASTER_PROBE_MAX_BRICK_COUNT>  next_brick_history_valid{};
     for (uint volume_index = 0; volume_index < snapshot.volume_count; ++volume_index) {
-        const bool volume_reset = RequiresHistoryReset(snapshot, volume_index);
+        const bool volume_reset = volume_history_reset[volume_index];
         const VolumeSnapshot& volume = snapshot.volumes[volume_index];
         volume_history_reset[volume_index] = volume_reset;
         next_history_valid[volume_index] = true;
@@ -1776,6 +2032,10 @@ ProbeVolumeResource::PrepareUpdate(
         next_brick_history_valid[brick_index] = true;
         m_brick_last_update_frame[brick_index] = frame_index;
         brick.update_age = 0;
+        if (mandatory && brick.streaming_state == RASTER_PROBE_STREAMING_PENDING_LOAD) {
+            m_brick_load_submission[brick_index] = 0u;
+            m_brick_load_awaiting_submission[brick_index] = true;
+        }
         if (dirty_reasons != 0u) {
             ++update_info.scheduled_dirty_brick_count;
             ++update_info.scheduled_dirty_level_brick_count[brick.subdivision_level];
@@ -1815,7 +2075,7 @@ ProbeVolumeResource::PrepareUpdate(
 
     if (changed) {
         LOG_DEBUG(
-            "[ProbeGI] Multi-volume brick residency updated: active_volumes={}, cells={}, hierarchy={}, max_level={}, layout_generation={}, base_probes={}, hierarchy_probes={}, level_bricks=({}, {}, {}), requested_bricks={}/{}, requested_levels=({}, {}, {}), requested_probes={}/{}, resident_bricks={}/{}, resident_levels=({}, {}, {}), resident_probes={}/{}, physical_allocations={}, physical_probes={}/{}, free_physical_probes={}, capacity_evicted_bricks={}, allocator_compacted={}, sparse={}, resident_distance={}, resident_hysteresis={}, scheduler={}, update_budget={}, scheduled_bricks={}, scheduled_probes={}, deferred_bricks={}, trace_distance={}, trace_rays={}, history_hysteresis=({}, {}).",
+            "[ProbeGI] Multi-volume brick residency updated: active_volumes={}, cells={}, hierarchy={}, max_level={}, layout_generation={}, base_probes={}, hierarchy_probes={}, level_bricks=({}, {}, {}), requested_bricks={}/{}, requested_levels=({}, {}, {}), requested_probes={}/{}, physical_resident_bricks={}/{}, resident_levels=({}, {}, {}), resident_local_probes={}/{}, published_bricks={}, pending_load_bricks={}, cached_bricks={}, retiring_pages={}, active_allocations={}, active_physical_probes={}/{}, target_physical_capacity={}, free_physical_probes={}, retiring_allocations={}, retiring_probes={}, capacity_evicted_bricks={}, streaming={}, load_budget={}, eviction_budget={}, loaded_this_frame={}, evicted_this_frame={}, reclaimed_this_frame={}, allocation_stalls={}, sparse={}, resident_distance={}, resident_hysteresis={}, scheduler={}, update_budget={}, scheduled_bricks={}, scheduled_probes={}, deferred_bricks={}, trace_distance={}, trace_rays={}, history_hysteresis=({}, {}).",
             snapshot.volume_count,
             snapshot.cell_count,
             snapshot.hierarchy_enabled ? 1 : 0,
@@ -1840,12 +2100,25 @@ ProbeVolumeResource::PrepareUpdate(
             snapshot.level_resident_brick_count[2],
             snapshot.resident_probe_count,
             snapshot.hierarchy_probe_count,
+            snapshot.published_brick_count,
+            snapshot.pending_load_brick_count,
+            snapshot.cached_brick_count,
+            snapshot.retiring_brick_count,
             snapshot.physical_allocation_count,
             snapshot.allocated_physical_probe_count,
+            snapshot.physical_allocator_capacity,
             snapshot.physical_probe_capacity,
             snapshot.free_physical_probe_count,
+            snapshot.retiring_allocation_count,
+            snapshot.retiring_probe_count,
             snapshot.capacity_evicted_brick_count,
-            snapshot.allocator_compacted ? 1 : 0,
+            snapshot.streaming_enabled ? 1 : 0,
+            snapshot.streaming_load_budget,
+            snapshot.streaming_eviction_budget,
+            snapshot.streaming_loaded_brick_count,
+            snapshot.streaming_evicted_brick_count,
+            snapshot.streaming_reclaimed_allocation_count,
+            snapshot.streaming_allocation_stall_count,
             snapshot.sparse_bricks_enabled ? 1 : 0,
             snapshot.brick_resident_distance,
             snapshot.brick_resident_hysteresis,
@@ -1860,7 +2133,7 @@ ProbeVolumeResource::PrepareUpdate(
             snapshot.visibility_hysteresis
         );
         StageVolumeUpload(snapshot);
-    } else if (snapshot.debug_mode == 6u || snapshot.debug_mode == 11u) {
+    } else if (snapshot.debug_mode == 6u || snapshot.debug_mode == 11u || snapshot.debug_mode == 12u) {
         StageBrickUpload(snapshot);
     }
 

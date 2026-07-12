@@ -374,6 +374,21 @@ void RasterUI::ShowConfig() {
             ),
             static_cast<int>(Render::RASTER_PROBE_MAX_COUNT)
         );
+        ImGui::Checkbox("Streaming Residency", &m_config.probe_gi_streaming_enabled);
+        if (m_config.probe_gi_streaming_enabled) {
+            ImGui::SliderInt(
+                "Brick Load Budget",
+                &m_config.probe_gi_streaming_load_budget,
+                1,
+                static_cast<int>(Render::RASTER_PROBE_MAX_BRICK_COUNT)
+            );
+            ImGui::SliderInt(
+                "Brick Eviction Budget",
+                &m_config.probe_gi_streaming_eviction_budget,
+                1,
+                static_cast<int>(Render::RASTER_PROBE_MAX_BRICK_COUNT)
+            );
+        }
         ImGui::Checkbox("Sparse Brick Residency", &m_config.probe_gi_sparse_bricks_enabled);
         if (m_config.probe_gi_sparse_bricks_enabled) {
             ImGui::SliderFloat(
@@ -483,8 +498,9 @@ void RasterUI::ShowConfig() {
             "Adaptive Level",
             "Hierarchy Resolve",
             "Dirty Priority",
+            "Streaming State",
         };
-        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 12);
+        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 13);
         if (m_config.probe_gi_debug_mode != 0) {
             ImGui::SliderFloat("Debug Scale", &m_config.probe_gi_debug_scale, 0.0f, 8.0f);
         }

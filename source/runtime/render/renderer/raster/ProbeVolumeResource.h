@@ -4,12 +4,15 @@
 #include "ProbeDirtyTracker.h"
 #include "ProbeGeometryClassifier.h"
 #include "ProbePhysicalAllocator.h"
+#include "ProbeStreaming.h"
 #include "RasterConfig.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "rhi/RHIResource.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
+
+#include <atomic>
 
 namespace Moer {
 class Scene;
@@ -57,6 +60,7 @@ public:
         uint64              frame_index
     );
     void UpdateSceneData(CommandList& cmd_list, const Scene& scene);
+    void TrackFrameSubmission(CommandList& cmd_list, uint64 frame_index);
     void FillLightingData(LightingData& lighting_data) const;
 
     BufferView GetProbeBufferView() const {
@@ -127,6 +131,42 @@ public:
         return m_snapshot.resident_probe_count;
     }
 
+    uint GetPublishedBrickCount() const {
+        return m_snapshot.published_brick_count;
+    }
+
+    uint GetPendingLoadBrickCount() const {
+        return m_snapshot.pending_load_brick_count;
+    }
+
+    uint GetCachedBrickCount() const {
+        return m_snapshot.cached_brick_count;
+    }
+
+    uint GetRetiringAllocationCount() const {
+        return m_snapshot.retiring_allocation_count;
+    }
+
+    uint GetRetiringProbeCount() const {
+        return m_snapshot.retiring_probe_count;
+    }
+
+    uint GetStreamingLoadedBrickCount() const {
+        return m_snapshot.streaming_loaded_brick_count;
+    }
+
+    uint GetStreamingEvictedBrickCount() const {
+        return m_snapshot.streaming_evicted_brick_count;
+    }
+
+    uint GetStreamingReclaimedAllocationCount() const {
+        return m_snapshot.streaming_reclaimed_allocation_count;
+    }
+
+    uint GetStreamingAllocationStallCount() const {
+        return m_snapshot.streaming_allocation_stall_count;
+    }
+
     uint GetRequestedBrickCount() const {
         return m_snapshot.requested_brick_count;
     }
@@ -137,6 +177,10 @@ public:
 
     uint GetPhysicalProbeCapacity() const {
         return m_snapshot.physical_probe_capacity;
+    }
+
+    uint GetPhysicalAllocatorCapacity() const {
+        return m_snapshot.physical_allocator_capacity;
     }
 
     uint GetAllocatedPhysicalProbeCount() const {
@@ -249,6 +293,9 @@ private:
         bool  resident           = false;
         uint  update_age         = 0;
         uint  dirty_flags        = 0u;
+        uint  page_generation    = 1u;
+        uint  streaming_state    = RASTER_PROBE_STREAMING_UNMAPPED;
+        bool  cached             = false;
         float camera_distance_sq = 0.0f;
     };
 
@@ -316,12 +363,23 @@ private:
         uint   requested_probe_count      = 0;
         uint   resident_brick_count       = 0;
         uint   resident_probe_count       = 0;
+        uint   published_brick_count      = 0;
+        uint   pending_load_brick_count   = 0;
+        uint   cached_brick_count         = 0;
+        uint   retiring_brick_count       = 0;
         uint   total_count                = 0;
         uint   hierarchy_probe_count      = 0;
         uint   physical_probe_capacity    = RASTER_PROBE_MAX_COUNT;
+        uint   physical_allocator_capacity = RASTER_PROBE_MAX_COUNT;
         uint   allocated_physical_probe_count = 0;
         uint   physical_allocation_count  = 0;
         uint   free_physical_probe_count  = RASTER_PROBE_MAX_COUNT;
+        uint   retiring_allocation_count  = 0;
+        uint   retiring_probe_count       = 0;
+        uint   streaming_loaded_brick_count = 0;
+        uint   streaming_evicted_brick_count = 0;
+        uint   streaming_reclaimed_allocation_count = 0;
+        uint   streaming_allocation_stall_count = 0;
         uint   capacity_evicted_brick_count = 0;
         uint   geometry_generation        = 0;
         uint   geometry_primitive_count   = 0;
@@ -339,6 +397,9 @@ private:
         float  dirty_influence_scale      = 1.0f;
         float  brick_resident_distance    = 0.0f;
         float  brick_resident_hysteresis  = 0.0f;
+        bool   streaming_enabled          = true;
+        uint   streaming_load_budget      = 1u;
+        uint   streaming_eviction_budget  = 1u;
         bool   update_scheduler_enabled   = false;
         uint   update_brick_budget        = 1;
         float  trace_distance             = 0.0f;
@@ -373,9 +434,14 @@ private:
         bool            history_valid
     ) const;
     bool RequiresPhysicalAllocatorReset(const Snapshot& snapshot) const;
-    void ApplyPhysicalResidency(Snapshot& snapshot);
+    void ApplyPhysicalResidency(
+        Snapshot& snapshot,
+        const StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT>& volume_history_reset
+    );
     void ResetPhysicalAllocator(uint physical_probe_capacity);
-    void ReleasePhysicalAllocation(uint brick_index);
+    void RetirePhysicalAllocation(uint brick_index, uint virtual_page);
+    void CollectRetiredAllocations(Snapshot& snapshot);
+    uint AdvancePageGeneration(uint virtual_page);
     bool HasSnapshotChanged(const Snapshot& snapshot) const;
     bool RequiresHistoryReset(const Snapshot& snapshot, uint volume_index) const;
     void StageVolumeUpload(const Snapshot& snapshot);
@@ -406,7 +472,19 @@ private:
     StaticArray<bool, RASTER_PROBE_MAX_BRICK_COUNT> m_brick_history_valid{};
     StaticArray<uint64, RASTER_PROBE_MAX_BRICK_COUNT> m_brick_last_update_frame{};
     StaticArray<ProbePhysicalAllocator::Allocation, RASTER_PROBE_MAX_BRICK_COUNT> m_physical_allocations{};
+    StaticArray<uint, RASTER_PROBE_MAX_BRICK_COUNT> m_physical_allocation_pages{};
+    StaticArray<uint, RASTER_PROBE_MAX_BRICK_COUNT> m_physical_allocation_generations{};
+    StaticArray<uint64, RASTER_PROBE_MAX_BRICK_COUNT> m_brick_load_submission{};
+    StaticArray<bool, RASTER_PROBE_MAX_BRICK_COUNT> m_brick_load_awaiting_submission{};
+    StaticArray<uint, RASTER_PROBE_MAX_PAGE_COUNT> m_page_generations{};
     ProbePhysicalAllocator m_physical_allocator;
+    ProbeRetirementQueue   m_retirement_queue;
+    struct GpuCompletionState {
+        std::atomic<uint64> completed_submission{0u};
+    };
+    SharedPtr<GpuCompletionState> m_gpu_completion_state;
+    uint64           m_last_submitted_submission = 0u;
+    uint             m_pending_physical_capacity = 0u;
     Array<Box3D>     m_scene_geometry_bounds;
     Array<ProbeTrackedBounds> m_scene_geometry_instances;
     Array<ProbeDirtyRegion>   m_frame_dirty_regions;

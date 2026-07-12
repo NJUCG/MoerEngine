@@ -64,6 +64,27 @@ uint ProbeGIGetLevelPageOffset(uint subdivision_level) {
     return page_offset;
 }
 
+uint ProbeGILoadPageEntryAtLevel(
+    Moer::LightingData lighting_data,
+    Moer::ProbeVolumeGpuDesc volume,
+    uint3 coord,
+    uint subdivision_level
+) {
+    const uint level = min(subdivision_level, volume.hierarchy.z);
+    const uint3 counts = ProbeGIGetLevelCounts(volume, level);
+    if (any(coord >= counts)) {
+        return Moer::RASTER_PROBE_PAGE_INVALID;
+    }
+
+    const uint3 brick_coord = coord / Moer::RASTER_PROBE_BRICK_DIM;
+    const uint level_grid_dim = ProbeGIGetLevelGridDim(level);
+    const uint virtual_page = volume.allocation.z + ProbeGIGetLevelPageOffset(level) +
+                              brick_coord.x + brick_coord.y * level_grid_dim +
+                              brick_coord.z * level_grid_dim * level_grid_dim;
+    ArrayBuffer page_table = ArrayBuffer(lighting_data.probe_system_counts.w);
+    return page_table.Load<uint>(virtual_page);
+}
+
 uint ProbeGIGetBrickIndexAtLevel(
     Moer::LightingData lighting_data,
     Moer::ProbeVolumeGpuDesc volume,
@@ -83,8 +104,21 @@ uint ProbeGIGetBrickIndexAtLevel(
                               brick_coord.z * level_grid_dim * level_grid_dim;
 
     ArrayBuffer page_table = ArrayBuffer(lighting_data.probe_system_counts.w);
-    const uint brick_index = page_table.Load<uint>(virtual_page);
-    if (brick_index == Moer::RASTER_PROBE_PAGE_INVALID) {
+    const uint page_entry = page_table.Load<uint>(virtual_page);
+    if (page_entry == Moer::RASTER_PROBE_PAGE_INVALID) {
+        return Moer::RASTER_PROBE_PAGE_INVALID;
+    }
+
+    const uint streaming_state =
+        (page_entry >> Moer::RASTER_PROBE_PAGE_STATE_SHIFT) & Moer::RASTER_PROBE_PAGE_STATE_MASK;
+    if (streaming_state != Moer::RASTER_PROBE_STREAMING_RESIDENT) {
+        return Moer::RASTER_PROBE_PAGE_INVALID;
+    }
+    const uint brick_index = page_entry & Moer::RASTER_PROBE_PAGE_BRICK_MASK;
+    const uint page_generation =
+        (page_entry >> Moer::RASTER_PROBE_PAGE_GENERATION_SHIFT) &
+        Moer::RASTER_PROBE_PAGE_GENERATION_MASK;
+    if (brick_index >= Moer::RASTER_PROBE_MAX_BRICK_COUNT || page_generation == 0u) {
         return Moer::RASTER_PROBE_PAGE_INVALID;
     }
 
@@ -92,6 +126,7 @@ uint ProbeGIGetBrickIndexAtLevel(
     const Moer::ProbeBrickGpuDesc brick = brick_buffer.Load<Moer::ProbeBrickGpuDesc>(brick_index);
     const bool descriptor_matches = brick.probe_range.z != 0u && brick.hierarchy.y == level &&
                                     brick.hierarchy.w == virtual_page &&
+                                    brick.probe_range.w == page_generation &&
                                     brick.neighbor_pages_1.z == lighting_data.probe_system_hierarchy.w;
     return descriptor_matches ? brick_index : Moer::RASTER_PROBE_PAGE_INVALID;
 }
@@ -1061,11 +1096,72 @@ float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, 
     }
 
     if (debug_mode == 4u || debug_mode == 5u || debug_mode == 6u || debug_mode == 7u || debug_mode == 8u ||
-        debug_mode == 9u || debug_mode == 10u || debug_mode == 11u) {
+        debug_mode == 9u || debug_mode == 10u || debug_mode == 11u || debug_mode == 12u) {
         uint3 counts = ProbeGIGetCounts(volume);
         float3 local = ProbeGIGetLocalCoord(volume, biased_pos);
         uint3 coord = min(uint3(round(clamp(local, float3(0.0, 0.0, 0.0), float3(counts - uint3(1, 1, 1))))), counts - uint3(1, 1, 1));
         uint brick_index = ProbeGIGetBrickIndex(lighting_data, volume, coord);
+        if (debug_mode == 12u) {
+            uint desired_level;
+            uint transition_level;
+            float transition_weight;
+            ProbeGIResolveAdaptiveLevels(
+                lighting_data,
+                volume,
+                biased_pos,
+                desired_level,
+                transition_level,
+                transition_weight
+            );
+            const uint level = min(desired_level, volume.hierarchy.z);
+            const uint3 level_counts = ProbeGIGetLevelCounts(volume, level);
+            const float3 level_local = clamp(
+                ProbeGIGetLocalCoordAtLevel(volume, biased_pos, level),
+                float3(0.0, 0.0, 0.0),
+                float3(level_counts - uint3(1u, 1u, 1u))
+            );
+            const uint3 level_coord = min(uint3(round(level_local)), level_counts - uint3(1u, 1u, 1u));
+            const uint page_entry =
+                ProbeGILoadPageEntryAtLevel(lighting_data, volume, level_coord, level);
+            if (page_entry == Moer::RASTER_PROBE_PAGE_INVALID) {
+                return float3(0.45, 0.0, 0.0) * lighting_data.probe_system_debug.x;
+            }
+
+            const uint streaming_state =
+                (page_entry >> Moer::RASTER_PROBE_PAGE_STATE_SHIFT) &
+                Moer::RASTER_PROBE_PAGE_STATE_MASK;
+            const uint page_brick_index = page_entry & Moer::RASTER_PROBE_PAGE_BRICK_MASK;
+            const uint page_generation =
+                (page_entry >> Moer::RASTER_PROBE_PAGE_GENERATION_SHIFT) &
+                Moer::RASTER_PROBE_PAGE_GENERATION_MASK;
+            if (page_brick_index >= Moer::RASTER_PROBE_MAX_BRICK_COUNT || page_generation == 0u) {
+                return float3(1.0, 0.0, 0.0) * lighting_data.probe_system_debug.x;
+            }
+
+            ArrayBuffer brick_buffer = ArrayBuffer(lighting_data.probe_system_counts.z);
+            const Moer::ProbeBrickGpuDesc page_brick =
+                brick_buffer.Load<Moer::ProbeBrickGpuDesc>(page_brick_index);
+            if (page_brick.probe_range.w != page_generation) {
+                return float3(1.0, 1.0, 1.0) * lighting_data.probe_system_debug.x;
+            }
+
+            if (streaming_state == Moer::RASTER_PROBE_STREAMING_PENDING_LOAD) {
+                return float3(1.00, 0.52, 0.02) * lighting_data.probe_system_debug.x;
+            }
+            if (streaming_state == Moer::RASTER_PROBE_STREAMING_RETIRING) {
+                return float3(0.92, 0.04, 0.72) * lighting_data.probe_system_debug.x;
+            }
+            if (streaming_state == Moer::RASTER_PROBE_STREAMING_RESIDENT) {
+                const bool cached =
+                    (page_brick.neighbor_pages_1.w & Moer::RASTER_PROBE_STREAMING_CACHED) != 0u;
+                const float3 resident_color = cached ?
+                                                  float3(0.05, 0.46, 1.00) :
+                                                  float3(0.03, 0.88, 0.35);
+                return resident_color * lighting_data.probe_system_debug.x;
+            }
+            return float3(0.045, 0.035, 0.055) * lighting_data.probe_system_debug.x;
+        }
+
         if (debug_mode == 5u) {
             if (brick_index == Moer::RASTER_PROBE_PAGE_INVALID) {
                 return float3(0.90, 0.03, 0.02) * lighting_data.probe_system_debug.x;
