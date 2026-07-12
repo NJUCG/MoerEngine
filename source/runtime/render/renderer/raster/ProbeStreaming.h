@@ -34,12 +34,25 @@ inline uint UnpackProbePageStreamingState(uint entry) {
     return (entry >> RASTER_PROBE_PAGE_STATE_SHIFT) & RASTER_PROBE_PAGE_STATE_MASK;
 }
 
-inline uint PackProbeStreamingFlags(uint flags, uint streaming_state, bool cached) {
-    flags &= ~(RASTER_PROBE_STREAMING_STATE_FLAG_MASK | RASTER_PROBE_STREAMING_CACHED);
+inline uint PackProbeStreamingFlags(
+    uint flags,
+    uint streaming_state,
+    bool cached,
+    bool prefetched = false,
+    bool clipmap_reused = false
+) {
+    flags &= ~(RASTER_PROBE_STREAMING_STATE_FLAG_MASK | RASTER_PROBE_STREAMING_CACHED |
+               RASTER_PROBE_STREAMING_PREFETCHED | RASTER_PROBE_CLIPMAP_REUSED);
     flags |= (streaming_state & RASTER_PROBE_PAGE_STATE_MASK)
              << RASTER_PROBE_STREAMING_STATE_FLAG_SHIFT;
     if (cached) {
         flags |= RASTER_PROBE_STREAMING_CACHED;
+    }
+    if (prefetched) {
+        flags |= RASTER_PROBE_STREAMING_PREFETCHED;
+    }
+    if (clipmap_reused) {
+        flags |= RASTER_PROBE_CLIPMAP_REUSED;
     }
     return flags;
 }

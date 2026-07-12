@@ -37,6 +37,8 @@ bool TestStreamingFlagsPreserveDirtyState() {
     const uint resident_flags = PackProbeStreamingFlags(
         dirty_flags,
         RASTER_PROBE_STREAMING_RESIDENT,
+        true,
+        true,
         true
     );
 
@@ -56,6 +58,19 @@ bool TestStreamingFlagsPreserveDirtyState() {
            Expect(
                (resident_flags & RASTER_PROBE_STREAMING_CACHED) != 0u,
                "resident cached page must set cached bit"
+           ) &&
+           Expect(
+               (resident_flags & RASTER_PROBE_STREAMING_PREFETCHED) != 0u,
+               "prefetched page must set prefetch bit"
+           ) &&
+           Expect(
+               (resident_flags & RASTER_PROBE_CLIPMAP_REUSED) != 0u,
+               "rebound Clipmap page must set reuse bit"
+           ) &&
+           Expect(
+               (pending_flags &
+                (RASTER_PROBE_STREAMING_PREFETCHED | RASTER_PROBE_CLIPMAP_REUSED)) == 0u,
+               "disabled Clipmap flags must clear stale bits"
            );
 }
 

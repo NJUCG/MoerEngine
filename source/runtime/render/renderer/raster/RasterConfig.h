@@ -141,6 +141,8 @@ struct ProbeVolumeConfig {
     float3 extent          = float3(16.0f, 6.0f, 16.0f);
     float  intensity_scale = 1.0f;
     float  blend_distance  = 1.5f;
+    bool   camera_clipmap   = false;
+    bool   clipmap_follow_y = false;
 };
 
 struct RasterConfig {
@@ -210,6 +212,10 @@ struct RasterConfig {
     bool   probe_gi_sparse_bricks_enabled     = false;
     float  probe_gi_brick_resident_distance   = 12.0f;
     float  probe_gi_brick_resident_hysteresis = 2.0f;
+    float  probe_gi_clipmap_anchor_hysteresis = 0.10f;
+    bool   probe_gi_motion_prefetch_enabled    = true;
+    float  probe_gi_motion_prefetch_threshold  = 0.05f;
+    int    probe_gi_motion_prefetch_keep_frames = 8;
     int    probe_gi_physical_probe_capacity   = Render::RASTER_PROBE_MAX_COUNT;
     bool   probe_gi_streaming_enabled          = true;
     int    probe_gi_streaming_load_budget      = 2;
@@ -257,7 +263,7 @@ struct RasterConfig {
     float3 probe_gi_sky_color            = float3(0.48f, 0.62f, 0.95f);
     float3 probe_gi_ground_color         = float3(0.35f, 0.27f, 0.18f);
     int    probe_gi_debug_mode =
-        0; // 0=off, 1=volume cells, 2=irradiance, 3=contribution, 4=visibility, 5=brick residency, 6=update age, 7=physical allocation, 8=cell layout, 9=adaptive level, 10=hierarchy resolve, 11=dirty priority, 12=streaming state
+        0; // 0=off, 1=volume cells, 2=irradiance, 3=contribution, 4=visibility, 5=brick residency, 6=update age, 7=physical allocation, 8=cell layout, 9=adaptive level, 10=hierarchy resolve, 11=dirty priority, 12=streaming state, 13=clipmap/prefetch
     float  probe_gi_debug_scale          = 1.0f;
     bool   probe_gi_gizmo_enabled        = false;
     int    probe_gi_gizmo_color_mode     = 0; // 0=fixed color, 1=probe irradiance, 2=visibility, 3=state

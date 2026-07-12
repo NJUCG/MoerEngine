@@ -231,6 +231,13 @@ void RasterRenderer::UpdateGlobalLightingData(
                << " reclaimed_allocations="
                << context.probe_volume.GetStreamingReclaimedAllocationCount()
                << " allocation_stalls=" << context.probe_volume.GetStreamingAllocationStallCount()
+               << " clipmap_volumes=" << context.probe_volume.GetClipmapVolumeCount()
+               << " clipmap_scrolled=" << context.probe_volume.GetClipmapScrolledVolumeCount()
+               << " prefetched_bricks=" << context.probe_volume.GetPrefetchedBrickCount()
+               << " reused_l0_bricks=" << context.probe_volume.GetClipmapReusedBrickCount()
+               << " prefetch=" << (ui_config.probe_gi_motion_prefetch_enabled ? 1 : 0)
+               << " prefetch_threshold=" << ui_config.probe_gi_motion_prefetch_threshold
+               << " prefetch_keep_frames=" << ui_config.probe_gi_motion_prefetch_keep_frames
                << " scheduler=" << (ui_config.probe_gi_update_scheduler_enabled ? 1 : 0)
                << " update_budget=" << ui_config.probe_gi_update_brick_budget
                << " scheduled_bricks=" << scheduled_bricks << "/" << resident_bricks

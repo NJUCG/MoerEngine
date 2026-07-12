@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ProbeAdaptiveLayout.h"
+#include "ProbeClipmap.h"
 #include "ProbeDirtyTracker.h"
 #include "ProbeGeometryClassifier.h"
 #include "ProbePhysicalAllocator.h"
@@ -199,6 +200,22 @@ public:
         return m_snapshot.capacity_evicted_brick_count;
     }
 
+    uint GetClipmapVolumeCount() const {
+        return m_snapshot.clipmap_volume_count;
+    }
+
+    uint GetClipmapScrolledVolumeCount() const {
+        return m_snapshot.clipmap_scrolled_volume_count;
+    }
+
+    uint GetPrefetchedBrickCount() const {
+        return m_snapshot.prefetched_brick_count;
+    }
+
+    uint GetClipmapReusedBrickCount() const {
+        return m_snapshot.clipmap_reused_brick_count;
+    }
+
     uint GetScheduledBrickCount() const {
         return m_last_scheduled_brick_count;
     }
@@ -278,6 +295,7 @@ public:
 private:
     struct BrickSnapshot {
         uint3 coord              = uint3(0u);
+        int3  world_fine_coord   = int3(0);
         uint3 local_counts       = uint3(1u);
         uint  volume_index       = 0;
         uint  probe_offset       = RASTER_PROBE_PAGE_INVALID;
@@ -289,6 +307,7 @@ private:
         uint4 neighbor_pages_0   = uint4(RASTER_PROBE_PAGE_INVALID);
         uint4 neighbor_pages_1   = uint4(RASTER_PROBE_PAGE_INVALID);
         Box3D sample_bounds;
+        bool  placement_requested = true;
         bool  requested_resident = true;
         bool  resident           = false;
         uint  update_age         = 0;
@@ -296,6 +315,11 @@ private:
         uint  page_generation    = 1u;
         uint  streaming_state    = RASTER_PROBE_STREAMING_UNMAPPED;
         bool  cached             = false;
+        bool  prefetched         = false;
+        bool  clipmap_reused     = false;
+        uint  previous_brick_index = RASTER_PROBE_PAGE_INVALID;
+        uint64 last_requested_frame = 0u;
+        uint64 last_reused_frame = 0u;
         float camera_distance_sq = 0.0f;
     };
 
@@ -312,6 +336,7 @@ private:
         uint   first_cell_index     = 0;
         uint   cell_count           = 0;
         uint   max_subdivision_level = 0;
+        uint   previous_volume_index = RASTER_PROBE_PAGE_INVALID;
         uint   requested_brick_count = 0;
         uint   requested_probe_count = 0;
         uint   resident_brick_count = 0;
@@ -319,6 +344,14 @@ private:
         StaticArray<uint, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_brick_count{};
         StaticArray<uint, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_requested_brick_count{};
         StaticArray<uint, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> level_resident_brick_count{};
+        bool   camera_clipmap        = false;
+        bool   clipmap_follow_y      = false;
+        bool   clipmap_scrolled      = false;
+        uint   prefetched_brick_count = 0;
+        uint   clipmap_reused_brick_count = 0;
+        int3   clipmap_anchor_cell   = int3(0);
+        float3 configured_origin     = float3(0.0f);
+        float3 clipmap_cell_step     = float3(1.0f);
         float3 origin               = float3(0.0f);
         float3 extent               = float3(1.0f);
         float3 spacing              = float3(1.0f);
@@ -381,6 +414,10 @@ private:
         uint   streaming_reclaimed_allocation_count = 0;
         uint   streaming_allocation_stall_count = 0;
         uint   capacity_evicted_brick_count = 0;
+        uint   clipmap_volume_count       = 0;
+        uint   clipmap_scrolled_volume_count = 0;
+        uint   prefetched_brick_count     = 0;
+        uint   clipmap_reused_brick_count = 0;
         uint   geometry_generation        = 0;
         uint   geometry_primitive_count   = 0;
         uint   fine_cell_count            = 0;
@@ -397,6 +434,10 @@ private:
         float  dirty_influence_scale      = 1.0f;
         float  brick_resident_distance    = 0.0f;
         float  brick_resident_hysteresis  = 0.0f;
+        float  clipmap_anchor_hysteresis  = 0.0f;
+        bool   motion_prefetch_enabled    = false;
+        float  motion_prefetch_threshold  = 0.0f;
+        uint   motion_prefetch_keep_frames = 1u;
         bool   streaming_enabled          = true;
         uint   streaming_load_budget      = 1u;
         uint   streaming_eviction_budget  = 1u;
@@ -415,6 +456,9 @@ private:
         float  directional_bounce         = 0.0f;
         float3 sky_color                  = float3(0.0f);
         float3 ground_color               = float3(0.0f);
+        float3 camera_position            = float3(0.0f);
+        float3 camera_motion              = float3(0.0f);
+        uint64 frame_index                = 0u;
         StaticArray<VolumeSnapshot, RASTER_PROBE_VOLUME_MAX_COUNT> volumes{};
         StaticArray<CellSnapshot, RASTER_PROBE_MAX_CELL_COUNT> cells{};
         StaticArray<BrickSnapshot, RASTER_PROBE_MAX_BRICK_COUNT> bricks{};
@@ -438,6 +482,7 @@ private:
         Snapshot& snapshot,
         const StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT>& volume_history_reset
     );
+    void RebindPhysicalAllocations(Snapshot& snapshot, bool allow_reuse);
     void ResetPhysicalAllocator(uint physical_probe_capacity);
     void RetirePhysicalAllocation(uint brick_index, uint virtual_page);
     void CollectRetiredAllocations(Snapshot& snapshot);

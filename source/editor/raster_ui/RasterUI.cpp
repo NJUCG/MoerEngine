@@ -303,6 +303,16 @@ void RasterUI::ShowConfig() {
         ImGui::SliderInt("Probe Count Y", &selected_volume.count_y, 1, 16);
         ImGui::SliderInt("Probe Count Z", &selected_volume.count_z, 1, 16);
         clamp_probe_counts(selected_volume);
+        ImGui::Checkbox("Camera Clipmap", &selected_volume.camera_clipmap);
+        if (selected_volume.camera_clipmap) {
+            ImGui::Checkbox("Clipmap Follow Y", &selected_volume.clipmap_follow_y);
+            ImGui::SliderFloat(
+                "Clipmap Anchor Hysteresis",
+                &m_config.probe_gi_clipmap_anchor_hysteresis,
+                0.0f,
+                0.49f
+            );
+        }
 
         int active_volume_count = 0;
         int probe_total = 0;
@@ -403,6 +413,21 @@ void RasterUI::ShowConfig() {
                 0.0f,
                 16.0f
             );
+            ImGui::Checkbox("Motion Prefetch", &m_config.probe_gi_motion_prefetch_enabled);
+            if (m_config.probe_gi_motion_prefetch_enabled) {
+                ImGui::SliderFloat(
+                    "Prefetch Motion Threshold",
+                    &m_config.probe_gi_motion_prefetch_threshold,
+                    0.0f,
+                    2.0f
+                );
+                ImGui::SliderInt(
+                    "Prefetch Keep Frames",
+                    &m_config.probe_gi_motion_prefetch_keep_frames,
+                    1,
+                    120
+                );
+            }
         }
         ImGui::Checkbox("Update Scheduler", &m_config.probe_gi_update_scheduler_enabled);
         if (m_config.probe_gi_update_scheduler_enabled) {
@@ -499,8 +524,9 @@ void RasterUI::ShowConfig() {
             "Hierarchy Resolve",
             "Dirty Priority",
             "Streaming State",
+            "Clipmap / Prefetch",
         };
-        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 13);
+        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 14);
         if (m_config.probe_gi_debug_mode != 0) {
             ImGui::SliderFloat("Debug Scale", &m_config.probe_gi_debug_scale, 0.0f, 8.0f);
         }

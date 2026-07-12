@@ -39,6 +39,13 @@ target_link_libraries(${test_target}
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
+set(test_target TestProbeClipmap)
+add_executable(${test_target} "ProbeClipmapTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+
 set(test_target TestProbeStreaming)
 add_executable(${test_target} "ProbeStreamingTest.cpp")
 target_link_libraries(${test_target}

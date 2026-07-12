@@ -632,6 +632,9 @@ void ProbeVolumeResource::TrackFrameSubmission(CommandList& cmd_list, uint64 fra
 ProbeVolumeResource::Snapshot
 ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_position, uint64 frame_index) const {
     Snapshot snapshot{};
+    snapshot.frame_index                = frame_index;
+    snapshot.camera_position            = camera_position;
+    snapshot.camera_motion              = m_has_snapshot ? camera_position - m_snapshot.camera_position : float3(0.0f);
     snapshot.enabled                    = config.probe_gi_enabled;
     snapshot.sparse_bricks_enabled     = config.probe_gi_sparse_bricks_enabled;
     snapshot.adaptive_placement_enabled =
@@ -655,6 +658,14 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
                                             0u;
     snapshot.brick_resident_distance   = Max(config.probe_gi_brick_resident_distance, 0.1f);
     snapshot.brick_resident_hysteresis = Max(config.probe_gi_brick_resident_hysteresis, 0.0f);
+    snapshot.clipmap_anchor_hysteresis = Clamp(config.probe_gi_clipmap_anchor_hysteresis, 0.0f, 0.49f);
+    snapshot.motion_prefetch_enabled = config.probe_gi_motion_prefetch_enabled;
+    snapshot.motion_prefetch_threshold = Max(config.probe_gi_motion_prefetch_threshold, 0.0f);
+    snapshot.motion_prefetch_keep_frames = static_cast<uint>(Clamp(
+        config.probe_gi_motion_prefetch_keep_frames,
+        1,
+        120
+    ));
     snapshot.update_scheduler_enabled  = config.probe_gi_update_scheduler_enabled;
     snapshot.update_brick_budget =
         static_cast<uint>(Clamp(config.probe_gi_update_brick_budget, 1, int(RASTER_PROBE_MAX_BRICK_COUNT)));
@@ -679,7 +690,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
         1,
         int(RASTER_PROBE_MAX_BRICK_COUNT)
     ));
-    snapshot.debug_mode = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 12));
+    snapshot.debug_mode = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 13));
     snapshot.trace_distance     = Max(config.probe_gi_trace_distance, 0.1f);
     snapshot.trace_ray_count =
         static_cast<uint>(Clamp(config.probe_gi_trace_ray_count, 1, int(RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT)));
@@ -722,13 +733,82 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
         volume.total_count = volume.count_x * volume.count_y * volume.count_z;
         volume.probe_offset = snapshot.total_count;
         volume.page_table_offset = config_index * RASTER_PROBE_MAX_PAGES_PER_VOLUME;
-        volume.origin       = volume_config.origin;
+        volume.camera_clipmap   = volume_config.camera_clipmap;
+        volume.clipmap_follow_y = volume_config.clipmap_follow_y;
+        volume.configured_origin = volume_config.origin;
         volume.extent       = SanitizeExtent(volume_config.extent);
         volume.spacing      = float3(
             volume.count_x > 1 ? volume.extent.x / float(volume.count_x - 1) : volume.extent.x,
             volume.count_y > 1 ? volume.extent.y / float(volume.count_y - 1) : volume.extent.y,
             volume.count_z > 1 ? volume.extent.z / float(volume.count_z - 1) : volume.extent.z
         );
+        volume.clipmap_cell_step = ProbeClipmap::GetCellStep(
+            volume.extent,
+            uint3(volume.count_x, volume.count_y, volume.count_z)
+        );
+        if (m_has_snapshot) {
+            for (uint previous_volume_index = 0u;
+                 previous_volume_index < m_snapshot.volume_count;
+                 ++previous_volume_index) {
+                if (m_snapshot.volumes[previous_volume_index].config_index == config_index) {
+                    volume.previous_volume_index = previous_volume_index;
+                    break;
+                }
+            }
+        }
+
+        bool previous_anchor_valid = false;
+        int3 previous_anchor_cell(0);
+        if (volume.previous_volume_index != RASTER_PROBE_PAGE_INVALID) {
+            const VolumeSnapshot& previous = m_snapshot.volumes[volume.previous_volume_index];
+            previous_anchor_valid = previous.camera_clipmap && volume.camera_clipmap &&
+                                    previous.count_x == volume.count_x &&
+                                    previous.count_y == volume.count_y &&
+                                    previous.count_z == volume.count_z &&
+                                    NearlyEqual(previous.configured_origin, volume.configured_origin) &&
+                                    NearlyEqual(previous.extent, volume.extent) &&
+                                    NearlyEqual(previous.clipmap_cell_step, volume.clipmap_cell_step) &&
+                                    previous.clipmap_follow_y == volume.clipmap_follow_y;
+            previous_anchor_cell = previous.clipmap_anchor_cell;
+        }
+
+        if (volume.camera_clipmap) {
+            const ProbeClipmapAnchor anchor = ProbeClipmap::ResolveAnchor(
+                camera_position,
+                volume.configured_origin,
+                volume.extent,
+                volume.clipmap_cell_step,
+                previous_anchor_cell,
+                previous_anchor_valid,
+                volume.clipmap_follow_y,
+                snapshot.clipmap_anchor_hysteresis
+            );
+            volume.clipmap_anchor_cell = anchor.cell;
+            volume.origin = anchor.origin;
+            volume.clipmap_scrolled = previous_anchor_valid && anchor.cell != previous_anchor_cell;
+            ++snapshot.clipmap_volume_count;
+            if (volume.clipmap_scrolled) {
+                ++snapshot.clipmap_scrolled_volume_count;
+                LOG_DEBUG(
+                    "[ProbeGI] Camera Clipmap anchor scrolled: config_index={}, previous_cell=({}, {}, {}), current_cell=({}, {}, {}), runtime_origin={}, cell_step={}, camera={}, camera_motion={}, follow_y={}, hysteresis={}.",
+                    config_index,
+                    previous_anchor_cell.x,
+                    previous_anchor_cell.y,
+                    previous_anchor_cell.z,
+                    anchor.cell.x,
+                    anchor.cell.y,
+                    anchor.cell.z,
+                    volume.origin.ToString(2),
+                    volume.clipmap_cell_step.ToString(2),
+                    camera_position.ToString(2),
+                    snapshot.camera_motion.ToString(2),
+                    volume.clipmap_follow_y ? 1 : 0,
+                    snapshot.clipmap_anchor_hysteresis
+                );
+            }
+        } else {
+            volume.origin = volume.configured_origin;
+        }
         volume.intensity   = Max(config.probe_gi_intensity * volume_config.intensity_scale, 0.0f);
         volume.normal_bias = Max(config.probe_gi_normal_bias, 0.0f);
         const float max_blend_distance =
@@ -741,6 +821,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
         const Box3D volume_bounds(volume.origin, volume.origin + volume.extent);
         const std::span<const Box3D> geometry_bounds(m_scene_geometry_bounds);
         volume.first_cell_index = snapshot.cell_count;
+        const uint volume_first_brick_index = snapshot.brick_count;
         volume.max_subdivision_level = snapshot.hierarchy_enabled ? RASTER_PROBE_MAX_SUBDIVISION_LEVEL : 0u;
         snapshot.max_subdivision_level = Max(snapshot.max_subdivision_level, volume.max_subdivision_level);
         uint  nearest_brick_index = RASTER_PROBE_PAGE_INVALID;
@@ -775,6 +856,16 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
             brick.volume_index      = snapshot.volume_count;
             brick.cell_index        = cell_index;
             brick.subdivision_level = subdivision_level;
+            brick.world_fine_coord = subdivision_level == 0u ?
+                                         ProbeClipmap::GetWorldFineBrickCoord(
+                                             volume.clipmap_anchor_cell,
+                                             brick_coord
+                                         ) :
+                                         int3(
+                                             static_cast<int>(brick_coord.x),
+                                             static_cast<int>(brick_coord.y),
+                                             static_cast<int>(brick_coord.z)
+                                         );
 
             const ProbeBrickVirtualKey virtual_key{config_index, subdivision_level, brick.coord};
             brick.page_index        = ProbeAdaptiveLayout::GetVirtualPageIndex(virtual_key);
@@ -811,48 +902,65 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
             const float3 brick_max = volume.origin + level_spacing * float3(brick_last);
             brick.sample_bounds = Box3D(Min(brick_min, brick_max), Max(brick_min, brick_max));
 
-            bool same_brick = false;
-            if (m_has_snapshot && brick_index < m_snapshot.brick_count) {
-                const BrickSnapshot& previous_brick = m_snapshot.bricks[brick_index];
-                same_brick = previous_brick.volume_index == brick.volume_index &&
-                             previous_brick.coord == brick.coord &&
-                             previous_brick.page_index == brick.page_index &&
-                             previous_brick.local_counts == brick.local_counts &&
-                             previous_brick.subdivision_level == brick.subdivision_level;
+            if (volume.previous_volume_index != RASTER_PROBE_PAGE_INVALID) {
+                for (uint previous_brick_index = 0u;
+                     previous_brick_index < m_snapshot.brick_count;
+                     ++previous_brick_index) {
+                    const BrickSnapshot& previous_brick = m_snapshot.bricks[previous_brick_index];
+                    if (previous_brick.volume_index != volume.previous_volume_index ||
+                        previous_brick.subdivision_level != brick.subdivision_level ||
+                        previous_brick.local_counts != brick.local_counts ||
+                        previous_brick.probe_count != brick.probe_count) {
+                        continue;
+                    }
+
+                    const bool same_identity = volume.clipmap_scrolled ?
+                                                   brick.subdivision_level == 0u &&
+                                                       previous_brick.world_fine_coord ==
+                                                           brick.world_fine_coord :
+                                                   previous_brick.coord == brick.coord &&
+                                                       previous_brick.page_index == brick.page_index &&
+                                                       previous_brick.cell_index == brick.cell_index;
+                    if (same_identity) {
+                        brick.previous_brick_index = previous_brick_index;
+                        brick.last_requested_frame = previous_brick.last_requested_frame;
+                        brick.last_reused_frame = previous_brick.last_reused_frame;
+                        break;
+                    }
+                }
             }
-            const bool history_valid = same_brick && m_brick_history_valid[brick_index];
+            const bool same_brick = brick.previous_brick_index != RASTER_PROBE_PAGE_INVALID;
+            const bool history_valid = same_brick && m_brick_history_valid[brick.previous_brick_index];
             brick.update_age = history_valid ?
                                    static_cast<uint>(std::min<uint64>(
-                                       frame_index - m_brick_last_update_frame[brick_index],
+                                       frame_index - m_brick_last_update_frame[brick.previous_brick_index],
                                        255u
                                    )) :
                                    255u;
+            brick.clipmap_reused = same_brick && brick.last_reused_frame != 0u &&
+                                   frame_index >= brick.last_reused_frame &&
+                                   frame_index - brick.last_reused_frame <=
+                                       snapshot.motion_prefetch_keep_frames;
 
             float resident_distance = snapshot.brick_resident_distance;
             if (distance_gated && snapshot.sparse_bricks_enabled && same_brick &&
-                m_snapshot.sparse_bricks_enabled && m_snapshot.bricks[brick_index].requested_resident) {
+                m_snapshot.sparse_bricks_enabled &&
+                m_snapshot.bricks[brick.previous_brick_index].requested_resident) {
                 resident_distance += snapshot.brick_resident_hysteresis;
             }
             const bool within_resident_distance =
                 !distance_gated || !snapshot.sparse_bricks_enabled ||
                 brick.camera_distance_sq <= resident_distance * resident_distance;
+            brick.placement_requested = level_requested;
             brick.requested_resident = level_requested && within_resident_distance;
+            if (brick.requested_resident) {
+                brick.last_requested_frame = frame_index;
+            }
 
             ++snapshot.level_brick_count[subdivision_level];
             ++volume.level_brick_count[subdivision_level];
             snapshot.hierarchy_probe_count += brick.probe_count;
             volume.hierarchy_probe_count += brick.probe_count;
-            if (brick.requested_resident) {
-                ++snapshot.requested_brick_count;
-                snapshot.requested_probe_count += brick.probe_count;
-                ++snapshot.level_requested_brick_count[subdivision_level];
-                ++volume.requested_brick_count;
-                volume.requested_probe_count += brick.probe_count;
-                ++volume.level_requested_brick_count[subdivision_level];
-                if (cell_index != RASTER_PROBE_PAGE_INVALID) {
-                    ++snapshot.cells[cell_index].requested_brick_count;
-                }
-            }
 
             ++snapshot.brick_count;
             ++volume.brick_count;
@@ -998,18 +1106,107 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
             );
         }
 
+        bool has_requested_brick = false;
+        for (uint brick_index = volume_first_brick_index;
+             brick_index < snapshot.brick_count;
+             ++brick_index) {
+            has_requested_brick |= snapshot.bricks[brick_index].requested_resident;
+        }
         if (!snapshot.hierarchy_enabled && snapshot.sparse_bricks_enabled &&
-            volume.requested_brick_count == 0u &&
-            nearest_brick_index != RASTER_PROBE_PAGE_INVALID) {
+            !has_requested_brick && nearest_brick_index != RASTER_PROBE_PAGE_INVALID) {
             BrickSnapshot& nearest_brick = snapshot.bricks[nearest_brick_index];
             nearest_brick.requested_resident = true;
+            nearest_brick.last_requested_frame = frame_index;
+        }
+
+        if (snapshot.sparse_bricks_enabled && snapshot.motion_prefetch_enabled) {
+            for (uint brick_index = volume_first_brick_index;
+                 brick_index < snapshot.brick_count;
+                 ++brick_index) {
+                BrickSnapshot& brick = snapshot.bricks[brick_index];
+                if (brick.subdivision_level != 0u || !brick.placement_requested ||
+                    brick.requested_resident ||
+                    brick.previous_brick_index == RASTER_PROBE_PAGE_INVALID) {
+                    continue;
+                }
+                const BrickSnapshot& previous =
+                    m_snapshot.bricks[brick.previous_brick_index];
+                if (previous.prefetched && previous.last_requested_frame != 0u &&
+                    frame_index >= previous.last_requested_frame &&
+                    frame_index - previous.last_requested_frame <=
+                        snapshot.motion_prefetch_keep_frames) {
+                    brick.requested_resident = true;
+                    brick.prefetched = true;
+                }
+            }
+
+            float3 prefetch_motion = snapshot.camera_motion;
+            if (volume.camera_clipmap && !volume.clipmap_follow_y) {
+                prefetch_motion.y = 0.0f;
+            }
+            const int3 prefetch_offset = ProbeClipmap::GetDominantPrefetchOffset(
+                prefetch_motion,
+                snapshot.motion_prefetch_threshold
+            );
+            if (prefetch_offset.x != 0 || prefetch_offset.y != 0 || prefetch_offset.z != 0) {
+                for (uint brick_index = volume_first_brick_index;
+                     brick_index < snapshot.brick_count;
+                     ++brick_index) {
+                    const BrickSnapshot& source_brick = snapshot.bricks[brick_index];
+                    if (source_brick.subdivision_level != 0u ||
+                        !source_brick.requested_resident || source_brick.prefetched) {
+                        continue;
+                    }
+
+                    uint3 neighbor_coord;
+                    if (!ProbeClipmap::ResolveNeighborCoord(
+                            source_brick.coord,
+                            prefetch_offset,
+                            fine_brick_counts,
+                            neighbor_coord
+                        )) {
+                        continue;
+                    }
+
+                    for (uint neighbor_index = volume_first_brick_index;
+                         neighbor_index < snapshot.brick_count;
+                         ++neighbor_index) {
+                        BrickSnapshot& neighbor = snapshot.bricks[neighbor_index];
+                        if (neighbor.subdivision_level != 0u || !neighbor.placement_requested ||
+                            neighbor.coord != neighbor_coord) {
+                            continue;
+                        }
+                        if (!neighbor.requested_resident || neighbor.prefetched) {
+                            neighbor.requested_resident = true;
+                            neighbor.prefetched = true;
+                            neighbor.last_requested_frame = frame_index;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        for (uint brick_index = volume_first_brick_index;
+             brick_index < snapshot.brick_count;
+             ++brick_index) {
+            const BrickSnapshot& brick = snapshot.bricks[brick_index];
+            if (!brick.requested_resident) {
+                continue;
+            }
             ++snapshot.requested_brick_count;
-            snapshot.requested_probe_count += nearest_brick.probe_count;
-            ++snapshot.level_requested_brick_count[nearest_brick.subdivision_level];
+            snapshot.requested_probe_count += brick.probe_count;
+            ++snapshot.level_requested_brick_count[brick.subdivision_level];
             ++volume.requested_brick_count;
-            volume.requested_probe_count += nearest_brick.probe_count;
-            ++volume.level_requested_brick_count[nearest_brick.subdivision_level];
-            ++snapshot.cells[nearest_brick.cell_index].requested_brick_count;
+            volume.requested_probe_count += brick.probe_count;
+            ++volume.level_requested_brick_count[brick.subdivision_level];
+            if (brick.cell_index != RASTER_PROBE_PAGE_INVALID) {
+                ++snapshot.cells[brick.cell_index].requested_brick_count;
+            }
+            if (brick.prefetched) {
+                ++snapshot.prefetched_brick_count;
+                ++volume.prefetched_brick_count;
+            }
         }
 
         snapshot.total_count += volume.total_count;
@@ -1141,6 +1338,99 @@ void ProbeVolumeResource::CollectRetiredAllocations(Snapshot& snapshot) {
     }
 }
 
+void ProbeVolumeResource::RebindPhysicalAllocations(Snapshot& snapshot, bool allow_reuse) {
+    StaticArray<ProbePhysicalAllocator::Allocation, RASTER_PROBE_MAX_BRICK_COUNT> next_allocations{};
+    StaticArray<uint, RASTER_PROBE_MAX_BRICK_COUNT> next_pages{};
+    StaticArray<uint, RASTER_PROBE_MAX_BRICK_COUNT> next_generations{};
+    StaticArray<uint64, RASTER_PROBE_MAX_BRICK_COUNT> next_load_submissions{};
+    StaticArray<bool, RASTER_PROBE_MAX_BRICK_COUNT> next_load_awaiting_submission{};
+    StaticArray<bool, RASTER_PROBE_MAX_BRICK_COUNT> next_history_valid{};
+    StaticArray<uint64, RASTER_PROBE_MAX_BRICK_COUNT> next_last_update_frame{};
+    StaticArray<uint, RASTER_PROBE_MAX_BRICK_COUNT> next_pending_dirty_reasons{};
+    StaticArray<bool, RASTER_PROBE_MAX_BRICK_COUNT> previous_allocation_used{};
+    next_pages.fill(RASTER_PROBE_PAGE_INVALID);
+
+    if (allow_reuse && m_has_snapshot) {
+        for (uint brick_index = 0u; brick_index < snapshot.brick_count; ++brick_index) {
+            BrickSnapshot& brick = snapshot.bricks[brick_index];
+            const uint previous_index = brick.previous_brick_index;
+            if (previous_index == RASTER_PROBE_PAGE_INVALID ||
+                previous_index >= m_snapshot.brick_count ||
+                previous_allocation_used[previous_index] ||
+                !m_physical_allocations[previous_index].valid) {
+                continue;
+            }
+
+            const BrickSnapshot& previous_brick = m_snapshot.bricks[previous_index];
+            if (m_physical_allocation_pages[previous_index] != previous_brick.page_index ||
+                previous_brick.local_counts != brick.local_counts ||
+                previous_brick.probe_count != brick.probe_count) {
+                continue;
+            }
+
+            const VolumeSnapshot& volume = snapshot.volumes[brick.volume_index];
+            const bool clipmap_rebind = volume.clipmap_scrolled &&
+                                        brick.subdivision_level == 0u &&
+                                        previous_brick.world_fine_coord == brick.world_fine_coord;
+            if (volume.clipmap_scrolled && !clipmap_rebind) {
+                continue;
+            }
+
+            next_allocations[brick_index] = m_physical_allocations[previous_index];
+            next_pages[brick_index] = brick.page_index;
+            next_generations[brick_index] = clipmap_rebind ?
+                                                AdvancePageGeneration(brick.page_index) :
+                                                m_physical_allocation_generations[previous_index];
+            next_load_submissions[brick_index] = m_brick_load_submission[previous_index];
+            next_load_awaiting_submission[brick_index] =
+                m_brick_load_awaiting_submission[previous_index];
+            next_history_valid[brick_index] = m_brick_history_valid[previous_index];
+            next_last_update_frame[brick_index] = m_brick_last_update_frame[previous_index];
+            next_pending_dirty_reasons[brick_index] =
+                m_brick_pending_dirty_reasons[previous_index];
+            previous_allocation_used[previous_index] = true;
+
+            if (clipmap_rebind) {
+                brick.clipmap_reused = true;
+                brick.last_reused_frame = snapshot.frame_index;
+                ++snapshot.clipmap_reused_brick_count;
+                ++snapshot.volumes[brick.volume_index].clipmap_reused_brick_count;
+                LOG_DEBUG(
+                    "[ProbeGI] Clipmap L0 Brick rebound: volume={}, world_brick=({}, {}, {}), old_brick={}, new_brick={}, old_page={}, new_page={}, generation={}, physical_offset={}, history_valid={}.",
+                    brick.volume_index,
+                    brick.world_fine_coord.x,
+                    brick.world_fine_coord.y,
+                    brick.world_fine_coord.z,
+                    previous_index,
+                    brick_index,
+                    previous_brick.page_index,
+                    brick.page_index,
+                    next_generations[brick_index],
+                    next_allocations[brick_index].probe_offset,
+                    next_history_valid[brick_index] ? 1 : 0
+                );
+            }
+        }
+    }
+
+    for (uint previous_index = 0u; previous_index < m_physical_allocations.size(); ++previous_index) {
+        if (!m_physical_allocations[previous_index].valid ||
+            previous_allocation_used[previous_index]) {
+            continue;
+        }
+        RetirePhysicalAllocation(previous_index, m_physical_allocation_pages[previous_index]);
+    }
+
+    m_physical_allocations = next_allocations;
+    m_physical_allocation_pages = next_pages;
+    m_physical_allocation_generations = next_generations;
+    m_brick_load_submission = next_load_submissions;
+    m_brick_load_awaiting_submission = next_load_awaiting_submission;
+    m_brick_history_valid = next_history_valid;
+    m_brick_last_update_frame = next_last_update_frame;
+    m_brick_pending_dirty_reasons = next_pending_dirty_reasons;
+}
+
 void ProbeVolumeResource::ApplyPhysicalResidency(
     Snapshot& snapshot,
     const StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT>& volume_history_reset
@@ -1226,8 +1516,9 @@ void ProbeVolumeResource::ApplyPhysicalResidency(
         static_cast<uint>(requested_candidates.size()) -
         static_cast<uint>(std::count(selected_bricks.begin(), selected_bricks.end(), true));
 
-    const bool allocator_reset = RequiresPhysicalAllocatorReset(snapshot);
-    if (allocator_reset) {
+    const bool layout_changed = RequiresPhysicalAllocatorReset(snapshot) ||
+                                snapshot.clipmap_scrolled_volume_count != 0u;
+    if (layout_changed) {
         ++m_layout_generation;
         if (m_layout_generation == 0u) {
             ++m_layout_generation;
@@ -1235,42 +1526,13 @@ void ProbeVolumeResource::ApplyPhysicalResidency(
     }
     snapshot.layout_generation = m_layout_generation;
 
-    auto same_brick_identity = [&](uint brick_index) {
-        if (!m_has_snapshot || brick_index >= m_snapshot.brick_count ||
-            brick_index >= snapshot.brick_count) {
-            return false;
-        }
-        const BrickSnapshot& previous = m_snapshot.bricks[brick_index];
-        const BrickSnapshot& current  = snapshot.bricks[brick_index];
-        return previous.coord == current.coord && previous.local_counts == current.local_counts &&
-               previous.volume_index == current.volume_index &&
-               previous.probe_count == current.probe_count && previous.page_index == current.page_index &&
-               previous.cell_index == current.cell_index &&
-               previous.subdivision_level == current.subdivision_level &&
-               previous.parent_page_index == current.parent_page_index;
-    };
-
     const uint current_allocator_capacity = m_physical_allocator.GetCapacity();
     if (current_allocator_capacity == 0u && m_retirement_queue.Empty()) {
         ResetPhysicalAllocator(snapshot.physical_probe_capacity);
     } else if (current_allocator_capacity != snapshot.physical_probe_capacity) {
         m_pending_physical_capacity = snapshot.physical_probe_capacity;
     }
-
-    for (uint brick_index = 0u; brick_index < m_physical_allocations.size(); ++brick_index) {
-        if (!m_physical_allocations[brick_index].valid) {
-            continue;
-        }
-        const bool binding_matches = same_brick_identity(brick_index) &&
-                                     m_physical_allocation_pages[brick_index] ==
-                                         snapshot.bricks[brick_index].page_index;
-        if (!binding_matches || m_pending_physical_capacity != 0u) {
-            const uint old_page = brick_index < m_snapshot.brick_count ?
-                                      m_snapshot.bricks[brick_index].page_index :
-                                      m_physical_allocation_pages[brick_index];
-            RetirePhysicalAllocation(brick_index, old_page);
-        }
-    }
+    RebindPhysicalAllocations(snapshot, m_pending_physical_capacity == 0u);
 
     Array<uint> eviction_candidates;
     for (uint brick_index = 0u; brick_index < snapshot.brick_count; ++brick_index) {
@@ -1508,6 +1770,10 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
             snapshot.streaming_reclaimed_allocation_count ||
         m_snapshot.streaming_allocation_stall_count != snapshot.streaming_allocation_stall_count ||
         m_snapshot.capacity_evicted_brick_count != snapshot.capacity_evicted_brick_count ||
+        m_snapshot.clipmap_volume_count != snapshot.clipmap_volume_count ||
+        m_snapshot.clipmap_scrolled_volume_count != snapshot.clipmap_scrolled_volume_count ||
+        m_snapshot.prefetched_brick_count != snapshot.prefetched_brick_count ||
+        m_snapshot.clipmap_reused_brick_count != snapshot.clipmap_reused_brick_count ||
         m_snapshot.geometry_generation != snapshot.geometry_generation ||
         m_snapshot.geometry_primitive_count != snapshot.geometry_primitive_count ||
         m_snapshot.fine_cell_count != snapshot.fine_cell_count ||
@@ -1523,6 +1789,10 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
         !NearlyEqual(m_snapshot.dirty_influence_scale, snapshot.dirty_influence_scale) ||
         !NearlyEqual(m_snapshot.brick_resident_distance, snapshot.brick_resident_distance) ||
         !NearlyEqual(m_snapshot.brick_resident_hysteresis, snapshot.brick_resident_hysteresis) ||
+        !NearlyEqual(m_snapshot.clipmap_anchor_hysteresis, snapshot.clipmap_anchor_hysteresis) ||
+        m_snapshot.motion_prefetch_enabled != snapshot.motion_prefetch_enabled ||
+        !NearlyEqual(m_snapshot.motion_prefetch_threshold, snapshot.motion_prefetch_threshold) ||
+        m_snapshot.motion_prefetch_keep_frames != snapshot.motion_prefetch_keep_frames ||
         m_snapshot.streaming_enabled != snapshot.streaming_enabled ||
         m_snapshot.streaming_load_budget != snapshot.streaming_load_budget ||
         m_snapshot.streaming_eviction_budget != snapshot.streaming_eviction_budget ||
@@ -1560,6 +1830,14 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
             lhs.level_brick_count != rhs.level_brick_count ||
             lhs.level_requested_brick_count != rhs.level_requested_brick_count ||
             lhs.level_resident_brick_count != rhs.level_resident_brick_count ||
+            lhs.camera_clipmap != rhs.camera_clipmap ||
+            lhs.clipmap_follow_y != rhs.clipmap_follow_y ||
+            lhs.clipmap_scrolled != rhs.clipmap_scrolled ||
+            lhs.prefetched_brick_count != rhs.prefetched_brick_count ||
+            lhs.clipmap_reused_brick_count != rhs.clipmap_reused_brick_count ||
+            lhs.clipmap_anchor_cell != rhs.clipmap_anchor_cell ||
+            !NearlyEqual(lhs.configured_origin, rhs.configured_origin) ||
+            !NearlyEqual(lhs.clipmap_cell_step, rhs.clipmap_cell_step) ||
             !NearlyEqual(lhs.origin, rhs.origin) ||
             !NearlyEqual(lhs.extent, rhs.extent) || !NearlyEqual(lhs.spacing, rhs.spacing) ||
             !NearlyEqual(lhs.intensity, rhs.intensity) || !NearlyEqual(lhs.normal_bias, rhs.normal_bias) ||
@@ -1597,9 +1875,12 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
             lhs.cell_index != rhs.cell_index || lhs.subdivision_level != rhs.subdivision_level ||
             lhs.parent_page_index != rhs.parent_page_index ||
             lhs.neighbor_pages_0 != rhs.neighbor_pages_0 || lhs.neighbor_pages_1 != rhs.neighbor_pages_1 ||
+            lhs.placement_requested != rhs.placement_requested ||
             lhs.requested_resident != rhs.requested_resident || lhs.resident != rhs.resident ||
             lhs.page_generation != rhs.page_generation ||
-            lhs.streaming_state != rhs.streaming_state || lhs.cached != rhs.cached) {
+            lhs.streaming_state != rhs.streaming_state || lhs.cached != rhs.cached ||
+            lhs.prefetched != rhs.prefetched || lhs.clipmap_reused != rhs.clipmap_reused ||
+            lhs.world_fine_coord != rhs.world_fine_coord) {
             return true;
         }
     }
@@ -1614,6 +1895,8 @@ bool ProbeVolumeResource::RequiresHistoryReset(const Snapshot& snapshot, uint vo
 
     const VolumeSnapshot& previous = m_snapshot.volumes[volume_index];
     const VolumeSnapshot& current  = snapshot.volumes[volume_index];
+    const bool fixed_origin_changed =
+        !current.camera_clipmap && !NearlyEqual(previous.origin, current.origin);
     return m_snapshot.enabled != snapshot.enabled ||
            m_snapshot.hierarchy_enabled != snapshot.hierarchy_enabled ||
            previous.config_index != current.config_index ||
@@ -1625,7 +1908,11 @@ bool ProbeVolumeResource::RequiresHistoryReset(const Snapshot& snapshot, uint vo
            previous.first_cell_index != current.first_cell_index ||
            previous.cell_count != current.cell_count ||
            previous.max_subdivision_level != current.max_subdivision_level ||
-           !NearlyEqual(previous.origin, current.origin) ||
+           previous.camera_clipmap != current.camera_clipmap ||
+           previous.clipmap_follow_y != current.clipmap_follow_y ||
+           !NearlyEqual(previous.configured_origin, current.configured_origin) ||
+           !NearlyEqual(previous.clipmap_cell_step, current.clipmap_cell_step) ||
+           fixed_origin_changed ||
            !NearlyEqual(previous.extent, current.extent) || !NearlyEqual(previous.spacing, current.spacing) ||
            !NearlyEqual(m_snapshot.trace_distance, snapshot.trace_distance) ||
            m_snapshot.trace_ray_count != snapshot.trace_ray_count ||
@@ -1724,7 +2011,13 @@ void ProbeVolumeResource::StageBrickUpload(const Snapshot& snapshot) {
             brick.neighbor_pages_1.x,
             brick.neighbor_pages_1.y,
             snapshot.layout_generation,
-            PackProbeStreamingFlags(brick.dirty_flags, brick.streaming_state, brick.cached)
+            PackProbeStreamingFlags(
+                brick.dirty_flags,
+                brick.streaming_state,
+                brick.cached,
+                brick.prefetched,
+                brick.clipmap_reused
+            )
         );
     }
 
@@ -1820,6 +2113,30 @@ ProbeVolumeResource::PrepareUpdate(
         volume_history_reset[volume_index] = RequiresHistoryReset(snapshot, volume_index);
     }
     ApplyPhysicalResidency(snapshot, volume_history_reset);
+    const uint previous_prefetched_brick_count =
+        m_has_snapshot ? m_snapshot.prefetched_brick_count : 0u;
+    if (snapshot.clipmap_scrolled_volume_count != 0u ||
+        snapshot.clipmap_reused_brick_count != 0u ||
+        ((snapshot.prefetched_brick_count != previous_prefetched_brick_count) &&
+         (snapshot.prefetched_brick_count != 0u || previous_prefetched_brick_count != 0u))) {
+        LOG_DEBUG(
+            "[ProbeGI] Clipmap residency decision: camera={}, motion={}, clipmap_volumes={}, scrolled_volumes={}, prefetched_bricks={}, reused_l0_bricks={}, requested_bricks={}/{}, loaded_this_frame={}, evicted_this_frame={}, retiring_allocations={}, load_budget={}, prefetch_threshold={}, keep_frames={}.",
+            snapshot.camera_position.ToString(2),
+            snapshot.camera_motion.ToString(2),
+            snapshot.clipmap_volume_count,
+            snapshot.clipmap_scrolled_volume_count,
+            snapshot.prefetched_brick_count,
+            snapshot.clipmap_reused_brick_count,
+            snapshot.requested_brick_count,
+            snapshot.brick_count,
+            snapshot.streaming_loaded_brick_count,
+            snapshot.streaming_evicted_brick_count,
+            snapshot.retiring_allocation_count,
+            snapshot.streaming_load_budget,
+            snapshot.motion_prefetch_threshold,
+            snapshot.motion_prefetch_keep_frames
+        );
+    }
     ApplyDirtyEvents(snapshot);
     const bool changed  = HasSnapshotChanged(snapshot);
     bool adaptive_layout_changed =
@@ -1879,7 +2196,7 @@ ProbeVolumeResource::PrepareUpdate(
 
         if (changed || volume_reset) {
             LOG_DEBUG(
-                "[ProbeGI] Volume residency updated: slot={}, config_index={}, count=({}, {}, {}) base_probes={}, hierarchy_probes={}, logical_offset={}, cells={} range=[{}, {}), max_level={}, level_bricks=({}, {}, {}), requested_bricks={}/{}, requested_levels=({}, {}, {}), requested_probes={}, resident_bricks={}/{}, resident_levels=({}, {}, {}), resident_probes={}, page_table_offset={}, origin={}, extent={}, spacing={}, intensity={}, blend_distance={}, history_reset={}",
+                "[ProbeGI] Volume residency updated: slot={}, config_index={}, count=({}, {}, {}) base_probes={}, hierarchy_probes={}, logical_offset={}, cells={} range=[{}, {}), max_level={}, level_bricks=({}, {}, {}), requested_bricks={}/{}, requested_levels=({}, {}, {}), requested_probes={}, prefetched_bricks={}, resident_bricks={}/{}, resident_levels=({}, {}, {}), resident_probes={}, page_table_offset={}, configured_origin={}, runtime_origin={}, extent={}, spacing={}, intensity={}, blend_distance={}, clipmap={}, follow_y={}, anchor=({}, {}, {}), cell_step={}, scrolled={}, reused_l0={}, history_reset={}",
                 volume_index,
                 volume.config_index,
                 volume.count_x,
@@ -1901,6 +2218,7 @@ ProbeVolumeResource::PrepareUpdate(
                 volume.level_requested_brick_count[1],
                 volume.level_requested_brick_count[2],
                 volume.requested_probe_count,
+                volume.prefetched_brick_count,
                 volume.resident_brick_count,
                 volume.brick_count,
                 volume.level_resident_brick_count[0],
@@ -1908,11 +2226,20 @@ ProbeVolumeResource::PrepareUpdate(
                 volume.level_resident_brick_count[2],
                 volume.resident_probe_count,
                 volume.page_table_offset,
+                volume.configured_origin.ToString(2),
                 volume.origin.ToString(2),
                 volume.extent.ToString(2),
                 volume.spacing.ToString(2),
                 volume.intensity,
                 volume.blend_distance,
+                volume.camera_clipmap ? 1 : 0,
+                volume.clipmap_follow_y ? 1 : 0,
+                volume.clipmap_anchor_cell.x,
+                volume.clipmap_anchor_cell.y,
+                volume.clipmap_anchor_cell.z,
+                volume.clipmap_cell_step.ToString(2),
+                volume.clipmap_scrolled ? 1 : 0,
+                volume.clipmap_reused_brick_count,
                 volume_reset ? 1 : 0
             );
         }
@@ -2133,7 +2460,8 @@ ProbeVolumeResource::PrepareUpdate(
             snapshot.visibility_hysteresis
         );
         StageVolumeUpload(snapshot);
-    } else if (snapshot.debug_mode == 6u || snapshot.debug_mode == 11u || snapshot.debug_mode == 12u) {
+    } else if (snapshot.debug_mode == 6u || snapshot.debug_mode == 11u ||
+               snapshot.debug_mode == 12u || snapshot.debug_mode == 13u) {
         StageBrickUpload(snapshot);
     }
 
