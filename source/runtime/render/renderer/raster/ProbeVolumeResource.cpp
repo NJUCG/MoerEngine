@@ -9,6 +9,7 @@
 #include "scene/Scene.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -78,6 +79,15 @@ Box3D TransformBounds(const Box3D& local_bounds, const float4x4& world_transform
         return Box3D();
     }
     return bounds;
+}
+
+uint64 HashTransform(const float4x4& transform) {
+    uint64 hash = 14695981039346656037ull;
+    for (float component : transform.e) {
+        hash ^= static_cast<uint64>(std::bit_cast<uint32>(component));
+        hash *= 1099511628211ull;
+    }
+    return hash;
 }
 
 float3 GetMainLightColor(const Scene& scene, float3& out_direction, float& out_intensity) {
@@ -286,17 +296,32 @@ void ProbeVolumeResource::Destroy(BindlessArrayRef& bdls) {
     m_physical_allocations.fill({});
     m_physical_allocator.Reset(0u);
     m_scene_geometry_bounds.clear();
+    m_scene_geometry_instances.clear();
+    m_frame_dirty_regions.clear();
+    m_brick_pending_dirty_reasons.fill(0u);
+    m_main_light_snapshot = {};
+    m_main_light_snapshot_valid = false;
+    m_frame_global_dirty_reasons = 0u;
+    m_frame_changed_geometry_count = 0u;
+    m_frame_dirty_regions_collapsed = false;
     m_scene_geometry_cache_valid = false;
     m_scene_geometry_generation = 0u;
     m_layout_generation = 0u;
     m_last_scheduled_brick_count = 0;
     m_last_scheduled_probe_count = 0;
+    m_last_dirty_brick_count = 0;
+    m_last_scheduled_dirty_brick_count = 0;
+    m_last_deferred_dirty_brick_count = 0;
+    m_last_dirty_region_count = 0;
+    m_last_global_dirty_reasons = 0u;
 }
 
-void ProbeVolumeResource::RefreshSceneGeometry(const Scene& scene) {
+void ProbeVolumeResource::RefreshSceneGeometry(const Scene& scene, bool dirty_tracking_enabled) {
     if (!scene.IsReady()) {
-        if (m_scene_geometry_cache_valid || !m_scene_geometry_bounds.empty()) {
+        if (m_scene_geometry_cache_valid || !m_scene_geometry_bounds.empty() ||
+            !m_scene_geometry_instances.empty()) {
             m_scene_geometry_bounds.clear();
+            m_scene_geometry_instances.clear();
             m_scene_geometry_cache_valid = false;
             ++m_scene_geometry_generation;
             if (m_scene_geometry_generation == 0u) {
@@ -319,13 +344,15 @@ void ProbeVolumeResource::RefreshSceneGeometry(const Scene& scene) {
 
     Array<Box3D> rebuilt_bounds;
     rebuilt_bounds.reserve(m_scene_geometry_bounds.size());
+    Array<ProbeTrackedBounds> rebuilt_instances;
+    rebuilt_instances.reserve(m_scene_geometry_instances.size());
     uint renderable_instance_count = 0u;
     uint leaf_primitive_count      = 0u;
     uint skipped_invalid_count     = 0u;
 
     const auto& registry = scene.r();
     registry.view<const ecs::CRenderable, const ecs::CNode>().each(
-        [&](const auto, const ecs::CRenderable& renderable, const ecs::CNode& node) {
+        [&](const auto renderable_entity, const ecs::CRenderable& renderable, const ecs::CNode& node) {
             if (renderable.mesh_entt == entt::null || !registry.valid(renderable.mesh_entt) ||
                 !registry.all_of<ecs::CMesh>(renderable.mesh_entt)) {
                 ++skipped_invalid_count;
@@ -341,6 +368,7 @@ void ProbeVolumeResource::RefreshSceneGeometry(const Scene& scene) {
                                         ) :
                                         static_cast<uint>(mesh.primitive_entts.size());
             leaf_primitive_count += leaf_count;
+            Box3D instance_bounds;
             for (uint primitive_index = 0u; primitive_index < leaf_count; ++primitive_index) {
                 const entt::entity primitive_entity = mesh.primitive_entts[primitive_index];
                 if (!registry.valid(primitive_entity) || !registry.all_of<ecs::CPrimitive>(primitive_entity)) {
@@ -355,24 +383,142 @@ void ProbeVolumeResource::RefreshSceneGeometry(const Scene& scene) {
                     continue;
                 }
                 rebuilt_bounds.push_back(world_bounds);
+                instance_bounds.Expand(world_bounds);
+            }
+
+            if (instance_bounds.IsValid()) {
+                rebuilt_instances.push_back(
+                    {
+                        static_cast<uint64>(entt::to_integral(renderable_entity)),
+                        instance_bounds,
+                        HashTransform(node.d_world_transform)
+                    }
+                );
             }
         }
     );
 
+    ProbeDirtyTracker::SortByKey(rebuilt_instances);
+    const bool transform_changed = tick_state.updated_transform || tick_state.created_transform;
+    const bool geometry_rebuilt  = tick_state.rebuilt_mesh || tick_state.rebuilt_rt_blas;
+    ProbeDirtyDiff geometry_diff;
+    if (m_scene_geometry_cache_valid) {
+        uint dirty_reasons = 0u;
+        if (transform_changed) {
+            dirty_reasons |= RASTER_PROBE_DIRTY_DYNAMIC;
+        }
+        if (geometry_rebuilt) {
+            dirty_reasons |= RASTER_PROBE_DIRTY_GEOMETRY;
+        }
+
+        geometry_diff = ProbeDirtyTracker::Diff(
+            m_scene_geometry_instances,
+            rebuilt_instances,
+            dirty_reasons,
+            64u,
+            geometry_rebuilt
+        );
+        if (!geometry_rebuilt && geometry_diff.changed_bounds == 0u) {
+            return;
+        }
+        if (dirty_tracking_enabled) {
+            m_frame_changed_geometry_count += geometry_diff.changed_bounds;
+            m_frame_dirty_regions_collapsed |= geometry_diff.collapsed;
+            m_frame_dirty_regions = std::move(geometry_diff.regions);
+        }
+    }
+
     m_scene_geometry_bounds = std::move(rebuilt_bounds);
+    m_scene_geometry_instances = std::move(rebuilt_instances);
     m_scene_geometry_cache_valid = true;
     ++m_scene_geometry_generation;
     if (m_scene_geometry_generation == 0u) {
         ++m_scene_geometry_generation;
     }
     LOG_DEBUG(
-        "[ProbeGI] Geometry cache rebuilt: generation={}, renderable_instances={}, leaf_primitives={}, valid_world_bounds={}, skipped_invalid={}.",
+        "[ProbeGI] Geometry cache rebuilt: generation={}, renderable_instances={}, leaf_primitives={}, valid_world_bounds={}, skipped_invalid={}, dirty_regions={}, dirty_instances={}, dirty_collapsed={}.",
         m_scene_geometry_generation,
         renderable_instance_count,
         leaf_primitive_count,
         m_scene_geometry_bounds.size(),
-        skipped_invalid_count
+        skipped_invalid_count,
+        m_frame_dirty_regions.size(),
+        m_frame_changed_geometry_count,
+        m_frame_dirty_regions_collapsed ? 1 : 0
     );
+}
+
+void ProbeVolumeResource::RefreshGlobalDirtyEvents(const Scene& scene, bool dirty_tracking_enabled) {
+    if (!dirty_tracking_enabled || !scene.IsReady()) {
+        m_main_light_snapshot_valid = false;
+        return;
+    }
+
+    MainLightSnapshot current_light{};
+    const entt::entity light_entity = scene.GetMainDirectionalLightEntity();
+    current_light.exists = light_entity != entt::null;
+    if (current_light.exists) {
+        const auto& light = scene.GetMainDirectionalLight();
+        current_light.direction = SafeNormalize(light.d_direction, current_light.direction);
+        current_light.color     = light.color;
+        current_light.intensity = light.intensity;
+    }
+
+    if (m_main_light_snapshot_valid &&
+        (m_main_light_snapshot.exists != current_light.exists ||
+         !NearlyEqual(m_main_light_snapshot.direction, current_light.direction) ||
+         !NearlyEqual(m_main_light_snapshot.color, current_light.color) ||
+         !NearlyEqual(m_main_light_snapshot.intensity, current_light.intensity))) {
+        m_frame_global_dirty_reasons |= RASTER_PROBE_DIRTY_LIGHT;
+    }
+    if (m_has_snapshot && scene.GetLastTickState().updated_material) {
+        m_frame_global_dirty_reasons |= RASTER_PROBE_DIRTY_MATERIAL;
+    }
+
+    m_main_light_snapshot = current_light;
+    m_main_light_snapshot_valid = true;
+    if (m_frame_global_dirty_reasons != 0u) {
+        LOG_DEBUG(
+            "[ProbeGI] Global dirty event: reasons=0x{:x}, main_light_exists={}, direction={}, color={}, intensity={}.",
+            m_frame_global_dirty_reasons,
+            current_light.exists ? 1 : 0,
+            current_light.direction.ToString(3),
+            current_light.color.ToString(3),
+            current_light.intensity
+        );
+    }
+}
+
+void ProbeVolumeResource::ApplyDirtyEvents(Snapshot& snapshot) {
+    m_last_dirty_region_count = static_cast<uint>(m_frame_dirty_regions.size());
+    m_last_global_dirty_reasons = m_frame_global_dirty_reasons;
+    m_last_dirty_brick_count = 0u;
+    if (!snapshot.dirty_tracking_enabled) {
+        m_brick_pending_dirty_reasons.fill(0u);
+        return;
+    }
+
+    const float influence_distance = snapshot.trace_distance * snapshot.dirty_influence_scale;
+    for (uint brick_index = 0u; brick_index < snapshot.brick_count; ++brick_index) {
+        BrickSnapshot& brick = snapshot.bricks[brick_index];
+        if (!brick.resident) {
+            m_brick_pending_dirty_reasons[brick_index] = 0u;
+            brick.dirty_flags = 0u;
+            continue;
+        }
+
+        const uint event_reasons = ProbeDirtyTracker::ResolveReasons(
+            brick.sample_bounds,
+            m_frame_dirty_regions,
+            m_frame_global_dirty_reasons,
+            influence_distance
+        );
+        m_brick_pending_dirty_reasons[brick_index] |= event_reasons;
+        brick.dirty_flags = m_brick_pending_dirty_reasons[brick_index];
+        if (brick.dirty_flags != 0u) {
+            ++m_last_dirty_brick_count;
+        }
+    }
 }
 
 void ProbeVolumeResource::UpdateSceneData(CommandList& cmd_list, const Scene& scene) {
@@ -450,6 +596,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
     snapshot.adaptive_placement_enabled =
         snapshot.enabled && config.probe_gi_adaptive_placement_enabled;
     snapshot.hierarchy_enabled = snapshot.enabled && config.probe_gi_adaptive_hierarchy_enabled;
+    snapshot.dirty_tracking_enabled = snapshot.enabled && config.probe_gi_dirty_tracking_enabled;
     snapshot.adaptive_geometry_padding = Max(config.probe_gi_adaptive_geometry_padding, 0.0f);
     snapshot.adaptive_fine_occupancy = Clamp(
         config.probe_gi_adaptive_fine_occupancy,
@@ -459,6 +606,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
     snapshot.adaptive_fine_primitives =
         static_cast<uint>(Clamp(config.probe_gi_adaptive_fine_primitives, 1, 512));
     snapshot.adaptive_transition_width = Clamp(config.probe_gi_adaptive_transition_width, 0.0f, 4.0f);
+    snapshot.dirty_influence_scale = Clamp(config.probe_gi_dirty_influence_scale, 0.0f, 1.0f);
     snapshot.geometry_generation =
         snapshot.adaptive_placement_enabled ? m_scene_geometry_generation : 0u;
     snapshot.geometry_primitive_count = snapshot.adaptive_placement_enabled ?
@@ -476,7 +624,7 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
         int(min_physical_probe_capacity),
         int(RASTER_PROBE_MAX_COUNT)
     ));
-    snapshot.debug_mode = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 10));
+    snapshot.debug_mode = static_cast<uint>(Clamp(config.probe_gi_debug_mode, 0, 11));
     snapshot.trace_distance     = Max(config.probe_gi_trace_distance, 0.1f);
     snapshot.trace_ray_count =
         static_cast<uint>(Clamp(config.probe_gi_trace_ray_count, 1, int(RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT)));
@@ -603,6 +751,10 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
             );
             const float3 brick_center = volume.origin + level_spacing * brick_center_coord;
             brick.camera_distance_sq = SquaredLengthf(camera_position - brick_center);
+            const float3 brick_min = volume.origin + level_spacing * float3(brick_start);
+            const uint3  brick_last = brick_start + brick.local_counts - uint3(1u);
+            const float3 brick_max = volume.origin + level_spacing * float3(brick_last);
+            brick.sample_bounds = Box3D(Min(brick_min, brick_max), Max(brick_min, brick_max));
 
             bool same_brick = false;
             if (m_has_snapshot && brick_index < m_snapshot.brick_count) {
@@ -849,6 +1001,7 @@ void ProbeVolumeResource::ResetPhysicalAllocator(uint physical_probe_capacity) {
     m_physical_allocator.Reset(physical_probe_capacity);
     m_brick_history_valid.fill(false);
     m_brick_last_update_frame.fill(0);
+    m_brick_pending_dirty_reasons.fill(0u);
     LOG_DEBUG("[ProbeGI] Physical Probe allocator reset: capacity={}.", physical_probe_capacity);
 }
 
@@ -877,6 +1030,7 @@ void ProbeVolumeResource::ReleasePhysicalAllocation(uint brick_index) {
     allocation = {};
     m_brick_history_valid[brick_index] = false;
     m_brick_last_update_frame[brick_index] = 0;
+    m_brick_pending_dirty_reasons[brick_index] = 0u;
 }
 
 void ProbeVolumeResource::ApplyPhysicalResidency(Snapshot& snapshot) {
@@ -1089,6 +1243,7 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
         m_snapshot.sparse_bricks_enabled != snapshot.sparse_bricks_enabled ||
         m_snapshot.adaptive_placement_enabled != snapshot.adaptive_placement_enabled ||
         m_snapshot.hierarchy_enabled != snapshot.hierarchy_enabled ||
+        m_snapshot.dirty_tracking_enabled != snapshot.dirty_tracking_enabled ||
         m_snapshot.debug_mode != snapshot.debug_mode ||
         m_snapshot.volume_count != snapshot.volume_count || m_snapshot.cell_count != snapshot.cell_count ||
         m_snapshot.brick_count != snapshot.brick_count ||
@@ -1117,6 +1272,7 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
         !NearlyEqual(m_snapshot.adaptive_fine_occupancy, snapshot.adaptive_fine_occupancy) ||
         m_snapshot.adaptive_fine_primitives != snapshot.adaptive_fine_primitives ||
         !NearlyEqual(m_snapshot.adaptive_transition_width, snapshot.adaptive_transition_width) ||
+        !NearlyEqual(m_snapshot.dirty_influence_scale, snapshot.dirty_influence_scale) ||
         !NearlyEqual(m_snapshot.brick_resident_distance, snapshot.brick_resident_distance) ||
         !NearlyEqual(m_snapshot.brick_resident_hysteresis, snapshot.brick_resident_hysteresis) ||
         m_snapshot.update_scheduler_enabled != snapshot.update_scheduler_enabled ||
@@ -1315,7 +1471,7 @@ void ProbeVolumeResource::StageBrickUpload(const Snapshot& snapshot) {
             brick.neighbor_pages_1.x,
             brick.neighbor_pages_1.y,
             snapshot.layout_generation,
-            brick.neighbor_pages_1.w
+            brick.dirty_flags
         );
     }
 
@@ -1380,6 +1536,15 @@ ProbeVolumeResource::PrepareUpdate(
     UpdateInfo update_info{};
     m_last_scheduled_brick_count = 0;
     m_last_scheduled_probe_count = 0;
+    m_last_dirty_brick_count = 0;
+    m_last_scheduled_dirty_brick_count = 0;
+    m_last_deferred_dirty_brick_count = 0;
+    m_last_dirty_region_count = 0;
+    m_last_global_dirty_reasons = 0u;
+    m_frame_dirty_regions.clear();
+    m_frame_global_dirty_reasons = 0u;
+    m_frame_changed_geometry_count = 0u;
+    m_frame_dirty_regions_collapsed = false;
 
     if (m_probe_buffer.buf == nullptr || m_volume_buffer.buf == nullptr || m_cell_buffer.buf == nullptr ||
         m_brick_buffer.buf == nullptr || m_page_table_buffer.buf == nullptr ||
@@ -1387,14 +1552,18 @@ ProbeVolumeResource::PrepareUpdate(
         return update_info;
     }
 
-    if (config.probe_gi_enabled && config.probe_gi_adaptive_placement_enabled) {
-        RefreshSceneGeometry(scene);
+    const bool dirty_tracking_enabled = config.probe_gi_enabled && config.probe_gi_dirty_tracking_enabled;
+    if (config.probe_gi_enabled &&
+        (config.probe_gi_adaptive_placement_enabled || dirty_tracking_enabled)) {
+        RefreshSceneGeometry(scene, dirty_tracking_enabled);
     } else {
         m_scene_geometry_cache_valid = false;
     }
+    RefreshGlobalDirtyEvents(scene, dirty_tracking_enabled);
 
     Snapshot snapshot = BuildSnapshot(config, camera_position, frame_index);
     ApplyPhysicalResidency(snapshot);
+    ApplyDirtyEvents(snapshot);
     const bool changed  = HasSnapshotChanged(snapshot);
     bool adaptive_layout_changed =
         !m_has_snapshot || m_snapshot.adaptive_placement_enabled != snapshot.adaptive_placement_enabled ||
@@ -1425,6 +1594,7 @@ ProbeVolumeResource::PrepareUpdate(
         m_history_valid.fill(false);
         m_brick_history_valid.fill(false);
         m_brick_last_update_frame.fill(0);
+        m_brick_pending_dirty_reasons.fill(0u);
         m_snapshot     = snapshot;
         m_has_snapshot = true;
         if (changed) {
@@ -1440,6 +1610,7 @@ ProbeVolumeResource::PrepareUpdate(
     update_info.volume_count         = snapshot.volume_count;
     update_info.resident_brick_count = snapshot.resident_brick_count;
     update_info.resident_probe_count = snapshot.resident_probe_count;
+    update_info.dirty_brick_count    = m_last_dirty_brick_count;
 
     StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT> volume_history_reset{};
     StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT> next_history_valid{};
@@ -1553,11 +1724,21 @@ ProbeVolumeResource::PrepareUpdate(
             if (lhs_mandatory != rhs_mandatory) {
                 return lhs_mandatory;
             }
-            if (lhs.subdivision_level != rhs.subdivision_level) {
+            const bool lhs_dirty = (m_brick_pending_dirty_reasons[lhs_index] &
+                                    RASTER_PROBE_DIRTY_REASON_MASK) != 0u;
+            const bool rhs_dirty = (m_brick_pending_dirty_reasons[rhs_index] &
+                                    RASTER_PROBE_DIRTY_REASON_MASK) != 0u;
+            if (lhs_dirty != rhs_dirty) {
+                return lhs_dirty;
+            }
+            if (lhs_dirty && lhs.subdivision_level != rhs.subdivision_level) {
                 return lhs.subdivision_level > rhs.subdivision_level;
             }
             if (lhs.update_age != rhs.update_age) {
                 return lhs.update_age > rhs.update_age;
+            }
+            if (lhs.subdivision_level != rhs.subdivision_level) {
+                return lhs.subdivision_level > rhs.subdivision_level;
             }
             if (!NearlyEqual(lhs.camera_distance_sq, rhs.camera_distance_sq)) {
                 return lhs.camera_distance_sq < rhs.camera_distance_sq;
@@ -1570,9 +1751,14 @@ ProbeVolumeResource::PrepareUpdate(
         BrickSnapshot& brick = snapshot.bricks[brick_index];
         const bool mandatory =
             volume_history_reset[brick.volume_index] || !m_brick_history_valid[brick_index];
+        const uint dirty_reasons =
+            m_brick_pending_dirty_reasons[brick_index] & RASTER_PROBE_DIRTY_REASON_MASK;
         if (snapshot.update_scheduler_enabled && !mandatory &&
             update_info.job_count >= snapshot.update_brick_budget) {
             ++update_info.deferred_brick_count;
+            if (dirty_reasons != 0u) {
+                ++update_info.deferred_dirty_brick_count;
+            }
             continue;
         }
         if (update_info.job_count >= update_info.jobs.size()) {
@@ -1586,13 +1772,46 @@ ProbeVolumeResource::PrepareUpdate(
         job.probe_count  = brick.probe_count;
         job.param = BuildUpdateParam(snapshot, volume, brick.volume_index, brick_index, scene, !mandatory);
         update_info.scheduled_probe_count += brick.probe_count;
+        ++update_info.scheduled_level_brick_count[brick.subdivision_level];
         next_brick_history_valid[brick_index] = true;
         m_brick_last_update_frame[brick_index] = frame_index;
         brick.update_age = 0;
+        if (dirty_reasons != 0u) {
+            ++update_info.scheduled_dirty_brick_count;
+            ++update_info.scheduled_dirty_level_brick_count[brick.subdivision_level];
+            brick.dirty_flags = dirty_reasons | RASTER_PROBE_DIRTY_SCHEDULED;
+            m_brick_pending_dirty_reasons[brick_index] = 0u;
+        }
     }
 
     m_last_scheduled_brick_count = update_info.job_count;
     m_last_scheduled_probe_count = update_info.scheduled_probe_count;
+    m_last_scheduled_dirty_brick_count = update_info.scheduled_dirty_brick_count;
+    m_last_deferred_dirty_brick_count = update_info.deferred_dirty_brick_count;
+
+    if (m_frame_changed_geometry_count != 0u || m_frame_global_dirty_reasons != 0u ||
+        update_info.scheduled_dirty_brick_count != 0u || update_info.deferred_dirty_brick_count != 0u) {
+        LOG_DEBUG(
+            "[ProbeGI] Dirty update scheduler: regions={}, changed_instances={}, collapsed={}, global_reasons=0x{:x}, influence_distance={}, dirty_bricks={}, scheduled_dirty={}, scheduled_dirty_levels=({}, {}, {}), deferred_dirty={}, scheduled_total={}/{}, scheduled_levels=({}, {}, {}), budget={}.",
+            m_frame_dirty_regions.size(),
+            m_frame_changed_geometry_count,
+            m_frame_dirty_regions_collapsed ? 1 : 0,
+            m_frame_global_dirty_reasons,
+            snapshot.trace_distance * snapshot.dirty_influence_scale,
+            update_info.dirty_brick_count,
+            update_info.scheduled_dirty_brick_count,
+            update_info.scheduled_dirty_level_brick_count[0],
+            update_info.scheduled_dirty_level_brick_count[1],
+            update_info.scheduled_dirty_level_brick_count[2],
+            update_info.deferred_dirty_brick_count,
+            update_info.job_count,
+            snapshot.resident_brick_count,
+            update_info.scheduled_level_brick_count[0],
+            update_info.scheduled_level_brick_count[1],
+            update_info.scheduled_level_brick_count[2],
+            snapshot.update_brick_budget
+        );
+    }
 
     if (changed) {
         LOG_DEBUG(
@@ -1641,7 +1860,7 @@ ProbeVolumeResource::PrepareUpdate(
             snapshot.visibility_hysteresis
         );
         StageVolumeUpload(snapshot);
-    } else if (snapshot.debug_mode == 6u) {
+    } else if (snapshot.debug_mode == 6u || snapshot.debug_mode == 11u) {
         StageBrickUpload(snapshot);
     }
 

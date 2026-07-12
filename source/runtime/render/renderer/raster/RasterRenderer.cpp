@@ -223,6 +223,13 @@ void RasterRenderer::UpdateGlobalLightingData(
                << " scheduled_probes=" << context.probe_volume.GetScheduledProbeCount() << "/"
                << context.probe_volume.GetResidentProbeCount()
                << " deferred_bricks=" << deferred_bricks
+               << " dirty_tracking=" << (ui_config.probe_gi_dirty_tracking_enabled ? 1 : 0)
+               << " dirty_regions=" << context.probe_volume.GetDirtyRegionCount()
+               << " global_dirty=0x" << std::hex << context.probe_volume.GetGlobalDirtyReasons() << std::dec
+               << " dirty_bricks=" << context.probe_volume.GetDirtyBrickCount()
+               << " scheduled_dirty=" << context.probe_volume.GetScheduledDirtyBrickCount()
+               << " deferred_dirty=" << context.probe_volume.GetDeferredDirtyBrickCount()
+               << " dirty_influence_scale=" << ui_config.probe_gi_dirty_influence_scale
                << " intensity=" << ui_config.probe_gi_intensity
                << " trace_distance=" << ui_config.probe_gi_trace_distance
                << " trace_rays=" << ui_config.probe_gi_trace_ray_count

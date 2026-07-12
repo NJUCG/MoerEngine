@@ -398,6 +398,15 @@ void RasterUI::ShowConfig() {
                 static_cast<int>(Render::RASTER_PROBE_MAX_BRICK_COUNT)
             );
         }
+        ImGui::Checkbox("Dirty Tracking", &m_config.probe_gi_dirty_tracking_enabled);
+        if (m_config.probe_gi_dirty_tracking_enabled) {
+            ImGui::SliderFloat(
+                "Dirty Influence Scale",
+                &m_config.probe_gi_dirty_influence_scale,
+                0.0f,
+                1.0f
+            );
+        }
 
         auto sanitize_volume_size = [](float3 value) {
             return float3(
@@ -473,8 +482,9 @@ void RasterUI::ShowConfig() {
             "Cell Layout",
             "Adaptive Level",
             "Hierarchy Resolve",
+            "Dirty Priority",
         };
-        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 11);
+        ImGui::Combo("Debug View", &m_config.probe_gi_debug_mode, s_probe_gi_debug_modes, 12);
         if (m_config.probe_gi_debug_mode != 0) {
             ImGui::SliderFloat("Debug Scale", &m_config.probe_gi_debug_scale, 0.0f, 8.0f);
         }

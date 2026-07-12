@@ -1061,7 +1061,7 @@ float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, 
     }
 
     if (debug_mode == 4u || debug_mode == 5u || debug_mode == 6u || debug_mode == 7u || debug_mode == 8u ||
-        debug_mode == 9u || debug_mode == 10u) {
+        debug_mode == 9u || debug_mode == 10u || debug_mode == 11u) {
         uint3 counts = ProbeGIGetCounts(volume);
         float3 local = ProbeGIGetLocalCoord(volume, biased_pos);
         uint3 coord = min(uint3(round(clamp(local, float3(0.0, 0.0, 0.0), float3(counts - uint3(1, 1, 1))))), counts - uint3(1, 1, 1));
@@ -1186,6 +1186,68 @@ float3 ProbeGIGetDebugColor(Moer::LightingData lighting_data, float3 world_pos, 
             );
             return transition_color * (0.35 + 0.65 * resident_coverage) *
                    lighting_data.probe_system_debug.x;
+        }
+
+        if (debug_mode == 11u) {
+            if (lighting_data.probe_system_hierarchy.x != 0u) {
+                const uint cell_index = ProbeGIGetCellIndex(volume, coord);
+                if (cell_index != Moer::RASTER_PROBE_PAGE_INVALID &&
+                    cell_index < lighting_data.probe_system_hierarchy.y) {
+                    ArrayBuffer cell_buffer = ArrayBuffer(lighting_data.probe_system_hierarchy.x);
+                    const Moer::ProbeCellGpuDesc cell =
+                        cell_buffer.Load<Moer::ProbeCellGpuDesc>(cell_index);
+                    const uint start_level =
+                        min(cell.hierarchy.x, Moer::RASTER_PROBE_MAX_SUBDIVISION_LEVEL);
+                    const uint end_level =
+                        min(cell.hierarchy.y, Moer::RASTER_PROBE_MAX_SUBDIVISION_LEVEL);
+                    brick_index = Moer::RASTER_PROBE_PAGE_INVALID;
+                    for (uint level = start_level; level <= end_level; ++level) {
+                        const uint candidate =
+                            ProbeGIGetBrickIndexAtLevel(lighting_data, volume, coord, level);
+                        if (candidate != Moer::RASTER_PROBE_PAGE_INVALID) {
+                            brick_index = candidate;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (brick_index == Moer::RASTER_PROBE_PAGE_INVALID) {
+                return float3(0.18, 0.01, 0.02) * lighting_data.probe_system_debug.x;
+            }
+
+            ArrayBuffer brick_buffer = ArrayBuffer(lighting_data.probe_system_counts.z);
+            const Moer::ProbeBrickGpuDesc brick =
+                brick_buffer.Load<Moer::ProbeBrickGpuDesc>(brick_index);
+            const uint dirty_flags = brick.neighbor_pages_1.w;
+            const uint dirty_reasons = dirty_flags & Moer::RASTER_PROBE_DIRTY_REASON_MASK;
+            if (dirty_reasons == 0u) {
+                return float3(0.035, 0.075, 0.055) * lighting_data.probe_system_debug.x;
+            }
+
+            float3 dirty_color = float3(0.0, 0.0, 0.0);
+            float  reason_count = 0.0;
+            if ((dirty_reasons & Moer::RASTER_PROBE_DIRTY_GEOMETRY) != 0u) {
+                dirty_color += float3(1.00, 0.28, 0.03);
+                reason_count += 1.0;
+            }
+            if ((dirty_reasons & Moer::RASTER_PROBE_DIRTY_DYNAMIC) != 0u) {
+                dirty_color += float3(0.92, 0.05, 0.78);
+                reason_count += 1.0;
+            }
+            if ((dirty_reasons & Moer::RASTER_PROBE_DIRTY_LIGHT) != 0u) {
+                dirty_color += float3(1.00, 0.88, 0.05);
+                reason_count += 1.0;
+            }
+            if ((dirty_reasons & Moer::RASTER_PROBE_DIRTY_MATERIAL) != 0u) {
+                dirty_color += float3(0.04, 0.72, 1.00);
+                reason_count += 1.0;
+            }
+            dirty_color /= max(reason_count, 1.0);
+            if ((dirty_flags & Moer::RASTER_PROBE_DIRTY_SCHEDULED) != 0u) {
+                dirty_color = lerp(dirty_color, float3(0.05, 0.95, 0.35), 0.45);
+            }
+            return dirty_color * lighting_data.probe_system_debug.x;
         }
 
         uint probe_index = ProbeGIGetProbeIndex(lighting_data, volume, coord);

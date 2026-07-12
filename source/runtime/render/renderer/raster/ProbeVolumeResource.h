@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ProbeAdaptiveLayout.h"
+#include "ProbeDirtyTracker.h"
 #include "ProbeGeometryClassifier.h"
 #include "ProbePhysicalAllocator.h"
 #include "RasterConfig.h"
@@ -38,6 +39,11 @@ public:
         uint                                                resident_probe_count  = 0;
         uint                                                scheduled_probe_count = 0;
         uint                                                deferred_brick_count  = 0;
+        uint                                                dirty_brick_count     = 0;
+        uint                                                scheduled_dirty_brick_count = 0;
+        uint                                                deferred_dirty_brick_count  = 0;
+        StaticArray<uint, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> scheduled_level_brick_count{};
+        StaticArray<uint, RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u> scheduled_dirty_level_brick_count{};
         StaticArray<UpdateJob, RASTER_PROBE_MAX_BRICK_COUNT> jobs{};
     };
 
@@ -157,6 +163,26 @@ public:
         return m_last_scheduled_probe_count;
     }
 
+    uint GetDirtyBrickCount() const {
+        return m_last_dirty_brick_count;
+    }
+
+    uint GetScheduledDirtyBrickCount() const {
+        return m_last_scheduled_dirty_brick_count;
+    }
+
+    uint GetDeferredDirtyBrickCount() const {
+        return m_last_deferred_dirty_brick_count;
+    }
+
+    uint GetDirtyRegionCount() const {
+        return m_last_dirty_region_count;
+    }
+
+    uint GetGlobalDirtyReasons() const {
+        return m_last_global_dirty_reasons;
+    }
+
     const ProbeBrickGpuDesc& GetBrickDesc(uint brick_index) const {
         return m_gpu_brick_descs[brick_index];
     }
@@ -218,9 +244,11 @@ private:
         uint  parent_page_index  = RASTER_PROBE_PAGE_INVALID;
         uint4 neighbor_pages_0   = uint4(RASTER_PROBE_PAGE_INVALID);
         uint4 neighbor_pages_1   = uint4(RASTER_PROBE_PAGE_INVALID);
+        Box3D sample_bounds;
         bool  requested_resident = true;
         bool  resident           = false;
         uint  update_age         = 0;
+        uint  dirty_flags        = 0u;
         float camera_distance_sq = 0.0f;
     };
 
@@ -277,6 +305,7 @@ private:
         bool   sparse_bricks_enabled      = false;
         bool   adaptive_placement_enabled = false;
         bool   hierarchy_enabled          = false;
+        bool   dirty_tracking_enabled     = false;
         uint   debug_mode                 = 0;
         uint   volume_count               = 0;
         uint   cell_count                 = 0;
@@ -307,6 +336,7 @@ private:
         float  adaptive_fine_occupancy    = 0.25f;
         uint   adaptive_fine_primitives   = 64u;
         float  adaptive_transition_width  = 1.5f;
+        float  dirty_influence_scale      = 1.0f;
         float  brick_resident_distance    = 0.0f;
         float  brick_resident_hysteresis  = 0.0f;
         bool   update_scheduler_enabled   = false;
@@ -331,7 +361,9 @@ private:
     };
 
     Snapshot BuildSnapshot(const RasterConfig& config, float3 camera_position, uint64 frame_index) const;
-    void RefreshSceneGeometry(const Scene& scene);
+    void RefreshSceneGeometry(const Scene& scene, bool dirty_tracking_enabled);
+    void RefreshGlobalDirtyEvents(const Scene& scene, bool dirty_tracking_enabled);
+    void ApplyDirtyEvents(Snapshot& snapshot);
     ProbeUpdateParam BuildUpdateParam(
         const Snapshot& snapshot,
         const VolumeSnapshot& volume,
@@ -376,11 +408,30 @@ private:
     StaticArray<ProbePhysicalAllocator::Allocation, RASTER_PROBE_MAX_BRICK_COUNT> m_physical_allocations{};
     ProbePhysicalAllocator m_physical_allocator;
     Array<Box3D>     m_scene_geometry_bounds;
+    Array<ProbeTrackedBounds> m_scene_geometry_instances;
+    Array<ProbeDirtyRegion>   m_frame_dirty_regions;
+    StaticArray<uint, RASTER_PROBE_MAX_BRICK_COUNT> m_brick_pending_dirty_reasons{};
+    struct MainLightSnapshot {
+        bool   exists    = false;
+        float3 direction = float3(0.0f, -1.0f, 0.0f);
+        float3 color     = float3(1.0f);
+        float  intensity = 0.0f;
+    };
+    MainLightSnapshot m_main_light_snapshot;
+    bool             m_main_light_snapshot_valid = false;
+    uint             m_frame_global_dirty_reasons = 0u;
+    uint             m_frame_changed_geometry_count = 0u;
+    bool             m_frame_dirty_regions_collapsed = false;
     bool             m_scene_geometry_cache_valid = false;
     uint             m_scene_geometry_generation  = 0;
     uint             m_layout_generation         = 0;
     uint             m_last_scheduled_brick_count = 0;
     uint             m_last_scheduled_probe_count = 0;
+    uint             m_last_dirty_brick_count = 0;
+    uint             m_last_scheduled_dirty_brick_count = 0;
+    uint             m_last_deferred_dirty_brick_count = 0;
+    uint             m_last_dirty_region_count = 0;
+    uint             m_last_global_dirty_reasons = 0u;
 };
 
 } // namespace Moer::Render::Raster

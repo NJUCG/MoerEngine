@@ -66,6 +66,14 @@ static constexpr uint RASTER_PROBE_STATE_INVALID = 0;
 static constexpr uint RASTER_PROBE_STATE_ACTIVE = 1;
 static constexpr uint RASTER_PROBE_STATE_RELOCATED = 2;
 static constexpr uint RASTER_PROBE_STATE_NEAR_SURFACE = 3;
+static constexpr uint RASTER_PROBE_DIRTY_GEOMETRY = 1u << 0u;
+static constexpr uint RASTER_PROBE_DIRTY_DYNAMIC = 1u << 1u;
+static constexpr uint RASTER_PROBE_DIRTY_LIGHT = 1u << 2u;
+static constexpr uint RASTER_PROBE_DIRTY_MATERIAL = 1u << 3u;
+static constexpr uint RASTER_PROBE_DIRTY_REASON_MASK =
+    RASTER_PROBE_DIRTY_GEOMETRY | RASTER_PROBE_DIRTY_DYNAMIC |
+    RASTER_PROBE_DIRTY_LIGHT | RASTER_PROBE_DIRTY_MATERIAL;
+static constexpr uint RASTER_PROBE_DIRTY_SCHEDULED = 1u << 8u;
 static constexpr uint RASTER_PROBE_GIZMO_DRAW_MODE_PROBES = 1;
 static constexpr uint RASTER_PROBE_GIZMO_DRAW_MODE_BOUNDS = 2;
 static constexpr uint RASTER_PROBE_GIZMO_DRAW_MODE_ADAPTIVE_CELL_BOUNDS = 3;
@@ -112,6 +120,14 @@ static const uint RASTER_PROBE_STATE_INVALID = 0;
 static const uint RASTER_PROBE_STATE_ACTIVE = 1;
 static const uint RASTER_PROBE_STATE_RELOCATED = 2;
 static const uint RASTER_PROBE_STATE_NEAR_SURFACE = 3;
+static const uint RASTER_PROBE_DIRTY_GEOMETRY = 1u << 0u;
+static const uint RASTER_PROBE_DIRTY_DYNAMIC = 1u << 1u;
+static const uint RASTER_PROBE_DIRTY_LIGHT = 1u << 2u;
+static const uint RASTER_PROBE_DIRTY_MATERIAL = 1u << 3u;
+static const uint RASTER_PROBE_DIRTY_REASON_MASK =
+    RASTER_PROBE_DIRTY_GEOMETRY | RASTER_PROBE_DIRTY_DYNAMIC |
+    RASTER_PROBE_DIRTY_LIGHT | RASTER_PROBE_DIRTY_MATERIAL;
+static const uint RASTER_PROBE_DIRTY_SCHEDULED = 1u << 8u;
 static const uint RASTER_PROBE_GIZMO_DRAW_MODE_PROBES = 1;
 static const uint RASTER_PROBE_GIZMO_DRAW_MODE_BOUNDS = 2;
 static const uint RASTER_PROBE_GIZMO_DRAW_MODE_ADAPTIVE_CELL_BOUNDS = 3;
