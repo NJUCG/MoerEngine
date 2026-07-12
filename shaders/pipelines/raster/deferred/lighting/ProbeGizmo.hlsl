@@ -129,7 +129,7 @@ float3 ProbeGizmoGetColor(Moer::ProbeGridProbeData probe, uint axis_index) {
     float3 fixed_color = max(param.fixed_color.rgb, float3(0.0, 0.0, 0.0));
     uint probe_state = uint(round(max(probe.world_position.w, 0.0)));
 
-    if (param.probe_volume_config.y == 3u) {
+    if (param.probe_volume_config.y == Moer::RASTER_PROBE_GIZMO_COLOR_STATE) {
         if (probe_state == Moer::RASTER_PROBE_STATE_INVALID) {
             return float3(1.0, 0.05, 0.02) * param.gizmo_config.y;
         }
@@ -142,13 +142,13 @@ float3 ProbeGizmoGetColor(Moer::ProbeGridProbeData probe, uint axis_index) {
         return float3(0.10, 0.95, 0.45) * param.gizmo_config.y;
     }
 
-    if (param.probe_volume_config.y == 1u) {
+    if (param.probe_volume_config.y == Moer::RASTER_PROBE_GIZMO_COLOR_IRRADIANCE) {
         float3 irradiance = max(probe.irradiance.rgb * probe.irradiance.a, float3(0.0, 0.0, 0.0));
         float irradiance_peak = max(max(irradiance.r, irradiance.g), max(irradiance.b, 1e-4));
         float3 irradiance_vis = irradiance / (1.0 + irradiance_peak);
         return max(irradiance_vis * param.gizmo_config.y, axis_tint * 0.08);
     }
-    if (param.probe_volume_config.y == 2u) {
+    if (param.probe_volume_config.y == Moer::RASTER_PROBE_GIZMO_COLOR_VISIBILITY) {
         float open_ratio = saturate(probe.visibility.z);
         float mean_distance = saturate(probe.visibility.x / 16.0);
         return float3(1.0 - open_ratio, open_ratio, mean_distance) * param.gizmo_config.y;

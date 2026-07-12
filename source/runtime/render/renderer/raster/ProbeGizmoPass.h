@@ -46,68 +46,161 @@ public:
 
     void Process(RasterContext& context, const RasterConfig& config, const Camera& camera) {
         const uint probe_count = context.probe_volume.GetPhysicalAllocatorCapacity();
+        const uint gizmo_color_mode = static_cast<uint>(Clamp(
+            config.probe_gi_gizmo_color_mode,
+            int(RASTER_PROBE_GIZMO_COLOR_FIXED),
+            int(RASTER_PROBE_GIZMO_COLOR_APV_LEVEL)
+        ));
         const bool draw_probes = config.probe_gi_enabled && config.probe_gi_gizmo_enabled &&
                                  context.probe_volume.GetResidentProbeCount() != 0 &&
                                  context.probe_volume.GetBufferHandle() != 0;
         const bool draw_bounds = config.probe_gi_enabled && config.probe_gi_volume_bounds_enabled &&
                                  context.probe_volume.GetVolumeCount() != 0;
+        const bool draw_apv_selected_level =
+            draw_probes && gizmo_color_mode == RASTER_PROBE_GIZMO_COLOR_APV_LEVEL &&
+            config.probe_gi_adaptive_placement_enabled && config.probe_gi_adaptive_hierarchy_enabled;
         const bool draw_adaptive_cells =
             config.probe_gi_enabled && config.probe_gi_adaptive_placement_enabled &&
-            config.probe_gi_debug_mode == 9 && context.probe_volume.GetCellCount() != 0;
+            (config.probe_gi_debug_mode == 9 || draw_apv_selected_level) &&
+            context.probe_volume.GetCellCount() != 0;
         if (!draw_probes && !draw_bounds && !draw_adaptive_cells) {
             return;
         }
 
         if (draw_probes) {
-            ProbeGizmoParam param{};
-            param.world2clip          = Transpose(camera.GetViewProjectionMatrix());
-            param.probe_volume_config = uint4(
-                RASTER_PROBE_GIZMO_DRAW_MODE_PROBES,
-                static_cast<uint>(Clamp(config.probe_gi_gizmo_color_mode, 0, 3)),
-                context.probe_volume.GetBufferHandle(),
-                probe_count
-            );
-            param.gizmo_config = float4(
-                Max(config.probe_gi_gizmo_size, 0.01f),
-                Max(config.probe_gi_gizmo_intensity, 0.0f),
-                Max(config.probe_gi_gizmo_thickness, 0.001f),
-                0.0f
-            );
-            param.fixed_color = float4(
-                config.probe_gi_gizmo_fixed_color.x,
-                config.probe_gi_gizmo_fixed_color.y,
-                config.probe_gi_gizmo_fixed_color.z,
-                0.65f
-            );
-            param.camera_position = float4(camera.GetPosition().x, camera.GetPosition().y, camera.GetPosition().z, 0.0f);
-
-            RasterTool::LogDebugEverySeconds("[ProbeGI] Probe gizmo pass active.", 3.0);
-
-            Array<SingleDrawParam> resident_draws;
-            resident_draws.reserve(context.probe_volume.GetResidentBrickCount());
-            for (uint brick_index = 0; brick_index < context.probe_volume.GetBrickCount(); ++brick_index) {
-                const ProbeBrickGpuDesc& brick = context.probe_volume.GetBrickDesc(brick_index);
+            auto is_published_resident = [](const ProbeBrickGpuDesc& brick) {
                 const uint streaming_state =
                     (brick.neighbor_pages_1.w & RASTER_PROBE_STREAMING_STATE_FLAG_MASK) >>
                     RASTER_PROBE_STREAMING_STATE_FLAG_SHIFT;
-                if (brick.probe_range.z == 0u || brick.probe_range.y == 0u ||
-                    streaming_state != RASTER_PROBE_STREAMING_RESIDENT) {
-                    continue;
+                return brick.probe_range.z != 0u && brick.probe_range.y != 0u &&
+                       streaming_state == RASTER_PROBE_STREAMING_RESIDENT;
+            };
+
+            auto draw_probe_batch = [&](Array<SingleDrawParam>&& draws,
+                                        uint                     color_mode,
+                                        float3                   fixed_color,
+                                        float                    alpha,
+                                        const char*              pass_name) {
+                if (draws.empty()) {
+                    return;
                 }
-                resident_draws.emplace_back(
-                    SingleDrawParam{18, brick.probe_range.y, 0, 0, brick.probe_range.x}
+
+                ProbeGizmoParam param{};
+                param.world2clip          = Transpose(camera.GetViewProjectionMatrix());
+                param.probe_volume_config = uint4(
+                    RASTER_PROBE_GIZMO_DRAW_MODE_PROBES,
+                    color_mode,
+                    context.probe_volume.GetBufferHandle(),
+                    probe_count
+                );
+                param.gizmo_config = float4(
+                    Max(config.probe_gi_gizmo_size, 0.01f),
+                    Max(config.probe_gi_gizmo_intensity, 0.0f),
+                    Max(config.probe_gi_gizmo_thickness, 0.001f),
+                    0.0f
+                );
+                param.fixed_color = float4(
+                    fixed_color.x,
+                    fixed_color.y,
+                    fixed_color.z,
+                    Clamp(alpha, 0.0f, 1.0f)
+                );
+                param.camera_position =
+                    float4(camera.GetPosition().x, camera.GetPosition().y, camera.GetPosition().z, 0.0f);
+
+                context.cmd_list.Gfx(m_pipeline, context.bdls, param)
+                    .Draw(
+                        pass_name,
+                        context.textures.lighting_output.GetRect2D(),
+                        std::move(draws),
+                        ColorAttachment{
+                            context.textures.lighting_output.tex,
+                            EAttachmentAction::AC_LOAD_STORE,
+                            float4(0, 0, 0, 0)
+                        }
+                    );
+            };
+
+            if (!draw_apv_selected_level) {
+                Array<SingleDrawParam> resident_draws;
+                resident_draws.reserve(context.probe_volume.GetResidentBrickCount());
+                for (uint brick_index = 0; brick_index < context.probe_volume.GetBrickCount(); ++brick_index) {
+                    const ProbeBrickGpuDesc& brick = context.probe_volume.GetBrickDesc(brick_index);
+                    if (!is_published_resident(brick)) {
+                        continue;
+                    }
+                    resident_draws.emplace_back(
+                        SingleDrawParam{18, brick.probe_range.y, 0, 0, brick.probe_range.x}
+                    );
+                }
+
+                draw_probe_batch(
+                    std::move(resident_draws),
+                    gizmo_color_mode,
+                    config.probe_gi_gizmo_fixed_color,
+                    0.65f,
+                    "Probe GI Gizmo Pass"
+                );
+                RasterTool::LogDebugEverySeconds("[ProbeGI] Probe gizmo pass active.", 3.0);
+            } else {
+                StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT> volume_has_coarse_cell{};
+                for (uint cell_index = 0u; cell_index < context.probe_volume.GetCellCount(); ++cell_index) {
+                    const ProbeCellGpuDesc& cell = context.probe_volume.GetCellDesc(cell_index);
+                    const uint desired_level = Min(cell.geometry.z, RASTER_PROBE_MAX_SUBDIVISION_LEVEL);
+                    if (desired_level == RASTER_PROBE_MAX_SUBDIVISION_LEVEL &&
+                        cell.coord_volume.w < RASTER_PROBE_VOLUME_MAX_COUNT) {
+                        volume_has_coarse_cell[cell.coord_volume.w] = true;
+                    }
+                }
+
+                Array<SingleDrawParam> level_draws[RASTER_PROBE_MAX_SUBDIVISION_LEVEL + 1u];
+                for (uint brick_index = 0u; brick_index < context.probe_volume.GetBrickCount(); ++brick_index) {
+                    const ProbeBrickGpuDesc& brick = context.probe_volume.GetBrickDesc(brick_index);
+                    const uint level = brick.hierarchy.y;
+                    if (!is_published_resident(brick) || level > RASTER_PROBE_MAX_SUBDIVISION_LEVEL) {
+                        continue;
+                    }
+
+                    bool selected_level = false;
+                    if (level < RASTER_PROBE_MAX_SUBDIVISION_LEVEL) {
+                        const uint cell_index = brick.hierarchy.x;
+                        if (cell_index < context.probe_volume.GetCellCount()) {
+                            const ProbeCellGpuDesc& cell = context.probe_volume.GetCellDesc(cell_index);
+                            selected_level = Min(cell.geometry.z, RASTER_PROBE_MAX_SUBDIVISION_LEVEL) == level;
+                        }
+                    } else {
+                        const uint volume_index = brick.coord_volume.w;
+                        selected_level = volume_index < RASTER_PROBE_VOLUME_MAX_COUNT &&
+                                         volume_has_coarse_cell[volume_index];
+                    }
+
+                    if (selected_level) {
+                        level_draws[level].emplace_back(
+                            SingleDrawParam{18, brick.probe_range.y, 0, 0, brick.probe_range.x}
+                        );
+                    }
+                }
+
+                static constexpr const char* level_pass_names[] = {
+                    "Probe GI APV Fine Gizmo Pass",
+                    "Probe GI APV Medium Gizmo Pass",
+                    "Probe GI APV Coarse Gizmo Pass",
+                };
+                for (int level = int(RASTER_PROBE_MAX_SUBDIVISION_LEVEL); level >= 0; --level) {
+                    draw_probe_batch(
+                        std::move(level_draws[level]),
+                        RASTER_PROBE_GIZMO_COLOR_FIXED,
+                        GetAdaptiveCellColor(static_cast<uint>(level)),
+                        0.82f,
+                        level_pass_names[level]
+                    );
+                }
+
+                RasterTool::LogDebugEverySeconds(
+                    "[ProbeGI] APV selected-level gizmo pass active.",
+                    3.0
                 );
             }
-
-            context.cmd_list.Gfx(m_pipeline, context.bdls, param)
-                .Draw(
-                    "Probe GI Gizmo Pass",
-                    context.textures.lighting_output.GetRect2D(),
-                    std::move(resident_draws),
-                    ColorAttachment{
-                        context.textures.lighting_output.tex, EAttachmentAction::AC_LOAD_STORE, float4(0, 0, 0, 0)
-                    }
-                );
         }
 
         if (draw_bounds) {

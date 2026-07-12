@@ -343,6 +343,31 @@ void RasterUI::ShowConfig() {
             Render::RASTER_PROBE_CELL_BRICK_DIM,
             Render::RASTER_PROBE_CELL_BRICK_DIM
         );
+        const int selected_brick_count_x =
+            (selected_volume.count_x + int(Render::RASTER_PROBE_BRICK_DIM) - 1) /
+            int(Render::RASTER_PROBE_BRICK_DIM);
+        const int selected_brick_count_y =
+            (selected_volume.count_y + int(Render::RASTER_PROBE_BRICK_DIM) - 1) /
+            int(Render::RASTER_PROBE_BRICK_DIM);
+        const int selected_brick_count_z =
+            (selected_volume.count_z + int(Render::RASTER_PROBE_BRICK_DIM) - 1) /
+            int(Render::RASTER_PROBE_BRICK_DIM);
+        const int selected_cell_count_x =
+            (selected_brick_count_x + int(Render::RASTER_PROBE_CELL_BRICK_DIM) - 1) /
+            int(Render::RASTER_PROBE_CELL_BRICK_DIM);
+        const int selected_cell_count_y =
+            (selected_brick_count_y + int(Render::RASTER_PROBE_CELL_BRICK_DIM) - 1) /
+            int(Render::RASTER_PROBE_CELL_BRICK_DIM);
+        const int selected_cell_count_z =
+            (selected_brick_count_z + int(Render::RASTER_PROBE_CELL_BRICK_DIM) - 1) /
+            int(Render::RASTER_PROBE_CELL_BRICK_DIM);
+        ImGui::Text(
+            "Selected APV Cell Grid: %d x %d x %d (%d)",
+            selected_cell_count_x,
+            selected_cell_count_y,
+            selected_cell_count_z,
+            selected_cell_count_x * selected_cell_count_y * selected_cell_count_z
+        );
         ImGui::Checkbox(
             "Adaptive Hierarchy Sampling",
             &m_config.probe_gi_adaptive_hierarchy_enabled
@@ -519,8 +544,8 @@ void RasterUI::ShowConfig() {
             "Brick Residency",
             "Update Age",
             "Physical Allocation",
-            "Cell Layout",
-            "Adaptive Level",
+            "APV Cell Layout",
+            "APV Desired Level",
             "Hierarchy Resolve",
             "Dirty Priority",
             "Streaming State",
@@ -539,8 +564,14 @@ void RasterUI::ShowConfig() {
         }
         ImGui::Checkbox("Show Probe Gizmos", &m_config.probe_gi_gizmo_enabled);
         if (m_config.probe_gi_gizmo_enabled) {
-            static const char* s_probe_gizmo_color_modes[] = {"Fixed Color", "Irradiance", "Visibility", "State"};
-            ImGui::Combo("Gizmo Color", &m_config.probe_gi_gizmo_color_mode, s_probe_gizmo_color_modes, 4);
+            static const char* s_probe_gizmo_color_modes[] = {
+                "Fixed Color",
+                "Irradiance",
+                "Visibility",
+                "State",
+                "APV Selected Level",
+            };
+            ImGui::Combo("Gizmo Color", &m_config.probe_gi_gizmo_color_mode, s_probe_gizmo_color_modes, 5);
             ImGui::SliderFloat("Gizmo Size", &m_config.probe_gi_gizmo_size, 0.02f, 1.0f);
             ImGui::SliderFloat("Gizmo Thickness", &m_config.probe_gi_gizmo_thickness, 0.002f, 0.08f);
             ImGui::SliderFloat("Gizmo Intensity", &m_config.probe_gi_gizmo_intensity, 0.1f, 8.0f);

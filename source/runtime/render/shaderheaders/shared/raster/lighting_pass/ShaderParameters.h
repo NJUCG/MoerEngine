@@ -97,6 +97,11 @@ static constexpr uint RASTER_PROBE_CLIPMAP_REUSED = 1u << 20u;
 static constexpr uint RASTER_PROBE_GIZMO_DRAW_MODE_PROBES = 1;
 static constexpr uint RASTER_PROBE_GIZMO_DRAW_MODE_BOUNDS = 2;
 static constexpr uint RASTER_PROBE_GIZMO_DRAW_MODE_ADAPTIVE_CELL_BOUNDS = 3;
+static constexpr uint RASTER_PROBE_GIZMO_COLOR_FIXED = 0;
+static constexpr uint RASTER_PROBE_GIZMO_COLOR_IRRADIANCE = 1;
+static constexpr uint RASTER_PROBE_GIZMO_COLOR_VISIBILITY = 2;
+static constexpr uint RASTER_PROBE_GIZMO_COLOR_STATE = 3;
+static constexpr uint RASTER_PROBE_GIZMO_COLOR_APV_LEVEL = 4;
 #else
 static const uint RASTER_PROBE_VOLUME_MAX_COUNT = 4;
 static const uint RASTER_PROBE_MAX_COUNT_PER_VOLUME = 512;
@@ -171,6 +176,11 @@ static const uint RASTER_PROBE_CLIPMAP_REUSED = 1u << 20u;
 static const uint RASTER_PROBE_GIZMO_DRAW_MODE_PROBES = 1;
 static const uint RASTER_PROBE_GIZMO_DRAW_MODE_BOUNDS = 2;
 static const uint RASTER_PROBE_GIZMO_DRAW_MODE_ADAPTIVE_CELL_BOUNDS = 3;
+static const uint RASTER_PROBE_GIZMO_COLOR_FIXED = 0;
+static const uint RASTER_PROBE_GIZMO_COLOR_IRRADIANCE = 1;
+static const uint RASTER_PROBE_GIZMO_COLOR_VISIBILITY = 2;
+static const uint RASTER_PROBE_GIZMO_COLOR_STATE = 3;
+static const uint RASTER_PROBE_GIZMO_COLOR_APV_LEVEL = 4;
 #endif
 
 struct ProbeGridProbeData {

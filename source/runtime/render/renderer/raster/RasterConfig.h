@@ -266,7 +266,8 @@ struct RasterConfig {
         0; // 0=off, 1=volume cells, 2=irradiance, 3=contribution, 4=visibility, 5=brick residency, 6=update age, 7=physical allocation, 8=cell layout, 9=adaptive level, 10=hierarchy resolve, 11=dirty priority, 12=streaming state, 13=clipmap/prefetch
     float  probe_gi_debug_scale          = 1.0f;
     bool   probe_gi_gizmo_enabled        = false;
-    int    probe_gi_gizmo_color_mode     = 0; // 0=fixed color, 1=probe irradiance, 2=visibility, 3=state
+    int    probe_gi_gizmo_color_mode =
+        0; // 0=fixed color, 1=probe irradiance, 2=visibility, 3=state, 4=APV selected level
     float  probe_gi_gizmo_size           = 0.22f;
     float  probe_gi_gizmo_thickness      = 0.018f;
     float  probe_gi_gizmo_intensity      = 1.2f;
