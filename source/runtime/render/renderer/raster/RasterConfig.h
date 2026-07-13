@@ -366,6 +366,7 @@ struct RasterConfig {
     bool           shadow_csm_blend_option               = true;
     int            shadow_csm_sm_size                    = 4096;
     bool           shadow_csm_visualize_cascade          = false;
+    float          shadow_csm_auto_max_cover_ratio_of_camera = 0.25f;
     bool           shadow_cache_enabled                  = true; // 开启后允许远级联复用上一帧阴影图
     int            shadow_cache_disable_first_n_cascades = 0;    // 前N层级联始终全量刷新
 

@@ -273,14 +273,19 @@ StaticArray<Vector3f, 8> Camera::GetFrustumCorners(float near_clip_ratio, float 
     StaticArray<Vector3f, 8> corners;
 
     Vector3f cam_pos = this->GetPosition();
+    const float tan_half_fov     = GetTanHalfFov();
+    const float near_half_height = near_clip * tan_half_fov;
+    const float near_half_width  = near_half_height * m_aspect_ratio;
+    const float far_half_height  = far_clip * tan_half_fov;
+    const float far_half_width   = far_half_height * m_aspect_ratio;
     for (int i = 0; i < 4; i++) { // 0: right-top, 1: left-top, 2: right-bottom, 3: left-bottom
         corners[i] = cam_pos + m_front * near_clip +
-                     m_right * (i % 2 == 0 ? 1.f : -1.f) * near_clip * m_aspect_ratio +
-                     m_up * (i / 2 == 0 ? 1.f : -1.f) * near_clip;
+                     m_right * (i % 2 == 0 ? 1.f : -1.f) * near_half_width +
+                     m_up * (i / 2 == 0 ? 1.f : -1.f) * near_half_height;
 
         corners[i + 4] = cam_pos + m_front * far_clip +
-                         m_right * (i % 2 == 0 ? 1.f : -1.f) * far_clip * m_aspect_ratio +
-                         m_up * (i / 2 == 0 ? 1.f : -1.f) * far_clip;
+                         m_right * (i % 2 == 0 ? 1.f : -1.f) * far_half_width +
+                         m_up * (i / 2 == 0 ? 1.f : -1.f) * far_half_height;
     }
 
     return corners; // RVO

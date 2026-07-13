@@ -744,6 +744,12 @@ void RasterUI::ShowConfig() {
             csm_shadow_cache_param();
         } else if (m_config.shadow_map_mode == EShadowMapMode::CSM_AUTO) { // CSM_Auto
             csm_common_param();
+            ImGui::SliderFloat(
+                "Max Cover Ratio",
+                &m_config.shadow_csm_auto_max_cover_ratio_of_camera,
+                0.0001f,
+                1.0f
+            );
             ImGui::SliderFloat("Lerp Factor", &m_config.shadow_csm_lerp_factor, 0, 1);
             csm_shadow_cache_param();
         }
