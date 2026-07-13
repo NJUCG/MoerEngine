@@ -72,6 +72,11 @@ struct CLightEnvironment { // IBL
 
 struct CTagRootNode {};
 
+struct CVisibility {
+    bool visible_in_editor = true;
+    bool visible_in_game   = true;
+};
+
 // CNode应该被UEmplaceNodeToParent正确设置
 // CNode包含了Transform信息
 struct CNode {

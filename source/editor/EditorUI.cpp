@@ -79,6 +79,7 @@ EditorUI::EditorUI(
 
     if (window_visibility_settings.loaded) {
         m_b_show_scene_color   = window_visibility_settings.scene_color;
+        m_b_show_scene_view    = window_visibility_settings.scene_view;
         m_b_show_hierarchy     = window_visibility_settings.hierarchy;
         m_b_show_inspector     = window_visibility_settings.inspector;
         m_b_show_config        = window_visibility_settings.config;
@@ -87,7 +88,8 @@ EditorUI::EditorUI(
         m_b_show_memory_profiler = window_visibility_settings.memory_profiler;
 #endif
     } else {
-        m_b_show_scene_color   = has_saved_window_settings("Scene Color");
+        m_b_show_scene_color   = has_saved_window_settings("Game") || has_saved_window_settings("Scene Color");
+        m_b_show_scene_view    = has_saved_window_settings("Scene");
         m_b_show_hierarchy     = has_saved_window_settings("Hierarchy");
         m_b_show_inspector     = has_saved_window_settings("Inspector");
         m_b_show_config        = has_saved_window_settings("Configs");
@@ -353,7 +355,8 @@ void EditorUI::TickUI(Scene& scene) {
 
         if (ImGui::BeginMenu("Window")) {
 
-            ImGui::MenuItem("Scene Color", nullptr, &m_b_show_scene_color);
+            ImGui::MenuItem("Game", nullptr, &m_b_show_scene_color);
+            ImGui::MenuItem("Scene", nullptr, &m_b_show_scene_view);
             ImGui::MenuItem("Hierarchy", nullptr, &m_b_show_hierarchy);
             ImGui::MenuItem("Inspector", nullptr, &m_b_show_inspector);
             ImGui::MenuItem("Configs", nullptr, &m_b_show_config);
@@ -372,7 +375,22 @@ void EditorUI::TickUI(Scene& scene) {
         ShowMemoryProfiler(&m_b_show_memory_profiler);
     }
 #endif
-    ShowSceneColor();
+    m_b_active_viewport_window_seen = false;
+    m_scene_color_resolution        = {0.f, 0.f};
+    m_scene_color_pos               = {0.f, 0.f};
+    if (m_config->active_viewport_mode == EEditorViewportMode::Game) {
+        ShowGameView();
+        ShowSceneView(scene);
+    } else {
+        ShowSceneView(scene);
+        ShowGameView();
+    }
+    if (!m_b_active_viewport_window_seen) {
+        m_b_scene_color_mouse_captured              = false;
+        WindowInput::Get().is_active                = false;
+        WindowInput::Get().m_scene_color_resolution = uint2(0u, 0u);
+        WindowInput::Get().m_scene_color_pos        = uint2(0u, 0u);
+    }
     ShowHierarchy(scene);
     ShowInspector(scene);
     ShowConfig(scene);
@@ -488,10 +506,11 @@ void EditorUI::ShowHierarchy(Scene& scene) {
     }
 
     auto draw_node = [&](auto& self, entt::entity entity) -> void {
-        const std::string  label        = scene.GetNodeDisplayName(entity);
-        const bool         selected     = (m_selected_node == entity);
-        const bool         has_children = scene.GetNodeChildCount(entity) > 0;
-        ImGuiTreeNodeFlags tree_flags   = ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_OpenOnArrow;
+        const std::string           label        = scene.GetNodeDisplayName(entity);
+        const Scene::NodeVisibility visibility   = scene.GetNodeVisibility(entity);
+        const bool                  selected     = (m_selected_node == entity);
+        const bool                  has_children = scene.GetNodeChildCount(entity) > 0;
+        ImGuiTreeNodeFlags          tree_flags   = ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_OpenOnArrow;
 
         if (selected) {
             tree_flags |= ImGuiTreeNodeFlags_Selected;
@@ -501,8 +520,25 @@ void EditorUI::ShowHierarchy(Scene& scene) {
         }
 
         ImGui::PushID(static_cast<int>(entt::to_integral(entity)));
+        bool visible_in_game = visibility.visible_in_game;
+        if (ImGui::Checkbox("##visible_game", &visible_in_game)) {
+            scene.SetNodeVisibleInGame(entity, visible_in_game);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                visibility.effectively_visible_in_game ? "Visible in Game" : "Hidden in Game"
+            );
+        }
+        ImGui::SameLine();
         ImGui::SetNextItemOpen(false, ImGuiCond_Once);
+        const bool dim_node_label = !visibility.effectively_visible_in_game;
+        if (dim_node_label) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        }
         const bool is_open = ImGui::TreeNodeEx(label.c_str(), tree_flags);
+        if (dim_node_label) {
+            ImGui::PopStyleColor();
+        }
         if (ImGui::IsItemClicked()) {
             m_selected_node = entity;
         }
@@ -536,7 +572,7 @@ void EditorUI::PresentWindows() {
 }
 
 bool EditorUI::IsSeperateWindow() const {
-    auto* current_window = ImGui::FindWindowByName("Scene Color");
+    auto* current_window = ImGui::FindWindowByName(GetActiveViewportWindowName());
     if (!current_window) {
         return false;
     }
@@ -544,11 +580,227 @@ bool EditorUI::IsSeperateWindow() const {
 }
 
 TextureView EditorUI::GetWindowFrameBuffer() {
-    auto* current_window = ImGui::FindWindowByName("Scene Color");
+    auto* current_window = ImGui::FindWindowByName(GetActiveViewportWindowName());
     if (current_window && current_window->ParentWindow == nullptr && current_window->Viewport) {
         return m_ui_renderer->GetWindowFrameBuffer(current_window->Viewport);
     }
     return TextureView();
+}
+
+const char* EditorUI::GetActiveViewportWindowName() const {
+    return m_config->active_viewport_mode == EEditorViewportMode::Scene ? "Scene" : "Game";
+}
+
+void EditorUI::ShowGameView() {
+    ShowViewportWindow("Game", &m_b_show_scene_color, EEditorViewportMode::Game);
+}
+
+void EditorUI::ShowSceneView(Scene&) {
+    ShowViewportWindow("Scene", &m_b_show_scene_view, EEditorViewportMode::Scene);
+}
+
+void EditorUI::ShowViewportWindow(
+    const char*         window_name,
+    bool*               p_open,
+    EEditorViewportMode viewport_mode
+) {
+    const bool was_active_viewport = m_config->active_viewport_mode == viewport_mode;
+
+    ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar;
+    if (was_active_viewport) {
+        window_flags |= ImGuiWindowFlags_NoBackground;
+    }
+
+    if (!p_open || !*p_open) {
+        if (m_config->active_viewport_mode == viewport_mode) {
+            m_b_scene_color_mouse_captured = false;
+        }
+        return;
+    }
+
+    if (!ImGui::Begin(window_name, p_open, window_flags)) {
+        if (m_config->active_viewport_mode == viewport_mode) {
+            m_b_scene_color_mouse_captured = false;
+        }
+        ImGui::End();
+        return;
+    }
+
+    bool is_active_viewport = m_config->active_viewport_mode == viewport_mode;
+    if (!is_active_viewport && !m_b_active_viewport_window_seen) {
+        m_config->active_viewport_mode = viewport_mode;
+        is_active_viewport             = true;
+    }
+    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
+        m_config->active_viewport_mode = viewport_mode;
+        is_active_viewport             = true;
+    }
+
+    if (ImGui::BeginMenuBar()) {
+        ImGui::TextDisabled("%s", is_active_viewport ? "Active" : "Inactive");
+        ImGui::TextDisabled(
+            "%s",
+            viewport_mode == EEditorViewportMode::Game ? "Main Camera" : "Free Camera"
+        );
+        if (viewport_mode == EEditorViewportMode::Scene) {
+            auto& gizmos = m_config->scene_view_gizmos;
+            ImGui::Separator();
+            ImGui::MenuItem("Gizmos", nullptr, &gizmos.enabled);
+            if (ImGui::BeginMenu("Gizmo Layers")) {
+                ImGui::Checkbox("Main Camera", &gizmos.show_main_camera);
+                ImGui::Separator();
+
+                if (ImGui::BeginMenu("CSM")) {
+                    ImGui::Checkbox("Enabled", &gizmos.show_csm);
+                    ImGui::BeginDisabled(!gizmos.show_csm);
+                    ImGui::Checkbox("Split Frustums", &gizmos.show_csm_split_frustums);
+                    ImGui::Checkbox("Bounding Spheres", &gizmos.show_csm_bounding_spheres);
+
+                    if (ImGui::BeginMenu("Cascades")) {
+                        const uint active_cascade_count = Min(
+                            static_cast<uint>(m_config->raster_config.shadow_csm_num_of_cascades),
+                            static_cast<uint>(CSM_MAX_CASCADES)
+                        );
+                        for (uint cascade_index = 0u; cascade_index < CSM_MAX_CASCADES; ++cascade_index) {
+                            ImGui::PushID(static_cast<int>(cascade_index));
+                            ImGui::BeginDisabled(cascade_index >= active_cascade_count);
+
+                            const float4 color = GetCsmGizmoCascadeColor(cascade_index);
+                            ImGui::ColorButton(
+                                "##Color",
+                                ImVec4(color.x, color.y, color.z, color.w),
+                                ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop,
+                                ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight())
+                            );
+                            ImGui::SameLine();
+
+                            bool cascade_visible =
+                                (gizmos.csm_cascade_visibility_mask & (1u << cascade_index)) != 0u;
+                            const std::string cascade_label = "Cascade " + std::to_string(cascade_index);
+                            if (ImGui::Checkbox(cascade_label.c_str(), &cascade_visible)) {
+                                if (cascade_visible) {
+                                    gizmos.csm_cascade_visibility_mask |= 1u << cascade_index;
+                                } else {
+                                    gizmos.csm_cascade_visibility_mask &= ~(1u << cascade_index);
+                                }
+                            }
+
+                            ImGui::EndDisabled();
+                            ImGui::PopID();
+                        }
+                        ImGui::EndMenu();
+                    }
+
+                    ImGui::EndDisabled();
+                    ImGui::EndMenu();
+                }
+                ImGui::Separator();
+
+                ImGui::Checkbox("Probe GI", &gizmos.show_probe_gi);
+                ImGui::BeginDisabled(!gizmos.show_probe_gi);
+                ImGui::Checkbox("Probe Points", &gizmos.show_probe_gi_probes);
+                ImGui::Checkbox("Probe Volumes", &gizmos.show_probe_gi_volume_bounds);
+                ImGui::Checkbox("Adaptive Cells", &gizmos.show_probe_gi_adaptive_cells);
+                ImGui::EndDisabled();
+                ImGui::Separator();
+
+                ImGui::SliderFloat("Line Thickness", &gizmos.line_thickness, 0.001f, 0.02f);
+                ImGui::EndMenu();
+            }
+        }
+        ImGui::EndMenuBar();
+    }
+
+    if (!is_active_viewport) {
+        ImGui::End();
+        return;
+    }
+
+    auto* current_window = ImGui::FindWindowByName(window_name);
+    if (!current_window) {
+        ImGui::End();
+        return;
+    }
+
+    m_b_active_viewport_window_seen = true;
+
+    const bool m_b_separate_window = current_window->ParentWindow == nullptr;
+    const auto menu_rect           = current_window->MenuBarRect();
+    const auto menu_bar            = current_window->MenuBarHeight();
+
+    const float2 scene_size = {
+        current_window->Size.x,
+        current_window->Size.y + current_window->Pos.y - menu_rect.Max.y
+    };
+
+    const auto window_rect = current_window->Rect();
+    ImRect     parent_rect{};
+
+    if (m_b_separate_window) {
+        parent_rect = {
+            current_window->Pos.x,
+            current_window->Pos.y,
+            current_window->Pos.x + current_window->Size.x,
+            current_window->Pos.y + current_window->Size.y
+        };
+
+        const float2 local_pos = {window_rect.Min.x - parent_rect.Min.x, menu_rect.Max.y - parent_rect.Min.y};
+        m_scene_color_resolution = {scene_size.x, scene_size.y};
+        m_scene_color_pos        = {local_pos.x, local_pos.y};
+    } else {
+        parent_rect = current_window->ParentWindow->Rect();
+
+        const float2 local_pos = {
+            window_rect.Min.x - parent_rect.Min.x, menu_rect.Max.y + menu_bar - parent_rect.Min.y
+        };
+
+        m_scene_color_resolution = {scene_size.x, scene_size.y};
+        m_scene_color_pos        = {local_pos.x, local_pos.y};
+    }
+
+    WindowInput::Get().m_scene_color_resolution = uint2(
+        m_scene_color_resolution.x > 0.f ? static_cast<uint>(m_scene_color_resolution.x) : 0u,
+        m_scene_color_resolution.y > 0.f ? static_cast<uint>(m_scene_color_resolution.y) : 0u
+    );
+    WindowInput::Get().m_scene_color_pos = uint2(
+        m_scene_color_pos.x > 0.f ? static_cast<uint>(m_scene_color_pos.x) : 0u,
+        m_scene_color_pos.y > 0.f ? static_cast<uint>(m_scene_color_pos.y) : 0u
+    );
+
+    static constexpr float border = 4.f;
+
+    const float  scene_color_top = menu_rect.Max.y + (m_b_separate_window ? 0.f : menu_bar);
+    const ImVec2 scene_color_min = ImVec2(window_rect.Min.x + border, scene_color_top + border);
+    const ImVec2 scene_color_max = ImVec2(
+        window_rect.Min.x + m_scene_color_resolution.x - border,
+        scene_color_top + m_scene_color_resolution.y - border
+    );
+    const ImVec2 mouse_pos = ImGui::GetMousePos();
+
+    const bool b_scene_color_hovered = mouse_pos.x > scene_color_min.x && mouse_pos.x < scene_color_max.x &&
+                                       mouse_pos.y > scene_color_min.y && mouse_pos.y < scene_color_max.y;
+
+    const bool b_mouse_clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                                 ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
+                                 ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+    const bool b_mouse_down    = WindowInput::Get().mouse_button_state[MouseButtons::Left] ||
+                                 WindowInput::Get().mouse_button_state[MouseButtons::Middle] ||
+                                 WindowInput::Get().mouse_button_state[MouseButtons::Right];
+
+    if (!b_mouse_down) {
+        m_b_scene_color_mouse_captured = false;
+    } else if (!m_b_scene_color_mouse_captured && b_mouse_clicked && b_scene_color_hovered) {
+        m_b_scene_color_mouse_captured     = true;
+        WindowInput::Get().is_cursor_dirty = true;
+        WindowInput::Get().cursor_delta_x  = 0.f;
+        WindowInput::Get().cursor_delta_y  = 0.f;
+    }
+
+    WindowInput::Get().is_active =
+        m_b_scene_color_mouse_captured ||
+        (b_scene_color_hovered && WindowInput::Get().key_button_switch_state[KeyButtons::F]);
+
+    ImGui::End();
 }
 
 void EditorUI::ShowSceneColor() {
@@ -778,6 +1030,7 @@ void EditorUI::SyncWindowVisibilitySettings() {
     EditorWindowVisibilitySettings settings;
     settings.loaded        = true;
     settings.scene_color   = m_b_show_scene_color;
+    settings.scene_view    = m_b_show_scene_view;
     settings.hierarchy     = m_b_show_hierarchy;
     settings.inspector     = m_b_show_inspector;
     settings.config        = m_b_show_config;

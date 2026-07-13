@@ -479,6 +479,7 @@ void Camera::Tick(const SharedPtr<EditorConfig> config) {
         }
 
     } else {
+        auto& input = WindowInput::Get();
 
         // camera speed
 
@@ -486,81 +487,88 @@ void Camera::Tick(const SharedPtr<EditorConfig> config) {
         if (camera_speed_cfg >= k_camera_speed_min && camera_speed_cfg <= k_camera_speed_max) {
             camera_speed = camera_speed_cfg;
         } else {
-            if (WindowInput::Get().speed_up) {
-                camera_speed += k_camera_speed_up_delta * WindowInput::Get().delta_time;
+            if (input.speed_up) {
+                camera_speed += k_camera_speed_up_delta * input.delta_time;
                 if (camera_speed > k_camera_speed_max)
                     camera_speed = k_camera_speed_max;
             }
-            if (WindowInput::Get().speed_down) {
-                camera_speed -= k_camera_speed_down_delta * WindowInput::Get().delta_time;
+            if (input.speed_down) {
+                camera_speed -= k_camera_speed_down_delta * input.delta_time;
                 if (camera_speed < k_camera_speed_min)
                     camera_speed = k_camera_speed_min;
             }
-            if (WindowInput::Get().reset_speed) {
+            if (input.reset_speed) {
                 camera_speed = k_camera_speed_default;
             }
         }
 
-        float speed = 1.0 * camera_speed * k_camera_speed_multiplier * WindowInput::Get().delta_time;
+        const float speed = camera_speed * k_camera_speed_multiplier * input.delta_time;
 
-        // movement
-        if (WindowInput::Get().camera_forward)
-            this->MoveFront(speed);
-        if (WindowInput::Get().camera_backward)
-            this->MoveFront(-speed);
-        if (WindowInput::Get().camera_left)
-            this->MoveRight(-speed);
-        if (WindowInput::Get().camera_right)
-            this->MoveRight(speed);
-        if (WindowInput::Get().camera_up)
-            this->MoveUp(speed);
-        if (WindowInput::Get().camera_down)
-            this->MoveUp(-speed);
+        const float cursor_delta_x = input.cursor_delta_x;
+        const float cursor_delta_y = input.cursor_delta_y;
+        const bool  has_cursor_delta = Abs(cursor_delta_x) >= EPS || Abs(cursor_delta_y) >= EPS;
+        const bool  left_mouse       = input.mouse_button_state[MouseButtons::Left];
+        const bool  middle_mouse     = input.mouse_button_state[MouseButtons::Middle];
+        const bool  right_mouse      = input.mouse_button_state[MouseButtons::Right];
 
-        // rotation
+        bool apply_mouse_pan          = false;
+        bool apply_left_forward_slide = false;
+        bool rotation_applied         = false;
 
-        auto pure_rotate = [&]() {
-            this->ApplyRotation(WindowInput::Get().cursor_delta_x, WindowInput::Get().cursor_delta_y);
-        };
-
-        auto rotate_with_moving = [&]() {
-            this->ApplyRotation(WindowInput::Get().cursor_delta_x, 0.f);
-
-            float speed_y = WindowInput::Get().cursor_delta_y * k_mouse_sensitivity_mouse_moving *
-                            WindowInput::Get().delta_time;
-            this->MoveForward(-speed_y);
-        };
-
-        auto pure_move = [&]() {
-            float speed_x = WindowInput::Get().cursor_delta_x * k_mouse_sensitivity_mouse_moving *
-                            WindowInput::Get().delta_time;
-            float speed_y = WindowInput::Get().cursor_delta_y * k_mouse_sensitivity_mouse_moving *
-                            WindowInput::Get().delta_time;
-
-            this->MoveRight(speed_x);
-            this->MoveUp(-speed_y);
-        };
-
-        if (WindowInput::Get().cursor_delta_x || WindowInput::Get().cursor_delta_y) {
-
-            // unreal style camera control
-            if (WindowInput::Get().key_button_switch_state[KeyButtons::F]) {
-                pure_rotate();
-            } else if (
-                WindowInput::Get().mouse_button_state[MouseButtons::Left] &&
-                WindowInput::Get().mouse_button_state[MouseButtons::Right]
-            ) {
-                pure_move();
-            } else if (WindowInput::Get().mouse_button_state[MouseButtons::Middle]) {
-                pure_move();
-            } else if (WindowInput::Get().mouse_button_state[MouseButtons::Right]) {
-                pure_rotate();
-            } else if (WindowInput::Get().mouse_button_state[MouseButtons::Left]) {
-                rotate_with_moving();
+        if (has_cursor_delta) {
+            if (input.key_button_switch_state[KeyButtons::F]) {
+                this->ApplyRotation(cursor_delta_x, cursor_delta_y);
+                rotation_applied = true;
+            } else if ((left_mouse && right_mouse) || middle_mouse) {
+                apply_mouse_pan = true;
+            } else if (right_mouse) {
+                this->ApplyRotation(cursor_delta_x, cursor_delta_y);
+                rotation_applied = true;
+            } else if (left_mouse) {
+                this->ApplyRotation(cursor_delta_x, 0.f);
+                apply_left_forward_slide = true;
+                rotation_applied         = true;
             }
 
-            WindowInput::Get().cursor_delta_x = 0.0f;
-            WindowInput::Get().cursor_delta_y = 0.0f;
+            input.cursor_delta_x = 0.0f;
+            input.cursor_delta_y = 0.0f;
+        }
+
+        if (rotation_applied) {
+            UpdateVectors();
+        }
+
+        Vector3f keyboard_move(0.f, 0.f, 0.f);
+        if (input.camera_forward)
+            keyboard_move += m_front;
+        if (input.camera_backward)
+            keyboard_move -= m_front;
+        if (input.camera_left)
+            keyboard_move -= m_right;
+        if (input.camera_right)
+            keyboard_move += m_right;
+        if (input.camera_up)
+            keyboard_move += UP_IN_WORLD;
+        if (input.camera_down)
+            keyboard_move -= UP_IN_WORLD;
+
+        const float keyboard_move_len = Length(keyboard_move);
+        if (keyboard_move_len > EPS) {
+            m_position += keyboard_move * (speed / keyboard_move_len);
+            m_is_position_modified = true;
+        }
+
+        if (has_cursor_delta) {
+            if (apply_mouse_pan) {
+                const float speed_x = cursor_delta_x * k_mouse_sensitivity_mouse_moving * input.delta_time;
+                const float speed_y = cursor_delta_y * k_mouse_sensitivity_mouse_moving * input.delta_time;
+
+                this->MoveRight(speed_x);
+                this->MoveUp(-speed_y);
+            } else if (apply_left_forward_slide) {
+                const float speed_y = cursor_delta_y * k_mouse_sensitivity_mouse_moving * input.delta_time;
+                this->MoveForward(-speed_y);
+            }
         }
     }
 

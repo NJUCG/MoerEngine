@@ -53,6 +53,32 @@ entt::entity FindNodeEntityByNameRecursive(const Scene& scene, entt::entity enti
     return matched_entity;
 }
 
+bool IsNodeVisibleAlongParentChain(const entt::registry& registry, entt::entity entity, bool game_visibility) {
+    if (entity == entt::null || !registry.valid(entity) || !registry.all_of<ecs::CNode>(entity)) {
+        return false;
+    }
+
+    entt::entity current = entity;
+    while (current != entt::null) {
+        if (!registry.valid(current) || !registry.all_of<ecs::CNode>(current)) {
+            return false;
+        }
+
+        if (const auto* visibility = registry.try_get<ecs::CVisibility>(current)) {
+            if (game_visibility && !visibility->visible_in_game) {
+                return false;
+            }
+            if (!game_visibility && !visibility->visible_in_editor) {
+                return false;
+            }
+        }
+
+        current = registry.get<ecs::CNode>(current).parent_entt;
+    }
+
+    return true;
+}
+
 } // namespace
 
 ///////////////////////
@@ -189,6 +215,33 @@ std::optional<Scene::NodeLocalTransform> Scene::TryGetNodeLocalTransform(entt::e
         .rotation    = node.rotation,
         .scale       = node.scale,
     };
+}
+
+Scene::NodeVisibility Scene::GetNodeVisibility(entt::entity entity) const {
+    NodeVisibility visibility{};
+    if (!IsValidNodeEntity(entity)) {
+        visibility.effectively_visible_in_editor = false;
+        visibility.effectively_visible_in_game   = false;
+        return visibility;
+    }
+
+    if (const auto* visibility_component = r().try_get<ecs::CVisibility>(entity)) {
+        visibility.has_visibility_component = true;
+        visibility.visible_in_editor        = visibility_component->visible_in_editor;
+        visibility.visible_in_game          = visibility_component->visible_in_game;
+    }
+
+    visibility.effectively_visible_in_editor = IsNodeVisibleAlongParentChain(r(), entity, false);
+    visibility.effectively_visible_in_game   = IsNodeVisibleAlongParentChain(r(), entity, true);
+    return visibility;
+}
+
+bool Scene::IsNodeVisibleInEditor(entt::entity entity) const {
+    return GetNodeVisibility(entity).effectively_visible_in_editor;
+}
+
+bool Scene::IsNodeVisibleInGame(entt::entity entity) const {
+    return GetNodeVisibility(entity).effectively_visible_in_game;
 }
 
 /////////////////////////////

@@ -89,11 +89,15 @@ public: // Sub UI
 private:
     void ResetState(); // reset m_b_need_reload, etc..
     void ShowFileMenu(Scene& scene, bool is_scene_loading);
+    void ShowGameView();
+    void ShowSceneView(Scene& scene);
+    void ShowViewportWindow(const char* window_name, bool* p_open, EEditorViewportMode viewport_mode);
     void ShowSceneColor();
     void ShowConfig(Scene& scene);
     void ShowSceneEditing(Scene& scene);
     void ShowHierarchy(Scene& scene);
     void ShowInspector(Scene& scene);
+    const char* GetActiveViewportWindowName() const;
 
     // 同步顶层子窗口开关到 ImGui ini 自定义段
     void SyncWindowVisibilitySettings();
@@ -104,11 +108,13 @@ private:
 
 private:
     bool   m_b_show_scene_color           = true;
+    bool   m_b_show_scene_view            = true;
     bool   m_b_show_hierarchy             = true;
     bool   m_b_show_inspector             = true;
     bool   m_b_show_config                = true;
     bool   m_b_show_scene_editing         = true;
     bool   m_b_scene_color_mouse_captured = false;
+    bool   m_b_active_viewport_window_seen = false;
     float2 m_scene_color_resolution; // TODO: why float2? not uint2?
     float2 m_scene_color_pos;
     bool   m_b_show = true;

@@ -61,6 +61,56 @@ static void CollectNodeSubtreePostOrder(
     out_entities.push_back(entity);
 }
 
+static void MarkNodeVisibilityRenderSync(Scene& scene, entt::entity entity) {
+    auto& registry = scene.r();
+    if (entity == entt::null || !registry.valid(entity) || !registry.all_of<ecs::CNode>(entity)) {
+        return;
+    }
+
+    MarkSceneMeshRebuild(scene);
+
+    Array<entt::entity> subtree_entities;
+    CollectNodeSubtreePostOrder(registry, entity, subtree_entities);
+    for (entt::entity subtree_entity : subtree_entities) {
+        if (!registry.valid(subtree_entity)) {
+            continue;
+        }
+        if (registry.all_of<ecs::CLight>(subtree_entity)) {
+            registry.emplace_or_replace<ecs::CTagNeedUpdateLight>(subtree_entity);
+        }
+    }
+}
+
+static bool SetNodeVisibility(Scene& scene, entt::entity entity, bool visible, bool game_visibility) {
+    if (!scene.IsValidNodeEntity(entity)) {
+        return false;
+    }
+
+    Scene::NodeVisibility current_visibility = scene.GetNodeVisibility(entity);
+    const bool current_local_visibility =
+        game_visibility ? current_visibility.visible_in_game : current_visibility.visible_in_editor;
+    if (current_local_visibility == visible) {
+        return true;
+    }
+
+    auto& registry             = scene.r();
+    auto& visibility_component = registry.get_or_emplace<ecs::CVisibility>(entity);
+    if (game_visibility) {
+        visibility_component.visible_in_game = visible;
+    } else {
+        visibility_component.visible_in_editor = visible;
+    }
+
+    if (visibility_component.visible_in_editor && visibility_component.visible_in_game) {
+        registry.remove<ecs::CVisibility>(entity);
+    }
+
+    if (game_visibility) {
+        MarkNodeVisibilityRenderSync(scene, entity);
+    }
+    return true;
+}
+
 static void EnsureMainCameraExists(ecs::LogicalScene& logical_scene, entt::registry& registry) {
     if (registry.view<ecs::CTagMainCamera>().front() != entt::null) {
         return;
@@ -275,6 +325,14 @@ bool Scene::SetNodeScale(entt::entity entity, const float3& value) {
         c_node.scale = value;
     });
     return true;
+}
+
+bool Scene::SetNodeVisibleInEditor(entt::entity entity, bool visible) {
+    return SetNodeVisibility(*this, entity, visible, false);
+}
+
+bool Scene::SetNodeVisibleInGame(entt::entity entity, bool visible) {
+    return SetNodeVisibility(*this, entity, visible, true);
 }
 
 // 创建带 CNode 的 entity，并接入 parent 或 root node

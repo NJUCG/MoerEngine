@@ -263,14 +263,33 @@ void GLFWWindowImpl::TickCursorState() {
 }
 
 void GLFWWindowImpl::SetCursorHide() {
+    auto& input = WindowInput::Get();
+    if (!input.is_cursor_hiding) {
+        input.is_cursor_dirty = true;
+        input.cursor_delta_x  = 0.0f;
+        input.cursor_delta_y  = 0.0f;
+    }
+
     glfwSetInputMode((GLFWwindow*)main_window_handle.window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-    WindowInput::Get().is_cursor_hiding = true;
+#ifdef GLFW_RAW_MOUSE_MOTION
+    if (glfwRawMouseMotionSupported()) {
+        glfwSetInputMode((GLFWwindow*)main_window_handle.window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
+    }
+#endif
+    input.is_cursor_hiding = true;
 }
 
 void GLFWWindowImpl::SetCursorNormal() {
+#ifdef GLFW_RAW_MOUSE_MOTION
+    if (WindowInput::Get().is_cursor_hiding && glfwRawMouseMotionSupported()) {
+        glfwSetInputMode((GLFWwindow*)main_window_handle.window, GLFW_RAW_MOUSE_MOTION, GLFW_FALSE);
+    }
+#endif
     glfwSetInputMode((GLFWwindow*)main_window_handle.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     WindowInput::Get().is_cursor_hiding = false;
     WindowInput::Get().is_cursor_dirty  = true;
+    WindowInput::Get().cursor_delta_x   = 0.0f;
+    WindowInput::Get().cursor_delta_y   = 0.0f;
 }
 
 void GLFWWindowImpl::InitVulkan() {
@@ -449,17 +468,19 @@ static void CursorPosCallbackFunc(GLFWwindow* window, double xpos, double ypos) 
     float xPos = static_cast<float>(xpos);
     float yPos = static_cast<float>(ypos);
 
-    if (WindowInput::Get().is_cursor_dirty) {
-        WindowInput::Get().cursor_last_x   = xPos;
-        WindowInput::Get().cursor_last_y   = yPos;
-        WindowInput::Get().is_cursor_dirty = false;
+    auto& input = WindowInput::Get();
+
+    if (input.is_cursor_dirty) {
+        input.cursor_last_x   = xPos;
+        input.cursor_last_y   = yPos;
+        input.is_cursor_dirty = false;
     }
 
-    WindowInput::Get().cursor_delta_x = xPos - WindowInput::Get().cursor_last_x;
-    WindowInput::Get().cursor_delta_y = yPos - WindowInput::Get().cursor_last_y;
+    input.cursor_delta_x += xPos - input.cursor_last_x;
+    input.cursor_delta_y += yPos - input.cursor_last_y;
 
-    WindowInput::Get().cursor_last_x = xPos;
-    WindowInput::Get().cursor_last_y = yPos;
+    input.cursor_last_x = xPos;
+    input.cursor_last_y = yPos;
 }
 
 static void FrameBufferSizeCallbackFunc(GLFWwindow* window, int width, int height) {

@@ -10,6 +10,28 @@
 
 namespace Moer::Render {
 
+static bool IsNodeEffectivelyVisibleInGame(const entt::registry& registry, entt::entity entity) {
+    if (entity == entt::null || !registry.valid(entity) || !registry.all_of<ecs::CNode>(entity)) {
+        return false;
+    }
+
+    entt::entity current = entity;
+    while (current != entt::null) {
+        if (!registry.valid(current) || !registry.all_of<ecs::CNode>(current)) {
+            return false;
+        }
+
+        if (const auto* visibility = registry.try_get<ecs::CVisibility>(current);
+            visibility && !visibility->visible_in_game) {
+            return false;
+        }
+
+        current = registry.get<ecs::CNode>(current).parent_entt;
+    }
+
+    return true;
+}
+
 static bool RecreateByteBufferIfNeeded(
     BindlessArrayRef  bindless_array,
     BufferWithHandle& target,
@@ -794,7 +816,7 @@ void GpuScene::InitRaytracingScene(CommandList& cmd_list) {
     {
         r.view<const ecs::CRenderable, const ecs::CNode>().each(
             [&](const auto entt, const ecs::CRenderable& renderable, const ecs::CNode& node) {
-                if (renderable.mesh_entt == entt::null) return;
+                if (renderable.mesh_entt == entt::null || !IsNodeEffectivelyVisibleInGame(r, entt)) return;
                 auto it = m_mesh_entt_to_blas.find(renderable.mesh_entt);
                 if (it == m_mesh_entt_to_blas.end()) return;
 
@@ -885,7 +907,7 @@ void GpuScene::RebuildRaytracingSceneTlas(CommandList& cmd_list) {
 
         r.view<const ecs::CRenderable, const ecs::CNode>().each(
             [&](const auto entt, const ecs::CRenderable& renderable, const ecs::CNode& node) {
-                if (renderable.mesh_entt == entt::null) return;
+                if (renderable.mesh_entt == entt::null || !IsNodeEffectivelyVisibleInGame(r, entt)) return;
                 auto it = m_mesh_entt_to_blas.find(renderable.mesh_entt);
                 if (it == m_mesh_entt_to_blas.end()) return;
 
@@ -940,7 +962,7 @@ void GpuScene::UpdateRaytracingScene(CommandList& cmd_list) {
     // 按 CRenderable+CNode 遍历，顺序与 Init/Rebuild 一致
     r.view<const ecs::CRenderable, const ecs::CNode>().each(
         [&](const auto entt, const ecs::CRenderable& renderable, const ecs::CNode& node) {
-            if (renderable.mesh_entt == entt::null) return;
+            if (renderable.mesh_entt == entt::null || !IsNodeEffectivelyVisibleInGame(r, entt)) return;
             if (m_mesh_entt_to_blas.find(renderable.mesh_entt) == m_mesh_entt_to_blas.end()) return;
 
             if (tlas_instance_idx < m_res.rt_scene->GetInstanceCount()) {

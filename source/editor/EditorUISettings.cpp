@@ -43,6 +43,7 @@ void ParseEditorWindowVisibilityLine(EditorWindowVisibilitySettings& settings, s
     }
 
     if (TryParseBoolSetting(line, "SceneColor", settings.scene_color) ||
+        TryParseBoolSetting(line, "SceneView", settings.scene_view) ||
         TryParseBoolSetting(line, "Hierarchy", settings.hierarchy) ||
         TryParseBoolSetting(line, "Inspector", settings.inspector) ||
         TryParseBoolSetting(line, "Configs", settings.config) ||
@@ -79,6 +80,7 @@ void EditorWindowVisibilitySettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler*
 
     out_buf->appendf("[%s][%s]\n", k_editor_window_visibility_type, k_editor_window_visibility_name);
     out_buf->appendf("SceneColor=%d\n", settings.scene_color ? 1 : 0);
+    out_buf->appendf("SceneView=%d\n", settings.scene_view ? 1 : 0);
     out_buf->appendf("Hierarchy=%d\n", settings.hierarchy ? 1 : 0);
     out_buf->appendf("Inspector=%d\n", settings.inspector ? 1 : 0);
     out_buf->appendf("Configs=%d\n", settings.config ? 1 : 0);
@@ -145,7 +147,8 @@ bool IsSameWindowVisibilitySettings(
     const EditorWindowVisibilitySettings& lhs,
     const EditorWindowVisibilitySettings& rhs
 ) {
-    return lhs.loaded == rhs.loaded && lhs.scene_color == rhs.scene_color && lhs.hierarchy == rhs.hierarchy &&
+    return lhs.loaded == rhs.loaded && lhs.scene_color == rhs.scene_color &&
+           lhs.scene_view == rhs.scene_view && lhs.hierarchy == rhs.hierarchy &&
            lhs.inspector == rhs.inspector && lhs.config == rhs.config &&
            lhs.scene_editing == rhs.scene_editing && lhs.memory_profiler == rhs.memory_profiler;
 }
