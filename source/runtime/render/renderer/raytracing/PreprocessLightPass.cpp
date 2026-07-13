@@ -369,6 +369,9 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
 
     // 下面注释掉的这一段代码，是原来的多线程处理光线的代码
     // - 场景管理在重构后，目前没有时间进行迁移，所以保留此处的注释
+    {
+
+
 
     // uint chunk_size    = 1024;
     // uint parrallel_cnt = std::max(_rt_ctx.num_threads, 1u);
@@ -565,6 +568,8 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     //         }
     //     }
     // }
+
+    }
 
     std::ranges::sort(light_entities, [&](entt::entity _lhs, entt::entity _rhs) {
         return LightPriority(_lhs, scene) < LightPriority(_rhs, scene);

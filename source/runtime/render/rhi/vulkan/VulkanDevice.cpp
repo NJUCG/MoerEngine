@@ -27,6 +27,7 @@
 #include "Core.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/ThreadManager.h"
+#include "vulkan/vk_enum_string_helper.h"
 #include "vulkan/vulkan_core.h"
 
 // #include <vk_mem_alloc.h>
