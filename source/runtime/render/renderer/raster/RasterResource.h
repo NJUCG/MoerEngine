@@ -67,6 +67,7 @@ public:
             float                                shadow_csm_lerp_factor                = 0.0f;
             float                                shadow_csm_blend_percentage           = 0.0f;
             bool                                 shadow_csm_blend_option               = false;
+            float                                shadow_csm_auto_max_cover_ratio_of_camera = 0.0f;
             bool                                 shadow_pcss_enabled                   = false;
             float                                shadow_pcss_light_size_world          = 0.0f;
             bool                                 shadow_cache_enabled                  = false;

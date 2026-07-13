@@ -15,6 +15,7 @@
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/raster/geometry_pass/ShaderParameters.h"
 
+#include <cmath>
 #include <sstream>
 
 namespace {
@@ -29,6 +30,11 @@ struct CSMCascadeCandidate {
     float4   scale_data{};
     float3   snapped_light_space_center = float3(0.f, 0.f, 0.f);
     float    world_units_per_texel      = 0.0f;
+};
+
+struct CSMCascadeSphere {
+    float3 center = float3(0.f, 0.f, 0.f);
+    float  radius = 0.0f;
 };
 
 StaticArray<float, CSM_MAX_CASCADES> get_csm_blend(
@@ -86,6 +92,12 @@ StaticArray<float, CSM_MAX_CASCADES> transform_split_ratios_to_points(
     return split_points;
 }
 
+float get_csm_auto_shadow_far_clip(const RasterConfig& ui_config, const float near_clip, const float far_clip) {
+    const float max_cover_ratio =
+        Clamp(ui_config.shadow_csm_auto_max_cover_ratio_of_camera, 1e-4f, 1.0f);
+    return near_clip + (far_clip - near_clip) * max_cover_ratio;
+}
+
 ShadowCacheConfigSnapshot build_shadow_cache_config_snapshot(const RasterConfig& ui_config) {
     ShadowCacheConfigSnapshot snapshot{};
     snapshot.shadow_map_mode                       = static_cast<int>(ui_config.shadow_map_mode);
@@ -95,6 +107,8 @@ ShadowCacheConfigSnapshot build_shadow_cache_config_snapshot(const RasterConfig&
     snapshot.shadow_csm_lerp_factor                = ui_config.shadow_csm_lerp_factor;
     snapshot.shadow_csm_blend_percentage           = ui_config.shadow_csm_blend_percentage;
     snapshot.shadow_csm_blend_option               = ui_config.shadow_csm_blend_option;
+    snapshot.shadow_csm_auto_max_cover_ratio_of_camera =
+        ui_config.shadow_csm_auto_max_cover_ratio_of_camera;
     snapshot.shadow_pcss_enabled                   = ui_config.shadow_pcss_enabled;
     snapshot.shadow_pcss_light_size_world          = ui_config.shadow_pcss_light_size_world;
     snapshot.shadow_cache_enabled                  = ui_config.shadow_cache_enabled;
@@ -115,6 +129,8 @@ bool is_shadow_cache_config_equal(
         lhs.shadow_csm_lerp_factor != rhs.shadow_csm_lerp_factor ||
         lhs.shadow_csm_blend_percentage != rhs.shadow_csm_blend_percentage ||
         lhs.shadow_csm_blend_option != rhs.shadow_csm_blend_option ||
+        lhs.shadow_csm_auto_max_cover_ratio_of_camera !=
+            rhs.shadow_csm_auto_max_cover_ratio_of_camera ||
         lhs.shadow_pcss_enabled != rhs.shadow_pcss_enabled ||
         lhs.shadow_pcss_light_size_world != rhs.shadow_pcss_light_size_world ||
         lhs.shadow_cache_enabled != rhs.shadow_cache_enabled ||
@@ -162,6 +178,25 @@ float get_shadow_cache_move_in_texels(
         candidate.snapped_light_space_center.y - shadow_cache_entry.snapped_light_space_center.y
     );
     return Lengthf(delta) / texel_size;
+}
+
+float3 get_stable_light_up(const float3& normalized_light_dir) {
+    const float3 world_up    = float3(0.f, 1.f, 0.f);
+    const float3 fallback_up = float3(0.f, 0.f, 1.f);
+    return std::abs(Dot(normalized_light_dir, world_up)) > 0.99f ? fallback_up : world_up;
+}
+
+CSMCascadeSphere build_cascade_bounding_sphere(const StaticArray<float3, 8>& frustum_corners) {
+    CSMCascadeSphere sphere{};
+    for (const float3& corner : frustum_corners) {
+        sphere.center += corner;
+    }
+    sphere.center *= 1.0f / 8.0f;
+
+    for (const float3& corner : frustum_corners) {
+        sphere.radius = Max(sphere.radius, Lengthf(corner - sphere.center));
+    }
+    return sphere;
 }
 
 void tick_and_log_shadow_cache(
@@ -224,7 +259,8 @@ CSMCascadeCandidate build_csm_cascade_candidate(
     CSMCascadeCandidate candidate{};
 
     const float3 normalized_light_dir = Normalizef(light_direction);
-    const float3 light_right          = Normalizef(Cross(normalized_light_dir, float3(0.f, 1.f, 0.f)));
+    const float3 light_world_up       = get_stable_light_up(normalized_light_dir);
+    const float3 light_right          = Normalizef(Cross(normalized_light_dir, light_world_up));
     const float3 light_up             = Normalizef(Cross(light_right, normalized_light_dir));
 
     // World Space to Light Space (Light View Space)
@@ -273,14 +309,6 @@ CSMCascadeCandidate build_csm_cascade_candidate(
     for (uint i = 0; i < 8; i++) {
         frustum_corner_in_light_space[i] = world_to_light_view_rotate_only * frustum_corners[i];
     }
-    // - Get 最长对角线
-    float max_cross_distance = Max(
-        Lengthf(frustum_corner_in_light_space[4] - frustum_corner_in_light_space[6]), // 远平面对角线
-        Lengthf(
-            frustum_corner_in_light_space[0] - frustum_corner_in_light_space[6]
-        ) // 近平面和远平面的最长对角线
-    );
-
     // - Get AABB
     float3 min = frustum_corner_in_light_space[0];
     float3 max = frustum_corner_in_light_space[0];
@@ -289,24 +317,28 @@ CSMCascadeCandidate build_csm_cascade_candidate(
         max = Max(max, frustum_corner_in_light_space[i]);
     }
 
-    // 最小跳跃单位，避免shadow swimming
-    // Reference: https://zhuanlan.zhihu.com/p/116731971
-    candidate.world_units_per_texel = max_cross_distance / ui_config.shadow_csm_sm_size;
+    const CSMCascadeSphere cascade_sphere       = build_cascade_bounding_sphere(frustum_corners);
+    const float3           sphere_center_in_light_space =
+        world_to_light_view_rotate_only * cascade_sphere.center;
+    const float stable_ortho_width = Max(cascade_sphere.radius * 2.0f, 1e-3f);
+
+    // Stable CSM: keep XY projection size fixed for the cascade sphere and only move in texel-sized steps.
+    candidate.world_units_per_texel = stable_ortho_width / ui_config.shadow_csm_sm_size;
     auto get_fixed_coord            = [&](float x) {
-        return floorf(x / candidate.world_units_per_texel) * candidate.world_units_per_texel;
+        return std::floor(x / candidate.world_units_per_texel) * candidate.world_units_per_texel;
     };
 
     candidate.snapped_light_space_center = float3(
-        get_fixed_coord((min.x + max.x) * 0.5f),
-        get_fixed_coord((min.y + max.y) * 0.5f),
-        get_fixed_coord(min.z - 0.01f)
+        get_fixed_coord(sphere_center_in_light_space.x),
+        get_fixed_coord(sphere_center_in_light_space.y),
+        sphere_center_in_light_space.z
     );
 
     //虚拟光源位置
     const float3 light_pos = world_to_light_view_rotate_only_inverse * candidate.snapped_light_space_center;
 
     // Get new z min & max in Light View Space
-    float light_z_offset            = Dot(light_pos, light_direction);
+    float light_z_offset            = Dot(light_pos, normalized_light_dir);
     float aabb_min_z_in_light_space = min.z + light_z_offset;
     float aabb_max_z_in_light_space = max.z + light_z_offset;
 
@@ -317,10 +349,10 @@ CSMCascadeCandidate build_csm_cascade_candidate(
     float z_delta = (max.z - min.z) * 1.0f;
 
     float4x4 light_view_to_light_clip = MakeOrthoMatrixRH(
-        -0.5f * max_cross_distance,
-        0.5f * max_cross_distance,
-        -0.5f * max_cross_distance,
-        0.5f * max_cross_distance,
+        -0.5f * stable_ortho_width,
+        0.5f * stable_ortho_width,
+        -0.5f * stable_ortho_width,
+        0.5f * stable_ortho_width,
         aabb_min_z_in_light_space - z_delta,
         aabb_max_z_in_light_space + z_delta
     );
@@ -329,12 +361,12 @@ CSMCascadeCandidate build_csm_cascade_candidate(
     // Final Matrix
     // world to light clip0
     const float4x4 light_view_matrix =
-        MakeLookatViewMatrixRH(light_pos, light_pos + light_direction, light_up);
+        MakeLookatViewMatrixRH(light_pos, light_pos + normalized_light_dir, light_up);
 
     const float4x4 world_to_light_orth_matrix = light_view_to_light_clip * light_view_matrix;
 
     // 保存正交矩阵数据，供PCSS方向光软阴影使用
-    float ortho_width = max_cross_distance;
+    float ortho_width = stable_ortho_width;
     float z_near_val  = aabb_min_z_in_light_space - z_delta;
     float z_far_val   = aabb_max_z_in_light_space + z_delta;
     float z_range     = z_far_val - z_near_val;
@@ -579,8 +611,9 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
         local_cascade_split_points; //actual split points between near_clip and far_clip
     switch (ui_config.shadow_map_mode) {
         case EShadowMapMode::CSM_AUTO: {
+            const float shadow_far_clip = get_csm_auto_shadow_far_clip(ui_config, near_clip, far_clip);
             local_cascade_split_points = get_cascade_split_points(
-                near_clip, far_clip, ui_config.shadow_csm_lerp_factor, enabled_cascade_layers
+                near_clip, shadow_far_clip, ui_config.shadow_csm_lerp_factor, enabled_cascade_layers
             );
             auto ratios = transform_split_points_to_ratios(
                 local_cascade_split_points, near_clip, far_clip, enabled_cascade_layers
