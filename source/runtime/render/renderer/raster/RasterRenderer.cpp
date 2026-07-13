@@ -255,6 +255,7 @@ void RasterRenderer::UpdateGlobalLightingData(
                << " hit_lights=" << lighting_data->light_count
                << " trace_distance=" << ui_config.probe_gi_trace_distance
                << " trace_rays=" << ui_config.probe_gi_trace_ray_count
+               << " ray_sequence=rotated_fibonacci"
                << " visibility=(" << ui_config.probe_gi_visibility_bias << ", "
                << ui_config.probe_gi_visibility_power << ", "
                << ui_config.probe_gi_visibility_min_weight << ", "

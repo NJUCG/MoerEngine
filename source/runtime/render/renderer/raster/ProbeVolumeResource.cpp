@@ -90,6 +90,41 @@ uint64 HashTransform(const float4x4& transform) {
     return hash;
 }
 
+uint HashProbeRaySeed(uint value) {
+    value ^= value >> 16u;
+    value *= 0x7feb352du;
+    value ^= value >> 15u;
+    value *= 0x846ca68bu;
+    value ^= value >> 16u;
+    return value;
+}
+
+float ProbeRayUnitSample(uint seed) {
+    return float(HashProbeRaySeed(seed) >> 8u) * (1.0f / 16777216.0f);
+}
+
+float4 BuildProbeRayRotation(uint64 frame_index, uint volume_index, uint brick_index) {
+    constexpr float two_pi = 6.28318530717958647692f;
+    const uint frame_seed =
+        static_cast<uint>(frame_index) ^ HashProbeRaySeed(static_cast<uint>(frame_index >> 32u));
+    const uint seed =
+        HashProbeRaySeed(frame_seed ^ HashProbeRaySeed(volume_index + 0x9e3779b9u) ^
+                         HashProbeRaySeed(brick_index + 0x85ebca6bu));
+    const float u1 = ProbeRayUnitSample(seed + 0x68bc21ebu);
+    const float u2 = ProbeRayUnitSample(seed + 0x02e5be93u);
+    const float u3 = ProbeRayUnitSample(seed + 0x967a889bu);
+    const float radius_xy = std::sqrt(Max(1.0f - u1, 0.0f));
+    const float radius_zw = std::sqrt(Max(u1, 0.0f));
+    const float angle_xy = two_pi * u2;
+    const float angle_zw = two_pi * u3;
+    return float4(
+        radius_xy * std::sin(angle_xy),
+        radius_xy * std::cos(angle_xy),
+        radius_zw * std::sin(angle_zw),
+        radius_zw * std::cos(angle_zw)
+    );
+}
+
 } // namespace
 
 void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
@@ -2050,7 +2085,7 @@ ProbeUpdateParam ProbeVolumeResource::BuildUpdateParam(
         float4(snapshot.ground_color.x, snapshot.ground_color.y, snapshot.ground_color.z, 0.0f);
     param.probe_update_context =
         uint4(gpu_scene.light_buf.hdl, scene.cpu_scene().GetLightCount(), 0u, brick_index);
-    param.probe_ray_rotation = float4(0.0f, 0.0f, 0.0f, 1.0f);
+    param.probe_ray_rotation = BuildProbeRayRotation(snapshot.frame_index, volume_index, brick_index);
     param.probe_trace_config =
         float4(snapshot.trace_distance, snapshot.visibility_bias, float(snapshot.trace_ray_count), 0.0f);
     return param;
