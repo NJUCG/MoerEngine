@@ -56,7 +56,7 @@ void PrepareLightPass::CountEmissiveInstances(uint& _num_emissive_meshes, uint& 
     auto& r = scene.r();
 
     // 遍历所有有 CRenderable 的 entity
-    r.view<const ecs::CRenderable>().each([&](const auto entity, const ecs::CRenderable& c_renderable) {
+    r.view<const ecs::CRenderable>().each([&](const auto, const ecs::CRenderable& c_renderable) {
         // 获取 CMesh
         if (!r.valid(c_renderable.mesh_entt) || !r.all_of<ecs::CMesh>(c_renderable.mesh_entt)) {
             return; // Skip invalid mesh
@@ -105,19 +105,18 @@ static uint LightPriority(entt::entity entity, const Moer::Scene& scene) {
     }
 }
 
-static inline uint FloatToUInt(float _v, float _scale) {
-    return (uint)floor(_v * _scale + 0.5f);
+static uint FloatToUInt(float _v, float _scale) {
+    return static_cast<uint>(std::floor(_v * _scale + 0.5f));
 }
 
-static inline float Saturate(float _v) {
+static float Saturate(float _v) {
     return std::clamp(_v, 0.f, 1.f);
 }
 
-static inline uint
-FloaT3ToR8G8B8Unorm(float _unpacked_input_x, float _unpacked_input_y, float _unpacked_input_z) {
-    return (FloatToUInt(Saturate(_unpacked_input_x), 0xFF) & 0xFF) |
-           ((FloatToUInt(Saturate(_unpacked_input_y), 0xFF) & 0xFF) << 8) |
-           ((FloatToUInt(Saturate(_unpacked_input_z), 0xFF) & 0xFF) << 16);
+static uint Float3ToR8G8B8Unorm(const float3& _unpacked_input) {
+    return (FloatToUInt(Saturate(_unpacked_input.x), 255.f) & 0xffu) |
+           ((FloatToUInt(Saturate(_unpacked_input.y), 255.f) & 0xffu) << 8) |
+           ((FloatToUInt(Saturate(_unpacked_input.z), 255.f) & 0xffu) << 16);
 }
 
 static uint16_t Fp32ToFp16(float _v) {
@@ -132,66 +131,64 @@ static uint16_t Fp32ToFp16(float _v) {
     const uint u   = biased_float.ui;
 
     const uint sign = u & 0x80000000;
-    uint       body = u & 0x0fffffff;
+    const uint body = u & 0x0fffffff;
 
-    return (uint16_t)(sign >> 16 | body >> 13) & 0xFFFF;
+    return static_cast<uint16_t>((sign >> 16 | body >> 13) & 0xffffu);
 }
 
-static void PackPolyLightColor(float3 _color, PolymorphicLightInfo& _info) {
-    float max_radiance = Max(Max(_color.x, _color.y), _color.z);
-    if (max_radiance < 0.f)
+static void PackPolyLightColor(const float3& _color, PolymorphicLightInfo& _info) {
+    const float max_radiance = Max(Max(_color.x, _color.y), _color.z);
+    if (max_radiance <= 0.f)
         return;
 
-    float log_radiance   = (std::log2f(max_radiance) - g_poly_morphic_light_min_log2_radiance) /
-                           (g_poly_morphic_light_max_log2_radiance - g_poly_morphic_light_min_log2_radiance);
-    log_radiance         = std::clamp(log_radiance, 0.f, 1.f);
-    uint packed_radiance = std::min(uint(ceilf(log_radiance * 65534.f)) + 1, 0xffffu);
-    uint unpacked_radiance = std::exp2f(
-        (float(packed_radiance - 1) / 65534.f) *
+    const float log_radiance = std::clamp(
+        (std::log2f(max_radiance) - g_poly_morphic_light_min_log2_radiance) /
+            (g_poly_morphic_light_max_log2_radiance - g_poly_morphic_light_min_log2_radiance),
+        0.f,
+        1.f
+    );
+    const uint packed_radiance =
+        std::min(static_cast<uint>(std::ceil(log_radiance * 65534.f)) + 1, 0xffffu);
+    const float unpacked_radiance = std::exp2f(
+        (static_cast<float>(packed_radiance - 1) / 65534.f) *
             (g_poly_morphic_light_max_log2_radiance - g_poly_morphic_light_min_log2_radiance) +
         g_poly_morphic_light_min_log2_radiance
     );
 
-    _info.color_type_flags |= FloaT3ToR8G8B8Unorm(
-        _color.x / unpacked_radiance, _color.y / unpacked_radiance, _color.z / unpacked_radiance
-    );
+    _info.color_type_flags |= Float3ToR8G8B8Unorm(_color / unpacked_radiance);
     _info.log_radiance = packed_radiance;
 }
 
-static float2 UnitVectorToOctahedron(const float3 _n) {
-    float  m  = abs(_n.x) + abs(_n.y) + abs(_n.z);
-    float2 xy = {_n.x, _n.y};
+static float2 UnitVectorToOctahedron(const float3& _n) {
+    const float m = std::abs(_n.x) + std::abs(_n.y) + std::abs(_n.z);
+    float2     xy = {_n.x, _n.y};
     xy.x /= m;
     xy.y /= m;
     if (_n.z <= 0.0f) {
         float2 signs;
         signs.x = xy.x >= 0.0f ? 1.0f : -1.0f;
         signs.y = xy.y >= 0.0f ? 1.0f : -1.0f;
-        float x = (1.0f - abs(xy.y)) * signs.x;
-        float y = (1.0f - abs(xy.x)) * signs.y;
+        const float x = (1.0f - std::abs(xy.y)) * signs.x;
+        const float y = (1.0f - std::abs(xy.x)) * signs.y;
         xy.x    = x;
         xy.y    = y;
     }
-    return {xy.x, xy.y};
+    return xy;
 }
 
-static uint32_t PackNormalizedVector(const float3 _x) {
-    float2 xy          = UnitVectorToOctahedron(_x);
-    xy.x               = xy.x * .5f + .5f;
-    xy.y               = xy.y * .5f + .5f;
-    uint x             = FloatToUInt(Saturate(xy.x), (1 << 16) - 1);
-    uint y             = FloatToUInt(Saturate(xy.y), (1 << 16) - 1);
-    uint packed_output = x;
-    packed_output |= y << 16;
-    return packed_output;
+static uint32_t PackNormalizedVector(const float3& _x) {
+    float2 xy = UnitVectorToOctahedron(_x);
+    xy.x      = xy.x * .5f + .5f;
+    xy.y      = xy.y * .5f + .5f;
+    const uint x = FloatToUInt(Saturate(xy.x), 65535.f);
+    const uint y = FloatToUInt(Saturate(xy.y), 65535.f);
+    return x | (y << 16);
 }
+
 static bool CanConvert(entt::entity entity, const Moer::Scene& scene) {
     auto& r = scene.r();
-    if (!r.valid(entity))
-        return false;
-
     // 检查是否有 CLight 组件
-    if (!r.all_of<ecs::CLight>(entity))
+    if (!r.valid(entity) || !r.all_of<ecs::CLight>(entity))
         return false;
 
     const auto& c_light = r.get<ecs::CLight>(entity);
@@ -218,27 +215,25 @@ static bool ConvertLight(entt::entity entity, const Moer::Scene& scene, Polymorp
     auto&       r       = scene.r();
     const auto& c_light = r.get<ecs::CLight>(entity);
 
-    static int first_time = 12;
-    first_time -= 1;
-
     switch (c_light.type) {
         case Moer::ELightType::Directional: {
             const auto& c_light_dir = r.get<ecs::CLightDirectional>(entity);
 
             // 0.533度是太阳的视角直径（默认值，因为新系统中没有 angular_size 字段）
-            float angular_size = 0.533f;
+            const float angular_size = 0.533f;
 
-            float half_angular_size_rad = Angle::DegreeToRadian(std::max(angular_size, 0.1f));
-            float solid_angle           = 2 * PI * (1 - cos(half_angular_size_rad));
+            const float half_angular_size_rad = Angle::DegreeToRadian(std::max(angular_size, 0.1f));
+            const float solid_angle           = 2 * PI * (1 - std::cos(half_angular_size_rad));
 
             float3 radiance = c_light_dir.color * c_light_dir.intensity / std::max(solid_angle, 1e-6f);
 
-            float max_radiance = Max(Max(radiance.x, radiance.y), radiance.z);
+            const float max_radiance = Max(Max(radiance.x, radiance.y), radiance.z);
             if (max_radiance > g_poly_morphic_light_max_radiance) {
                 radiance = radiance / max_radiance * g_poly_morphic_light_max_radiance;
             }
 
-            _info.color_type_flags = (uint)EPolyLightType::ELDirectional << g_poly_morphic_light_type_shift;
+            _info.color_type_flags =
+                static_cast<uint>(EPolyLightType::ELDirectional) << g_poly_morphic_light_type_shift;
             PackPolyLightColor(radiance, _info);
 
             _info.direction1 = PackNormalizedVector(Normalizef(c_light_dir.d_direction));
@@ -253,9 +248,10 @@ static bool ConvertLight(entt::entity entity, const Moer::Scene& scene, Polymorp
         case Moer::ELightType::Point: {
             const auto& c_light_point = r.get<ecs::CLightPoint>(entity);
             float3      flux          = c_light_point.color * c_light_point.intensity;
-            _info.color_type_flags    = (uint)EPolyLightType::ELPoint << g_poly_morphic_light_type_shift;
+            _info.color_type_flags =
+                static_cast<uint>(EPolyLightType::ELPoint) << g_poly_morphic_light_type_shift;
 
-            float max_flux = Max(Max(flux.x, flux.y), flux.z);
+            const float max_flux = Max(Max(flux.x, flux.y), flux.z);
             if (max_flux > g_poly_morphic_light_max_flux) {
                 flux = flux / max_flux * g_poly_morphic_light_max_flux;
             }
@@ -271,7 +267,7 @@ static bool ConvertLight(entt::entity entity, const Moer::Scene& scene, Polymorp
             return false;
         }
         default: {
-            LOG_INFO("Light Type {} not supported", uint(c_light.type));
+            LOG_INFO("Light Type {} not supported", static_cast<uint>(c_light.type));
             return false;
         }
     }
@@ -357,20 +353,16 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     // 数组中保存 primitive -> 首个三角形光源 offset 的映射。
     // 非自发光 primitive 保持 s_invalid_light_idx。
     uint max_primitive_id = 0;
-    if (!primitive_to_light_offset_map.empty()) {
-        for (const auto& [primitive_id, light_offset] : primitive_to_light_offset_map) {
-            max_primitive_id = std::max(max_primitive_id, primitive_id);
-        }
+    for (const auto& mapping : primitive_to_light_offset_map) {
+        max_primitive_id = std::max(max_primitive_id, mapping.first);
     }
-    uint num_primitives = scene.GetCpuScene().GetPrimitiveCount();
+    const uint num_primitives = scene.GetCpuScene().GetPrimitiveCount();
     max_primitive_id    = std::max(max_primitive_id, num_primitives > 0 ? num_primitives - 1 : 0);
 
     // 创建数组（primitive_id -> light_offset 映射）
     Array<uint> primitive_to_light(max_primitive_id + 1, s_invalid_light_idx);
     for (const auto& [primitive_id, light_offset] : primitive_to_light_offset_map) {
-        if (primitive_id <= max_primitive_id) {
-            primitive_to_light[primitive_id] = light_offset;
-        }
+        primitive_to_light[primitive_id] = light_offset;
     }
 
     // 3. 处理场景光源（Directional Light, Point Light 等）
@@ -591,7 +583,7 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     //   [ 有限解析光 ] [ 无限远方向光 ]
     //
     // 环境光不来自 ECS，因此在下方从 RTContext 单独追加到末尾。
-    std::ranges::sort(light_entities, [&](entt::entity _lhs, entt::entity _rhs) {
+    std::ranges::sort(light_entities, [this](entt::entity _lhs, entt::entity _rhs) {
         return LightPriority(_lhs, scene) < LightPriority(_rhs, scene);
     });
 
@@ -609,7 +601,7 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
 
         // 创建 Task
         PrepareLightsTask task{};
-        task.primitive_id      = prim_light_infos.size() | g_task_prim_light_bit;
+        task.primitive_id      = static_cast<uint>(prim_light_infos.size()) | g_task_prim_light_bit;
         task.light_offset      = light_buf_offset;
         task.num_triangles     = 1;
         task.prev_light_offset = pre_iter == primitive_light_buffer_offsets.end() ? -1 : pre_iter->second;
@@ -620,7 +612,7 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         prim_light_infos.emplace_back(light_info);
 
         // 统计光源类型
-        auto c_light = scene.r().get<ecs::CLight>(entity);
+        const auto& c_light = scene.r().get<ecs::CLight>(entity);
         switch (c_light.type) {
             case Moer::ELightType::Directional: {
                 num_infinite_prim_lights++;
@@ -642,13 +634,14 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     // RTContext 同时持有原始环境贴图 handle 和预计算的 PDF 贴图。
     if (_rt_ctx.scene_params.enable_env_map && _rt_ctx.env_pdf_tex) {
         PolymorphicLightInfo light_info{};
-        light_info.color_type_flags = (uint)EPolyLightType::ELEnv << g_poly_morphic_light_type_shift;
+        light_info.color_type_flags =
+            static_cast<uint>(EPolyLightType::ELEnv) << g_poly_morphic_light_type_shift;
 
-        float3 color_scale = float3(_rt_ctx.scene_params.env_map_scale);
+        const float3 color_scale(_rt_ctx.scene_params.env_map_scale);
         PackPolyLightColor(color_scale, light_info);
 
         light_info.direction1 = _rt_ctx.scene_params.env_map_handle;
-        uint3 env_extent      = _rt_ctx.env_pdf_tex->GetExtent(); // env_pdf_tex 与 env_map 同尺寸
+        const uint3 env_extent = _rt_ctx.env_pdf_tex->GetExtent(); // env_pdf_tex 与 env_map 同尺寸
         light_info.direction2 = env_extent.x | (env_extent.y << 16);
         light_info.scalars    = Fp32ToFp16(_rt_ctx.scene_params.env_map_rotation);
         light_info.scalars |= g_poly_morphic_light_env_is_scalar_bit;
@@ -658,7 +651,7 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         auto             pre_iter      = primitive_light_buffer_offsets.find(env_light_key);
 
         PrepareLightsTask task{};
-        task.primitive_id      = prim_light_infos.size() | g_task_prim_light_bit;
+        task.primitive_id      = static_cast<uint>(prim_light_infos.size()) | g_task_prim_light_bit;
         task.light_offset      = light_buf_offset;
         task.num_triangles     = 1;
         task.prev_light_offset = pre_iter == primitive_light_buffer_offsets.end() ? -1 : pre_iter->second;
@@ -714,7 +707,7 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
 
     // 5. 设置 Shader 参数并 Dispatch
     PrepareLightsParams param{};
-    param.num_tasks = tasks.size();
+    param.num_tasks = static_cast<uint>(tasks.size());
 
     param.primitive_buf_hdl  = _rt_ctx.GetBindlessHandles().primitive_buf_hdl;
     param.instance_buf_hdl   = _rt_ctx.GetBindlessHandles().instance_buf_hdl;
@@ -731,7 +724,7 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     //
     // task 中的 offset 始终是帧内局部值；Shader 在最终访问 buffer 时
     // 才加上 cur_light_offset 或 prev_light_offset。
-    uint max_lights_in_buffer = uint(_rt_ctx.light_data_buf->GetNumElement() / 2);
+    const uint max_lights_in_buffer = static_cast<uint>(_rt_ctx.light_data_buf->GetNumElement() / 2);
     param.cur_light_offset    = max_lights_in_buffer * b_odd_frame;
     param.prev_light_offset   = max_lights_in_buffer * !b_odd_frame;
 
