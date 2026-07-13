@@ -92,6 +92,12 @@ StaticArray<float, CSM_MAX_CASCADES> transform_split_ratios_to_points(
     return split_points;
 }
 
+float get_csm_auto_shadow_far_clip(const RasterConfig& ui_config, const float near_clip, const float far_clip) {
+    const float max_cover_ratio =
+        Clamp(ui_config.shadow_csm_auto_max_cover_ratio_of_camera, 1e-4f, 1.0f);
+    return near_clip + (far_clip - near_clip) * max_cover_ratio;
+}
+
 ShadowCacheConfigSnapshot build_shadow_cache_config_snapshot(const RasterConfig& ui_config) {
     ShadowCacheConfigSnapshot snapshot{};
     snapshot.shadow_map_mode                       = static_cast<int>(ui_config.shadow_map_mode);
@@ -101,6 +107,8 @@ ShadowCacheConfigSnapshot build_shadow_cache_config_snapshot(const RasterConfig&
     snapshot.shadow_csm_lerp_factor                = ui_config.shadow_csm_lerp_factor;
     snapshot.shadow_csm_blend_percentage           = ui_config.shadow_csm_blend_percentage;
     snapshot.shadow_csm_blend_option               = ui_config.shadow_csm_blend_option;
+    snapshot.shadow_csm_auto_max_cover_ratio_of_camera =
+        ui_config.shadow_csm_auto_max_cover_ratio_of_camera;
     snapshot.shadow_pcss_enabled                   = ui_config.shadow_pcss_enabled;
     snapshot.shadow_pcss_light_size_world          = ui_config.shadow_pcss_light_size_world;
     snapshot.shadow_cache_enabled                  = ui_config.shadow_cache_enabled;
@@ -121,6 +129,8 @@ bool is_shadow_cache_config_equal(
         lhs.shadow_csm_lerp_factor != rhs.shadow_csm_lerp_factor ||
         lhs.shadow_csm_blend_percentage != rhs.shadow_csm_blend_percentage ||
         lhs.shadow_csm_blend_option != rhs.shadow_csm_blend_option ||
+        lhs.shadow_csm_auto_max_cover_ratio_of_camera !=
+            rhs.shadow_csm_auto_max_cover_ratio_of_camera ||
         lhs.shadow_pcss_enabled != rhs.shadow_pcss_enabled ||
         lhs.shadow_pcss_light_size_world != rhs.shadow_pcss_light_size_world ||
         lhs.shadow_cache_enabled != rhs.shadow_cache_enabled ||
@@ -601,8 +611,9 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
         local_cascade_split_points; //actual split points between near_clip and far_clip
     switch (ui_config.shadow_map_mode) {
         case EShadowMapMode::CSM_AUTO: {
+            const float shadow_far_clip = get_csm_auto_shadow_far_clip(ui_config, near_clip, far_clip);
             local_cascade_split_points = get_cascade_split_points(
-                near_clip, far_clip, ui_config.shadow_csm_lerp_factor, enabled_cascade_layers
+                near_clip, shadow_far_clip, ui_config.shadow_csm_lerp_factor, enabled_cascade_layers
             );
             auto ratios = transform_split_points_to_ratios(
                 local_cascade_split_points, near_clip, far_clip, enabled_cascade_layers
