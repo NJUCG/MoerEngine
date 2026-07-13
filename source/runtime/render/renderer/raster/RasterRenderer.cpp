@@ -252,14 +252,14 @@ void RasterRenderer::UpdateGlobalLightingData(
                << " deferred_dirty=" << context.probe_volume.GetDeferredDirtyBrickCount()
                << " dirty_influence_scale=" << ui_config.probe_gi_dirty_influence_scale
                << " intensity=" << ui_config.probe_gi_intensity
+               << " hit_lights=" << lighting_data->light_count
                << " trace_distance=" << ui_config.probe_gi_trace_distance
                << " trace_rays=" << ui_config.probe_gi_trace_ray_count
                << " visibility=(" << ui_config.probe_gi_visibility_bias << ", "
                << ui_config.probe_gi_visibility_power << ", "
                << ui_config.probe_gi_visibility_min_weight << ", "
                << ui_config.probe_gi_visibility_strength << ")"
-               << " sky=" << ui_config.probe_gi_sky_intensity
-               << " bounce=" << ui_config.probe_gi_directional_bounce;
+               << " sky=" << ui_config.probe_gi_sky_intensity;
         RasterTool::LogDebugEverySeconds(stream.str(), 2.0);
     }
 

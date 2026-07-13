@@ -230,9 +230,9 @@ struct ProbeUpdateParam {
     float4 probe_volume_origin;  // xyz = min corner, w = irradiance history weight
     float4 probe_volume_spacing; // xyz = cell spacing, w = visibility history weight
     float4 probe_sky_color;      // rgb = sky tint, w = sky intensity
-    float4 probe_ground_color;   // rgb = ground tint, w = directional bounce strength
-    float4 main_light_direction; // xyz = world-space light direction, w = resident brick index
-    float4 main_light_color;     // rgb = light color, w = light intensity
+    float4 probe_ground_color;   // rgb = fallback lower-hemisphere tint, w = reserved
+    uint4  probe_update_context; // x = light buffer, y = light count, z = environment cubemap, w = resident brick index
+    float4 probe_ray_rotation;   // xyzw = world-space ray rotation quaternion
     float4 probe_trace_config;   // x = max ray distance, y = trace bias, z = ray count, w = ray query enabled
 };
 

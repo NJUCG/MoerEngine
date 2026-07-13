@@ -90,21 +90,6 @@ uint64 HashTransform(const float4x4& transform) {
     return hash;
 }
 
-float3 GetMainLightColor(const Scene& scene, float3& out_direction, float& out_intensity) {
-    out_direction = float3(0.0f, -1.0f, 0.0f);
-    out_intensity = 0.0f;
-
-    const entt::entity light_entity = scene.GetMainDirectionalLightEntity();
-    if (light_entity == entt::null) {
-        return float3(1.0f);
-    }
-
-    const auto& light = scene.GetMainDirectionalLight();
-    out_direction     = SafeNormalize(light.d_direction, out_direction);
-    out_intensity     = light.intensity;
-    return light.color;
-}
-
 } // namespace
 
 void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
@@ -467,6 +452,9 @@ void ProbeVolumeResource::RefreshGlobalDirtyEvents(const Scene& scene, bool dirt
     }
 
     MainLightSnapshot current_light{};
+    const Scene::TickState& tick_state = scene.GetLastTickState();
+    const bool scene_lights_changed =
+        tick_state.updated_light || tick_state.created_light || tick_state.destroyed_light;
     const entt::entity light_entity = scene.GetMainDirectionalLightEntity();
     current_light.exists = light_entity != entt::null;
     if (current_light.exists) {
@@ -476,14 +464,15 @@ void ProbeVolumeResource::RefreshGlobalDirtyEvents(const Scene& scene, bool dirt
         current_light.intensity = light.intensity;
     }
 
-    if (m_main_light_snapshot_valid &&
-        (m_main_light_snapshot.exists != current_light.exists ||
-         !NearlyEqual(m_main_light_snapshot.direction, current_light.direction) ||
-         !NearlyEqual(m_main_light_snapshot.color, current_light.color) ||
-         !NearlyEqual(m_main_light_snapshot.intensity, current_light.intensity))) {
+    if ((m_has_snapshot && scene_lights_changed) ||
+        (m_main_light_snapshot_valid &&
+         (m_main_light_snapshot.exists != current_light.exists ||
+          !NearlyEqual(m_main_light_snapshot.direction, current_light.direction) ||
+          !NearlyEqual(m_main_light_snapshot.color, current_light.color) ||
+          !NearlyEqual(m_main_light_snapshot.intensity, current_light.intensity)))) {
         m_frame_global_dirty_reasons |= RASTER_PROBE_DIRTY_LIGHT;
     }
-    if (m_has_snapshot && scene.GetLastTickState().updated_material) {
+    if (m_has_snapshot && tick_state.updated_material) {
         m_frame_global_dirty_reasons |= RASTER_PROBE_DIRTY_MATERIAL;
     }
 
@@ -702,7 +691,6 @@ ProbeVolumeResource::BuildSnapshot(const RasterConfig& config, float3 camera_pos
     snapshot.visibility_hysteresis = Clamp(config.probe_gi_visibility_hysteresis, 0.0f, 0.99f);
     snapshot.debug_scale        = Max(config.probe_gi_debug_scale, 0.0f);
     snapshot.sky_intensity      = Max(config.probe_gi_sky_intensity, 0.0f);
-    snapshot.directional_bounce = Max(config.probe_gi_directional_bounce, 0.0f);
     snapshot.sky_color          = Max(config.probe_gi_sky_color, float3(0.0f));
     snapshot.ground_color       = Max(config.probe_gi_ground_color, float3(0.0f));
     snapshot.page_table.fill(RASTER_PROBE_PAGE_INVALID);
@@ -1808,7 +1796,6 @@ bool ProbeVolumeResource::HasSnapshotChanged(const Snapshot& snapshot) const {
         !NearlyEqual(m_snapshot.visibility_hysteresis, snapshot.visibility_hysteresis) ||
         !NearlyEqual(m_snapshot.debug_scale, snapshot.debug_scale) ||
         !NearlyEqual(m_snapshot.sky_intensity, snapshot.sky_intensity) ||
-        !NearlyEqual(m_snapshot.directional_bounce, snapshot.directional_bounce) ||
         !NearlyEqual(m_snapshot.sky_color, snapshot.sky_color) ||
         !NearlyEqual(m_snapshot.ground_color, snapshot.ground_color)) {
         return true;
@@ -1918,7 +1905,6 @@ bool ProbeVolumeResource::RequiresHistoryReset(const Snapshot& snapshot, uint vo
            m_snapshot.trace_ray_count != snapshot.trace_ray_count ||
            !NearlyEqual(m_snapshot.visibility_bias, snapshot.visibility_bias) ||
            !NearlyEqual(m_snapshot.sky_intensity, snapshot.sky_intensity) ||
-           !NearlyEqual(m_snapshot.directional_bounce, snapshot.directional_bounce) ||
            !NearlyEqual(m_snapshot.sky_color, snapshot.sky_color) ||
            !NearlyEqual(m_snapshot.ground_color, snapshot.ground_color);
 }
@@ -2033,10 +2019,8 @@ ProbeUpdateParam ProbeVolumeResource::BuildUpdateParam(
     const Scene&    scene,
     bool            history_valid
 ) const {
-    float3 main_light_direction;
-    float  main_light_intensity = 0.0f;
-    float3 main_light_color     = GetMainLightColor(scene, main_light_direction, main_light_intensity);
     const BrickSnapshot& brick = snapshot.bricks[brick_index];
+    const GpuScene::Res& gpu_scene = scene.GetGpuSceneRes();
     const uint3 base_probe_counts(volume.count_x, volume.count_y, volume.count_z);
     const uint3 level_probe_counts =
         ProbeAdaptiveLayout::GetLevelProbeCounts(base_probe_counts, brick.subdivision_level);
@@ -2063,10 +2047,10 @@ ProbeUpdateParam ProbeVolumeResource::BuildUpdateParam(
     );
     param.probe_sky_color      = float4(snapshot.sky_color.x, snapshot.sky_color.y, snapshot.sky_color.z, snapshot.sky_intensity);
     param.probe_ground_color =
-        float4(snapshot.ground_color.x, snapshot.ground_color.y, snapshot.ground_color.z, snapshot.directional_bounce);
-    param.main_light_direction =
-        float4(main_light_direction.x, main_light_direction.y, main_light_direction.z, float(brick_index));
-    param.main_light_color = float4(main_light_color.x, main_light_color.y, main_light_color.z, main_light_intensity);
+        float4(snapshot.ground_color.x, snapshot.ground_color.y, snapshot.ground_color.z, 0.0f);
+    param.probe_update_context =
+        uint4(gpu_scene.light_buf.hdl, scene.cpu_scene().GetLightCount(), 0u, brick_index);
+    param.probe_ray_rotation = float4(0.0f, 0.0f, 0.0f, 1.0f);
     param.probe_trace_config =
         float4(snapshot.trace_distance, snapshot.visibility_bias, float(snapshot.trace_ray_count), 0.0f);
     return param;

@@ -8,7 +8,9 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
 #include "materials/Material.hlsli"
 #include "shared/Geometry.h"
 #include "shared/ShaderParameters.h"
+#include "shared/raster/SharedEnum.h"
 #include "shared/raster/ShaderParameters.h"
+#include "shared/scene/SharedSceneStruct.h"
 #include "shared/utils/MoerMath.hlsli"
 #include "shared/utils/Packing.h"
 #include "pipelines/raytracing/inline/RaytracingCommon.hlsli"
@@ -29,21 +31,9 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
 [[vk::binding(7, 0)]] StructuredBuffer<Moer::ProbeVolumeGpuDesc> probe_volume_data;
 [[vk::binding(8, 0)]] StructuredBuffer<Moer::ProbeBrickGpuDesc> probe_brick_data;
 
-float ProbeSafeSaturate(float value) {
-    return saturate(value);
-}
-
 float3 ProbeSafeNormalize(float3 value, float3 fallback) {
     const float len_sq = dot(value, value);
     return len_sq > 1e-6 ? value * rsqrt(len_sq) : fallback;
-}
-
-float3 ProbeGetGridCoord01(uint3 coord, uint3 counts) {
-    return float3(
-        counts.x > 1u ? float(coord.x) / float(counts.x - 1u) : 0.5,
-        counts.y > 1u ? float(coord.y) / float(counts.y - 1u) : 0.5,
-        counts.z > 1u ? float(coord.z) / float(counts.z - 1u) : 0.5
-    );
 }
 
 float3 ProbeDecodeOctahedral(float2 encoded) {
@@ -141,12 +131,18 @@ float ProbeGetNearGeometryDistance(float max_trace_distance, float trace_bias) {
     return clamp(spacing_based, lower_bound, upper_bound);
 }
 
-float3 ProbeEstimateMissRadiance(float3 direction, float3 sun_bounce) {
+float3 ProbeEstimateMissRadiance(float3 direction) {
+    if (param.probe_update_context.z != 0u) {
+        const float3 environment_radiance =
+            TextureHandle(param.probe_update_context.z).SampleLevelCube<float3>(direction, 0.0);
+        return max(environment_radiance * param.probe_sky_color.a, float3(0.0, 0.0, 0.0));
+    }
+
     const float sky_weight = saturate(direction.y * 0.5 + 0.5);
-    const float3 sky_ground =
-        lerp(param.probe_ground_color.rgb * 0.55, param.probe_sky_color.rgb, sky_weight) * param.probe_sky_color.a;
-    const float sun_alignment = pow(saturate(dot(direction, -param.main_light_direction.xyz)), 48.0);
-    return sky_ground + sun_bounce * sun_alignment;
+    return max(
+        lerp(param.probe_ground_color.rgb, param.probe_sky_color.rgb, sky_weight) * param.probe_sky_color.a,
+        float3(0.0, 0.0, 0.0)
+    );
 }
 
 struct ProbeTraceResult {
@@ -206,16 +202,90 @@ ProbeTraceResult ProbeTraceRay(float3 origin, float3 direction, float tmin, floa
 }
 #endif
 
-float3 ProbeEstimateHitMaterialRadiance(
+float ProbeTraceShadow(float3 origin, float3 direction, float max_distance) {
+#if PROBE_GI_USE_RAY_QUERY
+    if (max_distance <= 1e-4) {
+        return 1.0;
+    }
+    return ProbeTraceRay(origin, direction, 0.0, max_distance).visible;
+#else
+    return 1.0;
+#endif
+}
+
+float3 ProbeEvaluateDirectIrradiance(float3 world_position, float3 surface_normal, float trace_bias) {
+    if (param.probe_update_context.x == 0u || param.probe_update_context.y == 0u) {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    ArrayBuffer light_buffer = ArrayBuffer(param.probe_update_context.x);
+    float3 direct_irradiance = float3(0.0, 0.0, 0.0);
+    const float surface_offset = max(trace_bias, 0.002);
+    const float3 shadow_origin = world_position + surface_normal * surface_offset;
+
+    [loop] for (uint light_index = 0u; light_index < param.probe_update_context.y; ++light_index) {
+        const Moer::GLight light = light_buffer.Load<Moer::GLight>(light_index);
+        const float3 light_energy = max(light.color * light.intensity, float3(0.0, 0.0, 0.0));
+
+        if (light.type == Moer::ELightType::Directional) {
+            const float3 direction_to_light = ProbeSafeNormalize(-light.direction, float3(0.0, 1.0, 0.0));
+            const float n_dot_light = saturate(dot(surface_normal, direction_to_light));
+            if (n_dot_light <= 0.0) {
+                continue;
+            }
+
+            const float shadow_distance = max(param.probe_trace_config.x * 64.0, 1024.0);
+            const float shadow = ProbeTraceShadow(shadow_origin, direction_to_light, shadow_distance);
+            direct_irradiance += light_energy * n_dot_light * shadow;
+            continue;
+        }
+
+        if (light.type == Moer::ELightType::Point || light.type == Moer::ELightType::Spot) {
+            const float3 to_light = light.position - world_position;
+            const float distance_sq = dot(to_light, to_light);
+            if (distance_sq <= 1e-6) {
+                continue;
+            }
+
+            const float distance_to_light = sqrt(distance_sq);
+            const float3 direction_to_light = to_light / distance_to_light;
+            const float n_dot_light = saturate(dot(surface_normal, direction_to_light));
+            if (n_dot_light <= 0.0) {
+                continue;
+            }
+
+            float spot_weight = 1.0;
+            if (light.type == Moer::ELightType::Spot) {
+                const float cone_cosine = dot(-direction_to_light, ProbeSafeNormalize(light.direction, float3(0.0, -1.0, 0.0)));
+                spot_weight = saturate(
+                    (cone_cosine - light.info.y) / max(light.info.x - light.info.y, 1e-4)
+                );
+            }
+
+            const float shadow_distance = max(distance_to_light - surface_offset, 0.0);
+            const float shadow = ProbeTraceShadow(shadow_origin, direction_to_light, shadow_distance);
+            const float attenuation = rcp(max(4.0 * PI * distance_sq, 1e-4));
+            direct_irradiance += light_energy * n_dot_light * attenuation * spot_weight * shadow;
+            continue;
+        }
+
+        if (light.type == Moer::ELightType::Ambient || light.type == Moer::ELightType::Environment) {
+            direct_irradiance += light_energy;
+        }
+    }
+
+    return max(direct_irradiance, float3(0.0, 0.0, 0.0));
+}
+
+float3 ProbeEvaluateHitRadiance(
     ProbeTraceResult trace_result,
+    float3 ray_origin,
     float3 ray_direction,
-    float normalized_hit_distance,
-    float3 fallback_hit_bounce,
-    float direct_light_energy
+    float trace_bias
 ) {
 #if PROBE_GI_USE_RAY_QUERY
     if (trace_result.instance_id == ~0u) {
-        return fallback_hit_bounce;
+        return float3(0.0, 0.0, 0.0);
     }
 
     const Moer::GBufferPassParams scene_params = probe_scene_data[0];
@@ -236,23 +306,18 @@ float3 ProbeEstimateHitMaterialRadiance(
         Moer::EMA_BaseColor | Moer::EMA_Normal | Moer::EMA_MetalRough | Moer::EMA_Emissive
     );
 
-    const float3 surface_normal = ProbeSafeNormalize(material.normal, -ray_direction);
-    const float facing_probe = saturate(dot(surface_normal, -ray_direction));
-    const float n_dot_light = saturate(dot(surface_normal, -param.main_light_direction.xyz));
-    const float diffuse_energy = 1.0 - saturate(material.metalness) * 0.85;
-    const float rough_bounce = 0.35 + 0.65 * saturate(material.roughness);
-    const float distance_energy = 0.30 + 0.70 * saturate(normalized_hit_distance);
+    float3 surface_normal = ProbeSafeNormalize(material.normal, -ray_direction);
+    if (dot(surface_normal, ray_direction) > 0.0) {
+        surface_normal = -surface_normal;
+    }
 
-    const float3 direct_bounce =
-        param.main_light_color.rgb * direct_light_energy * param.probe_ground_color.w * n_dot_light;
-    const float3 indirect_bounce = fallback_hit_bounce * (0.35 + 0.65 * facing_probe);
-    const float3 material_bounce =
-        material.diffuse_albedo * (direct_bounce + indirect_bounce) * diffuse_energy * rough_bounce * distance_energy +
-        material.emissive * 0.35;
-
-    return max(lerp(fallback_hit_bounce, material_bounce, 0.85), float3(0.0, 0.0, 0.0));
+    const float3 hit_position = ray_origin + ray_direction * trace_result.hit_distance;
+    const float3 direct_irradiance =
+        ProbeEvaluateDirectIrradiance(hit_position, surface_normal, trace_bias);
+    const float3 diffuse_radiance = material.diffuse_albedo * direct_irradiance * rcp(PI);
+    return max(material.emissive + diffuse_radiance, float3(0.0, 0.0, 0.0));
 #else
-    return fallback_hit_bounce;
+    return float3(0.0, 0.0, 0.0);
 #endif
 }
 
@@ -333,7 +398,7 @@ ProbePlacementResult ProbeClassifyAndRelocate(
 }
 
 [numthreads(64, 1, 1)] void main(uint local_probe_index : SV_DispatchThreadID) {
-    const uint brick_index = uint(round(max(param.main_light_direction.w, 0.0)));
+    const uint brick_index = param.probe_update_context.w;
     const Moer::ProbeBrickGpuDesc brick = probe_brick_data[brick_index];
     if (brick.probe_range.z == 0u || brick.coord_volume.w != param.probe_volume_counts.w) {
         return;
@@ -357,29 +422,7 @@ ProbePlacementResult ProbeClassifyAndRelocate(
     }
     const uint probe_index = brick.probe_range.x + local_probe_index;
 
-    const float3 coord01  = ProbeGetGridCoord01(coord, counts);
     const float3 grid_position = param.probe_volume_origin.xyz + param.probe_volume_spacing.xyz * float3(coord);
-
-    const float3 up        = float3(0.0, 1.0, 0.0);
-    const float  sun_lift  = ProbeSafeSaturate(dot(-param.main_light_direction.xyz, up));
-    const float  direct_light_intensity = max(param.main_light_color.a, 0.0);
-    const float  direct_light_energy    = direct_light_intensity / (1.0 + direct_light_intensity);
-    const float3 sun_bounce =
-        param.main_light_color.rgb * direct_light_energy * param.probe_ground_color.w * (0.35 + 0.65 * sun_lift);
-
-    const float brick_phase = frac(float(brick_index) * 0.61803398875);
-    const float lateral_variation =
-        0.88 + 0.12 * sin((coord01.x * 3.17 + coord01.z * 2.41 + brick_phase) * PI);
-    const float low_volume_weight = pow(saturate(1.0 - coord01.y), 1.35);
-    const float wall_bounce_mask = saturate(abs(coord01.x - 0.5) * 2.0) * saturate(1.0 - coord01.y * 0.75);
-
-    const float3 sky_gradient =
-        lerp(param.probe_ground_color.rgb * 0.70, param.probe_sky_color.rgb * 0.85, coord01.y) * param.probe_sky_color.a;
-    const float3 directional_bounce = sun_bounce * (0.25 + 0.55 * low_volume_weight);
-    const float3 local_color_bounce =
-        lerp(float3(0.65, 0.26, 0.17), float3(0.12, 0.42, 0.72), smoothstep(0.0, 1.0, coord01.x)) *
-        wall_bounce_mask * param.probe_sky_color.a * 0.16;
-    const float3 ground_bounce = param.probe_ground_color.rgb * low_volume_weight * param.probe_sky_color.a * 0.30;
 
     const float max_trace_distance = max(param.probe_trace_config.x, 0.1);
     const float trace_bias = max(param.probe_trace_config.y, 0.02);
@@ -410,10 +453,11 @@ ProbePlacementResult ProbeClassifyAndRelocate(
                 atlas_texel_index < Moer::RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT;
                 ++atlas_texel_index) {
         const float3 ray_direction = ProbeGetAtlasDirection(atlas_texel_index);
+        const float3 ray_origin = position + ray_direction * trace_bias;
         ProbeTraceResult trace_result = ProbeMakeMissTrace(max_trace_distance);
         if (atlas_texel_index < trace_texel_count) {
             trace_result = ProbeTraceRay(
-                position + ray_direction * trace_bias,
+                ray_origin,
                 ray_direction,
                 0.0,
                 max_trace_distance
@@ -430,13 +474,10 @@ ProbePlacementResult ProbeClassifyAndRelocate(
             very_close_hit_sum += hit * (hit_distance < invalid_distance ? 1.0 : 0.0);
         }
 
-        const float normalized_hit = saturate(hit_distance / max_trace_distance);
-        const float3 miss_radiance = ProbeEstimateMissRadiance(ray_direction, sun_bounce);
-        const float3 hit_bounce = (ground_bounce * 0.45 + local_color_bounce * 1.25 + directional_bounce * 0.20) *
-                                  (0.25 + 0.75 * normalized_hit);
-        const float3 material_hit_bounce =
-            ProbeEstimateHitMaterialRadiance(trace_result, ray_direction, normalized_hit, hit_bounce, direct_light_energy);
-        const float3 directional_irradiance = lerp(material_hit_bounce, miss_radiance, visible);
+        const float3 miss_radiance = ProbeEstimateMissRadiance(ray_direction);
+        const float3 hit_radiance =
+            ProbeEvaluateHitRadiance(trace_result, ray_origin, ray_direction, trace_bias);
+        const float3 directional_irradiance = lerp(hit_radiance, miss_radiance, visible);
 
         ray_radiance_sum += directional_irradiance;
         current_open_sum += visible;
@@ -518,11 +559,7 @@ ProbePlacementResult ProbeClassifyAndRelocate(
 
     const float probe_confidence = probe_state == Moer::RASTER_PROBE_STATE_INVALID ? 0.0 : 1.0;
 
-    const float3 fallback_irradiance =
-        max((sky_gradient + directional_bounce + ground_bounce + local_color_bounce) * lateral_variation, float3(0.0, 0.0, 0.0));
-    const float3 traced_irradiance =
-        ray_radiance_sum * inv_ray_count + directional_bounce * 0.25 + local_color_bounce * (1.0 - current_open_ratio) * 0.70;
-    const float3 irradiance = lerp(fallback_irradiance, traced_irradiance, trace_blend);
+    const float3 irradiance = max(ray_radiance_sum * inv_ray_count, float3(0.0, 0.0, 0.0));
 
     float3 final_irradiance = irradiance;
     if (irradiance_history_weight > 0.0 && probe_confidence > 0.0 && history_probe.irradiance.a > 0.0 &&

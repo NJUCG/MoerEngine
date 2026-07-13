@@ -453,7 +453,6 @@ private:
         float  visibility_hysteresis      = 0.0f;
         float  debug_scale                = 1.0f;
         float  sky_intensity              = 0.0f;
-        float  directional_bounce         = 0.0f;
         float3 sky_color                  = float3(0.0f);
         float3 ground_color               = float3(0.0f);
         float3 camera_position            = float3(0.0f);

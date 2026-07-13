@@ -113,6 +113,8 @@ public:
                 continue;
             }
 
+            job.param.probe_update_context.z = context.textures.cubemap_tex.hdl;
+
             const uint dispatch_count =
                 (job.probe_count + RASTER_PROBE_UPDATE_GROUP_SIZE - 1u) / RASTER_PROBE_UPDATE_GROUP_SIZE;
 
