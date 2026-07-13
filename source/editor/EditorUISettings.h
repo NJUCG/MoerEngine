@@ -14,6 +14,7 @@ namespace Moer {
 struct EditorWindowVisibilitySettings {
     bool loaded          = false;
     bool scene_color     = true;
+    bool scene_view      = true;
     bool hierarchy       = true;
     bool inspector       = true;
     bool config          = true;

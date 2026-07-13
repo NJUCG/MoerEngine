@@ -142,6 +142,21 @@ void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_
 
     ImGui::TextDisabled("Entity %u", static_cast<uint32>(entt::to_integral(selected_node)));
 
+    Scene::NodeVisibility visibility = scene->GetNodeVisibility(selected_node);
+    bool                  visible_in_game = visibility.visible_in_game;
+    if (ImGui::Checkbox("Visible in Game", &visible_in_game)) {
+        scene->SetNodeVisibleInGame(selected_node, visible_in_game);
+        visibility = scene->GetNodeVisibility(selected_node);
+    }
+    bool visible_in_editor = visibility.visible_in_editor;
+    if (ImGui::Checkbox("Visible in Editor", &visible_in_editor)) {
+        scene->SetNodeVisibleInEditor(selected_node, visible_in_editor);
+        visibility = scene->GetNodeVisibility(selected_node);
+    }
+    if (!visibility.effectively_visible_in_game) {
+        ImGui::TextDisabled("Game visibility is blocked by this node or a parent.");
+    }
+
     if (ImGui::InputText("Name", name_buffer.data(), name_buffer.size())) {
         scene->SetNodeName(selected_node, name_buffer.data());
     }

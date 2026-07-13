@@ -176,6 +176,14 @@ public:
         bool is_main_light        = false;
     };
 
+    struct NodeVisibility {
+        bool has_visibility_component           = false;
+        bool visible_in_editor                  = true;
+        bool visible_in_game                    = true;
+        bool effectively_visible_in_editor      = true;
+        bool effectively_visible_in_game        = true;
+    };
+
     Scene();
     ~Scene() = default;
 
@@ -298,6 +306,9 @@ public:
     NodeSubtreeStats                  GetNodeSubtreeStats(entt::entity entity) const;
     bool                              TryGetNodeName(entt::entity entity, std::string& out_name) const;
     std::optional<NodeLocalTransform> TryGetNodeLocalTransform(entt::entity entity) const;
+    NodeVisibility                    GetNodeVisibility(entt::entity entity) const;
+    bool                              IsNodeVisibleInEditor(entt::entity entity) const;
+    bool                              IsNodeVisibleInGame(entt::entity entity) const;
 
     entt::entity GetMainCameraEntity() const;
     entt::entity GetMainDirectionalLightEntity() const;
@@ -334,6 +345,8 @@ public:
     bool SetNodeTranslation(entt::entity entity, const float3& value);
     bool SetNodeRotation(entt::entity entity, const Quaternion& value);
     bool SetNodeScale(entt::entity entity, const float3& value);
+    bool SetNodeVisibleInEditor(entt::entity entity, bool visible);
+    bool SetNodeVisibleInGame(entt::entity entity, bool visible);
 
     // 创建普通 entity，不接入 scene node 树，也不触发 scene sync。
     entt::entity CreateEntity(std::string_view name = {});

@@ -102,6 +102,8 @@ static constexpr uint RASTER_PROBE_GIZMO_COLOR_IRRADIANCE = 1;
 static constexpr uint RASTER_PROBE_GIZMO_COLOR_VISIBILITY = 2;
 static constexpr uint RASTER_PROBE_GIZMO_COLOR_STATE = 3;
 static constexpr uint RASTER_PROBE_GIZMO_COLOR_APV_LEVEL = 4;
+static constexpr uint RASTER_CSM_GIZMO_DRAW_SPLIT_FRUSTUM = 1u << 0u;
+static constexpr uint RASTER_CSM_GIZMO_DRAW_BOUNDING_SPHERE = 1u << 1u;
 #else
 static const uint RASTER_PROBE_VOLUME_MAX_COUNT = 4;
 static const uint RASTER_PROBE_MAX_COUNT_PER_VOLUME = 512;
@@ -181,6 +183,8 @@ static const uint RASTER_PROBE_GIZMO_COLOR_IRRADIANCE = 1;
 static const uint RASTER_PROBE_GIZMO_COLOR_VISIBILITY = 2;
 static const uint RASTER_PROBE_GIZMO_COLOR_STATE = 3;
 static const uint RASTER_PROBE_GIZMO_COLOR_APV_LEVEL = 4;
+static const uint RASTER_CSM_GIZMO_DRAW_SPLIT_FRUSTUM = 1u << 0u;
+static const uint RASTER_CSM_GIZMO_DRAW_BOUNDING_SPHERE = 1u << 1u;
 #endif
 
 struct ProbeGridProbeData {
@@ -243,6 +247,26 @@ struct ProbeGizmoParam {
     float4   gizmo_config;        // probes: x = axis half-size, y = color intensity, z = axis thickness; bounds: xyz = extent, w = line thickness
     float4   fixed_color;         // rgb = fixed gizmo color, w = alpha
     float4   camera_position;     // xyz = camera position, w = reserved
+};
+
+struct CameraGizmoParam {
+    float4x4 world2clip;
+    float4   camera_position_near;       // xyz = main camera position, w = near visualization distance
+    float4   camera_right_tan_half_fov;  // xyz = main camera right, w = tan(fov_y / 2)
+    float4   camera_up_aspect;           // xyz = main camera up, w = aspect ratio
+    float4   camera_front_far;           // xyz = main camera front, w = far visualization distance
+};
+
+struct CsmGizmoCascadeData {
+    float4 color;
+    float4 sphere_center_radius;
+    float4 frustum_corners[8];
+};
+
+struct CsmGizmoParam {
+    float4x4 world2clip;
+    uint4    csm_config;                // x = cascade buffer, y = cascade count, z = draw flags, w = reserved
+    float4   camera_position_thickness; // xyz = scene camera position, w = world-space line thickness
 };
 
 struct MaterialPassBindlessParam {
@@ -318,6 +342,9 @@ struct LightingData {
 
 #ifdef __cplusplus
 static_assert(sizeof(ProbeUpdateParam) <= 128);
+static_assert(sizeof(CameraGizmoParam) <= 128);
+static_assert(sizeof(CsmGizmoParam) <= 128);
+static_assert(sizeof(CsmGizmoCascadeData) % 16 == 0);
 static_assert(sizeof(ProbeVolumeGpuDesc) == 112);
 static_assert(sizeof(ProbeCellGpuDesc) == 96);
 static_assert(sizeof(ProbeBrickGpuDesc) == 96);

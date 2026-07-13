@@ -4,7 +4,9 @@
 #include "AoPass.h"
 #include "BilateralFilterDenoiserPass.h"
 #include "BloomPass.h"
+#include "CameraGizmoPass.h"
 #include "CooperativeOpsPass.h"
+#include "CsmGizmoPass.h"
 #include "DirectionalShadowMaskPass.h"
 #include "GeometryPass.h"
 #include "HiZBuildPass.h"
@@ -71,7 +73,9 @@ RasterRenderer::RasterRenderer(
     shadow_depth_pass            = MakeUnique<ShadowDepthPass>(raster_context);
     directional_shadow_mask_pass = MakeUnique<DirectionalShadowMaskPass>(raster_context);
     probe_update_pass            = MakeUnique<ProbeUpdatePass>(raster_context);
+    csm_gizmo_pass               = MakeUnique<CsmGizmoPass>(raster_context);
     probe_gizmo_pass             = MakeUnique<ProbeGizmoPass>(raster_context);
+    camera_gizmo_pass            = MakeUnique<CameraGizmoPass>(raster_context);
     geometry_pass                = MakeUnique<GeometryPass>(raster_context);
     lighting_pass                = MakeUnique<LightingPass>(raster_context);
     skybox_pass                  = MakeUnique<SkyboxPass>(raster_context);
@@ -365,7 +369,15 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
             RasterTool::ExecuteScenePendingCommands(scene, device, gfx_queue);
         }
 
-        auto& camera = scene.GetMainCamera().camera;
+        auto& main_camera = scene.GetMainCamera().camera;
+        if (!m_b_scene_view_camera_initialized) {
+            m_scene_view_camera                  = main_camera;
+            m_b_scene_view_camera_initialized = true;
+        }
+
+        Camera& camera =
+            editor_config->active_viewport_mode == EEditorViewportMode::Scene ? m_scene_view_camera :
+                                                                            main_camera;
 
         {
             // Jitter Camera for SMAA T2x
@@ -382,7 +394,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         raster_context.Update(camera.GetDeltaTime());
 
-        if (scene_tick_state.updated_transform) {
+        if (scene_tick_state.updated_transform || scene_tick_state.rebuilt_mesh) {
             raster_context.csm_data.shadow_cache_config_snapshot_valid = false;
             raster_context.InvalidateHiZHistory();
         }
@@ -418,7 +430,18 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         //Env&Atmo Pass
         skybox_pass->Process(raster_context, raster_config, camera);
 
-        probe_gizmo_pass->Process(raster_context, raster_config, camera);
+        const auto& scene_gizmos = editor_config->scene_view_gizmos;
+        const bool  draw_scene_gizmos =
+            editor_config->active_viewport_mode == EEditorViewportMode::Scene && scene_gizmos.enabled;
+        if (draw_scene_gizmos && scene_gizmos.show_probe_gi) {
+            RasterConfig probe_gizmo_config                    = raster_config;
+            probe_gizmo_config.probe_gi_gizmo_enabled         = scene_gizmos.show_probe_gi_probes;
+            probe_gizmo_config.probe_gi_volume_bounds_enabled = scene_gizmos.show_probe_gi_volume_bounds;
+            if (scene_gizmos.show_probe_gi_adaptive_cells) {
+                probe_gizmo_config.probe_gi_debug_mode = 9;
+            }
+            probe_gizmo_pass->Process(raster_context, probe_gizmo_config, camera);
+        }
 
         // Post Process Passes
         // - Ambient Occlusion
@@ -453,6 +476,16 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         // - Tonemapping Pass
         processing_image = tonemapping_pass->Process(raster_context, raster_config, processing_image);
+
+        if (draw_scene_gizmos) {
+            if (scene_gizmos.show_main_camera) {
+                camera_gizmo_pass->Process(raster_context, camera, main_camera);
+            }
+
+            if (scene_gizmos.show_csm) {
+                csm_gizmo_pass->Process(raster_context, raster_config, scene_gizmos, camera, main_camera);
+            }
+        }
 
         if (hooks.on_ui_combine_pass) {
             default_output_texture = hooks.on_ui_combine_pass(

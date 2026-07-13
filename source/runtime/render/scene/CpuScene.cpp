@@ -8,9 +8,36 @@
 
 namespace Moer {
 
+static bool IsNodeEffectivelyVisibleInGame(const entt::registry& registry, entt::entity entity) {
+    if (entity == entt::null || !registry.valid(entity) || !registry.all_of<ecs::CNode>(entity)) {
+        return false;
+    }
+
+    entt::entity current = entity;
+    while (current != entt::null) {
+        if (!registry.valid(current) || !registry.all_of<ecs::CNode>(current)) {
+            return false;
+        }
+
+        if (const auto* visibility = registry.try_get<ecs::CVisibility>(current);
+            visibility && !visibility->visible_in_game) {
+            return false;
+        }
+
+        current = registry.get<ecs::CNode>(current).parent_entt;
+    }
+
+    return true;
+}
+
 // 将 LogicalScene 中的 Light 组件转换为 shader 可见的 GLight 数据。
 static bool TryBuildGLight(const entt::registry& registry, entt::entity entity, GLight& out_light) {
     out_light = GLight{};
+
+    if (registry.all_of<ecs::CNode>(entity) && !IsNodeEffectivelyVisibleInGame(registry, entity)) {
+        out_light.type = static_cast<uint>(ELightType::None);
+        return true;
+    }
 
     if (registry.all_of<ecs::CLightDirectional>(entity)) {
         const auto& c_light = registry.get<ecs::CLightDirectional>(entity);
@@ -478,7 +505,7 @@ void CpuScene::InitializeMeshes() {
                 node_queue.push(c_node.next_sibling_entt);
             }
 
-            if (r.all_of<ecs::CRenderable>(entity)) {
+            if (r.all_of<ecs::CRenderable>(entity) && IsNodeEffectivelyVisibleInGame(r, entity)) {
                 const ecs::CRenderable& c_renderable = r.get<ecs::CRenderable>(entity);
                 const ecs::CMesh&       c_mesh       = r.get<ecs::CMesh>(c_renderable.mesh_entt);
 
