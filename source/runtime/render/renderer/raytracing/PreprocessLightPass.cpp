@@ -204,7 +204,7 @@ static bool CanConvert(entt::entity entity, const Moer::Scene& scene) {
             // TODO: CLightSpot 还未实现
             return false;
         case Moer::ELightType::Environment:
-            // TODO: CLightEnvironment 还未实现
+            // TODO: CLightEnvironment 还未实现；当前环境光由 Process() 直接从 RTContext 组装。
             return false;
         default:
             return false;
@@ -279,12 +279,27 @@ static bool ConvertLight(entt::entity entity, const Moer::Scene& scene, Polymorp
 }
 
 void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
+    // CPU 临时数据与单帧逻辑光源缓冲的对应关系：
+    //
+    //   tasks（按 light_offset 排序）              light_data（单帧）
+    //   +------------------------------+            +---------------------------+
+    //   | 自发光 primitive：N 个三角形 |----------->| N 个三角形光源          |
+    //   | 有限 ECS 光源：1 个元素      |----------->| 有限解析光源            |
+    //   | 方向光：1 个元素              |----------->| 无限远光源              |
+    //   | 环境光：1 个元素              |----------->| 环境光                   |
+    //   +------------------------------+            +---------------------------+
+    //
+    // 每个 task 占用 [light_offset, light_offset + num_triangles) 区间。
+    // PrepareLights.hlsl::FindTask() 依赖这些区间连续且按起点排序。
+    // 解析光/环境光会置位 primitive_id 最高位，剩余位索引 prim_light_infos；
+    // 否则 primitive_id 直接标识自发光 primitive，区间内每个元素对应一个三角形。
     Array<PrepareLightsTask>    tasks;
     Array<PolymorphicLightInfo> prim_light_infos;
 
     uint light_buf_offset = 0;
 
-    // 1. 遍历所有 CPrimitive，处理自发光三角形
+    // 1. 遍历所有 CPrimitive，为每个自发光 primitive 生成一个 task。
+    // Compute Shader 会再将它展开为“每个三角形一个 PolymorphicLightInfo”。
     UnorderedMap<uint, uint> primitive_to_light_offset_map;
 
     auto& r = scene.r();
@@ -312,7 +327,8 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
             return;
         }
 
-        // 检查是否已经处理过
+        // 检查是否已经处理过；保留上一帧的区间起点，
+        // 供时域 ReSTIR 在场景重建后重映射该 primitive 的三角形光源。
         uint64 primitive_hash = static_cast<uint64>(primitive_id);
         auto   iter           = instance_light_buffer_offsets.find(primitive_hash);
 
@@ -326,7 +342,8 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         task.index_start_idx    = c_primitive.index.is_valid ? c_primitive.index.start_idx : 0;
         task.first_instance_idx = scene.GetCpuScene().GetFirstInstanceIndex(primitive_id);
 
-        // 记录映射关系（对应原始代码的 geo_instance_to_light[first_geom_instance_idx + i] = light_buf_offset）
+        // 记录 primitive_id -> light_offset 映射。此处保存帧内局部 offset；
+        // 只有真正访问 GPU 双缓冲时才加 cur_light_offset。
         primitive_to_light_offset_map[primitive_id]   = light_buf_offset;
         instance_light_buffer_offsets[primitive_hash] = light_buf_offset;
 
@@ -336,8 +353,9 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
 
     uint num_prim_lights = light_buf_offset; // 记录自发光三角形的数量
 
-    // 2. 将 primitive_to_light_offset_map 转换为数组
-
+    // 2. 将 primitive_to_light_offset_map 转换为 GPU 稠密数组。
+    // 数组中保存 primitive -> 首个三角形光源 offset 的映射。
+    // 非自发光 primitive 保持 s_invalid_light_idx。
     uint max_primitive_id = 0;
     if (!primitive_to_light_offset_map.empty()) {
         for (const auto& [primitive_id, light_offset] : primitive_to_light_offset_map) {
@@ -356,7 +374,6 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     }
 
     // 3. 处理场景光源（Directional Light, Point Light 等）
-
     Timer timer;
     timer.Start();
 
@@ -369,10 +386,8 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
 
     // 下面注释掉的这一段代码，是原来的多线程处理光线的代码
     // - 场景管理在重构后，目前没有时间进行迁移，所以保留此处的注释
+    // - 该实现只是暂时停用，并非废弃；迁移完成后会重新启用。
     {
-
-
-
     // uint chunk_size    = 1024;
     // uint parrallel_cnt = std::max(_rt_ctx.num_threads, 1u);
     // parrallel_cnt      = std::min(parrallel_cnt, (uint)light_entities_src.size() / chunk_size + 1);
@@ -571,6 +586,11 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
 
     }
 
+    // LightPriority 决定 ReSTIR DI 所依赖的物理分区顺序：
+    //
+    //   [ 有限解析光 ] [ 无限远方向光 ]
+    //
+    // 环境光不来自 ECS，因此在下方从 RTContext 单独追加到末尾。
     std::ranges::sort(light_entities, [&](entt::entity _lhs, entt::entity _rhs) {
         return LightPriority(_lhs, scene) < LightPriority(_rhs, scene);
     });
@@ -584,7 +604,7 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
             continue;
         }
 
-        // 查找上一帧的 offset
+        // 查找上一帧的 offset；Entity 身份跨帧稳定，用作解析光的时域重映射 key。
         auto pre_iter = primitive_light_buffer_offsets.find(uint64(entity));
 
         // 创建 Task
@@ -619,6 +639,7 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
 
     // 处理环境光（直接从 RTContext 获取数据，绕过 ECS）
     // 注意：rt_ctx.env_map 未被赋值（是 renderer 局部变量），用 env_pdf_tex 获取尺寸
+    // RTContext 同时持有原始环境贴图 handle 和预计算的 PDF 贴图。
     if (_rt_ctx.scene_params.enable_env_map && _rt_ctx.env_pdf_tex) {
         PolymorphicLightInfo light_info{};
         light_info.color_type_flags = (uint)EPolyLightType::ELEnv << g_poly_morphic_light_type_shift;
@@ -632,6 +653,7 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         light_info.scalars    = Fp32ToFp16(_rt_ctx.scene_params.env_map_rotation);
         light_info.scalars |= g_poly_morphic_light_env_is_scalar_bit;
 
+        // 使用保留 key 为这个 RTContext 环境光提供稳定的跨帧身份。
         constexpr uint64 env_light_key = ~0ull; // 固定 key，用于跨帧追踪
         auto             pre_iter      = primitive_light_buffer_offsets.find(env_light_key);
 
@@ -653,7 +675,6 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     auto time = timer.ElapsedMilliseconds();
 
     // 4. 上传数据到 GPU
-
     _cmd_list.PushScopeWithTimeScope("PrepareLights");
 
     // 上传 primitive_to_light
@@ -684,13 +705,14 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     }
 
     // 清除资源
+    // 每帧都会重建这两个输出：mapping 中 0 表示“无映射”，
+    // PrepareLights.hlsl 会将有效索引按从 1 开始的形式存储。
     _cmd_list.ClearResource(_rt_ctx.light_mapping_buf->GetView(), 0u);
     _cmd_list.ClearResource(
         _rt_ctx.local_light_pdf_tex->GetView(0, _rt_ctx.local_light_pdf_tex->GetNumMips()), float4(0.f)
     );
 
     // 5. 设置 Shader 参数并 Dispatch
-
     PrepareLightsParams param{};
     param.num_tasks = tasks.size();
 
@@ -702,10 +724,21 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     param.texcoord0_buf_hdl  = _rt_ctx.GetBindlessHandles().texcoord0_buf_hdl;
     param.primitive_to_light = _rt_ctx.GetBindlessHandles().primitive_to_light;
 
+    // light_data_buf 与 light_mapping_buf 共用相同的 ping-pong 布局：
+    //
+    //   物理分配： [ half 0: max_lights ][ half 1: max_lights ]
+    //               ^ 当前帧 / 上一帧       ^ 上一帧 / 当前帧
+    //
+    // task 中的 offset 始终是帧内局部值；Shader 在最终访问 buffer 时
+    // 才加上 cur_light_offset 或 prev_light_offset。
     uint max_lights_in_buffer = uint(_rt_ctx.light_data_buf->GetNumElement() / 2);
     param.cur_light_offset    = max_lights_in_buffer * b_odd_frame;
     param.prev_light_offset   = max_lights_in_buffer * !b_odd_frame;
 
+    // ReSTIR 按下列三个连续的逻辑分区消费光源数据：
+    //
+    //   [ 自发光三角形 + 有限光 ][ 方向光 ][ 环境光 ]
+    //   ^ local_light_region          ^ infinite ^ env_light
     _rt_ctx.is_ctx.SetLightBufferParams(
         param.cur_light_offset,
         num_finite_prim_lights + num_prim_lights,
@@ -729,6 +762,7 @@ void PrepareLightPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     _rt_ctx.sd_utils.GenerateMips(_cmd_list, _rt_ctx.local_light_pdf_mips);
 
     // 保持数据在回调中存活（对应原始代码）
+    // CopyFrom 只记录异步上传；需将 CPU 后备数组保留到 CommandList 执行完成。
     _cmd_list.AddCallback([primitive_to_light(std::move(primitive_to_light)),
                            prim_light_infos(std::move(prim_light_infos)),
                            tasks(std::move(tasks))]() {
