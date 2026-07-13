@@ -159,7 +159,8 @@ public:
 
         if (rt_available) {
             RasterTool::LogDebugEverySeconds(
-                "[ProbeGI] DDGI ray-query resident-brick update active: ray_sequence=rotated_fibonacci.",
+                "[ProbeGI] DDGI ray-query resident-brick update active: ray_sequence=rotated_fibonacci, "
+                "placement=history_iterative(16x3+verify).",
                 3.0
             );
             return;

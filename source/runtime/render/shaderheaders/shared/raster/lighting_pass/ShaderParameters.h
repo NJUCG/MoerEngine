@@ -187,6 +187,7 @@ struct ProbeGridProbeData {
     float4 world_position; // xyz = probe center, w = RASTER_PROBE_STATE_*
     float4 irradiance;     // rgb = diffuse irradiance, w = confidence
     float4 visibility;     // x = mean ray distance, y = mean distance squared, z = open ratio, w = traced confidence
+    float4 placement;      // xyz = relocation offset from nominal grid, w = signed valid/blocked stability count
 };
 
 struct ProbeGridVisibilityTexel {

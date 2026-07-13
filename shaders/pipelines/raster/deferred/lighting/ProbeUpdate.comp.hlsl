@@ -381,77 +381,234 @@ float3 ProbeEvaluateHitRadiance(
 #endif
 }
 
+static const uint PROBE_PLACEMENT_RAY_BUDGET = 16u;
+static const uint PROBE_RELOCATION_MAX_ITERATIONS = 3u;
+
+struct ProbePlacementAnalysis {
+    float3 escape_direction;
+    float  escape_strength;
+    float  close_hit_ratio;
+    float  very_close_hit_ratio;
+    float  backface_hit_ratio;
+    float  open_ratio;
+};
+
 struct ProbePlacementResult {
     float3 position;
     uint   state;
+    float  stability;
+    ProbePlacementAnalysis analysis;
 };
 
-ProbePlacementResult ProbeClassifyAndRelocate(
-    float3 grid_position,
-    uint trace_texel_count,
+ProbePlacementAnalysis ProbeAnalyzePlacement(
+    float3 candidate_position,
+    uint ray_count,
     float max_trace_distance,
     float trace_bias
 ) {
-    ProbePlacementResult result;
+    ProbePlacementAnalysis analysis = (ProbePlacementAnalysis)0;
+    const float near_distance = ProbeGetNearGeometryDistance(max_trace_distance, trace_bias);
+    const float invalid_distance = max(trace_bias * 1.5, near_distance * 0.18);
+    float3 escape_sum = float3(0.0, 0.0, 0.0);
+    float closest_backface_distance = max_trace_distance;
+    float3 closest_backface_direction = float3(0.0, 0.0, 0.0);
+
+    [loop] for (uint ray_index = 0u; ray_index < ray_count; ++ray_index) {
+        const float3 ray_direction = ProbeGetTraceRayDirection(ray_index, ray_count);
+        const ProbeTraceResult trace_result =
+            ProbeTraceRay(candidate_position, ray_direction, 0.001, max_trace_distance);
+        const float hit = 1.0 - trace_result.visible;
+        const float backface_hit = hit * (trace_result.backface != 0u ? 1.0 : 0.0);
+        const float frontface_hit = hit - backface_hit;
+        const float close_hit =
+            hit * (1.0 - smoothstep(near_distance, near_distance * 1.75, trace_result.hit_distance));
+        const float near_pressure =
+            1.0 - saturate(trace_result.hit_distance / max(near_distance, 1e-4));
+
+        analysis.close_hit_ratio += close_hit;
+        analysis.very_close_hit_ratio +=
+            hit * (trace_result.hit_distance < invalid_distance ? 1.0 : 0.0);
+        analysis.backface_hit_ratio += backface_hit;
+        analysis.open_ratio += trace_result.visible;
+
+        const float open_weight = lerp(
+            0.35 * saturate(trace_result.hit_distance / max(near_distance, 1e-4)),
+            1.0,
+            trace_result.visible
+        );
+        escape_sum += ray_direction * open_weight;
+        escape_sum -= ray_direction * frontface_hit * close_hit * 1.75;
+        escape_sum += ray_direction * backface_hit * (1.25 + 1.75 * near_pressure);
+
+        if (backface_hit > 0.0 && trace_result.hit_distance < closest_backface_distance) {
+            closest_backface_distance = trace_result.hit_distance;
+            closest_backface_direction = ray_direction;
+        }
+    }
+
+    const float inv_ray_count = rcp(float(max(ray_count, 1u)));
+    analysis.close_hit_ratio *= inv_ray_count;
+    analysis.very_close_hit_ratio *= inv_ray_count;
+    analysis.backface_hit_ratio *= inv_ray_count;
+    analysis.open_ratio *= inv_ray_count;
+    if (closest_backface_distance < max_trace_distance) {
+        escape_sum += closest_backface_direction * float(ray_count) * 0.65;
+    }
+    analysis.escape_strength = length(escape_sum) * inv_ray_count;
+    analysis.escape_direction =
+        ProbeSafeNormalize(escape_sum, closest_backface_distance < max_trace_distance ?
+                                           closest_backface_direction :
+                                           float3(0.0, 1.0, 0.0));
+    return analysis;
+}
+
+bool ProbePlacementIsClear(ProbePlacementAnalysis analysis) {
+    return analysis.close_hit_ratio <= 0.08 && analysis.very_close_hit_ratio <= 0.04 &&
+           analysis.backface_hit_ratio <= 0.10;
+}
+
+bool ProbePlacementIsSeverelyBlocked(ProbePlacementAnalysis analysis) {
+    return analysis.backface_hit_ratio > 0.45 || analysis.very_close_hit_ratio > 0.65 ||
+           (analysis.close_hit_ratio > 0.90 && analysis.open_ratio < 0.06);
+}
+
+float3 ProbeClampRelocationOffset(float3 position, float3 grid_position, float max_offset) {
+    const float3 offset = position - grid_position;
+    const float offset_length = length(offset);
+    return offset_length > max_offset ?
+               grid_position + offset * (max_offset / max(offset_length, 1e-5)) :
+               position;
+}
+
+ProbePlacementResult ProbeClassifyAndRelocate(
+    float3 grid_position,
+    Moer::ProbeGridProbeData history_probe,
+    bool placement_history_valid,
+    uint trace_ray_count,
+    float max_trace_distance,
+    float trace_bias,
+    float3 volume_min,
+    float3 volume_max
+) {
+    ProbePlacementResult result = (ProbePlacementResult)0;
     result.position = grid_position;
     result.state = Moer::RASTER_PROBE_STATE_ACTIVE;
 
 #if PROBE_GI_USE_RAY_QUERY
-    if (param.probe_trace_config.w <= 0.0 || trace_texel_count == 0u) {
+    if (param.probe_trace_config.w <= 0.0 || trace_ray_count == 0u) {
         return result;
     }
 
-    const float near_distance = ProbeGetNearGeometryDistance(max_trace_distance, trace_bias);
-    const float invalid_distance = max(trace_bias * 1.5, near_distance * 0.18);
+    const uint placement_ray_count = min(trace_ray_count, PROBE_PLACEMENT_RAY_BUDGET);
+    const float max_relocation_offset = ProbeGetMinSpacing() * 0.48;
+    const uint previous_state = placement_history_valid ?
+                                    ProbeDecodeState(history_probe.world_position.w) :
+                                    Moer::RASTER_PROBE_STATE_ACTIVE;
+    const float previous_stability = placement_history_valid ? history_probe.placement.w : 0.0;
+    if (placement_history_valid) {
+        result.position = clamp(history_probe.world_position.xyz, volume_min, volume_max);
+        result.position = ProbeClampRelocationOffset(
+            result.position,
+            grid_position,
+            max_relocation_offset
+        );
+    }
 
-    float close_hit_sum = 0.0;
-    float very_close_hit_sum = 0.0;
-    float3 escape_dir_sum = float3(0.0, 0.0, 0.0);
-
-    [loop] for (uint atlas_texel_index = 0u;
-                atlas_texel_index < Moer::RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT;
-                ++atlas_texel_index) {
-        if (atlas_texel_index >= trace_texel_count) {
-            continue;
+    [loop] for (uint iteration = 0u; iteration < PROBE_RELOCATION_MAX_ITERATIONS; ++iteration) {
+        result.analysis = ProbeAnalyzePlacement(
+            result.position,
+            placement_ray_count,
+            max_trace_distance,
+            trace_bias
+        );
+        if (ProbePlacementIsClear(result.analysis)) {
+            break;
         }
 
-        const float3 ray_direction = ProbeGetTraceRayDirection(atlas_texel_index, trace_texel_count);
-        const ProbeTraceResult trace_result =
-            ProbeTraceRay(grid_position, ray_direction, 0.001, max_trace_distance);
-        const float hit_distance = trace_result.hit_distance;
-        const float visible = trace_result.visible;
+        const float3 current_offset = result.position - grid_position;
+        const float remaining_offset = max(max_relocation_offset - length(current_offset), 0.0);
+        if (remaining_offset <= trace_bias * 0.25 ||
+            (result.analysis.escape_strength < 0.015 && ProbePlacementIsSeverelyBlocked(result.analysis))) {
+            break;
+        }
 
-        const float hit = 1.0 - visible;
-        const float close_hit =
-            hit * (1.0 - smoothstep(near_distance, near_distance * 1.75, hit_distance));
-        close_hit_sum += close_hit;
-        very_close_hit_sum += hit * (hit_distance < invalid_distance ? 1.0 : 0.0);
-
-        const float open_distance_weight = lerp(saturate(hit_distance / near_distance), 1.0, visible);
-        escape_dir_sum += ray_direction * open_distance_weight;
-        escape_dir_sum -= ray_direction * close_hit * 1.25;
+        const float placement_pressure = max(
+            result.analysis.close_hit_ratio,
+            max(result.analysis.very_close_hit_ratio, result.analysis.backface_hit_ratio)
+        );
+        float relocation_step = clamp(
+            ProbeGetNearGeometryDistance(max_trace_distance, trace_bias) * (0.30 + placement_pressure),
+            trace_bias * 1.5,
+            ProbeGetMinSpacing() * 0.22
+        );
+        relocation_step = min(relocation_step, remaining_offset);
+        const float3 previous_position = result.position;
+        result.position = clamp(
+            result.position + result.analysis.escape_direction * relocation_step,
+            volume_min,
+            volume_max
+        );
+        result.position = ProbeClampRelocationOffset(
+            result.position,
+            grid_position,
+            max_relocation_offset
+        );
+        if (length(result.position - previous_position) <= trace_bias * 0.10) {
+            break;
+        }
     }
 
-    const float inv_trace_count = 1.0 / float(trace_texel_count);
-    const float close_hit_ratio = close_hit_sum * inv_trace_count;
-    const float very_close_hit_ratio = very_close_hit_sum * inv_trace_count;
-    const float escape_len = length(escape_dir_sum) * inv_trace_count;
+    result.analysis = ProbeAnalyzePlacement(
+        result.position,
+        placement_ray_count,
+        max_trace_distance,
+        trace_bias
+    );
+    if (ProbePlacementIsClear(result.analysis)) {
+        result.stability = previous_stability > 0.0 ? min(previous_stability + 1.0, 8.0) : 1.0;
 
-    if (close_hit_ratio <= 0.08 && very_close_hit_ratio <= 0.04) {
+        const float relocation_distance = length(result.position - grid_position);
+        if (relocation_distance > trace_bias * 0.5 && result.stability >= 3.0) {
+            const float return_distance = min(relocation_distance * 0.20, ProbeGetMinSpacing() * 0.08);
+            const float3 return_position = lerp(
+                result.position,
+                grid_position,
+                return_distance / max(relocation_distance, 1e-5)
+            );
+            const ProbePlacementAnalysis return_analysis = ProbeAnalyzePlacement(
+                return_position,
+                placement_ray_count,
+                max_trace_distance,
+                trace_bias
+            );
+            if (ProbePlacementIsClear(return_analysis)) {
+                result.position = return_position;
+                result.analysis = return_analysis;
+            }
+        }
+
+        const bool remains_relocated = length(result.position - grid_position) > trace_bias * 0.5;
+        result.state = remains_relocated ?
+                           Moer::RASTER_PROBE_STATE_RELOCATED :
+                           Moer::RASTER_PROBE_STATE_ACTIVE;
+        if (previous_state == Moer::RASTER_PROBE_STATE_INVALID && result.stability < 2.0) {
+            result.state = Moer::RASTER_PROBE_STATE_INVALID;
+        }
         return result;
     }
 
-    if ((close_hit_ratio > 0.88 && escape_len < 0.08) || very_close_hit_ratio > 0.70) {
+    result.stability = previous_stability < 0.0 ? max(previous_stability - 1.0, -8.0) : -1.0;
+    if (ProbePlacementIsSeverelyBlocked(result.analysis)) {
         result.state = Moer::RASTER_PROBE_STATE_INVALID;
         return result;
     }
 
-    const float3 escape_dir = ProbeSafeNormalize(escape_dir_sum, float3(0.0, 1.0, 0.0));
-    const float relocation_strength = saturate((close_hit_ratio - 0.04) / 0.58);
-    const float relocation_distance = min(near_distance * relocation_strength, ProbeGetMinSpacing() * 0.45);
-    result.position = grid_position + escape_dir * relocation_distance;
-    result.state =
-        relocation_distance > trace_bias * 0.5 ? Moer::RASTER_PROBE_STATE_RELOCATED : Moer::RASTER_PROBE_STATE_NEAR_SURFACE;
+    const bool safely_relocated =
+        result.analysis.backface_hit_ratio < 0.20 && result.analysis.very_close_hit_ratio < 0.20 &&
+        result.analysis.close_hit_ratio < 0.60 && length(result.position - grid_position) > trace_bias * 0.5;
+    result.state = safely_relocated ?
+                       Moer::RASTER_PROBE_STATE_RELOCATED :
+                       Moer::RASTER_PROBE_STATE_NEAR_SURFACE;
 #endif
 
     return result;
@@ -486,18 +643,27 @@ ProbePlacementResult ProbeClassifyAndRelocate(
 
     const float max_trace_distance = max(param.probe_trace_config.x, 0.1);
     const float trace_bias = max(param.probe_trace_config.y, 0.02);
-    const uint trace_texel_count =
+    const uint trace_ray_count =
         clamp(uint(param.probe_trace_config.z), 1u, Moer::RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT);
     const float trace_blend = saturate(param.probe_trace_config.w);
-
-    ProbePlacementResult placement =
-        ProbeClassifyAndRelocate(grid_position, trace_texel_count, max_trace_distance, trace_bias);
     const float3 volume_min = param.probe_volume_origin.xyz;
     const float3 volume_max = param.probe_volume_origin.xyz + param.probe_volume_spacing.xyz * float3(counts - uint3(1, 1, 1));
-    const float3 position = clamp(placement.position, volume_min, volume_max);
     const float irradiance_history_weight = saturate(param.probe_volume_origin.w);
     const float visibility_history_weight = saturate(param.probe_volume_spacing.w);
     const Moer::ProbeGridProbeData history_probe = rw_probe_data[probe_index];
+    const bool placement_history_valid =
+        irradiance_history_weight > 0.0 || visibility_history_weight > 0.0;
+    const ProbePlacementResult placement = ProbeClassifyAndRelocate(
+        grid_position,
+        history_probe,
+        placement_history_valid,
+        trace_ray_count,
+        max_trace_distance,
+        trace_bias,
+        volume_min,
+        volume_max
+    );
+    const float3 position = placement.position;
     const bool probe_state_history_valid =
         history_probe.irradiance.a > 0.0 &&
         ProbeDecodeState(history_probe.world_position.w) != Moer::RASTER_PROBE_STATE_INVALID;
@@ -515,13 +681,14 @@ ProbePlacementResult ProbeClassifyAndRelocate(
     float3 ray_radiance_sum = float3(0.0, 0.0, 0.0);
     float  close_hit_sum = 0.0;
     float  very_close_hit_sum = 0.0;
+    float  backface_hit_sum = 0.0;
     uint   visited_atlas_low = 0u;
     uint   visited_atlas_high = 0u;
     const float near_distance = ProbeGetNearGeometryDistance(max_trace_distance, trace_bias);
     const float invalid_distance = max(trace_bias * 1.5, near_distance * 0.18);
 
-    [loop] for (uint ray_index = 0u; ray_index < trace_texel_count; ++ray_index) {
-        const float3 ray_direction = ProbeGetTraceRayDirection(ray_index, trace_texel_count);
+    [loop] for (uint ray_index = 0u; ray_index < trace_ray_count; ++ray_index) {
+        const float3 ray_direction = ProbeGetTraceRayDirection(ray_index, trace_ray_count);
         const float3 ray_origin = position + ray_direction * trace_bias;
         const ProbeTraceResult trace_result =
             ProbeTraceRay(ray_origin, ray_direction, 0.0, max_trace_distance);
@@ -533,6 +700,7 @@ ProbePlacementResult ProbeClassifyAndRelocate(
             hit * (1.0 - smoothstep(near_distance, near_distance * 1.75, hit_distance));
         close_hit_sum += close_hit;
         very_close_hit_sum += hit * (hit_distance < invalid_distance ? 1.0 : 0.0);
+        backface_hit_sum += hit * (trace_result.backface != 0u ? 1.0 : 0.0);
 
         const float3 miss_radiance = ProbeEstimateMissRadiance(ray_direction);
         const float3 hit_radiance =
@@ -604,23 +772,28 @@ ProbePlacementResult ProbeClassifyAndRelocate(
         );
     }
 
-    const float inv_ray_count = 1.0 / float(trace_texel_count);
+    const float inv_ray_count = 1.0 / float(trace_ray_count);
     const float mean_distance = distance_sum * inv_ray_count;
     const float mean_distance_sq = distance_sq_sum * inv_ray_count;
     const float open_ratio = open_sum * inv_ray_count;
     const float current_open_ratio = open_ratio;
-    const float inv_trace_count = 1.0 / float(trace_texel_count);
+    const float inv_trace_count = 1.0 / float(trace_ray_count);
     const float close_hit_ratio = close_hit_sum * inv_trace_count;
     const float very_close_hit_ratio = very_close_hit_sum * inv_trace_count;
+    const float backface_hit_ratio = backface_hit_sum * inv_trace_count;
 
     uint probe_state = placement.state;
+    float placement_stability = placement.stability;
     if (trace_blend > 0.0) {
-        if (probe_state != Moer::RASTER_PROBE_STATE_INVALID &&
-            (very_close_hit_ratio > 0.55 || (close_hit_ratio > 0.88 && current_open_ratio < 0.08))) {
+        if (backface_hit_ratio > 0.55 || very_close_hit_ratio > 0.55 ||
+            (close_hit_ratio > 0.90 && current_open_ratio < 0.06)) {
             probe_state = Moer::RASTER_PROBE_STATE_INVALID;
-        } else if (probe_state == Moer::RASTER_PROBE_STATE_ACTIVE && close_hit_ratio > 0.16) {
+            placement_stability = placement_stability < 0.0 ?
+                                      max(placement_stability - 1.0, -8.0) :
+                                      -1.0;
+        } else if (probe_state == Moer::RASTER_PROBE_STATE_ACTIVE && close_hit_ratio > 0.24) {
             probe_state = Moer::RASTER_PROBE_STATE_NEAR_SURFACE;
-        } else if (probe_state == Moer::RASTER_PROBE_STATE_RELOCATED && close_hit_ratio > 0.50) {
+        } else if (probe_state == Moer::RASTER_PROBE_STATE_RELOCATED && close_hit_ratio > 0.45) {
             probe_state = Moer::RASTER_PROBE_STATE_NEAR_SURFACE;
         }
     }
@@ -643,5 +816,6 @@ ProbePlacementResult ProbeClassifyAndRelocate(
     probe.world_position      = float4(position, float(probe_state));
     probe.irradiance          = float4(final_irradiance, probe_confidence);
     probe.visibility          = float4(final_visibility, trace_blend);
+    probe.placement           = float4(position - grid_position, placement_stability);
     rw_probe_data[probe_index] = probe;
 }

@@ -256,6 +256,7 @@ void RasterRenderer::UpdateGlobalLightingData(
                << " trace_distance=" << ui_config.probe_gi_trace_distance
                << " trace_rays=" << ui_config.probe_gi_trace_ray_count
                << " ray_sequence=rotated_fibonacci"
+               << " placement=history_iterative(16x3+verify)"
                << " visibility=(" << ui_config.probe_gi_visibility_bias << ", "
                << ui_config.probe_gi_visibility_power << ", "
                << ui_config.probe_gi_visibility_min_weight << ", "
