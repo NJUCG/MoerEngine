@@ -718,7 +718,7 @@ void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
         return;
     viewport_data->sc->Recreate(swapchain_info);
     viewport_data->framebuffer = rd_device.CreateTexture(
-        Extent2D(_viewport->Size.x, _viewport->Size.y),
+        Extent2D(_size.x, _size.y),
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED
     );
