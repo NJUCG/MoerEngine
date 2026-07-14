@@ -1,5 +1,6 @@
 #include "Scene.h"
 
+#include "RenderThread.h"
 #include "log/LogSystem.h"
 #include "math/Transform.h"
 #include "scene/testcase/SceneTestCaseRunner.h"
@@ -156,7 +157,7 @@ void FinalizeDestroyedLights(Scene& scene) {
 /////////////////////////
 
 const Scene::TickState& Scene::Tick(bool is_run_test_case) {
-    assert(m_logical_scene && m_cpu_scene && m_gpu_scene && "Scene is not ready");
+    assert(m_logical_scene && m_cpu_scene && "Scene is not ready");
 
     if (is_run_test_case) {
         SceneTestCaseRunner::Get().PreTick(*this);
@@ -167,13 +168,6 @@ const Scene::TickState& Scene::Tick(bool is_run_test_case) {
         m_logical_scene->Update();
 
         m_cpu_scene->Update();
-
-        m_gpu_scene->Update(
-            *m_logical_scene,
-            *m_cpu_scene,
-            m_last_tick_state.rebuilt_mesh,
-            m_last_tick_state.rebuilt_rt_blas
-        );
 
         FinalizeDestroyedLights(*this);
     }
@@ -198,15 +192,35 @@ SceneUpdateBatch Scene::PrepareUpdateBatch(bool is_run_test_case, bool capture_g
         return batch;
     }
 
-    if (HasPendingGpuSceneCommands()) {
-        batch.initial_gpu_commands.emplace(PopPendingCommandList());
-        ConsumePendingGpuSceneCommands();
+    if (HasPendingGpuSceneUpdate()) {
+        batch.initial_gpu_update = m_cpu_scene->BuildGpuSceneUpdate(
+            true, true, true, true, true, true
+        );
+        ConsumePendingGpuSceneUpdate();
     }
 
     batch.tick_state = Tick(is_run_test_case);
-    if (batch.tick_state || HasPendingGpuSceneCommands()) {
-        batch.update_gpu_commands.emplace(PopPendingCommandList());
-        ConsumePendingGpuSceneCommands();
+    if (HasPendingGpuSceneUpdate()) {
+        batch.update_gpu_update = m_cpu_scene->BuildGpuSceneUpdate(
+            true, true, true, true, true, true
+        );
+        ConsumePendingGpuSceneUpdate();
+    } else if (batch.tick_state) {
+        const bool update_lights = batch.tick_state.updated_light || batch.tick_state.created_light ||
+                                   batch.tick_state.destroyed_light;
+        const bool update_materials =
+            batch.tick_state.updated_material || batch.tick_state.created_material;
+        const bool update_rt_instances = batch.tick_state.updated_transform ||
+                                         batch.tick_state.created_transform ||
+                                         batch.tick_state.rebuilt_mesh;
+        batch.update_gpu_update = m_cpu_scene->BuildGpuSceneUpdate(
+            false,
+            update_lights,
+            update_materials,
+            batch.tick_state.rebuilt_mesh,
+            batch.tick_state.rebuilt_rt_blas,
+            update_rt_instances
+        );
     }
 
     batch.main_camera = GetMainCamera().camera;
@@ -236,9 +250,9 @@ SceneUpdateBatch Scene::PrepareUpdateBatch(bool is_run_test_case, bool capture_g
     if (!s_logged_batch_boundary) {
         const size_t geometry_instance_count = batch.geometry ? batch.geometry->instances.size() : 0u;
         LOG_INFO(
-            "[Threading] SceneUpdateBatch prepared on {} Thread; initial_commands={}, geometry_instances={}.",
+            "[Threading] SceneUpdateBatch prepared on {} Thread; initial_gpu_update={}, geometry_instances={}.",
             IsCurrentlyGameThread() ? "Game" : "Render",
-            batch.initial_gpu_commands.has_value() ? 1 : 0,
+            batch.initial_gpu_update.has_value() ? 1 : 0,
             geometry_instance_count
         );
         s_logged_batch_boundary = true;
@@ -247,21 +261,17 @@ SceneUpdateBatch Scene::PrepareUpdateBatch(bool is_run_test_case, bool capture_g
     return batch;
 }
 
-Render::GpuScene::PendingCommandList&& Scene::PopPendingCommandList() {
-    return std::move(m_gpu_scene->PopPendingCommandList());
+bool Scene::HasPendingGpuSceneUpdate() const {
+    return m_has_pending_gpu_scene_update;
 }
 
-bool Scene::HasPendingGpuSceneCommands() const {
-    return m_has_pending_gpu_scene_commands;
-}
-
-void Scene::ConsumePendingGpuSceneCommands() {
-    m_has_pending_gpu_scene_commands = false;
+void Scene::ConsumePendingGpuSceneUpdate() {
+    m_has_pending_gpu_scene_update = false;
 }
 
 Scene::TickState Scene::BuildPendingTickState() const {
     TickState state{};
-    if (!m_logical_scene || !m_cpu_scene || !m_gpu_scene) {
+    if (!m_logical_scene || !m_cpu_scene) {
         return state;
     }
 

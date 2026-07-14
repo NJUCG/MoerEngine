@@ -44,13 +44,17 @@ union FloatBits {
 
 static Box3D scene_bounding{};
 
-static void ExecuteScenePendingCommands(Scene& scene, RenderDevice& device, CommandQueue& gfx_queue) {
-    auto&& scene_cmd_list = scene.PopPendingCommandList();
-    auto   copy_evt       = device.GetCopyQueue().Execute(scene_cmd_list.copy_queue_cmd_list.Submit());
+static void ExecuteSceneUpdate(
+    RenderScene& render_scene,
+    GpuSceneUpdate&& update,
+    RenderDevice& device,
+    CommandQueue& gfx_queue
+) {
+    auto scene_cmd_list = render_scene.ApplyUpdate(std::move(update));
+    auto copy_evt = device.GetCopyQueue().Execute(scene_cmd_list.copy_queue_cmd_list.Submit());
     device.GetCopyQueue().Sync(copy_evt.timeline);
-    gfx_queue.Execute(scene_cmd_list.gfx_queue_cmd_list.Submit());
+    gfx_queue.Execute(scene_cmd_list.gfx_queue_cmd_list.Submit().TickProfiling());
     gfx_queue.Sync();
-    scene.ConsumePendingGpuSceneCommands();
 }
 
 RaytracingRenderer::RaytracingRenderer(
@@ -178,7 +182,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     };
 
     auto refresh_scene_runtime_refs = [&]() {
-        const auto& gpu_scene_res    = scene.GetGpuSceneRes();
+        const auto& gpu_scene_res    = render_scene->GetGpuSceneRes();
         const bool  rt_scene_changed = rt_scene.Get() != gpu_scene_res.rt_scene.Get();
         rt_scene                     = gpu_scene_res.rt_scene;
         rt_ctx->SetBindlessHandles(gpu_scene_res);
@@ -188,9 +192,23 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         }
     };
 
-    auto execute_scene_pending_commands = [&]() {
-        ExecuteScenePendingCommands(scene, device, gfx_queue);
-        refresh_scene_runtime_refs();
+    auto execute_scene_updates = [&](SceneUpdateBatch&& batch) {
+        bool updated = false;
+        if (batch.initial_gpu_update) {
+            ExecuteSceneUpdate(
+                *render_scene, std::move(*batch.initial_gpu_update), device, gfx_queue
+            );
+            updated = true;
+        }
+        if (batch.update_gpu_update) {
+            ExecuteSceneUpdate(
+                *render_scene, std::move(*batch.update_gpu_update), device, gfx_queue
+            );
+            updated = true;
+        }
+        if (updated) {
+            refresh_scene_runtime_refs();
+        }
     };
 
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
@@ -255,9 +273,8 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
         if (scene.IsReady() && runtime_assets.IsReady()) {
 
-            // 处理场景加载或全量重建过程中遗留的命令
-            if (scene.HasPendingGpuSceneCommands()) {
-                execute_scene_pending_commands();
+            if (!render_scene->IsReady()) {
+                execute_scene_updates(scene.PrepareUpdateBatch(false, false));
             }
 
             // load scene
@@ -407,10 +424,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 }
             }
 
-            const auto& scene_tick_state = scene.Tick();
-            if (scene_tick_state || scene.HasPendingGpuSceneCommands()) {
-                execute_scene_pending_commands();
-            }
+            execute_scene_updates(scene.PrepareUpdateBatch(false, false));
 
             // TODO: 统一update代码
             // 疑问：为什么这段 UpdateRaytracingScene 的代码必须写在这个位置，不能挪到前面去？

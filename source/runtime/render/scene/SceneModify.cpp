@@ -520,11 +520,9 @@ bool Scene::DestroyNodeSubtree(entt::entity entity) {
     logical_scene().SUpdateAllNodeTransformAndAABB();
     logical_scene().SUpdateAllLightData();
 
-    // 这里会整体替换 GpuScene，先等待飞行中的命令完成，避免销毁仍在使用的资源。
-    Render::RenderDevice::Get().WaitIdle();
-    m_cpu_scene                      = MakeUnique<CpuScene>(*m_logical_scene);
-    m_gpu_scene                      = MakeUnique<Render::GpuScene>(*m_cpu_scene, bindless_array());
-    m_has_pending_gpu_scene_commands = true;
+    // RenderScene 在渲染线程消费全量更新并处理旧 GPU 资源的同步销毁。
+    m_cpu_scene                    = MakeUnique<CpuScene>(*m_logical_scene);
+    m_has_pending_gpu_scene_update = true;
     SceneInternal::ClearSceneSyncTags(registry);
     return true;
 }

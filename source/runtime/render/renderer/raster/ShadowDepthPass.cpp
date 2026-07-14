@@ -649,7 +649,7 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
         m_culling_pass.Process(
             context,
             context.lighting_data.world2shadow_clip[cascade_index],
-            context.scene.gpu_scene_res(),
+            context.GetGpuSceneRes(),
             context.gpu_culling_buffers.shadow,
             nullptr,
             RasterTool::GetShadowCullingProfileScopeName(cascade_index)
@@ -758,7 +758,7 @@ void ShadowDepthPass::RenderPointShadows(
         m_culling_pass.Process(
             context,
             view_proj,
-            context.scene.gpu_scene_res(),
+            context.GetGpuSceneRes(),
             context.gpu_culling_buffers.shadow,
             nullptr,
             RasterTool::GetShadowCullingProfileScopeName(face)
@@ -788,7 +788,7 @@ void ShadowDepthPass::RenderShadow(
     GeometryPassBindlessParam param;
     param.world2clip = Transpose(view_proj);
 
-    const auto& gpu_scene_res           = context.scene.gpu_scene_res();
+    const auto& gpu_scene_res           = context.GetGpuSceneRes();
     param.instance_buf_hdl              = gpu_scene_res.instance_buf.hdl;
     param.visible_instance_id_buf_hdl   = context.gpu_culling_buffers.shadow.visible_instance_id_buf.hdl;
     param.use_visible_instance_id_remap = 1;

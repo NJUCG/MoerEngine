@@ -483,7 +483,9 @@ void ProbeVolumeResource::ApplyDirtyEvents(Snapshot& snapshot) {
     }
 }
 
-void ProbeVolumeResource::UpdateSceneData(CommandList& cmd_list, const Scene& scene) {
+void ProbeVolumeResource::UpdateSceneData(
+    CommandList& cmd_list, const GpuScene::Res& gpu_scene_res
+) {
     if (m_scene_data_buffer == nullptr || m_volume_buffer.buf == nullptr || m_cell_buffer.buf == nullptr ||
         m_brick_buffer.buf == nullptr || m_page_table_buffer.buf == nullptr) {
         return;
@@ -524,8 +526,6 @@ void ProbeVolumeResource::UpdateSceneData(CommandList& cmd_list, const Scene& sc
         );
         m_page_table_upload.clear();
     }
-
-    const auto& gpu_scene_res = scene.GetGpuSceneRes();
 
     GBufferPassParams params{};
     params.instance_buf_hdl  = gpu_scene_res.instance_buf.hdl;
@@ -1977,12 +1977,11 @@ ProbeUpdateParam ProbeVolumeResource::BuildUpdateParam(
     const VolumeSnapshot& volume,
     uint            volume_index,
     uint            brick_index,
-    const Scene&    scene,
+    const GpuScene::Res& gpu_scene,
     uint            light_count,
     bool            history_valid
 ) const {
     const BrickSnapshot& brick = snapshot.bricks[brick_index];
-    const GpuScene::Res& gpu_scene = scene.GetGpuSceneRes();
     const uint3 base_probe_counts(volume.count_x, volume.count_y, volume.count_z);
     const uint3 level_probe_counts =
         ProbeAdaptiveLayout::GetLevelProbeCounts(base_probe_counts, brick.subdivision_level);
@@ -2020,7 +2019,7 @@ ProbeUpdateParam ProbeVolumeResource::BuildUpdateParam(
 ProbeVolumeResource::UpdateInfo
 ProbeVolumeResource::PrepareUpdate(
     const RasterConfig&     config,
-    const Scene&            scene,
+    const GpuScene::Res&    gpu_scene,
     const SceneUpdateBatch& scene_updates,
     float3                  camera_position,
     uint64                  frame_index
@@ -2304,7 +2303,7 @@ ProbeVolumeResource::PrepareUpdate(
             volume,
             brick.volume_index,
             brick_index,
-            scene,
+            gpu_scene,
             scene_updates.light_count,
             !mandatory
         );

@@ -60,8 +60,9 @@ RasterRenderer::RasterRenderer(
     m_present_windows(_hooks.on_present_windows) {
     ScopedLogTimer startup_timer("[Startup][RasterRenderer] RasterRenderer::Constructor() total");
 
-    raster_context_ptr =
-        MakeUnique<RasterContext>(device, manager, gfx_queue, bindless_array, cmd_list, scene, resolution);
+    raster_context_ptr = MakeUnique<RasterContext>(
+        device, manager, gfx_queue, bindless_array, cmd_list, *render_scene, resolution
+    );
     auto& raster_context = *raster_context_ptr;
 
     raster_context.CreateFrameBuffers();
@@ -409,9 +410,10 @@ void RasterRenderer::RenderFrame(RasterFramePacket frame_packet) {
     if (frame_packet.scene_updates.scene_ready) {
         // 处理场景加载过程中遗留的命令
         auto& scene_updates = frame_packet.scene_updates;
-        if (scene_updates.initial_gpu_commands) {
+        if (scene_updates.initial_gpu_update) {
+            auto commands = render_scene->ApplyUpdate(std::move(*scene_updates.initial_gpu_update));
             RasterTool::ExecuteScenePendingCommands(
-                std::move(*scene_updates.initial_gpu_commands), device, gfx_queue
+                std::move(commands), device, gfx_queue
             );
         }
 
@@ -427,9 +429,10 @@ void RasterRenderer::RenderFrame(RasterFramePacket frame_packet) {
         auto& raster_config = frame_packet.raster_config;
 
         const auto& scene_tick_state = scene_updates.tick_state;
-        if (scene_updates.update_gpu_commands) {
+        if (scene_updates.update_gpu_update) {
+            auto commands = render_scene->ApplyUpdate(std::move(*scene_updates.update_gpu_update));
             RasterTool::ExecuteScenePendingCommands(
-                std::move(*scene_updates.update_gpu_commands), device, gfx_queue
+                std::move(commands), device, gfx_queue
             );
         }
 
@@ -477,7 +480,7 @@ void RasterRenderer::RenderFrame(RasterFramePacket frame_packet) {
         shadow_depth_pass->Process(raster_context, raster_config, camera);
         cmd_list.PopScopeWithTimeScope();
 
-        probe_update_pass->Process(raster_context, raster_config, scene, camera, time);
+        probe_update_pass->Process(raster_context, raster_config, camera, time);
 
         // Update Global Lighting Data
         UpdateGlobalLightingData(raster_context, raster_config, camera);

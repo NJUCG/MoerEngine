@@ -31,7 +31,9 @@ Renderer::Renderer(uint2 _resolution, const SharedPtr<EditorConfig> _config, con
         swapchain = device.CreateSwapchain(swapchain_createinfo);
     }
     {
-        bindless_array = scene.bindless_array();
+        bindless_array = device.CreateBindlessArray();
+        scene.SetBindlessArray(bindless_array);
+        render_scene = MakeUnique<RenderScene>(bindless_array);
 
         // FIXME: 异步版有bug，会在gfx_queue.Execute()卡死，并且会卡住整台机器一分钟
         // scene.LoadSceneFromFileAsync(_config->scene_path);
@@ -67,6 +69,7 @@ void Renderer::ReleaseResources() {
     swapchain->Sync();
     device.WaitIdle();
 
+    render_scene.reset();
     cmd_list.UpdateBindlessArray(bindless_array);
     gfx_queue.Execute(cmd_list.Submit().DeleteResources());
     gfx_queue.Sync();

@@ -58,7 +58,7 @@ public:
         pass_param.gbuffer_metal_rough_ao = context.textures.metal_rough_ao.hdl;
         pass_param.gbuffer_depth          = context.textures.depth_nearest_sampler.hdl;
 
-        pass_param.light_buf_hdl      = context.scene.GetGpuSceneRes().light_buf.hdl;
+        pass_param.light_buf_hdl      = context.GetGpuSceneRes().light_buf.hdl;
         pass_param.cubemap_handle     = context.textures.cubemap_tex.hdl;
         pass_param.shadow_mask_handle = context.textures.shadow_mask.hdl;
 

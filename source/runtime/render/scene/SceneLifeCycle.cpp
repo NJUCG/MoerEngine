@@ -112,9 +112,7 @@ void AppendMegaBuffers(entt::registry& target_registry, const entt::registry& so
 // MARK: 生命周期 API
 ///////////////////////
 
-Scene::Scene() {
-    m_bindless_array = Render::RenderDevice::Get().CreateBindlessArray();
-}
+Scene::Scene() = default;
 
 void Scene::LoadSceneInternal(const std::filesystem::path& file_path) {
     ScopedLogTimer startup_timer("[Startup][Scene] LoadSceneInternal total");
@@ -123,7 +121,6 @@ void Scene::LoadSceneInternal(const std::filesystem::path& file_path) {
     this->m_scene_load_info.Reset();
     this->m_scene_load_info.StartLoading();
 
-    m_gpu_scene.reset();
     m_cpu_scene.reset();
     m_logical_scene.reset();
 
@@ -144,9 +141,8 @@ void Scene::LoadSceneInternal(const std::filesystem::path& file_path) {
     // 2. cpu scene
     this->m_cpu_scene = MakeUnique<CpuScene>(*this->m_logical_scene);
 
-    // 3. gpu scene
-    this->m_gpu_scene = MakeUnique<Render::GpuScene>(*this->m_cpu_scene, this->bindless_array());
-    this->m_has_pending_gpu_scene_commands = true;
+    // 3. renderer-side scene update
+    this->m_has_pending_gpu_scene_update = true;
 
     // finish
     m_source_file_path = file_path;
@@ -407,10 +403,8 @@ Scene::ImportSceneFromFileResult Scene::ImportSceneFromFileSync(const std::files
 
     // Import 会带来新的 texture/material entities，但当前增量同步链路不会在 GpuScene 中创建这些纹理。
     // 这里直接按最新 logical scene 重建一次 runtime scene，确保材质纹理句柄立即有效。
-    Render::RenderDevice::Get().WaitIdle();
-    m_cpu_scene                      = MakeUnique<CpuScene>(*m_logical_scene);
-    m_gpu_scene                      = MakeUnique<Render::GpuScene>(*m_cpu_scene, bindless_array());
-    m_has_pending_gpu_scene_commands = true;
+    m_cpu_scene                       = MakeUnique<CpuScene>(*m_logical_scene);
+    m_has_pending_gpu_scene_update    = true;
     SceneInternal::ClearSceneSyncTags(target_registry);
 
     import_result.success               = true;
@@ -435,10 +429,8 @@ void Scene::Reset() {
 
     m_logical_scene.reset();
     m_cpu_scene.reset();
-    m_gpu_scene.reset();
-
     m_scene_load_info.Reset();
-    m_has_pending_gpu_scene_commands = false;
+    m_has_pending_gpu_scene_update = false;
 }
 
 bool Scene::IsStartLoading() const {

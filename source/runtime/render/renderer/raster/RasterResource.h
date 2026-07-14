@@ -3,6 +3,7 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "scene/Scene.h"
+#include "scene/RenderScene.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
@@ -43,7 +44,7 @@ public:
     CommandQueue&    gfx_queue;
     BindlessArrayRef bdls;
     CommandList&     cmd_list;
-    Scene&           scene;
+    RenderScene&     render_scene;
 
     const SceneUpdateBatch* scene_updates = nullptr;
 
@@ -126,7 +127,11 @@ public:
 
     // RayTracing
     RaytracingSceneRef rt_scene() {
-        return scene.GetGpuSceneRes().rt_scene;
+        return render_scene.GetGpuSceneRes().rt_scene;
+    }
+
+    const GpuScene::Res& GetGpuSceneRes() const {
+        return render_scene.GetGpuSceneRes();
     }
 
 private:
@@ -175,7 +180,7 @@ public:
         CommandQueue&    gfx_queue,
         BindlessArrayRef bdls,
         CommandList&     cmd_list,
-        Scene&           scene,
+        RenderScene&     render_scene,
         uint2            resolution
     ) :
         device(device),
@@ -183,7 +188,7 @@ public:
         gfx_queue(gfx_queue),
         bdls(bdls),
         cmd_list(cmd_list),
-        scene(scene),
+        render_scene(render_scene),
         resolution(resolution) {
 
         // textures

@@ -16,12 +16,11 @@
 
 namespace Moer {
 namespace Render {
-// 前向声明 GpuScene
-class GpuScene;
+struct GpuSceneUpdate;
 } // namespace Render
 
 /**
- * CpuScene 是 LogicalScene 和 GpuScene 之间的 CPU 缓冲层。
+ * CpuScene 是 LogicalScene 与 GpuSceneUpdate 之间的 CPU 缓冲层。
  *
  * 结构:
  * - m_light_buf / m_material_buf / m_draw_cmd_buf / m_primitive_buf / m_instance_buf
@@ -31,15 +30,13 @@ class GpuScene;
  * 改这里:
  * - 改 shader 结构或 buffer 布局: SharedSceneStruct.h + CpuScene.cpp
  * - 改 dirty tag 规则: LogicalComponents.h + SceneModify.cpp + CpuScene.cpp
- * - 改材质和 mesh 的展开方式: CpuScene.cpp + GpuScene.cpp
+ * - 改材质和 mesh 的展开方式: CpuScene.cpp + GpuSceneUpdate.h + GpuScene.cpp
  *
  * 用法:
  * - 通常只由 Scene 构造和 Tick 驱动
  * - 外部不要直接改内部 buffer，应该改 LogicalScene/Scene API
  */
 class RENDER_API CpuScene {
-
-    friend class Render::GpuScene; // 友元类GpuScene
 
 public:
     CpuScene(ecs::LogicalScene& logical_scene);
@@ -91,6 +88,15 @@ public:
      * @return Light 数量
      */
     uint GetLightCount() const;
+
+    Render::GpuSceneUpdate BuildGpuSceneUpdate(
+        bool full_rebuild,
+        bool update_lights,
+        bool update_materials,
+        bool update_meshes,
+        bool rebuild_rt_blas,
+        bool update_rt_instances
+    ) const;
 
 private:
     ecs::LogicalScene& m_logical_scene;

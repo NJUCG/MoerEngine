@@ -1,26 +1,10 @@
 #include "Scene.h"
 
-#include "rhi/RHI.h"
-
 namespace Moer {
 
 ///////////////////////////
-// MARK: CPU / GPU Scene API
+// MARK: CPU Scene / Bindless API
 ///////////////////////////
-
-const Render::GpuScene::Res& Scene::gpu_scene_res() const {
-    assert(m_gpu_scene && "Scene is not ready");
-    return m_gpu_scene->res();
-}
-
-const Render::GpuScene::Res& Scene::GetGpuSceneRes() const {
-    return gpu_scene_res();
-}
-
-void Scene::RestoreDrawCommands(Render::CommandList& cmd_list) {
-    assert(m_gpu_scene && "Scene is not ready");
-    m_gpu_scene->RestoreDrawCommands(cmd_list);
-}
 
 const CpuScene& Scene::cpu_scene() const {
     assert(m_cpu_scene && "Scene is not ready");
@@ -32,14 +16,17 @@ const CpuScene& Scene::GetCpuScene() const {
 }
 
 Render::BindlessArrayRef Scene::bindless_array() {
-    if (!m_bindless_array) {
-        m_bindless_array = Render::RenderDevice::Get().CreateBindlessArray();
-    }
+    assert(m_bindless_array && "Renderer must assign the Scene bindless array before use.");
     return m_bindless_array;
 }
 
 Render::BindlessArrayRef Scene::GetBindlessArray() {
     return bindless_array();
+}
+
+void Scene::SetBindlessArray(Render::BindlessArrayRef bindless_array) {
+    assert(bindless_array);
+    m_bindless_array = std::move(bindless_array);
 }
 
 ///////////////////////////////////////////

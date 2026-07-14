@@ -4,6 +4,7 @@
 #include "renderer/EditorConfig.h"
 #include "rhi/RHI.h"
 #include "scene/Scene.h"
+#include "scene/RenderScene.h"
 #include "shader/ShaderResourceManager.h"
 
 #include "common/UiCombinePass.h"
@@ -93,6 +94,7 @@ protected:
 
     SwapchainCreateInfo swapchain_createinfo;
     Scene               scene;
+    UniquePtr<RenderScene> render_scene;
     CommandList         cmd_list;
 
     UniquePtr<UiCombinePass> ui_combine_pass;

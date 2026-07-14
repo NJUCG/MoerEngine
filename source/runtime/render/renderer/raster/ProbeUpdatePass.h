@@ -88,14 +88,13 @@ public:
     void Process(
         RasterContext&     context,
         const RasterConfig& config,
-        const Scene&        scene,
         const Camera&       camera,
         uint64              frame_index
     ) {
         ProbeVolumeResource::UpdateInfo update_info =
             context.probe_volume.PrepareUpdate(
                 config,
-                scene,
+                context.GetGpuSceneRes(),
                 context.GetSceneUpdates(),
                 camera.GetPosition(),
                 frame_index
@@ -105,7 +104,7 @@ public:
             return;
         }
 
-        context.probe_volume.UpdateSceneData(context.cmd_list, scene);
+        context.probe_volume.UpdateSceneData(context.cmd_list, context.GetGpuSceneRes());
 
         if (update_info.job_count == 0 || update_info.scheduled_probe_count == 0) {
             return;

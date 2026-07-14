@@ -71,7 +71,7 @@ public:
     }
 
     void Process(RasterContext& context, RasterConfig& ui_config, const Camera& camera) {
-        const auto& gpu_scene_res = context.scene.gpu_scene_res();
+        const auto& gpu_scene_res = context.GetGpuSceneRes();
 
         const bool use_occlusion_culling = ui_config.enable_occlusion_culling &&
                                            context.hiz_data.previous_valid &&

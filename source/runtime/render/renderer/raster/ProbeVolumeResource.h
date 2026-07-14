@@ -10,6 +10,7 @@
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "rhi/RHIResource.h"
+#include "scene/GpuScene.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 
@@ -57,12 +58,12 @@ public:
 
     UpdateInfo PrepareUpdate(
         const RasterConfig&     config,
-        const Scene&            scene,
+        const GpuScene::Res&    gpu_scene,
         const SceneUpdateBatch& scene_updates,
         float3                  camera_position,
         uint64                  frame_index
     );
-    void UpdateSceneData(CommandList& cmd_list, const Scene& scene);
+    void UpdateSceneData(CommandList& cmd_list, const GpuScene::Res& gpu_scene);
     void TrackFrameSubmission(CommandList& cmd_list, uint64 frame_index);
     void FillLightingData(LightingData& lighting_data) const;
 
@@ -475,7 +476,7 @@ private:
         const VolumeSnapshot& volume,
         uint            volume_index,
         uint            brick_index,
-        const Scene&    scene,
+        const GpuScene::Res& gpu_scene,
         uint            light_count,
         bool            history_valid
     ) const;
