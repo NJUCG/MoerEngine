@@ -188,7 +188,7 @@ void TaskGraph::TriggerEventWhenTasksComplete(
     if (task_events.size() <
         8) // don't bother to check for completion if there are lots of prereqs...too expensive to check
     {
-        bool pending = false;
+        pending = false;
         for (int32_t index = 0; index < task_events.size(); index++) {
             GraphEventRef task = task_events[index];
             if (task != nullptr && !task->IsComplete()) {

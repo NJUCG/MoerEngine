@@ -38,6 +38,13 @@ struct CORE_API GlobalConfig {
     } editor;
 
     struct Engine {
+        struct Threading {
+            bool render_thread = false;
+            bool rhi_thread    = false;
+            bool rhi_bypass    = true;
+            uint max_frame_lag = 0;
+        } threading;
+
         struct RHI {
             std::string type;
             std::string api_version;

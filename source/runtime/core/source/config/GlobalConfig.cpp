@@ -5,7 +5,7 @@
 namespace Moer::Config {
 
 GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_path) {
-    GlobalConfig c;
+    GlobalConfig c{};
 
     auto config = toml::parse_file(toml_path.data());
 
@@ -27,6 +27,13 @@ GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_p
         config.at_path("editor.preset_imgui_config_path").value_or("./asset/preset_imgui.ini");
 
     // Engine
+
+    c.engine.threading.render_thread =
+        config.at_path("engine.threading.render_thread").value_or(false);
+    c.engine.threading.rhi_thread = config.at_path("engine.threading.rhi_thread").value_or(false);
+    c.engine.threading.rhi_bypass = config.at_path("engine.threading.rhi_bypass").value_or(true);
+    c.engine.threading.max_frame_lag =
+        config.at_path("engine.threading.max_frame_lag").value_or(uint{0});
 
     c.engine.rhi.type =
         config.at_path("engine.rhi.type").value_or("Not Specified"); // Use this to warn user to set it

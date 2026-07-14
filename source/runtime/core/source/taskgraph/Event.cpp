@@ -41,9 +41,9 @@ void Event::Trigger() {
 
 void Event::Wait() {
     std::unique_lock<std::mutex> lock{m_mutex};
-    if (m_signal < 1) {
-        m_cond.wait(lock);
-    }
+    m_cond.wait(lock, [this]() {
+        return m_signal.load(std::memory_order_acquire) >= 1;
+    });
     if (m_autoReset)
         OnReset();
     lock.unlock();

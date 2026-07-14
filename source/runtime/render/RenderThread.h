@@ -4,6 +4,7 @@
 #include "Core.h"
 #include "RenderAPI.h"
 #include <cstdint>
+#include <functional>
 class Runnable;
 class RunnableThread;
 namespace Moer {
@@ -22,6 +23,28 @@ extern void RENDER_API RestartRenderThread();
 extern void RENDER_API SuspendRenderThread(bool _restart_later = true);
 
 extern void RENDER_API ResumeRenderThread(bool _promised_restart_before = true);
+
+extern bool RENDER_API IsRenderThreadRunning();
+
+class RENDER_API RenderThreadService {
+public:
+    ~RenderThreadService();
+
+    void Start();
+    void Stop();
+
+    GraphEventRef Enqueue(std::function<void()> task);
+    void          Wait(const GraphEventRef& event);
+    void          RunAndWait(std::function<void()> task);
+    void          Flush();
+
+    bool IsRunning() const {
+        return running;
+    }
+
+private:
+    bool running = false;
+};
 
 class RENDER_API ScopedResumeRenderThread {
 public:

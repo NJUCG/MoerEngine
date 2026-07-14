@@ -290,21 +290,15 @@ struct UndefinedRenderTaskName {
  */
 template<typename Funtion, typename TaskNameType = UndefinedRenderTaskName>
 FORCEINLINE void EnqueueRenderTask(Funtion&& _func) {
-    using TRenderTaskType = RenderThreadTaskType<TaskNameType, Funtion>;
+    using StoredFunction  = std::decay_t<Funtion>;
+    using TRenderTaskType = RenderThreadTaskType<TaskNameType, StoredFunction>;
     if (Moer::IsCurrentlyRenderThread()) {
-        TRenderTaskType task(std::forward<Funtion>(_func));
+        TRenderTaskType task(StoredFunction(std::forward<Funtion>(_func)));
         task.Fire(EThread::EMainThread, nullptr);
+        return;
     }
-    if (Moer::IsCurrentlyGameThread()) {
-        // GraphTask<TRenderTaskType>::CreateTask().ConstructAndDispatchWhenReady(std::forward<Funtion>(_func));
-        GraphTask<TRenderTaskType>::Create(std::forward<Funtion>(_func)).Dispatch(EThread::ERenderThread);
-    } else {
-        // Any Thread maybe
-        // immediately execute on render thread
-        // TRenderTaskType task(std::forward<Funtion>(_func));
-        // task.Fire(EThread::EMainThread, nullptr);
-        // GraphTask<TRenderTaskType>::CreateTask().ConstructAndDispatchWhenReady(std::forward<Funtion>(_func));
-        GraphTask<TRenderTaskType>::Create(std::forward<Funtion>(_func)).Dispatch(EThread::ERenderThread);
-    }
+
+    GraphTask<TRenderTaskType>::Create(StoredFunction(std::forward<Funtion>(_func)))
+        .Dispatch(EThread::ERenderThread);
 }
 #endif

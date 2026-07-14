@@ -62,6 +62,12 @@ private:
 };
 
 void StartRenderThread() {
+    assert(IsCurrentlyGameThread() && "Render thread must be started from the game thread.");
+    if (IsRenderThreadRunning()) {
+        LOG_WARNING("[Threading] Render thread is already running.");
+        return;
+    }
+
     g_render_thread_runnable = MoerNew(RenderThread)();
 
     g_render_thread = RunnableThread::Create(
@@ -76,6 +82,12 @@ void StartRenderThread() {
 };
 
 void StopRenderThread() {
+
+    assert(IsCurrentlyGameThread() && "Render thread must be stopped from the game thread.");
+    if (!IsRenderThreadRunning()) {
+        LOG_WARNING("[Threading] Render thread is already stopped.");
+        return;
+    }
 
     LOG_INFO("Wait for Rendering Thread To Stop.");
     //wait for thread to finish executing
@@ -163,6 +175,59 @@ void ResumeRenderThread(bool _promised_restart_before) {
             g_render_suspend_end_event->Trigger();
         }
     }
+}
+
+bool IsRenderThreadRunning() {
+    return g_render_thread != nullptr && g_render_thread_runnable != nullptr;
+}
+
+RenderThreadService::~RenderThreadService() {
+    assert(!running && "RenderThreadService::Stop() must be called before destruction.");
+}
+
+void RenderThreadService::Start() {
+    if (running) {
+        return;
+    }
+
+    StartRenderThread();
+    running = IsRenderThreadRunning();
+}
+
+void RenderThreadService::Stop() {
+    if (!running) {
+        return;
+    }
+
+    Flush();
+    StopRenderThread();
+    running = false;
+}
+
+GraphEventRef RenderThreadService::Enqueue(std::function<void()> task) {
+    assert(running && "Cannot enqueue work before the render thread starts.");
+    assert(IsCurrentlyGameThread() && "RenderThreadService is submitted by the game thread.");
+    assert(task && "Cannot enqueue an empty render task.");
+    return LambdaTask::Dispatch(std::move(task), EThread::ERenderThread);
+}
+
+void RenderThreadService::Wait(const GraphEventRef& event) {
+    assert(running && "Cannot wait after the render thread stops.");
+    assert(IsCurrentlyGameThread() && "RenderThreadService is waited by the game thread.");
+    TaskGraph::GetInterface().WaitUntilTaskComplete(event, EThread::EMainThread);
+}
+
+void RenderThreadService::RunAndWait(std::function<void()> task) {
+    auto event = Enqueue(std::move(task));
+    Wait(event);
+}
+
+void RenderThreadService::Flush() {
+    if (!running) {
+        return;
+    }
+
+    RunAndWait([]() {});
 }
 
 ScopedResumeRenderThread::ScopedResumeRenderThread() {
