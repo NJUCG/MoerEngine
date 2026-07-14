@@ -1,5 +1,3 @@
-#include "scene/Scene.h"
-
 #include "RasterResource.h"
 #include "RasterTextures.h"
 #include "RasterTool.h"
@@ -26,10 +24,9 @@ SkyboxPass::SkyboxPass(RasterContext& context) {
 void SkyboxPass::Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera) {
     SkyboxPassBindlessParam skybox_param;
     skybox_param.cubemap_handle = context.textures.cubemap_tex.hdl;
-    auto directional_light_entt = context.scene.GetMainDirectionalLightEntity();
-    if (directional_light_entt != entt::null && ui_config.skybox_exposure_correct_enabled) {
-        auto directional_light       = context.scene.GetMainDirectionalLight();
-        skybox_param.exposure_factor = directional_light.color * directional_light.intensity *
+    const auto& directional_light = context.GetSceneUpdates().main_directional_light;
+    if (directional_light && ui_config.skybox_exposure_correct_enabled) {
+        skybox_param.exposure_factor = directional_light->color * directional_light->intensity *
                                        powf(10.0f, ui_config.skybox_exposure_correct_factor_log10);
     } else {
         skybox_param.exposure_factor = float3(1.0f, 1.0f, 1.0f);

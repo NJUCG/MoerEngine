@@ -23,6 +23,8 @@ namespace Render {
 class CommandList;
 }
 
+struct SceneUpdateBatch;
+
 /**
  * Scene 是运行时场景总入口，负责把 LogicalScene / CpuScene / GpuScene 串起来。
  *
@@ -256,6 +258,8 @@ public:
 
     const TickState& GetLastTickState() const;
 
+    SceneUpdateBatch PrepareUpdateBatch(bool is_run_test_case, bool capture_geometry_snapshot);
+
     Render::GpuScene::PendingCommandList&& PopPendingCommandList();
     bool                                   HasPendingGpuSceneCommands() const;
     void                                   ConsumePendingGpuSceneCommands();
@@ -468,6 +472,41 @@ private:
     TickState             m_last_tick_state;
     std::filesystem::path m_source_file_path;
     bool                  m_has_pending_gpu_scene_commands = false;
+};
+
+struct SceneGeometryInstanceSnapshot {
+    uint64 key            = 0u;
+    Box3D  bounds{};
+    uint64 transform_hash = 0u;
+};
+
+struct SceneGeometrySnapshot {
+    Array<Box3D>                         primitive_bounds;
+    Array<SceneGeometryInstanceSnapshot> instances;
+    uint                                 renderable_instance_count = 0u;
+    uint                                 leaf_primitive_count       = 0u;
+    uint                                 skipped_invalid_count      = 0u;
+};
+
+struct SceneUpdateBatch {
+    SceneUpdateBatch() = default;
+
+    SceneUpdateBatch(const SceneUpdateBatch&)            = delete;
+    SceneUpdateBatch& operator=(const SceneUpdateBatch&) = delete;
+    SceneUpdateBatch(SceneUpdateBatch&&)                 = default;
+    SceneUpdateBatch& operator=(SceneUpdateBatch&&)      = default;
+
+    bool scene_ready = false;
+
+    Scene::TickState tick_state{};
+    std::optional<Render::GpuScene::PendingCommandList> initial_gpu_commands;
+    std::optional<Render::GpuScene::PendingCommandList> update_gpu_commands;
+
+    Camera                                main_camera{};
+    uint                                  light_count = 0u;
+    std::optional<ecs::CLightDirectional> main_directional_light;
+    std::optional<ecs::CLightPoint>       main_point_light;
+    std::optional<SceneGeometrySnapshot>  geometry;
 };
 
 template<>

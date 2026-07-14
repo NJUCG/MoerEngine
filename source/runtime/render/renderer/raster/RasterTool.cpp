@@ -198,17 +198,19 @@ void RasterTool::TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig
 }
 
 // 执行 Scene 同步阶段积累的 copy/gfx command list。
-void RasterTool::ExecuteScenePendingCommands(Scene& scene, RenderDevice& device, CommandQueue& gfx_queue) {
-    auto&& scene_cmd_list = scene.PopPendingCommandList();
+void RasterTool::ExecuteScenePendingCommands(
+    GpuScene::PendingCommandList&& commands,
+    RenderDevice&                  device,
+    CommandQueue&                  gfx_queue
+) {
+    assert(!IsRenderThreadInitialized() || IsCurrentlyRenderThread());
 
-    auto copy_evt = device.GetCopyQueue().Execute(scene_cmd_list.copy_queue_cmd_list.Submit());
+    auto copy_evt = device.GetCopyQueue().Execute(commands.copy_queue_cmd_list.Submit());
     device.GetCopyQueue().Sync(copy_evt.timeline);
 
-    gfx_queue.Execute(scene_cmd_list.gfx_queue_cmd_list.Submit().TickProfiling());
+    gfx_queue.Execute(commands.gfx_queue_cmd_list.Submit().TickProfiling());
     gfx_queue.Sync();
     // LogRtSceneProfiling(gfx_queue);
-
-    scene.ConsumePendingGpuSceneCommands();
 }
 
 } // namespace Moer::Render::Raster

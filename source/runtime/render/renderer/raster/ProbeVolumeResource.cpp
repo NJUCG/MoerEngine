@@ -2,14 +2,11 @@
 
 #include "log/LogSystem.h"
 #include "math/Function.h"
-#include "math/Transform.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
-#include "scene/LogicalComponents.h"
 #include "scene/Scene.h"
 
 #include <algorithm>
-#include <bit>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -52,42 +49,6 @@ bool NearlyEqual(float lhs, float rhs) {
 
 bool NearlyEqual(float3 lhs, float3 rhs) {
     return NearlyEqual(lhs.x, rhs.x) && NearlyEqual(lhs.y, rhs.y) && NearlyEqual(lhs.z, rhs.z);
-}
-
-bool IsFinite(float3 value) {
-    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
-}
-
-Box3D TransformBounds(const Box3D& local_bounds, const float4x4& world_transform) {
-    Box3D bounds;
-    if (!local_bounds.IsValid() || !IsFinite(local_bounds.min) || !IsFinite(local_bounds.max)) {
-        return bounds;
-    }
-
-    const float3& min = local_bounds.min;
-    const float3& max = local_bounds.max;
-    const Transform transform(world_transform);
-    bounds.Expand(transform * float3(min.x, min.y, min.z));
-    bounds.Expand(transform * float3(max.x, min.y, min.z));
-    bounds.Expand(transform * float3(min.x, max.y, min.z));
-    bounds.Expand(transform * float3(max.x, max.y, min.z));
-    bounds.Expand(transform * float3(min.x, min.y, max.z));
-    bounds.Expand(transform * float3(max.x, min.y, max.z));
-    bounds.Expand(transform * float3(min.x, max.y, max.z));
-    bounds.Expand(transform * float3(max.x, max.y, max.z));
-    if (!IsFinite(bounds.min) || !IsFinite(bounds.max)) {
-        return Box3D();
-    }
-    return bounds;
-}
-
-uint64 HashTransform(const float4x4& transform) {
-    uint64 hash = 14695981039346656037ull;
-    for (float component : transform.e) {
-        hash ^= static_cast<uint64>(std::bit_cast<uint32>(component));
-        hash *= 1099511628211ull;
-    }
-    return hash;
 }
 
 uint HashProbeRaySeed(uint value) {
@@ -348,8 +309,11 @@ void ProbeVolumeResource::Destroy(BindlessArrayRef& bdls) {
     m_last_global_dirty_reasons = 0u;
 }
 
-void ProbeVolumeResource::RefreshSceneGeometry(const Scene& scene, bool dirty_tracking_enabled) {
-    if (!scene.IsReady()) {
+void ProbeVolumeResource::RefreshSceneGeometry(
+    const SceneUpdateBatch& scene_updates,
+    bool                    dirty_tracking_enabled
+) {
+    if (!scene_updates.scene_ready) {
         if (m_scene_geometry_cache_valid || !m_scene_geometry_bounds.empty() ||
             !m_scene_geometry_instances.empty()) {
             m_scene_geometry_bounds.clear();
@@ -367,68 +331,28 @@ void ProbeVolumeResource::RefreshSceneGeometry(const Scene& scene, bool dirty_tr
         return;
     }
 
-    const Scene::TickState& tick_state = scene.GetLastTickState();
+    const Scene::TickState& tick_state = scene_updates.tick_state;
     const bool geometry_changed = tick_state.updated_transform || tick_state.created_transform ||
                                   tick_state.rebuilt_mesh || tick_state.rebuilt_rt_blas;
     if (m_scene_geometry_cache_valid && !geometry_changed) {
         return;
     }
 
-    Array<Box3D> rebuilt_bounds;
-    rebuilt_bounds.reserve(m_scene_geometry_bounds.size());
+    if (!scene_updates.geometry) {
+        LOG_WARNING("[ProbeGI] Scene geometry changed without a matching frame snapshot.");
+        return;
+    }
+
+    const SceneGeometrySnapshot& geometry = *scene_updates.geometry;
+    Array<Box3D> rebuilt_bounds = geometry.primitive_bounds;
     Array<ProbeTrackedBounds> rebuilt_instances;
-    rebuilt_instances.reserve(m_scene_geometry_instances.size());
-    uint renderable_instance_count = 0u;
-    uint leaf_primitive_count      = 0u;
-    uint skipped_invalid_count     = 0u;
-
-    const auto& registry = scene.r();
-    registry.view<const ecs::CRenderable, const ecs::CNode>().each(
-        [&](const auto renderable_entity, const ecs::CRenderable& renderable, const ecs::CNode& node) {
-            if (renderable.mesh_entt == entt::null || !registry.valid(renderable.mesh_entt) ||
-                !registry.all_of<ecs::CMesh>(renderable.mesh_entt)) {
-                ++skipped_invalid_count;
-                return;
-            }
-
-            ++renderable_instance_count;
-            const auto& mesh = registry.get<const ecs::CMesh>(renderable.mesh_entt);
-            const uint leaf_count = mesh.num_leaf_clusters > 0u ?
-                                        Min(
-                                            mesh.num_leaf_clusters,
-                                            static_cast<uint>(mesh.primitive_entts.size())
-                                        ) :
-                                        static_cast<uint>(mesh.primitive_entts.size());
-            leaf_primitive_count += leaf_count;
-            Box3D instance_bounds;
-            for (uint primitive_index = 0u; primitive_index < leaf_count; ++primitive_index) {
-                const entt::entity primitive_entity = mesh.primitive_entts[primitive_index];
-                if (!registry.valid(primitive_entity) || !registry.all_of<ecs::CPrimitive>(primitive_entity)) {
-                    ++skipped_invalid_count;
-                    continue;
-                }
-
-                const auto& primitive = registry.get<const ecs::CPrimitive>(primitive_entity);
-                const Box3D world_bounds = TransformBounds(primitive.aabb, node.d_world_transform);
-                if (!world_bounds.IsValid()) {
-                    ++skipped_invalid_count;
-                    continue;
-                }
-                rebuilt_bounds.push_back(world_bounds);
-                instance_bounds.Expand(world_bounds);
-            }
-
-            if (instance_bounds.IsValid()) {
-                rebuilt_instances.push_back(
-                    {
-                        static_cast<uint64>(entt::to_integral(renderable_entity)),
-                        instance_bounds,
-                        HashTransform(node.d_world_transform)
-                    }
-                );
-            }
-        }
-    );
+    rebuilt_instances.reserve(geometry.instances.size());
+    for (const SceneGeometryInstanceSnapshot& instance : geometry.instances) {
+        rebuilt_instances.push_back({instance.key, instance.bounds, instance.transform_hash});
+    }
+    const uint renderable_instance_count = geometry.renderable_instance_count;
+    const uint leaf_primitive_count       = geometry.leaf_primitive_count;
+    const uint skipped_invalid_count      = geometry.skipped_invalid_count;
 
     ProbeDirtyTracker::SortByKey(rebuilt_instances);
     const bool transform_changed = tick_state.updated_transform || tick_state.created_transform;
@@ -480,20 +404,22 @@ void ProbeVolumeResource::RefreshSceneGeometry(const Scene& scene, bool dirty_tr
     );
 }
 
-void ProbeVolumeResource::RefreshGlobalDirtyEvents(const Scene& scene, bool dirty_tracking_enabled) {
-    if (!dirty_tracking_enabled || !scene.IsReady()) {
+void ProbeVolumeResource::RefreshGlobalDirtyEvents(
+    const SceneUpdateBatch& scene_updates,
+    bool                    dirty_tracking_enabled
+) {
+    if (!dirty_tracking_enabled || !scene_updates.scene_ready) {
         m_main_light_snapshot_valid = false;
         return;
     }
 
     MainLightSnapshot current_light{};
-    const Scene::TickState& tick_state = scene.GetLastTickState();
+    const Scene::TickState& tick_state = scene_updates.tick_state;
     const bool scene_lights_changed =
         tick_state.updated_light || tick_state.created_light || tick_state.destroyed_light;
-    const entt::entity light_entity = scene.GetMainDirectionalLightEntity();
-    current_light.exists = light_entity != entt::null;
+    current_light.exists = scene_updates.main_directional_light.has_value();
     if (current_light.exists) {
-        const auto& light = scene.GetMainDirectionalLight();
+        const auto& light = *scene_updates.main_directional_light;
         current_light.direction = SafeNormalize(light.d_direction, current_light.direction);
         current_light.color     = light.color;
         current_light.intensity = light.intensity;
@@ -2052,6 +1978,7 @@ ProbeUpdateParam ProbeVolumeResource::BuildUpdateParam(
     uint            volume_index,
     uint            brick_index,
     const Scene&    scene,
+    uint            light_count,
     bool            history_valid
 ) const {
     const BrickSnapshot& brick = snapshot.bricks[brick_index];
@@ -2083,8 +2010,7 @@ ProbeUpdateParam ProbeVolumeResource::BuildUpdateParam(
     param.probe_sky_color      = float4(snapshot.sky_color.x, snapshot.sky_color.y, snapshot.sky_color.z, snapshot.sky_intensity);
     param.probe_ground_color =
         float4(snapshot.ground_color.x, snapshot.ground_color.y, snapshot.ground_color.z, 0.0f);
-    param.probe_update_context =
-        uint4(gpu_scene.light_buf.hdl, scene.cpu_scene().GetLightCount(), 0u, brick_index);
+    param.probe_update_context = uint4(gpu_scene.light_buf.hdl, light_count, 0u, brick_index);
     param.probe_ray_rotation = BuildProbeRayRotation(snapshot.frame_index, volume_index, brick_index);
     param.probe_trace_config =
         float4(snapshot.trace_distance, snapshot.visibility_bias, float(snapshot.trace_ray_count), 0.0f);
@@ -2093,10 +2019,11 @@ ProbeUpdateParam ProbeVolumeResource::BuildUpdateParam(
 
 ProbeVolumeResource::UpdateInfo
 ProbeVolumeResource::PrepareUpdate(
-    const RasterConfig& config,
-    const Scene&        scene,
-    float3              camera_position,
-    uint64              frame_index
+    const RasterConfig&     config,
+    const Scene&            scene,
+    const SceneUpdateBatch& scene_updates,
+    float3                  camera_position,
+    uint64                  frame_index
 ) {
     UpdateInfo update_info{};
     m_last_scheduled_brick_count = 0;
@@ -2120,11 +2047,11 @@ ProbeVolumeResource::PrepareUpdate(
     const bool dirty_tracking_enabled = config.probe_gi_enabled && config.probe_gi_dirty_tracking_enabled;
     if (config.probe_gi_enabled &&
         (config.probe_gi_adaptive_placement_enabled || dirty_tracking_enabled)) {
-        RefreshSceneGeometry(scene, dirty_tracking_enabled);
+        RefreshSceneGeometry(scene_updates, dirty_tracking_enabled);
     } else {
         m_scene_geometry_cache_valid = false;
     }
-    RefreshGlobalDirtyEvents(scene, dirty_tracking_enabled);
+    RefreshGlobalDirtyEvents(scene_updates, dirty_tracking_enabled);
 
     Snapshot snapshot = BuildSnapshot(config, camera_position, frame_index);
     StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT> volume_history_reset{};
@@ -2372,7 +2299,15 @@ ProbeVolumeResource::PrepareUpdate(
         job.volume_index = brick.volume_index;
         job.brick_index  = brick_index;
         job.probe_count  = brick.probe_count;
-        job.param = BuildUpdateParam(snapshot, volume, brick.volume_index, brick_index, scene, !mandatory);
+        job.param = BuildUpdateParam(
+            snapshot,
+            volume,
+            brick.volume_index,
+            brick_index,
+            scene,
+            scene_updates.light_count,
+            !mandatory
+        );
         update_info.scheduled_probe_count += brick.probe_count;
         ++update_info.scheduled_level_brick_count[brick.subdivision_level];
         next_brick_history_valid[brick_index] = true;

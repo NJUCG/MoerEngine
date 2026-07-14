@@ -499,31 +499,9 @@ void ShadowDepthPass::PreparePointShadowResources(RasterContext& context, const 
     }
 }
 
-std::optional<entt::entity> ShadowDepthPass::GetMainLightDirectionEntity(RasterContext& context) {
-    auto& r = context.scene.r();
-
-    // 首先尝试查找有 CTagMainLight + CLightDirectional 的实体
-    auto main_light_view = r.view<ecs::CLightDirectional, ecs::CTagMainLight>();
-    auto main_it         = main_light_view.begin();
-
-    if (main_it != main_light_view.end()) {
-        return *main_it;
-    }
-
-    // 如果没有找到带 CTagMainLight 的，则查找第一个 CLightDirectional
-    auto fallback_view = r.view<ecs::CLightDirectional>();
-    auto fallback_it   = fallback_view.begin();
-
-    if (fallback_it != fallback_view.end()) {
-        return *fallback_it;
-    }
-
-    return std::nullopt;
-}
-
 std::optional<ecs::CLightDirectional> ShadowDepthPass::GetMainLightDirection(RasterContext& context) {
-    auto entity_opt = GetMainLightDirectionEntity(context);
-    if (!entity_opt.has_value()) {
+    const auto& light = context.GetSceneUpdates().main_directional_light;
+    if (!light) {
         LOG_ERROR(
             "No directional light found in the scene. Please ensure at least one entity has "
             "CLightDirectional component."
@@ -531,43 +509,19 @@ std::optional<ecs::CLightDirectional> ShadowDepthPass::GetMainLightDirection(Ras
         return std::nullopt;
     }
 
-    auto& r = context.scene.r();
-    return r.get<ecs::CLightDirectional>(entity_opt.value());
-}
-
-std::optional<entt::entity> ShadowDepthPass::GetMainPointLightEntity(RasterContext& context) {
-    auto& r = context.scene.r();
-
-    // 首先尝试查找有 CTagMainLight + CLightPoint 的实体
-    auto main_light_view = r.view<ecs::CLightPoint, ecs::CTagMainLight>();
-    auto main_it         = main_light_view.begin();
-
-    if (main_it != main_light_view.end()) {
-        return *main_it;
-    }
-
-    // 如果没有找到带 CTagMainLight 的，则查找第一个 CLightPoint
-    auto fallback_view = r.view<ecs::CLightPoint>();
-    auto fallback_it   = fallback_view.begin();
-
-    if (fallback_it != fallback_view.end()) {
-        return *fallback_it;
-    }
-
-    return std::nullopt;
+    return light;
 }
 
 std::optional<ecs::CLightPoint> ShadowDepthPass::GetMainPointLight(RasterContext& context) {
-    auto entity_opt = GetMainPointLightEntity(context);
-    if (!entity_opt.has_value()) {
+    const auto& light = context.GetSceneUpdates().main_point_light;
+    if (!light) {
         LOG_ERROR(
             "No point light found in the scene. Please ensure at least one entity has CLightPoint component."
         );
         return std::nullopt;
     }
 
-    auto& r = context.scene.r();
-    return r.get<ecs::CLightPoint>(entity_opt.value());
+    return light;
 }
 
 void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_config, const Camera& camera) {
@@ -577,18 +531,15 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
     PrepareCSMResources(context, ui_config);
 
     // Light
-    auto light_entity_opt = GetMainLightDirectionEntity(context);
-    if (!light_entity_opt.has_value()) {
+    auto light = GetMainLightDirection(context);
+    if (!light) {
         return;
     }
-
-    auto& r            = context.scene.r();
-    auto  light_entity = light_entity_opt.value();
 
     const float near_clip = camera.GetNearClip();
     const float far_clip  = camera.GetFarClip();
 
-    const auto& c_light_directional            = r.get<ecs::CLightDirectional>(light_entity);
+    const auto& c_light_directional            = *light;
     context.lighting_data.main_light_direction = Normalizef(c_light_directional.d_direction);
     context.csm_data.light_dir                 = context.lighting_data.main_light_direction;
 
@@ -760,13 +711,10 @@ void ShadowDepthPass::RenderPointShadows(
 ) {
     PreparePointShadowResources(context, config);
 
-    auto light_entity_opt = GetMainPointLightEntity(context);
-    if (!light_entity_opt.has_value()) {
+    auto light = GetMainPointLight(context);
+    if (!light) {
         return;
     }
-
-    auto& r            = context.scene.r();
-    auto  light_entity = light_entity_opt.value();
 
     const uint light_idx = 0; // 目前我们只处理第一个点光源的阴影
     auto&      cube_res  = context.point_shadow_data.shadow_cubes[light_idx];
@@ -777,10 +725,8 @@ void ShadowDepthPass::RenderPointShadows(
     cube_res.near_plane = near_plane;
     cube_res.far_plane  = far_plane;
 
-    // 从 CNode 获取位置（translation 在矩阵的第 4 列的 xyz 分量）
-    const auto& c_node = r.get<ecs::CNode>(light_entity);
-    cube_res.light_pos =
-        float3(c_node.d_world_transform[0].w, c_node.d_world_transform[1].w, c_node.d_world_transform[2].w);
+    // GT 在 Scene sync 后已把 derived world position 拷入当前帧快照。
+    cube_res.light_pos = light->d_position;
 
     // 计算投影矩阵 (90度 FOV, Aspect 1.0)
     // 交换了 near_plane 和 far_plane 以适应 Inverse Depth

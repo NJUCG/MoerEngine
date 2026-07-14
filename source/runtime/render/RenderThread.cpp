@@ -204,22 +204,10 @@ void RenderThreadService::Stop() {
     running = false;
 }
 
-GraphEventRef RenderThreadService::Enqueue(std::function<void()> task) {
-    assert(running && "Cannot enqueue work before the render thread starts.");
-    assert(IsCurrentlyGameThread() && "RenderThreadService is submitted by the game thread.");
-    assert(task && "Cannot enqueue an empty render task.");
-    return LambdaTask::Dispatch(std::move(task), EThread::ERenderThread);
-}
-
 void RenderThreadService::Wait(const GraphEventRef& event) {
     assert(running && "Cannot wait after the render thread stops.");
     assert(IsCurrentlyGameThread() && "RenderThreadService is waited by the game thread.");
     TaskGraph::GetInterface().WaitUntilTaskComplete(event, EThread::EMainThread);
-}
-
-void RenderThreadService::RunAndWait(std::function<void()> task) {
-    auto event = Enqueue(std::move(task));
-    Wait(event);
 }
 
 void RenderThreadService::Flush() {

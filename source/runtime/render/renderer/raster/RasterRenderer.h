@@ -110,6 +110,7 @@ private:
     // TODO: rt_geometries 已迁移到 GpuScene，未来应移除
     Camera m_scene_view_camera;
     bool   m_b_scene_view_camera_initialized = false;
+    bool   m_capture_scene_geometry_snapshot = true;
 
     std::function<void(CommandList&, TextureRef)> m_render_gui;
     std::function<void()>                         m_present_windows;

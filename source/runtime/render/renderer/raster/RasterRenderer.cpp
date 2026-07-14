@@ -149,7 +149,7 @@ void RasterRenderer::UpdateGlobalLightingData(
     LightingData* lighting_data = &context.lighting_data;
 
     lighting_data->clip2world      = Transpose(camera.GetViewProjectionMatrixInv());
-    lighting_data->light_count     = context.scene.cpu_scene().GetLightCount();
+    lighting_data->light_count     = context.GetSceneUpdates().light_count;
     lighting_data->camera_position = camera.GetPosition();
 
     // Shadow Parameters
@@ -317,6 +317,19 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
         );
     }
 
+    auto& scene_test_case_runner = SceneTestCaseRunner::Get();
+    const bool is_run_scene_test_case =
+        scene_test_case_runner.HasActiveCase() || scene_test_case_runner.HasPendingCase();
+    frame_packet.scene_updates =
+        scene.PrepareUpdateBatch(is_run_scene_test_case, m_capture_scene_geometry_snapshot);
+    if (frame_packet.scene_updates.scene_ready) {
+        if (frame_packet.scene_updates.geometry) {
+            m_capture_scene_geometry_snapshot = false;
+        }
+    } else {
+        m_capture_scene_geometry_snapshot = true;
+    }
+
     if (frame_packet.window.state != EWindowState::SizeChanged &&
         hooks.on_raster_register_frame_buffers) {
         auto& raster_context = *raster_context_ptr;
@@ -347,6 +360,7 @@ void RasterRenderer::RenderFrame(RasterFramePacket frame_packet) {
 
     auto& raster_context = *raster_context_ptr;
     raster_context.SetResolution(frame_packet.window.resolution);
+    raster_context.BeginSceneFrame(frame_packet.scene_updates);
     PrepareRenderFrame(frame_packet.window);
 
     if (time == 0) {
@@ -392,9 +406,14 @@ void RasterRenderer::RenderFrame(RasterFramePacket frame_packet) {
 
     // MARK: 3. Run Render Passes
 
-    if (scene.IsReady()) {
+    if (frame_packet.scene_updates.scene_ready) {
         // 处理场景加载过程中遗留的命令
-        RasterTool::ExecuteScenePendingCommands(scene, device, gfx_queue);
+        auto& scene_updates = frame_packet.scene_updates;
+        if (scene_updates.initial_gpu_commands) {
+            RasterTool::ExecuteScenePendingCommands(
+                std::move(*scene_updates.initial_gpu_commands), device, gfx_queue
+            );
+        }
 
         if (first_load) {
             first_load = false;
@@ -407,17 +426,14 @@ void RasterRenderer::RenderFrame(RasterFramePacket frame_packet) {
 
         auto& raster_config = frame_packet.raster_config;
 
-        auto& scene_test_case_runner = SceneTestCaseRunner::Get();
-
-        const bool is_run_scene_test_case =
-            scene_test_case_runner.HasActiveCase() || scene_test_case_runner.HasPendingCase();
-
-        const auto& scene_tick_state = scene.Tick(is_run_scene_test_case);
-        if (scene_tick_state || scene.HasPendingGpuSceneCommands()) {
-            RasterTool::ExecuteScenePendingCommands(scene, device, gfx_queue);
+        const auto& scene_tick_state = scene_updates.tick_state;
+        if (scene_updates.update_gpu_commands) {
+            RasterTool::ExecuteScenePendingCommands(
+                std::move(*scene_updates.update_gpu_commands), device, gfx_queue
+            );
         }
 
-        auto& main_camera = scene.GetMainCamera().camera;
+        Camera main_camera = scene_updates.main_camera;
         if (!m_b_scene_view_camera_initialized) {
             m_scene_view_camera               = main_camera;
             m_b_scene_view_camera_initialized = true;
@@ -583,6 +599,8 @@ void RasterRenderer::RenderFrame(RasterFramePacket frame_packet) {
             std::this_thread::sleep_for(std::chrono::duration<double>(1.0 / raster_config.debug_fps_limit));
             LOG_DEBUG("FPS Limit Enabled: {}", raster_config.debug_fps_limit);
         }
+
+        scene_updates.main_camera = std::move(main_camera);
     }
 
     // 因为目前Vulkan的输出信息会聚合后再print，所以我们需要轮询，打印出最后添加的信息
@@ -608,11 +626,16 @@ void RasterRenderer::RenderFrame(RasterFramePacket frame_packet) {
         }
     }
 
-    m_latest_frame_feedback = RasterFrameFeedback{
-        frame_packet.frame_id,
-        frame_packet.raster_config.culling_stats,
-        frame_packet.raster_config.cooperative_ops_status
-    };
+    RasterFrameFeedback feedback{};
+    feedback.frame_id               = frame_packet.frame_id;
+    feedback.culling_stats          = frame_packet.raster_config.culling_stats;
+    feedback.cooperative_ops_status = frame_packet.raster_config.cooperative_ops_status;
+    feedback.has_main_camera        = frame_packet.scene_updates.scene_ready;
+    if (feedback.has_main_camera) {
+        feedback.main_camera = frame_packet.scene_updates.main_camera;
+    }
+    m_latest_frame_feedback = std::move(feedback);
+    raster_context.EndSceneFrame();
 }
 
 bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
@@ -629,6 +652,9 @@ void RasterRenderer::ApplyFrameFeedback(RasterConfig& target_config) {
 
     target_config.culling_stats          = m_latest_frame_feedback->culling_stats;
     target_config.cooperative_ops_status = m_latest_frame_feedback->cooperative_ops_status;
+    if (m_latest_frame_feedback->has_main_camera && scene.IsReady()) {
+        scene.GetMainCamera().camera = m_latest_frame_feedback->main_camera;
+    }
     m_latest_frame_feedback.reset();
 }
 

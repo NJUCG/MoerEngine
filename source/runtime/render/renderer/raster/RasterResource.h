@@ -45,6 +45,8 @@ public:
     CommandList&     cmd_list;
     Scene&           scene;
 
+    const SceneUpdateBatch* scene_updates = nullptr;
+
     float frame_time;
 
     uint2 GetResolution() {
@@ -198,6 +200,19 @@ public:
 
     void SetResolution(uint2 new_resolution) {
         resolution = new_resolution;
+    }
+
+    void BeginSceneFrame(const SceneUpdateBatch& updates) {
+        scene_updates = &updates;
+    }
+
+    void EndSceneFrame() {
+        scene_updates = nullptr;
+    }
+
+    const SceneUpdateBatch& GetSceneUpdates() const {
+        assert(scene_updates && "Scene frame data is only valid during RasterRenderer::RenderFrame().");
+        return *scene_updates;
     }
 
     void CreateLightingData() {

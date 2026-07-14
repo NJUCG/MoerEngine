@@ -4,7 +4,8 @@
 #include "Core.h"
 #include "RenderAPI.h"
 #include <cstdint>
-#include <functional>
+#include <type_traits>
+#include <utility>
 class Runnable;
 class RunnableThread;
 namespace Moer {
@@ -26,6 +27,23 @@ extern void RENDER_API ResumeRenderThread(bool _promised_restart_before = true);
 
 extern bool RENDER_API IsRenderThreadRunning();
 
+template<typename Function>
+class RenderThreadServiceTask {
+public:
+    explicit RenderThreadServiceTask(Function&& function) : m_function(std::move(function)) {}
+
+    static EThread::Type GetPreferredThread() {
+        return EThread::ERenderThread;
+    }
+
+    void Fire(EThread::Type, const GraphEventRef&) {
+        m_function();
+    }
+
+private:
+    Function m_function;
+};
+
 class RENDER_API RenderThreadService {
 public:
     ~RenderThreadService();
@@ -33,10 +51,28 @@ public:
     void Start();
     void Stop();
 
-    GraphEventRef Enqueue(std::function<void()> task);
-    void          Wait(const GraphEventRef& event);
-    void          RunAndWait(std::function<void()> task);
-    void          Flush();
+    template<typename Function>
+        requires std::is_invocable_v<std::decay_t<Function>&>
+    GraphEventRef Enqueue(Function&& task) {
+        assert(running && "Cannot enqueue work before the render thread starts.");
+        assert(IsCurrentlyGameThread() && "RenderThreadService is submitted by the game thread.");
+
+        using StoredFunction = std::decay_t<Function>;
+        using TaskType       = RenderThreadServiceTask<StoredFunction>;
+        return GraphTask<TaskType>::Create(StoredFunction(std::forward<Function>(task)))
+            .Dispatch(EThread::ERenderThread);
+    }
+
+    void Wait(const GraphEventRef& event);
+
+    template<typename Function>
+        requires std::is_invocable_v<std::decay_t<Function>&>
+    void RunAndWait(Function&& task) {
+        auto event = Enqueue(std::forward<Function>(task));
+        Wait(event);
+    }
+
+    void Flush();
 
     bool IsRunning() const {
         return running;

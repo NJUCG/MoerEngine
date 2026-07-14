@@ -3,13 +3,10 @@
 #include "misc/STL.h"
 #include "RasterConfig.h"
 #include "rhi/RHICommandDrawData.h"
+#include "scene/GpuScene.h"
 
 #include <source_location>
 #include <string_view>
-
-namespace Moer {
-class Scene;
-}
 
 namespace Moer::Render {
 class CommandQueue;
@@ -42,7 +39,11 @@ public:
 
     static void TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig& raster_config);
 
-    static void ExecuteScenePendingCommands(Scene& scene, RenderDevice& device, CommandQueue& gfx_queue);
+    static void ExecuteScenePendingCommands(
+        GpuScene::PendingCommandList&& commands,
+        RenderDevice&                  device,
+        CommandQueue&                  gfx_queue
+    );
 };
 
 } // namespace Moer::Render::Raster

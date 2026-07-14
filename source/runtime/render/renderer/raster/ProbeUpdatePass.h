@@ -93,7 +93,13 @@ public:
         uint64              frame_index
     ) {
         ProbeVolumeResource::UpdateInfo update_info =
-            context.probe_volume.PrepareUpdate(config, scene, camera.GetPosition(), frame_index);
+            context.probe_volume.PrepareUpdate(
+                config,
+                scene,
+                context.GetSceneUpdates(),
+                camera.GetPosition(),
+                frame_index
+            );
 
         if (!update_info.enabled) {
             return;
