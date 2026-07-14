@@ -13,7 +13,7 @@
 
 namespace Moer::Render {
 
-Renderer::Renderer(uint2& _resolution, const SharedPtr<EditorConfig> _config, const EngineHooks& hooks) :
+Renderer::Renderer(uint2 _resolution, const SharedPtr<EditorConfig> _config, const EngineHooks& hooks) :
     resolution(_resolution),
     device(RenderDevice::Get()),
     manager(ShaderManager::Get()),
@@ -74,31 +74,40 @@ void Renderer::ReleaseResources() {
     scene.Reset();
 }
 
-Renderer::EWindowState Renderer::TickWindowContext(const EngineHooks& hooks) {
+Renderer::WindowFrameState Renderer::TickWindowContext(uint2 current_resolution) {
     WindowContext::Tick();
-    if (time >= max_frame_in_flight) {
-        timeline->Wait(time - max_frame_in_flight);
-    }
 
     int w_width, w_height;
     WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
     if (w_width == 0 || w_height == 0) {
-        return EWindowState::Hiding; // 跳过Tick()
+        return WindowFrameState{EWindowState::Hiding, current_resolution};
 
-    } else if (w_width != resolution.x || w_height != resolution.y) {
-        resolution.x = uint32(w_width);
-        resolution.y = uint32(w_height);
+    } else if (w_width != current_resolution.x || w_height != current_resolution.y) {
+        return WindowFrameState{
+            EWindowState::SizeChanged,
+            uint2(static_cast<uint32>(w_width), static_cast<uint32>(w_height))
+        };
 
-        gfx_queue.Sync();
-        swapchain_createinfo.size = {resolution.x, resolution.y};
-        swapchain->Sync();
-        swapchain->Recreate(swapchain_createinfo);
-
-        return EWindowState::SizeChanged; // 继续执行Tick()
-
-    } else {
-        return EWindowState::Default; // 继续执行Tick()
     }
+
+    return WindowFrameState{EWindowState::Default, current_resolution};
+}
+
+void Renderer::PrepareRenderFrame(const WindowFrameState& window_frame) {
+    resolution = window_frame.resolution;
+
+    if (time >= max_frame_in_flight) {
+        timeline->Wait(time - max_frame_in_flight);
+    }
+
+    if (window_frame.state != EWindowState::SizeChanged) {
+        return;
+    }
+
+    gfx_queue.Sync();
+    swapchain_createinfo.size = {resolution.x, resolution.y};
+    swapchain->Sync();
+    swapchain->Recreate(swapchain_createinfo);
 }
 
 void Renderer::LogSceneLoadStatus(const EditorConfig& config) const {

@@ -9,6 +9,57 @@
 
 namespace Moer {
 
+CameraFrameInput CameraFrameInput::Capture(const EditorConfig& config) {
+    auto& input = WindowInput::Get();
+
+    CameraFrameInput frame_input{};
+    frame_input.viewport_resolution = input.m_scene_color_resolution;
+    frame_input.window_aspect_ratio = input.aspect_ratio;
+    frame_input.delta_time          = input.delta_time;
+
+    frame_input.cursor_delta_x = input.cursor_delta_x;
+    frame_input.cursor_delta_y = input.cursor_delta_y;
+    frame_input.scroll_offset  = input.scroll_offset;
+
+    frame_input.is_cursor_hiding = input.is_cursor_hiding;
+    frame_input.left_mouse       = input.mouse_button_state[MouseButtons::Left];
+    frame_input.middle_mouse     = input.mouse_button_state[MouseButtons::Middle];
+    frame_input.right_mouse      = input.mouse_button_state[MouseButtons::Right];
+    frame_input.free_look_active = input.key_button_switch_state[KeyButtons::F];
+
+    frame_input.camera_forward  = input.camera_forward;
+    frame_input.camera_backward = input.camera_backward;
+    frame_input.camera_left     = input.camera_left;
+    frame_input.camera_right    = input.camera_right;
+    frame_input.camera_up       = input.camera_up;
+    frame_input.camera_down     = input.camera_down;
+
+    frame_input.speed_up    = input.speed_up;
+    frame_input.speed_down  = input.speed_down;
+    frame_input.reset_speed = input.reset_speed;
+
+    frame_input.projection_override_enabled = config.camera_projection_override_enabled;
+    frame_input.camera_speed_log10           = config.camera_speed_log10;
+    frame_input.camera_fovy                  = config.camera_fovy;
+    frame_input.camera_far_clip_log10        = config.camera_far_clip_log10;
+    frame_input.camera_near_clip_log10       = config.camera_near_clip_log10;
+
+    const bool override_fov = config.camera_projection_override_enabled &&
+                              config.camera_fovy >= Camera::k_fov_min &&
+                              config.camera_fovy <= Camera::k_fov_max;
+    if (!input.is_cursor_hiding && !override_fov && !IsZero(input.scroll_offset)) {
+        input.scroll_offset = 0.0f;
+    }
+
+    const bool has_cursor_delta = Abs(input.cursor_delta_x) >= EPS || Abs(input.cursor_delta_y) >= EPS;
+    if (input.is_cursor_hiding && has_cursor_delta) {
+        input.cursor_delta_x = 0.0f;
+        input.cursor_delta_y = 0.0f;
+    }
+
+    return frame_input;
+}
+
 //camera space axis
 const Vector3f Camera::UP_IN_WORLD = Vector3f(0.f, 1.f, 0.f);
 
@@ -163,8 +214,20 @@ void Camera::SetJitterMatrix(const Matrix4x4f& jitter_matrix) noexcept {
 }
 
 void Camera::SetJitterMatrix(const Vector2f& jitter) noexcept {
+    SetJitterMatrix(
+        jitter,
+        uint2(
+            static_cast<uint>(WindowInput::Get().width),
+            static_cast<uint>(WindowInput::Get().height)
+        )
+    );
+}
+
+void Camera::SetJitterMatrix(const Vector2f& jitter, uint2 render_resolution) noexcept {
+    const float width  = static_cast<float>(Max(render_resolution.x, 1u));
+    const float height = static_cast<float>(Max(render_resolution.y, 1u));
     m_jittered_matrix = MakeTranslation(
-        2.0f * jitter.x / WindowInput::Get().width, 2.0f * jitter.y / WindowInput::Get().height, 0.f
+        2.0f * jitter.x / width, 2.0f * jitter.y / height, 0.f
     );
     m_is_jittered_matrix_modified = true;
 }
@@ -442,31 +505,32 @@ void Camera::UpdatePlanesAndFrustum() {
      * - Drag `left mouse button` to rotate the camera and move forward/backward
      * - Drag `both mouse buttons` or `middle button` to move the camera
      */
-void Camera::Tick(const SharedPtr<EditorConfig> config) {
-    const uint2 scene_color_resolution = WindowInput::Get().m_scene_color_resolution;
-    if (scene_color_resolution.x > 0 && scene_color_resolution.y > 0) {
-        this->SetAspectRatio(static_cast<float>(scene_color_resolution.x) / scene_color_resolution.y);
+void Camera::Tick(const CameraFrameInput& frame_input) {
+    if (frame_input.viewport_resolution.x > 0 && frame_input.viewport_resolution.y > 0) {
+        this->SetAspectRatio(
+            static_cast<float>(frame_input.viewport_resolution.x) / frame_input.viewport_resolution.y
+        );
     } else {
-        this->SetAspectRatio(WindowInput::Get().aspect_ratio);
+        this->SetAspectRatio(frame_input.window_aspect_ratio);
     }
 
-    if (config->camera_projection_override_enabled) {
+    if (frame_input.projection_override_enabled) {
         const float near_clip_log10 = log10f(this->GetNearClip());
         const float far_clip_log10  = log10f(this->GetFarClip());
-        if (Compare(config->camera_near_clip_log10, near_clip_log10) != 0) {
-            this->SetNearClip(powf(10.f, config->camera_near_clip_log10));
+        if (Compare(frame_input.camera_near_clip_log10, near_clip_log10) != 0) {
+            this->SetNearClip(powf(10.f, frame_input.camera_near_clip_log10));
         }
-        if (Compare(config->camera_far_clip_log10, far_clip_log10) != 0) {
-            this->SetFarClip(powf(10.f, config->camera_far_clip_log10));
+        if (Compare(frame_input.camera_far_clip_log10, far_clip_log10) != 0) {
+            this->SetFarClip(powf(10.f, frame_input.camera_far_clip_log10));
         }
     }
 
-    if (!WindowInput::Get().is_cursor_hiding) {
+    if (!frame_input.is_cursor_hiding) {
 
-        if (config->camera_projection_override_enabled && config->camera_fovy >= k_fov_min &&
-            config->camera_fovy <= k_fov_max) {
-            this->SetFov(config->camera_fovy);
-        } else if (!IsZero(WindowInput::Get().scroll_offset)) {
+        if (frame_input.projection_override_enabled && frame_input.camera_fovy >= k_fov_min &&
+            frame_input.camera_fovy <= k_fov_max) {
+            this->SetFov(frame_input.camera_fovy);
+        } else if (!IsZero(frame_input.scroll_offset)) {
             float coef;
             if (Compare(m_fov_y, k_fov_default) <= 0) {
                 coef = (Min(k_fov_default, m_fov_y) - k_fov_min) / (k_fov_default - k_fov_min);
@@ -474,49 +538,46 @@ void Camera::Tick(const SharedPtr<EditorConfig> config) {
                 coef = (k_fov_max - Max(k_fov_default, m_fov_y)) / (k_fov_max - k_fov_default);
             }
 
-            this->SetFov(m_fov_y - WindowInput::Get().scroll_offset * coef * k_fov_multiplier);
-            WindowInput::Get().scroll_offset = 0.0f;
+            this->SetFov(m_fov_y - frame_input.scroll_offset * coef * k_fov_multiplier);
         }
 
     } else {
-        auto& input = WindowInput::Get();
-
         // camera speed
 
-        float camera_speed_cfg = powf(10.f, config->camera_speed_log10);
+        float camera_speed_cfg = powf(10.f, frame_input.camera_speed_log10);
         if (camera_speed_cfg >= k_camera_speed_min && camera_speed_cfg <= k_camera_speed_max) {
             camera_speed = camera_speed_cfg;
         } else {
-            if (input.speed_up) {
-                camera_speed += k_camera_speed_up_delta * input.delta_time;
+            if (frame_input.speed_up) {
+                camera_speed += k_camera_speed_up_delta * frame_input.delta_time;
                 if (camera_speed > k_camera_speed_max)
                     camera_speed = k_camera_speed_max;
             }
-            if (input.speed_down) {
-                camera_speed -= k_camera_speed_down_delta * input.delta_time;
+            if (frame_input.speed_down) {
+                camera_speed -= k_camera_speed_down_delta * frame_input.delta_time;
                 if (camera_speed < k_camera_speed_min)
                     camera_speed = k_camera_speed_min;
             }
-            if (input.reset_speed) {
+            if (frame_input.reset_speed) {
                 camera_speed = k_camera_speed_default;
             }
         }
 
-        const float speed = camera_speed * k_camera_speed_multiplier * input.delta_time;
+        const float speed = camera_speed * k_camera_speed_multiplier * frame_input.delta_time;
 
-        const float cursor_delta_x = input.cursor_delta_x;
-        const float cursor_delta_y = input.cursor_delta_y;
+        const float cursor_delta_x = frame_input.cursor_delta_x;
+        const float cursor_delta_y = frame_input.cursor_delta_y;
         const bool  has_cursor_delta = Abs(cursor_delta_x) >= EPS || Abs(cursor_delta_y) >= EPS;
-        const bool  left_mouse       = input.mouse_button_state[MouseButtons::Left];
-        const bool  middle_mouse     = input.mouse_button_state[MouseButtons::Middle];
-        const bool  right_mouse      = input.mouse_button_state[MouseButtons::Right];
+        const bool  left_mouse       = frame_input.left_mouse;
+        const bool  middle_mouse     = frame_input.middle_mouse;
+        const bool  right_mouse      = frame_input.right_mouse;
 
         bool apply_mouse_pan          = false;
         bool apply_left_forward_slide = false;
         bool rotation_applied         = false;
 
         if (has_cursor_delta) {
-            if (input.key_button_switch_state[KeyButtons::F]) {
+            if (frame_input.free_look_active) {
                 this->ApplyRotation(cursor_delta_x, cursor_delta_y);
                 rotation_applied = true;
             } else if ((left_mouse && right_mouse) || middle_mouse) {
@@ -530,8 +591,6 @@ void Camera::Tick(const SharedPtr<EditorConfig> config) {
                 rotation_applied         = true;
             }
 
-            input.cursor_delta_x = 0.0f;
-            input.cursor_delta_y = 0.0f;
         }
 
         if (rotation_applied) {
@@ -539,17 +598,17 @@ void Camera::Tick(const SharedPtr<EditorConfig> config) {
         }
 
         Vector3f keyboard_move(0.f, 0.f, 0.f);
-        if (input.camera_forward)
+        if (frame_input.camera_forward)
             keyboard_move += m_front;
-        if (input.camera_backward)
+        if (frame_input.camera_backward)
             keyboard_move -= m_front;
-        if (input.camera_left)
+        if (frame_input.camera_left)
             keyboard_move -= m_right;
-        if (input.camera_right)
+        if (frame_input.camera_right)
             keyboard_move += m_right;
-        if (input.camera_up)
+        if (frame_input.camera_up)
             keyboard_move += UP_IN_WORLD;
-        if (input.camera_down)
+        if (frame_input.camera_down)
             keyboard_move -= UP_IN_WORLD;
 
         const float keyboard_move_len = Length(keyboard_move);
@@ -560,20 +619,28 @@ void Camera::Tick(const SharedPtr<EditorConfig> config) {
 
         if (has_cursor_delta) {
             if (apply_mouse_pan) {
-                const float speed_x = cursor_delta_x * k_mouse_sensitivity_mouse_moving * input.delta_time;
-                const float speed_y = cursor_delta_y * k_mouse_sensitivity_mouse_moving * input.delta_time;
+                const float speed_x =
+                    cursor_delta_x * k_mouse_sensitivity_mouse_moving * frame_input.delta_time;
+                const float speed_y =
+                    cursor_delta_y * k_mouse_sensitivity_mouse_moving * frame_input.delta_time;
 
                 this->MoveRight(speed_x);
                 this->MoveUp(-speed_y);
             } else if (apply_left_forward_slide) {
-                const float speed_y = cursor_delta_y * k_mouse_sensitivity_mouse_moving * input.delta_time;
+                const float speed_y =
+                    cursor_delta_y * k_mouse_sensitivity_mouse_moving * frame_input.delta_time;
                 this->MoveForward(-speed_y);
             }
         }
     }
 
     UpdateAllDerivedProperties();
-    elapsed_time = WindowInput::Get().delta_time;
+    elapsed_time = frame_input.delta_time;
+}
+
+void Camera::Tick(const SharedPtr<EditorConfig> config) {
+    assert(config);
+    Tick(CameraFrameInput::Capture(*config));
 }
 
 Camera Camera::CreateDefaultCamera() {
@@ -600,7 +667,7 @@ OutputStream& Camera::operator<<(OutputStream& _stream) const {
 }
 
 float Camera::GetDeltaTime() const noexcept {
-    return WindowInput::Get().delta_time;
+    return elapsed_time;
 }
 
 std::string Camera::ToString() {

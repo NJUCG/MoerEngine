@@ -5,6 +5,7 @@
 #include "misc/ScopedLogTimer.h"
 #include "remote/RemoteConfig.h"
 #include "remote/RemoteModule.h"
+#include "RenderThread.h"
 #include "rhi/RHI.h"
 #include "scripting/PythonRuntimeConfig.h"
 #include "scripting/ScriptHost.h"
@@ -78,6 +79,31 @@ void Engine::Init(int argc, const char** argv) {
 
     // Init TaskSystem
     TaskSystem::Init();
+
+    LOG_INFO("[Threading] GameThread id = {}", GetGameThreadId());
+    LOG_INFO(
+        "[Threading] render_thread={}, rhi_thread={}, rhi_bypass={}, max_frame_lag={}",
+        config.engine.threading.render_thread,
+        config.engine.threading.rhi_thread,
+        config.engine.threading.rhi_bypass,
+        config.engine.threading.max_frame_lag
+    );
+
+    if (config.engine.threading.rhi_thread) {
+        LOG_WARNING("[Threading] RHI thread mode is configured but not implemented; using synchronous RHI.");
+    }
+
+    if (config.engine.threading.render_thread) {
+        if (config.engine.threading.max_frame_lag != 0) {
+            LOG_WARNING(
+                "[Threading] max_frame_lag={} is not implemented; forcing frame-synchronized Render Thread mode.",
+                config.engine.threading.max_frame_lag
+            );
+        }
+
+        m_render_thread_service = MakeUnique<RenderThreadService>();
+        m_render_thread_service->Start();
+    }
 
     // Init RenderDevice
     std::string rhi_type_str = config.engine.rhi.type;
@@ -160,27 +186,62 @@ void Engine::Run(const EngineHooks& hooks) {
     };
 
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
+        const ERenderMethod selected_render_method = m_editor_config->selected_render_method;
+
         LOG_INFO(
             "Selecting Render Method : {}",
-            k_render_method_names[static_cast<uint>(m_editor_config->selected_render_method)]
+            k_render_method_names[static_cast<uint>(selected_render_method)]
         );
 
-        if (m_editor_config->selected_render_method == ERenderMethod::Raster) {
-            m_renderer = MakeUnique<Raster::RasterRenderer>(
-                m_editor_config->GetResolution(), m_editor_config, runtime_hooks
-            );
+        auto create_renderer = [this, runtime_hooks, selected_render_method]() {
+            if (selected_render_method == ERenderMethod::Raster) {
+                m_renderer = MakeUnique<Raster::RasterRenderer>(
+                    m_editor_config->GetResolution(), m_editor_config, runtime_hooks
+                );
 
-        } else if (m_editor_config->selected_render_method == ERenderMethod::Raytracing) {
-            // Render::Raytracing::RaytracingMain(m_editor_ui, *m_runtime_assets);
-            m_renderer = MakeUnique<Raytracing::RaytracingRenderer>(
-                m_editor_config->GetResolution(), m_editor_config, runtime_hooks, *m_runtime_assets
-            );
+            } else if (selected_render_method == ERenderMethod::Raytracing) {
+                m_renderer = MakeUnique<Raytracing::RaytracingRenderer>(
+                    m_editor_config->GetResolution(), m_editor_config, runtime_hooks, *m_runtime_assets
+                );
+
+            } else {
+                assert(false && "Unknown render method");
+            }
+        };
+
+        const bool use_synchronized_render_thread =
+            m_render_thread_service && selected_render_method == ERenderMethod::Raster;
+
+        if (use_synchronized_render_thread) {
+            m_render_thread_service->RunAndWait(std::move(create_renderer));
+            assert(m_renderer && m_renderer->SupportsSynchronizedRenderThread());
+            auto* raster_renderer = static_cast<Raster::RasterRenderer*>(m_renderer.get());
+
+            while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
+                auto frame_packet = raster_renderer->PrepareFrame(m_editor_config, runtime_hooks);
+                m_render_thread_service->RunAndWait(
+                    [raster_renderer, frame_packet = std::move(frame_packet)]() mutable {
+                        assert(IsCurrentlyRenderThread());
+                        raster_renderer->RenderFrame(std::move(frame_packet));
+                    }
+                );
+                raster_renderer->ApplyFrameFeedback(m_editor_config->raster_config);
+
+                if (runtime_hooks.on_is_need_reload && runtime_hooks.on_is_need_reload()) {
+                    break;
+                }
+            }
 
         } else {
-            assert(false && "Unknown render method");
-        }
+            if (m_render_thread_service && selected_render_method == ERenderMethod::Raytracing) {
+                LOG_WARNING(
+                    "[Threading] Raytracing single-frame state is not migrated yet; using the synchronous path."
+                );
+            }
 
-        m_renderer->Run(m_editor_config, runtime_hooks);
+            create_renderer();
+            m_renderer->Run(m_editor_config, runtime_hooks);
+        }
 
         if (m_script_host) {
             m_script_host->CancelPendingSceneCommands(
@@ -189,7 +250,15 @@ void Engine::Run(const EngineHooks& hooks) {
         }
 
         // Switch Renderer
-        m_renderer.reset();
+        if (use_synchronized_render_thread) {
+            m_render_thread_service->RunAndWait([this]() {
+                LOG_INFO("[Threading] Destroying renderer on Render Thread.");
+                m_renderer.reset();
+                LOG_INFO("[Threading] Renderer destroyed on Render Thread.");
+            });
+        } else {
+            m_renderer.reset();
+        }
     }
 }
 
@@ -227,6 +296,13 @@ void Engine::ShutDown() {
         m_script_host->CancelPendingSceneCommands("Scene became unavailable during engine shutdown.");
         m_script_host->Stop();
         m_script_host.reset();
+    }
+
+    if (m_render_thread_service) {
+        LOG_INFO("[Threading] Stopping Render Thread service.");
+        m_render_thread_service->Stop();
+        m_render_thread_service.reset();
+        LOG_INFO("[Threading] Render Thread service stopped.");
     }
 
     m_runtime_assets.reset(); // 释放RuntimeAssets资源

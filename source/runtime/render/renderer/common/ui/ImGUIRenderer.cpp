@@ -339,6 +339,16 @@ void ImGUIRenderBackend::EndGUIFrame() {
     ImGui::Render();
 }
 
+void ImGUIRenderBackend::UpdatePlatformWindows() {
+    ImGuiContext* context = ImGui::GetCurrentContext();
+    auto&         io      = ImGui::GetIO();
+    if (context && (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) &&
+        context->FrameCountEnded == context->FrameCount &&
+        context->FrameCountPlatformEnded < context->FrameCount) {
+        ImGui::UpdatePlatformWindows();
+    }
+}
+
 void ImGUIRenderBackend::RegisterImage(Texture* _texture, Sampler _sampler) {
     auto iter = registered_images.try_emplace(_texture, 0);
     if (iter.second) {
@@ -369,12 +379,7 @@ void ImGUIRenderBackend::RenderGUI(CommandList& _cmd_list, const TextureView& _f
         GUIRender(main_draw_data, _framebuffer, _cmd_list);
     }
     {
-        ImGuiContext* g  = ImGui::GetCurrentContext();
-        auto&         io = ImGui::GetIO();
-        if (g && (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) && g->FrameCountEnded == g->FrameCount &&
-            g->FrameCountPlatformEnded < g->FrameCount) {
-            ImGui::UpdatePlatformWindows();
-        }
+        auto&            io = ImGui::GetIO();
         ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
 
         if (io.BackendFlags & ImGuiBackendFlags_RendererHasViewports) {

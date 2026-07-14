@@ -50,12 +50,14 @@ float GetElapsedTimeSeconds() {
 } // namespace
 
 RasterRenderer::RasterRenderer(
-    uint2&                        _resolution,
+    uint2                         _resolution,
     const SharedPtr<EditorConfig> _config,
     const EngineHooks&            _hooks
 ) :
     // Super
-    Renderer(_resolution, _config, _hooks) {
+    Renderer(_resolution, _config, _hooks),
+    m_render_gui(_hooks.on_render_gui),
+    m_present_windows(_hooks.on_present_windows) {
     ScopedLogTimer startup_timer("[Startup][RasterRenderer] RasterRenderer::Constructor() total");
 
     raster_context_ptr =
@@ -115,11 +117,19 @@ RasterRenderer::RasterRenderer(
 }
 
 RasterRenderer::~RasterRenderer() {
+    LOG_INFO(
+        "[Threading] RasterRenderer destruction started on {} Thread.",
+        IsCurrentlyRenderThread() ? "Render" : "Game"
+    );
     auto& raster_context = *raster_context_ptr;
     raster_context.FreeFrameBuffers(true);
 
     // 下面这段需要在Renderer子类中执行。否则各种Pass对象被Release的时候，对应的资源还没有被释放
     ReleaseResources();
+    LOG_INFO(
+        "[Threading] RasterRenderer destruction finished on {} Thread.",
+        IsCurrentlyRenderThread() ? "Render" : "Game"
+    );
 }
 
 void RasterRenderer::Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
@@ -275,20 +285,86 @@ void RasterRenderer::UpdateGlobalLightingData(
     );
 }
 
-bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
-    auto& raster_context = *raster_context_ptr;
+RasterFramePacket
+RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
+    assert(!IsRenderThreadInitialized() || IsCurrentlyGameThread());
+    assert(editor_config);
 
     LogSceneLoadStatus(*editor_config);
 
-    // MARK: 1. Tick Window
-    auto window_state = TickWindowContext(hooks);
+    RasterFramePacket frame_packet{};
+    frame_packet.frame_id = m_next_frame_id++;
+    frame_packet.window   = TickWindowContext(editor_config->GetResolution());
+    editor_config->SetResolution(frame_packet.window.resolution);
+
+    if (hooks.on_tick_scripting) {
+        hooks.on_tick_scripting(scene);
+    }
+
+    if (hooks.on_tick_test) {
+        hooks.on_tick_test(scene);
+    }
+
+    if (hooks.on_tick_ui) {
+        hooks.on_tick_ui(scene);
+    }
+
+    if (scene.IsReady()) {
+        ProcessSceneTestCaseRequests(
+            editor_config->scene_test_case_config,
+            scene,
+            GetElapsedTimeSeconds()
+        );
+    }
+
+    if (frame_packet.window.state != EWindowState::SizeChanged &&
+        hooks.on_raster_register_frame_buffers) {
+        auto& raster_context = *raster_context_ptr;
+        hooks.on_raster_register_frame_buffers(raster_context.GetDisplayableFrameBuffersView());
+    }
+
+    frame_packet.raster_config        = editor_config->raster_config;
+    frame_packet.active_viewport_mode = editor_config->active_viewport_mode;
+    frame_packet.scene_view_gizmos    = editor_config->scene_view_gizmos;
+    frame_packet.camera_input         = CameraFrameInput::Capture(*editor_config);
+    if (hooks.on_capture_ui_composition) {
+        frame_packet.ui_composition = hooks.on_capture_ui_composition();
+    }
+
+    if (frame_packet.frame_id == 0) {
+        LOG_INFO(
+            "[Threading] RasterFramePacket boundary active; resolution={}x{}",
+            frame_packet.window.resolution.x,
+            frame_packet.window.resolution.y
+        );
+    }
+
+    return frame_packet;
+}
+
+void RasterRenderer::RenderFrame(RasterFramePacket frame_packet) {
+    assert(!IsRenderThreadInitialized() || IsCurrentlyRenderThread());
+
+    auto& raster_context = *raster_context_ptr;
+    raster_context.SetResolution(frame_packet.window.resolution);
+    PrepareRenderFrame(frame_packet.window);
+
+    if (time == 0) {
+        const uint32_t frame_thread_id =
+            IsCurrentlyRenderThread() ? GetRenderThreadId() : GetGameThreadId();
+        LOG_INFO(
+            "[Threading] Raster frames execute on {} thread id = {}",
+            IsCurrentlyRenderThread() ? "Render" : "Game",
+            frame_thread_id
+        );
+    }
 
     bool skip_present = false;
-    if (window_state == EWindowState::Hiding) {
+    if (frame_packet.window.state == EWindowState::Hiding) {
         std::this_thread::yield(); // FIXME: 这个东西有用吗？
         skip_present = true;
 
-    } else if (window_state == EWindowState::SizeChanged) {
+    } else if (frame_packet.window.state == EWindowState::SizeChanged) {
         LOG_INFO("Size Changed.");
 
         raster_context.FreeFrameBuffers(false);
@@ -308,32 +384,8 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         );
 #endif
 
-        if (hooks.on_raster_register_frame_buffers) {
-            hooks.on_raster_register_frame_buffers(raster_context.GetDisplayableFrameBuffersView());
-        }
-
-    } else if (window_state == EWindowState::Default) {
-        // do nothing
-
     } else {
-        assert(false);
-    }
-
-    // MARK: 2. Tick UI
-    if (hooks.on_tick_scripting) {
-        hooks.on_tick_scripting(scene);
-    }
-
-    if (hooks.on_tick_test) {
-        hooks.on_tick_test(scene);
-    }
-
-    if (hooks.on_tick_ui) {
-        hooks.on_tick_ui(scene);
-    }
-
-    if (hooks.on_raster_register_frame_buffers) {
-        hooks.on_raster_register_frame_buffers(raster_context.GetDisplayableFrameBuffersView());
+        assert(frame_packet.window.state == EWindowState::Default);
     }
 
     TextureRef default_output_texture = raster_context.textures.output.tex;
@@ -353,11 +405,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
             gfx_queue.Sync();
         }
 
-        auto& raster_config = editor_config->raster_config;
-
-        const float elapsed_time_seconds = GetElapsedTimeSeconds();
-
-        ProcessSceneTestCaseRequests(editor_config->scene_test_case_config, scene, elapsed_time_seconds);
+        auto& raster_config = frame_packet.raster_config;
 
         auto& scene_test_case_runner = SceneTestCaseRunner::Get();
 
@@ -371,13 +419,13 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
         auto& main_camera = scene.GetMainCamera().camera;
         if (!m_b_scene_view_camera_initialized) {
-            m_scene_view_camera                  = main_camera;
+            m_scene_view_camera               = main_camera;
             m_b_scene_view_camera_initialized = true;
         }
 
-        Camera& camera =
-            editor_config->active_viewport_mode == EEditorViewportMode::Scene ? m_scene_view_camera :
-                                                                            main_camera;
+        Camera& camera = frame_packet.active_viewport_mode == EEditorViewportMode::Scene ?
+                             m_scene_view_camera :
+                             main_camera;
 
         {
             // Jitter Camera for SMAA T2x
@@ -386,11 +434,16 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
 
                 smaa_current_frame_index ^= 1;
                 static StaticArray<float2, 2> smaa_jitter = {float2(0.25f, -0.25f), float2(-0.25f, 0.25f)};
-                camera.SetJitterMatrix(smaa_jitter[smaa_current_frame_index]);
+                const uint2 jitter_resolution =
+                    frame_packet.camera_input.viewport_resolution.x > 0 &&
+                            frame_packet.camera_input.viewport_resolution.y > 0 ?
+                        frame_packet.camera_input.viewport_resolution :
+                        frame_packet.window.resolution;
+                camera.SetJitterMatrix(smaa_jitter[smaa_current_frame_index], jitter_resolution);
             }
         }
 
-        camera.Tick(editor_config);
+        camera.Tick(frame_packet.camera_input);
 
         raster_context.Update(camera.GetDeltaTime());
 
@@ -430,9 +483,9 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         //Env&Atmo Pass
         skybox_pass->Process(raster_context, raster_config, camera);
 
-        const auto& scene_gizmos = editor_config->scene_view_gizmos;
+        const auto& scene_gizmos = frame_packet.scene_view_gizmos;
         const bool  draw_scene_gizmos =
-            editor_config->active_viewport_mode == EEditorViewportMode::Scene && scene_gizmos.enabled;
+            frame_packet.active_viewport_mode == EEditorViewportMode::Scene && scene_gizmos.enabled;
         if (draw_scene_gizmos && scene_gizmos.show_probe_gi) {
             RasterConfig probe_gizmo_config                    = raster_config;
             probe_gizmo_config.probe_gi_gizmo_enabled         = scene_gizmos.show_probe_gi_probes;
@@ -487,10 +540,15 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
             }
         }
 
-        if (hooks.on_ui_combine_pass) {
-            default_output_texture = hooks.on_ui_combine_pass(
-                ui_combine_pass.get(),
+        if (frame_packet.ui_composition.enabled) {
+            const auto& ui_frame = frame_packet.ui_composition;
+            default_output_texture = ui_combine_pass->Process(
                 cmd_list,
+                ui_frame.separate_window,
+                ui_frame.output_resolution,
+                ui_frame.scene_color_position,
+                ui_frame.scene_color_resolution,
+                ui_frame.window_frame_buffer,
                 raster_context.GetSelectedFrameBufferView(raster_config.selected_frame_buffer_index),
                 raster_context.textures.ui_frame_buffer.tex,
                 raster_context.textures.output.tex
@@ -501,9 +559,12 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
             default_output_texture = ui_combine_pass->Process(
                 cmd_list,
                 true,
-                resolution,
+                frame_packet.window.resolution,
                 float2(0.f, 0.f),
-                float2(static_cast<float>(resolution.x), static_cast<float>(resolution.y)),
+                float2(
+                    static_cast<float>(frame_packet.window.resolution.x),
+                    static_cast<float>(frame_packet.window.resolution.y)
+                ),
                 TextureView(raster_context.textures.output.tex),
                 processing_image.tex,
                 {},
@@ -527,8 +588,8 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
     // 因为目前Vulkan的输出信息会聚合后再print，所以我们需要轮询，打印出最后添加的信息
     device.FlushDebugMessages();
 
-    if (hooks.on_render_gui) {
-        hooks.on_render_gui(cmd_list, default_output_texture);
+    if (m_render_gui) {
+        m_render_gui(cmd_list, default_output_texture);
     }
 
     raster_context.probe_volume.TrackFrameSubmission(cmd_list, time);
@@ -539,20 +600,36 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
         that we've done flushing copy queue resources
         */
     gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources().TickProfiling());
-    // RasterTool::TickAndLogProfiling(gfx_queue, editor_config->raster_config);
 
     if (!skip_present) {
         gfx_queue.Present(swapchain, default_output_texture);
-        if (hooks.on_present_windows) {
-            hooks.on_present_windows();
+        if (m_present_windows) {
+            m_present_windows();
         }
     }
 
-    if (hooks.on_is_need_reload && hooks.on_is_need_reload()) {
-        return false; // break
+    m_latest_frame_feedback = RasterFrameFeedback{
+        frame_packet.frame_id,
+        frame_packet.raster_config.culling_stats,
+        frame_packet.raster_config.cooperative_ops_status
+    };
+}
+
+bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
+    RenderFrame(PrepareFrame(editor_config, hooks));
+    ApplyFrameFeedback(editor_config->raster_config);
+    return !hooks.on_is_need_reload || !hooks.on_is_need_reload();
+}
+
+void RasterRenderer::ApplyFrameFeedback(RasterConfig& target_config) {
+    assert(!IsRenderThreadInitialized() || IsCurrentlyGameThread());
+    if (!m_latest_frame_feedback) {
+        return;
     }
 
-    return true;
+    target_config.culling_stats          = m_latest_frame_feedback->culling_stats;
+    target_config.cooperative_ops_status = m_latest_frame_feedback->cooperative_ops_status;
+    m_latest_frame_feedback.reset();
 }
 
 } // namespace Moer::Render::Raster

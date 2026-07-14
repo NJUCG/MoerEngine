@@ -17,6 +17,7 @@ namespace Moer {
 
 class EditorUI;
 class RuntimeAssets;
+class RenderThreadService;
 
 class RENDER_API Engine {
 public:
@@ -51,6 +52,7 @@ private:
     UniquePtr<scripting::ScriptHost> m_script_host;
     UniquePtr<remote::RemoteModule>  m_remote_module;
     UniquePtr<Render::Renderer>      m_renderer;
+    UniquePtr<RenderThreadService>   m_render_thread_service;
 
     bool m_has_shutdown = false;
 };

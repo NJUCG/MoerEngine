@@ -10,6 +10,15 @@
 
 namespace Moer::Render {
 
+struct UiCompositionFrameData {
+    bool        enabled = false;
+    bool        separate_window = false;
+    uint2       output_resolution{};
+    float2      scene_color_position{};
+    float2      scene_color_resolution{};
+    TextureView window_frame_buffer{};
+};
+
 struct EngineHooks {
     // Common
     std::function<void(Scene&)>                   on_tick_scripting;
@@ -21,6 +30,8 @@ struct EngineHooks {
 
     std::function<TextureRef(UiCombinePass*, CommandList&, TextureView, TextureView, TextureView)>
         on_ui_combine_pass;
+
+    std::function<UiCompositionFrameData(void)> on_capture_ui_composition;
 
     std::function<void(std::string, std::function<void(void)>)> on_register_ui_func;
 
@@ -42,29 +53,40 @@ public:
         Num,
     };
 
-    Renderer(uint2& _resolution, const SharedPtr<EditorConfig> _config, const EngineHooks& hooks);
+    struct WindowFrameState {
+        EWindowState state      = EWindowState::Default;
+        uint2        resolution = uint2(0u, 0u);
+    };
+
+    Renderer(uint2 _resolution, const SharedPtr<EditorConfig> _config, const EngineHooks& hooks);
 
     virtual ~Renderer();
 
     void ReleaseResources();
 
-    EWindowState TickWindowContext(const EngineHooks& hooks);
-    void         LogSceneLoadStatus(const EditorConfig& config) const;
+    WindowFrameState TickWindowContext(uint2 current_resolution);
+    void             LogSceneLoadStatus(const EditorConfig& config) const;
 
     Renderer(const Renderer&)            = delete;
     Renderer& operator=(const Renderer&) = delete;
 
     virtual void Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) = 0;
 
+    virtual bool SupportsSynchronizedRenderThread() const {
+        return false;
+    }
+
     CommandList& GetCommandList() {
         return cmd_list;
     }
 
 protected:
+    void PrepareRenderFrame(const WindowFrameState& window_frame);
+
     RenderDevice&  device;
     ShaderManager& manager;
     CommandQueue&  gfx_queue;
-    uint2&         resolution; // 数据源位于EditorConfig中
+    uint2          resolution;
 
     SwapchainRef     swapchain;
     BindlessArrayRef bindless_array;

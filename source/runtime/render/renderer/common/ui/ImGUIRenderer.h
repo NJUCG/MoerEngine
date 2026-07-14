@@ -39,6 +39,7 @@ public:
 
     void BeginGUIFrame();
     void EndGUIFrame();
+    void UpdatePlatformWindows();
 
     void RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer);
 

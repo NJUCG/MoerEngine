@@ -19,6 +19,9 @@ struct UIRenderer::Impl {
     void EndGUIFrame() {
         backend.EndGUIFrame();
     }
+    void UpdatePlatformWindows() {
+        backend.UpdatePlatformWindows();
+    }
 
     void RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer) {
         backend.RenderGUI(_cmd_list, _framebuffer);
@@ -44,6 +47,10 @@ void UIRenderer::BeginGUIFrame() {
 
 void UIRenderer::EndGUIFrame() {
     impl->EndGUIFrame();
+}
+
+void UIRenderer::UpdatePlatformWindows() {
+    impl->UpdatePlatformWindows();
 }
 
 void UIRenderer::RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer) {

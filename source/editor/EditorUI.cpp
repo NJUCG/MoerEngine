@@ -400,6 +400,7 @@ void EditorUI::TickUI(Scene& scene) {
     SyncWindowVisibilitySettings();
 
     m_ui_renderer->EndGUIFrame();
+    m_ui_renderer->UpdatePlatformWindows();
 }
 
 void EditorUI::ShowSceneEditing(Scene& scene) {

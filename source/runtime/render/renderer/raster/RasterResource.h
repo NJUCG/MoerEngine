@@ -163,7 +163,7 @@ private:
         });
     }
 
-    uint2& resolution; // Be careful, resolution is also a reference
+    uint2 resolution;
 
 public:
     // Constructor
@@ -174,7 +174,7 @@ public:
         BindlessArrayRef bdls,
         CommandList&     cmd_list,
         Scene&           scene,
-        uint2&           resolution
+        uint2            resolution
     ) :
         device(device),
         manager(manager),
@@ -194,6 +194,10 @@ public:
 
     void Update(float delta_time) {
         frame_time = delta_time;
+    }
+
+    void SetResolution(uint2 new_resolution) {
+        resolution = new_resolution;
     }
 
     void CreateLightingData() {

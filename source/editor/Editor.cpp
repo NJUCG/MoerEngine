@@ -74,6 +74,17 @@ void Editor::Run(const ExtraHooks& extra_hooks) {
                         default_output_texture
                     );
                 },
+            .on_capture_ui_composition =
+                [this]() {
+                    return UiCompositionFrameData{
+                        .enabled                = true,
+                        .separate_window        = m_editor_ui->IsSeperateWindow(),
+                        .output_resolution      = m_editor_ui->GetConfig()->GetResolution(),
+                        .scene_color_position   = m_editor_ui->GetSceneColorPos(),
+                        .scene_color_resolution = m_editor_ui->GetSceneColorResolution(),
+                        .window_frame_buffer    = m_editor_ui->GetWindowFrameBuffer()
+                    };
+                },
             .on_register_ui_func =
                 [this](std::string name, std::function<void(void)> lambda) {
                     m_editor_ui->RegisterUIFunc(name, std::move(lambda));

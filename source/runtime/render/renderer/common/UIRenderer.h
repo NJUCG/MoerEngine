@@ -41,6 +41,8 @@ public:
 
     RENDER_API void EndGUIFrame();
 
+    RENDER_API void UpdatePlatformWindows();
+
     RENDER_API void RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer);
     RENDER_API void RegisterImage(Texture* _texture, Sampler _sampler);
     RENDER_API void UnRegisterImage(Texture* _texture);

@@ -199,7 +199,10 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
         LogSceneLoadStatus(*editor_config);
 
-        auto window_state = TickWindowContext(hooks);
+        auto window_frame = TickWindowContext(editor_config->GetResolution());
+        editor_config->SetResolution(window_frame.resolution);
+        PrepareRenderFrame(window_frame);
+        auto window_state = window_frame.state;
         bool skip_present = false;
 
         if (window_state == EWindowState::Hiding) {
