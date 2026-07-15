@@ -288,74 +288,119 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
     assert(!IsRenderThreadInitialized() || IsCurrentlyGameThread());
     assert(editor_config);
 
-    LogSceneLoadStatus(*editor_config);
-
-    RasterFramePacket frame_packet{};
+    const bool           profile_logging = IsFramePrepareProfilingEnabled();
+    const auto           prepare_started = BeginFramePrepareProfile();
+    FramePrepareProfile  prepare_profile{};
+    FramePrepareWorkload prepare_workload{};
+    RasterFramePacket    frame_packet{};
     frame_packet.frame_id = m_next_frame_id++;
-    frame_packet.window   = TickWindowContext(editor_config->GetResolution());
-    editor_config->SetResolution(frame_packet.window.resolution);
-
-    if (hooks.on_tick_scripting) {
-        hooks.on_tick_scripting(scene);
+    {
+        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.window_ms);
+        LogSceneLoadStatus(*editor_config);
+        frame_packet.window = TickWindowContext(editor_config->GetResolution());
+        editor_config->SetResolution(frame_packet.window.resolution);
     }
 
-    if (hooks.on_tick_test) {
-        hooks.on_tick_test(scene);
+    {
+        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.scripting_ms);
+        if (hooks.on_tick_scripting) {
+            hooks.on_tick_scripting(scene);
+        }
     }
 
-    if (hooks.on_tick_ui) {
-        hooks.on_tick_ui(scene);
+    {
+        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.test_ms);
+        if (hooks.on_tick_test) {
+            hooks.on_tick_test(scene);
+        }
     }
 
-    const CameraFrameInput camera_input = CameraFrameInput::Capture(*editor_config);
-    frame_packet.camera_viewport_resolution = camera_input.viewport_resolution;
-
-    if (scene.IsReady()) {
-        ProcessSceneTestCaseRequests(
-            editor_config->scene_test_case_config,
-            scene,
-            GetElapsedTimeSeconds()
-        );
+    {
+        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.ui_tick_ms);
+        if (hooks.on_tick_ui) {
+            hooks.on_tick_ui(scene);
+        }
     }
 
-    auto& scene_test_case_runner = SceneTestCaseRunner::Get();
-    const bool is_run_scene_test_case =
-        scene_test_case_runner.HasActiveCase() || scene_test_case_runner.HasPendingCase();
-    frame_packet.scene_updates =
-        scene.PrepareUpdateBatch(is_run_scene_test_case, m_capture_scene_geometry_snapshot);
-    if (frame_packet.scene_updates.scene_ready) {
-        if (frame_packet.scene_updates.geometry) {
-            m_capture_scene_geometry_snapshot = false;
+    CameraFrameInput camera_input{};
+    bool             is_run_scene_test_case = false;
+    {
+        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.camera_and_test_ms);
+        camera_input                            = CameraFrameInput::Capture(*editor_config);
+        frame_packet.camera_viewport_resolution = camera_input.viewport_resolution;
+
+        if (scene.IsReady()) {
+            ProcessSceneTestCaseRequests(
+                editor_config->scene_test_case_config, scene, GetElapsedTimeSeconds()
+            );
         }
 
-        Camera main_camera = frame_packet.scene_updates.main_camera;
-        if (!m_b_scene_view_camera_initialized) {
-            m_scene_view_camera               = main_camera;
-            m_b_scene_view_camera_initialized = true;
-        }
-
-        Camera& render_camera = editor_config->active_viewport_mode == EEditorViewportMode::Scene ?
-                                    m_scene_view_camera :
-                                    main_camera;
-        render_camera.Tick(camera_input);
-        frame_packet.render_camera = render_camera;
-
-        if (editor_config->active_viewport_mode == EEditorViewportMode::Game) {
-            frame_packet.scene_updates.main_camera = render_camera;
-            scene.GetMainCamera().camera            = render_camera;
-        }
-    } else {
-        m_capture_scene_geometry_snapshot = true;
+        auto& scene_test_case_runner = SceneTestCaseRunner::Get();
+        is_run_scene_test_case =
+            scene_test_case_runner.HasActiveCase() || scene_test_case_runner.HasPendingCase();
     }
 
-    frame_packet.raster_config        = editor_config->raster_config;
-    frame_packet.active_viewport_mode = editor_config->active_viewport_mode;
-    frame_packet.scene_view_gizmos    = editor_config->scene_view_gizmos;
-    if (hooks.on_capture_ui_composition) {
-        frame_packet.ui_composition = hooks.on_capture_ui_composition();
+    {
+        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.scene_update_ms);
+        frame_packet.scene_updates =
+            scene.PrepareUpdateBatch(is_run_scene_test_case, m_capture_scene_geometry_snapshot);
     }
-    if (hooks.on_capture_ui_draw_frame) {
-        frame_packet.ui_draw_frame = hooks.on_capture_ui_draw_frame();
+    if (profile_logging) {
+        const auto& updates                        = frame_packet.scene_updates;
+        prepare_workload.scene_ready_frames        = updates.scene_ready ? 1u : 0u;
+        prepare_workload.scene_dirty_frames        = static_cast<bool>(updates.tick_state) ? 1u : 0u;
+        prepare_workload.initial_gpu_update_frames = updates.initial_gpu_update ? 1u : 0u;
+        prepare_workload.update_gpu_update_frames  = updates.update_gpu_update ? 1u : 0u;
+        prepare_workload.geometry_snapshot_frames  = updates.geometry ? 1u : 0u;
+    }
+
+    {
+        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.camera_and_test_ms);
+        if (frame_packet.scene_updates.scene_ready) {
+            if (frame_packet.scene_updates.geometry) {
+                m_capture_scene_geometry_snapshot = false;
+            }
+
+            Camera main_camera = frame_packet.scene_updates.main_camera;
+            if (!m_b_scene_view_camera_initialized) {
+                m_scene_view_camera               = main_camera;
+                m_b_scene_view_camera_initialized = true;
+            }
+
+            Camera& render_camera = editor_config->active_viewport_mode == EEditorViewportMode::Scene ?
+                                        m_scene_view_camera :
+                                        main_camera;
+            render_camera.Tick(camera_input);
+            frame_packet.render_camera = render_camera;
+
+            if (editor_config->active_viewport_mode == EEditorViewportMode::Game) {
+                frame_packet.scene_updates.main_camera = render_camera;
+                scene.GetMainCamera().camera           = render_camera;
+            }
+        } else {
+            m_capture_scene_geometry_snapshot = true;
+        }
+    }
+
+    {
+        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.config_snapshot_ms);
+        frame_packet.raster_config        = editor_config->raster_config;
+        frame_packet.active_viewport_mode = editor_config->active_viewport_mode;
+        frame_packet.scene_view_gizmos    = editor_config->scene_view_gizmos;
+    }
+
+    {
+        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.ui_composition_ms);
+        if (hooks.on_capture_ui_composition) {
+            frame_packet.ui_composition = hooks.on_capture_ui_composition();
+        }
+    }
+    {
+        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.ui_draw_packet_ms);
+        if (hooks.on_capture_ui_draw_frame) {
+            frame_packet.ui_draw_frame = hooks.on_capture_ui_draw_frame();
+        }
+        CaptureFramePrepareUiWorkload(prepare_workload, frame_packet.ui_draw_frame);
     }
 
     if (frame_packet.frame_id == 0) {
@@ -369,6 +414,7 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
         );
     }
 
+    RecordFramePrepareProfile("Raster", prepare_started, prepare_profile, prepare_workload);
     return frame_packet;
 }
 
@@ -381,8 +427,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     PrepareRenderFrame(frame_packet.window);
 
     if (time == 0) {
-        const uint32_t frame_thread_id =
-            IsCurrentlyRenderThread() ? GetRenderThreadId() : GetGameThreadId();
+        const uint32_t frame_thread_id = IsCurrentlyRenderThread() ? GetRenderThreadId() : GetGameThreadId();
         LOG_INFO(
             "[Threading] Raster frames execute on {} thread id = {}",
             IsCurrentlyRenderThread() ? "Render" : "Game",

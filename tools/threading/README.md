@@ -120,8 +120,31 @@ The summary aggregates the last five one-second profile windows by default.
 RHI data includes caller cost, enqueue-to-start latency, backend work time,
 Execute/Present splits, maximum queue depth, and pending GPU timeline distance.
 RT data includes frame prepare, task queue latency, render execution, GT
-lag-limit wait, and maximum pending frames. Use `--profile-tail-windows` to
-change the steady-state window.
+lag-limit wait, and maximum pending frames; Prepare, Render, and GT wait use
+their own sample counts when tail windows are combined. PrepareFrame data is emitted for
+both game-thread and render-thread scenarios. It separates window handling,
+scripting/test/UI hooks, camera and test state, config snapshotting, scene
+update and snapshot construction, UI composition and draw-packet copying, plus
+unattributed time. The report also retains per-window maxima and workload
+counters so a timing change can be distinguished from a change in scene or UI
+work. PrepareFrame averages are weighted by the `samples` count. Use
+`--profile-tail-windows` to change the steady-state window.
+
+For attribution work, keep the scene fixed and run at least three processes per
+scenario. Skipping window stress avoids mixing resize/minimize behavior into the
+steady-state tail windows:
+
+```powershell
+python tools/threading/run_matrix.py --scenario raster_rt1_rhi --repeat 3 --skip-window-stress --base-config template.MoerEngine.toml --outdir target/validation/rt_rhi/prepare_raster
+python tools/threading/run_matrix.py --scenario ray_rt1_rhi --repeat 3 --skip-window-stress --base-config template.MoerEngine.toml --outdir target/validation/rt_rhi/prepare_ray
+```
+
+Each run's `prepare_profile` object in `summary.json` contains the weighted
+breakdown and workload totals. `summary.md` presents the same data in timing and
+workload tables. Every non-fault profiled matrix scenario requires at least one
+`[ThreadingProfile][Prepare]` window before it can pass. The short synthetic
+fault scenario is exempt because it may terminate before the first one-second
+Prepare window is complete.
 
 The runner refuses to reuse a non-empty scenario directory so a failed launch
 cannot accidentally consume a stale report from an earlier run.

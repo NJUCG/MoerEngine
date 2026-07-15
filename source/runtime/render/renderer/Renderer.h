@@ -1,6 +1,7 @@
 #pragma once
 
 // Runtime
+#include "renderer/FramePrepareProfile.h"
 #include "renderer/EditorConfig.h"
 #include "rhi/RHI.h"
 #include "scene/Scene.h"
@@ -9,6 +10,8 @@
 
 #include "common/UIRenderer.h"
 #include "common/UiCombinePass.h"
+
+#include <string_view>
 
 namespace Moer::Render {
 
@@ -82,7 +85,19 @@ public:
     }
 
 protected:
-    void PrepareRenderFrame(const WindowFrameState& window_frame);
+    void               PrepareRenderFrame(const WindowFrameState& window_frame);
+    [[nodiscard]] bool IsFramePrepareProfilingEnabled() const {
+        return frame_prepare_profile_state != nullptr;
+    }
+    [[nodiscard]] FramePrepareProfileClock::time_point BeginFramePrepareProfile() const;
+    void CaptureFramePrepareUiWorkload(FramePrepareWorkload& workload, const UiDrawFramePacket& ui_draw_frame)
+        const;
+    void RecordFramePrepareProfile(
+        std::string_view                     renderer_name,
+        FramePrepareProfileClock::time_point started_at,
+        const FramePrepareProfile&           profile,
+        const FramePrepareWorkload&          workload
+    );
 
     RenderDevice&  device;
     ShaderManager& manager;
@@ -105,6 +120,8 @@ protected:
     bool     first_load;
     bool     released = false;
     uint     max_frame_in_flight;
+
+    UniquePtr<FramePrepareProfileState> frame_prepare_profile_state;
 };
 
 } // namespace Moer::Render

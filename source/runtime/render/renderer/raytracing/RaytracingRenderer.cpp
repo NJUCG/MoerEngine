@@ -42,6 +42,15 @@ ImportantSamplingParams CreateImportanceSamplingParams(uint2 resolution) {
     return params;
 }
 
+bool EqualFloat3(const float3& lhs, const float3& rhs) {
+    return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z;
+}
+
+bool EqualQuaternion(const Quaternion& lhs, const Quaternion& rhs) {
+    return lhs.vec.x == rhs.vec.x && lhs.vec.y == rhs.vec.y && lhs.vec.z == rhs.vec.z &&
+           lhs.vec.w == rhs.vec.w;
+}
+
 void ExecuteSceneUpdate(
     RenderScene&     render_scene,
     GpuSceneUpdate&& update,
@@ -197,67 +206,133 @@ RaytracingRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, co
     assert(IsCurrentlyGameThread());
     assert(editor_config);
 
-    LogSceneLoadStatus(*editor_config);
-
+    const bool            profile_logging = IsFramePrepareProfilingEnabled();
+    const auto            prepare_started = BeginFramePrepareProfile();
+    FramePrepareProfile   prepare_profile{};
+    FramePrepareWorkload  prepare_workload{};
     RaytracingFramePacket frame_packet{};
     frame_packet.frame_id = next_frame_id++;
-    frame_packet.window   = TickWindowContext(editor_config->GetResolution());
-    editor_config->SetResolution(frame_packet.window.resolution);
-
-    if (hooks.on_tick_scripting) {
-        hooks.on_tick_scripting(scene);
-    }
-    if (hooks.on_tick_test) {
-        hooks.on_tick_test(scene);
-    }
-    if (hooks.on_tick_ui) {
-        hooks.on_tick_ui(scene);
+    {
+        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.window_ms);
+        LogSceneLoadStatus(*editor_config);
+        frame_packet.window = TickWindowContext(editor_config->GetResolution());
+        editor_config->SetResolution(frame_packet.window.resolution);
     }
 
-    frame_packet.config               = editor_config->raytracing_config;
-    frame_packet.runtime_assets_ready = runtime_assets.IsReady();
-    frame_packet.debug_input          = debug_ui_frame_input;
-    const CameraFrameInput camera_input = CameraFrameInput::Capture(*editor_config);
+    {
+        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.scripting_ms);
+        if (hooks.on_tick_scripting) {
+            hooks.on_tick_scripting(scene);
+        }
+    }
+    {
+        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.test_ms);
+        if (hooks.on_tick_test) {
+            hooks.on_tick_test(scene);
+        }
+    }
+    {
+        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.ui_tick_ms);
+        if (hooks.on_tick_ui) {
+            hooks.on_tick_ui(scene);
+        }
+    }
 
-    const bool submit_export_request =
-        frame_packet.config.export_cfg.b_export && !export_request_in_flight;
-    frame_packet.config.export_cfg.b_export = submit_export_request;
-    export_request_in_flight              = export_request_in_flight || submit_export_request;
+    {
+        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.config_snapshot_ms);
+        frame_packet.config               = editor_config->raytracing_config;
+        frame_packet.runtime_assets_ready = runtime_assets.IsReady();
+        frame_packet.debug_input          = debug_ui_frame_input;
+    }
+
+    CameraFrameInput camera_input{};
+    {
+        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.camera_and_test_ms);
+        camera_input = CameraFrameInput::Capture(*editor_config);
+
+        const bool submit_export_request =
+            frame_packet.config.export_cfg.b_export && !export_request_in_flight;
+        frame_packet.config.export_cfg.b_export = submit_export_request;
+        export_request_in_flight                = export_request_in_flight || submit_export_request;
+    }
 
     if (scene.IsReady() && frame_packet.runtime_assets_ready) {
-        const auto light_entity = scene.GetMainDirectionalLightEntity();
-        if (light_entity != entt::null && scene.r().valid(light_entity) &&
-            scene.r().all_of<ecs::CLightDirectional, ecs::CNode>(light_entity)) {
-            scene.Patch<ecs::CLightDirectional>(light_entity, [&](auto& light) {
-                light.color     = float3(0.9f, 0.65f, 0.4f);
-                light.intensity = frame_packet.config.exposure;
-            });
-            scene.Patch<ecs::CNode>(light_entity, [&](auto& node) {
-                node.rotation = Quaternion(float3(0.f, 0.f, -1.f), -frame_packet.config.sun_direction);
-            });
+        {
+            ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.camera_and_test_ms);
+            const auto                     light_entity = scene.GetMainDirectionalLightEntity();
+            if (light_entity != entt::null && scene.r().valid(light_entity) &&
+                scene.r().all_of<ecs::CLightDirectional, ecs::CNode>(light_entity)) {
+                const float3     desired_color(0.9f, 0.65f, 0.4f);
+                const Quaternion desired_rotation(float3(0.f, 0.f, -1.f), -frame_packet.config.sun_direction);
+                // Compare the authoritative scene components instead of caching the last config.
+                // External edits are still corrected on the next frame, while stable values do not
+                // manufacture dirty scene work every frame.
+                const auto& light = scene.r().get<ecs::CLightDirectional>(light_entity);
+                if (!EqualFloat3(light.color, desired_color) ||
+                    light.intensity != frame_packet.config.exposure) {
+                    scene.Patch<ecs::CLightDirectional>(light_entity, [&](auto& patched_light) {
+                        patched_light.color     = desired_color;
+                        patched_light.intensity = frame_packet.config.exposure;
+                    });
+                }
+
+                const auto& node = scene.r().get<ecs::CNode>(light_entity);
+                if (!EqualQuaternion(node.rotation, desired_rotation)) {
+                    scene.Patch<ecs::CNode>(light_entity, [&](auto& patched_node) {
+                        patched_node.rotation = desired_rotation;
+                    });
+                }
+            }
         }
 
-        frame_packet.scene_updates  = scene.PrepareUpdateBatch(false, capture_scene_geometry_snapshot);
-        frame_packet.scene_snapshot = CaptureRaytracingSceneFrameSnapshot(scene);
-        if (frame_packet.scene_updates.scene_ready) {
-            Camera camera = frame_packet.scene_updates.main_camera;
-            camera.Tick(camera_input);
-            frame_packet.scene_updates.main_camera = camera;
-            scene.GetMainCamera().camera            = camera;
+        {
+            ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.scene_update_ms);
+            frame_packet.scene_updates = scene.PrepareUpdateBatch(false, capture_scene_geometry_snapshot);
         }
-        if (frame_packet.scene_updates.geometry) {
-            capture_scene_geometry_snapshot = false;
+        if (profile_logging) {
+            const auto& updates                        = frame_packet.scene_updates;
+            prepare_workload.scene_ready_frames        = updates.scene_ready ? 1u : 0u;
+            prepare_workload.scene_dirty_frames        = static_cast<bool>(updates.tick_state) ? 1u : 0u;
+            prepare_workload.initial_gpu_update_frames = updates.initial_gpu_update ? 1u : 0u;
+            prepare_workload.update_gpu_update_frames  = updates.update_gpu_update ? 1u : 0u;
+            prepare_workload.geometry_snapshot_frames  = updates.geometry ? 1u : 0u;
         }
-        if (frame_packet.scene_updates.scene_ready) {
-            EnsureDebugUiRegistered(hooks);
+        {
+            ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.scene_snapshot_ms);
+            frame_packet.scene_snapshot = CaptureRaytracingSceneFrameSnapshot(scene);
+            if (profile_logging) {
+                prepare_workload.scene_snapshot_build_frames = 1u;
+            }
+        }
+        {
+            ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.camera_and_test_ms);
+            if (frame_packet.scene_updates.scene_ready) {
+                Camera camera = frame_packet.scene_updates.main_camera;
+                camera.Tick(camera_input);
+                frame_packet.scene_updates.main_camera = camera;
+                scene.GetMainCamera().camera           = camera;
+            }
+            if (frame_packet.scene_updates.geometry) {
+                capture_scene_geometry_snapshot = false;
+            }
+            if (frame_packet.scene_updates.scene_ready) {
+                EnsureDebugUiRegistered(hooks);
+            }
         }
     }
 
-    if (hooks.on_capture_ui_composition) {
-        frame_packet.ui_composition = hooks.on_capture_ui_composition();
+    {
+        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.ui_composition_ms);
+        if (hooks.on_capture_ui_composition) {
+            frame_packet.ui_composition = hooks.on_capture_ui_composition();
+        }
     }
-    if (hooks.on_capture_ui_draw_frame) {
-        frame_packet.ui_draw_frame = hooks.on_capture_ui_draw_frame();
+    {
+        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.ui_draw_packet_ms);
+        if (hooks.on_capture_ui_draw_frame) {
+            frame_packet.ui_draw_frame = hooks.on_capture_ui_draw_frame();
+        }
+        CaptureFramePrepareUiWorkload(prepare_workload, frame_packet.ui_draw_frame);
     }
 
     if (frame_packet.frame_id == 0) {
@@ -271,6 +346,7 @@ RaytracingRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, co
         );
     }
 
+    RecordFramePrepareProfile("Raytracing", prepare_started, prepare_profile, prepare_workload);
     return frame_packet;
 }
 

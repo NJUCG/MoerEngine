@@ -161,6 +161,8 @@ def required_patterns(scenario: Scenario) -> list[str]:
         ),
         "[ThreadingProfile][RHI]",
     ]
+    if not scenario.fault_validation:
+        patterns.append("[ThreadingProfile][Prepare]")
     if scenario.effective_rhi_thread:
         patterns.append("[Threading] RHIThread id =")
     if scenario.render_thread and scenario.max_frame_lag == 1:
@@ -275,7 +277,11 @@ def parse_profile_value(value: str) -> object:
 
 
 def parse_profile_windows(path: Path) -> dict[str, list[dict[str, object]]]:
-    profiles: dict[str, list[dict[str, object]]] = {"RHI": [], "RT": []}
+    profiles: dict[str, list[dict[str, object]]] = {
+        "RHI": [],
+        "RT": [],
+        "Prepare": [],
+    }
     if not path.is_file():
         return profiles
 
@@ -303,7 +309,7 @@ def aggregate_profile_windows(
     if not selected:
         return {}
 
-    sample_key = "samples" if profile_type == "RHI" else "frames"
+    sample_key = "samples" if profile_type in ("RHI", "Prepare") else "frames"
     sample_count = sum(int(window.get(sample_key, 0)) for window in selected)
     window_ms = sum(float(window.get("window_ms", 0.0)) for window in selected)
 
@@ -315,12 +321,18 @@ def aggregate_profile_windows(
             for window in selected
         ) / sample_count
 
-    def weighted_average_by(field: str, count_field: str) -> float:
-        count = sum(int(window.get(count_field, 0)) for window in selected)
+    def weighted_average_by(
+        field: str, count_field: str, fallback_count_field: str | None = None
+    ) -> float:
+        def field_count(window: dict[str, object]) -> int:
+            fallback = window.get(fallback_count_field, 0) if fallback_count_field else 0
+            return int(window.get(count_field, fallback))
+
+        count = sum(field_count(window) for window in selected)
         if count == 0:
             return 0.0
         return sum(
-            float(window.get(field, 0.0)) * int(window.get(count_field, 0))
+            float(window.get(field, 0.0)) * field_count(window)
             for window in selected
         ) / count
 
@@ -359,10 +371,20 @@ def aggregate_profile_windows(
                 "max_gpu_pending": max(int(window.get("gpu_pending", 0)) for window in selected),
             }
         )
-    else:
+    elif profile_type == "RT":
         aggregate.update(
             {
-                "prepare_avg_ms": weighted_average("prepare_avg_ms"),
+                "prepare_sample_count": sum(
+                    int(window.get("prepare_samples", window.get("frames", 0)))
+                    for window in selected
+                ),
+                "gt_wait_sample_count": sum(
+                    int(window.get("gt_wait_samples", window.get("frames", 0)))
+                    for window in selected
+                ),
+                "prepare_avg_ms": weighted_average_by(
+                    "prepare_avg_ms", "prepare_samples", "frames"
+                ),
                 "prepare_max_ms": max(float(window.get("prepare_max_ms", 0.0)) for window in selected),
                 "queue_wait_avg_ms": weighted_average("queue_wait_avg_ms"),
                 "queue_wait_max_ms": max(
@@ -370,9 +392,65 @@ def aggregate_profile_windows(
                 ),
                 "render_avg_ms": weighted_average("render_avg_ms"),
                 "render_max_ms": max(float(window.get("render_max_ms", 0.0)) for window in selected),
-                "gt_wait_avg_ms": weighted_average("gt_wait_avg_ms"),
+                "gt_wait_avg_ms": weighted_average_by(
+                    "gt_wait_avg_ms", "gt_wait_samples", "frames"
+                ),
                 "gt_wait_max_ms": max(float(window.get("gt_wait_max_ms", 0.0)) for window in selected),
                 "max_pending": max(int(window.get("max_pending", 0)) for window in selected),
+            }
+        )
+    elif profile_type == "Prepare":
+        aggregate.update(
+            {
+                "renderer": selected[-1].get("renderer"),
+                "total_avg_ms": weighted_average("total_avg_ms"),
+                "total_max_ms": max(
+                    float(window.get("total_max_ms", 0.0)) for window in selected
+                ),
+                "window_avg_ms": weighted_average("window_avg_ms"),
+                "scripting_avg_ms": weighted_average("scripting_avg_ms"),
+                "test_avg_ms": weighted_average("test_avg_ms"),
+                "ui_tick_avg_ms": weighted_average("ui_tick_avg_ms"),
+                "camera_and_test_avg_ms": weighted_average("camera_and_test_avg_ms"),
+                "config_snapshot_avg_ms": weighted_average("config_snapshot_avg_ms"),
+                "scene_update_avg_ms": weighted_average("scene_update_avg_ms"),
+                "scene_update_max_ms": max(
+                    float(window.get("scene_update_max_ms", 0.0)) for window in selected
+                ),
+                "scene_snapshot_avg_ms": weighted_average("scene_snapshot_avg_ms"),
+                "scene_snapshot_max_ms": max(
+                    float(window.get("scene_snapshot_max_ms", 0.0)) for window in selected
+                ),
+                "ui_composition_avg_ms": weighted_average("ui_composition_avg_ms"),
+                "ui_draw_packet_avg_ms": weighted_average("ui_draw_packet_avg_ms"),
+                "ui_draw_packet_max_ms": max(
+                    float(window.get("ui_draw_packet_max_ms", 0.0)) for window in selected
+                ),
+                "other_avg_ms": weighted_average("other_avg_ms"),
+                "scene_ready_frames": sum(
+                    int(window.get("scene_ready_frames", 0)) for window in selected
+                ),
+                "scene_dirty_frames": sum(
+                    int(window.get("scene_dirty_frames", 0)) for window in selected
+                ),
+                "initial_gpu_update_frames": sum(
+                    int(window.get("initial_gpu_update_frames", 0)) for window in selected
+                ),
+                "update_gpu_update_frames": sum(
+                    int(window.get("update_gpu_update_frames", 0)) for window in selected
+                ),
+                "geometry_snapshot_frames": sum(
+                    int(window.get("geometry_snapshot_frames", 0)) for window in selected
+                ),
+                "scene_snapshot_build_frames": sum(
+                    int(window.get("scene_snapshot_build_frames", 0)) for window in selected
+                ),
+                "ui_vertices_avg": weighted_average("ui_vertices_avg"),
+                "ui_indices_avg": weighted_average("ui_indices_avg"),
+                "ui_commands_avg": weighted_average("ui_commands_avg"),
+                "ui_vertices_max": max(
+                    int(window.get("ui_vertices_max", 0)) for window in selected
+                ),
             }
         )
     return aggregate
@@ -405,6 +483,65 @@ def write_markdown_summary(path: Path, summary: dict[str, object]) -> None:
             f"{profile_number(run, 'rt_profile', 'queue_wait_avg_ms'):.3f} ms | "
             f"{profile_number(run, 'rt_profile', 'render_avg_ms'):.3f} ms | "
             f"{profile_number(run, 'rt_profile', 'gt_wait_avg_ms'):.3f} ms |"
+        )
+    lines.extend(
+        [
+            "",
+            "## PrepareFrame Breakdown",
+            "",
+            "All averages are weighted by the `samples` count in the selected tail windows.",
+            "",
+            "| Scenario | Iteration | Renderer | Samples/s | Total avg | Window | Scripting | Test | UI tick | Camera/test | Config snapshot | Scene update | Scene snapshot | UI composition | UI draw packet | Other |",
+            "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for run in summary["runs"]:
+        prepare_profile = run.get("prepare_profile", {})
+        renderer = (
+            prepare_profile.get("renderer", "-")
+            if isinstance(prepare_profile, dict)
+            else "-"
+        )
+        lines.append(
+            f"| {run['scenario']} | {run['iteration']} | {renderer} | "
+            f"{profile_number(run, 'prepare_profile', 'samples_per_second'):.1f} | "
+            f"{profile_number(run, 'prepare_profile', 'total_avg_ms'):.3f} ms | "
+            f"{profile_number(run, 'prepare_profile', 'window_avg_ms'):.3f} ms | "
+            f"{profile_number(run, 'prepare_profile', 'scripting_avg_ms'):.3f} ms | "
+            f"{profile_number(run, 'prepare_profile', 'test_avg_ms'):.3f} ms | "
+            f"{profile_number(run, 'prepare_profile', 'ui_tick_avg_ms'):.3f} ms | "
+            f"{profile_number(run, 'prepare_profile', 'camera_and_test_avg_ms'):.3f} ms | "
+            f"{profile_number(run, 'prepare_profile', 'config_snapshot_avg_ms'):.3f} ms | "
+            f"{profile_number(run, 'prepare_profile', 'scene_update_avg_ms'):.3f} ms | "
+            f"{profile_number(run, 'prepare_profile', 'scene_snapshot_avg_ms'):.3f} ms | "
+            f"{profile_number(run, 'prepare_profile', 'ui_composition_avg_ms'):.3f} ms | "
+            f"{profile_number(run, 'prepare_profile', 'ui_draw_packet_avg_ms'):.3f} ms | "
+            f"{profile_number(run, 'prepare_profile', 'other_avg_ms'):.3f} ms |"
+        )
+    lines.extend(
+        [
+            "",
+            "| Scenario | Iteration | Total max | Scene update max | Scene snapshot max | UI draw max | Scene ready | Scene dirty | Initial GPU | Update GPU | Geometry snapshot | Snapshot build | UI vertices avg/max | UI indices avg | UI commands avg |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for run in summary["runs"]:
+        lines.append(
+            f"| {run['scenario']} | {run['iteration']} | "
+            f"{profile_number(run, 'prepare_profile', 'total_max_ms'):.3f} ms | "
+            f"{profile_number(run, 'prepare_profile', 'scene_update_max_ms'):.3f} ms | "
+            f"{profile_number(run, 'prepare_profile', 'scene_snapshot_max_ms'):.3f} ms | "
+            f"{profile_number(run, 'prepare_profile', 'ui_draw_packet_max_ms'):.3f} ms | "
+            f"{profile_number(run, 'prepare_profile', 'scene_ready_frames'):.0f} | "
+            f"{profile_number(run, 'prepare_profile', 'scene_dirty_frames'):.0f} | "
+            f"{profile_number(run, 'prepare_profile', 'initial_gpu_update_frames'):.0f} | "
+            f"{profile_number(run, 'prepare_profile', 'update_gpu_update_frames'):.0f} | "
+            f"{profile_number(run, 'prepare_profile', 'geometry_snapshot_frames'):.0f} | "
+            f"{profile_number(run, 'prepare_profile', 'scene_snapshot_build_frames'):.0f} | "
+            f"{profile_number(run, 'prepare_profile', 'ui_vertices_avg'):.1f}/"
+            f"{profile_number(run, 'prepare_profile', 'ui_vertices_max'):.0f} | "
+            f"{profile_number(run, 'prepare_profile', 'ui_indices_avg'):.1f} | "
+            f"{profile_number(run, 'prepare_profile', 'ui_commands_avg'):.1f} |"
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -552,6 +689,9 @@ def main() -> int:
             rt_profile = aggregate_profile_windows(
                 profile_windows["RT"], "RT", args.profile_tail_windows
             )
+            prepare_profile = aggregate_profile_windows(
+                profile_windows["Prepare"], "Prepare", args.profile_tail_windows
+            )
             min_nonblack = min(
                 (capture.get("nonblack_ratio", 0.0) for capture in captures),
                 default=0.0,
@@ -570,6 +710,7 @@ def main() -> int:
                 "failure_reasons": report.get("failure_reasons", []),
                 "rhi_profile": rhi_profile,
                 "rt_profile": rt_profile,
+                "prepare_profile": prepare_profile,
                 "report": str(report_path),
             }
             runs.append(run)

@@ -93,20 +93,23 @@ public:
             return;
         }
 
-        const auto now = ThreadProfileClock::now();
+        const auto                   now = ThreadProfileClock::now();
         std::unique_lock<std::mutex> lock(mutex);
-        const double window_ms = ThreadProfileMilliseconds(window_start, now);
+        const double                 window_ms = ThreadProfileMilliseconds(window_start, now);
         if (window_ms < 1000.0 || render_samples == 0) {
             return;
         }
 
         LOG_INFO(
-            "[ThreadingProfile][RT] window_ms={:.3f} frames={} prepare_avg_ms={:.3f} "
-            "prepare_max_ms={:.3f} queue_wait_avg_ms={:.3f} queue_wait_max_ms={:.3f} "
-            "render_avg_ms={:.3f} render_max_ms={:.3f} gt_wait_avg_ms={:.3f} "
-            "gt_wait_max_ms={:.3f} max_pending={}",
+            "[ThreadingProfile][RT] window_ms={:.3f} frames={} prepare_samples={} "
+            "gt_wait_samples={} prepare_avg_ms={:.3f} prepare_max_ms={:.3f} "
+            "queue_wait_avg_ms={:.3f} queue_wait_max_ms={:.3f} render_avg_ms={:.3f} "
+            "render_max_ms={:.3f} gt_wait_avg_ms={:.3f} gt_wait_max_ms={:.3f} "
+            "max_pending={}",
             window_ms,
             render_samples,
+            prepare_samples,
+            game_wait_samples,
             prepare_samples == 0 ? 0.0 : prepare_total_ms / double(prepare_samples),
             prepare_max_ms,
             queue_wait_total_ms / double(render_samples),
