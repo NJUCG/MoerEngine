@@ -9,6 +9,7 @@
 #include "rhi/RHIIO.h"
 #include "vulkan/vulkan_core.h"
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <functional>
 #include <mutex>
@@ -181,40 +182,63 @@ public:
     };
 
     struct RhiExecuteWork {
-        CmdSubmit submit;
-        uint64    timeline;
-        uint64    serial;
+        CmdSubmit                             submit;
+        uint64                                timeline;
+        uint64                                serial;
+        std::chrono::steady_clock::time_point enqueued_at;
+        uint32                                enqueue_depth;
+        double                                caller_ms{0.0};
 
-        RhiExecuteWork(CmdSubmit&& _submit, uint64 _timeline, uint64 _serial) :
+        RhiExecuteWork(
+            CmdSubmit&&                           _submit,
+            uint64                                _timeline,
+            uint64                                _serial,
+            std::chrono::steady_clock::time_point _enqueued_at,
+            uint32                                _enqueue_depth
+        ) :
             submit(std::move(_submit)),
             timeline(_timeline),
-            serial(_serial) {}
+            serial(_serial),
+            enqueued_at(_enqueued_at),
+            enqueue_depth(_enqueue_depth) {}
     };
 
     struct RhiPresentWork {
-        SwapchainRef swapchain;
-        TextureRef   source_texture;
-        TextureView  source_view;
-        uint64       timeline;
-        uint64       serial;
+        SwapchainRef                          swapchain;
+        TextureRef                            source_texture;
+        TextureView                           source_view;
+        uint64                                timeline;
+        uint64                                serial;
+        std::chrono::steady_clock::time_point enqueued_at;
+        uint32                                enqueue_depth;
+        double                                caller_ms{0.0};
 
         RhiPresentWork(
-            SwapchainRef&& _swapchain,
-            TextureRef&&   _source_texture,
-            TextureView    _source_view,
-            uint64         _timeline,
-            uint64         _serial
+            SwapchainRef&&                       _swapchain,
+            TextureRef&&                         _source_texture,
+            TextureView                          _source_view,
+            uint64                               _timeline,
+            uint64                               _serial,
+            std::chrono::steady_clock::time_point _enqueued_at,
+            uint32                               _enqueue_depth
         ) :
             swapchain(std::move(_swapchain)),
             source_texture(std::move(_source_texture)),
             source_view(_source_view),
             timeline(_timeline),
-            serial(_serial) {}
+            serial(_serial),
+            enqueued_at(_enqueued_at),
+            enqueue_depth(_enqueue_depth) {}
     };
 
     using RhiWork = std::variant<RhiExecuteWork, RhiPresentWork>;
 
-    VkCommandQueue(VulkanDevice& _device, EQueueType _type, bool _enable_rhi_thread = false);
+    VkCommandQueue(
+        VulkanDevice& _device,
+        EQueueType    _type,
+        bool          _enable_rhi_thread = false,
+        bool          _thread_profile_logging = false
+    );
     ~VkCommandQueue();
     WaitEvent   Execute(CmdSubmit&& _submit) override;
     void        Wait(WaitEvent _event) override;
@@ -237,6 +261,8 @@ public:
 #endif
 
 private:
+    enum class ERhiWorkKind : uint8 { Execute, Present };
+
     void                       ExecuteNow(CmdSubmit&& _submit, uint64 _timeline);
     void PresentNow(
         SwapchainRef&& _swapchain,
@@ -251,6 +277,13 @@ private:
     UniquePtr<VulkanAllocator> GetAllocator();
     UniquePtr<VulkanPresentor> GetPresentor();
     void                       Complete(uint64 _timeline);
+    void                       RecordThreadingProfile(
+        ERhiWorkKind _kind,
+        double       _caller_ms,
+        double       _queue_wait_ms,
+        double       _work_ms,
+        uint32       _enqueue_depth
+    );
 
 private:
     std::atomic<uint64>                                last_frame{0};
@@ -268,6 +301,7 @@ private:
     std::mutex                                         profiler_mutex;
 
     bool                    rhi_thread_enabled{false};
+    bool                    thread_profile_logging{false};
     bool                    rhi_worker_running{false};
     std::atomic<uint32_t>   rhi_thread_id{0};
     uint64                  enqueued_rhi_work{0};
@@ -276,6 +310,19 @@ private:
     std::mutex              rhi_work_mutex;
     std::condition_variable rhi_work_cv;
     std::condition_variable rhi_work_done_cv;
+
+    std::chrono::steady_clock::time_point thread_profile_window_start =
+        std::chrono::steady_clock::now();
+    uint64 thread_profile_samples{0};
+    uint64 thread_profile_execute_samples{0};
+    uint64 thread_profile_present_samples{0};
+    double thread_profile_caller_total_ms{0.0};
+    double thread_profile_caller_max_ms{0.0};
+    double thread_profile_queue_wait_total_ms{0.0};
+    double thread_profile_queue_wait_max_ms{0.0};
+    double thread_profile_work_total_ms{0.0};
+    double thread_profile_work_max_ms{0.0};
+    uint32 thread_profile_max_enqueue_depth{0};
 
     std::mutex   exec_mtx;
     std::jthread completion_thread;

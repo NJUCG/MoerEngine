@@ -39,10 +39,11 @@ struct CORE_API GlobalConfig {
 
     struct Engine {
         struct Threading {
-            bool render_thread = false;
-            bool rhi_thread    = false;
-            bool rhi_bypass    = true;
-            uint max_frame_lag = 0;
+            bool render_thread   = false;
+            bool rhi_thread      = false;
+            bool rhi_bypass      = true;
+            bool profile_logging = false;
+            uint max_frame_lag   = 0;
         } threading;
 
         struct RHI {

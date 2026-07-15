@@ -68,6 +68,7 @@ def generate_config(base_text: str, scenario: Scenario) -> str:
         ("engine.threading", "rhi_thread"): scenario.rhi_thread,
         ("engine.threading", "rhi_bypass"): scenario.rhi_bypass,
         ("engine.threading", "max_frame_lag"): scenario.max_frame_lag,
+        ("engine.threading", "profile_logging"): True,
         ("engine.render", "default_render_method"): scenario.renderer,
     }
     replaced = {target: 0 for target in replacements}
@@ -109,6 +110,7 @@ def generate_config(base_text: str, scenario: Scenario) -> str:
         ("engine.threading", "rhi_thread"): threading["rhi_thread"],
         ("engine.threading", "rhi_bypass"): threading["rhi_bypass"],
         ("engine.threading", "max_frame_lag"): threading["max_frame_lag"],
+        ("engine.threading", "profile_logging"): threading["profile_logging"],
         ("engine.render", "default_render_method"): render["default_render_method"],
     }
     if actual != replacements:
@@ -138,11 +140,14 @@ def required_patterns(scenario: Scenario) -> list[str]:
             f"[Threading] {scenario.renderer} frames execute on "
             f"{execution_thread} thread id ="
         ),
+        "[ThreadingProfile][RHI]",
     ]
     if scenario.effective_rhi_thread:
         patterns.append("[Threading] RHIThread id =")
     if scenario.render_thread and scenario.max_frame_lag == 1:
         patterns.append("[Threading] GT/RT overlap active")
+    if scenario.render_thread:
+        patterns.append("[ThreadingProfile][RT]")
     return patterns
 
 
@@ -192,6 +197,106 @@ def build_verifier_command(
     return command
 
 
+def parse_profile_value(value: str) -> object:
+    try:
+        return int(value)
+    except ValueError:
+        try:
+            return float(value)
+        except ValueError:
+            return value
+
+
+def parse_profile_windows(path: Path) -> dict[str, list[dict[str, object]]]:
+    profiles: dict[str, list[dict[str, object]]] = {"RHI": [], "RT": []}
+    if not path.is_file():
+        return profiles
+
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        for profile_type in profiles:
+            marker = f"[ThreadingProfile][{profile_type}]"
+            marker_index = line.find(marker)
+            if marker_index < 0:
+                continue
+            fields = {
+                key: parse_profile_value(value)
+                for key, value in re.findall(
+                    r"([A-Za-z_]+)=([^\s]+)", line[marker_index + len(marker) :]
+                )
+            }
+            profiles[profile_type].append(fields)
+            break
+    return profiles
+
+
+def aggregate_profile_windows(
+    windows: list[dict[str, object]], profile_type: str, tail_count: int
+) -> dict[str, object]:
+    selected = windows[-tail_count:] if tail_count > 0 else windows
+    if not selected:
+        return {}
+
+    sample_key = "samples" if profile_type == "RHI" else "frames"
+    sample_count = sum(int(window.get(sample_key, 0)) for window in selected)
+    window_ms = sum(float(window.get("window_ms", 0.0)) for window in selected)
+
+    def weighted_average(field: str) -> float:
+        if sample_count == 0:
+            return 0.0
+        return sum(
+            float(window.get(field, 0.0)) * int(window.get(sample_key, 0))
+            for window in selected
+        ) / sample_count
+
+    aggregate: dict[str, object] = {
+        "window_count": len(selected),
+        "sample_count": sample_count,
+        "window_ms": window_ms,
+        "samples_per_second": sample_count * 1000.0 / window_ms if window_ms > 0.0 else 0.0,
+        "windows": selected,
+    }
+    if profile_type == "RHI":
+        aggregate.update(
+            {
+                "mode": selected[-1].get("mode"),
+                "caller_avg_ms": weighted_average("caller_avg_ms"),
+                "caller_max_ms": max(float(window.get("caller_max_ms", 0.0)) for window in selected),
+                "queue_wait_avg_ms": weighted_average("queue_wait_avg_ms"),
+                "queue_wait_max_ms": max(
+                    float(window.get("queue_wait_max_ms", 0.0)) for window in selected
+                ),
+                "work_avg_ms": weighted_average("work_avg_ms"),
+                "work_max_ms": max(float(window.get("work_max_ms", 0.0)) for window in selected),
+                "max_enqueue_depth": max(
+                    int(window.get("max_enqueue_depth", 0)) for window in selected
+                ),
+                "max_gpu_pending": max(int(window.get("gpu_pending", 0)) for window in selected),
+            }
+        )
+    else:
+        aggregate.update(
+            {
+                "prepare_avg_ms": weighted_average("prepare_avg_ms"),
+                "prepare_max_ms": max(float(window.get("prepare_max_ms", 0.0)) for window in selected),
+                "queue_wait_avg_ms": weighted_average("queue_wait_avg_ms"),
+                "queue_wait_max_ms": max(
+                    float(window.get("queue_wait_max_ms", 0.0)) for window in selected
+                ),
+                "render_avg_ms": weighted_average("render_avg_ms"),
+                "render_max_ms": max(float(window.get("render_max_ms", 0.0)) for window in selected),
+                "gt_wait_avg_ms": weighted_average("gt_wait_avg_ms"),
+                "gt_wait_max_ms": max(float(window.get("gt_wait_max_ms", 0.0)) for window in selected),
+                "max_pending": max(int(window.get("max_pending", 0)) for window in selected),
+            }
+        )
+    return aggregate
+
+
+def profile_number(run: dict[str, object], profile: str, field: str) -> float:
+    data = run.get(profile, {})
+    return float(data.get(field, 0.0)) if isinstance(data, dict) else 0.0
+
+
 def write_markdown_summary(path: Path, summary: dict[str, object]) -> None:
     lines = [
         "# RT/RHI Threading Validation",
@@ -200,15 +305,20 @@ def write_markdown_summary(path: Path, summary: dict[str, object]) -> None:
         f"- Duration: `{summary['duration_seconds']:.1f}s`",
         f"- Result: `{'PASS' if summary['success'] else 'FAIL'}`",
         "",
-        "| Scenario | Iteration | Result | Exit | Captures | Min nonblack | Duration |",
-        "|---|---:|---|---:|---:|---:|---:|",
+        "| Scenario | Iteration | Result | RHI caller | RHI wait | RHI work | Depth | RT queue | RT render | GT wait |",
+        "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for run in summary["runs"]:
         lines.append(
             f"| {run['scenario']} | {run['iteration']} | "
-            f"{'PASS' if run['success'] else 'FAIL'} | {run.get('exit_code')} | "
-            f"{run.get('capture_count', 0)} | {run.get('min_nonblack_ratio', 0.0):.4f} | "
-            f"{run.get('duration_seconds', 0.0):.1f}s |"
+            f"{'PASS' if run['success'] else 'FAIL'} | "
+            f"{profile_number(run, 'rhi_profile', 'caller_avg_ms'):.3f} ms | "
+            f"{profile_number(run, 'rhi_profile', 'queue_wait_avg_ms'):.3f} ms | "
+            f"{profile_number(run, 'rhi_profile', 'work_avg_ms'):.3f} ms | "
+            f"{profile_number(run, 'rhi_profile', 'max_enqueue_depth'):.0f} | "
+            f"{profile_number(run, 'rt_profile', 'queue_wait_avg_ms'):.3f} ms | "
+            f"{profile_number(run, 'rt_profile', 'render_avg_ms'):.3f} ms | "
+            f"{profile_number(run, 'rt_profile', 'gt_wait_avg_ms'):.3f} ms |"
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -237,6 +347,7 @@ def parse_args(repo_root: Path) -> argparse.Namespace:
     parser.add_argument("--close-timeout", type=float, default=45.0)
     parser.add_argument("--ready-log-pattern", default="Copied ImGui frame includes")
     parser.add_argument("--min-nonblack-ratio", type=float, default=0.01)
+    parser.add_argument("--profile-tail-windows", type=int, default=5)
     parser.add_argument("--skip-window-stress", action="store_true")
     parser.add_argument("--detach-configs", action="store_true")
     parser.add_argument("--continue-on-failure", action="store_true")
@@ -249,6 +360,8 @@ def parse_args(repo_root: Path) -> argparse.Namespace:
         args.soak_seconds = 300.0 if args.set == "soak" else 0.0
     if args.soak_seconds < 0.0:
         parser.error("--soak-seconds cannot be negative")
+    if args.profile_tail_windows < 1:
+        parser.error("--profile-tail-windows must be at least 1")
     return args
 
 
@@ -346,6 +459,13 @@ def main() -> int:
                 else {}
             )
             captures = report.get("captures", [])
+            profile_windows = parse_profile_windows(run_dir / "stdout.log")
+            rhi_profile = aggregate_profile_windows(
+                profile_windows["RHI"], "RHI", args.profile_tail_windows
+            )
+            rt_profile = aggregate_profile_windows(
+                profile_windows["RT"], "RT", args.profile_tail_windows
+            )
             min_nonblack = min(
                 (capture.get("nonblack_ratio", 0.0) for capture in captures),
                 default=0.0,
@@ -362,6 +482,8 @@ def main() -> int:
                 "min_nonblack_ratio": min_nonblack,
                 "duration_seconds": report.get("duration_seconds", 0.0),
                 "failure_reasons": report.get("failure_reasons", []),
+                "rhi_profile": rhi_profile,
+                "rt_profile": rt_profile,
                 "report": str(report_path),
             }
             runs.append(run)
@@ -387,6 +509,7 @@ def main() -> int:
         "selected_scenarios": selected_names,
         "repeat": args.repeat,
         "soak_seconds": args.soak_seconds,
+        "profile_tail_windows": args.profile_tail_windows,
         "dry_run": args.dry_run,
         "success": all(run["success"] for run in runs)
         and len(runs) == len(selected_names) * args.repeat,

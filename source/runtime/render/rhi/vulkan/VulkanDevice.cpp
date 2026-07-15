@@ -55,7 +55,8 @@ namespace Moer::Render {
 namespace VkUtil = Moer::RHI::Vulkan::Util;
 
 VulkanDevice::VulkanDevice(const VulkanRHIConfig&& _config) : RenderDevice::Impl() {
-    rhi_thread_enabled = _config.rhi_thread && !_config.rhi_bypass;
+    rhi_thread_enabled      = _config.rhi_thread && !_config.rhi_bypass;
+    thread_profile_logging = _config.thread_profile_logging;
     if (_config.rhi_thread && _config.rhi_bypass) {
         LOG_INFO("[Threading] Vulkan RHI Thread bypass is enabled; graphics submissions stay synchronous.");
     } else if (!_config.rhi_thread && !_config.rhi_bypass) {
@@ -478,7 +479,12 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.transfer.value(), 0, &m_transfer_queue);
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.raytracing.value(), 0, &m_raytracing_queue);
 
-    gfx_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Graphics, rhi_thread_enabled);
+    gfx_queue = MakeUnique<VkCommandQueue>(
+        *this,
+        EQueueType::Graphics,
+        rhi_thread_enabled,
+        thread_profile_logging
+    );
     SetResourceName(uint64(m_graphics_queue), VK_OBJECT_TYPE_QUEUE, "GraphicsQueue");
     compute_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute, false);
     SetResourceName(uint64(m_compute_queue), VK_OBJECT_TYPE_QUEUE, "ComputeQueue");

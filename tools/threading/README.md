@@ -15,6 +15,10 @@ split into repeatable validation runs.
 `MoerEditor --config <path>` selects the generated config. Launches without
 `--config` keep using `MoerEngine.toml` next to the executable.
 
+Matrix configs set `engine.threading.profile_logging=true`. The regular and
+template configs keep it disabled, so normal editor runs do not emit profiling
+windows.
+
 ## Common Commands
 
 Build first:
@@ -82,6 +86,12 @@ Each run writes `stdout.log`, `stderr.log`, screenshots, its generated
 `MoerEngine.toml`, and `report.json`. The matrix root also contains
 `summary.json` and `summary.md`. The default output root is ignored build output
 under `target/validation/rt_rhi/`.
+
+The summary aggregates the last five one-second profile windows by default.
+RHI data includes caller cost, enqueue-to-start latency, backend work time,
+maximum queue depth, and pending GPU timeline distance. RT data includes frame
+prepare, task queue latency, render execution, GT lag-limit wait, and maximum
+pending frames. Use `--profile-tail-windows` to change the steady-state window.
 
 The runner refuses to reuse a non-empty scenario directory so a failed launch
 cannot accidentally consume a stale report from an earlier run.

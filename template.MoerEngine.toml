@@ -19,6 +19,7 @@ render_thread = false
 rhi_thread = false
 rhi_bypass = true
 max_frame_lag = 0
+profile_logging = false
 
 [engine.rhi]
 type = "Vulkan"

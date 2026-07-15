@@ -39,6 +39,7 @@ struct DeviceInitInfo {
     std::string_view rhi_api_version;
     bool             rhi_thread = false;
     bool             rhi_bypass = true;
+    bool             thread_profile_logging = false;
 };
 namespace Moer::Render {
 

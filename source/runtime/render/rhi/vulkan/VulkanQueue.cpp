@@ -2895,7 +2895,19 @@ void ProfilerStorage::EndProfilerSession(VulkanCmdList& _cmd_list, std::string_v
 #pragma endregion
 
 #pragma region[ VkCommandQueue ]
-VkCommandQueue::VkCommandQueue(VulkanDevice& _device, EQueueType _type, bool _enable_rhi_thread) :
+static double RhiThreadProfileMilliseconds(
+    std::chrono::steady_clock::time_point _begin,
+    std::chrono::steady_clock::time_point _end
+) {
+    return std::chrono::duration<double, std::milli>(_end - _begin).count();
+}
+
+VkCommandQueue::VkCommandQueue(
+    VulkanDevice& _device,
+    EQueueType    _type,
+    bool          _enable_rhi_thread,
+    bool          _thread_profile_logging
+) :
     CommandQueue(),
     vk_device(_device),
     queue(_type, _device),
@@ -2905,7 +2917,8 @@ VkCommandQueue::VkCommandQueue(VulkanDevice& _device, EQueueType _type, bool _en
         s_queue_max_frame_in_flight * s_query_max_storage * 4
     ),
     profiler_storage(timestamp_pool),
-    rhi_thread_enabled(_enable_rhi_thread) {
+    rhi_thread_enabled(_enable_rhi_thread),
+    thread_profile_logging(_thread_profile_logging) {
     timeline = MoerNew(VulkanFence(vk_device));
 
     completion_worker_running = true;
@@ -2959,14 +2972,24 @@ VkCommandQueue::~VkCommandQueue() {
 
 WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
     if (rhi_thread_enabled) {
+        const auto caller_started = std::chrono::steady_clock::now();
         uint64 current_timeline;
         {
             std::unique_lock<std::mutex> lock(rhi_work_mutex);
             current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
             const uint64 serial = ++enqueued_rhi_work;
+            const uint32 enqueue_depth = uint32(rhi_work_queue.size() + 1);
+            const auto   enqueued_at    = std::chrono::steady_clock::now();
             rhi_work_queue.emplace_back(
-                std::in_place_type<RhiExecuteWork>, std::move(_submit), current_timeline, serial
+                std::in_place_type<RhiExecuteWork>,
+                std::move(_submit),
+                current_timeline,
+                serial,
+                enqueued_at,
+                enqueue_depth
             );
+            std::get<RhiExecuteWork>(rhi_work_queue.back()).caller_ms =
+                RhiThreadProfileMilliseconds(caller_started, std::chrono::steady_clock::now());
         }
         rhi_work_cv.notify_one();
         return {uint64(timeline), current_timeline};
@@ -2974,7 +2997,11 @@ WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
 
     std::unique_lock<std::mutex> lock(exec_mtx);
     const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
+    const auto   work_started     = std::chrono::steady_clock::now();
     ExecuteNow(std::move(_submit), current_timeline);
+    const double work_ms =
+        RhiThreadProfileMilliseconds(work_started, std::chrono::steady_clock::now());
+    RecordThreadingProfile(ERhiWorkKind::Execute, work_ms, 0.0, work_ms, 0);
     return {uint64(timeline), current_timeline};
 }
 
@@ -3149,18 +3176,25 @@ void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
     TextureRef source_texture{_view.texture};
 
     if (rhi_thread_enabled) {
+        const auto caller_started = std::chrono::steady_clock::now();
         {
             std::unique_lock<std::mutex> lock(rhi_work_mutex);
             const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
             const uint64 serial           = ++enqueued_rhi_work;
+            const uint32 enqueue_depth    = uint32(rhi_work_queue.size() + 1);
+            const auto   enqueued_at       = std::chrono::steady_clock::now();
             rhi_work_queue.emplace_back(
                 std::in_place_type<RhiPresentWork>,
                 std::move(_sc),
                 std::move(source_texture),
                 _view,
                 current_timeline,
-                serial
+                serial,
+                enqueued_at,
+                enqueue_depth
             );
+            std::get<RhiPresentWork>(rhi_work_queue.back()).caller_ms =
+                RhiThreadProfileMilliseconds(caller_started, std::chrono::steady_clock::now());
         }
         rhi_work_cv.notify_one();
         return;
@@ -3168,7 +3202,11 @@ void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
 
     std::unique_lock<std::mutex> lock(exec_mtx);
     const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
+    const auto   work_started     = std::chrono::steady_clock::now();
     PresentNow(std::move(_sc), std::move(source_texture), _view, current_timeline);
+    const double work_ms =
+        RhiThreadProfileMilliseconds(work_started, std::chrono::steady_clock::now());
+    RecordThreadingProfile(ERhiWorkKind::Present, work_ms, 0.0, work_ms, 0);
 }
 
 void VkCommandQueue::PresentNow(
@@ -3366,6 +3404,78 @@ void VkCommandQueue::EnqueueCompletionMarker(uint64 _timeline) {
     event_queue.emplace_back(Array<std::function<void()>>{}, _timeline, true);
 }
 
+void VkCommandQueue::RecordThreadingProfile(
+    ERhiWorkKind _kind,
+    double       _caller_ms,
+    double       _queue_wait_ms,
+    double       _work_ms,
+    uint32       _enqueue_depth
+) {
+    if (!thread_profile_logging) {
+        return;
+    }
+
+    ++thread_profile_samples;
+    if (_kind == ERhiWorkKind::Execute) {
+        ++thread_profile_execute_samples;
+    } else {
+        ++thread_profile_present_samples;
+    }
+    thread_profile_caller_total_ms += _caller_ms;
+    thread_profile_caller_max_ms = std::max(thread_profile_caller_max_ms, _caller_ms);
+    thread_profile_queue_wait_total_ms += _queue_wait_ms;
+    thread_profile_queue_wait_max_ms =
+        std::max(thread_profile_queue_wait_max_ms, _queue_wait_ms);
+    thread_profile_work_total_ms += _work_ms;
+    thread_profile_work_max_ms = std::max(thread_profile_work_max_ms, _work_ms);
+    thread_profile_max_enqueue_depth =
+        std::max(thread_profile_max_enqueue_depth, _enqueue_depth);
+
+    const auto   now       = std::chrono::steady_clock::now();
+    const double window_ms = RhiThreadProfileMilliseconds(thread_profile_window_start, now);
+    if (window_ms < 1000.0) {
+        return;
+    }
+
+    const uint64 submitted_timeline = last_frame.load(std::memory_order_acquire);
+    const uint64 completed_timeline = executed_frame.load(std::memory_order_acquire);
+    const uint64 gpu_pending = submitted_timeline > completed_timeline
+                                   ? submitted_timeline - completed_timeline
+                                   : 0;
+    LOG_INFO(
+        "[ThreadingProfile][RHI] queue={} mode={} window_ms={:.3f} samples={} execute={} "
+        "present={} caller_avg_ms={:.3f} caller_max_ms={:.3f} queue_wait_avg_ms={:.3f} "
+        "queue_wait_max_ms={:.3f} work_avg_ms={:.3f} work_max_ms={:.3f} "
+        "max_enqueue_depth={} gpu_pending={}",
+        queue.GetType() == EQueueType::Graphics ? "Graphics" : "Compute",
+        rhi_thread_enabled ? "threaded" : "synchronous",
+        window_ms,
+        thread_profile_samples,
+        thread_profile_execute_samples,
+        thread_profile_present_samples,
+        thread_profile_caller_total_ms / double(thread_profile_samples),
+        thread_profile_caller_max_ms,
+        thread_profile_queue_wait_total_ms / double(thread_profile_samples),
+        thread_profile_queue_wait_max_ms,
+        thread_profile_work_total_ms / double(thread_profile_samples),
+        thread_profile_work_max_ms,
+        thread_profile_max_enqueue_depth,
+        gpu_pending
+    );
+
+    thread_profile_window_start       = now;
+    thread_profile_samples            = 0;
+    thread_profile_execute_samples    = 0;
+    thread_profile_present_samples    = 0;
+    thread_profile_caller_total_ms    = 0.0;
+    thread_profile_caller_max_ms      = 0.0;
+    thread_profile_queue_wait_total_ms = 0.0;
+    thread_profile_queue_wait_max_ms  = 0.0;
+    thread_profile_work_total_ms      = 0.0;
+    thread_profile_work_max_ms        = 0.0;
+    thread_profile_max_enqueue_depth  = 0;
+}
+
 void VkCommandQueue::RhiThreadMain() {
     Platform::SetCurrentThreadName(
         queue.GetType() == EQueueType::Graphics ? "Moer RHI Thread" : "Moer Compute RHI"
@@ -3393,8 +3503,18 @@ void VkCommandQueue::RhiThreadMain() {
         }
 
         const uint64 serial = std::visit([](const auto& _work) { return _work.serial; }, *work);
+        const auto enqueued_at =
+            std::visit([](const auto& _work) { return _work.enqueued_at; }, *work);
+        const uint32 enqueue_depth =
+            std::visit([](const auto& _work) { return _work.enqueue_depth; }, *work);
+        const double caller_ms =
+            std::visit([](const auto& _work) { return _work.caller_ms; }, *work);
+        const ERhiWorkKind work_kind = std::holds_alternative<RhiExecuteWork>(*work)
+                                           ? ERhiWorkKind::Execute
+                                           : ERhiWorkKind::Present;
         {
             std::unique_lock<std::mutex> lock(exec_mtx);
+            const auto work_started = std::chrono::steady_clock::now();
             std::visit(
                 Overload{
                     [this](RhiExecuteWork& _work) {
@@ -3410,6 +3530,14 @@ void VkCommandQueue::RhiThreadMain() {
                     }
                 },
                 *work
+            );
+            const auto work_finished = std::chrono::steady_clock::now();
+            RecordThreadingProfile(
+                work_kind,
+                caller_ms,
+                RhiThreadProfileMilliseconds(enqueued_at, work_started),
+                RhiThreadProfileMilliseconds(work_started, work_finished),
+                enqueue_depth
             );
         }
 

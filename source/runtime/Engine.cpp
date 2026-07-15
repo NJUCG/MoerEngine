@@ -20,7 +20,10 @@
 #include "renderer/raytracing/RaytracingRenderer.h"
 
 // 3rd party (std)
+#include <algorithm>
 #include <cassert>
+#include <chrono>
+#include <mutex>
 #include <nfd.hpp>
 #include <optional>
 #include <stdexcept>
@@ -37,6 +40,116 @@ static UniquePtr<NFD::Guard> nfd_guard = nullptr;
 static bool ContainsNonAscii(const std::filesystem::path& p);
 
 namespace {
+
+using ThreadProfileClock = std::chrono::steady_clock;
+
+double ThreadProfileMilliseconds(
+    ThreadProfileClock::time_point begin,
+    ThreadProfileClock::time_point end
+) {
+    return std::chrono::duration<double, std::milli>(end - begin).count();
+}
+
+class RenderThreadProfileAccumulator {
+public:
+    explicit RenderThreadProfileAccumulator(bool enabled) : enabled(enabled) {}
+
+    void RecordPrepare(double milliseconds) {
+        if (!enabled) {
+            return;
+        }
+        std::unique_lock<std::mutex> lock(mutex);
+        ++prepare_samples;
+        prepare_total_ms += milliseconds;
+        prepare_max_ms = std::max(prepare_max_ms, milliseconds);
+    }
+
+    void RecordRender(double queue_wait_ms, double render_ms) {
+        if (!enabled) {
+            return;
+        }
+        std::unique_lock<std::mutex> lock(mutex);
+        ++render_samples;
+        queue_wait_total_ms += queue_wait_ms;
+        queue_wait_max_ms = std::max(queue_wait_max_ms, queue_wait_ms);
+        render_total_ms += render_ms;
+        render_max_ms = std::max(render_max_ms, render_ms);
+    }
+
+    void RecordGameThreadWait(double milliseconds, size_t pending_frames) {
+        if (!enabled) {
+            return;
+        }
+        std::unique_lock<std::mutex> lock(mutex);
+        ++game_wait_samples;
+        game_wait_total_ms += milliseconds;
+        game_wait_max_ms = std::max(game_wait_max_ms, milliseconds);
+        max_pending_frames = std::max(max_pending_frames, pending_frames);
+    }
+
+    void MaybeLog() {
+        if (!enabled) {
+            return;
+        }
+
+        const auto now = ThreadProfileClock::now();
+        std::unique_lock<std::mutex> lock(mutex);
+        const double window_ms = ThreadProfileMilliseconds(window_start, now);
+        if (window_ms < 1000.0 || render_samples == 0) {
+            return;
+        }
+
+        LOG_INFO(
+            "[ThreadingProfile][RT] window_ms={:.3f} frames={} prepare_avg_ms={:.3f} "
+            "prepare_max_ms={:.3f} queue_wait_avg_ms={:.3f} queue_wait_max_ms={:.3f} "
+            "render_avg_ms={:.3f} render_max_ms={:.3f} gt_wait_avg_ms={:.3f} "
+            "gt_wait_max_ms={:.3f} max_pending={}",
+            window_ms,
+            render_samples,
+            prepare_samples == 0 ? 0.0 : prepare_total_ms / double(prepare_samples),
+            prepare_max_ms,
+            queue_wait_total_ms / double(render_samples),
+            queue_wait_max_ms,
+            render_total_ms / double(render_samples),
+            render_max_ms,
+            game_wait_samples == 0 ? 0.0 : game_wait_total_ms / double(game_wait_samples),
+            game_wait_max_ms,
+            max_pending_frames
+        );
+
+        window_start        = now;
+        prepare_samples     = 0;
+        render_samples      = 0;
+        game_wait_samples   = 0;
+        prepare_total_ms    = 0.0;
+        prepare_max_ms      = 0.0;
+        queue_wait_total_ms = 0.0;
+        queue_wait_max_ms   = 0.0;
+        render_total_ms     = 0.0;
+        render_max_ms       = 0.0;
+        game_wait_total_ms  = 0.0;
+        game_wait_max_ms    = 0.0;
+        max_pending_frames  = 0;
+    }
+
+private:
+    bool enabled = false;
+
+    std::mutex                      mutex;
+    ThreadProfileClock::time_point window_start        = ThreadProfileClock::now();
+    uint64                          prepare_samples     = 0;
+    uint64                          render_samples      = 0;
+    uint64                          game_wait_samples   = 0;
+    double                          prepare_total_ms    = 0.0;
+    double                          prepare_max_ms      = 0.0;
+    double                          queue_wait_total_ms = 0.0;
+    double                          queue_wait_max_ms   = 0.0;
+    double                          render_total_ms     = 0.0;
+    double                          render_max_ms       = 0.0;
+    double                          game_wait_total_ms  = 0.0;
+    double                          game_wait_max_ms    = 0.0;
+    size_t                          max_pending_frames  = 0;
+};
 
 std::optional<std::filesystem::path> ParseConfigOverride(int argc, const char** argv) {
     constexpr std::string_view config_prefix = "--config=";
@@ -77,6 +190,7 @@ template<typename PrepareFunction, typename RenderFunction, typename ApplyFuncti
 void RunBoundedRenderLoop(
     RenderThreadService& service,
     uint                 max_frame_lag,
+    bool                 profile_logging,
     PrepareFunction      prepare_frame,
     RenderFunction       render_frame,
     ApplyFunction        apply_feedback,
@@ -86,6 +200,7 @@ void RunBoundedRenderLoop(
     using Feedback = std::remove_cvref_t<std::invoke_result_t<RenderFunction&, FramePacket>>;
 
     BoundedRenderFrameQueue<Feedback> frame_queue(service, max_frame_lag);
+    RenderThreadProfileAccumulator    profile(profile_logging);
     bool                              overlap_logged = false;
     auto retire_feedback = [&](Feedback feedback) {
         std::invoke(apply_feedback, std::move(feedback));
@@ -94,13 +209,42 @@ void RunBoundedRenderLoop(
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
         frame_queue.RetireCompleted(retire_feedback);
 
+        ThreadProfileClock::time_point prepare_started{};
+        if (profile_logging) {
+            prepare_started = ThreadProfileClock::now();
+        }
         FramePacket frame_packet = std::invoke(prepare_frame);
+        if (profile_logging) {
+            profile.RecordPrepare(
+                ThreadProfileMilliseconds(prepare_started, ThreadProfileClock::now())
+            );
+        }
         const uint64 frame_id     = frame_packet.frame_id;
+        ThreadProfileClock::time_point submitted_at{};
+        if (profile_logging) {
+            submitted_at = ThreadProfileClock::now();
+        }
         frame_queue.Submit(
             frame_id,
-            [render_frame, frame_packet = std::move(frame_packet)]() mutable -> Feedback {
+            [render_frame,
+             frame_packet = std::move(frame_packet),
+             submitted_at,
+             profile_logging,
+             &profile]() mutable -> Feedback {
                 assert(IsCurrentlyRenderThread());
-                return std::invoke(render_frame, std::move(frame_packet));
+                if (!profile_logging) {
+                    return std::invoke(render_frame, std::move(frame_packet));
+                }
+
+                const auto render_started = ThreadProfileClock::now();
+                const double queue_wait_ms =
+                    ThreadProfileMilliseconds(submitted_at, render_started);
+                Feedback feedback = std::invoke(render_frame, std::move(frame_packet));
+                profile.RecordRender(
+                    queue_wait_ms,
+                    ThreadProfileMilliseconds(render_started, ThreadProfileClock::now())
+                );
+                return feedback;
             }
         );
 
@@ -114,7 +258,19 @@ void RunBoundedRenderLoop(
             );
         }
 
+        const size_t pending_before_limit = frame_queue.PendingFrameCount();
+        ThreadProfileClock::time_point game_wait_started{};
+        if (profile_logging) {
+            game_wait_started = ThreadProfileClock::now();
+        }
         frame_queue.EnforceLagLimit(retire_feedback);
+        if (profile_logging) {
+            profile.RecordGameThreadWait(
+                ThreadProfileMilliseconds(game_wait_started, ThreadProfileClock::now()),
+                pending_before_limit
+            );
+            profile.MaybeLog();
+        }
         if (std::invoke(should_stop)) {
             break;
         }
@@ -164,11 +320,13 @@ void Engine::Init(int argc, const char** argv) {
 
     LOG_INFO("[Threading] GameThread id = {}", GetGameThreadId());
     LOG_INFO(
-        "[Threading] render_thread={}, rhi_thread={}, rhi_bypass={}, max_frame_lag={}",
+        "[Threading] render_thread={}, rhi_thread={}, rhi_bypass={}, max_frame_lag={}, "
+        "profile_logging={}",
         config.engine.threading.render_thread,
         config.engine.threading.rhi_thread,
         config.engine.threading.rhi_bypass,
-        config.engine.threading.max_frame_lag
+        config.engine.threading.max_frame_lag,
+        config.engine.threading.profile_logging
     );
 
     if (config.engine.threading.render_thread) {
@@ -213,6 +371,7 @@ void Engine::Init(int argc, const char** argv) {
                 .rhi_api_version = config.engine.rhi.api_version,
                 .rhi_thread      = config.engine.threading.rhi_thread,
                 .rhi_bypass      = config.engine.threading.rhi_bypass,
+                .thread_profile_logging = config.engine.threading.profile_logging,
             }
         )
     );
@@ -264,7 +423,9 @@ void Engine::Init(int argc, const char** argv) {
 }
 
 void Engine::Run(const EngineHooks& hooks) {
-    EngineHooks runtime_hooks       = hooks;
+    EngineHooks runtime_hooks = hooks;
+    const bool thread_profile_logging =
+        ConfigManager::GetInstance().GetConfig().engine.threading.profile_logging;
     runtime_hooks.on_tick_scripting = [this](Scene& scene) {
         if (m_script_host) {
             m_script_host->ProcessMainThreadCommands(scene);
@@ -310,6 +471,7 @@ void Engine::Run(const EngineHooks& hooks) {
                 RunBoundedRenderLoop(
                     *m_render_thread_service,
                     m_max_frame_lag,
+                    thread_profile_logging,
                     [this, raster_renderer, &runtime_hooks]() {
                         return raster_renderer->PrepareFrame(m_editor_config, runtime_hooks);
                     },
@@ -331,6 +493,7 @@ void Engine::Run(const EngineHooks& hooks) {
                 RunBoundedRenderLoop(
                     *m_render_thread_service,
                     m_max_frame_lag,
+                    thread_profile_logging,
                     [this, raytracing_renderer, &runtime_hooks]() {
                         return raytracing_renderer->PrepareFrame(m_editor_config, runtime_hooks);
                     },

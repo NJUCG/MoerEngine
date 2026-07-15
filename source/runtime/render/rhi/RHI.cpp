@@ -19,8 +19,9 @@ VulkanRHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
     assert(_info.rhi_type == ERHIType::Vulkan);
 
     VulkanRHIConfig config;
-    config.rhi_thread = _info.rhi_thread;
-    config.rhi_bypass = _info.rhi_bypass;
+    config.rhi_thread             = _info.rhi_thread;
+    config.rhi_bypass             = _info.rhi_bypass;
+    config.thread_profile_logging = _info.thread_profile_logging;
 
     std::string_view api = _info.rhi_api_version;
 
