@@ -244,8 +244,12 @@ public:
     inline VkQueue GetRayTracingQueue() const {
         return m_raytracing_queue;
     }
+    VkResult PresentOnQueue(VkQueue _queue, const VkPresentInfoKHR& _present_info);
+    VkResult WaitQueueIdle(VkQueue _queue);
 
 private:
+    std::mutex& GetQueueHostMutex(VkQueue _queue);
+
     VkInstance            m_instance                  = VK_NULL_HANDLE;
     VkPhysicalDevice      m_gpu                       = VK_NULL_HANDLE;
     VkDevice              m_device                    = VK_NULL_HANDLE;
@@ -268,9 +272,12 @@ private:
     UniquePtr<VkCopyQueue>    copy_queue{};
     bool                      rhi_thread_enabled      = false;
     bool                      thread_profile_logging = false;
-    // 这个锁只在AMD GPU上使用，因为AMD GPU没有TransferQueue
-    // 在现代NVIDIA GPU上，这个锁不会被触发，接近0开销，不用在意性能
-    std::mutex                                m_shared_queue_submit_mutex;
+    // Every host call operating on the same VkQueue must use the same mutex.
+    std::mutex                                m_graphics_queue_mutex;
+    std::mutex                                m_present_queue_mutex;
+    std::mutex                                m_compute_queue_mutex;
+    std::mutex                                m_transfer_queue_mutex;
+    std::mutex                                m_raytracing_queue_mutex;
     LockFreeQueueBase<RHIResource, false, 64> deferred_release_queue{};
     static constexpr uint immutable_sampler_count = uint(SF_Num) * uint(SAM_Num) * uint(SCF_Num);
     StaticArray<VkSampler, immutable_sampler_count> immutable_samplers{};

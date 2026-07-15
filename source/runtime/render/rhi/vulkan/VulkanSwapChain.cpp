@@ -344,7 +344,7 @@ void VkSwapchain::Present(VkQueue _queue, uint _index) {
     present_info.swapchainCount     = 1;
     present_info.pSwapchains        = &handle;
     present_info.pImageIndices      = &_index;
-    VkResult result                 = vkQueuePresentKHR(_queue, &present_info);
+    VkResult result                 = device.PresentOnQueue(_queue, present_info);
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
         //recreate manually? because we don't know the window size
     } else if (result != VK_SUCCESS) {
@@ -382,8 +382,17 @@ void VkSwapchain::Sync() {
     while (cur_present_cnt.load(std::memory_order_relaxed) > 0) {
         std::this_thread::yield();
     }
-    // Swapchain semaphores are signaled by graphics queue and waited by present queue.
-    vkQueueWaitIdle(device.GetGraphicsQueue());
-    vkQueueWaitIdle(device.GetPresentQueue());
+    VkQueue graphics_queue = device.GetGraphicsQueue();
+    VkQueue present_queue  = device.GetPresentQueue();
+    VkResult result        = device.WaitQueueIdle(graphics_queue);
+    if (result != VK_SUCCESS) {
+        LOG_ERROR("Failed to wait for graphics queue idle, result={}", int(result));
+    }
+    if (present_queue != graphics_queue) {
+        result = device.WaitQueueIdle(present_queue);
+        if (result != VK_SUCCESS) {
+            LOG_ERROR("Failed to wait for present queue idle, result={}", int(result));
+        }
+    }
 }
 } // namespace Moer::Render

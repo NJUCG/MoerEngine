@@ -492,21 +492,21 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
     copy_queue = MakeUnique<VkCopyQueue>(*this);
     SetResourceName(uint64(m_transfer_queue), VK_OBJECT_TYPE_QUEUE, "TransferQueue");
 
+    gfx_queue->SetQueueSubmitMutex(&GetQueueHostMutex(m_graphics_queue));
+    compute_queue->SetQueueSubmitMutex(&GetQueueHostMutex(m_compute_queue));
+    copy_queue->SetQueueSubmitMutex(&GetQueueHostMutex(m_transfer_queue));
+
     if (m_graphics_queue == m_transfer_queue) {
         LOG_WARNING(
             "gfx and transfer share the same VkQueue handle. "
-            "Installing shared submit mutex to avoid concurrent vkQueueSubmit2."
+            "Using shared host synchronization for queue operations."
         );
-        gfx_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
-        copy_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
     }
     if (m_compute_queue == m_graphics_queue) {
         LOG_WARNING(
             "compute and gfx share the same VkQueue handle. "
-            "Installing shared submit mutex to avoid concurrent vkQueueSubmit2."
+            "Using shared host synchronization for queue operations."
         );
-        gfx_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
-        compute_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
     }
 }
 
@@ -942,6 +942,37 @@ void VulkanDevice::FlushDebugMessages() const {
 
 void VulkanDevice::WaitIdle() {
     vkDeviceWaitIdle(m_device);
+}
+
+std::mutex& VulkanDevice::GetQueueHostMutex(VkQueue _queue) {
+    assert(_queue != VK_NULL_HANDLE);
+    if (_queue == m_graphics_queue) {
+        return m_graphics_queue_mutex;
+    }
+    if (_queue == m_present_queue) {
+        return m_present_queue_mutex;
+    }
+    if (_queue == m_compute_queue) {
+        return m_compute_queue_mutex;
+    }
+    if (_queue == m_transfer_queue) {
+        return m_transfer_queue_mutex;
+    }
+    if (_queue == m_raytracing_queue) {
+        return m_raytracing_queue_mutex;
+    }
+    assert(false && "Unknown VkQueue handle");
+    return m_graphics_queue_mutex;
+}
+
+VkResult VulkanDevice::PresentOnQueue(VkQueue _queue, const VkPresentInfoKHR& _present_info) {
+    std::unique_lock<std::mutex> lock(GetQueueHostMutex(_queue));
+    return vkQueuePresentKHR(_queue, &_present_info);
+}
+
+VkResult VulkanDevice::WaitQueueIdle(VkQueue _queue) {
+    std::unique_lock<std::mutex> lock(GetQueueHostMutex(_queue));
+    return vkQueueWaitIdle(_queue);
 }
 
 void VulkanDevice::SetupDebugUtilsMessengerEXT() {

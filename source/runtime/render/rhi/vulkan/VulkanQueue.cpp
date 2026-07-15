@@ -2638,9 +2638,7 @@ VkNativeQueue::~VkNativeQueue() {}
 void VkNativeQueue::SubmitEmpty(VkFence _fence) {
     // 这个锁只在AMD GPU上使用，因为AMD GPU没有TransferQueue
     // 在现代NVIDIA GPU上，这个锁不会被触发，接近0开销，不用在意性能
-    std::unique_lock<std::mutex> guard;
-    if (submit_mutex)
-        guard = std::unique_lock<std::mutex>(*submit_mutex);
+    std::unique_lock<std::mutex> guard(*submit_mutex);
 
     VkSubmitInfo2 submit_info{};
     submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
@@ -2669,9 +2667,7 @@ void VkNativeQueue::SubmitEmpty(VkFence _fence) {
 }
 
 void VkNativeQueue::Submit(VulkanCmdList& _cmdlist, VkFence _fence) {
-    std::unique_lock<std::mutex> guard;
-    if (submit_mutex)
-        guard = std::unique_lock<std::mutex>(*submit_mutex);
+    std::unique_lock<std::mutex> guard(*submit_mutex);
 
     VkSubmitInfo2   submit_info{};
     VkCommandBuffer cmd = _cmdlist.GetHandle();
@@ -2763,6 +2759,7 @@ void VkCommandQueue::Wait(WaitEvent _evt) {
 }
 
 void VkNativeQueue::BeginLabel(std::string_view _label, float4 _color) {
+    std::unique_lock<std::mutex> guard(*submit_mutex);
     VkDebugUtilsLabelEXT label{VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT};
     label.pLabelName = _label.data();
     label.color[0]   = _color.x;
@@ -2773,10 +2770,12 @@ void VkNativeQueue::BeginLabel(std::string_view _label, float4 _color) {
 }
 
 void VkNativeQueue::EndLabel() {
+    std::unique_lock<std::mutex> guard(*submit_mutex);
     vkQueueEndDebugUtilsLabelEXT(queue);
 }
 
 void VkNativeQueue::InsertLabel(std::string_view _label, float4 _color) {
+    std::unique_lock<std::mutex> guard(*submit_mutex);
     VkDebugUtilsLabelEXT label{VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT};
     label.pLabelName = _label.data();
     label.color[0]   = _color.x;
@@ -3049,6 +3048,7 @@ void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline) {
     // LOG_INFO("Reorderer time {}", timer.ElapsedMilliseconds());
     const auto& cmd_lists = reorderer.m_cmd_lists;
     bool        has_cmd   = !reorderer.m_cmd_lists.empty();
+    uint64      descriptor_frame = 0;
 
     //Set Descriptor buffer ringbuffer offset and start debug region
     double preprocess_time = 0.0;
@@ -3065,7 +3065,10 @@ void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline) {
         }
 
         if (queue.GetType() != EQueueType::Copy) {
-            vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors(_timeline);
+            // Present work advances the queue timeline without consuming descriptor storage.
+            // Keep ring reuse aligned with the execute-only in-flight limit.
+            descriptor_frame = descriptor_submission++;
+            vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors(descriptor_frame);
         }
 
         std::string_view queue_label = queue.GetType() == EQueueType::Graphics ? "Graphics Exec" :
@@ -3110,7 +3113,7 @@ void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline) {
         vk_allocator.GetCmdList().EndLabel();
         vk_allocator.GetCmdList().End();
         if (queue.GetType() != EQueueType::Copy) {
-            vk_device.GetGlobalDescriptorHeap().EndPushDescriptors(_timeline);
+            vk_device.GetGlobalDescriptorHeap().EndPushDescriptors(descriptor_frame);
         }
         tracker.Reset();
     }

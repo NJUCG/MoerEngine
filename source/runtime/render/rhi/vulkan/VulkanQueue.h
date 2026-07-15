@@ -45,9 +45,11 @@ public:
         return type;
     }
 
-    // 当多个 VkNativeQueue 实例共享同一个 VkQueue handle 时，
-    // 必须通过同一把 mutex 互斥 vkQueueSubmit2，否则违反 Vulkan 线程安全要求。
-    void SetSubmitMutex(std::mutex* _mutex) { submit_mutex = _mutex; }
+    // Logical queues that alias one VkQueue must share one host synchronization mutex.
+    void SetSubmitMutex(std::mutex* _mutex) {
+        assert(_mutex != nullptr);
+        submit_mutex = _mutex;
+    }
 
     void BeginLabel(std::string_view _label, float4 _color);
     void EndLabel();
@@ -59,9 +61,9 @@ private:
     VkQueue                      queue;
     EQueueType                   type;
     
-    // 这个锁只在AMD GPU上使用，因为AMD GPU没有TransferQueue
-    // 在现代NVIDIA GPU上，这个锁不会被触发，接近0开销，不用在意性能
-    std::mutex*                  submit_mutex = nullptr;
+    // A local mutex covers standalone use before the device installs its canonical queue mutex.
+    std::mutex                   local_submit_mutex;
+    std::mutex*                  submit_mutex = &local_submit_mutex;
 };
 
 struct ProfilerStorage {
@@ -287,6 +289,7 @@ private:
 
 private:
     std::atomic<uint64>                                last_frame{0};
+    uint64                                             descriptor_submission{0};
     CircularQueue<uint64, s_queue_max_frame_in_flight> executed_queue;
     std::atomic<uint64>                                executed_frame = 0;
     CircularQueue<uint64, s_queue_max_frame_in_flight> presented_queue;
