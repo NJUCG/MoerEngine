@@ -362,7 +362,7 @@ def parse_args(repo_root: Path) -> argparse.Namespace:
     parser.add_argument("--soak-seconds", type=float)
     parser.add_argument("--startup-timeout", type=float, default=90.0)
     parser.add_argument("--ready-timeout", type=float, default=180.0)
-    parser.add_argument("--ready-settle-seconds", type=float, default=5.0)
+    parser.add_argument("--ready-settle-seconds", type=float, default=12.0)
     parser.add_argument("--close-timeout", type=float, default=45.0)
     parser.add_argument("--ready-log-pattern", default="Copied ImGui frame includes")
     parser.add_argument("--min-nonblack-ratio", type=float, default=0.01)

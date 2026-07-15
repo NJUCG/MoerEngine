@@ -42,7 +42,7 @@ public:
     std::tuple<VkSemaphore, uint, uint> AquireNextImage(uint64 _timeout = UINT64_MAX);
     TextureView                         GetSwapchainImage(uint _index);
     VkSemaphore                         GetImageReadyFence(uint _index);
-    VkSemaphore                         GetRenderFinishedFence();
+    VkSemaphore                         GetRenderFinishedFence(uint _image_index);
     void                                Present(VkQueue _queue, uint _image_index);
     void                                Sync() override;
 

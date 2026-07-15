@@ -296,8 +296,8 @@ VkSwapchain::~VkSwapchain() {
 VkSemaphore VkSwapchain::GetImageReadyFence(uint _index) {
     return image_ready_fences[_index % image_ready_fences.size()];
 }
-VkSemaphore VkSwapchain::GetRenderFinishedFence() {
-    return render_finished_fences[image_idx % render_finished_fences.size()];
+VkSemaphore VkSwapchain::GetRenderFinishedFence(uint _image_index) {
+    return render_finished_fences[_image_index % render_finished_fences.size()];
 }
 TextureView VkSwapchain::GetSwapchainImage(uint _index) {
     return swapchain_views[_index % swapchain_views.size()];
@@ -326,7 +326,7 @@ void VkSwapchain::Present(VkQueue _queue, uint _index) {
     if (_index == UINT32_MAX) {
         return;
     }
-    VkSemaphore finished_semaphores[] = {render_finished_fences[image_idx % render_finished_fences.size()]};
+    VkSemaphore finished_semaphores[] = {GetRenderFinishedFence(_index)};
     // 如果启用了 VK_EXT_swapchain_maintenance1，则使用 present fence 优化队列同步；
     // 否则退回到兼容路径，不挂 VkSwapchainPresentFenceInfoEXT，避免验证层报扩展未启用。
     const bool use_present_fence = device.HasDeviceExtension(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);

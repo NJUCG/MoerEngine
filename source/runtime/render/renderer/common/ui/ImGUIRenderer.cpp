@@ -493,15 +493,6 @@ UiDrawFramePacket ImGUIRenderBackend::CaptureDrawFrame() {
             }
         }
 
-        if (!frame.platform_viewports.empty()) {
-            static std::atomic_bool logged_platform_viewport_capture = false;
-            if (!logged_platform_viewport_capture.exchange(true)) {
-                LOG_INFO(
-                    "[Threading] Copied ImGui frame includes {} platform viewport(s).",
-                    frame.platform_viewports.size()
-                );
-            }
-        }
     }
 
     return frame;
@@ -524,6 +515,16 @@ void ImGUIRenderBackend::RenderGUI(
     for (auto& viewport : _frame.platform_viewports) {
         if (viewport.framebuffer) {
             GUIRender(viewport, viewport.framebuffer->GetView(), _cmd_list, render_data, *this);
+        }
+    }
+
+    if (!_frame.main_viewport.commands.empty()) {
+        static std::atomic_bool logged_draw_packet_render = false;
+        if (!logged_draw_packet_render.exchange(true)) {
+            LOG_INFO(
+                "[Threading] Copied ImGui frame includes {} platform viewport(s).",
+                _frame.platform_viewports.size()
+            );
         }
     }
 }

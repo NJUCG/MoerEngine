@@ -99,8 +99,10 @@ cannot accidentally consume a stale report from an earlier run.
 
 ## Notes
 
-- The ready marker defaults to `Copied ImGui frame includes`, which is later
-  than HWND creation and avoids sampling an unrendered first frame.
+- The ready marker defaults to `Copied ImGui frame includes`, which is emitted
+  after the first copied draw packet is consumed. The runner then waits 12
+  seconds by default so asynchronous scene and ProbeGI initialization can
+  reach a visually stable frame before sampling.
 - The base TOML is parsed after scenario values are patched, and all five
   threading/render values are checked before launch.
 - `--continue-on-failure` is recommended for a full matrix so one failed

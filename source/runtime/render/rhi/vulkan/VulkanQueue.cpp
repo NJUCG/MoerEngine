@@ -3292,7 +3292,7 @@ void VkCommandQueue::PresentNow(
 
     queue.Signal(timeline, _timeline, VK_PIPELINE_STAGE_2_COPY_BIT);
     queue.Wait(fence, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-    queue.Signal(sc->GetRenderFinishedFence(), VK_PIPELINE_STAGE_2_COPY_BIT);
+    queue.Signal(sc->GetRenderFinishedFence(idx), VK_PIPELINE_STAGE_2_COPY_BIT);
     queue.Submit(vk_allocator.GetCmdList());
     sc->Present(queue.GetHandle(), idx);
     {

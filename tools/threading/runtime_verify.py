@@ -313,7 +313,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--startup-settle-seconds", type=float, default=15.0)
     parser.add_argument("--ready-log-pattern")
     parser.add_argument("--ready-timeout", type=float, default=180.0)
-    parser.add_argument("--ready-settle-seconds", type=float, default=5.0)
+    parser.add_argument("--ready-settle-seconds", type=float, default=12.0)
     parser.add_argument("--soak-seconds", type=float, default=0.0)
     parser.add_argument("--close-timeout", type=float, default=45.0)
     parser.add_argument("--skip-window-stress", action="store_true")
