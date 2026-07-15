@@ -2,7 +2,7 @@
 
 > 本文件整体就是交给后续 Agent 的中文提示词和状态快照。
 >
-> 当前功能开发冻结在 **Phase 6.1 完成点**。Phase 6.0 已完成换机接管，Phase 6.1 已完成 Vulkan first-fault latch、失败传播和可控注入验收；下一阶段是 Phase 7 PrepareFrame 性能归因。
+> 当前功能开发冻结在 **Phase 7 完成点**。Phase 6.1 已完成 Vulkan first-fault latch 与失败传播；Phase 7 已完成 PrepareFrame 分阶段归因、三轮前后对照和单一低风险优化；下一阶段是 Phase 8 RenderGraph 最小骨架。
 >
 > 换机后，请让 Agent 先完整阅读本文件、仓库根目录 `AGENTS.md` 和 `tools/threading/README.md`，再执行“换机接管流程”。不要只截取“下一步”一节，否则容易丢失已经建立的线程与资源所有权约束。
 >
@@ -17,7 +17,7 @@
 当前必须遵守以下指令：
 
 1. 使用中文沟通和记录结论。
-2. Phase 5 历史冻结点为 `f55c016e`；当前 Phase 6.1 功能完成点为 `8afa2cac`。两者之间的 Phase 6.0/6.1 改动和验证必须与本文件进度区及 TechRecord 对应，不应存在未经记录的新功能实现。
+2. Phase 5 历史冻结点为 `f55c016e`；当前 Phase 7 功能完成点为 `db76cfd6`。Phase 6.0/6.1/7 的改动和验证必须与本文件进度区及 TechRecord 对应，不应存在未经记录的新功能实现。
 3. 第一个动作必须是核对分支身份、工作区、配置、构建和自动验证基线。不要一上来修改代码。
 4. 如果用户只让你“查看状态”或“接手”，先汇报已完成目标、未完成目标和下一阶段计划，等待用户明确授权后再开发。
 5. 如果用户同时明确说“继续实现”，也要先完成换机基线复现；基线失败时先定位环境或回归原因，不得把失败状态直接带入下一阶段。
@@ -42,11 +42,12 @@ Base commit on 2026-07-16: d016d1d8f5f96a8909bc8bfdaa6468e9810ad6a5
 Phase 5 historical freeze commit: f55c016e
 Phase 6.0 takeover code commit: 402b7c66
 Phase 6.1 current functional commit: 8afa2cac
+Phase 7 current functional commit: db76cfd6
 ```
 
 用户最初写的 `feature/rt-thi-threading` 是拼写误差；远端实际分支和当前 upstream 均为 `feature/rt-rhi-threading` / `origin/feature/rt-rhi-threading`。
 
-`f55c016e` 仍是 Phase 5 历史基线，不再是当前功能终点。判断最新代码应看 `8afa2cac`，判断最新交接文档应看分支 HEAD。
+`f55c016e` 仍是 Phase 5 历史基线，不再是当前功能终点。判断最新功能代码应看 `db76cfd6`，判断最新交接文档应看分支 HEAD。
 
 ### 2.2 原电脑未纳入分支的本地内容
 
@@ -113,6 +114,10 @@ Phase 6.0 TechRecord commit: 845f73e
 Phase 6.1 TechRecord commit: 83bedaf
 20_技术文档/引擎架构/MoerEngine/RT_RHI_Threading/12_Phase6.1_DeviceFault锁存与失败传播.md
 30_问题复盘/BugFix/MoerEngine_RT_RHI_Phase6.1_DeviceFault锁存与Swapchain生命周期复盘.md
+
+Phase 7 TechRecord commit: 0f30519
+20_技术文档/引擎架构/MoerEngine/RT_RHI_Threading/13_Phase7_PrepareFrame性能归因与低风险优化.md
+30_问题复盘/BugFix/MoerEngine_RT_RHI_Phase7_无变化SunPatch与PrepareFrame更新放大复盘.md
 ```
 
 ---
@@ -694,7 +699,7 @@ Phase 5 节点当时没有完整的 device-fault latch。该缺口已由 Phase 6
 
 ### Phase 7：PrepareFrame 性能归因与低风险优化
 
-状态：当前下一阶段，尚未开始。
+状态：已完成，提交 `db76cfd6`；详细证据见进度追加区与 TechRecord `13_Phase7_PrepareFrame性能归因与低风险优化.md`。
 
 目标：先知道时间花在哪里，再做局部优化。
 
@@ -712,6 +717,8 @@ Phase 5 节点当时没有完整的 device-fault latch。该缺口已由 Phase 6
 - full matrix 与视觉结论不回归。
 
 ### Phase 8：RenderGraph 最小骨架
+
+状态：当前下一阶段，尚未开始。
 
 目标：先把现有线性 pass 迁入显式 graph，初版不追求并行。
 
@@ -1050,3 +1057,25 @@ python tools\threading\run_matrix.py --set full --continue-on-failure
 - 双仓库推送：MoerEngine `origin/feature/rt-rhi-threading` 包含 `8afa2cac` 及本交接更新；TechRecord `origin/main` 包含 `83bedaf`。
 - 已知限制：synthetic seam 在注入前预排空，只证明失败传播，不等同于真实 mid-flight TDR；尚未覆盖 Execute/Copy/external signal 等其他 fault entrypoint、device/surface recreation、Clang/Ninja、Release、其他 GPU/driver 或 D3D12。
 - 下一步：进入 Phase 7 PrepareFrame 性能归因。先拆稳定子指标并采集至少三轮重复样本，再做单一、低风险优化；不要同时启动 RenderGraph 或 parallel recording。
+
+### 2026-07-16：Phase 7 PrepareFrame 性能归因与低风险优化
+
+- 目标：在不破坏 GT/RT/RHI 所有权边界的前提下，把 Raster/Raytracing `PrepareFrame` 拆成可重复归因的稳定阶段，并只优化一个被数据证明的来源。
+- 指标：新增独立 `[ThreadingProfile][Prepare]`，覆盖同步与 RT 模式；拆分 window、scripting/test/UI hook、camera/test、config snapshot、scene update、Ray scene snapshot、UI composition/draw packet 和 other，同时记录 scene dirty、GPU update、geometry/snapshot build 与 UI workload。
+- 测量隔离：profile state 只在 `profile_logging=true` 时单独分配，默认关闭不取时钟、不加锁、不格式化、不分配，并避免与 RT frame state cache-line 伪共享；`phase7_profile_off` 为 `1/1 PASS` 且无 Prepare marker。
+- 工具口径：`run_matrix.py` 解析/聚合 Prepare 尾窗口并输出 JSON/Markdown；Prepare 使用自己的 `samples`。旧 RT 日志补 `prepare_samples/gt_wait_samples`，Prepare/Render/GT wait 各自按正确分母跨窗口加权；短 fault 场景不强制等待一秒 Prepare marker。
+- 优化前基线：`target/validation/rt_rhi/phase7_prepare_baseline` 为 `12/12 PASS`。三轮中位数 Raster sync/RT1 为 `0.554/0.526 ms`；Ray RT0/RT1 为 `25.170/25.180 ms`，其中 scene snapshot 约 `17 ms`、scene update 约 `7.6~7.7 ms`。
+- 根因：Ray 每帧无条件 Patch 同一主方向光与节点；`Scene::Patch` 无条件 MarkDirty，使每个 steady frame 都生成 Logical/CpuScene 更新、GPU update 与 geometry snapshot。
+- 单一优化：每帧仍从当前 Ray config 计算目标 Sun 值，但比较 Scene 中实际 `CLightDirectional/CNode` 后只在真实变化时 Patch。没有只缓存上一帧 config，因此外部场景修改仍会在下一帧被恢复；所有比较仍在 GT。
+- 优化后对照：`target/validation/rt_rhi/phase7_prepare_optimized` 为 `6/6 PASS`。RT0/RT1 三轮中位数降至 `17.890/18.013 ms`，分别下降约 `28.9%/28.5%`；scene update 降至 `0.037/0.035 ms`，steady dirty/update GPU/geometry 比例从 `100%` 降至 `0%`。
+- 剩余瓶颈：Ray scene snapshot 仍每帧构建，约 `17.1~17.8 ms`，成为最大阶段；其缓存/增量 invalidation 留给独立性能阶段，不混入 Phase 8。
+- MoerEngine 提交：`db76cfd6 perf(threading): 归因并优化 PrepareFrame`。
+- 构建与脚本：最终 `cmake --build build --config Debug --target MoerEditor --parallel 4`、`py_compile`、新旧聚合合成断言与 `git diff --check` 均 PASS。
+- 回归：最终 smoke `phase7_smoke_final` 为 `3/3 PASS`；显式 sync validation `phase7_syncval` 为 `1/1 PASS`；fault `phase7_fault` 为 `1/1 PASS`；full `phase7_full` 为 `9/9 PASS`、`262.4 s`、九个进程正常退出、最低非黑 `0.9475`。
+- 视觉结论：Raster/Raytracing Sponza 在最大化、resize、restore 与键盘输入后均正确，无黑屏、陈旧 framebuffer 或 swapchain 停滞；正常日志未匹配 assertion、VUID、unexpected device lost、submit failure、access violation 或 tracked resource residue。
+- 配置保护：根 `MoerEngine.toml` 未覆盖；所有矩阵继续从 tracked `template.MoerEngine.toml` 生成独立配置。
+- TechRecord 实施记录：`20_技术文档/引擎架构/MoerEngine/RT_RHI_Threading/13_Phase7_PrepareFrame性能归因与低风险优化.md`。
+- TechRecord 问题复盘：`30_问题复盘/BugFix/MoerEngine_RT_RHI_Phase7_无变化SunPatch与PrepareFrame更新放大复盘.md`。
+- TechRecord 提交：`0f30519 docs(threading): 记录 Phase 7 PrepareFrame 优化`。
+- 已知限制：固定场景已覆盖稳定值跳过路径，但尚无自动化用例修改 `sun_direction/exposure` 后断言“恰好一帧 dirty”；尚未覆盖 Clang/Ninja、Release、其他 GPU/driver 或 D3D12。
+- 下一步：进入 Phase 8 Raster RenderGraph 最小串行骨架，先建立 pass/resource declaration、旧路径回退与 off/on 对照；不要同时引入 snapshot cache 或 parallel recording。
