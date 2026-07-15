@@ -123,10 +123,12 @@ struct RaytracingRenderer::RuntimeState {
             ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED
         )),
         exported_file_path(ConfigManager::GetInstance().GetWorkspacePath() / "saved"),
-        prepare_light_pass(MakeUnique<PrepareLightPass>(renderer.device, renderer.manager, renderer.scene)),
-        g_buffer_pass(MakeUnique<GBufferPass>(renderer.device, renderer.manager, renderer.scene)),
-        lighting_pass(MakeUnique<LightingPass>(renderer.manager, renderer.scene)),
-        composition_pass(MakeUnique<CompositionPass>(renderer.device, renderer.manager, renderer.scene)),
+        prepare_light_pass(MakeUnique<PrepareLightPass>(renderer.manager, renderer.bindless_array)),
+        g_buffer_pass(MakeUnique<GBufferPass>(renderer.device, renderer.manager, renderer.bindless_array)),
+        lighting_pass(MakeUnique<LightingPass>(renderer.manager, renderer.bindless_array)),
+        composition_pass(
+            MakeUnique<CompositionPass>(renderer.device, renderer.manager, renderer.bindless_array)
+        ),
         visualize_pass(MakeUnique<VisualizePass>(renderer.device, renderer.manager)),
         rt_ctx(MakeUnique<RTContext>(shader_utils, importance_sampling_context, renderer.bindless_array)) {
         if (!std::filesystem::exists(exported_file_path)) {
@@ -141,8 +143,7 @@ struct RaytracingRenderer::RuntimeState {
             .resolved_color      = rt_ctx->frame_rt.resolved_color,
             .hdr_color           = rt_ctx->frame_rt.hdr_color
         };
-        antialias_pass =
-            MakeUnique<AntialiasPass>(renderer.device, renderer.manager, renderer.scene, antialias_pass_info);
+        antialias_pass = MakeUnique<AntialiasPass>(renderer.device, renderer.manager, antialias_pass_info);
 
 #if WITH_NRD
         nrd_plugin    = renderer.device.LoadPlugin<Ext::NRDPlugin>();
@@ -234,7 +235,8 @@ RaytracingRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, co
             });
         }
 
-        frame_packet.scene_updates = scene.PrepareUpdateBatch(false, capture_scene_geometry_snapshot);
+        frame_packet.scene_updates  = scene.PrepareUpdateBatch(false, capture_scene_geometry_snapshot);
+        frame_packet.scene_snapshot = CaptureRaytracingSceneFrameSnapshot(scene);
         if (frame_packet.scene_updates.geometry) {
             capture_scene_geometry_snapshot = false;
         }
@@ -362,7 +364,7 @@ void RaytracingRenderer::RenderFrame(RaytracingFramePacket frame_packet) {
         if (!state.tone_mapping_pass) {
             ToneMappingPass::CreateInfo info{};
             info.color_lut          = state.rt_ctx->default_res.black_tex;
-            state.tone_mapping_pass = MakeUnique<ToneMappingPass>(device, manager, scene, info);
+            state.tone_mapping_pass = MakeUnique<ToneMappingPass>(device, manager, info);
         }
 
         Camera& camera = frame_packet.scene_updates.main_camera;
@@ -452,24 +454,21 @@ void RaytracingRenderer::RenderFrame(RaytracingFramePacket frame_packet) {
         state.importance_sampling_context.TickFrame(time);
         state.visualize_config.visualize_mode = ui_config.final_color;
 
-        uint num_emissive_meshes, num_emissive_triangles;
-        state.prepare_light_pass->CountEmissiveInstances(num_emissive_meshes, num_emissive_triangles);
-
         static constexpr uint s_mesh_alloc_chunk      = 128;
         static constexpr uint s_triangle_alloc_chunk  = 1024;
         static constexpr uint s_primitive_alloc_chunk = 128;
-        const uint            max_primitives          = scene.GetCpuScene().GetPrimitiveCount();
+        const auto&           scene_snapshot          = frame_packet.scene_snapshot;
         state.rt_ctx->CreateBuffersIfNeeded(
-            (num_emissive_meshes + s_mesh_alloc_chunk - 1) & ~(s_mesh_alloc_chunk - 1),
-            (num_emissive_triangles + s_triangle_alloc_chunk - 1) & ~(s_triangle_alloc_chunk - 1),
-            (scene.GetCpuScene().GetLightCount() + s_primitive_alloc_chunk - 1) &
-                ~(s_primitive_alloc_chunk - 1),
-            max_primitives
+            (scene_snapshot.emissive_instance_count + s_mesh_alloc_chunk - 1) & ~(s_mesh_alloc_chunk - 1),
+            (scene_snapshot.emissive_triangle_count + s_triangle_alloc_chunk - 1) &
+                ~(s_triangle_alloc_chunk - 1),
+            (scene_snapshot.light_count + s_primitive_alloc_chunk - 1) & ~(s_primitive_alloc_chunk - 1),
+            scene_snapshot.primitive_count
         );
         cmd_list.UpdateBindlessArray(bindless_array);
 
         state.rt_ctx->Tick(camera, state.antialias_pass->GetPixelOffset());
-        state.prepare_light_pass->Process(cmd_list, *state.rt_ctx);
+        state.prepare_light_pass->Process(cmd_list, *state.rt_ctx, scene_snapshot);
         state.g_buffer_pass->Process(cmd_list, *state.rt_ctx);
         state.lighting_pass->Process(cmd_list, *state.rt_ctx);
 
@@ -762,7 +761,7 @@ void RaytracingRenderer::RecreateFrameResources(uint2 new_extent) {
     state.antialias_pass_info.feedback_color_pong = state.rt_ctx->frame_rt.feedback_color_pong;
     state.antialias_pass_info.resolved_color      = state.rt_ctx->frame_rt.resolved_color;
     state.antialias_pass_info.hdr_color           = state.rt_ctx->frame_rt.hdr_color;
-    state.antialias_pass   = MakeUnique<AntialiasPass>(device, manager, scene, state.antialias_pass_info);
+    state.antialias_pass   = MakeUnique<AntialiasPass>(device, manager, state.antialias_pass_info);
     state.b_feedback_valid = false;
 }
 

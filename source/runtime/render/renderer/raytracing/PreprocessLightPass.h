@@ -2,15 +2,12 @@
 #define MOER_PREPARE_LIGHTS_PASS_H
 
 #include "RTResource.h"
+#include "RaytracingSceneFrameSnapshot.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/lighting/ShaderParameters.h"
-
-namespace Moer {
-class Scene;
-}
 
 namespace Moer::Render::Raytracing {
 
@@ -29,19 +26,18 @@ public:
 };
 class PrepareLightPass {
 public:
-    PrepareLightPass(class RenderDevice& _device, class ShaderManager& _manager, Scene& _scene);
-    void Process(class CommandList& _cmd_list, RTContext& _rt_ctx);
-    void CountEmissiveInstances(uint& _num_emissive_meshes, uint& _num_emissive_triangles);
+    PrepareLightPass(class ShaderManager& manager, BindlessArrayRef bindless_array);
+    void Process(
+        class CommandList&                  cmd_list,
+        RTContext&                          rt_ctx,
+        const RaytracingSceneFrameSnapshot& scene_snapshot
+    );
 
 private:
-    class RenderDevice&  device;
-    class ShaderManager& manager;
-    Scene&               scene;
+    BindlessArrayRef bindless_array;
 
     UnorderedMap<uint64, uint> instance_light_buffer_offsets;
     UnorderedMap<uint64, uint> primitive_light_buffer_offsets;
-
-    BufferRef geom_instance_to_light_buf;
 
     PrepareLightShaderPipeline prepare_light_pipeline;
 

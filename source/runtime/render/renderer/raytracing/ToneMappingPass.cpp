@@ -11,17 +11,11 @@
 
 namespace Moer::Render::Raytracing {
 
-ToneMappingPass::ToneMappingPass(
-    RenderDevice&  _device,
-    ShaderManager& _manager,
-    Scene&         _scene,
-    CreateInfo     _info
-) :
+ToneMappingPass::ToneMappingPass(RenderDevice& _device, ShaderManager& _manager, CreateInfo _info) :
     device(_device),
     manager(_manager),
     histogram_pipeline{manager.Compute<HistogramPipeline>("pipelines/raytracing/postprocess/Histogram.hlsl")},
-    exposure_pipeline{manager.Compute<ExposurePipeline>("pipelines/raytracing/postprocess/Exposure.hlsl")},
-    scene(_scene) {
+    exposure_pipeline{manager.Compute<ExposurePipeline>("pipelines/raytracing/postprocess/Exposure.hlsl")} {
 
     VertexStream     stream{};
     GfxPsoCreateInfo pso_info(
@@ -40,7 +34,9 @@ ToneMappingPass::ToneMappingPass(
         "tone_mapping_constants2", sizeof(ToneMappingParams), EBufferUsageFlags::CONSTANT_BUFFER
     );
     histogram_buffer = device.CreateBuffer<uint>(
-        "histogram_buffer", _info.histogram_bins, EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TEXTURE_BUFFER
+        "histogram_buffer",
+        _info.histogram_bins,
+        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TEXTURE_BUFFER
     );
     histogram_buffer->SetName("histogram_buffer");
     exposure_buffer = device.CreateBuffer<uint>(

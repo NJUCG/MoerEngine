@@ -3,11 +3,7 @@
 #include "RTResource.h"
 #include "rhi/RHI.h"
 #include "shader/ShaderPipeline.h"
-namespace Moer {
-
-class Scene;
-
-namespace Render::Raytracing {
+namespace Moer::Render::Raytracing {
 
 #define DI_BINDINGS()                               \
     DEFINE_SHADER_TLAS(tlas);                       \
@@ -106,12 +102,12 @@ public:
 
 class LightingPass {
 public:
-    LightingPass(class ShaderManager& _manager, Scene& _scene);
+    LightingPass(class ShaderManager& manager, BindlessArrayRef bindless_array);
 
     void Process(CommandList& _cmd_list, RTContext& _rt_ctx);
 
 private:
-    Scene& scene;
+    BindlessArrayRef bindless_array;
 
     ResampleConstants constants;
     Array<byte>       upload_data;
@@ -129,8 +125,6 @@ private:
     BufferRef resample_params;
 };
 
-} // namespace Render::Raytracing
-
-} // namespace Moer
+} // namespace Moer::Render::Raytracing
 
 #endif

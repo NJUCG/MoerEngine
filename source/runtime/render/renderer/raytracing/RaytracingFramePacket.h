@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RaytracingConfig.h"
+#include "RaytracingSceneFrameSnapshot.h"
 #include "renderer/Renderer.h"
 
 namespace Moer::Render::Raytracing {
@@ -15,11 +16,12 @@ struct RaytracingFramePacket {
 
     uint64 frame_id = 0;
 
-    Renderer::WindowFrameState window{};
-    RaytracingConfig           config{};
-    CameraFrameInput           camera_input{};
-    SceneUpdateBatch           scene_updates{};
-    bool                       runtime_assets_ready = false;
+    Renderer::WindowFrameState   window{};
+    RaytracingConfig             config{};
+    CameraFrameInput             camera_input{};
+    SceneUpdateBatch             scene_updates{};
+    RaytracingSceneFrameSnapshot scene_snapshot{};
+    bool                         runtime_assets_ready = false;
 
     UiCompositionFrameData ui_composition{};
     UiDrawFramePacket      ui_draw_frame{};

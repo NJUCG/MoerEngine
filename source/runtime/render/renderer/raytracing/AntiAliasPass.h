@@ -40,7 +40,7 @@ public:
         TextureRef hdr_color;
     };
 
-    AntialiasPass(RenderDevice& _device, class ShaderManager& _manager, Scene& _scene, CreateInfo _info);
+    AntialiasPass(RenderDevice& device, class ShaderManager& manager, CreateInfo info);
 
     void Process(
         CommandList& _cmd_list,
@@ -55,9 +55,7 @@ public:
     float2 GetPixelOffset();
 
 private:
-private:
     ShaderManager& manager;
-    Scene&         scene;
     TAAPipeline    taa_pipeline;
 
     uint    frame_idx   = 0;

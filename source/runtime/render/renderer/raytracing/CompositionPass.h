@@ -5,12 +5,6 @@
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 
-namespace Moer {
-
-class Scene;
-
-}
-
 namespace Moer::Render::Raytracing {
 
 class CompositionPassPipeline : public ComputePipeline {
@@ -58,13 +52,17 @@ public:
 
 class CompositionPass {
 public:
-    CompositionPass(class RenderDevice& _device, class ShaderManager& _manager, Scene& _scene);
+    CompositionPass(
+        class RenderDevice&  device,
+        class ShaderManager& manager,
+        BindlessArrayRef     bindless_array
+    );
     void Process(class CommandList& _cmd_list, RTContext& _rt_ctx);
 
 private:
     class RenderDevice&  device;
     class ShaderManager& manager;
-    Scene&               scene;
+    BindlessArrayRef     bindless_array;
 
     BufferRef            gbuffer_constants;
     CompositingConstants constants{};

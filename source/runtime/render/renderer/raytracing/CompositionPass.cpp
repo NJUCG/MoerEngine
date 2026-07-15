@@ -6,10 +6,14 @@
 
 namespace Moer::Render::Raytracing {
 
-CompositionPass::CompositionPass(RenderDevice& _device, ShaderManager& _manager, Scene& _scene) :
-    device(_device),
-    manager(_manager),
-    scene(_scene) {
+CompositionPass::CompositionPass(
+    RenderDevice&    device,
+    ShaderManager&   manager,
+    BindlessArrayRef bindless_array
+) :
+    device(device),
+    manager(manager),
+    bindless_array(std::move(bindless_array)) {
 
     int with_nrd = WITH_NRD;
 #pragma push_macro("WITH_NRD")
@@ -65,7 +69,7 @@ void CompositionPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
             _rt_ctx.frame_rt.diffuse_lighting,
             _rt_ctx.frame_rt.specular_lighting,
 #endif
-            scene.GetBindlessArray()
+            bindless_array
         )
         .Dispatch(
             uint3(ceil(constants.main_view.rect.x / 8), ceil(constants.main_view.rect.y / 8), 1),
