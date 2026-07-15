@@ -5,6 +5,8 @@
 > 当前功能开发冻结在 **Phase 5 完成点**。在原电脑上，除了补充本文件并推送分支，不再继续实现下一阶段功能。
 >
 > 换机后，请让 Agent 先完整阅读本文件、仓库根目录 `AGENTS.md` 和 `tools/threading/README.md`，再执行“换机接管流程”。不要只截取“下一步”一节，否则容易丢失已经建立的线程与资源所有权约束。
+>
+> `MoerEngine` 与 `TechRecord` 是本任务的两个必选仓库。每个阶段必须同时交付代码/分支记录和 TechRecord 改进记录；只更新其中一个仓库不能标记阶段完整完成。
 
 ---
 
@@ -21,9 +23,10 @@
 5. 如果用户同时明确说“继续实现”，也要先完成换机基线复现；基线失败时先定位环境或回归原因，不得把失败状态直接带入下一阶段。
 6. 每个阶段都执行小步 `编辑 -> 构建 -> 运行 -> 多配置观察 -> 日志扫描 -> 阶段提交`，并在阶段边界停止汇报。
 7. 用户特别要求阶段性成果分阶段提交。只暂存本阶段自己的文件，不得夹带用户的其他工作区变更。
-8. 不得强推、重写当前分支历史或随意 rebase。若未来 `main` 已前进，先完成当前分支基线，再单独评估合并策略。
-9. 不得为了“消除报错”删除断言、忽略 Vulkan 返回值或放宽验证脚本。必须分析首个失效点。
-10. 视觉判断要区分“窗口未展开”和“渲染错误”。此前用户已经确认过一次截图只是窗口尺寸不同，画面渲染本身正确。
+8. 每个阶段都必须把架构决策、实现结果、验证证据、问题复盘和剩余 TODO 同步到 TechRecord，单独提交并推送 TechRecord 当前分支。
+9. 不得强推、重写当前分支历史或随意 rebase。若未来 `main` 已前进，先完成当前分支基线，再单独评估合并策略。
+10. 不得为了“消除报错”删除断言、忽略 Vulkan 返回值或放宽验证脚本。必须分析首个失效点。
+11. 视觉判断要区分“窗口未展开”和“渲染错误”。此前用户已经确认过一次截图只是窗口尺寸不同，画面渲染本身正确。
 
 ---
 
@@ -59,21 +62,50 @@ M  CMakeLists.txt
 
 换机后远端分支没有这些内容是正常现象。不要根据本文件重建或伪造它们，也不要把它们误判为“丢失的功能代码”。
 
-### 2.3 可选外部 TechRecord
+### 2.3 必选 TechRecord 仓库
 
-原电脑另有独立仓库：
+TechRecord 是本任务的第二个必选交付仓库，不是可选参考资料：
 
 ```text
-D:\Other_Files\TechRecord
+Repository: https://github.com/Irk2wd/TechRecord.git
+Expected local path: D:\Other_Files\TechRecord
+Branch: main
 ```
 
-其中 RT/RHI 实施记录位于：
+换机后必须先确认该仓库已存在并同步到远端最新状态。若本地路径不同，可以使用实际 clone 路径，但不能跳过 TechRecord 阶段记录。
+
+RT/RHI 总路线与实施记录位于：
 
 ```text
 20_技术文档/引擎架构/MoerEngine/RT_RHI_Threading/
 ```
 
-Phase 5 文档提交为 `71b10ed`。换机后若没有这个独立仓库，不构成阻塞；本文件必须被视为分支内的自包含交接依据。
+问题或回归复盘位于：
+
+```text
+30_问题复盘/BugFix/
+```
+
+每个阶段结束前必须完成：
+
+1. 阅读 `00_调研与初步方向.md` 和最新一篇阶段实施记录。
+2. 在 `RT_RHI_Threading/` 中继续编号，新建或更新本阶段中文实施记录。
+3. 将本阶段完成状态、MoerEngine commit 和实施记录链接追加到 `00_调研与初步方向.md`。
+4. 若本阶段发现崩溃、断言、竞态、资源泄漏、性能回归或容易复发的坑，在 `30_问题复盘/BugFix/` 新建或更新专项复盘。
+5. 记录真实改动范围、架构决策、被否决方案、构建命令、运行矩阵、视觉结论、日志证据、性能数据、已知限制和下一步。
+6. 只记录可长期复用的知识，不把大段临时控制台输出、截图或本机缓存提交到 TechRecord。
+7. 在 TechRecord 仓库只暂存本阶段自己的文档，执行 diff 检查、提交并推送其当前分支。
+8. 最终汇报必须同时给出 MoerEngine 与 TechRecord 的 commit、远端分支和推送结果。
+
+若 TechRecord 暂时不可访问、认证失败或存在无法安全合并的冲突，必须明确报告该阶段“文档交付未完成”，继续处理同步问题；不得静默跳过，也不得仅更新本文件代替 TechRecord。
+
+Phase 5 已同步的基线记录：
+
+```text
+TechRecord commit: 71b10ed
+20_技术文档/引擎架构/MoerEngine/RT_RHI_Threading/10_Phase5稳定性回归与线程性能基线.md
+30_问题复盘/BugFix/MoerEngine_RT_RHI_Phase5_描述符环复用与Present二次断言复盘.md
+```
 
 ---
 
@@ -649,7 +681,7 @@ graphics timeline 同时为 Execute 和 Present 递增，但 Present 不消费 r
 
 ## 10. 换机接管流程
 
-### 10.1 获取分支
+### 10.1 获取 MoerEngine 分支
 
 新 clone：
 
@@ -663,30 +695,69 @@ git submodule update --init --recursive
 已有 clone：
 
 ```powershell
+git status --short --branch
 git fetch origin
 git switch feature/rt-rhi-threading
 git pull --ff-only origin feature/rt-rhi-threading
 git submodule update --init --recursive
 ```
 
-### 10.2 身份核对
+### 10.2 获取并同步 TechRecord
+
+新 clone：
 
 ```powershell
+git clone https://github.com/Irk2wd/TechRecord.git D:\Other_Files\TechRecord
+Set-Location D:\Other_Files\TechRecord
+git switch main
+git pull --ff-only origin main
+```
+
+已有 clone：
+
+```powershell
+Set-Location D:\Other_Files\TechRecord
+git status --short --branch
+git fetch origin
+git switch main
+git pull --ff-only origin main
+```
+
+如果 TechRecord 已有用户工作区修改，不得为了 pull 而 reset 或 checkout。先运行 `git status`，识别并保护修改；必要时在不丢失用户内容的前提下解决同步问题。
+
+### 10.3 两个仓库身份核对
+
+MoerEngine：
+
+```powershell
+Set-Location <MoerEngine路径>
 git status --short --branch
 git merge-base --is-ancestor d016d1d8f5f96a8909bc8bfdaa6468e9810ad6a5 HEAD
 git log --oneline --decorate d016d1d8f5f96a8909bc8bfdaa6468e9810ad6a5..HEAD
 git show --stat f55c016e
 ```
 
+TechRecord：
+
+```powershell
+Set-Location <TechRecord路径>
+git status --short --branch
+git log -5 --oneline --decorate
+Test-Path '20_技术文档\引擎架构\MoerEngine\RT_RHI_Threading\10_Phase5稳定性回归与线程性能基线.md'
+Test-Path '30_问题复盘\BugFix\MoerEngine_RT_RHI_Phase5_描述符环复用与Present二次断言复盘.md'
+```
+
 预期：
 
 - 当前分支是 `feature/rt-rhi-threading`。
 - `f55c016e` 存在且是交接文档之前的功能冻结点。
-- 工作区在开始新任务前干净；若不干净，先识别并保护用户改动。
+- TechRecord 当前分支是 `main`，Phase 5 两篇记录存在。
+- 两个工作区在开始新任务前都已核对；若不干净，先识别并保护用户改动。
 
-### 10.3 必读文件
+### 10.4 必读文件
 
 ```text
+# MoerEngine
 AGENTS.md
 MoerEngine.toml
 docs/GeneratedByAI/260716-RT_RHI线程重构续作Agent提示词.md
@@ -695,9 +766,14 @@ source/runtime/Engine.cpp
 source/runtime/render/RenderThread.h
 source/runtime/render/rhi/vulkan/VulkanQueue.h
 source/runtime/render/rhi/vulkan/VulkanQueue.cpp
+
+# TechRecord
+20_技术文档/引擎架构/MoerEngine/RT_RHI_Threading/00_调研与初步方向.md
+20_技术文档/引擎架构/MoerEngine/RT_RHI_Threading/10_Phase5稳定性回归与线程性能基线.md
+30_问题复盘/BugFix/MoerEngine_RT_RHI_Phase5_描述符环复用与Present二次断言复盘.md
 ```
 
-### 10.4 基线执行
+### 10.5 基线执行
 
 ```powershell
 just b
@@ -708,7 +784,7 @@ python tools\threading\run_matrix.py --set full --continue-on-failure
 
 若没有 `just`，按 `docs/BUILD.md` 配置后执行等价构建。
 
-### 10.5 基线失败时
+### 10.6 基线失败时
 
 按以下顺序排查：
 
@@ -769,11 +845,11 @@ python tools\threading\run_matrix.py --set full --continue-on-failure
 
 ---
 
-## 12. 阶段开发与提交标准
+## 12. 阶段开发、双仓库记录与提交标准
 
 每个新阶段必须执行：
 
-1. `git status`，保护用户现有变更。
+1. 在 MoerEngine 和 TechRecord 分别执行 `git status`，保护两个仓库的用户现有变更。
 2. 写出该阶段目标、触点、风险和验收标准。
 3. 小步编辑，不混入无关重构。
 4. 优先 `just b`，否则使用等价 CMake 构建。
@@ -782,9 +858,13 @@ python tools\threading\run_matrix.py --set full --continue-on-failure
 7. 扫描 assertion、VUID、device lost、submit failure 和资源残留。
 8. 视觉检查主窗口和平台 viewport，不能只依赖 exit code。
 9. 运行 `git diff --check` 和脚本语法检查。
-10. 只暂存自己的文件，创建中文语义清楚的阶段提交。
-11. 更新本文件“进度追加区”，记录 commit、构建、运行证据和下一步。
-12. 推送当前 feature branch，不直接推送 main。
+10. 在 MoerEngine 只暂存自己的功能和验证文件，创建中文语义清楚的阶段提交。
+11. 更新本文件“进度追加区”，记录 MoerEngine commit、构建、运行证据、TechRecord 路径和下一步。
+12. 在 TechRecord 新增或更新阶段实施记录，并更新 `00_调研与初步方向.md`；发现 bug/regression 时同步更新 `30_问题复盘/BugFix/`。
+13. TechRecord 记录必须引用准确的 MoerEngine commit，并包含架构决策、验证证据、性能观察、已知限制和剩余 TODO。
+14. 在 TechRecord 只暂存本阶段自己的文档，执行 `git diff --cached --check`，提交并推送 TechRecord 当前分支。
+15. 推送 MoerEngine 当前 feature branch，不直接推送 MoerEngine main。
+16. 用远端 hash 核对两个仓库均已推送；只有两个仓库都完成远端交付，阶段才算完整完成。
 
 禁止事项：
 
@@ -796,6 +876,8 @@ python tools\threading\run_matrix.py --set full --continue-on-failure
 - 不要把 raw pointer 扫描包装成通用资源保活。
 - 不要恢复 `_timeline % 3` descriptor 选槽。
 - 不要因为最后出现 Present 断言就把交换链当作首故障。
+- 不要用本文件的“进度追加区”代替 TechRecord 正式实施记录和 BugFix 复盘。
+- 不要把 TechRecord 中其他人的索引、assets 或研究资料顺带暂存到当前阶段提交。
 
 ---
 
@@ -804,13 +886,15 @@ python tools\threading\run_matrix.py --set full --continue-on-failure
 第一次接手时，回复至少包含以下内容：
 
 ```text
-1. 已确认仓库、分支、base commit 和功能冻结点。
-2. 当前工作区是否干净；若不干净，哪些属于用户变更。
-3. Phase 0-5 已完成目标的简要确认。
-4. 尚未完成：跨机基线、device-fault latch、PrepareFrame 归因、RenderGraph、并行录制、更多 queue/backend。
-5. 本机将使用的编译器、构建配置和 GPU/driver。
-6. 先执行 build + smoke + full matrix；基线通过后再开始 Phase 6.1。
-7. 如果用户尚未明确授权继续开发，在这里停止并等待，不修改功能代码。
+1. 已确认 MoerEngine 与 TechRecord 两个仓库、各自分支和远端同步状态。
+2. 已确认 MoerEngine base commit、功能冻结点，以及 TechRecord Phase 5 实施记录和 BugFix 复盘存在。
+3. 两个工作区是否干净；若不干净，哪些属于用户变更。
+4. Phase 0-5 已完成目标的简要确认。
+5. 尚未完成：跨机基线、device-fault latch、PrepareFrame 归因、RenderGraph、并行录制、更多 queue/backend。
+6. 本机将使用的编译器、构建配置和 GPU/driver。
+7. 先执行 build + smoke + full matrix；基线通过后再开始 Phase 6.1。
+8. 已确认每个阶段都要同步更新、提交和推送 TechRecord，这是必选 Definition of Done。
+9. 如果用户尚未明确授权继续开发，在这里停止并等待，不修改功能代码。
 ```
 
 ---
@@ -824,11 +908,15 @@ python tools\threading\run_matrix.py --set full --continue-on-failure
 
 - 目标：
 - 主要改动：
-- 提交：`<hash> <message>`
+- MoerEngine 提交：`<hash> <message>`
 - 构建：
 - 运行矩阵：
 - 视觉结论：
 - 错误扫描：
+- TechRecord 实施记录：`<path>`
+- TechRecord 问题复盘：`<path 或 无>`
+- TechRecord 提交：`<hash> <message>`
+- 双仓库推送：
 - 已知限制：
 - 下一步：
 ```
@@ -843,6 +931,9 @@ python tools\threading\run_matrix.py --set full --continue-on-failure
 - 完整矩阵：`9/9 PASS`，九个进程正常退出。
 - 视觉结论：Raster/Raytracing Sponza 场景正确；此前差异来自窗口未展开，不是渲染错误。
 - 错误扫描：assertion、VUID、device lost、submit failure、access violation、资源残留均为 0。
+- TechRecord 实施记录：`20_技术文档/引擎架构/MoerEngine/RT_RHI_Threading/10_Phase5稳定性回归与线程性能基线.md`。
+- TechRecord 问题复盘：`30_问题复盘/BugFix/MoerEngine_RT_RHI_Phase5_描述符环复用与Present二次断言复盘.md`。
+- TechRecord 提交：`71b10ed docs(threading): 记录 Phase 5 稳定性与性能基线`，已同步到 `origin/main`。
 - 默认配置：同步 Raster。
 - 当前状态：停止继续开发，等待换机后先执行 Phase 6.0 基线复现。
 - 下一步：基线通过并获得用户授权后，独立实施 Phase 6.1 device-fault latch；不要直接跳到 RenderGraph。
