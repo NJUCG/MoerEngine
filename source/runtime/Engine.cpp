@@ -209,37 +209,49 @@ void Engine::Run(const EngineHooks& hooks) {
             }
         };
 
-        const bool use_synchronized_render_thread =
-            m_render_thread_service && selected_render_method == ERenderMethod::Raster;
+        const bool use_synchronized_render_thread = m_render_thread_service != nullptr;
 
         if (use_synchronized_render_thread) {
             m_render_thread_service->RunAndWait(std::move(create_renderer));
             assert(m_renderer && m_renderer->SupportsSynchronizedRenderThread());
-            auto* raster_renderer = static_cast<Raster::RasterRenderer*>(m_renderer.get());
 
-            while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
-                auto frame_packet = raster_renderer->PrepareFrame(m_editor_config, runtime_hooks);
-                m_render_thread_service->RunAndWait(
-                    [raster_renderer, frame_packet = std::move(frame_packet)]() mutable {
+            if (selected_render_method == ERenderMethod::Raster) {
+                auto* raster_renderer = static_cast<Raster::RasterRenderer*>(m_renderer.get());
+                while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
+                    auto frame_packet = raster_renderer->PrepareFrame(m_editor_config, runtime_hooks);
+                    m_render_thread_service->RunAndWait([raster_renderer,
+                                                         frame_packet = std::move(frame_packet)]() mutable {
                         assert(IsCurrentlyRenderThread());
                         raster_renderer->RenderFrame(std::move(frame_packet));
+                    });
+                    raster_renderer->ApplyFrameFeedback(m_editor_config->raster_config);
+
+                    if (runtime_hooks.on_is_need_reload && runtime_hooks.on_is_need_reload()) {
+                        break;
                     }
-                );
-                raster_renderer->ApplyFrameFeedback(m_editor_config->raster_config);
-
-                if (runtime_hooks.on_is_need_reload && runtime_hooks.on_is_need_reload()) {
-                    break;
                 }
-            }
 
+            } else if (selected_render_method == ERenderMethod::Raytracing) {
+                auto* raytracing_renderer = static_cast<Raytracing::RaytracingRenderer*>(m_renderer.get());
+                while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
+                    auto frame_packet = raytracing_renderer->PrepareFrame(m_editor_config, runtime_hooks);
+                    m_render_thread_service->RunAndWait([raytracing_renderer,
+                                                         frame_packet = std::move(frame_packet)]() mutable {
+                        assert(IsCurrentlyRenderThread());
+                        raytracing_renderer->RenderFrame(std::move(frame_packet));
+                    });
+                    raytracing_renderer->ApplyFrameFeedback(m_editor_config->raytracing_config);
+
+                    if (runtime_hooks.on_is_need_reload && runtime_hooks.on_is_need_reload()) {
+                        break;
+                    }
+                }
+                raytracing_renderer->Shutdown(runtime_hooks);
+
+            } else {
+                assert(false && "Unknown render method");
+            }
         } else {
-            if (m_render_thread_service && selected_render_method == ERenderMethod::Raytracing) {
-                LOG_WARNING(
-                    "[Threading] Raytracing pass scene reads are not migrated yet; consuming "
-                    "RaytracingFramePacket on the Game Thread."
-                );
-            }
-
             create_renderer();
             if (selected_render_method == ERenderMethod::Raytracing) {
                 auto* raytracing_renderer =

@@ -79,12 +79,8 @@ struct RaytracingRenderer::RuntimeState {
 
     Timer timer;
 
-    bool        b_feedback_valid               = false;
-    bool        b_export                       = false;
-    std::string selected_material_texture_name = "";
-    bool        b_final_show_texture           = false;
-    bool        b_use_bindless                 = true;
-    uint        mip_level                      = 0;
+    bool b_feedback_valid = false;
+    bool b_export         = false;
 
     std::filesystem::path exported_file_path;
 
@@ -171,7 +167,8 @@ RaytracingRenderer::RaytracingRenderer(
     runtime_state(MakeUnique<RuntimeState>(*this)) {}
 
 RaytracingRenderer::~RaytracingRenderer() {
-    LOG_INFO("[Threading] RaytracingRenderer destruction started on Game Thread.");
+    const char* thread_name = IsCurrentlyRenderThread() ? "Render" : "Game";
+    LOG_INFO("[Threading] RaytracingRenderer destruction started on {} Thread.", thread_name);
 
     if (runtime_state && runtime_state->rt_ctx) {
         for (const uint buffer : runtime_state->rt_ctx->GetAllocatedBdlsBuf()) {
@@ -183,7 +180,7 @@ RaytracingRenderer::~RaytracingRenderer() {
     }
 
     ReleaseResources();
-    LOG_INFO("[Threading] RaytracingRenderer destruction finished on Game Thread.");
+    LOG_INFO("[Threading] RaytracingRenderer destruction finished on {} Thread.", thread_name);
 }
 
 void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
@@ -221,6 +218,7 @@ RaytracingRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, co
     frame_packet.config               = editor_config->raytracing_config;
     frame_packet.camera_input         = CameraFrameInput::Capture(*editor_config);
     frame_packet.runtime_assets_ready = runtime_assets.IsReady();
+    frame_packet.debug_input          = debug_ui_frame_input;
 
     if (scene.IsReady() && frame_packet.runtime_assets_ready) {
         const auto light_entity = scene.GetMainDirectionalLightEntity();
@@ -267,11 +265,20 @@ RaytracingRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, co
 }
 
 void RaytracingRenderer::RenderFrame(RaytracingFramePacket frame_packet) {
-    assert(IsCurrentlyGameThread());
+    assert(!IsRenderThreadInitialized() || IsCurrentlyRenderThread());
     assert(runtime_state);
 
     auto& state     = *runtime_state;
     auto& ui_config = frame_packet.config;
+
+    if (frame_packet.frame_id == 0) {
+        const uint32_t frame_thread_id = IsCurrentlyRenderThread() ? GetRenderThreadId() : GetGameThreadId();
+        LOG_INFO(
+            "[Threading] Raytracing frames execute on {} thread id = {}",
+            IsCurrentlyRenderThread() ? "Render" : "Game",
+            frame_thread_id
+        );
+    }
 
     PrepareRenderFrame(frame_packet.window);
     bool skip_present = false;
@@ -540,15 +547,16 @@ void RaytracingRenderer::RenderFrame(RaytracingFramePacket frame_packet) {
         );
         state.visualize_pass->Process(cmd_list, *state.rt_ctx, state.visualize_config, bindless_array);
 
-        if (state.b_final_show_texture &&
-            state.material_textures.contains(state.selected_material_texture_name)) {
-            TextureRef        texture = state.material_textures[state.selected_material_texture_name].tex;
+        const auto& debug_input = frame_packet.debug_input;
+        if (debug_input.show_final_texture &&
+            state.material_textures.contains(debug_input.selected_material_texture_name)) {
+            TextureRef texture = state.material_textures[debug_input.selected_material_texture_name].tex;
             ShowTextureParams show_texture_params{};
             show_texture_params.dst_dim = resolution;
             show_texture_params.bdls_handle =
-                state.material_textures[state.selected_material_texture_name].hdl;
-            show_texture_params.mip_level    = state.mip_level;
-            show_texture_params.use_bindless = state.b_use_bindless;
+                state.material_textures[debug_input.selected_material_texture_name].hdl;
+            show_texture_params.mip_level    = static_cast<uint>(debug_input.mip_level);
+            show_texture_params.use_bindless = debug_input.use_bindless;
             state.shader_utils.ShowTexture(
                 cmd_list, bindless_array, show_texture_params, texture, state.rt_ctx->frame_rt.ldr_color
             );
@@ -578,8 +586,9 @@ void RaytracingRenderer::RenderFrame(RaytracingFramePacket frame_packet) {
         feedback.main_camera     = camera;
     }
 
-    const TextureRef final_color =
-        state.b_final_show_texture ? state.rt_ctx->frame_rt.ldr_color : state.rt_ctx->frame_rt.debug_color;
+    const TextureRef final_color = frame_packet.debug_input.show_final_texture ?
+                                       state.rt_ctx->frame_rt.ldr_color :
+                                       state.rt_ctx->frame_rt.debug_color;
 
     if (frame_packet.ui_composition.enabled) {
         const auto& ui_frame = frame_packet.ui_composition;
@@ -608,9 +617,9 @@ void RaytracingRenderer::RenderFrame(RaytracingFramePacket frame_packet) {
         );
     }
 
-    RenderUiDrawFrame(
-        cmd_list, state.output->GetView(), frame_packet.ui_draw_frame, EUiDrawExecutionThread::Game
-    );
+    const auto ui_execution_thread =
+        IsCurrentlyRenderThread() ? EUiDrawExecutionThread::Render : EUiDrawExecutionThread::Game;
+    RenderUiDrawFrame(cmd_list, state.output->GetView(), frame_packet.ui_draw_frame, ui_execution_thread);
 
     if (state.rt_scene) {
         state.rt_scene->AdvanceFrame();
@@ -620,14 +629,19 @@ void RaytracingRenderer::RenderFrame(RaytracingFramePacket frame_packet) {
     gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources().TickProfiling());
     if (!skip_present) {
         gfx_queue.Present(swapchain, state.output);
-        PresentUiDrawFrame(frame_packet.ui_draw_frame, EUiDrawExecutionThread::Game);
+        PresentUiDrawFrame(frame_packet.ui_draw_frame, ui_execution_thread);
     }
 
+    feedback.profiler_data = gfx_queue.GetProfilerEntry();
+    feedback.material_texture_names.reserve(state.material_textures.size());
+    for (const auto& entry : state.material_textures) {
+        feedback.material_texture_names.emplace_back(entry.first);
+    }
     latest_frame_feedback = std::move(feedback);
 }
 
 void RaytracingRenderer::ApplyFrameFeedback(RaytracingConfig& target_config) {
-    assert(IsCurrentlyGameThread());
+    assert(!IsRenderThreadInitialized() || IsCurrentlyGameThread());
     if (!latest_frame_feedback) {
         return;
     }
@@ -641,6 +655,8 @@ void RaytracingRenderer::ApplyFrameFeedback(RaytracingConfig& target_config) {
     if (latest_frame_feedback->has_main_camera && scene.IsReady()) {
         scene.GetMainCamera().camera = latest_frame_feedback->main_camera;
     }
+    debug_ui_profiler_data          = std::move(latest_frame_feedback->profiler_data);
+    debug_ui_material_texture_names = std::move(latest_frame_feedback->material_texture_names);
     latest_frame_feedback.reset();
 }
 
@@ -666,21 +682,21 @@ void RaytracingRenderer::EnsureDebugUiRegistered(const EngineHooks& hooks) {
 
     hooks.on_register_ui_func("Display MaterialTexture", [this]() {
         assert(IsCurrentlyGameThread());
-        auto& state = *runtime_state;
+        auto& debug_input = debug_ui_frame_input;
 
-        ImGui::Checkbox("Show Final Texture", &state.b_final_show_texture);
-        ImGui::SliderInt("Mip Level", reinterpret_cast<int*>(&state.mip_level), 0, 12);
-        ImGui::Checkbox("Use Bindless", &state.b_use_bindless);
+        ImGui::Checkbox("Show Final Texture", &debug_input.show_final_texture);
+        ImGui::SliderInt("Mip Level", &debug_input.mip_level, 0, 12);
+        ImGui::Checkbox("Use Bindless", &debug_input.use_bindless);
         if (ImGui::TreeNode("MaterialTexture")) {
-            for (auto& [name, texture] : state.material_textures) {
-                if (ImGui::Selectable(name.data(), state.selected_material_texture_name == name)) {
-                    state.selected_material_texture_name = name;
+            for (const auto& name : debug_ui_material_texture_names) {
+                if (ImGui::Selectable(name.data(), debug_input.selected_material_texture_name == name)) {
+                    debug_input.selected_material_texture_name = name;
                 }
             }
             ImGui::TreePop();
         }
 
-        const auto entries = gfx_queue.GetProfilerEntry();
+        const auto& entries = debug_ui_profiler_data;
         if (!entries.cpu_entries.empty()) {
             ImGui::Text("CPU Time:");
             for (const auto& [name, duration] : entries.cpu_entries) {

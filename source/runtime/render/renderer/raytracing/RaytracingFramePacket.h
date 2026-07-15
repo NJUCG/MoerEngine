@@ -3,8 +3,16 @@
 #include "RaytracingConfig.h"
 #include "RaytracingSceneFrameSnapshot.h"
 #include "renderer/Renderer.h"
+#include "rhi/RHICommand.h"
 
 namespace Moer::Render::Raytracing {
+
+struct RaytracingDebugFrameInput {
+    bool        show_final_texture = false;
+    bool        use_bindless       = true;
+    int         mip_level          = 0;
+    std::string selected_material_texture_name;
+};
 
 struct RaytracingFramePacket {
     RaytracingFramePacket() = default;
@@ -22,6 +30,7 @@ struct RaytracingFramePacket {
     SceneUpdateBatch             scene_updates{};
     RaytracingSceneFrameSnapshot scene_snapshot{};
     bool                         runtime_assets_ready = false;
+    RaytracingDebugFrameInput    debug_input{};
 
     UiCompositionFrameData ui_composition{};
     UiDrawFramePacket      ui_draw_frame{};
@@ -37,6 +46,9 @@ struct RaytracingFrameFeedback {
     float grid_cell_size     = 1.0f;
 
     bool export_consumed = false;
+
+    ProfileData        profiler_data{};
+    Array<std::string> material_texture_names;
 };
 
 } // namespace Moer::Render::Raytracing

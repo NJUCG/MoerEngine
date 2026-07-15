@@ -27,6 +27,10 @@ public:
 
     virtual void Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) override;
 
+    bool SupportsSynchronizedRenderThread() const override {
+        return true;
+    }
+
     RaytracingFramePacket PrepareFrame(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks);
     void                  RenderFrame(RaytracingFramePacket frame_packet);
     void                  ApplyFrameFeedback(RaytracingConfig& target_config);
@@ -41,6 +45,9 @@ private:
     UniquePtr<RuntimeState> runtime_state;
 
     std::optional<RaytracingFrameFeedback> latest_frame_feedback;
+    RaytracingDebugFrameInput              debug_ui_frame_input{};
+    ProfileData                            debug_ui_profiler_data{};
+    Array<std::string>                     debug_ui_material_texture_names;
     uint64                                 next_frame_id                   = 0;
     bool                                   capture_scene_geometry_snapshot = true;
     bool                                   debug_ui_registered             = false;
