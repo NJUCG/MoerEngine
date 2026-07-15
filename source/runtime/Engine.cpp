@@ -235,12 +235,29 @@ void Engine::Run(const EngineHooks& hooks) {
         } else {
             if (m_render_thread_service && selected_render_method == ERenderMethod::Raytracing) {
                 LOG_WARNING(
-                    "[Threading] Raytracing single-frame state is not migrated yet; using the synchronous path."
+                    "[Threading] Raytracing pass scene reads are not migrated yet; consuming "
+                    "RaytracingFramePacket on the Game Thread."
                 );
             }
 
             create_renderer();
-            m_renderer->Run(m_editor_config, runtime_hooks);
+            if (selected_render_method == ERenderMethod::Raytracing) {
+                auto* raytracing_renderer =
+                    static_cast<Raytracing::RaytracingRenderer*>(m_renderer.get());
+                while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
+                    auto frame_packet =
+                        raytracing_renderer->PrepareFrame(m_editor_config, runtime_hooks);
+                    raytracing_renderer->RenderFrame(std::move(frame_packet));
+                    raytracing_renderer->ApplyFrameFeedback(m_editor_config->raytracing_config);
+
+                    if (runtime_hooks.on_is_need_reload && runtime_hooks.on_is_need_reload()) {
+                        break;
+                    }
+                }
+                raytracing_renderer->Shutdown(runtime_hooks);
+            } else {
+                m_renderer->Run(m_editor_config, runtime_hooks);
+            }
         }
 
         if (m_script_host) {
