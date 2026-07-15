@@ -27,6 +27,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstring>
 #include <fstream>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -201,6 +202,7 @@ static void FreeWrapper(void* ptr, void* user_data) {
     Memory::Free(ptr);
 }
 ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) {
+    assert(!IsRenderThreadInitialized() || IsCurrentlyGameThread());
 
     ImGui::SetAllocatorFunctions(MallocWrapper, FreeWrapper, nullptr);
     IMGUI_CHECKVERSION();
@@ -226,8 +228,6 @@ ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) 
             AddFont({"msyh.ttc", 20.0f, EFontType::Chinese});
         }
     }
-    bindless_array = device.CreateBindlessArray();
-
     ImGuiIO& io = ImGui::GetIO();
     assert(io.BackendRendererUserData == nullptr && "GUI backend already initialized.");
 
@@ -255,31 +255,7 @@ ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) 
     auto     config              = Moer::ConfigManager::GetInstance().GetConfig();
     uint32_t max_frame_in_flight = config.engine.rhi.max_frame_in_flight;
 
-    auto& sd_mgr = ShaderManager::Get();
-
-    VertexStream vertex_stream;
-    vertex_stream.EmplacePerVertex(
-        {Moer::Render::VertexElement(PF_R32G32_SFLOAT),
-         Moer::Render::VertexElement(PF_R32G32_SFLOAT),
-         Moer::Render::VertexElement(PF_R8G8B8A8_UNORM)}
-    );
-
     ImGUIData* render_backend_data = MoerNew(ImGUIData)();
-
-    for (auto format : ImGUIData::s_supported_formats) {
-        GfxPsoCreateInfo pso_info(
-            RHIRasterizeInfo::Preset<Rast::CULL_NONE, FrontFace::CW>(),
-            vertex_stream,
-            {RHIColorAttachmentInfo::Preset<Blend::ALPHA_BLEND>(format)}
-        );
-        auto rast_pso = sd_mgr.Raster()
-                            .Vertex("features/ui/GuiVert.hlsl")
-                            .Pixel("features/ui/GuiFrag.hlsl")
-                            .Build<GUIPipelineBdls>(std::move(pso_info));
-
-        render_backend_data->rast_psos[format] = std::move(rast_pso);
-    }
-
     render_backend_data->num_frames_in_flight = max_frame_in_flight;
     backend_data                              = render_backend_data;
 
@@ -297,48 +273,72 @@ ImGUIRenderBackend::ImGUIRenderBackend(RenderDevice& _device) : device(_device) 
     int width, height;
     //MARK... this is freaking slow, it's build first called, we need a default data for it, and async load other fonts
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    const size_t font_byte_size = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+    Array<byte>  font_pixels(font_byte_size);
+    std::memcpy(font_pixels.data(), pixels, font_byte_size);
 
-    using namespace Moer::Render;
-    auto& rd_device = Moer::Render::RenderDevice::Get();
-    //upload texture
-    {
-        const uint32_t alignment    = 256;
-        uint32_t       upload_pitch = Moer::AlignUp(width * 4, alignment);
-        uint32_t       upload_size  = height * upload_pitch;
-        TextureRef     font_tex =
-            rd_device.CreateTexture(Extent2D(width, height), PF_R8G8B8A8_UNORM, ETextureUsageFlags::SAMPLED);
+    uint font_texture_handle = 0;
+    RunRenderThreadControlAndWait(
+        [this,
+         render_backend_data,
+         width,
+         height,
+         font_pixels = std::move(font_pixels),
+         &font_texture_handle]() mutable {
+            assert(!IsRenderThreadRunning() || IsCurrentlyRenderThread());
 
-        CommandList cmd_list;
-        cmd_list.CopyFrom(std::span<std::byte>((std::byte*)pixels, upload_size), font_tex);
+            bindless_array = device.CreateBindlessArray();
 
-        rd_device.GetCommandQueue(EQueueType::Graphics).Execute(std::move(cmd_list.Submit()));
-        rd_device.GetCommandQueue(EQueueType::Graphics).Sync();
-        render_backend_data->font_texture = font_tex;
-        uint handle = bindless_array->AllocateTexture(font_tex, Sampler(SF_CUBIC, SAM_REPEAT));
-        registered_images.try_emplace(font_tex, handle);
-        io.Fonts->SetTexID(handle);
-    }
+            auto&        shader_manager = ShaderManager::Get();
+            VertexStream vertex_stream;
+            vertex_stream.EmplacePerVertex(
+                {Moer::Render::VertexElement(PF_R32G32_SFLOAT),
+                 Moer::Render::VertexElement(PF_R32G32_SFLOAT),
+                 Moer::Render::VertexElement(PF_R8G8B8A8_UNORM)}
+            );
+
+            for (auto format : ImGUIData::s_supported_formats) {
+                GfxPsoCreateInfo pso_info(
+                    RHIRasterizeInfo::Preset<Rast::CULL_NONE, FrontFace::CW>(),
+                    vertex_stream,
+                    {RHIColorAttachmentInfo::Preset<Blend::ALPHA_BLEND>(format)}
+                );
+                auto rast_pso = shader_manager.Raster()
+                                    .Vertex("features/ui/GuiVert.hlsl")
+                                    .Pixel("features/ui/GuiFrag.hlsl")
+                                    .Build<GUIPipelineBdls>(std::move(pso_info));
+
+                render_backend_data->rast_psos[format] = std::move(rast_pso);
+            }
+
+            TextureRef font_texture = device.CreateTexture(
+                Extent2D(width, height), PF_R8G8B8A8_UNORM, ETextureUsageFlags::SAMPLED
+            );
+            CommandList cmd_list;
+            cmd_list.CopyFrom(std::move(font_pixels), font_texture);
+
+            auto& graphics_queue = device.GetCommandQueue(EQueueType::Graphics);
+            graphics_queue.Execute(std::move(cmd_list.Submit()));
+            graphics_queue.Sync();
+
+            render_backend_data->font_texture = font_texture;
+            font_texture_handle =
+                bindless_array->AllocateTexture(font_texture, Sampler(SF_CUBIC, SAM_REPEAT));
+            registered_images.try_emplace(font_texture, font_texture_handle);
+
+            LOG_INFO(
+                "[Threading][UI] Initialized ImGui GPU resources on {} Thread.",
+                IsCurrentlyRenderThread() ? "Render" : "Game"
+            );
+        }
+    );
+    io.Fonts->SetTexID(font_texture_handle);
 
     if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
         GuiInitPlatformInterface();
 };
 inline ImGUIData* GetGUIBackendData() {
     return ImGui::GetCurrentContext() ? (ImGUIData*)ImGui::GetIO().BackendRendererUserData : nullptr;
-}
-ImGUIRenderBackend::~ImGUIRenderBackend() {
-    {
-        //delete main viewport data
-        ImGuiViewport*   main_viewport = ImGui::GetMainViewport();
-        GuiViewportData* viewport_data = (GuiViewportData*)main_viewport->RendererUserData;
-        MoerDelete(viewport_data);
-        main_viewport->RendererUserData = nullptr;
-    }
-    ImGui_ImplGlfw_Shutdown();
-    ImGUIData* data = static_cast<ImGUIData*>(backend_data);
-    ImGui::DestroyContext();
-    bindless_array = nullptr;
-    MoerDelete(data);
-    backend_data = nullptr;
 }
 void ImGUIRenderBackend::BeginGUIFrame() {
     ImGui_ImplGlfw_NewFrame();
@@ -361,11 +361,15 @@ void ImGUIRenderBackend::UpdatePlatformWindows() {
 }
 
 void ImGUIRenderBackend::RegisterImage(Texture* _texture, Sampler _sampler) {
-    auto iter = registered_images.try_emplace(_texture, 0);
-    if (iter.second) {
-        uint handle = bindless_array->AllocateTexture(_texture->GetView(0, _texture->GetNumMips()), _sampler);
-        iter.first->second = handle;
-    }
+    TextureRef texture = _texture;
+    RunRenderThreadControlAndWait([this, texture, _sampler]() {
+        auto iter = registered_images.try_emplace(texture.Get(), 0);
+        if (iter.second) {
+            uint handle =
+                bindless_array->AllocateTexture(texture->GetView(0, texture->GetNumMips()), _sampler);
+            iter.first->second = handle;
+        }
+    });
 }
 
 void ImGUIRenderBackend::UnRegisterImage(Texture* _texture) {}
@@ -801,6 +805,44 @@ void ReleaseViewportResources(
         _viewport_index,
         IsCurrentlyRenderThread() ? "Render" : "Game"
     );
+}
+
+ImGUIRenderBackend::~ImGUIRenderBackend() {
+    assert(!IsRenderThreadInitialized() || IsCurrentlyGameThread());
+
+    if (ImGui::GetCurrentContext() && (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable)) {
+        ImGui::DestroyPlatformWindows();
+    }
+
+    ImGUIData*       data          = static_cast<ImGUIData*>(backend_data);
+    ImGuiViewport*   main_viewport = ImGui::GetMainViewport();
+    GuiViewportData* viewport_data = static_cast<GuiViewportData*>(main_viewport->RendererUserData);
+    main_viewport->RendererUserData = nullptr;
+
+    auto       render_resources = viewport_data ? std::move(viewport_data->render_resources) : nullptr;
+    const auto viewport_index   = viewport_data ? viewport_data->viewport_index : 0;
+    RunRenderThreadControlAndWait([this, data, render_resources, viewport_index]() {
+        ReleaseViewportResources(device, render_resources, viewport_index);
+        bindless_array = nullptr;
+        if (data) {
+            data->font_texture = nullptr;
+            data->rast_psos.clear();
+        }
+
+        LOG_INFO(
+            "[Threading][UI] Released ImGui backend GPU resources on {} Thread.",
+            IsCurrentlyRenderThread() ? "Render" : "Game"
+        );
+    });
+
+    if (viewport_data) {
+        MoerDelete(viewport_data);
+    }
+    registered_images.clear();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+    MoerDelete(data);
+    backend_data = nullptr;
 }
 
 void GuiCreateWindow(ImGuiViewport* _viewport) {
