@@ -937,3 +937,20 @@ python tools\threading\run_matrix.py --set full --continue-on-failure
 - 默认配置：同步 Raster。
 - 当前状态：停止继续开发，等待换机后先执行 Phase 6.0 基线复现。
 - 下一步：基线通过并获得用户授权后，独立实施 Phase 6.1 device-fault latch；不要直接跳到 RenderGraph。
+
+### 2026-07-16：Phase 6.0 换机基线复现与接管回归
+
+- 目标：在新机器复现 Phase 5 构建、运行矩阵与视觉基线，修复换机暴露的回归，再进入新的功能阶段。
+- 主要改动：render-finished binary semaphore 改为按实际 acquired swapchain image index 配对；copied ImGui ready marker 移到 draw packet 被渲染消费之后；第一启动 dock 目标更新为 `Game`；矩阵默认视觉稳定等待改为 `12 s`。
+- MoerEngine 提交：`402b7c66 fix(vulkan): 修复换机线程基线回归`。
+- 构建：`cmake --build build --config Debug --target MoerEditor --parallel 4` PASS；脚本 `py_compile` PASS。当前机器没有可用的 `just`、Ninja/Clang，因此本阶段是 Visual Studio 2022 / MSVC Debug 基线。
+- 运行矩阵：`target/validation/rt_rhi/phase6_0_takeover_full_final_20260716`，`9/9 PASS`，总耗时 `264.9 s`，九个进程均正常退出；最低非黑像素比例 `0.9475`。
+- 视觉结论：Raster/Raytracing Sponza 在最大化、resize、restore 与键盘输入后均正确；`raster_rt1_rhi_off` 默认 `12 s` 定向复测非黑比例 `0.9676`，此前暗帧是 ProbeGI 初始化期采样。
+- 错误扫描：assertion、VUID、device lost、queue submission failure、access violation 与 tracked resource residue 均为 0；不再出现 `VUID-vkQueueSubmit2-semaphore-03868`。
+- 配置保护：本机根 `MoerEngine.toml` 未覆盖；矩阵使用 tracked `template.MoerEngine.toml` 生成独立场景配置。
+- TechRecord 实施记录：`20_技术文档/引擎架构/MoerEngine/RT_RHI_Threading/11_Phase6.0换机基线复现与接管回归.md`。
+- TechRecord 问题复盘：`30_问题复盘/BugFix/MoerEngine_RT_RHI_Phase6.0_换机基线与Swapchain信号量复用复盘.md`。
+- TechRecord 提交：`845f73e docs(threading): 记录 Phase 6.0 换机基线`。
+- 双仓库推送：MoerEngine `origin/feature/rt-rhi-threading` 已包含 `402b7c660a803405c92fae1d42d785a8cde5e623`；TechRecord `origin/main=845f73e6e0b8db697fbd10bc337a95f71ac50382`。
+- 已知限制：尚未覆盖 Clang/Ninja、Release、其他 GPU/driver，也未做故意 device-lost 注入；`12 s` 仅是当前 Sponza + ProbeGI 的自动截图稳态等待，不是引擎同步协议。
+- 下一步：独立实施 Phase 6.1 device-fault latch，优先完成 first-fault record、typed submit/acquire/present outcome、CPU settled timeline 与失败资源隔离；不要同阶段混入 PrepareFrame、RenderGraph 或 parallel recording。
