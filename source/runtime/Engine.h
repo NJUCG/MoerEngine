@@ -54,6 +54,7 @@ private:
     UniquePtr<Render::Renderer>      m_renderer;
     UniquePtr<RenderThreadService>   m_render_thread_service;
 
+    uint m_max_frame_lag = 0;
     bool m_has_shutdown = false;
 };
 

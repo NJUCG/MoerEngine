@@ -210,12 +210,30 @@ void RenderThreadService::Wait(const GraphEventRef& event) {
     TaskGraph::GetInterface().WaitUntilTaskComplete(event, EThread::EMainThread);
 }
 
+void RenderThreadService::Wait(const RenderFrameFence& fence) {
+    assert(fence.rt_done && "Cannot wait on an empty render frame fence.");
+    Wait(fence.rt_done);
+}
+
 void RenderThreadService::Flush() {
     if (!running) {
         return;
     }
 
     RunAndWait([]() {});
+}
+
+void RunRenderThreadControlAndWait(std::function<void()> task) {
+    assert(task);
+    if (!IsRenderThreadRunning() || IsCurrentlyRenderThread()) {
+        task();
+        return;
+    }
+
+    assert(IsCurrentlyGameThread() && "Render control work must be submitted from the game thread.");
+    using TaskType = RenderThreadServiceTask<std::function<void()>>;
+    auto event = GraphTask<TaskType>::Create(std::move(task)).Dispatch(EThread::ERenderThread);
+    TaskGraph::GetInterface().WaitUntilTaskComplete(event, EThread::EMainThread);
 }
 
 ScopedResumeRenderThread::ScopedResumeRenderThread() {

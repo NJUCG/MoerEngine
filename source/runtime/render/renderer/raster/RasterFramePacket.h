@@ -17,7 +17,8 @@ struct RasterFramePacket {
     RasterConfig               raster_config{};
     EEditorViewportMode        active_viewport_mode = EEditorViewportMode::Game;
     SceneViewGizmoConfig       scene_view_gizmos{};
-    CameraFrameInput           camera_input{};
+    Camera                     render_camera{};
+    uint2                      camera_viewport_resolution{};
     UiCompositionFrameData     ui_composition{};
     UiDrawFramePacket          ui_draw_frame{};
     SceneUpdateBatch           scene_updates{};
@@ -30,8 +31,7 @@ struct RasterFrameFeedback {
     uint64_t                    frame_id = 0;
     RasterConfig::CullingStats  culling_stats{};
     CooperativeOpsStatus        cooperative_ops_status{};
-    bool                        has_main_camera = false;
-    Camera                      main_camera{};
+    Array<std::string>          displayable_frame_buffer_names;
 };
 
 } // namespace Moer::Render::Raster

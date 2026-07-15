@@ -57,7 +57,7 @@ class TensorRTPass;
 class RENDER_API RasterRenderer : public Renderer {
 
 public:
-    RasterRenderer(uint2 _resolution, const SharedPtr<EditorConfig> _config, const EngineHooks& _hooks);
+    RasterRenderer(uint2 _resolution, const SharedPtr<EditorConfig> _config);
 
     virtual ~RasterRenderer() override;
 
@@ -69,8 +69,12 @@ public:
 
     RasterFramePacket
     PrepareFrame(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks);
-    void RenderFrame(RasterFramePacket frame_packet);
-    void ApplyFrameFeedback(RasterConfig& target_config);
+    RasterFrameFeedback RenderFrame(RasterFramePacket frame_packet);
+    void ApplyFrameFeedback(
+        RasterFrameFeedback feedback,
+        RasterConfig&       target_config,
+        const EngineHooks&  hooks
+    );
 
     bool RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks);
 
@@ -112,8 +116,7 @@ private:
     bool   m_b_scene_view_camera_initialized = false;
     bool   m_capture_scene_geometry_snapshot = true;
 
-    std::optional<RasterFrameFeedback> m_latest_frame_feedback;
-    uint64_t                           m_next_frame_id = 0;
+    uint64_t m_next_frame_id = 0;
 }; // namespace Moer::Render::Raster
 
 } // namespace Moer::Render::Raster

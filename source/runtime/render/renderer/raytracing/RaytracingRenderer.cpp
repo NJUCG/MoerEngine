@@ -159,10 +159,9 @@ struct RaytracingRenderer::RuntimeState {
 RaytracingRenderer::RaytracingRenderer(
     uint2&                        resolution,
     const SharedPtr<EditorConfig> config,
-    const EngineHooks&            hooks,
     RuntimeAssets&                runtime_assets
 ) :
-    Renderer(resolution, config, hooks),
+    Renderer(resolution, config),
     runtime_assets(runtime_assets),
     runtime_state(MakeUnique<RuntimeState>(*this)) {}
 
@@ -216,9 +215,14 @@ RaytracingRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, co
     }
 
     frame_packet.config               = editor_config->raytracing_config;
-    frame_packet.camera_input         = CameraFrameInput::Capture(*editor_config);
     frame_packet.runtime_assets_ready = runtime_assets.IsReady();
     frame_packet.debug_input          = debug_ui_frame_input;
+    const CameraFrameInput camera_input = CameraFrameInput::Capture(*editor_config);
+
+    const bool submit_export_request =
+        frame_packet.config.export_cfg.b_export && !export_request_in_flight;
+    frame_packet.config.export_cfg.b_export = submit_export_request;
+    export_request_in_flight              = export_request_in_flight || submit_export_request;
 
     if (scene.IsReady() && frame_packet.runtime_assets_ready) {
         const auto light_entity = scene.GetMainDirectionalLightEntity();
@@ -235,6 +239,12 @@ RaytracingRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, co
 
         frame_packet.scene_updates  = scene.PrepareUpdateBatch(false, capture_scene_geometry_snapshot);
         frame_packet.scene_snapshot = CaptureRaytracingSceneFrameSnapshot(scene);
+        if (frame_packet.scene_updates.scene_ready) {
+            Camera camera = frame_packet.scene_updates.main_camera;
+            camera.Tick(camera_input);
+            frame_packet.scene_updates.main_camera = camera;
+            scene.GetMainCamera().camera            = camera;
+        }
         if (frame_packet.scene_updates.geometry) {
             capture_scene_geometry_snapshot = false;
         }
@@ -264,7 +274,7 @@ RaytracingRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, co
     return frame_packet;
 }
 
-void RaytracingRenderer::RenderFrame(RaytracingFramePacket frame_packet) {
+RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket frame_packet) {
     assert(!IsRenderThreadInitialized() || IsCurrentlyRenderThread());
     assert(runtime_state);
 
@@ -303,7 +313,8 @@ void RaytracingRenderer::RenderFrame(RaytracingFramePacket frame_packet) {
     state.timer.Start();
 
     RaytracingFrameFeedback feedback{};
-    feedback.frame_id = frame_packet.frame_id;
+    feedback.frame_id                = frame_packet.frame_id;
+    feedback.export_request_finished = ui_config.export_cfg.b_export;
 
     if (frame_packet.scene_updates.scene_ready && frame_packet.runtime_assets_ready) {
         ExecuteSceneUpdates(frame_packet.scene_updates);
@@ -376,7 +387,6 @@ void RaytracingRenderer::RenderFrame(RaytracingFramePacket frame_packet) {
 
         Camera& camera = frame_packet.scene_updates.main_camera;
         state.rt_ctx->FillLowDiscrepancySequence(cmd_list);
-        camera.Tick(frame_packet.camera_input);
         state.b_export = ui_config.export_cfg.b_export;
 
         if (state.rt_scene) {
@@ -582,8 +592,6 @@ void RaytracingRenderer::RenderFrame(RaytracingFramePacket frame_packet) {
             feedback.export_consumed = true;
         }
 
-        feedback.has_main_camera = true;
-        feedback.main_camera     = camera;
     }
 
     const TextureRef final_color = frame_packet.debug_input.show_final_texture ?
@@ -628,7 +636,28 @@ void RaytracingRenderer::RenderFrame(RaytracingFramePacket frame_packet) {
     time++;
     gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources().TickProfiling());
     if (!skip_present) {
-        gfx_queue.Present(swapchain, state.output);
+        const auto output_view = state.output->GetView();
+        if (frame_packet.window.state == EWindowState::SizeChanged) {
+            LOG_INFO(
+                "[Threading][Resize] Raytracing main present source={}x{}, swapchain={}x{}, UI platform viewports={}.",
+                output_view.extent.x,
+                output_view.extent.y,
+                swapchain->size.x,
+                swapchain->size.y,
+                frame_packet.ui_draw_frame.platform_viewports.size()
+            );
+        }
+        if (output_view.extent.x == swapchain->size.x && output_view.extent.y == swapchain->size.y) {
+            gfx_queue.Present(swapchain, state.output);
+        } else {
+            LOG_WARNING(
+                "Skipping stale raytracing main-window present: source={}x{}, swapchain={}x{}.",
+                output_view.extent.x,
+                output_view.extent.y,
+                swapchain->size.x,
+                swapchain->size.y
+            );
+        }
         PresentUiDrawFrame(frame_packet.ui_draw_frame, ui_execution_thread);
     }
 
@@ -637,32 +666,31 @@ void RaytracingRenderer::RenderFrame(RaytracingFramePacket frame_packet) {
     for (const auto& entry : state.material_textures) {
         feedback.material_texture_names.emplace_back(entry.first);
     }
-    latest_frame_feedback = std::move(feedback);
+    return feedback;
 }
 
-void RaytracingRenderer::ApplyFrameFeedback(RaytracingConfig& target_config) {
+void RaytracingRenderer::ApplyFrameFeedback(
+    RaytracingFrameFeedback feedback,
+    RaytracingConfig&       target_config
+) {
     assert(!IsRenderThreadInitialized() || IsCurrentlyGameThread());
-    if (!latest_frame_feedback) {
-        return;
+    if (feedback.has_grid_cell_size) {
+        target_config.grid_config.cell_size = feedback.grid_cell_size;
     }
-
-    if (latest_frame_feedback->has_grid_cell_size) {
-        target_config.grid_config.cell_size = latest_frame_feedback->grid_cell_size;
+    if (feedback.export_request_finished) {
+        export_request_in_flight = false;
+        if (feedback.export_consumed) {
+            target_config.export_cfg.b_export = false;
+        }
     }
-    if (latest_frame_feedback->export_consumed) {
-        target_config.export_cfg.b_export = false;
-    }
-    if (latest_frame_feedback->has_main_camera && scene.IsReady()) {
-        scene.GetMainCamera().camera = latest_frame_feedback->main_camera;
-    }
-    debug_ui_profiler_data          = std::move(latest_frame_feedback->profiler_data);
-    debug_ui_material_texture_names = std::move(latest_frame_feedback->material_texture_names);
-    latest_frame_feedback.reset();
+    debug_ui_profiler_data          = std::move(feedback.profiler_data);
+    debug_ui_material_texture_names = std::move(feedback.material_texture_names);
 }
 
 bool RaytracingRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
-    RenderFrame(PrepareFrame(editor_config, hooks));
-    ApplyFrameFeedback(editor_config->raytracing_config);
+    ApplyFrameFeedback(
+        RenderFrame(PrepareFrame(editor_config, hooks)), editor_config->raytracing_config
+    );
     return !hooks.on_is_need_reload || !hooks.on_is_need_reload();
 }
 

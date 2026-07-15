@@ -13,7 +13,7 @@
 
 namespace Moer::Render {
 
-Renderer::Renderer(uint2 _resolution, const SharedPtr<EditorConfig> _config, const EngineHooks& hooks) :
+Renderer::Renderer(uint2 _resolution, const SharedPtr<EditorConfig> _config) :
     resolution(_resolution),
     device(RenderDevice::Get()),
     manager(ShaderManager::Get()),
@@ -48,10 +48,6 @@ Renderer::Renderer(uint2 _resolution, const SharedPtr<EditorConfig> _config, con
     }
     {
         ui_combine_pass = MakeUnique<UiCombinePass>(manager);
-    }
-    // Show sub ui
-    if (hooks.on_show_config_sub_ui) {
-        hooks.on_show_config_sub_ui();
     }
 }
 

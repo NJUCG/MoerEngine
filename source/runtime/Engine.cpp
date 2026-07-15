@@ -22,6 +22,7 @@
 // 3rd party (std)
 #include <cassert>
 #include <nfd.hpp>
+#include <type_traits>
 
 // namespace
 using namespace Moer::Render;
@@ -44,6 +45,57 @@ ERenderMethod ParseDefaultRenderMethod(std::string_view render_method_name) {
 
     LOG_WARNING("Invalid default render method: {}. Use Raster instead.", render_method_name);
     return ERenderMethod::Raster;
+}
+
+template<typename PrepareFunction, typename RenderFunction, typename ApplyFunction, typename StopFunction>
+void RunBoundedRenderLoop(
+    RenderThreadService& service,
+    uint                 max_frame_lag,
+    PrepareFunction      prepare_frame,
+    RenderFunction       render_frame,
+    ApplyFunction        apply_feedback,
+    StopFunction         should_stop
+) {
+    using FramePacket = std::remove_cvref_t<std::invoke_result_t<PrepareFunction&>>;
+    using Feedback = std::remove_cvref_t<std::invoke_result_t<RenderFunction&, FramePacket>>;
+
+    BoundedRenderFrameQueue<Feedback> frame_queue(service, max_frame_lag);
+    bool                              overlap_logged = false;
+    auto retire_feedback = [&](Feedback feedback) {
+        std::invoke(apply_feedback, std::move(feedback));
+    };
+
+    while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
+        frame_queue.RetireCompleted(retire_feedback);
+
+        FramePacket frame_packet = std::invoke(prepare_frame);
+        const uint64 frame_id     = frame_packet.frame_id;
+        frame_queue.Submit(
+            frame_id,
+            [render_frame, frame_packet = std::move(frame_packet)]() mutable -> Feedback {
+                assert(IsCurrentlyRenderThread());
+                return std::invoke(render_frame, std::move(frame_packet));
+            }
+        );
+
+        if (!overlap_logged && max_frame_lag > 0 && frame_queue.PendingFrameCount() > 1) {
+            overlap_logged = true;
+            LOG_INFO(
+                "[Threading] GT/RT overlap active at frame {}; pending render frames={}; max_frame_lag={}.",
+                frame_id,
+                frame_queue.PendingFrameCount(),
+                max_frame_lag
+            );
+        }
+
+        frame_queue.EnforceLagLimit(retire_feedback);
+        if (std::invoke(should_stop)) {
+            break;
+        }
+    }
+
+    frame_queue.Flush(retire_feedback);
+    LOG_INFO("[Threading] Render frame queue drained before renderer shutdown/reload.");
 }
 
 } // namespace
@@ -94,15 +146,19 @@ void Engine::Init(int argc, const char** argv) {
     }
 
     if (config.engine.threading.render_thread) {
-        if (config.engine.threading.max_frame_lag != 0) {
+        m_max_frame_lag = std::min(config.engine.threading.max_frame_lag, uint{1});
+        if (config.engine.threading.max_frame_lag > 1) {
             LOG_WARNING(
-                "[Threading] max_frame_lag={} is not implemented; forcing frame-synchronized Render Thread mode.",
+                "[Threading] max_frame_lag={} exceeds the validated range; clamping to 1.",
                 config.engine.threading.max_frame_lag
             );
         }
 
         m_render_thread_service = MakeUnique<RenderThreadService>();
         m_render_thread_service->Start();
+        LOG_INFO("[Threading] Effective Render Thread max_frame_lag={}", m_max_frame_lag);
+    } else if (config.engine.threading.max_frame_lag != 0) {
+        LOG_WARNING("[Threading] max_frame_lag is ignored while render_thread=false.");
     }
 
     // Init RenderDevice
@@ -160,6 +216,8 @@ void Engine::Init(int argc, const char** argv) {
 
     m_runtime_assets =
         MakeUnique<RuntimeAssets>(ConfigManager::GetInstance().GetEditorResourcePath(), RenderDevice::Get());
+    m_runtime_assets->WaitUntilReady();
+    LOG_INFO("[Threading] RuntimeAssets are immutable-ready before renderer/UI frame overlap begins.");
 
     m_script_host = MakeUnique<scripting::ScriptHost>(scripting::PythonRuntimeConfig::Default());
     m_script_host->Start();
@@ -196,12 +254,12 @@ void Engine::Run(const EngineHooks& hooks) {
         auto create_renderer = [this, runtime_hooks, selected_render_method]() {
             if (selected_render_method == ERenderMethod::Raster) {
                 m_renderer = MakeUnique<Raster::RasterRenderer>(
-                    m_editor_config->GetResolution(), m_editor_config, runtime_hooks
+                    m_editor_config->GetResolution(), m_editor_config
                 );
 
             } else if (selected_render_method == ERenderMethod::Raytracing) {
                 m_renderer = MakeUnique<Raytracing::RaytracingRenderer>(
-                    m_editor_config->GetResolution(), m_editor_config, runtime_hooks, *m_runtime_assets
+                    m_editor_config->GetResolution(), m_editor_config, *m_runtime_assets
                 );
 
             } else {
@@ -209,43 +267,57 @@ void Engine::Run(const EngineHooks& hooks) {
             }
         };
 
-        const bool use_synchronized_render_thread = m_render_thread_service != nullptr;
+        const bool use_render_thread = m_render_thread_service != nullptr;
 
-        if (use_synchronized_render_thread) {
+        if (use_render_thread) {
             m_render_thread_service->RunAndWait(std::move(create_renderer));
             assert(m_renderer && m_renderer->SupportsSynchronizedRenderThread());
 
+            if (runtime_hooks.on_show_config_sub_ui) {
+                runtime_hooks.on_show_config_sub_ui();
+            }
+
             if (selected_render_method == ERenderMethod::Raster) {
                 auto* raster_renderer = static_cast<Raster::RasterRenderer*>(m_renderer.get());
-                while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
-                    auto frame_packet = raster_renderer->PrepareFrame(m_editor_config, runtime_hooks);
-                    m_render_thread_service->RunAndWait([raster_renderer,
-                                                         frame_packet = std::move(frame_packet)]() mutable {
-                        assert(IsCurrentlyRenderThread());
-                        raster_renderer->RenderFrame(std::move(frame_packet));
-                    });
-                    raster_renderer->ApplyFrameFeedback(m_editor_config->raster_config);
-
-                    if (runtime_hooks.on_is_need_reload && runtime_hooks.on_is_need_reload()) {
-                        break;
+                RunBoundedRenderLoop(
+                    *m_render_thread_service,
+                    m_max_frame_lag,
+                    [this, raster_renderer, &runtime_hooks]() {
+                        return raster_renderer->PrepareFrame(m_editor_config, runtime_hooks);
+                    },
+                    [raster_renderer](Raster::RasterFramePacket frame_packet) {
+                        return raster_renderer->RenderFrame(std::move(frame_packet));
+                    },
+                    [this, raster_renderer, &runtime_hooks](Raster::RasterFrameFeedback feedback) {
+                        raster_renderer->ApplyFrameFeedback(
+                            std::move(feedback), m_editor_config->raster_config, runtime_hooks
+                        );
+                    },
+                    [&runtime_hooks]() {
+                        return runtime_hooks.on_is_need_reload && runtime_hooks.on_is_need_reload();
                     }
-                }
+                );
 
             } else if (selected_render_method == ERenderMethod::Raytracing) {
                 auto* raytracing_renderer = static_cast<Raytracing::RaytracingRenderer*>(m_renderer.get());
-                while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
-                    auto frame_packet = raytracing_renderer->PrepareFrame(m_editor_config, runtime_hooks);
-                    m_render_thread_service->RunAndWait([raytracing_renderer,
-                                                         frame_packet = std::move(frame_packet)]() mutable {
-                        assert(IsCurrentlyRenderThread());
-                        raytracing_renderer->RenderFrame(std::move(frame_packet));
-                    });
-                    raytracing_renderer->ApplyFrameFeedback(m_editor_config->raytracing_config);
-
-                    if (runtime_hooks.on_is_need_reload && runtime_hooks.on_is_need_reload()) {
-                        break;
+                RunBoundedRenderLoop(
+                    *m_render_thread_service,
+                    m_max_frame_lag,
+                    [this, raytracing_renderer, &runtime_hooks]() {
+                        return raytracing_renderer->PrepareFrame(m_editor_config, runtime_hooks);
+                    },
+                    [raytracing_renderer](Raytracing::RaytracingFramePacket frame_packet) {
+                        return raytracing_renderer->RenderFrame(std::move(frame_packet));
+                    },
+                    [this, raytracing_renderer](Raytracing::RaytracingFrameFeedback feedback) {
+                        raytracing_renderer->ApplyFrameFeedback(
+                            std::move(feedback), m_editor_config->raytracing_config
+                        );
+                    },
+                    [&runtime_hooks]() {
+                        return runtime_hooks.on_is_need_reload && runtime_hooks.on_is_need_reload();
                     }
-                }
+                );
                 raytracing_renderer->Shutdown(runtime_hooks);
 
             } else {
@@ -253,14 +325,19 @@ void Engine::Run(const EngineHooks& hooks) {
             }
         } else {
             create_renderer();
+            if (runtime_hooks.on_show_config_sub_ui) {
+                runtime_hooks.on_show_config_sub_ui();
+            }
             if (selected_render_method == ERenderMethod::Raytracing) {
                 auto* raytracing_renderer =
                     static_cast<Raytracing::RaytracingRenderer*>(m_renderer.get());
                 while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
                     auto frame_packet =
                         raytracing_renderer->PrepareFrame(m_editor_config, runtime_hooks);
-                    raytracing_renderer->RenderFrame(std::move(frame_packet));
-                    raytracing_renderer->ApplyFrameFeedback(m_editor_config->raytracing_config);
+                    raytracing_renderer->ApplyFrameFeedback(
+                        raytracing_renderer->RenderFrame(std::move(frame_packet)),
+                        m_editor_config->raytracing_config
+                    );
 
                     if (runtime_hooks.on_is_need_reload && runtime_hooks.on_is_need_reload()) {
                         break;
@@ -279,7 +356,7 @@ void Engine::Run(const EngineHooks& hooks) {
         }
 
         // Switch Renderer
-        if (use_synchronized_render_thread) {
+        if (use_render_thread) {
             m_render_thread_service->RunAndWait([this]() {
                 LOG_INFO("[Threading] Destroying renderer on Render Thread.");
                 m_renderer.reset();

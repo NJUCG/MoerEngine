@@ -95,9 +95,9 @@ void Editor::Run(const ExtraHooks& extra_hooks) {
                 },
 
             // Raster
-            .on_raster_register_frame_buffers =
-                [this](const Array<TextureView>& textures) {
-                    m_editor_ui->m_raster_ui.RegisterFrameBuffers(textures);
+            .on_raster_register_frame_buffer_names =
+                [this](const Array<std::string>& names) {
+                    m_editor_ui->m_raster_ui.RegisterFrameBufferNames(names);
                 }
         }
     );

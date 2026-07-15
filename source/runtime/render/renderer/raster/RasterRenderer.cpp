@@ -51,11 +51,10 @@ float GetElapsedTimeSeconds() {
 
 RasterRenderer::RasterRenderer(
     uint2                         _resolution,
-    const SharedPtr<EditorConfig> _config,
-    const EngineHooks&            _hooks
+    const SharedPtr<EditorConfig> _config
 ) :
     // Super
-    Renderer(_resolution, _config, _hooks) {
+    Renderer(_resolution, _config) {
     ScopedLogTimer startup_timer("[Startup][RasterRenderer] RasterRenderer::Constructor() total");
 
     raster_context_ptr = MakeUnique<RasterContext>(
@@ -308,6 +307,9 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
         hooks.on_tick_ui(scene);
     }
 
+    const CameraFrameInput camera_input = CameraFrameInput::Capture(*editor_config);
+    frame_packet.camera_viewport_resolution = camera_input.viewport_resolution;
+
     if (scene.IsReady()) {
         ProcessSceneTestCaseRequests(
             editor_config->scene_test_case_config,
@@ -325,20 +327,30 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
         if (frame_packet.scene_updates.geometry) {
             m_capture_scene_geometry_snapshot = false;
         }
+
+        Camera main_camera = frame_packet.scene_updates.main_camera;
+        if (!m_b_scene_view_camera_initialized) {
+            m_scene_view_camera               = main_camera;
+            m_b_scene_view_camera_initialized = true;
+        }
+
+        Camera& render_camera = editor_config->active_viewport_mode == EEditorViewportMode::Scene ?
+                                    m_scene_view_camera :
+                                    main_camera;
+        render_camera.Tick(camera_input);
+        frame_packet.render_camera = render_camera;
+
+        if (editor_config->active_viewport_mode == EEditorViewportMode::Game) {
+            frame_packet.scene_updates.main_camera = render_camera;
+            scene.GetMainCamera().camera            = render_camera;
+        }
     } else {
         m_capture_scene_geometry_snapshot = true;
-    }
-
-    if (frame_packet.window.state != EWindowState::SizeChanged &&
-        hooks.on_raster_register_frame_buffers) {
-        auto& raster_context = *raster_context_ptr;
-        hooks.on_raster_register_frame_buffers(raster_context.GetDisplayableFrameBuffersView());
     }
 
     frame_packet.raster_config        = editor_config->raster_config;
     frame_packet.active_viewport_mode = editor_config->active_viewport_mode;
     frame_packet.scene_view_gizmos    = editor_config->scene_view_gizmos;
-    frame_packet.camera_input         = CameraFrameInput::Capture(*editor_config);
     if (hooks.on_capture_ui_composition) {
         frame_packet.ui_composition = hooks.on_capture_ui_composition();
     }
@@ -360,7 +372,7 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
     return frame_packet;
 }
 
-void RasterRenderer::RenderFrame(RasterFramePacket frame_packet) {
+RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) {
     assert(!IsRenderThreadInitialized() || IsCurrentlyRenderThread());
 
     auto& raster_context = *raster_context_ptr;
@@ -440,15 +452,8 @@ void RasterRenderer::RenderFrame(RasterFramePacket frame_packet) {
             );
         }
 
-        Camera main_camera = scene_updates.main_camera;
-        if (!m_b_scene_view_camera_initialized) {
-            m_scene_view_camera               = main_camera;
-            m_b_scene_view_camera_initialized = true;
-        }
-
-        Camera& camera = frame_packet.active_viewport_mode == EEditorViewportMode::Scene ?
-                             m_scene_view_camera :
-                             main_camera;
+        const Camera& main_camera = scene_updates.main_camera;
+        Camera        camera      = frame_packet.render_camera;
 
         {
             // Jitter Camera for SMAA T2x
@@ -457,16 +462,13 @@ void RasterRenderer::RenderFrame(RasterFramePacket frame_packet) {
 
                 smaa_current_frame_index ^= 1;
                 static StaticArray<float2, 2> smaa_jitter = {float2(0.25f, -0.25f), float2(-0.25f, 0.25f)};
-                const uint2 jitter_resolution =
-                    frame_packet.camera_input.viewport_resolution.x > 0 &&
-                            frame_packet.camera_input.viewport_resolution.y > 0 ?
-                        frame_packet.camera_input.viewport_resolution :
-                        frame_packet.window.resolution;
+                const uint2 jitter_resolution = frame_packet.camera_viewport_resolution.x > 0 &&
+                                                        frame_packet.camera_viewport_resolution.y > 0 ?
+                                                    frame_packet.camera_viewport_resolution :
+                                                    frame_packet.window.resolution;
                 camera.SetJitterMatrix(smaa_jitter[smaa_current_frame_index], jitter_resolution);
             }
         }
-
-        camera.Tick(frame_packet.camera_input);
 
         raster_context.Update(camera.GetDeltaTime());
 
@@ -658,32 +660,34 @@ void RasterRenderer::RenderFrame(RasterFramePacket frame_packet) {
     feedback.frame_id               = frame_packet.frame_id;
     feedback.culling_stats          = frame_packet.raster_config.culling_stats;
     feedback.cooperative_ops_status = frame_packet.raster_config.cooperative_ops_status;
-    feedback.has_main_camera        = frame_packet.scene_updates.scene_ready;
-    if (feedback.has_main_camera) {
-        feedback.main_camera = frame_packet.scene_updates.main_camera;
+    if (frame_packet.frame_id == 0) {
+        for (const TextureView& view : raster_context.GetDisplayableFrameBuffersView()) {
+            feedback.displayable_frame_buffer_names.emplace_back(view.GetTexture()->GetName());
+        }
     }
-    m_latest_frame_feedback = std::move(feedback);
     raster_context.EndSceneFrame();
+    return feedback;
 }
 
 bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
-    RenderFrame(PrepareFrame(editor_config, hooks));
-    ApplyFrameFeedback(editor_config->raster_config);
+    ApplyFrameFeedback(
+        RenderFrame(PrepareFrame(editor_config, hooks)), editor_config->raster_config, hooks
+    );
     return !hooks.on_is_need_reload || !hooks.on_is_need_reload();
 }
 
-void RasterRenderer::ApplyFrameFeedback(RasterConfig& target_config) {
+void RasterRenderer::ApplyFrameFeedback(
+    RasterFrameFeedback feedback,
+    RasterConfig&       target_config,
+    const EngineHooks&  hooks
+) {
     assert(!IsRenderThreadInitialized() || IsCurrentlyGameThread());
-    if (!m_latest_frame_feedback) {
-        return;
+    target_config.culling_stats          = feedback.culling_stats;
+    target_config.cooperative_ops_status = feedback.cooperative_ops_status;
+    if (!feedback.displayable_frame_buffer_names.empty() &&
+        hooks.on_raster_register_frame_buffer_names) {
+        hooks.on_raster_register_frame_buffer_names(feedback.displayable_frame_buffer_names);
     }
-
-    target_config.culling_stats          = m_latest_frame_feedback->culling_stats;
-    target_config.cooperative_ops_status = m_latest_frame_feedback->cooperative_ops_status;
-    if (m_latest_frame_feedback->has_main_camera && scene.IsReady()) {
-        scene.GetMainCamera().camera = m_latest_frame_feedback->main_camera;
-    }
-    m_latest_frame_feedback.reset();
 }
 
 } // namespace Moer::Render::Raster

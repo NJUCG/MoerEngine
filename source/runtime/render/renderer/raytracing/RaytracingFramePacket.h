@@ -26,7 +26,6 @@ struct RaytracingFramePacket {
 
     Renderer::WindowFrameState   window{};
     RaytracingConfig             config{};
-    CameraFrameInput             camera_input{};
     SceneUpdateBatch             scene_updates{};
     RaytracingSceneFrameSnapshot scene_snapshot{};
     bool                         runtime_assets_ready = false;
@@ -39,13 +38,11 @@ struct RaytracingFramePacket {
 struct RaytracingFrameFeedback {
     uint64 frame_id = 0;
 
-    bool   has_main_camera = false;
-    Camera main_camera{};
-
     bool  has_grid_cell_size = false;
     float grid_cell_size     = 1.0f;
 
-    bool export_consumed = false;
+    bool export_request_finished = false;
+    bool export_consumed         = false;
 
     ProfileData        profiler_data{};
     Array<std::string> material_texture_names;

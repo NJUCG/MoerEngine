@@ -41,7 +41,7 @@ struct EngineHooks {
     std::function<void(void)> on_show_config_sub_ui;
 
     // Raster
-    std::function<void(const Array<TextureView>&)> on_raster_register_frame_buffers;
+    std::function<void(const Array<std::string>&)> on_raster_register_frame_buffer_names;
 };
 
 class RENDER_API Renderer {
@@ -59,7 +59,7 @@ public:
         uint2        resolution = uint2(0u, 0u);
     };
 
-    Renderer(uint2 _resolution, const SharedPtr<EditorConfig> _config, const EngineHooks& hooks);
+    Renderer(uint2 _resolution, const SharedPtr<EditorConfig> _config);
 
     virtual ~Renderer();
 
