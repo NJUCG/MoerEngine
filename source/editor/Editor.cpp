@@ -42,14 +42,6 @@ void Editor::Run(const ExtraHooks& extra_hooks) {
                 [this](Scene& scene) {
                     m_editor_ui->TickUI(scene);
                 },
-            .on_render_gui =
-                [this](CommandList& cmd_list, TextureRef output_image) {
-                    m_editor_ui->RenderGUI(cmd_list, output_image);
-                },
-            .on_present_windows =
-                [this]() {
-                    m_editor_ui->PresentWindows();
-                },
             .on_is_need_reload =
                 [this]() {
                     return m_editor_ui->IsNeedReload();
@@ -84,6 +76,10 @@ void Editor::Run(const ExtraHooks& extra_hooks) {
                         .scene_color_resolution = m_editor_ui->GetSceneColorResolution(),
                         .window_frame_buffer    = m_editor_ui->GetWindowFrameBuffer()
                     };
+                },
+            .on_capture_ui_draw_frame =
+                [this]() {
+                    return m_editor_ui->CaptureDrawFrame();
                 },
             .on_register_ui_func =
                 [this](std::string name, std::function<void(void)> lambda) {

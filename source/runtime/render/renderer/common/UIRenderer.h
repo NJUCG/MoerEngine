@@ -5,6 +5,7 @@
 #include "misc/STL.h"
 #include "rhi/RHI.h"
 #include <cstdint>
+#include <type_traits>
 
 struct FontUpdateEvent {
     void* font_data;
@@ -30,6 +31,86 @@ public:
 };
 
 namespace Moer::Render {
+class UiDrawFrameBackend;
+
+class RENDER_API UiViewportRenderResources {
+public:
+    virtual ~UiViewportRenderResources() = default;
+};
+
+enum class EUiDrawExecutionThread : uint8_t {
+    Game,
+    Render
+};
+
+struct UiDrawVertex {
+    float2 position{};
+    float2 uv{};
+    uint32 color = 0;
+};
+
+using UiDrawIndex = uint16;
+
+struct UiDrawCommand {
+    float2 clip_min{};
+    float2 clip_max{};
+    uint32 texture_handle = 0;
+    uint32 element_count  = 0;
+    uint32 vertex_offset  = 0;
+    uint32 index_offset   = 0;
+};
+
+struct UiViewportDrawPacket {
+    float2 display_position{};
+    float2 display_size{};
+    float2 framebuffer_scale{1.f, 1.f};
+
+    Array<UiDrawVertex>  vertices;
+    Array<UiDrawIndex>   indices;
+    Array<UiDrawCommand> commands;
+
+    SharedPtr<UiViewportRenderResources> render_resources;
+    TextureRef                           framebuffer;
+    SwapchainRef                         swapchain;
+};
+
+struct UiDrawFramePacket {
+    UiDrawFramePacket()                                        = default;
+    UiDrawFramePacket(UiDrawFramePacket&&) noexcept            = default;
+    UiDrawFramePacket& operator=(UiDrawFramePacket&&) noexcept = default;
+    UiDrawFramePacket(const UiDrawFramePacket&)                = delete;
+    UiDrawFramePacket& operator=(const UiDrawFramePacket&)     = delete;
+
+    SharedPtr<UiDrawFrameBackend> backend;
+    UiViewportDrawPacket          main_viewport;
+    Array<UiViewportDrawPacket>   platform_viewports;
+};
+
+static_assert(std::is_move_constructible_v<UiDrawFramePacket>);
+static_assert(!std::is_copy_constructible_v<UiDrawFramePacket>);
+
+class RENDER_API UiDrawFrameBackend {
+public:
+    virtual ~UiDrawFrameBackend() = default;
+
+    virtual void RenderGUI(
+        CommandList&           _cmd_list,
+        const TextureView&     _main_framebuffer,
+        UiDrawFramePacket&     _frame,
+        EUiDrawExecutionThread _execution_thread
+    ) = 0;
+    virtual void
+    PresentWindows(const UiDrawFramePacket& _frame, EUiDrawExecutionThread _execution_thread) = 0;
+};
+
+RENDER_API void RenderUiDrawFrame(
+    CommandList&           _cmd_list,
+    const TextureView&     _main_framebuffer,
+    UiDrawFramePacket&     _frame,
+    EUiDrawExecutionThread _execution_thread
+);
+RENDER_API void PresentUiDrawFrame(const UiDrawFramePacket& _frame, EUiDrawExecutionThread _execution_thread);
+
 class UIRenderer {
 public:
     struct Impl;
@@ -43,12 +124,11 @@ public:
 
     RENDER_API void UpdatePlatformWindows();
 
-    RENDER_API void RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer);
-    RENDER_API void RegisterImage(Texture* _texture, Sampler _sampler);
-    RENDER_API void UnRegisterImage(Texture* _texture);
+    RENDER_API UiDrawFramePacket CaptureDrawFrame();
+    RENDER_API void              RegisterImage(Texture* _texture, Sampler _sampler);
+    RENDER_API void              UnRegisterImage(Texture* _texture);
 
     RENDER_API TextureView GetWindowFrameBuffer(void* _window);
-    RENDER_API void        PresentWindows();
 
 private:
     UniquePtr<Impl> impl;

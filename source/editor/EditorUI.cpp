@@ -564,12 +564,8 @@ void EditorUI::ShowInspector(Scene& scene) {
     m_inspector_ui.ShowWindow(&m_b_show_inspector, &scene, m_selected_node);
 }
 
-void EditorUI::RenderGUI(Render::CommandList& cmd_list, const Render::TextureView& final_output) {
-    m_ui_renderer->RenderGUI(cmd_list, final_output);
-}
-
-void EditorUI::PresentWindows() {
-    m_ui_renderer->PresentWindows();
+Render::UiDrawFramePacket EditorUI::CaptureDrawFrame() {
+    return m_ui_renderer->CaptureDrawFrame();
 }
 
 bool EditorUI::IsSeperateWindow() const {

@@ -67,6 +67,8 @@ RaytracingRenderer::RaytracingRenderer(
     runtime_assets(_runtime_assets) {}
 
 void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
+    assert(IsCurrentlyGameThread());
+
     bool b_new_env_map = false;
 
     TextureRef         env_map{};
@@ -265,6 +267,10 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
         if (hooks.on_tick_ui) {
             hooks.on_tick_ui(scene);
+        }
+        UiDrawFramePacket ui_draw_frame{};
+        if (hooks.on_capture_ui_draw_frame) {
+            ui_draw_frame = hooks.on_capture_ui_draw_frame();
         }
 
         timer.Stop();
@@ -674,9 +680,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             );
         }
 
-        if (hooks.on_render_gui) {
-            hooks.on_render_gui(cmd_list, output);
-        }
+        RenderUiDrawFrame(cmd_list, output->GetView(), ui_draw_frame, EUiDrawExecutionThread::Game);
 
         if (rt_scene) {
             rt_scene->AdvanceFrame();
@@ -686,10 +690,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources().TickProfiling());
         if (!skip_present) {
             gfx_queue.Present(swapchain, output);
-
-            if (hooks.on_present_windows) {
-                hooks.on_present_windows();
-            }
+            PresentUiDrawFrame(ui_draw_frame, EUiDrawExecutionThread::Game);
         }
         if (hooks.on_is_need_reload && hooks.on_is_need_reload()) {
             break;

@@ -19,6 +19,7 @@ struct RasterFramePacket {
     SceneViewGizmoConfig       scene_view_gizmos{};
     CameraFrameInput           camera_input{};
     UiCompositionFrameData     ui_composition{};
+    UiDrawFramePacket          ui_draw_frame{};
     SceneUpdateBatch           scene_updates{};
 };
 

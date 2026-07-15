@@ -55,9 +55,7 @@ RasterRenderer::RasterRenderer(
     const EngineHooks&            _hooks
 ) :
     // Super
-    Renderer(_resolution, _config, _hooks),
-    m_render_gui(_hooks.on_render_gui),
-    m_present_windows(_hooks.on_present_windows) {
+    Renderer(_resolution, _config, _hooks) {
     ScopedLogTimer startup_timer("[Startup][RasterRenderer] RasterRenderer::Constructor() total");
 
     raster_context_ptr = MakeUnique<RasterContext>(
@@ -344,12 +342,18 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
     if (hooks.on_capture_ui_composition) {
         frame_packet.ui_composition = hooks.on_capture_ui_composition();
     }
+    if (hooks.on_capture_ui_draw_frame) {
+        frame_packet.ui_draw_frame = hooks.on_capture_ui_draw_frame();
+    }
 
     if (frame_packet.frame_id == 0) {
         LOG_INFO(
-            "[Threading] RasterFramePacket boundary active; resolution={}x{}",
+            "[Threading] RasterFramePacket boundary active; resolution={}x{}, UI main vertices={}, "
+            "platform viewports={}.",
             frame_packet.window.resolution.x,
-            frame_packet.window.resolution.y
+            frame_packet.window.resolution.y,
+            frame_packet.ui_draw_frame.main_viewport.vertices.size(),
+            frame_packet.ui_draw_frame.platform_viewports.size()
         );
     }
 
@@ -609,9 +613,11 @@ void RasterRenderer::RenderFrame(RasterFramePacket frame_packet) {
     // 因为目前Vulkan的输出信息会聚合后再print，所以我们需要轮询，打印出最后添加的信息
     device.FlushDebugMessages();
 
-    if (m_render_gui) {
-        m_render_gui(cmd_list, default_output_texture);
-    }
+    const auto ui_execution_thread =
+        IsRenderThreadInitialized() ? EUiDrawExecutionThread::Render : EUiDrawExecutionThread::Game;
+    RenderUiDrawFrame(
+        cmd_list, default_output_texture->GetView(), frame_packet.ui_draw_frame, ui_execution_thread
+    );
 
     raster_context.probe_volume.TrackFrameSubmission(cmd_list, time);
     time++;
@@ -623,10 +629,29 @@ void RasterRenderer::RenderFrame(RasterFramePacket frame_packet) {
     gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources().TickProfiling());
 
     if (!skip_present) {
-        gfx_queue.Present(swapchain, default_output_texture);
-        if (m_present_windows) {
-            m_present_windows();
+        const auto output_view = default_output_texture->GetView();
+        if (frame_packet.window.state == EWindowState::SizeChanged) {
+            LOG_INFO(
+                "[Threading][Resize] Main present source={}x{}, swapchain={}x{}, UI platform viewports={}.",
+                output_view.extent.x,
+                output_view.extent.y,
+                swapchain->size.x,
+                swapchain->size.y,
+                frame_packet.ui_draw_frame.platform_viewports.size()
+            );
         }
+        if (output_view.extent.x == swapchain->size.x && output_view.extent.y == swapchain->size.y) {
+            gfx_queue.Present(swapchain, default_output_texture);
+        } else {
+            LOG_WARNING(
+                "Skipping stale main-window present: source={}x{}, swapchain={}x{}.",
+                output_view.extent.x,
+                output_view.extent.y,
+                swapchain->size.x,
+                swapchain->size.y
+            );
+        }
+        PresentUiDrawFrame(frame_packet.ui_draw_frame, ui_execution_thread);
     }
 
     RasterFrameFeedback feedback{};

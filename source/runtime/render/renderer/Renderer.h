@@ -7,6 +7,7 @@
 #include "scene/RenderScene.h"
 #include "shader/ShaderResourceManager.h"
 
+#include "common/UIRenderer.h"
 #include "common/UiCombinePass.h"
 
 namespace Moer::Render {
@@ -25,14 +26,13 @@ struct EngineHooks {
     std::function<void(Scene&)>                   on_tick_scripting;
     std::function<void(Scene&)>                   on_tick_test;
     std::function<void(Scene&)>                   on_tick_ui;
-    std::function<void(CommandList&, TextureRef)> on_render_gui;
-    std::function<void(void)>                     on_present_windows;
     std::function<bool(void)>                     on_is_need_reload;
 
     std::function<TextureRef(UiCombinePass*, CommandList&, TextureView, TextureView, TextureView)>
         on_ui_combine_pass;
 
     std::function<UiCompositionFrameData(void)> on_capture_ui_composition;
+    std::function<UiDrawFramePacket(void)>      on_capture_ui_draw_frame;
 
     std::function<void(std::string, std::function<void(void)>)> on_register_ui_func;
 

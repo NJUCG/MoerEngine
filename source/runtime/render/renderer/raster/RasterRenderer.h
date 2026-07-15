@@ -112,9 +112,6 @@ private:
     bool   m_b_scene_view_camera_initialized = false;
     bool   m_capture_scene_geometry_snapshot = true;
 
-    std::function<void(CommandList&, TextureRef)> m_render_gui;
-    std::function<void()>                         m_present_windows;
-
     std::optional<RasterFrameFeedback> m_latest_frame_feedback;
     uint64_t                           m_next_frame_id = 0;
 }; // namespace Moer::Render::Raster
