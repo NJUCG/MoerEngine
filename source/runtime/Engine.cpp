@@ -141,10 +141,6 @@ void Engine::Init(int argc, const char** argv) {
         config.engine.threading.max_frame_lag
     );
 
-    if (config.engine.threading.rhi_thread) {
-        LOG_WARNING("[Threading] RHI thread mode is configured but not implemented; using synchronous RHI.");
-    }
-
     if (config.engine.threading.render_thread) {
         m_max_frame_lag = std::min(config.engine.threading.max_frame_lag, uint{1});
         if (config.engine.threading.max_frame_lag > 1) {
@@ -185,6 +181,8 @@ void Engine::Init(int argc, const char** argv) {
                 .rhi_type        = rhi_type,
                 .name            = "MoerEngine",
                 .rhi_api_version = config.engine.rhi.api_version,
+                .rhi_thread      = config.engine.threading.rhi_thread,
+                .rhi_bypass      = config.engine.threading.rhi_bypass,
             }
         )
     );

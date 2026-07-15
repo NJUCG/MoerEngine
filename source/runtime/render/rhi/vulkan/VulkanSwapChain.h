@@ -39,7 +39,7 @@ public:
     ~VkSwapchain();
     void Recreate(const SwapchainCreateInfo& _info) override;
     void CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate = false);
-    std::tuple<VkSemaphore, uint, uint> AquireNextImage();
+    std::tuple<VkSemaphore, uint, uint> AquireNextImage(uint64 _timeout = UINT64_MAX);
     TextureView                         GetSwapchainImage(uint _index);
     VkSemaphore                         GetImageReadyFence(uint _index);
     VkSemaphore                         GetRenderFinishedFence();

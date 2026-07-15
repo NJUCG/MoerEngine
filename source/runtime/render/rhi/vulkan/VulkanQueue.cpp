@@ -10,6 +10,8 @@
 #include "misc/STL.h"
 #include "misc/Timer.h"
 #include "misc/Traits.h"
+#include "log/LogSystem.h"
+#include "platform/Platform.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIIO.h"
@@ -2650,7 +2652,18 @@ void VkNativeQueue::SubmitEmpty(VkFence _fence) {
     submit_info.pSignalSemaphoreInfos    = signal_infos.data();
     submit_info.commandBufferInfoCount   = 0;
     submit_info.pCommandBufferInfos      = VK_NULL_HANDLE;
-    vkQueueSubmit2(queue, 1, &submit_info, _fence);
+    VkResult submit_result = vkQueueSubmit2(queue, 1, &submit_info, _fence);
+    if (submit_result != VK_SUCCESS) {
+        LOG_ERROR(
+            "[VkNativeQueue] empty vkQueueSubmit2 FAILED! result={}, queue={:#x}, type={}, "
+            "wait_count={}, signal_count={}",
+            (int)submit_result,
+            (uint64)queue,
+            (int)type,
+            wait_infos.size(),
+            signal_infos.size()
+        );
+    }
     wait_infos.clear();
     signal_infos.clear();
 }
@@ -2882,7 +2895,95 @@ void ProfilerStorage::EndProfilerSession(VulkanCmdList& _cmd_list, std::string_v
 #pragma endregion
 
 #pragma region[ VkCommandQueue ]
+VkCommandQueue::VkCommandQueue(VulkanDevice& _device, EQueueType _type, bool _enable_rhi_thread) :
+    CommandQueue(),
+    vk_device(_device),
+    queue(_type, _device),
+    timestamp_pool(
+        _device,
+        VK_QUERY_TYPE_TIMESTAMP,
+        s_queue_max_frame_in_flight * s_query_max_storage * 4
+    ),
+    profiler_storage(timestamp_pool),
+    rhi_thread_enabled(_enable_rhi_thread) {
+    timeline = MoerNew(VulkanFence(vk_device));
+
+    completion_worker_running = true;
+    completion_thread         = std::jthread(&VkCommandQueue::CompletionThreadMain, this);
+
+    if (rhi_thread_enabled) {
+        rhi_worker_running = true;
+        rhi_thread         = std::jthread(&VkCommandQueue::RhiThreadMain, this);
+    }
+
+    LOG_INFO(
+        "[Threading] Vulkan {} queue RHI mode: {}",
+        _type == EQueueType::Graphics ? "graphics" : "compute",
+        rhi_thread_enabled ? "threaded" : "synchronous"
+    );
+}
+
+VkCommandQueue::~VkCommandQueue() {
+    Sync();
+
+    if (rhi_thread_enabled) {
+        {
+            std::unique_lock<std::mutex> lock(rhi_work_mutex);
+            rhi_worker_running = false;
+        }
+        rhi_work_cv.notify_all();
+        rhi_thread.join();
+    }
+
+    {
+        std::unique_lock<std::mutex> lock(event_mutex);
+        completion_worker_running = false;
+    }
+    queue_cv.notify_all();
+    completion_thread.join();
+
+    Array<VulkanAllocator*> allocs;
+    allocators.PopAll(allocs);
+    for (auto* allocator : allocs) {
+        MoerDelete(allocator);
+    }
+
+    Array<VulkanPresentor*> presents;
+    presentors.PopAll(presents);
+    for (auto* presentor : presents) {
+        MoerDelete(presentor);
+    }
+
+    MoerDelete(timeline);
+}
+
 WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
+    if (rhi_thread_enabled) {
+        uint64 current_timeline;
+        {
+            std::unique_lock<std::mutex> lock(rhi_work_mutex);
+            current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
+            const uint64 serial = ++enqueued_rhi_work;
+            rhi_work_queue.emplace_back(
+                std::in_place_type<RhiExecuteWork>, std::move(_submit), current_timeline, serial
+            );
+        }
+        rhi_work_cv.notify_one();
+        return {uint64(timeline), current_timeline};
+    }
+
+    std::unique_lock<std::mutex> lock(exec_mtx);
+    const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
+    ExecuteNow(std::move(_submit), current_timeline);
+    return {uint64(timeline), current_timeline};
+}
+
+void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline) {
+    assert(
+        !rhi_thread_enabled ||
+        rhi_thread_id.load(std::memory_order_acquire) == Platform::GetCurrentThreadID()
+    );
+
     Timer         timer{};
     Timer         reorder_timer{};
     FunctionTable function_table{
@@ -2901,8 +3002,7 @@ WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
         reorderer.AcceptCmd(cmd.get());
     }
     reorder_timer.Stop();
-    double                       reorder_time = reorder_timer.ElapsedMilliseconds();
-    std::unique_lock<std::mutex> lock(exec_mtx); //currently only one thread can execute commands at a time
+    double reorder_time = reorder_timer.ElapsedMilliseconds();
 
     //Get Allocators for buffer, texture and commandlist
     auto  allocator_ptr = std::move(GetAllocator());
@@ -2922,7 +3022,6 @@ WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
     // LOG_INFO("Reorderer time {}", timer.ElapsedMilliseconds());
     const auto& cmd_lists = reorderer.m_cmd_lists;
     bool        has_cmd   = !reorderer.m_cmd_lists.empty();
-    uint64      last_time = last_frame;
 
     //Set Descriptor buffer ringbuffer offset and start debug region
     double preprocess_time = 0.0;
@@ -2930,13 +3029,16 @@ WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
         vk_allocator.GetCmdList().Begin();
         if (_submit.b_tick_profiling) {
             profiler_storage.CollectProfiling(vk_allocator.GetCmdList().GetHandle());
-            cached_profiler_entry = profiler_storage.GetProfilerEntry();
+            {
+                std::unique_lock<std::mutex> profiler_lock(profiler_mutex);
+                cached_profiler_entry = profiler_storage.GetProfilerEntry();
+            }
             profiler_storage.BeginProfilerSession(vk_allocator.GetCmdList(), "Graphics Exec");
             timer.Start();
         }
 
         if (queue.GetType() != EQueueType::Copy) {
-            vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors(last_time + 1);
+            vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors(_timeline);
         }
 
         std::string_view queue_label = queue.GetType() == EQueueType::Graphics ? "Graphics Exec" :
@@ -2981,110 +3083,136 @@ WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
         vk_allocator.GetCmdList().EndLabel();
         vk_allocator.GetCmdList().End();
         if (queue.GetType() != EQueueType::Copy) {
-            vk_device.GetGlobalDescriptorHeap().EndPushDescriptors(last_time + 1);
+            vk_device.GetGlobalDescriptorHeap().EndPushDescriptors(_timeline);
         }
         tracker.Reset();
     }
 
+    AppendDeferredReleaseCallbacks(_submit.callbacks);
+
+    const auto end_tag = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    queue.Signal(timeline, _timeline, end_tag);
+    for (auto& evt : _submit.wait_events) {
+        queue.Wait(
+            reinterpret_cast<VulkanFence*>(evt.timeline_handle),
+            evt.value,
+            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+        );
+    }
+    for (auto& evt : _submit.signal_events) {
+        queue.Signal(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value, end_tag);
+    }
+
     if (has_cmd) {
-        Array<RHIResource*> deleted_resources;
-        vk_device.deferred_release_queue.PopAll(deleted_resources);
-        _submit.callbacks.emplace_back([deleted_resources(std::move(deleted_resources))]() {
-            for (auto* resource : deleted_resources) {
-                MoerDelete(resource);
-            }
-        });
-    }
-
-    if (_submit.cmds.empty()) {
-        allocators.Push(allocator_ptr.release());
-        std::unique_lock<std::mutex> lock(event_mutex);
-        bool                         b_wake_up = false;
-
-        b_wake_up = _submit.callbacks.size() != 0 || _submit.wait_events.size() != 0 ||
-                    _submit.signal_events.size() != 0;
-        if (b_wake_up) {
-            auto end_tag = queue.GetType() == EQueueType::Graphics ? VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT :
-                                                                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-
-            if (_submit.callbacks.size() > 0) {
-                event_queue.emplace_back(std::move(_submit.callbacks), last_time, true);
-            }
-            for (auto& evt : _submit.signal_events) {
-                event_queue.emplace_back(WaitEvent(evt.timeline_handle, evt.value), last_frame, false);
-                event_queue.emplace_back(SignalEvent(evt.timeline_handle, evt.value), last_time, false);
-            }
-            queue.SubmitEmpty();
-        }
-
-        if (b_wake_up) {
-            queue_cv.notify_one();
-        }
-        return {uint64(timeline), last_time};
-    } else {
-        auto current_timeline = ++last_frame;
-
-        auto end_tag = queue.GetType() == EQueueType::Graphics ? VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT :
-                                                                 VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-        queue.Signal(timeline, current_timeline, end_tag);
-        for (auto& evt : _submit.wait_events) {
-            queue.Wait(
-                reinterpret_cast<VulkanFence*>(evt.timeline_handle),
-                evt.value,
-                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
-            );
-        }
-        for (auto& evt : _submit.signal_events) {
-            queue.Signal(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value, end_tag);
-        }
         queue.Submit(vk_allocator.GetCmdList());
-
-        std::unique_lock<std::mutex> lock(event_mutex);
-        event_queue.emplace_back(std::move(allocator_ptr), current_timeline, true);
-        for (auto& evt : _submit.signal_events) {
-            event_queue.emplace_back(SignalEvent(evt.timeline_handle, evt.value), current_timeline, false);
-        }
-        if (_submit.callbacks.size() > 0) {
-            event_queue.emplace_back(std::move(_submit.callbacks), current_timeline, false);
-        }
-        queue_cv.notify_one();
-        executed_queue.Enqueue(current_timeline);
-        if (_submit.b_tick_profiling) {
-            timer.Stop();
-            profiler_storage.RegisterCpuTimestamp("Queue Execution", timer.ElapsedMilliseconds());
-            profiler_storage.RegisterCpuTimestamp("Command Reorder", reorder_time);
-            profiler_storage.RegisterCpuTimestamp("Command Preprocess", preprocess_time);
-            profiler_storage.RegisterCpuTimestamp(
-                "Reorder Percentage", reorder_time / timer.ElapsedMilliseconds()
-            );
-            profiler_storage.RegisterCpuTimestamp(
-                "Preprocess Percentage", preprocess_time / timer.ElapsedMilliseconds()
-            );
-            profiler_storage.AdvanceFrame();
-        }
-        // LOG_INFO("Submit time {}", timer.ElapsedMilliseconds());
-        return {uint64(timeline), current_timeline};
+    } else {
+        allocators.Push(allocator_ptr.release());
+        queue.SubmitEmpty();
     }
-    return {uint64(timeline), 0ull};
+
+    {
+        std::unique_lock<std::mutex> lock(event_mutex);
+        event_queue.emplace_back(FencePlaceHoler{}, _timeline, false);
+        if (has_cmd) {
+            event_queue.emplace_back(std::move(allocator_ptr), _timeline, false);
+        }
+        for (auto& evt : _submit.signal_events) {
+            event_queue.emplace_back(SignalEvent(evt.timeline_handle, evt.value), _timeline, false);
+        }
+        if (!_submit.callbacks.empty()) {
+            event_queue.emplace_back(std::move(_submit.callbacks), _timeline, false);
+        }
+        EnqueueCompletionMarker(_timeline);
+    }
+    queue_cv.notify_one();
+
+    if (has_cmd) {
+        executed_queue.Enqueue(_timeline);
+    }
+    if (has_cmd && _submit.b_tick_profiling) {
+        timer.Stop();
+        profiler_storage.RegisterCpuTimestamp("Queue Execution", timer.ElapsedMilliseconds());
+        profiler_storage.RegisterCpuTimestamp("Command Reorder", reorder_time);
+        profiler_storage.RegisterCpuTimestamp("Command Preprocess", preprocess_time);
+        profiler_storage.RegisterCpuTimestamp(
+            "Reorder Percentage", reorder_time / timer.ElapsedMilliseconds()
+        );
+        profiler_storage.RegisterCpuTimestamp(
+            "Preprocess Percentage", preprocess_time / timer.ElapsedMilliseconds()
+        );
+        profiler_storage.AdvanceFrame();
+    }
 }
 
 void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
+    assert(_view.texture != nullptr && "Present source texture is null");
+    TextureRef source_texture{_view.texture};
+
+    if (rhi_thread_enabled) {
+        {
+            std::unique_lock<std::mutex> lock(rhi_work_mutex);
+            const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
+            const uint64 serial           = ++enqueued_rhi_work;
+            rhi_work_queue.emplace_back(
+                std::in_place_type<RhiPresentWork>,
+                std::move(_sc),
+                std::move(source_texture),
+                _view,
+                current_timeline,
+                serial
+            );
+        }
+        rhi_work_cv.notify_one();
+        return;
+    }
+
+    std::unique_lock<std::mutex> lock(exec_mtx);
+    const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
+    PresentNow(std::move(_sc), std::move(source_texture), _view, current_timeline);
+}
+
+void VkCommandQueue::PresentNow(
+    SwapchainRef&& _sc,
+    TextureRef&&   _source_texture,
+    TextureView    _view,
+    uint64         _timeline
+) {
+    assert(
+        !rhi_thread_enabled ||
+        rhi_thread_id.load(std::memory_order_acquire) == Platform::GetCurrentThreadID()
+    );
+
     VkSwapchain* sc = ResourceCast(_sc.Get());
-    // auto         allocator    = std::move(GetAllocator());
-    std::unique_lock<std::mutex> lock(exec_mtx); //currently only one thread can execute commands at a time
-    auto                         presentor = std::move(GetPresentor());
-    // auto& vk_allocator = *allocator;
+    auto         presentor = std::move(GetPresentor());
     auto& vk_allocator = *presentor;
     auto& vk_cmd_list  = vk_allocator.GetCmdList();
     auto& vk_tracker   = vk_allocator.GetTracker();
     sc->WaitFrameInFlight();
-    auto [fence, idx, present_timeline] = sc->AquireNextImage();
+    auto [fence, idx, present_timeline] =
+        sc->AquireNextImage(rhi_thread_enabled ? 0 : UINT64_MAX);
+
+    Array<std::function<void()>> callbacks;
     if (idx == UINT32_MAX) {
-        //present null
         presentor->Reset();
         presentors.Push(presentor.release());
+
+        AppendDeferredReleaseCallbacks(callbacks);
+        callbacks.emplace_back(
+            [swapchain = std::move(_sc), source_texture = std::move(_source_texture)]() mutable {}
+        );
+
+        queue.Signal(timeline, _timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+        queue.SubmitEmpty();
+        {
+            std::unique_lock<std::mutex> lock(event_mutex);
+            event_queue.emplace_back(FencePlaceHoler{}, _timeline, false);
+            event_queue.emplace_back(std::move(callbacks), _timeline, false);
+            EnqueueCompletionMarker(_timeline);
+        }
+        queue_cv.notify_one();
         return;
     }
+
     //copy
     auto* vk_src_tex     = static_cast<VulkanTexture*>(_view.texture);
     auto* swaphchain_tex = ResourceCast(sc->GetSwapchainImage(idx).texture);
@@ -3116,26 +3244,72 @@ void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
         // vk_tracker.PropagateState();
     }
 
-    auto current_timeline = ++last_frame;
-    queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_COPY_BIT);
+    AppendDeferredReleaseCallbacks(callbacks);
+    callbacks.emplace_back(
+        [swapchain = std::move(_sc), source_texture = std::move(_source_texture)]() mutable {}
+    );
+
+    queue.Signal(timeline, _timeline, VK_PIPELINE_STAGE_2_COPY_BIT);
     queue.Wait(fence, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
     queue.Signal(sc->GetRenderFinishedFence(), VK_PIPELINE_STAGE_2_COPY_BIT);
     queue.Submit(vk_allocator.GetCmdList());
     sc->Present(queue.GetHandle(), idx);
     {
         std::unique_lock<std::mutex> lock(event_mutex);
-        event_queue.emplace_back(std::move(presentor), current_timeline, true);
-        queue_cv.notify_one();
-        presented_queue.Enqueue(current_timeline);
+        event_queue.emplace_back(FencePlaceHoler{}, _timeline, false);
+        event_queue.emplace_back(std::move(presentor), _timeline, false);
+        event_queue.emplace_back(std::move(callbacks), _timeline, false);
+        EnqueueCompletionMarker(_timeline);
     }
+    presented_queue.Enqueue(_timeline);
+    queue_cv.notify_one();
 }
 
 void VkCommandQueue::Sync() {
-    Complete(last_frame);
+    assert(
+        !rhi_thread_enabled ||
+        rhi_thread_id.load(std::memory_order_acquire) != Platform::GetCurrentThreadID()
+    );
+
+    uint64 target_timeline = 0;
+    uint64 target_work     = 0;
+    if (rhi_thread_enabled) {
+        std::unique_lock<std::mutex> lock(rhi_work_mutex);
+        target_work     = enqueued_rhi_work;
+        target_timeline = last_frame.load(std::memory_order_relaxed);
+        rhi_work_done_cv.wait(lock, [this, target_work]() {
+            return completed_rhi_work >= target_work;
+        });
+    } else {
+        std::unique_lock<std::mutex> lock(exec_mtx);
+        target_timeline = last_frame.load(std::memory_order_relaxed);
+    }
+
+    Complete(target_timeline);
+
+    Array<RHIResource*> deleted_resources;
+    if (queue.GetType() != EQueueType::Graphics) {
+        return;
+    }
+    if (rhi_thread_enabled) {
+        std::unique_lock<std::mutex> lock(rhi_work_mutex);
+        if (enqueued_rhi_work == target_work && completed_rhi_work >= target_work) {
+            vk_device.deferred_release_queue.PopAll(deleted_resources);
+        }
+    } else {
+        std::unique_lock<std::mutex> lock(exec_mtx);
+        if (last_frame.load(std::memory_order_relaxed) == target_timeline) {
+            vk_device.deferred_release_queue.PopAll(deleted_resources);
+        }
+    }
+    for (auto* resource : deleted_resources) {
+        MoerDelete(resource);
+    }
 }
 
 ProfileData VkCommandQueue::GetProfilerEntry() {
-    return profiler_storage.GetProfilerEntry();
+    std::unique_lock<std::mutex> lock(profiler_mutex);
+    return cached_profiler_entry;
 }
 
 UniquePtr<VulkanAllocator> VkCommandQueue::GetAllocator() {
@@ -3161,127 +3335,168 @@ UniquePtr<VulkanPresentor> VkCommandQueue::GetPresentor() {
     return MakeUnique<VulkanPresentor>(&vk_device, queue.GetType());
 }
 
-void VkCommandQueue::ExecuteThread() {
-    while (enabled) {
-        uint64 timeline;
-        bool   b_wake_up = false;
+void VkCommandQueue::AppendDeferredReleaseCallbacks(Array<std::function<void()>>& _callbacks) {
+    if (queue.GetType() != EQueueType::Graphics) {
+        return;
+    }
 
-        auto wait_util_reach_timeline = [&timeline, &b_wake_up, this]() {
-            if (!b_wake_up) {
-                return;
-            }
-            uint64 prev_timeline = executed_frame;
-            while (prev_timeline < timeline &&
-                   !executed_frame.compare_exchange_weak(prev_timeline, timeline)) {
-                std::this_thread::yield();
-            }
-        };
+    Array<RHIResource*> deleted_resources;
+    if (rhi_thread_enabled) {
+        std::unique_lock<std::mutex> lock(rhi_work_mutex);
+        if (!rhi_work_queue.empty()) {
+            return;
+        }
+        vk_device.deferred_release_queue.PopAll(deleted_resources);
+    } else {
+        vk_device.deferred_release_queue.PopAll(deleted_resources);
+    }
 
-        auto visit_allocator = [&,
-                                &allocators(this->allocators),
-                                fence(this->timeline)](UniquePtr<VulkanAllocator>& _allocator) {
-            _allocator->Complete(fence, timeline);
-            // LOG_INFO("timeline {} complete", timeline);
-            _allocator->Reset();
-            allocators.Push(_allocator.release());
-            wait_util_reach_timeline();
-        };
-        auto visit_presentor = [&,
-                                &presentors(this->presentors),
-                                fence(this->timeline)](UniquePtr<VulkanPresentor>& _presentor) {
-            _presentor->Complete(fence, timeline);
-            _presentor->Reset();
-            presentors.Push(_presentor.release());
-            wait_util_reach_timeline();
-        };
-        auto visit_fence = [&](FencePlaceHoler& _fence) {
-            this->timeline->HostWait(timeline);
-            wait_util_reach_timeline();
-        };
-        auto visit_funcs = [&](Array<std::function<void()>>& _funcs) {
-            for (auto& func : _funcs) {
-                func();
-            }
-            wait_util_reach_timeline();
-        };
+    if (deleted_resources.empty()) {
+        return;
+    }
 
-        auto visit_signal_event = [&](SignalEvent& _evt) {
-            auto* fence = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
-            fence->Notify(_evt.value);
-        };
-        auto visit_wait_event = [&](WaitEvent& _evt) {
-            auto* fence = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
-            fence->Wait(_evt.value);
-        };
-        while (true) {
-            std::optional<QueueEvent> evt;
-            {
-                std::unique_lock<std::mutex> lock(event_mutex);
-                if (!event_queue.empty()) {
-                    auto& event = event_queue.front();
-                    evt.emplace(std::move(event));
-                    event_queue.pop_front();
-                }
-            }
-            if (!evt.has_value()) {
+    _callbacks.emplace_back([deleted_resources = std::move(deleted_resources)]() mutable {
+        for (auto* resource : deleted_resources) {
+            MoerDelete(resource);
+        }
+    });
+}
+
+void VkCommandQueue::EnqueueCompletionMarker(uint64 _timeline) {
+    event_queue.emplace_back(Array<std::function<void()>>{}, _timeline, true);
+}
+
+void VkCommandQueue::RhiThreadMain() {
+    Platform::SetCurrentThreadName(
+        queue.GetType() == EQueueType::Graphics ? "Moer RHI Thread" : "Moer Compute RHI"
+    );
+    rhi_thread_id.store(Platform::GetCurrentThreadID(), std::memory_order_release);
+    LOG_INFO(
+        "[Threading] RHIThread id = {}, queue = {}",
+        rhi_thread_id.load(std::memory_order_relaxed),
+        queue.GetType() == EQueueType::Graphics ? "Graphics" : "Compute"
+    );
+
+    while (true) {
+        std::optional<RhiWork> work;
+        {
+            std::unique_lock<std::mutex> lock(rhi_work_mutex);
+            rhi_work_cv.wait(lock, [this]() {
+                return !rhi_worker_running || !rhi_work_queue.empty();
+            });
+            if (!rhi_worker_running && rhi_work_queue.empty()) {
                 break;
             }
-            timeline  = evt->timeline;
-            b_wake_up = evt->wake_thread;
 
+            work.emplace(std::move(rhi_work_queue.front()));
+            rhi_work_queue.pop_front();
+        }
+
+        const uint64 serial = std::visit([](const auto& _work) { return _work.serial; }, *work);
+        {
+            std::unique_lock<std::mutex> lock(exec_mtx);
             std::visit(
                 Overload{
-                    [&](UniquePtr<VulkanAllocator>& _allocator) {
-                        visit_allocator(_allocator);
+                    [this](RhiExecuteWork& _work) {
+                        ExecuteNow(std::move(_work.submit), _work.timeline);
                     },
-                    [&](UniquePtr<VulkanPresentor>& _presentor) {
-                        visit_presentor(_presentor);
-                    },
-                    [&](FencePlaceHoler& _fence) {
-                        visit_fence(_fence);
-                    },
-                    [&](Array<std::function<void()>>& _funcs) {
-                        visit_funcs(_funcs);
-                    },
-                    [&](SignalEvent& _evt) {
-                        visit_signal_event(_evt);
-                    },
-                    [&](WaitEvent& _evt) {
-                        // visit_wait_event(_evt);
-                    },
-                    [&](VulkanFence* _fence) {
-                        assert(false && "Invalid event");
+                    [this](RhiPresentWork& _work) {
+                        PresentNow(
+                            std::move(_work.swapchain),
+                            std::move(_work.source_texture),
+                            _work.source_view,
+                            _work.timeline
+                        );
                     }
                 },
-
-                evt->event
+                *work
             );
         }
+
+        work.reset();
         {
-            //wait for queue submission
+            std::unique_lock<std::mutex> lock(rhi_work_mutex);
+            completed_rhi_work = serial;
+        }
+        rhi_work_done_cv.notify_all();
+    }
+
+    LOG_INFO("[Threading] RHIThread id = {} stopped", Platform::GetCurrentThreadID());
+}
+
+void VkCommandQueue::CompletionThreadMain() {
+    Platform::SetCurrentThreadName(
+        queue.GetType() == EQueueType::Graphics ? "Vulkan Gfx Completion" : "Vulkan Compute Completion"
+    );
+
+    while (true) {
+        std::optional<QueueEvent> evt;
+        {
             std::unique_lock<std::mutex> lock(event_mutex);
-            while (enabled && event_queue.empty()) {
-                queue_cv.wait(lock);
+            queue_cv.wait(lock, [this]() {
+                return !completion_worker_running || !event_queue.empty();
+            });
+            if (!completion_worker_running && event_queue.empty()) {
+                break;
             }
+
+            evt.emplace(std::move(event_queue.front()));
+            event_queue.pop_front();
+        }
+
+        const uint64 event_timeline = evt->timeline;
+        std::visit(
+            Overload{
+                [this, event_timeline](UniquePtr<VulkanAllocator>& _allocator) {
+                    _allocator->Complete(timeline, event_timeline);
+                    _allocator->Reset();
+                    allocators.Push(_allocator.release());
+                },
+                [this, event_timeline](UniquePtr<VulkanPresentor>& _presentor) {
+                    _presentor->Complete(timeline, event_timeline);
+                    _presentor->Reset();
+                    presentors.Push(_presentor.release());
+                },
+                [this, event_timeline](FencePlaceHoler&) {
+                    timeline->HostWait(event_timeline);
+                },
+                [](Array<std::function<void()>>& _funcs) {
+                    for (auto& func : _funcs) {
+                        func();
+                    }
+                },
+                [](SignalEvent& _evt) {
+                    auto* fence = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
+                    fence->Notify(_evt.value);
+                },
+                [](WaitEvent&) {},
+                [](VulkanFence*) {
+                    assert(false && "Invalid event");
+                }
+            },
+            evt->event
+        );
+
+        if (evt->wake_thread) {
+            uint64 completed = executed_frame.load(std::memory_order_relaxed);
+            while (completed < event_timeline &&
+                   !executed_frame.compare_exchange_weak(
+                       completed, event_timeline, std::memory_order_release, std::memory_order_relaxed
+                   )) {}
+            queue_cv.notify_all();
         }
     }
 }
 
 void VkCommandQueue::Complete(uint64 _timeline) {
-    while (executed_frame < _timeline) {
-        std::this_thread::yield();
+    if (_timeline == 0) {
+        return;
     }
-    // vk_device.FlushDeferredReleases();
-}
 
-void VkCommandQueue::Signal() {
-    auto current_timeline = ++last_frame;
-    queue.Signal(timeline, current_timeline);
-    {
-        std::unique_lock<std::mutex> lock(event_mutex);
-        event_queue.push_back({FencePlaceHoler{}, current_timeline, true});
-        queue_cv.notify_one();
-    }
+    std::unique_lock<std::mutex> lock(event_mutex);
+    queue_cv.wait(lock, [this, _timeline]() {
+        return executed_frame.load(std::memory_order_acquire) >= _timeline;
+    });
 }
 
 #pragma endregion

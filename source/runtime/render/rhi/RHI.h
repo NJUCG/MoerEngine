@@ -37,6 +37,8 @@ struct DeviceInitInfo {
     ERHIType         rhi_type;
     std::string_view name;
     std::string_view rhi_api_version;
+    bool             rhi_thread = false;
+    bool             rhi_bypass = true;
 };
 namespace Moer::Render {
 

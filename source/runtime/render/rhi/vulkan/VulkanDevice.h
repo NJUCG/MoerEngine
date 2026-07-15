@@ -60,6 +60,8 @@ struct QueueFamilyIndices {
 
 struct VulkanRHIConfig {
     uint32 api_version = VK_API_VERSION_1_3;
+    bool   rhi_thread  = false;
+    bool   rhi_bypass  = true;
 };
 
 struct VulkanDeviceInfo {
@@ -263,6 +265,7 @@ private:
     UniquePtr<VkCommandQueue> gfx_queue{}; // VkCommandQueue是MoerEngine的封装！
     UniquePtr<VkCommandQueue> compute_queue{};
     UniquePtr<VkCopyQueue>    copy_queue{};
+    bool                      rhi_thread_enabled = false;
     // 这个锁只在AMD GPU上使用，因为AMD GPU没有TransferQueue
     // 在现代NVIDIA GPU上，这个锁不会被触发，接近0开销，不用在意性能
     std::mutex                                m_shared_queue_submit_mutex;

@@ -302,17 +302,20 @@ VkSemaphore VkSwapchain::GetRenderFinishedFence() {
 TextureView VkSwapchain::GetSwapchainImage(uint _index) {
     return swapchain_views[_index % swapchain_views.size()];
 }
-std::tuple<VkSemaphore, uint, uint> VkSwapchain::AquireNextImage() {
+std::tuple<VkSemaphore, uint, uint> VkSwapchain::AquireNextImage(uint64 _timeout) {
     uint32_t    aquire_idx = 0;
     VkSemaphore ready_sem  = image_ready_fences[image_idx % image_ready_fences.size()];
 
     VkResult result =
-        vkAcquireNextImageKHR(device.GetDevice(), handle, UINT64_MAX, ready_sem, VK_NULL_HANDLE, &aquire_idx);
+        vkAcquireNextImageKHR(device.GetDevice(), handle, _timeout, ready_sem, VK_NULL_HANDLE, &aquire_idx);
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         aquire_idx = UINT32_MAX;
     }
     if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
         return {ready_sem, aquire_idx, image_idx};
+    }
+    if (result == VK_NOT_READY || result == VK_TIMEOUT) {
+        return {VK_NULL_HANDLE, UINT32_MAX, image_idx};
     }
     // assert(false && "Error acquiring next present texture.");
     LOG_WARNING("Fail to acquire next image, window may be resized.");

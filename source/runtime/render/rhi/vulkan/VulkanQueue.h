@@ -8,9 +8,13 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHIIO.h"
 #include "vulkan/vulkan_core.h"
+#include <atomic>
+#include <condition_variable>
 #include <functional>
 #include <mutex>
 #include <string_view>
+#include <thread>
+#include <variant>
 namespace Moer::Render {
 static constexpr uint s_queue_max_frame_in_flight = 3;
 static constexpr uint s_query_max_storage         = 8 * 64;
@@ -176,44 +180,42 @@ public:
             wake_thread(_other.wake_thread) {}
     };
 
-    VkCommandQueue(VulkanDevice& _device, EQueueType _type) :
-        CommandQueue(),
-        vk_device(_device),
-        queue(_type, _device),
-        timestamp_pool(
-            _device,
-            VK_QUERY_TYPE_TIMESTAMP,
-            s_queue_max_frame_in_flight * s_query_max_storage * 4
-        ),
-        profiler_storage(timestamp_pool) {
-        timeline = MoerNew(VulkanFence(vk_device));
-        enabled  = true;
-        thread   = std::jthread(&VkCommandQueue::ExecuteThread, this);
-    }
+    struct RhiExecuteWork {
+        CmdSubmit submit;
+        uint64    timeline;
+        uint64    serial;
 
-    ~VkCommandQueue() {
-        enabled = false;
-        queue_cv.notify_all();
-        thread.join();
-        //clear allocators
-        Array<VulkanAllocator*> allocs;
-        allocators.PopAll(allocs);
-        // uint32 alloc_count = 0;
-        for (auto& allocator : allocs) {
-            MoerDelete(allocator);
-            // ++alloc_count
-        }
-        // LOG_INFO("Allocator count {}", alloc_count);
-        Array<VulkanPresentor*> presents;
-        presentors.PopAll(presents);
-        // uint32 present_count = 0;
-        for (auto& presentor : presents) {
-            MoerDelete(presentor);
-            // present_count++;
-        }
-        // LOG_INFO("Presentor count {}", present_count);
-        MoerDelete(timeline);
-    }
+        RhiExecuteWork(CmdSubmit&& _submit, uint64 _timeline, uint64 _serial) :
+            submit(std::move(_submit)),
+            timeline(_timeline),
+            serial(_serial) {}
+    };
+
+    struct RhiPresentWork {
+        SwapchainRef swapchain;
+        TextureRef   source_texture;
+        TextureView  source_view;
+        uint64       timeline;
+        uint64       serial;
+
+        RhiPresentWork(
+            SwapchainRef&& _swapchain,
+            TextureRef&&   _source_texture,
+            TextureView    _source_view,
+            uint64         _timeline,
+            uint64         _serial
+        ) :
+            swapchain(std::move(_swapchain)),
+            source_texture(std::move(_source_texture)),
+            source_view(_source_view),
+            timeline(_timeline),
+            serial(_serial) {}
+    };
+
+    using RhiWork = std::variant<RhiExecuteWork, RhiPresentWork>;
+
+    VkCommandQueue(VulkanDevice& _device, EQueueType _type, bool _enable_rhi_thread = false);
+    ~VkCommandQueue();
     WaitEvent   Execute(CmdSubmit&& _submit) override;
     void        Wait(WaitEvent _event) override;
     void        Present(SwapchainRef _viewport, TextureView _view) override;
@@ -222,7 +224,6 @@ public:
 
     void SetQueueSubmitMutex(std::mutex* _mutex) { queue.SetSubmitMutex(_mutex); }
 
-    void                                      ExecuteThread();
     VulkanDevice&                             vk_device;
     LockFreeQueueBase<VulkanAllocator, false> allocators;
     LockFreeQueueBase<VulkanPresentor, false> presentors;
@@ -236,27 +237,49 @@ public:
 #endif
 
 private:
+    void                       ExecuteNow(CmdSubmit&& _submit, uint64 _timeline);
+    void PresentNow(
+        SwapchainRef&& _swapchain,
+        TextureRef&&   _source_texture,
+        TextureView    _source_view,
+        uint64         _timeline
+    );
+    void                       RhiThreadMain();
+    void                       CompletionThreadMain();
+    void                       AppendDeferredReleaseCallbacks(Array<std::function<void()>>& _callbacks);
+    void                       EnqueueCompletionMarker(uint64 _timeline);
     UniquePtr<VulkanAllocator> GetAllocator();
     UniquePtr<VulkanPresentor> GetPresentor();
     void                       Complete(uint64 _timeline);
-    void                       Signal();
 
 private:
-    uint64                                             last_frame = 0;
+    std::atomic<uint64>                                last_frame{0};
     CircularQueue<uint64, s_queue_max_frame_in_flight> executed_queue;
     std::atomic<uint64>                                executed_frame = 0;
     CircularQueue<uint64, s_queue_max_frame_in_flight> presented_queue;
     VulkanFence*                                       timeline = nullptr;
     std::mutex                                         event_mutex;
-    bool                                               enabled{false};
-    std::condition_variable                            queue_cv; // wake up execute thread from sleeping
+    bool                                               completion_worker_running{false};
+    std::condition_variable                            queue_cv;
     VkNativeQueue                                      queue;
     VkNativeQueryPool                                  timestamp_pool;
     ProfilerStorage                                    profiler_storage;
     ProfileData                                        cached_profiler_entry;
+    std::mutex                                         profiler_mutex;
+
+    bool                    rhi_thread_enabled{false};
+    bool                    rhi_worker_running{false};
+    std::atomic<uint32_t>   rhi_thread_id{0};
+    uint64                  enqueued_rhi_work{0};
+    uint64                  completed_rhi_work{0};
+    DEQueue<RhiWork>        rhi_work_queue;
+    std::mutex              rhi_work_mutex;
+    std::condition_variable rhi_work_cv;
+    std::condition_variable rhi_work_done_cv;
 
     std::mutex   exec_mtx;
-    std::jthread thread;
+    std::jthread completion_thread;
+    std::jthread rhi_thread;
 };
 class VkCopyQueue : public CopyQueue {
 public:
