@@ -1276,7 +1276,7 @@ private:
     Command*                     current_barriers{nullptr};
     Array<std::function<void()>> callbacks;
     TCachedArgArray              cached_args;
-    Queue<std::string_view>      scope_stack;
+    Queue<std::string>           scope_stack;
 };
 class QueueCmd {};
 

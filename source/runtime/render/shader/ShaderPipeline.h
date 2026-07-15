@@ -134,12 +134,14 @@ public:                                                                         
 
 namespace Moer::Render {
 using TInvalidArg = uint;
+using TextureViewArray = Array<TextureView>;
+using BufferViewArray  = Array<BufferView>;
 using TArg        = std::variant<
            TInvalidArg,
            BufferView,
            TextureView,
-           std::span<TextureView>,
-           std::span<BufferView>,
+           TextureViewArray,
+           BufferViewArray,
            Sampler,
            BindlessArrayRef,
            RaytracingTlasRef>;
@@ -176,23 +178,27 @@ struct ArrayArguments {
         constants(_const_size),
         b_use_bindless(_b_use_bdls) {}
     ArrayArguments(ArrayArguments&& _other) {
-        args      = std::move(_other.args);
-        constants = std::move(_other.constants);
+        args           = std::move(_other.args);
+        constants      = std::move(_other.constants);
+        b_use_bindless = _other.b_use_bindless;
     }
 
     ArrayArguments(const ArrayArguments& _other) {
-        args      = _other.args;
-        constants = _other.constants;
+        args           = _other.args;
+        constants      = _other.constants;
+        b_use_bindless = _other.b_use_bindless;
     }
     ArrayArguments& operator=(ArrayArguments&& _other) {
-        args      = std::move(_other.args);
-        constants = std::move(_other.constants);
+        args           = std::move(_other.args);
+        constants      = std::move(_other.constants);
+        b_use_bindless = _other.b_use_bindless;
         return *this;
     }
 
     ArrayArguments& operator=(const ArrayArguments& _other) {
-        args      = _other.args;
-        constants = _other.constants;
+        args           = _other.args;
+        constants      = _other.constants;
+        b_use_bindless = _other.b_use_bindless;
         return *this;
     }
 
@@ -385,7 +391,7 @@ struct ShaderArgs {
             } else if constexpr (std::is_same_v<Type, TextureView>) {
                 _arg_setter[index] = std::forward<T>(_t);
             } else if constexpr (std::is_same_v<Type, t_texture_array_arg>) {
-                _arg_setter[index] = std::forward<T>(_t);
+                _arg_setter[index] = TextureViewArray(_t.begin(), _t.end());
             } else {
                 if constexpr (true)
                     assert(0 && "not a buffer type");
@@ -397,7 +403,7 @@ struct ShaderArgs {
             } else if constexpr (std::is_same_v<Type, BufferView>) {
                 _arg_setter[index] = std::forward<T>(_t);
             } else if constexpr (std::is_same_v<Type, t_buffer_array_arg>) {
-                _arg_setter[index] = std::forward<T>(_t);
+                _arg_setter[index] = BufferViewArray(_t.begin(), _t.end());
             } else {
                 if constexpr (true)
                     assert(0 && "not a buffer type");

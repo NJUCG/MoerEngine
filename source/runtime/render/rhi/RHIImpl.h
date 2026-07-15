@@ -884,7 +884,7 @@ struct BufferRange {
 struct SetDrawStateCmd : public Command {
 public:
 private:
-    mutable PipelineHandle*            pipeline{};
+    PipelineHandle                     pipeline{};
     RenderPassInfo                     render_pass_info;
     Array<MeshDrawData>                mesh_data;
     ArrayArguments                     args;
@@ -906,7 +906,7 @@ public:
     ) :
         Command(EType::SetDrawState, _name),
         args(std::move(_args)),
-        pipeline(&_pipeline),
+        pipeline(_pipeline),
         render_pass_info(std::move(_info)),
         mesh_data(std::move(_draw_data)) {
         evaluate_mesh_task =
@@ -963,7 +963,7 @@ public:
     }
 
     auto& Pipeline() const {
-        return *pipeline;
+        return pipeline;
     }
     const auto& RenderPassInfo() const {
         return render_pass_info;
@@ -1283,7 +1283,7 @@ public:
 
 private:
     // const PipelineHandle& pipeline;
-    mutable PipelineHandle* pipeline = nullptr;
+    PipelineHandle          pipeline{};
     DispatchParam           param;
     // ArrayArguments          args;
     TShaderArgArray args;
@@ -1298,7 +1298,7 @@ public:
     ) :
         Command(EType::ShaderDispatch, _name),
         param(_param),
-        pipeline(&_handle),
+        pipeline(_handle),
         args(std::move(_args)) {}
     DispatchCmd(
         TShaderArgArray&& _args,
@@ -1307,7 +1307,7 @@ public:
         std::string_view  _name = typenames[uint(EType::ShaderDispatch)]
     ) :
         Command(EType::ShaderDispatch, _name),
-        pipeline(&_handle),
+        pipeline(_handle),
         param(DispatchIndirectParam{_indirect}),
         args(std::move(_args)) {}
 
@@ -1322,7 +1322,7 @@ public:
         return _args_cache[std::get<ArrayArgReference>(args).handle];
     }
     auto& Pipeline() const {
-        return *pipeline;
+        return pipeline;
     }
     auto Param() const {
         return param;
@@ -1565,7 +1565,7 @@ public:
     bool IsPop() const {
         return !b_push;
     }
-    auto ScopeName() const {
+    const std::string& ScopeName() const {
         return scope_name;
     }
     bool QueryTimestamp() const {
@@ -1573,9 +1573,9 @@ public:
     }
 
 private:
-    bool             b_push            = false;
-    bool             b_query_timestamp = false;
-    std::string_view scope_name;
+    bool        b_push            = false;
+    bool        b_query_timestamp = false;
+    std::string scope_name;
 };
 
 struct CustomCmd : public Command {

@@ -578,9 +578,9 @@ void VulkanCmdList::DispatchIndirect(VulkanBuffer* _buffer, uint64 _offset) {
     vkCmdDispatchIndirect(command_buffer, _buffer->GetHandle(), _offset);
 }
 
-void VulkanCmdList::UploadDescriptors(PipelineHandle& _pso_handle) {}
+void VulkanCmdList::UploadDescriptors(const PipelineHandle& _pso_handle) {}
 
-void VulkanCmdList::UploadPushConstants(PipelineHandle& _pso_handle, std::span<const uint> _data) {
+void VulkanCmdList::UploadPushConstants(const PipelineHandle& _pso_handle, std::span<const uint> _data) {
     auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(_pso_handle.handle);
     // auto  binding_info               = _pso_handle.binding_infos[_pso_handle.constant_idx];
     // auto [offset, size, stage_flags] = DecodeReflectPushConstant(binding_info);
@@ -594,7 +594,7 @@ VkImageLayout GetSamplerImageLayout(const TextureView& _view) {
                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 
-void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArguments& _args) {
+void VulkanCmdList::BindDescriptors(const PipelineHandle& _pso_handle, const ArrayArguments& _args) {
     auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(_pso_handle.handle);
 
     assert(vk_pso && vk_pso->bind_template != nullptr && "Pipeline state has no bind template!");
@@ -652,8 +652,8 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
                             case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: {
 
                                 if (writer.descriptorCount > 1) {
-                                    std::span<TextureView> textures =
-                                        std::get<std::span<TextureView>>(_args[set_info.param_idx]);
+                                    const TextureViewArray& textures =
+                                        std::get<TextureViewArray>(_args[set_info.param_idx]);
                                     uint desc_size = std::min(writer.descriptorCount, uint(textures.size()));
                                     for (uint j = 0; j < desc_size; ++j) {
                                         VkImageLayout layout = GetSamplerImageLayout(textures[j]);
@@ -680,8 +680,8 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
                             }
                             case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: {
                                 if (writer.descriptorCount > 1) {
-                                    std::span<TextureView> textures =
-                                        std::get<std::span<TextureView>>(_args[set_info.param_idx]);
+                                    const TextureViewArray& textures =
+                                        std::get<TextureViewArray>(_args[set_info.param_idx]);
                                     uint desc_size = std::min(writer.descriptorCount, uint(textures.size()));
                                     for (uint j = 0; j < desc_size; ++j) {
                                         uint64 src_handle = descriptor_heap.GetImageDescIdx(
@@ -717,8 +717,8 @@ void VulkanCmdList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArgu
                             case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
                             case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: {
                                 if (writer.descriptorCount > 1) {
-                                    std::span<BufferView> buffers =
-                                        std::get<std::span<BufferView>>(_args[set_info.param_idx]);
+                                    const BufferViewArray& buffers =
+                                        std::get<BufferViewArray>(_args[set_info.param_idx]);
                                     for (uint j = 0; j < writer.descriptorCount; ++j) {
                                         uint64 src_handle = descriptor_heap.GetBufferDescIdx(
                                             buffers[j], writer.descriptorType, format

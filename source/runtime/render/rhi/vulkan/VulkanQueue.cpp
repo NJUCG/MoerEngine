@@ -317,11 +317,11 @@ struct VkCmdPreprocessor {
                         };
                         writed_texture_resources.insert(key);
                     }
-                } else if constexpr (std::is_same_v<T, std::span<TextureView>>) {
+                } else if constexpr (std::is_same_v<T, TextureViewArray>) {
                     for (auto&& i : _arg) {
                         VisitArgs(i, _flag, _pipelines);
                     }
-                } else if constexpr (std::is_same_v<T, std::span<BufferView>>) {
+                } else if constexpr (std::is_same_v<T, BufferViewArray>) {
                     for (auto&& i : _arg) {
                         VisitArgs(i, _flag, _pipelines);
                     }
@@ -1430,7 +1430,7 @@ public:
         cmd_list.BeginLabel(_cmd.name, dispatch_color);
         const auto& param = _cmd.Param();
 
-        PipelineHandle& pso = _cmd.Pipeline();
+        const PipelineHandle& pso = _cmd.Pipeline();
         cmd_list.SetPso(_cmd.Pipeline());
         const auto& args = _cmd.Args(cached_args);
 
@@ -1487,7 +1487,7 @@ public:
         state = EState::Draw;
 
         const auto&     args = _cmd.Args();
-        PipelineHandle& pso  = _cmd.Pipeline();
+        const PipelineHandle& pso  = _cmd.Pipeline();
 
         const auto& pass_info = _cmd.RenderPassInfo();
 

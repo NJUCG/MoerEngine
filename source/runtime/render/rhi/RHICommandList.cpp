@@ -159,7 +159,6 @@ void CommandList::CopyFrom(TextureView _src, TextureView _dst, std::string_view 
     );
 }
 void CommandList::CopyFrom(TextureView _src, BufferView _dst, std::string_view _name) {
-
     commands.push_back(
         MakeUnique<CopyTextureToBufferCmd>(
             _src.texture->GetFormat(),
@@ -190,13 +189,13 @@ void CommandList::CopyFrom(BufferView _src, TextureView _dst, std::string_view _
     );
 }
 
-// Be careful with the Lifetime of the data!
 void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, std::string_view _name) {
     uint3 extent = uint3(
         std::max(uint(_texture.extent.x) >> _texture.mip_level, 1u),
         std::max(uint(_texture.extent.y) >> _texture.mip_level, 1u),
         std::max(uint(_texture.extent.z) >> _texture.mip_level, 1u)
     );
+    Array<byte> owned_data(_data.begin(), _data.end());
     commands.push_back(
         MakeUnique<UploadTextureCmd>(
             _texture.texture->GetFormat(),
@@ -205,23 +204,23 @@ void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, std::str
             _texture.array_layer,
             _texture.offset,
             extent,
-            _data.data(),
+            std::move(owned_data),
             _name
         )
     );
 }
 
-// Be careful with the Lifetime of the data!
 void CommandList::CopyFrom(std::span<byte> _data, BufferView _buffer, std::string_view _name) {
     if (_data.size() == 0) {
         return;
     }
+    Array<byte> owned_data(_data.begin(), _data.end());
     commands.push_back(
         MakeUnique<UploadBufferCmd>(
             reinterpret_cast<uint64>(_buffer.GetBuffer()),
             _buffer.GetByteOffset(),
             _data.size_bytes(),
-            _data.data(),
+            std::move(owned_data),
             _name
         )
     );
@@ -352,12 +351,12 @@ void CommandList::ClearResource(TextureView _texture, uint _value) {
 
 void CommandList::PushScope(std::string_view _name) {
     commands.push_back(MakeUnique<ScopeCmd>(_name, true, false));
-    scope_stack.push(_name);
+    scope_stack.emplace(_name);
 }
 
 void CommandList::PushScopeWithTimeScope(std::string_view _name) {
     commands.push_back(MakeUnique<ScopeCmd>(_name, true, true));
-    scope_stack.push(_name);
+    scope_stack.emplace(_name);
 }
 
 void CommandList::PopScope() {

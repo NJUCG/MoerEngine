@@ -1202,12 +1202,12 @@ struct D3D12CommandPreprocessVisitor {
                     b_write
                 );
             },
-            [&](const std::span<TextureView>& arg) {
+            [&](const TextureViewArray& arg) {
                 for (auto&& i : arg) {
                     VisitArgs(i, _state_flag, _pipeline_flag);
                 }
             },
-            [&](const std::span<BufferView>& arg) {
+            [&](const BufferViewArray& arg) {
                 for (auto&& i : arg) {
                     VisitArgs(i, _state_flag, _pipeline_flag);
                 }
@@ -1361,7 +1361,7 @@ struct D3D12CommandVisitor {
     }
 
     void Visit(const DispatchCmd& _cmd) {
-        PipelineHandle& pso = _cmd.Pipeline();
+        const PipelineHandle& pso = _cmd.Pipeline();
         cmd_list.SetPso(pso);
 
         const auto& args = _cmd.Args({}); // todo cached args
@@ -1753,7 +1753,7 @@ void D3D12CommandList::SetPso(const PipelineHandle& _handle) {
     list->SetPipelineState(pso->Native());
     list->SetComputeRootSignature(pso->NativeRootSignature());
 }
-void D3D12CommandList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayArguments& _args) {
+void D3D12CommandList::BindDescriptors(const PipelineHandle& _pso_handle, const ArrayArguments& _args) {
 
     D3D12PipelineState* pso    = reinterpret_cast<D3D12PipelineState*>(_pso_handle.handle);
     const auto&         layout = pso->GetLayout();
@@ -1821,10 +1821,10 @@ void D3D12CommandList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayA
                     [&](const TextureView& arg) {
                         FATAL("not implemented");
                     },
-                    [&](const std::span<TextureView>& arg) {
+                    [&](const TextureViewArray& arg) {
                         FATAL("not implemented");
                     },
-                    [&](const std::span<BufferView>& arg) {
+                    [&](const BufferViewArray& arg) {
                         ASSERT(IsShaderVarCommonBuffer(var_type));
                         for (int j = 0; const BufferView& view : arg) {
                             D3D12Buffer* buf = reinterpret_cast<D3D12Buffer*>(view.GetBuffer());
@@ -1865,10 +1865,10 @@ void D3D12CommandList::BindDescriptors(PipelineHandle& _pso_handle, const ArrayA
                     [&](const TextureView& arg) {
                         FATAL("not implemented");
                     },
-                    [&](const std::span<TextureView>& arg) {
+                    [&](const TextureViewArray& arg) {
                         FATAL("not implemented");
                     },
-                    [&](const std::span<BufferView>& arg) {
+                    [&](const BufferViewArray& arg) {
                         ASSERT(IsShaderVarCommonBuffer(var_type));
                         for (int j = 0; const BufferView& view : arg) {
                             D3D12Buffer* buf = reinterpret_cast<D3D12Buffer*>(view.GetBuffer());

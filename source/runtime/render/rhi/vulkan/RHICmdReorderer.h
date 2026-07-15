@@ -715,7 +715,7 @@ public:
                         Range(_arg.mip_level, _arg.num_mips, _arg.array_layer, _arg.num_array),
                         b_write
                     );
-                } else if constexpr (std::is_same_v<T, std::span<TextureView>>) {
+                } else if constexpr (std::is_same_v<T, TextureViewArray>) {
                     for (auto&& tex : _arg) {
                         EmplaceArg(
                             (uint64)(tex.GetTexture()),
@@ -724,7 +724,7 @@ public:
                             m_funcs.is_resource_write(_flag)
                         );
                     }
-                } else if constexpr (std::is_same_v<T, std::span<BufferView>>) {
+                } else if constexpr (std::is_same_v<T, BufferViewArray>) {
                     for (auto&& buf : _arg) {
                         EmplaceArg(
                             (uint64)(buf.GetBuffer()),
