@@ -212,6 +212,7 @@ struct DispatchMeshData {
 struct CmdSubmit {
     Array<UniquePtr<Command>>        cmds;
     Array<std::function<void(void)>> callbacks;
+    Array<std::function<void(void)>> success_callbacks;
     TCachedArgArray                  cached_args;
 
     Array<WaitEvent>   wait_events;
@@ -248,6 +249,7 @@ struct CmdSubmit {
     CmdSubmit(CmdSubmit&& _other) noexcept {
         cmds               = std::move(_other.cmds);
         callbacks          = std::move(_other.callbacks);
+        success_callbacks  = std::move(_other.success_callbacks);
         wait_events        = std::move(_other.wait_events);
         signal_events      = std::move(_other.signal_events);
         cached_args        = std::move(_other.cached_args);
@@ -259,6 +261,7 @@ struct CmdSubmit {
     CmdSubmit& operator=(CmdSubmit&& _other) noexcept {
         cmds               = std::move(_other.cmds);
         callbacks          = std::move(_other.callbacks);
+        success_callbacks  = std::move(_other.success_callbacks);
         wait_events        = std::move(_other.wait_events);
         signal_events      = std::move(_other.signal_events);
         cached_args        = std::move(_other.cached_args);
@@ -270,10 +273,12 @@ struct CmdSubmit {
     CmdSubmit(
         Array<UniquePtr<Command>>&&        _cmds,
         Array<std::function<void(void)>>&& _callbacks,
+        Array<std::function<void(void)>>&& _success_callbacks,
         TCachedArgArray&&                  _cached_args
     ) :
         cmds(std::move(_cmds)),
         callbacks(std::move(_callbacks)),
+        success_callbacks(std::move(_success_callbacks)),
         cached_args(std::move(_cached_args)) {}
 
     std::string ToString() const {
@@ -1197,6 +1202,7 @@ public:
 #pragma endregion
 
     RENDER_API void AddCallback(std::function<void()>&& _callback);
+    RENDER_API void AddSuccessCallback(std::function<void()>&& _callback);
 
     RENDER_API ArrayArgReference RegisterArgs(ArrayArguments&& _args);
 
@@ -1275,6 +1281,7 @@ private:
     Array<UniquePtr<Command>>    commands;
     Command*                     current_barriers{nullptr};
     Array<std::function<void()>> callbacks;
+    Array<std::function<void()>> success_callbacks;
     TCachedArgArray              cached_args;
     Queue<std::string>           scope_stack;
 };

@@ -2,6 +2,7 @@
 #include "PixelFormat.h"
 #include "VulkanAllocator.h"
 #include "VulkanCommand.h"
+#include "VulkanFault.h"
 // #include "VulkanDevice.h"
 #include "misc/LockFree.h"
 #include "misc/STL.h"
@@ -24,8 +25,15 @@ public:
     VkNativeQueue(EQueueType _type, VulkanDevice& _device);
     ~VkNativeQueue();
 
-    void Submit(VulkanCmdList& _cmdlist, VkFence _fence = VK_NULL_HANDLE);
-    void SubmitEmpty(VkFence _fence = VK_NULL_HANDLE);
+    VulkanOperationResult Submit(
+        VulkanCmdList&               _cmdlist,
+        const VulkanOperationContext& _context,
+        VkFence                       _fence = VK_NULL_HANDLE
+    );
+    VulkanOperationResult SubmitEmpty(
+        const VulkanOperationContext& _context,
+        VkFence                       _fence = VK_NULL_HANDLE
+    );
     void Wait(
         VulkanFence*          _fence,
         uint64                _timeline,
@@ -58,6 +66,7 @@ public:
 private:
     Array<VkSemaphoreSubmitInfo> wait_infos;
     Array<VkSemaphoreSubmitInfo> signal_infos;
+    VulkanDevice&                device;
     VkQueue                      queue;
     EQueueType                   type;
     
@@ -153,18 +162,35 @@ struct ProfilerStorage {
     uint64 cur_frame = 0;
 };
 
+struct VulkanSubmissionEvent {
+    VulkanOperationResult  outcome;
+    VulkanOperationContext context;
+    bool                   gpu_submitted{false};
+};
+
+struct VulkanCallbackBatch {
+    Array<std::function<void()>> callbacks;
+    bool                         success_only{false};
+};
+
+struct VulkanDeferredReleaseBatch {
+    Array<RHIResource*> resources;
+};
+
+struct VulkanCompletionMarker {};
+
 class VkCommandQueue : public CommandQueue {
 public:
-    struct FencePlaceHoler {};
-
     using EventType = std::variant<
+        VulkanSubmissionEvent,
         UniquePtr<VulkanAllocator>,
         UniquePtr<VulkanPresentor>,
-        Array<std::function<void()>>,
+        VulkanCallbackBatch,
+        VulkanDeferredReleaseBatch,
+        VulkanCompletionMarker,
         VulkanFence*,
         SignalEvent,
-        WaitEvent,
-        FencePlaceHoler>;
+        WaitEvent>;
 
     struct QueueEvent {
         EventType event;
@@ -272,16 +298,17 @@ private:
         double work_total_ms{0.0};
     };
 
-    void                       ExecuteNow(CmdSubmit&& _submit, uint64 _timeline);
+    void                       ExecuteNow(CmdSubmit&& _submit, uint64 _timeline, uint64 _serial);
     void PresentNow(
         SwapchainRef&& _swapchain,
         TextureRef&&   _source_texture,
         TextureView    _source_view,
-        uint64         _timeline
+        uint64         _timeline,
+        uint64         _serial
     );
     void                       RhiThreadMain();
     void                       CompletionThreadMain();
-    void                       AppendDeferredReleaseCallbacks(Array<std::function<void()>>& _callbacks);
+    Array<RHIResource*>        TakeDeferredReleases();
     void                       EnqueueCompletionMarker(uint64 _timeline);
     UniquePtr<VulkanAllocator> GetAllocator();
     UniquePtr<VulkanPresentor> GetPresentor();
@@ -298,7 +325,7 @@ private:
     std::atomic<uint64>                                last_frame{0};
     uint64                                             descriptor_submission{0};
     CircularQueue<uint64, s_queue_max_frame_in_flight> executed_queue;
-    std::atomic<uint64>                                executed_frame = 0;
+    std::atomic<uint64>                                cpu_settled_frame = 0;
     CircularQueue<uint64, s_queue_max_frame_in_flight> presented_queue;
     VulkanFence*                                       timeline = nullptr;
     std::mutex                                         event_mutex;
@@ -337,20 +364,22 @@ private:
     std::mutex   exec_mtx;
     std::jthread completion_thread;
     std::jthread rhi_thread;
+    Array<UniquePtr<VulkanAllocator>> allocator_quarantine;
+    Array<UniquePtr<VulkanPresentor>> presentor_quarantine;
 };
 class VkCopyQueue : public CopyQueue {
 public:
     friend VulkanDevice;
     VkCopyQueue(VulkanDevice& _device);
     ~VkCopyQueue();
-    struct Placeholder {};
     using EventType = std::variant<
+        VulkanSubmissionEvent,
         UniquePtr<VulkanAllocator>,
         UniquePtr<VulkanPresentor>,
-        Array<std::function<void()>>,
+        VulkanCallbackBatch,
+        VulkanCompletionMarker,
         IOSignalEvt,
-        IOWaitEvt,
-        Placeholder>;
+        IOWaitEvt>;
     struct IOEvent {
         EventType event;
         uint64    timeline;
@@ -428,11 +457,12 @@ private:
     VulkanDevice& device;
 
     uint                    last_frame     = 0;
-    std::atomic<uint64>     executed_frame = 0;
+    std::atomic<uint64>     cpu_settled_frame = 0;
     VulkanFenceRef          timeline       = nullptr;
     std::mutex              event_mutex;
-    bool                    enabled{false};
+    std::atomic_bool        enabled{false};
     std::condition_variable queue_cv; // wake up execute thread from sleeping
+    std::condition_variable settled_cv;
     VkNativeQueue           queue;
     std::jthread            thread;
 
@@ -445,5 +475,6 @@ private:
     std::mutex                                     io_mutex;
     Queue<std::pair<CommandList&&, uint64>>        io_rhi_cmdlists;
     std::mutex                                     rhi_mutex;
+    Array<UniquePtr<VulkanAllocator>>              allocator_quarantine;
 };
 } // namespace Moer::Render

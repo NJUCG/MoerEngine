@@ -121,14 +121,20 @@ void CommandList::ComputeDispatcher::DispatchIndirect(
 }
 
 CmdSubmit CommandList::Submit() {
-    CmdSubmit submit(std::move(commands), std::move(callbacks), std::move(cached_args));
+    CmdSubmit submit(
+        std::move(commands),
+        std::move(callbacks),
+        std::move(success_callbacks),
+        std::move(cached_args)
+    );
     commands.clear();
     callbacks.clear();
+    success_callbacks.clear();
     return std::move(submit);
 }
 
 bool CommandList::IsEmpty() const {
-    return commands.empty() && callbacks.empty() && cached_args.empty();
+    return commands.empty() && callbacks.empty() && success_callbacks.empty() && cached_args.empty();
 }
 
 void CommandList::CopyFrom(BufferView _src, BufferView _dst, std::string_view _name) {
@@ -398,6 +404,10 @@ void CommandList::AddCustomCommand(UniquePtr<Command>&& _cmd, std::string_view _
 
 void CommandList::AddCallback(std::function<void()>&& _callback) {
     callbacks.emplace_back(std::move(_callback));
+}
+
+void CommandList::AddSuccessCallback(std::function<void()>&& _callback) {
+    success_callbacks.emplace_back(std::move(_callback));
 }
 
 void CommandList::BeginBarriers(

@@ -584,6 +584,21 @@ void GUIRender(
         return;
     }
 
+    const uint32 draw_width =
+        static_cast<uint32>(_draw_packet.display_size.x * _draw_packet.framebuffer_scale.x);
+    const uint32 draw_height =
+        static_cast<uint32>(_draw_packet.display_size.y * _draw_packet.framebuffer_scale.y);
+    if (draw_width > _frame_buffer.extent.x || draw_height > _frame_buffer.extent.y) {
+        LOG_WARNING(
+            "Skipping stale ImGui draw packet: draw={}x{}, target={}x{}.",
+            draw_width,
+            draw_height,
+            _frame_buffer.extent.x,
+            _frame_buffer.extent.y
+        );
+        return;
+    }
+
     auto render_resources =
         std::static_pointer_cast<GuiViewportRenderResources>(_draw_packet.render_resources);
     if (!render_resources || render_resources->render_buffers.empty()) {
@@ -689,10 +704,7 @@ void GUIRender(
         )
         .Draw(
             "ImGui Draws",
-            {0,
-             0,
-             static_cast<uint>(_draw_packet.display_size.x * _draw_packet.framebuffer_scale.x),
-             static_cast<uint>(_draw_packet.display_size.y * _draw_packet.framebuffer_scale.y)},
+            {0, 0, draw_width, draw_height},
             std::move(draw_meshes),
             ColorAttachment(_frame_buffer.GetTexture(), EAttachmentAction::AC_LOAD_STORE)
         );

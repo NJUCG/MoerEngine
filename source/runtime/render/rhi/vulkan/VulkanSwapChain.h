@@ -12,6 +12,7 @@
 #include "window/WindowContext.h"
 
 #include "VulkanPlatform.h"
+#include "VulkanFault.h"
 #include <atomic>
 #include <mutex>
 #include <thread>
@@ -34,20 +35,35 @@ ChooseSwapExtent(uint32_t* _width, uint32_t* _height, const VkSurfaceCapabilitie
 
 class VkSwapchain : public Swapchain {
 public:
+    struct AcquireResult {
+        VulkanOperationResult outcome;
+        VkSemaphore           ready_semaphore{VK_NULL_HANDLE};
+        uint32                image_index{UINT32_MAX};
+        uint64                present_timeline{0};
+
+        [[nodiscard]] bool HasImage() const {
+            return image_index != UINT32_MAX;
+        }
+    };
     friend VkCommandQueue;
     VkSwapchain(RenderDevice::Impl& _device, const SwapchainCreateInfo& _info);
     ~VkSwapchain();
     void Recreate(const SwapchainCreateInfo& _info) override;
     void CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate = false);
-    std::tuple<VkSemaphore, uint, uint> AquireNextImage(uint64 _timeout = UINT64_MAX);
+    AcquireResult                       AquireNextImage(uint64 _timeout = UINT64_MAX);
     TextureView                         GetSwapchainImage(uint _index);
     VkSemaphore                         GetImageReadyFence(uint _index);
     VkSemaphore                         GetRenderFinishedFence(uint _image_index);
-    void                                Present(VkQueue _queue, uint _image_index);
+    VulkanOperationResult Present(
+        VkQueue _queue,
+        uint    _image_index,
+        uint64  _timeline,
+        uint64  _work_serial
+    );
     void                                Sync() override;
 
-    void               WaitFrameInFlight();
-    void               WaitFrameInFlight(uint64 _image_idx);
+    bool               WaitFrameInFlight();
+    bool               WaitFrameInFlight(uint64 _image_idx);
     VkFence            GetInFlightFence(uint64 _image_idx);
     VkSurfaceFormatKHR GetSurfaceFormat() const {
         return fmt;
@@ -69,6 +85,7 @@ public:
     std::atomic_uint64_t present_timeline = 0;
 
 private:
+    bool PreparePresentFence(uint64 _present_idx);
     void OnFinishPresent(uint64 _image_idx);
     void EnqueuePresent(uint64 _present_idx);
 

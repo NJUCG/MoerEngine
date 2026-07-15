@@ -21,31 +21,50 @@ class Scenario:
     rhi_bypass: bool
     max_frame_lag: int
     window_stress: bool = False
+    editor_args: tuple[str, ...] = ()
+    fault_validation: bool = False
+    ready_settle_seconds: float | None = None
 
     @property
     def effective_rhi_thread(self) -> bool:
         return self.rhi_thread and not self.rhi_bypass
 
 
+FUNCTIONAL_SCENARIOS = (
+    Scenario("raster_sync", "Raster", False, False, True, 0),
+    Scenario("raster_rhi_bypass", "Raster", False, True, True, 0),
+    Scenario("raster_rhi_gt", "Raster", False, True, False, 0, True),
+    Scenario("raster_rt0_rhi", "Raster", True, True, False, 0),
+    Scenario("raster_rt1_rhi", "Raster", True, True, False, 1, True),
+    Scenario("raster_rt1_rhi_off", "Raster", True, False, False, 1),
+    Scenario("ray_rhi_gt", "Raytracing", False, True, False, 0),
+    Scenario("ray_rt0_rhi", "Raytracing", True, True, False, 0),
+    Scenario("ray_rt1_rhi", "Raytracing", True, True, False, 1, True),
+)
+
+FAULT_SCENARIOS = (
+    Scenario(
+        "ray_rt1_rhi_fault_present_submit",
+        "Raytracing",
+        True,
+        True,
+        False,
+        1,
+        editor_args=("--vulkan-fault-inject=present-submit@3",),
+        fault_validation=True,
+        ready_settle_seconds=1.0,
+    ),
+)
+
 SCENARIOS = {
-    scenario.name: scenario
-    for scenario in (
-        Scenario("raster_sync", "Raster", False, False, True, 0),
-        Scenario("raster_rhi_bypass", "Raster", False, True, True, 0),
-        Scenario("raster_rhi_gt", "Raster", False, True, False, 0, True),
-        Scenario("raster_rt0_rhi", "Raster", True, True, False, 0),
-        Scenario("raster_rt1_rhi", "Raster", True, True, False, 1, True),
-        Scenario("raster_rt1_rhi_off", "Raster", True, False, False, 1),
-        Scenario("ray_rhi_gt", "Raytracing", False, True, False, 0),
-        Scenario("ray_rt0_rhi", "Raytracing", True, True, False, 0),
-        Scenario("ray_rt1_rhi", "Raytracing", True, True, False, 1, True),
-    )
+    scenario.name: scenario for scenario in (*FUNCTIONAL_SCENARIOS, *FAULT_SCENARIOS)
 }
 
 SCENARIO_SETS = {
     "smoke": ("raster_sync", "raster_rhi_gt", "ray_rt1_rhi"),
-    "full": tuple(SCENARIOS),
+    "full": tuple(scenario.name for scenario in FUNCTIONAL_SCENARIOS),
     "soak": ("raster_rt1_rhi", "ray_rt1_rhi"),
+    "fault": tuple(scenario.name for scenario in FAULT_SCENARIOS),
 }
 
 SECTION_PATTERN = re.compile(r"^\s*\[([^]]+)]\s*(?:#.*)?$")
@@ -160,6 +179,11 @@ def build_verifier_command(
     scenario: Scenario,
     args: argparse.Namespace,
 ) -> list[str]:
+    ready_settle_seconds = (
+        scenario.ready_settle_seconds
+        if scenario.ready_settle_seconds is not None
+        else args.ready_settle_seconds
+    )
     command = [
         sys.executable,
         str(verifier),
@@ -178,14 +202,57 @@ def build_verifier_command(
         "--ready-timeout",
         str(args.ready_timeout),
         "--ready-settle-seconds",
-        str(args.ready_settle_seconds),
+        str(ready_settle_seconds),
         "--close-timeout",
         str(args.close_timeout),
         "--min-nonblack-ratio",
         str(args.min_nonblack_ratio),
     ]
+    for editor_arg in scenario.editor_args:
+        command.append(f"--editor-arg={editor_arg}")
     for pattern in required_patterns(scenario):
         command.extend(["--require-log-pattern", pattern])
+    if scenario.fault_validation:
+        exact_injection_line = (
+            r"^\[[^\]\r\n]+\] \[info\] \[[^\]\r\n]+\] "
+            r"\[VulkanFault\]\[Injection\] point=present-submit "
+            r"trigger=3 mode=synthetic-device-lost$"
+        )
+        exact_first_fault_line = (
+            r"^\[[^\]\r\n]+\] \[error\] \[[^\]\r\n]+\] "
+            r"\[VulkanFault\]\[First\] operation=PresentSubmit "
+            r"result=VK_ERROR_DEVICE_LOST result_code=-4 queue=Graphics "
+            r"queue_handle=0x[1-9a-f][0-9a-f]* timeline=[1-9][0-9]* "
+            r"work_serial=[1-9][0-9]* thread=[1-9][0-9]* "
+            r"injected=true predrained=true$"
+        )
+        exact_summary_line = (
+            r"^\[[^\]\r\n]+\] \[info\] \[[^\]\r\n]+\] "
+            r"\[VulkanFault\]\[Summary\] first_fault_count=1 "
+            r"native_submit_after_fault=0 native_present_after_fault=0 "
+            r"(?:rejected_submit=[1-9][0-9]* rejected_present=[0-9]+|"
+            r"rejected_submit=0 rejected_present=[1-9][0-9]*) "
+            r"device_lost=true "
+            r"skipped_command_pool_reset=true allocator_quarantined=true "
+            r"sync_completed=true quarantine_count=[1-9][0-9]* "
+            r"queue_sync_count=3$"
+        )
+        fault_log_patterns = (
+            r"\[VulkanFault\]\[Injection\]",
+            r"\[VulkanFault\]\[First\]",
+            r"\[VulkanFault\]\[Summary\]",
+            exact_injection_line,
+            exact_first_fault_line,
+            exact_summary_line,
+        )
+        command.extend(
+            [
+                "--allow-forbidden-log-pattern",
+                exact_first_fault_line,
+            ]
+        )
+        for pattern in fault_log_patterns:
+            command.extend(["--require-log-count", pattern, "1"])
     if not scenario.effective_rhi_thread:
         command.extend(["--forbid-log-pattern", r"\[Threading\] RHIThread id ="])
     if args.skip_window_stress or not scenario.window_stress:

@@ -252,8 +252,12 @@ def drag_window_tab(
 
 
 def scan_logs(
-    paths: list[Path], required: list[str], forbidden: list[str]
-) -> tuple[list[str], list[dict[str, object]]]:
+    paths: list[Path],
+    required: list[str],
+    forbidden: list[str],
+    allowed_forbidden: list[str],
+    required_counts: list[tuple[str, int]],
+) -> tuple[list[str], list[dict[str, object]], list[dict[str, object]]]:
     texts = {
         str(path): path.read_text(encoding="utf-8", errors="replace")
         if path.exists()
@@ -263,10 +267,26 @@ def scan_logs(
     combined = "\n".join(texts.values())
     missing_required = [pattern for pattern in required if pattern not in combined]
 
+    log_count_results = []
+    for pattern, expected in required_counts:
+        regex = re.compile(pattern, re.MULTILINE)
+        actual = sum(len(regex.findall(text)) for text in texts.values())
+        log_count_results.append(
+            {
+                "pattern": pattern,
+                "expected": expected,
+                "actual": actual,
+                "matches": actual == expected,
+            }
+        )
+
     forbidden_matches: list[dict[str, object]] = []
     compiled = [(pattern, re.compile(pattern, re.IGNORECASE)) for pattern in forbidden]
+    compiled_allowed = [re.compile(pattern, re.IGNORECASE) for pattern in allowed_forbidden]
     for path, text in texts.items():
         for line_number, line in enumerate(text.splitlines(), start=1):
+            if any(regex.search(line) for regex in compiled_allowed):
+                continue
             for pattern, regex in compiled:
                 if regex.search(line):
                     forbidden_matches.append(
@@ -277,7 +297,7 @@ def scan_logs(
                             "text": line,
                         }
                     )
-    return missing_required, forbidden_matches
+    return missing_required, forbidden_matches, log_count_results
 
 
 def close_process(
@@ -321,9 +341,52 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--detach-configs", action="store_true")
     parser.add_argument("--min-nonblack-ratio", type=float, default=0.01)
     parser.add_argument("--require-log-pattern", action="append", default=[])
+    parser.add_argument(
+        "--require-log-count",
+        action="append",
+        nargs=2,
+        metavar=("PATTERN", "COUNT"),
+        default=[],
+        help="Require a regex to occur exactly COUNT times across stdout and stderr.",
+    )
     parser.add_argument("--forbid-log-pattern", action="append", default=[])
+    parser.add_argument(
+        "--allow-forbidden-log-pattern",
+        action="append",
+        default=[],
+        help=(
+            "Allow a line matching this regex even if it also matches a forbidden "
+            "pattern; all other lines retain the normal forbidden scan."
+        ),
+    )
     parser.add_argument("--no-default-forbidden-patterns", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    required_counts: list[tuple[str, int]] = []
+    for pattern, count_text in args.require_log_count:
+        try:
+            expected = int(count_text)
+        except ValueError:
+            parser.error(f"--require-log-count COUNT must be an integer: {count_text!r}")
+        if expected < 0:
+            parser.error("--require-log-count COUNT cannot be negative")
+        required_counts.append((pattern, expected))
+    args.require_log_count = required_counts
+
+    regex_options = (
+        [("--require-log-count", pattern) for pattern, _ in required_counts]
+        + [("--forbid-log-pattern", pattern) for pattern in args.forbid_log_pattern]
+        + [
+            ("--allow-forbidden-log-pattern", pattern)
+            for pattern in args.allow_forbidden_log_pattern
+        ]
+    )
+    for option, pattern in regex_options:
+        try:
+            re.compile(pattern)
+        except re.error as error:
+            parser.error(f"{option} contains an invalid regex {pattern!r}: {error}")
+    return args
 
 
 def main() -> int:
@@ -362,10 +425,15 @@ def main() -> int:
         "captures": [],
         "capture_errors": [],
         "required_log_patterns": args.require_log_pattern,
+        "required_log_counts": [
+            {"pattern": pattern, "expected": expected}
+            for pattern, expected in args.require_log_count
+        ],
         "forbidden_log_patterns": (
             [] if args.no_default_forbidden_patterns else list(DEFAULT_FORBIDDEN_PATTERNS)
         )
         + args.forbid_log_pattern,
+        "allowed_forbidden_log_patterns": args.allow_forbidden_log_pattern,
         "closed_normally": False,
         "success": False,
     }
@@ -468,11 +536,16 @@ def main() -> int:
         report["automation_error"] = automation_error
 
     forbidden = report["forbidden_log_patterns"]
-    missing_required, forbidden_matches = scan_logs(
-        [stdout_path, stderr_path], args.require_log_pattern, forbidden
+    missing_required, forbidden_matches, log_count_results = scan_logs(
+        [stdout_path, stderr_path],
+        args.require_log_pattern,
+        forbidden,
+        args.allow_forbidden_log_pattern,
+        args.require_log_count,
     )
     report["missing_required_log_patterns"] = missing_required
     report["forbidden_log_matches"] = forbidden_matches
+    report["required_log_count_results"] = log_count_results
 
     failure_reasons: list[str] = []
     if automation_error is not None:
@@ -492,6 +565,8 @@ def main() -> int:
             )
     if missing_required:
         failure_reasons.append("Required log patterns were not observed")
+    if any(not result["matches"] for result in log_count_results):
+        failure_reasons.append("Required log counts did not match")
     if forbidden_matches:
         failure_reasons.append("Forbidden log patterns were observed")
 

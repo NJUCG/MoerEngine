@@ -566,7 +566,7 @@ void ProbeVolumeResource::TrackFrameSubmission(CommandList& cmd_list, uint64 fra
     }
 
     SharedPtr<GpuCompletionState> completion_state = m_gpu_completion_state;
-    cmd_list.AddCallback([completion_state, submission]() {
+    cmd_list.AddSuccessCallback([completion_state, submission]() {
         uint64 completed = completion_state->completed_submission.load(std::memory_order_relaxed);
         while (completed < submission &&
                !completion_state->completed_submission.compare_exchange_weak(

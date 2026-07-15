@@ -40,6 +40,7 @@ struct DeviceInitInfo {
     bool             rhi_thread = false;
     bool             rhi_bypass = true;
     bool             thread_profile_logging = false;
+    uint64_t         vulkan_present_submit_fault_trigger = 0;
 };
 namespace Moer::Render {
 

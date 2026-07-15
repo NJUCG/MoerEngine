@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <charconv>
 #include <mutex>
 #include <nfd.hpp>
 #include <optional>
@@ -174,6 +175,56 @@ std::optional<std::filesystem::path> ParseConfigOverride(int argc, const char** 
     return std::nullopt;
 }
 
+uint64_t ParseVulkanPresentSubmitFaultTrigger(int argc, const char** argv) {
+    constexpr std::string_view argument_name = "--vulkan-fault-inject";
+    constexpr std::string_view prefix        = "--vulkan-fault-inject=";
+    constexpr std::string_view point_prefix  = "present-submit@";
+
+    std::optional<std::string_view> specification;
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view argument = argv[index];
+        std::optional<std::string_view> candidate;
+        if (argument == argument_name) {
+            if (index + 1 >= argc) {
+                throw std::invalid_argument("--vulkan-fault-inject requires <point>@<positive-count>");
+            }
+            candidate = std::string_view(argv[++index]);
+        } else if (argument.starts_with(prefix)) {
+            candidate = argument.substr(prefix.size());
+        }
+
+        if (!candidate.has_value()) {
+            continue;
+        }
+        if (specification.has_value()) {
+            throw std::invalid_argument("--vulkan-fault-inject may be specified only once");
+        }
+        specification = *candidate;
+    }
+
+    if (!specification.has_value()) {
+        return 0;
+    }
+    if (!specification->starts_with(point_prefix)) {
+        throw std::invalid_argument(
+            "unsupported Vulkan fault point; expected present-submit@<positive-count>"
+        );
+    }
+
+    const std::string_view count_text = specification->substr(point_prefix.size());
+    uint64_t               count      = 0;
+    const auto [end, error] = std::from_chars(
+        count_text.data(), count_text.data() + count_text.size(), count
+    );
+    if (count_text.empty() || error != std::errc{} || end != count_text.data() + count_text.size() ||
+        count == 0) {
+        throw std::invalid_argument(
+            "Vulkan fault trigger count must be a positive integer: present-submit@<positive-count>"
+        );
+    }
+    return count;
+}
+
 ERenderMethod ParseDefaultRenderMethod(std::string_view render_method_name) {
     if (render_method_name == "Raster") {
         return ERenderMethod::Raster;
@@ -284,6 +335,10 @@ void RunBoundedRenderLoop(
 
 Engine::Engine() {}
 
+void Engine::ValidateCommandLine(int argc, const char** argv) {
+    (void)ParseVulkanPresentSubmitFaultTrigger(argc, argv);
+}
+
 Engine::~Engine() {
     assert(m_has_shutdown && "Engine::ShutDown() was not called before Engine destruction!");
 }
@@ -314,6 +369,8 @@ void Engine::Init(int argc, const char** argv) {
         ConfigManager::GetInstance().Init(path);
     }
     const auto& config = ConfigManager::GetInstance().GetConfig();
+    const uint64_t vulkan_present_submit_fault_trigger =
+        ParseVulkanPresentSubmitFaultTrigger(argc, argv);
 
     // Init TaskSystem
     TaskSystem::Init();
@@ -372,6 +429,7 @@ void Engine::Init(int argc, const char** argv) {
                 .rhi_thread      = config.engine.threading.rhi_thread,
                 .rhi_bypass      = config.engine.threading.rhi_bypass,
                 .thread_profile_logging = config.engine.threading.profile_logging,
+                .vulkan_present_submit_fault_trigger = vulkan_present_submit_fault_trigger,
             }
         )
     );

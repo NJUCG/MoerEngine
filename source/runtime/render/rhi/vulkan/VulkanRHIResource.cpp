@@ -33,6 +33,7 @@
 
 #include <memory>
 #include <mutex>
+#include <chrono>
 #include <thread>
 
 #pragma region utils definition
@@ -2888,49 +2889,127 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
     }
 
     uint64 VulkanFence::GetDeviceValue() const{
-        uint64_t value;
-        vkGetSemaphoreCounterValue(m_device->GetDevice(), timeline, &value);
+        uint64_t value  = current_value;
+        VkResult result = vkGetSemaphoreCounterValue(m_device->GetDevice(), timeline, &value);
+        if (result != VK_SUCCESS) {
+            m_device->TryLatchFirstFault(
+                VulkanOperationContext{.operation = EVulkanFaultOperation::TimelineHostWait}, result
+            );
+        }
         // vkGetSemaphoreCounterValue(m_device->GetDevice(), m_fence.timeline, &value);
         return value;
     }
 
     void VulkanFence::Wait(uint64_t _value) {
         std::unique_lock<std::mutex> _(cv_m);
-        while (current_value < _value) {
-            std::this_thread::yield();
-            cv.wait(_); }
+        while (current_value < _value && !failed && !m_device->IsFaulted()) {
+            cv.wait_for(_, std::chrono::milliseconds(50));
+        }
+        if (current_value < _value && !failed && m_device->IsFaulted()) {
+            failed         = true;
+            failure_result = m_device->GetFirstFaultResult();
+        }
     }
 
     void VulkanFence::Notify(uint64_t _value) {
         {
             std::unique_lock<std::mutex> _(cv_m);
             current_value = std::max(current_value, _value);
+            submitted_value = std::max(submitted_value, _value);
         }
         cv.notify_all();
     }
 
-    void VulkanFence::Sync(uint64_t _value) {
-        std::unique_lock<std::mutex> _(cv_m);
-        while (current_value < _value) { cv.wait(_); }
+    void VulkanFence::MarkSubmitted(uint64_t _value) {
+        {
+            std::unique_lock<std::mutex> lock(cv_m);
+            submitted_value = std::max(submitted_value, _value);
+        }
+        cv.notify_all();
     }
 
-    void VulkanFence::HostWait(uint64_t _value) {
+    bool VulkanFence::WaitSubmitted(uint64_t _value) {
+        std::unique_lock<std::mutex> lock(cv_m);
+        while (submitted_value < _value && !failed && !m_device->IsFaulted()) {
+            cv.wait_for(lock, std::chrono::milliseconds(50));
+        }
+        return submitted_value >= _value && !failed && !m_device->IsFaulted();
+    }
+
+    void VulkanFence::Sync(uint64_t _value) {
+        std::unique_lock<std::mutex> _(cv_m);
+        while (current_value < _value && !failed && !m_device->IsFaulted()) {
+            cv.wait_for(_, std::chrono::milliseconds(50));
+        }
+        if (current_value < _value && !failed && m_device->IsFaulted()) {
+            failed         = true;
+            failure_result = m_device->GetFirstFaultResult();
+        }
+    }
+
+    VkResult VulkanFence::HostWait(uint64_t _value, const VulkanOperationContext& _context) {
         VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
         info.semaphoreCount = 1;
         info.pValues        = &_value;
         info.pSemaphores    = &timeline;
-        VkResult result = vkWaitSemaphores(m_device->GetDevice(), &info, UINT64_MAX);
-        if (result != VK_SUCCESS) {
-            LOG_ERROR("[VulkanFence] HostWait FAILED! result={}, semaphore={:#x}, wait_value={}",
-                      (int)result, (uint64)timeline, _value);
+        constexpr uint64_t wait_slice_ns = 50'000'000;
+        while (!m_device->IsDeviceLost()) {
+            const VkResult result = vkWaitSemaphores(m_device->GetDevice(), &info, wait_slice_ns);
+            if (result == VK_SUCCESS) {
+                return VK_SUCCESS;
+            }
+            if (result == VK_TIMEOUT) {
+                continue;
+            }
+
+            VulkanOperationContext context = _context;
+            if (context.operation == EVulkanFaultOperation::None) {
+                context.operation = EVulkanFaultOperation::TimelineHostWait;
+            }
+            context.timeline = _value;
+            m_device->TryLatchFirstFault(context, result);
+            if (result != VK_ERROR_DEVICE_LOST) {
+                m_device->EmergencyExitWithoutVulkanCleanup(context, result);
+            }
+            Fail(result);
+            return result;
         }
+        const VkResult result = VK_ERROR_DEVICE_LOST;
+        Fail(result);
+        return result;
+    }
+
+    void VulkanFence::Fail(VkResult _result) {
+        {
+            std::unique_lock<std::mutex> lock(cv_m);
+            failed         = true;
+            failure_result = _result;
+        }
+        cv.notify_all();
+    }
+
+    bool VulkanFence::IsFailed() const {
+        std::unique_lock<std::mutex> lock(cv_m);
+        return failed;
     }
 
     void VulkanFence::SignalHost(uint64_t _value) {
         VkSemaphoreSignalInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
         info.semaphore = timeline;
         info.value     = _value;
-        vkSignalSemaphore(m_device->GetDevice(), &info);
+        if (m_device->IsFaulted()) {
+            Fail(m_device->GetFirstFaultResult());
+            return;
+        }
+        const VkResult result = vkSignalSemaphore(m_device->GetDevice(), &info);
+        if (result != VK_SUCCESS) {
+            m_device->TryLatchFirstFault(
+                VulkanOperationContext{.operation = EVulkanFaultOperation::TimelineHostWait}, result
+            );
+            Fail(result);
+            return;
+        }
+        Notify(_value);
     }
 
     VulkanFence::~VulkanFence() {

@@ -2616,7 +2616,7 @@ public:
 
 #pragma region[ Native Queue ]
 
-VkNativeQueue::VkNativeQueue(EQueueType _type, VulkanDevice& _device) : type(_type) {
+VkNativeQueue::VkNativeQueue(EQueueType _type, VulkanDevice& _device) : device(_device), type(_type) {
     switch (_type) {
         case EQueueType::Graphics:
             queue = _device.GetGraphicsQueue();
@@ -2635,10 +2635,16 @@ VkNativeQueue::VkNativeQueue(EQueueType _type, VulkanDevice& _device) : type(_ty
 
 VkNativeQueue::~VkNativeQueue() {}
 
-void VkNativeQueue::SubmitEmpty(VkFence _fence) {
-    // 这个锁只在AMD GPU上使用，因为AMD GPU没有TransferQueue
-    // 在现代NVIDIA GPU上，这个锁不会被触发，接近0开销，不用在意性能
-    std::unique_lock<std::mutex> guard(*submit_mutex);
+VulkanOperationResult VkNativeQueue::SubmitEmpty(
+    const VulkanOperationContext& _context,
+    VkFence                       _fence
+) {
+    if (device.IsFaulted()) {
+        wait_infos.clear();
+        signal_infos.clear();
+        device.RecordRejectedSubmit();
+        return {EVulkanOperationStatus::Rejected, device.GetFirstFaultResult()};
+    }
 
     VkSubmitInfo2 submit_info{};
     submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
@@ -2650,24 +2656,42 @@ void VkNativeQueue::SubmitEmpty(VkFence _fence) {
     submit_info.pSignalSemaphoreInfos    = signal_infos.data();
     submit_info.commandBufferInfoCount   = 0;
     submit_info.pCommandBufferInfos      = VK_NULL_HANDLE;
-    VkResult submit_result = vkQueueSubmit2(queue, 1, &submit_info, _fence);
-    if (submit_result != VK_SUCCESS) {
-        LOG_ERROR(
-            "[VkNativeQueue] empty vkQueueSubmit2 FAILED! result={}, queue={:#x}, type={}, "
-            "wait_count={}, signal_count={}",
-            (int)submit_result,
-            (uint64)queue,
-            (int)type,
-            wait_infos.size(),
-            signal_infos.size()
-        );
-    }
+    VulkanOperationContext context = _context;
+    context.operation  = EVulkanFaultOperation::QueueSubmitEmpty;
+    context.queue_type = type;
+    context.queue      = queue;
+    const VulkanOperationResult outcome =
+        device.SubmitOnQueue(queue, submit_info, _fence, context);
     wait_infos.clear();
     signal_infos.clear();
+    return outcome;
 }
 
-void VkNativeQueue::Submit(VulkanCmdList& _cmdlist, VkFence _fence) {
-    std::unique_lock<std::mutex> guard(*submit_mutex);
+VulkanOperationResult VkNativeQueue::Submit(
+    VulkanCmdList&                _cmdlist,
+    const VulkanOperationContext& _context,
+    VkFence                       _fence
+) {
+    if (device.IsFaulted()) {
+        wait_infos.clear();
+        signal_infos.clear();
+        device.RecordRejectedSubmit();
+        return {EVulkanOperationStatus::Rejected, device.GetFirstFaultResult()};
+    }
+
+    VulkanOperationContext context = _context;
+    context.queue_type = type;
+    context.queue      = queue;
+    if (context.operation == EVulkanFaultOperation::PresentSubmit &&
+        device.ShouldInjectPresentSubmit()) {
+        LOG_INFO(
+            "[VulkanFault][Injection] point=present-submit trigger={} mode=synthetic-device-lost",
+            device.GetPresentSubmitFaultTrigger()
+        );
+        wait_infos.clear();
+        signal_infos.clear();
+        return device.InjectPresentSubmitFault(context);
+    }
 
     VkSubmitInfo2   submit_info{};
     VkCommandBuffer cmd = _cmdlist.GetHandle();
@@ -2685,20 +2709,14 @@ void VkNativeQueue::Submit(VulkanCmdList& _cmdlist, VkFence _fence) {
     submit_info.commandBufferInfoCount   = 1;
     submit_info.pCommandBufferInfos      = &cmd_info;
 
-    VkResult submit_result = vkQueueSubmit2(queue, 1, &submit_info, _fence);
-    if (submit_result != VK_SUCCESS) {
-        LOG_ERROR(
-            "[VkNativeQueue] vkQueueSubmit2 FAILED! result={}, queue={:#x}, type={}, "
-            "wait_count={}, signal_count={}",
-            (int)submit_result,
-            (uint64)queue,
-            (int)type,
-            wait_infos.size(),
-            signal_infos.size()
-        );
+    if (context.operation == EVulkanFaultOperation::None) {
+        context.operation = EVulkanFaultOperation::QueueSubmit;
     }
+    const VulkanOperationResult outcome =
+        device.SubmitOnQueue(queue, submit_info, _fence, context);
     wait_infos.clear();
     signal_infos.clear();
+    return outcome;
 }
 
 void VkNativeQueue::Wait(VulkanFence* _fence, uint64 _fence_val, VkPipelineStageFlags2 _stage) {
@@ -2901,6 +2919,44 @@ static double RhiThreadProfileMilliseconds(
     return std::chrono::duration<double, std::milli>(_end - _begin).count();
 }
 
+static bool WaitForSubmittedDependencies(
+    VulkanDevice& _device, const Array<WaitEvent>& _wait_events
+) {
+    for (const WaitEvent& event : _wait_events) {
+        auto* fence = reinterpret_cast<VulkanFence*>(event.timeline_handle);
+        if (fence == nullptr || !fence->WaitSubmitted(event.value)) {
+            return false;
+        }
+    }
+    return !_device.IsFaulted();
+}
+
+static VkResult GetRejectedSubmitResult(VulkanDevice& _device) {
+    return _device.IsFaulted() ? _device.GetFirstFaultResult() : VK_ERROR_UNKNOWN;
+}
+
+static void MarkSubmissionAccepted(
+    VulkanFence* _queue_timeline, uint64 _timeline, const Array<SignalEvent>& _signal_events
+) {
+    _queue_timeline->MarkSubmitted(_timeline);
+    for (const SignalEvent& event : _signal_events) {
+        reinterpret_cast<VulkanFence*>(event.timeline_handle)->MarkSubmitted(event.value);
+    }
+}
+
+static void FailSubmissionSignals(
+    VulkanFence* _queue_timeline,
+    const Array<SignalEvent>& _signal_events,
+    VkResult _result
+) {
+    if (_queue_timeline != nullptr) {
+        _queue_timeline->Fail(_result);
+    }
+    for (const SignalEvent& event : _signal_events) {
+        reinterpret_cast<VulkanFence*>(event.timeline_handle)->Fail(_result);
+    }
+}
+
 VkCommandQueue::VkCommandQueue(
     VulkanDevice& _device,
     EQueueType    _type,
@@ -2966,10 +3022,21 @@ VkCommandQueue::~VkCommandQueue() {
         MoerDelete(presentor);
     }
 
+    allocator_quarantine.clear();
+    presentor_quarantine.clear();
     MoerDelete(timeline);
+    vk_device.RecordQueueSyncComplete();
 }
 
 WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
+    if (vk_device.IsFaulted()) {
+        vk_device.RecordRejectedSubmit();
+        FailSubmissionSignals(nullptr, _submit.signal_events, vk_device.GetFirstFaultResult());
+        for (auto& callback : _submit.callbacks) {
+            callback();
+        }
+        return {uint64(timeline), last_frame.load(std::memory_order_acquire)};
+    }
     if (rhi_thread_enabled) {
         const auto caller_started = std::chrono::steady_clock::now();
         uint64 current_timeline;
@@ -2997,18 +3064,53 @@ WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
     std::unique_lock<std::mutex> lock(exec_mtx);
     const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
     const auto   work_started     = std::chrono::steady_clock::now();
-    ExecuteNow(std::move(_submit), current_timeline);
+    ExecuteNow(std::move(_submit), current_timeline, current_timeline);
     const double work_ms =
         RhiThreadProfileMilliseconds(work_started, std::chrono::steady_clock::now());
     RecordThreadingProfile(ERhiWorkKind::Execute, work_ms, 0.0, work_ms, 0);
     return {uint64(timeline), current_timeline};
 }
 
-void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline) {
+void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline, uint64 _serial) {
     assert(
         !rhi_thread_enabled ||
         rhi_thread_id.load(std::memory_order_acquire) == Platform::GetCurrentThreadID()
     );
+
+    const VulkanOperationContext context{
+        .operation   = EVulkanFaultOperation::QueueSubmit,
+        .queue_type  = queue.GetType(),
+        .queue       = queue.GetHandle(),
+        .timeline    = _timeline,
+        .work_serial = _serial,
+    };
+    if (vk_device.IsFaulted()) {
+        vk_device.RecordRejectedSubmit();
+        const VkResult rejected_result = vk_device.GetFirstFaultResult();
+        FailSubmissionSignals(timeline, _submit.signal_events, rejected_result);
+        std::unique_lock<std::mutex> lock(event_mutex);
+        event_queue.emplace_back(
+            VulkanSubmissionEvent{
+                {EVulkanOperationStatus::Rejected, rejected_result}, context
+            },
+            _timeline,
+            false
+        );
+        if (!_submit.callbacks.empty()) {
+            event_queue.emplace_back(
+                VulkanCallbackBatch{std::move(_submit.callbacks), false}, _timeline, false
+            );
+        }
+        if (!_submit.success_callbacks.empty()) {
+            event_queue.emplace_back(
+                VulkanCallbackBatch{std::move(_submit.success_callbacks), true}, _timeline, false
+            );
+        }
+        EnqueueCompletionMarker(_timeline);
+        lock.unlock();
+        queue_cv.notify_one();
+        return;
+    }
 
     Timer         timer{};
     Timer         reorder_timer{};
@@ -3118,39 +3220,62 @@ void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline) {
         tracker.Reset();
     }
 
-    AppendDeferredReleaseCallbacks(_submit.callbacks);
+    Array<RHIResource*> deferred_releases = TakeDeferredReleases();
 
-    const auto end_tag = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-    queue.Signal(timeline, _timeline, end_tag);
-    for (auto& evt : _submit.wait_events) {
-        queue.Wait(
-            reinterpret_cast<VulkanFence*>(evt.timeline_handle),
-            evt.value,
-            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
-        );
-    }
-    for (auto& evt : _submit.signal_events) {
-        queue.Signal(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value, end_tag);
-    }
-
-    if (has_cmd) {
-        queue.Submit(vk_allocator.GetCmdList());
+    const auto            end_tag = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    VulkanOperationResult submit_outcome{};
+    if (!WaitForSubmittedDependencies(vk_device, _submit.wait_events)) {
+        vk_device.RecordRejectedSubmit();
+        const VkResult rejected_result = GetRejectedSubmitResult(vk_device);
+        submit_outcome = {EVulkanOperationStatus::Rejected, rejected_result};
+        FailSubmissionSignals(timeline, _submit.signal_events, rejected_result);
     } else {
-        allocators.Push(allocator_ptr.release());
-        queue.SubmitEmpty();
+        queue.Signal(timeline, _timeline, end_tag);
+        for (auto& evt : _submit.wait_events) {
+            queue.Wait(
+                reinterpret_cast<VulkanFence*>(evt.timeline_handle),
+                evt.value,
+                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+            );
+        }
+        for (auto& evt : _submit.signal_events) {
+            queue.Signal(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value, end_tag);
+        }
+
+        submit_outcome = has_cmd ? queue.Submit(vk_allocator.GetCmdList(), context)
+                                 : queue.SubmitEmpty(context);
+        if (submit_outcome.WasSubmitted()) {
+            MarkSubmissionAccepted(timeline, _timeline, _submit.signal_events);
+        } else {
+            FailSubmissionSignals(timeline, _submit.signal_events, submit_outcome.result);
+        }
     }
 
     {
         std::unique_lock<std::mutex> lock(event_mutex);
-        event_queue.emplace_back(FencePlaceHoler{}, _timeline, false);
-        if (has_cmd) {
-            event_queue.emplace_back(std::move(allocator_ptr), _timeline, false);
-        }
+        event_queue.emplace_back(
+            VulkanSubmissionEvent{submit_outcome, context, submit_outcome.WasSubmitted()},
+            _timeline,
+            false
+        );
+        event_queue.emplace_back(std::move(allocator_ptr), _timeline, false);
         for (auto& evt : _submit.signal_events) {
             event_queue.emplace_back(SignalEvent(evt.timeline_handle, evt.value), _timeline, false);
         }
         if (!_submit.callbacks.empty()) {
-            event_queue.emplace_back(std::move(_submit.callbacks), _timeline, false);
+            event_queue.emplace_back(
+                VulkanCallbackBatch{std::move(_submit.callbacks), false}, _timeline, false
+            );
+        }
+        if (!_submit.success_callbacks.empty()) {
+            event_queue.emplace_back(
+                VulkanCallbackBatch{std::move(_submit.success_callbacks), true}, _timeline, false
+            );
+        }
+        if (!deferred_releases.empty()) {
+            event_queue.emplace_back(
+                VulkanDeferredReleaseBatch{std::move(deferred_releases)}, _timeline, false
+            );
         }
         EnqueueCompletionMarker(_timeline);
     }
@@ -3177,6 +3302,11 @@ void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline) {
 void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
     assert(_view.texture != nullptr && "Present source texture is null");
     TextureRef source_texture{_view.texture};
+
+    if (vk_device.IsFaulted()) {
+        vk_device.RecordRejectedPresent();
+        return;
+    }
 
     if (rhi_thread_enabled) {
         const auto caller_started = std::chrono::steady_clock::now();
@@ -3206,7 +3336,9 @@ void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
     std::unique_lock<std::mutex> lock(exec_mtx);
     const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
     const auto   work_started     = std::chrono::steady_clock::now();
-    PresentNow(std::move(_sc), std::move(source_texture), _view, current_timeline);
+    PresentNow(
+        std::move(_sc), std::move(source_texture), _view, current_timeline, current_timeline
+    );
     const double work_ms =
         RhiThreadProfileMilliseconds(work_started, std::chrono::steady_clock::now());
     RecordThreadingProfile(ERhiWorkKind::Present, work_ms, 0.0, work_ms, 0);
@@ -3216,38 +3348,93 @@ void VkCommandQueue::PresentNow(
     SwapchainRef&& _sc,
     TextureRef&&   _source_texture,
     TextureView    _view,
-    uint64         _timeline
+    uint64         _timeline,
+    uint64         _serial
 ) {
     assert(
         !rhi_thread_enabled ||
         rhi_thread_id.load(std::memory_order_acquire) == Platform::GetCurrentThreadID()
     );
 
+    const VulkanOperationContext context{
+        .operation   = EVulkanFaultOperation::PresentSubmit,
+        .queue_type  = queue.GetType(),
+        .queue       = queue.GetHandle(),
+        .timeline    = _timeline,
+        .work_serial = _serial,
+    };
+    if (vk_device.IsFaulted()) {
+        vk_device.RecordRejectedPresent();
+        const VkResult rejected_result = vk_device.GetFirstFaultResult();
+        timeline->Fail(rejected_result);
+        std::unique_lock<std::mutex> lock(event_mutex);
+        event_queue.emplace_back(
+            VulkanSubmissionEvent{
+                {EVulkanOperationStatus::Rejected, rejected_result}, context, false
+            },
+            _timeline,
+            false
+        );
+        EnqueueCompletionMarker(_timeline);
+        lock.unlock();
+        queue_cv.notify_one();
+        return;
+    }
+
     VkSwapchain* sc = ResourceCast(_sc.Get());
     auto         presentor = std::move(GetPresentor());
     auto& vk_allocator = *presentor;
     auto& vk_cmd_list  = vk_allocator.GetCmdList();
     auto& vk_tracker   = vk_allocator.GetTracker();
-    sc->WaitFrameInFlight();
-    auto [fence, idx, present_timeline] =
-        sc->AquireNextImage(rhi_thread_enabled ? 0 : UINT64_MAX);
+    if (!sc->WaitFrameInFlight()) {
+        vk_device.RecordRejectedPresent();
+        const VkResult rejected_result = GetRejectedSubmitResult(vk_device);
+        timeline->Fail(rejected_result);
+        std::unique_lock<std::mutex> lock(event_mutex);
+        event_queue.emplace_back(
+            VulkanSubmissionEvent{
+                {EVulkanOperationStatus::Rejected, rejected_result}, context, false
+            },
+            _timeline,
+            false
+        );
+        event_queue.emplace_back(std::move(presentor), _timeline, false);
+        EnqueueCompletionMarker(_timeline);
+        lock.unlock();
+        queue_cv.notify_one();
+        return;
+    }
+    auto acquire = sc->AquireNextImage(rhi_thread_enabled ? 0 : 50'000'000);
 
     Array<std::function<void()>> callbacks;
-    if (idx == UINT32_MAX) {
-        presentor->Reset();
-        presentors.Push(presentor.release());
+    if (!acquire.HasImage()) {
+        if (acquire.outcome.status == EVulkanOperationStatus::Faulted ||
+            acquire.outcome.status == EVulkanOperationStatus::Rejected) {
+            timeline->Fail(acquire.outcome.result);
+        } else {
+            presentors.Push(presentor.release());
+        }
 
-        AppendDeferredReleaseCallbacks(callbacks);
+        Array<RHIResource*> deferred_releases = TakeDeferredReleases();
         callbacks.emplace_back(
             [swapchain = std::move(_sc), source_texture = std::move(_source_texture)]() mutable {}
         );
-
-        queue.Signal(timeline, _timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-        queue.SubmitEmpty();
         {
             std::unique_lock<std::mutex> lock(event_mutex);
-            event_queue.emplace_back(FencePlaceHoler{}, _timeline, false);
-            event_queue.emplace_back(std::move(callbacks), _timeline, false);
+            event_queue.emplace_back(
+                VulkanSubmissionEvent{acquire.outcome, context, false}, _timeline, false
+            );
+            if (presentor) {
+                event_queue.emplace_back(std::move(presentor), _timeline, false);
+            }
+            event_queue.emplace_back(
+                VulkanCallbackBatch{std::move(callbacks), false}, _timeline, false
+            );
+            if (!deferred_releases.empty()) {
+                event_queue.emplace_back(
+                    VulkanDeferredReleaseBatch{std::move(deferred_releases)}, _timeline, false
+                );
+            }
             EnqueueCompletionMarker(_timeline);
         }
         queue_cv.notify_one();
@@ -3256,6 +3443,7 @@ void VkCommandQueue::PresentNow(
 
     //copy
     auto* vk_src_tex     = static_cast<VulkanTexture*>(_view.texture);
+    const uint idx       = acquire.image_index;
     auto* swaphchain_tex = ResourceCast(sc->GetSwapchainImage(idx).texture);
     {
         vk_cmd_list.Begin();
@@ -3285,24 +3473,49 @@ void VkCommandQueue::PresentNow(
         // vk_tracker.PropagateState();
     }
 
-    AppendDeferredReleaseCallbacks(callbacks);
+    Array<RHIResource*> deferred_releases = TakeDeferredReleases();
     callbacks.emplace_back(
         [swapchain = std::move(_sc), source_texture = std::move(_source_texture)]() mutable {}
     );
 
     queue.Signal(timeline, _timeline, VK_PIPELINE_STAGE_2_COPY_BIT);
-    queue.Wait(fence, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    queue.Wait(acquire.ready_semaphore, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
     queue.Signal(sc->GetRenderFinishedFence(idx), VK_PIPELINE_STAGE_2_COPY_BIT);
-    queue.Submit(vk_allocator.GetCmdList());
-    sc->Present(queue.GetHandle(), idx);
+    VulkanOperationResult submit_outcome = queue.Submit(vk_allocator.GetCmdList(), context);
+    if (submit_outcome.WasSubmitted()) {
+        timeline->MarkSubmitted(_timeline);
+    } else {
+        timeline->Fail(submit_outcome.result);
+    }
+    VulkanOperationResult final_outcome  = submit_outcome;
+    if (submit_outcome.WasSubmitted()) {
+        const VulkanOperationResult present_outcome =
+            sc->Present(queue.GetHandle(), idx, _timeline, _serial);
+        if (!present_outcome.Succeeded()) {
+            final_outcome = present_outcome;
+        }
+    }
     {
         std::unique_lock<std::mutex> lock(event_mutex);
-        event_queue.emplace_back(FencePlaceHoler{}, _timeline, false);
+        event_queue.emplace_back(
+            VulkanSubmissionEvent{final_outcome, context, submit_outcome.WasSubmitted()},
+            _timeline,
+            false
+        );
         event_queue.emplace_back(std::move(presentor), _timeline, false);
-        event_queue.emplace_back(std::move(callbacks), _timeline, false);
+        event_queue.emplace_back(
+            VulkanCallbackBatch{std::move(callbacks), false}, _timeline, false
+        );
+        if (!deferred_releases.empty()) {
+            event_queue.emplace_back(
+                VulkanDeferredReleaseBatch{std::move(deferred_releases)}, _timeline, false
+            );
+        }
         EnqueueCompletionMarker(_timeline);
     }
-    presented_queue.Enqueue(_timeline);
+    if (submit_outcome.WasSubmitted()) {
+        presented_queue.Enqueue(_timeline);
+    }
     queue_cv.notify_one();
 }
 
@@ -3327,6 +3540,10 @@ void VkCommandQueue::Sync() {
     }
 
     Complete(target_timeline);
+
+    if (vk_device.IsFaulted()) {
+        return;
+    }
 
     Array<RHIResource*> deleted_resources;
     if (queue.GetType() != EQueueType::Graphics) {
@@ -3376,35 +3593,27 @@ UniquePtr<VulkanPresentor> VkCommandQueue::GetPresentor() {
     return MakeUnique<VulkanPresentor>(&vk_device, queue.GetType());
 }
 
-void VkCommandQueue::AppendDeferredReleaseCallbacks(Array<std::function<void()>>& _callbacks) {
+Array<RHIResource*> VkCommandQueue::TakeDeferredReleases() {
     if (queue.GetType() != EQueueType::Graphics) {
-        return;
+        return {};
     }
 
     Array<RHIResource*> deleted_resources;
     if (rhi_thread_enabled) {
         std::unique_lock<std::mutex> lock(rhi_work_mutex);
         if (!rhi_work_queue.empty()) {
-            return;
+            return {};
         }
         vk_device.deferred_release_queue.PopAll(deleted_resources);
     } else {
         vk_device.deferred_release_queue.PopAll(deleted_resources);
     }
 
-    if (deleted_resources.empty()) {
-        return;
-    }
-
-    _callbacks.emplace_back([deleted_resources = std::move(deleted_resources)]() mutable {
-        for (auto* resource : deleted_resources) {
-            MoerDelete(resource);
-        }
-    });
+    return deleted_resources;
 }
 
 void VkCommandQueue::EnqueueCompletionMarker(uint64 _timeline) {
-    event_queue.emplace_back(Array<std::function<void()>>{}, _timeline, true);
+    event_queue.emplace_back(VulkanCompletionMarker{}, _timeline, true);
 }
 
 void VkCommandQueue::RecordThreadingProfile(
@@ -3443,7 +3652,7 @@ void VkCommandQueue::RecordThreadingProfile(
     }
 
     const uint64 submitted_timeline = last_frame.load(std::memory_order_acquire);
-    const uint64 completed_timeline = executed_frame.load(std::memory_order_acquire);
+    const uint64 completed_timeline = cpu_settled_frame.load(std::memory_order_acquire);
     const uint64 gpu_pending = submitted_timeline > completed_timeline
                                    ? submitted_timeline - completed_timeline
                                    : 0;
@@ -3534,14 +3743,15 @@ void VkCommandQueue::RhiThreadMain() {
             std::visit(
                 Overload{
                     [this](RhiExecuteWork& _work) {
-                        ExecuteNow(std::move(_work.submit), _work.timeline);
+                        ExecuteNow(std::move(_work.submit), _work.timeline, _work.serial);
                     },
                     [this](RhiPresentWork& _work) {
                         PresentNow(
                             std::move(_work.swapchain),
                             std::move(_work.source_texture),
                             _work.source_view,
-                            _work.timeline
+                            _work.timeline,
+                            _work.serial
                         );
                     }
                 },
@@ -3573,6 +3783,8 @@ void VkCommandQueue::CompletionThreadMain() {
         queue.GetType() == EQueueType::Graphics ? "Vulkan Gfx Completion" : "Vulkan Compute Completion"
     );
 
+    bool batch_gpu_success = false;
+    bool batch_release_safe = false;
     while (true) {
         std::optional<QueueEvent> evt;
         {
@@ -3591,27 +3803,83 @@ void VkCommandQueue::CompletionThreadMain() {
         const uint64 event_timeline = evt->timeline;
         std::visit(
             Overload{
-                [this, event_timeline](UniquePtr<VulkanAllocator>& _allocator) {
-                    _allocator->Complete(timeline, event_timeline);
-                    _allocator->Reset();
-                    allocators.Push(_allocator.release());
-                },
-                [this, event_timeline](UniquePtr<VulkanPresentor>& _presentor) {
-                    _presentor->Complete(timeline, event_timeline);
-                    _presentor->Reset();
-                    presentors.Push(_presentor.release());
-                },
-                [this, event_timeline](FencePlaceHoler&) {
-                    timeline->HostWait(event_timeline);
-                },
-                [](Array<std::function<void()>>& _funcs) {
-                    for (auto& func : _funcs) {
-                        func();
+                [this, event_timeline, &batch_gpu_success, &batch_release_safe](
+                    VulkanSubmissionEvent& _submission
+                ) {
+                    batch_gpu_success = false;
+                    batch_release_safe =
+                        !_submission.gpu_submitted &&
+                        (_submission.outcome.status == EVulkanOperationStatus::Retry ||
+                         _submission.outcome.status == EVulkanOperationStatus::Recreate);
+                    if (!_submission.gpu_submitted) {
+                        if (_submission.outcome.status == EVulkanOperationStatus::Faulted ||
+                            _submission.outcome.status == EVulkanOperationStatus::Rejected) {
+                            timeline->Fail(_submission.outcome.result);
+                        }
+                        return;
+                    }
+
+                    VulkanOperationContext wait_context = _submission.context;
+                    wait_context.operation = EVulkanFaultOperation::TimelineHostWait;
+                    const VkResult wait_result = timeline->HostWait(event_timeline, wait_context);
+                    if (wait_result == VK_SUCCESS && !vk_device.IsDeviceLost()) {
+                        timeline->Notify(event_timeline);
+                        batch_gpu_success = true;
+                        batch_release_safe = true;
+                    } else {
+                        timeline->Fail(wait_result);
                     }
                 },
-                [](SignalEvent& _evt) {
+                [this, &batch_gpu_success](UniquePtr<VulkanAllocator>& _allocator) {
+                    if (batch_gpu_success && !vk_device.IsFaulted()) {
+                        _allocator->CompleteSuccess();
+                        if (_allocator->Reset()) {
+                            allocators.Push(_allocator.release());
+                            return;
+                        }
+                    }
+                    vk_device.RecordAllocatorQuarantine();
+                    vk_device.RecordSkippedCommandPoolReset();
+                    allocator_quarantine.emplace_back(std::move(_allocator));
+                },
+                [this, &batch_gpu_success](UniquePtr<VulkanPresentor>& _presentor) {
+                    if (batch_gpu_success && !vk_device.IsFaulted()) {
+                        _presentor->CompleteSuccess();
+                        if (_presentor->Reset()) {
+                            presentors.Push(_presentor.release());
+                            return;
+                        }
+                    }
+                    vk_device.RecordAllocatorQuarantine();
+                    vk_device.RecordSkippedCommandPoolReset();
+                    presentor_quarantine.emplace_back(std::move(_presentor));
+                },
+                [&batch_gpu_success](VulkanCallbackBatch& _batch) {
+                    if (!_batch.success_only || batch_gpu_success) {
+                        for (auto& func : _batch.callbacks) {
+                            func();
+                        }
+                    }
+                },
+                [this, &batch_gpu_success, &batch_release_safe](VulkanDeferredReleaseBatch& _batch) {
+                    if (batch_gpu_success || batch_release_safe) {
+                        for (auto* resource : _batch.resources) {
+                            MoerDelete(resource);
+                        }
+                        return;
+                    }
+                    for (auto* resource : _batch.resources) {
+                        vk_device.EnqueueDeferredRelease(resource);
+                    }
+                },
+                [](VulkanCompletionMarker&) {},
+                [this, &batch_gpu_success](SignalEvent& _evt) {
                     auto* fence = reinterpret_cast<VulkanFence*>(_evt.timeline_handle);
-                    fence->Notify(_evt.value);
+                    if (batch_gpu_success) {
+                        fence->Notify(_evt.value);
+                    } else if (vk_device.IsFaulted()) {
+                        fence->Fail(vk_device.GetFirstFaultResult());
+                    }
                 },
                 [](WaitEvent&) {},
                 [](VulkanFence*) {
@@ -3622,9 +3890,9 @@ void VkCommandQueue::CompletionThreadMain() {
         );
 
         if (evt->wake_thread) {
-            uint64 completed = executed_frame.load(std::memory_order_relaxed);
+            uint64 completed = cpu_settled_frame.load(std::memory_order_relaxed);
             while (completed < event_timeline &&
-                   !executed_frame.compare_exchange_weak(
+                   !cpu_settled_frame.compare_exchange_weak(
                        completed, event_timeline, std::memory_order_release, std::memory_order_relaxed
                    )) {}
             queue_cv.notify_all();
@@ -3639,7 +3907,7 @@ void VkCommandQueue::Complete(uint64 _timeline) {
 
     std::unique_lock<std::mutex> lock(event_mutex);
     queue_cv.wait(lock, [this, _timeline]() {
-        return executed_frame.load(std::memory_order_acquire) >= _timeline;
+        return cpu_settled_frame.load(std::memory_order_acquire) >= _timeline;
     });
 }
 
@@ -3659,6 +3927,7 @@ VkCopyQueue::VkCopyQueue(VulkanDevice& _device) :
 }
 
 VkCopyQueue::~VkCopyQueue() {
+    Complete(last_frame);
     enabled = false;
     queue_cv.notify_all();
     thread.join();
@@ -3668,7 +3937,9 @@ VkCopyQueue::~VkCopyQueue() {
     for (auto& allocator : allocs) {
         MoerDelete(allocator);
     }
+    allocator_quarantine.clear();
     timeline = nullptr;
+    device.RecordQueueSyncComplete();
 }
 static constexpr uint64 fread_segment_size = 1024 * 64; // 64KB
 IOWaitEvt               VkCopyQueue::Execute(IOQueueSubmission&& _submission) {
@@ -3734,7 +4005,18 @@ IOWaitEvt VkCopyQueue::Execute(CmdSubmit&& _evt) {
     Array<UniquePtr<Command>> cmds = std::move(_evt.cmds);
 
     auto current_timeline = last_frame;
-    if (!cmds.empty()) {
+    if (device.IsFaulted()) {
+        device.RecordRejectedSubmit();
+        FailSubmissionSignals(nullptr, _evt.signal_events, device.GetFirstFaultResult());
+        for (auto& callback : _evt.callbacks) {
+            callback();
+        }
+        return {uint64(timeline.Get()), current_timeline};
+    }
+    const bool has_queue_work =
+        !cmds.empty() || !_evt.wait_events.empty() || !_evt.signal_events.empty() ||
+        !_evt.callbacks.empty() || !_evt.success_callbacks.empty();
+    if (has_queue_work) {
 
         FunctionTable function_table{
             .is_resource_write       = &IsBufferTextureWrite,
@@ -3793,30 +4075,65 @@ IOWaitEvt VkCopyQueue::Execute(CmdSubmit&& _evt) {
         //event queue
 
         auto current_timeline = ++last_frame;
-        queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-        if (current_timeline > 1) {
-            queue.Wait(timeline, current_timeline - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+        const VulkanOperationContext context{
+            .operation   = EVulkanFaultOperation::QueueSubmit,
+            .queue_type  = EQueueType::Copy,
+            .queue       = queue.GetHandle(),
+            .timeline    = current_timeline,
+            .work_serial = current_timeline,
+        };
+        VulkanOperationResult submit_outcome{};
+        if (!WaitForSubmittedDependencies(device, _evt.wait_events)) {
+            device.RecordRejectedSubmit();
+            const VkResult rejected_result = GetRejectedSubmitResult(device);
+            submit_outcome = {EVulkanOperationStatus::Rejected, rejected_result};
+            FailSubmissionSignals(timeline.Get(), _evt.signal_events, rejected_result);
+        } else {
+            queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+            if (current_timeline > 1) {
+                queue.Wait(timeline, current_timeline - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+            }
+            for (auto& evt : _evt.wait_events) {
+                queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);
+            }
+            for (auto& evt : _evt.signal_events) {
+                queue.Signal(
+                    reinterpret_cast<VulkanFence*>(evt.timeline_handle),
+                    evt.value,
+                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+                );
+            }
+            submit_outcome = queue.Submit(vk_allocator.GetCmdList(), context);
+            if (submit_outcome.WasSubmitted()) {
+                MarkSubmissionAccepted(timeline.Get(), current_timeline, _evt.signal_events);
+            } else {
+                FailSubmissionSignals(timeline.Get(), _evt.signal_events, submit_outcome.result);
+            }
         }
-        for (auto& evt : _evt.wait_events) {
-            queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);
-        }
-        for (auto& evt : _evt.signal_events) {
-            queue.Signal(
-                reinterpret_cast<VulkanFence*>(evt.timeline_handle),
-                evt.value,
-                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
-            );
-        }
-        queue.Submit(vk_allocator.GetCmdList());
         {
             std::unique_lock<std::mutex> lock(event_mutex);
-            event_queue.emplace_back(std::move(allocator), current_timeline, true);
+            event_queue.emplace_back(
+                VulkanSubmissionEvent{submit_outcome, context, submit_outcome.WasSubmitted()},
+                current_timeline,
+                false
+            );
+            event_queue.emplace_back(std::move(allocator), current_timeline, false);
             for (auto& evt : _evt.signal_events) {
                 event_queue.emplace_back(
                     IOSignalEvt(evt.timeline_handle, evt.value), current_timeline, false
                 );
             }
-            event_queue.emplace_back(std::move(_evt.callbacks), current_timeline, false);
+            if (!_evt.callbacks.empty()) {
+                event_queue.emplace_back(
+                    VulkanCallbackBatch{std::move(_evt.callbacks), false}, current_timeline, false
+                );
+            }
+            if (!_evt.success_callbacks.empty()) {
+                event_queue.emplace_back(
+                    VulkanCallbackBatch{std::move(_evt.success_callbacks), true}, current_timeline, false
+                );
+            }
+            event_queue.emplace_back(VulkanCompletionMarker{}, current_timeline, true);
             queue_cv.notify_one();
         }
         return {uint64(timeline.Get()), current_timeline};
@@ -3833,96 +4150,89 @@ FenceRef VkCopyQueue::GetFenceHandle() {
 }
 
 void VkCopyQueue::ExecuteThread() {
-    while (enabled) {
-        uint64 timeline;
-        bool   b_wake_up = false;
-
-        auto wait_util_reach_timeline = [&timeline, &b_wake_up, this]() {
-            if (!b_wake_up) {
-                return;
-            }
-            uint64 prev_timeline = executed_frame;
-            while (prev_timeline < timeline &&
-                   !executed_frame.compare_exchange_weak(prev_timeline, timeline)) {
-                std::this_thread::yield();
-            }
-        };
-
-        auto visit_allocator = [&,
-                                &allocators(this->allocators),
-                                fence(this->timeline)](UniquePtr<VulkanAllocator>& _allocator) {
-            _allocator->Complete(fence, timeline);
-            _allocator->Reset();
-            allocators.Push(_allocator.release());
-            wait_util_reach_timeline();
-        };
-        auto visit_fence = [&](Placeholder& _fence) {
-            this->timeline->HostWait(timeline);
-            wait_util_reach_timeline();
-        };
-        auto visit_funcs = [&](Array<std::function<void()>>& _funcs) {
-            for (auto& func : _funcs) {
-                func();
-            }
-            wait_util_reach_timeline();
-        };
-
-        auto visit_signal_event = [&](IOSignalEvt& _evt) {
-            auto* fence = reinterpret_cast<VulkanFence*>(_evt.handle);
-            fence->Notify(_evt.timeline);
-        };
-        auto visit_wait_event = [&](IOWaitEvt& _evt) {
-            auto* fence = reinterpret_cast<VulkanFence*>(_evt.handle);
-            fence->HostWait(_evt.timeline);
-        };
-        while (true) {
-            std::optional<IOEvent> evt;
-            {
-                std::unique_lock<std::mutex> lock(event_mutex);
-                if (!event_queue.empty()) {
-                    auto& event = event_queue.front();
-                    evt.emplace(std::move(event));
-                    event_queue.pop_front();
-                }
-            }
-            if (!evt.has_value()) {
-                break;
-            }
-            timeline  = evt->timeline;
-            b_wake_up = evt->wake_thread;
-            std::visit(
-                Overload{
-                    [&](UniquePtr<VulkanAllocator>& _evt) {
-                        visit_allocator(_evt);
-                    },
-                    [&](Placeholder& _evt) {
-                        visit_fence(_evt);
-                    },
-                    [&](Array<std::function<void()>>& _evt) {
-                        visit_funcs(_evt);
-                    },
-                    [&](IOSignalEvt& _evt) {
-                        visit_signal_event(_evt);
-                    },
-                    [&](IOWaitEvt& _evt) {
-                        // visit_wait_event(_evt);
-                    },
-                    [&](VulkanFence* _fence) {
-                        assert(false && "Invalid event");
-                    },
-                    [&](UniquePtr<VulkanPresentor>& _evt) {
-                        assert(false && "Invalid event");
-                    }
-
-                },
-                evt->event
-            );
-        }
+    bool batch_gpu_success = false;
+    while (true) {
+        std::optional<IOEvent> evt;
         {
             std::unique_lock<std::mutex> lock(event_mutex);
-            while (enabled && event_queue.empty()) {
-                queue_cv.wait(lock);
+            queue_cv.wait(lock, [this]() {
+                return !enabled.load(std::memory_order_acquire) || !event_queue.empty();
+            });
+            if (!enabled.load(std::memory_order_acquire) && event_queue.empty()) {
+                break;
             }
+            evt.emplace(std::move(event_queue.front()));
+            event_queue.pop_front();
+        }
+
+        const uint64 event_timeline = evt->timeline;
+        std::visit(
+            Overload{
+                [this, event_timeline, &batch_gpu_success](VulkanSubmissionEvent& _submission) {
+                    batch_gpu_success = false;
+                    if (!_submission.gpu_submitted) {
+                        if (_submission.outcome.status == EVulkanOperationStatus::Faulted ||
+                            _submission.outcome.status == EVulkanOperationStatus::Rejected) {
+                            timeline->Fail(_submission.outcome.result);
+                        }
+                        return;
+                    }
+                    VulkanOperationContext wait_context = _submission.context;
+                    wait_context.operation = EVulkanFaultOperation::TimelineHostWait;
+                    const VkResult result = timeline->HostWait(event_timeline, wait_context);
+                    if (result == VK_SUCCESS && !device.IsDeviceLost()) {
+                        timeline->Notify(event_timeline);
+                        batch_gpu_success = true;
+                    } else {
+                        timeline->Fail(result);
+                    }
+                },
+                [this, &batch_gpu_success](UniquePtr<VulkanAllocator>& _allocator) {
+                    if (batch_gpu_success && !device.IsFaulted()) {
+                        _allocator->CompleteSuccess();
+                        if (_allocator->Reset()) {
+                            allocators.Push(_allocator.release());
+                            return;
+                        }
+                    }
+                    device.RecordAllocatorQuarantine();
+                    device.RecordSkippedCommandPoolReset();
+                    allocator_quarantine.emplace_back(std::move(_allocator));
+                },
+                [this, &batch_gpu_success](VulkanCallbackBatch& _batch) {
+                    if (!_batch.success_only || batch_gpu_success) {
+                        for (auto& callback : _batch.callbacks) {
+                            callback();
+                        }
+                    }
+                },
+                [](VulkanCompletionMarker&) {},
+                [this, &batch_gpu_success](IOSignalEvt& _evt) {
+                    auto* fence = reinterpret_cast<VulkanFence*>(_evt.handle);
+                    if (batch_gpu_success) {
+                        fence->Notify(_evt.timeline);
+                    } else if (device.IsFaulted()) {
+                        fence->Fail(device.GetFirstFaultResult());
+                    }
+                },
+                [](IOWaitEvt&) {},
+                [](UniquePtr<VulkanPresentor>&) {
+                    assert(false && "Presentor event is invalid on the copy queue");
+                }
+            },
+            evt->event
+        );
+
+        if (evt->wake_thread) {
+            uint64 settled = cpu_settled_frame.load(std::memory_order_relaxed);
+            while (settled < event_timeline &&
+                   !cpu_settled_frame.compare_exchange_weak(
+                       settled,
+                       event_timeline,
+                       std::memory_order_release,
+                       std::memory_order_relaxed
+                   )) {}
+            settled_cv.notify_all();
         }
     }
 }
@@ -4063,12 +4373,45 @@ void VkCopyQueue::RHIThreadLoop() {
         vk_tracker.Reset();
         //event queue
         auto current_timeline = ++last_frame;
+        const VulkanOperationContext context{
+            .operation   = EVulkanFaultOperation::QueueSubmit,
+            .queue_type  = EQueueType::Copy,
+            .queue       = queue.GetHandle(),
+            .timeline    = current_timeline,
+            .work_serial = current_timeline,
+        };
         queue.Signal(this->timeline, current_timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
         queue.Wait(this->timeline, current_timeline - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-        queue.Submit(vk_allocator.GetCmdList());
+        const VulkanOperationResult submit_outcome =
+            queue.Submit(vk_allocator.GetCmdList(), context);
+        if (submit_outcome.WasSubmitted()) {
+            this->timeline->MarkSubmitted(current_timeline);
+        } else {
+            this->timeline->Fail(submit_outcome.result);
+        }
         {
             std::unique_lock<std::mutex> lock(event_mutex);
-            event_queue.emplace_back(std::move(allocator), current_timeline, true);
+            event_queue.emplace_back(
+                VulkanSubmissionEvent{submit_outcome, context, submit_outcome.WasSubmitted()},
+                current_timeline,
+                false
+            );
+            event_queue.emplace_back(std::move(allocator), current_timeline, false);
+            if (!submission.callbacks.empty()) {
+                event_queue.emplace_back(
+                    VulkanCallbackBatch{std::move(submission.callbacks), false},
+                    current_timeline,
+                    false
+                );
+            }
+            if (!submission.success_callbacks.empty()) {
+                event_queue.emplace_back(
+                    VulkanCallbackBatch{std::move(submission.success_callbacks), true},
+                    current_timeline,
+                    false
+                );
+            }
+            event_queue.emplace_back(VulkanCompletionMarker{}, current_timeline, true);
             queue_cv.notify_one();
         }
         {
@@ -4091,28 +4434,13 @@ UniquePtr<VulkanAllocator> VkCopyQueue::GetAllocator() {
 }
 
 void VkCopyQueue::Complete(uint64 _timeline) {
-    uint64 spin_count = 0;
-    while (executed_frame < _timeline) {
-        std::this_thread::yield();
-        ++spin_count;
-        if (spin_count == 10'000'000) {
-            LOG_ERROR(
-                "[CopyQueue] Complete: STILL WAITING after 10M spins! "
-                "_timeline={}, executed_frame={}, enabled={}",
-                _timeline,
-                executed_frame.load(),
-                (bool)enabled
-            );
-        }
-        if (spin_count % 50'000'000 == 0) {
-            LOG_ERROR(
-                "[CopyQueue] Complete: STUCK! spins={}, _timeline={}, executed_frame={}",
-                spin_count,
-                _timeline,
-                executed_frame.load()
-            );
-        }
+    if (_timeline == 0) {
+        return;
     }
+    std::unique_lock<std::mutex> lock(event_mutex);
+    settled_cv.wait(lock, [this, _timeline]() {
+        return cpu_settled_frame.load(std::memory_order_acquire) >= _timeline;
+    });
 }
 #pragma endregion
 } // namespace Moer::Render
