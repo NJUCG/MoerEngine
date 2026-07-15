@@ -567,13 +567,16 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
         if (frame_packet.ui_composition.enabled) {
             const auto& ui_frame = frame_packet.ui_composition;
+            const auto  window_frame_buffer = ui_frame.window_frame_buffer ?
+                                                  ui_frame.window_frame_buffer->GetView() :
+                                                  TextureView();
             default_output_texture = ui_combine_pass->Process(
                 cmd_list,
                 ui_frame.separate_window,
                 ui_frame.output_resolution,
                 ui_frame.scene_color_position,
                 ui_frame.scene_color_resolution,
-                ui_frame.window_frame_buffer,
+                window_frame_buffer,
                 raster_context.GetSelectedFrameBufferView(raster_config.selected_frame_buffer_index),
                 raster_context.textures.ui_frame_buffer.tex,
                 raster_context.textures.output.tex

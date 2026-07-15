@@ -72,8 +72,8 @@ public:
         m_b_show_render_config_sub_ui = show;
     }
 
-    bool                IsSeperateWindow() const;
-    Render::TextureView GetWindowFrameBuffer();
+    bool               IsSeperateWindow() const;
+    Render::TextureRef GetWindowFrameBuffer();
 
     void RegisterUIFunc(std::string _name, std::function<void()>&& _func);
     void UnregisterUIFunc(std::string _name);

@@ -576,12 +576,12 @@ bool EditorUI::IsSeperateWindow() const {
     return current_window->ParentWindow == nullptr;
 }
 
-TextureView EditorUI::GetWindowFrameBuffer() {
+TextureRef EditorUI::GetWindowFrameBuffer() {
     auto* current_window = ImGui::FindWindowByName(GetActiveViewportWindowName());
     if (current_window && current_window->ParentWindow == nullptr && current_window->Viewport) {
         return m_ui_renderer->GetWindowFrameBuffer(current_window->Viewport);
     }
-    return TextureView();
+    return TextureRef();
 }
 
 const char* EditorUI::GetActiveViewportWindowName() const {

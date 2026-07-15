@@ -128,7 +128,7 @@ public:
     RENDER_API void              RegisterImage(Texture* _texture, Sampler _sampler);
     RENDER_API void              UnRegisterImage(Texture* _texture);
 
-    RENDER_API TextureView GetWindowFrameBuffer(void* _window);
+    RENDER_API TextureRef GetWindowFrameBuffer(void* _window);
 
 private:
     UniquePtr<Impl> impl;

@@ -59,7 +59,7 @@ UiDrawFramePacket UIRenderer::CaptureDrawFrame() {
     return impl->CaptureDrawFrame();
 }
 
-TextureView UIRenderer::GetWindowFrameBuffer(void* _window) {
+TextureRef UIRenderer::GetWindowFrameBuffer(void* _window) {
     return impl->backend->GetWindowFrameBuffer(_window);
 }
 

@@ -51,7 +51,7 @@ public:
     ) override;
     void PresentWindows(const UiDrawFramePacket& _frame, EUiDrawExecutionThread _execution_thread) override;
 
-    TextureView GetWindowFrameBuffer(void* _window);
+    TextureRef GetWindowFrameBuffer(void* _window);
 
     BindlessArrayRef             bindless_array;
     RenderDevice&                device;

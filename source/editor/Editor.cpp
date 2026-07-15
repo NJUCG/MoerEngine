@@ -54,13 +54,14 @@ void Editor::Run(const ExtraHooks& extra_hooks) {
                     TextureView    input_ui_texture, // TODO: is this necessary?
                     TextureView    default_output_texture
                 ) {
+                    const auto window_frame_buffer = m_editor_ui->GetWindowFrameBuffer();
                     return ui_combine_pass->Process(
                         cmd_list,
                         m_editor_ui->IsSeperateWindow(),
                         m_editor_ui->GetConfig()->GetResolution(),
                         m_editor_ui->GetSceneColorPos(),
                         m_editor_ui->GetSceneColorResolution(),
-                        m_editor_ui->GetWindowFrameBuffer(),
+                        window_frame_buffer ? window_frame_buffer->GetView() : TextureView(),
                         input_color_texture,
                         input_ui_texture,
                         default_output_texture

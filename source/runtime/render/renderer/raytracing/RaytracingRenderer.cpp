@@ -600,13 +600,15 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
 
     if (frame_packet.ui_composition.enabled) {
         const auto& ui_frame = frame_packet.ui_composition;
+        const auto  window_frame_buffer =
+            ui_frame.window_frame_buffer ? ui_frame.window_frame_buffer->GetView() : TextureView();
         ui_combine_pass->Process(
             cmd_list,
             ui_frame.separate_window,
             ui_frame.output_resolution,
             ui_frame.scene_color_position,
             ui_frame.scene_color_resolution,
-            ui_frame.window_frame_buffer,
+            window_frame_buffer,
             final_color,
             state.ui_frame_buffer,
             state.output

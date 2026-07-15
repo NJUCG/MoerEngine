@@ -552,13 +552,13 @@ void ImGUIRenderBackend::PresentWindows(
     }
 }
 
-TextureView ImGUIRenderBackend::GetWindowFrameBuffer(void* _window) {
+TextureRef ImGUIRenderBackend::GetWindowFrameBuffer(void* _window) {
     ImGuiViewport*   viewport      = (ImGuiViewport*)_window;
     GuiViewportData* viewport_data = (GuiViewportData*)viewport->RendererUserData;
 
     return viewport_data && viewport_data->render_resources && viewport_data->render_resources->framebuffer ?
-               viewport_data->render_resources->framebuffer->GetView() :
-               TextureView();
+               viewport_data->render_resources->framebuffer :
+               TextureRef();
 }
 
 } // namespace Moer::Render
@@ -717,6 +717,92 @@ void DestroyRenderBuffers(GuiFrameRenderBuffers* _render_buffers) {
     _render_buffers->arg_buffer = nullptr;
 }
 
+void CreateOrResizeViewportResources(
+    RenderDevice&                                       _device,
+    const SharedPtr<GuiViewportRenderResources>&        _resources,
+    void*                                               _platform_window,
+    uint2                                               _extent,
+    uint32_t                                            _frame_in_flight,
+    uint32_t                                            _viewport_index
+) {
+    assert(_resources);
+    assert(!IsRenderThreadRunning() || IsCurrentlyRenderThread());
+
+    const bool has_swapchain = _resources->sc.IsValid();
+    const bool swapchain_matches =
+        has_swapchain && _resources->sc->size.x == _extent.x && _resources->sc->size.y == _extent.y;
+    const bool framebuffer_matches =
+        _resources->framebuffer && _resources->framebuffer->GetExtent().x == _extent.x &&
+        _resources->framebuffer->GetExtent().y == _extent.y;
+    if (swapchain_matches && framebuffer_matches) {
+        return;
+    }
+
+    auto& graphics_queue = _device.GetCommandQueue(EQueueType::Graphics);
+    if (has_swapchain || _resources->framebuffer) {
+        graphics_queue.Sync();
+    }
+
+    Moer::WindowHandle handle{static_cast<Moer::WindowType*>(_platform_window)};
+    SwapchainCreateInfo swapchain_info{
+        .window_handle    = reinterpret_cast<uintptr_t>(&handle),
+        .size             = _extent,
+        .back_buffer_sz   = _frame_in_flight,
+        .preferred_format = PF_R8G8B8A8_SRGB
+    };
+
+    if (!has_swapchain) {
+        _resources->sc = _device.CreateSwapchain(swapchain_info);
+    } else if (!swapchain_matches) {
+        _resources->sc->Sync();
+        _resources->sc->Recreate(swapchain_info);
+    }
+
+    _resources->framebuffer = _device.CreateTexture(
+        Extent2D(_extent.x, _extent.y),
+        PF_R8G8B8A8_SRGB,
+        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED
+    );
+    _resources->framebuffer->SetName(std::format("ImGui Window {}", _viewport_index));
+
+    LOG_INFO(
+        "[Threading][UI] {} ImGui viewport {} resources at {}x{} on {} Thread.",
+        has_swapchain ? "Updated" : "Created",
+        _viewport_index,
+        _extent.x,
+        _extent.y,
+        IsCurrentlyRenderThread() ? "Render" : "Game"
+    );
+}
+
+void ReleaseViewportResources(
+    RenderDevice&                                _device,
+    const SharedPtr<GuiViewportRenderResources>& _resources,
+    uint32_t                                     _viewport_index
+) {
+    if (!_resources) {
+        return;
+    }
+    assert(!IsRenderThreadRunning() || IsCurrentlyRenderThread());
+
+    _device.GetCommandQueue(EQueueType::Graphics).Sync();
+    if (_resources->sc) {
+        _resources->sc->Sync();
+    }
+    _resources->sc          = nullptr;
+    _resources->framebuffer = nullptr;
+    for (auto& render_buffers : _resources->render_buffers) {
+        DestroyRenderBuffers(&render_buffers);
+    }
+    _resources->frame_index = 0;
+
+    LOG_INFO(
+        "[Threading][UI] Released ImGui viewport {} resources on {} Thread.",
+        _viewport_index,
+        IsCurrentlyRenderThread() ? "Render" : "Game"
+    );
+}
+
 void GuiCreateWindow(ImGuiViewport* _viewport) {
     ImGUIData&       backend_data  = *GetGUIBackendData();
     GuiViewportData* viewport_data = MoerNew(GuiViewportData)(backend_data.num_frames_in_flight);
@@ -728,32 +814,36 @@ void GuiCreateWindow(ImGuiViewport* _viewport) {
     // viewport_data->copy_fence   = rd_device.CreateFence();
     // viewport_data->fence        = rd_device.CreateFence();
 
-    Moer::WindowHandle handle{(Moer::WindowType*)(_viewport->PlatformHandle ? _viewport->PlatformHandle :
-                                                                              _viewport->PlatformHandleRaw)};
+    void* platform_window =
+        _viewport->PlatformHandle ? _viewport->PlatformHandle : _viewport->PlatformHandleRaw;
+    if (!platform_window) {
+        return;
+    }
+    Moer::WindowHandle handle{static_cast<Moer::WindowType*>(platform_window)};
     using namespace Moer::Render;
     using namespace Moer;
 
     int width, height;
     WindowContext::GetWindowSize(&handle, &width, &height);
-
-    SwapchainCreateInfo swapchain_info{
-        .window_handle    = (uint64)&handle,
-        .size             = {(uint)_viewport->Size.x, (uint)_viewport->Size.y},
-        .back_buffer_sz   = backend_data.num_frames_in_flight,
-        .preferred_format = PF_R8G8B8A8_SRGB
-    };
-
-    if (width == 0 || height == 0) {
+    const uint2 extent{static_cast<uint>(_viewport->Size.x), static_cast<uint>(_viewport->Size.y)};
+    if (width == 0 || height == 0 || extent.x == 0 || extent.y == 0) {
         return;
     }
-    auto& render_resources       = *viewport_data->render_resources;
-    render_resources.sc          = rd_device.CreateSwapchain(swapchain_info);
-    render_resources.framebuffer = rd_device.CreateTexture(
-        Extent2D(_viewport->Size.x, _viewport->Size.y),
-        PF_R8G8B8A8_SRGB,
-        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED
+
+    const auto render_resources = viewport_data->render_resources;
+    const auto viewport_index   = viewport_data->viewport_index;
+    RunRenderThreadControlAndWait(
+        [&rd_device,
+         render_resources,
+         platform_window,
+         extent,
+         frame_in_flight = backend_data.num_frames_in_flight,
+         viewport_index]() {
+            CreateOrResizeViewportResources(
+                rd_device, render_resources, platform_window, extent, frame_in_flight, viewport_index
+            );
+        }
     );
-    render_resources.framebuffer->SetName(std::format("ImGui Window {}", viewport_data->viewport_index));
 }
 
 void GuiDestroyWindow(ImGuiViewport* _viewport) {
@@ -763,16 +853,15 @@ void GuiDestroyWindow(ImGuiViewport* _viewport) {
     auto& device = backend_data.render_backend->device;
 
     if (GuiViewportData* viewport_data = (GuiViewportData*)_viewport->RendererUserData) {
-        auto& render_resources = viewport_data->render_resources;
-        if (render_resources && render_resources->sc) {
-            device.GetCommandQueue(EQueueType::Graphics).Sync();
-            render_resources->sc          = nullptr;
-            render_resources->framebuffer = nullptr;
-            for (auto& render_buffers : render_resources->render_buffers) {
-                DestroyRenderBuffers(&render_buffers);
+        _viewport->RendererUserData = nullptr;
+
+        auto       render_resources = std::move(viewport_data->render_resources);
+        const auto viewport_index   = viewport_data->viewport_index;
+        RunRenderThreadControlAndWait(
+            [&device, render_resources, viewport_index]() {
+                ReleaseViewportResources(device, render_resources, viewport_index);
             }
-        }
-        viewport_data->render_resources.reset();
+        );
         MoerDelete(viewport_data);
     }
     _viewport->RendererUserData = nullptr;
@@ -783,33 +872,28 @@ void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
         return;
     }
 
-    ImGUIData* backend_data = GetGUIBackendData();
-    auto&      rd_device    = backend_data->render_backend->device;
-    auto&      resources    = *viewport_data->render_resources;
-    auto       sc           = resources.sc;
-    if (!sc) {
+    void* platform_window =
+        _viewport->PlatformHandle ? _viewport->PlatformHandle : _viewport->PlatformHandleRaw;
+    if (!platform_window) {
         return;
     }
-    if (sc->size.x == _size.x && sc->size.y == _size.y)
-        return;
-    rd_device.GetCommandQueue(EQueueType::Graphics).Sync();
-    sc->Sync();
 
-    Moer::WindowHandle handle{(Moer::WindowType*)(_viewport->PlatformHandle ? _viewport->PlatformHandle :
-                                                                              _viewport->PlatformHandleRaw)};
-
-    SwapchainCreateInfo swapchain_info{
-        .window_handle    = (uintptr_t)&handle,
-        .size             = {(uint)_size.x, (uint)_size.y},
-        .back_buffer_sz   = backend_data->num_frames_in_flight,
-        .preferred_format = PF_R8G8B8A8_SRGB
-    };
-
-    resources.sc->Recreate(swapchain_info);
-    resources.framebuffer = rd_device.CreateTexture(
-        Extent2D(_size.x, _size.y),
-        PF_R8G8B8A8_SRGB,
-        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED
+    ImGUIData* backend_data = GetGUIBackendData();
+    auto&      rd_device    = backend_data->render_backend->device;
+    const auto render_resources = viewport_data->render_resources;
+    const auto viewport_index   = viewport_data->viewport_index;
+    const uint2 extent{static_cast<uint>(_size.x), static_cast<uint>(_size.y)};
+    RunRenderThreadControlAndWait(
+        [&rd_device,
+         render_resources,
+         platform_window,
+         extent,
+         frame_in_flight = backend_data->num_frames_in_flight,
+         viewport_index]() {
+            CreateOrResizeViewportResources(
+                rd_device, render_resources, platform_window, extent, frame_in_flight, viewport_index
+            );
+        }
     );
 }
 void GuiRenderWindow(ImGuiViewport* _viewport, void* _cmd_list) {

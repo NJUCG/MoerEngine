@@ -13,12 +13,12 @@
 namespace Moer::Render {
 
 struct UiCompositionFrameData {
-    bool        enabled = false;
-    bool        separate_window = false;
-    uint2       output_resolution{};
-    float2      scene_color_position{};
-    float2      scene_color_resolution{};
-    TextureView window_frame_buffer{};
+    bool       enabled = false;
+    bool       separate_window = false;
+    uint2      output_resolution{};
+    float2     scene_color_position{};
+    float2     scene_color_resolution{};
+    TextureRef window_frame_buffer{};
 };
 
 struct EngineHooks {
