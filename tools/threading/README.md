@@ -89,9 +89,10 @@ under `target/validation/rt_rhi/`.
 
 The summary aggregates the last five one-second profile windows by default.
 RHI data includes caller cost, enqueue-to-start latency, backend work time,
-maximum queue depth, and pending GPU timeline distance. RT data includes frame
-prepare, task queue latency, render execution, GT lag-limit wait, and maximum
-pending frames. Use `--profile-tail-windows` to change the steady-state window.
+Execute/Present splits, maximum queue depth, and pending GPU timeline distance.
+RT data includes frame prepare, task queue latency, render execution, GT
+lag-limit wait, and maximum pending frames. Use `--profile-tail-windows` to
+change the steady-state window.
 
 The runner refuses to reuse a non-empty scenario directory so a failed launch
 cannot accidentally consume a stale report from an earlier run.

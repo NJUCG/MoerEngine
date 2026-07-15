@@ -265,6 +265,13 @@ public:
 private:
     enum class ERhiWorkKind : uint8 { Execute, Present };
 
+    struct RhiWorkProfileTotals {
+        uint64 samples{0};
+        double caller_total_ms{0.0};
+        double queue_wait_total_ms{0.0};
+        double work_total_ms{0.0};
+    };
+
     void                       ExecuteNow(CmdSubmit&& _submit, uint64 _timeline);
     void PresentNow(
         SwapchainRef&& _swapchain,
@@ -317,8 +324,8 @@ private:
     std::chrono::steady_clock::time_point thread_profile_window_start =
         std::chrono::steady_clock::now();
     uint64 thread_profile_samples{0};
-    uint64 thread_profile_execute_samples{0};
-    uint64 thread_profile_present_samples{0};
+    RhiWorkProfileTotals thread_profile_execute{};
+    RhiWorkProfileTotals thread_profile_present{};
     double thread_profile_caller_total_ms{0.0};
     double thread_profile_caller_max_ms{0.0};
     double thread_profile_queue_wait_total_ms{0.0};

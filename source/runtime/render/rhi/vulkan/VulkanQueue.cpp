@@ -3419,11 +3419,13 @@ void VkCommandQueue::RecordThreadingProfile(
     }
 
     ++thread_profile_samples;
-    if (_kind == ERhiWorkKind::Execute) {
-        ++thread_profile_execute_samples;
-    } else {
-        ++thread_profile_present_samples;
-    }
+    RhiWorkProfileTotals& kind_profile = _kind == ERhiWorkKind::Execute
+                                            ? thread_profile_execute
+                                            : thread_profile_present;
+    ++kind_profile.samples;
+    kind_profile.caller_total_ms += _caller_ms;
+    kind_profile.queue_wait_total_ms += _queue_wait_ms;
+    kind_profile.work_total_ms += _work_ms;
     thread_profile_caller_total_ms += _caller_ms;
     thread_profile_caller_max_ms = std::max(thread_profile_caller_max_ms, _caller_ms);
     thread_profile_queue_wait_total_ms += _queue_wait_ms;
@@ -3445,31 +3447,42 @@ void VkCommandQueue::RecordThreadingProfile(
     const uint64 gpu_pending = submitted_timeline > completed_timeline
                                    ? submitted_timeline - completed_timeline
                                    : 0;
+    auto average = [](double _total, uint64 _samples) {
+        return _samples == 0 ? 0.0 : _total / double(_samples);
+    };
     LOG_INFO(
         "[ThreadingProfile][RHI] queue={} mode={} window_ms={:.3f} samples={} execute={} "
         "present={} caller_avg_ms={:.3f} caller_max_ms={:.3f} queue_wait_avg_ms={:.3f} "
         "queue_wait_max_ms={:.3f} work_avg_ms={:.3f} work_max_ms={:.3f} "
+        "execute_caller_avg_ms={:.3f} execute_wait_avg_ms={:.3f} execute_work_avg_ms={:.3f} "
+        "present_caller_avg_ms={:.3f} present_wait_avg_ms={:.3f} present_work_avg_ms={:.3f} "
         "max_enqueue_depth={} gpu_pending={}",
         queue.GetType() == EQueueType::Graphics ? "Graphics" : "Compute",
         rhi_thread_enabled ? "threaded" : "synchronous",
         window_ms,
         thread_profile_samples,
-        thread_profile_execute_samples,
-        thread_profile_present_samples,
+        thread_profile_execute.samples,
+        thread_profile_present.samples,
         thread_profile_caller_total_ms / double(thread_profile_samples),
         thread_profile_caller_max_ms,
         thread_profile_queue_wait_total_ms / double(thread_profile_samples),
         thread_profile_queue_wait_max_ms,
         thread_profile_work_total_ms / double(thread_profile_samples),
         thread_profile_work_max_ms,
+        average(thread_profile_execute.caller_total_ms, thread_profile_execute.samples),
+        average(thread_profile_execute.queue_wait_total_ms, thread_profile_execute.samples),
+        average(thread_profile_execute.work_total_ms, thread_profile_execute.samples),
+        average(thread_profile_present.caller_total_ms, thread_profile_present.samples),
+        average(thread_profile_present.queue_wait_total_ms, thread_profile_present.samples),
+        average(thread_profile_present.work_total_ms, thread_profile_present.samples),
         thread_profile_max_enqueue_depth,
         gpu_pending
     );
 
     thread_profile_window_start       = now;
     thread_profile_samples            = 0;
-    thread_profile_execute_samples    = 0;
-    thread_profile_present_samples    = 0;
+    thread_profile_execute            = {};
+    thread_profile_present            = {};
     thread_profile_caller_total_ms    = 0.0;
     thread_profile_caller_max_ms      = 0.0;
     thread_profile_queue_wait_total_ms = 0.0;

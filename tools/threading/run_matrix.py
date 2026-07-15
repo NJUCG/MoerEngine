@@ -248,6 +248,15 @@ def aggregate_profile_windows(
             for window in selected
         ) / sample_count
 
+    def weighted_average_by(field: str, count_field: str) -> float:
+        count = sum(int(window.get(count_field, 0)) for window in selected)
+        if count == 0:
+            return 0.0
+        return sum(
+            float(window.get(field, 0.0)) * int(window.get(count_field, 0))
+            for window in selected
+        ) / count
+
     aggregate: dict[str, object] = {
         "window_count": len(selected),
         "sample_count": sample_count,
@@ -267,6 +276,16 @@ def aggregate_profile_windows(
                 ),
                 "work_avg_ms": weighted_average("work_avg_ms"),
                 "work_max_ms": max(float(window.get("work_max_ms", 0.0)) for window in selected),
+                "execute_caller_avg_ms": weighted_average_by(
+                    "execute_caller_avg_ms", "execute"
+                ),
+                "execute_wait_avg_ms": weighted_average_by("execute_wait_avg_ms", "execute"),
+                "execute_work_avg_ms": weighted_average_by("execute_work_avg_ms", "execute"),
+                "present_caller_avg_ms": weighted_average_by(
+                    "present_caller_avg_ms", "present"
+                ),
+                "present_wait_avg_ms": weighted_average_by("present_wait_avg_ms", "present"),
+                "present_work_avg_ms": weighted_average_by("present_work_avg_ms", "present"),
                 "max_enqueue_depth": max(
                     int(window.get("max_enqueue_depth", 0)) for window in selected
                 ),
