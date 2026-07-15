@@ -27,6 +27,21 @@ ConfigManager& ConfigManager::GetInstance() {
 }
 
 void ConfigManager::Init(const std::filesystem::path& _workspace_path) {
+    InitInternal(_workspace_path, _workspace_path / "MoerEngine.toml", false);
+}
+
+void ConfigManager::Init(
+    const std::filesystem::path& _workspace_path,
+    const std::filesystem::path& _config_path
+) {
+    InitInternal(_workspace_path, _config_path, true);
+}
+
+void ConfigManager::InitInternal(
+    const std::filesystem::path& _workspace_path,
+    const std::filesystem::path& _config_path,
+    bool                         _is_override
+) {
     // pathes
     workspace_path            = _workspace_path;
     editor_resource_path      = _workspace_path / "asset";
@@ -35,7 +50,10 @@ void ConfigManager::Init(const std::filesystem::path& _workspace_path) {
     engine_shader_shared_path = _workspace_path / "asset" / MACRO_STR(SHADER_SHARED_PATH_RELATIVE_TO_ASSET);
 
     // check config exists
-    std::filesystem::path config_path = _workspace_path / "MoerEngine.toml";
+    const std::filesystem::path config_path = std::filesystem::absolute(_config_path);
+    if (_is_override) {
+        LOG_INFO("[Config] Using command-line config override: {}", config_path.generic_string());
+    }
     if (!std::filesystem::exists(config_path)) {
         LOG_ERROR("Config `{}` does not exist.", config_path.generic_string());
         LOG_ERROR(

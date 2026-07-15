@@ -22,6 +22,9 @@
 // 3rd party (std)
 #include <cassert>
 #include <nfd.hpp>
+#include <optional>
+#include <stdexcept>
+#include <string_view>
 #include <type_traits>
 
 // namespace
@@ -34,6 +37,29 @@ static UniquePtr<NFD::Guard> nfd_guard = nullptr;
 static bool ContainsNonAscii(const std::filesystem::path& p);
 
 namespace {
+
+std::optional<std::filesystem::path> ParseConfigOverride(int argc, const char** argv) {
+    constexpr std::string_view config_prefix = "--config=";
+
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view argument = argv[index];
+        if (argument == "--config") {
+            if (index + 1 >= argc || std::string_view(argv[index + 1]).empty()) {
+                throw std::invalid_argument("--config requires a TOML file path");
+            }
+            return std::filesystem::path(argv[index + 1]);
+        }
+        if (argument.starts_with(config_prefix)) {
+            const std::string_view path = argument.substr(config_prefix.size());
+            if (path.empty()) {
+                throw std::invalid_argument("--config requires a TOML file path");
+            }
+            return std::filesystem::path(path);
+        }
+    }
+
+    return std::nullopt;
+}
 
 ERenderMethod ParseDefaultRenderMethod(std::string_view render_method_name) {
     if (render_method_name == "Raster") {
@@ -126,7 +152,11 @@ void Engine::Init(int argc, const char** argv) {
         );
     }
 
-    ConfigManager::GetInstance().Init(path);
+    if (const auto config_override = ParseConfigOverride(argc, argv)) {
+        ConfigManager::GetInstance().Init(path, *config_override);
+    } else {
+        ConfigManager::GetInstance().Init(path);
+    }
     const auto& config = ConfigManager::GetInstance().GetConfig();
 
     // Init TaskSystem
