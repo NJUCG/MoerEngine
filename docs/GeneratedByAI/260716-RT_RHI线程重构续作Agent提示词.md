@@ -2,7 +2,7 @@
 
 > 本文件整体就是交给后续 Agent 的中文提示词和状态快照。
 >
-> 当前功能开发冻结在 **Phase 5 完成点**。在原电脑上，除了补充本文件并推送分支，不再继续实现下一阶段功能。
+> 当前功能开发冻结在 **Phase 6.1 完成点**。Phase 6.0 已完成换机接管，Phase 6.1 已完成 Vulkan first-fault latch、失败传播和可控注入验收；下一阶段是 Phase 7 PrepareFrame 性能归因。
 >
 > 换机后，请让 Agent 先完整阅读本文件、仓库根目录 `AGENTS.md` 和 `tools/threading/README.md`，再执行“换机接管流程”。不要只截取“下一步”一节，否则容易丢失已经建立的线程与资源所有权约束。
 >
@@ -17,7 +17,7 @@
 当前必须遵守以下指令：
 
 1. 使用中文沟通和记录结论。
-2. 当前功能冻结点为 `f55c016e`。该提交之后允许存在交接文档提交，但不应存在未经记录的新功能实现。
+2. Phase 5 历史冻结点为 `f55c016e`；当前 Phase 6.1 功能完成点为 `8afa2cac`。两者之间的 Phase 6.0/6.1 改动和验证必须与本文件进度区及 TechRecord 对应，不应存在未经记录的新功能实现。
 3. 第一个动作必须是核对分支身份、工作区、配置、构建和自动验证基线。不要一上来修改代码。
 4. 如果用户只让你“查看状态”或“接手”，先汇报已完成目标、未完成目标和下一阶段计划，等待用户明确授权后再开发。
 5. 如果用户同时明确说“继续实现”，也要先完成换机基线复现；基线失败时先定位环境或回归原因，不得把失败状态直接带入下一阶段。
@@ -39,10 +39,14 @@ Repository: https://github.com/NJUCG/MoerEngine.git
 Branch: feature/rt-rhi-threading
 Base branch: main
 Base commit on 2026-07-16: d016d1d8f5f96a8909bc8bfdaa6468e9810ad6a5
-Functional freeze commit: f55c016e
+Phase 5 historical freeze commit: f55c016e
+Phase 6.0 takeover code commit: 402b7c66
+Phase 6.1 current functional commit: 8afa2cac
 ```
 
-`main..f55c016e` 一共有 18 个功能/验证提交。交接文档提交位于 `f55c016e` 之后，因此判断功能冻结点时要看 `f55c016e`，判断最新文档时看分支 HEAD。
+用户最初写的 `feature/rt-thi-threading` 是拼写误差；远端实际分支和当前 upstream 均为 `feature/rt-rhi-threading` / `origin/feature/rt-rhi-threading`。
+
+`f55c016e` 仍是 Phase 5 历史基线，不再是当前功能终点。判断最新代码应看 `8afa2cac`，判断最新交接文档应看分支 HEAD。
 
 ### 2.2 原电脑未纳入分支的本地内容
 
@@ -99,12 +103,16 @@ RT/RHI 总路线与实施记录位于：
 
 若 TechRecord 暂时不可访问、认证失败或存在无法安全合并的冲突，必须明确报告该阶段“文档交付未完成”，继续处理同步问题；不得静默跳过，也不得仅更新本文件代替 TechRecord。
 
-Phase 5 已同步的基线记录：
+当前最近的 TechRecord 阶段记录：
 
 ```text
-TechRecord commit: 71b10ed
-20_技术文档/引擎架构/MoerEngine/RT_RHI_Threading/10_Phase5稳定性回归与线程性能基线.md
-30_问题复盘/BugFix/MoerEngine_RT_RHI_Phase5_描述符环复用与Present二次断言复盘.md
+Phase 6.0 TechRecord commit: 845f73e
+20_技术文档/引擎架构/MoerEngine/RT_RHI_Threading/11_Phase6.0换机基线复现与接管回归.md
+30_问题复盘/BugFix/MoerEngine_RT_RHI_Phase6.0_换机基线与Swapchain信号量复用复盘.md
+
+Phase 6.1 TechRecord commit: 83bedaf
+20_技术文档/引擎架构/MoerEngine/RT_RHI_Threading/12_Phase6.1_DeviceFault锁存与失败传播.md
+30_问题复盘/BugFix/MoerEngine_RT_RHI_Phase6.1_DeviceFault锁存与Swapchain生命周期复盘.md
 ```
 
 ---
@@ -270,7 +278,7 @@ a8a0635a feat(threading): 将 Vulkan 提交迁移至 RHI FIFO
 
 ### 4.9 Phase 5：自动回归、性能基线与稳定性修复
 
-状态：完成，是当前冻结点。
+状态：完成，是 Phase 6.0/6.1 的历史基线。
 
 - 增加 Windows 自动验证器和九场景矩阵。
 - 支持 `MoerEditor --config <path>`，每个场景使用独立 TOML，不修改根配置。
@@ -287,6 +295,39 @@ a8a0635a feat(threading): 将 Vulkan 提交迁移至 RHI FIFO
 500bc65b feat(threading): 增加 RT RHI 稳态性能指标
 558f4055 fix(vulkan): 修复异步队列与描述符环并发
 f55c016e feat(threading): 拆分 Execute 与 Present 性能指标
+```
+
+### 4.10 Phase 6.0：换机基线复现与接管回归
+
+状态：完成。
+
+- 在 RTX 5080、Visual Studio 2022 / MSVC Debug 环境完成换机构建与九场景矩阵。
+- 修复 render-finished binary semaphore 未按实际 acquired image index 配对导致的 `VUID-vkQueueSubmit2-semaphore-03868`。
+- copied ImGui ready marker 移到 draw packet 的真实消费点；第一启动 dock 目标更新为 `Game`。
+- 矩阵统一使用 tracked `template.MoerEngine.toml`，没有覆盖开发者本机根配置。
+
+提交：
+
+```text
+402b7c66 fix(vulkan): 修复换机线程基线回归
+```
+
+### 4.11 Phase 6.1：Device-fault latch 与失败传播
+
+状态：完成，是当前功能冻结点。
+
+- 新增 device 级 `Healthy -> Publishing -> Faulted` first-fault latch 与完整 operation/context record。
+- Submit/Present/Acquire 接入 native admission gate；fault 后拒绝新 native submit/present。
+- 引入 typed Vulkan outcome、submission-acceptance handshake 和独立 `cpu_settled_frame`，失败不再伪装成 GPU completion。
+- success-only callback、allocator/presentor quarantine、command-pool reset skip、queued-work cancel/drain 形成 fail-closed shutdown。
+- swapchain recreate 改为临时资源事务，并修复 oldSwapchain retirement、Acquire 有效输出、`VK_INCOMPLETE` 和 present-fence 槽位复用边角。
+- `VK_ERROR_SURFACE_LOST_KHR` 因尚无 surface reconstruction 协议而归为 terminal fault。
+- 新增严格 `--vulkan-fault-inject=present-submit@3` seam 与独立 `fault` 验证集。
+
+提交：
+
+```text
+8afa2cac feat(vulkan): 完成 DeviceFault 锁存与失败传播
 ```
 
 ---
@@ -343,13 +384,28 @@ rhi_thread_enabled = rhi_thread && !rhi_bypass;
 - `rhi_thread=true, rhi_bypass=false`：graphics RHI FIFO threaded mode。
 - 回退路径是调试资产，不能为了简化新代码而删除。
 
+### 5.8 Device fault 与提交接受边界
+
+- future timeline 已分配不等于 producer 已被 Vulkan queue 接受；consumer 的 GPU wait 必须先通过 submission-acceptance handshake。
+- first terminal fault 只能发布一次，并携带 operation、result、queue、timeline/work serial；后续错误不能覆盖首故障。
+- fault 发布后不得再调用 native submit/present；正常 shutdown、fault harness 和后续新入口都必须维持 post-fault native call 为 0。
+- 不得用 host timeline signal 伪造 producer 的 GPU work 已完成。
+
+### 5.9 CPU settled、GPU completion 与失败资源
+
+- CPU-settled 只说明逻辑 work 已有最终成功/失败结论，不等于 GPU completed。
+- success-only callback 只能在真实 GPU success 后执行。
+- GPU completion 未证明时，allocator/presentor 必须 quarantine，command pool reset 必须跳过。
+- lost device 不等待不可达的 GPU timeline；非 device-lost completion unknown 必须 fail-closed，不能进入可能 UAF 的 Vulkan 清理。
+- `VK_ERROR_SURFACE_LOST_KHR` 当前是 terminal fault；在建立 surface owner/reconstruction 协议前，不得改回无消费者的普通 Recreate。
+
 ---
 
 ## 6. 当前验证基线
 
 ### 6.1 构建环境说明
 
-原电脑没有可用的 `just`，最终使用现有 Visual Studio/MSVC Debug build tree：
+当前接管机器没有可用的 `just`、Ninja/Clang，Phase 6.0/6.1 使用现有 Visual Studio/MSVC Debug build tree：
 
 ```powershell
 cmake --build build --config Debug --target MoerEditor --parallel 4
@@ -357,17 +413,17 @@ cmake --build build --config Debug --target MoerEditor --parallel 4
 
 构建通过，只保留既有 C4244/C4715 warning。
 
-仓库标准环境仍是 Ninja + Clang + C++20。换机后优先执行：
+仓库标准环境仍是 Ninja + Clang + C++20。未来具备该工具链时优先执行：
 
 ```powershell
 just b
 ```
 
-若 `just` 不可用，再按 `docs/BUILD.md` 配置，并使用等价的 `cmake --build`。不要把“MSVC 已通过”误写成“标准 Ninja/Clang 已通过”。
+若 `just` 不可用，再按 `docs/BUILD.md` 配置，并使用等价的 `cmake --build`。当前结论仍只是 MSVC Debug，不得写成标准 Ninja/Clang 或 Release 已通过。
 
 ### 6.2 默认配置
 
-正常开发结束后，根 `MoerEngine.toml` 必须保持：
+受版本管理的 `template.MoerEngine.toml` 保持同步 Raster baseline：
 
 ```toml
 [engine.threading]
@@ -381,7 +437,7 @@ profile_logging = false
 default_render_method = "Raster"
 ```
 
-矩阵会用 `--config` 生成独立场景配置，不应改写根配置或可执行目录的默认配置。
+矩阵以该 template 为 base，并用 `--config` 生成独立场景配置，不应改写根配置或可执行目录的默认配置。当前机器的根 `MoerEngine.toml` 是开发者既有、被忽略的 Raytracing 配置，Phase 6.0/6.1 均未覆盖。
 
 ### 6.3 自动矩阵
 
@@ -395,9 +451,10 @@ default_render_method = "Raster"
 
 ```powershell
 python -m py_compile tools\threading\run_matrix.py tools\threading\runtime_verify.py
-python tools\threading\run_matrix.py --set smoke
-python tools\threading\run_matrix.py --set full --continue-on-failure
-python tools\threading\run_matrix.py --set soak --repeat 3 --soak-seconds 300
+python tools\threading\run_matrix.py --set smoke --base-config template.MoerEngine.toml
+python tools\threading\run_matrix.py --set full --continue-on-failure --base-config template.MoerEngine.toml
+python tools\threading\run_matrix.py --set fault --base-config template.MoerEngine.toml
+python tools\threading\run_matrix.py --set soak --repeat 3 --soak-seconds 300 --base-config template.MoerEngine.toml
 ```
 
 完整矩阵包含：
@@ -414,17 +471,30 @@ python tools\threading\run_matrix.py --set soak --repeat 3 --soak-seconds 300
 | `ray_rt0_rhi` | Raytracing | on | 0 | threaded |
 | `ray_rt1_rhi` | Raytracing | on | 1 | threaded |
 
-Phase 5 最终结果：
+Phase 6.1 当前最终结果：
 
 ```text
 Build: PASS
-Raytracing targeted probe: PASS
+Smoke matrix: 3/3 PASS
+Synchronization validation: 1/1 PASS
+Fault injection: 1/1 PASS
 Full matrix: 9/9 PASS
-Duration: 187.1 s
-Minimum screenshot nonblack ratio: 0.7994
+Full duration: 263.9 s
+Full minimum screenshot nonblack ratio: 0.9477
 Normal process exit: 9/9
 Severe raw-log matches: 0
 ```
+
+最终证据目录：
+
+```text
+target/validation/rt_rhi/phase6_1_fault_final3
+target/validation/rt_rhi/phase6_1_smoke_final3
+target/validation/rt_rhi/phase6_1_syncval_final
+target/validation/rt_rhi/phase6_1_full_final3
+```
+
+`fault` 与正常 `full` 必须保持分离。fault harness 只豁免完全锚定且字段正确的唯一 `[VulkanFault][First]` error 行，并要求 Injection/First/Summary 各恰好一次；不得把宽泛的 `device lost` 豁免带入正常矩阵。
 
 严重错误扫描至少覆盖：
 
@@ -438,7 +508,7 @@ remaining allocation
 access violation
 ```
 
-原电脑的 `target/validation/rt_rhi/` 被忽略，不会随分支推送。换机后必须生成自己的报告，不能因为本文件记录了 PASS 就跳过基线复现。
+`target/validation/rt_rhi/` 被忽略，不会随分支推送。任何新机器或关键 Vulkan 生命周期改动后都必须生成自己的报告，不能因为本文件记录了 PASS 就跳过复现。
 
 ### 6.4 性能基线解释
 
@@ -499,9 +569,9 @@ graphics timeline 同时为 Execute 和 Present 递增，但 Present 不消费 r
 
 修复后完成五次 Raster 定向运行、一次 Ray 探针、一次 synchronization validation 和最终九场景矩阵，未再复现。
 
-### 7.4 尚未完成的相关 hardening
+### 7.4 Phase 5 当时尚未完成的相关 hardening
 
-当前没有完整的 device-fault latch。若未来出现真实 device lost，completion/present/allocator 路径仍可能继续执行并制造二次断言或 reset VUID。
+Phase 5 节点当时没有完整的 device-fault latch。该缺口已由 Phase 6.1 的 `8afa2cac` 补齐：first-fault、native admission、submission acceptance、CPU-settled、失败资源隔离和 shutdown 已形成统一协议。真实 mid-flight TDR、device/surface recreation 与其他 fault entrypoint 仍属于后续工作。
 
 不能用以下方式“修复”：
 
@@ -510,7 +580,7 @@ graphics timeline 同时为 Execute 和 Present 递增，但 Present 不消费 r
 - 在 device lost 后继续 reset command pool/allocator。
 - 用 `vkDeviceWaitIdle` 试图等待尚未提交到 Vulkan queue 的 CPU FIFO work。
 
-正确方向见下一节 Phase 6。
+已完成实现与验收见下一节 Phase 6.1 和进度追加区。
 
 ---
 
@@ -520,15 +590,16 @@ graphics timeline 同时为 Execute 和 Present 递增，但 Present 不消费 r
 
 ### 8.1 跨机器/标准工具链验收
 
-- 尚未在另一台机器复现 smoke/full matrix。
+- 已在 RTX 5080 接管机器用 Visual Studio 2022 / MSVC Debug 复现 smoke/full matrix，并完成 Phase 6.0/6.1 最终矩阵。
 - 尚未在标准 Ninja + Clang Debug/Release 上完成同等矩阵。
-- `WITH_NRD=ON`、CUDA 等可选路径未形成完整回归。
+- 尚未覆盖 Release、其他 GPU/driver；`WITH_NRD=ON`、CUDA 等可选路径也未形成完整回归。
 
-### 8.2 Device-fault 状态传播
+### 8.2 Device-fault 恢复与跨入口覆盖
 
-- 没有 device-level 或 graphics-queue-level first-fault latch。
-- `Submit`、`Present`、fence `HostWait`、completion 和 shutdown 没有统一失败传播协议。
-- device lost 后如何停止新 work、解除 CPU wait、跳过不安全回收仍需设计和验证。
+- Phase 6.1 已完成 device-level first-fault latch、typed outcome、submission acceptance、CPU-settled、失败资源隔离和 fail-closed shutdown。
+- 当前 synthetic seam 只覆盖预排空后的第三次 Present submit；真实 mid-flight TDR、Execute/Copy submit、external signal、OOM 与 driver 返回时序尚未覆盖。
+- 尚未实现 device recreation、`VkSurfaceKHR` reconstruction 或通用 WSI recovery state machine；`SURFACE_LOST` 当前为 terminal fault。
+- D3D12 backend 尚未迁移到同等 fault protocol。
 
 ### 8.3 Raytracing PrepareFrame 性能归因
 
@@ -569,6 +640,8 @@ graphics timeline 同时为 Execute 和 Present 递增，但 Present 不消费 r
 
 ### Phase 6.0：换机基线复现
 
+状态：已完成，提交 `402b7c66`；详细证据见进度追加区与 TechRecord `11_Phase6.0换机基线复现与接管回归.md`。
+
 目标：证明远端分支在新环境上仍是可工作的冻结点。
 
 工作内容：
@@ -588,6 +661,8 @@ graphics timeline 同时为 Execute 和 Present 递增，但 Present 不消费 r
 - 基线失败前不开始下一阶段代码改动。
 
 ### Phase 6.1：Device-fault latch 与失败传播
+
+状态：已完成，提交 `8afa2cac`；详细证据见进度追加区与 TechRecord `12_Phase6.1_DeviceFault锁存与失败传播.md`。
 
 目标：首个 Vulkan/device 失败发生后，停止制造 Present、allocator、command pool 等二次错误，并让 Sync/shutdown 有可证明的退出路径。
 
@@ -618,6 +693,8 @@ graphics timeline 同时为 Execute 和 Present 递增，但 Present 不消费 r
 - 单独阶段提交，并更新本文件的进度记录。
 
 ### Phase 7：PrepareFrame 性能归因与低风险优化
+
+状态：当前下一阶段，尚未开始。
 
 目标：先知道时间花在哪里，再做局部优化。
 
@@ -887,12 +964,12 @@ python tools\threading\run_matrix.py --set full --continue-on-failure
 
 ```text
 1. 已确认 MoerEngine 与 TechRecord 两个仓库、各自分支和远端同步状态。
-2. 已确认 MoerEngine base commit、功能冻结点，以及 TechRecord Phase 5 实施记录和 BugFix 复盘存在。
+2. 已确认 MoerEngine base commit、Phase 5 历史冻结点、Phase 6.1 当前功能完成点，以及 TechRecord Phase 6.1 实施记录和 BugFix 复盘存在。
 3. 两个工作区是否干净；若不干净，哪些属于用户变更。
-4. Phase 0-5 已完成目标的简要确认。
-5. 尚未完成：跨机基线、device-fault latch、PrepareFrame 归因、RenderGraph、并行录制、更多 queue/backend。
+4. Phase 0-6.1 已完成目标的简要确认。
+5. 尚未完成：Clang/Ninja/Release 与其他 GPU 交叉验证、真实 mid-flight fault/device-surface recovery、PrepareFrame 归因、RenderGraph、并行录制、更多 queue/backend。
 6. 本机将使用的编译器、构建配置和 GPU/driver。
-7. 先执行 build + smoke + full matrix；基线通过后再开始 Phase 6.1。
+7. 先执行 build + smoke/full 基线，并保留独立 fault seam；基线通过后再开始 Phase 7 PrepareFrame 归因。
 8. 已确认每个阶段都要同步更新、提交和推送 TechRecord，这是必选 Definition of Done。
 9. 如果用户尚未明确授权继续开发，在这里停止并等待，不修改功能代码。
 ```
@@ -954,3 +1031,22 @@ python tools\threading\run_matrix.py --set full --continue-on-failure
 - 双仓库推送：MoerEngine `origin/feature/rt-rhi-threading` 已包含 `402b7c660a803405c92fae1d42d785a8cde5e623`；TechRecord `origin/main=845f73e6e0b8db697fbd10bc337a95f71ac50382`。
 - 已知限制：尚未覆盖 Clang/Ninja、Release、其他 GPU/driver，也未做故意 device-lost 注入；`12 s` 仅是当前 Sponza + ProbeGI 的自动截图稳态等待，不是引擎同步协议。
 - 下一步：独立实施 Phase 6.1 device-fault latch，优先完成 first-fault record、typed submit/acquire/present outcome、CPU settled timeline 与失败资源隔离；不要同阶段混入 PrepareFrame、RenderGraph 或 parallel recording。
+
+### 2026-07-16：Phase 6.1 Device-fault latch 与失败传播
+
+- 目标：首个 Vulkan terminal failure 后只发布一次完整诊断，拒绝后续 native submit/present，失败完成 CPU 依赖，隔离未证明 GPU completion 的资源，并让 Sync/shutdown 有界退出。
+- 主要改动：新增 `VulkanFault.h` 与 device first-fault 状态机；Submit/Present/Acquire typed outcome；native admission gate；submission-acceptance handshake；独立 `cpu_settled_frame`；success-only callback；allocator/presentor quarantine；command-pool reset skip；queued-work cancel/drain；严格 fault injection 与验证断言。
+- Swapchain hardening：recreate 改为临时资源事务；按规范处理 oldSwapchain 即使 create 失败也已 retired；`VK_INCOMPLETE` 有界重试；Acquire 仅在成功状态输出 image；present fence 精确槽位复用；`SURFACE_LOST` 因无 surface reconstruction 协议而 fail-closed terminal。
+- MoerEngine 提交：`8afa2cac feat(vulkan): 完成 DeviceFault 锁存与失败传播`。
+- 构建：`cmake --build build --config Debug --target MoerEditor --parallel 4` PASS，仅保留既有 C4244/C4715 warning；`py_compile` 与 `git diff --check` PASS；非法计数和重复 fault 参数均以 exit code `2` 拒绝。
+- 故障注入：`target/validation/rt_rhi/phase6_1_fault_final3`，`1/1 PASS`，Injection/First/Summary 各一次；First=`PresentSubmit/VK_ERROR_DEVICE_LOST/timeline=17/work_serial=17/injected=true/predrained=true`；Summary 证明 post-fault native submit/present=`0/0`、rejected=`148/49`、quarantine=`2`、queue Sync=`3/3`。
+- 正常回归：`phase6_1_smoke_final3` 为 `3/3 PASS`；显式 `VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT` 的 `phase6_1_syncval_final` 为 `1/1 PASS`；`phase6_1_full_final3` 为 `9/9 PASS`，总耗时 `263.9 s`，九个进程正常退出，最低非黑比例 `0.9477`。
+- 视觉结论：Raster/Raytracing Sponza 在最大化、resize、restore 与键盘输入后均正确；fault 帧非黑比例 `0.8916`，一秒 Raytracing 累积噪声符合注入时机，没有黑屏或资源破坏迹象。
+- 错误扫描：正常矩阵 assertion、VUID、unexpected device lost、queue submission failure、access violation 与 tracked resource residue 均为 0；fault 集仅豁免完全锚定且字段正确的唯一 First error 行，没有 Present/command-pool 级联噪声。
+- 配置保护：本机根 `MoerEngine.toml` 未覆盖；所有矩阵使用 tracked `template.MoerEngine.toml` 生成独立场景配置。
+- TechRecord 实施记录：`20_技术文档/引擎架构/MoerEngine/RT_RHI_Threading/12_Phase6.1_DeviceFault锁存与失败传播.md`。
+- TechRecord 问题复盘：`30_问题复盘/BugFix/MoerEngine_RT_RHI_Phase6.1_DeviceFault锁存与Swapchain生命周期复盘.md`。
+- TechRecord 提交：`83bedaf docs(threading): 记录 Phase 6.1 故障锁存`。
+- 双仓库推送：MoerEngine `origin/feature/rt-rhi-threading` 包含 `8afa2cac` 及本交接更新；TechRecord `origin/main` 包含 `83bedaf`。
+- 已知限制：synthetic seam 在注入前预排空，只证明失败传播，不等同于真实 mid-flight TDR；尚未覆盖 Execute/Copy/external signal 等其他 fault entrypoint、device/surface recreation、Clang/Ninja、Release、其他 GPU/driver 或 D3D12。
+- 下一步：进入 Phase 7 PrepareFrame 性能归因。先拆稳定子指标并采集至少三轮重复样本，再做单一、低风险优化；不要同时启动 RenderGraph 或 parallel recording。
