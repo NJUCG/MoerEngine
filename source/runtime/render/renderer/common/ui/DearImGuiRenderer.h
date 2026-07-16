@@ -1,41 +1,24 @@
-#ifndef MOER_ENGINE_IMGUI_RENDERER_H
-#define MOER_ENGINE_IMGUI_RENDERER_H
+// 实现 Moer UI 数据包与 Dear ImGui 绘制数据之间的转换和渲染。
+
+#ifndef MOER_ENGINE_DEAR_IMGUI_RENDERER_H
+#define MOER_ENGINE_DEAR_IMGUI_RENDERER_H
+
 #include "misc/STL.h"
 #include "renderer/common/UIRenderer.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
+
 #define ImTextureID uint64_t
-struct UIFrameData;
-
-class ImGUIRenderer : public UIRenderer {
-
-public:
-    ImGUIRenderer()          = default;
-    virtual ~ImGUIRenderer() = default;
-    virtual void Init() override {};
-    virtual void ShutDown() override {};
-
-    virtual void BeginRenderFrame() override {};
-    virtual void EndRenderFrame() override {};
-
-    virtual void RegisterImage(uint64_t _handle) override {};
-    virtual void UnRegisterImage(uint64_t _handle) override {};
-
-private:
-    UIFrameData* frame_data;
-    class Impl;
-    Impl* impl;
-};
 
 namespace Moer::Render {
-class ImGUIRenderBackend : public UiDrawFrameBackend {
+class ImGuiRenderBackend : public UiDrawFrameBackend {
 public:
-    ImGUIRenderBackend(RenderDevice& _device);
-    ~ImGUIRenderBackend();
+    explicit ImGuiRenderBackend(RenderDevice& _device);
+    ~ImGuiRenderBackend() override;
 
     void RegisterImage(Texture* _texture, Sampler _sampler);
-    void UnRegisterImage(Texture* _texture);
+    void UnregisterImage(Texture* _texture);
 
     void BeginGUIFrame();
     void EndGUIFrame();
@@ -60,4 +43,4 @@ public:
 };
 } // namespace Moer::Render
 
-#endif
+#endif // MOER_ENGINE_DEAR_IMGUI_RENDERER_H

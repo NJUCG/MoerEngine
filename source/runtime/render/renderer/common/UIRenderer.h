@@ -1,3 +1,5 @@
+// 定义 UI 绘制帧的跨线程数据包，并为具体的 ImGui 渲染后端提供稳定入口。
+
 #ifndef MOER_ENGINE_UI_RENDERER_H
 #define MOER_ENGINE_UI_RENDERER_H
 
@@ -6,29 +8,6 @@
 #include "rhi/RHI.h"
 #include <cstdint>
 #include <type_traits>
-
-struct FontUpdateEvent {
-    void* font_data;
-};
-class UIRenderer {
-public:
-    RENDER_API UIRenderer() = default;
-
-    RENDER_API static UIRenderer* GetRenderer();
-
-    RENDER_API virtual ~UIRenderer()   = default;
-    RENDER_API virtual void Init()     = 0;
-    RENDER_API virtual void ShutDown() = 0;
-
-    RENDER_API virtual void RegisterImage(uint64_t _handle)   = 0;
-    RENDER_API virtual void UnRegisterImage(uint64_t _handle) = 0;
-
-    RENDER_API virtual void BeginRenderFrame() = 0;
-
-    RENDER_API virtual void EndRenderFrame() = 0;
-
-    // RENDER_API virtual void UploadFonts(FontDesc _font_desc) = 0;
-};
 
 namespace Moer::Render {
 class UiDrawFrameBackend;
@@ -81,6 +60,7 @@ struct UiDrawFramePacket {
     UiDrawFramePacket(const UiDrawFramePacket&)                = delete;
     UiDrawFramePacket& operator=(const UiDrawFramePacket&)     = delete;
 
+    // 数据包需要持有后端，确保渲染线程消费复制后的绘制数据时后端仍然有效。
     SharedPtr<UiDrawFrameBackend> backend;
     UiViewportDrawPacket          main_viewport;
     Array<UiViewportDrawPacket>   platform_viewports;
@@ -126,14 +106,14 @@ public:
 
     RENDER_API UiDrawFramePacket CaptureDrawFrame();
     RENDER_API void              RegisterImage(Texture* _texture, Sampler _sampler);
-    RENDER_API void              UnRegisterImage(Texture* _texture);
+    RENDER_API void              UnregisterImage(Texture* _texture);
+    [[deprecated("Use UnregisterImage instead")]] RENDER_API void UnRegisterImage(Texture* _texture);
 
     RENDER_API TextureRef GetWindowFrameBuffer(void* _window);
 
 private:
     UniquePtr<Impl> impl;
-    // RENDER_API virtual void UploadFonts(FontDesc _font_desc) = 0;
 };
 }; // namespace Moer::Render
 
-#endif //MOER_ENGINE_UI_RENDERER_H
+#endif // MOER_ENGINE_UI_RENDERER_H
