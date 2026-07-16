@@ -2,7 +2,7 @@
 
 > 本文件整体就是交给后续 Agent 的中文提示词和状态快照。
 >
-> 当前功能开发冻结在 **Phase 7 完成点**。Phase 6.1 已完成 Vulkan first-fault latch 与失败传播；Phase 7 已完成 PrepareFrame 分阶段归因、三轮前后对照和单一低风险优化；下一阶段是 Phase 8 RenderGraph 最小骨架。
+> 当前功能开发冻结在 **Phase 8 完成点**。Phase 8 已完成 Raster RenderGraph 最小串行骨架、旧路径回退、关键资源对照与 reload/switch 生命周期验证；下一阶段是 Phase 9 并行命令录制的前置设计，不得直接删除串行边开始并行。
 >
 > 换机后，请让 Agent 先完整阅读本文件、仓库根目录 `AGENTS.md` 和 `tools/threading/README.md`，再执行“换机接管流程”。不要只截取“下一步”一节，否则容易丢失已经建立的线程与资源所有权约束。
 >
@@ -17,7 +17,7 @@
 当前必须遵守以下指令：
 
 1. 使用中文沟通和记录结论。
-2. Phase 5 历史冻结点为 `f55c016e`；当前 Phase 7 功能完成点为 `db76cfd6`。Phase 6.0/6.1/7 的改动和验证必须与本文件进度区及 TechRecord 对应，不应存在未经记录的新功能实现。
+2. Phase 5 历史冻结点为 `f55c016e`；当前 Phase 8 功能完成点为 `fd59508c`。Phase 6.0/6.1/7/8 的改动和验证必须与本文件进度区及 TechRecord 对应，不应存在未经记录的新功能实现。
 3. 第一个动作必须是核对分支身份、工作区、配置、构建和自动验证基线。不要一上来修改代码。
 4. 如果用户只让你“查看状态”或“接手”，先汇报已完成目标、未完成目标和下一阶段计划，等待用户明确授权后再开发。
 5. 如果用户同时明确说“继续实现”，也要先完成换机基线复现；基线失败时先定位环境或回归原因，不得把失败状态直接带入下一阶段。
@@ -43,11 +43,12 @@ Phase 5 historical freeze commit: f55c016e
 Phase 6.0 takeover code commit: 402b7c66
 Phase 6.1 current functional commit: 8afa2cac
 Phase 7 current functional commit: db76cfd6
+Phase 8 current functional commit: fd59508c
 ```
 
 用户最初写的 `feature/rt-thi-threading` 是拼写误差；远端实际分支和当前 upstream 均为 `feature/rt-rhi-threading` / `origin/feature/rt-rhi-threading`。
 
-`f55c016e` 仍是 Phase 5 历史基线，不再是当前功能终点。判断最新功能代码应看 `db76cfd6`，判断最新交接文档应看分支 HEAD。
+`f55c016e` 仍是 Phase 5 历史基线，不再是当前功能终点。判断最新功能代码应看 `fd59508c`，判断最新交接文档应看分支 HEAD。
 
 ### 2.2 原电脑未纳入分支的本地内容
 
@@ -118,6 +119,10 @@ Phase 6.1 TechRecord commit: 83bedaf
 Phase 7 TechRecord commit: 0f30519
 20_技术文档/引擎架构/MoerEngine/RT_RHI_Threading/13_Phase7_PrepareFrame性能归因与低风险优化.md
 30_问题复盘/BugFix/MoerEngine_RT_RHI_Phase7_无变化SunPatch与PrepareFrame更新放大复盘.md
+
+Phase 8 TechRecord commit: 4474339
+20_技术文档/引擎架构/MoerEngine/RT_RHI_Threading/14_Phase8_RasterRenderGraph最小串行骨架.md
+30_问题复盘/BugFix/MoerEngine_RT_RHI_Phase8_DepthBuffer物理身份与Graph依赖断链复盘.md
 ```
 
 ---
@@ -147,7 +152,7 @@ GPU Completion Thread
 
 TaskGraph worker 继续承担资源加载、纹理解码、ParallelFor 等通用工作，但不能成为一个没有数据所有权边界的“隐式 Render Thread”。
 
-长期终态还包括 RenderGraph、并行命令录制和更多队列/backend 的线程化，但这些尚未实现，不能在状态汇报中写成已完成。
+长期终态还包括具备物理 transient/culling/barrier handoff 的成熟 RenderGraph、并行命令录制和更多队列/backend 的线程化；Phase 8 只完成最小串行骨架，不能把这些终态能力写成已完成。
 
 ---
 
@@ -319,7 +324,7 @@ f55c016e feat(threading): 拆分 Execute 与 Present 性能指标
 
 ### 4.11 Phase 6.1：Device-fault latch 与失败传播
 
-状态：完成，是当前功能冻结点。
+状态：完成。
 
 - 新增 device 级 `Healthy -> Publishing -> Faulted` first-fault latch 与完整 operation/context record。
 - Submit/Present/Acquire 接入 native admission gate；fault 后拒绝新 native submit/present。
@@ -333,6 +338,38 @@ f55c016e feat(threading): 拆分 Execute 与 Present 性能指标
 
 ```text
 8afa2cac feat(vulkan): 完成 DeviceFault 锁存与失败传播
+```
+
+### 4.12 Phase 7：PrepareFrame 性能归因与低风险优化
+
+状态：完成。
+
+- 新增默认关闭的 `[ThreadingProfile][Prepare]`，统一覆盖 Raster/Raytracing 的同步与 RT 路径。
+- 三轮归因确认 Ray scene snapshot 约 `17 ms`，无变化 Sun Patch 放大的 scene update 约 `7.7 ms`。
+- 只在 light/node 实际值变化时 Patch，Ray RT0/RT1 PrepareFrame 中位数分别下降约 `28.9%/28.5%`。
+- steady dirty/update GPU/geometry snapshot 比例从 `100%` 降到 `0%`；Ray scene snapshot 缓存保持为独立后续性能阶段。
+
+提交：
+
+```text
+db76cfd6 perf(threading): 归因并优化 PrepareFrame
+```
+
+### 4.13 Phase 8：Raster RenderGraph 最小串行骨架
+
+状态：完成，是当前功能冻结点。
+
+- 重写最小 RenderGraph 契约：显式 pass/resource、import alias、logical transient lifetime、export、RAW/WAR/WAW、稳定拓扑顺序与确定性 dump。
+- Raster linear/graph 共用一份 `define_raster_passes(schedule)`；默认 graph 关闭，compile/execute 前置失败按 renderer instance latch 到 linear。
+- Phase 8 强制相邻 `serial` 边；RenderGraph 不生成 barrier、不修改 tracked state，RHI command preprocess 仍是唯一真实 barrier owner。
+- 新增 `TestRenderGraph`、7 场景 graph matrix、8 场景关键 framebuffer matrix、BMP comparator 和 Raster reload/switch self-exit 生命周期 seam。
+- 修复 DepthBuffer wrapper 与底层 Texture identity 不一致导致的 DAG 依赖断链；最终 dump 证明 `Geometry -> UiCombine [RAW:depth]`。
+- 最新 graph `7/7`、关键资源 `8/8`、显式 synchronization validation `1/1`、fault `1/1` 全部 PASS。
+
+提交：
+
+```text
+fd59508c feat(rendergraph): 建立 Raster 最小串行骨架
 ```
 
 ---
@@ -404,16 +441,25 @@ rhi_thread_enabled = rhi_thread && !rhi_bypass;
 - lost device 不等待不可达的 GPU timeline；非 device-lost completion unknown 必须 fail-closed，不能进入可能 UAF 的 Vulkan 清理。
 - `VK_ERROR_SURFACE_LOST_KHR` 当前是 terminal fault；在建立 surface owner/reconstruction 协议前，不得改回无消费者的普通 Recreate。
 
+### 5.10 RenderGraph 与 barrier 所有权
+
+- Phase 8 RenderGraph 只拥有 logical access、dependency、稳定串行顺序、lifetime 和诊断，不得直接修改 RHI tracked state。
+- 真实 barrier 的唯一 owner 仍是 command reorder / backend preprocess；在建立明确 handoff 前，不得让 graph 与 preprocess 同时生成 barrier。
+- texture physical identity 必须 canonical 到 view/barrier 所用的底层 Texture，不能使用任意 typed wrapper 地址。DepthBuffer wrapper 与内部 Texture 不同。
+- graph fallback 必须在第一个 pass callback 前决定；未来若允许 Execute 中途失败，必须先引入 typed execution result 或 executed-pass count。
+- `processing_image` token 可能代表多个物理纹理，HiZ commit 包含 CPU 侧资源交换；解决物理版本前不得据此安全重排或并行。
+- `render_graph=false` 的 linear 路径仍是默认和调试资产，Phase 9 不得删除。
+
 ---
 
 ## 6. 当前验证基线
 
 ### 6.1 构建环境说明
 
-当前接管机器没有可用的 `just`、Ninja/Clang，Phase 6.0/6.1 使用现有 Visual Studio/MSVC Debug build tree：
+当前接管机器没有可用的 `just`、Ninja/Clang，Phase 6.0-8 使用现有 Visual Studio/MSVC Debug build tree：
 
 ```powershell
-cmake --build build --config Debug --target MoerEditor --parallel 4
+cmake --build build --config Debug --target TestRenderGraph MoerEditor --parallel 4
 ```
 
 构建通过，只保留既有 C4244/C4715 warning。
@@ -440,9 +486,13 @@ profile_logging = false
 
 [engine.render]
 default_render_method = "Raster"
+
+[engine.render.raster]
+render_graph = false
+render_graph_debug_dump = false
 ```
 
-矩阵以该 template 为 base，并用 `--config` 生成独立场景配置，不应改写根配置或可执行目录的默认配置。当前机器的根 `MoerEngine.toml` 是开发者既有、被忽略的 Raytracing 配置，Phase 6.0/6.1 均未覆盖。
+矩阵以该 template 为 base，并用 `--config` 生成独立场景配置，不应改写根配置或可执行目录的默认配置。当前机器的根 `MoerEngine.toml` 是开发者既有、被忽略的 Raytracing 配置，Phase 6.0-8 均未覆盖。
 
 ### 6.3 自动矩阵
 
@@ -450,14 +500,17 @@ default_render_method = "Raster"
 
 - `tools/threading/runtime_verify.py`
 - `tools/threading/run_matrix.py`
+- `tools/threading/compare_captures.py`
 - `tools/threading/README.md`
 
 常用命令：
 
 ```powershell
-python -m py_compile tools\threading\run_matrix.py tools\threading\runtime_verify.py
+python -m py_compile tools\threading\run_matrix.py tools\threading\runtime_verify.py tools\threading\compare_captures.py
 python tools\threading\run_matrix.py --set smoke --base-config template.MoerEngine.toml
 python tools\threading\run_matrix.py --set full --continue-on-failure --base-config template.MoerEngine.toml
+python tools\threading\run_matrix.py --set rendergraph --continue-on-failure --base-config template.MoerEngine.toml
+python tools\threading\run_matrix.py --set rendergraph-resources --continue-on-failure --base-config template.MoerEngine.toml
 python tools\threading\run_matrix.py --set fault --base-config template.MoerEngine.toml
 python tools\threading\run_matrix.py --set soak --repeat 3 --soak-seconds 300 --base-config template.MoerEngine.toml
 ```
@@ -476,7 +529,7 @@ python tools\threading\run_matrix.py --set soak --repeat 3 --soak-seconds 300 --
 | `ray_rt0_rhi` | Raytracing | on | 0 | threaded |
 | `ray_rt1_rhi` | Raytracing | on | 1 | threaded |
 
-Phase 6.1 当前最终结果：
+Phase 6.1 历史最终结果：
 
 ```text
 Build: PASS
@@ -500,6 +553,33 @@ target/validation/rt_rhi/phase6_1_full_final3
 ```
 
 `fault` 与正常 `full` 必须保持分离。fault harness 只豁免完全锚定且字段正确的唯一 `[VulkanFault][First]` error 行，并要求 Injection/First/Summary 各恰好一次；不得把宽泛的 `device lost` 豁免带入正常矩阵。
+
+Phase 8 最新结果：
+
+```text
+Build + TestRenderGraph: PASS
+Linear/full matrix: 9/9 PASS, 267.8 s, min nonblack 0.947685
+RenderGraph matrix: 7/7 PASS, 223.2 s, min nonblack 0.965670
+Key resource matrix: 8/8 PASS, 230.7 s
+Synchronization validation: 1/1 PASS, SYNCHRONIZATION_VALIDATION_EXT confirmed
+Fault injection: 1/1 PASS
+Reload/switch lifecycle: 1/1 PASS, exact 4 drains / 3 Raster / 1 Raytracing destruction
+Final graph-off/on: MAE 0.6055, RMSE 1.7544, p99 8, RGB<=2 ratio 0.8831
+```
+
+Phase 8 最终证据目录：
+
+```text
+target/validation/rt_rhi/phase8_full_linear_ray_20260716
+target/validation/rt_rhi/phase8_rendergraph_final_20260716
+target/validation/rt_rhi/phase8_key_resources_final_20260716
+target/validation/rt_rhi/phase8_syncval_final_20260716
+target/validation/rt_rhi/phase8_fault_final_20260716
+target/validation/rt_rhi/phase8_reload_switch_final_v2_20260716
+target/validation/rt_rhi/phase8_graph_off_on_compare_final_20260716
+```
+
+`rendergraph` 场景禁止 `[RenderGraph][Fallback]`；`rendergraph-resources` 的每个进程 PASS 仍不等于 off/on 视觉等价，必须另外保留 comparator JSON。生命周期场景不截图，改为验证正常 self-exit 和精确 drain/destruction 计数。
 
 严重错误扫描至少覆盖：
 
@@ -591,7 +671,7 @@ Phase 5 节点当时没有完整的 device-fault latch。该缺口已由 Phase 6
 
 ## 8. 尚未完成的目标
 
-以下项目都没有完成，状态汇报时必须明确标注。
+以下目标仍未达到长期终态；其中已完成的阶段性骨架会单独标注，状态汇报不得把阶段完成等同于终态完成。
 
 ### 8.1 跨机器/标准工具链验收
 
@@ -608,14 +688,16 @@ Phase 5 节点当时没有完整的 device-fault latch。该缺口已由 Phase 6
 
 ### 8.3 Raytracing PrepareFrame 性能归因
 
-- 已知道 Ray lag 1 的 PrepareFrame 约为 `46.9 ms`，但尚未把 Scene snapshot、light preprocess、UI packet、资源同步等子阶段分别计时。
-- 尚未实施有证据支持的优化。
+- Phase 7 已完成稳定子阶段归因和单一低风险优化；无变化 Sun Patch 导致的 steady scene update 已消除。
+- 当前最大剩余成本是每帧重建的 Ray scene snapshot，约 `17.1~17.8 ms`。
+- snapshot cache/增量 invalidation 尚未设计，不能破坏 FramePacket 值语义或把 Scene/ECS 借用带入 RT。
 
 ### 8.4 RenderGraph
 
-- 尚未实现 RenderGraph/FrameGraph。
-- pass/resource 依赖仍主要由现有线性 pass 调度和 command reorder/barrier preprocess 表达。
-- transient resource lifetime、pass culling、graph compile 和 graph debug view 均未实现。
+- Phase 8 已完成 Raster 最小串行骨架：pass/resource declaration、graph compile、logical transient lifetime、import/export、alias、确定性 dump 和旧路径回退。
+- 当前仍无 pass culling、物理 transient allocator/alias reuse、subresource barrier generation、graph UI 或 parallel recording。
+- graph 只表达 logical dependency；command reorder/barrier preprocess 仍拥有真实状态和 barrier。
+- `processing_image` token、HiZ CPU swap 和物理资源版本尚未达到安全重排条件。
 
 原调研曾把 RenderGraph 称为 Phase 5；实际执行中 Phase 5 被用于稳定性回归和性能基线。后续统一将 RenderGraph 顺延，避免编号混乱。
 
@@ -718,7 +800,7 @@ Phase 5 节点当时没有完整的 device-fault latch。该缺口已由 Phase 6
 
 ### Phase 8：RenderGraph 最小骨架
 
-状态：当前下一阶段，尚未开始。
+状态：已完成，提交 `fd59508c`；详细证据见进度追加区与 TechRecord `14_Phase8_RasterRenderGraph最小串行骨架.md`。
 
 目标：先把现有线性 pass 迁入显式 graph，初版不追求并行。
 
@@ -738,6 +820,8 @@ Phase 5 节点当时没有完整的 device-fault latch。该缺口已由 Phase 6
 
 ### Phase 9：并行命令录制
 
+状态：当前下一阶段，尚未开始。先完成设计/研究和门槛核对，不要把“删除 serial edge”当作实现方案。
+
 目标：基于已经显式化的 pass DAG 并行录制独立 pass/batch。
 
 必须先解决：
@@ -747,6 +831,8 @@ Phase 5 节点当时没有完整的 device-fault latch。该缺口已由 Phase 6
 - pipeline/cache/profiler 的并发访问。
 - secondary/primary command buffer 合并策略。
 - graph dependency 与 TaskGraph job 的完成关系。
+- graph physical version/subresource 与现有 barrier preprocess 的明确 handoff。
+- `processing_image` 多物理纹理、HiZ CPU swap 和部分 Execute 失败的表达。
 
 验收必须包含高压力重复矩阵和 synchronization validation，不能只看平均帧时间。
 
@@ -919,6 +1005,14 @@ python tools\threading\run_matrix.py --set full --continue-on-failure
 - [`source/runtime/render/rhi/vulkan/VulkanAllocator.cpp`](../../source/runtime/render/rhi/vulkan/VulkanAllocator.cpp)
 - [`source/runtime/render/rhi/vulkan/VulkanRHIResource.cpp`](../../source/runtime/render/rhi/vulkan/VulkanRHIResource.cpp)
 
+### RenderGraph 与 Raster 接入
+
+- [`source/runtime/render/rendergraph/RenderGraph.h`](../../source/runtime/render/rendergraph/RenderGraph.h)
+- [`source/runtime/render/rendergraph/RenderGraph.cpp`](../../source/runtime/render/rendergraph/RenderGraph.cpp)
+- [`source/runtime/render/renderer/raster/RasterRenderer.h`](../../source/runtime/render/renderer/raster/RasterRenderer.h)
+- [`source/runtime/render/renderer/raster/RasterRenderer.cpp`](../../source/runtime/render/renderer/raster/RasterRenderer.cpp)
+- [`source/test/RenderGraphTest.cpp`](../../source/test/RenderGraphTest.cpp)
+
 ### 配置与验证
 
 - [`source/runtime/core/include/config/GlobalConfig.h`](../../source/runtime/core/include/config/GlobalConfig.h)
@@ -926,6 +1020,7 @@ python tools\threading\run_matrix.py --set full --continue-on-failure
 - [`tools/threading/README.md`](../../tools/threading/README.md)
 - [`tools/threading/run_matrix.py`](../../tools/threading/run_matrix.py)
 - [`tools/threading/runtime_verify.py`](../../tools/threading/runtime_verify.py)
+- [`tools/threading/compare_captures.py`](../../tools/threading/compare_captures.py)
 
 ---
 
@@ -971,12 +1066,12 @@ python tools\threading\run_matrix.py --set full --continue-on-failure
 
 ```text
 1. 已确认 MoerEngine 与 TechRecord 两个仓库、各自分支和远端同步状态。
-2. 已确认 MoerEngine base commit、Phase 5 历史冻结点、Phase 6.1 当前功能完成点，以及 TechRecord Phase 6.1 实施记录和 BugFix 复盘存在。
+2. 已确认 MoerEngine base commit、Phase 5 历史冻结点、Phase 8 当前功能完成点 `fd59508c`，以及 TechRecord Phase 8 实施记录和 BugFix 复盘存在。
 3. 两个工作区是否干净；若不干净，哪些属于用户变更。
-4. Phase 0-6.1 已完成目标的简要确认。
-5. 尚未完成：Clang/Ninja/Release 与其他 GPU 交叉验证、真实 mid-flight fault/device-surface recovery、PrepareFrame 归因、RenderGraph、并行录制、更多 queue/backend。
+4. Phase 0-8 已完成目标的简要确认。
+5. 尚未完成：Clang/Ninja/Release 与其他 GPU 交叉验证、真实 mid-flight fault/device-surface recovery、Ray snapshot cache、物理 transient/culling/barrier handoff、并行录制、更多 queue/backend。
 6. 本机将使用的编译器、构建配置和 GPU/driver。
-7. 先执行 build + smoke/full 基线，并保留独立 fault seam；基线通过后再开始 Phase 7 PrepareFrame 归因。
+7. 先执行 build + TestRenderGraph + linear/graph smoke 基线，并保留独立 sync/fault seam；基线通过后再研究 Phase 9 的资源版本、barrier handoff 和 recorder ownership。
 8. 已确认每个阶段都要同步更新、提交和推送 TechRecord，这是必选 Definition of Done。
 9. 如果用户尚未明确授权继续开发，在这里停止并等待，不修改功能代码。
 ```
@@ -1079,3 +1174,23 @@ python tools\threading\run_matrix.py --set full --continue-on-failure
 - TechRecord 提交：`0f30519 docs(threading): 记录 Phase 7 PrepareFrame 优化`。
 - 已知限制：固定场景已覆盖稳定值跳过路径，但尚无自动化用例修改 `sun_direction/exposure` 后断言“恰好一帧 dirty”；尚未覆盖 Clang/Ninja、Release、其他 GPU/driver 或 D3D12。
 - 下一步：进入 Phase 8 Raster RenderGraph 最小串行骨架，先建立 pass/resource declaration、旧路径回退与 off/on 对照；不要同时引入 snapshot cache 或 parallel recording。
+
+### 2026-07-16：Phase 8 Raster RenderGraph 最小串行骨架
+
+- 目标：把现有 Raster 线性 pass 迁入显式 graph declaration/compile，同时保持稳定串行行为、现有 RHI barrier owner 和可配置 linear 回退。
+- 主要改动：重写 `RenderGraph.h/.cpp`；支持 import alias、logical transient、export、Read/Write/ReadWrite、RAW/WAR/WAW、显式/serial edge、稳定拓扑、one-shot execute 和确定性 dump；Raster linear/graph 共用 `define_raster_passes(schedule)`；删除旧死 graph 抽象。
+- 所有权决策：RenderGraph 不生成 barrier、不修改 tracked state；command reorder/backend preprocess 仍是唯一真实 barrier owner。默认 `render_graph=false`。
+- 物理身份修复：DepthBuffer wrapper 与内部 Texture 地址不同；现统一 canonicalize 到 `TextureView::GetTexture()`，并在 alias invariant 失败时于首个 callback 前 latch linear。最终 dump 证明 `depth_nearest_sampler/selected_framebuffer` alias depth，且 `Geometry -> UiCombine [RAW:depth]`。
+- MoerEngine 提交：`fd59508c feat(rendergraph): 建立 Raster 最小串行骨架`。
+- 构建：`cmake --build build --config Debug --target TestRenderGraph MoerEditor --parallel 4` PASS；`TestRenderGraph.exe`、`py_compile`、`git diff --check` PASS。
+- 运行矩阵：linear/full `9/9 PASS`（`267.8 s`）；最新 graph `7/7 PASS`（`223.2 s`）；关键资源 `8/8 PASS`；显式 synchronization validation `1/1 PASS`；fault `1/1 PASS`。
+- 生命周期：Raster→Raster reload→Raytracing→Raster 正常 self-exit；精确 4 次 queue drain、4 次 renderer destroy 包装、Raster 3 次、Raytracing 1 次析构完成。
+- 视觉结论：最终 Sponza graph-off/on MAE `0.6055`、RMSE `1.7544`、p99 `8`、RGB<=2 ratio `0.8831`，通过阈值；BaseColor/Normal/LinearDepth 四组配对全部 PASS，人工检查无黑屏、陈旧 framebuffer 或几何错位。
+- 错误扫描：正常 graph/sync 场景 assertion、VUID、SYNC-HAZARD、unexpected device lost、submit failure、access violation、tracked resource residue 和 graph fallback 均为 0；fault 仅保留严格锚定的唯一 First error。
+- 配置保护：根 `MoerEngine.toml` 的开发者 Raytracing 设置未覆盖；矩阵继续从 tracked template 生成隔离配置。
+- TechRecord 实施记录：`20_技术文档/引擎架构/MoerEngine/RT_RHI_Threading/14_Phase8_RasterRenderGraph最小串行骨架.md`。
+- TechRecord 问题复盘：`30_问题复盘/BugFix/MoerEngine_RT_RHI_Phase8_DepthBuffer物理身份与Graph依赖断链复盘.md`。
+- TechRecord 提交：`4474339 docs(threading): 记录 Phase 8 RenderGraph 骨架`。
+- 双仓库推送：MoerEngine `origin/feature/rt-rhi-threading` 包含 `fd59508c` 及本交接更新；TechRecord `origin/main=4474339`。
+- 已知限制：无 pass culling、物理 transient allocator/alias reuse、subresource barrier generation 或并行录制；`processing_image` token 与 HiZ CPU swap 尚不能表达安全重排所需的物理版本；只覆盖 RTX 5080 + MSVC Debug。
+- 下一步：Phase 9 先研究并固化 physical resource version、barrier handoff、每 recorder command pool/allocator/descriptor arena、secondary/primary 合并和部分执行失败语义；不得直接删除 Phase 8 serial edge。
