@@ -1,409 +1,544 @@
-// #include "rendergraph/RenderGraph.h"
+#include "rendergraph/RenderGraph.h"
 
-// #include "log/LogSystem.h"
-// #include "misc/Timer.h"
-// #include "rendergraph/DepdencyGraph.h"
-// #include "rendergraph/PassNode.h"
-// #include "rendergraph/RenderGraphHandle.h"
-// namespace Moer {
-//     RenderGraphTexture* BlackBoard::GetTexture(std::string_view name) const {
-//         return m_renderGraph.GetTexture(GetHandle(name));
-//     }
-//     RenderGraphHandle BlackBoard::GetHandle(std::string_view name) const {
-//         if (m_handles.find(name) == m_handles.end()) {
-//             return RenderGraphHandle();
-//         }
-//         return m_handles.at(name);
-//     }
-//     Moer::Array<RenderGraphHandle> BlackBoard::GetHandles(const Moer::Array<std::string>& names) const {
-//         Moer::Array<RenderGraphHandle> handles;
-//         for (const auto& name : names) {
-//             handles.emplace_back(GetHandle(name));
-//         }
-//         return handles;
-//     }
-//     void BlackBoard::PutHandle(std::string_view name, RenderGraphHandle handle) {
-//         if (m_handles.contains(name)) {
-//             LOG_ERROR("Resource {0} already exists in blackboard", name);
-//             return;
-//         }
-//         m_handles.emplace(name, handle);
-//     }
-//     BlackBoard::BlackBoard(RenderGraph& renderGraph) : m_renderGraph(renderGraph) {
-//     }
-//     RenderGraphBuffer* BlackBoard::GetBuffer(std::string_view name) const {
-//         return m_renderGraph.GetBuffer(GetHandle(name));
-//     }
-//     RenderGraph::Builder& RenderGraph::Builder::ReadTexture(RenderGraphHandle _input, RenderGraphTexture::Usage _usage, uint32_t _mip_level, uint32_t _mip_cnt) {
-//         DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = _mip_level, .num_mips = _mip_cnt, .array_index = 0, .array_count = 1, .usage = _usage};
-//         m_renderGraph.ReadInternal(m_pass, _input, std::move(desc));
-//         return *this;
-//     }
-//     RenderGraph::Builder& RenderGraph::Builder::WriteTexture(RenderGraphHandle _output, RenderGraphTexture::Usage _usage, uint32_t _mip_level, uint32_t _mip_cnt) {
+#include <algorithm>
+#include <atomic>
+#include <cassert>
+#include <sstream>
+#include <utility>
 
-//         DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = _mip_level, .num_mips = _mip_cnt, .array_index = 0, .array_count = 1, .usage = _usage};
-//         m_renderGraph.WriteInternal(m_pass, _output, std::move(desc));
-//         return *this;
-//     }
-//     RenderGraph::Builder& RenderGraph::Builder::ReadWriteTexture(RenderGraphHandle _inout, RenderGraphTexture::Usage _usage, uint32_t _mip_level, uint32_t _mip_cnt) {
-//         DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = _mip_level, .num_mips = _mip_cnt, .array_index = 0, .array_count = 1, .usage = _usage};
-//         m_renderGraph.ReadInternal(m_pass, _inout, std::move(desc));
-//         m_renderGraph.WriteInternal(m_pass, _inout, std::move(desc));
-//         return *this;
-//     }
+namespace Moer::Render {
 
-//     RenderGraph::Builder& RenderGraph::Builder::ReadWriteTextures(const Moer::Array<RenderGraphHandle>& inputs, RenderGraphTexture::Usage usage) {
-//         for (auto input : inputs) {
-//             DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = 0, .num_mips = 1, .array_index = 0, .array_count = 1, .usage = usage};
-//             m_renderGraph.ReadInternal(m_pass, input, std::move(desc));
-//             m_renderGraph.WriteInternal(m_pass, input, std::move(desc));
-//         }
-//         return *this;
-//     }
-//     RenderGraph::Builder& RenderGraph::Builder::ReadTextures(const Moer::Array<RenderGraphHandle>& inputs, RenderGraphTexture::Usage usage) {
-//         for (auto input : inputs) {
-//             DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = 0, .num_mips = 1, .array_index = 0, .array_count = 1, .usage = usage};
-//             m_renderGraph.ReadInternal(m_pass, input, std::move(desc));
-//         }
-//         return *this;
-//     }
-//     RenderGraph::Builder& RenderGraph::Builder::WriteTextures(const Moer::Array<RenderGraphHandle>& output, RenderGraphTexture::Usage usage) {
-//         for (auto out : output) {
-//             DepdencyGraph::ResourceDesc desc = DepdencyGraph::TextureSubDesc{.mip_level = 0, .num_mips = 1, .array_index = 0, .array_count = 1, .usage = usage};
-//             m_renderGraph.WriteInternal(m_pass, out, std::move(desc));
-//         }
-//         return *this;
-//     }
-//     RenderGraph::Builder& RenderGraph::Builder::ReadBuffer(RenderGraphHandle input, RenderGraphBuffer::Usage usage) {
-//         DepdencyGraph::ResourceDesc desc = DepdencyGraph::BufferSubDesc{.offset = 0, .size = 0, .layout = usage};
-//         m_renderGraph.ReadInternal(m_pass, input, std::move(desc));
-//         return *this;
-//     }
-//     RenderGraph::Builder& RenderGraph::Builder::WriteBuffer(RenderGraphHandle output, RenderGraphBuffer::Usage usage) {
-//         DepdencyGraph::ResourceDesc desc = DepdencyGraph::BufferSubDesc{.offset = 0, .size = 0, .layout = usage};
-//         m_renderGraph.WriteInternal(m_pass, output, std::move(desc));
-//         return *this;
-//     }
-//     RenderGraph::Builder& RenderGraph::Builder::WriteBuffers(const Moer::Array<RenderGraphHandle>& output, RenderGraphBuffer::Usage usage) {
-//         for (auto out : output) {
-//             DepdencyGraph::ResourceDesc desc = DepdencyGraph::BufferSubDesc{.offset = 0, .size = 0, .layout = usage};
-//             m_renderGraph.WriteInternal(m_pass, out, std::move(desc));
-//         }
-//         return *this;
-//     }
-//     RenderGraph::Builder& RenderGraph::Builder::ReadBuffers(const Moer::Array<RenderGraphHandle>& _inputs, RenderGraphBuffer::Usage _usage) {
-//         for (auto input : _inputs) {
-//             DepdencyGraph::ResourceDesc desc = DepdencyGraph::BufferSubDesc{.offset = 0, .size = 0, .layout = _usage};
-//             m_renderGraph.ReadInternal(m_pass, input, std::move(desc));
-//         }
-//         return *this;
-//     }
-//     void RenderGraph::Builder::DeclareRenderPass(const RenderGraphPassDescriptor& descriptor) {
-//         if (descriptor.depth_stencil_attachment.IsInitialized()) {
-//             //Depth Attachment may be used in this pass,but not used in later pass
-//             //to avoid cull depth attachment, we need to add a ref
-//             m_renderGraph.GetResource(descriptor.depth_stencil_attachment)->AddRef();
-//         }
-//         auto pass = static_cast<GraphicsPassNode*>(m_pass);
-//         pass->DeclareRenderPass(descriptor);
-//     }
-//     void RenderGraph::Builder::DeclareComputePass(const ComputePassDescriptor& descriptor) {
-//         auto pass = static_cast<ComputePassNode*>(m_pass);
-//         pass->DeclareComputePass(descriptor);
-//     }
-//     RenderGraph::Builder::Builder(PassNode* pass, RenderGraph& renderGraph) : m_pass(pass), m_renderGraph(renderGraph) {
-//     }
-//     void RenderGraph::SetCutUnUsedResources(bool cut) {
-//         m_cut = cut;
-//     }
-//     RenderGraph::RenderGraph() : m_black_board(*this) {
-//     }
-//     void RenderGraph::Reset() {
-//         m_dependency_graph.Reset();
-//         m_black_board.Reset();
-//         for (auto& resource : m_last_resources) {
-//             MoerDelete(resource);
-//         }
-//         for (auto& pass : m_last_passes) {
-//             MoerDelete(pass);
-//         }
-//         m_last_resources = std::move(m_resources);
-//         m_last_passes    = std::move(m_passes);
+namespace {
 
-//         m_resources = {};
-//         m_passes    = {};
-//     }
-//     RenderGraphHandle RenderGraph::CreateTexture(std::string_view name, const RenderGraphTexture::Descriptor& descriptor) {
-//         RenderGraphTexture* texture = MoerNew(RenderGraphTexture)(name, descriptor);
-//         return AddTextureInternal(texture);
-//     }
-//     RenderGraphHandle RenderGraph::ImportTexture(std::string_view name, RHITextureRef rhi_texture) {
-//         RenderGraphTexture* texture = MoerNew(RenderGraphTexture)(name, rhi_texture);
-//         return AddTextureInternal(texture);
-//     }
-//     RenderGraphHandle RenderGraph::CreateBuffer(std::string_view _name, const RenderGraphBuffer::Descriptor& descriptor) {
-//         RenderGraphBuffer* buffer = MoerNew(RenderGraphBuffer)(_name, descriptor);
-//         return AddBufferInternal(buffer);
-//     }
-//     RenderGraphHandle RenderGraph::ImportBuffer(std::string_view _name, RHIBufferRef _rhi_buffer) {
-//         RenderGraphBuffer* buffer = MoerNew(RenderGraphBuffer)(_name, _rhi_buffer);
-//         return AddBufferInternal(buffer);
-//     }
-//     // RenderGraphHandle RenderGraph::CreateTextureSubResource(RenderGraphHandle parent, std::string_view name, const RHISubresourceRange& sub_resource) {
-//     //     if (auto handle = m_black_board.GetHandle(name); handle.IsInitialized()) {
-//     //         return handle;
-//     //     }
-//     //     RenderGraphTexture* parent_texture = GetTexture(parent);
-//     //     RenderGraphTexture* texture        = MoerNew(RenderGraphTexture)(name, parent_texture, sub_resource);
-//     //     return AddTextureInternal(texture);
-//     // }
-//     void RenderGraph::AddGraphicPass(std::string_view name, const GraphicSetup& setup, GraphicsExecute&& execute) {
-//         RenderGraphPass* pass = MoerNew(RenderGraphPass)(std::move(execute));
-//         auto*            node = MoerNew(GraphicsPassNode)(name, pass);
-//         m_passes.emplace_back(node);
-//         Builder builder(node, *this);
-//         setup(builder);
-//     }
-//     void RenderGraph::AddComputePass(std::string_view name, const ComputeSetUp& setup, ComputeExecute&& execute) {
-//         RenderGraphPass* pass = MoerNew(RenderGraphPass)(std::move(execute));
-//         auto             node = MoerNew(ComputePassNode)(name, pass);
-//         m_passes.emplace_back(node);
-//         Builder builder(node, *this);
-//         setup(builder);
-//     }
-//     void RenderGraph::AddRayTracingPass(std::string_view name, const RayTracingSetup& setup, RaytracingExecute&& execute) {
-//         //TODO
-//     }
+std::atomic<uint64_t> s_next_graph_id{1};
 
-//     void RenderGraph::AddCopyPass(std::string_view _name, const CopySetup& _setup, CopyExecute&& _execute) {
-//         RenderGraphPass* pass = MoerNew(RenderGraphPass)(std::move(_execute));
-//         auto*            node = MoerNew(CopyPassNode)(_name, pass);
-//         m_passes.emplace_back(node);
-//         Builder builder(node, *this);
-//         _setup(builder);
-//     }
-//     void RenderGraph::AddImageCopyPass(std::string_view _name, RenderGraphHandle _src, RenderGraphHandle _dst) {
-//         if (_src == _dst) {
-//             return;
-//         }
-//         auto execute = [_src, _dst](RenderPassContext& context) {
-//             auto*              cmd_list        = context.cmd_list;
-//             auto*              graph           = &context.graph;
-//             auto               src_rhi_texture = graph->GetTexture(_src)->GetTexture();
-//             auto               dst_rhi_texture = graph->GetTexture(_dst)->GetTexture();
-//             RHIBlitTextureInfo blit_info{};
-//             blit_info.src_slice  = RHISubresourceSlice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, 1);
-//             blit_info.dst_slice  = RHISubresourceSlice(ETextureAspectFlags::COLOR, 0, 0, 1, 0, 1);
-//             blit_info.src_layout = RenderGraphTexture::GetTextureLayout(std::get<RenderGraphTexture::Usage>(src_rhi_texture->GetTrackedUsage(0)));
-//             blit_info.dst_layout = RenderGraphTexture::GetTextureLayout(std::get<RenderGraphTexture::Usage>(dst_rhi_texture->GetTrackedUsage(0)));
-//             auto     extent      = dst_rhi_texture->GetExtent3D();
-//             auto     src_extent  = src_rhi_texture->GetExtent3D();
-//             Offset3D zero_offset(0, 0, 0);
-//             blit_info.src_offsets[0] = zero_offset;
-//             blit_info.src_offsets[1] = Offset3D(src_extent.x, src_extent.y, 1);
-//             blit_info.dst_offsets[0] = zero_offset;
-//             blit_info.dst_offsets[1] = Offset3D(extent.x, extent.y, 1);
-//             cmd_list->BlitTexture(blit_info, src_rhi_texture, dst_rhi_texture);
-//         };
-//         auto setup = [_src, _dst](Builder& builder) {
-//             builder.ReadTexture(_src, RenderGraphTexture::Usage::TS_TRANSFER_SRC);
-//             builder.WriteTexture(_dst, RenderGraphTexture::Usage::TS_TRANSFER_DST);
-//         };
-//         AddCopyPass(_name, std::move(setup), std::move(execute));
-//     }
+const char* ToString(RenderGraph::ResourceKind kind) {
+    switch (kind) {
+        case RenderGraph::ResourceKind::Texture:
+            return "texture";
+        case RenderGraph::ResourceKind::Buffer:
+            return "buffer";
+        case RenderGraph::ResourceKind::Token:
+            return "token";
+    }
+    return "unknown";
+}
 
-//     void RenderGraph::Execute(const RenderGraphExecuteConfig& config) {
-//         Compile();
-//         // LOG_INFO("Compile Time: {0}ms", timer.ElapsedMilliseconds());
+const char* ToString(uint8_t access_mode) {
+    switch (access_mode) {
+        case 0:
+            return "R";
+        case 1:
+            return "W";
+        case 2:
+            return "RW";
+        default:
+            return "?";
+    }
+}
 
-//         auto* cmd_list = config.cmd_list;
-//         for (auto& pass : m_passes) {
-//             for (auto& resource : pass->GetResourcesToCreate()) {
-//                 resource->Create();
-//             }
-//             pass->ResloveResourceUsage(cmd_list);
-//             RenderPassContext pass_context{.graph = *this, .cmd_list = cmd_list, .render_extent = config.render_extent, .pass_type = pass->GetPassType()};
-//             pass->Execute(pass_context);
-//             for (auto& resource : pass->GetResourcesToDestroy()) {
-//                 resource->Destroy();
-//             }
-//         }
-//     }
-//     void RenderGraph::Compile() {
-//         bool need_compile = IsNeedCompile();
+void AppendUnique(std::vector<std::string>& values, std::string value) {
+    if (std::find(values.begin(), values.end(), value) == values.end()) {
+        values.emplace_back(std::move(value));
+    }
+}
 
-//         if (!need_compile) {
-//             std::unordered_map<PassNode*, uint32_t> pass_idxes;
-//             for (size_t i = 0; i < m_last_passes.size(); i++) {
-//                 pass_idxes.emplace(m_last_passes[i], i);
-//             }
-//             for (int i = 0; i < m_resources.size(); i++) {
-//                 auto* resource      = m_resources[i];
-//                 auto* last_resource = m_last_resources[i];
-//                 resource->SetRefCount(last_resource->GetRefCount());
-//                 if (last_resource->create_pass) {
-//                     uint32_t create_pass_idx = pass_idxes[last_resource->create_pass];
-//                     resource->create_pass    = m_passes[create_pass_idx];
-//                 }
-//                 if (last_resource->destroy_pass) {
-//                     uint32_t destroy_pass_idx = pass_idxes[last_resource->destroy_pass];
-//                     resource->destroy_pass    = m_passes[destroy_pass_idx];
-//                 }
-//             }
-//             for (int i = 0; i < m_passes.size(); i++) {
-//                 auto* pass      = m_passes[i];
-//                 auto* last_pass = m_last_passes[i];
-//                 pass->SetBarrierInfo(last_pass->GetBarrierInfo());
-//             }
+} // namespace
 
-//         }
+RenderGraph::RenderGraph(std::string_view graph_name) :
+    name(graph_name), graph_id(s_next_graph_id.fetch_add(1, std::memory_order_relaxed)) {
+    assert(graph_id != 0 && "RenderGraph id counter wrapped.");
+}
 
-//         else {
-//             m_dependency_graph.Cull();
+RenderGraph::~RenderGraph() = default;
 
-//             Moer::Array<PassNode*> available_passes;
-//             for (auto& pass : m_passes) {
-//                 if (!pass->IsCulled()) {
-//                     available_passes.emplace_back(pass);
-//                 }
-//             }
+RenderGraph::PassBuilder&
+RenderGraph::PassBuilder::Read(ResourceHandle resource, std::string_view range) {
+    graph.AddAccess(pass_index, resource, AccessMode::Read, range);
+    return *this;
+}
 
-//             auto       first = available_passes.begin();
-//             const auto last  = available_passes.end();
+RenderGraph::PassBuilder&
+RenderGraph::PassBuilder::Write(ResourceHandle resource, std::string_view range) {
+    graph.AddAccess(pass_index, resource, AccessMode::Write, range);
+    return *this;
+}
 
-//             while (first != last) {
-//                 PassNode* const pass_node = *first;
-//                 first++;
-//                 auto in_resources  = m_dependency_graph.GetInComingNodes(pass_node);
-//                 auto out_resources = m_dependency_graph.GetOutGoingNodes(pass_node);
+RenderGraph::PassBuilder&
+RenderGraph::PassBuilder::ReadWrite(ResourceHandle resource, std::string_view range) {
+    graph.AddAccess(pass_index, resource, AccessMode::ReadWrite, range);
+    return *this;
+}
 
-//                 for (auto* const in_resource : in_resources) {
-//                     auto* const resource = dynamic_cast<RenderGraphResource*>(in_resource);
-//                     //Currently not suupport pass connect
-//                     assert(resource);
+RenderGraph::PassBuilder& RenderGraph::PassBuilder::DependsOn(PassHandle dependency) {
+    graph.AddDependency(pass_index, dependency);
+    return *this;
+}
 
-//                     resource->create_pass  = resource->create_pass ? resource->create_pass : pass_node;
-//                     resource->destroy_pass = pass_node;
-//                 }
-//                 for (auto* const out_resource : out_resources) {
-//                     auto* const resource = dynamic_cast<RenderGraphResource*>(out_resource);
-//                     assert(resource);
-//                     resource->create_pass  = resource->create_pass ? resource->create_pass : pass_node;
-//                     resource->destroy_pass = pass_node;
-//                 }
+RenderGraph::PassBuilder& RenderGraph::PassBuilder::SideEffect() {
+    graph.MarkSideEffect(pass_index);
+    return *this;
+}
 
-//                 for (auto* const edge : m_dependency_graph.GetEdges(pass_node)) {
-//                     auto* resource = dynamic_cast<RenderGraphResource*>(edge->src == pass_node ? edge->dst : edge->src);
-//                     pass_node->AddResourceUsage(resource, edge->desc);
-//                 }
-//             }
-//             // pass_node->FinalizeUsage();
-//         }
+RenderGraph::ResourceHandle
+RenderGraph::Import(std::string_view resource_name, ResourceKind kind, const void* physical_identity) {
+    if (!InvalidateCompile()) {
+        return {};
+    }
+    if (resource_name.empty()) {
+        declaration_errors.emplace_back("resource name cannot be empty");
+        return {};
+    }
 
-//         for (const auto& resource : m_resources) {
-//             if (!m_cut | !resource->IsCulled()) {
-//                 if (resource->create_pass)
-//                     resource->create_pass->AddResourceToCreate(resource);
-//                 if (resource->destroy_pass)
-//                     resource->destroy_pass->AddResourceToDestroy(resource);
-//             } else {
-//                 LOG_INFO("Resource {0} is not used", resource->GetName());
-//             }
-//         }
-//     }
-//     BlackBoard& RenderGraph::GetBlackBoard() {
-//         return m_black_board;
-//     }
-//     void BlackBoard::Reset() {
-//         m_handles.clear();
-//     }
-//     bool RenderGraph::IsWriteResource(RenderGraphHandle handle, PassNode* node) const {
-//         auto* resource = GetResource(handle);
-//         return m_dependency_graph.IsWriteResource(node, resource);
-//     }
-//     bool RenderGraph::IsReadResource(RenderGraphHandle handle, PassNode* node) const {
-//         auto* resource = GetResource(handle);
-//         return m_dependency_graph.IsReadResource(node, resource);
-//     }
-//     RenderGraphTexture* RenderGraph::GetTexture(RenderGraphHandle handle) const {
-//         return dynamic_cast<RenderGraphTexture*>(GetResource(handle));
-//     }
-//     RenderGraphBuffer* RenderGraph::GetBuffer(RenderGraphHandle handle) const {
-//         return dynamic_cast<RenderGraphBuffer*>(GetResource(handle));
-//     }
-//     RenderGraphResource::Type RenderGraph::GetResourceType(RenderGraphHandle handle) const {
-//         return GetResource(handle)->GetType();
-//     }
-//     RenderGraph& RenderGraph::SetGraphOutput(RenderGraphHandle handle) {
-//         GetResource(handle)->AddRef();
-//         return *this;
-//     }
-//     std::vector<std::string_view> RenderGraph::GetResourceNames(RenderGraphResource::Type type) const {
-//         std::vector<std::string_view> resourceNames;
-//         for (auto& resource : m_resources) {
-//             if (resource->GetType() == type || type == RenderGraphResource::Type::ALL)
-//                 resourceNames.emplace_back(resource->GetName());
-//         }
-//         return resourceNames;
-//     }
-//     RenderGraph::~RenderGraph() {
-//         for (auto& resource : m_resources) {
-//             MoerDelete(resource);
-//         }
-//         for (auto& pass : m_passes) {
-//             MoerDelete(pass);
-//         }
-//     }
-//     bool RenderGraph::IsNeedCompile() const {
-//         if (m_last_passes.size() != m_passes.size() || m_last_resources.size() != m_resources.size()) {
-//             return true;
-//         }
-//         static auto check_pass_is_same = [](const PassNode* a, const PassNode* b) {
-//             if (a->GetName() != b->GetName()) {
-//                 return false;
-//             }
-//             if (a->GetPassType() != b->GetPassType()) {
-//                 return false;
-//             }
-//             return true;
-//         };
-//         for (size_t i = 0; i < m_passes.size(); i++) {
-//             if (!check_pass_is_same(m_passes[i], m_last_passes[i])) {
-//                 return true;
-//             }
-//         }
-//         for (size_t i = 0; i < m_resources.size(); i++) {
-//             if (m_resources[i]->GetName() != m_last_resources[i]->GetName()) {
-//                 return true;
-//             }
-//         }
-//         return false;
-//     }
-//     void RenderGraph::WriteInternal(PassNode* pass, RenderGraphHandle output, DepdencyGraph::ResourceDesc&& _desc) {
-//         GetResource(output)->ConnectForWrite(m_dependency_graph, pass, std::move(_desc));
-//     }
-//     void RenderGraph::ReadInternal(PassNode* pass, RenderGraphHandle input, DepdencyGraph::ResourceDesc&& _desc) {
-//         GetResource(input)->ConnectForRead(m_dependency_graph, pass, std::move(_desc));
-//     }
-//     RenderGraphHandle RenderGraph::AddTextureInternal(RenderGraphTexture* texture) {
-//         if (m_black_board.GetHandle(texture->GetName()).IsInitialized()) {
-//             LOG_ERROR("Resource {0} already exists in blackboard", texture->GetName());
-//             return RenderGraphHandle();
-//         }
-//         m_dependency_graph.RegisterNode(texture);
-//         const RenderGraphHandle handle(static_cast<RenderGraphHandle::Index>(m_resources.size()));
-//         m_black_board.PutHandle(texture->GetName(), handle);
-//         m_resources.emplace_back(texture);
-//         return handle;
-//     }
-//     RenderGraphHandle RenderGraph::AddBufferInternal(RenderGraphBuffer* buffer) {
-//         m_dependency_graph.RegisterNode(buffer);
-//         const RenderGraphHandle handle(static_cast<RenderGraphHandle::Index>(m_resources.size()));
-//         m_black_board.PutHandle(buffer->GetName(), handle);
-//         m_resources.emplace_back(buffer);
-//         return handle;
-//     }
-//     RenderGraphResource* RenderGraph::GetResource(RenderGraphHandle handle) const {
-//         return m_resources[handle.index];
-//     }
-// }// namespace Moer
+    for (uint32_t index = 0; index < resources.size(); ++index) {
+        auto& resource = resources[index];
+        if (resource.name == resource_name ||
+            std::find(resource.aliases.begin(), resource.aliases.end(), resource_name) !=
+                resource.aliases.end()) {
+            declaration_errors.emplace_back("duplicate resource or alias name: " + std::string(resource_name));
+            return {};
+        }
+        if (physical_identity != nullptr && resource.physical_identity == physical_identity) {
+            if (!resource.imported) {
+                declaration_errors.emplace_back(
+                    "physical identity aliases transient resource: " + std::string(resource_name)
+                );
+                return {};
+            }
+            if (resource.kind != kind) {
+                declaration_errors.emplace_back(
+                    "physical identity imported with different resource kinds: " + std::string(resource_name)
+                );
+                return {};
+            }
+            resource.aliases.emplace_back(resource_name);
+            return ResourceHandle{index, graph_id};
+        }
+    }
+
+    ResourceDeclaration resource{};
+    resource.name              = resource_name;
+    resource.kind              = kind;
+    resource.physical_identity = physical_identity;
+    resource.imported          = true;
+    resources.emplace_back(std::move(resource));
+    return ResourceHandle{static_cast<uint32_t>(resources.size() - 1), graph_id};
+}
+
+RenderGraph::ResourceHandle RenderGraph::CreateTransient(
+    std::string_view resource_name,
+    ResourceKind kind
+) {
+    if (!InvalidateCompile()) {
+        return {};
+    }
+    if (resource_name.empty()) {
+        declaration_errors.emplace_back("resource name cannot be empty");
+        return {};
+    }
+    for (const auto& resource : resources) {
+        if (resource.name == resource_name ||
+            std::find(resource.aliases.begin(), resource.aliases.end(), resource_name) !=
+                resource.aliases.end()) {
+            declaration_errors.emplace_back("duplicate resource name: " + std::string(resource_name));
+            return {};
+        }
+    }
+
+    ResourceDeclaration resource{};
+    resource.name      = resource_name;
+    resource.kind      = kind;
+    resource.imported  = false;
+    resources.emplace_back(std::move(resource));
+    return ResourceHandle{static_cast<uint32_t>(resources.size() - 1), graph_id};
+}
+
+void RenderGraph::Export(ResourceHandle resource) {
+    if (!InvalidateCompile()) {
+        return;
+    }
+    if (!IsValidResource(resource)) {
+        declaration_errors.emplace_back("Export received an invalid resource handle");
+        return;
+    }
+    resources[resource.index].exported = true;
+}
+
+RenderGraph::PassHandle RenderGraph::AddPass(
+    std::string_view pass_name,
+    const SetupCallback& setup,
+    ExecuteCallback execute
+) {
+    if (!InvalidateCompile()) {
+        return {};
+    }
+    if (pass_name.empty()) {
+        declaration_errors.emplace_back("pass name cannot be empty");
+        return {};
+    }
+    if (!execute) {
+        declaration_errors.emplace_back("pass has no execute callback: " + std::string(pass_name));
+        return {};
+    }
+    if (std::any_of(passes.begin(), passes.end(), [&](const PassDeclaration& pass) {
+            return pass.name == pass_name;
+        })) {
+        declaration_errors.emplace_back("duplicate pass name: " + std::string(pass_name));
+        return {};
+    }
+
+    PassDeclaration pass{};
+    pass.name    = pass_name;
+    pass.execute = std::move(execute);
+    passes.emplace_back(std::move(pass));
+    const uint32_t pass_index = static_cast<uint32_t>(passes.size() - 1);
+    PassBuilder builder(*this, pass_index);
+    if (setup) {
+        setup(builder);
+    }
+    return PassHandle{pass_index, graph_id};
+}
+
+bool RenderGraph::Compile() {
+    if (executed) {
+        return FailCompile("graph has already executed and cannot be compiled again");
+    }
+    compiled = false;
+    compile_error.clear();
+    execution_order.clear();
+    compiled_edges.clear();
+    for (auto& resource : resources) {
+        resource.first_use = PassHandle::InvalidIndex;
+        resource.last_use  = PassHandle::InvalidIndex;
+    }
+
+    if (!declaration_errors.empty()) {
+        return FailCompile(declaration_errors.front());
+    }
+    if (passes.empty()) {
+        return FailCompile("graph contains no passes");
+    }
+
+    auto add_edge = [&](uint32_t src, uint32_t dst, std::string reason) {
+        if (src == dst) {
+            return;
+        }
+        auto edge = std::find_if(compiled_edges.begin(), compiled_edges.end(), [&](const CompiledEdge& item) {
+            return item.src == src && item.dst == dst;
+        });
+        if (edge == compiled_edges.end()) {
+            compiled_edges.push_back(CompiledEdge{src, dst, {std::move(reason)}});
+        } else {
+            AppendUnique(edge->reasons, std::move(reason));
+        }
+    };
+
+    // Phase 8's production policy is intentionally serial. Adjacent edges make
+    // the old declaration order an explicit invariant while the graph still
+    // compiles and reports the underlying resource hazards.
+    for (uint32_t pass_index = 1; pass_index < passes.size(); ++pass_index) {
+        add_edge(pass_index - 1, pass_index, "serial");
+    }
+
+    for (uint32_t pass_index = 0; pass_index < passes.size(); ++pass_index) {
+        for (const PassHandle dependency : passes[pass_index].explicit_dependencies) {
+            if (!IsValidPass(dependency)) {
+                return FailCompile("pass '" + passes[pass_index].name + "' has an invalid explicit dependency");
+            }
+            add_edge(dependency.index, pass_index, "explicit");
+        }
+    }
+
+    struct HazardState {
+        uint32_t              last_writer = PassHandle::InvalidIndex;
+        std::vector<uint32_t> readers;
+        bool                  ever_written = false;
+    };
+    std::vector<HazardState> hazards(resources.size());
+
+    for (uint32_t pass_index = 0; pass_index < passes.size(); ++pass_index) {
+        struct CombinedAccess {
+            bool read = false;
+            bool write = false;
+        };
+        std::vector<CombinedAccess> combined(resources.size());
+        for (const auto& access : passes[pass_index].accesses) {
+            if (!IsValidResource(access.resource)) {
+                return FailCompile("pass '" + passes[pass_index].name + "' references an invalid resource");
+            }
+            auto& item = combined[access.resource.index];
+            item.read |= access.mode == AccessMode::Read || access.mode == AccessMode::ReadWrite;
+            item.write |= access.mode == AccessMode::Write || access.mode == AccessMode::ReadWrite;
+        }
+
+        for (uint32_t resource_index = 0; resource_index < combined.size(); ++resource_index) {
+            const CombinedAccess access = combined[resource_index];
+            if (!access.read && !access.write) {
+                continue;
+            }
+            auto& hazard  = hazards[resource_index];
+            auto& resource = resources[resource_index];
+
+            if (access.read) {
+                if (!resource.imported && hazard.last_writer == PassHandle::InvalidIndex) {
+                    return FailCompile(
+                        "transient resource '" + resource.name + "' is read before its first producer in pass '" +
+                        passes[pass_index].name + "'"
+                    );
+                }
+                if (hazard.last_writer != PassHandle::InvalidIndex) {
+                    add_edge(hazard.last_writer, pass_index, "RAW:" + resource.name);
+                }
+            }
+
+            if (access.write) {
+                if (hazard.last_writer != PassHandle::InvalidIndex) {
+                    add_edge(hazard.last_writer, pass_index, "WAW:" + resource.name);
+                }
+                for (const uint32_t reader : hazard.readers) {
+                    add_edge(reader, pass_index, "WAR:" + resource.name);
+                }
+                hazard.readers.clear();
+                hazard.last_writer = pass_index;
+                hazard.ever_written = true;
+            } else if (access.read &&
+                       std::find(hazard.readers.begin(), hazard.readers.end(), pass_index) == hazard.readers.end()) {
+                hazard.readers.push_back(pass_index);
+            }
+        }
+    }
+
+    for (uint32_t index = 0; index < resources.size(); ++index) {
+        if (!resources[index].imported && !hazards[index].ever_written) {
+            return FailCompile("transient resource has no producer: " + resources[index].name);
+        }
+    }
+
+    std::sort(compiled_edges.begin(), compiled_edges.end(), [](const CompiledEdge& lhs, const CompiledEdge& rhs) {
+        return lhs.src < rhs.src || (lhs.src == rhs.src && lhs.dst < rhs.dst);
+    });
+    for (auto& edge : compiled_edges) {
+        std::sort(edge.reasons.begin(), edge.reasons.end());
+    }
+
+    std::vector<uint32_t> indegree(passes.size(), 0);
+    for (const auto& edge : compiled_edges) {
+        ++indegree[edge.dst];
+    }
+    std::vector<bool> scheduled(passes.size(), false);
+    while (execution_order.size() < passes.size()) {
+        uint32_t next = PassHandle::InvalidIndex;
+        for (uint32_t pass_index = 0; pass_index < passes.size(); ++pass_index) {
+            if (!scheduled[pass_index] && indegree[pass_index] == 0) {
+                next = pass_index;
+                break;
+            }
+        }
+        if (next == PassHandle::InvalidIndex) {
+            return FailCompile("pass dependency cycle detected");
+        }
+        scheduled[next] = true;
+        execution_order.push_back(next);
+        for (const auto& edge : compiled_edges) {
+            if (edge.src == next) {
+                assert(indegree[edge.dst] > 0);
+                --indegree[edge.dst];
+            }
+        }
+    }
+
+    std::vector<uint32_t> execution_position(passes.size(), PassHandle::InvalidIndex);
+    for (uint32_t position = 0; position < execution_order.size(); ++position) {
+        execution_position[execution_order[position]] = position;
+    }
+    for (uint32_t pass_index = 0; pass_index < passes.size(); ++pass_index) {
+        const uint32_t position = execution_position[pass_index];
+        for (const auto& access : passes[pass_index].accesses) {
+            auto& resource = resources[access.resource.index];
+            resource.first_use = std::min(resource.first_use, position);
+            if (resource.last_use == PassHandle::InvalidIndex) {
+                resource.last_use = position;
+            } else {
+                resource.last_use = std::max(resource.last_use, position);
+            }
+        }
+    }
+    // An imported resource may be forwarded unchanged to a consumer outside
+    // the graph. That is a valid import/export boundary even when no graph pass
+    // touches it. Transients are already required to have a producer above.
+
+    compiled = true;
+    return true;
+}
+
+bool RenderGraph::Execute() {
+    if (!compiled) {
+        compile_error = "Execute called before a successful Compile";
+        return false;
+    }
+    if (executed) {
+        compile_error = "a per-frame RenderGraph can only be executed once";
+        return false;
+    }
+    executed = true;
+
+    for (uint32_t position = 0; position < execution_order.size(); ++position) {
+        auto& pass = passes[execution_order[position]];
+        assert(pass.execute);
+        pass.execute();
+    }
+    return true;
+}
+
+std::string RenderGraph::Dump() const {
+    std::ostringstream stream;
+    stream << "graph='" << name << "' mode=serial barrier_owner=rhi_command_preprocess compiled="
+           << (compiled ? "true" : "false") << " executed=" << (executed ? "true" : "false")
+           << " passes=" << passes.size() << " resources=" << resources.size();
+    if (!compile_error.empty()) {
+        stream << " error='" << compile_error << "'";
+    }
+    stream << '\n';
+
+    stream << "passes:\n";
+    const bool has_complete_order = execution_order.size() == passes.size();
+    for (uint32_t item_index = 0; item_index < passes.size(); ++item_index) {
+        const uint32_t pass_index = has_complete_order ? execution_order[item_index] : item_index;
+        const auto& pass = passes[pass_index];
+        stream << "  [" << item_index << "] " << pass.name << " declared=" << pass_index
+               << " scheduled=" << (has_complete_order ? "true" : "false")
+               << " side_effect=" << (pass.side_effect ? "true" : "false") << " accesses=[";
+        for (uint32_t access_index = 0; access_index < pass.accesses.size(); ++access_index) {
+            const auto& access = pass.accesses[access_index];
+            if (access_index != 0) {
+                stream << ", ";
+            }
+            stream << ToString(static_cast<uint8_t>(access.mode)) << ':'
+                   << resources[access.resource.index].name << '(' << access.range << ')';
+        }
+        stream << "]\n";
+    }
+
+    stream << "resources:\n";
+    for (uint32_t index = 0; index < resources.size(); ++index) {
+        const auto& resource = resources[index];
+        stream << "  [" << index << "] " << resource.name << " kind=" << ToString(resource.kind)
+               << " lifetime=" << (resource.imported ? "imported" : "transient")
+               << " first=";
+        if (resource.first_use == PassHandle::InvalidIndex) {
+            stream << "unused";
+        } else {
+            stream << resource.first_use;
+        }
+        stream << " last=";
+        if (resource.last_use == PassHandle::InvalidIndex) {
+            stream << "unused";
+        } else {
+            stream << resource.last_use;
+        }
+        stream << " exported=" << (resource.exported ? "true" : "false") << " aliases=[";
+        auto aliases = resource.aliases;
+        std::sort(aliases.begin(), aliases.end());
+        for (uint32_t alias_index = 0; alias_index < aliases.size(); ++alias_index) {
+            if (alias_index != 0) {
+                stream << ", ";
+            }
+            stream << aliases[alias_index];
+        }
+        stream << "]\n";
+    }
+
+    stream << "edges:\n";
+    for (const auto& edge : compiled_edges) {
+        stream << "  " << passes[edge.src].name << " -> " << passes[edge.dst].name << " reasons=[";
+        for (uint32_t reason_index = 0; reason_index < edge.reasons.size(); ++reason_index) {
+            if (reason_index != 0) {
+                stream << ", ";
+            }
+            stream << edge.reasons[reason_index];
+        }
+        stream << "]\n";
+    }
+    return stream.str();
+}
+
+void RenderGraph::AddAccess(
+    uint32_t pass_index,
+    ResourceHandle resource,
+    AccessMode mode,
+    std::string_view range
+) {
+    if (!InvalidateCompile()) {
+        return;
+    }
+    if (pass_index >= passes.size()) {
+        declaration_errors.emplace_back("access declaration has invalid pass index");
+        return;
+    }
+    if (!IsValidResource(resource)) {
+        declaration_errors.emplace_back("pass '" + passes[pass_index].name + "' declared an invalid resource");
+        return;
+    }
+    passes[pass_index].accesses.push_back(AccessDeclaration{resource, mode, std::string(range)});
+}
+
+void RenderGraph::AddDependency(uint32_t pass_index, PassHandle dependency) {
+    if (!InvalidateCompile()) {
+        return;
+    }
+    if (pass_index >= passes.size() || !IsValidPass(dependency)) {
+        declaration_errors.emplace_back("explicit dependency contains an invalid pass handle");
+        return;
+    }
+    if (dependency.index == pass_index) {
+        declaration_errors.emplace_back("pass cannot depend on itself: " + passes[pass_index].name);
+        return;
+    }
+    auto& dependencies = passes[pass_index].explicit_dependencies;
+    if (std::find(dependencies.begin(), dependencies.end(), dependency) == dependencies.end()) {
+        dependencies.push_back(dependency);
+    }
+}
+
+void RenderGraph::MarkSideEffect(uint32_t pass_index) {
+    if (!InvalidateCompile()) {
+        return;
+    }
+    if (pass_index >= passes.size()) {
+        declaration_errors.emplace_back("side-effect declaration has invalid pass index");
+        return;
+    }
+    passes[pass_index].side_effect = true;
+}
+
+bool RenderGraph::InvalidateCompile() {
+    if (executed) {
+        declaration_errors.emplace_back("graph declarations cannot be mutated after execution");
+        return false;
+    }
+    compiled = false;
+    compile_error.clear();
+    execution_order.clear();
+    compiled_edges.clear();
+    for (auto& resource : resources) {
+        resource.first_use = PassHandle::InvalidIndex;
+        resource.last_use  = PassHandle::InvalidIndex;
+    }
+    return true;
+}
+
+bool RenderGraph::FailCompile(std::string message) {
+    compile_error = std::move(message);
+    compiled      = false;
+    return false;
+}
+
+bool RenderGraph::IsValidResource(ResourceHandle resource) const {
+    return resource.IsValid() && resource.owner_id == graph_id && resource.index < resources.size();
+}
+
+bool RenderGraph::IsValidPass(PassHandle pass) const {
+    return pass.IsValid() && pass.owner_id == graph_id && pass.index < passes.size();
+}
+
+} // namespace Moer::Render

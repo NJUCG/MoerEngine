@@ -6,6 +6,8 @@
 
 #include <functional>
 #include <optional>
+#include <string>
+#include <unordered_set>
 
 namespace Moer::Render::Raster {
 
@@ -117,6 +119,11 @@ private:
     bool   m_capture_scene_geometry_snapshot = true;
 
     uint64_t m_next_frame_id = 0;
+
+    bool                            render_graph_enabled = false;
+    bool                            render_graph_debug_dump = false;
+    bool                            render_graph_fallback_latched = false;
+    std::unordered_set<std::string> logged_render_graph_dumps;
 }; // namespace Moer::Render::Raster
 
 } // namespace Moer::Render::Raster

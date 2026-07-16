@@ -48,6 +48,10 @@ GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_p
         config.at_path("engine.render.raster.enable_shadow").value_or(true);
     c.engine.render.raster.low_quality_mode =
         config.at_path("engine.render.raster.low_quality_mode").value_or(false);
+    c.engine.render.raster.render_graph =
+        config.at_path("engine.render.raster.render_graph").value_or(false);
+    c.engine.render.raster.render_graph_debug_dump =
+        config.at_path("engine.render.raster.render_graph_debug_dump").value_or(false);
 
     c.engine.scene.scene_path =
         config.at_path("engine.scene.scene_path").value_or("./asset/scenes/sponza/Sponza.gltf");

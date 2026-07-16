@@ -220,7 +220,10 @@ def wait_for_log(
         except OSError:
             pass
         if process.poll() is not None:
-            return False
+            try:
+                return pattern in path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return False
         time.sleep(0.5)
     return False
 
@@ -257,7 +260,13 @@ def scan_logs(
     forbidden: list[str],
     allowed_forbidden: list[str],
     required_counts: list[tuple[str, int]],
-) -> tuple[list[str], list[dict[str, object]], list[dict[str, object]]]:
+    required_min_counts: list[tuple[str, int]],
+) -> tuple[
+    list[str],
+    list[dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+]:
     texts = {
         str(path): path.read_text(encoding="utf-8", errors="replace")
         if path.exists()
@@ -280,6 +289,19 @@ def scan_logs(
             }
         )
 
+    log_min_count_results = []
+    for pattern, minimum in required_min_counts:
+        regex = re.compile(pattern, re.MULTILINE)
+        actual = sum(len(regex.findall(text)) for text in texts.values())
+        log_min_count_results.append(
+            {
+                "pattern": pattern,
+                "minimum": minimum,
+                "actual": actual,
+                "matches": actual >= minimum,
+            }
+        )
+
     forbidden_matches: list[dict[str, object]] = []
     compiled = [(pattern, re.compile(pattern, re.IGNORECASE)) for pattern in forbidden]
     compiled_allowed = [re.compile(pattern, re.IGNORECASE) for pattern in allowed_forbidden]
@@ -297,7 +319,7 @@ def scan_logs(
                             "text": line,
                         }
                     )
-    return missing_required, forbidden_matches, log_count_results
+    return missing_required, forbidden_matches, log_count_results, log_min_count_results
 
 
 def close_process(
@@ -334,6 +356,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ready-log-pattern")
     parser.add_argument("--ready-timeout", type=float, default=180.0)
     parser.add_argument("--ready-settle-seconds", type=float, default=12.0)
+    parser.add_argument(
+        "--expect-exit-after-ready",
+        action="store_true",
+        help=(
+            "After observing the ready marker, wait for the editor to exit on its own "
+            "instead of capturing the window and posting WM_CLOSE."
+        ),
+    )
     parser.add_argument("--soak-seconds", type=float, default=0.0)
     parser.add_argument("--close-timeout", type=float, default=45.0)
     parser.add_argument("--skip-window-stress", action="store_true")
@@ -349,6 +379,14 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="Require a regex to occur exactly COUNT times across stdout and stderr.",
     )
+    parser.add_argument(
+        "--require-log-min-count",
+        action="append",
+        nargs=2,
+        metavar=("PATTERN", "COUNT"),
+        default=[],
+        help="Require a regex to occur at least COUNT times across stdout and stderr.",
+    )
     parser.add_argument("--forbid-log-pattern", action="append", default=[])
     parser.add_argument(
         "--allow-forbidden-log-pattern",
@@ -361,6 +399,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--no-default-forbidden-patterns", action="store_true")
     args = parser.parse_args()
+    if args.expect_exit_after_ready and not args.ready_log_pattern:
+        parser.error("--expect-exit-after-ready requires --ready-log-pattern")
 
     required_counts: list[tuple[str, int]] = []
     for pattern, count_text in args.require_log_count:
@@ -373,8 +413,23 @@ def parse_args() -> argparse.Namespace:
         required_counts.append((pattern, expected))
     args.require_log_count = required_counts
 
+    required_min_counts: list[tuple[str, int]] = []
+    for pattern, count_text in args.require_log_min_count:
+        try:
+            minimum = int(count_text)
+        except ValueError:
+            parser.error(f"--require-log-min-count COUNT must be an integer: {count_text!r}")
+        if minimum < 0:
+            parser.error("--require-log-min-count COUNT cannot be negative")
+        required_min_counts.append((pattern, minimum))
+    args.require_log_min_count = required_min_counts
+
     regex_options = (
         [("--require-log-count", pattern) for pattern, _ in required_counts]
+        + [
+            ("--require-log-min-count", pattern)
+            for pattern, _ in required_min_counts
+        ]
         + [("--forbid-log-pattern", pattern) for pattern in args.forbid_log_pattern]
         + [
             ("--allow-forbidden-log-pattern", pattern)
@@ -429,12 +484,17 @@ def main() -> int:
             {"pattern": pattern, "expected": expected}
             for pattern, expected in args.require_log_count
         ],
+        "required_log_min_counts": [
+            {"pattern": pattern, "minimum": minimum}
+            for pattern, minimum in args.require_log_min_count
+        ],
         "forbidden_log_patterns": (
             [] if args.no_default_forbidden_patterns else list(DEFAULT_FORBIDDEN_PATTERNS)
         )
         + args.forbid_log_pattern,
         "allowed_forbidden_log_patterns": args.allow_forbidden_log_pattern,
         "closed_normally": False,
+        "expected_exit_after_ready": args.expect_exit_after_ready,
         "success": False,
     }
 
@@ -467,58 +527,70 @@ def main() -> int:
                     raise RuntimeError(
                         f"Ready log pattern was not observed: {args.ready_log_pattern}"
                     )
-                wait_process_alive(process, args.ready_settle_seconds)
+                if args.expect_exit_after_ready:
+                    try:
+                        exit_code = process.wait(timeout=args.close_timeout)
+                    except subprocess.TimeoutExpired as error:
+                        raise RuntimeError(
+                            "MoerEditor did not exit after the ready marker within "
+                            f"{args.close_timeout:.1f} seconds"
+                        ) from error
+                    report["closed_normally"] = True
+                    report["exit_code"] = exit_code
+                else:
+                    wait_process_alive(process, args.ready_settle_seconds)
             else:
                 wait_process_alive(process, args.startup_settle_seconds)
 
-            if args.detach_configs:
-                for start_x_ratio in (0.765, 0.75, 0.78):
-                    drag_window_tab(main_hwnd, start_x_ratio, 70, 1900, 300)
+            if not args.expect_exit_after_ready:
+                if args.detach_configs:
+                    for start_x_ratio in (0.765, 0.75, 0.78):
+                        drag_window_tab(main_hwnd, start_x_ratio, 70, 1900, 300)
+                        wait_process_alive(process, 3.0)
+                        if len(enumerate_windows(process.pid)) > 1:
+                            break
+                    wait_process_alive(process, 2.0)
+
+                capture(report, main_hwnd, outdir / "01_maximized.bmp")
+                viewport_windows = [
+                    hwnd for hwnd in enumerate_windows(process.pid) if hwnd != main_hwnd
+                ]
+                report["platform_viewport_count"] = len(viewport_windows)
+                for index, viewport_hwnd in enumerate(viewport_windows):
+                    capture(report, viewport_hwnd, outdir / f"01_viewport_{index}.bmp")
+
+                if args.detach_configs and viewport_windows:
+                    user32.SetWindowPos(viewport_windows[0], 0, 0, 0, 700, 650, 0x0002 | 0x0004)
+                    wait_process_alive(process, 4.0)
+                    capture(report, viewport_windows[0], outdir / "01_viewport_resized.bmp")
+
+                if not args.skip_window_stress:
+                    user32.ShowWindow(main_hwnd, SW_RESTORE)
+                    user32.SetWindowPos(main_hwnd, 0, 0, 0, 1600, 900, 0x0002 | 0x0004)
                     wait_process_alive(process, 3.0)
-                    if len(enumerate_windows(process.pid)) > 1:
-                        break
-                wait_process_alive(process, 2.0)
+                    capture(report, main_hwnd, outdir / "02_resized.bmp")
 
-            capture(report, main_hwnd, outdir / "01_maximized.bmp")
-            viewport_windows = [
-                hwnd for hwnd in enumerate_windows(process.pid) if hwnd != main_hwnd
-            ]
-            report["platform_viewport_count"] = len(viewport_windows)
-            for index, viewport_hwnd in enumerate(viewport_windows):
-                capture(report, viewport_hwnd, outdir / f"01_viewport_{index}.bmp")
+                    user32.ShowWindow(main_hwnd, SW_MINIMIZE)
+                    wait_process_alive(process, 2.0)
+                    user32.ShowWindow(main_hwnd, SW_MAXIMIZE)
+                    wait_process_alive(process, 4.0)
+                    capture(report, main_hwnd, outdir / "03_restored.bmp")
 
-            if args.detach_configs and viewport_windows:
-                user32.SetWindowPos(viewport_windows[0], 0, 0, 0, 700, 650, 0x0002 | 0x0004)
-                wait_process_alive(process, 4.0)
-                capture(report, viewport_windows[0], outdir / "01_viewport_resized.bmp")
+                    user32.PostMessageW(main_hwnd, WM_KEYDOWN, 0x44, 0)
+                    wait_process_alive(process, 2.0)
+                    user32.PostMessageW(main_hwnd, WM_KEYUP, 0x44, 0)
+                    wait_process_alive(process, 2.0)
+                    capture(report, main_hwnd, outdir / "04_after_key.bmp")
 
-            if not args.skip_window_stress:
-                user32.ShowWindow(main_hwnd, SW_RESTORE)
-                user32.SetWindowPos(main_hwnd, 0, 0, 0, 1600, 900, 0x0002 | 0x0004)
-                wait_process_alive(process, 3.0)
-                capture(report, main_hwnd, outdir / "02_resized.bmp")
+                if args.soak_seconds > 0.0:
+                    wait_process_alive(process, args.soak_seconds)
+                    capture(report, main_hwnd, outdir / "05_after_soak.bmp")
 
-                user32.ShowWindow(main_hwnd, SW_MINIMIZE)
-                wait_process_alive(process, 2.0)
-                user32.ShowWindow(main_hwnd, SW_MAXIMIZE)
-                wait_process_alive(process, 4.0)
-                capture(report, main_hwnd, outdir / "03_restored.bmp")
-
-                user32.PostMessageW(main_hwnd, WM_KEYDOWN, 0x44, 0)
-                wait_process_alive(process, 2.0)
-                user32.PostMessageW(main_hwnd, WM_KEYUP, 0x44, 0)
-                wait_process_alive(process, 2.0)
-                capture(report, main_hwnd, outdir / "04_after_key.bmp")
-
-            if args.soak_seconds > 0.0:
-                wait_process_alive(process, args.soak_seconds)
-                capture(report, main_hwnd, outdir / "05_after_soak.bmp")
-
-            closed_normally, exit_code = close_process(
-                process, main_hwnd, args.close_timeout
-            )
-            report["closed_normally"] = closed_normally
-            report["exit_code"] = exit_code
+                closed_normally, exit_code = close_process(
+                    process, main_hwnd, args.close_timeout
+                )
+                report["closed_normally"] = closed_normally
+                report["exit_code"] = exit_code
     except Exception as error:
         automation_error = str(error)
     finally:
@@ -536,16 +608,18 @@ def main() -> int:
         report["automation_error"] = automation_error
 
     forbidden = report["forbidden_log_patterns"]
-    missing_required, forbidden_matches, log_count_results = scan_logs(
+    missing_required, forbidden_matches, log_count_results, log_min_count_results = scan_logs(
         [stdout_path, stderr_path],
         args.require_log_pattern,
         forbidden,
         args.allow_forbidden_log_pattern,
         args.require_log_count,
+        args.require_log_min_count,
     )
     report["missing_required_log_patterns"] = missing_required
     report["forbidden_log_matches"] = forbidden_matches
     report["required_log_count_results"] = log_count_results
+    report["required_log_min_count_results"] = log_min_count_results
 
     failure_reasons: list[str] = []
     if automation_error is not None:
@@ -554,19 +628,22 @@ def main() -> int:
         failure_reasons.append("MoerEditor did not close normally")
     if report.get("exit_code") != 0:
         failure_reasons.append(f"MoerEditor exit code was {report.get('exit_code')}")
-    if report["capture_errors"]:
-        failure_reasons.append("One or more window captures failed")
-    if not report["captures"]:
-        failure_reasons.append("No window captures were produced")
-    for item in report["captures"]:
-        if item["nonblack_ratio"] < args.min_nonblack_ratio:
-            failure_reasons.append(
-                f"Capture {item['path']} has nonblack_ratio={item['nonblack_ratio']:.6f}"
-            )
+    if not args.expect_exit_after_ready:
+        if report["capture_errors"]:
+            failure_reasons.append("One or more window captures failed")
+        if not report["captures"]:
+            failure_reasons.append("No window captures were produced")
+        for item in report["captures"]:
+            if item["nonblack_ratio"] < args.min_nonblack_ratio:
+                failure_reasons.append(
+                    f"Capture {item['path']} has nonblack_ratio={item['nonblack_ratio']:.6f}"
+                )
     if missing_required:
         failure_reasons.append("Required log patterns were not observed")
     if any(not result["matches"] for result in log_count_results):
         failure_reasons.append("Required log counts did not match")
+    if any(not result["matches"] for result in log_min_count_results):
+        failure_reasons.append("Required minimum log counts did not match")
     if forbidden_matches:
         failure_reasons.append("Forbidden log patterns were observed")
 

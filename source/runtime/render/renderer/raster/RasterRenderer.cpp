@@ -21,12 +21,15 @@
 #include "SkyboxPass.h"
 #include "SsrPass.h"
 #include "TonemappingPass.h"
+#include "config/ConfigManager.h"
 #include "debug/RenderDocApi.h"
 #include "misc/ScopedLogTimer.h"
+#include "rendergraph/RenderGraph.h"
 #include "scene/testcase/SceneTestCaseDispatcher.h"
 #include "scene/testcase/SceneTestCaseRunner.h"
 #include "window/WindowContext.h"
 
+#include <algorithm>
 #include <chrono>
 #include <optional>
 #include <sstream>
@@ -56,6 +59,21 @@ RasterRenderer::RasterRenderer(
     // Super
     Renderer(_resolution, _config) {
     ScopedLogTimer startup_timer("[Startup][RasterRenderer] RasterRenderer::Constructor() total");
+
+    const auto& graph_config =
+        ConfigManager::GetInstance().GetConfig().engine.render.raster;
+    render_graph_enabled    = graph_config.render_graph;
+    render_graph_debug_dump = graph_config.render_graph_debug_dump;
+    LOG_INFO(
+        "[RenderGraph] Raster execution mode: {}",
+        render_graph_enabled ? "graph" : "linear"
+    );
+    if (!_config->validation_selected_frame_buffer_name.empty()) {
+        LOG_INFO(
+            "[ThreadingValidation][RasterFramebuffer] selection={}",
+            _config->validation_selected_frame_buffer_name
+        );
+    }
 
     raster_context_ptr = MakeUnique<RasterContext>(
         device, manager, gfx_queue, bindless_array, cmd_list, *render_scene, resolution
@@ -385,6 +403,8 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
     {
         ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.config_snapshot_ms);
         frame_packet.raster_config        = editor_config->raster_config;
+        frame_packet.validation_selected_frame_buffer_name =
+            editor_config->validation_selected_frame_buffer_name;
         frame_packet.active_viewport_mode = editor_config->active_viewport_mode;
         frame_packet.scene_view_gizmos    = editor_config->scene_view_gizmos;
     }
@@ -526,123 +546,579 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         // FIXME: 统一update scene
         // scene.GetGpuScene().UpdateRaytracingScene(cmd_list);
 
-        // Shadow Depth Pass
-        cmd_list.PushScopeWithTimeScope(RasterTool::GetShadowDepthPassProfileScopeName());
-        shadow_depth_pass->Process(raster_context, raster_config, camera);
-        cmd_list.PopScopeWithTimeScope();
-
-        probe_update_pass->Process(raster_context, raster_config, camera, time);
-
-        // Update Global Lighting Data
-        UpdateGlobalLightingData(raster_context, raster_config, camera);
-
-        // Geometry Pass
-        cmd_list.PushScopeWithTimeScope(RasterTool::GetGeometryPassProfileScopeName());
-        geometry_pass->Process(raster_context, raster_config, camera);
-        cmd_list.PopScopeWithTimeScope();
-
-        hiz_build_pass->Process(raster_context, raster_config);
-        raster_context.CommitHiZHistory(camera.GetViewProjectionMatrix());
-
-        // Directional Shadow Mask Pass
-        directional_shadow_mask_pass->Process(raster_context, raster_config, camera);
-
-        // Lighting Pass
-        lighting_pass->Process(raster_context, raster_config, camera);
-
-        //Env&Atmo Pass
-        skybox_pass->Process(raster_context, raster_config, camera);
-
         const auto& scene_gizmos = frame_packet.scene_view_gizmos;
         const bool  draw_scene_gizmos =
             frame_packet.active_viewport_mode == EEditorViewportMode::Scene && scene_gizmos.enabled;
-        if (draw_scene_gizmos && scene_gizmos.show_probe_gi) {
-            RasterConfig probe_gizmo_config                    = raster_config;
-            probe_gizmo_config.probe_gi_gizmo_enabled         = scene_gizmos.show_probe_gi_probes;
-            probe_gizmo_config.probe_gi_volume_bounds_enabled = scene_gizmos.show_probe_gi_volume_bounds;
-            if (scene_gizmos.show_probe_gi_adaptive_cells) {
-                probe_gizmo_config.probe_gi_debug_mode = 9;
+        AoPass::AoPassOutput ao_result{};
+        TextureWithHandle   processing_image = raster_context.textures.ao_output;
+        TextureView         selected_framebuffer_view{};
+        TextureView         window_framebuffer_view{};
+        if (frame_packet.ui_composition.enabled) {
+            if (frame_packet.validation_selected_frame_buffer_name.empty()) {
+                selected_framebuffer_view = raster_context.GetSelectedFrameBufferView(
+                    raster_config.selected_frame_buffer_index
+                );
+            } else {
+                const auto displayable_views = raster_context.GetDisplayableFrameBuffersView();
+                const auto selected = std::find_if(
+                    displayable_views.begin(),
+                    displayable_views.end(),
+                    [&](const TextureView& view) {
+                        return view.GetTexture()->GetName() ==
+                               frame_packet.validation_selected_frame_buffer_name;
+                    }
+                );
+                if (selected == displayable_views.end()) {
+                    LOG_ERROR(
+                        "[ThreadingValidation][RasterFramebuffer] selected framebuffer '{}' no longer "
+                        "exists; using the UI-selected framebuffer instead.",
+                        frame_packet.validation_selected_frame_buffer_name
+                    );
+                    selected_framebuffer_view = raster_context.GetSelectedFrameBufferView(
+                        raster_config.selected_frame_buffer_index
+                    );
+                } else {
+                    selected_framebuffer_view = *selected;
+                }
             }
-            probe_gizmo_pass->Process(raster_context, probe_gizmo_config, camera);
+            if (frame_packet.ui_composition.window_frame_buffer) {
+                window_framebuffer_view = frame_packet.ui_composition.window_frame_buffer->GetView();
+            }
         }
+        const bool ui_writes_external_window =
+            frame_packet.ui_composition.enabled && frame_packet.ui_composition.separate_window &&
+            window_framebuffer_view.GetTexture() != nullptr;
 
-        // Post Process Passes
-        // - Ambient Occlusion
-        auto ao_result = ao_pass->Process(raster_context, raster_config, camera, time);
+        struct RasterGraphResources {
+            RenderGraph::ResourceHandle scene;
+            RenderGraph::ResourceHandle shadow_maps;
+            RenderGraph::ResourceHandle probe_volume;
+            RenderGraph::ResourceHandle lighting_data;
+            RenderGraph::ResourceHandle base_color;
+            RenderGraph::ResourceHandle normal;
+            RenderGraph::ResourceHandle metal_rough_ao;
+            RenderGraph::ResourceHandle depth;
+            RenderGraph::ResourceHandle hiz_current;
+            RenderGraph::ResourceHandle hiz_previous;
+            RenderGraph::ResourceHandle shadow_mask;
+            RenderGraph::ResourceHandle lighting_output;
+            RenderGraph::ResourceHandle ao_working_set;
+            RenderGraph::ResourceHandle motion_vectors;
+            RenderGraph::ResourceHandle ao_output;
+            RenderGraph::ResourceHandle denoiser_output;
+            RenderGraph::ResourceHandle ssr_output;
+            RenderGraph::ResourceHandle aa_output;
+            RenderGraph::ResourceHandle bloom_chain;
+            RenderGraph::ResourceHandle tonemapping_state;
+            RenderGraph::ResourceHandle tonemapping_output;
+            RenderGraph::ResourceHandle selected_framebuffer;
+            RenderGraph::ResourceHandle ui_framebuffer;
+            RenderGraph::ResourceHandle window_framebuffer;
+            RenderGraph::ResourceHandle output;
+            RenderGraph::ResourceHandle processing_image;
+        } graph_resources{};
 
-        rtao_denoiser_pass->ProcessInPlace(raster_context, raster_config, ao_result.ao_only_idx);
-        ao_pass->CompositeAo(raster_context, raster_config, ao_result.ao_only);
+        auto define_raster_passes = [&](auto&& schedule) {
+            schedule(
+                "ShadowDepth",
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.Read(graph_resources.scene)
+                        .Write(graph_resources.shadow_maps, "all-cascades-and-cube-faces")
+                        .SideEffect();
+                },
+                [&]() {
+                    cmd_list.PushScopeWithTimeScope(RasterTool::GetShadowDepthPassProfileScopeName());
+                    shadow_depth_pass->Process(raster_context, raster_config, camera);
+                    cmd_list.PopScopeWithTimeScope();
+                }
+            );
+            schedule(
+                "ProbeUpdate",
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.Read(graph_resources.scene)
+                        .ReadWrite(graph_resources.probe_volume)
+                        .SideEffect();
+                },
+                [&]() { probe_update_pass->Process(raster_context, raster_config, camera, time); }
+            );
+            schedule(
+                "UploadLightingData",
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.Read(graph_resources.shadow_maps)
+                        .Read(graph_resources.probe_volume)
+                        .Write(graph_resources.lighting_data)
+                        .SideEffect();
+                },
+                [&]() { UpdateGlobalLightingData(raster_context, raster_config, camera); }
+            );
+            schedule(
+                "Geometry",
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.Read(graph_resources.scene)
+                        .Read(graph_resources.hiz_previous, "all-mips")
+                        .Write(graph_resources.base_color)
+                        .Write(graph_resources.normal)
+                        .Write(graph_resources.metal_rough_ao)
+                        .Write(graph_resources.depth);
+                },
+                [&]() {
+                    cmd_list.PushScopeWithTimeScope(RasterTool::GetGeometryPassProfileScopeName());
+                    geometry_pass->Process(raster_context, raster_config, camera);
+                    cmd_list.PopScopeWithTimeScope();
+                }
+            );
+            schedule(
+                "HiZBuild",
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.Read(graph_resources.depth)
+                        .Write(graph_resources.hiz_current, "all-mips");
+                },
+                [&]() { hiz_build_pass->Process(raster_context, raster_config); }
+            );
+            schedule(
+                "CommitHiZHistory",
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.Read(graph_resources.hiz_current, "all-mips")
+                        .Write(graph_resources.hiz_previous, "all-mips")
+                        .SideEffect();
+                },
+                [&]() { raster_context.CommitHiZHistory(camera.GetViewProjectionMatrix()); }
+            );
+            schedule(
+                "DirectionalShadowMask",
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.Read(graph_resources.normal)
+                        .Read(graph_resources.depth)
+                        .Read(graph_resources.lighting_data)
+                        .Read(graph_resources.shadow_maps)
+                        .Write(graph_resources.shadow_mask);
+                },
+                [&]() {
+                    directional_shadow_mask_pass->Process(raster_context, raster_config, camera);
+                }
+            );
+            schedule(
+                "Lighting",
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.Read(graph_resources.base_color)
+                        .Read(graph_resources.normal)
+                        .Read(graph_resources.metal_rough_ao)
+                        .Read(graph_resources.depth)
+                        .Read(graph_resources.shadow_mask)
+                        .Read(graph_resources.lighting_data)
+                        .Read(graph_resources.probe_volume)
+                        .Write(graph_resources.lighting_output);
+                },
+                [&]() { lighting_pass->Process(raster_context, raster_config, camera); }
+            );
+            schedule(
+                "Skybox",
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.Read(graph_resources.depth)
+                        .ReadWrite(graph_resources.lighting_output);
+                },
+                [&]() { skybox_pass->Process(raster_context, raster_config, camera); }
+            );
 
-        TextureWithHandle processing_image = raster_context.textures.ao_output;
+            if (draw_scene_gizmos && scene_gizmos.show_probe_gi) {
+                schedule(
+                    "ProbeGizmo",
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.Read(graph_resources.probe_volume)
+                            .ReadWrite(graph_resources.lighting_output)
+                            .SideEffect();
+                    },
+                    [&]() {
+                        RasterConfig probe_gizmo_config                    = raster_config;
+                        probe_gizmo_config.probe_gi_gizmo_enabled         = scene_gizmos.show_probe_gi_probes;
+                        probe_gizmo_config.probe_gi_volume_bounds_enabled =
+                            scene_gizmos.show_probe_gi_volume_bounds;
+                        if (scene_gizmos.show_probe_gi_adaptive_cells) {
+                            probe_gizmo_config.probe_gi_debug_mode = 9;
+                        }
+                        probe_gizmo_pass->Process(raster_context, probe_gizmo_config, camera);
+                    }
+                );
+            }
 
-        // - CUDA Pass
+            schedule(
+                "AmbientOcclusion",
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.Read(graph_resources.normal)
+                        .Read(graph_resources.depth)
+                        .Read(graph_resources.lighting_output)
+                        .Read(graph_resources.scene)
+                        .Write(graph_resources.ao_working_set)
+                        .Write(graph_resources.motion_vectors);
+                },
+                [&]() { ao_result = ao_pass->Process(raster_context, raster_config, camera, time); }
+            );
+            schedule(
+                "RtaoDenoise",
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.Read(graph_resources.normal)
+                        .Read(graph_resources.depth)
+                        .Read(graph_resources.motion_vectors)
+                        .ReadWrite(graph_resources.ao_working_set);
+                },
+                [&]() {
+                    rtao_denoiser_pass->ProcessInPlace(
+                        raster_context, raster_config, ao_result.ao_only_idx
+                    );
+                }
+            );
+            schedule(
+                "AoComposite",
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.Read(graph_resources.ao_working_set)
+                        .Read(graph_resources.lighting_output)
+                        .Read(graph_resources.depth)
+                        .Read(graph_resources.normal)
+                        .Write(graph_resources.ao_output)
+                        .Write(graph_resources.processing_image);
+                },
+                [&]() {
+                    ao_pass->CompositeAo(raster_context, raster_config, ao_result.ao_only);
+                    processing_image = raster_context.textures.ao_output;
+                }
+            );
+
 #if WITH_CUDA
-        if (raster_config.ai_is_cuda_enabled) {
-            processing_image = tensor_rt_pass->Process(raster_context, raster_config, ao_result.ao_only_idx);
-        }
+            if (raster_config.ai_is_cuda_enabled) {
+                schedule(
+                    "TensorRT",
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.Read(graph_resources.ao_working_set)
+                            .Read(graph_resources.depth)
+                            .Read(graph_resources.lighting_output)
+                            .Read(graph_resources.motion_vectors)
+                            .ReadWrite(graph_resources.processing_image)
+                            .SideEffect();
+                    },
+                    [&]() {
+                        processing_image = tensor_rt_pass->Process(
+                            raster_context, raster_config, ao_result.ao_only_idx
+                        );
+                    }
+                );
+            }
 #endif
 
-        // - Denoiser Pass (Bilateral Filter)
-        processing_image = bfd_pass->Process(raster_context, raster_config, processing_image);
-
-        // - Screen Space Reflection
-        processing_image = ssr_pass->Process(raster_context, raster_config, camera, processing_image);
-
-        // - Cooperative Ops
-        processing_image = cooperative_ops_pass->Process(raster_context, raster_config, processing_image);
-
-        // - Anti-aliasing
-        processing_image = aa_pass->Process(raster_context, raster_config, camera, processing_image);
-
-        // - Bloom Pass
-        processing_image = bloom_pass->Process(raster_context, raster_config, processing_image);
-
-        // - Tonemapping Pass
-        processing_image = tonemapping_pass->Process(raster_context, raster_config, processing_image);
-
-        if (draw_scene_gizmos) {
-            if (scene_gizmos.show_main_camera) {
-                camera_gizmo_pass->Process(raster_context, camera, main_camera);
-            }
-
-            if (scene_gizmos.show_csm) {
-                csm_gizmo_pass->Process(raster_context, raster_config, scene_gizmos, camera, main_camera);
-            }
-        }
-
-        if (frame_packet.ui_composition.enabled) {
-            const auto& ui_frame = frame_packet.ui_composition;
-            const auto  window_frame_buffer = ui_frame.window_frame_buffer ?
-                                                  ui_frame.window_frame_buffer->GetView() :
-                                                  TextureView();
-            default_output_texture = ui_combine_pass->Process(
-                cmd_list,
-                ui_frame.separate_window,
-                ui_frame.output_resolution,
-                ui_frame.scene_color_position,
-                ui_frame.scene_color_resolution,
-                window_frame_buffer,
-                raster_context.GetSelectedFrameBufferView(raster_config.selected_frame_buffer_index),
-                raster_context.textures.ui_frame_buffer.tex,
-                raster_context.textures.output.tex
+            schedule(
+                "BilateralDenoise",
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.ReadWrite(graph_resources.processing_image)
+                        .Write(graph_resources.denoiser_output);
+                },
+                [&]() {
+                    processing_image = bfd_pass->Process(raster_context, raster_config, processing_image);
+                }
             );
+            schedule(
+                "ScreenSpaceReflection",
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.ReadWrite(graph_resources.processing_image)
+                        .Read(graph_resources.normal)
+                        .Read(graph_resources.depth)
+                        .Read(graph_resources.metal_rough_ao)
+                        .Write(graph_resources.ssr_output);
+                },
+                [&]() {
+                    processing_image =
+                        ssr_pass->Process(raster_context, raster_config, camera, processing_image);
+                }
+            );
+            schedule(
+                "CooperativeOps",
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.ReadWrite(graph_resources.processing_image).SideEffect();
+                },
+                [&]() {
+                    processing_image =
+                        cooperative_ops_pass->Process(raster_context, raster_config, processing_image);
+                }
+            );
+            schedule(
+                "AntiAliasing",
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.ReadWrite(graph_resources.processing_image)
+                        .Read(graph_resources.depth)
+                        .Write(graph_resources.aa_output);
+                },
+                [&]() {
+                    processing_image =
+                        aa_pass->Process(raster_context, raster_config, camera, processing_image);
+                }
+            );
+            schedule(
+                "Bloom",
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.ReadWrite(graph_resources.processing_image)
+                        .Write(graph_resources.bloom_chain, "all-mips");
+                },
+                [&]() {
+                    processing_image = bloom_pass->Process(raster_context, raster_config, processing_image);
+                }
+            );
+            schedule(
+                "Tonemapping",
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.ReadWrite(graph_resources.processing_image)
+                        .ReadWrite(graph_resources.tonemapping_state)
+                        .Write(graph_resources.tonemapping_output);
+                },
+                [&]() {
+                    processing_image =
+                        tonemapping_pass->Process(raster_context, raster_config, processing_image);
+                }
+            );
+
+            if (draw_scene_gizmos && scene_gizmos.show_main_camera) {
+                schedule(
+                    "CameraGizmo",
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.Read(graph_resources.scene)
+                            .ReadWrite(graph_resources.tonemapping_output)
+                            .ReadWrite(graph_resources.processing_image)
+                            .SideEffect();
+                    },
+                    [&]() { camera_gizmo_pass->Process(raster_context, camera, main_camera); }
+                );
+            }
+            if (draw_scene_gizmos && scene_gizmos.show_csm) {
+                schedule(
+                    "CsmGizmo",
+                    [&](RenderGraph::PassBuilder& builder) {
+                        builder.Read(graph_resources.shadow_maps)
+                            .ReadWrite(graph_resources.tonemapping_output)
+                            .ReadWrite(graph_resources.processing_image)
+                            .SideEffect();
+                    },
+                    [&]() {
+                        csm_gizmo_pass->Process(
+                            raster_context, raster_config, scene_gizmos, camera, main_camera
+                        );
+                    }
+                );
+            }
+
+            schedule(
+                "UiCombine",
+                [&](RenderGraph::PassBuilder& builder) {
+                    if (!frame_packet.ui_composition.enabled) {
+                        builder.Read(graph_resources.processing_image)
+                            .Write(graph_resources.output);
+                    } else if (ui_writes_external_window) {
+                        builder.Read(graph_resources.selected_framebuffer)
+                            .Write(graph_resources.window_framebuffer);
+                    } else {
+                        builder.Read(graph_resources.selected_framebuffer)
+                            .Read(graph_resources.ui_framebuffer)
+                            .Write(graph_resources.output);
+                    }
+                    builder.SideEffect();
+                },
+                [&]() {
+                    if (frame_packet.ui_composition.enabled) {
+                        const auto& ui_frame = frame_packet.ui_composition;
+                        default_output_texture = ui_combine_pass->Process(
+                            cmd_list,
+                            ui_frame.separate_window,
+                            ui_frame.output_resolution,
+                            ui_frame.scene_color_position,
+                            ui_frame.scene_color_resolution,
+                            window_framebuffer_view,
+                            selected_framebuffer_view,
+                            raster_context.textures.ui_frame_buffer.tex,
+                            raster_context.textures.output.tex
+                        );
+                    } else {
+                        // Without editor UI composition, use the copy path directly instead of sampling an
+                        // uninitialized UI buffer through the combine shader.
+                        default_output_texture = ui_combine_pass->Process(
+                            cmd_list,
+                            true,
+                            frame_packet.window.resolution,
+                            float2(0.f, 0.f),
+                            float2(
+                                static_cast<float>(frame_packet.window.resolution.x),
+                                static_cast<float>(frame_packet.window.resolution.y)
+                            ),
+                            TextureView(raster_context.textures.output.tex),
+                            processing_image.tex,
+                            {},
+                            raster_context.textures.output.tex
+                        );
+                    }
+                }
+            );
+        };
+
+        auto execute_linear = [&]() {
+            auto linear_schedule = [](
+                                       std::string_view,
+                                       auto&&,
+                                       auto&& execute
+                                   ) { std::forward<decltype(execute)>(execute)(); };
+            define_raster_passes(linear_schedule);
+        };
+
+        if (render_graph_enabled && !render_graph_fallback_latched) {
+            RenderGraph graph("RasterFrame");
+            auto import_texture = [&](std::string_view name, const auto& texture) {
+                // DepthBufferRef wraps a TextureRef while ordinary texture handles point at the
+                // Texture directly. Canonicalize every texture import to the TextureView's physical
+                // Texture so aliases (including the two depth sampler wrappers and the editor view)
+                // resolve to one graph resource.
+                return graph.Import(
+                    name,
+                    RenderGraph::ResourceKind::Texture,
+                    texture->GetView().GetTexture()
+                );
+            };
+
+            graph_resources.scene = graph.Import(
+                "scene", RenderGraph::ResourceKind::Token, render_scene.get()
+            );
+            graph_resources.shadow_maps = graph.Import(
+                "shadow_maps", RenderGraph::ResourceKind::Token, &raster_context.csm_data
+            );
+            graph_resources.probe_volume = graph.Import(
+                "probe_volume", RenderGraph::ResourceKind::Token, &raster_context.probe_volume
+            );
+            graph_resources.lighting_data = graph.Import(
+                "lighting_data",
+                RenderGraph::ResourceKind::Buffer,
+                raster_context.lighting_data_buffer.buf.Get()
+            );
+            graph_resources.base_color =
+                import_texture("base_color", raster_context.textures.base_color.tex);
+            graph_resources.normal = import_texture("normal", raster_context.textures.normal.tex);
+            graph_resources.metal_rough_ao =
+                import_texture("metal_rough_ao", raster_context.textures.metal_rough_ao.tex);
+            graph_resources.depth =
+                import_texture("depth", raster_context.textures.depth_linear_sampler.tex);
+            const auto depth_nearest_alias =
+                import_texture("depth_nearest_sampler", raster_context.textures.depth_nearest_sampler.tex);
+            assert(depth_nearest_alias == graph_resources.depth);
+            graph_resources.hiz_current =
+                import_texture("hiz_current", raster_context.textures.hiz_current.tex);
+            graph_resources.hiz_previous =
+                import_texture("hiz_previous", raster_context.textures.hiz_previous.tex);
+            graph_resources.shadow_mask =
+                import_texture("shadow_mask", raster_context.textures.shadow_mask.tex);
+            graph_resources.lighting_output =
+                import_texture("lighting_output", raster_context.textures.lighting_output.tex);
+            graph_resources.ao_working_set = graph.Import(
+                "ao_working_set", RenderGraph::ResourceKind::Token, ao_pass.get()
+            );
+            graph_resources.motion_vectors = graph.Import(
+                "motion_vectors", RenderGraph::ResourceKind::Token, rtao_denoiser_pass.get()
+            );
+            graph_resources.ao_output =
+                import_texture("ao_output", raster_context.textures.ao_output.tex);
+            graph_resources.denoiser_output =
+                import_texture("denoiser_output", raster_context.textures.denoiser_output.tex);
+            graph_resources.ssr_output =
+                import_texture("ssr_output", raster_context.textures.ssr_output.tex);
+            graph_resources.aa_output =
+                import_texture("aa_output", raster_context.textures.aa_output.tex);
+            graph_resources.bloom_chain = graph.Import(
+                "bloom_chain", RenderGraph::ResourceKind::Token, bloom_pass.get()
+            );
+            graph_resources.tonemapping_state = graph.Import(
+                "tonemapping_state", RenderGraph::ResourceKind::Token, tonemapping_pass.get()
+            );
+            graph_resources.tonemapping_output =
+                import_texture("tonemapping_output", raster_context.textures.tonemapping_output.tex);
+            if (frame_packet.ui_composition.enabled) {
+                graph_resources.selected_framebuffer = graph.Import(
+                    "selected_framebuffer",
+                    RenderGraph::ResourceKind::Texture,
+                    selected_framebuffer_view.GetTexture()
+                );
+
+                RenderGraph::ResourceHandle expected_validation_resource;
+                const auto& validation_name = frame_packet.validation_selected_frame_buffer_name;
+                if (validation_name == "base_color") {
+                    expected_validation_resource = graph_resources.base_color;
+                } else if (validation_name == "normal") {
+                    expected_validation_resource = graph_resources.normal;
+                } else if (validation_name == "depth_linear_sampler") {
+                    expected_validation_resource = graph_resources.depth;
+                } else if (validation_name == "tonemapping_output") {
+                    expected_validation_resource = graph_resources.tonemapping_output;
+                }
+                if (expected_validation_resource.IsValid() &&
+                    graph_resources.selected_framebuffer != expected_validation_resource) {
+                    render_graph_fallback_latched = true;
+                    LOG_ERROR(
+                        "[RenderGraph][Fallback] Raster framebuffer validation target '{}' did not "
+                        "alias its canonical graph resource. Using the linear path for this renderer "
+                        "instance.",
+                        validation_name
+                    );
+                }
+            }
+            graph_resources.ui_framebuffer =
+                import_texture("ui_framebuffer", raster_context.textures.ui_frame_buffer.tex);
+            if (ui_writes_external_window) {
+                graph_resources.window_framebuffer = graph.Import(
+                    "window_framebuffer",
+                    RenderGraph::ResourceKind::Texture,
+                    window_framebuffer_view.GetTexture()
+                );
+            }
+            graph_resources.output =
+                import_texture("output", raster_context.textures.output.tex);
+            graph_resources.processing_image = graph.CreateTransient(
+                "processing_image", RenderGraph::ResourceKind::Token
+            );
+
+            if (render_graph_fallback_latched) {
+                execute_linear();
+            } else {
+                auto graph_schedule = [&](std::string_view name, auto&& setup, auto&& execute) {
+                    graph.AddPass(
+                        name,
+                        std::forward<decltype(setup)>(setup),
+                        std::forward<decltype(execute)>(execute)
+                    );
+                };
+                define_raster_passes(graph_schedule);
+                graph.Export(graph_resources.output);
+                if (ui_writes_external_window) {
+                    graph.Export(graph_resources.window_framebuffer);
+                }
+
+                if (graph.Compile()) {
+                    if (render_graph_debug_dump) {
+                        std::string dump = graph.Dump();
+                        if (logged_render_graph_dumps.emplace(dump).second) {
+                            LOG_INFO("[RenderGraph][DebugDump]\n{}", dump);
+                        }
+                    }
+                    if (!graph.Execute()) {
+                        render_graph_fallback_latched = true;
+                        LOG_ERROR(
+                            "[RenderGraph][Fallback] Raster graph execution was rejected before any pass: {}. "
+                            "Using the linear path for this renderer instance.",
+                            graph.GetCompileError()
+                        );
+                        execute_linear();
+                    }
+                } else {
+                    render_graph_fallback_latched = true;
+                    LOG_ERROR(
+                        "[RenderGraph][Fallback] Raster graph compile failed before execution: {}. "
+                        "Using the linear path for this renderer instance.",
+                        graph.GetCompileError()
+                    );
+                    execute_linear();
+                }
+            }
         } else {
-            // Without editor UI composition, use the copy path directly instead of sampling an uninitialized
-            // UI buffer through the combine shader.
-            default_output_texture = ui_combine_pass->Process(
-                cmd_list,
-                true,
-                frame_packet.window.resolution,
-                float2(0.f, 0.f),
-                float2(
-                    static_cast<float>(frame_packet.window.resolution.x),
-                    static_cast<float>(frame_packet.window.resolution.y)
-                ),
-                TextureView(raster_context.textures.output.tex),
-                processing_image.tex,
-                {},
-                raster_context.textures.output.tex
-            );
+            execute_linear();
         }
 
         // without test

@@ -24,10 +24,12 @@
 #include <cassert>
 #include <chrono>
 #include <charconv>
+#include <iterator>
 #include <mutex>
 #include <nfd.hpp>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <type_traits>
 
@@ -228,6 +230,75 @@ uint64_t ParseVulkanPresentSubmitFaultTrigger(int argc, const char** argv) {
     return count;
 }
 
+bool ParseThreadingRendererSwitchValidation(int argc, const char** argv) {
+    constexpr std::string_view argument_name = "--threading-renderer-switch-validation";
+    constexpr std::string_view value_prefix  = "--threading-renderer-switch-validation=";
+
+    bool enabled = false;
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view argument = argv[index];
+        if (argument.starts_with(value_prefix)) {
+            throw std::invalid_argument(
+                "--threading-renderer-switch-validation is a flag and does not accept a value"
+            );
+        }
+        if (argument != argument_name) {
+            continue;
+        }
+        if (enabled) {
+            throw std::invalid_argument(
+                "--threading-renderer-switch-validation may be specified only once"
+            );
+        }
+        enabled = true;
+    }
+    return enabled;
+}
+
+std::optional<std::string>
+ParseThreadingRasterFramebufferValidation(int argc, const char** argv) {
+    constexpr std::string_view argument_name = "--threading-raster-framebuffer-validation";
+    constexpr std::string_view value_prefix  = "--threading-raster-framebuffer-validation=";
+    constexpr std::string_view allowed_names[] = {
+        "base_color",
+        "normal",
+        "depth_linear_sampler",
+        "tonemapping_output",
+    };
+
+    std::optional<std::string_view> selection;
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view argument = argv[index];
+        std::optional<std::string_view> candidate;
+        if (argument == argument_name) {
+            if (index + 1 >= argc || std::string_view(argv[index + 1]).empty()) {
+                throw std::invalid_argument(
+                    "--threading-raster-framebuffer-validation requires a framebuffer name"
+                );
+            }
+            candidate = std::string_view(argv[++index]);
+        } else if (argument.starts_with(value_prefix)) {
+            candidate = argument.substr(value_prefix.size());
+        }
+        if (!candidate.has_value()) {
+            continue;
+        }
+        if (selection.has_value()) {
+            throw std::invalid_argument(
+                "--threading-raster-framebuffer-validation may be specified only once"
+            );
+        }
+        if (std::find(std::begin(allowed_names), std::end(allowed_names), *candidate) ==
+            std::end(allowed_names)) {
+            throw std::invalid_argument(
+                "unsupported Raster framebuffer validation target: " + std::string(*candidate)
+            );
+        }
+        selection = *candidate;
+    }
+    return selection.has_value() ? std::optional<std::string>(std::string(*selection)) : std::nullopt;
+}
+
 ERenderMethod ParseDefaultRenderMethod(std::string_view render_method_name) {
     if (render_method_name == "Raster") {
         return ERenderMethod::Raster;
@@ -340,6 +411,34 @@ Engine::Engine() {}
 
 void Engine::ValidateCommandLine(int argc, const char** argv) {
     (void)ParseVulkanPresentSubmitFaultTrigger(argc, argv);
+    const bool renderer_switch_validation =
+        ParseThreadingRendererSwitchValidation(argc, argv);
+    const auto raster_framebuffer_validation =
+        ParseThreadingRasterFramebufferValidation(argc, argv);
+    if (!renderer_switch_validation && !raster_framebuffer_validation.has_value()) {
+        return;
+    }
+
+    std::filesystem::path workspace_path = argv[0];
+    workspace_path = workspace_path.filename().string().find(".exe") != std::string::npos ?
+                         workspace_path.parent_path() :
+                         workspace_path;
+    const std::filesystem::path config_path =
+        ParseConfigOverride(argc, argv).value_or(workspace_path / "MoerEngine.toml");
+    if (!std::filesystem::is_regular_file(config_path)) {
+        throw std::invalid_argument(
+            "threading validation config does not exist: " +
+            config_path.generic_string()
+        );
+    }
+    const auto validation_config =
+        Config::GlobalConfig::LoadConfigFromTomlFile(config_path.generic_string());
+    if (validation_config.engine.render.default_render_method != "Raster") {
+        throw std::invalid_argument(
+            "threading Raster validation requires "
+            "engine.render.default_render_method = \"Raster\""
+        );
+    }
 }
 
 Engine::~Engine() {
@@ -374,6 +473,17 @@ void Engine::Init(int argc, const char** argv) {
     const auto& config = ConfigManager::GetInstance().GetConfig();
     const uint64_t vulkan_present_submit_fault_trigger =
         ParseVulkanPresentSubmitFaultTrigger(argc, argv);
+    const bool renderer_switch_validation_enabled =
+        ParseThreadingRendererSwitchValidation(argc, argv);
+    const auto raster_framebuffer_validation =
+        ParseThreadingRasterFramebufferValidation(argc, argv);
+    if ((renderer_switch_validation_enabled || raster_framebuffer_validation.has_value()) &&
+        config.engine.render.default_render_method != "Raster") {
+        throw std::invalid_argument(
+            "threading Raster validation requires "
+            "engine.render.default_render_method = \"Raster\""
+        );
+    }
 
     // Init TaskSystem
     TaskSystem::Init();
@@ -443,6 +553,18 @@ void Engine::Init(int argc, const char** argv) {
     m_editor_config->selected_render_method =
         ParseDefaultRenderMethod(config.engine.render.default_render_method);
     m_editor_config->scene_path = config.engine.scene.scene_path;
+    if (raster_framebuffer_validation.has_value()) {
+        m_editor_config->validation_selected_frame_buffer_name =
+            *raster_framebuffer_validation;
+    }
+    if (renderer_switch_validation_enabled) {
+        m_renderer_switch_validation_stage = ERendererSwitchValidationStage::InitialRaster;
+        LOG_INFO(
+            "[ThreadingValidation][RendererSwitch] Enabled; sequence=Raster reload, "
+            "Raster->Raytracing->Raster; "
+            "stable_ready_gt_frames=12."
+        );
+    }
 
     // Init WindowContext
     m_editor_config->SetResolution(config.editor.width, config.editor.height);
@@ -492,6 +614,25 @@ void Engine::Run(const EngineHooks& hooks) {
             m_script_host->ProcessMainThreadCommands(scene);
         }
     };
+    if (m_renderer_switch_validation_stage != ERendererSwitchValidationStage::Disabled) {
+        auto on_tick_test = std::move(runtime_hooks.on_tick_test);
+        runtime_hooks.on_tick_test =
+            [this, on_tick_test = std::move(on_tick_test)](Scene& scene) {
+                if (on_tick_test) {
+                    on_tick_test(scene);
+                }
+                TickRendererSwitchValidation(scene);
+            };
+
+        auto on_is_need_reload = std::move(runtime_hooks.on_is_need_reload);
+        runtime_hooks.on_is_need_reload =
+            [this, on_is_need_reload = std::move(on_is_need_reload)]() {
+                const bool hook_requested = on_is_need_reload && on_is_need_reload();
+                const bool validation_requested =
+                    ConsumeRendererSwitchValidationReloadRequest();
+                return hook_requested || validation_requested;
+            };
+    }
 
     while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
         const ERenderMethod selected_render_method = m_editor_config->selected_render_method;
@@ -618,6 +759,103 @@ void Engine::Run(const EngineHooks& hooks) {
             m_renderer.reset();
         }
     }
+}
+
+void Engine::TickRendererSwitchValidation(Scene& scene) {
+    assert(IsCurrentlyGameThread());
+
+    constexpr uint k_stable_ready_gt_frames = 12;
+
+    ERenderMethod expected_render_method = ERenderMethod::Raster;
+    switch (m_renderer_switch_validation_stage) {
+        case ERendererSwitchValidationStage::InitialRaster:
+        case ERendererSwitchValidationStage::ReloadedRaster:
+        case ERendererSwitchValidationStage::FinalRaster:
+            expected_render_method = ERenderMethod::Raster;
+            break;
+        case ERendererSwitchValidationStage::Raytracing:
+            expected_render_method = ERenderMethod::Raytracing;
+            break;
+        case ERendererSwitchValidationStage::Disabled:
+        case ERendererSwitchValidationStage::Complete:
+        case ERendererSwitchValidationStage::Failed:
+            return;
+    }
+
+    if (m_editor_config->selected_render_method != expected_render_method) {
+        LOG_ERROR(
+            "[ThreadingValidation][RendererSwitch][Error] Expected renderer {}, observed {}.",
+            k_render_method_names[static_cast<uint>(expected_render_method)],
+            k_render_method_names[static_cast<uint>(m_editor_config->selected_render_method)]
+        );
+        m_renderer_switch_validation_stage = ERendererSwitchValidationStage::Failed;
+        m_renderer_switch_validation_reload_requested = false;
+        WindowContext::RequestClose(WindowContext::GetMainWindow());
+        return;
+    }
+
+    if (!scene.IsReady()) {
+        m_renderer_switch_validation_ready_frames = 0;
+        return;
+    }
+
+    ++m_renderer_switch_validation_ready_frames;
+    if (m_renderer_switch_validation_ready_frames < k_stable_ready_gt_frames) {
+        return;
+    }
+    m_renderer_switch_validation_ready_frames = 0;
+
+    switch (m_renderer_switch_validation_stage) {
+        case ERendererSwitchValidationStage::InitialRaster:
+            LOG_INFO(
+                "[ThreadingValidation][RendererSwitch] Request Raster reload after {} ready GT "
+                "frames.",
+                k_stable_ready_gt_frames
+            );
+            m_renderer_switch_validation_stage = ERendererSwitchValidationStage::ReloadedRaster;
+            m_renderer_switch_validation_reload_requested = true;
+            break;
+        case ERendererSwitchValidationStage::ReloadedRaster:
+            LOG_INFO(
+                "[ThreadingValidation][RendererSwitch] Request Raster->Raytracing reload after {} "
+                "ready GT frames.",
+                k_stable_ready_gt_frames
+            );
+            m_editor_config->selected_render_method = ERenderMethod::Raytracing;
+            m_renderer_switch_validation_stage = ERendererSwitchValidationStage::Raytracing;
+            m_renderer_switch_validation_reload_requested = true;
+            break;
+        case ERendererSwitchValidationStage::Raytracing:
+            LOG_INFO(
+                "[ThreadingValidation][RendererSwitch] Request Raytracing->Raster reload after {} "
+                "ready GT frames.",
+                k_stable_ready_gt_frames
+            );
+            m_editor_config->selected_render_method = ERenderMethod::Raster;
+            m_renderer_switch_validation_stage = ERendererSwitchValidationStage::FinalRaster;
+            m_renderer_switch_validation_reload_requested = true;
+            break;
+        case ERendererSwitchValidationStage::FinalRaster:
+            m_renderer_switch_validation_stage = ERendererSwitchValidationStage::Complete;
+            LOG_INFO(
+                "[ThreadingValidation][RendererSwitch] Complete: final Raster stable for {} ready "
+                "GT frames.",
+                k_stable_ready_gt_frames
+            );
+            WindowContext::RequestClose(WindowContext::GetMainWindow());
+            break;
+        case ERendererSwitchValidationStage::Disabled:
+        case ERendererSwitchValidationStage::Complete:
+        case ERendererSwitchValidationStage::Failed:
+            break;
+    }
+}
+
+bool Engine::ConsumeRendererSwitchValidationReloadRequest() {
+    assert(IsCurrentlyGameThread());
+    const bool requested = m_renderer_switch_validation_reload_requested;
+    m_renderer_switch_validation_reload_requested = false;
+    return requested;
 }
 
 void Engine::RequestExit() {

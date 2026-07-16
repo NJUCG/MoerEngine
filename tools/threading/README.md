@@ -14,10 +14,15 @@ split into repeatable validation runs.
 
 `MoerEditor --config <path>` selects the generated config. Launches without
 `--config` keep using `MoerEngine.toml` next to the executable.
+`run_matrix.py` defaults to the tracked `template.MoerEngine.toml`; pass
+`--base-config` only when intentionally testing another complete template.
 
 Matrix configs set `engine.threading.profile_logging=true`. The regular and
 template configs keep it disabled, so normal editor runs do not emit profiling
-windows.
+windows. They also set `engine.render.raster.render_graph` and
+`render_graph_debug_dump` explicitly for every scenario. The existing
+functional sets keep the RenderGraph path off; the dedicated `rendergraph` set
+enables both the graph and its one-time debug dump.
 
 ## Common Commands
 
@@ -45,6 +50,61 @@ Run the full functional matrix:
 python tools/threading/run_matrix.py --set full --continue-on-failure --base-config template.MoerEngine.toml
 ```
 
+Run the seven-scenario Raster RenderGraph matrix:
+
+```powershell
+python tools/threading/run_matrix.py --set rendergraph --continue-on-failure --base-config template.MoerEngine.toml
+```
+
+This covers the same Raster RT/RHI/bypass/lag combinations as `full`, but with
+the graph and graph debug dump enabled. It also contains a validation-only
+Raster reload, Raster-to-Raytracing switch and Raytracing-to-Raster switch.
+`full` remains the original nine functional scenarios and exercises the linear
+Raster fallback.
+
+The reload/switch scenario emits its final marker and requests a normal editor
+shutdown itself. `runtime_verify.py --expect-exit-after-ready` then validates
+the exit code, four render-queue drains, four renderer destructions, three
+Raster destructor completions and one Raytracing destructor completion without calling `PrintWindow`
+on a window that has crossed several renderer lifetimes. That lifecycle-only
+scenario intentionally produces no capture; the other graph scenarios retain
+the visual and resize/restore coverage.
+
+Compare the corresponding maximized captures from graph-off and graph-on runs:
+
+```powershell
+python tools/threading/compare_captures.py `
+  target/validation/rt_rhi/<linear-run>/raster_sync `
+  target/validation/rt_rhi/<graph-run>/raster_graph_sync `
+  --output target/validation/rt_rhi/<comparison>/report.json `
+  --max-mean-absolute-error 1 `
+  --max-rmse 3 `
+  --max-p99 10 `
+  --min-all-channels-le-2-ratio 0.80
+```
+
+The comparator deterministically prefers the common `01_maximized.bmp`,
+requires equal dimensions, reports RGB error distribution and exits nonzero
+when an enabled threshold fails. The nonzero tolerance accounts for dynamic
+sampling between two independent editor processes; retain the JSON report with
+the validation evidence, not in Git.
+
+Run paired graph-off/on captures for the key GBuffer textures:
+
+```powershell
+python tools/threading/run_matrix.py --set rendergraph-resources --continue-on-failure
+```
+
+This eight-scenario set forces the editor display to `base_color`, `normal`, and
+`depth_linear_sampler`, with one synchronous linear and graph run for each
+texture. A second `base_color` pair runs with RT + threaded RHI to cover the
+non-empty framebuffer-selection snapshot across GT/RT. Use
+`compare_captures.py` on every corresponding pair: the matrix summary validates
+each process independently and is not, by itself, a graph-off/on visual-equivalence
+result. The validation-only framebuffer flag is strictly limited to those
+textures plus `tonemapping_output`; normal launches leave the selection empty
+and preserve the UI-controlled framebuffer.
+
 Run the isolated synthetic device-loss scenario:
 
 ```powershell
@@ -69,24 +129,35 @@ python tools/threading/run_matrix.py --set full --dry-run --base-config template
 
 ## Scenario Coverage
 
-| Scenario | Renderer | RT | RHI | Bypass | Lag | Window stress |
-|---|---|---:|---:|---:|---:|---:|
-| `raster_sync` | Raster | off | off | on | 0 | no |
-| `raster_rhi_bypass` | Raster | off | configured | on | 0 | no |
-| `raster_rhi_gt` | Raster | off | on | off | 0 | yes |
-| `raster_rt0_rhi` | Raster | on | on | off | 0 | no |
-| `raster_rt1_rhi` | Raster | on | on | off | 1 | yes |
-| `raster_rt1_rhi_off` | Raster | on | off | off | 1 | no |
-| `ray_rhi_gt` | Raytracing | off | on | off | 0 | no |
-| `ray_rt0_rhi` | Raytracing | on | on | off | 0 | no |
-| `ray_rt1_rhi` | Raytracing | on | on | off | 1 | yes |
-| `ray_rt1_rhi_fault_present_submit` | Raytracing | on | on | off | 1 | no |
+| Scenario | Renderer | Graph | Dump | RT | RHI | Bypass | Lag | Window stress |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `raster_sync` | Raster | off | off | off | off | on | 0 | no |
+| `raster_rhi_bypass` | Raster | off | off | off | configured | on | 0 | no |
+| `raster_rhi_gt` | Raster | off | off | off | on | off | 0 | yes |
+| `raster_rt0_rhi` | Raster | off | off | on | on | off | 0 | no |
+| `raster_rt1_rhi` | Raster | off | off | on | on | off | 1 | yes |
+| `raster_rt1_rhi_off` | Raster | off | off | on | off | off | 1 | no |
+| `raster_graph_sync` | Raster | on | on | off | off | on | 0 | no |
+| `raster_graph_rhi_bypass` | Raster | on | on | off | configured | on | 0 | no |
+| `raster_graph_rhi_gt` | Raster | on | on | off | on | off | 0 | yes |
+| `raster_graph_rt0_rhi` | Raster | on | on | on | on | off | 0 | no |
+| `raster_graph_rt1_rhi` | Raster | on | on | on | on | off | 1 | yes |
+| `raster_graph_rt1_rhi_off` | Raster | on | on | on | off | off | 1 | no |
+| `raster_graph_rt1_rhi_reload_switch` | Raster→Raster→Raytracing→Raster | on (Raster) | on | on | on | off | 1 | no |
+| `ray_rhi_gt` | Raytracing | n/a | n/a | off | on | off | 0 | no |
+| `ray_rt0_rhi` | Raytracing | n/a | n/a | on | on | off | 0 | no |
+| `ray_rt1_rhi` | Raytracing | n/a | n/a | on | on | off | 1 | yes |
+| `ray_rt1_rhi_fault_present_submit` | Raytracing | n/a | n/a | on | on | off | 1 | no |
 
 ## Pass Criteria
 
 A run passes only when all of the following are true:
 
 - The expected GT/RT/RHI mode markers appear in the log.
+- Raster runs emit exactly one execution-mode marker per Raster renderer
+  instance. The reload/switch seam requires exactly three Raster mode markers
+  and at least three graph dumps; topology changes may legitimately add another
+  unique dump. Graph runs must not emit `[RenderGraph][Fallback]`.
 - No default forbidden pattern appears, including assertion, Vulkan VUID,
   device lost, queue submission failure, access violation, or tracked resource
   residue.
@@ -158,6 +229,7 @@ cannot accidentally consume a stale report from an earlier run.
   one-second settle because its first two real presents already provide the
   frame captured after the third synthetic submit fault.
 - The base TOML is parsed after scenario values are patched, and all five
-  threading/render values are checked before launch.
+  threading values, the renderer, and both Raster RenderGraph values are
+  checked before launch.
 - `--continue-on-failure` is recommended for a full matrix so one failed
   scenario does not hide the state of later scenarios.

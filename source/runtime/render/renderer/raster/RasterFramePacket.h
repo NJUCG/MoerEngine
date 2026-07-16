@@ -7,6 +7,7 @@
 #include "scene/camera/Camera.h"
 
 #include <cstdint>
+#include <string>
 #include <type_traits>
 
 namespace Moer::Render::Raster {
@@ -15,6 +16,7 @@ struct RasterFramePacket {
     uint64_t                   frame_id = 0;
     Renderer::WindowFrameState window{};
     RasterConfig               raster_config{};
+    std::string                validation_selected_frame_buffer_name;
     EEditorViewportMode        active_viewport_mode = EEditorViewportMode::Game;
     SceneViewGizmoConfig       scene_view_gizmos{};
     Camera                     render_camera{};

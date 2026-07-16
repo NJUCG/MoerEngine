@@ -45,8 +45,21 @@ public:
     }
 
 private:
+    enum class ERendererSwitchValidationStage : uint8 {
+        Disabled,
+        InitialRaster,
+        ReloadedRaster,
+        Raytracing,
+        FinalRaster,
+        Complete,
+        Failed,
+    };
+
     void Init3rdParty();
     void ShutDown3rdParty();
+
+    void TickRendererSwitchValidation(Scene& scene);
+    bool ConsumeRendererSwitchValidationReloadRequest();
 
     SharedPtr<EditorConfig>  m_editor_config;
     UniquePtr<RuntimeAssets> m_runtime_assets;
@@ -58,6 +71,12 @@ private:
 
     uint m_max_frame_lag = 0;
     bool m_has_shutdown = false;
+
+    // Validation state is accessed only by Game Thread hooks. Render work is drained before reload.
+    ERendererSwitchValidationStage m_renderer_switch_validation_stage =
+        ERendererSwitchValidationStage::Disabled;
+    uint m_renderer_switch_validation_ready_frames = 0;
+    bool m_renderer_switch_validation_reload_requested = false;
 };
 
 } // namespace Moer

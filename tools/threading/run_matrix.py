@@ -20,9 +20,15 @@ class Scenario:
     rhi_thread: bool
     rhi_bypass: bool
     max_frame_lag: int
+    render_graph: bool = False
+    render_graph_debug_dump: bool = False
     window_stress: bool = False
     editor_args: tuple[str, ...] = ()
     fault_validation: bool = False
+    renderer_switch_validation: bool = False
+    framebuffer_validation: str | None = None
+    expect_exit_after_ready: bool = False
+    ready_log_pattern: str | None = None
     ready_settle_seconds: float | None = None
 
     @property
@@ -33,13 +39,175 @@ class Scenario:
 FUNCTIONAL_SCENARIOS = (
     Scenario("raster_sync", "Raster", False, False, True, 0),
     Scenario("raster_rhi_bypass", "Raster", False, True, True, 0),
-    Scenario("raster_rhi_gt", "Raster", False, True, False, 0, True),
+    Scenario("raster_rhi_gt", "Raster", False, True, False, 0, window_stress=True),
     Scenario("raster_rt0_rhi", "Raster", True, True, False, 0),
-    Scenario("raster_rt1_rhi", "Raster", True, True, False, 1, True),
+    Scenario("raster_rt1_rhi", "Raster", True, True, False, 1, window_stress=True),
     Scenario("raster_rt1_rhi_off", "Raster", True, False, False, 1),
     Scenario("ray_rhi_gt", "Raytracing", False, True, False, 0),
     Scenario("ray_rt0_rhi", "Raytracing", True, True, False, 0),
-    Scenario("ray_rt1_rhi", "Raytracing", True, True, False, 1, True),
+    Scenario("ray_rt1_rhi", "Raytracing", True, True, False, 1, window_stress=True),
+)
+
+RENDERGRAPH_SCENARIOS = (
+    Scenario(
+        "raster_graph_sync",
+        "Raster",
+        False,
+        False,
+        True,
+        0,
+        render_graph=True,
+        render_graph_debug_dump=True,
+    ),
+    Scenario(
+        "raster_graph_rhi_bypass",
+        "Raster",
+        False,
+        True,
+        True,
+        0,
+        render_graph=True,
+        render_graph_debug_dump=True,
+    ),
+    Scenario(
+        "raster_graph_rhi_gt",
+        "Raster",
+        False,
+        True,
+        False,
+        0,
+        render_graph=True,
+        render_graph_debug_dump=True,
+        window_stress=True,
+    ),
+    Scenario(
+        "raster_graph_rt0_rhi",
+        "Raster",
+        True,
+        True,
+        False,
+        0,
+        render_graph=True,
+        render_graph_debug_dump=True,
+    ),
+    Scenario(
+        "raster_graph_rt1_rhi",
+        "Raster",
+        True,
+        True,
+        False,
+        1,
+        render_graph=True,
+        render_graph_debug_dump=True,
+        window_stress=True,
+    ),
+    Scenario(
+        "raster_graph_rt1_rhi_off",
+        "Raster",
+        True,
+        False,
+        False,
+        1,
+        render_graph=True,
+        render_graph_debug_dump=True,
+    ),
+    Scenario(
+        "raster_graph_rt1_rhi_reload_switch",
+        "Raster",
+        True,
+        True,
+        False,
+        1,
+        render_graph=True,
+        render_graph_debug_dump=True,
+        editor_args=("--threading-renderer-switch-validation",),
+        renderer_switch_validation=True,
+        expect_exit_after_ready=True,
+        ready_log_pattern="[ThreadingValidation][RendererSwitch] Complete:",
+    ),
+)
+
+RENDERGRAPH_RESOURCE_SCENARIOS = (
+    Scenario(
+        "raster_key_base_linear",
+        "Raster",
+        False,
+        False,
+        True,
+        0,
+        framebuffer_validation="base_color",
+    ),
+    Scenario(
+        "raster_key_base_graph",
+        "Raster",
+        False,
+        False,
+        True,
+        0,
+        render_graph=True,
+        render_graph_debug_dump=True,
+        framebuffer_validation="base_color",
+    ),
+    Scenario(
+        "raster_key_base_rt1_rhi_linear",
+        "Raster",
+        True,
+        True,
+        False,
+        1,
+        framebuffer_validation="base_color",
+    ),
+    Scenario(
+        "raster_key_base_rt1_rhi_graph",
+        "Raster",
+        True,
+        True,
+        False,
+        1,
+        render_graph=True,
+        render_graph_debug_dump=True,
+        framebuffer_validation="base_color",
+    ),
+    Scenario(
+        "raster_key_normal_linear",
+        "Raster",
+        False,
+        False,
+        True,
+        0,
+        framebuffer_validation="normal",
+    ),
+    Scenario(
+        "raster_key_normal_graph",
+        "Raster",
+        False,
+        False,
+        True,
+        0,
+        render_graph=True,
+        render_graph_debug_dump=True,
+        framebuffer_validation="normal",
+    ),
+    Scenario(
+        "raster_key_depth_linear",
+        "Raster",
+        False,
+        False,
+        True,
+        0,
+        framebuffer_validation="depth_linear_sampler",
+    ),
+    Scenario(
+        "raster_key_depth_graph",
+        "Raster",
+        False,
+        False,
+        True,
+        0,
+        render_graph=True,
+        render_graph_debug_dump=True,
+        framebuffer_validation="depth_linear_sampler",
+    ),
 )
 
 FAULT_SCENARIOS = (
@@ -57,12 +225,22 @@ FAULT_SCENARIOS = (
 )
 
 SCENARIOS = {
-    scenario.name: scenario for scenario in (*FUNCTIONAL_SCENARIOS, *FAULT_SCENARIOS)
+    scenario.name: scenario
+    for scenario in (
+        *FUNCTIONAL_SCENARIOS,
+        *RENDERGRAPH_SCENARIOS,
+        *RENDERGRAPH_RESOURCE_SCENARIOS,
+        *FAULT_SCENARIOS,
+    )
 }
 
 SCENARIO_SETS = {
     "smoke": ("raster_sync", "raster_rhi_gt", "ray_rt1_rhi"),
     "full": tuple(scenario.name for scenario in FUNCTIONAL_SCENARIOS),
+    "rendergraph": tuple(scenario.name for scenario in RENDERGRAPH_SCENARIOS),
+    "rendergraph-resources": tuple(
+        scenario.name for scenario in RENDERGRAPH_RESOURCE_SCENARIOS
+    ),
     "soak": ("raster_rt1_rhi", "ray_rt1_rhi"),
     "fault": tuple(scenario.name for scenario in FAULT_SCENARIOS),
 }
@@ -89,6 +267,11 @@ def generate_config(base_text: str, scenario: Scenario) -> str:
         ("engine.threading", "max_frame_lag"): scenario.max_frame_lag,
         ("engine.threading", "profile_logging"): True,
         ("engine.render", "default_render_method"): scenario.renderer,
+        ("engine.render.raster", "render_graph"): scenario.render_graph,
+        (
+            "engine.render.raster",
+            "render_graph_debug_dump",
+        ): scenario.render_graph_debug_dump,
     }
     replaced = {target: 0 for target in replacements}
     current_section = ""
@@ -124,6 +307,7 @@ def generate_config(base_text: str, scenario: Scenario) -> str:
     parsed = tomllib.loads(generated)
     threading = parsed["engine"]["threading"]
     render = parsed["engine"]["render"]
+    raster = render["raster"]
     actual = {
         ("engine.threading", "render_thread"): threading["render_thread"],
         ("engine.threading", "rhi_thread"): threading["rhi_thread"],
@@ -131,6 +315,10 @@ def generate_config(base_text: str, scenario: Scenario) -> str:
         ("engine.threading", "max_frame_lag"): threading["max_frame_lag"],
         ("engine.threading", "profile_logging"): threading["profile_logging"],
         ("engine.render", "default_render_method"): render["default_render_method"],
+        ("engine.render.raster", "render_graph"): raster["render_graph"],
+        ("engine.render.raster", "render_graph_debug_dump"): raster[
+            "render_graph_debug_dump"
+        ],
     }
     if actual != replacements:
         raise ValueError(f"Generated config validation failed: expected={replacements}, actual={actual}")
@@ -169,6 +357,32 @@ def required_patterns(scenario: Scenario) -> list[str]:
         patterns.append("[Threading] GT/RT overlap active")
     if scenario.render_thread:
         patterns.append("[ThreadingProfile][RT]")
+    if scenario.renderer == "Raster":
+        patterns.append(
+            "[RenderGraph] Raster execution mode: "
+            + ("graph" if scenario.render_graph else "linear")
+        )
+        if scenario.render_graph:
+            patterns.append("[RenderGraph][DebugDump]")
+    if scenario.renderer_switch_validation:
+        patterns.extend(
+            [
+                "[ThreadingValidation][RendererSwitch] Enabled",
+                "[ThreadingValidation][RendererSwitch] Request Raster reload",
+                "[ThreadingValidation][RendererSwitch] Request Raster->Raytracing reload",
+                "[ThreadingValidation][RendererSwitch] Request Raytracing->Raster reload",
+                "[ThreadingValidation][RendererSwitch] Complete:",
+                (
+                    "[Threading] Raytracing frames execute on "
+                    f"{execution_thread} thread id ="
+                ),
+            ]
+        )
+    if scenario.framebuffer_validation:
+        patterns.append(
+            "[ThreadingValidation][RasterFramebuffer] selection="
+            + scenario.framebuffer_validation
+        )
     return patterns
 
 
@@ -200,7 +414,7 @@ def build_verifier_command(
         "--startup-timeout",
         str(args.startup_timeout),
         "--ready-log-pattern",
-        args.ready_log_pattern,
+        scenario.ready_log_pattern or args.ready_log_pattern,
         "--ready-timeout",
         str(args.ready_timeout),
         "--ready-settle-seconds",
@@ -212,8 +426,52 @@ def build_verifier_command(
     ]
     for editor_arg in scenario.editor_args:
         command.append(f"--editor-arg={editor_arg}")
+    if scenario.framebuffer_validation:
+        command.append(
+            "--editor-arg=--threading-raster-framebuffer-validation="
+            + scenario.framebuffer_validation
+        )
+    if scenario.expect_exit_after_ready:
+        command.append("--expect-exit-after-ready")
     for pattern in required_patterns(scenario):
         command.extend(["--require-log-pattern", pattern])
+    if scenario.renderer == "Raster":
+        raster_mode_marker = (
+            "[RenderGraph] Raster execution mode: "
+            + ("graph" if scenario.render_graph else "linear")
+        )
+        expected_raster_instances = 3 if scenario.renderer_switch_validation else 1
+        command.extend(
+            [
+                "--require-log-count",
+                re.escape(raster_mode_marker),
+                str(expected_raster_instances),
+            ]
+        )
+        if scenario.render_graph:
+            command.extend(
+                ["--forbid-log-pattern", r"\[RenderGraph\]\[Fallback\]"]
+            )
+            if scenario.renderer_switch_validation:
+                command.extend(
+                    [
+                        "--require-log-min-count",
+                        r"\[RenderGraph\]\[DebugDump\]",
+                        str(expected_raster_instances),
+                    ]
+                )
+    if scenario.renderer_switch_validation:
+        lifecycle_counts = (
+            ("[Threading] Render frame queue drained before renderer shutdown/reload.", 4),
+            ("[Threading] Destroying renderer on Render Thread.", 4),
+            ("[Threading] Renderer destroyed on Render Thread.", 4),
+            ("[Threading] RasterRenderer destruction finished on Render Thread.", 3),
+            ("[Threading] RaytracingRenderer destruction finished on Render Thread.", 1),
+        )
+        for marker, expected_count in lifecycle_counts:
+            command.extend(
+                ["--require-log-count", re.escape(marker), str(expected_count)]
+            )
     if scenario.fault_validation:
         exact_injection_line = (
             r"^\[[^\]\r\n]+\] \[info\] \[[^\]\r\n]+\] "
@@ -554,7 +812,9 @@ def parse_args(repo_root: Path) -> argparse.Namespace:
     )
     parser.add_argument("--exe", type=Path, default=default_exe)
     parser.add_argument("--workdir", type=Path)
-    parser.add_argument("--base-config", type=Path, default=repo_root / "MoerEngine.toml")
+    parser.add_argument(
+        "--base-config", type=Path, default=repo_root / "template.MoerEngine.toml"
+    )
     parser.add_argument(
         "--outdir",
         type=Path,
@@ -597,7 +857,9 @@ def main() -> int:
             print(
                 f"{name}: renderer={scenario.renderer}, rt={scenario.render_thread}, "
                 f"rhi={scenario.rhi_thread}, bypass={scenario.rhi_bypass}, "
-                f"lag={scenario.max_frame_lag}, stress={scenario.window_stress}"
+                f"lag={scenario.max_frame_lag}, graph={scenario.render_graph}, "
+                f"graph_dump={scenario.render_graph_debug_dump}, "
+                f"stress={scenario.window_stress}"
             )
         return 0
 
@@ -616,7 +878,15 @@ def main() -> int:
         return 2
 
     selected_names = args.scenario or list(SCENARIO_SETS[args.set])
-    base_text = base_config.read_text(encoding="utf-8")
+    try:
+        base_text = base_config.read_text(encoding="utf-8")
+        generated_configs = {
+            scenario_name: generate_config(base_text, SCENARIOS[scenario_name])
+            for scenario_name in dict.fromkeys(selected_names)
+        }
+    except (OSError, KeyError, TypeError, ValueError) as error:
+        print(f"Failed to generate matrix configs: {error}", file=sys.stderr)
+        return 2
 
     planned_run_dirs = []
     for iteration in range(1, args.repeat + 1):
@@ -649,7 +919,7 @@ def main() -> int:
             run_dir = outdir / run_name
             run_dir.mkdir(parents=True, exist_ok=True)
             config_path = run_dir / "MoerEngine.toml"
-            config_path.write_text(generate_config(base_text, scenario), encoding="utf-8")
+            config_path.write_text(generated_configs[scenario_name], encoding="utf-8")
             command = build_verifier_command(
                 verifier,
                 exe,
@@ -692,9 +962,10 @@ def main() -> int:
             prepare_profile = aggregate_profile_windows(
                 profile_windows["Prepare"], "Prepare", args.profile_tail_windows
             )
-            min_nonblack = min(
-                (capture.get("nonblack_ratio", 0.0) for capture in captures),
-                default=0.0,
+            min_nonblack = (
+                min(capture.get("nonblack_ratio", 0.0) for capture in captures)
+                if captures
+                else None
             )
             success = completed.returncode == 0 and bool(report.get("success"))
             run = {
@@ -705,6 +976,7 @@ def main() -> int:
                 "exit_code": report.get("exit_code"),
                 "closed_normally": report.get("closed_normally", False),
                 "capture_count": len(captures),
+                "captures_expected": not scenario.expect_exit_after_ready,
                 "min_nonblack_ratio": min_nonblack,
                 "duration_seconds": report.get("duration_seconds", 0.0),
                 "failure_reasons": report.get("failure_reasons", []),
@@ -714,9 +986,14 @@ def main() -> int:
                 "report": str(report_path),
             }
             runs.append(run)
+            visual_result = (
+                "captures=skipped (lifecycle-only)"
+                if scenario.expect_exit_after_ready
+                else f"captures={run['capture_count']}, min_nonblack={min_nonblack or 0.0:.4f}"
+            )
             print(
                 f"  {'PASS' if success else 'FAIL'}: exit={run['exit_code']}, "
-                f"captures={run['capture_count']}, min_nonblack={min_nonblack:.4f}"
+                f"{visual_result}"
             )
             if not success:
                 if completed.stdout:
