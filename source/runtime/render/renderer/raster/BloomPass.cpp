@@ -1,6 +1,6 @@
 ﻿#include "BloomPass.h"
 
-// Implements the prefilter, downsample, upsample, and additive-composite bloom stages.
+// 实现 Bloom 的预过滤、下采样、上采样和加法合成阶段。
 #include "RasterResource.h"
 #include "RasterTextures.h"
 #include "RasterTool.h"
@@ -63,7 +63,7 @@ BloomPass::Process(
     prefilter_param.threshold = 20.0f;
     prefilter_param.knee      = 0.5f;
 
-    // Extract highlights into mip 0 before constructing the lower-resolution pyramid.
+    // 构建低分辨率金字塔前，先将高亮区域提取到 mip 0。
     context.cmd_list
         .Gfx(prefilter_pipeline, input_texture.tex->GetView(0, 1), linear_sampler, prefilter_param)
         .Draw(
@@ -78,7 +78,7 @@ BloomPass::Process(
             }
         );
 
-    // Downsample pass.
+    // 下采样阶段。
     for (uint mip_index = 1; mip_index < mip_count; ++mip_index) {
         BloomDownsampleParam downsample_param;
 
@@ -106,7 +106,7 @@ BloomPass::Process(
             );
     }
 
-    // Upsample pass. The separate chain avoids sampling from the mip currently being written.
+    // 上采样阶段。使用独立纹理链，避免采样当前正在写入的 mip。
     for (int mip_index = static_cast<int>(mip_count) - 2; mip_index >= 0; --mip_index) {
         BloomUpsampleParam upsample_param;
 

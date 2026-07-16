@@ -1,6 +1,6 @@
 #pragma once
 
-// Presents raster renderer settings and diagnostic output selection in the editor.
+// 在编辑器中提供 Raster 渲染器设置和诊断输出选择。
 
 #include "CooperativeOpsUI.h"
 

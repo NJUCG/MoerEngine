@@ -1,6 +1,6 @@
 #include "CompositionPass.h"
 
-// Selects the active GBuffer history and composes the HDR lighting result.
+// 选择当前使用的 GBuffer 历史，并合成 HDR 光照结果。
 
 #include "rhi/RHICommand.h"
 #include "shader/ShaderResourceManager.h"

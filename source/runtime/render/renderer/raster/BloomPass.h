@@ -1,4 +1,4 @@
-// Extracts bright regions, builds the bloom pyramid, and composites it into scene color.
+// 提取高亮区域、构建 Bloom 金字塔，并合成回场景颜色。
 #pragma once
 
 #include "shader/ShaderPipeline.h"

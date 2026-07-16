@@ -1,6 +1,6 @@
 #pragma once
 
-// Defines renderer-wide frame orchestration, window state, and editor hook contracts.
+// 定义渲染器公共的帧编排、窗口状态与编辑器 Hook 契约。
 
 // Runtime
 #include "renderer/EditorConfig.h"
@@ -116,7 +116,7 @@ protected:
 
     UniquePtr<UiCombinePass> ui_combine_pass;
 
-    // Frame synchronization state shared by concrete renderers.
+    // 由具体渲染器共享的帧同步状态。
     FenceRef timeline;
     uint64   time;
     bool     first_load;

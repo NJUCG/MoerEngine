@@ -1,6 +1,6 @@
 #pragma once
 
-// Displays cooperative matrix/vector capability and runtime status for the raster renderer.
+// 显示 Raster 渲染器的 Cooperative Matrix/Vector 能力与运行状态。
 
 #include "Core.h"
 #include "renderer/raster/RasterConfig.h"

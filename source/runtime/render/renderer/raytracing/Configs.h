@@ -1,14 +1,14 @@
 #ifndef MOER_RAYTRACING_CONFIGS_H
 #define MOER_RAYTRACING_CONFIGS_H
 
-// CPU-side configuration and frame state for ReSTIR DI importance sampling.
+// ReSTIR DI 重要性采样的 CPU 侧配置与帧状态。
 
 #include "misc/Traits.h"
 #include "rhi/RHICommand.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 #include "shaderheaders/shared/lighting/ShaderParameters.h"
 
-// Shared shader parameter types place the importance-sampling context in Moer::Render.
+// 共享 Shader 参数类型将重要性采样上下文定义在 Moer::Render 中。
 namespace Moer::Render {
 
 static constexpr uint s_num_restirdi_reservoir_buffer = 3;
@@ -225,7 +225,7 @@ struct ImportanceSamplingContext {
         di_spatial_resample_settings = _params;
     }
 
-    // Updated by PrepareLightPass after the per-frame light layout is known.
+    // PrepareLightPass 确定每帧光源布局后更新。
     void SetLightBufferParams(
         uint _frame_offset,
         uint _num_finit_lights,

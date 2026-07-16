@@ -1,6 +1,6 @@
 #pragma once
 
-// Owns the editor-facing lifetime around Engine and wires editor UI callbacks into the runtime loop.
+// 管理 Engine 外层的编辑器生命周期，并将编辑器 UI 回调接入运行时循环。
 
 #include "misc/STL.h"
 

@@ -1,6 +1,6 @@
 #include "InspectorUI.h"
 
-// Edits the selected scene node through Scene's public query and mutation API.
+// 通过 Scene 的公共查询和修改 API 编辑当前选中的场景节点。
 
 #include "scene/Scene.h"
 

@@ -1,4 +1,4 @@
-// Builds the screen-space directional shadow factor consumed by deferred lighting.
+// 构建延迟光照使用的屏幕空间方向光阴影因子。
 #pragma once
 
 #include "shader/ShaderPipeline.h"

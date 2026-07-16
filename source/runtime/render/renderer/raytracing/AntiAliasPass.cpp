@@ -1,5 +1,5 @@
 ﻿#include "AntiAliasPass.h"
-// Implements temporal resolve and deterministic jitter sequences.
+// 实现时序解析与确定性抖动序列。
 
 #include "rhi/RHIResource.h"
 #include "shader/ShaderResourceManager.h"

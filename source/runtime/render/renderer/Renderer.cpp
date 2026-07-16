@@ -1,6 +1,6 @@
 #include "renderer/Renderer.h"
 
-// Implements renderer-wide resource ownership, swapchain resizing, and frame-prepare profiling.
+// 实现渲染器公共的资源所有权管理、交换链尺寸调整与帧准备性能统计。
 
 // Runtime
 #include "config/ConfigManager.h"
@@ -117,7 +117,7 @@ void Renderer::PrepareRenderFrame(const WindowFrameState& window_frame) {
 
 void Renderer::LogSceneLoadStatus(const EditorConfig& config) const {
     if (!scene.IsStartLoading()) {
-        // Keep the warning periodic so a missing scene remains visible without flooding the log.
+        // 周期性提示场景缺失，既保证问题持续可见，也避免刷屏。
         static LoopedTimer timer(2.0);
         if (timer.Tick()) {
             LOG_WARNING(

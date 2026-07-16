@@ -1,6 +1,6 @@
 #include "GBufferPass.h"
 
-// Builds current/previous frame GBuffer surfaces and the packed denoiser attributes.
+// 构建当前帧和上一帧的 GBuffer 表面，并打包降噪器属性。
 
 #include "RTResource.h"
 #include "shader/ShaderResourceManager.h"
@@ -39,19 +39,19 @@ void GBufferPass::Process(CommandList& cmd_list, RTContext& rt_ctx) {
     GBufferPassParams                params{};
     const RaytracingBindlessHandles& bindless_handles = rt_ctx.GetBindlessHandles();
 
-    // Scene indirection tables.
+    // 场景间接索引表。
     params.instance_buf_hdl  = bindless_handles.instance_buf_hdl;
     params.primitive_buf_hdl = bindless_handles.primitive_buf_hdl;
     params.material_buf_hdl  = bindless_handles.material_buf_hdl;
 
-    // Shared geometry mega-buffers.
+    // 共享几何数据大缓冲区。
     params.position_buf_hdl       = bindless_handles.position_buf_hdl;
     params.packed_normal_buf_hdl  = bindless_handles.packed_normal_buf_hdl;
     params.packed_tangent_buf_hdl = bindless_handles.packed_tangent_buf_hdl;
     params.texcoord0_buf_hdl      = bindless_handles.texcoord0_buf_hdl;
     params.index_buf_hdl          = bindless_handles.index_buf_hdl;
 
-    // Ray-tracing-specific mesh-level BLAS indirection.
+    // Raytracing 专用的 mesh 级 BLAS 间接索引。
     params.rt_instance_buf_hdl        = bindless_handles.rt_instance_buf_hdl;
     params.rt_primitive_table_buf_hdl = bindless_handles.rt_primitive_table_buf_hdl;
 

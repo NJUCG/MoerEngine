@@ -1,7 +1,7 @@
 #ifndef MOER_ANTIALIASPASS_H
 #define MOER_ANTIALIASPASS_H
 
-// Temporal antialiasing pass and per-frame camera jitter generation.
+// 提供时序抗锯齿 Pass 和逐帧相机抖动。
 
 #include "RTResource.h"
 #include "RaytracingConfig.h"

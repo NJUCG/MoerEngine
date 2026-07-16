@@ -1,4 +1,4 @@
-// Provides shared raster draw data, profiling labels, throttled logging, and scene command submission.
+// 提供 Raster 共用绘制数据、profiling 标签、限频日志和场景命令提交。
 #pragma once
 
 #include "misc/STL.h"

@@ -1,4 +1,4 @@
-// Implements the full-screen directional shadow-mask pass.
+// 实现全屏方向光阴影遮罩 Pass。
 #include "DirectionalShadowMaskPass.h"
 
 #include "RasterTool.h"

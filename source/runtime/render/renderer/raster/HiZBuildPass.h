@@ -1,4 +1,4 @@
-// Builds the hierarchical reverse-Z depth pyramid used by GPU occlusion culling.
+// 构建 GPU 遮挡剔除使用的层次化反向 Z 深度金字塔。
 #pragma once
 
 #include "RasterResource.h"
@@ -37,7 +37,7 @@ public:
             return;
         }
 
-        // Mip 0 copies depth; each later dispatch reduces one 2x2 level into the next mip.
+        // mip 0 复制深度，后续每次 dispatch 将当前层级的每个 2x2 区域归约到下一个 mip。
         auto dispatch_build = [&](TextureView source_view,
                                   TextureView destination_view,
                                   const uint2 source_size,

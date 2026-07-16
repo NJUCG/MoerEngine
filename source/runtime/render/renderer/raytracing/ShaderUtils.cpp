@@ -1,6 +1,6 @@
 #include "ShaderUtils.h"
 
-// Implements renderer-side utility dispatches and CPU-generated sampling data.
+// 实现渲染器侧工具调度和 CPU 生成的采样数据。
 
 #include "PixelFormat.h"
 #include "log/LogSystem.h"
@@ -83,7 +83,7 @@ void ShaderUtils::GenerateMipPdf(
     PreprocessEnvironmentMapParams param;
     uint                           width  = _env_map.extent.x;
     uint                           height = _env_map.extent.y;
-    // Each dispatch integrates at most five consecutive mip levels.
+    // 每次调度最多处理连续五级 mip。
     for (uint i = 0; i < _integrated_mips.size(); i += 5) {
         param.src_mip_level  = i;
         param.num_mip_levels = _integrated_mips.size();

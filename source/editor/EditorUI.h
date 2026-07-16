@@ -1,6 +1,6 @@
 #pragma once
 
-// Coordinates the editor's top-level ImGui windows and forwards their state to the runtime renderer.
+// 协调编辑器顶层 ImGui 窗口，并将其状态传递给运行时渲染器。
 
 #include "misc/Traits.h"
 #include "remote/RemoteModuleController.h"
@@ -114,7 +114,7 @@ private:
     bool   m_b_show_scene_editing         = true;
     bool   m_b_scene_color_mouse_captured = false;
     bool   m_b_active_viewport_window_seen = false;
-    // ImGui window geometry is represented in floating-point screen coordinates.
+    // ImGui 窗口几何信息使用浮点屏幕坐标表示。
     float2 m_scene_color_resolution;
     float2 m_scene_color_pos;
     bool   m_b_show = true;

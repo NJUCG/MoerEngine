@@ -1,6 +1,6 @@
 #include "RasterUI.h"
 
-// Draws the raster pipeline's feature controls and lightweight runtime diagnostics.
+// 提供 Raster 管线的功能控制项和轻量级运行时诊断信息。
 
 #include "config/ConfigManager.h"
 
@@ -191,12 +191,12 @@ void RasterUI::ShowConfig() {
             "Shading", "Shading: [%s]", s_shading_mode_name_map.at(m_config.shading_mode).c_str()
         )) {
 
-        // Only one shading model is currently exposed, so this section configures its BRDF directly.
+        // 当前仅开放一种着色模型，因此本区域直接配置其 BRDF。
 
         if (m_config.shading_mode == EShadingMode::DEFAULT_PBR) {
             ImGui::Text("BRDF Settings:");
 
-            // Compensates for energy lost by the single-scatter microfacet approximation.
+            // 补偿单次散射微表面近似造成的能量损失。
             ImGui::Checkbox("MultiScatter (Kulla-Conty)", &m_config.shading_brdf_enable_multi_scatter);
 
             // Spacing
@@ -231,7 +231,7 @@ void RasterUI::ShowConfig() {
                 draw_border();
             }
             if (m_config.shading_brdf_G_mode == EBrdfGMode::G_SCHLICK) {
-                // Schlick's geometry approximation uses a different remap for image-based lighting.
+                // Schlick 几何近似在 IBL 中使用不同的重映射。
                 ImGui::Checkbox("Light Source is IBL", &m_config.shading_brdf_G_is_ibl);
             }
             ImGui::Dummy(ImVec2(0.0f, 5.0f));

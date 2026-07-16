@@ -1,7 +1,7 @@
 #ifndef MOER_LIGHTING_PASS_H
 #define MOER_LIGHTING_PASS_H
 
-// ReSTIR DI presampling, temporal/spatial reuse, and final sample shading.
+// ReSTIR DI 预采样、时序/空间复用以及最终样本着色。
 
 #include "RTResource.h"
 #include "rhi/RHI.h"
@@ -9,8 +9,8 @@
 
 namespace Moer::Render::Raytracing {
 
-// These pipelines intentionally share an identical argument layout so one registered argument
-// set can be reused across all ReSTIR DI dispatches in a frame.
+// 这些 pipeline 使用完全相同的参数布局，因此每帧可在所有 ReSTIR DI 调度间
+// 复用同一组已注册参数。
 #define DI_BINDINGS()                               \
     DEFINE_SHADER_TLAS(tlas);                       \
     DEFINE_SHADER_TLAS(prev_tlas);                  \
@@ -80,7 +80,7 @@ public:
     DI_BINDINGS();
     DEFINE_SHADER_ARGS(DI_SHADER_ARGS());
 
-    // WITH_NRD is also a build macro, so temporarily release the name for the shader mutation.
+    // WITH_NRD 同时也是构建宏，因此暂时释放该名称供 Shader 变体使用。
 #pragma push_macro("WITH_NRD")
 #undef WITH_NRD
     MUTATION_SPARSE_UINT(WITH_NRD, 0, 1);

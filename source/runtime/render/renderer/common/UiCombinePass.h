@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-// Composes the scene and editor UI into the active swapchain or platform-window framebuffer.
+// 将场景与编辑器 UI 合成到当前交换链或平台窗口的 Framebuffer。
 
 #include "PixelFormat.h"
 #include "misc/STL.h"

@@ -1,6 +1,6 @@
 #include "Configs.h"
 
-// Maintains frame-to-frame ReSTIR reservoir indices and light sampling buffer ranges.
+// 维护帧间 ReSTIR 储层索引与光源采样缓冲区范围。
 
 #include "shaderheaders/shared/ShaderParameters.h"
 #include "shaderheaders/shared/lighting/ShaderParameters.h"
@@ -57,7 +57,7 @@ ImportanceSamplingContext::ImportanceSamplingContext(const ImportanceSamplingPar
     }
 
     ComputeGridLightSlotCnt();
-    // The grid occupies a persistent segment after the local and environment RIS segments.
+    // 网格使用本地光源与环境光 RIS 区段之后的一段持久区间。
     grid_cell_offset = segment_allocator.Allocate(grid_runtime_config.num_light_slot);
 }
 void ImportanceSamplingContext::ComputeGridLightSlotCnt() {

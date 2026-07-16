@@ -1,6 +1,6 @@
 #include "EditorUI.h"
 
-// Builds the editor dockspace, coordinates top-level tools, and tracks the active render viewport.
+// 构建编辑器 ImGui Dockspace，协调顶层工具，并跟踪当前活动的渲染视口。
 
 // Runtime
 #include "log/LogSystem.h"
@@ -767,7 +767,7 @@ void EditorUI::ShowViewportWindow(
         m_scene_color_pos.y > 0.f ? static_cast<uint>(m_scene_color_pos.y) : 0u
     );
 
-    // A drag controls the camera only when it starts inside the rendered viewport.
+    // 只有从渲染视口内部开始的拖拽才会控制摄像机。
     static constexpr float k_viewport_border = 4.f;
 
     const float  scene_color_top = menu_rect.Max.y + (separate_window ? 0.f : menu_bar_height);

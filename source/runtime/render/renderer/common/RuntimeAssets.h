@@ -1,7 +1,7 @@
 #ifndef MOER_EDITOR_ASSETS_H
 #define MOER_EDITOR_ASSETS_H
 
-// Loads immutable renderer startup assets and transfers them to the graphics queue.
+// 加载渲染器启动阶段使用的只读资源，并将其转移到图形队列。
 
 #include "taskgraph/GraphTask.h"
 

@@ -1,6 +1,6 @@
 #pragma once
 
-// Exposes the ray-tracing renderer's runtime configuration through an ImGui panel.
+// 通过 ImGui 面板提供 Raytracing 渲染器的运行时配置。
 
 #include "renderer/raytracing/RaytracingConfig.h"
 

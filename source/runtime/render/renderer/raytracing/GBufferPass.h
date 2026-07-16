@@ -1,7 +1,7 @@
 #ifndef MOER_RENDER_GBUFFER_PASS_H
 #define MOER_RENDER_GBUFFER_PASS_H
 
-// Produces the ray-traced GBuffer and converts it into the denoiser-facing layout.
+// 生成 Raytracing GBuffer，并转换为降噪器所需布局。
 
 #include "RTResource.h"
 #include "shader/ShaderPipeline.h"
@@ -55,7 +55,7 @@ public:
 
     DEFINE_SHADER_ARGS(rw_specular_roughness, rw_normal_roughness, r_normal, r_view_depth);
 
-    // WITH_NRD is also a build macro, so temporarily release the name for the shader mutation.
+    // WITH_NRD 同时也是构建宏，因此暂时释放该名称供 Shader 变体使用。
 #pragma push_macro("WITH_NRD")
 #undef WITH_NRD
     MUTATION_SPARSE_UINT(WITH_NRD, 0, 1);

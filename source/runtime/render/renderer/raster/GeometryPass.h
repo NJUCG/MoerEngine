@@ -1,4 +1,4 @@
-// Culls visible scene instances and writes the deferred geometry buffers.
+// 对场景实例执行可见性剔除，并写入延迟渲染几何缓冲。
 #pragma once
 
 #include "math/Function.h"
@@ -73,7 +73,7 @@ public:
                                            context.textures.hiz_previous.tex != nullptr &&
                                            context.hiz_data.mip_count > 0;
 
-        // Culling always runs to select LODs; frustum and Hi-Z rejection remain configurable.
+        // 剔除阶段始终运行以选择 LOD；视锥和 Hi-Z 剔除仍可配置。
         CullingPass::CullStatistics culling_stats;
         CullingPass::CullingOptions culling_options{
             raster_config.enable_frustum_culling,

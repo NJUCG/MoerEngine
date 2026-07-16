@@ -1,6 +1,6 @@
 #include "SceneEditingUI.h"
 
-// Hosts small scene-editing tools and explicit scene-test triggers used during development.
+// 提供小型场景编辑工具，以及开发期间使用的显式场景测试入口。
 
 #include "scene/Scene.h"
 #include "scene/editing/SceneEditing.h"

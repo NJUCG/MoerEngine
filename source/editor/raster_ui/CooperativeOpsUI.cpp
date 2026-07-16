@@ -1,6 +1,6 @@
 #include "CooperativeOpsUI.h"
 
-// Keeps cooperative-operation controls and diagnostics separate from the main raster settings panel.
+// 将协作运算控制项和诊断信息与 Raster 主设置面板分离。
 
 #include <imgui.h>
 

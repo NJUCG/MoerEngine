@@ -1,6 +1,6 @@
 #include "VisualizePass.h"
 
-// Dispatches the selected debug view into the renderer's debug output texture.
+// 将选定的调试视图写入渲染器的调试输出纹理。
 
 #include "RTResource.h"
 #include "rhi/RHICommand.h"

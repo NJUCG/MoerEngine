@@ -1,7 +1,7 @@
 #ifndef MOER_RENDER_COMPOSITION_PASS_H
 #define MOER_RENDER_COMPOSITION_PASS_H
 
-// Combines GBuffer data and direct-lighting outputs into the HDR scene color.
+// 将 GBuffer 数据与直接光照输出合成为 HDR 场景颜色。
 
 #include "RTResource.h"
 #include "shader/ShaderPipeline.h"
@@ -45,7 +45,7 @@ public:
         bdls
     );
 
-    // WITH_NRD is also a build macro, so temporarily release the name for the shader mutation.
+    // WITH_NRD 同时也是构建宏，因此暂时释放该名称供 Shader 变体使用。
 #pragma push_macro("WITH_NRD")
 #undef WITH_NRD
     MUTATION_SPARSE_UINT(WITH_NRD, 0, 1);

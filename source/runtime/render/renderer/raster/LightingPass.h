@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-// Applies deferred PBR lighting to the geometry buffers and directional shadow mask.
+// 对几何缓冲和方向光阴影遮罩应用延迟 PBR 光照。
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 

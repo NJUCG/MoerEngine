@@ -1,6 +1,6 @@
 #include "RaytracingUI.h"
 
-// Draws controls for ReSTIR DI, denoising, post-processing, and capture configuration.
+// 提供 ReSTIR DI、降噪、后处理和捕获配置的控制项。
 
 #include "math/Function.h"
 

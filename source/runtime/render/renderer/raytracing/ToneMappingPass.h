@@ -1,7 +1,7 @@
 #ifndef MOER_TONE_MAPPING_PASS_H
 #define MOER_TONE_MAPPING_PASS_H
 
-// Builds luminance exposure and maps HDR lighting into the display target.
+// 计算亮度曝光，并将 HDR 光照映射到显示目标。
 
 #include "rhi/RHIResource.h"
 #include "shader/ShaderPipeline.h"

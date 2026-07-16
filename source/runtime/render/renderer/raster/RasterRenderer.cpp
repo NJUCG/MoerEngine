@@ -1,4 +1,4 @@
-// Implements raster frame orchestration without embedding pass-specific rendering algorithms.
+// 负责光栅帧编排，不在此处实现各 Pass 的具体渲染算法。
 #include "RasterRenderer.h"
 
 #include "AaPass.h"
@@ -139,7 +139,7 @@ RasterRenderer::~RasterRenderer() {
     auto& raster_context = *raster_context_ptr;
     raster_context.FreeFrameBuffers(true);
 
-    // Pass resources must be released while the derived pass objects still exist.
+    // 必须在派生 Pass 对象仍然存活时释放其 Pass 资源。
     ReleaseResources();
     LOG_INFO(
         "[Threading] RasterRenderer destruction finished on {} Thread.",
@@ -193,7 +193,7 @@ void RasterRenderer::UpdateGlobalLightingData(
     lighting_data->far_clip   = camera.GetFarClip();
 
     lighting_data->is_csm_blend_enabled = ui_config.shadow_csm_blend_option ? 1 : 0;
-    // Only the active prefix is consumed by the shader; inactive cascade slots remain untouched.
+    // Shader 仅使用有效前缀，未启用的级联槽位保持不变。
 
     // PCSS
     lighting_data->light_size_world = ui_config.shadow_pcss_light_size_world;
@@ -456,7 +456,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
     bool skip_present = false;
     if (frame_packet.window.state == EWindowState::Hiding) {
-        // Avoid spinning aggressively while the minimized window cannot present.
+        // 窗口最小化后无法 present，此处主动让出线程，避免高频空转。
         std::this_thread::yield();
         skip_present = true;
 
@@ -465,7 +465,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
         raster_context.FreeFrameBuffers(false);
         raster_context.CreateFrameBuffers();
-        // External textures are resolution-independent and remain valid across a window resize.
+        // 外部纹理与分辨率无关，窗口尺寸变化后仍然有效。
         raster_context.AllocateFrameBuffers();
 
 #if WITH_CUDA
@@ -486,7 +486,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
     TextureRef default_output_texture = raster_context.textures.output.tex;
 
-    // Consume the prepared scene snapshot only after window resources are ready.
+    // 窗口资源就绪后再使用已准备好的场景快照。
 
     if (frame_packet.scene_updates.scene_ready) {
         // 处理场景加载过程中遗留的命令
@@ -501,7 +501,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         if (first_load) {
             first_load = false;
 
-            // Publish descriptors created by the initial scene upload before the first raster pass.
+            // 第一个 Raster Pass 执行前，先发布首次场景上传创建的 descriptor。
             cmd_list.UpdateBindlessArray(bindless_array);
             gfx_queue.Execute(cmd_list.Submit());
             gfx_queue.Sync();
@@ -521,7 +521,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         Camera        camera      = frame_packet.render_camera;
 
         {
-            // Alternate the two SMAA T2x sub-pixel offsets without modifying the captured camera.
+            // 在不修改已捕获相机的前提下，交替使用两个 SMAA T2x 亚像素偏移。
             static uint8_t s_smaa_frame_index = 0;
             if (raster_config.aa_mode == EAaMode::SMAA_T2X) {
                 s_smaa_frame_index ^= 1;
@@ -1122,7 +1122,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         }
 
         if (raster_config.debug_fps_limit_enable) {
-            // This debug limiter is intentionally simple and does not compensate for frame time.
+            // 此调试限帧器有意保持简单，不补偿当前帧耗时。
             std::this_thread::sleep_for(std::chrono::duration<double>(1.0 / raster_config.debug_fps_limit));
             LOG_DEBUG("FPS Limit Enabled: {}", raster_config.debug_fps_limit);
         }
@@ -1141,8 +1141,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
     raster_context.probe_volume.TrackFrameSubmission(cmd_list, time);
     time++;
-    // Host-synchronized copy work is already complete. Signaling this timeline communicates that
-    // ordering to the validation layer without adding another copy-queue wait here.
+    // Host 同步的 copy 操作已经完成。此处触发 timeline，向 validation layer 传递执行顺序，
+    // 无需再额外等待 copy queue。
     gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources().TickProfiling());
 
     if (!skip_present) {

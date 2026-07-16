@@ -1,4 +1,4 @@
-// Coordinates raster frame preparation, pass execution, and game/render-thread feedback.
+// 负责光栅帧准备、Pass 执行，以及游戏线程与渲染线程之间的反馈。
 #pragma once
 
 #include "RasterFramePacket.h"
@@ -36,8 +36,8 @@ class TensorRTPass;
 #endif
 
 /**
- * Owns the raster passes and coordinates the frame boundary between the game and render threads.
- * Frame preparation captures mutable editor/scene state; RenderFrame consumes that snapshot.
+ * 持有 Raster Pass，并协调游戏线程与渲染线程的帧边界。
+ * 帧准备阶段捕获可变的 Editor/Scene 状态，RenderFrame 使用该快照。
  */
 class RENDER_API RasterRenderer : public Renderer {
 
@@ -67,10 +67,10 @@ public:
     UpdateGlobalLightingData(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
 
 private:
-    // Heap ownership allows RasterContext to remain forward-declared in this public header.
+    // 使用堆所有权，使公共头文件中只需前置声明 RasterContext。
     UniquePtr<RasterContext> raster_context_ptr;
 
-    // Ordered raster passes.
+    // 按执行顺序排列的 Raster Pass。
     UniquePtr<HiZBuildPass>                hiz_build_pass;
     UniquePtr<ShadowDepthPass>             shadow_depth_pass;
     UniquePtr<DirectionalShadowMaskPass>   directional_shadow_mask_pass;

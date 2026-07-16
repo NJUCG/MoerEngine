@@ -1,7 +1,7 @@
 #ifndef MOER_RENDER_VISUALIZE_PASS_H
 #define MOER_RENDER_VISUALIZE_PASS_H
 
-// Selects and displays ray-tracing intermediate buffers for editor diagnostics.
+// 选择并显示 Raytracing 中间缓冲区，用于编辑器诊断。
 
 #include "RTResource.h"
 #include "shader/ShaderPipeline.h"

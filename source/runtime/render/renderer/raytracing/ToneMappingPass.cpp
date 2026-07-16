@@ -1,6 +1,6 @@
 #include "ToneMappingPass.h"
 
-// Implements histogram-based auto exposure followed by fullscreen tone mapping.
+// 实现基于直方图的自动曝光，并执行全屏 Tone Mapping。
 
 #include "PixelFormat.h"
 #include "rhi/RHICommand.h"

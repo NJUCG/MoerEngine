@@ -1,6 +1,6 @@
 #include "SkyboxPass.h"
 
-// Implements skybox exposure correction and full-screen background rendering.
+// 实现 Skybox 曝光校正和全屏背景绘制。
 #include "RasterResource.h"
 #include "RasterTextures.h"
 #include "RasterTool.h"
@@ -47,7 +47,7 @@ void SkyboxPass::Process(RasterContext& context, const RasterConfig& ui_config, 
             context.textures.lighting_output.GetRect2D(),
             std::move(RasterTool::GetFullScreenDrawDatas()),
             depth_attachment,
-            // Preserve lighting written by the previous deferred pass.
+            // 保留上一个延迟光照 Pass 写入的结果。
             ColorAttachment{
                 context.textures.lighting_output.tex, EAttachmentAction::AC_LOAD_STORE, float4(0, 0, 0, 0)
             }

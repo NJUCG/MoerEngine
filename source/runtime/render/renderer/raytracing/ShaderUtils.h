@@ -1,7 +1,7 @@
 #ifndef MOER_SHADER_UTILS_H
 #define MOER_SHADER_UTILS_H
 
-// Common compute and fullscreen helpers used by the ray tracing renderer.
+// Raytracing 渲染器共用的计算与全屏辅助函数。
 
 #include "PixelFormat.h"
 #include "rhi/RHI.h"

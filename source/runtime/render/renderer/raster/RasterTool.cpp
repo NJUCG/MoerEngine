@@ -1,4 +1,4 @@
-// Implements small utilities shared by otherwise independent raster passes.
+// 实现各独立 Raster Pass 共用的小型工具函数。
 #include "RasterTool.h"
 
 #include "RasterConfig.h"

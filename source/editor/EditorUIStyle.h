@@ -1,6 +1,6 @@
 #pragma once
 
-// Defines the editor's ImGui theme and the small runtime style selector.
+// 定义编辑器的 ImGui 主题，以及用于运行时切换样式的简易选择器。
 
 #include <imgui.h>
 #include <imgui_internal.h>

@@ -1,6 +1,6 @@
 ﻿#include "LightingPass.h"
 
-// Coordinates the ReSTIR DI dispatch sequence while sharing one immutable argument set.
+// 协调 ReSTIR DI 各阶段调度，并共享同一组不可变参数。
 
 #include "Configs.h"
 #include "rhi/RHI.h"
@@ -106,8 +106,8 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     auto div_ceil = [](uint _a, uint _b) -> uint {
         return (_a + _b - 1) / _b;
     };
-    // Every pipeline declared with DI_BINDINGS has the same argument layout. Registering once
-    // avoids rebuilding an equivalent argument pack for each stage.
+    // 所有通过 DI_BINDINGS 声明的 pipeline 都采用相同参数布局。这里只注册一次，
+    // 避免为每个阶段重复构建等价参数包。
     ArrayArgReference arg_ref =
         _cmd_list.RegisterArgs(presample_light_pipeline.SetArgs(DI_BINDING_ARGS(_rt_ctx)));
 
@@ -136,7 +136,7 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
             .Dispatch(uint3(dispatch_size, 1), "PresampleLightGrid");
     }
 
-    // Initial sampling, temporal reuse, spatial reuse, and shading operate at screen-tile granularity.
+    // 初始采样、时序复用、空间复用和着色均以屏幕 tile 为调度粒度。
     {
         uint2 dispatch_size = _rt_ctx.frame_rt.diffuse_lighting->GetExtent().xy;
         dispatch_size.x     = div_ceil(dispatch_size.x, DI_SCREEN_TILE_SIZE);

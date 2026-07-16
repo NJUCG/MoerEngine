@@ -1,6 +1,6 @@
 #pragma once
 
-// Wraps the native scene-file picker and normalizes its result for editor callers.
+// 封装原生场景文件选择器，并统一返回给编辑器调用方的结果。
 
 #include "log/LogSystem.h"
 

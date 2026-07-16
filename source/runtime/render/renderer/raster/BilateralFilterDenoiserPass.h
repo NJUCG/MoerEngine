@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-// Filters AI-produced lighting noise into the raster denoiser output target.
+// 过滤 AI 光照结果中的噪点，并写入光栅降噪输出目标。
 #include "math/Function.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
@@ -19,7 +19,7 @@ public:
     DEFINE_SHADER_ARGS(bdls, param);
 };
 
-/** Filters TensorRT output into the dedicated denoiser target when bilateral denoising is enabled. */
+/** 启用双边滤波降噪时，过滤 TensorRT 输出并写入专用降噪目标。 */
 class BilateralFilterDenoiserPass {
 public:
     BilateralFilterDenoiserPass(RasterContext& context) :

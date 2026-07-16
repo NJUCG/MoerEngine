@@ -1,6 +1,6 @@
 #include "subui/RemoteExamplesUI.h"
 
-// Generates copy-ready HTTP, WebSocket, JSON, and Python examples for the active remote endpoint.
+// 为当前远程端点生成可直接复制的 HTTP、WebSocket、JSON 和 Python 示例。
 
 #include <imgui.h>
 

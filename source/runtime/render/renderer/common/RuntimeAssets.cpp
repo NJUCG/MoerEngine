@@ -1,4 +1,4 @@
-// Implements asynchronous CPU loading followed by explicit copy-to-graphics queue ownership transfer.
+// 实现 CPU 异步加载，以及从复制队列到图形队列的显式资源所有权转移。
 
 #include "RuntimeAssets.h"
 
@@ -41,7 +41,7 @@ Render::TextureRef RuntimeAssets::GetTexture(std::string_view name) const {
 }
 
 Render::BufferRef RuntimeAssets::GetBuffer(std::string_view /*name*/) const {
-    // Runtime buffers are not registered by this asset loader yet.
+    // 该资源加载器目前尚未注册运行时 Buffer。
     return nullptr;
 }
 
@@ -105,7 +105,7 @@ void RuntimeAssets::LoadTextures() {
                         Extent2D(width, height),
                         PF_R32G32B32A32_SFLOAT,
                         ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS,
-                        1 // EXR mip generation is not supported by this loader yet.
+                        1 // 该加载器目前尚不支持为 EXR 生成 mip。
                     );
                     exported_textures.emplace_back(texture, ETextureState::SAMPLE);
 

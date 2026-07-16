@@ -22,7 +22,7 @@ void Editor::Run() {
 }
 
 void Editor::Run(const ExtraHooks& extra_hooks) {
-    // The UI lifetime is bounded by Engine::Run because its renderer resources depend on the active engine.
+    // UI 的生命周期限定在 Engine::Run 内，因为其渲染器资源依赖当前运行的 Engine。
     m_editor_ui = MakeUnique<EditorUI>(
         MakeUnique<Render::UIRenderer>(RenderDevice::Get()),
         m_engine->GetEditorConfig(),
