@@ -2,7 +2,7 @@
 
 > 本文件整体就是交给后续 Agent 的中文提示词和状态快照。
 >
-> 当前功能开发冻结在 **Phase 8 完成点**。Phase 8 已完成 Raster RenderGraph 最小串行骨架、旧路径回退、关键资源对照与 reload/switch 生命周期验证；下一阶段是 Phase 9 并行命令录制的前置设计，不得直接删除串行边开始并行。
+> 当前功能开发仍冻结在 **Phase 8 完成点**。Phase 9 并行命令录制的前置研究已经完成，当前结论为 `STOP -> conditional GO`：先做串行测量、物理资源版本、不可变录制计划和 recorder ownership，再决定是否进入小型原型；不得直接删除串行边开始并行。
 >
 > 换机后，请让 Agent 先完整阅读本文件、仓库根目录 `AGENTS.md` 和 `tools/threading/README.md`，再执行“换机接管流程”。不要只截取“下一步”一节，否则容易丢失已经建立的线程与资源所有权约束。
 >
@@ -1194,3 +1194,15 @@ python tools\threading\run_matrix.py --set full --continue-on-failure
 - 双仓库推送：MoerEngine `origin/feature/rt-rhi-threading` 包含 `fd59508c` 及本交接更新；TechRecord `origin/main=4474339`。
 - 已知限制：无 pass culling、物理 transient allocator/alias reuse、subresource barrier generation 或并行录制；`processing_image` token 与 HiZ CPU swap 尚不能表达安全重排所需的物理版本；只覆盖 RTX 5080 + MSVC Debug。
 - 下一步：Phase 9 先研究并固化 physical resource version、barrier handoff、每 recorder command pool/allocator/descriptor arena、secondary/primary 合并和部分执行失败语义；不得直接删除 Phase 8 serial edge。
+
+### 2026-07-16：Phase 9 并行命令录制前置设计与可行性
+
+- 目标：在不修改功能源码、不删除 Phase 8 `serial` policy 的前提下，审计 RenderGraph、RHI command packet、Vulkan recorder/descriptor/tracker、TaskGraph join 和 completion retirement，并形成可实施的 Stop/Go 方案。
+- 只读结论：当前串行 allocator/pool 所有权合法，但 graph 只有 pointer identity/字符串 range，Raster callback 共享 `cmd_list/context`，`processing_image` 与 HiZ host swap 未物理化；Vulkan bind 会改写全局 descriptor cursor 和共享 PSO binder，多个 tracker 也无法独立推进全局 layout。
+- 当前决策：`STOP -> conditional GO`。不能直接并行 graph callback 或现有 visitor；先完成 typed physical version/subresource、immutable `RasterFramePlan`/segments、recorder-local descriptor/query lease、typed `RecordOutcome` 和整批 timeline retirement。
+- 首版推荐：`CmdReorderer layer + ordered multiple primary command buffers`。Graph callback 保持串行；每 worker 独占 pool/CB/arena，唯一 RHI coordinator 录制 barrier primary，并以稳定数组顺序一次 `vkQueueSubmit2`；secondary + dynamic rendering inheritance 后置。
+- 实施门禁：Phase 9.0 串行测量/golden -> 9.1 物理版本与 FramePlan -> 9.2 合成 recorder substrate -> 由三轮数据决定是否在 9.3 接入 `HiZBuild + DirectionalShadowMask` 条件白名单。parallel 默认关闭，linear、RHI off/bypass 和串行 recorder 全部保留。
+- MoerEngine 功能源码：无改动；功能冻结点仍为 `fd59508c`。本阶段是 docs-only 研究交付，因此未重复执行 Phase 8 构建与运行矩阵。
+- TechRecord 研究记录：`20_技术文档/引擎架构/MoerEngine/RT_RHI_Threading/15_Phase9_并行命令录制前置设计与可行性.md`。
+- TechRecord 提交：`9e91d56 docs(threading): 规划 Phase 9 并行命令录制`；方案收敛提交：`20ea618 docs(threading): 收敛 Phase 9 recorder 边界`，`origin/main=20ea618`。
+- 下一步：等待用户确认；确认后必须使用 `implement-moer-feature` 工作流从 Phase 9.0 开始，小步构建、运行、观察与阶段提交。若 eligible recording 收益空间不足，则停在诊断/契约阶段。
