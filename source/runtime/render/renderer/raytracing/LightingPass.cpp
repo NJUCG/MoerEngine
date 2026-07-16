@@ -1,5 +1,7 @@
 ﻿#include "LightingPass.h"
 
+// Coordinates the ReSTIR DI dispatch sequence while sharing one immutable argument set.
+
 #include "Configs.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
@@ -26,8 +28,8 @@ LightingPass::LightingPass(ShaderManager& _manager, BindlessArrayRef bindless_ar
     generate_initial_sample_pipeline = std::move(_manager.Compute<GenerateInitialSamplePipeline>(
         "pipelines/raytracing/restir_di/GenerateInitialSamples.hlsl"
     ));
-    temporal_resmaple_pipeline       = std::move(
-        _manager.Compute<TemporalResmaplePipeline>("pipelines/raytracing/restir_di/TemporalResampling.hlsl")
+    temporal_resample_pipeline       = std::move(
+        _manager.Compute<TemporalResamplePipeline>("pipelines/raytracing/restir_di/TemporalResampling.hlsl")
     );
     spatial_resample_pipeline = std::move(
         _manager.Compute<SpatialResamplePipeline>("pipelines/raytracing/restir_di/SpatialResampling.hlsl")
@@ -51,8 +53,6 @@ LightingPass::LightingPass(ShaderManager& _manager, BindlessArrayRef bindless_ar
 }
 
 void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
-    //process
-    const DI::ReSTIRDIConfig&        restir_di_config         = _rt_ctx.is_ctx.GetReSTIRDIConfig();
     const DI::ReSTIRDIRuntimeConfig& restir_di_runtime_config = _rt_ctx.is_ctx.GetReSTIRDIRuntimeConfig();
 
     const ImportanceSamplingContext& is_ctx = _rt_ctx.is_ctx;
@@ -61,14 +61,11 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     constants.main_view        = _rt_ctx.main_view;
     constants.prev_view        = _rt_ctx.prev_view;
     constants.enable_prev_tlas = true;
-    constants.di_params        = is_ctx.GetReSTIRDIRuntimeConfig().common_params;
     constants.local_light_pdf_size =
         _rt_ctx.local_light_pdf_tex ? _rt_ctx.local_light_pdf_tex->GetExtent().xy : uint2(0);
     constants.env_pdf_size     = _rt_ctx.env_pdf_tex ? _rt_ctx.env_pdf_tex->GetExtent().xy : uint2(0);
     constants.bindless_handles = _rt_ctx.GetBindlessHandles();
 
-    // static constexpr uint offset_of_prev_view           = offsetof(ResampleConstants, prev_view);
-    // static constexpr uint offset_of_main_view           = offsetof(ViewParam, near_far);
     constants.di_params                                 = restir_di_runtime_config.common_params;
     constants.restir_di_params.initial_sample_params    = is_ctx.GetDIInitialSampleParams();
     constants.restir_di_params.temporal_resample_params = is_ctx.GetDITemporalResampleParams();
@@ -109,8 +106,8 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     auto div_ceil = [](uint _a, uint _b) -> uint {
         return (_a + _b - 1) / _b;
     };
-    int i = s_di_light_compact_bit;
-
+    // Every pipeline declared with DI_BINDINGS has the same argument layout. Registering once
+    // avoids rebuilding an equivalent argument pack for each stage.
     ArrayArgReference arg_ref =
         _cmd_list.RegisterArgs(presample_light_pipeline.SetArgs(DI_BINDING_ARGS(_rt_ctx)));
 
@@ -119,9 +116,6 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
             div_ceil(is_ctx.GetLocalLightRISBufferParams().tile_size, DI_PRESAMPLE_GRID_SIZE),
             is_ctx.GetLocalLightRISBufferParams().tile_cnt
         );
-        // _cmd_list.Compute(presample_light_pipeline, DI_BINDING_ARGS(_rt_ctx))
-        //     .Dispatch(uint3(dispatch_size, 1), "PresampleLight");
-
         _cmd_list.Compute(presample_light_pipeline, arg_ref)
             .Dispatch(uint3(dispatch_size, 1), "PresampleLight");
     }
@@ -131,9 +125,6 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
             div_ceil(is_ctx.GetEnvLightRISBufferParams().tile_size, DI_PRESAMPLE_GRID_SIZE),
             is_ctx.GetEnvLightRISBufferParams().tile_cnt
         );
-        // _cmd_list.Compute(presample_env_map_pipeline, DI_BINDING_ARGS(_rt_ctx))
-        //     .Dispatch(uint3(dispatch_size, 1), "PresampleEnvMap");
-
         _cmd_list.Compute(presample_env_map_pipeline, arg_ref)
             .Dispatch(uint3(dispatch_size, 1), "PresampleEnvMap");
     }
@@ -141,14 +132,11 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
     if (is_ctx.GetLightBufferParams().local_light_region.light_cnt) {
         uint2 dispatch_size =
             uint2(div_ceil(is_ctx.GetGridRuntimeConfig().num_light_slot, DI_PRESAMPLE_GRID_SIZE), 1);
-        // _cmd_list.Compute(presample_light_grid_pipeline, DI_BINDING_ARGS(_rt_ctx))
-        //     .Dispatch(uint3(dispatch_size, 1), "PresampleLightGrid");
-
         _cmd_list.Compute(presample_light_grid_pipeline, arg_ref)
             .Dispatch(uint3(dispatch_size, 1), "PresampleLightGrid");
     }
 
-    //direct lighting
+    // Initial sampling, temporal reuse, spatial reuse, and shading operate at screen-tile granularity.
     {
         uint2 dispatch_size = _rt_ctx.frame_rt.diffuse_lighting->GetExtent().xy;
         dispatch_size.x     = div_ceil(dispatch_size.x, DI_SCREEN_TILE_SIZE);
@@ -156,7 +144,7 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         _cmd_list.Compute(generate_initial_sample_pipeline, arg_ref)
             .Dispatch(uint3(dispatch_size, 1), "GenerateInitialSample");
 
-        _cmd_list.Compute(temporal_resmaple_pipeline, arg_ref)
+        _cmd_list.Compute(temporal_resample_pipeline, arg_ref)
             .Dispatch(uint3(dispatch_size, 1), "TemporalResample");
 
         _cmd_list.Compute(spatial_resample_pipeline, arg_ref)

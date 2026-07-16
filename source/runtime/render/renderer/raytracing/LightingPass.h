@@ -1,10 +1,16 @@
 #ifndef MOER_LIGHTING_PASS_H
 #define MOER_LIGHTING_PASS_H
+
+// ReSTIR DI presampling, temporal/spatial reuse, and final sample shading.
+
 #include "RTResource.h"
 #include "rhi/RHI.h"
 #include "shader/ShaderPipeline.h"
+
 namespace Moer::Render::Raytracing {
 
+// These pipelines intentionally share an identical argument layout so one registered argument
+// set can be reused across all ReSTIR DI dispatches in a frame.
 #define DI_BINDINGS()                               \
     DEFINE_SHADER_TLAS(tlas);                       \
     DEFINE_SHADER_TLAS(prev_tlas);                  \
@@ -29,82 +35,67 @@ namespace Moer::Render::Raytracing {
 class PresampleLightPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(PresampleLightPipeline);
-
     DI_BINDINGS();
-
     DEFINE_SHADER_ARGS(DI_SHADER_ARGS());
 };
 
 class PresampleEnvMapPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(PresampleEnvMapPipeline);
-
     DI_BINDINGS();
-
     DEFINE_SHADER_ARGS(DI_SHADER_ARGS());
 };
 
 class PresampleLightGridPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(PresampleLightGridPipeline);
-
     DI_BINDINGS();
-
     DEFINE_SHADER_ARGS(DI_SHADER_ARGS());
 };
 
 class GenerateInitialSamplePipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(GenerateInitialSamplePipeline);
-
     DI_BINDINGS();
-
     DEFINE_SHADER_ARGS(DI_SHADER_ARGS());
 };
 
-class TemporalResmaplePipeline : public ComputePipeline {
+class TemporalResamplePipeline : public ComputePipeline {
 public:
-    DEFINE_COMPUTE_PIPELINE_CLASS(TemporalResmaplePipeline);
-
+    DEFINE_COMPUTE_PIPELINE_CLASS(TemporalResamplePipeline);
     DI_BINDINGS();
-
     DEFINE_SHADER_ARGS(DI_SHADER_ARGS());
 };
 
 class SpatialResamplePipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(SpatialResamplePipeline);
-
     DI_BINDINGS();
-
     DEFINE_SHADER_ARGS(DI_SHADER_ARGS());
-};
-
-class FusedResamplingPipeline : public ComputePipeline {
-public:
-    DEFINE_COMPUTE_PIPELINE_CLASS(FusedResamplingPipeline);
 };
 
 class DIShadeSamplePipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(DIShadeSamplePipeline);
-
     DI_BINDINGS();
-
     DEFINE_SHADER_ARGS(DI_SHADER_ARGS());
 
-#pragma push_macro("WITH_NRD")            // 保存WITH_NRD宏的值
-#undef WITH_NRD                           // 释放WITH_NRD宏
-    MUTATION_SPARSE_UINT(WITH_NRD, 0, 1); // Value could be 0 or 1
+    // WITH_NRD is also a build macro, so temporarily release the name for the shader mutation.
+#pragma push_macro("WITH_NRD")
+#undef WITH_NRD
+    MUTATION_SPARSE_UINT(WITH_NRD, 0, 1);
     MUTATION_SET(MutationSet, WITH_NRD);
-#pragma pop_macro("WITH_NRD") // 用之前的值重新定义WITH_NRD宏
+#pragma pop_macro("WITH_NRD")
 };
+
+#undef DI_SHADER_ARGS
+#undef DI_BINDINGS
 
 class LightingPass {
 public:
     LightingPass(class ShaderManager& manager, BindlessArrayRef bindless_array);
 
-    void Process(CommandList& _cmd_list, RTContext& _rt_ctx);
+    void Process(CommandList& cmd_list, RTContext& rt_ctx);
 
 private:
     BindlessArrayRef bindless_array;
@@ -116,11 +107,9 @@ private:
     PresampleEnvMapPipeline       presample_env_map_pipeline;
     PresampleLightGridPipeline    presample_light_grid_pipeline;
     GenerateInitialSamplePipeline generate_initial_sample_pipeline;
-    TemporalResmaplePipeline      temporal_resmaple_pipeline;
+    TemporalResamplePipeline      temporal_resample_pipeline;
     SpatialResamplePipeline       spatial_resample_pipeline;
-
-    FusedResamplingPipeline fused_resampling_pipeline;
-    DIShadeSamplePipeline   di_shade_sample_pipeline;
+    DIShadeSamplePipeline         di_shade_sample_pipeline;
 
     BufferRef resample_params;
 };

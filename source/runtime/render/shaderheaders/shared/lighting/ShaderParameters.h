@@ -207,7 +207,7 @@ struct ReSTIRDIInitialSampleParams {
     uint num_primary_brdf_lights;
 
     float brdf_cutoff;
-    uint  enable_initial_visiblity;
+    uint  enable_initial_visibility;
     uint  env_map_is; //importance sampling
     uint  local_light_sample_mode;
 };
@@ -242,10 +242,10 @@ struct ReSTIRDISpatialResampleParams {
 };
 
 struct ReSTIRDIShadingParams {
-    uint  enable_final_visiblity;
-    uint  reuse_final_visiblity;
-    uint  final_visiblity_max_age;
-    float final_visiblity_max_distance;
+    uint  enable_final_visibility;
+    uint  reuse_final_visibility;
+    uint  final_visibility_max_age;
+    float final_visibility_max_distance;
 
     uint enable_denoiser_input_packing;
     uint padding0;

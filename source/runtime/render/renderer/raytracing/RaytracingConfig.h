@@ -24,7 +24,7 @@ enum class EJitter {
 
 struct GridConfig {
     int   grid_mode      = 1;
-    int   light_per_ceil = 512;
+    int   lights_per_cell = 512;
     float cell_size      = 1.f;
 };
 

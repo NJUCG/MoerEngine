@@ -36,8 +36,8 @@ namespace Moer::Render::Raytracing {
 
 namespace {
 
-ImportantSamplingParams CreateImportanceSamplingParams(uint2 resolution) {
-    ImportantSamplingParams params{};
+ImportanceSamplingParams CreateImportanceSamplingParams(uint2 resolution) {
+    ImportanceSamplingParams params{};
     params.render_size = resolution;
     return params;
 }
@@ -76,7 +76,7 @@ struct RaytracingRenderer::RuntimeState {
     RaytracingSceneRef rt_scene{};
 
     ShaderUtils               shader_utils;
-    ImportantSamplingParams   importance_sampling_params;
+    ImportanceSamplingParams   importance_sampling_params;
     ImportanceSamplingContext importance_sampling_context;
 
     bool first_load = true;
@@ -113,7 +113,7 @@ struct RaytracingRenderer::RuntimeState {
     VisualizeConfig visualize_config{};
 
     explicit RuntimeState(RaytracingRenderer& renderer) :
-        shader_utils(renderer.device, renderer.manager),
+        shader_utils(renderer.manager),
         importance_sampling_params(CreateImportanceSamplingParams(renderer.resolution)),
         importance_sampling_context(importance_sampling_params),
         output(renderer.device.CreateTexture(
@@ -144,9 +144,7 @@ struct RaytracingRenderer::RuntimeState {
         antialias_pass_info = AntialiasPass::CreateInfo{
             .motion              = rt_ctx->frame_rt.motion,
             .feedback_color_ping = rt_ctx->frame_rt.feedback_color_ping,
-            .feedback_color_pong = rt_ctx->frame_rt.feedback_color_pong,
-            .resolved_color      = rt_ctx->frame_rt.resolved_color,
-            .hdr_color           = rt_ctx->frame_rt.hdr_color
+            .feedback_color_pong = rt_ctx->frame_rt.feedback_color_pong
         };
         antialias_pass = MakeUnique<AntialiasPass>(renderer.device, renderer.manager, antialias_pass_info);
 
@@ -436,7 +434,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 src_env_map->GetNumMips()
             );
             state.shader_utils.SampleTextureCS(
-                cmd_list, src_env_map->GetView(0, 1), state.env_map->GetView(0, 1), src_env_map->GetFormat()
+                cmd_list, src_env_map->GetView(0, 1), state.env_map->GetView(0, 1)
             );
 
             Sampler sampler{SF_CUBIC, SAM_REPEAT};
@@ -476,12 +474,12 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         ToneMappingPass::Params tone_params{};
         AntialiasPass::Params   aa_params{};
         {
-            auto grid_cfg      = state.importance_sampling_context.GetGridChangableConfig();
+            auto grid_cfg      = state.importance_sampling_context.GetGridChangeableConfig();
             grid_cfg.cell_size = ui_config.grid_config.cell_size;
             grid_cfg.center    = camera.GetPosition();
 
             auto grid_static_cfg           = state.importance_sampling_context.GetGridConfig();
-            grid_static_cfg.light_per_ceil = ui_config.grid_config.light_per_ceil;
+            grid_static_cfg.lights_per_cell = ui_config.grid_config.lights_per_cell;
             grid_static_cfg.grid_mode      = ui_config.grid_config.grid_mode;
             state.importance_sampling_context.SetGridConfig(grid_static_cfg);
             state.importance_sampling_context.SetChangeableGridConfig(grid_cfg);
@@ -517,7 +515,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             di_spatial_resampling_config.num_spatial_samples =
                 ui_config.restir_di_cfg.spatial_resample_config.num_spatial_samples;
 
-            state.importance_sampling_context.SetReSTIRDIIInitialSampleParams(di_initial_sample_config);
+            state.importance_sampling_context.SetReSTIRDIInitialSampleParams(di_initial_sample_config);
             state.importance_sampling_context.SetReSTIRDITemporalResampleParams(di_temporal_resampling_config
             );
             state.importance_sampling_context.SetReSTIRDISpatialResampleParams(di_spatial_resampling_config);
@@ -618,7 +616,6 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         state.composition_pass->Process(cmd_list, *state.rt_ctx);
         state.antialias_pass->Process(
             cmd_list,
-            *state.rt_ctx,
             aa_params,
             state.b_feedback_valid,
             state.rt_ctx->frame_rt.hdr_color,
@@ -626,7 +623,6 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         );
         state.tone_mapping_pass->Process(
             cmd_list,
-            *state.rt_ctx,
             tone_params,
             state.rt_ctx->frame_rt.resolved_color,
             state.rt_ctx->frame_rt.ldr_color
@@ -881,8 +877,6 @@ void RaytracingRenderer::RecreateFrameResources(uint2 new_extent) {
     state.antialias_pass_info.motion              = state.rt_ctx->frame_rt.motion;
     state.antialias_pass_info.feedback_color_ping = state.rt_ctx->frame_rt.feedback_color_ping;
     state.antialias_pass_info.feedback_color_pong = state.rt_ctx->frame_rt.feedback_color_pong;
-    state.antialias_pass_info.resolved_color      = state.rt_ctx->frame_rt.resolved_color;
-    state.antialias_pass_info.hdr_color           = state.rt_ctx->frame_rt.hdr_color;
     state.antialias_pass   = MakeUnique<AntialiasPass>(device, manager, state.antialias_pass_info);
     state.b_feedback_valid = false;
 }

@@ -1,17 +1,19 @@
 #ifndef MOER_RAYTRACING_CONFIGS_H
 #define MOER_RAYTRACING_CONFIGS_H
 
+// CPU-side configuration and frame state for ReSTIR DI importance sampling.
+
 #include "misc/Traits.h"
 #include "rhi/RHICommand.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 #include "shaderheaders/shared/lighting/ShaderParameters.h"
 
-// namespace Moer::Render, not Moer::Render::Raytracing (need fix?)
+// Shared shader parameter types place the importance-sampling context in Moer::Render.
 namespace Moer::Render {
 
 static constexpr uint s_num_restirdi_reservoir_buffer = 3;
 
-inline static uint JekinsHash(uint _key) {
+inline static uint JenkinsHash(uint _key) {
     _key = (_key + 0x7ed55d16) + (_key << 12);
     _key = (_key ^ 0xc761c23c) ^ (_key >> 19);
     _key = (_key + 0x165667b1) + (_key << 5);
@@ -26,23 +28,23 @@ public:
     SimpleSegmentAllocator();
 
     uint Allocate(uint _size_elements);
-    uint GetTotalSize() const; //in elements
+    uint GetTotalSize() const;
 
 private:
-    uint total_element_cnt;
+    uint total_element_count;
 };
 
 struct GridConfig {
     uint3 grid_size{16};
     uint  grid_mode      = s_di_local_light_sample_mode_power_ris;
-    uint  light_per_ceil = 512;
+    uint  lights_per_cell = 512;
 };
 
 struct GridRuntimeConfig {
     uint num_light_slot;
 };
 
-struct GridChangableConfig {
+struct GridChangeableConfig {
     float  cell_size = 25.f;
     float3 center    = float3(0.f);
 
@@ -68,8 +70,6 @@ struct ReSTIRDIRuntimeConfig {
 };
 } // namespace DI
 
-struct ImportanceSamplingConfig {};
-
 inline static DI::ReSTIRDIInitialSampleParams GetDefaultReSTIRDIInitialSampleParams() {
     DI::ReSTIRDIInitialSampleParams params;
     params.num_primary_local_lights    = 8;
@@ -77,7 +77,7 @@ inline static DI::ReSTIRDIInitialSampleParams GetDefaultReSTIRDIInitialSamplePar
     params.num_primary_env_lights      = 1;
     params.num_primary_brdf_lights     = 1;
     params.brdf_cutoff                 = 0.001f;
-    params.enable_initial_visiblity    = 1;
+    params.enable_initial_visibility   = 1;
     params.env_map_is                  = 1;
     params.local_light_sample_mode     = s_di_local_light_sample_mode_grid;
     return params;
@@ -112,10 +112,10 @@ inline static DI::ReSTIRDISpatialResampleParams GetDefaultReSTIRDISpatialResampl
 inline static DI::ReSTIRDIShadingParams GetDefaultReSTIRDIShadingParams() {
     DI::ReSTIRDIShadingParams params;
     params.enable_denoiser_input_packing = 0;
-    params.enable_final_visiblity        = 1;
-    params.final_visiblity_max_age       = 4;
-    params.final_visiblity_max_distance  = 16.f;
-    params.reuse_final_visiblity         = 1;
+    params.enable_final_visibility       = 1;
+    params.final_visibility_max_age      = 4;
+    params.final_visibility_max_distance = 16.f;
+    params.reuse_final_visibility        = 1;
     return params;
 }
 
@@ -125,7 +125,7 @@ inline static DI::ReSTIRDIBufferIndices GetDefaultReSTIRDIBufferIndicesParams() 
     return params;
 }
 
-struct ImportantSamplingParams {
+struct ImportanceSamplingParams {
     BufferSegmentParam local_light_ris_buffer_segment_params{1024, 128};
     BufferSegmentParam env_light_ris_buffer_segment_params{1024, 128};
 
@@ -137,7 +137,7 @@ struct ImportantSamplingParams {
 
 struct ImportanceSamplingContext {
 
-    ImportanceSamplingContext(const ImportantSamplingParams& _param);
+    explicit ImportanceSamplingContext(const ImportanceSamplingParams& _param);
 
     DI::ReSTIRDIInitialSampleParams& GetDIInitialSampleParams() {
         return di_initial_sample_params;
@@ -198,8 +198,8 @@ struct ImportanceSamplingContext {
         return light_buffer_params;
     }
 
-    void SetChangeableGridConfig(const GridChangableConfig& _config) {
-        grid_changable_config                       = _config;
+    void SetChangeableGridConfig(const GridChangeableConfig& _config) {
+        grid_changeable_config                      = _config;
         grid_params.common_params.cell_size         = _config.cell_size;
         grid_params.common_params.center_x          = _config.center.x;
         grid_params.common_params.center_y          = _config.center.y;
@@ -213,11 +213,7 @@ struct ImportanceSamplingContext {
         ComputeGridLightSlotCnt();
     }
 
-    void SetReSTIRDIInitialSampleMode(uint _sample_mode) {
-        di_initial_sample_params.local_light_sample_mode = _sample_mode;
-    }
-
-    void SetReSTIRDIIInitialSampleParams(const DI::ReSTIRDIInitialSampleParams& _params) {
+    void SetReSTIRDIInitialSampleParams(const DI::ReSTIRDIInitialSampleParams& _params) {
         di_initial_sample_params = _params;
     }
 
@@ -229,7 +225,7 @@ struct ImportanceSamplingContext {
         di_spatial_resample_settings = _params;
     }
 
-    //called in prepare lights in each frame
+    // Updated by PrepareLightPass after the per-frame light layout is known.
     void SetLightBufferParams(
         uint _frame_offset,
         uint _num_finit_lights,
@@ -245,16 +241,12 @@ struct ImportanceSamplingContext {
         return grid_runtime_config;
     }
 
-    GridChangableConfig GetGridChangableConfig() const {
-        return grid_changable_config;
+    GridChangeableConfig GetGridChangeableConfig() const {
+        return grid_changeable_config;
     }
 
     const Grid::Params& GetGridParams() const {
         return grid_params;
-    }
-
-    uint GetGridCeillOffset() const {
-        return grid_runtime_config.num_light_slot;
     }
 
     const DI::ReSTIRDIRuntimeConfig& GetReSTIRDIRuntimeConfig() const {
@@ -293,9 +285,9 @@ private:
     DI::RISBufferSegmentParams env_light_ris_buffer_params;
     DI::LightBufferParams      light_buffer_params;
 
-    GridConfig          grid_config;
-    GridRuntimeConfig   grid_runtime_config;
-    GridChangableConfig grid_changable_config;
+    GridConfig           grid_config;
+    GridRuntimeConfig    grid_runtime_config;
+    GridChangeableConfig grid_changeable_config;
 
     Grid::Params grid_params;
 

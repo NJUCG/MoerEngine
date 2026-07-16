@@ -35,7 +35,7 @@ main(uint2 dtid
       light_sample);
 
   if (resample_params.restir_di_params.initial_sample_params
-          .enable_initial_visiblity &&
+          .enable_initial_visibility &&
       res.IsValid()) {
     if (!Moer::GetCurrentConservativeVisibility(surface, light_sample.x)) {
       res.StoreVisibility(0.f, true);

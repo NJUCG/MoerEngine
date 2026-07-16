@@ -1,6 +1,8 @@
 #ifndef MOER_SHADER_UTILS_H
 #define MOER_SHADER_UTILS_H
 
+// Common compute and fullscreen helpers used by the ray tracing renderer.
+
 #include "PixelFormat.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
@@ -16,16 +18,6 @@ class ShaderManager;
 namespace Moer::Render::Raytracing {
 
 static constexpr uint s_max_mip_levels = 14;
-
-class GenLowDiscrepancyPipeline : public ComputePipeline {
-public:
-    DEFINE_COMPUTE_PIPELINE_CLASS(GenLowDiscrepancyPipeline);
-
-    DEFINE_SHADER_CONSTANT_STRUCT(GenLowDiscrepancySequenceParam, param);
-    DEFINE_SHADER_BUFFER(output);
-
-    DEFINE_SHADER_ARGS(param, output);
-};
 
 struct GenerateMipPdfPipeline : public ComputePipeline {
 public:
@@ -56,18 +48,9 @@ public:
     DEFINE_SHADER_ARGS(param, src_tex, bdls);
 };
 
-class UtilsSampleTexturePipeline : public RasterPipeline {
+class CopyTextureComputePipeline : public ComputePipeline {
 public:
-    DEFINE_RASTER_PIPELINE_CLASS(UtilsSampleTexturePipeline);
-    DEFINE_SHADER_TEX(src_color);
-    DEFINE_SHADER_SAMPLER(spl);
-
-    DEFINE_SHADER_ARGS(src_color, spl);
-};
-
-class UtilsSampleTexturePipelineCS : public ComputePipeline {
-public:
-    DEFINE_COMPUTE_PIPELINE_CLASS(UtilsSampleTexturePipelineCS);
+    DEFINE_COMPUTE_PIPELINE_CLASS(CopyTextureComputePipeline);
     DEFINE_SHADER_TEX(src_color);
     DEFINE_SHADER_SAMPLER(spl);
     DEFINE_SHADER_TEX(dst_color);
@@ -77,20 +60,7 @@ public:
 
 class ShaderUtils {
 public:
-    ShaderUtils(RenderDevice& _device, ShaderManager& _manager);
-
-    GenLowDiscrepancyPipeline& GetGenLowDiscrepancyPipeline() {
-        return gen_low_discrepancy_pipeline;
-    }
-    GenerateMipPdfPipeline& GetGenerateMipPdfPipeline() {
-        return generate_mip_pdf_pipeline;
-    }
-    GenerateMipsPipeline& GetGenerateMipsPipeline() {
-        return generate_mips_pipeline;
-    }
-    ShowTexturePipeline& GetShowTexturePipeline() {
-        return show_texture_pipeline;
-    }
+    explicit ShaderUtils(ShaderManager& manager);
 
     void GenerateLowDiscrepancySequence(
         CommandList&                   _cmd_list,
@@ -111,31 +81,13 @@ public:
         TextureRef               _dst_texture
     );
 
-    void SampleTextureRaster(
-        CommandList& _cmd_list,
-        TextureView  _input_texture,
-        TextureView  _output_texture,
-        EPixelFormat _output_format
-    );
-
-    void SampleTextureCS(
-        CommandList& _cmd_list,
-        TextureView  _input_texture,
-        TextureView  _output_texture,
-        EPixelFormat _output_format
-    );
+    void SampleTextureCS(CommandList& cmd_list, TextureView input_texture, TextureView output_texture);
 
 private:
-    GenLowDiscrepancyPipeline    gen_low_discrepancy_pipeline;
-    GenerateMipPdfPipeline       generate_mip_pdf_pipeline;
-    GenerateMipsPipeline         generate_mips_pipeline;
-    ShowTexturePipeline          show_texture_pipeline;
-    UtilsSampleTexturePipelineCS sample_texture_cs_pipeline;
-
-    UnorderedMap<EPixelFormat, UtilsSampleTexturePipeline> sample_texture_pipeline_map;
-
-    ShaderManager& manager;
-    RenderDevice&  device;
+    GenerateMipPdfPipeline     generate_mip_pdf_pipeline;
+    GenerateMipsPipeline       generate_mips_pipeline;
+    ShowTexturePipeline        show_texture_pipeline;
+    CopyTextureComputePipeline copy_texture_pipeline;
 };
 } // namespace Moer::Render::Raytracing
 #endif

@@ -1,6 +1,8 @@
 #ifndef MOER_ANTIALIASPASS_H
 #define MOER_ANTIALIASPASS_H
 
+// Temporal antialiasing pass and per-frame camera jitter generation.
+
 #include "RTResource.h"
 #include "RaytracingConfig.h"
 #include "rhi/RHI.h"
@@ -36,15 +38,12 @@ public:
         TextureRef motion;
         TextureRef feedback_color_ping;
         TextureRef feedback_color_pong;
-        TextureRef resolved_color;
-        TextureRef hdr_color;
     };
 
     AntialiasPass(RenderDevice& device, class ShaderManager& manager, CreateInfo info);
 
     void Process(
         CommandList& _cmd_list,
-        RTContext&   _rt_ctx,
         Params       _params,
         bool         _prev_view_valid,
         TextureRef   _input,
@@ -52,11 +51,10 @@ public:
     );
     void   AdvanceFrame();
     void   SetJitter(EJitter _jitter_mode);
-    float2 GetPixelOffset();
+    float2 GetPixelOffset() const;
 
 private:
-    ShaderManager& manager;
-    TAAPipeline    taa_pipeline;
+    TAAPipeline taa_pipeline;
 
     uint    frame_idx   = 0;
     float2  jitter      = float2(0.f);
@@ -67,8 +65,6 @@ private:
     TextureRef motion;
     TextureRef feedback_color_ping;
     TextureRef feedback_color_pong;
-    TextureRef resolved_color;
-    TextureRef hdr_color;
 };
 } // namespace Moer::Render::Raytracing
 #endif

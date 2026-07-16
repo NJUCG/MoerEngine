@@ -1,6 +1,8 @@
 #ifndef MOER_RENDER_VISUALIZE_PASS_H
 #define MOER_RENDER_VISUALIZE_PASS_H
 
+// Selects and displays ray-tracing intermediate buffers for editor diagnostics.
+
 #include "RTResource.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/ShaderParameters.h"
@@ -40,18 +42,15 @@ struct VisualizeConfig {
 
 class VisualizePass {
 public:
-    VisualizePass(RenderDevice& _device, class ShaderManager& _manager);
+    VisualizePass(RenderDevice& device, class ShaderManager& manager);
     void Process(
-        CommandList&           _cmd_list,
-        RTContext&             _rt_ctx,
-        const VisualizeConfig& _config,
-        BindlessArrayRef       _bdls_array
+        CommandList&           cmd_list,
+        RTContext&             rt_ctx,
+        const VisualizeConfig& config,
+        BindlessArrayRef       bindless_array
     );
 
 private:
-    RenderDevice&  device;
-    ShaderManager& manager;
-
     VisualizeParams   params;
     BufferRef         visualize_params_buffer;
     VisualizePipeline visualize_pipeline;

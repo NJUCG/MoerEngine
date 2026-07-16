@@ -1,11 +1,18 @@
 #ifndef MOER_TONE_MAPPING_PASS_H
 #define MOER_TONE_MAPPING_PASS_H
 
-#include "RTResource.h"
+// Builds luminance exposure and maps HDR lighting into the display target.
+
 #include "rhi/RHIResource.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 #include "shaderheaders/shared/postprocess/ShaderParameters.h"
+
+namespace Moer::Render {
+class CommandList;
+class RenderDevice;
+class ShaderManager;
+} // namespace Moer::Render
 
 namespace Moer::Render::Raytracing {
 
@@ -15,11 +22,11 @@ public:
 
     DEFINE_SHADER_BUFFER(params);
     DEFINE_SHADER_TEX(source_tex);
-    DEFINE_SHADER_BUFFER(exposuer);
+    DEFINE_SHADER_BUFFER(exposure);
     DEFINE_SHADER_TEX(color_lut);
     DEFINE_SHADER_SAMPLER(color_lut_sampler);
 
-    DEFINE_SHADER_ARGS(params, source_tex, exposuer, color_lut, color_lut_sampler);
+    DEFINE_SHADER_ARGS(params, source_tex, exposure, color_lut, color_lut_sampler);
 };
 
 class HistogramPipeline : public ComputePipeline {
@@ -47,11 +54,8 @@ public:
 class ToneMappingPass {
 public:
     struct CreateInfo {
-        bool       b_texture_array;
-        uint       histogram_bins               = HISTOGRAM_BINS;
-        uint       num_constant_buffer_versions = 16;
-        BufferRef  exposure_buffer_override     = nullptr;
-        TextureRef color_lut                    = nullptr;
+        uint       histogram_bins = HISTOGRAM_BINS;
+        TextureRef color_lut      = nullptr;
     };
 
     struct Params {
@@ -68,51 +72,37 @@ public:
     };
 
 public:
-    ToneMappingPass(class RenderDevice& _device, class ShaderManager& _manager, CreateInfo _info);
+    ToneMappingPass(RenderDevice& device, ShaderManager& manager, CreateInfo info);
     void Process(
-        class CommandList& _cmd_list,
-        RTContext&         _rt_ctx,
-        Params             _params,
-        TextureRef         _src_tex,
-        TextureRef         _target
+        CommandList& cmd_list,
+        Params       params,
+        TextureRef   source_texture,
+        TextureRef   target_texture
     );
     void AdvanceFrame(float _frame_time);
 
 private:
-    void ComputeExposure(CommandList& _cmd_list, Params _params);
+    void ComputeExposure(CommandList& _cmd_list);
     void ComputeHistogram(CommandList& _cmd_list, TextureRef _src_tex);
     void ResetHistogram(CommandList& _cmd_list);
     void ResetExposure(CommandList& _cmd_list);
-    void Render(
-        CommandList& _cmd_list,
-        RTContext&   _rt_ctx,
-        Params       _params,
-        TextureRef   _src_tex,
-        TextureRef   _target
-    );
-    class RenderDevice&  device;
-    class ShaderManager& manager;
-    float                frame_time     = 0;
-    uint                 frame_idx      = 0;
-    uint                 color_lut_size = 0;
+    void Render(CommandList& _cmd_list, TextureRef _src_tex, TextureRef _target);
 
-    BufferRef         tone_mapping_constants;
-    BufferRef         tone_mapping_constants2;
-    ToneMappingParams test_copy_back;
-    BufferRef         histogram_buffer;
-    BufferRef         exposure_buffer;
-    TextureRef        color_lut;
-    Array<byte>       upload_data;
-    bool              b_enabled = false;
+    float frame_time     = 0;
+    uint  frame_idx      = 0;
+    uint  color_lut_size = 0;
+
+    BufferRef   tone_mapping_constants;
+    BufferRef   histogram_buffer;
+    BufferRef   exposure_buffer;
+    TextureRef  color_lut;
+    Array<byte> upload_data;
+    bool        tone_mapping_enabled = false;
 
     ToneMappingPassPipeline tone_mapping_pass_pipeline;
     HistogramPipeline       histogram_pipeline;
     ExposurePipeline        exposure_pipeline;
 
-    //Test DrawIndirect samples
-    BufferRef indirect_buffer;
-    BufferRef count_buffer;
-    BufferRef index_buffer;
 };
 } // namespace Moer::Render::Raytracing
 #endif

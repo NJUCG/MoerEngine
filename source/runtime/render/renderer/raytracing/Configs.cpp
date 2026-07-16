@@ -1,20 +1,19 @@
 #include "Configs.h"
 
+// Maintains frame-to-frame ReSTIR reservoir indices and light sampling buffer ranges.
+
 #include "shaderheaders/shared/ShaderParameters.h"
 #include "shaderheaders/shared/lighting/ShaderParameters.h"
 
 namespace Moer::Render {
-#pragma region ReSTIR DI
-
-#pragma endregion
-ImportanceSamplingContext::ImportanceSamplingContext(const ImportantSamplingParams& _param) :
+ImportanceSamplingContext::ImportanceSamplingContext(const ImportanceSamplingParams& _param) :
     restir_di_config{},
     local_light_ris_buffer_params{},
     env_light_ris_buffer_params{},
     light_buffer_params{},
     grid_config{},
     grid_runtime_config{},
-    grid_changable_config{},
+    grid_changeable_config{},
     segment_allocator{},
     di_initial_sample_params{} {
 
@@ -58,12 +57,12 @@ ImportanceSamplingContext::ImportanceSamplingContext(const ImportantSamplingPara
     }
 
     ComputeGridLightSlotCnt();
-    //allocate grid light slot
+    // The grid occupies a persistent segment after the local and environment RIS segments.
     grid_cell_offset = segment_allocator.Allocate(grid_runtime_config.num_light_slot);
 }
 void ImportanceSamplingContext::ComputeGridLightSlotCnt() {
     grid_runtime_config.num_light_slot = grid_config.grid_size.x * grid_config.grid_size.y *
-                                         grid_config.grid_size.z * grid_config.light_per_ceil;
+                                         grid_config.grid_size.z * grid_config.lights_per_cell;
 }
 
 void ImportanceSamplingContext::UpdateReSTIRDIBufferIndices() {
@@ -104,7 +103,7 @@ void ImportanceSamplingContext::AdvanceFrameIdx(uint _frame_idx) {
     {
         frame_idx                                 = _frame_idx;
         di_last_frame_output_reservoir            = di_current_frame_output_reservoir;
-        di_temporal_resample_params.random_number = JekinsHash(frame_idx);
+        di_temporal_resample_params.random_number = JenkinsHash(frame_idx);
         UpdateReSTIRDIBufferIndices();
 
         di_initial_sample_params.env_map_is = light_buffer_params.env_light.light_cnt;
@@ -112,13 +111,13 @@ void ImportanceSamplingContext::AdvanceFrameIdx(uint _frame_idx) {
         grid_params.grid_params.cell_y      = grid_config.grid_size.y;
         grid_params.grid_params.cell_z      = grid_config.grid_size.z;
 
-        grid_params.common_params.center_x          = grid_changable_config.center.x;
-        grid_params.common_params.center_y          = grid_changable_config.center.y;
-        grid_params.common_params.center_z          = grid_changable_config.center.z;
-        grid_params.common_params.cell_size         = grid_changable_config.cell_size;
-        grid_params.common_params.jitter            = grid_changable_config.grid_jitter;
-        grid_params.common_params.num_build_samples = grid_changable_config.num_grid_build_samples;
-        grid_params.common_params.lights_per_cell   = grid_config.light_per_ceil;
+        grid_params.common_params.center_x          = grid_changeable_config.center.x;
+        grid_params.common_params.center_y          = grid_changeable_config.center.y;
+        grid_params.common_params.center_z          = grid_changeable_config.center.z;
+        grid_params.common_params.cell_size         = grid_changeable_config.cell_size;
+        grid_params.common_params.jitter            = grid_changeable_config.grid_jitter;
+        grid_params.common_params.num_build_samples = grid_changeable_config.num_grid_build_samples;
+        grid_params.common_params.lights_per_cell   = grid_config.lights_per_cell;
         grid_params.common_params.local_light_sampling_fallback_mode = s_di_local_light_sample_mode_power_ris;
         grid_params.common_params.local_light_sample_mode            = grid_config.grid_mode;
         grid_params.common_params.ris_buffer_offset                  = grid_cell_offset;
@@ -129,16 +128,16 @@ void ImportanceSamplingContext::TickFrame(uint _frame_idx) {
     AdvanceFrameIdx(_frame_idx);
 }
 
-SimpleSegmentAllocator::SimpleSegmentAllocator() : total_element_cnt(0) {}
+SimpleSegmentAllocator::SimpleSegmentAllocator() : total_element_count(0) {}
 
 uint SimpleSegmentAllocator::Allocate(uint _size_elements) {
-    uint ret = total_element_cnt;
-    total_element_cnt += _size_elements;
-    return ret;
+    const uint offset = total_element_count;
+    total_element_count += _size_elements;
+    return offset;
 }
 
 uint SimpleSegmentAllocator::GetTotalSize() const {
-    return total_element_cnt;
+    return total_element_count;
 }
 
 } // namespace Moer::Render

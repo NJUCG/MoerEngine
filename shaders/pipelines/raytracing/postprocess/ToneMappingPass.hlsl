@@ -5,7 +5,7 @@
 [[vk::binding(0, 0)]] ConstantBuffer<Moer::ToneMappingParams> params
     : register(b0);
 [[vk::binding(1, 0)]] Texture2D source_tex : register(t0);
-[[vk::binding(2, 0)]] Buffer<uint> exposuer : register(t1);
+[[vk::binding(2, 0)]] Buffer<uint> exposure : register(t1);
 
 [[vk::binding(3, 0)]] Texture2D color_lut : register(t2);
 [[vk::binding(4, 0)]] SamplerState color_lut_sampler : register(s0);
@@ -15,7 +15,7 @@ float3 ConvertToLDR(float3 hdr_color) {
   if (src_luminance <= 0.0f) {
     return float3(0.0f, 0.0f, 0.0f);
   }
-  float adapted_luminance = asfloat(exposuer[0]);
+  float adapted_luminance = asfloat(exposure[0]);
 
   if (adapted_luminance <= 0.0f) {
     return params.min_adapted_luminance;
