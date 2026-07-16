@@ -21,6 +21,8 @@ constexpr uint DivCeil(uint value, uint divisor) {
 } // namespace
 
 ShaderUtils::ShaderUtils(ShaderManager& manager) {
+    gen_low_discrepancy_pipeline =
+        std::move(manager.Compute<GenLowDiscrepancyPipeline>("core/utils/GenLowDiscrepancySequence.hlsl"));
     generate_mip_pdf_pipeline = std::move(manager.Compute<GenerateMipPdfPipeline>(
         "pipelines/raytracing/lighting/precompute/ProcessEnvironmentMap.hlsl"
     ));
@@ -37,6 +39,8 @@ ShaderUtils::ShaderUtils(ShaderManager& manager) {
     copy_texture_pipeline =
         std::move(manager.Compute<CopyTextureComputePipeline>("core/utils/CopyTexture.cs.hlsl"));
 }
+
+ShaderUtils::ShaderUtils(RenderDevice& /*device*/, ShaderManager& manager) : ShaderUtils(manager) {}
 
 void ShaderUtils::GenerateLowDiscrepancySequence(
     CommandList&                   _cmd_list,

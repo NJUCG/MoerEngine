@@ -62,7 +62,7 @@ ImportanceSamplingContext::ImportanceSamplingContext(const ImportanceSamplingPar
 }
 void ImportanceSamplingContext::ComputeGridLightSlotCnt() {
     grid_runtime_config.num_light_slot = grid_config.grid_size.x * grid_config.grid_size.y *
-                                         grid_config.grid_size.z * grid_config.lights_per_cell;
+                                         grid_config.grid_size.z * grid_config.GetLightsPerCell();
 }
 
 void ImportanceSamplingContext::UpdateReSTIRDIBufferIndices() {
@@ -117,7 +117,7 @@ void ImportanceSamplingContext::AdvanceFrameIdx(uint _frame_idx) {
         grid_params.common_params.cell_size         = grid_changeable_config.cell_size;
         grid_params.common_params.jitter            = grid_changeable_config.grid_jitter;
         grid_params.common_params.num_build_samples = grid_changeable_config.num_grid_build_samples;
-        grid_params.common_params.lights_per_cell   = grid_config.lights_per_cell;
+        grid_params.common_params.lights_per_cell   = grid_config.GetLightsPerCell();
         grid_params.common_params.local_light_sampling_fallback_mode = s_di_local_light_sample_mode_power_ris;
         grid_params.common_params.local_light_sample_mode            = grid_config.grid_mode;
         grid_params.common_params.ris_buffer_offset                  = grid_cell_offset;

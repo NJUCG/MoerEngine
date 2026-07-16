@@ -19,6 +19,16 @@ namespace Moer::Render::Raytracing {
 
 static constexpr uint s_max_mip_levels = 14;
 
+// 该管线虽未被当前帧流程调用，但仍是可供工具代码使用的 GPU 生成接口。
+class GenLowDiscrepancyPipeline : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(GenLowDiscrepancyPipeline);
+    DEFINE_SHADER_CONSTANT_STRUCT(GenLowDiscrepancySequenceParam, param);
+    DEFINE_SHADER_BUFFER(output);
+
+    DEFINE_SHADER_ARGS(param, output);
+};
+
 struct GenerateMipPdfPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(GenerateMipPdfPipeline);
@@ -58,9 +68,32 @@ public:
     DEFINE_SHADER_ARGS(src_color, spl, dst_color);
 };
 
+using UtilsSampleTexturePipelineCS [[deprecated("Use CopyTextureComputePipeline instead")]] =
+    CopyTextureComputePipeline;
+
 class ShaderUtils {
 public:
     explicit ShaderUtils(ShaderManager& manager);
+    [[deprecated("RenderDevice is no longer required; use ShaderUtils(ShaderManager&) instead")]] ShaderUtils(
+        RenderDevice& device,
+        ShaderManager& manager
+    );
+
+    GenLowDiscrepancyPipeline& GetGenLowDiscrepancyPipeline() {
+        return gen_low_discrepancy_pipeline;
+    }
+
+    GenerateMipPdfPipeline& GetGenerateMipPdfPipeline() {
+        return generate_mip_pdf_pipeline;
+    }
+
+    GenerateMipsPipeline& GetGenerateMipsPipeline() {
+        return generate_mips_pipeline;
+    }
+
+    ShowTexturePipeline& GetShowTexturePipeline() {
+        return show_texture_pipeline;
+    }
 
     void GenerateLowDiscrepancySequence(
         CommandList&                   _cmd_list,
@@ -83,7 +116,17 @@ public:
 
     void SampleTextureCS(CommandList& cmd_list, TextureView input_texture, TextureView output_texture);
 
+    [[deprecated("Output format is provided by the output texture")]] void SampleTextureCS(
+        CommandList& cmd_list,
+        TextureView  input_texture,
+        TextureView  output_texture,
+        EPixelFormat /*output_format*/
+    ) {
+        SampleTextureCS(cmd_list, input_texture, output_texture);
+    }
+
 private:
+    GenLowDiscrepancyPipeline  gen_low_discrepancy_pipeline;
     GenerateMipPdfPipeline     generate_mip_pdf_pipeline;
     GenerateMipsPipeline       generate_mips_pipeline;
     ShowTexturePipeline        show_texture_pipeline;

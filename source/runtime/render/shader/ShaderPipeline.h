@@ -493,9 +493,19 @@ struct ParameterBlock {
         args       = TPipeline::SetArgs(std::forward<TArgs>(_args)...);
         b_args_set = true;
     }
-    ParameterBlockAllocationInfo* allocation_info = nullptr;
-    ArrayArguments                args;
-    bool                          b_args_set = false;
+    // 旧字段是已公开接口，保留唯一存储以避免通过 union 别名访问非活动成员。
+    ParameterBlockAllocationInfo* alloc_info = nullptr;
+
+    ParameterBlockAllocationInfo* GetAllocationInfo() const {
+        return alloc_info;
+    }
+
+    void SetAllocationInfo(ParameterBlockAllocationInfo* allocation_info) {
+        alloc_info = allocation_info;
+    }
+
+    ArrayArguments args;
+    bool           b_args_set = false;
 };
 
 template<typename TPipeline>

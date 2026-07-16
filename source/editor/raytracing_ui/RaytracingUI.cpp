@@ -85,7 +85,7 @@ void RaytracingUI::ShowConfig() {
             }
             ImGui::TreePop();
         }
-        ImGui::SliderInt("Lights per Cell", &m_config.grid_config.lights_per_cell, 1, 1024);
+        ImGui::SliderInt("Lights per Cell", &m_config.grid_config.GetLightsPerCell(), 1, 1024);
         ImGui::SliderFloat("Cell Size", &m_config.grid_config.cell_size, 1.f, 400.f);
         ImGui::TreePop();
     }

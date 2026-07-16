@@ -23,6 +23,11 @@ inline static uint JenkinsHash(uint _key) {
     return _key;
 }
 
+// 保留旧拼写，避免仍依赖该工具函数的外部调用方立即失效。
+[[deprecated("Use JenkinsHash instead")]] inline static uint JekinsHash(uint _key) {
+    return JenkinsHash(_key);
+}
+
 class SimpleSegmentAllocator {
 public:
     SimpleSegmentAllocator();
@@ -36,8 +41,17 @@ private:
 
 struct GridConfig {
     uint3 grid_size{16};
-    uint  grid_mode      = s_di_local_light_sample_mode_power_ris;
-    uint  lights_per_cell = 512;
+    uint  grid_mode = s_di_local_light_sample_mode_power_ris;
+    // 旧字段已公开，保留为唯一存储；新代码通过正确拼写的访问器读写。
+    uint light_per_ceil = 512;
+
+    uint GetLightsPerCell() const {
+        return light_per_ceil;
+    }
+
+    void SetLightsPerCell(uint lights_per_cell) {
+        light_per_ceil = lights_per_cell;
+    }
 };
 
 struct GridRuntimeConfig {
@@ -51,6 +65,8 @@ struct GridChangeableConfig {
     float grid_jitter            = 1.f;
     uint  num_grid_build_samples = 8;
 };
+
+using GridChangableConfig [[deprecated("Use GridChangeableConfig instead")]] = GridChangeableConfig;
 
 struct BufferSegmentParam {
     uint tile_size;
@@ -135,6 +151,9 @@ struct ImportanceSamplingParams {
     uint neighbor_offset_cnt = 8092;
 };
 
+using ImportantSamplingParams [[deprecated("Use ImportanceSamplingParams instead")]] =
+    ImportanceSamplingParams;
+
 struct ImportanceSamplingContext {
 
     explicit ImportanceSamplingContext(const ImportanceSamplingParams& _param);
@@ -213,8 +232,18 @@ struct ImportanceSamplingContext {
         ComputeGridLightSlotCnt();
     }
 
+    void SetReSTIRDIInitialSampleMode(uint _sample_mode) {
+        di_initial_sample_params.local_light_sample_mode = _sample_mode;
+    }
+
     void SetReSTIRDIInitialSampleParams(const DI::ReSTIRDIInitialSampleParams& _params) {
         di_initial_sample_params = _params;
+    }
+
+    [[deprecated("Use SetReSTIRDIInitialSampleParams instead")]] void SetReSTIRDIIInitialSampleParams(
+        const DI::ReSTIRDIInitialSampleParams& _params
+    ) {
+        SetReSTIRDIInitialSampleParams(_params);
     }
 
     void SetReSTIRDITemporalResampleParams(const DI::ReSTIRDITemporalResampleParams& _params) {
@@ -243,6 +272,10 @@ struct ImportanceSamplingContext {
 
     GridChangeableConfig GetGridChangeableConfig() const {
         return grid_changeable_config;
+    }
+
+    [[deprecated("Use GetGridChangeableConfig instead")]] GridChangeableConfig GetGridChangableConfig() const {
+        return GetGridChangeableConfig();
     }
 
     const Grid::Params& GetGridParams() const {

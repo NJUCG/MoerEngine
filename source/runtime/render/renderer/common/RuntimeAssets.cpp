@@ -71,7 +71,7 @@ void RuntimeAssets::LoadTextures() {
                     if (file) {
                         ubyte* data = stbi_load_from_file(file, &width, &height, &channels, 4);
 
-                        TextureRef texture = RenderDevice::Get().CreateTexture(
+                        TextureRef texture = device.CreateTexture(
                             entry.path().filename().string(),
                             Extent2D(width, height),
                             PF_R8G8B8A8_UNORM,
@@ -100,7 +100,7 @@ void RuntimeAssets::LoadTextures() {
                             FreeEXRErrorMessage(err);
                         }
                     }
-                    TextureRef texture = RenderDevice::Get().CreateTexture(
+                    TextureRef texture = device.CreateTexture(
                         entry.path().filename().string(),
                         Extent2D(width, height),
                         PF_R32G32B32A32_SFLOAT,

@@ -479,8 +479,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             grid_cfg.center    = camera.GetPosition();
 
             auto grid_static_cfg           = state.importance_sampling_context.GetGridConfig();
-            grid_static_cfg.lights_per_cell = ui_config.grid_config.lights_per_cell;
-            grid_static_cfg.grid_mode      = ui_config.grid_config.grid_mode;
+            grid_static_cfg.SetLightsPerCell(ui_config.grid_config.GetLightsPerCell());
+            grid_static_cfg.grid_mode = ui_config.grid_config.grid_mode;
             state.importance_sampling_context.SetGridConfig(grid_static_cfg);
             state.importance_sampling_context.SetChangeableGridConfig(grid_cfg);
 
