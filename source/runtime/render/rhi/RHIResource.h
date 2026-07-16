@@ -1107,6 +1107,13 @@ struct ShaderVsPs {
     SingleShaderInfo ps;
 };
 
+struct ShaderVsHsDsPs {
+    SingleShaderInfo vs;
+    SingleShaderInfo hs;
+    SingleShaderInfo ds;
+    SingleShaderInfo ps;
+};
+
 struct ShaderMsPs {
     SingleShaderInfo ms;
     SingleShaderInfo ps;
@@ -1144,7 +1151,7 @@ struct ShaderArgCppInfo {
 };
 
 using ShaderOutputGroup =
-    std::variant<ShaderVsGsPs, ShaderVsPs, ShaderMsPs, ShaderTsMsPs, ShaderCs, ShaderRT>;
+    std::variant<ShaderVsGsPs, ShaderVsPs, ShaderVsHsDsPs, ShaderMsPs, ShaderTsMsPs, ShaderCs, ShaderRT>;
 
 struct PipelineShaderInfo {
     ShaderOutputGroup       shader_group;
@@ -1198,12 +1205,20 @@ struct GfxPsoCreateInfo {
         shading_rate(VSR_1_1x1),
         hash_key(0) {}
 
+    GfxPsoCreateInfo& SetPatchControlPoints(uint32_t control_points) {
+        patch_control_points = control_points;
+        return *this;
+    }
+
     RHIRasterizeInfo         rasterizer_info;
     VertexStream             vertex_stream;
     RHIMultisampleStateInfo  multisample_info;
     RHIDepthStencilStateInfo depth_stencil_info;
 
     EPrimitiveTopology primitive_topology;
+    // Required when primitive_topology is PATCH_LIST. Kept explicit instead of assuming triangle
+    // patches so the RHI contract remains valid for future isoline/quad tessellation passes.
+    uint32_t patch_control_points = 0;
 
     EPixelFormat                  depth_stencil_format;
     Array<RHIColorAttachmentInfo> color_attachments_info;

@@ -1042,6 +1042,8 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             case EShaderType::ST_COMPUTE: return VK_SHADER_STAGE_COMPUTE_BIT;
             case EShaderType::ST_MESH: return VK_SHADER_STAGE_MESH_BIT_NV;
             case EShaderType::ST_AMPLIFICATION: return VK_SHADER_STAGE_TASK_BIT_NV;
+            case EShaderType::ST_HULL: return VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT;
+            case EShaderType::ST_DOMAIN: return VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
             case EShaderType::ST_RAY_GEN: return VK_SHADER_STAGE_RAYGEN_BIT_KHR;
             case EShaderType::ST_RAY_MISS: return VK_SHADER_STAGE_MISS_BIT_KHR;
             case EShaderType::ST_RAY_CLOSESTHIT: return VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;

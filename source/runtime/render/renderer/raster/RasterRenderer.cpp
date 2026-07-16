@@ -10,6 +10,7 @@
 #include "CsmGizmoPass.h"
 #include "DirectionalShadowMaskPass.h"
 #include "GeometryPass.h"
+#include "TessellatedSurfacePass.h"
 #include "HiZBuildPass.h"
 #include "LightingPass.h"
 #include "ProbeGizmoPass.h"
@@ -95,6 +96,7 @@ RasterRenderer::RasterRenderer(
     probe_gizmo_pass             = MakeUnique<ProbeGizmoPass>(raster_context);
     camera_gizmo_pass            = MakeUnique<CameraGizmoPass>(raster_context);
     geometry_pass                = MakeUnique<GeometryPass>(raster_context);
+    tessellated_surface_pass     = MakeUnique<TessellatedSurfacePass>(raster_context);
     lighting_pass                = MakeUnique<LightingPass>(raster_context);
     skybox_pass                  = MakeUnique<SkyboxPass>(raster_context);
     ao_pass                      = MakeUnique<AoPass>(raster_context);
@@ -663,6 +665,18 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     cmd_list.PushScopeWithTimeScope(RasterTool::GetGeometryPassProfileScopeName());
                     geometry_pass->Process(raster_context, raster_config, camera);
                     cmd_list.PopScopeWithTimeScope();
+                }
+            );
+            schedule(
+                "TessellatedSurface",
+                [&](RenderGraph::PassBuilder& builder) {
+                    builder.ReadWrite(graph_resources.base_color)
+                        .ReadWrite(graph_resources.normal)
+                        .ReadWrite(graph_resources.metal_rough_ao)
+                        .ReadWrite(graph_resources.depth);
+                },
+                [&]() {
+                    tessellated_surface_pass->Process(raster_context, raster_config, camera);
                 }
             );
             schedule(

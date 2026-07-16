@@ -743,6 +743,10 @@ enum EShaderType : uint8_t {
     ST_RAY_CALLABLE,
     ST_RAY_INTERSECTION,
     ST_RAY_ANYHIT,
+    // Keep new shader stages after the existing serialized values. Shader cache entries persist
+    // the numeric EShaderType value, so inserting stages above would reinterpret old cache data.
+    ST_HULL,
+    ST_DOMAIN,
     ST_Num,
     ST_NumBits = 4
 };

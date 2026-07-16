@@ -124,6 +124,16 @@ public:
 
     void FlushDebugMessages() const override;
 
+    bool SupportsTessellation() const override {
+        return m_device_info.core_features.core_1_0.tessellationShader == VK_TRUE;
+    }
+
+    uint32_t GetMaxTessellationFactor() const override {
+        return SupportsTessellation() ?
+                   m_device_info.core_properties.core_1_0.limits.maxTessellationGenerationLevel :
+                   0;
+    }
+
     // Cooperative support related
     bool                            IsExtensionCooperativeEnabled() const override;
     const CooperativeExtensionInfo& GetCooperativeExtensionInfo() const override;
