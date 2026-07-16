@@ -1,5 +1,7 @@
 #include "renderer/Renderer.h"
 
+// Implements renderer-wide resource ownership, swapchain resizing, and frame-prepare profiling.
+
 // Runtime
 #include "config/ConfigManager.h"
 #include "misc/Timer.h"
@@ -15,22 +17,22 @@
 
 namespace Moer::Render {
 
-Renderer::Renderer(uint2 _resolution, const SharedPtr<EditorConfig> _config) :
-    resolution(_resolution),
+Renderer::Renderer(uint2 initial_resolution, const SharedPtr<EditorConfig> config) :
     device(RenderDevice::Get()),
     manager(ShaderManager::Get()),
     gfx_queue(device.GetCommandQueue(EQueueType::Graphics)),
+    resolution(initial_resolution),
     scene(),
     cmd_list() {
 
     {
-        swapchain_createinfo = SwapchainCreateInfo{
+        swapchain_create_info = SwapchainCreateInfo{
             .window_handle    = (uintptr_t)WindowContext::GetMainWindow(),
             .size             = {resolution.x, resolution.y},
             .back_buffer_sz   = 2,
             .preferred_format = PF_R8G8B8A8_SRGB
         };
-        swapchain = device.CreateSwapchain(swapchain_createinfo);
+        swapchain = device.CreateSwapchain(swapchain_create_info);
     }
     {
         bindless_array = device.CreateBindlessArray();
@@ -39,7 +41,7 @@ Renderer::Renderer(uint2 _resolution, const SharedPtr<EditorConfig> _config) :
 
         // FIXME: 异步版有bug，会在gfx_queue.Execute()卡死，并且会卡住整台机器一分钟
         // scene.LoadSceneFromFileAsync(_config->scene_path);
-        scene.LoadSceneFromFile(_config->scene_path);
+        scene.LoadSceneFromFile(config->scene_path);
     }
     // Other vars
     {
@@ -57,14 +59,13 @@ Renderer::Renderer(uint2 _resolution, const SharedPtr<EditorConfig> _config) :
     }
 }
 
-Renderer::~Renderer() {
-    // ReleaseResources(); // 在Renderer子类中释放
-}
+Renderer::~Renderer() = default;
 
 void Renderer::ReleaseResources() {
-    if (released)
+    if (resources_released) {
         return;
-    released = true;
+    }
+    resources_released = true;
 
     timeline->Wait(time);
     gfx_queue.Sync();
@@ -86,13 +87,12 @@ Renderer::WindowFrameState Renderer::TickWindowContext(uint2 current_resolution)
     WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
     if (w_width == 0 || w_height == 0) {
         return WindowFrameState{EWindowState::Hiding, current_resolution};
+    }
 
-    } else if (w_width != current_resolution.x || w_height != current_resolution.y) {
+    if (w_width != current_resolution.x || w_height != current_resolution.y) {
         return WindowFrameState{
-            EWindowState::SizeChanged,
-            uint2(static_cast<uint32>(w_width), static_cast<uint32>(w_height))
+            EWindowState::SizeChanged, uint2(static_cast<uint32>(w_width), static_cast<uint32>(w_height))
         };
-
     }
 
     return WindowFrameState{EWindowState::Default, current_resolution};
@@ -110,16 +110,16 @@ void Renderer::PrepareRenderFrame(const WindowFrameState& window_frame) {
     }
 
     gfx_queue.Sync();
-    swapchain_createinfo.size = {resolution.x, resolution.y};
+    swapchain_create_info.size = {resolution.x, resolution.y};
     swapchain->Sync();
-    swapchain->Recreate(swapchain_createinfo);
+    swapchain->Recreate(swapchain_create_info);
 }
 
 void Renderer::LogSceneLoadStatus(const EditorConfig& config) const {
-    if (scene.IsStartLoading() == false) {
-        // 没有找到场景，每隔一段时间在命令行打印提示信息，避免用户不知道发生了什么
+    if (!scene.IsStartLoading()) {
+        // Keep the warning periodic so a missing scene remains visible without flooding the log.
         static LoopedTimer timer(2.0);
-        if (timer.Tick()) { // 每隔1s触发一次
+        if (timer.Tick()) {
             LOG_WARNING(
                 "Don't find scene or scene format isn't supported. Please load a valid scene. Latest "
                 "attempted scene: {}",
