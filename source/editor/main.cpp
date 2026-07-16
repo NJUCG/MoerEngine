@@ -1,5 +1,8 @@
+// Validates editor command-line arguments and owns the top-level Editor lifecycle.
+
 #include "Editor.h"
 #include "Engine.h"
+
 #include <iostream>
 
 int main(int argc, const char** argv) {

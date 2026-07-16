@@ -1,5 +1,7 @@
 #include "InspectorUI.h"
 
+// Edits the selected scene node through Scene's public query and mutation API.
+
 #include "scene/Scene.h"
 
 #include <imgui.h>
@@ -120,8 +122,7 @@ void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_
     }
 
     std::string node_name;
-    std::string node_display_name;
-    auto        local_transform = scene->TryGetNodeLocalTransform(selected_node);
+    const auto  local_transform = scene->TryGetNodeLocalTransform(selected_node);
     if (!scene->TryGetNodeName(selected_node, node_name) || !local_transform.has_value()) {
         selected_node           = entt::null;
         m_rotation_cache_entity = entt::null;
@@ -130,7 +131,7 @@ void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_
         return;
     }
 
-    node_display_name = scene->GetNodeDisplayName(selected_node);
+    const std::string node_display_name = scene->GetNodeDisplayName(selected_node);
 
     if (m_rotation_cache_entity != selected_node) {
         m_rotation_cache_entity = selected_node;
@@ -142,7 +143,7 @@ void InspectorUI::ShowWindow(bool* p_open, Scene* scene, entt::entity& selected_
 
     ImGui::TextDisabled("Entity %u", static_cast<uint32>(entt::to_integral(selected_node)));
 
-    Scene::NodeVisibility visibility = scene->GetNodeVisibility(selected_node);
+    Scene::NodeVisibility visibility      = scene->GetNodeVisibility(selected_node);
     bool                  visible_in_game = visibility.visible_in_game;
     if (ImGui::Checkbox("Visible in Game", &visible_in_game)) {
         scene->SetNodeVisibleInGame(selected_node, visible_in_game);

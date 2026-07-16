@@ -1,5 +1,7 @@
 #include "EditorUI.h"
 
+// Builds the editor dockspace, coordinates top-level tools, and tracks the active render viewport.
+
 // Runtime
 #include "log/LogSystem.h"
 #include "window/WindowInput.h"
@@ -73,7 +75,7 @@ EditorUI::EditorUI(
     const EditorWindowVisibilitySettings& window_visibility_settings =
         EditorUISettings::LoadWindowVisibilitySettings();
 
-    auto has_saved_window_settings = [](const char* window_name) {
+    const auto has_saved_window_settings = [](const char* window_name) {
         return ImGui::FindWindowSettingsByID(ImHashStr(window_name)) != nullptr;
     };
 
@@ -207,7 +209,7 @@ void EditorUI::ShowMemoryProfiler(bool* p_open) {
             };
             PlotContext ctx = {s, &snapshot};
 
-            auto getter = [](void* data, int idx) -> float {
+            const auto getter = [](void* data, int idx) -> float {
                 auto* p = (PlotContext*)data;
                 return p->d->operator[](idx).values[p->s_idx];
             };
@@ -276,7 +278,7 @@ void EditorUI::ShowMemoryProfiler(bool* p_open) {
 
 void EditorUI::TickUI(Scene& scene) {
 
-    ResetState();
+    ResetFrameState();
 
     m_ui_renderer->BeginGUIFrame();
 
@@ -506,7 +508,7 @@ void EditorUI::ShowHierarchy(Scene& scene) {
         return;
     }
 
-    auto draw_node = [&](auto& self, entt::entity entity) -> void {
+    const auto draw_node = [&](auto& self, entt::entity entity) -> void {
         const std::string           label        = scene.GetNodeDisplayName(entity);
         const Scene::NodeVisibility visibility   = scene.GetNodeVisibility(entity);
         const bool                  selected     = (m_selected_node == entity);
@@ -568,7 +570,7 @@ Render::UiDrawFramePacket EditorUI::CaptureDrawFrame() {
     return m_ui_renderer->CaptureDrawFrame();
 }
 
-bool EditorUI::IsSeperateWindow() const {
+bool EditorUI::IsSeparateWindow() const {
     auto* current_window = ImGui::FindWindowByName(GetActiveViewportWindowName());
     if (!current_window) {
         return false;
@@ -721,9 +723,9 @@ void EditorUI::ShowViewportWindow(
 
     m_b_active_viewport_window_seen = true;
 
-    const bool m_b_separate_window = current_window->ParentWindow == nullptr;
-    const auto menu_rect           = current_window->MenuBarRect();
-    const auto menu_bar            = current_window->MenuBarHeight();
+    const bool separate_window = current_window->ParentWindow == nullptr;
+    const auto menu_rect       = current_window->MenuBarRect();
+    const auto menu_bar_height = current_window->MenuBarHeight();
 
     const float2 scene_size = {
         current_window->Size.x,
@@ -733,7 +735,7 @@ void EditorUI::ShowViewportWindow(
     const auto window_rect = current_window->Rect();
     ImRect     parent_rect{};
 
-    if (m_b_separate_window) {
+    if (separate_window) {
         parent_rect = {
             current_window->Pos.x,
             current_window->Pos.y,
@@ -748,7 +750,8 @@ void EditorUI::ShowViewportWindow(
         parent_rect = current_window->ParentWindow->Rect();
 
         const float2 local_pos = {
-            window_rect.Min.x - parent_rect.Min.x, menu_rect.Max.y + menu_bar - parent_rect.Min.y
+            window_rect.Min.x - parent_rect.Min.x,
+            menu_rect.Max.y + menu_bar_height - parent_rect.Min.y
         };
 
         m_scene_color_resolution = {scene_size.x, scene_size.y};
@@ -764,29 +767,31 @@ void EditorUI::ShowViewportWindow(
         m_scene_color_pos.y > 0.f ? static_cast<uint>(m_scene_color_pos.y) : 0u
     );
 
-    static constexpr float border = 4.f;
+    // A drag controls the camera only when it starts inside the rendered viewport.
+    static constexpr float k_viewport_border = 4.f;
 
-    const float  scene_color_top = menu_rect.Max.y + (m_b_separate_window ? 0.f : menu_bar);
-    const ImVec2 scene_color_min = ImVec2(window_rect.Min.x + border, scene_color_top + border);
+    const float  scene_color_top = menu_rect.Max.y + (separate_window ? 0.f : menu_bar_height);
+    const ImVec2 scene_color_min =
+        ImVec2(window_rect.Min.x + k_viewport_border, scene_color_top + k_viewport_border);
     const ImVec2 scene_color_max = ImVec2(
-        window_rect.Min.x + m_scene_color_resolution.x - border,
-        scene_color_top + m_scene_color_resolution.y - border
+        window_rect.Min.x + m_scene_color_resolution.x - k_viewport_border,
+        scene_color_top + m_scene_color_resolution.y - k_viewport_border
     );
     const ImVec2 mouse_pos = ImGui::GetMousePos();
 
-    const bool b_scene_color_hovered = mouse_pos.x > scene_color_min.x && mouse_pos.x < scene_color_max.x &&
-                                       mouse_pos.y > scene_color_min.y && mouse_pos.y < scene_color_max.y;
+    const bool scene_color_hovered = mouse_pos.x > scene_color_min.x && mouse_pos.x < scene_color_max.x &&
+                                     mouse_pos.y > scene_color_min.y && mouse_pos.y < scene_color_max.y;
 
-    const bool b_mouse_clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                                 ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
-                                 ImGui::IsMouseClicked(ImGuiMouseButton_Right);
-    const bool b_mouse_down    = WindowInput::Get().mouse_button_state[MouseButtons::Left] ||
-                                 WindowInput::Get().mouse_button_state[MouseButtons::Middle] ||
-                                 WindowInput::Get().mouse_button_state[MouseButtons::Right];
+    const bool mouse_clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                               ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
+                               ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+    const bool mouse_down = WindowInput::Get().mouse_button_state[MouseButtons::Left] ||
+                            WindowInput::Get().mouse_button_state[MouseButtons::Middle] ||
+                            WindowInput::Get().mouse_button_state[MouseButtons::Right];
 
-    if (!b_mouse_down) {
+    if (!mouse_down) {
         m_b_scene_color_mouse_captured = false;
-    } else if (!m_b_scene_color_mouse_captured && b_mouse_clicked && b_scene_color_hovered) {
+    } else if (!m_b_scene_color_mouse_captured && mouse_clicked && scene_color_hovered) {
         m_b_scene_color_mouse_captured     = true;
         WindowInput::Get().is_cursor_dirty = true;
         WindowInput::Get().cursor_delta_x  = 0.f;
@@ -795,115 +800,7 @@ void EditorUI::ShowViewportWindow(
 
     WindowInput::Get().is_active =
         m_b_scene_color_mouse_captured ||
-        (b_scene_color_hovered && WindowInput::Get().key_button_switch_state[KeyButtons::F]);
-
-    ImGui::End();
-}
-
-void EditorUI::ShowSceneColor() {
-    ImGuiIO&         io           = ImGui::GetIO();
-    ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_MenuBar;
-
-    const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
-    if (!m_b_show_scene_color) {
-        m_b_scene_color_mouse_captured              = false;
-        WindowInput::Get().is_active                = false;
-        WindowInput::Get().m_scene_color_resolution = uint2(0u, 0u);
-        WindowInput::Get().m_scene_color_pos        = uint2(0u, 0u);
-        return;
-    }
-    if (!ImGui::Begin("Scene Color", &m_b_show_scene_color, window_flags)) {
-        m_b_scene_color_mouse_captured              = false;
-        WindowInput::Get().is_active                = false;
-        WindowInput::Get().m_scene_color_resolution = uint2(0u, 0u);
-        WindowInput::Get().m_scene_color_pos        = uint2(0u, 0u);
-        ImGui::End();
-        return;
-    }
-
-    float2 scene_size = {0, 0};
-
-    static float2 xy_ratio = {16, 9};
-    // auto          menu_rect = ImGui::GetCurrentWindow()->MenuBarRect();
-
-    auto* current_window      = ImGui::FindWindowByName("Scene Color");
-    bool  m_b_separate_window = current_window->ParentWindow == nullptr;
-    auto  menu_rect           = current_window->MenuBarRect();
-    auto  menu_bar            = current_window->MenuBarHeight();
-
-    scene_size.x = current_window->Size.x;
-    scene_size.y = current_window->Size.y + current_window->Pos.y - menu_rect.Max.y; // what is this?
-
-    auto   window_rect = current_window->Rect(); // this is main window rect
-    ImRect parent_rect{};
-
-    if (m_b_separate_window) {
-
-        parent_rect = {
-            current_window->Pos.x,
-            current_window->Pos.y,
-            current_window->Pos.x + current_window->Size.x,
-            current_window->Pos.y + current_window->Size.y
-        };
-
-        float2 local_pos = {window_rect.Min.x - parent_rect.Min.x, menu_rect.Max.y - parent_rect.Min.y};
-
-        m_scene_color_resolution = {scene_size.x, scene_size.y};
-        m_scene_color_pos        = {local_pos.x, local_pos.y};
-    } else {
-        parent_rect = current_window->ParentWindow->Rect();
-
-        float2 local_pos = {
-            window_rect.Min.x - parent_rect.Min.x, menu_rect.Max.y + menu_bar - parent_rect.Min.y
-        };
-
-        m_scene_color_resolution = {scene_size.x, scene_size.y};
-        m_scene_color_pos        = {local_pos.x, local_pos.y};
-    }
-
-    WindowInput::Get().m_scene_color_resolution = uint2(
-        m_scene_color_resolution.x > 0.f ? static_cast<uint>(m_scene_color_resolution.x) : 0u,
-        m_scene_color_resolution.y > 0.f ? static_cast<uint>(m_scene_color_resolution.y) : 0u
-    );
-    WindowInput::Get().m_scene_color_pos = uint2(
-        m_scene_color_pos.x > 0.f ? static_cast<uint>(m_scene_color_pos.x) : 0u,
-        m_scene_color_pos.y > 0.f ? static_cast<uint>(m_scene_color_pos.y) : 0u
-    );
-
-    // inject. Needs to be refactored (camera control)
-    // 鼠标按下起点在SceneColor内时，才捕获本次拖拽并控制摄像机
-    static constexpr float border = 4.f;
-
-    const float  scene_color_top = menu_rect.Max.y + (m_b_separate_window ? 0.f : menu_bar);
-    const ImVec2 scene_color_min = ImVec2(window_rect.Min.x + border, scene_color_top + border);
-    const ImVec2 scene_color_max = ImVec2(
-        window_rect.Min.x + m_scene_color_resolution.x - border,
-        scene_color_top + m_scene_color_resolution.y - border
-    );
-    const ImVec2 mouse_pos = ImGui::GetMousePos();
-
-    const bool b_scene_color_hovered = mouse_pos.x > scene_color_min.x && mouse_pos.x < scene_color_max.x &&
-                                       mouse_pos.y > scene_color_min.y && mouse_pos.y < scene_color_max.y;
-
-    const bool b_mouse_clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                                 ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
-                                 ImGui::IsMouseClicked(ImGuiMouseButton_Right);
-    const bool b_mouse_down    = WindowInput::Get().mouse_button_state[MouseButtons::Left] ||
-                                 WindowInput::Get().mouse_button_state[MouseButtons::Middle] ||
-                                 WindowInput::Get().mouse_button_state[MouseButtons::Right];
-
-    if (!b_mouse_down) {
-        m_b_scene_color_mouse_captured = false;
-    } else if (!m_b_scene_color_mouse_captured && b_mouse_clicked && b_scene_color_hovered) {
-        m_b_scene_color_mouse_captured     = true;
-        WindowInput::Get().is_cursor_dirty = true;
-        WindowInput::Get().cursor_delta_x  = 0.f;
-        WindowInput::Get().cursor_delta_y  = 0.f;
-    }
-
-    WindowInput::Get().is_active =
-        m_b_scene_color_mouse_captured ||
-        (b_scene_color_hovered && WindowInput::Get().key_button_switch_state[KeyButtons::F]);
+        (scene_color_hovered && WindowInput::Get().key_button_switch_state[KeyButtons::F]);
 
     ImGui::End();
 }
@@ -1018,7 +915,7 @@ void EditorUI::ShowConfig(Scene& scene) {
     ImGui::End();
 }
 
-void EditorUI::ResetState() {
+void EditorUI::ResetFrameState() {
     m_b_need_reload = false;
 }
 
@@ -1041,12 +938,12 @@ void EditorUI::SyncWindowVisibilitySettings() {
     EditorUISettings::StoreWindowVisibilitySettings(settings);
 }
 
-void EditorUI::RegisterUIFunc(std::string _name, std::function<void()>&& _func) {
-    m_show_func_map[_name] = std::move(_func);
+void EditorUI::RegisterUIFunc(std::string name, std::function<void()>&& callback) {
+    m_show_func_map[std::move(name)] = std::move(callback);
 }
 
-void EditorUI::UnregisterUIFunc(std::string _name) {
-    m_show_func_map.erase(_name);
+void EditorUI::UnregisterUIFunc(std::string name) {
+    m_show_func_map.erase(name);
 }
 
 } // namespace Moer

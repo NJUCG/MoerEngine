@@ -1,5 +1,7 @@
 #include "EditorUISettings.h"
 
+// Persists top-level editor window visibility in a dedicated ImGui ini settings section.
+
 #include <imgui.h>
 #include <imgui_internal.h>
 

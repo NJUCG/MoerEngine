@@ -1,5 +1,7 @@
 #pragma once
 
+// Wraps the native scene-file picker and normalizes its result for editor callers.
+
 #include "log/LogSystem.h"
 
 #include <array>

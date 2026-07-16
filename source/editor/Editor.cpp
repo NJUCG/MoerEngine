@@ -4,17 +4,13 @@
 
 #include "EditorUI.h"
 
-#include <cassert>
-#include <nfd.hpp>
-
-// namespace
 using namespace Moer::Render;
 
 namespace Moer {
 
-Editor::Editor() {}
+Editor::Editor() = default;
 
-Editor::~Editor() {}
+Editor::~Editor() = default;
 
 void Editor::Init(int argc, const char** argv) {
     m_engine = MakeUnique<Engine>();
@@ -26,14 +22,13 @@ void Editor::Run() {
 }
 
 void Editor::Run(const ExtraHooks& extra_hooks) {
-    // init
+    // The UI lifetime is bounded by Engine::Run because its renderer resources depend on the active engine.
     m_editor_ui = MakeUnique<EditorUI>(
         MakeUnique<Render::UIRenderer>(RenderDevice::Get()),
         m_engine->GetEditorConfig(),
         m_engine->GetRemoteModuleController()
     );
 
-    // run
     m_engine->Run(
         EngineHooks{
             // Common
@@ -51,13 +46,13 @@ void Editor::Run(const ExtraHooks& extra_hooks) {
                     UiCombinePass* ui_combine_pass,
                     CommandList&   cmd_list,
                     TextureView    input_color_texture,
-                    TextureView    input_ui_texture, // TODO: is this necessary?
+                    TextureView    input_ui_texture,
                     TextureView    default_output_texture
                 ) {
                     const auto window_frame_buffer = m_editor_ui->GetWindowFrameBuffer();
                     return ui_combine_pass->Process(
                         cmd_list,
-                        m_editor_ui->IsSeperateWindow(),
+                        m_editor_ui->IsSeparateWindow(),
                         m_editor_ui->GetConfig()->GetResolution(),
                         m_editor_ui->GetSceneColorPos(),
                         m_editor_ui->GetSceneColorResolution(),
@@ -71,7 +66,7 @@ void Editor::Run(const ExtraHooks& extra_hooks) {
                 [this]() {
                     return UiCompositionFrameData{
                         .enabled                = true,
-                        .separate_window        = m_editor_ui->IsSeperateWindow(),
+                        .separate_window        = m_editor_ui->IsSeparateWindow(),
                         .output_resolution      = m_editor_ui->GetConfig()->GetResolution(),
                         .scene_color_position   = m_editor_ui->GetSceneColorPos(),
                         .scene_color_resolution = m_editor_ui->GetSceneColorResolution(),
@@ -83,12 +78,12 @@ void Editor::Run(const ExtraHooks& extra_hooks) {
                     return m_editor_ui->CaptureDrawFrame();
                 },
             .on_register_ui_func =
-                [this](std::string name, std::function<void(void)> lambda) {
-                    m_editor_ui->RegisterUIFunc(name, std::move(lambda));
+                [this](std::string name, std::function<void()> callback) {
+                    m_editor_ui->RegisterUIFunc(std::move(name), std::move(callback));
                 },
             .on_unregister_ui_func =
                 [this](std::string name) {
-                    m_editor_ui->UnregisterUIFunc(name);
+                    m_editor_ui->UnregisterUIFunc(std::move(name));
                 },
             .on_show_config_sub_ui =
                 [this]() {
@@ -103,8 +98,7 @@ void Editor::Run(const ExtraHooks& extra_hooks) {
         }
     );
 
-    // release
-    m_editor_ui.reset(); // 释放EditorUI资源
+    m_editor_ui.reset();
 }
 
 void Editor::ShutDown() {

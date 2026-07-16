@@ -1,5 +1,7 @@
 #pragma once
 
+// Owns the editor-facing lifetime around Engine and wires editor UI callbacks into the runtime loop.
+
 #include "misc/STL.h"
 
 #include <functional>

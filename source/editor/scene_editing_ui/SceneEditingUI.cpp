@@ -1,5 +1,7 @@
 #include "SceneEditingUI.h"
 
+// Hosts small scene-editing tools and explicit scene-test triggers used during development.
+
 #include "scene/Scene.h"
 #include "scene/editing/SceneEditing.h"
 #include "scene/testcase/SceneTestSuiteRunner.h"
@@ -10,7 +12,9 @@
 
 namespace Moer {
 
-static EProceduralPrimitiveShape GetProceduralShapeFromIndex(int shape_index) {
+namespace {
+
+EProceduralPrimitiveShape GetProceduralShapeFromIndex(int shape_index) {
     switch (shape_index) {
         case 1:
             return EProceduralPrimitiveShape::FacetedSphere;
@@ -20,7 +24,7 @@ static EProceduralPrimitiveShape GetProceduralShapeFromIndex(int shape_index) {
     }
 }
 
-static std::string_view GetProceduralShapeName(EProceduralPrimitiveShape shape) {
+std::string_view GetProceduralShapeName(EProceduralPrimitiveShape shape) {
     switch (shape) {
         case EProceduralPrimitiveShape::Cube:
             return "Runtime UI Cube";
@@ -29,6 +33,8 @@ static std::string_view GetProceduralShapeName(EProceduralPrimitiveShape shape) 
     }
     return "Runtime UI Procedural Renderable";
 }
+
+} // namespace
 
 SceneEditingUI::SceneEditingUI(SceneTestCaseConfig& test_case_config) :
     m_test_case_config(test_case_config) {}

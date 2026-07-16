@@ -1,5 +1,7 @@
 #include "CooperativeOpsUI.h"
 
+// Keeps cooperative-operation controls and diagnostics separate from the main raster settings panel.
+
 #include <imgui.h>
 
 namespace Moer {
@@ -15,13 +17,13 @@ void CooperativeOpsUI::ShowConfig() {
         return;
     }
 
-    auto draw_border = []() {
-        ImVec2 min = ImGui::GetItemRectMin();
-        ImVec2 max = ImGui::GetItemRectMax();
+    const auto draw_border = []() {
+        const ImVec2 min = ImGui::GetItemRectMin();
+        const ImVec2 max = ImGui::GetItemRectMax();
         ImGui::GetWindowDrawList()->AddRect(min, max, IM_COL32(255, 255, 255, 255));
     };
 
-    auto& status = m_config.cooperative_ops_status;
+    const auto& status = m_config.cooperative_ops_status;
 
     if (ImGui::Selectable("Enable", m_config.cooperative_ops_enabled)) {
         m_config.cooperative_ops_enabled = true;

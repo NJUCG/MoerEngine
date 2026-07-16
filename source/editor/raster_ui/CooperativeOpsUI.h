@@ -1,5 +1,7 @@
 #pragma once
 
+// Displays cooperative matrix/vector capability and runtime status for the raster renderer.
+
 #include "Core.h"
 #include "renderer/raster/RasterConfig.h"
 
