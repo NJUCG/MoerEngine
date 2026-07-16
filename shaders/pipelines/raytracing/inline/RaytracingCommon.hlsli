@@ -133,10 +133,7 @@ GeometryRecord GetGeometryRecordFrom(
     // 4. 从 MegaBuffer 读取三角形索引
     ArrayBuffer index_buf   = ArrayBuffer(_param.index_buf_hdl);
     uint        index_start = geo_record.primitive.index_start_idx; // in uint
-    uint3       indices;
-    indices.x = index_buf.Load<uint>(index_start + _prim_idx * 3);
-    indices.y = index_buf.Load<uint>(index_start + _prim_idx * 3 + 1);
-    indices.z = index_buf.Load<uint>(index_start + _prim_idx * 3 + 2);
+    uint3       indices     = index_buf.Load<uint3>(_prim_idx, index_start * sizeof(uint));
 
     // 5. 计算重心坐标
     float3 barycentrics;

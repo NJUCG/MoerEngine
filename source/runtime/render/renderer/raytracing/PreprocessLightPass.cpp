@@ -77,9 +77,10 @@ void PrepareLightPass::Process(
 ) {
     Array<PrepareLightsTask>    tasks;
     Array<PolymorphicLightInfo> primitive_light_infos;
-    UnorderedMap<uint, uint>    primitive_to_light_offset_map;
+    Array<uint>                 primitive_to_light(scene_snapshot.primitive_count, s_invalid_light_idx);
 
-    uint light_buffer_offset = 0;
+    uint light_buffer_offset          = 0;
+    uint num_emissive_triangle_lights = 0;
     for (const auto& primitive : scene_snapshot.emissive_primitives) {
         const auto previous = instance_light_buffer_offsets.find(primitive.stable_key);
 
@@ -91,25 +92,14 @@ void PrepareLightPass::Process(
         task.index_start_idx    = primitive.index_start_idx;
         task.first_instance_idx = primitive.first_instance_idx;
 
-        primitive_to_light_offset_map[primitive.primitive_id] = light_buffer_offset;
-        instance_light_buffer_offsets[primitive.stable_key]   = light_buffer_offset;
+        if (primitive.primitive_id >= primitive_to_light.size()) {
+            primitive_to_light.resize(primitive.primitive_id + 1, s_invalid_light_idx);
+        }
+        primitive_to_light[primitive.primitive_id]          = light_buffer_offset;
+        instance_light_buffer_offsets[primitive.stable_key] = light_buffer_offset;
         light_buffer_offset += task.num_triangles;
+        num_emissive_triangle_lights += task.num_triangles;
         tasks.emplace_back(task);
-    }
-
-    const uint num_primitive_lights = light_buffer_offset;
-
-    uint max_primitive_id = 0;
-    for (const auto& mapping : primitive_to_light_offset_map) {
-        max_primitive_id = std::max(max_primitive_id, mapping.first);
-    }
-    max_primitive_id = std::max(
-        max_primitive_id, scene_snapshot.primitive_count > 0 ? scene_snapshot.primitive_count - 1 : 0
-    );
-
-    Array<uint> primitive_to_light(max_primitive_id + 1, s_invalid_light_idx);
-    for (const auto& [primitive_id, light_offset] : primitive_to_light_offset_map) {
-        primitive_to_light[primitive_id] = light_offset;
     }
 
     uint num_finite_primitive_lights   = 0;
@@ -221,7 +211,7 @@ void PrepareLightPass::Process(
 
     rt_ctx.is_ctx.SetLightBufferParams(
         params.cur_light_offset,
-        num_finite_primitive_lights + num_primitive_lights,
+        num_finite_primitive_lights + num_emissive_triangle_lights,
         num_infinite_primitive_lights,
         num_environment_lights
     );
