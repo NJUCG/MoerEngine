@@ -1206,3 +1206,20 @@ python tools\threading\run_matrix.py --set full --continue-on-failure
 - TechRecord 研究记录：`20_技术文档/引擎架构/MoerEngine/RT_RHI_Threading/15_Phase9_并行命令录制前置设计与可行性.md`。
 - TechRecord 提交：`9e91d56 docs(threading): 规划 Phase 9 并行命令录制`；方案收敛提交：`20ea618 docs(threading): 收敛 Phase 9 recorder 边界`，`origin/main=20ea618`。
 - 下一步：等待用户确认；确认后必须使用 `implement-moer-feature` 工作流从 Phase 9.0 开始，小步构建、运行、观察与阶段提交。若 eligible recording 收益空间不足，则停在诊断/契约阶段。
+
+### 2026-07-16：Phase 9.0 串行录制测量与契约冻结
+
+- 目标：只在现有 Vulkan 串行 recorder 上测量真实 CPU 录制成本并冻结可自动验证的 serial golden；用 Release 数据决定是否值得进入 Phase 9.1/9.2，不实现真实并行 command buffer，也不删除 Phase 8 serial edge。
+- 主要改动：为全部 `21` 种 RHI command 建立显式 capability 表，当前全部保持 `SerialOnly`；新增 dedicated `ExternalCpuJoinPool`、逐 command/layer 诊断与保守收益预测、来自实际提交录制点的 command/layer/barrier/descriptor/query semantic golden、fail-closed unresolved/opaque 统计和 opt-in strict verifier；同时修复 reorderer 的嵌套 scope、subresource range、hazard/layer、barrier 清理和 descriptor 边界等串行契约问题。External join 仅是经过单测的后续基础设施，本阶段没有接入真实 recorder worker。
+- MoerEngine 功能提交：`ec0dfdf4f6bae3fef6c0b517cda63b35f86fed42`（`feat(threading): 冻结 Phase 9.0 串行录制契约`），已推送到 `origin/feature/rt-rhi-threading`。
+- 构建：本机无 `just`，等价执行 Debug `cmake --build build --config Debug --target TestExternalCpuJoin TestRHIRecordDiagnostics TestRHICmdReorderer TestRenderGraph TestTaskGraph MoerEditor --parallel 8` 和 Release `cmake --build build --config Release --target MoerEditor --parallel 8`，均 PASS；`py_compile`、runner dry-run/list、strict 合成断言和 `git diff --check` 均 PASS。
+- 定向测试：`TestExternalCpuJoin`、`TestRHIRecordDiagnostics`、`TestRHICmdReorderer`、`TestRenderGraph`、`TestTaskGraph` 全部 PASS，覆盖 join 重入/异常/drain/reuse、21 类 capability、golden 稳定性与 reorderer hazard/barrier 契约。
+- Debug 回归：full `9/9 PASS`、RenderGraph `7/7 PASS`、关键资源 `8/8 PASS`、fault `1/1 PASS`、显式 synchronization validation `1/1 PASS`；最终 threaded profile-off `target/validation/rt_rhi/phase9_0/debug_threaded_profile_off` 为 `1/1 PASS`，且 `[ThreadingProfile]` 匹配为 `0`，证明 profile-off 仍走无新增诊断时钟、哈希、分配、格式化和输出的串行路径。
+- 最终 Release Gate：固定 Sponza Raster、RT/RHI thread on、lag 1、每次取最后 `5` 个一秒稳态 tail window；`target/validation/rt_rhi/phase9_0/release_linear_timingfix` 与 `target/validation/rt_rhi/phase9_0/release_graph_timingfix` 各独立运行 `3` 次，六轮全部 PASS。共 `1975/1975` 个所选 tail submission golden complete，incomplete/unresolved/opaque 均为 `0`；每次为 `51` layers、`64` commands、`45` 个 measurement candidates、`0` 个 safe candidates，仅 `1` 层具并行形状且只有 `2` 个 candidate。
+- 性能结论：六轮 eligible work 仅 `0.0128~0.0156 ms`，约为 recorder wall 的 `6.7%~7.4%`，远低于 `0.2 ms` 和 `15%` 双门槛；加入保守 join 成本后 projected net 全部为负，因此结论为 **STOP**，不是进入真实 parallel CB 的正确性阻塞。
+- Golden 摘要：Command=`1ace03aa109a61b8`、Layer=`c611607ad03e3ff7`、Barrier=`97cc4f20495e0b46`、Descriptor=`a466bd73913bcc89`、Query=`99ddfe3a44fd2539`、Combined=`4069ad6829e2562b`、Manifest=`0951b1e00ae81063`；同一 scenario 的 repeat 与每次所选 tail-window manifest 均稳定，linear/graph 之间也经显式对照一致。
+- 视觉与错误扫描：配对资源中 BaseColor 与 LinearDepth exact，Normal MAE=`0.106220`、RMSE=`1.35616`、p99=`6`、RGB<=2 ratio=`0.968126`，通过阈值；正常矩阵未发现 assertion、VUID、SYNC-HAZARD、unexpected device lost、submit failure 或 tracked-resource residue。根 `MoerEngine.toml` 的开发者 Raytracing 配置未覆盖，所有运行均使用隔离生成配置。
+- TechRecord 实施记录：`20_技术文档/引擎架构/MoerEngine/RT_RHI_Threading/16_Phase9.0串行录制测量与契约冻结.md`，并同步更新 `00_调研与初步方向.md`。
+- TechRecord 提交：`9ba9ff9a9b9840ceb0c258b4560dbc321562db07`（`docs(threading): 记录 Phase 9.0 串行录制契约`），已推送到 `origin/main`。
+- 已知限制：`1975/1975` 完整性只适用于固定 Raster 场景所选的最后五个稳态 tail window；启动/过渡 submission 与 Raytracing/Custom 路径仍可能按设计 fail closed，未宣称全路径 100% complete；尚未做其他 GPU/driver/backend 的交叉验收。
+- 下一步：保持 **STOP**。不要进入 Phase 9.1/9.2，不要实现真实 parallel CB，也绝不能删除 Phase 8 serial edge。只有工作负载实质变化、重新采集至少三轮 Release 数据并同时超过 `0.2 ms` eligible work 与 `15%` recorder wall 两个门槛后，才重新评估后续阶段。
