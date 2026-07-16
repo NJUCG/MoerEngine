@@ -1,3 +1,4 @@
+// 负责 Scene 的加载、导入、重置与缓存生命周期，并维护运行时场景的重建状态。
 #include "Scene.h"
 #include "SceneInternal.h"
 
@@ -108,45 +109,38 @@ void AppendMegaBuffers(entt::registry& target_registry, const entt::registry& so
 
 } // namespace
 
-///////////////////////
 // MARK: 生命周期 API
-///////////////////////
 
 Scene::Scene() = default;
 
 void Scene::LoadSceneInternal(const std::filesystem::path& file_path) {
     ScopedLogTimer startup_timer("[Startup][Scene] LoadSceneInternal total");
 
-    // start
-    this->m_scene_load_info.Reset();
-    this->m_scene_load_info.StartLoading();
+    m_scene_load_info.Reset();
+    m_scene_load_info.StartLoading();
 
     m_cpu_scene.reset();
     m_logical_scene.reset();
 
-    // 1. logical scene
+    // 先加载逻辑场景，再基于其完整快照重建 CPU 场景。
     SceneLoadRequest request{};
     request.file_path = file_path;
-    SceneImportResult result{};
-    result = LoaderInterface::LoadScene(request);
+    SceneImportResult result = LoaderInterface::LoadScene(request);
 
-    // failed in LogicalScene loading
     if (!result) {
         LOG_ERROR("Scene load failed: path={}", file_path.string());
-        this->m_scene_load_info.Reset();
+        m_scene_load_info.Reset();
         return;
     }
-    this->m_logical_scene = std::move(result.logical_scene);
+    m_logical_scene = std::move(result.logical_scene);
 
-    // 2. cpu scene
-    this->m_cpu_scene = MakeUnique<CpuScene>(*this->m_logical_scene);
+    m_cpu_scene = MakeUnique<CpuScene>(*m_logical_scene);
 
-    // 3. renderer-side scene update
-    this->m_has_pending_gpu_scene_update = true;
+    // GPU 场景由渲染线程在后续 Tick 中统一重建。
+    m_has_pending_gpu_scene_update = true;
 
-    // finish
     m_source_file_path = file_path;
-    this->m_scene_load_info.FinishLoading();
+    m_scene_load_info.FinishLoading();
 }
 
 void Scene::LoadSceneFromFileAsync(const std::filesystem::path& file_path) {

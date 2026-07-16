@@ -1,3 +1,4 @@
+// 负责将 Assimp 场景转换为 LogicalScene，并组装网格、材质、节点、相机和灯光数据。
 #include "Parser.h"
 
 #include "ClusterBuilder.h"
@@ -36,31 +37,26 @@ int32_t GetEmbeddedTextureId(const std::string& path) {
     return -1;
 }
 
-// PImpl模式，转发
 bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::filesystem::path& file_path) {
-    // MARK: Assimp
-
-    // ai_scene资源的持有者是importer，所以需要注意importer生命周期
+    // aiScene 由 importer 持有，因此 importer 必须覆盖整个转换过程。
     Assimp::Importer importer;
 
     const aiScene* ai_scene = ([&]() -> const aiScene* {
-        auto path = std::filesystem::weakly_canonical(file_path);
+        const auto canonical_path = std::filesystem::weakly_canonical(file_path);
 
-        if (!std::filesystem::exists(path)) {
-            LOG_WARNING("File not exist: {}", path.string());
+        if (!std::filesystem::exists(canonical_path)) {
+            LOG_WARNING("File not exist: {}", canonical_path.string());
             LOG_WARNING("Please check the `scene_path` in source/configs/MoerEngine.toml.");
             return nullptr;
         }
 
-        const aiScene* gltf_scene = importer.ReadFile(
+        const aiScene* imported_scene = importer.ReadFile(
             file_path.string(),
             aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_GenBoundingBoxes | aiProcess_GenNormals |
-                aiProcess_CalcTangentSpace
-                /* 后面两个是新加的 */
-                | aiProcess_RemoveRedundantMaterials | aiProcess_OptimizeMeshes
+                aiProcess_CalcTangentSpace | aiProcess_RemoveRedundantMaterials | aiProcess_OptimizeMeshes
         );
 
-        if (gltf_scene == nullptr) {
+        if (imported_scene == nullptr) {
             LOG_WARNING(
                 "Failed to load gltf file: {}. Assimp error: {}",
                 file_path.string(),
@@ -69,23 +65,17 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             return nullptr;
         }
 
-        return gltf_scene;
+        return imported_scene;
     }());
 
     if (ai_scene == nullptr) {
         return false;
     }
 
-    /**
-     * MARK: Tools Functions
-     */
+    // Assimp 类型到引擎数学类型的局部转换函数。
 
     auto color4_to_float4 = [](const aiColor4D& ai_vec) -> float4 {
         return float4{ai_vec.r, ai_vec.g, ai_vec.b, ai_vec.a};
-    };
-
-    auto quat_to_float4 = [](const aiQuaternion& ai_quat) -> float4 {
-        return float4{ai_quat.x, ai_quat.y, ai_quat.z, ai_quat.w};
     };
 
     auto color3_to_float3 = [](const aiColor3D& ai_vec) -> float3 {
@@ -97,8 +87,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
     };
 
     auto to_float4x4 = [](const aiMatrix4x4& ai_mat) -> float4x4 {
-        // aiMatrix4x4 is row-major
-        // float4x4 is row-major
+        // 两种矩阵均为行主序，可按元素直接复制。
         return float4x4{
             {ai_mat[0][0], ai_mat[0][1], ai_mat[0][2], ai_mat[0][3]},
             {ai_mat[1][0], ai_mat[1][1], ai_mat[1][2], ai_mat[1][3]},
@@ -111,18 +100,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         return "(" + std::to_string(ai_color.r) + ", " + std::to_string(ai_color.g) + ", " +
                std::to_string(ai_color.b) + ")";
     };
-    auto color4_to_string = [](const aiColor4D& ai_color) -> std::string {
-        return "(" + std::to_string(ai_color.r) + ", " + std::to_string(ai_color.g) + ", " +
-               std::to_string(ai_color.b) + ", " + std::to_string(ai_color.a) + ")";
-    };
-    auto vec3_to_string = [](const aiVector3D& ai_vec) -> std::string {
-        return "(" + std::to_string(ai_vec.x) + ", " + std::to_string(ai_vec.y) + ", " +
-               std::to_string(ai_vec.z) + ")";
-    };
-
-    // MARK: Initialize Logical Scene
-
-    // TODO: 把这些code独立出去
+    // 解析结果会完整覆盖传入的逻辑场景，并重新建立合并顶点缓冲。
 
     auto& r = out_logical_scene.r();
 
@@ -137,10 +115,10 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
     auto& uv0_buf   = mega_bufs.texcoord0;
     auto& idx_buf   = mega_bufs.index;
 
-    // MARK: 准备Mesh&Bufs
+    // MARK: 预留网格缓冲
 
     {
-        // 先遍历一遍所有mesh，初始化每个buf大小
+        // 先统计源网格规模，避免后续追加数据时反复扩容。
 
         uint32 vtx_cnt = 0;
         uint32 idx_cnt = 0;
@@ -159,7 +137,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         idx_buf.reserve(idx_cnt);
     }
 
-    // MARK: Load Meshes
+    // MARK: 加载网格
     gtl::flat_hash_map<const aiMesh*, Array<entt::entity>>    mesh_entity_map;
     gtl::flat_hash_map<const aiMesh*, ClusterBuildResult>     mesh_cluster_build_results;
     {
@@ -265,7 +243,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             source_vtx_cnt += mesh_stats.source_vertex_count;
             source_idx_cnt += mesh_stats.source_index_count;
 
-            // TODO: Support TexCoord1
+            // TODO: 支持第二套纹理坐标 TexCoord1。
             if (mesh->HasTextureCoords(1)) {
                 static bool first_time = true;
                 if (first_time) {
@@ -360,11 +338,11 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         }
     }
 
-    // MARK: Build Primitive Hash
+    // MARK: 构建 Primitive Hash
 
     out_logical_scene.SBuildPrimitiveHash();
 
-    // MARK: Load Textures
+    // MARK: 加载纹理
 
     // 支持多线程加载纹理
     gtl::parallel_flat_hash_map<std::string, entt::entity> tex_map;
@@ -414,17 +392,14 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             }
         }
 
-        // load texture single
-
-        // 加载ImageReadDesc
+        // 为每个纹理生成读取参数。
         auto load_image_desc = [&](const std::string& texture_path) {
-            // TODO: 这里没有重构过，需要检查是否有bug
-            // 可能存在的问题：① channel和format ② mipmap
+            // 调整此处推导规则时，需要同时验证 channel/format 匹配和 mipmap 生成路径。
 
             const int32 embedded_id = GetEmbeddedTextureId(texture_path);
 
             const uint32 preferred_channel   = 4;
-            const bool   is_generate_mipmaps = true; // 暂定mipmap直接读取
+            const bool   is_generate_mipmaps = true;
 
             if (embedded_id >= 0) {
                 const aiTexture* texture = ai_scene->mTextures[embedded_id];
@@ -460,9 +435,8 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             return filename.empty() ? texture_path : filename;
         };
 
-        // 初始化CTexture
+        // 将读取结果复制到 CTexture，并按约定释放 ImageIO 返回的数据。
         auto update_c_texture = [&](ecs::CTexture& c_texture, const ImageReadDesc& image_desc) {
-            // copy
             c_texture.format            = image_desc.format;
             c_texture.width             = image_desc.width;
             c_texture.height            = image_desc.height;
@@ -473,12 +447,10 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 reinterpret_cast<uint8*>(image_desc.data), image_desc.data_size, c_texture.data.data()
             );
 
-            // call back
             if (image_desc.data_callback != nullptr) {
                 image_desc.data_callback(image_desc.data);
             }
 
-            // assert
             assert(
                 image_desc.channel == Render::GetChannelFromPixelFormat(image_desc.format) &&
                 "Image channel does not match its format."
@@ -499,7 +471,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             tex_map[texture_path] = entity;
         }
 
-        // 加载单个纹理并创建对应的entity和CTexture
+        // 加载单个纹理并写入预先创建的 CTexture。
         auto load_texture = [&](const std::string& texture_path) -> bool {
             ImageReadDesc image_desc = load_image_desc(texture_path);
 
@@ -515,8 +487,6 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
 
             return true;
         };
-
-        // multi-thread load textures
 
         const bool is_multi_thread = true;
 
@@ -596,7 +566,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         }
     }
 
-    // MARK: Load Materials
+    // MARK: 加载材质
 
     std::stringstream mat_ss;
     mat_ss << "\nMaterial Info: \n";
@@ -752,8 +722,6 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             mat_map[material_name]          = entity;
             material_index_to_entity_map[i] = entity;
 
-            // Load Data
-
             mat_ss << "\tLoading Material: " << material_name << "\n";
 
             load_normal_map(c_material, material);
@@ -771,7 +739,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         }
     }
 
-    // MARK: 在CPrimitive上挂载Material Entity
+    // MARK: 在 CPrimitive 上挂载材质实体
     {
         // 遍历所有 mesh，将对应的 material entity 挂载到 primitive 上
         for (const auto& [mesh, primitive_entities] : mesh_entity_map) {
@@ -799,12 +767,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         }
     }
 
-    /**
-     * MARK: Preload Cameras and Lights
-     * 
-     * 因为assimp中，无法通过node定位camera和light，而是需要在camera和light中拿name去找
-     * 所以这里需要建立 name -> camera/light ptr 的 map
-     */
+    // Assimp 需要通过名称关联节点与相机/灯光，因此先建立名称到对象的映射。
 
     gtl::flat_hash_map<std::string, const aiCamera*> camera_map;
     gtl::flat_hash_map<std::string, const aiLight*>  light_map;
@@ -843,9 +806,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         }
     }
 
-    /**
-     * MARK: Camera & Light Tools
-     */
+    // MARK: 相机与灯光转换辅助函数
 
     auto is_mesh_node = [&](const aiNode* node) -> bool {
         return node->mNumMeshes > 0;
@@ -859,7 +820,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         return light_map.contains(node_name);
     };
 
-    // MARK: Mesh
+    // MARK: 网格节点
 
     gtl::flat_hash_map<uint64, entt::entity> mesh_node_map;
 
@@ -958,7 +919,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         c_mesh.primitive_entts.insert(c_mesh.primitive_entts.end(), all_nonleaf_entts.begin(), all_nonleaf_entts.end());
     };
 
-    // MARK: Camera
+    // MARK: 相机
 
     auto create_camera_to_node = [&](entt::entity node_entt, const aiNode* node) {
         const aiCamera* camera = camera_map[node->mName.C_Str()];
@@ -978,13 +939,12 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         float4 world_pos           = node_transform * position;
         float4 world_look_at       = node_transform * look_at;
         float4 world_up            = node_transform * up;
-        float4 world_loot_at_point = world_pos + world_look_at;
+        float4 world_look_at_point = world_pos + world_look_at;
 
-        Transform world2camera = Transform(float3(world_pos), float3(world_loot_at_point), float3(world_up));
+        Transform world2camera = Transform(float3(world_pos), float3(world_look_at_point), float3(world_up));
         Transform camera2world = Inverse(world2camera.GetMatrix4x4());
 
-        // The interpretation of 'mHorizontalFOV' is inconsistent among gltf2, fbx, and the documentation in the official Assimp version (5.4.2).
-        // In this project, we ensure 'mHorizontalFOV' is the 'half' of the horizontal field of view angle (at least in GLTF2 and FBX).
+        // Assimp 5.4.2 对不同格式的 mHorizontalFOV 解释不一致；项目统一按水平半视场角处理。
         float fov_y_deg = AI_RAD_TO_DEG(2.0f * atan(tan(camera->mHorizontalFOV) / camera->mAspect));
 
         c_camera.camera = Camera();
@@ -997,7 +957,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         );
     };
 
-    // MARK: Light
+    // MARK: 灯光
 
     auto create_light_to_node = [&](entt::entity node_entt, const aiNode* node) {
         const aiLight* light = light_map[node->mName.C_Str()];
@@ -1089,7 +1049,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         }
     };
 
-    // MARK: Load Node
+    // MARK: 加载节点
 
     uint32 total_node_cnt = 0;
     {
@@ -1108,7 +1068,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             out_scale               = float3(ai_scale.x, ai_scale.y, ai_scale.z);
         };
 
-        // Root Node
+        // 根节点
         const auto& root_node_entt = r.create();
         {
             r.emplace<ecs::CTagRootNode>(root_node_entt);
@@ -1118,7 +1078,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             // root_node_entt的深度默认为0，之后的depth会在UEmplaceNodeYToX中计算
         }
 
-        // Scene Meta Data
+        // 场景元数据
         {
             const auto& entity            = r.create();
             auto&       c_scene_meta_data = r.emplace<ecs::CSceneMetaData>(entity);
@@ -1127,17 +1087,15 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             c_scene_meta_data.scene_path     = file_path.string();
         }
 
-        // Traverse Nodes
+        // 遍历节点
         std::function<void(entt::entity, const aiNode*)> dfs_node = [&](const entt::entity x,
                                                                         const aiNode*      y) {
-            // x: current entity
-            // y: current aiNode
+            // x 为当前实体，y 为对应的 aiNode。
             total_node_cnt++;
 
-            // here, assert (1) x has been created (2) has CNode
+            // 遍历到此处时，实体应已创建并带有 CNode。
             assert((r.all_of<ecs::CNode>(x)) && "Entity has no CNode component.");
 
-            // get CNode
             auto& c_node = r.get<ecs::CNode>(x);
 
             // 基础数据
@@ -1151,12 +1109,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             }
             c_node.is_dirty = false;
 
-            /**
-             * traverse children
-             * 
-             * 需要设置c_node: first_child_entt, last_child_entt, child_count
-             * 需要设置c_child_node: parent_entt, prev_sibling_entt, next_sibling_entt
-             */
+            // 创建子实体时同步维护父子与兄弟链表关系。
 
             Array<entt::entity> child_entities;
             child_entities.reserve(y->mNumChildren);
@@ -1165,7 +1118,6 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 const auto& child_entity = r.create();
                 child_entities.emplace_back(child_entity);
 
-                // add CNode to child
                 auto& c_child_node = r.emplace<ecs::CNode>(child_entity);
 
                 out_logical_scene.UEmplaceNodeToParent(x, c_node, child_entity, c_child_node);
@@ -1203,18 +1155,12 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
 
             } else if (is_light) {
                 create_light_to_node(x, y);
-
-            } else {
-                // empty node, transform only
             }
 
             const std::string_view source_node_name =
                 r.all_of<ecs::CTagRootNode>(x) ? std::string_view{} : std::string_view(y->mName.C_Str());
             ecs::EnsureNodeName(r, x, source_node_name);
 
-            /**
-             * recursive traverse
-             */
             for (uint i = 0; i < y->mNumChildren; i++) {
                 dfs_node(child_entities[i], y->mChildren[i]);
             }
@@ -1245,46 +1191,18 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
     out_logical_scene.Update();
 
     {
-        // log
-
-        // log all nodes info
         std::stringstream ss;
         ss << "\nScene Info: \n";
 
-        // node & mesh
         ss << "\tTotal Node Count: " << total_node_cnt << "\n";
         ss << "\tAssimp Mesh Count: " << ai_scene->mNumMeshes << "\n";
 
-        // r.view<const ecs::CNode>().each([&](auto entity_id, const ecs::CNode& c_node) {
-        //     // get the num of mesh from CRenderable
-        //     uint mesh_cnt = 0;
-        //     if (r.all_of<ecs::CRenderable>(entity_id)) {
-        //         const auto& c_renderable = r.get<ecs::CRenderable>(entity_id);
-        //         if (c_renderable.mesh_entt != entt::null && r.valid(c_renderable.mesh_entt) &&
-        //             r.all_of<ecs::CMesh>(c_renderable.mesh_entt)) {
-        //             const auto& c_mesh = r.get<ecs::CMesh>(c_renderable.mesh_entt);
-        //             mesh_cnt           = static_cast<uint>(c_mesh.primitive_entts.size());
-        //         }
-        //     }
-
-        //     ss << "\t\tNode " << (uint32)entity_id << ": mesh count: " << mesh_cnt;
-
-        //     if (r.all_of<ecs::CNode>(entity_id)) {
-        //         const ecs::CNode& c_node = r.get<ecs::CNode>(entity_id);
-        //         ss << ": transform: " << c_node.d_world_transform.ToString(false, 3);
-        //     }
-
-        //     ss << "\n";
-        // });
-
-        // camera
         ss << "\tTotal Camera Count: " << camera_map.size() << ". Assimp: " << ai_scene->mNumCameras << "\n";
         for (const auto& [name, camera] : camera_map) {
             ss << "\t\tCamera " << name << ": " << camera->mPosition.x << ", " << camera->mPosition.y << ", "
                << camera->mPosition.z << "\n";
         }
 
-        // light
         ss << "\tTotal Light Count: " << light_map.size() << ". Assimp: " << ai_scene->mNumLights << "\n";
         for (const auto& [name, light] : light_map) {
             if (light->mType == aiLightSourceType::aiLightSource_DIRECTIONAL) {

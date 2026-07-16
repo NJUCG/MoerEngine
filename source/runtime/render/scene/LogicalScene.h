@@ -20,7 +20,7 @@ namespace Moer::ecs {
  * 改这里:
  * - 加组件或改字段: LogicalComponents.h
  * - 改节点树 / derived data / 哈希构建: LogicalScene.cpp
- * - 改外部场景 API 行为: SceneModify.cpp + SceneLifeCycle.cpp
+ * - 改外部场景 API 行为: SceneModify.cpp + SceneLifecycle.cpp
  *
  * 用法:
  * - parser / cache / editor 先写 LogicalScene

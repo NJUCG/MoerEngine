@@ -1,6 +1,4 @@
-/**
- * 实现第一批 Scene testcase smoke cases，用来验证 testcase 框架和现有 Scene API
- */
+// 集中实现 Scene API 的冒烟用例，并维护用例 ID、名称和实例之间的稳定映射。
 #include "scene/testcase/SceneTestCaseRegistry.h"
 
 #include "log/LogSystem.h"
@@ -10,11 +8,36 @@
 
 #include <cmath>
 #include <filesystem>
+#include <iterator>
 #include <unordered_set>
 
 namespace Moer {
 
 namespace {
+
+struct SceneTestCaseDescriptor {
+    ESceneTestCaseId id;
+    std::string_view name;
+};
+
+// 顺序同时决定界面展示和 Suite 执行顺序，新增用例时应只在这里追加。
+constexpr SceneTestCaseDescriptor kSceneTestCaseDescriptors[] = {
+    {ESceneTestCaseId::SuiteSaveStateCache, "SuiteSaveStateCache"},
+    {ESceneTestCaseId::FrameworkNoop, "FrameworkNoop"},
+    {ESceneTestCaseId::CreatePointLightOnce, "CreatePointLightOnce"},
+    {ESceneTestCaseId::PatchCreatedPointLightTransform, "PatchCreatedPointLightTransform"},
+    {ESceneTestCaseId::CreateDestroyPointLight, "CreateDestroyPointLight"},
+    {ESceneTestCaseId::EntityWithNodeStructuralFlow, "EntityWithNodeStructuralFlow"},
+    {ESceneTestCaseId::EntityWithNodeRejectInvalidOps, "EntityWithNodeRejectInvalidOps"},
+    {ESceneTestCaseId::CreateDestroyRenderable, "CreateDestroyRenderable"},
+    {ESceneTestCaseId::CreateProceduralRenderable, "CreateProceduralRenderable"},
+    {ESceneTestCaseId::SetNodeProperties, "SetNodeProperties"},
+    {ESceneTestCaseId::QueryNodeAndLocalTransform, "QueryNodeAndLocalTransform"},
+    {ESceneTestCaseId::DestroyNodeSubtree, "DestroyNodeSubtree"},
+    {ESceneTestCaseId::DebugModifyMaterial, "DebugModifyMaterial"},
+    {ESceneTestCaseId::ImportSceneFromFile, "ImportSceneFromFile"},
+    {ESceneTestCaseId::SuiteLoadStateCache, "SuiteLoadStateCache"},
+};
 
 // 比较两个 float 是否足够接近
 bool IsNear(float lhs, float rhs, float epsilon = 1e-4f) {
@@ -163,7 +186,6 @@ Array<float3> BuildRenderableCloneRootOffsets(bool stress_create_enabled, const 
 
 class FrameworkNoopTestCase final : public SceneTestCaseBase {
 public:
-    // 返回空运行验证 testcase 的名称
     std::string_view Name() const override {
         return "FrameworkNoop";
     }
@@ -185,7 +207,6 @@ public:
 
 class CreatePointLightOnceTestCase final : public SceneTestCaseBase {
 public:
-    // 返回单帧 point light 创建 testcase 的名称
     std::string_view Name() const override {
         return "CreatePointLightOnce";
     }
@@ -235,7 +256,6 @@ private:
 
 class PatchCreatedPointLightTransformTestCase final : public SceneTestCaseBase {
 public:
-    // 返回跨帧 point light transform patch testcase 的名称
     std::string_view Name() const override {
         return "PatchCreatedPointLightTransform";
     }
@@ -342,7 +362,6 @@ private:
 
 class DebugModifyMaterialTestCase final : public SceneTestCaseBase {
 public:
-    // 返回调试材质修改 testcase 的名称
     std::string_view Name() const override {
         return "DebugModifyMaterial";
     }
@@ -410,7 +429,6 @@ private:
 
 class CreateDestroyPointLightTestCase final : public SceneTestCaseBase {
 public:
-    // 返回 point light 创建删除 testcase 的名称
     std::string_view Name() const override {
         return "CreateDestroyPointLight";
     }
@@ -516,7 +534,6 @@ private:
 
 class EntityWithNodeStructuralFlowTestCase final : public SceneTestCaseBase {
 public:
-    // 返回 EntityWithNode 结构主链路 testcase 的名称
     std::string_view Name() const override {
         return "EntityWithNodeStructuralFlow";
     }
@@ -721,7 +738,6 @@ private:
 
 class EntityWithNodeRejectInvalidOpsTestCase final : public SceneTestCaseBase {
 public:
-    // 返回 EntityWithNode 非法操作 testcase 的名称
     std::string_view Name() const override {
         return "EntityWithNodeRejectInvalidOps";
     }
@@ -839,7 +855,6 @@ public:
     explicit CreateDestroyRenderableTestCase(bool stress_create_enabled) :
         m_stress_create_enabled(stress_create_enabled) {}
 
-    // 返回 renderable 创建删除 testcase 的名称
     std::string_view Name() const override {
         return "CreateDestroyRenderable";
     }
@@ -1913,63 +1928,28 @@ private:
 
 } // namespace
 
-// 根据 testcase ID 返回日志可读名称
 std::string_view GetSceneTestCaseName(ESceneTestCaseId test_case_id) {
-    switch (test_case_id) {
-        case ESceneTestCaseId::None:
-            return "None";
-        case ESceneTestCaseId::SuiteSaveStateCache:
-            return "SuiteSaveStateCache";
-        case ESceneTestCaseId::FrameworkNoop:
-            return "FrameworkNoop";
-        case ESceneTestCaseId::CreatePointLightOnce:
-            return "CreatePointLightOnce";
-        case ESceneTestCaseId::PatchCreatedPointLightTransform:
-            return "PatchCreatedPointLightTransform";
-        case ESceneTestCaseId::CreateDestroyPointLight:
-            return "CreateDestroyPointLight";
-        case ESceneTestCaseId::EntityWithNodeStructuralFlow:
-            return "EntityWithNodeStructuralFlow";
-        case ESceneTestCaseId::EntityWithNodeRejectInvalidOps:
-            return "EntityWithNodeRejectInvalidOps";
-        case ESceneTestCaseId::CreateDestroyRenderable:
-            return "CreateDestroyRenderable";
-        case ESceneTestCaseId::CreateProceduralRenderable:
-            return "CreateProceduralRenderable";
-        case ESceneTestCaseId::SetNodeProperties:
-            return "SetNodeProperties";
-        case ESceneTestCaseId::QueryNodeAndLocalTransform:
-            return "QueryNodeAndLocalTransform";
-        case ESceneTestCaseId::DestroyNodeSubtree:
-            return "DestroyNodeSubtree";
-        case ESceneTestCaseId::DebugModifyMaterial:
-            return "DebugModifyMaterial";
-        case ESceneTestCaseId::ImportSceneFromFile:
-            return "ImportSceneFromFile";
-        case ESceneTestCaseId::SuiteLoadStateCache:
-            return "SuiteLoadStateCache";
+    if (test_case_id == ESceneTestCaseId::None) {
+        return "None";
+    }
+
+    for (const SceneTestCaseDescriptor& descriptor : kSceneTestCaseDescriptors) {
+        if (descriptor.id == test_case_id) {
+            return descriptor.name;
+        }
     }
     return "Unknown";
 }
 
 const Array<ESceneTestCaseId>& GetAllSceneTestCaseIds() {
-    static const Array<ESceneTestCaseId> s_all_case_ids = {
-        ESceneTestCaseId::SuiteSaveStateCache,
-        ESceneTestCaseId::FrameworkNoop,
-        ESceneTestCaseId::CreatePointLightOnce,
-        ESceneTestCaseId::PatchCreatedPointLightTransform,
-        ESceneTestCaseId::CreateDestroyPointLight,
-        ESceneTestCaseId::EntityWithNodeStructuralFlow,
-        ESceneTestCaseId::EntityWithNodeRejectInvalidOps,
-        ESceneTestCaseId::CreateDestroyRenderable,
-        ESceneTestCaseId::CreateProceduralRenderable,
-        ESceneTestCaseId::SetNodeProperties,
-        ESceneTestCaseId::QueryNodeAndLocalTransform,
-        ESceneTestCaseId::DestroyNodeSubtree,
-        ESceneTestCaseId::DebugModifyMaterial,
-        ESceneTestCaseId::ImportSceneFromFile,
-        ESceneTestCaseId::SuiteLoadStateCache,
-    };
+    static const Array<ESceneTestCaseId> s_all_case_ids = [] {
+        Array<ESceneTestCaseId> case_ids;
+        case_ids.reserve(std::size(kSceneTestCaseDescriptors));
+        for (const SceneTestCaseDescriptor& descriptor : kSceneTestCaseDescriptors) {
+            case_ids.push_back(descriptor.id);
+        }
+        return case_ids;
+    }();
 
     return s_all_case_ids;
 }
