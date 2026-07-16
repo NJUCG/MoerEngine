@@ -11,6 +11,13 @@ target_link_libraries(${test_target}
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
+set(test_target TestShaderStageSupport)
+add_executable(${test_target} "ShaderStageSupportTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+
 set(test_target TestRenderGraph)
 add_executable(${test_target} "RenderGraphTest.cpp")
 target_link_libraries(${test_target}

@@ -14,6 +14,7 @@ class RasterContext;
 class HiZBuildPass;
 class ShadowDepthPass;
 class GeometryPass;
+class TessellatedSurfacePass;
 class CsmGizmoPass;
 class DirectionalShadowMaskPass;
 class ProbeUpdatePass;
@@ -79,6 +80,7 @@ private:
     UniquePtr<ProbeGizmoPass>              probe_gizmo_pass;
     UniquePtr<CameraGizmoPass>             camera_gizmo_pass;
     UniquePtr<GeometryPass>                geometry_pass;
+    UniquePtr<TessellatedSurfacePass>      tessellated_surface_pass;
     UniquePtr<LightingPass>                lighting_pass;
     UniquePtr<SkyboxPass>                  skybox_pass;
     UniquePtr<AoPass>                      ao_pass;

@@ -186,6 +186,118 @@ void RasterUI::ShowConfig() {
         ImGui::TreePop();
     }
 
+    // MARK: Hardware Tessellation Showcase
+    if (ImGui::TreeNode(
+            "Tessellated Surface",
+            "Tessellated Surface: [%s]",
+            m_config.tessellated_surface_enabled ? "Enable" : "Disable"
+        )) {
+        ImGui::Checkbox("Enable Surface", &m_config.tessellated_surface_enabled);
+
+        ImGui::BeginDisabled(!m_config.tessellated_surface_enabled);
+
+        static constexpr const char* preset_names[] = {
+            "Sand Dunes",
+            "Snow Field"
+        };
+        ImGui::Combo(
+            "Surface Preset",
+            &m_config.tessellated_surface_preset,
+            preset_names,
+            2
+        );
+
+        static constexpr const char* debug_mode_names[] = {
+            "Material",
+            "Tess Factor Heatmap",
+            "World Normal",
+            "Height"
+        };
+        ImGui::Combo(
+            "Surface Debug",
+            &m_config.tessellated_surface_debug_mode,
+            debug_mode_names,
+            4
+        );
+
+        ImGui::DragFloat3(
+            "Surface Center",
+            reinterpret_cast<float*>(&m_config.tessellated_surface_center),
+            0.05f
+        );
+        ImGui::SliderFloat(
+            "Half Extent (m)",
+            &m_config.tessellated_surface_half_extent,
+            0.5f,
+            40.0f
+        );
+        ImGui::SliderInt(
+            "Base Grid",
+            &m_config.tessellated_surface_grid_resolution,
+            2,
+            64,
+            "%d cells/axis"
+        );
+        ImGui::SliderFloat(
+            "Target Edge (px)",
+            &m_config.tessellated_surface_target_edge_pixels,
+            2.0f,
+            32.0f
+        );
+        ImGui::SliderFloat(
+            "Min Tess Factor",
+            &m_config.tessellated_surface_min_tess_factor,
+            2.0f,
+            m_config.tessellated_surface_max_tess_factor
+        );
+        ImGui::SliderFloat(
+            "Max Tess Factor",
+            &m_config.tessellated_surface_max_tess_factor,
+            m_config.tessellated_surface_min_tess_factor,
+            64.0f
+        );
+        ImGui::SliderFloat(
+            "Height Scale",
+            &m_config.tessellated_surface_height_scale,
+            0.0f,
+            3.0f
+        );
+        ImGui::SliderFloat(
+            "Detail Scale",
+            &m_config.tessellated_surface_detail_scale,
+            0.0f,
+            3.0f
+        );
+        ImGui::SliderFloat(
+            "Wind Angle",
+            &m_config.tessellated_surface_wind_angle_degrees,
+            -180.0f,
+            180.0f,
+            "%.0f deg"
+        );
+
+        if (ImGui::Button("Reset Surface Settings")) {
+            m_config.tessellated_surface_preset             = 0;
+            m_config.tessellated_surface_debug_mode         = 0;
+            m_config.tessellated_surface_grid_resolution    = 16;
+            m_config.tessellated_surface_center             = float3(0.0f, 0.04f, 0.0f);
+            m_config.tessellated_surface_half_extent        = 8.0f;
+            m_config.tessellated_surface_target_edge_pixels = 8.0f;
+            m_config.tessellated_surface_min_tess_factor    = 2.0f;
+            m_config.tessellated_surface_max_tess_factor    = 32.0f;
+            m_config.tessellated_surface_height_scale       = 1.0f;
+            m_config.tessellated_surface_detail_scale       = 1.0f;
+            m_config.tessellated_surface_wind_angle_degrees = 18.0f;
+        }
+
+        ImGui::TextDisabled(
+            "Triangle patches: VS -> HS -> DS -> PS. The showcase receives scene shadows but is not yet a CSM caster."
+        );
+
+        ImGui::EndDisabled();
+        ImGui::TreePop();
+    }
+
     // MARK: Shading
     if (ImGui::TreeNode(
             "Shading", "Shading: [%s]", s_shading_mode_name_map.at(m_config.shading_mode).c_str()

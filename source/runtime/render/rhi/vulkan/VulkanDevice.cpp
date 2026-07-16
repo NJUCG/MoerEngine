@@ -1656,6 +1656,31 @@ static void MergeReflectInfo(
 
 PipelineHandle
 VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo&& _shader_info) {
+    const bool uses_tessellation = std::holds_alternative<ShaderVsHsDsPs>(_shader_info.shader_group);
+    if (uses_tessellation) {
+        const uint32_t patch_control_points = _create_info.patch_control_points;
+        const uint32_t max_patch_size = m_device_info.core_properties.core_1_0.limits.maxTessellationPatchSize;
+        if (!SupportsTessellation()) {
+            LOG_ERROR("Cannot create tessellation pipeline: the Vulkan device does not support tessellation shaders.");
+            return {};
+        }
+        if (_create_info.primitive_topology != EPrimitiveTopology::PATCH_LIST) {
+            LOG_ERROR("Cannot create tessellation pipeline: primitive topology must be PATCH_LIST.");
+            return {};
+        }
+        if (patch_control_points == 0 || patch_control_points > max_patch_size) {
+            LOG_ERROR(
+                "Cannot create tessellation pipeline: patch control point count {} is outside [1, {}].",
+                patch_control_points,
+                max_patch_size
+            );
+            return {};
+        }
+    } else if (_create_info.primitive_topology == EPrimitiveTopology::PATCH_LIST) {
+        LOG_ERROR("Cannot create PATCH_LIST pipeline without Hull and Domain shaders.");
+        return {};
+    }
+
     VulkanPipelineState* vk_pso = MoerNew(VulkanPipelineState)(this, VulkanPipelineState::GFX);
 
     uint32_t attachment_count = _create_info.color_attachment_count;
@@ -1783,6 +1808,17 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
                 merge_reflect_info(_shader_info_group.gs, VK_SHADER_STAGE_GEOMETRY_BIT);
                 merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
             },
+            [&](const ShaderVsHsDsPs& _shader_info_group) {
+                shader_stages.reserve(4);
+                emplace_shader(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
+                emplace_shader(_shader_info_group.hs, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
+                emplace_shader(_shader_info_group.ds, VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT);
+                emplace_shader(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+                merge_reflect_info(_shader_info_group.vs, VK_SHADER_STAGE_VERTEX_BIT);
+                merge_reflect_info(_shader_info_group.hs, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT);
+                merge_reflect_info(_shader_info_group.ds, VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT);
+                merge_reflect_info(_shader_info_group.ps, VK_SHADER_STAGE_FRAGMENT_BIT);
+            },
             [&](const ShaderMsPs& _shader_info_group) {
                 shader_stages.reserve(2);
                 emplace_shader(_shader_info_group.ms, VK_SHADER_STAGE_MESH_BIT_NV);
@@ -1906,6 +1942,11 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     };
     auto vk_multisample_state = to_multi_sample_state(_create_info.multisample_info);
 
+    VkPipelineTessellationStateCreateInfo tessellation_state{
+        VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO
+    };
+    tessellation_state.patchControlPoints = _create_info.patch_control_points;
+
     auto to_depth_stencil_state = [](const RHIDepthStencilStateInfo& info) {
         VkPipelineDepthStencilStateCreateInfo state{};
         state.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
@@ -2013,7 +2054,7 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     pipeline_create_info.pStages             = shader_stages.data();
     pipeline_create_info.pVertexInputState   = &vertex_input_state;
     pipeline_create_info.pInputAssemblyState = &input_assembly_state;
-    pipeline_create_info.pTessellationState  = nullptr;
+    pipeline_create_info.pTessellationState  = uses_tessellation ? &tessellation_state : nullptr;
     pipeline_create_info.pViewportState      = &viewport_state;
     pipeline_create_info.pRasterizationState = &vk_rasterization_state;
     pipeline_create_info.pMultisampleState   = &vk_multisample_state;

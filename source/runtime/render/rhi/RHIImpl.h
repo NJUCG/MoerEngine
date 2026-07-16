@@ -1701,6 +1701,14 @@ public:
         ; // do nothing by default
     }
 
+    virtual bool SupportsTessellation() const {
+        return false;
+    }
+
+    virtual uint32_t GetMaxTessellationFactor() const {
+        return 0;
+    }
+
     virtual bool IsExtensionCooperativeEnabled() const {
         return false;
     }

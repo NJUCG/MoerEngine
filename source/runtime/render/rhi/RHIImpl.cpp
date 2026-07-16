@@ -114,6 +114,14 @@ const EShaderPlatform RenderDevice::GetShaderPlatform() const {
     }
 }
 
+bool RenderDevice::SupportsTessellation() const {
+    return impl && impl->SupportsTessellation();
+}
+
+uint32_t RenderDevice::GetMaxTessellationFactor() const {
+    return impl ? impl->GetMaxTessellationFactor() : 0;
+}
+
 RaytracingGeometryRef RenderDevice::CreateRaytracingGeometry(const RaytracingGeometryInfo& _init) {
     return impl->CreateRaytracingGeometry(_init);
 }

@@ -15,6 +15,10 @@ ERHIPipelineStageFlags ToPipelineStageFlag(spv::ExecutionModel _stage) {
             return ERHIPipelineStageFlags::PS_COMPUTE_SHADER;
         case spv::ExecutionModelGeometry:
             return ERHIPipelineStageFlags::PS_GEOMETRY_SHADER;
+        case spv::ExecutionModelTessellationControl:
+            return ERHIPipelineStageFlags::PS_TESSELLATION_CONTROL_SHADER;
+        case spv::ExecutionModelTessellationEvaluation:
+            return ERHIPipelineStageFlags::PS_TESSELLATION_EVALUATION_SHADER;
         case spv::ExecutionModelTaskNV:
             return ERHIPipelineStageFlags::PS_TASK_SHADER;
         case spv::ExecutionModelMeshNV:
@@ -71,6 +75,10 @@ const auto* GetShaderTypeWChar(EShaderType _type) {
             return L"ms";
         case ST_AMPLIFICATION:
             return L"as";
+        case ST_HULL:
+            return L"hs";
+        case ST_DOMAIN:
+            return L"ds";
         case ST_RAY_GEN:
             return L"lib";
         case ST_RAY_MISS:

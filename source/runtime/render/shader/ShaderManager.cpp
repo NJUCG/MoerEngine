@@ -17,6 +17,9 @@ using std::move;
 
 namespace {
 
+constexpr uint32_t k_shader_cache_magic          = 0x4D534443; // "MSDC"
+constexpr uint32_t k_shader_cache_format_version = 1;
+
 std::string_view GetShaderTypeName(EShaderType shader_type) {
     switch (shader_type) {
         case ST_VERTEX: return "vertex";
@@ -25,6 +28,8 @@ std::string_view GetShaderTypeName(EShaderType shader_type) {
         case ST_COMPUTE: return "compute";
         case ST_MESH: return "mesh";
         case ST_AMPLIFICATION: return "amplification";
+        case ST_HULL: return "hull";
+        case ST_DOMAIN: return "domain";
         case ST_RAY_GEN: return "ray_gen";
         case ST_RAY_MISS: return "ray_miss";
         case ST_RAY_CLOSESTHIT: return "ray_closest_hit";
@@ -153,7 +158,10 @@ void ShaderManager::DumpCache(std::filesystem::path _path) {
 
     std::ofstream fs(file_path, std::ios::binary);
     OutputStream  stream(fs);
-    stream << shader_resources_cache;
+    stream << k_shader_cache_magic << k_shader_cache_format_version << shader_resources_cache;
+    if (!fs.good()) {
+        LOG_WARNING("[Startup][Shader] DumpCache failed to write shader cache: {}", file_path.string());
+    }
 }
 
 void ShaderManager::LoadCache(std::filesystem::path _path) {
@@ -190,6 +198,26 @@ void ShaderManager::LoadCache(std::filesystem::path _path) {
     InputStream          stream(fs);
 
     try {
+        uint32_t cache_magic   = 0;
+        uint32_t cache_version = 0;
+        stream >> cache_magic >> cache_version;
+        if (fs.fail()) {
+            LOG_WARNING(
+                "[Startup][Shader] LoadCache discarded truncated or unversioned shader cache: {}",
+                file_path.string()
+            );
+            return;
+        }
+        if (cache_magic != k_shader_cache_magic || cache_version != k_shader_cache_format_version) {
+            LOG_INFO(
+                "[Startup][Shader] LoadCache discarded incompatible shader cache: path='{}', magic=0x{:08X}, version={}, expected_version={}",
+                file_path.string(),
+                cache_magic,
+                cache_version,
+                k_shader_cache_format_version
+            );
+            return;
+        }
         stream >> loaded_cache;
     } catch (const std::exception& e) {
         LOG_WARNING(
@@ -334,10 +362,22 @@ PipelineHandle RasterPipelineConstructor::CreatePipeline(
         auto& asset = std::get<ShaderAsset>(_asset);
         return asset.path.empty() || asset.entry_name.empty();
     };
-    bool b_vs_ps = is_empty(task_path) && !is_empty(vertex_path) && !is_empty(pixel_path);
-    bool b_gs    = !is_empty(geometry_path);
-    bool b_mesh  = !is_empty(mesh_path) && !is_empty(pixel_path);
-    bool b_task  = !is_empty(task_path);
+    bool b_vs_ps  = is_empty(task_path) && !is_empty(vertex_path) && !is_empty(pixel_path);
+    bool b_gs     = !is_empty(geometry_path);
+    bool b_hull   = !is_empty(hull_path);
+    bool b_domain = !is_empty(domain_path);
+    bool b_mesh   = !is_empty(mesh_path) && !is_empty(pixel_path);
+    bool b_task   = !is_empty(task_path);
+
+    if (b_hull != b_domain) {
+        LOG_ERROR("Raster pipeline tessellation requires both Hull and Domain shaders.");
+        return {};
+    }
+    const bool b_tessellation = b_hull && b_domain;
+    if (b_tessellation && (!b_vs_ps || b_gs || b_mesh || b_task)) {
+        LOG_ERROR("Raster tessellation currently supports only the VS + HS + DS + PS stage chain.");
+        return {};
+    }
 
     auto target_info       = device.GetShaderPlatform();
     auto get_shader_output = [&](const ShaderAssetOrCache& _info, EShaderType _type) -> Shader& {
@@ -367,7 +407,16 @@ PipelineHandle RasterPipelineConstructor::CreatePipeline(
     if (b_vs_ps) {
         auto& vert_output  = get_shader_output(vertex_path, ST_VERTEX);
         auto& pixel_output = get_shader_output(pixel_path, ST_FRAGMENT);
-        if (!b_gs) {
+        if (b_tessellation) {
+            auto& hull_output   = get_shader_output(hull_path, ST_HULL);
+            auto& domain_output = get_shader_output(domain_path, ST_DOMAIN);
+            sd_info.shader_group = ShaderVsHsDsPs{
+                .vs = get_shader_info(ST_VERTEX, vert_output),
+                .hs = get_shader_info(ST_HULL, hull_output),
+                .ds = get_shader_info(ST_DOMAIN, domain_output),
+                .ps = get_shader_info(ST_FRAGMENT, pixel_output)
+            };
+        } else if (!b_gs) {
             sd_info.shader_group = ShaderVsPs{
                 .vs = get_shader_info(ST_VERTEX, vert_output),
                 .ps = get_shader_info(ST_FRAGMENT, pixel_output)

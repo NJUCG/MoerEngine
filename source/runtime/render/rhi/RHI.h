@@ -181,6 +181,9 @@ public:
         return rhi_type;
     }
 
+    RENDER_API bool SupportsTessellation() const;
+    RENDER_API uint32_t GetMaxTessellationFactor() const;
+
     RENDER_API PipelineHandle
     CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders); //gfx
     RENDER_API PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders);     //compute

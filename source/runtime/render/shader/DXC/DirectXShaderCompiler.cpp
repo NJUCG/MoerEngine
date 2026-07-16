@@ -421,6 +421,8 @@ bool DXCompiler::IsSupportTarget(const ShaderTargetInfo& _target_info) {
 
         case ST_MESH:
         case ST_AMPLIFICATION:
+        case ST_HULL:
+        case ST_DOMAIN:
 
         case ST_RAY_GEN:
         case ST_RAY_MISS:

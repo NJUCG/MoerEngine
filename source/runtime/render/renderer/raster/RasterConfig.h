@@ -158,6 +158,21 @@ struct RasterConfig {
     // Debug 可视化模式：0=关闭，1=Cluster ID，2=frac(UV)，3=顶点法线
     int   geometry_debug_visualization           = 0;
 
+    // MARK: Procedural Tessellated Surface
+    // Opt-in showcase for the VS -> HS -> DS -> PS hardware tessellation path.
+    bool   tessellated_surface_enabled             = false;
+    int    tessellated_surface_preset              = 0; // 0=sand dunes, 1=snow field
+    int    tessellated_surface_debug_mode          = 0; // 0=material, 1=tess factor, 2=normal, 3=height
+    int    tessellated_surface_grid_resolution     = 16;
+    float3 tessellated_surface_center              = float3(0.0f, 0.04f, 0.0f);
+    float  tessellated_surface_half_extent         = 8.0f;
+    float  tessellated_surface_target_edge_pixels  = 8.0f;
+    float  tessellated_surface_min_tess_factor     = 2.0f;
+    float  tessellated_surface_max_tess_factor     = 32.0f;
+    float  tessellated_surface_height_scale        = 1.0f;
+    float  tessellated_surface_detail_scale        = 1.0f;
+    float  tessellated_surface_wind_angle_degrees  = 18.0f;
+
     // MARK: Culling Statistics (只读，由GPU更新)
     struct CullingStats {
         uint total_instances_before     = 0;
