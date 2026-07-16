@@ -984,11 +984,9 @@ public:
         return timeline;
     }
 
-public:
+private:
     uint64 current_value = 0;
     // uint64 last_value    = 0;
-
-private:
     VkSemaphore             timeline;
     std::condition_variable cv;
     mutable std::mutex      cv_m;

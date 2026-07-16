@@ -1,8 +1,10 @@
 #include "rhi/vulkan/RHICmdReorderer.h"
 
 #include <array>
+#include <exception>
 #include <iostream>
 #include <stdexcept>
+#include <thread>
 
 using namespace Moer;
 using namespace Moer::Render;
@@ -13,6 +15,25 @@ void Expect(bool _condition, const char* _message) {
     if (!_condition) {
         throw std::runtime_error(_message);
     }
+}
+
+class TestBuffer final : public Buffer {
+public:
+    TestBuffer(uint64 _elements, uint32 _stride, EBufferUsageFlags _usage) :
+        Buffer(BufferInfo{_elements, _stride, _usage}) {}
+
+    void SetName(const std::string_view) override {}
+};
+
+void ExpectRange(
+    const UnorderedMap<Buffer*, BufferRange>& _ranges,
+    Buffer*                                   _buffer,
+    uint64                                    _min,
+    uint64                                    _max,
+    const char*                               _message
+) {
+    const auto it = _ranges.find(_buffer);
+    Expect(it != _ranges.end() && it->second.min == _min && it->second.max == _max, _message);
 }
 
 bool FalseResourceFlag(uint64) {
@@ -187,6 +208,139 @@ void WriteBarrierWaitsForPriorRead() {
     Expect(FindCommandLayer(reorderer, &write_barrier) == 1, "write barrier missed the prior-read WAR edge");
 }
 
+void CommandResourcePreprocessingIsTaskGraphIndependent() {
+    std::exception_ptr worker_error;
+    std::jthread worker([&] {
+        try {
+            TestBuffer vertex_buffer(16, 4, EBufferUsageFlags::VERTEX_BUFFER);
+            TestBuffer index_buffer(16, 4, EBufferUsageFlags::INDEX_BUFFER);
+            TestBuffer indirect_buffer(16, 4, EBufferUsageFlags::INDIRECT_BUFFER);
+            TestBuffer count_buffer(4, 4, EBufferUsageFlags::INDIRECT_BUFFER);
+
+            MeshDrawData mesh{};
+            mesh.vtx_views.emplace_back(VertexBuffer{&vertex_buffer, 12});
+            mesh.idx_view = IndexBuffer{
+                BufferView(&index_buffer, 8, 4, 4), EIndexElementType::IET_UINT32
+            };
+            mesh.DrawIndirect(
+                BufferView(&indirect_buffer, 16, 8, 4),
+                BufferView(&count_buffer, 4, 1, 4),
+                8,
+                4
+            );
+
+            PipelineHandle      pipeline{};
+            ArrayArguments      args{};
+            RenderPassInfo      pass_info{};
+            Array<MeshDrawData> meshes{};
+            meshes.emplace_back(std::move(mesh));
+            SetDrawStateCmd draw_state(
+                pipeline, std::move(args), std::move(pass_info), std::move(meshes)
+            );
+            ExpectRange(
+                draw_state.VertexBuffers(), &vertex_buffer, 12, 76, "draw state missed vertex range"
+            );
+            ExpectRange(
+                draw_state.IndexBuffers(), &index_buffer, 8, 24, "draw state missed index range"
+            );
+            ExpectRange(
+                draw_state.IndirectBuffers(),
+                &indirect_buffer,
+                16,
+                48,
+                "draw state missed indirect range"
+            );
+            ExpectRange(
+                draw_state.DrawCountBuffers(), &count_buffer, 4, 8, "draw state missed count range"
+            );
+
+            TestBuffer batch_vertex(32, 4, EBufferUsageFlags::VERTEX_BUFFER);
+            TestBuffer batch_index(32, 4, EBufferUsageFlags::INDEX_BUFFER);
+            TestBuffer batch_indirect(32, 4, EBufferUsageFlags::INDIRECT_BUFFER);
+            TestBuffer dispatch_indirect(32, 4, EBufferUsageFlags::INDIRECT_BUFFER);
+            TestBuffer dispatch_count(4, 4, EBufferUsageFlags::INDIRECT_BUFFER);
+
+            MeshDrawData batch_mesh{};
+            batch_mesh.vtx_views.emplace_back(VertexBuffer{&batch_vertex, 20});
+            batch_mesh.idx_view = IndexBuffer{
+                BufferView(&batch_index, 12, 6, 4), EIndexElementType::IET_UINT32
+            };
+            batch_mesh.DrawIndirect(BufferView(&batch_indirect, 24, 4, 4), 4, 4);
+
+            DrawBatchElement mesh_element{};
+            mesh_element.RegisterDrawData(std::move(batch_mesh));
+            DrawBatchElement dispatch_element{};
+            dispatch_element.RegisterMeshDispatch(DispatchMeshData::DispatchIndirectCount(
+                BufferView(&dispatch_indirect, 32, 8, 4),
+                BufferView(&dispatch_count, 8, 1, 4),
+                8,
+                4
+            ));
+
+            DrawBatch batch{};
+            batch.draw_cmds.emplace_back(std::move(mesh_element));
+            batch.draw_cmds.emplace_back(std::move(dispatch_element));
+            MultiDrawCmd multi_draw(
+                std::move(batch), RenderPassInfo{}, "TaskGraphIndependentMultiDraw"
+            );
+            ExpectRange(
+                multi_draw.VertexBuffers(), &batch_vertex, 20, 148, "multi draw missed vertex range"
+            );
+            ExpectRange(
+                multi_draw.IndexBuffers(), &batch_index, 12, 36, "multi draw missed index range"
+            );
+            ExpectRange(
+                multi_draw.IndirectBuffers(),
+                &batch_indirect,
+                24,
+                40,
+                "multi draw missed mesh indirect range"
+            );
+            ExpectRange(
+                multi_draw.IndirectBuffers(),
+                &dispatch_indirect,
+                32,
+                64,
+                "multi draw missed dispatch indirect range"
+            );
+            ExpectRange(
+                multi_draw.IndirectBuffers(),
+                &dispatch_count,
+                8,
+                12,
+                "multi draw missed dispatch count range"
+            );
+
+            BufferRef accel_vertex(MoerNew(TestBuffer)(16, 4, EBufferUsageFlags::VERTEX_BUFFER));
+            BufferRef accel_index(MoerNew(TestBuffer)(16, 4, EBufferUsageFlags::INDEX_BUFFER));
+            RaytracingSegment segment{};
+            segment.vertex_buffer = accel_vertex;
+            segment.index_buffer  = accel_index;
+            RaytracingGeometryInfo geometry_info{};
+            geometry_info.segments.emplace_back(std::move(segment));
+            RaytracingGeometryRef geometry(MoerNew(RaytracingGeometry)(geometry_info));
+            Array<AccelerationStructureBuildParam> build_params{
+                AccelerationStructureBuildParam{geometry, ERaytracingBuildMode::BUILD}
+            };
+            BuildAccelerationStructuresCmd build_accel(std::move(build_params));
+            Expect(
+                build_accel.VtxBuffers().find(accel_vertex.Get()) != build_accel.VtxBuffers().end(),
+                "acceleration build missed vertex buffer"
+            );
+            Expect(
+                build_accel.IdxBuffers().find(accel_index.Get()) != build_accel.IdxBuffers().end(),
+                "acceleration build missed index buffer"
+            );
+        } catch (...) {
+            worker_error = std::current_exception();
+        }
+    });
+    worker.join();
+    if (worker_error) {
+        std::rethrow_exception(worker_error);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -195,6 +349,7 @@ int main() {
         ReadBarrierParticipatesInFollowingWarDependency();
         MultiResourceBarrierPublishesEveryAccessAtItsFinalLayer();
         WriteBarrierWaitsForPriorRead();
+        CommandResourcePreprocessingIsTaskGraphIndependent();
         std::cout << "RHI command reorderer tests passed\n";
         return 0;
     } catch (const std::exception& error) {

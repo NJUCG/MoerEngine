@@ -2897,11 +2897,16 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         // vkGetSemaphoreCounterValue(m_device->GetDevice(), timeline, &value);
         // // vkGetSemaphoreCounterValue(m_device->GetDevice(), m_fence.timeline, &value);
         // return value;
+        std::unique_lock<std::mutex> lock(cv_m);
         return current_value;
     }
 
-    uint64 VulkanFence::GetDeviceValue() const{
-        uint64_t value  = current_value;
+    uint64 VulkanFence::GetDeviceValue() const {
+        uint64_t value;
+        {
+            std::unique_lock<std::mutex> lock(cv_m);
+            value = current_value;
+        }
         VkResult result = vkGetSemaphoreCounterValue(m_device->GetDevice(), timeline, &value);
         if (result != VK_SUCCESS) {
             m_device->TryLatchFirstFault(
