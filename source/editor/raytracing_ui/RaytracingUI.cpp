@@ -1,87 +1,52 @@
 #include "RaytracingUI.h"
 
-#include "Core.h"
+// 提供 ReSTIR DI、降噪、后处理和捕获配置的控制项。
+
 #include "math/Function.h"
-#include "misc/STL.h"
-#include "renderer/common/UIRenderer.h"
-#include "rhi/RHIResource.h"
-#include "shaderheaders/shared/ShaderParameters.h"
-#include "shaderheaders/shared/lighting/ShaderParameters.h"
 
-#include "renderer/raytracing/AntiAliasPass.h"
-#include "renderer/raytracing/RaytracingConfig.h"
-
-// 3rd party
 #include <imgui.h>
-#include <imgui_internal.h>
+
+#include <array>
+#include <string_view>
 
 using namespace Moer::Render;
-using namespace Moer::Render::Raytracing;
 
 namespace Moer {
 
-enum ELocalLightSelectionMode {
-    ELLS_Uniform   = s_di_local_light_sample_mode_uniform,
-    ELLS_Power_RIS = s_di_local_light_sample_mode_power_ris,
-    ELLS_Grid      = s_di_local_light_sample_mode_grid,
-    ELLS_Num
+namespace {
+
+constexpr std::array<std::string_view, 3> k_local_light_sample_mode_names = {
+    "Uniform", "Power RIS", "Grid"
 };
-
-enum EGridLightPresampleMode {
-    EGLPM_Uniform   = s_di_local_light_sample_mode_uniform,
-    EGLPM_Power_RIS = s_di_local_light_sample_mode_power_ris,
-    EGLPM_Num
+constexpr std::array<std::string_view, 2> k_grid_light_presample_mode_names = {
+    "Uniform", "Power RIS"
 };
-
-enum EBiasCorrectionMode {
-    EBCM_None      = s_di_bias_correction_none,
-    EBCM_Basic     = s_di_bias_correction_basic,
-    EBCM_Pair_Wise = s_di_bias_correction_pair_wise,
-    EBCM_Traced    = s_di_bias_correction_traced,
-    EBCM_Num
+constexpr std::array<std::string_view, 4> k_bias_correction_mode_names = {
+    "None", "Basic", "Pair Wise", "Traced"
 };
-
-static constexpr std::string_view s_local_light_sample_mode_names[] = {"Uniform", "Power RIS", "Grid"};
-
-static constexpr std::string_view s_grid_light_presample_mode_names[] = {"Uniform", "Power RIS"};
-
-static constexpr std::string_view s_bias_correction_mode_names[] = {"None", "Basic", "Pair Wise", "Traced"};
-
-static constexpr std::string_view s_denoiser_mode_names[] = {"None", "ReBlur", "Relax"};
-
-static constexpr std::string_view s_aa_mode_names[]     = {"TAA"};
-static constexpr std::string_view s_jitter_mode_names[] = {"MSAA", "Halton", "R2", "White Noise"};
-static constexpr std::string_view s_final_color_names[] = {
-    "SceneColor"
-    "DI",
-    "Emissive",
-    "Diffuse",
-    "Specular",
-    "Normal",
-    "ViewDepth",
-    "Depth",
-    "Motion",
-    "Grid",
-    "Material",
-    "Position"
+constexpr std::array<std::string_view, 3> k_denoiser_mode_names = {"None", "ReBlur", "Relax"};
+constexpr std::array<std::string_view, 1> k_aa_mode_names       = {"TAA"};
+constexpr std::array<std::string_view, 4> k_jitter_mode_names = {
+    "MSAA", "Halton", "R2", "White Noise"
 };
+constexpr std::array<std::string_view, 2> k_exported_texture_names = {"LDR", "HDR"};
 
-static constexpr std::string_view s_exported_texture_names[] = {"LDR", "HDR"};
+} // namespace
 
-RaytracingUI::RaytracingUI(RaytracingConfig& config) : config(config) {
-    final_color_map["SceneColor"] = EFinalColor::EFC_SceneColor;
-    final_color_map["DI"]         = EFinalColor::EFC_DI;
-    final_color_map["Emissive"]   = EFinalColor::EFC_EMISSIVE;
-    final_color_map["Diffuse"]    = EFinalColor::EFC_DIFFUSE;
-    final_color_map["Specular"]   = EFinalColor::EFC_SPECULAR;
-    final_color_map["Normal"]     = EFinalColor::EFC_NORMAL;
-    final_color_map["ViewDepth"]  = EFinalColor::EFC_VIEW_DEPTH;
-    final_color_map["Depth"]      = EFinalColor::EFC_DEPTH;
-    final_color_map["Motion"]     = EFinalColor::EFC_MOTION;
-    final_color_map["Grid"]       = EFinalColor::EFC_GRID;
-    final_color_map["Material"]   = EFinalColor::EFC_MATERIAL;
-    final_color_map["Position"]   = EFinalColor::EFC_POSITION;
-    final_color_map["Custom"]     = EFinalColor::EFC_CUSTOM;
+RaytracingUI::RaytracingUI(RaytracingConfig& config) : m_config(config) {
+    m_final_color_options["SceneColor"] = EFinalColor::EFC_SceneColor;
+    m_final_color_options["DI"]         = EFinalColor::EFC_DI;
+    m_final_color_options["Emissive"]   = EFinalColor::EFC_EMISSIVE;
+    m_final_color_options["Diffuse"]    = EFinalColor::EFC_DIFFUSE;
+    m_final_color_options["Specular"]   = EFinalColor::EFC_SPECULAR;
+    m_final_color_options["Normal"]     = EFinalColor::EFC_NORMAL;
+    m_final_color_options["ViewDepth"]  = EFinalColor::EFC_VIEW_DEPTH;
+    m_final_color_options["Depth"]      = EFinalColor::EFC_DEPTH;
+    m_final_color_options["Motion"]     = EFinalColor::EFC_MOTION;
+    m_final_color_options["Grid"]       = EFinalColor::EFC_GRID;
+    m_final_color_options["Material"]   = EFinalColor::EFC_MATERIAL;
+    m_final_color_options["Position"]   = EFinalColor::EFC_POSITION;
+    m_final_color_options["Custom"]     = EFinalColor::EFC_CUSTOM;
 }
 
 void RaytracingUI::ShowConfig() {
@@ -90,9 +55,9 @@ void RaytracingUI::ShowConfig() {
     }
 
     if (ImGui::TreeNode("Final Color")) {
-        for (auto& [name, index] : final_color_map) {
-            if (ImGui::Selectable(name.c_str(), config.final_color == index)) {
-                config.final_color = static_cast<EFinalColor>(index);
+        for (const auto& [name, value] : m_final_color_options) {
+            if (ImGui::Selectable(name.c_str(), m_config.final_color == value)) {
+                m_config.final_color = static_cast<EFinalColor>(value);
             }
         }
 
@@ -101,8 +66,8 @@ void RaytracingUI::ShowConfig() {
     ImGui::Separator();
 
     if (ImGui::TreeNode("Process Light Configs")) {
-        ImGui::Checkbox("Parallel Mode", &config.process_light_cfg.parallel_mode);
-        ImGui::SliderInt("Num Threads", &config.process_light_cfg.num_threads, 1, 32);
+        ImGui::Checkbox("Parallel Mode", &m_config.process_light_cfg.parallel_mode);
+        ImGui::SliderInt("Num Threads", &m_config.process_light_cfg.num_threads, 1, 32);
         ImGui::TreePop();
     }
 
@@ -110,16 +75,18 @@ void RaytracingUI::ShowConfig() {
     if (ImGui::TreeNode("Grid Config")) {
 
         if (ImGui::TreeNode("Presample Mode")) {
-            for (auto& name : s_grid_light_presample_mode_names) {
-                uint idx = &name - s_grid_light_presample_mode_names;
-                if (ImGui::Selectable(name.data(), config.grid_config.grid_mode == idx)) {
-                    config.grid_config.grid_mode = idx;
+            for (uint index = 0; index < k_grid_light_presample_mode_names.size(); ++index) {
+                if (ImGui::Selectable(
+                        k_grid_light_presample_mode_names[index].data(),
+                        m_config.grid_config.grid_mode == index
+                    )) {
+                    m_config.grid_config.grid_mode = index;
                 }
             }
             ImGui::TreePop();
         }
-        ImGui::SliderInt("Light Per Ceil", &config.grid_config.light_per_ceil, 1, 1024);
-        ImGui::SliderFloat("Cell Size", &config.grid_config.cell_size, 1.f, 400.f);
+        ImGui::SliderInt("Lights per Cell", &m_config.grid_config.GetLightsPerCell(), 1, 1024);
+        ImGui::SliderFloat("Cell Size", &m_config.grid_config.cell_size, 1.f, 400.f);
         ImGui::TreePop();
     }
     ImGui::Separator();
@@ -127,13 +94,12 @@ void RaytracingUI::ShowConfig() {
     if (ImGui::TreeNode("ReSTIRDI")) {
         if (ImGui::TreeNode("InitialSampleSettings")) {
             if (ImGui::TreeNode("LocalLightSelection")) {
-                for (auto& name : s_local_light_sample_mode_names) {
-                    uint idx = &name - s_local_light_sample_mode_names;
+                for (uint index = 0; index < k_local_light_sample_mode_names.size(); ++index) {
                     if (ImGui::Selectable(
-                            name.data(),
-                            config.restir_di_cfg.initial_sample_config.local_light_sample_mode == idx
+                            k_local_light_sample_mode_names[index].data(),
+                            m_config.restir_di_cfg.initial_sample_config.local_light_sample_mode == index
                         )) {
-                        config.restir_di_cfg.initial_sample_config.local_light_sample_mode = idx;
+                        m_config.restir_di_cfg.initial_sample_config.local_light_sample_mode = index;
                     }
                 }
                 ImGui::TreePop();
@@ -143,22 +109,25 @@ void RaytracingUI::ShowConfig() {
 
         if (ImGui::TreeNode("TemporalResampleSettings")) {
             if (ImGui::TreeNode("BiasCorrection")) {
-                for (auto& name : s_bias_correction_mode_names) {
-                    uint idx = &name - s_bias_correction_mode_names;
+                for (uint index = 0; index < k_bias_correction_mode_names.size(); ++index) {
                     if (ImGui::Selectable(
-                            name.data(), config.restir_di_cfg.temporal_resample_config.bias_correction == idx
+                            k_bias_correction_mode_names[index].data(),
+                            m_config.restir_di_cfg.temporal_resample_config.bias_correction == index
                         )) {
-                        config.restir_di_cfg.temporal_resample_config.bias_correction = idx;
+                        m_config.restir_di_cfg.temporal_resample_config.bias_correction = index;
                     }
                 }
                 ImGui::TreePop();
             }
             ImGui::SliderFloat(
-                "depth threshold", &config.restir_di_cfg.temporal_resample_config.depth_threshold, 0.1f, 30.0f
+                "depth threshold",
+                &m_config.restir_di_cfg.temporal_resample_config.depth_threshold,
+                0.1f,
+                30.0f
             );
             ImGui::SliderFloat(
                 "normal threshold",
-                &config.restir_di_cfg.temporal_resample_config.normal_threshold,
+                &m_config.restir_di_cfg.temporal_resample_config.normal_threshold,
                 0.0f,
                 1.0f
             );
@@ -167,25 +136,31 @@ void RaytracingUI::ShowConfig() {
 
         if (ImGui::TreeNode("SpatialResampleSettings")) {
             if (ImGui::TreeNode("BiasCorrection")) {
-                for (auto& name : s_bias_correction_mode_names) {
-                    uint idx = &name - s_bias_correction_mode_names;
+                for (uint index = 0; index < k_bias_correction_mode_names.size(); ++index) {
                     if (ImGui::Selectable(
-                            name.data(), config.restir_di_cfg.spatial_resample_config.bias_correction == idx
+                            k_bias_correction_mode_names[index].data(),
+                            m_config.restir_di_cfg.spatial_resample_config.bias_correction == index
                         )) {
-                        config.restir_di_cfg.spatial_resample_config.bias_correction = idx;
+                        m_config.restir_di_cfg.spatial_resample_config.bias_correction = index;
                     }
                 }
                 ImGui::TreePop();
             }
             ImGui::SliderFloat(
-                "depth threshold", &config.restir_di_cfg.spatial_resample_config.depth_threshold, 0.0f, 1.0f
+                "depth threshold",
+                &m_config.restir_di_cfg.spatial_resample_config.depth_threshold,
+                0.0f,
+                1.0f
             );
             ImGui::SliderFloat(
-                "normal threshold", &config.restir_di_cfg.spatial_resample_config.normal_threshold, 0.0f, 1.0f
+                "normal threshold",
+                &m_config.restir_di_cfg.spatial_resample_config.normal_threshold,
+                0.0f,
+                1.0f
             );
             ImGui::SliderInt(
                 "num spatial samples",
-                &config.restir_di_cfg.spatial_resample_config.num_spatial_samples,
+                &m_config.restir_di_cfg.spatial_resample_config.num_spatial_samples,
                 1,
                 32
             );
@@ -197,85 +172,105 @@ void RaytracingUI::ShowConfig() {
     ImGui::Separator();
     ImGui::Text("NRD Config");
     if (ImGui::TreeNode("DenoiserConfig")) {
-        for (auto& name : s_denoiser_mode_names) {
-            uint idx = &name - s_denoiser_mode_names;
-            if (ImGui::Selectable(name.data(), config.denoiser_cfg.denoiser_type == idx)) {
-                config.denoiser_cfg.denoiser_type = idx;
+        for (uint index = 0; index < k_denoiser_mode_names.size(); ++index) {
+            if (ImGui::Selectable(
+                    k_denoiser_mode_names[index].data(), m_config.denoiser_cfg.denoiser_type == index
+                )) {
+                m_config.denoiser_cfg.denoiser_type = index;
             }
         }
         ImGui::TreePop();
     }
     ImGui::Separator();
     ImGui::Text("Post-Process Config");
-    ImGui::Checkbox("Enable ToneMapping", &config.tone_mapping_cfg.enable_tone_mapping);
+    ImGui::Checkbox("Enable ToneMapping", &m_config.tone_mapping_cfg.enable_tone_mapping);
     if (ImGui::TreeNode("ToneMapping")) {
         ImGui::SliderFloat(
-            "Histogram Low Percentile", &config.tone_mapping_cfg.histogram_low_percentile, 0.0f, 1.0f
+            "Histogram Low Percentile",
+            &m_config.tone_mapping_cfg.histogram_low_percentile,
+            0.0f,
+            1.0f
         );
         ImGui::SliderFloat(
-            "Histogram High Percentile", &config.tone_mapping_cfg.histogram_high_percentile, 0.0f, 1.0f
+            "Histogram High Percentile",
+            &m_config.tone_mapping_cfg.histogram_high_percentile,
+            0.0f,
+            1.0f
         );
         ImGui::SliderFloat(
-            "Eye Adaptation Speed Up", &config.tone_mapping_cfg.eye_adaptation_speed_up, 0.0f, 10.0f
+            "Eye Adaptation Speed Up",
+            &m_config.tone_mapping_cfg.eye_adaptation_speed_up,
+            0.0f,
+            10.0f
         );
         ImGui::SliderFloat(
-            "Eye Adaptation Speed Down", &config.tone_mapping_cfg.eye_adaptation_speed_down, 0.0f, 10.0f
+            "Eye Adaptation Speed Down",
+            &m_config.tone_mapping_cfg.eye_adaptation_speed_down,
+            0.0f,
+            10.0f
         );
         ImGui::SliderFloat(
-            "Min Adapted Luminance", &config.tone_mapping_cfg.min_adapted_luminance, 0.0f, 10.0f
+            "Min Adapted Luminance",
+            &m_config.tone_mapping_cfg.min_adapted_luminance,
+            0.0f,
+            10.0f
         );
         ImGui::SliderFloat(
-            "Max Adapted Luminance", &config.tone_mapping_cfg.max_adapted_luminance, 0.0f, 10.0f
+            "Max Adapted Luminance",
+            &m_config.tone_mapping_cfg.max_adapted_luminance,
+            0.0f,
+            10.0f
         );
-        ImGui::SliderFloat("Exposure Bias", &config.tone_mapping_cfg.exposure_bias, -10.0f, 10.0f);
-        ImGui::SliderFloat("WhitePoint", &config.tone_mapping_cfg.white_point, 0.0f, 10.0f);
+        ImGui::SliderFloat("Exposure Bias", &m_config.tone_mapping_cfg.exposure_bias, -10.0f, 10.0f);
+        ImGui::SliderFloat("WhitePoint", &m_config.tone_mapping_cfg.white_point, 0.0f, 10.0f);
         ImGui::TreePop();
     }
     if (ImGui::TreeNode("AntiAlias")) {
         if (ImGui::TreeNode("AA Settings")) {
-            for (uint i = 0; i < EAnitiAliasMode::EAA_Num; i++) {
-                if (ImGui::Selectable(s_aa_mode_names[i].data(), config.aa_cfg.aa_mode == i)) {
-                    config.aa_cfg.aa_mode = (EAnitiAliasMode)i;
+            for (uint index = 0; index < EAnitiAliasMode::EAA_Num; ++index) {
+                if (ImGui::Selectable(
+                        k_aa_mode_names[index].data(), m_config.aa_cfg.aa_mode == index
+                    )) {
+                    m_config.aa_cfg.aa_mode = static_cast<EAnitiAliasMode>(index);
                 }
             }
             ImGui::TreePop();
         }
 
         if (ImGui::TreeNode("Jitter Settings")) {
-            for (uint i = 0; i < uint(EJitter::WhiteNoise) + 1; i++) {
-                if (ImGui::Selectable(s_jitter_mode_names[i].data(), uint(config.aa_cfg.jitter_mode) == i)) {
-                    config.aa_cfg.jitter_mode = (EJitter)i;
+            for (uint index = 0; index < static_cast<uint>(EJitter::WhiteNoise) + 1; ++index) {
+                if (ImGui::Selectable(
+                        k_jitter_mode_names[index].data(),
+                        static_cast<uint>(m_config.aa_cfg.jitter_mode) == index
+                    )) {
+                    m_config.aa_cfg.jitter_mode = static_cast<EJitter>(index);
                 }
             }
             ImGui::TreePop();
         }
-        ImGui::SliderFloat("New Frame Weight", &config.aa_cfg.new_frame_weight, 0.0f, 1.0f);
-        ImGui::SliderFloat("Clamping Factor", &config.aa_cfg.clamping_factor, 0.0f, 10.0f);
-        ImGui::SliderFloat("Max Radiance", &config.aa_cfg.max_radiance, 0.0f, 10000.0f);
-        ImGui::Checkbox("Enable History Clamping", &config.aa_cfg.enable_history_clamping);
+        ImGui::SliderFloat("New Frame Weight", &m_config.aa_cfg.new_frame_weight, 0.0f, 1.0f);
+        ImGui::SliderFloat("Clamping Factor", &m_config.aa_cfg.clamping_factor, 0.0f, 10.0f);
+        ImGui::SliderFloat("Max Radiance", &m_config.aa_cfg.max_radiance, 0.0f, 10000.0f);
+        ImGui::Checkbox("Enable History Clamping", &m_config.aa_cfg.enable_history_clamping);
         ImGui::TreePop();
     }
     ImGui::Separator();
     ImGui::Text("Directional Light Config");
-    config.sun_direction = Normalizef(config.sun_direction);
-    ImGui::SliderFloat3("Sun Direction", &config.sun_direction.x, -1.0f, 1.0f);
-    ImGui::SliderFloat("Exposure", &config.exposure, 0.0f, 10.0f);
-    // ImGui::SliderFloat("Sun Angular Diameter", &config.sun_angular_diameter,
-    // 0.0f, 1.0f);
-
-    int max_bounce = config.max_bounce;
-    // ImGui::SliderInt("Max Bounce", &max_bounce, 1, 5);
-    config.max_bounce = max_bounce;
+    m_config.sun_direction = Normalizef(m_config.sun_direction);
+    ImGui::SliderFloat3("Sun Direction", &m_config.sun_direction.x, -1.0f, 1.0f);
+    ImGui::SliderFloat("Exposure", &m_config.exposure, 0.0f, 10.0f);
 
     ImGui::Separator();
     ImGui::Text("Capture Settings");
-    for (uint i = 0; i < EOutputTexture::EOT_Num; i++) {
-        if (ImGui::Selectable(s_exported_texture_names[i].data(), config.export_cfg.output_texture == i)) {
-            config.export_cfg.output_texture = (EOutputTexture)i;
+    for (uint index = 0; index < EOutputTexture::EOT_Num; ++index) {
+        if (ImGui::Selectable(
+                k_exported_texture_names[index].data(), m_config.export_cfg.output_texture == index
+            )) {
+            m_config.export_cfg.output_texture = static_cast<EOutputTexture>(index);
         }
     }
     if (ImGui::Button("Capture Screen")) {
-        config.export_cfg.b_export = true;
+        m_config.export_cfg.b_export = true;
     }
 
     ImGui::TreePop();

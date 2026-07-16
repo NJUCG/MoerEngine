@@ -1,5 +1,7 @@
 ﻿#pragma once
 
+// 将场景与编辑器 UI 合成到当前交换链或平台窗口的 Framebuffer。
+
 #include "PixelFormat.h"
 #include "misc/STL.h"
 #include "shader/ShaderPipeline.h"
@@ -39,32 +41,12 @@ class UiCombinePass {
         {PF_R8G8B8A8_UNORM, PF_R8G8B8A8_SRGB, PF_B8G8R8A8_UNORM, PF_B8G8R8A8_SRGB};
 
 public:
-    UiCombinePass(ShaderManager& _manager) {
-        // combine_ui_pipeline = [&]() {
-        //     GfxPsoCreateInfo combine_pso_info(
-        //         RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(output_format)}
-        //     );
-        //     return _manager.Raster()
-        //         .Vertex("features/ui/CombineGuiVert.hlsl")
-        //         .Pixel("features/ui/CombineGuiFrag.hlsl")
-        //         .Build<CombineUIPipeline>(std::move(combine_pso_info));
-        // }();
-
-        // sample_texture_pipeline = [&]() {
-        //     GfxPsoCreateInfo sample_tex_pso_info(
-        //         RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(output_format)}
-        //     );
-        //     return _manager.Raster()
-        //         .Vertex("core/common/FullScreen.vert.hlsl")
-        //         .Pixel("core/utils/CopyTexture.frag.hlsl")
-        //         .Build<SampleTexturePipeline>(std::move(sample_tex_pso_info));
-        // }();
-
-        for (auto format : s_supported_formats) {
+    explicit UiCombinePass(ShaderManager& manager) {
+        for (const auto format : s_supported_formats) {
             GfxPsoCreateInfo combine_pso_info(
                 RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
             );
-            combine_ui_pipelines[format] = _manager.Raster()
+            combine_ui_pipelines[format] = manager.Raster()
                                                .Vertex("features/ui/CombineGuiVert.hlsl")
                                                .Pixel("features/ui/CombineGuiFrag.hlsl")
                                                .Build<CombineUIPipeline>(std::move(combine_pso_info));
@@ -73,7 +55,7 @@ public:
                 RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
             );
             sample_texture_pipelines[format] =
-                _manager.Raster()
+                manager.Raster()
                     .Vertex("core/common/FullScreen.vert.hlsl")
                     .Pixel("core/utils/CopyTexture.frag.hlsl")
                     .Build<SampleTexturePipeline>(std::move(sample_tex_pso_info));
@@ -82,16 +64,16 @@ public:
 
     TextureRef Process(
         CommandList& cmd_list,
-        bool         is_seperate_window,
+        bool         is_separate_window,
         const uint2& resolution,
         float2       scene_color_pos,
         float2       scene_color_resolution,
         TextureView  input_window_frame_buffer,
         TextureView  input_color_texture,
-        TextureView  input_ui_texture, // TODO: is this necessary?
+        TextureView  input_ui_texture,
         TextureView  default_output_texture
     ) {
-        if (is_seperate_window && input_window_frame_buffer.GetTexture()) {
+        if (is_separate_window && input_window_frame_buffer.GetTexture()) {
             assert(
                 sample_texture_pipelines.contains(input_window_frame_buffer.format) &&
                 "Unsupported format for SampleTexturePipeline"
@@ -118,32 +100,32 @@ public:
                 );
             // The Scene Color platform-window framebuffer is presented separately by the ImGui backend.
             return default_output_texture.GetTexture();
-        } else {
-            assert(
-                combine_ui_pipelines.contains(default_output_texture.format) &&
-                "Unsupported format for CombineUIPipeline"
-            );
-            float2 f_res  = float2(resolution.x, resolution.y);
-            float2 min_xy = scene_color_pos / f_res;
-            float2 max_xy = (scene_color_pos + scene_color_resolution) / f_res;
-            cmd_list
-                .Gfx(
-                    combine_ui_pipelines[default_output_texture.format],
-                    input_color_texture,
-                    input_ui_texture,
-                    Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE),
-                    CombineUIPipeline::Param{min_xy, max_xy}
-                )
-                .Draw(
-                    "Combine UI Pass",
-                    Rect2D(0, 0, resolution.x, resolution.y),
-                    {},
-                    3,
-                    {SingleDrawParam(3, 1, 0, 0, 0)},
-                    ColorAttachment(default_output_texture.GetTexture())
-                );
-            return default_output_texture.GetTexture();
         }
+
+        assert(
+            combine_ui_pipelines.contains(default_output_texture.format) &&
+            "Unsupported format for CombineUIPipeline"
+        );
+        const float2 output_resolution = float2(resolution.x, resolution.y);
+        const float2 scene_rect_min    = scene_color_pos / output_resolution;
+        const float2 scene_rect_max    = (scene_color_pos + scene_color_resolution) / output_resolution;
+        cmd_list
+            .Gfx(
+                combine_ui_pipelines[default_output_texture.format],
+                input_color_texture,
+                input_ui_texture,
+                Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE),
+                CombineUIPipeline::Param{scene_rect_min, scene_rect_max}
+            )
+            .Draw(
+                "Combine UI Pass",
+                Rect2D(0, 0, resolution.x, resolution.y),
+                {},
+                3,
+                {SingleDrawParam(3, 1, 0, 0, 0)},
+                ColorAttachment(default_output_texture.GetTexture())
+            );
+        return default_output_texture.GetTexture();
     }
 
 private:

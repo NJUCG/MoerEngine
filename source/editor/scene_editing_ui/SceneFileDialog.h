@@ -1,5 +1,7 @@
 #pragma once
 
+// 封装原生场景文件选择器，并统一返回给编辑器调用方的结果。
+
 #include "log/LogSystem.h"
 
 #include <array>

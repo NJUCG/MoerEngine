@@ -1,5 +1,7 @@
 #include "subui/RemoteExamplesUI.h"
 
+// 为当前远程端点生成可直接复制的 HTTP、WebSocket、JSON 和 Python 示例。
+
 #include <imgui.h>
 
 #include <string>
@@ -75,13 +77,13 @@ void RemoteExamplesUI::ShowWindow(const remote::RemoteModuleController& remote_c
 
     const auto        remote_config = remote_controller.GetConfigSnapshot();
     const std::string remote_host   = BuildRemoteExampleHost(remote_config.bind_address);
-    const std::string remote_http_base =
+    const std::string http_base_url =
         "http://" + remote_host + ":" + std::to_string(remote_config.http_port);
-    const std::string remote_ws_events =
+    const std::string websocket_events_url =
         "ws://" + remote_host + ":" + std::to_string(remote_config.websocket_port) + "/ws/events";
-    const std::string healthz_url                  = remote_http_base + "/healthz";
-    const std::string status_url                   = remote_http_base + "/api/remote/status";
-    const std::string execute_url                  = remote_http_base + "/api/script/execute";
+    const std::string healthz_url                  = http_base_url + "/healthz";
+    const std::string status_url                   = http_base_url + "/api/remote/status";
+    const std::string execute_url                  = http_base_url + "/api/script/execute";
     const std::string healthz_example              = "curl.exe " + healthz_url;
     const std::string status_example               = "curl.exe " + status_url;
     const std::string execute_python               = "print('hello remote')";
@@ -164,14 +166,14 @@ print(f"animation finished for {TARGET_NAME}, entity={target_entity}")
     const std::string timed_animation_json_payload = BuildRemoteExecuteJsonPayload(timed_animation_python);
     const std::string timed_animation_example =
         BuildRemoteExecuteExample(execute_url, timed_animation_python);
-    const std::string websocket_example = "# example client endpoint\n" + remote_ws_events;
+    const std::string websocket_example = "# example client endpoint\n" + websocket_events_url;
 
-    auto show_remote_example_section = [](const char*        title,
-                                          const std::string& url,
-                                          const std::string& example,
-                                          std::string_view   script_body    = {},
-                                          std::string_view   json_payload   = {},
-                                          float              example_height = 72.0f) {
+    const auto draw_remote_example_section = [](const char*        title,
+                                                const std::string& url,
+                                                const std::string& example,
+                                                std::string_view   script_body    = {},
+                                                std::string_view   json_payload   = {},
+                                                float example_height = 72.0f) {
         ImGui::SeparatorText(title);
         ImGui::PushID(title);
 
@@ -223,12 +225,12 @@ print(f"animation finished for {TARGET_NAME}, entity={target_entity}")
         "POST script examples provide PowerShell command, raw Python script, and JSON payload"
     );
 
-    show_remote_example_section("Health Check", healthz_url, healthz_example);
-    show_remote_example_section("Remote Status", status_url, status_example);
-    show_remote_example_section(
+    draw_remote_example_section("Health Check", healthz_url, healthz_example);
+    draw_remote_example_section("Remote Status", status_url, status_example);
+    draw_remote_example_section(
         "Execute Script", execute_url, execute_example, execute_python, execute_json_payload, 150.0f
     );
-    show_remote_example_section(
+    draw_remote_example_section(
         "Execute Script: Move And Rotate Named Node",
         execute_url,
         named_transform_example,
@@ -236,7 +238,7 @@ print(f"animation finished for {TARGET_NAME}, entity={target_entity}")
         named_transform_json_payload,
         300.0f
     );
-    show_remote_example_section(
+    draw_remote_example_section(
         "Execute Script: Timed Sine Animation For Named Node",
         execute_url,
         timed_animation_example,
@@ -244,7 +246,7 @@ print(f"animation finished for {TARGET_NAME}, entity={target_entity}")
         timed_animation_json_payload,
         300.0f
     );
-    show_remote_example_section("WebSocket Events", remote_ws_events, websocket_example);
+    draw_remote_example_section("WebSocket Events", websocket_events_url, websocket_example);
 
     ImGui::End();
 }

@@ -1,5 +1,6 @@
-#ifndef MOER_TEST_RaytracingUI_H
-#define MOER_TEST_RaytracingUI_H
+#pragma once
+
+// 通过 ImGui 面板提供 Raytracing 渲染器的运行时配置。
 
 #include "renderer/raytracing/RaytracingConfig.h"
 
@@ -7,28 +8,26 @@ namespace Moer {
 
 class RaytracingUI {
 public:
-    RaytracingUI(RaytracingConfig& config);
+    explicit RaytracingUI(RaytracingConfig& config);
     ~RaytracingUI() = default;
 
     void ShowConfig();
 
     const RaytracingConfig& GetConfig() const {
-        return config;
+        return m_config;
     }
 
     RaytracingConfig& GetEditableConfig() {
-        return config;
+        return m_config;
     }
 
     void ResetConfig() {
-        config = RaytracingConfig();
+        m_config = {};
     }
 
 private:
-    RaytracingConfig& config;
-
-    UnorderedMap<std::string, uint> final_color_map;
+    RaytracingConfig&               m_config;
+    UnorderedMap<std::string, uint> m_final_color_options;
 };
 
 } // namespace Moer
-#endif

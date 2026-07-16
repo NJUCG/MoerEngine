@@ -1,3 +1,4 @@
+// 在延迟渲染场景几何体后方绘制环境 cubemap。
 #pragma once
 
 #include "shader/ShaderPipeline.h"

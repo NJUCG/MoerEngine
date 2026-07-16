@@ -1,3 +1,4 @@
+// 负责光栅帧编排，不在此处实现各 Pass 的具体渲染算法。
 #include "RasterRenderer.h"
 
 #include "AaPass.h"
@@ -53,11 +54,10 @@ float GetElapsedTimeSeconds() {
 } // namespace
 
 RasterRenderer::RasterRenderer(
-    uint2                         _resolution,
-    const SharedPtr<EditorConfig> _config
+    uint2                   initial_resolution,
+    SharedPtr<EditorConfig> config
 ) :
-    // Super
-    Renderer(_resolution, _config) {
+    Renderer(initial_resolution, config) {
     ScopedLogTimer startup_timer("[Startup][RasterRenderer] RasterRenderer::Constructor() total");
 
     const auto& graph_config =
@@ -68,10 +68,10 @@ RasterRenderer::RasterRenderer(
         "[RenderGraph] Raster execution mode: {}",
         render_graph_enabled ? "graph" : "linear"
     );
-    if (!_config->validation_selected_frame_buffer_name.empty()) {
+    if (!config->validation_selected_frame_buffer_name.empty()) {
         LOG_INFO(
             "[ThreadingValidation][RasterFramebuffer] selection={}",
-            _config->validation_selected_frame_buffer_name
+            config->validation_selected_frame_buffer_name
         );
     }
 
@@ -99,7 +99,8 @@ RasterRenderer::RasterRenderer(
     skybox_pass                  = MakeUnique<SkyboxPass>(raster_context);
     ao_pass                      = MakeUnique<AoPass>(raster_context);
     rtao_denoiser_pass           = MakeUnique<RtaoDenoiserPass>(raster_context);
-    bfd_pass                     = MakeUnique<BilateralFilterDenoiserPass>(raster_context);
+    bilateral_filter_denoiser_pass =
+        MakeUnique<BilateralFilterDenoiserPass>(raster_context);
     ssr_pass                     = MakeUnique<SsrPass>(raster_context);
     cooperative_ops_pass         = MakeUnique<CooperativeOpsPass>(raster_context);
     aa_pass                      = MakeUnique<AaPass>(raster_context);
@@ -124,8 +125,6 @@ RasterRenderer::RasterRenderer(
     gfx_queue.Execute(cmd_list.Submit());
     gfx_queue.Sync();
 
-    // Other vars
-
     LOG_INFO(
         "Cooperative Matrix & Vector Extensions is Enabled: {}",
         device.IsExtensionCooperativeEnabled() ? "Yes" : "No"
@@ -140,7 +139,7 @@ RasterRenderer::~RasterRenderer() {
     auto& raster_context = *raster_context_ptr;
     raster_context.FreeFrameBuffers(true);
 
-    // 下面这段需要在Renderer子类中执行。否则各种Pass对象被Release的时候，对应的资源还没有被释放
+    // 必须在派生 Pass 对象仍然存活时释放其 Pass 资源。
     ReleaseResources();
     LOG_INFO(
         "[Threading] RasterRenderer destruction finished on {} Thread.",
@@ -149,7 +148,7 @@ RasterRenderer::~RasterRenderer() {
 }
 
 void RasterRenderer::Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
-    while (WindowContext::ShouldClose(WindowContext::GetMainWindow()) == false) {
+    while (!WindowContext::ShouldClose(WindowContext::GetMainWindow())) {
         if (!RunSingle(editor_config, hooks)) {
             break;
         }
@@ -161,7 +160,7 @@ void RasterRenderer::UpdateGlobalLightingData(
     const RasterConfig& ui_config,
     const Camera&       camera
 ) {
-    uint          csm_layers    = ui_config.shadow_csm_num_of_cascades;
+    const uint    cascade_count = ui_config.shadow_csm_num_of_cascades;
     LightingData* lighting_data = &context.lighting_data;
 
     lighting_data->clip2world      = Transpose(camera.GetViewProjectionMatrixInv());
@@ -171,43 +170,43 @@ void RasterRenderer::UpdateGlobalLightingData(
     // Shadow Parameters
     lighting_data->shadow_map_mode              = static_cast<int>(ui_config.shadow_map_mode);
     lighting_data->shadow_sampling_mode         = ui_config.shadow_sampling_mode;
-    lighting_data->shadow_csm_num_of_cascades   = csm_layers;
+    lighting_data->shadow_csm_num_of_cascades   = cascade_count;
     lighting_data->shadow_csm_sm_size           = ui_config.shadow_csm_sm_size;
     lighting_data->shadow_csm_visualize_cascade = ui_config.shadow_csm_visualize_cascade;
 
     // Shadow Map
-    for (uint i = 0; i < csm_layers; i++) {
-        lighting_data->cascade_shadow_map[i] = context.csm_data.shadow_map_textures[i].hdl;
+    for (uint cascade_index = 0; cascade_index < cascade_count; ++cascade_index) {
+        lighting_data->cascade_shadow_map[cascade_index] =
+            context.csm_data.shadow_map_textures[cascade_index].hdl;
     }
     lighting_data->point_shadow_map = context.point_shadow_data.shadow_cubes[0].handle;
     lighting_data->light_pos        = context.point_shadow_data.shadow_cubes[0].light_pos;
     lighting_data->light_radius     = context.point_shadow_data.shadow_cubes[0].far_plane;
 
     // Shadow Transform
-    for (uint i = 0; i < csm_layers; i++) {
-        lighting_data->world2shadow_clip[i] = Transpose(lighting_data->world2shadow_clip[i]);
+    for (uint cascade_index = 0; cascade_index < cascade_count; ++cascade_index) {
+        lighting_data->world2shadow_clip[cascade_index] =
+            Transpose(lighting_data->world2shadow_clip[cascade_index]);
     }
     lighting_data->world2view = Transpose(camera.GetViewMatrix());
     lighting_data->near_clip  = camera.GetNearClip();
     lighting_data->far_clip   = camera.GetFarClip();
 
     lighting_data->is_csm_blend_enabled = ui_config.shadow_csm_blend_option ? 1 : 0;
-    // 注：此处不一定使用所有CSM，Shader中具体根据shadow_csm_num_of_cascades来决定
+    // Shader 仅使用有效前缀，未启用的级联槽位保持不变。
 
     // PCSS
-    lighting_data->light_size_world = ui_config.shadow_pcss_light_size_world; //假定的光源大小，用于软阴影计算
+    lighting_data->light_size_world = ui_config.shadow_pcss_light_size_world;
     lighting_data->pcss_enabled     = ui_config.shadow_pcss_enabled ? 1 : 0;
 
     // BRDF
-    {
-        lighting_data->lut_ggx_emu_handle  = context.textures.lut_ggx_emu.hdl;
-        lighting_data->lut_ggx_eavg_handle = context.textures.lut_ggx_eavg.hdl;
+    lighting_data->lut_ggx_emu_handle  = context.textures.lut_ggx_emu.hdl;
+    lighting_data->lut_ggx_eavg_handle = context.textures.lut_ggx_eavg.hdl;
 
-        lighting_data->brdf_enable_multi_scatter = ui_config.shading_brdf_enable_multi_scatter ? 1 : 0;
-        lighting_data->brdf_NDF_mode             = static_cast<uint>(ui_config.shading_brdf_NDF_mode);
-        lighting_data->brdf_G_mode               = static_cast<uint>(ui_config.shading_brdf_G_mode);
-        lighting_data->brdf_G_is_ibl             = ui_config.shading_brdf_G_is_ibl ? 1 : 0;
-    }
+    lighting_data->brdf_enable_multi_scatter = ui_config.shading_brdf_enable_multi_scatter ? 1 : 0;
+    lighting_data->brdf_NDF_mode             = static_cast<uint>(ui_config.shading_brdf_NDF_mode);
+    lighting_data->brdf_G_mode               = static_cast<uint>(ui_config.shading_brdf_G_mode);
+    lighting_data->brdf_G_is_ibl             = ui_config.shading_brdf_G_is_ibl ? 1 : 0;
 
     context.probe_volume.FillLightingData(*lighting_data);
 
@@ -296,7 +295,7 @@ void RasterRenderer::UpdateGlobalLightingData(
     }
 
     context.cmd_list.CopyFrom(
-        std::span<byte>((byte*)lighting_data, sizeof(LightingData)),
+        std::span<byte>(reinterpret_cast<byte*>(lighting_data), sizeof(LightingData)),
         context.lighting_data_buffer.buf->GetView()
     );
 }
@@ -311,7 +310,7 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
     FramePrepareProfile  prepare_profile{};
     FramePrepareWorkload prepare_workload{};
     RasterFramePacket    frame_packet{};
-    frame_packet.frame_id = m_next_frame_id++;
+    frame_packet.frame_id = next_frame_id++;
     {
         ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.window_ms);
         LogSceneLoadStatus(*editor_config);
@@ -361,7 +360,7 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
     {
         ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.scene_update_ms);
         frame_packet.scene_updates =
-            scene.PrepareUpdateBatch(is_run_scene_test_case, m_capture_scene_geometry_snapshot);
+            scene.PrepareUpdateBatch(is_run_scene_test_case, capture_scene_geometry_snapshot);
     }
     if (profile_logging) {
         const auto& updates                        = frame_packet.scene_updates;
@@ -376,17 +375,17 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
         ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.camera_and_test_ms);
         if (frame_packet.scene_updates.scene_ready) {
             if (frame_packet.scene_updates.geometry) {
-                m_capture_scene_geometry_snapshot = false;
+                capture_scene_geometry_snapshot = false;
             }
 
             Camera main_camera = frame_packet.scene_updates.main_camera;
-            if (!m_b_scene_view_camera_initialized) {
-                m_scene_view_camera               = main_camera;
-                m_b_scene_view_camera_initialized = true;
+            if (!scene_view_camera_initialized) {
+                scene_view_camera             = main_camera;
+                scene_view_camera_initialized = true;
             }
 
             Camera& render_camera = editor_config->active_viewport_mode == EEditorViewportMode::Scene ?
-                                        m_scene_view_camera :
+                                        scene_view_camera :
                                         main_camera;
             render_camera.Tick(camera_input);
             frame_packet.render_camera = render_camera;
@@ -396,7 +395,7 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
                 scene.GetMainCamera().camera           = render_camera;
             }
         } else {
-            m_capture_scene_geometry_snapshot = true;
+            capture_scene_geometry_snapshot = true;
         }
     }
 
@@ -457,7 +456,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
     bool skip_present = false;
     if (frame_packet.window.state == EWindowState::Hiding) {
-        std::this_thread::yield(); // FIXME: 这个东西有用吗？
+        // 窗口最小化后无法 present，此处主动让出线程，避免高频空转。
+        std::this_thread::yield();
         skip_present = true;
 
     } else if (frame_packet.window.state == EWindowState::SizeChanged) {
@@ -465,7 +465,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
         raster_context.FreeFrameBuffers(false);
         raster_context.CreateFrameBuffers();
-        // raster_context.UploadExternalFrameBuffers(); // 窗口大小变化时，外部纹理不会变化，所以不需要上传
+        // 外部纹理与分辨率无关，窗口尺寸变化后仍然有效。
         raster_context.AllocateFrameBuffers();
 
 #if WITH_CUDA
@@ -486,7 +486,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
     TextureRef default_output_texture = raster_context.textures.output.tex;
 
-    // MARK: 3. Run Render Passes
+    // 窗口资源就绪后再使用已准备好的场景快照。
 
     if (frame_packet.scene_updates.scene_ready) {
         // 处理场景加载过程中遗留的命令
@@ -501,7 +501,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         if (first_load) {
             first_load = false;
 
-            // 随手加一句，避免出错（重构完毕后可以尝试去除）
+            // 第一个 Raster Pass 执行前，先发布首次场景上传创建的 descriptor。
             cmd_list.UpdateBindlessArray(bindless_array);
             gfx_queue.Execute(cmd_list.Submit());
             gfx_queue.Sync();
@@ -521,17 +521,19 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         Camera        camera      = frame_packet.render_camera;
 
         {
-            // Jitter Camera for SMAA T2x
-            static uint8_t smaa_current_frame_index = 0;
+            // 在不修改已捕获相机的前提下，交替使用两个 SMAA T2x 亚像素偏移。
+            static uint8_t s_smaa_frame_index = 0;
             if (raster_config.aa_mode == EAaMode::SMAA_T2X) {
-
-                smaa_current_frame_index ^= 1;
-                static StaticArray<float2, 2> smaa_jitter = {float2(0.25f, -0.25f), float2(-0.25f, 0.25f)};
+                s_smaa_frame_index ^= 1;
+                static const StaticArray<float2, 2> s_smaa_jitter_offsets = {
+                    float2(0.25f, -0.25f),
+                    float2(-0.25f, 0.25f)
+                };
                 const uint2 jitter_resolution = frame_packet.camera_viewport_resolution.x > 0 &&
                                                         frame_packet.camera_viewport_resolution.y > 0 ?
                                                     frame_packet.camera_viewport_resolution :
                                                     frame_packet.window.resolution;
-                camera.SetJitterMatrix(smaa_jitter[smaa_current_frame_index], jitter_resolution);
+                camera.SetJitterMatrix(s_smaa_jitter_offsets[s_smaa_frame_index], jitter_resolution);
             }
         }
 
@@ -541,10 +543,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             raster_context.csm_data.shadow_cache_config_snapshot_valid = false;
             raster_context.InvalidateHiZHistory();
         }
-
-        // others
-        // FIXME: 统一update scene
-        // scene.GetGpuScene().UpdateRaytracingScene(cmd_list);
 
         const auto& scene_gizmos = frame_packet.scene_view_gizmos;
         const bool  draw_scene_gizmos =
@@ -673,7 +671,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     builder.Read(graph_resources.depth)
                         .Write(graph_resources.hiz_current, "all-mips");
                 },
-                [&]() { hiz_build_pass->Process(raster_context, raster_config); }
+                [&]() { hiz_build_pass->Process(raster_context); }
             );
             schedule(
                 "CommitHiZHistory",
@@ -694,7 +692,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         .Write(graph_resources.shadow_mask);
                 },
                 [&]() {
-                    directional_shadow_mask_pass->Process(raster_context, raster_config, camera);
+                    directional_shadow_mask_pass->Process(raster_context);
                 }
             );
             schedule(
@@ -709,7 +707,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         .Read(graph_resources.probe_volume)
                         .Write(graph_resources.lighting_output);
                 },
-                [&]() { lighting_pass->Process(raster_context, raster_config, camera); }
+                [&]() { lighting_pass->Process(raster_context, raster_config); }
             );
             schedule(
                 "Skybox",
@@ -811,7 +809,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         .Write(graph_resources.denoiser_output);
                 },
                 [&]() {
-                    processing_image = bfd_pass->Process(raster_context, raster_config, processing_image);
+                    processing_image = bilateral_filter_denoiser_pass->Process(
+                        raster_context, raster_config, processing_image
+                    );
                 }
             );
             schedule(
@@ -1121,14 +1121,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             execute_linear();
         }
 
-        // without test
-        // FIXME: 统一advance frame
-        // scene.GetRaytracingScene()->AdvanceFrame();
-
-        // debug
         if (raster_config.debug_fps_limit_enable) {
-            // sleep 1.0 / fps seconds
-            // 虽然不精确，但简单
+            // 此调试限帧器有意保持简单，不补偿当前帧耗时。
             std::this_thread::sleep_for(std::chrono::duration<double>(1.0 / raster_config.debug_fps_limit));
             LOG_DEBUG("FPS Limit Enabled: {}", raster_config.debug_fps_limit);
         }
@@ -1147,11 +1141,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
     raster_context.probe_volume.TrackFrameSubmission(cmd_list, time);
     time++;
-    /***
-        currently using a phony timeline (any timeline signaled by copy queue) to remove error message from validation layer caused by host synced copy operations
-        we're not waiting for the copy queue to finish, because operations we wanted are synced on host side, we use this timeline just to notifiy the validation layer
-        that we've done flushing copy queue resources
-        */
+    // Host 同步的 copy 操作已经完成。此处触发 timeline，向 validation layer 传递执行顺序，
+    // 无需再额外等待 copy queue。
     gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources().TickProfiling());
 
     if (!skip_present) {
@@ -1197,7 +1188,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
     ApplyFrameFeedback(
         RenderFrame(PrepareFrame(editor_config, hooks)), editor_config->raster_config, hooks
     );
-    return !hooks.on_is_need_reload || !hooks.on_is_need_reload();
+    return !hooks.should_reload || !hooks.should_reload();
 }
 
 void RasterRenderer::ApplyFrameFeedback(

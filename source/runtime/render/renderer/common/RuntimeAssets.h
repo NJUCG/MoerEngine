@@ -1,21 +1,25 @@
 #ifndef MOER_EDITOR_ASSETS_H
 #define MOER_EDITOR_ASSETS_H
+
+// 加载渲染器启动阶段使用的只读资源，并将其转移到图形队列。
+
 #include "taskgraph/GraphTask.h"
+
 #include <atomic>
 #include <filesystem>
-#include <rhi/RHI.h>
+#include <string_view>
+
+#include "rhi/RHI.h"
+
 namespace Moer {
 
 class RENDER_API RuntimeAssets {
 public:
-    struct DefaultResource {
-        Render::TextureRef white;
-        Render::TextureRef black;
-    };
-    RuntimeAssets(std::filesystem::path _assets_path, Render::RenderDevice& _device);
+    RuntimeAssets(std::filesystem::path asset_root, Render::RenderDevice& device);
+
     bool               IsReady() const;
-    Render::TextureRef GetTexture(std::string_view _name) const;
-    Render::BufferRef  GetBuffer(std::string_view _name) const;
+    Render::TextureRef GetTexture(std::string_view name) const;
+    Render::BufferRef  GetBuffer(std::string_view name) const;
     Render::TextureRef GetDefaultEnvMap() const;
     void               WaitUntilReady() const;
 
@@ -30,7 +34,7 @@ private:
 
     UnorderedMap<std::string, Render::TextureRef> textures;
 
-    std::atomic_bool b_loaded = false;
+    std::atomic_bool is_loaded = false;
     GraphEventRef    load_event;
 };
 

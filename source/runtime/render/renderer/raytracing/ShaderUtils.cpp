@@ -1,32 +1,26 @@
 #include "ShaderUtils.h"
+
+// 实现渲染器侧工具调度和 CPU 生成的采样数据。
+
 #include "PixelFormat.h"
 #include "log/LogSystem.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/utils/Packing.h"
-#include <type_traits>
+
+#include <algorithm>
 
 namespace Moer::Render::Raytracing {
 
-inline static uint DivCeil(uint _a, uint _b) {
-    return (_a + _b - 1) / _b;
+namespace {
+
+constexpr uint DivCeil(uint value, uint divisor) {
+    return (value + divisor - 1) / divisor;
 }
 
-static constexpr EPixelFormat s_supported_formats[] = {
-    PF_R32G32B32_SFLOAT,
-    PF_R32G32B32A32_SFLOAT,
-    PF_R16G16B16A16_SFLOAT,
-    PF_R16G16B16A16_UNORM,
-    PF_R16G16B16A16_UINT,
-    PF_R16G16B16A16_SNORM,
-    PF_R8G8B8A8_SNORM,
-    PF_R8G8B8A8_UNORM,
-    PF_R8G8B8A8_SRGB
-};
+} // namespace
 
-ShaderUtils::ShaderUtils(RenderDevice& _device, ShaderManager& _manager) :
-    manager(_manager),
-    device(_device) {
+ShaderUtils::ShaderUtils(ShaderManager& manager) {
     gen_low_discrepancy_pipeline =
         std::move(manager.Compute<GenLowDiscrepancyPipeline>("core/utils/GenLowDiscrepancySequence.hlsl"));
     generate_mip_pdf_pipeline = std::move(manager.Compute<GenerateMipPdfPipeline>(
@@ -42,20 +36,11 @@ ShaderUtils::ShaderUtils(RenderDevice& _device, ShaderManager& _manager) :
                                           .Pixel("core/utils/ShowTexture.frag.hlsl")
                                           .Build<ShowTexturePipeline>(std::move(show_texture_pso_info)));
 
-    // for (auto format : s_supported_formats) {
-    //     GfxPsoCreateInfo sample_tex_pso_info(
-    //         RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
-    //     );
-    //     sample_texture_pipeline_map[format] =
-    //         std::move(manager.Raster()
-    //                       .Vertex("core/utils/FullScreenQuad.hlsl")
-    //                       .Pixel("core/utils/CopyTexture.frag.hlsl")
-    //                       .Build<UtilsSampleTexturePipeline>(std::move(sample_tex_pso_info)));
-    // }
-
-    sample_texture_cs_pipeline =
-        std::move(manager.Compute<UtilsSampleTexturePipelineCS>("core/utils/CopyTexture.cs.hlsl"));
+    copy_texture_pipeline =
+        std::move(manager.Compute<CopyTextureComputePipeline>("core/utils/CopyTexture.cs.hlsl"));
 }
+
+ShaderUtils::ShaderUtils(RenderDevice& /*device*/, ShaderManager& manager) : ShaderUtils(manager) {}
 
 void ShaderUtils::GenerateLowDiscrepancySequence(
     CommandList&                   _cmd_list,
@@ -64,28 +49,29 @@ void ShaderUtils::GenerateLowDiscrepancySequence(
 ) {
     assert(_param.num_dimensions == 2);
     assert(_param.num_samples * _param.num_dimensions <= _output.GetByteSize());
-    // _cmd_list.Compute(gen_low_discrepancy_pipeline, _param, _output).Dispatch(uint3(DivCeil(_param.num_samples, 256), 1, 1), "GenerateLowDiscrepancySequence");
-
     Array<int8> data(_param.num_samples * 2);
-    int         R    = 250;
-    const float phi2 = 1.0f / 1.3247179572447f;
-    uint32_t    num  = 0;
-    float       u    = 0.5f;
-    float       v    = 0.5f;
+    constexpr int radius_scale = 250;
+    const float   phi2         = 1.0f / 1.3247179572447f;
+    uint32_t      num          = 0;
+    float         u            = 0.5f;
+    float         v            = 0.5f;
     while (num < _param.num_samples * 2) {
         u += phi2;
         v += phi2 * phi2;
-        if (u >= 1.0f)
+        if (u >= 1.0f) {
             u -= 1.0f;
-        if (v >= 1.0f)
+        }
+        if (v >= 1.0f) {
             v -= 1.0f;
+        }
 
-        float rSq = (u - 0.5f) * (u - 0.5f) + (v - 0.5f) * (v - 0.5f);
-        if (rSq > 0.25f)
+        const float radius_squared = (u - 0.5f) * (u - 0.5f) + (v - 0.5f) * (v - 0.5f);
+        if (radius_squared > 0.25f) {
             continue;
+        }
 
-        data[num++] = int8((u - 0.5f) * R);
-        data[num++] = (v - 0.5f) * R;
+        data[num++] = static_cast<int8>((u - 0.5f) * radius_scale);
+        data[num++] = static_cast<int8>((v - 0.5f) * radius_scale);
     }
 
     _cmd_list.CopyFrom(std::span<byte>((byte*)data.data(), data.size()), _output);
@@ -98,11 +84,10 @@ void ShaderUtils::GenerateMipPdf(
     const TextureView&     _env_map,
     std::span<TextureView> _integrated_mips
 ) {
-    using T = std::remove_const_t<std::remove_reference_t<const TextureView&>>;
     PreprocessEnvironmentMapParams param;
     uint                           width  = _env_map.extent.x;
     uint                           height = _env_map.extent.y;
-    //5 mips in one dispatch
+    // 每次调度最多处理连续五级 mip。
     for (uint i = 0; i < _integrated_mips.size(); i += 5) {
         param.src_mip_level  = i;
         param.num_mip_levels = _integrated_mips.size();
@@ -172,43 +157,15 @@ void ShaderUtils::ShowTexture(
         );
 }
 
-void ShaderUtils::SampleTextureRaster(
-    CommandList& _cmd_list,
-    TextureView  _src_tex,
-    TextureView  _dst_texture,
-    EPixelFormat _format
-) {
-    assert(0 && "SampleTextureRaster not implemented");
-    Sampler linear_clamp_sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE};
-    //find dst pso
-    if (!sample_texture_pipeline_map.contains(_format)) {
-        assert(false && "Unsupported format");
-    }
-
-    auto& sample_texture_pipeline = sample_texture_pipeline_map[_format];
-
-    _cmd_list.Gfx(sample_texture_pipeline, _src_tex, linear_clamp_sampler)
-        .Draw(
-            "SampleTexture",
-            Rect2D(0, 0, _dst_texture.extent.x, _dst_texture.extent.y),
-            {},
-            3,
-            {SingleDrawParam(3, 1, 0, 0, 0)},
-            ColorAttachment{_dst_texture.GetTexture()}
-        );
-}
-
 void ShaderUtils::SampleTextureCS(
-    CommandList& _cmd_list,
-    TextureView  _src_tex,
-    TextureView  _dst_texture,
-    EPixelFormat _format
+    CommandList& cmd_list,
+    TextureView  input_texture,
+    TextureView  output_texture
 ) {
     Sampler linear_clamp_sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE};
-    //find dst pso
-    _cmd_list.Compute(sample_texture_cs_pipeline, _src_tex, linear_clamp_sampler, _dst_texture)
+    cmd_list.Compute(copy_texture_pipeline, input_texture, linear_clamp_sampler, output_texture)
         .Dispatch(
-            uint3(DivCeil(_dst_texture.extent.x, 16), DivCeil(_dst_texture.extent.y, 16), 1),
+            uint3(DivCeil(output_texture.extent.x, 16), DivCeil(output_texture.extent.y, 16), 1),
             "SampleTextureCS"
         );
 }

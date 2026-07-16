@@ -1,9 +1,10 @@
 #include "RasterUI.h"
 
+// 提供 Raster 管线的功能控制项和轻量级运行时诊断信息。
+
 #include "config/ConfigManager.h"
 
 #include <imgui.h>
-#include <imgui_internal.h>
 #include <string_view>
 
 namespace Moer {
@@ -20,7 +21,7 @@ RasterUI::RasterUI(RasterConfig& config) : m_cooperative_ops_ui(config), m_confi
         m_config.aa_mode = EAaMode::FXAA_SIMPLIFIED;
     }
 
-    if (ConfigManager::GetInstance().GetConfig().engine.render.raster.enable_shadow == false) {
+    if (!ConfigManager::GetInstance().GetConfig().engine.render.raster.enable_shadow) {
         m_config.shadow_map_mode = EShadowMapMode::NONE;
     }
 }
@@ -30,11 +31,9 @@ void RasterUI::ShowConfig() {
         return;
     }
 
-    auto draw_border = [&]() {
-        // 获取选项的矩形区域
-        ImVec2 min = ImGui::GetItemRectMin();
-        ImVec2 max = ImGui::GetItemRectMax();
-        // 绘制边框
+    const auto draw_border = []() {
+        const ImVec2 min = ImGui::GetItemRectMin();
+        const ImVec2 max = ImGui::GetItemRectMax();
         ImGui::GetWindowDrawList()->AddRect(min, max, IM_COL32(255, 255, 255, 255));
     };
 
@@ -59,7 +58,7 @@ void RasterUI::ShowConfig() {
     // MARK: Geometry & Culling
     if (ImGui::TreeNode("Geometry & Culling")) {
 
-        auto toggle_button = [](const char* label, bool& value) {
+        const auto toggle_button = [](const char* label, bool& value) {
             ImGui::PushStyleColor(
                 ImGuiCol_Button, value ? IM_COL32(70, 130, 95, 255) : IM_COL32(65, 65, 65, 255)
             );
@@ -84,8 +83,15 @@ void RasterUI::ShowConfig() {
         ImGui::SliderInt("Force LOD Level", &m_config.force_lod_level, -1, 8, 
             m_config.force_lod_level < 0 ? "Auto" : "%d");
 
-        static const char* debug_vis_names[] = { "Off", "Cluster ID", "frac(UV)", "Vertex Normal" };
-        ImGui::Combo("Debug Visualization", &m_config.geometry_debug_visualization, debug_vis_names, 4);
+        static constexpr const char* debug_visualization_names[] = {
+            "Off", "Cluster ID", "frac(UV)", "Vertex Normal"
+        };
+        ImGui::Combo(
+            "Debug Visualization",
+            &m_config.geometry_debug_visualization,
+            debug_visualization_names,
+            4
+        );
 
         // Culling Statistics
         {
@@ -185,23 +191,12 @@ void RasterUI::ShowConfig() {
             "Shading", "Shading: [%s]", s_shading_mode_name_map.at(m_config.shading_mode).c_str()
         )) {
 
-        // 有多个ShadingMode的时候，再显示这个选项
-        // for (uint i = 0; i < s_shading_mode_name_map.size(); i++) {
-        //     auto cur_enum = static_cast<EShadingMode>(i);
-        //     if (ImGui::Selectable(
-        //             s_shading_mode_name_map.at(cur_enum).c_str(), m_config.shading_mode == cur_enum
-        //         )) {
-        //         m_config.shading_mode = cur_enum;
-        //     }
-        //     draw_border();
-        // }
-        // ImGui::Separator();
+        // 当前仅开放一种着色模型，因此本区域直接配置其 BRDF。
 
         if (m_config.shading_mode == EShadingMode::DEFAULT_PBR) {
-            // TODO: 添加注释，不然没人知道这些设置有什么用
             ImGui::Text("BRDF Settings:");
 
-            // BRDF, Multi-Scatter
+            // 补偿单次散射微表面近似造成的能量损失。
             ImGui::Checkbox("MultiScatter (Kulla-Conty)", &m_config.shading_brdf_enable_multi_scatter);
 
             // Spacing
@@ -210,7 +205,7 @@ void RasterUI::ShowConfig() {
             // NDF
             ImGui::Text("NDF:");
             for (uint i = 0; i < s_brdf_ndf_mode_name_map.size(); i++) {
-                auto cur_enum = static_cast<EBrdfNdfMode>(i);
+                const auto cur_enum = static_cast<EBrdfNdfMode>(i);
                 if (ImGui::Selectable(
                         s_brdf_ndf_mode_name_map.at(cur_enum).c_str(),
                         m_config.shading_brdf_NDF_mode == cur_enum
@@ -226,7 +221,7 @@ void RasterUI::ShowConfig() {
             // Geometry Function
             ImGui::Text("Geometry Function:");
             for (uint i = 0; i < s_brdf_geometry_mode_name_map.size(); i++) {
-                auto cur_enum = static_cast<EBrdfGMode>(i);
+                const auto cur_enum = static_cast<EBrdfGMode>(i);
                 if (ImGui::Selectable(
                         s_brdf_geometry_mode_name_map.at(cur_enum).c_str(),
                         m_config.shading_brdf_G_mode == cur_enum
@@ -236,7 +231,7 @@ void RasterUI::ShowConfig() {
                 draw_border();
             }
             if (m_config.shading_brdf_G_mode == EBrdfGMode::G_SCHLICK) {
-                // Light Source is IBL
+                // Schlick 几何近似在 IBL 中使用不同的重映射。
                 ImGui::Checkbox("Light Source is IBL", &m_config.shading_brdf_G_is_ibl);
             }
             ImGui::Dummy(ImVec2(0.0f, 5.0f));
@@ -254,8 +249,8 @@ void RasterUI::ShowConfig() {
 
     // MARK: Probe GI
     if (ImGui::TreeNode("Probe GI", "Probe GI: [%s]", m_config.probe_gi_enabled ? "Enable" : "Disable")) {
-        auto clamp_probe_counts = [&](ProbeVolumeConfig& volume) {
-            auto clamp_int = [](int value, int low, int high) {
+        const auto clamp_probe_counts = [](ProbeVolumeConfig& volume) {
+            const auto clamp_int = [](int value, int low, int high) {
                 return value < low ? low : (value > high ? high : value);
             };
 
@@ -263,7 +258,7 @@ void RasterUI::ShowConfig() {
             volume.count_y = clamp_int(volume.count_y, 1, 16);
             volume.count_z = clamp_int(volume.count_z, 1, 16);
 
-            auto probe_count = [&]() {
+            const auto probe_count = [&]() {
                 return volume.count_x * volume.count_y * volume.count_z;
             };
 
@@ -474,7 +469,7 @@ void RasterUI::ShowConfig() {
             );
         }
 
-        auto sanitize_volume_size = [](float3 value) {
+        const auto sanitize_volume_size = [](float3 value) {
             return float3(
                 value.x < 0.1f ? 0.1f : value.x,
                 value.y < 0.1f ? 0.1f : value.y,
@@ -657,7 +652,7 @@ void RasterUI::ShowConfig() {
         ImGui::Text("Only project 1st Dir.Light");
 
         for (uint i = 0; i < s_shadow_map_mode_name_map.size(); i++) {
-            EShadowMapMode cur_enum = static_cast<EShadowMapMode>(i);
+            const EShadowMapMode cur_enum = static_cast<EShadowMapMode>(i);
             if (ImGui::Selectable(
                     s_shadow_map_mode_name_map.at(cur_enum).c_str(), m_config.shadow_map_mode == cur_enum
                 )) {
@@ -671,7 +666,7 @@ void RasterUI::ShowConfig() {
             ImGui::SliderFloat("Light Size World", &m_config.shadow_pcss_light_size_world, 0.001f, 0.1f);
         }
 
-        auto csm_common_param = [&]() {
+        const auto draw_csm_common_settings = [&]() {
             ImGui::SliderInt("Num of Cascades", &m_config.shadow_csm_num_of_cascades, 1, CSM_MAX_CASCADES);
             ImGui::SliderInt("Shadow Map Size", &m_config.shadow_csm_sm_size, 512, 4096);
             ImGui::Checkbox("Visualize CSM Cascade", &m_config.shadow_csm_visualize_cascade);
@@ -688,9 +683,12 @@ void RasterUI::ShowConfig() {
                     "Cascade 0: Red", "Cascade 1: Orange", "Cascade 2: Green", "Cascade 3: Blue"
                 };
 
-                for (int i = 0; i < m_config.shadow_csm_num_of_cascades; i++) {
+                for (int cascade_index = 0; cascade_index < m_config.shadow_csm_num_of_cascades;
+                     ++cascade_index) {
                     ImGui::TextColored(
-                        s_cascade_visualize_colors[i], "%s", s_cascade_visualize_color_names[i]
+                        s_cascade_visualize_colors[cascade_index],
+                        "%s",
+                        s_cascade_visualize_color_names[cascade_index]
                     );
                 }
             }
@@ -700,7 +698,7 @@ void RasterUI::ShowConfig() {
             }
         };
 
-        auto csm_shadow_cache_param = [&]() {
+        const auto draw_csm_cache_settings = [&]() {
             ImGui::Separator();
             ImGui::Checkbox("Enable Shadow Cache", &m_config.shadow_cache_enabled);
             ImGui::TextWrapped(
@@ -716,35 +714,38 @@ void RasterUI::ShowConfig() {
             m_config.shadow_cache_disable_first_n_cascades =
                 Max(0,
                     Min(m_config.shadow_cache_disable_first_n_cascades, m_config.shadow_csm_num_of_cascades));
-            for (int i = 0; i < m_config.shadow_csm_num_of_cascades; i++) {
+            for (int cascade_index = 0; cascade_index < m_config.shadow_csm_num_of_cascades;
+                 ++cascade_index) {
                 ImGui::SliderFloat(
-                    std::format("Cascade {} Cache Move Threshold (Texels)", i).c_str(),
-                    &m_config.shadow_cache_camera_move_threshold_in_texels[i],
+                    std::format("Cascade {} Cache Move Threshold (Texels)", cascade_index).c_str(),
+                    &m_config.shadow_cache_camera_move_threshold_in_texels[cascade_index],
                     0.0f,
                     128.0f
                 );
             }
         };
 
-        if (m_config.shadow_map_mode == EShadowMapMode::POINT_CUBE) { // Point Cube
+        if (m_config.shadow_map_mode == EShadowMapMode::POINT_CUBE) {
             ImGui::SliderInt("Shadow Map Size", &m_config.shadow_csm_sm_size, 512, 4096);
-        } else if (m_config.shadow_map_mode == EShadowMapMode::CSM) { // CSM
-            csm_common_param();
-            float mx = 0.0f;
-            for (int i = 0; i < m_config.shadow_csm_num_of_cascades; i++) {
+        } else if (m_config.shadow_map_mode == EShadowMapMode::CSM) {
+            draw_csm_common_settings();
+            float minimum_cover_ratio = 0.0f;
+            for (int cascade_index = 0; cascade_index < m_config.shadow_csm_num_of_cascades;
+                 ++cascade_index) {
                 ImGui::SliderFloat(
-                    std::format("{}-th CSM Cover Ratio", i).c_str(),
-                    &m_config.shadow_csm_cover_ratio_of_camera[i],
+                    std::format("{}-th CSM Cover Ratio", cascade_index).c_str(),
+                    &m_config.shadow_csm_cover_ratio_of_camera[cascade_index],
                     0.0f,
-                    (i < m_config.shadow_csm_num_of_cascades - 1) ? 0.2f : 1.0f
+                    (cascade_index < m_config.shadow_csm_num_of_cascades - 1) ? 0.2f : 1.0f
                 );
-                m_config.shadow_csm_cover_ratio_of_camera[i] =
-                    Max(m_config.shadow_csm_cover_ratio_of_camera[i], mx);
-                mx = m_config.shadow_csm_cover_ratio_of_camera[i];
+                m_config.shadow_csm_cover_ratio_of_camera[cascade_index] = Max(
+                    m_config.shadow_csm_cover_ratio_of_camera[cascade_index], minimum_cover_ratio
+                );
+                minimum_cover_ratio = m_config.shadow_csm_cover_ratio_of_camera[cascade_index];
             }
-            csm_shadow_cache_param();
-        } else if (m_config.shadow_map_mode == EShadowMapMode::CSM_AUTO) { // CSM_Auto
-            csm_common_param();
+            draw_csm_cache_settings();
+        } else if (m_config.shadow_map_mode == EShadowMapMode::CSM_AUTO) {
+            draw_csm_common_settings();
             ImGui::SliderFloat(
                 "Max Cover Ratio",
                 &m_config.shadow_csm_auto_max_cover_ratio_of_camera,
@@ -752,7 +753,7 @@ void RasterUI::ShowConfig() {
                 1.0f
             );
             ImGui::SliderFloat("Lerp Factor", &m_config.shadow_csm_lerp_factor, 0, 1);
-            csm_shadow_cache_param();
+            draw_csm_cache_settings();
         }
 
         ImGui::TreePop();
@@ -765,7 +766,7 @@ void RasterUI::ShowConfig() {
 
         assert(s_ao_mode_name_map.size() == static_cast<uint32>(EAoMode::NUM));
         for (uint i = 0; i < s_ao_mode_name_map.size(); i++) {
-            EAoMode cur_enum = static_cast<EAoMode>(i);
+            const EAoMode cur_enum = static_cast<EAoMode>(i);
             if (ImGui::Selectable(s_ao_mode_name_map.at(cur_enum).c_str(), m_config.ao_mode == cur_enum)) {
                 m_config.ao_mode = cur_enum;
             }
@@ -789,7 +790,7 @@ void RasterUI::ShowConfig() {
             ImGui::Text("RTAO Sample Mode:");
             assert(s_rtao_sample_mode_name_map.size() == static_cast<uint32>(ERtaoSampleMode::NUM));
             for (uint i = 0; i < s_rtao_sample_mode_name_map.size(); i++) {
-                ERtaoSampleMode cur_enum = static_cast<ERtaoSampleMode>(i);
+                const ERtaoSampleMode cur_enum = static_cast<ERtaoSampleMode>(i);
                 if (ImGui::Selectable(
                         s_rtao_sample_mode_name_map.at(cur_enum).c_str(),
                         m_config.rtao_sample_mode == cur_enum
@@ -810,8 +811,6 @@ void RasterUI::ShowConfig() {
                 );
 
                 ImGui::Checkbox("Enable RTAO Reprojection", &m_config.rtao_denoiser_reprojection_enable);
-            } else {
-                // m_config.rtao_denoiser_reprojection_enable = false;
             }
 
             // 启用 Reprojection 后才能启用 Validation
@@ -821,8 +820,6 @@ void RasterUI::ShowConfig() {
                 ImGui::Checkbox(
                     "Enable RTAO Motion Weighting", &m_config.rtao_denoiser_motion_weighting_enable
                 );
-            } else {
-                // m_config.rtao_denoiser_validation_enable = false;
             }
 
             // 启用 Validation 后的额外选项
@@ -893,7 +890,7 @@ void RasterUI::ShowConfig() {
 
         assert(s_denoiser_mode_name_map.size() == static_cast<uint32>(EDenoiserMode::NUM));
         for (uint i = 0; i < s_denoiser_mode_name_map.size(); i++) {
-            EDenoiserMode cur_enum = static_cast<EDenoiserMode>(i);
+            const EDenoiserMode cur_enum = static_cast<EDenoiserMode>(i);
             if (ImGui::Selectable(
                     s_denoiser_mode_name_map.at(cur_enum).c_str(), m_config.denoiser_mode == cur_enum
                 )) {
@@ -991,7 +988,7 @@ void RasterUI::ShowConfig() {
 
         assert(s_aa_mode_name_map.size() == static_cast<uint32>(EAaMode::NUM));
         for (uint i = 0; i < s_aa_mode_name_map.size(); i++) {
-            EAaMode cur_enum = static_cast<EAaMode>(i);
+            const EAaMode cur_enum = static_cast<EAaMode>(i);
             if (ImGui::Selectable(s_aa_mode_name_map.at(cur_enum).c_str(), m_config.aa_mode == cur_enum)) {
                 m_config.aa_mode = cur_enum;
             }
@@ -1030,10 +1027,10 @@ void RasterUI::RegisterFrameBufferNames(const Array<std::string>& frame_buffer_n
 }
 
 uint RasterUI::GetDefaultSelectedFrameBufferIndex() const {
-    const std::string default_selected_frame_buffer_name = "tonemapping_output";
+    constexpr std::string_view k_default_frame_buffer_name = "tonemapping_output";
 
     for (uint i = 0; i < m_frame_buffer_names.size(); ++i) {
-        if (m_frame_buffer_names[i] == default_selected_frame_buffer_name) {
+        if (m_frame_buffer_names[i] == k_default_frame_buffer_name) {
             return i;
         }
     }

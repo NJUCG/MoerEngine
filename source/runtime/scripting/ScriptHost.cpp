@@ -1,3 +1,5 @@
+// 负责协调脚本工作线程、执行队列以及需要切回主线程的 Scene 命令。
+
 #include "scripting/ScriptHost.h"
 
 #include "log/LogSystem.h"
@@ -247,7 +249,6 @@ void ScriptHost::WorkerMain(std::promise<std::string> startup_promise) {
 
         if (!startup_value_sent) {
             startup_promise.set_value(ex.what());
-            startup_value_sent = true;
         }
 
         LOG_ERROR("ScriptHost worker failed: {}", ex.what());

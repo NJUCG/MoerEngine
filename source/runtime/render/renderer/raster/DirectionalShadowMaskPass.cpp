@@ -1,3 +1,4 @@
+// 实现全屏方向光阴影遮罩 Pass。
 #include "DirectionalShadowMaskPass.h"
 
 #include "RasterTool.h"
@@ -10,24 +11,19 @@ DirectionalShadowMaskPass::DirectionalShadowMaskPass(RasterContext& context) {
         {RHIColorAttachmentInfo::Preset(context.textures.shadow_mask.tex->GetFormat())}
     );
 
-    directional_shadow_mask_pipeline =
-        context.manager.Raster()
-            .Vertex("core/utils/FullScreenQuad.hlsl")
-            .Pixel("pipelines/raster/deferred/lighting/shadows/ShadowMask.frag.hlsl")
-            .Build<DirectionalShadowMaskPassPipeline>(std::move(pso_full_screen_info));
+    pipeline = context.manager.Raster()
+                   .Vertex("core/utils/FullScreenQuad.hlsl")
+                   .Pixel("pipelines/raster/deferred/lighting/shadows/ShadowMask.frag.hlsl")
+                   .Build<DirectionalShadowMaskPassPipeline>(std::move(pso_full_screen_info));
 }
 
-void DirectionalShadowMaskPass::Process(
-    RasterContext&      context,
-    const RasterConfig& ui_config,
-    const Camera&       camera
-) {
+void DirectionalShadowMaskPass::Process(RasterContext& context) {
     DirectionalShadowMaskPassBindlessParam param;
     param.normal_hdl = context.textures.normal.hdl;
     param.depth_hdl  = context.textures.depth_nearest_sampler.hdl;
 
     context.cmd_list
-        .Gfx(directional_shadow_mask_pipeline, context.lighting_data_buffer.buf, context.bdls, param)
+        .Gfx(pipeline, context.lighting_data_buffer.buf, context.bdls, param)
         .Draw(
             "Directional Shadow Mask Pass",
             context.textures.shadow_mask.GetRect2D(),

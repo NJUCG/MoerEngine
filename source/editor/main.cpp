@@ -1,5 +1,8 @@
+// 校验编辑器命令行参数，并管理顶层 Editor 生命周期。
+
 #include "Editor.h"
 #include "Engine.h"
+
 #include <iostream>
 
 int main(int argc, const char** argv) {

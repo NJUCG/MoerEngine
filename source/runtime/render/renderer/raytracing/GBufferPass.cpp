@@ -1,14 +1,17 @@
 #include "GBufferPass.h"
 
+// 构建当前帧和上一帧的 GBuffer 表面，并打包降噪器属性。
+
 #include "RTResource.h"
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 
+#include <cmath>
+#include <cstring>
+
 namespace Moer::Render::Raytracing {
 
 GBufferPass::GBufferPass(RenderDevice& device, ShaderManager& manager, BindlessArrayRef bindless_array) :
-    device(device),
-    manager(manager),
     bindless_array(std::move(bindless_array)) {
 
     gbuffer_constants = device.CreateBuffer<Moer::byte>(
@@ -16,65 +19,65 @@ GBufferPass::GBufferPass(RenderDevice& device, ShaderManager& manager, BindlessA
     );
     RTGBufferMacros gbuffer_macros{};
     gbuffer_macros.SetMutation<RaytracingGBufferPipeline::PRINT_TEST>(true);
-    gbuffer_pass_pipeline = std::move(manager.Compute<RaytracingGBufferPipeline>(
+    gbuffer_pipeline = manager.Compute<RaytracingGBufferPipeline>(
         "pipelines/raytracing/passes/GBufferRT.hlsl", gbuffer_macros
-    ));
+    );
 
-    int with_nrd = WITH_NRD;
+    constexpr int with_nrd = WITH_NRD;
 #pragma push_macro("WITH_NRD")
 #undef WITH_NRD
     PostProcessGBufferPipeline::MutationSet mutation_set;
     mutation_set.SetMutation<PostProcessGBufferPipeline::WITH_NRD>(with_nrd);
 #pragma pop_macro("WITH_NRD")
 
-    post_process_pipeline = std::move(manager.Compute<PostProcessGBufferPipeline>(
+    gbuffer_postprocess_pipeline = manager.Compute<PostProcessGBufferPipeline>(
         "pipelines/raytracing/passes/PostProcessGBuffer.hlsl", mutation_set
-    ));
+    );
 }
 
-void GBufferPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
-    GBufferPassParams         params{};
-    RaytracingBindlessHandles bindless_handles = _rt_ctx.GetBindlessHandles();
+void GBufferPass::Process(CommandList& cmd_list, RTContext& rt_ctx) {
+    GBufferPassParams                params{};
+    const RaytracingBindlessHandles& bindless_handles = rt_ctx.GetBindlessHandles();
 
-    // 场景结构数据
+    // 场景间接索引表。
     params.instance_buf_hdl  = bindless_handles.instance_buf_hdl;
     params.primitive_buf_hdl = bindless_handles.primitive_buf_hdl;
     params.material_buf_hdl  = bindless_handles.material_buf_hdl;
 
-    // MegaBuffers
+    // 共享几何数据大缓冲区。
     params.position_buf_hdl       = bindless_handles.position_buf_hdl;
     params.packed_normal_buf_hdl  = bindless_handles.packed_normal_buf_hdl;
     params.packed_tangent_buf_hdl = bindless_handles.packed_tangent_buf_hdl;
     params.texcoord0_buf_hdl      = bindless_handles.texcoord0_buf_hdl;
     params.index_buf_hdl          = bindless_handles.index_buf_hdl;
 
-    // RT 专用（mesh-level BLAS 方案）
+    // Raytracing 专用的 mesh 级 BLAS 间接索引。
     params.rt_instance_buf_hdl        = bindless_handles.rt_instance_buf_hdl;
     params.rt_primitive_table_buf_hdl = bindless_handles.rt_primitive_table_buf_hdl;
 
-    constants.main_view = _rt_ctx.main_view;
-    constants.prev_view = _rt_ctx.prev_view;
+    constants.main_view = rt_ctx.main_view;
+    constants.prev_view = rt_ctx.prev_view;
     upload_data.resize(sizeof(GBufferConstants));
     std::memcpy(upload_data.data(), &constants, sizeof(GBufferConstants));
 
-    FrameResources& frame_rt        = _rt_ctx.frame_rt;
-    bool            b_current_frame = _rt_ctx.b_current_frame;
-    _cmd_list.PushScopeWithTimeScope("GBufferPass");
-    _cmd_list.CopyFrom(std::move(upload_data), gbuffer_constants->GetView());
+    const FrameResources& frame         = rt_ctx.frame_rt;
+    const bool            current_frame = rt_ctx.b_current_frame;
+    cmd_list.PushScopeWithTimeScope("GBufferPass");
+    cmd_list.CopyFrom(std::move(upload_data), gbuffer_constants->GetView());
 
-    _cmd_list
+    cmd_list
         .Compute(
-            gbuffer_pass_pipeline,
+            gbuffer_pipeline,
             params,
             gbuffer_constants,
-            b_current_frame ? frame_rt.view_depth : frame_rt.prev_view_depth,
-            b_current_frame ? frame_rt.diffuse_albedo : frame_rt.prev_diffuse_albedo,
-            b_current_frame ? frame_rt.specular_roughness : frame_rt.prev_specular_roughness,
-            b_current_frame ? frame_rt.normal : frame_rt.prev_normal,
-            frame_rt.emission,
-            frame_rt.motion,
-            frame_rt.clip_depth,
-            _rt_ctx.rt_scene->GetTlas(),
+            current_frame ? frame.view_depth : frame.prev_view_depth,
+            current_frame ? frame.diffuse_albedo : frame.prev_diffuse_albedo,
+            current_frame ? frame.specular_roughness : frame.prev_specular_roughness,
+            current_frame ? frame.normal : frame.prev_normal,
+            frame.emission,
+            frame.motion,
+            frame.clip_depth,
+            rt_ctx.rt_scene->GetTlas(),
             bindless_array
         )
         .Dispatch(
@@ -82,19 +85,20 @@ void GBufferPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
             "RaytracingGbuffer"
         );
 
-    _cmd_list
+    cmd_list
         .Compute(
-            post_process_pipeline,
-            b_current_frame ? frame_rt.specular_roughness : frame_rt.prev_specular_roughness,
-            frame_rt.normal_roughness,
-            b_current_frame ? frame_rt.normal : frame_rt.prev_normal,
-            b_current_frame ? frame_rt.view_depth : frame_rt.prev_view_depth
+            gbuffer_postprocess_pipeline,
+            current_frame ? frame.specular_roughness : frame.prev_specular_roughness,
+            frame.normal_roughness,
+            current_frame ? frame.normal : frame.prev_normal,
+            current_frame ? frame.view_depth : frame.prev_view_depth
         )
         .Dispatch(
             uint3(ceil(constants.main_view.rect.x / 16), ceil(constants.main_view.rect.y / 16), 1),
             "PostProcessGBuffer"
         );
 
-    _cmd_list.PopScopeWithTimeScope();
+    cmd_list.PopScopeWithTimeScope();
 }
+
 } // namespace Moer::Render::Raytracing

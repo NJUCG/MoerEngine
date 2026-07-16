@@ -1,7 +1,6 @@
+// 实现 DXC 编译和反射阶段使用的枚举、格式与路径转换辅助函数。
 #include "DXCUtils.h"
 #include "PixelFormat.h"
-#include "config/ConfigManager.h"
-#include "platform/Platform.h"
 #include "shader/ShaderCommon.h"
 #include "spirv.hpp"
 #include <format>
@@ -202,10 +201,7 @@ std::wstring GetPlatform(EShaderType _type, EShaderPlatform _platform) {
     return k;
 }
 
-std::wstring SearchValidShaderPath(const std::string& _relative_shader_path) {
-    std::string           shader_path    = _relative_shader_path;
-    Moer::ConfigManager&  config_manager = Moer::ConfigManager::GetInstance();
-    std::filesystem::path shader_dir     = config_manager.GetEngineShaderPath();
-    //TODO: shader dir
-    return L"";
+std::wstring SearchValidShaderPath(const std::string&) {
+    // 预留给需要按平台搜索 Shader 的调用方；当前编译流程直接使用配置中的根目录。
+    return {};
 }

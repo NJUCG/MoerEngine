@@ -1,5 +1,7 @@
 #pragma once
 
+// 协调编辑器顶层 ImGui 窗口，并将其状态传递给运行时渲染器。
+
 #include "misc/Traits.h"
 #include "remote/RemoteModuleController.h"
 #include "renderer/EditorConfig.h"
@@ -61,7 +63,7 @@ public:
     const SharedPtr<EditorConfig> GetConfig() const {
         return m_config;
     }
-    bool IsNeedReload() const {
+    bool NeedsReload() const {
         return m_b_need_reload;
     }
     float GetSceneColorAspectRatio() const {
@@ -72,11 +74,11 @@ public:
         m_b_show_render_config_sub_ui = show;
     }
 
-    bool               IsSeperateWindow() const;
+    bool               IsSeparateWindow() const;
     Render::TextureRef GetWindowFrameBuffer();
 
-    void RegisterUIFunc(std::string _name, std::function<void()>&& _func);
-    void UnregisterUIFunc(std::string _name);
+    void RegisterUIFunc(std::string name, std::function<void()>&& callback);
+    void UnregisterUIFunc(std::string name);
 
 public: // Sub UI
     RasterUI       m_raster_ui;
@@ -85,12 +87,11 @@ public: // Sub UI
     RemoteExamplesUI m_remote_examples_ui;
 
 private:
-    void ResetState(); // reset m_b_need_reload, etc..
+    void ResetFrameState();
     void ShowFileMenu(Scene& scene, bool is_scene_loading);
     void ShowGameView();
     void ShowSceneView(Scene& scene);
     void ShowViewportWindow(const char* window_name, bool* p_open, EEditorViewportMode viewport_mode);
-    void ShowSceneColor();
     void ShowConfig(Scene& scene);
     void ShowSceneEditing(Scene& scene);
     void ShowHierarchy(Scene& scene);
@@ -113,7 +114,8 @@ private:
     bool   m_b_show_scene_editing         = true;
     bool   m_b_scene_color_mouse_captured = false;
     bool   m_b_active_viewport_window_seen = false;
-    float2 m_scene_color_resolution; // TODO: why float2? not uint2?
+    // ImGui 窗口几何信息使用浮点屏幕坐标表示。
+    float2 m_scene_color_resolution;
     float2 m_scene_color_pos;
     bool   m_b_show = true;
 

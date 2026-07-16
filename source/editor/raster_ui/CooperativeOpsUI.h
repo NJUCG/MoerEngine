@@ -1,5 +1,7 @@
 #pragma once
 
+// 显示 Raster 渲染器的 Cooperative Matrix/Vector 能力与运行状态。
+
 #include "Core.h"
 #include "renderer/raster/RasterConfig.h"
 

@@ -1,6 +1,6 @@
+// 构建 GPU 遮挡剔除使用的层次化反向 Z 深度金字塔。
 #pragma once
 
-#include "RasterConfig.h"
 #include "RasterResource.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
@@ -22,10 +22,12 @@ public:
 class HiZBuildPass {
 public:
     HiZBuildPass(RasterContext& context) {
-        m_pso = context.manager.Compute<HiZBuildPipeline>("pipelines/raster/culling/HiZBuild.comp.hlsl");
+        pipeline = context.manager.Compute<HiZBuildPipeline>(
+            "pipelines/raster/culling/HiZBuild.comp.hlsl"
+        );
     }
 
-    void Process(RasterContext& context, RasterConfig&) {
+    void Process(RasterContext& context) {
         if (context.textures.hiz_current.tex == nullptr) {
             return;
         }
@@ -35,45 +37,50 @@ public:
             return;
         }
 
-        // 第一版先保证结果正确：mip0 从 depth 拷贝，后续每层单独做一次 2x2 reduction
-        auto dispatch_build = [&](TextureView src_view,
-                                  TextureView dst_view,
-                                  const uint2 src_size,
-                                  const uint2 dst_size,
+        // mip 0 复制深度，后续每次 dispatch 将当前层级的每个 2x2 区域归约到下一个 mip。
+        auto dispatch_build = [&](TextureView source_view,
+                                  TextureView destination_view,
+                                  const uint2 source_size,
+                                  const uint2 destination_size,
                                   bool        is_mip0) {
             HiZBuildParam param{};
-            param.src_size = src_size;
-            param.dst_size = dst_size;
+            param.src_size = source_size;
+            param.dst_size = destination_size;
             param.is_mip0  = is_mip0 ? 1u : 0u;
 
-            context.cmd_list.Compute(m_pso, param, src_view, dst_view)
-                .Dispatch(uint3((dst_size.x + 7) / 8, (dst_size.y + 7) / 8, 1), "Build Hi-Z");
+            context.cmd_list.Compute(pipeline, param, source_view, destination_view)
+                .Dispatch(
+                    uint3((destination_size.x + 7) / 8, (destination_size.y + 7) / 8, 1),
+                    "Build Hi-Z"
+                );
         };
 
         context.cmd_list.PushScopeWithTimeScope("Build Hi-Z");
 
         {
-            TextureView src_view  = context.textures.depth_nearest_sampler.tex->GetView();
-            TextureView dst_view  = context.textures.hiz_current.tex->GetView(0, 1);
-            uint2       mip0_size = context.textures.hiz_current.GetSize(0);
+            const TextureView source_view      = context.textures.depth_nearest_sampler.tex->GetView();
+            const TextureView destination_view = context.textures.hiz_current.tex->GetView(0, 1);
+            const uint2       mip0_size        = context.textures.hiz_current.GetSize(0);
 
-            dispatch_build(src_view, dst_view, mip0_size, mip0_size, true);
+            dispatch_build(source_view, destination_view, mip0_size, mip0_size, true);
         }
 
         for (uint mip = 1; mip < mip_count; ++mip) {
-            TextureView src_view = context.textures.hiz_current.tex->GetView(static_cast<uint8>(mip - 1), 1);
-            TextureView dst_view = context.textures.hiz_current.tex->GetView(static_cast<uint8>(mip), 1);
-            uint2       src_size = context.textures.hiz_current.GetSize(mip - 1);
-            uint2       dst_size = context.textures.hiz_current.GetSize(mip);
+            const TextureView source_view =
+                context.textures.hiz_current.tex->GetView(static_cast<uint8>(mip - 1), 1);
+            const TextureView destination_view =
+                context.textures.hiz_current.tex->GetView(static_cast<uint8>(mip), 1);
+            const uint2 source_size      = context.textures.hiz_current.GetSize(mip - 1);
+            const uint2 destination_size = context.textures.hiz_current.GetSize(mip);
 
-            dispatch_build(src_view, dst_view, src_size, dst_size, false);
+            dispatch_build(source_view, destination_view, source_size, destination_size, false);
         }
 
         context.cmd_list.PopScopeWithTimeScope();
     }
 
 private:
-    HiZBuildPipeline m_pso;
+    HiZBuildPipeline pipeline;
 };
 
 } // namespace Moer::Render::Raster

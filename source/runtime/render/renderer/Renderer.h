@@ -1,11 +1,13 @@
 #pragma once
 
+// 定义渲染器公共的帧编排、窗口状态与编辑器 Hook 契约。
+
 // Runtime
-#include "renderer/FramePrepareProfile.h"
 #include "renderer/EditorConfig.h"
+#include "renderer/FramePrepareProfile.h"
 #include "rhi/RHI.h"
-#include "scene/Scene.h"
 #include "scene/RenderScene.h"
+#include "scene/Scene.h"
 #include "shader/ShaderResourceManager.h"
 
 #include "common/UIRenderer.h"
@@ -16,7 +18,7 @@
 namespace Moer::Render {
 
 struct UiCompositionFrameData {
-    bool       enabled = false;
+    bool       enabled         = false;
     bool       separate_window = false;
     uint2      output_resolution{};
     float2     scene_color_position{};
@@ -26,22 +28,22 @@ struct UiCompositionFrameData {
 
 struct EngineHooks {
     // Common
-    std::function<void(Scene&)>                   on_tick_scripting;
-    std::function<void(Scene&)>                   on_tick_test;
-    std::function<void(Scene&)>                   on_tick_ui;
-    std::function<bool(void)>                     on_is_need_reload;
+    std::function<void(Scene&)> on_tick_scripting;
+    std::function<void(Scene&)> on_tick_test;
+    std::function<void(Scene&)> on_tick_ui;
+    std::function<bool()>       should_reload;
 
     std::function<TextureRef(UiCombinePass*, CommandList&, TextureView, TextureView, TextureView)>
         on_ui_combine_pass;
 
-    std::function<UiCompositionFrameData(void)> on_capture_ui_composition;
-    std::function<UiDrawFramePacket(void)>      on_capture_ui_draw_frame;
+    std::function<UiCompositionFrameData()> on_capture_ui_composition;
+    std::function<UiDrawFramePacket()>      on_capture_ui_draw_frame;
 
-    std::function<void(std::string, std::function<void(void)>)> on_register_ui_func;
+    std::function<void(std::string, std::function<void()>)> on_register_ui_func;
 
     std::function<void(std::string)> on_unregister_ui_func;
 
-    std::function<void(void)> on_show_config_sub_ui;
+    std::function<void()> on_show_config_sub_ui;
 
     // Raster
     std::function<void(const Array<std::string>&)> on_raster_register_frame_buffer_names;
@@ -62,7 +64,7 @@ public:
         uint2        resolution = uint2(0u, 0u);
     };
 
-    Renderer(uint2 _resolution, const SharedPtr<EditorConfig> _config);
+    Renderer(uint2 initial_resolution, const SharedPtr<EditorConfig> config);
 
     virtual ~Renderer();
 
@@ -107,18 +109,18 @@ protected:
     SwapchainRef     swapchain;
     BindlessArrayRef bindless_array;
 
-    SwapchainCreateInfo swapchain_createinfo;
-    Scene               scene;
+    SwapchainCreateInfo    swapchain_create_info;
+    Scene                  scene;
     UniquePtr<RenderScene> render_scene;
-    CommandList         cmd_list;
+    CommandList            cmd_list;
 
     UniquePtr<UiCombinePass> ui_combine_pass;
 
-    // Other vars
+    // 由具体渲染器共享的帧同步状态。
     FenceRef timeline;
     uint64   time;
     bool     first_load;
-    bool     released = false;
+    bool     resources_released = false;
     uint     max_frame_in_flight;
 
     UniquePtr<FramePrepareProfileState> frame_prepare_profile_state;

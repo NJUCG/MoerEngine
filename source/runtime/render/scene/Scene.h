@@ -33,7 +33,7 @@ struct SceneUpdateBatch;
  *
  * 改这里:
  * - 加新的对外场景 API: Scene.h + SceneQuery.cpp / SceneModify.cpp
- * - 改加载 / import / reset / cache 入口: SceneLifeCycle.cpp + loader 目录
+ * - 改加载 / import / reset / cache 入口: SceneLifecycle.cpp + loader 目录
  * - 改每帧同步流程: SceneTickSync.cpp + CpuScene / GpuSceneUpdate
  * - 改 CPU Scene、bindless 或 Logical Scene bridge: SceneAccess.cpp
  *
@@ -51,7 +51,7 @@ struct SceneUpdateBatch;
  * - LogicalScene：内部 ECS / system 实现层
  * - SceneCreateInfo.h：负责 Scene API 的 CreateInfo 定义
  * - Scene.cpp拆分：
- *   - SceneLifeCycle.cpp：负责生命周期 API，包括 load / import / reset / cache
+ *   - SceneLifecycle.cpp：负责生命周期 API，包括 load / import / reset / cache
  *   - SceneTickSync.cpp：负责 Tick / sync 主流程与 GpuSceneUpdate 快照生成
  *   - SceneQuery.cpp：负责 Scene query API
  *   - SceneModify.cpp：负责 Scene 修改 API，调用 LogicalScene，并维护同步数据与 Dirty 标记
@@ -77,7 +77,7 @@ class RENDER_API Scene {
      * Scene 类目录：
      * 1. Runtime Scene Update Feature Checklist
      * 2. 类型
-     * 3. 生命周期 API / 私有 Helpers【实现位于：SceneLifeCycle.cpp】
+     * 3. 生命周期 API / 私有 Helpers【实现位于：SceneLifecycle.cpp】
      * 4. 场景 Tick / 同步 API / 私有 Helpers【实现位于：SceneTickSync.cpp】
      * 5. 场景查询 API【实现位于：SceneQuery.cpp】
      * 6. 场景修改 API【实现位于：SceneModify.cpp】

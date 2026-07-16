@@ -1,3 +1,4 @@
+// 声明 Assimp 场景到 LogicalScene 的转换入口。
 #pragma once
 
 #include <filesystem>

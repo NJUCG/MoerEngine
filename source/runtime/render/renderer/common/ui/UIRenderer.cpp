@@ -1,16 +1,18 @@
+// 将上层 UI 生命周期调用转发到 Dear ImGui 后端，并维护跨线程帧数据的后端所有权。
+
 #include "renderer/common/UIRenderer.h"
-#include "ImGUIRenderer.h"
+#include "DearImGuiRenderer.h"
 #include "rhi/RHI.h"
 
 namespace Moer::Render {
 struct UIRenderer::Impl {
-    Impl(RenderDevice& _device) : backend(MakeShared<ImGUIRenderBackend>(_device)) {};
-    ~Impl() {}
+    explicit Impl(RenderDevice& _device) : backend(MakeShared<ImGuiRenderBackend>(_device)) {}
+
     void RegisterImage(Texture* _texture, Sampler _sampler) {
         backend->RegisterImage(_texture, _sampler);
     }
-    void UnRegisterImage(Texture* _texture) {
-        backend->UnRegisterImage(_texture);
+    void UnregisterImage(Texture* _texture) {
+        backend->UnregisterImage(_texture);
     }
 
     void BeginGUIFrame() {
@@ -28,19 +30,23 @@ struct UIRenderer::Impl {
         frame.backend = backend;
         return frame;
     }
-    SharedPtr<ImGUIRenderBackend> backend;
+    SharedPtr<ImGuiRenderBackend> backend;
 };
 
 UIRenderer::UIRenderer(RenderDevice& _device) : impl(MakeUnique<Impl>(_device)) {}
 
-UIRenderer::~UIRenderer() {}
+UIRenderer::~UIRenderer() = default;
 
 void UIRenderer::RegisterImage(Texture* _texture, Sampler _sampler) {
     impl->RegisterImage(_texture, _sampler);
 }
 
+void UIRenderer::UnregisterImage(Texture* _texture) {
+    impl->UnregisterImage(_texture);
+}
+
 void UIRenderer::UnRegisterImage(Texture* _texture) {
-    impl->UnRegisterImage(_texture);
+    UnregisterImage(_texture);
 }
 
 void UIRenderer::BeginGUIFrame() {

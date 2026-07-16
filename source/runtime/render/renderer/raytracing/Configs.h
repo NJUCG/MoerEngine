@@ -1,17 +1,19 @@
 #ifndef MOER_RAYTRACING_CONFIGS_H
 #define MOER_RAYTRACING_CONFIGS_H
 
+// ReSTIR DI 重要性采样的 CPU 侧配置与帧状态。
+
 #include "misc/Traits.h"
 #include "rhi/RHICommand.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 #include "shaderheaders/shared/lighting/ShaderParameters.h"
 
-// namespace Moer::Render, not Moer::Render::Raytracing (need fix?)
+// 共享 Shader 参数类型将重要性采样上下文定义在 Moer::Render 中。
 namespace Moer::Render {
 
 static constexpr uint s_num_restirdi_reservoir_buffer = 3;
 
-inline static uint JekinsHash(uint _key) {
+inline static uint JenkinsHash(uint _key) {
     _key = (_key + 0x7ed55d16) + (_key << 12);
     _key = (_key ^ 0xc761c23c) ^ (_key >> 19);
     _key = (_key + 0x165667b1) + (_key << 5);
@@ -21,34 +23,50 @@ inline static uint JekinsHash(uint _key) {
     return _key;
 }
 
+// 保留旧拼写，避免仍依赖该工具函数的外部调用方立即失效。
+[[deprecated("Use JenkinsHash instead")]] inline static uint JekinsHash(uint _key) {
+    return JenkinsHash(_key);
+}
+
 class SimpleSegmentAllocator {
 public:
     SimpleSegmentAllocator();
 
     uint Allocate(uint _size_elements);
-    uint GetTotalSize() const; //in elements
+    uint GetTotalSize() const;
 
 private:
-    uint total_element_cnt;
+    uint total_element_count;
 };
 
 struct GridConfig {
     uint3 grid_size{16};
-    uint  grid_mode      = s_di_local_light_sample_mode_power_ris;
-    uint  light_per_ceil = 512;
+    uint  grid_mode = s_di_local_light_sample_mode_power_ris;
+    // 旧字段已公开，保留为唯一存储；新代码通过正确拼写的访问器读写。
+    uint light_per_ceil = 512;
+
+    uint GetLightsPerCell() const {
+        return light_per_ceil;
+    }
+
+    void SetLightsPerCell(uint lights_per_cell) {
+        light_per_ceil = lights_per_cell;
+    }
 };
 
 struct GridRuntimeConfig {
     uint num_light_slot;
 };
 
-struct GridChangableConfig {
+struct GridChangeableConfig {
     float  cell_size = 25.f;
     float3 center    = float3(0.f);
 
     float grid_jitter            = 1.f;
     uint  num_grid_build_samples = 8;
 };
+
+using GridChangableConfig [[deprecated("Use GridChangeableConfig instead")]] = GridChangeableConfig;
 
 struct BufferSegmentParam {
     uint tile_size;
@@ -68,8 +86,6 @@ struct ReSTIRDIRuntimeConfig {
 };
 } // namespace DI
 
-struct ImportanceSamplingConfig {};
-
 inline static DI::ReSTIRDIInitialSampleParams GetDefaultReSTIRDIInitialSampleParams() {
     DI::ReSTIRDIInitialSampleParams params;
     params.num_primary_local_lights    = 8;
@@ -77,7 +93,7 @@ inline static DI::ReSTIRDIInitialSampleParams GetDefaultReSTIRDIInitialSamplePar
     params.num_primary_env_lights      = 1;
     params.num_primary_brdf_lights     = 1;
     params.brdf_cutoff                 = 0.001f;
-    params.enable_initial_visiblity    = 1;
+    params.enable_initial_visibility   = 1;
     params.env_map_is                  = 1;
     params.local_light_sample_mode     = s_di_local_light_sample_mode_grid;
     return params;
@@ -112,10 +128,10 @@ inline static DI::ReSTIRDISpatialResampleParams GetDefaultReSTIRDISpatialResampl
 inline static DI::ReSTIRDIShadingParams GetDefaultReSTIRDIShadingParams() {
     DI::ReSTIRDIShadingParams params;
     params.enable_denoiser_input_packing = 0;
-    params.enable_final_visiblity        = 1;
-    params.final_visiblity_max_age       = 4;
-    params.final_visiblity_max_distance  = 16.f;
-    params.reuse_final_visiblity         = 1;
+    params.enable_final_visibility       = 1;
+    params.final_visibility_max_age      = 4;
+    params.final_visibility_max_distance = 16.f;
+    params.reuse_final_visibility        = 1;
     return params;
 }
 
@@ -125,7 +141,7 @@ inline static DI::ReSTIRDIBufferIndices GetDefaultReSTIRDIBufferIndicesParams() 
     return params;
 }
 
-struct ImportantSamplingParams {
+struct ImportanceSamplingParams {
     BufferSegmentParam local_light_ris_buffer_segment_params{1024, 128};
     BufferSegmentParam env_light_ris_buffer_segment_params{1024, 128};
 
@@ -135,9 +151,12 @@ struct ImportantSamplingParams {
     uint neighbor_offset_cnt = 8092;
 };
 
+using ImportantSamplingParams [[deprecated("Use ImportanceSamplingParams instead")]] =
+    ImportanceSamplingParams;
+
 struct ImportanceSamplingContext {
 
-    ImportanceSamplingContext(const ImportantSamplingParams& _param);
+    explicit ImportanceSamplingContext(const ImportanceSamplingParams& _param);
 
     DI::ReSTIRDIInitialSampleParams& GetDIInitialSampleParams() {
         return di_initial_sample_params;
@@ -198,8 +217,8 @@ struct ImportanceSamplingContext {
         return light_buffer_params;
     }
 
-    void SetChangeableGridConfig(const GridChangableConfig& _config) {
-        grid_changable_config                       = _config;
+    void SetChangeableGridConfig(const GridChangeableConfig& _config) {
+        grid_changeable_config                      = _config;
         grid_params.common_params.cell_size         = _config.cell_size;
         grid_params.common_params.center_x          = _config.center.x;
         grid_params.common_params.center_y          = _config.center.y;
@@ -217,8 +236,14 @@ struct ImportanceSamplingContext {
         di_initial_sample_params.local_light_sample_mode = _sample_mode;
     }
 
-    void SetReSTIRDIIInitialSampleParams(const DI::ReSTIRDIInitialSampleParams& _params) {
+    void SetReSTIRDIInitialSampleParams(const DI::ReSTIRDIInitialSampleParams& _params) {
         di_initial_sample_params = _params;
+    }
+
+    [[deprecated("Use SetReSTIRDIInitialSampleParams instead")]] void SetReSTIRDIIInitialSampleParams(
+        const DI::ReSTIRDIInitialSampleParams& _params
+    ) {
+        SetReSTIRDIInitialSampleParams(_params);
     }
 
     void SetReSTIRDITemporalResampleParams(const DI::ReSTIRDITemporalResampleParams& _params) {
@@ -229,7 +254,7 @@ struct ImportanceSamplingContext {
         di_spatial_resample_settings = _params;
     }
 
-    //called in prepare lights in each frame
+    // PrepareLightPass 确定每帧光源布局后更新。
     void SetLightBufferParams(
         uint _frame_offset,
         uint _num_finit_lights,
@@ -245,16 +270,16 @@ struct ImportanceSamplingContext {
         return grid_runtime_config;
     }
 
-    GridChangableConfig GetGridChangableConfig() const {
-        return grid_changable_config;
+    GridChangeableConfig GetGridChangeableConfig() const {
+        return grid_changeable_config;
+    }
+
+    [[deprecated("Use GetGridChangeableConfig instead")]] GridChangeableConfig GetGridChangableConfig() const {
+        return GetGridChangeableConfig();
     }
 
     const Grid::Params& GetGridParams() const {
         return grid_params;
-    }
-
-    uint GetGridCeillOffset() const {
-        return grid_runtime_config.num_light_slot;
     }
 
     const DI::ReSTIRDIRuntimeConfig& GetReSTIRDIRuntimeConfig() const {
@@ -293,9 +318,9 @@ private:
     DI::RISBufferSegmentParams env_light_ris_buffer_params;
     DI::LightBufferParams      light_buffer_params;
 
-    GridConfig          grid_config;
-    GridRuntimeConfig   grid_runtime_config;
-    GridChangableConfig grid_changable_config;
+    GridConfig           grid_config;
+    GridRuntimeConfig    grid_runtime_config;
+    GridChangeableConfig grid_changeable_config;
 
     Grid::Params grid_params;
 

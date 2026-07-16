@@ -1,5 +1,7 @@
 #pragma once
 
+// 在编辑器中提供 Raster 渲染器设置和诊断输出选择。
+
 #include "CooperativeOpsUI.h"
 
 #include "Core.h"
@@ -12,7 +14,7 @@ namespace Moer {
 class RasterUI {
 
 public:
-    RasterUI(RasterConfig& config);
+    explicit RasterUI(RasterConfig& config);
     ~RasterUI() = default;
 
     void ShowConfig();
@@ -31,7 +33,7 @@ private:
     bool               m_frame_buffer_names_initialized = false;
 
     CooperativeOpsUI m_cooperative_ops_ui;
-    RasterConfig& m_config;
+    RasterConfig&     m_config;
 };
 
 } // namespace Moer

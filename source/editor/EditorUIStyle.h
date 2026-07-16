@@ -1,5 +1,7 @@
 #pragma once
 
+// 定义编辑器的 ImGui 主题，以及用于运行时切换样式的简易选择器。
+
 #include <imgui.h>
 #include <imgui_internal.h>
 
@@ -8,10 +10,10 @@ namespace Moer {
 class EditorUIStyle {
 
 public:
-    static bool ShowStyleSelector(const char* _label) {
-        static int style_idx = 0;
-        if (ImGui::Combo(_label, &style_idx, "Default\0Light\0Classic\0")) {
-            switch (style_idx) {
+    static bool ShowStyleSelector(const char* label) {
+        static int style_index = 0;
+        if (ImGui::Combo(label, &style_index, "Default\0Light\0Classic\0")) {
+            switch (style_index) {
                 case 0:
                     StyleColorsDark();
                     break;
@@ -27,12 +29,11 @@ public:
         return false;
     }
 
-    // use this func first
     static void ApplyDefaultStyle() {
         StyleColorsDark();
     }
 
-    static void StyleColorsDark(ImGuiStyle* _dst = nullptr) {
+    static void StyleColorsDark() {
         auto& colors = ImGui::GetStyle().Colors;
 
         colors[ImGuiCol_Text]                  = ImVec4(0.90f, 0.90f, 0.90f, 1.00f);

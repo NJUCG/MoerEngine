@@ -1,5 +1,7 @@
 #include "EditorUISettings.h"
 
+// 在独立的 ImGui ini 配置段中持久化顶层编辑器窗口的可见性。
+
 #include <imgui.h>
 #include <imgui_internal.h>
 

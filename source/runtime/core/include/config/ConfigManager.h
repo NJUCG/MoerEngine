@@ -1,3 +1,4 @@
+// 管理全局配置，并集中提供运行时所需的工作目录与资源路径。
 #ifndef MOER_ENGINE_CONFIG_MANAGER_H
 #define MOER_ENGINE_CONFIG_MANAGER_H
 
@@ -6,7 +7,7 @@
 
 #include <filesystem>
 
-//implement ConfigManager as Singleton
+// UI 字体资源相对于 asset 根目录的位置；保留宏以兼容现有调用方。
 #define FONTS_DIR "fonts"
 namespace Moer {
 
@@ -15,10 +16,10 @@ class CORE_API ConfigManager {
 public:
     static ConfigManager& GetInstance();
 
-    void Init(const std::filesystem::path& _workspace_path);
+    void Init(const std::filesystem::path& workspace_path);
     void Init(
-        const std::filesystem::path& _workspace_path,
-        const std::filesystem::path& _config_path
+        const std::filesystem::path& workspace_path,
+        const std::filesystem::path& config_path
     );
 
     const std::filesystem::path& GetWorkspacePath() const;
@@ -29,33 +30,31 @@ public:
     const std::filesystem::path& GetScenePath() const;
     const std::filesystem::path& GetCachePath() const;
 
-    //call after config manager init
+    // 仅在配置管理器完成初始化后调用。
     const Config::GlobalConfig& GetConfig() const {
         return m_config;
     }
 
 private:
-    static ConfigManager* instance;
+    ConfigManager() = default;
 
-    ConfigManager() {}
     void InitInternal(
-        const std::filesystem::path& _workspace_path,
-        const std::filesystem::path& _config_path,
-        bool                         _is_override
+        const std::filesystem::path& workspace_path,
+        const std::filesystem::path& config_path,
+        bool                         is_override
     );
 
-private:
     Config::GlobalConfig m_config;
 
-    std::filesystem::path workspace_path;
-    std::filesystem::path editor_resource_path;
-    std::filesystem::path engine_shader_path;
-    std::filesystem::path engine_shader_shared_path;
-    std::filesystem::path engine_shader_cached_path;
-    std::filesystem::path scene_path;
-    std::filesystem::path cache_path;
+    std::filesystem::path m_workspace_path;
+    std::filesystem::path m_editor_resource_path;
+    std::filesystem::path m_engine_shader_path;
+    std::filesystem::path m_engine_shader_shared_path;
+    std::filesystem::path m_engine_shader_cached_path;
+    std::filesystem::path m_scene_path;
+    std::filesystem::path m_cache_path;
 };
 
 } // namespace Moer
 
-#endif //MOER_ENGINE_CONFIG_MANAGER_H
+#endif // MOER_ENGINE_CONFIG_MANAGER_H

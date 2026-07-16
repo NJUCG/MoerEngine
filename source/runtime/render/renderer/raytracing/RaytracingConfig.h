@@ -1,5 +1,7 @@
 #pragma once
 
+// 定义 Raytracing 管线可由编辑器调整的运行时配置。
+
 #include "misc/Traits.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 
@@ -23,9 +25,22 @@ enum class EJitter {
 };
 
 struct GridConfig {
-    int   grid_mode      = 1;
+    int grid_mode = 1;
+    // 旧字段已公开，保留为唯一存储；新代码通过正确拼写的访问器读写。
     int   light_per_ceil = 512;
     float cell_size      = 1.f;
+
+    int& GetLightsPerCell() {
+        return light_per_ceil;
+    }
+
+    int GetLightsPerCell() const {
+        return light_per_ceil;
+    }
+
+    void SetLightsPerCell(int lights_per_cell) {
+        light_per_ceil = lights_per_cell;
+    }
 };
 
 struct ReSTIRDIInitialSampleConfig {

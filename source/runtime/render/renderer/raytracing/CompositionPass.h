@@ -1,6 +1,8 @@
 #ifndef MOER_RENDER_COMPOSITION_PASS_H
 #define MOER_RENDER_COMPOSITION_PASS_H
 
+// 将 GBuffer 数据与直接光照输出合成为 HDR 场景颜色。
+
 #include "RTResource.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/ShaderParameters.h"
@@ -43,11 +45,12 @@ public:
         bdls
     );
 
-#pragma push_macro("WITH_NRD")            // 保存WITH_NRD宏的值
-#undef WITH_NRD                           // 释放WITH_NRD宏
-    MUTATION_SPARSE_UINT(WITH_NRD, 0, 1); // Value could be 0 or 1
+    // WITH_NRD 同时也是构建宏，因此暂时释放该名称供 Shader 变体使用。
+#pragma push_macro("WITH_NRD")
+#undef WITH_NRD
+    MUTATION_SPARSE_UINT(WITH_NRD, 0, 1);
     MUTATION_SET(MutationSet, WITH_NRD);
-#pragma pop_macro("WITH_NRD") // 用之前的值重新定义WITH_NRD宏
+#pragma pop_macro("WITH_NRD")
 };
 
 class CompositionPass {
@@ -57,18 +60,16 @@ public:
         class ShaderManager& manager,
         BindlessArrayRef     bindless_array
     );
-    void Process(class CommandList& _cmd_list, RTContext& _rt_ctx);
+    void Process(class CommandList& cmd_list, RTContext& rt_ctx);
 
 private:
-    class RenderDevice&  device;
-    class ShaderManager& manager;
-    BindlessArrayRef     bindless_array;
+    BindlessArrayRef bindless_array;
 
-    BufferRef            gbuffer_constants;
+    BufferRef            composition_constants;
     CompositingConstants constants{};
     Array<byte>          upload_data;
 
-    CompositionPassPipeline gbuffer_pass_pipeline;
+    CompositionPassPipeline composition_pipeline;
 };
 
 } // namespace Moer::Render::Raytracing

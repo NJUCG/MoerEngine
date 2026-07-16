@@ -19,7 +19,7 @@ class Scene;
 
 namespace Moer::scripting {
 
-// 管理 scripting thread 提交到主线程执行的 Scene 命令
+// 管理脚本线程提交到主线程执行的 Scene 命令
 class SCRIPTING_API MainThreadCommandQueue {
 public:
     MainThreadCommandQueue() = default;

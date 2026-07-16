@@ -1,23 +1,23 @@
 ﻿#include "AntiAliasPass.h"
+// 实现时序解析与确定性抖动序列。
+
 #include "rhi/RHIResource.h"
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/postprocess/ShaderParameters.h"
+#include <algorithm>
 #include <cmath>
 #include <random>
 
 namespace Moer::Render::Raytracing {
 
 AntialiasPass::AntialiasPass(RenderDevice& _device, ShaderManager& _manager, CreateInfo _info) :
-    manager(_manager),
-    taa_pipeline(manager.Compute<TAAPipeline>("pipelines/raytracing/postprocess/TAAPass.hlsl")),
+    taa_pipeline(_manager.Compute<TAAPipeline>("pipelines/raytracing/postprocess/TAAPass.hlsl")),
     frame_idx(0),
     jitter(float2(0.f)),
     jitter_mode(EJitter::MSAA),
     motion(_info.motion),
     feedback_color_ping(_info.feedback_color_ping),
-    feedback_color_pong(_info.feedback_color_pong),
-    resolved_color(_info.resolved_color),
-    hdr_color(_info.hdr_color) {
+    feedback_color_pong(_info.feedback_color_pong) {
     constant_buffer = _device.CreateBuffer<Moer::byte>(
         "PostProcess::TAAConstantBuffer", sizeof(TAAParams), EBufferUsageFlags::CONSTANT_BUFFER
     );
@@ -25,7 +25,6 @@ AntialiasPass::AntialiasPass(RenderDevice& _device, ShaderManager& _manager, Cre
 
 void AntialiasPass::Process(
     CommandList& _cmd_list,
-    RTContext&   _rt_ctx,
     Params       _param,
     bool         _prev_view_valid,
     TextureRef   _input,
@@ -51,7 +50,7 @@ void AntialiasPass::Process(
 
     _cmd_list.CopyFrom(std::move(upload_data), constant_buffer->GetView());
 
-    uint2 grid_size = uint2((_output->GetExtent().x + 15) / 16, ((_output->GetExtent().y + 15) / 16));
+    const uint2 grid_size = uint2((_output->GetExtent().x + 15) / 16, (_output->GetExtent().y + 15) / 16);
 
     Sampler linear_sampler{ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_CLAMP_TO_EDGE};
     _cmd_list
@@ -84,7 +83,9 @@ void AntialiasPass::AdvanceFrame() {
     std::swap(feedback_color_ping, feedback_color_pong);
 }
 
-static float VanderCorput(uint _idx, uint _base) {
+namespace {
+
+float VanderCorput(uint _idx, uint _base) {
     float v = 0.f;
     float f = 1.f / _base;
     uint  i = _idx;
@@ -96,11 +97,13 @@ static float VanderCorput(uint _idx, uint _base) {
     return v;
 }
 
-float2 AntialiasPass::GetPixelOffset() {
+} // namespace
+
+float2 AntialiasPass::GetPixelOffset() const {
     switch (jitter_mode) {
 
         case EJitter::MSAA: {
-            const float2 offsets[] = {
+            static const float2 offsets[] = {
                 float2(0.0625f, -0.1875f),
                 float2(-0.0625f, 0.1875f),
                 float2(0.3125f, 0.0625f),
@@ -113,7 +116,7 @@ float2 AntialiasPass::GetPixelOffset() {
             return offsets[frame_idx % 8];
         }
         case EJitter::Halton: {
-            uint idx = (frame_idx % 16) + 1;
+            const uint idx = (frame_idx % 16) + 1;
             return float2(VanderCorput(idx, 2), VanderCorput(idx, 3)) - 0.5f;
         }
         case EJitter::R2: {

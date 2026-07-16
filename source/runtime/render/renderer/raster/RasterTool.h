@@ -1,3 +1,4 @@
+// 提供 Raster 共用绘制数据、profiling 标签、限频日志和场景命令提交。
 #pragma once
 
 #include "misc/STL.h"
@@ -32,7 +33,7 @@ public:
     static std::string_view GetShadowDrawProfileScopeName(uint cascade_index);
 
     static void LogDebugEverySeconds(
-        std::string_view      str,
+        std::string_view      message,
         double                seconds,
         std::source_location  location = std::source_location::current()
     );

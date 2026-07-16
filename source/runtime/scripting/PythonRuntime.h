@@ -52,6 +52,8 @@ private:
 
     // 校验当前调用线程是否拥有解释器访问权
     void EnsureOwnerThread() const;
+    // 校验解释器已初始化且当前线程拥有访问权
+    void EnsureReadyForAccess() const;
     // 在已经获取 GIL 的前提下，在给定 globals 上执行脚本
     ScriptExecutionResult
     ExecuteSnippetOnGlobals(const ScriptExecutionRequest& request, const py::dict& globals);

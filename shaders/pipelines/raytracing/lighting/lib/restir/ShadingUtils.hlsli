@@ -15,15 +15,15 @@ bool ShadeSurface(inout DI::Reservoir _res, Surface _surface,
     return false;
 
   bool b_store = false;
-  if (resample_params.restir_di_params.shading_params.enable_final_visiblity) {
+  if (resample_params.restir_di_params.shading_params.enable_final_visibility) {
     float3 vis = 0.f;
     bool reused = false;
     DI::VisibilityResuseParam reuse_param;
     reuse_param.max_age =
-        resample_params.restir_di_params.shading_params.final_visiblity_max_age;
+        resample_params.restir_di_params.shading_params.final_visibility_max_age;
     reuse_param.max_distance = resample_params.restir_di_params.shading_params
-                                   .final_visiblity_max_distance;
-    if (resample_params.restir_di_params.shading_params.reuse_final_visiblity && _b_visibility_reuse) {
+                                   .final_visibility_max_distance;
+    if (resample_params.restir_di_params.shading_params.reuse_final_visibility && _b_visibility_reuse) {
       reused = _res.GetVisibility(reuse_param, vis);
     }
 

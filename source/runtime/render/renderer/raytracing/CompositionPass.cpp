@@ -1,8 +1,13 @@
-﻿#include "CompositionPass.h"
+#include "CompositionPass.h"
+
+// 选择当前使用的 GBuffer 历史，并合成 HDR 光照结果。
 
 #include "rhi/RHICommand.h"
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/ShaderParameters.h"
+
+#include <cmath>
+#include <cstring>
 
 namespace Moer::Render::Raytracing {
 
@@ -10,64 +15,58 @@ CompositionPass::CompositionPass(
     RenderDevice&    device,
     ShaderManager&   manager,
     BindlessArrayRef bindless_array
-) :
-    device(device),
-    manager(manager),
-    bindless_array(std::move(bindless_array)) {
+) : bindless_array(std::move(bindless_array)) {
 
-    int with_nrd = WITH_NRD;
+    constexpr int with_nrd = WITH_NRD;
 #pragma push_macro("WITH_NRD")
 #undef WITH_NRD
     CompositionPassPipeline::MutationSet mutation_set;
     mutation_set.SetMutation<CompositionPassPipeline::WITH_NRD>(with_nrd);
 #pragma pop_macro("WITH_NRD")
 
-    gbuffer_pass_pipeline = std::move(manager.Compute<CompositionPassPipeline>(
+    composition_pipeline = manager.Compute<CompositionPassPipeline>(
         "pipelines/raytracing/passes/CompositionPass.hlsl", mutation_set
-    ));
+    );
 
-    gbuffer_constants = device.CreateBuffer<Moer::byte>(
+    composition_constants = device.CreateBuffer<Moer::byte>(
         "CompositionPass::constant_buffer", sizeof(CompositingConstants), EBufferUsageFlags::CONSTANT_BUFFER
     );
 }
 
-void CompositionPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
-
-    constants.denoiser_mode  = _rt_ctx.config.denoiser_mode;
-    constants.enable_env_map = _rt_ctx.scene_params.enable_env_map ? 1 : 0;
-    constants.env_map_handle = _rt_ctx.scene_params.env_map_handle;
-
-    constants.env_rotation = _rt_ctx.scene_params.env_map_rotation;
-    constants.env_scale    = _rt_ctx.scene_params.env_map_scale;
-    constants.main_view    = _rt_ctx.main_view;
-    constants.prev_view    = _rt_ctx.prev_view;
+void CompositionPass::Process(CommandList& cmd_list, RTContext& rt_ctx) {
+    constants.denoiser_mode  = rt_ctx.config.denoiser_mode;
+    constants.enable_env_map = rt_ctx.scene_params.enable_env_map ? 1 : 0;
+    constants.env_map_handle = rt_ctx.scene_params.env_map_handle;
+    constants.env_rotation   = rt_ctx.scene_params.env_map_rotation;
+    constants.env_scale      = rt_ctx.scene_params.env_map_scale;
+    constants.main_view      = rt_ctx.main_view;
+    constants.prev_view      = rt_ctx.prev_view;
 
     upload_data.resize(sizeof(CompositingConstants));
     std::memcpy(upload_data.data(), &constants, sizeof(CompositingConstants));
+    cmd_list.CopyFrom(std::move(upload_data), composition_constants->GetView());
 
-    _cmd_list.CopyFrom(std::move(upload_data), gbuffer_constants->GetView());
-
-    bool        b_current_frame = _rt_ctx.b_current_frame;
-    const auto& frame_rt        = _rt_ctx.frame_rt;
-    _cmd_list
+    const bool            current_frame = rt_ctx.b_current_frame;
+    const FrameResources& frame          = rt_ctx.frame_rt;
+    cmd_list
         .Compute(
-            gbuffer_pass_pipeline,
-            gbuffer_constants,
-            _rt_ctx.frame_rt.hdr_color,
-            _rt_ctx.frame_rt.motion,
-            b_current_frame ? _rt_ctx.frame_rt.view_depth : _rt_ctx.frame_rt.prev_view_depth,
-            b_current_frame ? _rt_ctx.frame_rt.diffuse_albedo : _rt_ctx.frame_rt.prev_diffuse_albedo,
-            b_current_frame ? _rt_ctx.frame_rt.specular_roughness : _rt_ctx.frame_rt.prev_specular_roughness,
-            b_current_frame ? _rt_ctx.frame_rt.normal : _rt_ctx.frame_rt.prev_normal,
-            _rt_ctx.frame_rt.emission,
-            _rt_ctx.frame_rt.diffuse_lighting,
-            _rt_ctx.frame_rt.specular_lighting,
+            composition_pipeline,
+            composition_constants,
+            frame.hdr_color,
+            frame.motion,
+            current_frame ? frame.view_depth : frame.prev_view_depth,
+            current_frame ? frame.diffuse_albedo : frame.prev_diffuse_albedo,
+            current_frame ? frame.specular_roughness : frame.prev_specular_roughness,
+            current_frame ? frame.normal : frame.prev_normal,
+            frame.emission,
+            frame.diffuse_lighting,
+            frame.specular_lighting,
 #if WITH_NRD
-            _rt_ctx.frame_rt.denoised_diffuse_lighting,
-            _rt_ctx.frame_rt.denoised_specular_lighting,
+            frame.denoised_diffuse_lighting,
+            frame.denoised_specular_lighting,
 #else
-            _rt_ctx.frame_rt.diffuse_lighting,
-            _rt_ctx.frame_rt.specular_lighting,
+            frame.diffuse_lighting,
+            frame.specular_lighting,
 #endif
             bindless_array
         )
@@ -76,4 +75,5 @@ void CompositionPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
             "CompositionPass"
         );
 }
+
 } // namespace Moer::Render::Raytracing
