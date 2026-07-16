@@ -8,6 +8,7 @@
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIIO.h"
+#include "rhi/RHIRecordDiagnostics.h"
 #include "vulkan/vulkan_core.h"
 #include <atomic>
 #include <chrono>
@@ -75,11 +76,24 @@ private:
     std::mutex*                  submit_mutex = &local_submit_mutex;
 };
 
+struct QueryFrameDiagnostics {
+    uint64 digest{0};
+    uint32 used_query_count{0};
+};
+
 struct ProfilerStorage {
     static constexpr int s_max_num_profiler_queries_per_frame =
         s_query_max_storage * 2; // *2 is for begin&end
     static constexpr int s_total_query_count =
         s_max_num_profiler_queries_per_frame * s_queue_max_frame_in_flight;
+    // These stages are part of the serial query golden contract.  Keep the
+    // actual timestamp writes and the diagnostic event sourced from the same
+    // constants so they cannot silently drift apart.
+    static constexpr VkPipelineStageFlagBits kBeginTimestampStage =
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    static constexpr VkPipelineStageFlagBits kEndTimestampStage =
+        VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+    static constexpr VkPipelineStageFlags2 kResetQueryStage = VK_PIPELINE_STAGE_2_NONE;
 
     ProfilerStorage(VkNativeQueryPool& _timestamp_pool);
     void CollectProfiling(VkCommandBuffer _cmd);
@@ -121,6 +135,7 @@ struct ProfilerStorage {
 
     void BeginProfilerSession(VulkanCmdList& _cmd, std::string_view _name);
     void EndProfilerSession(VulkanCmdList& _cmd, std::string_view _name);
+    QueryFrameDiagnostics GetCurrentFrameQueryDiagnostics() const;
 
     bool               active = false;
     VkNativeQueryPool& timestamp_pool;
@@ -298,6 +313,94 @@ private:
         double work_total_ms{0.0};
     };
 
+    struct RhiRecordExecuteSample {
+        RecordTopologySummary topology;
+        Array<RecordLayerTiming> layer_timings;
+        double                   serial_command_sum_ms{0.0};
+        StableRecordHash         barrier_hash;
+        uint64                   descriptor_digest{StableRecordHash::kOffset};
+        uint64                   query_digest{StableRecordHash::kOffset};
+        uint64                   descriptor_bytes{0};
+        uint32                   buffer_barriers{0};
+        uint32                   texture_barriers{0};
+        uint32                   memory_barriers{0};
+        uint32                   used_queries{0};
+        SerialGoldenSummary      serial_golden{};
+        uint32                   golden_unresolved{0};
+        uint32                   golden_opaque{0};
+        uint64                   golden_unresolved_command_mask{0};
+        uint64                   golden_opaque_command_mask{0};
+        uint32                   golden_unresolved_native_buffers{0};
+        uint32                   golden_unresolved_native_images{0};
+        bool                     golden_has_unresolved_buffer_barrier{false};
+        SerialBarrierItem        golden_first_unresolved_buffer_barrier{};
+    };
+
+    struct RhiRecordWindowTotals {
+        uint64 samples{0};
+        double serial_record_wall_total_ms{0.0};
+        double serial_record_wall_max_ms{0.0};
+        double serial_command_sum_total_ms{0.0};
+        double eligible_record_total_ms{0.0};
+        double predicted_critical_total_ms{0.0};
+        double dispatch_join_estimate_total_ms{0.0};
+        double predicted_net_saving_total_ms{0.0};
+        uint64 layer_total{0};
+        uint64 command_total{0};
+        uint64 candidate_command_total{0};
+        uint64 safe_command_total{0};
+        uint64 parallel_layer_total{0};
+        uint64 descriptor_bytes_total{0};
+        uint64 buffer_barrier_total{0};
+        uint64 texture_barrier_total{0};
+        uint64 memory_barrier_total{0};
+        uint64 used_query_total{0};
+        uint32 layer_max{0};
+        uint32 command_max{0};
+        uint32 parallel_layer_max{0};
+        uint64 topology_changes{0};
+        uint64 golden_complete{0};
+        uint64 golden_incomplete{0};
+        uint64 golden_unresolved_total{0};
+        uint64 golden_opaque_total{0};
+        UnorderedSet<uint64> command_digests;
+        UnorderedSet<uint64> layer_digests;
+        UnorderedSet<uint64> barrier_digests;
+        UnorderedSet<uint64> descriptor_digests;
+        UnorderedSet<uint64> query_digests;
+        UnorderedSet<uint64> golden_command_digests;
+        UnorderedSet<uint64> golden_layer_digests;
+        UnorderedSet<uint64> golden_barrier_digests;
+        UnorderedSet<uint64> golden_descriptor_digests;
+        UnorderedSet<uint64> golden_query_digests;
+        UnorderedSet<uint64> golden_combined_digests;
+        UnorderedSet<uint64> golden_manifest_entries;
+    };
+
+    struct RhiThreadProfileState {
+        RhiThreadProfileState() : window_start(std::chrono::steady_clock::now()) {}
+
+        std::chrono::steady_clock::time_point window_start;
+        uint64                 samples{0};
+        RhiWorkProfileTotals   execute{};
+        RhiWorkProfileTotals   present{};
+        double                 caller_total_ms{0.0};
+        double                 caller_max_ms{0.0};
+        double                 queue_wait_total_ms{0.0};
+        double                 queue_wait_max_ms{0.0};
+        double                 work_total_ms{0.0};
+        double                 work_max_ms{0.0};
+        uint32                 max_enqueue_depth{0};
+        RhiRecordWindowTotals  record{};
+        bool                   calibration_ready{false};
+        uint32                 model_workers{1};
+        double                 dispatch_join_median_ms{0.0};
+        double                 dispatch_join_tail_ms{0.0};
+        bool                   has_topology{false};
+        uint64                 last_topology_digest{0};
+        UnorderedSet<uint64>   observed_golden_manifests;
+    };
+
     void                       ExecuteNow(CmdSubmit&& _submit, uint64 _timeline, uint64 _serial);
     void PresentNow(
         SwapchainRef&& _swapchain,
@@ -313,6 +416,8 @@ private:
     UniquePtr<VulkanAllocator> GetAllocator();
     UniquePtr<VulkanPresentor> GetPresentor();
     void                       Complete(uint64 _timeline);
+    void                       EnsureRecordCalibration();
+    void                       RecordRhiRecordProfile(const RhiRecordExecuteSample& _sample);
     void                       RecordThreadingProfile(
         ERhiWorkKind _kind,
         double       _caller_ms,
@@ -338,7 +443,7 @@ private:
     std::mutex                                         profiler_mutex;
 
     bool                    rhi_thread_enabled{false};
-    bool                    thread_profile_logging{false};
+    UniquePtr<RhiThreadProfileState> thread_profile;
     bool                    rhi_worker_running{false};
     std::atomic<uint32_t>   rhi_thread_id{0};
     uint64                  enqueued_rhi_work{0};
@@ -347,19 +452,6 @@ private:
     std::mutex              rhi_work_mutex;
     std::condition_variable rhi_work_cv;
     std::condition_variable rhi_work_done_cv;
-
-    std::chrono::steady_clock::time_point thread_profile_window_start =
-        std::chrono::steady_clock::now();
-    uint64 thread_profile_samples{0};
-    RhiWorkProfileTotals thread_profile_execute{};
-    RhiWorkProfileTotals thread_profile_present{};
-    double thread_profile_caller_total_ms{0.0};
-    double thread_profile_caller_max_ms{0.0};
-    double thread_profile_queue_wait_total_ms{0.0};
-    double thread_profile_queue_wait_max_ms{0.0};
-    double thread_profile_work_total_ms{0.0};
-    double thread_profile_work_max_ms{0.0};
-    uint32 thread_profile_max_enqueue_depth{0};
 
     std::mutex   exec_mtx;
     std::jthread completion_thread;

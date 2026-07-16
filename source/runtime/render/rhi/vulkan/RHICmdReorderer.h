@@ -216,8 +216,8 @@ public:
 
     //command layer resource view
     struct ResourceView {
-        int64 read_layer;
-        int64 write_layer;
+        int64 read_layer{-1};
+        int64 write_layer{-1};
     };
 
     struct RangeHandle : public ResourceHandle {
@@ -229,7 +229,7 @@ public:
             ArenaAllocatorWrapper<std::pair<const Range, ResourceView>>>;
 
     private:
-        ResourceView          max_view;
+        ResourceView          max_view{-1, -1};
         Range                 read_range;
         Range                 write_range;
         Map                   range2view;
@@ -450,12 +450,12 @@ public:
     }
 
     int64 GetLastLayerRead(NoRangeHandle* _handle) {
-        int64 layer = _handle->view.read_layer;
+        int64 layer = _handle->view.write_layer;
         return GetLayerWithOffset(layer + 1);
     }
 
     int64 GetLastLayerRead(BindlessHandle* _handle) {
-        int64 layer = _handle->view.write_layer + 1;
+        int64 layer = _handle->view.write_layer;
         return GetLayerWithOffset(layer + 1);
     }
 
@@ -835,47 +835,58 @@ public:
 
     void VisitCmd(const BarrierCmd* _cmd) {
         int64               layer = 0;
-        Array<RangeHandle*> barrier_resources;
-        Array<Range>        barrier_ranges;
+        Array<RangeHandle*> read_resources;
+        Array<Range>        read_ranges;
+        Array<RangeHandle*> write_resources;
+        Array<Range>        write_ranges;
         //reserve
-        barrier_resources.reserve(
-            _cmd->ReadBuffers().size() + _cmd->ReadTextures().size() + _cmd->WriteBuffers().size() +
-            _cmd->WriteTextures().size()
-        );
-        barrier_ranges.reserve(
-            _cmd->ReadBuffers().size() + _cmd->ReadTextures().size() + _cmd->WriteBuffers().size() +
-            _cmd->WriteTextures().size()
-        );
+        read_resources.reserve(_cmd->ReadBuffers().size() + _cmd->ReadTextures().size());
+        read_ranges.reserve(_cmd->ReadBuffers().size() + _cmd->ReadTextures().size());
+        write_resources.reserve(_cmd->WriteBuffers().size() + _cmd->WriteTextures().size());
+        write_ranges.reserve(_cmd->WriteBuffers().size() + _cmd->WriteTextures().size());
 
         for (const auto& [handle, state, pass_type, offset, size] : _cmd->ReadBuffers()) {
             RangeHandle* range_handle =
                 static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
-            layer = GetLastLayerRead(range_handle, Range(offset, size));
+            const Range range(offset, size);
+            layer = std::max(layer, GetLastLayerRead(range_handle, range));
+            read_resources.emplace_back(range_handle);
+            read_ranges.emplace_back(range);
         }
-        for (const auto& [handle, state, pass_type, mip_level, mip_cnt] : _cmd->ReadTextures()) {
+        for (const auto& [handle, state, pass_type, mip_level, mip_cnt, array_layer, array_cnt] :
+             _cmd->ReadTextures()) {
             RangeHandle* range_handle =
                 static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
-            layer = GetLastLayerRead(range_handle, Range(mip_level, mip_cnt));
+            const Range range(mip_level, mip_cnt, array_layer, array_cnt);
+            layer = std::max(layer, GetLastLayerRead(range_handle, range));
+            read_resources.emplace_back(range_handle);
+            read_ranges.emplace_back(range);
         }
 
         for (auto& [handle, state, pass_type, offset, size] : _cmd->WriteBuffers()) {
             RangeHandle* range_handle =
                 static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
-            layer = GetLastLayerRead(range_handle, Range(offset, size));
-            barrier_resources.emplace_back(range_handle);
-            barrier_ranges.emplace_back(Range(offset, size));
+            const Range range(offset, size);
+            layer = std::max(layer, GetLastLayerWrite(range_handle, range));
+            write_resources.emplace_back(range_handle);
+            write_ranges.emplace_back(range);
         }
 
-        for (const auto& [handle, state, pass_type, mip_level, mip_cnt] : _cmd->WriteTextures()) {
+        for (const auto& [handle, state, pass_type, mip_level, mip_cnt, array_layer, array_cnt] :
+             _cmd->WriteTextures()) {
             RangeHandle* range_handle =
                 static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
-            layer = GetLastLayerRead(range_handle, Range(mip_level, mip_cnt));
-            barrier_resources.emplace_back(range_handle);
-            barrier_ranges.emplace_back(Range(mip_level, mip_cnt));
+            const Range range(mip_level, mip_cnt, array_layer, array_cnt);
+            layer = std::max(layer, GetLastLayerWrite(range_handle, range));
+            write_resources.emplace_back(range_handle);
+            write_ranges.emplace_back(range);
         }
-        for (uint i = 0; i < barrier_resources.size(); ++i) {
-            RangeHandle* range_handle = barrier_resources[i];
-            Range        range        = barrier_ranges[i];
+        for (uint i = 0; i < read_resources.size(); ++i) {
+            read_resources[i]->EmplaceReadLayer(read_ranges[i], layer);
+        }
+        for (uint i = 0; i < write_resources.size(); ++i) {
+            RangeHandle* range_handle = write_resources[i];
+            Range        range        = write_ranges[i];
             range_handle->EmplaceWriteLayer(range, layer);
             m_write_resources.emplace(range_handle->handle);
         }
@@ -896,9 +907,12 @@ public:
                 RangeHandle* range_handle = static_cast<RangeHandle*>(
                     GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer)
                 );
-                layer = GetLastLayerRead(
-                    range_handle,
-                    Range(handle.mip_level, handle.num_mips, handle.array_layer, handle.num_array)
+                layer = std::max(
+                    layer,
+                    GetLastLayerRead(
+                        range_handle,
+                        Range(handle.mip_level, handle.num_mips, handle.array_layer, handle.num_array)
+                    )
                 );
                 assert(
                     layer == 0 &&
@@ -913,7 +927,10 @@ public:
                 RangeHandle* range_handle = static_cast<RangeHandle*>(
                     GetHandle(uint64(handle.GetBuffer()), ResourceType::Texture_Buffer)
                 );
-                layer = GetLastLayerRead(range_handle, Range(handle.GetByteOffset(), handle.GetByteSize()));
+                layer = std::max(
+                    layer,
+                    GetLastLayerRead(range_handle, Range(handle.GetByteOffset(), handle.GetByteSize()))
+                );
                 assert(
                     layer == 0 &&
                     std::format("Import Buffer {} should be the first command", handle.GetBuffer()->GetName())
@@ -944,9 +961,12 @@ public:
                 RangeHandle* range_handle = static_cast<RangeHandle*>(
                     GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer)
                 );
-                layer = GetLastLayerWrite(
-                    range_handle,
-                    Range(handle.mip_level, handle.num_mips, handle.array_layer, handle.num_array)
+                layer = std::max(
+                    layer,
+                    GetLastLayerWrite(
+                        range_handle,
+                        Range(handle.mip_level, handle.num_mips, handle.array_layer, handle.num_array)
+                    )
                 );
             }
 
@@ -955,7 +975,10 @@ public:
                 RangeHandle* range_handle = static_cast<RangeHandle*>(
                     GetHandle(uint64(handle.GetBuffer()), ResourceType::Texture_Buffer)
                 );
-                layer = GetLastLayerWrite(range_handle, Range(handle.GetByteOffset(), handle.GetByteSize()));
+                layer = std::max(
+                    layer,
+                    GetLastLayerWrite(range_handle, Range(handle.GetByteOffset(), handle.GetByteSize()))
+                );
             }
 
             for (const auto& [handle, state] : _cmd->ExportTextures()) {
@@ -1290,7 +1313,7 @@ public:
                         _cmd,
                         SetWrite(
                             (uint64)(_arg.GetTexture()),
-                            Range(_arg.mip_level, _arg.num_mips),
+                            Range(_arg.mip_level, _arg.num_mips, _arg.array_layer, _arg.num_array),
                             ResourceType::Texture_Buffer
                         )
                     );

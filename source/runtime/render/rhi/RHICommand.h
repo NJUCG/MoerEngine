@@ -11,6 +11,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderPipeline.h"
+#include <array>
 #include <filesystem>
 #include <functional>
 #include <misc/STL.h>
@@ -36,7 +37,7 @@ struct ProfileSection {
 
 struct Command {
 public:
-    enum class EType {
+    enum class EType : uint8_t {
         UploadBuffer,
         CopyBackBuffer,
         BufferToBuffer,
@@ -57,12 +58,13 @@ public:
         UpdateBindlessArray,
         ClearResource,
         Scope,
-        Custom
+        Custom,
+        Count
     };
 
-    static constexpr std::string_view typenames[] = {
+    static constexpr std::array<std::string_view, static_cast<size_t>(EType::Count)> typenames = {
         "UploadBuffer",    "CopyBackBuffer",      "BufferToBuffer", "BufferToTexture",
-        "TextureToBuffer", "CopyBackTexture",     "UploadTexture",  "TextureToTexture",
+        "TextureToBuffer", "UploadTexture",       "TextureToTexture", "CopyBackTexture",
         "ShaderDispatch",  "BuildAccel",          "BuildTLAS",      "TraceRay",
         "Barrier",         "QueueTransfer",       "SetDrawState",   "SetGeometryPassDrawState",
         "MultiDraw",       "UpdateBindlessArray", "ClearResource",  "Scope",
@@ -73,7 +75,7 @@ private:
     EType type;
 
 public:
-    explicit Command(EType _type) : type(_type), name(typenames[uint(_type)]) {}
+    explicit Command(EType _type) : type(_type), name(typenames[static_cast<size_t>(_type)]) {}
     explicit Command(EType _type, std::string_view _name) : type(_type), name(_name) {}
     virtual ~Command()                      = default;
     virtual EQueueType GetQueueType() const = 0;
@@ -1052,7 +1054,7 @@ public:
     RENDER_API void CopyFrom(
         TextureView      _src,
         std::span<byte>  _data,
-        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
+        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
     );
 
     RENDER_API void UpdateBindlessArray(BindlessArrayRef _array);
@@ -1283,7 +1285,7 @@ private:
     Array<std::function<void()>> callbacks;
     Array<std::function<void()>> success_callbacks;
     TCachedArgArray              cached_args;
-    Queue<std::string>           scope_stack;
+    Stack<std::string>           scope_stack;
 };
 class QueueCmd {};
 

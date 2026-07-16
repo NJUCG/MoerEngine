@@ -6,6 +6,8 @@
 #include "VulkanDescriptor.h"
 #include "VulkanDevice.h"
 #include "VulkanRHIResource.h"
+#include "VulkanSerialGolden.h"
+#include "rhi/ExternalCpuJoinPool.h"
 #include "misc/Alignment.h"
 #include "misc/STL.h"
 #include "misc/Timer.h"
@@ -21,8 +23,11 @@
 #include "shader/ShaderPipeline.h"
 #include "vulkan/vulkan_core.h"
 
+#include <algorithm>
+#include <cmath>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <variant>
 namespace Moer::Render {
@@ -708,8 +713,8 @@ struct VkCmdPreprocessor {
                     std::get<2>(access),
                     static_cast<uint8>(barrier.mip_level),
                     static_cast<uint8>(barrier.mip_cnt),
-                    0,
-                    kRemainingSubresource
+                    static_cast<uint8>(barrier.array_layer),
+                    static_cast<uint8>(barrier.array_cnt)
                 );
             }
             for (auto& barrier : _cmd->WriteTextures()) {
@@ -722,8 +727,8 @@ struct VkCmdPreprocessor {
                     std::get<2>(access),
                     static_cast<uint8>(barrier.mip_level),
                     static_cast<uint8>(barrier.mip_cnt),
-                    0,
-                    kRemainingSubresource
+                    static_cast<uint8>(barrier.array_layer),
+                    static_cast<uint8>(barrier.array_cnt)
                 );
             }
 
@@ -784,8 +789,8 @@ struct VkCmdPreprocessor {
                 std::get<2>(access),
                 static_cast<uint8>(barrier.mip_level),
                 static_cast<uint8>(barrier.mip_cnt),
-                0,
-                kRemainingSubresource,
+                static_cast<uint8>(barrier.array_layer),
+                static_cast<uint8>(barrier.array_cnt),
                 src_queue_family,
                 dst_queue_family
             );
@@ -800,8 +805,8 @@ struct VkCmdPreprocessor {
                 std::get<2>(access),
                 static_cast<uint8>(barrier.mip_level),
                 static_cast<uint8>(barrier.mip_cnt),
-                0,
-                kRemainingSubresource,
+                static_cast<uint8>(barrier.array_layer),
+                static_cast<uint8>(barrier.array_cnt),
                 src_queue_family,
                 dst_queue_family
             );
@@ -1299,6 +1304,10 @@ public:
                 break;
             case Command::EType::Custom:
                 Visit(static_cast<const CustomCmd&>(*_cmd));
+                break;
+            case Command::EType::SetGeometryPassDrawState:
+            case Command::EType::Count:
+                assert(false && "Unsupported command reached Vulkan recorder");
                 break;
         }
     };
@@ -2046,8 +2055,8 @@ public:
                         .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
                         .baseMipLevel   = _arg.mip_level,
                         .levelCount     = _arg.num_mips,
-                        .baseArrayLayer = 0,
-                        .layerCount     = 1
+                        .baseArrayLayer = _arg.array_layer,
+                        .layerCount     = _arg.num_array
                     };
                     VkClearColorValue value;
                     std::visit(
@@ -2880,10 +2889,11 @@ void ProfilerStorage::CollectProfiling(VkCommandBuffer _cb) {
 }
 
 int ProfilerStorage::GetQueryStorageIndex(std::string_view _name) {
-    if (name2sample.find(_name.data()) == name2sample.end()) {
-        name2sample[_name.data()] = Sample(name2sample.size());
+    const std::string name{_name};
+    if (name2sample.find(name) == name2sample.end()) {
+        name2sample[name] = Sample(name2sample.size());
     }
-    return name2sample[_name.data()].index;
+    return name2sample[name].index;
 }
 
 void ProfilerStorage::BeginProfilerSession(VulkanCmdList& _cmd_list, std::string_view _name) {
@@ -2892,7 +2902,7 @@ void ProfilerStorage::BeginProfilerSession(VulkanCmdList& _cmd_list, std::string
     }
     uint idx = GetQueryStorageIndex(_name) * 2 + 0 + cur_frame * s_max_num_profiler_queries_per_frame;
     vkCmdWriteTimestamp(
-        _cmd_list.GetHandle(), VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, timestamp_pool.GetHandle(), idx
+        _cmd_list.GetHandle(), kBeginTimestampStage, timestamp_pool.GetHandle(), idx
     );
     SetQueryUsed(idx);
     assert(IsQueryUsed(idx + 1) == false && "Query already used");
@@ -2904,10 +2914,27 @@ void ProfilerStorage::EndProfilerSession(VulkanCmdList& _cmd_list, std::string_v
     }
     uint idx = GetQueryStorageIndex(_name) * 2 + 1 + cur_frame * s_max_num_profiler_queries_per_frame;
     vkCmdWriteTimestamp(
-        _cmd_list.GetHandle(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestamp_pool.GetHandle(), idx
+        _cmd_list.GetHandle(), kEndTimestampStage, timestamp_pool.GetHandle(), idx
     );
     SetQueryUsed(idx);
     assert(IsQueryUsed(idx - 1) == true && "Query not used");
+}
+
+QueryFrameDiagnostics ProfilerStorage::GetCurrentFrameQueryDiagnostics() const {
+    QueryFrameDiagnostics diagnostics;
+    StableRecordHash      hash;
+    const uint32 frame_base = cur_frame * s_max_num_profiler_queries_per_frame;
+    for (uint32 query = 0; query < s_max_num_profiler_queries_per_frame; ++query) {
+        const uint32 absolute_query = frame_base + query;
+        if ((queries_used[absolute_query / 8] & (1u << (absolute_query % 8))) == 0) {
+            continue;
+        }
+        ++diagnostics.used_query_count;
+        hash.Add(query);
+    }
+    hash.Add(diagnostics.used_query_count);
+    diagnostics.digest = hash.Value();
+    return diagnostics;
 }
 #pragma endregion
 
@@ -2917,6 +2944,29 @@ static double RhiThreadProfileMilliseconds(
     std::chrono::steady_clock::time_point _end
 ) {
     return std::chrono::duration<double, std::milli>(_end - _begin).count();
+}
+
+static uint64 CanonicalDigest(const UnorderedSet<uint64>& _digests) {
+    Array<uint64> sorted_digests(_digests.begin(), _digests.end());
+    std::sort(sorted_digests.begin(), sorted_digests.end());
+
+    StableRecordHash hash;
+    hash.Add(sorted_digests.size());
+    for (const uint64 digest : sorted_digests) {
+        hash.Add(digest);
+    }
+    return hash.Value();
+}
+
+static std::string JoinRecordCounts(std::span<const uint32> _counts) {
+    std::string result;
+    for (size_t index = 0; index < _counts.size(); ++index) {
+        if (index != 0) {
+            result += ',';
+        }
+        result += std::to_string(_counts[index]);
+    }
+    return result;
 }
 
 static bool WaitForSubmittedDependencies(
@@ -2972,8 +3022,10 @@ VkCommandQueue::VkCommandQueue(
         s_queue_max_frame_in_flight * s_query_max_storage * 4
     ),
     profiler_storage(timestamp_pool),
-    rhi_thread_enabled(_enable_rhi_thread),
-    thread_profile_logging(_thread_profile_logging) {
+    rhi_thread_enabled(_enable_rhi_thread) {
+    if (_thread_profile_logging) {
+        thread_profile = MakeUnique<RhiThreadProfileState>();
+    }
     timeline = MoerNew(VulkanFence(vk_device));
 
     completion_worker_running = true;
@@ -3038,14 +3090,18 @@ WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
         return {uint64(timeline), last_frame.load(std::memory_order_acquire)};
     }
     if (rhi_thread_enabled) {
-        const auto caller_started = std::chrono::steady_clock::now();
+        std::chrono::steady_clock::time_point caller_started{};
+        if (thread_profile) {
+            caller_started = std::chrono::steady_clock::now();
+        }
         uint64 current_timeline;
         {
             std::unique_lock<std::mutex> lock(rhi_work_mutex);
             current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
             const uint64 serial = ++enqueued_rhi_work;
             const uint32 enqueue_depth = uint32(rhi_work_queue.size() + 1);
-            const auto   enqueued_at    = std::chrono::steady_clock::now();
+            const auto enqueued_at = thread_profile ? std::chrono::steady_clock::now()
+                                                    : std::chrono::steady_clock::time_point{};
             rhi_work_queue.emplace_back(
                 std::in_place_type<RhiExecuteWork>,
                 std::move(_submit),
@@ -3054,8 +3110,10 @@ WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
                 enqueued_at,
                 enqueue_depth
             );
-            std::get<RhiExecuteWork>(rhi_work_queue.back()).caller_ms =
-                RhiThreadProfileMilliseconds(caller_started, std::chrono::steady_clock::now());
+            if (thread_profile) {
+                std::get<RhiExecuteWork>(rhi_work_queue.back()).caller_ms =
+                    RhiThreadProfileMilliseconds(caller_started, std::chrono::steady_clock::now());
+            }
         }
         rhi_work_cv.notify_one();
         return {uint64(timeline), current_timeline};
@@ -3063,11 +3121,15 @@ WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
 
     std::unique_lock<std::mutex> lock(exec_mtx);
     const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
-    const auto   work_started     = std::chrono::steady_clock::now();
-    ExecuteNow(std::move(_submit), current_timeline, current_timeline);
-    const double work_ms =
-        RhiThreadProfileMilliseconds(work_started, std::chrono::steady_clock::now());
-    RecordThreadingProfile(ERhiWorkKind::Execute, work_ms, 0.0, work_ms, 0);
+    if (thread_profile) {
+        const auto work_started = std::chrono::steady_clock::now();
+        ExecuteNow(std::move(_submit), current_timeline, current_timeline);
+        const double work_ms =
+            RhiThreadProfileMilliseconds(work_started, std::chrono::steady_clock::now());
+        RecordThreadingProfile(ERhiWorkKind::Execute, work_ms, 0.0, work_ms, 0);
+    } else {
+        ExecuteNow(std::move(_submit), current_timeline, current_timeline);
+    }
     return {uint64(timeline), current_timeline};
 }
 
@@ -3112,6 +3174,21 @@ void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline, uint64 _s
         return;
     }
 
+    UniquePtr<RhiRecordExecuteSample> record_sample;
+    UniquePtr<VulkanSerialGoldenTrace> serial_golden;
+    UnorderedMap<const Command*, uint32_t> original_ordinals;
+    if (thread_profile && queue.GetType() == EQueueType::Graphics) {
+        EnsureRecordCalibration();
+        record_sample = MakeUnique<RhiRecordExecuteSample>();
+        serial_golden = MakeUnique<VulkanSerialGoldenTrace>();
+        original_ordinals.reserve(_submit.cmds.size());
+        for (uint32_t ordinal = 0; ordinal < _submit.cmds.size(); ++ordinal) {
+            const Command* command = _submit.cmds[ordinal].get();
+            original_ordinals.emplace(command, ordinal);
+            serial_golden->PrimeCommandResources(command, ordinal, _submit.cached_args);
+        }
+    }
+
     Timer         timer{};
     Timer         reorder_timer{};
     FunctionTable function_table{
@@ -3151,18 +3228,87 @@ void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline, uint64 _s
     const auto& cmd_lists = reorderer.m_cmd_lists;
     bool        has_cmd   = !reorderer.m_cmd_lists.empty();
     uint64      descriptor_frame = 0;
+    uint64      descriptor_begin_offset = 0;
+
+    if (record_sample) {
+        RecordTopologyBuilder topology_builder;
+        uint32                raw_layer_index = 0;
+        record_sample->layer_timings.resize(cmd_lists.size());
+        for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
+            topology_builder.BeginLayer(raw_layer_index++);
+            serial_golden->BeginLayer(raw_layer_index - 1);
+            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
+                topology_builder.AddCommand(cmdnode->cmd->Type());
+                const auto ordinal = original_ordinals.find(cmdnode->cmd);
+                if (ordinal == original_ordinals.end()) {
+                    serial_golden->MarkUnresolved();
+                    serial_golden->RecordCommand(
+                        cmdnode->cmd,
+                        std::numeric_limits<uint32_t>::max(),
+                        _submit.cached_args
+                    );
+                } else {
+                    serial_golden->RecordCommand(
+                        cmdnode->cmd, ordinal->second, _submit.cached_args
+                    );
+                }
+            }
+            topology_builder.EndLayer();
+            serial_golden->EndLayer();
+        }
+        record_sample->topology = topology_builder.Finish();
+    }
+
+    auto record_pending_barriers = [&](uint64 _group_index) {
+        const QueueFamilyIndices queue_families = vk_device.GetQueueFamilyIndices();
+        const SerialQueueFamilyMap serial_queue_family_map{
+            .graphics_family = queue_families.graphics.value_or(VK_QUEUE_FAMILY_IGNORED),
+            .compute_family  = queue_families.compute.value_or(VK_QUEUE_FAMILY_IGNORED),
+            .copy_family     = queue_families.transfer.value_or(VK_QUEUE_FAMILY_IGNORED),
+            .ignored_family  = VK_QUEUE_FAMILY_IGNORED,
+        };
+        const BarrierSemanticDiagnostics barriers =
+            tracker.GetPendingBarrierDiagnostics(
+                serial_golden.get(), _group_index, serial_queue_family_map
+            );
+        record_sample->barrier_hash.Add(_group_index);
+        record_sample->barrier_hash.Add(barriers.digest);
+        record_sample->barrier_hash.Add(barriers.buffer_count);
+        record_sample->barrier_hash.Add(barriers.texture_count);
+        record_sample->barrier_hash.Add(barriers.memory_count);
+        record_sample->buffer_barriers += barriers.buffer_count;
+        record_sample->texture_barriers += barriers.texture_count;
+        record_sample->memory_barriers += barriers.memory_count;
+    };
 
     //Set Descriptor buffer ringbuffer offset and start debug region
     double preprocess_time = 0.0;
     if (has_cmd) {
         vk_allocator.GetCmdList().Begin();
         if (_submit.b_tick_profiling) {
+            if (serial_golden) {
+                serial_golden->SetCurrentCommand(std::numeric_limits<uint32_t>::max());
+            }
             profiler_storage.CollectProfiling(vk_allocator.GetCmdList().GetHandle());
+            if (serial_golden) {
+                serial_golden->RecordQueryEvent(
+                    SerialQueryEvent::Reset,
+                    "Graphics Exec",
+                    ProfilerStorage::kResetQueryStage
+                );
+            }
             {
                 std::unique_lock<std::mutex> profiler_lock(profiler_mutex);
                 cached_profiler_entry = profiler_storage.GetProfilerEntry();
             }
             profiler_storage.BeginProfilerSession(vk_allocator.GetCmdList(), "Graphics Exec");
+            if (serial_golden) {
+                serial_golden->RecordQueryEvent(
+                    SerialQueryEvent::Begin,
+                    "Graphics Exec",
+                    ProfilerStorage::kBeginTimestampStage
+                );
+            }
             timer.Start();
         }
 
@@ -3171,6 +3317,9 @@ void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline, uint64 _s
             // Keep ring reuse aligned with the execute-only in-flight limit.
             descriptor_frame = descriptor_submission++;
             vk_device.GetGlobalDescriptorHeap().BeginPushDescriptors(descriptor_frame);
+            if (record_sample) {
+                descriptor_begin_offset = vk_device.GetGlobalDescriptorHeap().current_offset;
+            }
         }
 
         std::string_view queue_label = queue.GetType() == EQueueType::Graphics ? "Graphics Exec" :
@@ -3180,26 +3329,124 @@ void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline, uint64 _s
     }
 
     uint layer = 0;
+    if (record_sample) {
+        uint32 raw_layer_index = 0;
+        for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
+            const uint32 current_raw_layer = raw_layer_index++;
+            if (layer == 0) {
+                vk_allocator.GetCmdList().BeginLabel("Begin Layers", {0.0f, 0.0f, 1.0f, 1.0f});
+            }
+            if (cmd_list.head == nullptr) {
+                continue;
+            }
+            reorder_timer.Start();
+            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
+                preprocessor.VisitCmd(cmdnode->cmd);
+                serial_golden->RegisterDerivedResources(cmdnode->cmd);
+            }
+            tracker.ResolveBarriers();
+            record_pending_barriers(current_raw_layer);
+            tracker.DispatchBarriers(vk_allocator.GetCmdList());
+            reorder_timer.Stop();
+            preprocess_time += reorder_timer.ElapsedMilliseconds();
+            vk_allocator.GetCmdList().InsertLabel(
+                std::format("Layer {}", layer++), {0.0f, 0.0f, 1.0f, 1.0f}
+            );
+            RecordLayerTiming& layer_timing = record_sample->layer_timings[current_raw_layer];
+            struct DeferredCommandDiagnostics {
+                const Command* cmd{nullptr};
+                uint64         descriptor_begin{0};
+                uint64         descriptor_bytes{0};
+                double         command_ms{0.0};
+            };
+            Array<DeferredCommandDiagnostics> deferred_diagnostics(
+                record_sample->topology.layer_command_counts[current_raw_layer]
+            );
+            size_t     deferred_index = 0;
+            const auto layer_started  = std::chrono::steady_clock::now();
+            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
+                const auto* cmd = cmdnode->cmd;
+                const uint64 descriptor_before =
+                    vk_device.GetGlobalDescriptorHeap().current_offset;
+                const auto  command_started = std::chrono::steady_clock::now();
+                visitor.VisitCmd(cmd);
+                const auto command_finished = std::chrono::steady_clock::now();
+                const uint64 descriptor_after =
+                    vk_device.GetGlobalDescriptorHeap().current_offset;
+                assert(deferred_index < deferred_diagnostics.size());
+                deferred_diagnostics[deferred_index++] = {
+                    .cmd              = cmd,
+                    .descriptor_begin = descriptor_before - descriptor_begin_offset,
+                    .descriptor_bytes = descriptor_after - descriptor_before,
+                    .command_ms       = RhiThreadProfileMilliseconds(
+                        command_started, command_finished
+                    ),
+                };
+            }
+            const auto layer_finished = std::chrono::steady_clock::now();
+            assert(deferred_index == deferred_diagnostics.size());
+            layer_timing.wall_ms = RhiThreadProfileMilliseconds(layer_started, layer_finished);
 
-    for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
-        if (layer == 0) {
-            vk_allocator.GetCmdList().BeginLabel("Begin Layers", {0.0f, 0.0f, 1.0f, 1.0f});
+            // Descriptor/query golden reconstruction is deliberately outside
+            // the timed visitor loop so diagnostic hashing cannot inflate the
+            // hypothetical parallel-recording opportunity.
+            for (const DeferredCommandDiagnostics& diagnostics : deferred_diagnostics) {
+                const Command* cmd     = diagnostics.cmd;
+                const auto     ordinal = original_ordinals.find(cmd);
+                if (ordinal == original_ordinals.end()) {
+                    serial_golden->MarkUnresolved();
+                    serial_golden->SetCurrentCommand(std::numeric_limits<uint32_t>::max());
+                } else {
+                    serial_golden->SetCurrentCommand(ordinal->second);
+                }
+                serial_golden->RecordDescriptorsForCommand(
+                    cmd,
+                    _submit.cached_args,
+                    diagnostics.descriptor_begin,
+                    diagnostics.descriptor_bytes
+                );
+                if (cmd->Type() == Command::EType::Scope) {
+                    const auto& scope = *static_cast<const ScopeCmd*>(cmd);
+                    if (scope.QueryTimestamp()) {
+                        serial_golden->RecordQueryEvent(
+                            scope.IsPush() ? SerialQueryEvent::Begin : SerialQueryEvent::End,
+                            scope.ScopeName(),
+                            scope.IsPush() ? ProfilerStorage::kBeginTimestampStage
+                                           : ProfilerStorage::kEndTimestampStage
+                        );
+                    }
+                }
+                record_sample->serial_command_sum_ms += diagnostics.command_ms;
+                if (IsParallelRecordCandidate(cmd->Type())) {
+                    layer_timing.candidate_units_ms.push_back(diagnostics.command_ms);
+                }
+            }
         }
-        if (cmd_list.head == nullptr) {
-            continue;
-        }
-        reorder_timer.Start();
-        for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
-            preprocessor.VisitCmd(cmdnode->cmd);
-        }
-        tracker.ResolveBarriers();
-        tracker.DispatchBarriers(vk_allocator.GetCmdList());
-        reorder_timer.Stop();
-        preprocess_time += reorder_timer.ElapsedMilliseconds();
-        vk_allocator.GetCmdList().InsertLabel(std::format("Layer {}", layer++), {0.0f, 0.0f, 1.0f, 1.0f});
-        for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
-            const auto* cmd = cmdnode->cmd;
-            visitor.VisitCmd(cmd);
+    } else {
+        // Keep the profile-off path on the serial baseline: no diagnostic
+        // counters, per-command clocks, hashes, allocations, formatting, or output.
+        // The pre-existing preprocess timer and debug-label formatting remain unchanged.
+        for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
+            if (layer == 0) {
+                vk_allocator.GetCmdList().BeginLabel("Begin Layers", {0.0f, 0.0f, 1.0f, 1.0f});
+            }
+            if (cmd_list.head == nullptr) {
+                continue;
+            }
+            reorder_timer.Start();
+            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
+                preprocessor.VisitCmd(cmdnode->cmd);
+            }
+            tracker.ResolveBarriers();
+            tracker.DispatchBarriers(vk_allocator.GetCmdList());
+            reorder_timer.Stop();
+            preprocess_time += reorder_timer.ElapsedMilliseconds();
+            vk_allocator.GetCmdList().InsertLabel(
+                std::format("Layer {}", layer++), {0.0f, 0.0f, 1.0f, 1.0f}
+            );
+            for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
+                visitor.VisitCmd(cmdnode->cmd);
+            }
         }
     }
     if (layer > 0) {
@@ -3208,16 +3455,65 @@ void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline, uint64 _s
 
     if (has_cmd) {
         tracker.RestoreState();
+        if (record_sample) {
+            record_pending_barriers(std::numeric_limits<uint64>::max());
+        }
         tracker.DispatchBarriers(vk_allocator.GetCmdList());
         if (_submit.b_tick_profiling) {
             profiler_storage.EndProfilerSession(vk_allocator.GetCmdList(), "Graphics Exec");
+            if (serial_golden) {
+                serial_golden->SetCurrentCommand(std::numeric_limits<uint32_t>::max());
+                serial_golden->RecordQueryEvent(
+                    SerialQueryEvent::End,
+                    "Graphics Exec",
+                    ProfilerStorage::kEndTimestampStage
+                );
+            }
         }
         vk_allocator.GetCmdList().EndLabel();
         vk_allocator.GetCmdList().End();
         if (queue.GetType() != EQueueType::Copy) {
+            if (record_sample) {
+                record_sample->descriptor_bytes =
+                    vk_device.GetGlobalDescriptorHeap().current_offset - descriptor_begin_offset;
+            }
             vk_device.GetGlobalDescriptorHeap().EndPushDescriptors(descriptor_frame);
         }
+        if (record_sample && _submit.b_tick_profiling) {
+            const QueryFrameDiagnostics query_diagnostics =
+                profiler_storage.GetCurrentFrameQueryDiagnostics();
+            record_sample->query_digest = query_diagnostics.digest;
+            record_sample->used_queries = query_diagnostics.used_query_count;
+        }
         tracker.Reset();
+    }
+
+    if (record_sample) {
+        StableRecordHash descriptor_hash;
+        descriptor_hash.Add(record_sample->descriptor_bytes);
+        record_sample->descriptor_digest = descriptor_hash.Value();
+        if (!_submit.b_tick_profiling) {
+            StableRecordHash query_hash;
+            query_hash.Add(0);
+            record_sample->query_digest = query_hash.Value();
+        }
+        record_sample->serial_golden     = serial_golden->Finish();
+        record_sample->golden_unresolved = serial_golden->UnresolvedCount();
+        record_sample->golden_opaque     = serial_golden->OpaqueCount();
+        record_sample->golden_unresolved_command_mask =
+            serial_golden->UnresolvedCommandMask();
+        record_sample->golden_opaque_command_mask = serial_golden->OpaqueCommandMask();
+        record_sample->golden_unresolved_native_buffers =
+            serial_golden->UnresolvedNativeBufferCount();
+        record_sample->golden_unresolved_native_images =
+            serial_golden->UnresolvedNativeImageCount();
+        record_sample->golden_has_unresolved_buffer_barrier =
+            serial_golden->HasUnresolvedBufferBarrier();
+        if (record_sample->golden_has_unresolved_buffer_barrier) {
+            record_sample->golden_first_unresolved_buffer_barrier =
+                serial_golden->FirstUnresolvedBufferBarrier();
+        }
+        RecordRhiRecordProfile(*record_sample);
     }
 
     Array<RHIResource*> deferred_releases = TakeDeferredReleases();
@@ -3309,13 +3605,17 @@ void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
     }
 
     if (rhi_thread_enabled) {
-        const auto caller_started = std::chrono::steady_clock::now();
+        std::chrono::steady_clock::time_point caller_started{};
+        if (thread_profile) {
+            caller_started = std::chrono::steady_clock::now();
+        }
         {
             std::unique_lock<std::mutex> lock(rhi_work_mutex);
             const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
             const uint64 serial           = ++enqueued_rhi_work;
             const uint32 enqueue_depth    = uint32(rhi_work_queue.size() + 1);
-            const auto   enqueued_at       = std::chrono::steady_clock::now();
+            const auto enqueued_at = thread_profile ? std::chrono::steady_clock::now()
+                                                    : std::chrono::steady_clock::time_point{};
             rhi_work_queue.emplace_back(
                 std::in_place_type<RhiPresentWork>,
                 std::move(_sc),
@@ -3326,8 +3626,10 @@ void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
                 enqueued_at,
                 enqueue_depth
             );
-            std::get<RhiPresentWork>(rhi_work_queue.back()).caller_ms =
-                RhiThreadProfileMilliseconds(caller_started, std::chrono::steady_clock::now());
+            if (thread_profile) {
+                std::get<RhiPresentWork>(rhi_work_queue.back()).caller_ms =
+                    RhiThreadProfileMilliseconds(caller_started, std::chrono::steady_clock::now());
+            }
         }
         rhi_work_cv.notify_one();
         return;
@@ -3335,13 +3637,19 @@ void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
 
     std::unique_lock<std::mutex> lock(exec_mtx);
     const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
-    const auto   work_started     = std::chrono::steady_clock::now();
-    PresentNow(
-        std::move(_sc), std::move(source_texture), _view, current_timeline, current_timeline
-    );
-    const double work_ms =
-        RhiThreadProfileMilliseconds(work_started, std::chrono::steady_clock::now());
-    RecordThreadingProfile(ERhiWorkKind::Present, work_ms, 0.0, work_ms, 0);
+    if (thread_profile) {
+        const auto work_started = std::chrono::steady_clock::now();
+        PresentNow(
+            std::move(_sc), std::move(source_texture), _view, current_timeline, current_timeline
+        );
+        const double work_ms =
+            RhiThreadProfileMilliseconds(work_started, std::chrono::steady_clock::now());
+        RecordThreadingProfile(ERhiWorkKind::Present, work_ms, 0.0, work_ms, 0);
+    } else {
+        PresentNow(
+            std::move(_sc), std::move(source_texture), _view, current_timeline, current_timeline
+        );
+    }
 }
 
 void VkCommandQueue::PresentNow(
@@ -3616,6 +3924,223 @@ void VkCommandQueue::EnqueueCompletionMarker(uint64 _timeline) {
     event_queue.emplace_back(VulkanCompletionMarker{}, _timeline, true);
 }
 
+void VkCommandQueue::EnsureRecordCalibration() {
+    if (!thread_profile || thread_profile->calibration_ready ||
+        queue.GetType() != EQueueType::Graphics) {
+        return;
+    }
+
+    RhiThreadProfileState& profile = *thread_profile;
+    profile.model_workers = std::min(4u, std::max(1u, std::thread::hardware_concurrency()));
+
+    auto fail_calibration = [&](std::string_view _reason) {
+        profile.dispatch_join_median_ms = 1000000.0;
+        profile.dispatch_join_tail_ms   = 1000000.0;
+        profile.calibration_ready       = true;
+        LOG_ERROR(
+            "[ThreadingProfile][RHIRecordCalibration] queue=Graphics model_workers={} "
+            "status=failed estimate_basis=conservative reason={}",
+            profile.model_workers,
+            _reason
+        );
+    };
+
+    constexpr uint32 warmup_count = 16;
+    constexpr uint32 sample_count = 64;
+    try {
+        ExternalCpuJoinPool join_pool(profile.model_workers);
+        Array<ExternalCpuJoinPool::Job> jobs;
+        jobs.reserve(profile.model_workers);
+        for (uint32 worker = 0; worker < profile.model_workers; ++worker) {
+            jobs.emplace_back([] {});
+        }
+        const std::span<const ExternalCpuJoinPool::Job> job_span(jobs.data(), jobs.size());
+
+        for (uint32 warmup = 0; warmup < warmup_count; ++warmup) {
+            if (join_pool.RunAndWait(job_span) != ExternalJoinResult::Completed) {
+                fail_calibration("warmup_join");
+                return;
+            }
+        }
+
+        Array<double> samples;
+        samples.reserve(sample_count);
+        for (uint32 sample = 0; sample < sample_count; ++sample) {
+            const auto started = std::chrono::steady_clock::now();
+            if (join_pool.RunAndWait(job_span) != ExternalJoinResult::Completed) {
+                fail_calibration("sample_join");
+                return;
+            }
+            samples.push_back(
+                RhiThreadProfileMilliseconds(started, std::chrono::steady_clock::now())
+            );
+        }
+        std::sort(samples.begin(), samples.end());
+        const size_t median_index = samples.size() / 2;
+        const size_t tail_index   = (samples.size() * 95 + 99) / 100 - 1;
+        profile.dispatch_join_median_ms = samples[median_index];
+        profile.dispatch_join_tail_ms   = samples[tail_index];
+        profile.calibration_ready       = true;
+
+        LOG_INFO(
+            "[ThreadingProfile][RHIRecordCalibration] queue=Graphics model_workers={} warmup={} "
+            "samples={} dispatch_join_median_ms={:.6f} dispatch_join_tail_ms={:.6f} "
+            "estimate_basis=p95 status=completed",
+            profile.model_workers,
+            warmup_count,
+            sample_count,
+            profile.dispatch_join_median_ms,
+            profile.dispatch_join_tail_ms
+        );
+    } catch (const std::exception& error) {
+        fail_calibration(error.what());
+    } catch (...) {
+        fail_calibration("unknown_exception");
+    }
+}
+
+void VkCommandQueue::RecordRhiRecordProfile(const RhiRecordExecuteSample& _sample) {
+    if (!thread_profile) {
+        return;
+    }
+
+    RhiThreadProfileState& profile = *thread_profile;
+    const RecordPrediction prediction = PredictParallelRecordCriticalPath(
+        _sample.layer_timings, profile.model_workers, profile.dispatch_join_tail_ms
+    );
+    RhiRecordWindowTotals& totals = profile.record;
+    ++totals.samples;
+    totals.serial_record_wall_total_ms += prediction.serial_record_wall_ms;
+    totals.serial_record_wall_max_ms =
+        std::max(totals.serial_record_wall_max_ms, prediction.serial_record_wall_ms);
+    totals.serial_command_sum_total_ms += _sample.serial_command_sum_ms;
+    totals.eligible_record_total_ms += prediction.eligible_record_ms;
+    totals.predicted_critical_total_ms += prediction.predicted_critical_ms;
+    totals.dispatch_join_estimate_total_ms += prediction.dispatch_join_estimate_ms;
+    totals.predicted_net_saving_total_ms += prediction.predicted_net_saving_ms;
+    totals.layer_total += _sample.topology.layer_count;
+    totals.command_total += _sample.topology.command_count;
+    totals.candidate_command_total += _sample.topology.candidate_command_count;
+    totals.safe_command_total += _sample.topology.safe_command_count;
+    totals.parallel_layer_total += prediction.parallel_layer_count;
+    totals.descriptor_bytes_total += _sample.descriptor_bytes;
+    totals.buffer_barrier_total += _sample.buffer_barriers;
+    totals.texture_barrier_total += _sample.texture_barriers;
+    totals.memory_barrier_total += _sample.memory_barriers;
+    totals.used_query_total += _sample.used_queries;
+    totals.layer_max = std::max(totals.layer_max, _sample.topology.layer_count);
+    totals.command_max = std::max(totals.command_max, _sample.topology.command_count);
+    totals.parallel_layer_max =
+        std::max(totals.parallel_layer_max, prediction.parallel_layer_count);
+    totals.command_digests.insert(_sample.topology.command_digest);
+    totals.layer_digests.insert(_sample.topology.layer_digest);
+    totals.barrier_digests.insert(_sample.barrier_hash.Value());
+    totals.descriptor_digests.insert(_sample.descriptor_digest);
+    totals.query_digests.insert(_sample.query_digest);
+    if (_sample.serial_golden.complete) {
+        ++totals.golden_complete;
+    } else {
+        ++totals.golden_incomplete;
+    }
+    totals.golden_unresolved_total += _sample.golden_unresolved;
+    totals.golden_opaque_total += _sample.golden_opaque;
+    totals.golden_command_digests.insert(_sample.serial_golden.command_digest);
+    totals.golden_layer_digests.insert(_sample.serial_golden.layer_digest);
+    totals.golden_barrier_digests.insert(_sample.serial_golden.barrier_digest);
+    totals.golden_descriptor_digests.insert(_sample.serial_golden.descriptor_digest);
+    totals.golden_query_digests.insert(_sample.serial_golden.query_digest);
+    totals.golden_combined_digests.insert(_sample.serial_golden.combined_digest);
+    StableRecordHash manifest_entry_hash;
+    manifest_entry_hash.Add(_sample.topology.topology_digest);
+    manifest_entry_hash.Add(_sample.serial_golden.combined_digest);
+    manifest_entry_hash.Add(_sample.serial_golden.complete ? 1u : 0u);
+    totals.golden_manifest_entries.insert(manifest_entry_hash.Value());
+    const bool is_new_manifest_entry =
+        profile.observed_golden_manifests.insert(manifest_entry_hash.Value()).second;
+
+    if (is_new_manifest_entry) {
+        LOG_INFO(
+            "[ThreadingProfile][RHIRecordGolden] queue=Graphics schema=1 "
+            "identity=submission-alpha complete={} topology_digest={:016x} "
+            "combined_digest={:016x} command_digest={:016x} layer_digest={:016x} "
+            "barrier_digest={:016x} descriptor_digest={:016x} query_digest={:016x} "
+            "commands={} layers={} barriers={} descriptors={} queries={} unresolved={} opaque={} "
+            "unresolved_command_mask={:016x} opaque_command_mask={:016x} "
+            "unresolved_native_buffers={} unresolved_native_images={} "
+            "first_unresolved_buffer_group={} first_unresolved_buffer_src_stage={:x} "
+            "first_unresolved_buffer_dst_stage={:x} first_unresolved_buffer_src_access={:x} "
+            "first_unresolved_buffer_dst_access={:x} first_unresolved_buffer_offset={} "
+            "first_unresolved_buffer_size={}",
+            _sample.serial_golden.complete ? 1 : 0,
+            _sample.topology.topology_digest,
+            _sample.serial_golden.combined_digest,
+            _sample.serial_golden.command_digest,
+            _sample.serial_golden.layer_digest,
+            _sample.serial_golden.barrier_digest,
+            _sample.serial_golden.descriptor_digest,
+            _sample.serial_golden.query_digest,
+            _sample.serial_golden.command_count,
+            _sample.serial_golden.layer_count,
+            _sample.serial_golden.barrier_count,
+            _sample.serial_golden.descriptor_count,
+            _sample.serial_golden.query_count,
+            _sample.golden_unresolved,
+            _sample.golden_opaque,
+            _sample.golden_unresolved_command_mask,
+            _sample.golden_opaque_command_mask,
+            _sample.golden_unresolved_native_buffers,
+            _sample.golden_unresolved_native_images,
+            _sample.golden_has_unresolved_buffer_barrier
+                ? _sample.golden_first_unresolved_buffer_barrier.group_ordinal
+                : 0,
+            _sample.golden_has_unresolved_buffer_barrier
+                ? _sample.golden_first_unresolved_buffer_barrier.src_stage_mask
+                : 0,
+            _sample.golden_has_unresolved_buffer_barrier
+                ? _sample.golden_first_unresolved_buffer_barrier.dst_stage_mask
+                : 0,
+            _sample.golden_has_unresolved_buffer_barrier
+                ? _sample.golden_first_unresolved_buffer_barrier.src_access_mask
+                : 0,
+            _sample.golden_has_unresolved_buffer_barrier
+                ? _sample.golden_first_unresolved_buffer_barrier.dst_access_mask
+                : 0,
+            _sample.golden_has_unresolved_buffer_barrier
+                ? _sample.golden_first_unresolved_buffer_barrier.range_offset
+                : 0,
+            _sample.golden_has_unresolved_buffer_barrier
+                ? _sample.golden_first_unresolved_buffer_barrier.range_size
+                : 0
+        );
+    }
+
+    const bool topology_changed =
+        profile.has_topology && profile.last_topology_digest != _sample.topology.topology_digest;
+    if (!profile.has_topology || topology_changed) {
+        LOG_INFO(
+            "[ThreadingProfile][RHIRecordTopology] queue=Graphics topology_digest={:016x} "
+            "command_digest={:016x} layer_digest={:016x} layers={} commands={} "
+            "candidate_commands={} safe_commands={} layer_commands={} layer_candidates={} "
+            "change={}",
+            _sample.topology.topology_digest,
+            _sample.topology.command_digest,
+            _sample.topology.layer_digest,
+            _sample.topology.layer_count,
+            _sample.topology.command_count,
+            _sample.topology.candidate_command_count,
+            _sample.topology.safe_command_count,
+            JoinRecordCounts(_sample.topology.layer_command_counts),
+            JoinRecordCounts(_sample.topology.layer_candidate_counts),
+            topology_changed ? 1 : 0
+        );
+    }
+    if (topology_changed) {
+        ++totals.topology_changes;
+    }
+    profile.has_topology         = true;
+    profile.last_topology_digest = _sample.topology.topology_digest;
+}
+
 void VkCommandQueue::RecordThreadingProfile(
     ERhiWorkKind _kind,
     double       _caller_ms,
@@ -3623,30 +4148,29 @@ void VkCommandQueue::RecordThreadingProfile(
     double       _work_ms,
     uint32       _enqueue_depth
 ) {
-    if (!thread_profile_logging) {
+    if (!thread_profile) {
         return;
     }
 
-    ++thread_profile_samples;
+    RhiThreadProfileState& profile = *thread_profile;
+    ++profile.samples;
     RhiWorkProfileTotals& kind_profile = _kind == ERhiWorkKind::Execute
-                                            ? thread_profile_execute
-                                            : thread_profile_present;
+                                            ? profile.execute
+                                            : profile.present;
     ++kind_profile.samples;
     kind_profile.caller_total_ms += _caller_ms;
     kind_profile.queue_wait_total_ms += _queue_wait_ms;
     kind_profile.work_total_ms += _work_ms;
-    thread_profile_caller_total_ms += _caller_ms;
-    thread_profile_caller_max_ms = std::max(thread_profile_caller_max_ms, _caller_ms);
-    thread_profile_queue_wait_total_ms += _queue_wait_ms;
-    thread_profile_queue_wait_max_ms =
-        std::max(thread_profile_queue_wait_max_ms, _queue_wait_ms);
-    thread_profile_work_total_ms += _work_ms;
-    thread_profile_work_max_ms = std::max(thread_profile_work_max_ms, _work_ms);
-    thread_profile_max_enqueue_depth =
-        std::max(thread_profile_max_enqueue_depth, _enqueue_depth);
+    profile.caller_total_ms += _caller_ms;
+    profile.caller_max_ms = std::max(profile.caller_max_ms, _caller_ms);
+    profile.queue_wait_total_ms += _queue_wait_ms;
+    profile.queue_wait_max_ms = std::max(profile.queue_wait_max_ms, _queue_wait_ms);
+    profile.work_total_ms += _work_ms;
+    profile.work_max_ms = std::max(profile.work_max_ms, _work_ms);
+    profile.max_enqueue_depth = std::max(profile.max_enqueue_depth, _enqueue_depth);
 
     const auto   now       = std::chrono::steady_clock::now();
-    const double window_ms = RhiThreadProfileMilliseconds(thread_profile_window_start, now);
+    const double window_ms = RhiThreadProfileMilliseconds(profile.window_start, now);
     if (window_ms < 1000.0) {
         return;
     }
@@ -3669,36 +4193,124 @@ void VkCommandQueue::RecordThreadingProfile(
         queue.GetType() == EQueueType::Graphics ? "Graphics" : "Compute",
         rhi_thread_enabled ? "threaded" : "synchronous",
         window_ms,
-        thread_profile_samples,
-        thread_profile_execute.samples,
-        thread_profile_present.samples,
-        thread_profile_caller_total_ms / double(thread_profile_samples),
-        thread_profile_caller_max_ms,
-        thread_profile_queue_wait_total_ms / double(thread_profile_samples),
-        thread_profile_queue_wait_max_ms,
-        thread_profile_work_total_ms / double(thread_profile_samples),
-        thread_profile_work_max_ms,
-        average(thread_profile_execute.caller_total_ms, thread_profile_execute.samples),
-        average(thread_profile_execute.queue_wait_total_ms, thread_profile_execute.samples),
-        average(thread_profile_execute.work_total_ms, thread_profile_execute.samples),
-        average(thread_profile_present.caller_total_ms, thread_profile_present.samples),
-        average(thread_profile_present.queue_wait_total_ms, thread_profile_present.samples),
-        average(thread_profile_present.work_total_ms, thread_profile_present.samples),
-        thread_profile_max_enqueue_depth,
+        profile.samples,
+        profile.execute.samples,
+        profile.present.samples,
+        profile.caller_total_ms / double(profile.samples),
+        profile.caller_max_ms,
+        profile.queue_wait_total_ms / double(profile.samples),
+        profile.queue_wait_max_ms,
+        profile.work_total_ms / double(profile.samples),
+        profile.work_max_ms,
+        average(profile.execute.caller_total_ms, profile.execute.samples),
+        average(profile.execute.queue_wait_total_ms, profile.execute.samples),
+        average(profile.execute.work_total_ms, profile.execute.samples),
+        average(profile.present.caller_total_ms, profile.present.samples),
+        average(profile.present.queue_wait_total_ms, profile.present.samples),
+        average(profile.present.work_total_ms, profile.present.samples),
+        profile.max_enqueue_depth,
         gpu_pending
     );
 
-    thread_profile_window_start       = now;
-    thread_profile_samples            = 0;
-    thread_profile_execute            = {};
-    thread_profile_present            = {};
-    thread_profile_caller_total_ms    = 0.0;
-    thread_profile_caller_max_ms      = 0.0;
-    thread_profile_queue_wait_total_ms = 0.0;
-    thread_profile_queue_wait_max_ms  = 0.0;
-    thread_profile_work_total_ms      = 0.0;
-    thread_profile_work_max_ms        = 0.0;
-    thread_profile_max_enqueue_depth  = 0;
+    const RhiRecordWindowTotals& record = profile.record;
+    if (record.samples > 0) {
+        const double record_samples = double(record.samples);
+        const double predicted_net_pct = record.serial_record_wall_total_ms > 0.0
+                                                 ? record.predicted_net_saving_total_ms /
+                                                       record.serial_record_wall_total_ms * 100.0
+                                                 : 0.0;
+        LOG_INFO(
+            "[ThreadingProfile][RHIRecord] queue=Graphics mode={} window_ms={:.3f} samples={} "
+            "model_workers={} layers_avg={:.3f} layers_max={} commands_avg={:.3f} commands_max={} "
+            "candidate_commands_avg={:.3f} safe_commands_avg={:.3f} parallel_layers_avg={:.3f} "
+            "parallel_layers_max={} serial_record_wall_avg_ms={:.3f} "
+            "serial_record_wall_max_ms={:.3f} serial_command_sum_avg_ms={:.3f} "
+            "eligible_record_avg_ms={:.3f} predicted_critical_avg_ms={:.3f} "
+            "dispatch_join_est_avg_ms={:.3f} predicted_net_avg_ms={:.3f} predicted_net_pct={:.3f} "
+            "descriptor_bytes_avg={:.3f} buffer_barriers_avg={:.3f} texture_barriers_avg={:.3f} "
+            "memory_barriers_avg={:.3f} used_queries_avg={:.3f} "
+            "command_digest={:016x} command_variants={} layer_digest={:016x} layer_variants={} "
+            "barrier_digest={:016x} barrier_variants={} descriptor_digest={:016x} "
+            "descriptor_variants={} query_digest={:016x} query_variants={} topology_changes={} "
+            "golden_complete={} golden_incomplete={} golden_unresolved={} golden_opaque={} "
+            "golden_command_digest={:016x} golden_command_variants={} "
+            "golden_layer_digest={:016x} golden_layer_variants={} "
+            "golden_barrier_digest={:016x} golden_barrier_variants={} "
+            "golden_descriptor_digest={:016x} golden_descriptor_variants={} "
+            "golden_query_digest={:016x} golden_query_variants={} "
+            "golden_combined_digest={:016x} golden_combined_variants={} "
+            "golden_manifest_digest={:016x} golden_manifest_variants={} "
+            "calibration_tail_ms={:.6f}",
+            rhi_thread_enabled ? "threaded" : "synchronous",
+            window_ms,
+            record.samples,
+            profile.model_workers,
+            double(record.layer_total) / record_samples,
+            record.layer_max,
+            double(record.command_total) / record_samples,
+            record.command_max,
+            double(record.candidate_command_total) / record_samples,
+            double(record.safe_command_total) / record_samples,
+            double(record.parallel_layer_total) / record_samples,
+            record.parallel_layer_max,
+            record.serial_record_wall_total_ms / record_samples,
+            record.serial_record_wall_max_ms,
+            record.serial_command_sum_total_ms / record_samples,
+            record.eligible_record_total_ms / record_samples,
+            record.predicted_critical_total_ms / record_samples,
+            record.dispatch_join_estimate_total_ms / record_samples,
+            record.predicted_net_saving_total_ms / record_samples,
+            predicted_net_pct,
+            double(record.descriptor_bytes_total) / record_samples,
+            double(record.buffer_barrier_total) / record_samples,
+            double(record.texture_barrier_total) / record_samples,
+            double(record.memory_barrier_total) / record_samples,
+            double(record.used_query_total) / record_samples,
+            CanonicalDigest(record.command_digests),
+            record.command_digests.size(),
+            CanonicalDigest(record.layer_digests),
+            record.layer_digests.size(),
+            CanonicalDigest(record.barrier_digests),
+            record.barrier_digests.size(),
+            CanonicalDigest(record.descriptor_digests),
+            record.descriptor_digests.size(),
+            CanonicalDigest(record.query_digests),
+            record.query_digests.size(),
+            record.topology_changes,
+            record.golden_complete,
+            record.golden_incomplete,
+            record.golden_unresolved_total,
+            record.golden_opaque_total,
+            CanonicalDigest(record.golden_command_digests),
+            record.golden_command_digests.size(),
+            CanonicalDigest(record.golden_layer_digests),
+            record.golden_layer_digests.size(),
+            CanonicalDigest(record.golden_barrier_digests),
+            record.golden_barrier_digests.size(),
+            CanonicalDigest(record.golden_descriptor_digests),
+            record.golden_descriptor_digests.size(),
+            CanonicalDigest(record.golden_query_digests),
+            record.golden_query_digests.size(),
+            CanonicalDigest(record.golden_combined_digests),
+            record.golden_combined_digests.size(),
+            CanonicalDigest(record.golden_manifest_entries),
+            record.golden_manifest_entries.size(),
+            profile.dispatch_join_tail_ms
+        );
+    }
+
+    profile.window_start        = now;
+    profile.samples             = 0;
+    profile.execute             = {};
+    profile.present             = {};
+    profile.caller_total_ms     = 0.0;
+    profile.caller_max_ms       = 0.0;
+    profile.queue_wait_total_ms = 0.0;
+    profile.queue_wait_max_ms   = 0.0;
+    profile.work_total_ms       = 0.0;
+    profile.work_max_ms         = 0.0;
+    profile.max_enqueue_depth   = 0;
+    profile.record              = {};
 }
 
 void VkCommandQueue::RhiThreadMain() {
@@ -3728,43 +4340,50 @@ void VkCommandQueue::RhiThreadMain() {
         }
 
         const uint64 serial = std::visit([](const auto& _work) { return _work.serial; }, *work);
-        const auto enqueued_at =
-            std::visit([](const auto& _work) { return _work.enqueued_at; }, *work);
-        const uint32 enqueue_depth =
-            std::visit([](const auto& _work) { return _work.enqueue_depth; }, *work);
-        const double caller_ms =
-            std::visit([](const auto& _work) { return _work.caller_ms; }, *work);
-        const ERhiWorkKind work_kind = std::holds_alternative<RhiExecuteWork>(*work)
-                                           ? ERhiWorkKind::Execute
-                                           : ERhiWorkKind::Present;
         {
             std::unique_lock<std::mutex> lock(exec_mtx);
-            const auto work_started = std::chrono::steady_clock::now();
-            std::visit(
-                Overload{
-                    [this](RhiExecuteWork& _work) {
-                        ExecuteNow(std::move(_work.submit), _work.timeline, _work.serial);
+            auto execute_work = [&] {
+                std::visit(
+                    Overload{
+                        [this](RhiExecuteWork& _work) {
+                            ExecuteNow(std::move(_work.submit), _work.timeline, _work.serial);
+                        },
+                        [this](RhiPresentWork& _work) {
+                            PresentNow(
+                                std::move(_work.swapchain),
+                                std::move(_work.source_texture),
+                                _work.source_view,
+                                _work.timeline,
+                                _work.serial
+                            );
+                        }
                     },
-                    [this](RhiPresentWork& _work) {
-                        PresentNow(
-                            std::move(_work.swapchain),
-                            std::move(_work.source_texture),
-                            _work.source_view,
-                            _work.timeline,
-                            _work.serial
-                        );
-                    }
-                },
-                *work
-            );
-            const auto work_finished = std::chrono::steady_clock::now();
-            RecordThreadingProfile(
-                work_kind,
-                caller_ms,
-                RhiThreadProfileMilliseconds(enqueued_at, work_started),
-                RhiThreadProfileMilliseconds(work_started, work_finished),
-                enqueue_depth
-            );
+                    *work
+                );
+            };
+            if (thread_profile) {
+                const auto enqueued_at =
+                    std::visit([](const auto& _work) { return _work.enqueued_at; }, *work);
+                const uint32 enqueue_depth =
+                    std::visit([](const auto& _work) { return _work.enqueue_depth; }, *work);
+                const double caller_ms =
+                    std::visit([](const auto& _work) { return _work.caller_ms; }, *work);
+                const ERhiWorkKind work_kind = std::holds_alternative<RhiExecuteWork>(*work)
+                                                   ? ERhiWorkKind::Execute
+                                                   : ERhiWorkKind::Present;
+                const auto work_started = std::chrono::steady_clock::now();
+                execute_work();
+                const auto work_finished = std::chrono::steady_clock::now();
+                RecordThreadingProfile(
+                    work_kind,
+                    caller_ms,
+                    RhiThreadProfileMilliseconds(enqueued_at, work_started),
+                    RhiThreadProfileMilliseconds(work_started, work_finished),
+                    enqueue_depth
+                );
+            } else {
+                execute_work();
+            }
         }
 
         work.reset();

@@ -366,12 +366,14 @@ void CommandList::PushScopeWithTimeScope(std::string_view _name) {
 }
 
 void CommandList::PopScope() {
-    commands.push_back(MakeUnique<ScopeCmd>(scope_stack.front(), false, false));
+    assert(!scope_stack.empty() && "PopScope called without a matching PushScope");
+    commands.push_back(MakeUnique<ScopeCmd>(scope_stack.top(), false, false));
     scope_stack.pop();
 }
 
 void CommandList::PopScopeWithTimeScope() {
-    commands.push_back(MakeUnique<ScopeCmd>(scope_stack.front(), false, true));
+    assert(!scope_stack.empty() && "PopScopeWithTimeScope called without a matching push");
+    commands.push_back(MakeUnique<ScopeCmd>(scope_stack.top(), false, true));
     scope_stack.pop();
 }
 #pragma region[ raytracing ]
@@ -428,21 +430,21 @@ void CommandList::BeginBarriers(
 
 void CommandList::InnerReadBuffer(BufferView _buffer, EBufferState _state, EPassType _pass) {
     BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
-    barrier->ReadBuffer(_buffer.buffer, _state, _pass);
+    barrier->ReadBuffer(_buffer, _state, _pass);
 }
 void CommandList::InnerWriteBuffer(BufferView _buffer, EBufferState _state, EPassType _pass) {
     BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
-    barrier->WriteBuffer(_buffer.buffer, _state, _pass);
+    barrier->WriteBuffer(_buffer, _state, _pass);
 }
 
 void CommandList::InnerReadTexture(TextureView _texture, ETextureState _state, EPassType _pass) {
     BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
-    barrier->ReadTexture(_texture.texture, _state, _pass);
+    barrier->ReadTexture(_texture, _state, _pass);
 }
 
 void CommandList::InnerWriteTexture(TextureView _texture, ETextureState _state, EPassType _pass) {
     BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
-    barrier->WriteTexture(_texture.texture, _state, _pass);
+    barrier->WriteTexture(_texture, _state, _pass);
 }
 
 void CommandList::EndBarriers() {

@@ -1267,21 +1267,33 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                         descriptor_buffer_count++;
                         buffer_descriptor_buffer_idx = descriptor_buffer_count - 1;
                     }
-                    binder.emplace<VulkanBindlessSetArray>(layout.bindings.at(0).param_idx, buffer_descriptor_buffer_idx);
+                    binder.emplace<VulkanBindlessSetArray>(
+                        layout.bindings.at(0).param_idx,
+                        buffer_descriptor_buffer_idx,
+                        layout[0].descriptorCount
+                    );
                 }else if(!layout.bindings.empty() && (layout[0].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLER)){
                     if (sampler_descriptor_buffer_idx == invalid_descriptor_buffer_idx) {
                         descriptor_buffer_count++;
                         sampler_descriptor_buffer_idx = descriptor_buffer_count - 1;
                     }
 
-                    binder.emplace<VulkanBindlessSetSampler>(layout.bindings.at(0).param_idx, sampler_descriptor_buffer_idx);
+                    binder.emplace<VulkanBindlessSetSampler>(
+                        layout.bindings.at(0).param_idx,
+                        sampler_descriptor_buffer_idx,
+                        layout[0].descriptorCount
+                    );
                 }else if (!layout.bindings.empty() && (layout[0].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)){
                     //sampler and sampled_image use same descriptor buffer
                     if (sampler_descriptor_buffer_idx == invalid_descriptor_buffer_idx) {
                         descriptor_buffer_count++;
                         sampler_descriptor_buffer_idx = descriptor_buffer_count - 1;
                     }
-                    binder.emplace<VulkanBindlessSetImage>(layout.bindings.at(0).param_idx, sampler_descriptor_buffer_idx);
+                    binder.emplace<VulkanBindlessSetImage>(
+                        layout.bindings.at(0).param_idx,
+                        sampler_descriptor_buffer_idx,
+                        layout[0].descriptorCount
+                    );
                 }
                 else{
                     LOG_CRITICAL("Unsupported bindless descriptor type: {}", uint(layout[0].descriptorType));

@@ -631,7 +631,8 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& _pso_handle, const Arr
                         if (writer.descriptorCount < 1)
                             continue;
                         const VulkanDescriptorInfo& set_info = _binder.bind_infos[i];
-                        if (!(_pso_handle.valid_bits & (1 << set_info.param_idx)))
+                        if (set_info.param_idx >= 64 ||
+                            !(_pso_handle.valid_bits & (uint64(1) << set_info.param_idx)))
                             continue;
 
                         VkFormat format =

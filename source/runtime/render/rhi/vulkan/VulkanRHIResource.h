@@ -397,6 +397,8 @@ struct VulkanBindlessSetArray {
     uint param_idx;
     //descriptor buffer index
     uint desc_idx;
+    //descriptorCount declared by the pipeline layout
+    uint descriptor_count;
 };
 
 struct VulkanBindlessSetImage {
@@ -404,6 +406,8 @@ struct VulkanBindlessSetImage {
     uint param_idx;
     //descriptor buffer index
     uint desc_idx;
+    //descriptorCount declared by the pipeline layout
+    uint descriptor_count;
 };
 
 struct VulkanBindlessSetSampler {
@@ -411,6 +415,8 @@ struct VulkanBindlessSetSampler {
     uint param_idx;
     //descriptor buffer index
     uint desc_idx;
+    //descriptorCount declared by the pipeline layout
+    uint descriptor_count;
 };
 using TBinder = std::variant<
     VulkanDescriptorSetBinder,

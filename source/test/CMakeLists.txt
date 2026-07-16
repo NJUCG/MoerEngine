@@ -18,6 +18,27 @@ target_link_libraries(${test_target}
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
+set(test_target TestRHICmdReorderer)
+add_executable(${test_target} "RHICmdReordererTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+
+set(test_target TestExternalCpuJoin)
+add_executable(${test_target} "ExternalCpuJoinTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+
+set(test_target TestRHIRecordDiagnostics)
+add_executable(${test_target} "RHIRecordDiagnosticsTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+
 set(test_target TestProbePhysicalAllocator)
 add_executable(${test_target} "ProbePhysicalAllocatorTest.cpp")
 target_link_libraries(${test_target}

@@ -204,7 +204,7 @@ public:
         uint64           _src_offset,
         uint64           _dst_offset,
         uint64           _byte_size,
-        std::string_view _name = typenames[uint(EType::CopyBackBuffer)]
+        std::string_view _name = typenames[uint(EType::BufferToBuffer)]
     ) :
         Command(EType::BufferToBuffer, _name),
         src_handle(_src_handle),
@@ -544,6 +544,8 @@ struct TextureBarrier {
     EPassType     pass_type;
     uint          mip_level : 8;
     uint          mip_cnt : 8;
+    uint          array_layer : 8;
+    uint          array_cnt : 8;
 };
 
 struct BufferBarrier {
@@ -572,7 +574,9 @@ public:
                 _dst_state,
                 _pass_type,
                 _view.mip_level,
-                _view.num_mips
+                _view.num_mips,
+                _view.array_layer,
+                _view.num_array
             }
         );
         return *this;
@@ -584,7 +588,9 @@ public:
                 _dst_state,
                 _pass_type,
                 _view.mip_level,
-                _view.num_mips
+                _view.num_mips,
+                _view.array_layer,
+                _view.num_array
             }
         );
         return *this;
@@ -757,6 +763,24 @@ public:
     }
     const auto& UpdateCommands() const {
         return update_cmds;
+    }
+    const auto& ArrayIndicesData() const {
+        return array_indices_dat;
+    }
+    const auto& BufferIndicesData() const {
+        return buffer_indices_dat;
+    }
+    const auto& TextureIndicesData() const {
+        return texture_indices_dat;
+    }
+    size_t ArrayDataSize() const {
+        return array_data.size();
+    }
+    size_t BufferDataSize() const {
+        return buffer_data.size();
+    }
+    size_t TextureDataSize() const {
+        return texture_data.size();
     }
 
     auto StealArrayData() const {

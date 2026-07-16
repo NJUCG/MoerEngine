@@ -121,6 +121,23 @@ Run repeated threaded RT soak checks for five minutes per process:
 python tools/threading/run_matrix.py --set soak --repeat 3 --soak-seconds 300 --base-config template.MoerEngine.toml
 ```
 
+Collect the fixed-scene Phase 9.0 serial-recording samples for the linear and
+RenderGraph Raster paths. Build Release first so the predicted savings are not
+based on Debug instrumentation cost:
+
+```powershell
+just b Release
+python tools/threading/run_matrix.py --scenario raster_rt1_rhi --repeat 3 --skip-window-stress --profile-tail-windows 5 --strict-serial-golden --base-config template.MoerEngine.toml --exe target/bin/Release/MoerEditor.exe --workdir target/bin/Release --outdir target/validation/rt_rhi/phase9_0/raster_rt1_rhi
+python tools/threading/run_matrix.py --scenario raster_graph_rt1_rhi --repeat 3 --skip-window-stress --profile-tail-windows 5 --strict-serial-golden --base-config template.MoerEngine.toml --exe target/bin/Release/MoerEditor.exe --workdir target/bin/Release --outdir target/validation/rt_rhi/phase9_0/raster_graph_rt1_rhi
+```
+
+`--strict-serial-golden` is intentionally opt-in because unsupported commands
+in other render paths may be reported as incomplete. For the Phase 9.0 fixed
+Raster scenes it requires every selected tail sample to be complete, rejects
+any incomplete, unresolved, or opaque sample, requires one stable manifest
+across the selected tail windows, and compares that manifest across repeated
+runs of the same scenario.
+
 Generate and validate all scenario configs without launching the editor:
 
 ```powershell
@@ -154,6 +171,9 @@ python tools/threading/run_matrix.py --set full --dry-run --base-config template
 A run passes only when all of the following are true:
 
 - The expected GT/RT/RHI mode markers appear in the log.
+- Every non-fault run emits both PrepareFrame and RHI serial-recording profile
+  windows. The short synthetic fault run is exempt because it can exit before
+  either one-second window completes.
 - Raster runs emit exactly one execution-mode marker per Raster renderer
   instance. The reload/switch seam requires exactly three Raster mode markers
   and at least three graph dumps; topology changes may legitimately add another
@@ -190,6 +210,23 @@ under `target/validation/rt_rhi/`.
 The summary aggregates the last five one-second profile windows by default.
 RHI data includes caller cost, enqueue-to-start latency, backend work time,
 Execute/Present splits, maximum queue depth, and pending GPU timeline distance.
+RHI serial-recording data is stored in each run's `rhi_record_profile` object.
+It includes layer and command counts, measurement-candidate and currently-safe
+counts, serial wall and per-command sums, eligible work, modelled critical path,
+dispatch/join estimate, predicted net saving, descriptor bytes, barrier/query
+counts, calibration tail, topology changes, and command/layer/barrier/descriptor/
+query digests. The `golden_*` fields additionally report the semantic serial
+contract captured at the actual recording sites: reordered command/layer
+shape, emitted barriers, descriptor layout and resource bindings, and timestamp
+query events. `golden_complete` plus `golden_incomplete` equals the sampled
+submission count; incomplete samples fail closed and are never accepted as a
+baseline. Timing and count averages are weighted by `samples`; maxima are
+taken across the selected tail windows. `predicted_net_pct` is derived from the
+weighted net-saving and serial-wall totals instead of averaging percentages.
+For each digest family, `*_digests` contains the sorted unique window rollups,
+`*_digest_window_variants` counts those rollups, and `*_variants` is the maximum
+number of per-frame variants reported by any selected window. `summary.md`
+contains timing, workload/digest-variant, and digest tables for the same data.
 RT data includes frame prepare, task queue latency, render execution, GT
 lag-limit wait, and maximum pending frames; Prepare, Render, and GT wait use
 their own sample counts when tail windows are combined. PrepareFrame data is emitted for
@@ -213,9 +250,9 @@ python tools/threading/run_matrix.py --scenario ray_rt1_rhi --repeat 3 --skip-wi
 Each run's `prepare_profile` object in `summary.json` contains the weighted
 breakdown and workload totals. `summary.md` presents the same data in timing and
 workload tables. Every non-fault profiled matrix scenario requires at least one
-`[ThreadingProfile][Prepare]` window before it can pass. The short synthetic
-fault scenario is exempt because it may terminate before the first one-second
-Prepare window is complete.
+`[ThreadingProfile][Prepare]` and one `[ThreadingProfile][RHIRecord]` window
+before it can pass. The short synthetic fault scenario is exempt because it may
+terminate before the first one-second profile window is complete.
 
 The runner refuses to reuse a non-empty scenario directory so a failed launch
 cannot accidentally consume a stale report from an earlier run.
