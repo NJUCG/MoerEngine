@@ -26,7 +26,7 @@ int main() {
     assert(std::holds_alternative<Moer::Render::ShaderVsHsDsPs>(shader_group));
 
     Moer::Render::GfxPsoCreateInfo pipeline_info(
-        RHIRasterizeInfo::Preset(),
+        ::RHIRasterizeInfo::Preset(),
         {},
         {}
     );
