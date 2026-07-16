@@ -1,7 +1,13 @@
 #pragma once
 
+#include "RasterFramePacket.h"
 #include "renderer/Renderer.h"
 #include "rhi/RHIResource.h"
+
+#include <functional>
+#include <optional>
+#include <string>
+#include <unordered_set>
 
 namespace Moer::Render::Raster {
 
@@ -53,11 +59,24 @@ class TensorRTPass;
 class RENDER_API RasterRenderer : public Renderer {
 
 public:
-    RasterRenderer(uint2& _resolution, const SharedPtr<EditorConfig> _config, const EngineHooks& _hooks);
+    RasterRenderer(uint2 _resolution, const SharedPtr<EditorConfig> _config);
 
     virtual ~RasterRenderer() override;
 
     virtual void Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) override;
+
+    bool SupportsSynchronizedRenderThread() const override {
+        return true;
+    }
+
+    RasterFramePacket
+    PrepareFrame(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks);
+    RasterFrameFeedback RenderFrame(RasterFramePacket frame_packet);
+    void ApplyFrameFeedback(
+        RasterFrameFeedback feedback,
+        RasterConfig&       target_config,
+        const EngineHooks&  hooks
+    );
 
     bool RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks);
 
@@ -97,6 +116,14 @@ private:
     // TODO: rt_geometries 已迁移到 GpuScene，未来应移除
     Camera m_scene_view_camera;
     bool   m_b_scene_view_camera_initialized = false;
+    bool   m_capture_scene_geometry_snapshot = true;
+
+    uint64_t m_next_frame_id = 0;
+
+    bool                            render_graph_enabled = false;
+    bool                            render_graph_debug_dump = false;
+    bool                            render_graph_fallback_latched = false;
+    std::unordered_set<std::string> logged_render_graph_dumps;
 }; // namespace Moer::Render::Raster
 
 } // namespace Moer::Render::Raster

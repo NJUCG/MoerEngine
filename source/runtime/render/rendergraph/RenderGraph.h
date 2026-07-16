@@ -1,201 +1,192 @@
-#ifndef MOER_ENGINE_RENDER_GRAPH
-#define MOER_ENGINE_RENDER_GRAPH
+#pragma once
 
-#include "DepdencyGraph.h"
-#include "PassNode.h"
 #include "RenderAPI.h"
-#include "RenderGraphHandle.h"
-#include "RenderGraphPass.h"
-#include "RenderGraphResource.h"
-#include "misc/STL.h"
-#include "rhi/RHICommon.h"
-#include "rhi/RHIResource.h"
+
 #include <cstdint>
+#include <functional>
 #include <limits>
-namespace Moer {
+#include <string>
+#include <string_view>
+#include <vector>
 
-class PassNode;
+namespace Moer::Render {
 
-class RenderGraph;
-
-// A BlackBoard is a place to store data that is shared between passes
-class RENDER_API BlackBoard {
-public:
-    RenderGraphTexture*            GetTexture(std::string_view name) const;
-    RenderGraphBuffer*             GetBuffer(std::string_view name) const;
-    RenderGraphHandle              GetHandle(std::string_view _name) const;
-    Moer::Array<RenderGraphHandle> GetHandles(const Moer::Array<std::string>& names) const;
-    void                           PutHandle(std::string_view name, RenderGraphHandle handle);
-    BlackBoard(RenderGraph& renderGraph);
-    ~BlackBoard() = default;
-    void Reset();
-
-protected:
-    RenderGraph&                                            m_renderGraph;
-    Moer::UnorderedMap<std::string_view, RenderGraphHandle> m_handles;
-};
-
-struct RenderGraphExecuteConfig {
-    RHIGraphicsCommandList* cmd_list{nullptr};
-    Extent3D                render_extent{};
-};
-
+/**
+ * Phase 8 serial RenderGraph.
+ *
+ * The graph owns declaration, dependency validation, stable scheduling and
+ * logical transient lifetimes only. It deliberately does not emit resource
+ * barriers or mutate RHI tracked state: command reorder / backend preprocess
+ * remains the single owner of real barriers.
+ */
 class RENDER_API RenderGraph {
-
 public:
-    class Builder {
-    public:
-        Builder& ReadTexture(
-            RenderGraphHandle         _input,
-            RenderGraphTexture::Usage _usage     = TS_SAMPLED,
-            uint32_t                  _mip_level = 0,
-            uint32_t                  _mip_cnt   = 1
-        );
-
-        Builder& WriteTexture(
-            RenderGraphHandle         _output,
-            RenderGraphTexture::Usage _usage     = TS_COLOR_ATTACHMENT,
-            uint32_t                  _mip_level = 0,
-            uint32_t                  _mip_cnt   = 1
-        );
-
-        Builder& ReadWriteTexture(
-            RenderGraphHandle         _input,
-            RenderGraphTexture::Usage _usage     = TS_COLOR_ATTACHMENT,
-            uint32_t                  _mip_level = 0,
-            uint32_t                  _mip_cnt   = 1
-        );
-        Builder& ReadWriteTextures(
-            const Moer::Array<RenderGraphHandle>& inputs,
-            RenderGraphTexture::Usage             usage = TS_COLOR_ATTACHMENT
-        );
-        Builder& ReadTextures(
-            const Moer::Array<RenderGraphHandle>& inputs,
-            RenderGraphTexture::Usage             usage = TS_SAMPLED
-        );
-
-        Builder& WriteTextures(
-            const Moer::Array<RenderGraphHandle>& output,
-            RenderGraphTexture::Usage             usage = TS_COLOR_ATTACHMENT
-        );
-
-        Builder&
-        ReadBuffer(RenderGraphHandle input, RenderGraphBuffer::Usage usage = RenderGraphBuffer::Usage::READ);
-
-        Builder& WriteBuffer(
-            RenderGraphHandle        output,
-            RenderGraphBuffer::Usage usage = RenderGraphBuffer::Usage::WRITE
-        );
-
-        Builder& ReadBuffers(
-            const Moer::Array<RenderGraphHandle>& inputs,
-            RenderGraphBuffer::Usage              usage = RenderGraphBuffer::Usage::READ
-        );
-
-        Builder& WriteBuffers(
-            const Moer::Array<RenderGraphHandle>& output,
-            RenderGraphBuffer::Usage              usage = RenderGraphBuffer::Usage::WRITE
-        );
-
-        void DeclareRenderPass(const RenderGraphPassDescriptor& descriptor);
-        void DeclareComputePass(const ComputePassDescriptor& descriptor);
-        Builder(PassNode* pass, RenderGraph& renderGraph);
-
-    protected:
-        PassNode*    m_pass{nullptr};
-        RenderGraph& m_renderGraph;
+    enum class ResourceKind : uint8_t {
+        Texture,
+        Buffer,
+        Token,
     };
-    RenderGraph();
 
-    RenderGraph&      operator=(const RenderGraph& other) = delete;
-    void              Reset();
-    RenderGraphHandle CreateTexture(std::string_view name, const RenderGraphTexture::Descriptor& descriptor);
-    RenderGraphHandle ImportTexture(std::string_view name, RHITextureRef texture);
-    template<typename TResourceRef>
-        requires std::is_same_v<TResourceRef, RHITextureRef> || std::is_same_v<TResourceRef, RHIBufferRef> ||
-                 std::is_constructible_v<RHITextureRef, TResourceRef> ||
-                 std::is_constructible_v<RHIBufferRef, TResourceRef>
-    RenderGraphHandle ImportIfNotExist(std::string_view _name, TResourceRef _resource) {
-        if (auto handle = GetBlackBoard().GetHandle(_name); handle.IsInitialized()) {
-            return handle;
-        }
-        RenderGraphHandle handle;
+    struct ResourceHandle {
+        static constexpr uint32_t InvalidIndex = std::numeric_limits<uint32_t>::max();
 
-        using T = std::decay_t<decltype(_resource)>;
-        if constexpr (std::is_constructible_v<RHITextureRef, T>) {
-            handle = ImportTexture(_name, RHITextureRef(_resource));
-        } else if constexpr (std::is_constructible_v<RHIBufferRef, T>) {
-            handle = ImportBuffer(_name, RHIBufferRef(_resource));
+        uint32_t index = InvalidIndex;
+        uint64_t owner_id = 0;
+
+        [[nodiscard]] bool IsValid() const {
+            return index != InvalidIndex && owner_id != 0;
         }
 
-        return handle;
-    }
-
-    template<typename TResourceDesc>
-    RenderGraphHandle CreateIfNotExist(std::string_view _name, TResourceDesc _resource) {
-        if (auto handle = GetBlackBoard().GetHandle(_name); handle.IsInitialized()) {
-            return handle;
+        friend bool operator==(ResourceHandle lhs, ResourceHandle rhs) {
+            return lhs.index == rhs.index && lhs.owner_id == rhs.owner_id;
         }
-        RenderGraphHandle handle;
+    };
 
-        using T = std::decay_t<decltype(_resource)>;
-        if constexpr (std::is_constructible_v<RenderGraphTexture::Descriptor, T>) {
-            handle = CreateTexture(_name, RenderGraphTexture::Descriptor(_resource));
-        } else if constexpr (std::is_constructible_v<RenderGraphBuffer::Descriptor, T>) {
-            handle = CreateBuffer(_name, RenderGraphBuffer::Descriptor(_resource));
+    struct PassHandle {
+        static constexpr uint32_t InvalidIndex = std::numeric_limits<uint32_t>::max();
+
+        uint32_t index = InvalidIndex;
+        uint64_t owner_id = 0;
+
+        [[nodiscard]] bool IsValid() const {
+            return index != InvalidIndex && owner_id != 0;
         }
 
-        return handle;
-    }
-    RenderGraphHandle CreateBuffer(std::string_view name, const RenderGraphBuffer::Descriptor& descriptor);
-    RenderGraphHandle ImportBuffer(std::string_view name, RHIBufferRef buffer);
+        friend bool operator==(PassHandle lhs, PassHandle rhs) {
+            return lhs.index == rhs.index && lhs.owner_id == rhs.owner_id;
+        }
+    };
 
-    using GraphicSetup    = std::function<void(Builder& builder)>;
-    using ComputeSetUp    = std::function<void(Builder& builder)>;
-    using RayTracingSetup = std::function<void(Builder& builder)>;
-    using CopySetup       = std::function<void(Builder& _builder)>;
+    class RENDER_API PassBuilder {
+    public:
+        PassBuilder& Read(ResourceHandle resource, std::string_view range = "all");
+        PassBuilder& Write(ResourceHandle resource, std::string_view range = "all");
+        PassBuilder& ReadWrite(ResourceHandle resource, std::string_view range = "all");
+        PassBuilder& DependsOn(PassHandle dependency);
+        PassBuilder& SideEffect();
 
-    void AddGraphicPass(std::string_view name, const GraphicSetup& setup, GraphicsExecute&& execute);
-    void AddComputePass(std::string_view name, const ComputeSetUp& setup, ComputeExecute&& execute);
-    void AddRayTracingPass(std::string_view name, const RayTracingSetup& setup, RaytracingExecute&& execute);
-    void AddCopyPass(std::string_view _name, const CopySetup& _setup, CopyExecute&& _execute);
-    void AddImageCopyPass(std::string_view _name, RenderGraphHandle _src, RenderGraphHandle _dst);
-    void Execute(const RenderGraphExecuteConfig& config);
-    void Compile();
-    void SetCutUnUsedResources(bool cut);
+    private:
+        PassBuilder(RenderGraph& graph, uint32_t pass_index) : graph(graph), pass_index(pass_index) {}
 
-    BlackBoard&                   GetBlackBoard();
-    bool                          IsWriteResource(RenderGraphHandle handle, PassNode* node) const;
-    bool                          IsReadResource(RenderGraphHandle handle, PassNode* node) const;
-    RenderGraphTexture*           GetTexture(RenderGraphHandle handle) const;
-    RenderGraphBuffer*            GetBuffer(RenderGraphHandle handle) const;
-    RenderGraphResource::Type     GetResourceType(RenderGraphHandle handle) const;
-    RenderGraph&                  SetGraphOutput(RenderGraphHandle handle);
-    Extent3D                      GetRenderExtent() const;
-    std::vector<std::string_view> GetResourceNames(RenderGraphResource::Type type) const;
+        RenderGraph& graph;
+        uint32_t     pass_index;
+
+        friend class RenderGraph;
+    };
+
+    using SetupCallback   = std::function<void(PassBuilder&)>;
+    using ExecuteCallback = std::function<void()>;
+
+    explicit RenderGraph(std::string_view name = "RenderGraph");
     ~RenderGraph();
 
-protected:
-    bool IsNeedCompile() const;
-    void WriteInternal(PassNode* pass, RenderGraphHandle output, DepdencyGraph::ResourceDesc&& _desc);
-    void ReadInternal(PassNode* pass, RenderGraphHandle input, DepdencyGraph::ResourceDesc&& _desc);
-    RenderGraphHandle    AddTextureInternal(RenderGraphTexture* texture);
-    RenderGraphHandle    AddBufferInternal(RenderGraphBuffer* buffer);
-    RenderGraphResource* GetResource(RenderGraphHandle handle) const;
+    RenderGraph(const RenderGraph&)            = delete;
+    RenderGraph& operator=(const RenderGraph&) = delete;
+    RenderGraph(RenderGraph&&)                 = delete;
+    RenderGraph& operator=(RenderGraph&&)      = delete;
 
-    Moer::Array<RenderGraphResource*> m_resources;
-    Moer::Array<PassNode*>            m_passes;
+    /**
+     * Imports a resource owned outside the graph. A non-null physical identity
+     * is de-duplicated, so multiple view/sampler names can alias one resource.
+     */
+    ResourceHandle Import(
+        std::string_view name,
+        ResourceKind    kind,
+        const void*     physical_identity = nullptr
+    );
 
-    Moer::Array<RenderGraphResource*> m_last_resources;
-    Moer::Array<PassNode*>            m_last_passes;
+    /**
+     * Declares a logical transient lifetime. Phase 8 records first/last use
+     * only; physical allocation, release and alias reuse intentionally remain
+     * with the existing typed resource / GPU-completion ownership system.
+     */
+    ResourceHandle CreateTransient(
+        std::string_view name,
+        ResourceKind    kind
+    );
 
-    DepdencyGraph m_dependency_graph;
-    BlackBoard    m_black_board;
-    bool          m_cut{false};
+    void Export(ResourceHandle resource);
 
-    // Extent3D                         m_render_extent;
-    friend class Builder;
+    PassHandle AddPass(
+        std::string_view name,
+        const SetupCallback& setup,
+        ExecuteCallback      execute
+    );
+
+    /** Returns false and stores a deterministic diagnostic when the graph is invalid. */
+    bool Compile();
+
+    /** Executes callbacks serially once in the compiled stable topological order. */
+    bool Execute();
+
+    [[nodiscard]] bool IsCompiled() const {
+        return compiled;
+    }
+
+    [[nodiscard]] const std::string& GetCompileError() const {
+        return compile_error;
+    }
+
+    /** Deterministic text dump of passes, accesses, edges and lifetimes. */
+    [[nodiscard]] std::string Dump() const;
+
+private:
+    enum class AccessMode : uint8_t {
+        Read,
+        Write,
+        ReadWrite,
+    };
+
+    struct AccessDeclaration {
+        ResourceHandle resource;
+        AccessMode     mode = AccessMode::Read;
+        std::string    range;
+    };
+
+    struct ResourceDeclaration {
+        std::string                name;
+        std::vector<std::string>   aliases;
+        ResourceKind               kind = ResourceKind::Token;
+        const void*                physical_identity = nullptr;
+        bool                       imported = false;
+        bool                       exported = false;
+        uint32_t                   first_use = PassHandle::InvalidIndex;
+        uint32_t                   last_use = PassHandle::InvalidIndex;
+    };
+
+    struct PassDeclaration {
+        std::string                    name;
+        std::vector<AccessDeclaration> accesses;
+        std::vector<PassHandle>        explicit_dependencies;
+        ExecuteCallback                execute;
+        bool                           side_effect = false;
+    };
+
+    struct CompiledEdge {
+        uint32_t                 src = PassHandle::InvalidIndex;
+        uint32_t                 dst = PassHandle::InvalidIndex;
+        std::vector<std::string> reasons;
+    };
+
+    void AddAccess(uint32_t pass_index, ResourceHandle resource, AccessMode mode, std::string_view range);
+    void AddDependency(uint32_t pass_index, PassHandle dependency);
+    void MarkSideEffect(uint32_t pass_index);
+    bool InvalidateCompile();
+    bool FailCompile(std::string message);
+
+    [[nodiscard]] bool IsValidResource(ResourceHandle resource) const;
+    [[nodiscard]] bool IsValidPass(PassHandle pass) const;
+
+    std::string                      name;
+    std::vector<ResourceDeclaration> resources;
+    std::vector<PassDeclaration>     passes;
+    std::vector<uint32_t>            execution_order;
+    std::vector<CompiledEdge>        compiled_edges;
+    std::vector<std::string>         declaration_errors;
+    std::string                      compile_error;
+    uint64_t                         graph_id = 0;
+    bool                             compiled = false;
+    bool                             executed = false;
 };
-} // namespace Moer
 
-#endif // !MOER_ENGINE_RENDER_GRAPH
+} // namespace Moer::Render

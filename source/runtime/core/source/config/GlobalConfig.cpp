@@ -5,7 +5,7 @@
 namespace Moer::Config {
 
 GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_path) {
-    GlobalConfig c;
+    GlobalConfig c{};
 
     auto config = toml::parse_file(toml_path.data());
 
@@ -28,6 +28,15 @@ GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_p
 
     // Engine
 
+    c.engine.threading.render_thread =
+        config.at_path("engine.threading.render_thread").value_or(false);
+    c.engine.threading.rhi_thread = config.at_path("engine.threading.rhi_thread").value_or(false);
+    c.engine.threading.rhi_bypass = config.at_path("engine.threading.rhi_bypass").value_or(true);
+    c.engine.threading.profile_logging =
+        config.at_path("engine.threading.profile_logging").value_or(false);
+    c.engine.threading.max_frame_lag =
+        config.at_path("engine.threading.max_frame_lag").value_or(uint{0});
+
     c.engine.rhi.type =
         config.at_path("engine.rhi.type").value_or("Not Specified"); // Use this to warn user to set it
     c.engine.rhi.max_frame_in_flight = config.at_path("engine.rhi.max_frame_in_flight").value_or(3);
@@ -39,6 +48,10 @@ GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_p
         config.at_path("engine.render.raster.enable_shadow").value_or(true);
     c.engine.render.raster.low_quality_mode =
         config.at_path("engine.render.raster.low_quality_mode").value_or(false);
+    c.engine.render.raster.render_graph =
+        config.at_path("engine.render.raster.render_graph").value_or(false);
+    c.engine.render.raster.render_graph_debug_dump =
+        config.at_path("engine.render.raster.render_graph_debug_dump").value_or(false);
 
     c.engine.scene.scene_path =
         config.at_path("engine.scene.scene_path").value_or("./asset/scenes/sponza/Sponza.gltf");

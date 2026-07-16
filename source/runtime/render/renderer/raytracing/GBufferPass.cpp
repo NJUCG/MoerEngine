@@ -1,16 +1,15 @@
 #include "GBufferPass.h"
 
 #include "RTResource.h"
-#include "scene/Scene.h"
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 
 namespace Moer::Render::Raytracing {
 
-GBufferPass::GBufferPass(RenderDevice& _device, ShaderManager& _manager, Scene& _scene) :
-    device(_device),
-    manager(_manager),
-    scene(_scene) {
+GBufferPass::GBufferPass(RenderDevice& device, ShaderManager& manager, BindlessArrayRef bindless_array) :
+    device(device),
+    manager(manager),
+    bindless_array(std::move(bindless_array)) {
 
     gbuffer_constants = device.CreateBuffer<Moer::byte>(
         "Raytracing::gbuffer_constants", sizeof(GBufferConstants), EBufferUsageFlags::CONSTANT_BUFFER
@@ -76,7 +75,7 @@ void GBufferPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
             frame_rt.motion,
             frame_rt.clip_depth,
             _rt_ctx.rt_scene->GetTlas(),
-            scene.GetBindlessArray()
+            bindless_array
         )
         .Dispatch(
             uint3(ceil(constants.main_view.rect.x / 16), ceil(constants.main_view.rect.y / 16), 1),

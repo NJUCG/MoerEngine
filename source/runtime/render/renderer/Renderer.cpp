@@ -11,9 +11,11 @@
 
 #include "common/UiCombinePass.h"
 
+#include <algorithm>
+
 namespace Moer::Render {
 
-Renderer::Renderer(uint2& _resolution, const SharedPtr<EditorConfig> _config, const EngineHooks& hooks) :
+Renderer::Renderer(uint2 _resolution, const SharedPtr<EditorConfig> _config) :
     resolution(_resolution),
     device(RenderDevice::Get()),
     manager(ShaderManager::Get()),
@@ -31,7 +33,9 @@ Renderer::Renderer(uint2& _resolution, const SharedPtr<EditorConfig> _config, co
         swapchain = device.CreateSwapchain(swapchain_createinfo);
     }
     {
-        bindless_array = scene.bindless_array();
+        bindless_array = device.CreateBindlessArray();
+        scene.SetBindlessArray(bindless_array);
+        render_scene = MakeUnique<RenderScene>(bindless_array);
 
         // FIXME: 异步版有bug，会在gfx_queue.Execute()卡死，并且会卡住整台机器一分钟
         // scene.LoadSceneFromFileAsync(_config->scene_path);
@@ -39,17 +43,17 @@ Renderer::Renderer(uint2& _resolution, const SharedPtr<EditorConfig> _config, co
     }
     // Other vars
     {
-        timeline            = device.CreateFence();
-        time                = 0ull;
-        first_load          = true;
-        max_frame_in_flight = ConfigManager::GetInstance().GetConfig().engine.rhi.max_frame_in_flight;
+        const auto& engine_config = ConfigManager::GetInstance().GetConfig().engine;
+        timeline                  = device.CreateFence();
+        time                      = 0ull;
+        first_load                = true;
+        max_frame_in_flight       = engine_config.rhi.max_frame_in_flight;
+        if (engine_config.threading.profile_logging) {
+            frame_prepare_profile_state = MakeUnique<FramePrepareProfileState>();
+        }
     }
     {
         ui_combine_pass = MakeUnique<UiCombinePass>(manager);
-    }
-    // Show sub ui
-    if (hooks.on_show_config_sub_ui) {
-        hooks.on_show_config_sub_ui();
     }
 }
 
@@ -67,6 +71,7 @@ void Renderer::ReleaseResources() {
     swapchain->Sync();
     device.WaitIdle();
 
+    render_scene.reset();
     cmd_list.UpdateBindlessArray(bindless_array);
     gfx_queue.Execute(cmd_list.Submit().DeleteResources());
     gfx_queue.Sync();
@@ -74,31 +79,40 @@ void Renderer::ReleaseResources() {
     scene.Reset();
 }
 
-Renderer::EWindowState Renderer::TickWindowContext(const EngineHooks& hooks) {
+Renderer::WindowFrameState Renderer::TickWindowContext(uint2 current_resolution) {
     WindowContext::Tick();
-    if (time >= max_frame_in_flight) {
-        timeline->Wait(time - max_frame_in_flight);
-    }
 
     int w_width, w_height;
     WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
     if (w_width == 0 || w_height == 0) {
-        return EWindowState::Hiding; // 跳过Tick()
+        return WindowFrameState{EWindowState::Hiding, current_resolution};
 
-    } else if (w_width != resolution.x || w_height != resolution.y) {
-        resolution.x = uint32(w_width);
-        resolution.y = uint32(w_height);
+    } else if (w_width != current_resolution.x || w_height != current_resolution.y) {
+        return WindowFrameState{
+            EWindowState::SizeChanged,
+            uint2(static_cast<uint32>(w_width), static_cast<uint32>(w_height))
+        };
 
-        gfx_queue.Sync();
-        swapchain_createinfo.size = {resolution.x, resolution.y};
-        swapchain->Sync();
-        swapchain->Recreate(swapchain_createinfo);
-
-        return EWindowState::SizeChanged; // 继续执行Tick()
-
-    } else {
-        return EWindowState::Default; // 继续执行Tick()
     }
+
+    return WindowFrameState{EWindowState::Default, current_resolution};
+}
+
+void Renderer::PrepareRenderFrame(const WindowFrameState& window_frame) {
+    resolution = window_frame.resolution;
+
+    if (time >= max_frame_in_flight) {
+        timeline->Wait(time - max_frame_in_flight);
+    }
+
+    if (window_frame.state != EWindowState::SizeChanged) {
+        return;
+    }
+
+    gfx_queue.Sync();
+    swapchain_createinfo.size = {resolution.x, resolution.y};
+    swapchain->Sync();
+    swapchain->Recreate(swapchain_createinfo);
 }
 
 void Renderer::LogSceneLoadStatus(const EditorConfig& config) const {
@@ -113,6 +127,111 @@ void Renderer::LogSceneLoadStatus(const EditorConfig& config) const {
             );
         }
     }
+}
+
+FramePrepareProfileClock::time_point Renderer::BeginFramePrepareProfile() const {
+    return frame_prepare_profile_state ? FramePrepareProfileClock::now() :
+                                         FramePrepareProfileClock::time_point{};
+}
+
+void Renderer::CaptureFramePrepareUiWorkload(
+    FramePrepareWorkload&    workload,
+    const UiDrawFramePacket& ui_draw_frame
+) const {
+    if (!frame_prepare_profile_state) {
+        return;
+    }
+
+    const auto accumulate_viewport = [&](const UiViewportDrawPacket& viewport) {
+        workload.ui_vertices += viewport.vertices.size();
+        workload.ui_indices += viewport.indices.size();
+        workload.ui_commands += viewport.commands.size();
+    };
+    accumulate_viewport(ui_draw_frame.main_viewport);
+    for (const auto& viewport : ui_draw_frame.platform_viewports) {
+        accumulate_viewport(viewport);
+    }
+    workload.ui_vertices_max = workload.ui_vertices;
+}
+
+void Renderer::RecordFramePrepareProfile(
+    std::string_view                     renderer_name,
+    FramePrepareProfileClock::time_point started_at,
+    const FramePrepareProfile&           profile,
+    const FramePrepareWorkload&          workload
+) {
+    if (!frame_prepare_profile_state) {
+        return;
+    }
+
+    auto&        state    = *frame_prepare_profile_state;
+    const auto   now      = FramePrepareProfileClock::now();
+    const double total_ms = std::chrono::duration<double, std::milli>(now - started_at).count();
+    if (state.window_start == FramePrepareProfileClock::time_point{}) {
+        state.window_start = started_at;
+    }
+    ++state.samples;
+    state.total_ms += total_ms;
+    state.total_max_ms = std::max(state.total_max_ms, total_ms);
+    state.other_ms += std::max(0.0, total_ms - profile.MeasuredTotalMilliseconds());
+    state.scene_update_max_ms   = std::max(state.scene_update_max_ms, profile.scene_update_ms);
+    state.scene_snapshot_max_ms = std::max(state.scene_snapshot_max_ms, profile.scene_snapshot_ms);
+    state.ui_draw_packet_max_ms = std::max(state.ui_draw_packet_max_ms, profile.ui_draw_packet_ms);
+    state.accumulated.Accumulate(profile);
+    state.workload.Accumulate(workload);
+
+    const double window_ms = std::chrono::duration<double, std::milli>(now - state.window_start).count();
+    if (window_ms < 1000.0) {
+        return;
+    }
+
+    const double inverse_samples = 1.0 / double(state.samples);
+    LOG_INFO(
+        "[ThreadingProfile][Prepare] renderer={} window_ms={:.3f} samples={} "
+        "total_avg_ms={:.3f} total_max_ms={:.3f} window_avg_ms={:.3f} "
+        "scripting_avg_ms={:.3f} test_avg_ms={:.3f} ui_tick_avg_ms={:.3f} "
+        "camera_and_test_avg_ms={:.3f} config_snapshot_avg_ms={:.3f} "
+        "scene_update_avg_ms={:.3f} scene_update_max_ms={:.3f} "
+        "scene_snapshot_avg_ms={:.3f} scene_snapshot_max_ms={:.3f} "
+        "ui_composition_avg_ms={:.3f} ui_draw_packet_avg_ms={:.3f} "
+        "ui_draw_packet_max_ms={:.3f} other_avg_ms={:.3f} "
+        "scene_ready_frames={} scene_dirty_frames={} initial_gpu_update_frames={} "
+        "update_gpu_update_frames={} geometry_snapshot_frames={} "
+        "scene_snapshot_build_frames={} ui_vertices_avg={:.1f} ui_indices_avg={:.1f} "
+        "ui_commands_avg={:.1f} ui_vertices_max={}",
+        renderer_name,
+        window_ms,
+        state.samples,
+        state.total_ms * inverse_samples,
+        state.total_max_ms,
+        state.accumulated.window_ms * inverse_samples,
+        state.accumulated.scripting_ms * inverse_samples,
+        state.accumulated.test_ms * inverse_samples,
+        state.accumulated.ui_tick_ms * inverse_samples,
+        state.accumulated.camera_and_test_ms * inverse_samples,
+        state.accumulated.config_snapshot_ms * inverse_samples,
+        state.accumulated.scene_update_ms * inverse_samples,
+        state.scene_update_max_ms,
+        state.accumulated.scene_snapshot_ms * inverse_samples,
+        state.scene_snapshot_max_ms,
+        state.accumulated.ui_composition_ms * inverse_samples,
+        state.accumulated.ui_draw_packet_ms * inverse_samples,
+        state.ui_draw_packet_max_ms,
+        state.other_ms * inverse_samples,
+        state.workload.scene_ready_frames,
+        state.workload.scene_dirty_frames,
+        state.workload.initial_gpu_update_frames,
+        state.workload.update_gpu_update_frames,
+        state.workload.geometry_snapshot_frames,
+        state.workload.scene_snapshot_build_frames,
+        double(state.workload.ui_vertices) * inverse_samples,
+        double(state.workload.ui_indices) * inverse_samples,
+        double(state.workload.ui_commands) * inverse_samples,
+        state.workload.ui_vertices_max
+    );
+
+    state              = {};
+    state.window_start = now;
 }
 
 } // namespace Moer::Render

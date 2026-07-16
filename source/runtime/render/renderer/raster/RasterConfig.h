@@ -352,7 +352,8 @@ struct RasterConfig {
 
     // MARK: AI (CUDA, TensorRT)
     bool        ai_is_cuda_enabled          = false;
-    int         ai_trt_visualize_buffer_idx = s_ai_trt_visualize_buffer_array.size() - 2; // output
+    int         ai_trt_visualize_buffer_idx =
+        static_cast<int>(s_ai_trt_visualize_buffer_array.size()) - 2; // output
     std::string ai_trt_visualize_buffer =
         s_ai_trt_visualize_buffer_array[s_ai_trt_visualize_buffer_array.size() - 2];
     bool ai_trt_force_ldr = true;

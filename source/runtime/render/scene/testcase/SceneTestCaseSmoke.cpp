@@ -1704,8 +1704,8 @@ public:
                 "DestroyNodeSubtree should rebuild scene immediately instead of using tag-driven Tick sync."
             );
             Expect(
-                scene.HasPendingGpuSceneCommands(),
-                "DestroyNodeSubtree should leave pending GPU scene commands after immediate rebuild."
+                scene.HasPendingGpuSceneUpdate(),
+                "DestroyNodeSubtree should leave a pending GPU scene update after immediate rebuild."
             );
             Expect(!scene.IsValidNodeEntity(m_parent), "Destroyed subtree parent should be invalid.");
             Expect(!scene.IsValidNodeEntity(m_child), "Destroyed subtree child should be invalid.");
@@ -1806,8 +1806,8 @@ public:
                 "sync."
             );
             Expect(
-                scene.HasPendingGpuSceneCommands(),
-                "ImportSceneFromFileSync should leave pending GPU scene commands after immediate rebuild."
+                scene.HasPendingGpuSceneUpdate(),
+                "ImportSceneFromFileSync should leave a pending GPU scene update after immediate rebuild."
             );
             Expect(
                 m_import_result.import_root_entt != entt::null, "Import should return a valid import root."
@@ -1880,8 +1880,8 @@ public:
                 "sync."
             );
             Expect(
-                scene.HasPendingGpuSceneCommands(),
-                "Import fixture cleanup should leave pending GPU scene commands after immediate rebuild."
+                scene.HasPendingGpuSceneUpdate(),
+                "Import fixture cleanup should leave a pending GPU scene update after immediate rebuild."
             );
             Expect(
                 !scene.IsValidNodeEntity(m_import_root),

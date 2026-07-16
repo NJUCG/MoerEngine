@@ -400,6 +400,7 @@ void EditorUI::TickUI(Scene& scene) {
     SyncWindowVisibilitySettings();
 
     m_ui_renderer->EndGUIFrame();
+    m_ui_renderer->UpdatePlatformWindows();
 }
 
 void EditorUI::ShowSceneEditing(Scene& scene) {
@@ -563,12 +564,8 @@ void EditorUI::ShowInspector(Scene& scene) {
     m_inspector_ui.ShowWindow(&m_b_show_inspector, &scene, m_selected_node);
 }
 
-void EditorUI::RenderGUI(Render::CommandList& cmd_list, const Render::TextureView& final_output) {
-    m_ui_renderer->RenderGUI(cmd_list, final_output);
-}
-
-void EditorUI::PresentWindows() {
-    m_ui_renderer->PresentWindows();
+Render::UiDrawFramePacket EditorUI::CaptureDrawFrame() {
+    return m_ui_renderer->CaptureDrawFrame();
 }
 
 bool EditorUI::IsSeperateWindow() const {
@@ -579,12 +576,12 @@ bool EditorUI::IsSeperateWindow() const {
     return current_window->ParentWindow == nullptr;
 }
 
-TextureView EditorUI::GetWindowFrameBuffer() {
+TextureRef EditorUI::GetWindowFrameBuffer() {
     auto* current_window = ImGui::FindWindowByName(GetActiveViewportWindowName());
     if (current_window && current_window->ParentWindow == nullptr && current_window->Viewport) {
         return m_ui_renderer->GetWindowFrameBuffer(current_window->Viewport);
     }
-    return TextureView();
+    return TextureRef();
 }
 
 const char* EditorUI::GetActiveViewportWindowName() const {

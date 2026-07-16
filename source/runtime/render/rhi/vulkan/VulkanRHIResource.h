@@ -15,6 +15,7 @@
 #include "rhi/RHIResource.h"
 
 #include "VulkanPlatform.h"
+#include "VulkanFault.h"
 #include "VulkanSwapChain.h"
 #include "VulkanTypeDefs.h"
 #include "vulkan/vulkan_core.h"
@@ -396,6 +397,8 @@ struct VulkanBindlessSetArray {
     uint param_idx;
     //descriptor buffer index
     uint desc_idx;
+    //descriptorCount declared by the pipeline layout
+    uint descriptor_count;
 };
 
 struct VulkanBindlessSetImage {
@@ -403,6 +406,8 @@ struct VulkanBindlessSetImage {
     uint param_idx;
     //descriptor buffer index
     uint desc_idx;
+    //descriptorCount declared by the pipeline layout
+    uint descriptor_count;
 };
 
 struct VulkanBindlessSetSampler {
@@ -410,6 +415,8 @@ struct VulkanBindlessSetSampler {
     uint param_idx;
     //descriptor buffer index
     uint desc_idx;
+    //descriptorCount declared by the pipeline layout
+    uint descriptor_count;
 };
 using TBinder = std::variant<
     VulkanDescriptorSetBinder,
@@ -961,7 +968,14 @@ public:
     void Sync(uint64);
     // can be called on any thread to signal fence
     void  Notify(uint64);
-    void  HostWait(uint64_t _value);
+    void  MarkSubmitted(uint64_t _value);
+    bool  WaitSubmitted(uint64_t _value);
+    VkResult HostWait(
+        uint64_t                      _value,
+        const VulkanOperationContext& _context = VulkanOperationContext{}
+    );
+    void  Fail(VkResult _result);
+    bool  IsFailed() const;
     void  SignalHost(uint64_t _value);
     auto& GetFence() {
         return timeline;
@@ -970,14 +984,15 @@ public:
         return timeline;
     }
 
-public:
+private:
     uint64 current_value = 0;
     // uint64 last_value    = 0;
-
-private:
     VkSemaphore             timeline;
     std::condition_variable cv;
-    std::mutex              cv_m;
+    mutable std::mutex      cv_m;
+    uint64                  submitted_value{0};
+    bool                    failed{false};
+    VkResult                failure_result{VK_SUCCESS};
 };
 
 #pragma endregion

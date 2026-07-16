@@ -3,6 +3,7 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "scene/Scene.h"
+#include "scene/RenderScene.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
@@ -43,7 +44,9 @@ public:
     CommandQueue&    gfx_queue;
     BindlessArrayRef bdls;
     CommandList&     cmd_list;
-    Scene&           scene;
+    RenderScene&     render_scene;
+
+    const SceneUpdateBatch* scene_updates = nullptr;
 
     float frame_time;
 
@@ -124,7 +127,11 @@ public:
 
     // RayTracing
     RaytracingSceneRef rt_scene() {
-        return scene.GetGpuSceneRes().rt_scene;
+        return render_scene.GetGpuSceneRes().rt_scene;
+    }
+
+    const GpuScene::Res& GetGpuSceneRes() const {
+        return render_scene.GetGpuSceneRes();
     }
 
 private:
@@ -163,7 +170,7 @@ private:
         });
     }
 
-    uint2& resolution; // Be careful, resolution is also a reference
+    uint2 resolution;
 
 public:
     // Constructor
@@ -173,15 +180,15 @@ public:
         CommandQueue&    gfx_queue,
         BindlessArrayRef bdls,
         CommandList&     cmd_list,
-        Scene&           scene,
-        uint2&           resolution
+        RenderScene&     render_scene,
+        uint2            resolution
     ) :
         device(device),
         manager(manager),
         gfx_queue(gfx_queue),
         bdls(bdls),
         cmd_list(cmd_list),
-        scene(scene),
+        render_scene(render_scene),
         resolution(resolution) {
 
         // textures
@@ -194,6 +201,23 @@ public:
 
     void Update(float delta_time) {
         frame_time = delta_time;
+    }
+
+    void SetResolution(uint2 new_resolution) {
+        resolution = new_resolution;
+    }
+
+    void BeginSceneFrame(const SceneUpdateBatch& updates) {
+        scene_updates = &updates;
+    }
+
+    void EndSceneFrame() {
+        scene_updates = nullptr;
+    }
+
+    const SceneUpdateBatch& GetSceneUpdates() const {
+        assert(scene_updates && "Scene frame data is only valid during RasterRenderer::RenderFrame().");
+        return *scene_updates;
     }
 
     void CreateLightingData() {

@@ -5,10 +5,6 @@
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 
-namespace Moer {
-class Scene;
-}
-
 namespace Moer::Render::Raytracing {
 
 class RaytracingGBufferPipeline : public ComputePipeline {
@@ -66,13 +62,13 @@ public:
 
 class GBufferPass {
 public:
-    GBufferPass(class RenderDevice& _device, class ShaderManager& _manager, Scene& _scene);
+    GBufferPass(class RenderDevice& device, class ShaderManager& manager, BindlessArrayRef bindless_array);
     void Process(class CommandList& _cmd_list, RTContext& _rt_ctx);
 
 private:
     class RenderDevice&  device;
     class ShaderManager& manager;
-    Scene&               scene;
+    BindlessArrayRef     bindless_array;
 
     BufferRef        gbuffer_constants;
     GBufferConstants constants{};

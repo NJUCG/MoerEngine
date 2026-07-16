@@ -1,6 +1,6 @@
 #pragma once
 
-#include "CpuScene.h"
+#include "GpuSceneUpdate.h"
 #include "RenderAPI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
@@ -12,7 +12,7 @@ namespace Moer::Render {
  *
  * 结构:
  * - Res: 纹理、buffer、ray tracing scene
- * - m_map_texture_entity_to_bindless_handle: 逻辑纹理 -> bindless handle
+ * - m_map_texture_key_to_bindless_handle: 稳定纹理 key -> bindless handle
  * - PendingCommandList: copy/gfx queue 待执行命令
  *
  * 改这里:
@@ -21,24 +21,19 @@ namespace Moer::Render {
  * - 改 import / runtime create 后的资源重建: SceneLifeCycle.cpp + GpuScene.cpp
  *
  * 用法:
- * - Scene::Tick 后取 PopPendingCommandList() 提交给 RHI
+ * - RenderScene 在渲染线程应用 GpuSceneUpdate 后取 PopPendingCommandList() 提交给 RHI
  * - renderer/pass 只读 res() / GetRaytracingScene()
  */
 class RENDER_API GpuScene {
 
 public:
-    GpuScene(CpuScene& cpu_scene, BindlessArrayRef bindless_array);
+    explicit GpuScene(BindlessArrayRef bindless_array);
     ~GpuScene() noexcept;
 
     GpuScene(const GpuScene&)            = delete;
     GpuScene& operator=(const GpuScene&) = delete;
 
-    void Update(
-        const ecs::LogicalScene& logical_scene,
-        CpuScene&                cpu_scene,
-        bool                     rebuilt_mesh,
-        bool                     rebuilt_rt_blas
-    );
+    void ApplyUpdate(GpuSceneUpdate&& update);
 
 private:
     /**
@@ -46,24 +41,35 @@ private:
      */
 
     // 同步 CPU light cache 到 GPU light buffer，必要时重建 bindless buffer。
-    void UpdateLightBuffer(CommandList& cmd_list);
+    void UpdateLightBuffer(CommandList& cmd_list, const Array<GLight>& lights);
 
     // 同步 CPU material cache 到 GPU material buffer，必要时重建 bindless buffer。
-    void UpdateMaterialBuffer(CommandList& cmd_list);
+    void UpdateMaterialBuffer(
+        CommandList&                              cmd_list,
+        Array<GMaterial>&                         materials,
+        const Array<GpuSceneMaterialTextureRefs>& texture_refs
+    );
 
     // 同步 CPU instance cache 到 GPU instance buffer，必要时重建 bindless buffer。
-    void UpdateInstanceBuffer(CommandList& cmd_list);
+    void UpdateInstanceBuffer(CommandList& cmd_list, const Array<GInstance>& instances);
 
     // 同步 CPU draw command cache 到 GPU draw command buffer，必要时重建 bindless buffer。
-    void UpdateDrawCommandBuffer(CommandList& cmd_list);
+    void UpdateDrawCommandBuffer(CommandList& cmd_list, const Array<DrawIndexedCmdData>& draw_commands);
 
     // 同步 CPU primitive cache 和 mega buffers，必要时重建 bindless buffer。
-    void UpdatePrimitiveBuffer(CommandList& cmd_list);
-    void UpdatePositionMegaBuffer(CommandList& cmd_list);
-    void UpdatePackedNormalMegaBuffer(CommandList& cmd_list);
-    void UpdatePackedTangentMegaBuffer(CommandList& cmd_list);
-    void UpdateTexcoord0MegaBuffer(CommandList& cmd_list);
-    void UpdateIndexMegaBuffer(CommandList& cmd_list);
+    void UpdatePrimitiveBuffer(CommandList& cmd_list, const Array<GPrimitive>& primitives);
+    void UpdateClusterGroupBuffer(CommandList& cmd_list, const Array<GClusterGroup>& cluster_groups);
+    void UpdatePositionMegaBuffer(CommandList& cmd_list, const Array<float3>& positions);
+    void UpdatePackedNormalMegaBuffer(CommandList& cmd_list, const Array<uint32>& packed_normals);
+    void UpdatePackedTangentMegaBuffer(CommandList& cmd_list, const Array<uint32>& packed_tangents);
+    void UpdateTexcoord0MegaBuffer(CommandList& cmd_list, const Array<float2>& texcoords0);
+    void UpdateIndexMegaBuffer(CommandList& cmd_list, const Array<uint32>& indices);
+
+    void InitializeResources(GpuSceneUpdate& update);
+    void ResolveMaterialTextureHandles(
+        Array<GMaterial>&                         materials,
+        const Array<GpuSceneMaterialTextureRefs>& texture_refs
+    ) const;
 
 public:
     /**
@@ -133,14 +139,24 @@ public:
      * 
      * 初始化 Raytracing Scene，创建所有 BLAS 和 instance
      */
-    void InitRaytracingScene(CommandList& cmd_list);
+    void InitRaytracingScene(
+        CommandList&                         cmd_list,
+        const Array<GpuSceneRtMeshData>&     meshes,
+        const Array<GpuSceneRtInstanceData>& instances
+    );
 
     /**
      * 更新 Raytracing Scene，更新所有 instance 的 transform
      */
-    void UpdateRaytracingScene(CommandList& cmd_list);
+    void UpdateRaytracingScene(
+        CommandList&                             cmd_list,
+        const Array<GpuSceneRtInstanceData>& instances
+    );
 
-    void RebuildRaytracingSceneTlas(CommandList& cmd_list);
+    void RebuildRaytracingSceneTlas(
+        CommandList&                             cmd_list,
+        const Array<GpuSceneRtInstanceData>& instances
+    );
 
     /**
      * 获取 Raytracing Scene 引用
@@ -156,26 +172,24 @@ public:
     void RestoreDrawCommands(CommandList& cmd_list);
 
 private:
-    ecs::LogicalScene& m_logical_scene;
-    CpuScene&          m_cpu_scene;
-
-private:
     Res              m_res;
     BindlessArrayRef m_bindless_array; // TODO: 移动到RenderDevice里？
 
-    UnorderedMap<entt::entity, uint> m_map_texture_entity_to_bindless_handle;
+    UnorderedMap<GpuSceneResourceKey, uint> m_map_texture_key_to_bindless_handle;
 
     // RT Scene Cache: BLAS 按 CMesh 存储（1 CMesh = 1 BLAS，每个 CPrimitive 对应一个 geometry）
-    UnorderedMap<entt::entity, RaytracingGeometryRef> m_mesh_entt_to_blas;
+    UnorderedMap<GpuSceneResourceKey, RaytracingGeometryRef> m_mesh_key_to_blas;
 
     // CPU 侧映射缓存，用于 TLAS-only rebuild / update 时复用
     Array<GRtInstance> m_rt_instance_cache;
     Array<uint32>      m_rt_primitive_table_cache;
 
     // 每个 mesh_entt 在 m_rt_primitive_table_cache 中的起始偏移
-    UnorderedMap<entt::entity, uint32> m_mesh_entt_to_primitive_table_offset;
+    UnorderedMap<GpuSceneResourceKey, uint32> m_mesh_key_to_primitive_table_offset;
 
-    // 将gfx queue的数据存下来，等待主线程执行
+    Array<DrawIndexedCmdData> m_draw_commands;
+
+    // 记录场景上传命令，交给 renderer 统一提交。
     PendingCommandList m_pending_cmd_lists;
 };
 

@@ -9,6 +9,15 @@
 #include "rhi/RHIResource.h"
 #include "vulkan/vulkan_core.h"
 namespace Moer::Render {
+class VulkanSerialGoldenTrace;
+struct SerialQueueFamilyMap;
+
+struct BarrierSemanticDiagnostics {
+    uint64 digest{0};
+    uint32 buffer_count{0};
+    uint32 texture_count{0};
+    uint32 memory_count{0};
+};
 class VkTracker {
 private:
     struct BufferRange {
@@ -153,6 +162,12 @@ public:
     }
 
     void ResolveBarriers();
+
+    BarrierSemanticDiagnostics GetPendingBarrierDiagnostics(
+        VulkanSerialGoldenTrace*   _serial_golden,
+        uint64_t                   _group_ordinal,
+        const SerialQueueFamilyMap& _queue_family_map
+    ) const;
 
     void DispatchBarriers(class VulkanCmdList& _cmd_list);
     void RestoreState();

@@ -135,9 +135,9 @@ public:
     void Dispatch(uint32_t _group_count_x, uint32_t _group_count_y, uint32_t _group_count_z);
     void DispatchIndirect(VulkanBuffer* _buffer, uint64 _offset);
 
-    void UploadDescriptors(PipelineHandle& _pso_handle);
-    void UploadPushConstants(PipelineHandle& _pso_handle, std::span<const uint> _data);
-    void BindDescriptors(PipelineHandle& _pso_handle, const ArrayArguments& _args);
+    void UploadDescriptors(const PipelineHandle& _pso_handle);
+    void UploadPushConstants(const PipelineHandle& _pso_handle, std::span<const uint> _data);
+    void BindDescriptors(const PipelineHandle& _pso_handle, const ArrayArguments& _args);
 
     //Raytracing
     void BuildAccelerationStructures(

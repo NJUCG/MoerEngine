@@ -21,15 +21,14 @@ public:
         return m_config;
     }
 
-    Render::TextureView GetSelectedFrameBuffer() const;
-
-    void RegisterFrameBuffers(const Array<Render::TextureView>& frame_buffer_and_name_array);
+    void RegisterFrameBufferNames(const Array<std::string>& frame_buffer_names);
 
 private:
     uint GetDefaultSelectedFrameBufferIndex() const;
 
 private:
-    Array<Render::TextureView> m_frame_buffer_and_name_array;
+    Array<std::string> m_frame_buffer_names;
+    bool               m_frame_buffer_names_initialized = false;
 
     CooperativeOpsUI m_cooperative_ops_ui;
     RasterConfig& m_config;

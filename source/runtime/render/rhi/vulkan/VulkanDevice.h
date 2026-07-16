@@ -14,6 +14,7 @@
 #include "VulkanCommand.h"
 #include "VulkanDescriptor.h"
 #include "VulkanDeviceFeature.h"
+#include "VulkanFault.h"
 #include "VulkanDeviceProperty.h"
 #include "VulkanPlatform.h"
 #include "VulkanQueue.h"
@@ -25,6 +26,8 @@
 #include "VulkanMemoryAllocator.h"
 
 #include <optional>
+#include <atomic>
+#include <shared_mutex>
 
 namespace Moer::Render {
 class VulkanDescriptorSetsLayout;
@@ -60,6 +63,10 @@ struct QueueFamilyIndices {
 
 struct VulkanRHIConfig {
     uint32 api_version = VK_API_VERSION_1_3;
+    bool   rhi_thread  = false;
+    bool   rhi_bypass  = true;
+    bool   thread_profile_logging = false;
+    uint64 present_submit_fault_trigger = 0;
 };
 
 struct VulkanDeviceInfo {
@@ -241,8 +248,68 @@ public:
     inline VkQueue GetRayTracingQueue() const {
         return m_raytracing_queue;
     }
+    VulkanOperationResult SubmitOnQueue(
+        VkQueue                       _queue,
+        const VkSubmitInfo2&          _submit_info,
+        VkFence                       _fence,
+        const VulkanOperationContext& _context
+    );
+    VulkanOperationResult PresentOnQueue(
+        VkQueue                       _queue,
+        const VkPresentInfoKHR&       _present_info,
+        const VulkanOperationContext& _context
+    );
+    VulkanOperationResult AcquireNextImage(
+        VkSwapchainKHR                _swapchain,
+        uint64                        _timeout,
+        VkSemaphore                   _semaphore,
+        VkFence                       _fence,
+        uint32*                       _image_index,
+        const VulkanOperationContext& _context
+    );
+    VkResult WaitQueueIdle(VkQueue _queue, const VulkanOperationContext& _context);
+    VkResult ResetCommandPool(VkCommandPool _pool, const VulkanOperationContext& _context);
+    VkResult ResetFence(VkFence _fence, const VulkanOperationContext& _context);
+    using FaultAdmissionLock = std::unique_lock<std::shared_mutex>;
+    [[nodiscard]] FaultAdmissionLock AcquireFaultAdmission() {
+        return FaultAdmissionLock(native_queue_gate);
+    }
+
+    bool TryLatchFirstFault(
+        const VulkanOperationContext& _context,
+        VkResult                      _result,
+        bool                          _injected = false,
+        bool                          _predrained = false,
+        bool                          _force_terminal = false
+    );
+    [[nodiscard]] bool IsFaulted() const;
+    [[nodiscard]] bool IsDeviceLost() const;
+    [[nodiscard]] VkResult GetFirstFaultResult() const;
+    [[noreturn]] void EmergencyExitWithoutVulkanCleanup(
+        const VulkanOperationContext& _context, VkResult _result
+    );
+    [[nodiscard]] bool ShouldInjectPresentSubmit();
+    [[nodiscard]] uint64 GetPresentSubmitFaultTrigger() const {
+        return present_submit_fault_trigger;
+    }
+    VulkanOperationResult InjectPresentSubmitFault(const VulkanOperationContext& _context);
+    void RecordRejectedSubmit();
+    void RecordRejectedPresent();
+    void RecordAllocatorQuarantine();
+    void RecordSkippedCommandPoolReset();
+    void RecordQueueSyncComplete();
 
 private:
+    std::mutex& GetQueueHostMutex(VkQueue _queue);
+    Array<std::mutex*> GetUniqueQueueHostMutexes();
+    bool TryBeginFirstFault(VkResult _result);
+    void PublishFirstFaultLocked(
+        const VulkanOperationContext& _context,
+        VkResult                      _result,
+        bool                          _injected,
+        bool                          _predrained
+    );
+
     VkInstance            m_instance                  = VK_NULL_HANDLE;
     VkPhysicalDevice      m_gpu                       = VK_NULL_HANDLE;
     VkDevice              m_device                    = VK_NULL_HANDLE;
@@ -263,9 +330,34 @@ private:
     UniquePtr<VkCommandQueue> gfx_queue{}; // VkCommandQueue是MoerEngine的封装！
     UniquePtr<VkCommandQueue> compute_queue{};
     UniquePtr<VkCopyQueue>    copy_queue{};
-    // 这个锁只在AMD GPU上使用，因为AMD GPU没有TransferQueue
-    // 在现代NVIDIA GPU上，这个锁不会被触发，接近0开销，不用在意性能
-    std::mutex                                m_shared_queue_submit_mutex;
+    bool                      rhi_thread_enabled      = false;
+    bool                      thread_profile_logging = false;
+    uint64                    present_submit_fault_trigger = 0;
+    std::atomic<uint64>       present_submit_attempts{0};
+
+    std::atomic<EVulkanFaultPublishState> fault_state{EVulkanFaultPublishState::Healthy};
+    std::atomic_bool                        device_lost_observed{false};
+    VulkanFaultRecord                       first_fault{};
+    std::atomic<uint32>                     first_fault_count{0};
+    std::atomic<uint64>                     native_submit_call_count{0};
+    std::atomic<uint64>                     native_present_call_count{0};
+    std::atomic<uint64>                     fault_submit_call_snapshot{0};
+    std::atomic<uint64>                     fault_present_call_snapshot{0};
+    std::atomic<uint64>                     rejected_submit_count{0};
+    std::atomic<uint64>                     rejected_present_count{0};
+    std::atomic<uint64>                     allocator_quarantine_count{0};
+    std::atomic<uint64>                     skipped_command_pool_reset_count{0};
+    std::atomic<uint64>                     queue_sync_complete_count{0};
+    std::atomic_bool                        shutdown_sync_completed{false};
+    std::atomic_bool                        emergency_exit_started{false};
+    // Shared access covers native calls; fault publication takes exclusive access.
+    std::shared_mutex                         native_queue_gate;
+    // Every host call operating on the same VkQueue must use the same mutex.
+    std::mutex                                m_graphics_queue_mutex;
+    std::mutex                                m_present_queue_mutex;
+    std::mutex                                m_compute_queue_mutex;
+    std::mutex                                m_transfer_queue_mutex;
+    std::mutex                                m_raytracing_queue_mutex;
     LockFreeQueueBase<RHIResource, false, 64> deferred_release_queue{};
     static constexpr uint immutable_sampler_count = uint(SF_Num) * uint(SAM_Num) * uint(SCF_Num);
     StaticArray<VkSampler, immutable_sampler_count> immutable_samplers{};
@@ -297,6 +389,7 @@ private:
     void DestroyInternalShaders();
 
     void Destroy();
+    void LogFaultSummary() const;
 
     static Set<std::string> GetGpuExtensions(VkPhysicalDevice _gpu, const char* _layer_name = nullptr);
     static TQueueFamilyPropertiesArray GetQueueFamilyProperties(VkPhysicalDevice _gpu);

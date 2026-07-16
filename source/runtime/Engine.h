@@ -17,11 +17,14 @@ namespace Moer {
 
 class EditorUI;
 class RuntimeAssets;
+class RenderThreadService;
 
 class RENDER_API Engine {
 public:
     Engine();
     virtual ~Engine();
+
+    static void ValidateCommandLine(int argc, const char** argv);
 
     void Init(int argc, const char** argv);
     void Run(const Render::EngineHooks& hooks);
@@ -42,8 +45,21 @@ public:
     }
 
 private:
+    enum class ERendererSwitchValidationStage : uint8 {
+        Disabled,
+        InitialRaster,
+        ReloadedRaster,
+        Raytracing,
+        FinalRaster,
+        Complete,
+        Failed,
+    };
+
     void Init3rdParty();
     void ShutDown3rdParty();
+
+    void TickRendererSwitchValidation(Scene& scene);
+    bool ConsumeRendererSwitchValidationReloadRequest();
 
     SharedPtr<EditorConfig>  m_editor_config;
     UniquePtr<RuntimeAssets> m_runtime_assets;
@@ -51,8 +67,16 @@ private:
     UniquePtr<scripting::ScriptHost> m_script_host;
     UniquePtr<remote::RemoteModule>  m_remote_module;
     UniquePtr<Render::Renderer>      m_renderer;
+    UniquePtr<RenderThreadService>   m_render_thread_service;
 
+    uint m_max_frame_lag = 0;
     bool m_has_shutdown = false;
+
+    // Validation state is accessed only by Game Thread hooks. Render work is drained before reload.
+    ERendererSwitchValidationStage m_renderer_switch_validation_stage =
+        ERendererSwitchValidationStage::Disabled;
+    uint m_renderer_switch_validation_ready_frames = 0;
+    bool m_renderer_switch_validation_reload_requested = false;
 };
 
 } // namespace Moer

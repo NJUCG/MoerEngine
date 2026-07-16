@@ -7,14 +7,8 @@
 
 namespace Moer::Render::Raytracing {
 
-AntialiasPass::AntialiasPass(
-    RenderDevice&  _device,
-    ShaderManager& _manager,
-    Scene&         _scene,
-    CreateInfo     _info
-) :
+AntialiasPass::AntialiasPass(RenderDevice& _device, ShaderManager& _manager, CreateInfo _info) :
     manager(_manager),
-    scene(_scene),
     taa_pipeline(manager.Compute<TAAPipeline>("pipelines/raytracing/postprocess/TAAPass.hlsl")),
     frame_idx(0),
     jitter(float2(0.f)),

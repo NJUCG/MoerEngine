@@ -34,8 +34,7 @@ class Scene;
  *
  * 用法:
  * - 每帧先 TickUI(scene) 组装 ImGui
- * - 再 RenderGUI() 输出到 UI framebuffer
- * - 独立平台窗口由 PresentWindows() 收尾
+ * - 再 CaptureDrawFrame() 复制主视口和独立平台窗口的绘制数据
  *
  * 边界约束:
  * - 这里只负责窗口编排、菜单和 editor 级状态，不直接改 runtime 内部实现层
@@ -51,8 +50,7 @@ public:
     );
     ~EditorUI() = default;
     void TickUI(Scene& scene);
-    void RenderGUI(Render::CommandList& cmd_list, const Render::TextureView& final_output);
-    void PresentWindows();
+    Render::UiDrawFramePacket CaptureDrawFrame();
 
     float2 GetSceneColorResolution() const {
         return m_scene_color_resolution;
@@ -74,8 +72,8 @@ public:
         m_b_show_render_config_sub_ui = show;
     }
 
-    bool                IsSeperateWindow() const;
-    Render::TextureView GetWindowFrameBuffer();
+    bool               IsSeperateWindow() const;
+    Render::TextureRef GetWindowFrameBuffer();
 
     void RegisterUIFunc(std::string _name, std::function<void()>&& _func);
     void UnregisterUIFunc(std::string _name);

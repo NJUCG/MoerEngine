@@ -14,6 +14,13 @@ font_size = 17.0
 
 [engine]
 
+[engine.threading]
+render_thread = false
+rhi_thread = false
+rhi_bypass = true
+max_frame_lag = 0
+profile_logging = false
+
 [engine.rhi]
 type = "Vulkan"
 api_version = "1.3"
@@ -28,6 +35,8 @@ default_render_method = "Raster"
 
 [engine.render.raster]
 enable_shadow = true
+render_graph = false
+render_graph_debug_dump = false
 
 # 推荐AMD GPU或低配显卡启用本设置
 # 该选项会启用光栅化低质量模式：

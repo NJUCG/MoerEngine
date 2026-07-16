@@ -636,7 +636,7 @@ public:
     void End();
 
     void SetPso(const PipelineHandle& _handle);
-    void BindDescriptors(PipelineHandle& _pso_handle, const ArrayArguments& _args);
+    void BindDescriptors(const PipelineHandle& _pso_handle, const ArrayArguments& _args);
 
     void Dispatch(uint _x, uint _y, uint _z);
 

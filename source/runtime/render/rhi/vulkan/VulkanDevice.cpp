@@ -40,6 +40,7 @@
 #include "VulkanIOService.h"
 #include <algorithm>
 #include <config.h>
+#include <cstdlib>
 #include <filesystem>
 #include <optional>
 #include <platform/Platform.h>
@@ -55,6 +56,21 @@ namespace Moer::Render {
 namespace VkUtil = Moer::RHI::Vulkan::Util;
 
 VulkanDevice::VulkanDevice(const VulkanRHIConfig&& _config) : RenderDevice::Impl() {
+    rhi_thread_enabled      = _config.rhi_thread && !_config.rhi_bypass;
+    thread_profile_logging = _config.thread_profile_logging;
+    present_submit_fault_trigger = _config.present_submit_fault_trigger;
+    if (present_submit_fault_trigger != 0) {
+        LOG_INFO(
+            "[VulkanFault][Config] point=present-submit trigger={} mode=synthetic-device-lost",
+            present_submit_fault_trigger
+        );
+    }
+    if (_config.rhi_thread && _config.rhi_bypass) {
+        LOG_INFO("[Threading] Vulkan RHI Thread bypass is enabled; graphics submissions stay synchronous.");
+    } else if (!_config.rhi_thread && !_config.rhi_bypass) {
+        LOG_INFO("[Threading] rhi_bypass=false is ignored while rhi_thread=false.");
+    }
+
     InitVulkanInstance(_config.api_version);
 
     m_gpu = SelectGpu(_config.api_version);
@@ -471,29 +487,34 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.transfer.value(), 0, &m_transfer_queue);
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.raytracing.value(), 0, &m_raytracing_queue);
 
-    gfx_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Graphics);
+    gfx_queue = MakeUnique<VkCommandQueue>(
+        *this,
+        EQueueType::Graphics,
+        rhi_thread_enabled,
+        thread_profile_logging
+    );
     SetResourceName(uint64(m_graphics_queue), VK_OBJECT_TYPE_QUEUE, "GraphicsQueue");
-    compute_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute);
+    compute_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute, false);
     SetResourceName(uint64(m_compute_queue), VK_OBJECT_TYPE_QUEUE, "ComputeQueue");
     // transfer_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Copy);
     copy_queue = MakeUnique<VkCopyQueue>(*this);
     SetResourceName(uint64(m_transfer_queue), VK_OBJECT_TYPE_QUEUE, "TransferQueue");
 
+    gfx_queue->SetQueueSubmitMutex(&GetQueueHostMutex(m_graphics_queue));
+    compute_queue->SetQueueSubmitMutex(&GetQueueHostMutex(m_compute_queue));
+    copy_queue->SetQueueSubmitMutex(&GetQueueHostMutex(m_transfer_queue));
+
     if (m_graphics_queue == m_transfer_queue) {
         LOG_WARNING(
             "gfx and transfer share the same VkQueue handle. "
-            "Installing shared submit mutex to avoid concurrent vkQueueSubmit2."
+            "Using shared host synchronization for queue operations."
         );
-        gfx_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
-        copy_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
     }
     if (m_compute_queue == m_graphics_queue) {
         LOG_WARNING(
             "compute and gfx share the same VkQueue handle. "
-            "Installing shared submit mutex to avoid concurrent vkQueueSubmit2."
+            "Using shared host synchronization for queue operations."
         );
-        gfx_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
-        compute_queue->SetQueueSubmitMutex(&m_shared_queue_submit_mutex);
     }
 }
 
@@ -642,6 +663,11 @@ void VulkanDevice::Destroy() {
     compute_queue.reset();
     gfx_queue.reset();
     copy_queue.reset();
+    shutdown_sync_completed.store(
+        queue_sync_complete_count.load(std::memory_order_acquire) >= 3,
+        std::memory_order_release
+    );
+    LogFaultSummary();
     DestroyInternalShaders();
     FlushDeferredReleases();
     DestroyInternalResources();
@@ -928,7 +954,469 @@ void VulkanDevice::FlushDebugMessages() const {
 }
 
 void VulkanDevice::WaitIdle() {
-    vkDeviceWaitIdle(m_device);
+    if (IsDeviceLost()) {
+        return;
+    }
+
+    std::unique_lock<std::shared_mutex> gate(native_queue_gate);
+    if (IsDeviceLost()) {
+        return;
+    }
+
+    Array<std::unique_lock<std::mutex>> queue_locks;
+    const auto                         queue_mutexes = GetUniqueQueueHostMutexes();
+    queue_locks.reserve(queue_mutexes.size());
+    for (auto* mutex : queue_mutexes) {
+        queue_locks.emplace_back(*mutex);
+    }
+
+    const VulkanOperationContext context{.operation = EVulkanFaultOperation::DeviceWaitIdle};
+    const VkResult               result = vkDeviceWaitIdle(m_device);
+    if (result != VK_SUCCESS) {
+        if (TryBeginFirstFault(result)) {
+            PublishFirstFaultLocked(context, result, false, false);
+        }
+        if (result != VK_ERROR_DEVICE_LOST) {
+            EmergencyExitWithoutVulkanCleanup(context, result);
+        }
+    }
+}
+
+std::mutex& VulkanDevice::GetQueueHostMutex(VkQueue _queue) {
+    assert(_queue != VK_NULL_HANDLE);
+    if (_queue == m_graphics_queue) {
+        return m_graphics_queue_mutex;
+    }
+    if (_queue == m_present_queue) {
+        return m_present_queue_mutex;
+    }
+    if (_queue == m_compute_queue) {
+        return m_compute_queue_mutex;
+    }
+    if (_queue == m_transfer_queue) {
+        return m_transfer_queue_mutex;
+    }
+    if (_queue == m_raytracing_queue) {
+        return m_raytracing_queue_mutex;
+    }
+    assert(false && "Unknown VkQueue handle");
+    return m_graphics_queue_mutex;
+}
+
+Array<std::mutex*> VulkanDevice::GetUniqueQueueHostMutexes() {
+    Array<std::mutex*> mutexes;
+    const VkQueue queues[] = {
+        m_graphics_queue,
+        m_present_queue,
+        m_compute_queue,
+        m_transfer_queue,
+        m_raytracing_queue,
+    };
+    for (VkQueue queue : queues) {
+        if (queue == VK_NULL_HANDLE) {
+            continue;
+        }
+        std::mutex* mutex = &GetQueueHostMutex(queue);
+        if (std::find(mutexes.begin(), mutexes.end(), mutex) == mutexes.end()) {
+            mutexes.push_back(mutex);
+        }
+    }
+    return mutexes;
+}
+
+VulkanOperationResult VulkanDevice::SubmitOnQueue(
+    VkQueue                       _queue,
+    const VkSubmitInfo2&          _submit_info,
+    VkFence                       _fence,
+    const VulkanOperationContext& _context
+) {
+    std::shared_lock<std::shared_mutex> gate(native_queue_gate);
+    std::unique_lock<std::mutex>        queue_lock(GetQueueHostMutex(_queue));
+    if (IsFaulted()) {
+        queue_lock.unlock();
+        gate.unlock();
+        RecordRejectedSubmit();
+        return {EVulkanOperationStatus::Rejected, GetFirstFaultResult()};
+    }
+
+    native_submit_call_count.fetch_add(1, std::memory_order_relaxed);
+    const VkResult result = vkQueueSubmit2(_queue, 1, &_submit_info, _fence);
+    if (result == VK_SUCCESS) {
+        return {};
+    }
+
+    const bool publish_fault = TryBeginFirstFault(result);
+    queue_lock.unlock();
+    gate.unlock();
+    if (publish_fault) {
+        std::unique_lock<std::shared_mutex> publish_gate(native_queue_gate);
+        PublishFirstFaultLocked(_context, result, false, false);
+    }
+    return {EVulkanOperationStatus::Faulted, result};
+}
+
+VulkanOperationResult VulkanDevice::PresentOnQueue(
+    VkQueue                       _queue,
+    const VkPresentInfoKHR&       _present_info,
+    const VulkanOperationContext& _context
+) {
+    std::shared_lock<std::shared_mutex> gate(native_queue_gate);
+    std::unique_lock<std::mutex>        queue_lock(GetQueueHostMutex(_queue));
+    if (IsFaulted()) {
+        queue_lock.unlock();
+        gate.unlock();
+        RecordRejectedPresent();
+        return {EVulkanOperationStatus::Rejected, GetFirstFaultResult()};
+    }
+
+    native_present_call_count.fetch_add(1, std::memory_order_relaxed);
+    const VkResult result = vkQueuePresentKHR(_queue, &_present_info);
+    if (result == VK_SUCCESS) {
+        return {};
+    }
+    if (result == VK_NOT_READY || result == VK_TIMEOUT) {
+        return {EVulkanOperationStatus::Retry, result};
+    }
+    if (result == VK_SUBOPTIMAL_KHR || result == VK_ERROR_OUT_OF_DATE_KHR ||
+        result == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) {
+        return {EVulkanOperationStatus::Recreate, result};
+    }
+
+    const bool publish_fault = TryBeginFirstFault(result);
+    queue_lock.unlock();
+    gate.unlock();
+    if (publish_fault) {
+        std::unique_lock<std::shared_mutex> publish_gate(native_queue_gate);
+        PublishFirstFaultLocked(_context, result, false, false);
+    }
+    return {EVulkanOperationStatus::Faulted, result};
+}
+
+VulkanOperationResult VulkanDevice::AcquireNextImage(
+    VkSwapchainKHR                _swapchain,
+    uint64                        _timeout,
+    VkSemaphore                   _semaphore,
+    VkFence                       _fence,
+    uint32*                       _image_index,
+    const VulkanOperationContext& _context
+) {
+    std::shared_lock<std::shared_mutex> gate(native_queue_gate);
+    if (IsFaulted()) {
+        gate.unlock();
+        RecordRejectedPresent();
+        return {EVulkanOperationStatus::Rejected, GetFirstFaultResult()};
+    }
+
+    const VkResult result = vkAcquireNextImageKHR(
+        m_device, _swapchain, _timeout, _semaphore, _fence, _image_index
+    );
+    if (result == VK_SUCCESS) {
+        return {};
+    }
+    if (result == VK_NOT_READY || result == VK_TIMEOUT) {
+        return {EVulkanOperationStatus::Retry, result};
+    }
+    if (result == VK_SUBOPTIMAL_KHR || result == VK_ERROR_OUT_OF_DATE_KHR ||
+        result == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) {
+        return {EVulkanOperationStatus::Recreate, result};
+    }
+
+    const bool publish_fault = TryBeginFirstFault(result);
+    gate.unlock();
+    if (publish_fault) {
+        std::unique_lock<std::shared_mutex> publish_gate(native_queue_gate);
+        PublishFirstFaultLocked(_context, result, false, false);
+    }
+    return {EVulkanOperationStatus::Faulted, result};
+}
+
+VkResult VulkanDevice::WaitQueueIdle(
+    VkQueue _queue, const VulkanOperationContext& _context
+) {
+    if (IsDeviceLost()) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+
+    std::shared_lock<std::shared_mutex> gate(native_queue_gate);
+    std::unique_lock<std::mutex>        queue_lock(GetQueueHostMutex(_queue));
+    if (IsDeviceLost()) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+
+    const VkResult result = vkQueueWaitIdle(_queue);
+    if (result == VK_SUCCESS) {
+        return result;
+    }
+
+    const bool publish_fault = TryBeginFirstFault(result);
+    queue_lock.unlock();
+    gate.unlock();
+    if (publish_fault) {
+        std::unique_lock<std::shared_mutex> publish_gate(native_queue_gate);
+        PublishFirstFaultLocked(_context, result, false, false);
+    }
+    if (result != VK_ERROR_DEVICE_LOST) {
+        EmergencyExitWithoutVulkanCleanup(_context, result);
+    }
+    return result;
+}
+
+VkResult VulkanDevice::ResetCommandPool(
+    VkCommandPool _pool, const VulkanOperationContext& _context
+) {
+    std::shared_lock<std::shared_mutex> gate(native_queue_gate);
+    if (IsFaulted()) {
+        gate.unlock();
+        return GetFirstFaultResult();
+    }
+
+    const VkResult result = vkResetCommandPool(m_device, _pool, 0);
+    if (result == VK_SUCCESS) {
+        return result;
+    }
+
+    const bool publish_fault = TryBeginFirstFault(result);
+    gate.unlock();
+    if (publish_fault) {
+        std::unique_lock<std::shared_mutex> publish_gate(native_queue_gate);
+        PublishFirstFaultLocked(_context, result, false, false);
+    }
+    return result;
+}
+
+VkResult VulkanDevice::ResetFence(VkFence _fence, const VulkanOperationContext& _context) {
+    std::shared_lock<std::shared_mutex> gate(native_queue_gate);
+    if (IsFaulted()) {
+        gate.unlock();
+        return GetFirstFaultResult();
+    }
+
+    const VkResult result = vkResetFences(m_device, 1, &_fence);
+    if (result == VK_SUCCESS) {
+        return result;
+    }
+
+    const bool publish_fault = TryBeginFirstFault(result);
+    gate.unlock();
+    if (publish_fault) {
+        std::unique_lock<std::shared_mutex> publish_gate(native_queue_gate);
+        PublishFirstFaultLocked(_context, result, false, false);
+    }
+    return result;
+}
+
+bool VulkanDevice::TryBeginFirstFault(VkResult _result) {
+    if (_result == VK_ERROR_DEVICE_LOST) {
+        device_lost_observed.store(true, std::memory_order_release);
+    }
+    EVulkanFaultPublishState expected = EVulkanFaultPublishState::Healthy;
+    return fault_state.compare_exchange_strong(
+        expected,
+        EVulkanFaultPublishState::Publishing,
+        std::memory_order_acq_rel,
+        std::memory_order_acquire
+    );
+}
+
+void VulkanDevice::PublishFirstFaultLocked(
+    const VulkanOperationContext& _context,
+    VkResult                      _result,
+    bool                          _injected,
+    bool                          _predrained
+) {
+    first_fault = VulkanFaultRecord{
+        .operation     = _context.operation,
+        .result        = _result,
+        .queue_type    = _context.queue_type,
+        .queue_handle  = uint64(_context.queue),
+        .timeline      = _context.timeline,
+        .work_serial   = _context.work_serial,
+        .thread_id     = Platform::GetCurrentThreadID(),
+        .injected      = _injected,
+        .predrained    = _predrained,
+    };
+    first_fault_count.store(1, std::memory_order_relaxed);
+    fault_submit_call_snapshot.store(
+        native_submit_call_count.load(std::memory_order_relaxed), std::memory_order_relaxed
+    );
+    fault_present_call_snapshot.store(
+        native_present_call_count.load(std::memory_order_relaxed), std::memory_order_relaxed
+    );
+    fault_state.store(EVulkanFaultPublishState::Faulted, std::memory_order_release);
+
+    LOG_ERROR(
+        "[VulkanFault][First] operation={} result={} result_code={} queue={} queue_handle={:#x} "
+        "timeline={} work_serial={} thread={} injected={} predrained={}",
+        VulkanFaultOperationName(first_fault.operation),
+        VulkanResultName(first_fault.result),
+        int(first_fault.result),
+        VulkanQueueName(first_fault.queue_type),
+        first_fault.queue_handle,
+        first_fault.timeline,
+        first_fault.work_serial,
+        first_fault.thread_id,
+        first_fault.injected,
+        first_fault.predrained
+    );
+}
+
+bool VulkanDevice::TryLatchFirstFault(
+    const VulkanOperationContext& _context,
+    VkResult                      _result,
+    bool                          _injected,
+    bool                          _predrained,
+    bool                          _force_terminal
+) {
+    if (_result == VK_SUCCESS) {
+        return false;
+    }
+    if (!_force_terminal &&
+        (_result == VK_NOT_READY || _result == VK_TIMEOUT ||
+         _result == VK_SUBOPTIMAL_KHR || _result == VK_ERROR_OUT_OF_DATE_KHR ||
+         _result == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT)) {
+        return false;
+    }
+    if (!TryBeginFirstFault(_result)) {
+        return false;
+    }
+
+    std::unique_lock<std::shared_mutex> gate(native_queue_gate);
+    PublishFirstFaultLocked(_context, _result, _injected, _predrained);
+    return true;
+}
+
+bool VulkanDevice::IsFaulted() const {
+    return device_lost_observed.load(std::memory_order_acquire) ||
+           fault_state.load(std::memory_order_acquire) != EVulkanFaultPublishState::Healthy;
+}
+
+bool VulkanDevice::IsDeviceLost() const {
+    return device_lost_observed.load(std::memory_order_acquire);
+}
+
+[[noreturn]] void VulkanDevice::EmergencyExitWithoutVulkanCleanup(
+    const VulkanOperationContext& _context, VkResult _result
+) {
+    bool expected = false;
+    if (emergency_exit_started.compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel, std::memory_order_acquire
+        )) {
+        LOG_CRITICAL(
+            "[VulkanFault][CompletionUnknownFatal] operation={} result={} result_code={} "
+            "queue={} queue_handle={:#x} timeline={} work_serial={} thread={} "
+            "action=exit-without-vulkan-cleanup",
+            VulkanFaultOperationName(_context.operation),
+            VulkanResultName(_result),
+            int(_result),
+            VulkanQueueName(_context.queue_type),
+            uint64(_context.queue),
+            _context.timeline,
+            _context.work_serial,
+            Platform::GetCurrentThreadID()
+        );
+        if (auto logger = spdlog::default_logger()) {
+            logger->flush();
+        }
+    }
+    std::_Exit(EXIT_FAILURE);
+}
+
+VkResult VulkanDevice::GetFirstFaultResult() const {
+    EVulkanFaultPublishState state = fault_state.load(std::memory_order_acquire);
+    while (state == EVulkanFaultPublishState::Publishing) {
+        std::this_thread::yield();
+        state = fault_state.load(std::memory_order_acquire);
+    }
+    if (state != EVulkanFaultPublishState::Faulted) {
+        return VK_ERROR_DEVICE_LOST;
+    }
+    return first_fault.result;
+}
+
+bool VulkanDevice::ShouldInjectPresentSubmit() {
+    if (present_submit_fault_trigger == 0) {
+        return false;
+    }
+    return present_submit_attempts.fetch_add(1, std::memory_order_relaxed) + 1 ==
+           present_submit_fault_trigger;
+}
+
+VulkanOperationResult VulkanDevice::InjectPresentSubmitFault(
+    const VulkanOperationContext& _context
+) {
+    std::unique_lock<std::shared_mutex> gate(native_queue_gate);
+    if (IsFaulted()) {
+        gate.unlock();
+        RecordRejectedSubmit();
+        return {EVulkanOperationStatus::Rejected, GetFirstFaultResult()};
+    }
+
+    Array<std::unique_lock<std::mutex>> queue_locks;
+    const auto                         queue_mutexes = GetUniqueQueueHostMutexes();
+    queue_locks.reserve(queue_mutexes.size());
+    for (auto* mutex : queue_mutexes) {
+        queue_locks.emplace_back(*mutex);
+    }
+
+    const VkResult predrain_result = vkDeviceWaitIdle(m_device);
+    const bool     predrained      = predrain_result == VK_SUCCESS;
+    const VkResult result          = predrained ? VK_ERROR_DEVICE_LOST : predrain_result;
+    if (TryBeginFirstFault(result)) {
+        PublishFirstFaultLocked(_context, result, true, predrained);
+    }
+    if (!predrained && result != VK_ERROR_DEVICE_LOST) {
+        EmergencyExitWithoutVulkanCleanup(_context, result);
+    }
+    return {EVulkanOperationStatus::Faulted, result, true, predrained};
+}
+
+void VulkanDevice::RecordRejectedSubmit() {
+    rejected_submit_count.fetch_add(1, std::memory_order_relaxed);
+}
+
+void VulkanDevice::RecordRejectedPresent() {
+    rejected_present_count.fetch_add(1, std::memory_order_relaxed);
+}
+
+void VulkanDevice::RecordAllocatorQuarantine() {
+    allocator_quarantine_count.fetch_add(1, std::memory_order_relaxed);
+}
+
+void VulkanDevice::RecordSkippedCommandPoolReset() {
+    skipped_command_pool_reset_count.fetch_add(1, std::memory_order_relaxed);
+}
+
+void VulkanDevice::RecordQueueSyncComplete() {
+    queue_sync_complete_count.fetch_add(1, std::memory_order_relaxed);
+}
+
+void VulkanDevice::LogFaultSummary() const {
+    if (fault_state.load(std::memory_order_acquire) != EVulkanFaultPublishState::Faulted) {
+        return;
+    }
+    const uint64 native_submit_after_fault =
+        native_submit_call_count.load(std::memory_order_relaxed) -
+        fault_submit_call_snapshot.load(std::memory_order_relaxed);
+    const uint64 native_present_after_fault =
+        native_present_call_count.load(std::memory_order_relaxed) -
+        fault_present_call_snapshot.load(std::memory_order_relaxed);
+    LOG_INFO(
+        "[VulkanFault][Summary] first_fault_count={} native_submit_after_fault={} "
+        "native_present_after_fault={} rejected_submit={} rejected_present={} "
+        "device_lost={} skipped_command_pool_reset={} allocator_quarantined={} sync_completed={} "
+        "quarantine_count={} queue_sync_count={}",
+        first_fault_count.load(std::memory_order_relaxed),
+        native_submit_after_fault,
+        native_present_after_fault,
+        rejected_submit_count.load(std::memory_order_relaxed),
+        rejected_present_count.load(std::memory_order_relaxed),
+        IsDeviceLost(),
+        skipped_command_pool_reset_count.load(std::memory_order_relaxed) > 0,
+        allocator_quarantine_count.load(std::memory_order_relaxed) > 0,
+        shutdown_sync_completed.load(std::memory_order_acquire),
+        allocator_quarantine_count.load(std::memory_order_relaxed),
+        queue_sync_complete_count.load(std::memory_order_relaxed)
+    );
 }
 
 void VulkanDevice::SetupDebugUtilsMessengerEXT() {

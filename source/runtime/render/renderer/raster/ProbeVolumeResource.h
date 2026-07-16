@@ -10,6 +10,7 @@
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "rhi/RHIResource.h"
+#include "scene/GpuScene.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 
@@ -17,6 +18,7 @@
 
 namespace Moer {
 class Scene;
+struct SceneUpdateBatch;
 }
 
 namespace Moer::Render {
@@ -55,12 +57,13 @@ public:
     void Destroy(BindlessArrayRef& bdls);
 
     UpdateInfo PrepareUpdate(
-        const RasterConfig& config,
-        const Scene&        scene,
-        float3              camera_position,
-        uint64              frame_index
+        const RasterConfig&     config,
+        const GpuScene::Res&    gpu_scene,
+        const SceneUpdateBatch& scene_updates,
+        float3                  camera_position,
+        uint64                  frame_index
     );
-    void UpdateSceneData(CommandList& cmd_list, const Scene& scene);
+    void UpdateSceneData(CommandList& cmd_list, const GpuScene::Res& gpu_scene);
     void TrackFrameSubmission(CommandList& cmd_list, uint64 frame_index);
     void FillLightingData(LightingData& lighting_data) const;
 
@@ -465,15 +468,16 @@ private:
     };
 
     Snapshot BuildSnapshot(const RasterConfig& config, float3 camera_position, uint64 frame_index) const;
-    void RefreshSceneGeometry(const Scene& scene, bool dirty_tracking_enabled);
-    void RefreshGlobalDirtyEvents(const Scene& scene, bool dirty_tracking_enabled);
+    void RefreshSceneGeometry(const SceneUpdateBatch& scene_updates, bool dirty_tracking_enabled);
+    void RefreshGlobalDirtyEvents(const SceneUpdateBatch& scene_updates, bool dirty_tracking_enabled);
     void ApplyDirtyEvents(Snapshot& snapshot);
     ProbeUpdateParam BuildUpdateParam(
         const Snapshot& snapshot,
         const VolumeSnapshot& volume,
         uint            volume_index,
         uint            brick_index,
-        const Scene&    scene,
+        const GpuScene::Res& gpu_scene,
+        uint            light_count,
         bool            history_valid
     ) const;
     bool RequiresPhysicalAllocatorReset(const Snapshot& snapshot) const;

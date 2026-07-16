@@ -4,26 +4,31 @@
 
 namespace Moer::Render {
 struct UIRenderer::Impl {
-    Impl(RenderDevice& _device) : backend(_device) {};
+    Impl(RenderDevice& _device) : backend(MakeShared<ImGUIRenderBackend>(_device)) {};
     ~Impl() {}
     void RegisterImage(Texture* _texture, Sampler _sampler) {
-        backend.RegisterImage(_texture, _sampler);
+        backend->RegisterImage(_texture, _sampler);
     }
     void UnRegisterImage(Texture* _texture) {
-        backend.UnRegisterImage(_texture);
+        backend->UnRegisterImage(_texture);
     }
 
     void BeginGUIFrame() {
-        backend.BeginGUIFrame();
+        backend->BeginGUIFrame();
     }
     void EndGUIFrame() {
-        backend.EndGUIFrame();
+        backend->EndGUIFrame();
+    }
+    void UpdatePlatformWindows() {
+        backend->UpdatePlatformWindows();
     }
 
-    void RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer) {
-        backend.RenderGUI(_cmd_list, _framebuffer);
+    UiDrawFramePacket CaptureDrawFrame() {
+        auto frame    = backend->CaptureDrawFrame();
+        frame.backend = backend;
+        return frame;
     }
-    ImGUIRenderBackend backend;
+    SharedPtr<ImGUIRenderBackend> backend;
 };
 
 UIRenderer::UIRenderer(RenderDevice& _device) : impl(MakeUnique<Impl>(_device)) {}
@@ -46,16 +51,33 @@ void UIRenderer::EndGUIFrame() {
     impl->EndGUIFrame();
 }
 
-void UIRenderer::RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer) {
-    impl->RenderGUI(_cmd_list, _framebuffer);
+void UIRenderer::UpdatePlatformWindows() {
+    impl->UpdatePlatformWindows();
 }
 
-TextureView UIRenderer::GetWindowFrameBuffer(void* _window) {
-    return impl->backend.GetWindowFrameBuffer(_window);
+UiDrawFramePacket UIRenderer::CaptureDrawFrame() {
+    return impl->CaptureDrawFrame();
 }
 
-void UIRenderer::PresentWindows() {
-    impl->backend.PresentWindows();
+TextureRef UIRenderer::GetWindowFrameBuffer(void* _window) {
+    return impl->backend->GetWindowFrameBuffer(_window);
+}
+
+void RenderUiDrawFrame(
+    CommandList&           _cmd_list,
+    const TextureView&     _main_framebuffer,
+    UiDrawFramePacket&     _frame,
+    EUiDrawExecutionThread _execution_thread
+) {
+    if (_frame.backend) {
+        _frame.backend->RenderGUI(_cmd_list, _main_framebuffer, _frame, _execution_thread);
+    }
+}
+
+void PresentUiDrawFrame(const UiDrawFramePacket& _frame, EUiDrawExecutionThread _execution_thread) {
+    if (_frame.backend) {
+        _frame.backend->PresentWindows(_frame, _execution_thread);
+    }
 }
 
 } // namespace Moer::Render

@@ -68,12 +68,7 @@ public:
     };
 
 public:
-    ToneMappingPass(
-        class RenderDevice&  _device,
-        class ShaderManager& _manager,
-        Scene&               _scene,
-        CreateInfo           _info
-    );
+    ToneMappingPass(class RenderDevice& _device, class ShaderManager& _manager, CreateInfo _info);
     void Process(
         class CommandList& _cmd_list,
         RTContext&         _rt_ctx,
@@ -97,7 +92,6 @@ private:
     );
     class RenderDevice&  device;
     class ShaderManager& manager;
-    Scene&               scene;
     float                frame_time     = 0;
     uint                 frame_idx      = 0;
     uint                 color_lut_size = 0;

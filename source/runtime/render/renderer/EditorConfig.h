@@ -57,6 +57,9 @@ struct EditorConfig {
     EEditorViewportMode active_viewport_mode = EEditorViewportMode::Game;
     SceneViewGizmoConfig scene_view_gizmos;
 
+    // Validation-only debug selection. Empty during every normal editor run.
+    std::string validation_selected_frame_buffer_name;
+
     bool  camera_projection_override_enabled = true;
     float camera_speed_log10                 = log10f(25.f);
     float camera_fovy                        = 60.f;

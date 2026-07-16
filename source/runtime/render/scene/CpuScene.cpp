@@ -1,8 +1,10 @@
 #include "CpuScene.h"
 
+#include "GpuSceneUpdate.h"
 #include "LogicalComponents.h"
 #include "LogicalScene.h"
 #include "log/LogSystem.h"
+#include "scene/NodeNameUtils.h"
 #include "shaderheaders/shared/scene/SharedSceneStruct.h"
 #include <entt/entt.hpp>
 
@@ -681,6 +683,182 @@ void CpuScene::UpdateMeshes() {
             m_instance_buf[instance_slot.flat_instance_idx]                                  = instance;
         }
     });
+}
+
+Render::GpuSceneUpdate CpuScene::BuildGpuSceneUpdate(
+    bool full_rebuild,
+    bool update_lights,
+    bool update_materials,
+    bool update_meshes,
+    bool rebuild_rt_blas,
+    bool update_rt_instances
+) const {
+    Render::GpuSceneUpdate update{};
+    update.full_rebuild     = full_rebuild;
+    update.update_lights    = full_rebuild || update_lights;
+    update.update_materials = full_rebuild || update_materials;
+    update.update_meshes    = full_rebuild || update_meshes;
+
+    if (full_rebuild || rebuild_rt_blas) {
+        update.raytracing_update = Render::EGpuSceneRaytracingUpdate::RebuildBlas;
+    } else if (update_meshes) {
+        update.raytracing_update = Render::EGpuSceneRaytracingUpdate::RebuildTlas;
+    } else if (update_rt_instances) {
+        update.raytracing_update = Render::EGpuSceneRaytracingUpdate::UpdateInstances;
+    }
+
+    const auto& registry = m_logical_scene.r();
+    auto to_key = [](entt::entity entity) -> Render::GpuSceneResourceKey {
+        return entity == entt::null ?
+                   Render::k_invalid_gpu_scene_resource_key :
+                   static_cast<Render::GpuSceneResourceKey>(entt::to_integral(entity));
+    };
+
+    if (full_rebuild) {
+        update.textures.reserve(registry.view<const ecs::CTexture>().size());
+        registry.view<const ecs::CTexture>().each(
+            [&](entt::entity entity, const ecs::CTexture& texture) {
+                const auto* resource_name = registry.try_get<ecs::CResourceName>(entity);
+                Render::GpuSceneTextureData data{};
+                data.key  = to_key(entity);
+                data.name = resource_name == nullptr || ecs::IsBlankName(resource_name->name) ?
+                                ecs::MakeDebugName("Texture", entity) :
+                                resource_name->name;
+                data.data              = texture.data;
+                data.format            = texture.format;
+                data.width             = texture.width;
+                data.height            = texture.height;
+                data.mip_level_count   = texture.mip_level_count;
+                data.array_layer_count = texture.array_layer_count;
+                update.textures.push_back(std::move(data));
+            }
+        );
+    }
+
+    if (update.update_lights) {
+        update.lights = m_light_buf;
+    }
+
+    if (update.update_materials) {
+        update.materials = m_material_buf;
+        update.material_texture_refs.resize(update.materials.size());
+        registry.view<const ecs::CMaterial>().each(
+            [&](entt::entity entity, const ecs::CMaterial& material) {
+                const auto material_it = m_map_material_entity_to_id.find(entity);
+                if (material_it == m_map_material_entity_to_id.end()) {
+                    return;
+                }
+                auto& refs = update.material_texture_refs[material_it->second];
+                refs.normal             = to_key(material.normal_map_entt);
+                refs.ao                 = to_key(material.ao_map_entt);
+                refs.albedo             = to_key(material.albedo_map_entt);
+                refs.emissive           = to_key(material.emissive_map_entt);
+                refs.metallic_roughness = to_key(material.metallic_roughness_map_entt);
+            }
+        );
+    }
+
+    if (update.update_meshes) {
+        update.draw_commands = m_draw_cmd_buf;
+        update.primitives    = m_primitive_buf;
+        update.instances     = m_instance_buf;
+        update.cluster_groups = m_cluster_group_buf;
+
+        const auto& mega      = mega_buf();
+        update.positions      = mega.position;
+        update.packed_normals = mega.packed_normal;
+        update.packed_tangents = mega.packed_tangent;
+        update.texcoords0     = mega.texcoord0;
+        update.indices        = mega.index;
+    } else if (update_rt_instances) {
+        update.instances = m_instance_buf;
+    }
+
+    if (update.raytracing_update == Render::EGpuSceneRaytracingUpdate::RebuildBlas) {
+        update.rt_meshes.reserve(registry.view<const ecs::CMesh>().size());
+        registry.view<const ecs::CMesh>().each(
+            [&](entt::entity mesh_entity, const ecs::CMesh& mesh) {
+                Render::GpuSceneRtMeshData mesh_data{};
+                mesh_data.key = to_key(mesh_entity);
+                const uint leaf_count = mesh.num_leaf_clusters > 0 ?
+                                            Min(
+                                                mesh.num_leaf_clusters,
+                                                static_cast<uint>(mesh.primitive_entts.size())
+                                            ) :
+                                            static_cast<uint>(mesh.primitive_entts.size());
+                mesh_data.geometries.reserve(leaf_count);
+                for (uint index = 0; index < leaf_count; ++index) {
+                    const entt::entity primitive_entity = mesh.primitive_entts[index];
+                    const auto* primitive = registry.try_get<const ecs::CPrimitive>(primitive_entity);
+                    if (primitive == nullptr || !primitive->position.is_valid ||
+                        !primitive->index.is_valid) {
+                        continue;
+                    }
+
+                    mesh_data.geometries.push_back(
+                        {
+                            primitive->position.start_idx,
+                            primitive->vertex_count,
+                            primitive->index.start_idx,
+                            primitive->index_count,
+                            GetPrimitiveId(primitive_entity),
+                        }
+                    );
+                }
+                update.rt_meshes.push_back(std::move(mesh_data));
+            }
+        );
+    }
+
+    if (update.raytracing_update != Render::EGpuSceneRaytracingUpdate::None) {
+        update.rt_instances.reserve(
+            registry.view<const ecs::CRenderable, const ecs::CNode>().size_hint()
+        );
+        registry.view<const ecs::CRenderable, const ecs::CNode>().each(
+            [&](entt::entity entity, const ecs::CRenderable& renderable, const ecs::CNode& node) {
+                if (renderable.mesh_entt == entt::null ||
+                    !IsNodeEffectivelyVisibleInGame(registry, entity) ||
+                    !registry.valid(renderable.mesh_entt) ||
+                    !registry.all_of<ecs::CMesh>(renderable.mesh_entt)) {
+                    return;
+                }
+
+                const auto& mesh = registry.get<const ecs::CMesh>(renderable.mesh_entt);
+                const uint leaf_count = mesh.num_leaf_clusters > 0 ?
+                                            Min(
+                                                mesh.num_leaf_clusters,
+                                                static_cast<uint>(mesh.primitive_entts.size())
+                                            ) :
+                                            static_cast<uint>(mesh.primitive_entts.size());
+                uint valid_primitive_count = 0;
+                uint first_primitive_id     = UINT_MAX;
+                for (uint index = 0; index < leaf_count; ++index) {
+                    const entt::entity primitive_entity = mesh.primitive_entts[index];
+                    const auto* primitive = registry.try_get<const ecs::CPrimitive>(primitive_entity);
+                    if (primitive == nullptr || !primitive->position.is_valid ||
+                        !primitive->index.is_valid) {
+                        continue;
+                    }
+                    const uint primitive_id = GetPrimitiveId(primitive_entity);
+                    if (first_primitive_id == UINT_MAX) {
+                        first_primitive_id = primitive_id;
+                    }
+                    ++valid_primitive_count;
+                }
+
+                update.rt_instances.push_back(
+                    {
+                        to_key(renderable.mesh_entt),
+                        node.d_world_transform,
+                        valid_primitive_count,
+                        first_primitive_id,
+                    }
+                );
+            }
+        );
+    }
+
+    return update;
 }
 
 } // namespace Moer

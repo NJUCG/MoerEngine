@@ -38,14 +38,15 @@ void RasterUI::ShowConfig() {
         ImGui::GetWindowDrawList()->AddRect(min, max, IM_COL32(255, 255, 255, 255));
     };
 
-    if (ImGui::TreeNode(
+    if (!m_frame_buffer_names.empty() &&
+        ImGui::TreeNode(
             "Output Frame Buffer",
             "Output: [%s]",
-            m_frame_buffer_and_name_array[m_config.selected_frame_buffer_index].GetTexture()->GetName().data()
+            m_frame_buffer_names[m_config.selected_frame_buffer_index].c_str()
         )) {
-        for (uint i = 0; i < m_frame_buffer_and_name_array.size(); i++) {
+        for (uint i = 0; i < m_frame_buffer_names.size(); i++) {
             if (ImGui::Selectable(
-                    m_frame_buffer_and_name_array[i].GetTexture()->GetName().data(),
+                    m_frame_buffer_names[i].c_str(),
                     m_config.selected_frame_buffer_index == i
                 )) {
                 m_config.selected_frame_buffer_index = i;
@@ -1014,22 +1015,16 @@ void RasterUI::ShowConfig() {
     ImGui::TreePop();
 }
 
-Render::TextureView RasterUI::GetSelectedFrameBuffer() const {
-    return m_frame_buffer_and_name_array[m_config.selected_frame_buffer_index];
-}
+void RasterUI::RegisterFrameBufferNames(const Array<std::string>& frame_buffer_names) {
+    m_frame_buffer_names = frame_buffer_names;
 
-void RasterUI::RegisterFrameBuffers(const Array<Render::TextureView>& frame_buffer_and_name_array) {
-    m_frame_buffer_and_name_array = frame_buffer_and_name_array;
-
-    static bool b_first_load = true;
-    if (b_first_load) {
-        b_first_load = false;
-
+    if (!m_frame_buffer_names_initialized) {
+        m_frame_buffer_names_initialized = true;
         m_config.selected_frame_buffer_index = GetDefaultSelectedFrameBufferIndex();
     }
 
     assert(
-        m_config.selected_frame_buffer_index < m_frame_buffer_and_name_array.size() &&
+        m_config.selected_frame_buffer_index < m_frame_buffer_names.size() &&
         "Invalid default selected frame buffer index"
     );
 }
@@ -1037,8 +1032,8 @@ void RasterUI::RegisterFrameBuffers(const Array<Render::TextureView>& frame_buff
 uint RasterUI::GetDefaultSelectedFrameBufferIndex() const {
     const std::string default_selected_frame_buffer_name = "tonemapping_output";
 
-    for (uint i = 0; i < m_frame_buffer_and_name_array.size(); ++i) {
-        if (m_frame_buffer_and_name_array[i].GetTexture()->GetName() == default_selected_frame_buffer_name) {
+    for (uint i = 0; i < m_frame_buffer_names.size(); ++i) {
+        if (m_frame_buffer_names[i] == default_selected_frame_buffer_name) {
             return i;
         }
     }

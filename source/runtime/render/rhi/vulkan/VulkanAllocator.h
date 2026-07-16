@@ -52,13 +52,13 @@ public:
     VkTracker& GetTracker() {
         return tracker;
     }
-    void ResetCmdList();
+    bool ResetCmdList();
     void AddOnComplete(std::function<void()>&& _func) {
         on_complete.push_back(std::move(_func));
     }
 
-    virtual void Complete(VulkanFence* _fence, uint64 _timeline);
-    virtual void Reset();
+    virtual void CompleteSuccess();
+    virtual bool Reset();
 
 protected:
     std::optional<VulkanCmdAllocator> cmd_allocator;
@@ -66,6 +66,7 @@ protected:
 
     Array<std::function<void()>> on_complete;
 
+    EQueueType queue_type{EQueueType::Ignore};
     VkTracker tracker;
 };
 
@@ -97,7 +98,7 @@ public:
     VulkanPresentor(VulkanDevice* _device, EQueueType _queue_type);
     virtual ~VulkanPresentor();
 
-    void Complete(VulkanFence* _fence, uint64 _timeline) override;
+    void CompleteSuccess() override;
 };
 
 class VulkanAllocator : public VulkanAllocatorBase {
@@ -114,8 +115,8 @@ public:
 
     void ResetBufferAlloc();
 
-    void Complete(VulkanFence* _fence, uint64 _timeline) override;
-    void Reset() override;
+    void CompleteSuccess() override;
+    bool Reset() override;
     //staging buffer allocate with block strategy
 private:
     struct ScratchAllocator : VulkanDeviceObject {

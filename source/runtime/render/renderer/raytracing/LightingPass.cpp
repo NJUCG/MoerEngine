@@ -10,22 +10,28 @@
 
 namespace Moer::Render::Raytracing {
 
-LightingPass::LightingPass(ShaderManager& _manager, Scene& _scene) : scene(_scene) {
+LightingPass::LightingPass(ShaderManager& _manager, BindlessArrayRef bindless_array) :
+    bindless_array(std::move(bindless_array)) {
 
-    presample_light_pipeline =
-        std::move(_manager.Compute<PresampleLightPipeline>("pipelines/raytracing/lighting/precompute/PresampleLight.hlsl"));
-    presample_env_map_pipeline =
-        std::move(_manager.Compute<PresampleEnvMapPipeline>("pipelines/raytracing/lighting/precompute/PresampleEnvmap.hlsl"));
-    presample_light_grid_pipeline =
-        std::move(_manager.Compute<PresampleLightGridPipeline>("pipelines/raytracing/lighting/precompute/PresampleLightGrid.hlsl"));
+    presample_light_pipeline      = std::move(_manager.Compute<PresampleLightPipeline>(
+        "pipelines/raytracing/lighting/precompute/PresampleLight.hlsl"
+    ));
+    presample_env_map_pipeline    = std::move(_manager.Compute<PresampleEnvMapPipeline>(
+        "pipelines/raytracing/lighting/precompute/PresampleEnvmap.hlsl"
+    ));
+    presample_light_grid_pipeline = std::move(_manager.Compute<PresampleLightGridPipeline>(
+        "pipelines/raytracing/lighting/precompute/PresampleLightGrid.hlsl"
+    ));
 
-    generate_initial_sample_pipeline =
-        std::move(_manager.Compute<GenerateInitialSamplePipeline>("pipelines/raytracing/restir_di/GenerateInitialSamples.hlsl")
-        );
-    temporal_resmaple_pipeline =
-        std::move(_manager.Compute<TemporalResmaplePipeline>("pipelines/raytracing/restir_di/TemporalResampling.hlsl"));
-    spatial_resample_pipeline =
-        std::move(_manager.Compute<SpatialResamplePipeline>("pipelines/raytracing/restir_di/SpatialResampling.hlsl"));
+    generate_initial_sample_pipeline = std::move(_manager.Compute<GenerateInitialSamplePipeline>(
+        "pipelines/raytracing/restir_di/GenerateInitialSamples.hlsl"
+    ));
+    temporal_resmaple_pipeline       = std::move(
+        _manager.Compute<TemporalResmaplePipeline>("pipelines/raytracing/restir_di/TemporalResampling.hlsl")
+    );
+    spatial_resample_pipeline = std::move(
+        _manager.Compute<SpatialResamplePipeline>("pipelines/raytracing/restir_di/SpatialResampling.hlsl")
+    );
 
     int with_nrd = WITH_NRD;
 #pragma push_macro("WITH_NRD")
@@ -98,7 +104,7 @@ void LightingPass::Process(CommandList& _cmd_list, RTContext& _rt_ctx) {
         ctx.frame_rt.specular_lighting, ctx.frame_rt.temporal_sample_pos, ctx.frame_rt.gradients,         \
         b_current_frame ? ctx.frame_rt.restir_luminance : ctx.frame_rt.prev_luminance,                    \
         ctx.frame_rt.prev_diffuse_lighting, ctx.ris_buf, ctx.ris_light_data_buf, ctx.neighbor_offset_buf, \
-        scene.GetBindlessArray()
+        bindless_array
 
     auto div_ceil = [](uint _a, uint _b) -> uint {
         return (_a + _b - 1) / _b;

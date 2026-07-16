@@ -38,6 +38,14 @@ struct CORE_API GlobalConfig {
     } editor;
 
     struct Engine {
+        struct Threading {
+            bool render_thread   = false;
+            bool rhi_thread      = false;
+            bool rhi_bypass      = true;
+            bool profile_logging = false;
+            uint max_frame_lag   = 0;
+        } threading;
+
         struct RHI {
             std::string type;
             std::string api_version;
@@ -50,6 +58,8 @@ struct CORE_API GlobalConfig {
             struct Raster {
                 bool enable_shadow;
                 bool low_quality_mode;
+                bool render_graph;
+                bool render_graph_debug_dump;
             } raster;
 
         } render;

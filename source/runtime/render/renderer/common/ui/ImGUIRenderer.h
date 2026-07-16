@@ -29,7 +29,7 @@ private:
 };
 
 namespace Moer::Render {
-class ImGUIRenderBackend {
+class ImGUIRenderBackend : public UiDrawFrameBackend {
 public:
     ImGUIRenderBackend(RenderDevice& _device);
     ~ImGUIRenderBackend();
@@ -39,16 +39,24 @@ public:
 
     void BeginGUIFrame();
     void EndGUIFrame();
+    void UpdatePlatformWindows();
 
-    void RenderGUI(CommandList& _cmd_list, const TextureView& _framebuffer);
+    UiDrawFramePacket CaptureDrawFrame();
 
-    void PresentWindows();
+    void RenderGUI(
+        CommandList&           _cmd_list,
+        const TextureView&     _main_framebuffer,
+        UiDrawFramePacket&     _frame,
+        EUiDrawExecutionThread _execution_thread
+    ) override;
+    void PresentWindows(const UiDrawFramePacket& _frame, EUiDrawExecutionThread _execution_thread) override;
 
-    TextureView GetWindowFrameBuffer(void* _window);
+    TextureRef GetWindowFrameBuffer(void* _window);
 
     BindlessArrayRef             bindless_array;
     RenderDevice&                device;
     UnorderedMap<Texture*, uint> registered_images;
+    void*                        backend_data = nullptr;
 };
 } // namespace Moer::Render
 

@@ -11,6 +11,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderPipeline.h"
+#include <array>
 #include <filesystem>
 #include <functional>
 #include <misc/STL.h>
@@ -36,7 +37,7 @@ struct ProfileSection {
 
 struct Command {
 public:
-    enum class EType {
+    enum class EType : uint8_t {
         UploadBuffer,
         CopyBackBuffer,
         BufferToBuffer,
@@ -57,12 +58,13 @@ public:
         UpdateBindlessArray,
         ClearResource,
         Scope,
-        Custom
+        Custom,
+        Count
     };
 
-    static constexpr std::string_view typenames[] = {
+    static constexpr std::array<std::string_view, static_cast<size_t>(EType::Count)> typenames = {
         "UploadBuffer",    "CopyBackBuffer",      "BufferToBuffer", "BufferToTexture",
-        "TextureToBuffer", "CopyBackTexture",     "UploadTexture",  "TextureToTexture",
+        "TextureToBuffer", "UploadTexture",       "TextureToTexture", "CopyBackTexture",
         "ShaderDispatch",  "BuildAccel",          "BuildTLAS",      "TraceRay",
         "Barrier",         "QueueTransfer",       "SetDrawState",   "SetGeometryPassDrawState",
         "MultiDraw",       "UpdateBindlessArray", "ClearResource",  "Scope",
@@ -73,7 +75,7 @@ private:
     EType type;
 
 public:
-    explicit Command(EType _type) : type(_type), name(typenames[uint(_type)]) {}
+    explicit Command(EType _type) : type(_type), name(typenames[static_cast<size_t>(_type)]) {}
     explicit Command(EType _type, std::string_view _name) : type(_type), name(_name) {}
     virtual ~Command()                      = default;
     virtual EQueueType GetQueueType() const = 0;
@@ -212,6 +214,7 @@ struct DispatchMeshData {
 struct CmdSubmit {
     Array<UniquePtr<Command>>        cmds;
     Array<std::function<void(void)>> callbacks;
+    Array<std::function<void(void)>> success_callbacks;
     TCachedArgArray                  cached_args;
 
     Array<WaitEvent>   wait_events;
@@ -248,6 +251,7 @@ struct CmdSubmit {
     CmdSubmit(CmdSubmit&& _other) noexcept {
         cmds               = std::move(_other.cmds);
         callbacks          = std::move(_other.callbacks);
+        success_callbacks  = std::move(_other.success_callbacks);
         wait_events        = std::move(_other.wait_events);
         signal_events      = std::move(_other.signal_events);
         cached_args        = std::move(_other.cached_args);
@@ -259,6 +263,7 @@ struct CmdSubmit {
     CmdSubmit& operator=(CmdSubmit&& _other) noexcept {
         cmds               = std::move(_other.cmds);
         callbacks          = std::move(_other.callbacks);
+        success_callbacks  = std::move(_other.success_callbacks);
         wait_events        = std::move(_other.wait_events);
         signal_events      = std::move(_other.signal_events);
         cached_args        = std::move(_other.cached_args);
@@ -270,10 +275,12 @@ struct CmdSubmit {
     CmdSubmit(
         Array<UniquePtr<Command>>&&        _cmds,
         Array<std::function<void(void)>>&& _callbacks,
+        Array<std::function<void(void)>>&& _success_callbacks,
         TCachedArgArray&&                  _cached_args
     ) :
         cmds(std::move(_cmds)),
         callbacks(std::move(_callbacks)),
+        success_callbacks(std::move(_success_callbacks)),
         cached_args(std::move(_cached_args)) {}
 
     std::string ToString() const {
@@ -1047,7 +1054,7 @@ public:
     RENDER_API void CopyFrom(
         TextureView      _src,
         std::span<byte>  _data,
-        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
+        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
     );
 
     RENDER_API void UpdateBindlessArray(BindlessArrayRef _array);
@@ -1197,6 +1204,7 @@ public:
 #pragma endregion
 
     RENDER_API void AddCallback(std::function<void()>&& _callback);
+    RENDER_API void AddSuccessCallback(std::function<void()>&& _callback);
 
     RENDER_API ArrayArgReference RegisterArgs(ArrayArguments&& _args);
 
@@ -1275,8 +1283,9 @@ private:
     Array<UniquePtr<Command>>    commands;
     Command*                     current_barriers{nullptr};
     Array<std::function<void()>> callbacks;
+    Array<std::function<void()>> success_callbacks;
     TCachedArgArray              cached_args;
-    Queue<std::string_view>      scope_stack;
+    Stack<std::string>           scope_stack;
 };
 class QueueCmd {};
 

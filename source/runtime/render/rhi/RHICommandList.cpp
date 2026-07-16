@@ -121,14 +121,20 @@ void CommandList::ComputeDispatcher::DispatchIndirect(
 }
 
 CmdSubmit CommandList::Submit() {
-    CmdSubmit submit(std::move(commands), std::move(callbacks), std::move(cached_args));
+    CmdSubmit submit(
+        std::move(commands),
+        std::move(callbacks),
+        std::move(success_callbacks),
+        std::move(cached_args)
+    );
     commands.clear();
     callbacks.clear();
+    success_callbacks.clear();
     return std::move(submit);
 }
 
 bool CommandList::IsEmpty() const {
-    return commands.empty() && callbacks.empty() && cached_args.empty();
+    return commands.empty() && callbacks.empty() && success_callbacks.empty() && cached_args.empty();
 }
 
 void CommandList::CopyFrom(BufferView _src, BufferView _dst, std::string_view _name) {
@@ -159,7 +165,6 @@ void CommandList::CopyFrom(TextureView _src, TextureView _dst, std::string_view 
     );
 }
 void CommandList::CopyFrom(TextureView _src, BufferView _dst, std::string_view _name) {
-
     commands.push_back(
         MakeUnique<CopyTextureToBufferCmd>(
             _src.texture->GetFormat(),
@@ -190,13 +195,13 @@ void CommandList::CopyFrom(BufferView _src, TextureView _dst, std::string_view _
     );
 }
 
-// Be careful with the Lifetime of the data!
 void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, std::string_view _name) {
     uint3 extent = uint3(
         std::max(uint(_texture.extent.x) >> _texture.mip_level, 1u),
         std::max(uint(_texture.extent.y) >> _texture.mip_level, 1u),
         std::max(uint(_texture.extent.z) >> _texture.mip_level, 1u)
     );
+    Array<byte> owned_data(_data.begin(), _data.end());
     commands.push_back(
         MakeUnique<UploadTextureCmd>(
             _texture.texture->GetFormat(),
@@ -205,23 +210,23 @@ void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, std::str
             _texture.array_layer,
             _texture.offset,
             extent,
-            _data.data(),
+            std::move(owned_data),
             _name
         )
     );
 }
 
-// Be careful with the Lifetime of the data!
 void CommandList::CopyFrom(std::span<byte> _data, BufferView _buffer, std::string_view _name) {
     if (_data.size() == 0) {
         return;
     }
+    Array<byte> owned_data(_data.begin(), _data.end());
     commands.push_back(
         MakeUnique<UploadBufferCmd>(
             reinterpret_cast<uint64>(_buffer.GetBuffer()),
             _buffer.GetByteOffset(),
             _data.size_bytes(),
-            _data.data(),
+            std::move(owned_data),
             _name
         )
     );
@@ -352,21 +357,23 @@ void CommandList::ClearResource(TextureView _texture, uint _value) {
 
 void CommandList::PushScope(std::string_view _name) {
     commands.push_back(MakeUnique<ScopeCmd>(_name, true, false));
-    scope_stack.push(_name);
+    scope_stack.emplace(_name);
 }
 
 void CommandList::PushScopeWithTimeScope(std::string_view _name) {
     commands.push_back(MakeUnique<ScopeCmd>(_name, true, true));
-    scope_stack.push(_name);
+    scope_stack.emplace(_name);
 }
 
 void CommandList::PopScope() {
-    commands.push_back(MakeUnique<ScopeCmd>(scope_stack.front(), false, false));
+    assert(!scope_stack.empty() && "PopScope called without a matching PushScope");
+    commands.push_back(MakeUnique<ScopeCmd>(scope_stack.top(), false, false));
     scope_stack.pop();
 }
 
 void CommandList::PopScopeWithTimeScope() {
-    commands.push_back(MakeUnique<ScopeCmd>(scope_stack.front(), false, true));
+    assert(!scope_stack.empty() && "PopScopeWithTimeScope called without a matching push");
+    commands.push_back(MakeUnique<ScopeCmd>(scope_stack.top(), false, true));
     scope_stack.pop();
 }
 #pragma region[ raytracing ]
@@ -401,6 +408,10 @@ void CommandList::AddCallback(std::function<void()>&& _callback) {
     callbacks.emplace_back(std::move(_callback));
 }
 
+void CommandList::AddSuccessCallback(std::function<void()>&& _callback) {
+    success_callbacks.emplace_back(std::move(_callback));
+}
+
 void CommandList::BeginBarriers(
     uint       _read_tex_cnt,
     uint       _write_tex_cnt,
@@ -419,21 +430,21 @@ void CommandList::BeginBarriers(
 
 void CommandList::InnerReadBuffer(BufferView _buffer, EBufferState _state, EPassType _pass) {
     BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
-    barrier->ReadBuffer(_buffer.buffer, _state, _pass);
+    barrier->ReadBuffer(_buffer, _state, _pass);
 }
 void CommandList::InnerWriteBuffer(BufferView _buffer, EBufferState _state, EPassType _pass) {
     BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
-    barrier->WriteBuffer(_buffer.buffer, _state, _pass);
+    barrier->WriteBuffer(_buffer, _state, _pass);
 }
 
 void CommandList::InnerReadTexture(TextureView _texture, ETextureState _state, EPassType _pass) {
     BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
-    barrier->ReadTexture(_texture.texture, _state, _pass);
+    barrier->ReadTexture(_texture, _state, _pass);
 }
 
 void CommandList::InnerWriteTexture(TextureView _texture, ETextureState _state, EPassType _pass) {
     BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
-    barrier->WriteTexture(_texture.texture, _state, _pass);
+    barrier->WriteTexture(_texture, _state, _pass);
 }
 
 void CommandList::EndBarriers() {

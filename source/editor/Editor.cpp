@@ -42,14 +42,6 @@ void Editor::Run(const ExtraHooks& extra_hooks) {
                 [this](Scene& scene) {
                     m_editor_ui->TickUI(scene);
                 },
-            .on_render_gui =
-                [this](CommandList& cmd_list, TextureRef output_image) {
-                    m_editor_ui->RenderGUI(cmd_list, output_image);
-                },
-            .on_present_windows =
-                [this]() {
-                    m_editor_ui->PresentWindows();
-                },
             .on_is_need_reload =
                 [this]() {
                     return m_editor_ui->IsNeedReload();
@@ -62,17 +54,33 @@ void Editor::Run(const ExtraHooks& extra_hooks) {
                     TextureView    input_ui_texture, // TODO: is this necessary?
                     TextureView    default_output_texture
                 ) {
+                    const auto window_frame_buffer = m_editor_ui->GetWindowFrameBuffer();
                     return ui_combine_pass->Process(
                         cmd_list,
                         m_editor_ui->IsSeperateWindow(),
                         m_editor_ui->GetConfig()->GetResolution(),
                         m_editor_ui->GetSceneColorPos(),
                         m_editor_ui->GetSceneColorResolution(),
-                        m_editor_ui->GetWindowFrameBuffer(),
+                        window_frame_buffer ? window_frame_buffer->GetView() : TextureView(),
                         input_color_texture,
                         input_ui_texture,
                         default_output_texture
                     );
+                },
+            .on_capture_ui_composition =
+                [this]() {
+                    return UiCompositionFrameData{
+                        .enabled                = true,
+                        .separate_window        = m_editor_ui->IsSeperateWindow(),
+                        .output_resolution      = m_editor_ui->GetConfig()->GetResolution(),
+                        .scene_color_position   = m_editor_ui->GetSceneColorPos(),
+                        .scene_color_resolution = m_editor_ui->GetSceneColorResolution(),
+                        .window_frame_buffer    = m_editor_ui->GetWindowFrameBuffer()
+                    };
+                },
+            .on_capture_ui_draw_frame =
+                [this]() {
+                    return m_editor_ui->CaptureDrawFrame();
                 },
             .on_register_ui_func =
                 [this](std::string name, std::function<void(void)> lambda) {
@@ -88,9 +96,9 @@ void Editor::Run(const ExtraHooks& extra_hooks) {
                 },
 
             // Raster
-            .on_raster_register_frame_buffers =
-                [this](const Array<TextureView>& textures) {
-                    m_editor_ui->m_raster_ui.RegisterFrameBuffers(textures);
+            .on_raster_register_frame_buffer_names =
+                [this](const Array<std::string>& names) {
+                    m_editor_ui->m_raster_ui.RegisterFrameBufferNames(names);
                 }
         }
     );

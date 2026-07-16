@@ -2,15 +2,22 @@
 #include "PixelFormat.h"
 #include "VulkanAllocator.h"
 #include "VulkanCommand.h"
+#include "VulkanFault.h"
 // #include "VulkanDevice.h"
 #include "misc/LockFree.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIIO.h"
+#include "rhi/RHIRecordDiagnostics.h"
 #include "vulkan/vulkan_core.h"
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <functional>
 #include <mutex>
 #include <string_view>
+#include <thread>
+#include <variant>
 namespace Moer::Render {
 static constexpr uint s_queue_max_frame_in_flight = 3;
 static constexpr uint s_query_max_storage         = 8 * 64;
@@ -19,8 +26,15 @@ public:
     VkNativeQueue(EQueueType _type, VulkanDevice& _device);
     ~VkNativeQueue();
 
-    void Submit(VulkanCmdList& _cmdlist, VkFence _fence = VK_NULL_HANDLE);
-    void SubmitEmpty(VkFence _fence = VK_NULL_HANDLE);
+    VulkanOperationResult Submit(
+        VulkanCmdList&               _cmdlist,
+        const VulkanOperationContext& _context,
+        VkFence                       _fence = VK_NULL_HANDLE
+    );
+    VulkanOperationResult SubmitEmpty(
+        const VulkanOperationContext& _context,
+        VkFence                       _fence = VK_NULL_HANDLE
+    );
     void Wait(
         VulkanFence*          _fence,
         uint64                _timeline,
@@ -40,9 +54,11 @@ public:
         return type;
     }
 
-    // 当多个 VkNativeQueue 实例共享同一个 VkQueue handle 时，
-    // 必须通过同一把 mutex 互斥 vkQueueSubmit2，否则违反 Vulkan 线程安全要求。
-    void SetSubmitMutex(std::mutex* _mutex) { submit_mutex = _mutex; }
+    // Logical queues that alias one VkQueue must share one host synchronization mutex.
+    void SetSubmitMutex(std::mutex* _mutex) {
+        assert(_mutex != nullptr);
+        submit_mutex = _mutex;
+    }
 
     void BeginLabel(std::string_view _label, float4 _color);
     void EndLabel();
@@ -51,12 +67,18 @@ public:
 private:
     Array<VkSemaphoreSubmitInfo> wait_infos;
     Array<VkSemaphoreSubmitInfo> signal_infos;
+    VulkanDevice&                device;
     VkQueue                      queue;
     EQueueType                   type;
     
-    // 这个锁只在AMD GPU上使用，因为AMD GPU没有TransferQueue
-    // 在现代NVIDIA GPU上，这个锁不会被触发，接近0开销，不用在意性能
-    std::mutex*                  submit_mutex = nullptr;
+    // A local mutex covers standalone use before the device installs its canonical queue mutex.
+    std::mutex                   local_submit_mutex;
+    std::mutex*                  submit_mutex = &local_submit_mutex;
+};
+
+struct QueryFrameDiagnostics {
+    uint64 digest{0};
+    uint32 used_query_count{0};
 };
 
 struct ProfilerStorage {
@@ -64,6 +86,14 @@ struct ProfilerStorage {
         s_query_max_storage * 2; // *2 is for begin&end
     static constexpr int s_total_query_count =
         s_max_num_profiler_queries_per_frame * s_queue_max_frame_in_flight;
+    // These stages are part of the serial query golden contract.  Keep the
+    // actual timestamp writes and the diagnostic event sourced from the same
+    // constants so they cannot silently drift apart.
+    static constexpr VkPipelineStageFlagBits kBeginTimestampStage =
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    static constexpr VkPipelineStageFlagBits kEndTimestampStage =
+        VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+    static constexpr VkPipelineStageFlags2 kResetQueryStage = VK_PIPELINE_STAGE_2_NONE;
 
     ProfilerStorage(VkNativeQueryPool& _timestamp_pool);
     void CollectProfiling(VkCommandBuffer _cmd);
@@ -105,6 +135,7 @@ struct ProfilerStorage {
 
     void BeginProfilerSession(VulkanCmdList& _cmd, std::string_view _name);
     void EndProfilerSession(VulkanCmdList& _cmd, std::string_view _name);
+    QueryFrameDiagnostics GetCurrentFrameQueryDiagnostics() const;
 
     bool               active = false;
     VkNativeQueryPool& timestamp_pool;
@@ -146,18 +177,35 @@ struct ProfilerStorage {
     uint64 cur_frame = 0;
 };
 
+struct VulkanSubmissionEvent {
+    VulkanOperationResult  outcome;
+    VulkanOperationContext context;
+    bool                   gpu_submitted{false};
+};
+
+struct VulkanCallbackBatch {
+    Array<std::function<void()>> callbacks;
+    bool                         success_only{false};
+};
+
+struct VulkanDeferredReleaseBatch {
+    Array<RHIResource*> resources;
+};
+
+struct VulkanCompletionMarker {};
+
 class VkCommandQueue : public CommandQueue {
 public:
-    struct FencePlaceHoler {};
-
     using EventType = std::variant<
+        VulkanSubmissionEvent,
         UniquePtr<VulkanAllocator>,
         UniquePtr<VulkanPresentor>,
-        Array<std::function<void()>>,
+        VulkanCallbackBatch,
+        VulkanDeferredReleaseBatch,
+        VulkanCompletionMarker,
         VulkanFence*,
         SignalEvent,
-        WaitEvent,
-        FencePlaceHoler>;
+        WaitEvent>;
 
     struct QueueEvent {
         EventType event;
@@ -176,44 +224,65 @@ public:
             wake_thread(_other.wake_thread) {}
     };
 
-    VkCommandQueue(VulkanDevice& _device, EQueueType _type) :
-        CommandQueue(),
-        vk_device(_device),
-        queue(_type, _device),
-        timestamp_pool(
-            _device,
-            VK_QUERY_TYPE_TIMESTAMP,
-            s_queue_max_frame_in_flight * s_query_max_storage * 4
-        ),
-        profiler_storage(timestamp_pool) {
-        timeline = MoerNew(VulkanFence(vk_device));
-        enabled  = true;
-        thread   = std::jthread(&VkCommandQueue::ExecuteThread, this);
-    }
+    struct RhiExecuteWork {
+        CmdSubmit                             submit;
+        uint64                                timeline;
+        uint64                                serial;
+        std::chrono::steady_clock::time_point enqueued_at;
+        uint32                                enqueue_depth;
+        double                                caller_ms{0.0};
 
-    ~VkCommandQueue() {
-        enabled = false;
-        queue_cv.notify_all();
-        thread.join();
-        //clear allocators
-        Array<VulkanAllocator*> allocs;
-        allocators.PopAll(allocs);
-        // uint32 alloc_count = 0;
-        for (auto& allocator : allocs) {
-            MoerDelete(allocator);
-            // ++alloc_count
-        }
-        // LOG_INFO("Allocator count {}", alloc_count);
-        Array<VulkanPresentor*> presents;
-        presentors.PopAll(presents);
-        // uint32 present_count = 0;
-        for (auto& presentor : presents) {
-            MoerDelete(presentor);
-            // present_count++;
-        }
-        // LOG_INFO("Presentor count {}", present_count);
-        MoerDelete(timeline);
-    }
+        RhiExecuteWork(
+            CmdSubmit&&                           _submit,
+            uint64                                _timeline,
+            uint64                                _serial,
+            std::chrono::steady_clock::time_point _enqueued_at,
+            uint32                                _enqueue_depth
+        ) :
+            submit(std::move(_submit)),
+            timeline(_timeline),
+            serial(_serial),
+            enqueued_at(_enqueued_at),
+            enqueue_depth(_enqueue_depth) {}
+    };
+
+    struct RhiPresentWork {
+        SwapchainRef                          swapchain;
+        TextureRef                            source_texture;
+        TextureView                           source_view;
+        uint64                                timeline;
+        uint64                                serial;
+        std::chrono::steady_clock::time_point enqueued_at;
+        uint32                                enqueue_depth;
+        double                                caller_ms{0.0};
+
+        RhiPresentWork(
+            SwapchainRef&&                       _swapchain,
+            TextureRef&&                         _source_texture,
+            TextureView                          _source_view,
+            uint64                               _timeline,
+            uint64                               _serial,
+            std::chrono::steady_clock::time_point _enqueued_at,
+            uint32                               _enqueue_depth
+        ) :
+            swapchain(std::move(_swapchain)),
+            source_texture(std::move(_source_texture)),
+            source_view(_source_view),
+            timeline(_timeline),
+            serial(_serial),
+            enqueued_at(_enqueued_at),
+            enqueue_depth(_enqueue_depth) {}
+    };
+
+    using RhiWork = std::variant<RhiExecuteWork, RhiPresentWork>;
+
+    VkCommandQueue(
+        VulkanDevice& _device,
+        EQueueType    _type,
+        bool          _enable_rhi_thread = false,
+        bool          _thread_profile_logging = false
+    );
+    ~VkCommandQueue();
     WaitEvent   Execute(CmdSubmit&& _submit) override;
     void        Wait(WaitEvent _event) override;
     void        Present(SwapchainRef _viewport, TextureView _view) override;
@@ -222,7 +291,6 @@ public:
 
     void SetQueueSubmitMutex(std::mutex* _mutex) { queue.SetSubmitMutex(_mutex); }
 
-    void                                      ExecuteThread();
     VulkanDevice&                             vk_device;
     LockFreeQueueBase<VulkanAllocator, false> allocators;
     LockFreeQueueBase<VulkanPresentor, false> presentors;
@@ -236,41 +304,174 @@ public:
 #endif
 
 private:
+    enum class ERhiWorkKind : uint8 { Execute, Present };
+
+    struct RhiWorkProfileTotals {
+        uint64 samples{0};
+        double caller_total_ms{0.0};
+        double queue_wait_total_ms{0.0};
+        double work_total_ms{0.0};
+    };
+
+    struct RhiRecordExecuteSample {
+        RecordTopologySummary topology;
+        Array<RecordLayerTiming> layer_timings;
+        double                   serial_command_sum_ms{0.0};
+        StableRecordHash         barrier_hash;
+        uint64                   descriptor_digest{StableRecordHash::kOffset};
+        uint64                   query_digest{StableRecordHash::kOffset};
+        uint64                   descriptor_bytes{0};
+        uint32                   buffer_barriers{0};
+        uint32                   texture_barriers{0};
+        uint32                   memory_barriers{0};
+        uint32                   used_queries{0};
+        SerialGoldenSummary      serial_golden{};
+        uint32                   golden_unresolved{0};
+        uint32                   golden_opaque{0};
+        uint64                   golden_unresolved_command_mask{0};
+        uint64                   golden_opaque_command_mask{0};
+        uint32                   golden_unresolved_native_buffers{0};
+        uint32                   golden_unresolved_native_images{0};
+        bool                     golden_has_unresolved_buffer_barrier{false};
+        SerialBarrierItem        golden_first_unresolved_buffer_barrier{};
+    };
+
+    struct RhiRecordWindowTotals {
+        uint64 samples{0};
+        double serial_record_wall_total_ms{0.0};
+        double serial_record_wall_max_ms{0.0};
+        double serial_command_sum_total_ms{0.0};
+        double eligible_record_total_ms{0.0};
+        double predicted_critical_total_ms{0.0};
+        double dispatch_join_estimate_total_ms{0.0};
+        double predicted_net_saving_total_ms{0.0};
+        uint64 layer_total{0};
+        uint64 command_total{0};
+        uint64 candidate_command_total{0};
+        uint64 safe_command_total{0};
+        uint64 parallel_layer_total{0};
+        uint64 descriptor_bytes_total{0};
+        uint64 buffer_barrier_total{0};
+        uint64 texture_barrier_total{0};
+        uint64 memory_barrier_total{0};
+        uint64 used_query_total{0};
+        uint32 layer_max{0};
+        uint32 command_max{0};
+        uint32 parallel_layer_max{0};
+        uint64 topology_changes{0};
+        uint64 golden_complete{0};
+        uint64 golden_incomplete{0};
+        uint64 golden_unresolved_total{0};
+        uint64 golden_opaque_total{0};
+        UnorderedSet<uint64> command_digests;
+        UnorderedSet<uint64> layer_digests;
+        UnorderedSet<uint64> barrier_digests;
+        UnorderedSet<uint64> descriptor_digests;
+        UnorderedSet<uint64> query_digests;
+        UnorderedSet<uint64> golden_command_digests;
+        UnorderedSet<uint64> golden_layer_digests;
+        UnorderedSet<uint64> golden_barrier_digests;
+        UnorderedSet<uint64> golden_descriptor_digests;
+        UnorderedSet<uint64> golden_query_digests;
+        UnorderedSet<uint64> golden_combined_digests;
+        UnorderedSet<uint64> golden_manifest_entries;
+    };
+
+    struct RhiThreadProfileState {
+        RhiThreadProfileState() : window_start(std::chrono::steady_clock::now()) {}
+
+        std::chrono::steady_clock::time_point window_start;
+        uint64                 samples{0};
+        RhiWorkProfileTotals   execute{};
+        RhiWorkProfileTotals   present{};
+        double                 caller_total_ms{0.0};
+        double                 caller_max_ms{0.0};
+        double                 queue_wait_total_ms{0.0};
+        double                 queue_wait_max_ms{0.0};
+        double                 work_total_ms{0.0};
+        double                 work_max_ms{0.0};
+        uint32                 max_enqueue_depth{0};
+        RhiRecordWindowTotals  record{};
+        bool                   calibration_ready{false};
+        uint32                 model_workers{1};
+        double                 dispatch_join_median_ms{0.0};
+        double                 dispatch_join_tail_ms{0.0};
+        bool                   has_topology{false};
+        uint64                 last_topology_digest{0};
+        UnorderedSet<uint64>   observed_golden_manifests;
+    };
+
+    void                       ExecuteNow(CmdSubmit&& _submit, uint64 _timeline, uint64 _serial);
+    void PresentNow(
+        SwapchainRef&& _swapchain,
+        TextureRef&&   _source_texture,
+        TextureView    _source_view,
+        uint64         _timeline,
+        uint64         _serial
+    );
+    void                       RhiThreadMain();
+    void                       CompletionThreadMain();
+    Array<RHIResource*>        TakeDeferredReleases();
+    void                       EnqueueCompletionMarker(uint64 _timeline);
     UniquePtr<VulkanAllocator> GetAllocator();
     UniquePtr<VulkanPresentor> GetPresentor();
     void                       Complete(uint64 _timeline);
-    void                       Signal();
+    void                       EnsureRecordCalibration();
+    void                       RecordRhiRecordProfile(const RhiRecordExecuteSample& _sample);
+    void                       RecordThreadingProfile(
+        ERhiWorkKind _kind,
+        double       _caller_ms,
+        double       _queue_wait_ms,
+        double       _work_ms,
+        uint32       _enqueue_depth
+    );
 
 private:
-    uint64                                             last_frame = 0;
+    std::atomic<uint64>                                last_frame{0};
+    uint64                                             descriptor_submission{0};
     CircularQueue<uint64, s_queue_max_frame_in_flight> executed_queue;
-    std::atomic<uint64>                                executed_frame = 0;
+    std::atomic<uint64>                                cpu_settled_frame = 0;
     CircularQueue<uint64, s_queue_max_frame_in_flight> presented_queue;
     VulkanFence*                                       timeline = nullptr;
     std::mutex                                         event_mutex;
-    bool                                               enabled{false};
-    std::condition_variable                            queue_cv; // wake up execute thread from sleeping
+    bool                                               completion_worker_running{false};
+    std::condition_variable                            queue_cv;
     VkNativeQueue                                      queue;
     VkNativeQueryPool                                  timestamp_pool;
     ProfilerStorage                                    profiler_storage;
     ProfileData                                        cached_profiler_entry;
+    std::mutex                                         profiler_mutex;
+
+    bool                    rhi_thread_enabled{false};
+    UniquePtr<RhiThreadProfileState> thread_profile;
+    bool                    rhi_worker_running{false};
+    std::atomic<uint32_t>   rhi_thread_id{0};
+    uint64                  enqueued_rhi_work{0};
+    uint64                  completed_rhi_work{0};
+    DEQueue<RhiWork>        rhi_work_queue;
+    std::mutex              rhi_work_mutex;
+    std::condition_variable rhi_work_cv;
+    std::condition_variable rhi_work_done_cv;
 
     std::mutex   exec_mtx;
-    std::jthread thread;
+    std::jthread completion_thread;
+    std::jthread rhi_thread;
+    Array<UniquePtr<VulkanAllocator>> allocator_quarantine;
+    Array<UniquePtr<VulkanPresentor>> presentor_quarantine;
 };
 class VkCopyQueue : public CopyQueue {
 public:
     friend VulkanDevice;
     VkCopyQueue(VulkanDevice& _device);
     ~VkCopyQueue();
-    struct Placeholder {};
     using EventType = std::variant<
+        VulkanSubmissionEvent,
         UniquePtr<VulkanAllocator>,
         UniquePtr<VulkanPresentor>,
-        Array<std::function<void()>>,
+        VulkanCallbackBatch,
+        VulkanCompletionMarker,
         IOSignalEvt,
-        IOWaitEvt,
-        Placeholder>;
+        IOWaitEvt>;
     struct IOEvent {
         EventType event;
         uint64    timeline;
@@ -348,11 +549,12 @@ private:
     VulkanDevice& device;
 
     uint                    last_frame     = 0;
-    std::atomic<uint64>     executed_frame = 0;
+    std::atomic<uint64>     cpu_settled_frame = 0;
     VulkanFenceRef          timeline       = nullptr;
     std::mutex              event_mutex;
-    bool                    enabled{false};
+    std::atomic_bool        enabled{false};
     std::condition_variable queue_cv; // wake up execute thread from sleeping
+    std::condition_variable settled_cv;
     VkNativeQueue           queue;
     std::jthread            thread;
 
@@ -365,5 +567,6 @@ private:
     std::mutex                                     io_mutex;
     Queue<std::pair<CommandList&&, uint64>>        io_rhi_cmdlists;
     std::mutex                                     rhi_mutex;
+    Array<UniquePtr<VulkanAllocator>>              allocator_quarantine;
 };
 } // namespace Moer::Render

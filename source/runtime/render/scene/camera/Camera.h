@@ -8,6 +8,41 @@ namespace Moer {
 
 struct EditorConfig;
 
+struct CameraFrameInput {
+    uint2 viewport_resolution = uint2(0u, 0u);
+    float window_aspect_ratio = 16.0f / 9.0f;
+    float delta_time          = 0.0f;
+
+    float cursor_delta_x = 0.0f;
+    float cursor_delta_y = 0.0f;
+    float scroll_offset  = 0.0f;
+
+    bool is_cursor_hiding = false;
+    bool left_mouse       = false;
+    bool middle_mouse     = false;
+    bool right_mouse      = false;
+    bool free_look_active = false;
+
+    bool camera_forward  = false;
+    bool camera_backward = false;
+    bool camera_left     = false;
+    bool camera_right    = false;
+    bool camera_up       = false;
+    bool camera_down     = false;
+
+    bool speed_up    = false;
+    bool speed_down  = false;
+    bool reset_speed = false;
+
+    bool  projection_override_enabled = true;
+    float camera_speed_log10           = log10f(25.0f);
+    float camera_fovy                  = 60.0f;
+    float camera_far_clip_log10        = 3.0f;
+    float camera_near_clip_log10       = -2.0f;
+
+    static CameraFrameInput Capture(const EditorConfig& config);
+};
+
 class Camera {
     enum {
         FRUSTUM_LEFT = 0,
@@ -105,6 +140,7 @@ public:
     // Jitter Matrix only affect the view_projection_matrix
     void       SetJitterMatrix(const Matrix4x4f& jitter_matrix) noexcept;
     void       SetJitterMatrix(const Vector2f& jitter) noexcept;
+    void       SetJitterMatrix(const Vector2f& jitter, uint2 render_resolution) noexcept;
     Matrix4x4f GetJitterMatrix() const noexcept;
     void       ResetJitterMatrix() noexcept;
 
@@ -138,7 +174,8 @@ public:
          * ## Update the camera based on input per frame
          * 
          */
-    void Tick(const SharedPtr<EditorConfig> editor_config); //update camera per frame
+    void Tick(const CameraFrameInput& frame_input);
+    void Tick(const SharedPtr<EditorConfig> editor_config);
 
     bool IsDirty() const; //judge if camera changed compared to last frame
 
