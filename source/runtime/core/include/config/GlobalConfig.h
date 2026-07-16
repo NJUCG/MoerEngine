@@ -1,26 +1,19 @@
+// 定义与 MoerEngine.toml 配置项对应的强类型数据结构。
 #pragma once
 
 #include "API_Macro.h"
 #include "misc/Traits.h"
 
-// TODO: auto generate this file according to `MoerEngine.toml`
+// TODO: 后续可根据 MoerEngine.toml 自动生成本文件及其加载代码。
 
 namespace Moer::Config {
 
 /**
-     * 更安全的Config
-     * 简洁、安全、优雅
-     * 
-     * 如果需要修改配置文件定义，只需要修改：
-     * 1. 本文件的数据结构
-     * 2. 本文件的Loader
-     * 3. 配置文件（即 MoerEngine.toml）
-     * 
-     * 本文件的数据类型尽量使用基本数据类型；如果需要进行数据转换，请在使用配置文件时进行转换。
-     * 例如：在Editor.cpp中，将std::string default_render_method转换为ERenderMethod，而不是在本文件中定义ERenderMethod
-     * 
-     * 本文件只确保数据类型的正确性，不确保数据的合法性。
-     */
+ * 配置结构仅负责保证字段类型正确，不负责校验字段值是否合法。
+ *
+ * 修改配置定义时，需要同步更新本结构、加载代码与 MoerEngine.toml。
+ * 字段尽量使用基础类型；枚举等业务类型应由使用方负责转换，避免配置层依赖上层模块。
+ */
 struct CORE_API GlobalConfig {
 
     struct Editor {
@@ -67,7 +60,7 @@ struct CORE_API GlobalConfig {
         struct Scene {
             std::string scene_path;
             bool        enable_cache;
-            int         material_info_log_lines; // -1 to log all
+            int         material_info_log_lines; // -1 表示输出全部材质日志
         } scene;
 
         struct Remote {
