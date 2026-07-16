@@ -1188,7 +1188,7 @@ bool RasterRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, cons
     ApplyFrameFeedback(
         RenderFrame(PrepareFrame(editor_config, hooks)), editor_config->raster_config, hooks
     );
-    return !hooks.on_is_need_reload || !hooks.on_is_need_reload();
+    return !hooks.should_reload || !hooks.should_reload();
 }
 
 void RasterRenderer::ApplyFrameFeedback(

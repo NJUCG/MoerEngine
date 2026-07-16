@@ -31,7 +31,7 @@ struct EngineHooks {
     std::function<void(Scene&)> on_tick_scripting;
     std::function<void(Scene&)> on_tick_test;
     std::function<void(Scene&)> on_tick_ui;
-    std::function<bool()>       on_is_need_reload;
+    std::function<bool()>       should_reload;
 
     std::function<TextureRef(UiCombinePass*, CommandList&, TextureView, TextureView, TextureView)>
         on_ui_combine_pass;

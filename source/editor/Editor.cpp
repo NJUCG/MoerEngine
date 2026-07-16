@@ -37,9 +37,9 @@ void Editor::Run(const ExtraHooks& extra_hooks) {
                 [this](Scene& scene) {
                     m_editor_ui->TickUI(scene);
                 },
-            .on_is_need_reload =
+            .should_reload =
                 [this]() {
-                    return m_editor_ui->IsNeedReload();
+                    return m_editor_ui->NeedsReload();
                 },
             .on_ui_combine_pass =
                 [this](

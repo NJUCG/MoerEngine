@@ -765,7 +765,7 @@ bool RaytracingRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, 
     ApplyFrameFeedback(
         RenderFrame(PrepareFrame(editor_config, hooks)), editor_config->raytracing_config
     );
-    return !hooks.on_is_need_reload || !hooks.on_is_need_reload();
+    return !hooks.should_reload || !hooks.should_reload();
 }
 
 void RaytracingRenderer::Shutdown(const EngineHooks& hooks) {

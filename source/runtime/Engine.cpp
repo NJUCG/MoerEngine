@@ -624,10 +624,10 @@ void Engine::Run(const EngineHooks& hooks) {
                 TickRendererSwitchValidation(scene);
             };
 
-        auto on_is_need_reload = std::move(runtime_hooks.on_is_need_reload);
-        runtime_hooks.on_is_need_reload =
-            [this, on_is_need_reload = std::move(on_is_need_reload)]() {
-                const bool hook_requested = on_is_need_reload && on_is_need_reload();
+        auto base_should_reload = std::move(runtime_hooks.should_reload);
+        runtime_hooks.should_reload =
+            [this, base_should_reload = std::move(base_should_reload)]() {
+                const bool hook_requested = base_should_reload && base_should_reload();
                 const bool validation_requested =
                     ConsumeRendererSwitchValidationReloadRequest();
                 return hook_requested || validation_requested;
@@ -686,7 +686,7 @@ void Engine::Run(const EngineHooks& hooks) {
                         );
                     },
                     [&runtime_hooks]() {
-                        return runtime_hooks.on_is_need_reload && runtime_hooks.on_is_need_reload();
+                        return runtime_hooks.should_reload && runtime_hooks.should_reload();
                     }
                 );
 
@@ -708,7 +708,7 @@ void Engine::Run(const EngineHooks& hooks) {
                         );
                     },
                     [&runtime_hooks]() {
-                        return runtime_hooks.on_is_need_reload && runtime_hooks.on_is_need_reload();
+                        return runtime_hooks.should_reload && runtime_hooks.should_reload();
                     }
                 );
                 raytracing_renderer->Shutdown(runtime_hooks);
@@ -732,7 +732,7 @@ void Engine::Run(const EngineHooks& hooks) {
                         m_editor_config->raytracing_config
                     );
 
-                    if (runtime_hooks.on_is_need_reload && runtime_hooks.on_is_need_reload()) {
+                    if (runtime_hooks.should_reload && runtime_hooks.should_reload()) {
                         break;
                     }
                 }

@@ -63,7 +63,7 @@ public:
     const SharedPtr<EditorConfig> GetConfig() const {
         return m_config;
     }
-    bool IsNeedReload() const {
+    bool NeedsReload() const {
         return m_b_need_reload;
     }
     float GetSceneColorAspectRatio() const {
