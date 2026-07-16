@@ -1,3 +1,4 @@
+// Draws the environment cubemap behind deferred scene geometry.
 #pragma once
 
 #include "shader/ShaderPipeline.h"

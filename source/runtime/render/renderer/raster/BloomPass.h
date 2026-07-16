@@ -1,3 +1,4 @@
+// Extracts bright regions, builds the bloom pyramid, and composites it into scene color.
 #pragma once
 
 #include "shader/ShaderPipeline.h"
@@ -50,7 +51,7 @@ public:
     BloomPass(RasterContext& context);
 
     TextureWithHandle
-    Process(RasterContext& context, const RasterConfig& ui_config, TextureWithHandle& input_texture);
+    Process(RasterContext& context, const RasterConfig& raster_config, TextureWithHandle& input_texture);
 
 private:
     BloomPassPrefilterPipeline  prefilter_pipeline;

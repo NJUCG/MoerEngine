@@ -1,10 +1,9 @@
+// Builds the screen-space directional shadow factor consumed by deferred lighting.
 #pragma once
 
-#include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 
-#include "RasterConfig.h"
 #include "RasterResource.h"
 
 namespace Moer::Render::Raster {
@@ -22,9 +21,9 @@ class DirectionalShadowMaskPass {
 public:
     DirectionalShadowMaskPass(RasterContext& context);
 
-    void Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
+    void Process(RasterContext& context);
 
 private:
-    DirectionalShadowMaskPassPipeline directional_shadow_mask_pipeline;
+    DirectionalShadowMaskPassPipeline pipeline;
 };
 } // namespace Moer::Render::Raster

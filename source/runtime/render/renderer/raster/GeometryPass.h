@@ -1,3 +1,4 @@
+// Culls visible scene instances and writes the deferred geometry buffers.
 #pragma once
 
 #include "math/Function.h"
@@ -31,19 +32,11 @@ public:
 
 class GeometryPass {
 public:
-    GeometryPass(RasterContext& context) : m_culling_pass(context) {
-
-        // 1. PSO
-
-        RHIDepthStencilStateInfo ds_info =
+    GeometryPass(RasterContext& context) : culling_pass(context) {
+        RHIDepthStencilStateInfo depth_stencil_info =
             RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>();
-        //TODO：开启深度模板测试提高性能
-        // ds_info.b_enable_front_face_stencil = true;
-        // ds_info.front_face_pass_stencil_op  = EStencilOp::SO_REPLACE;
-        // ds_info.b_enable_back_face_stencil  = true;
-        // ds_info.back_face_pass_stencil_op   = EStencilOp::SO_REPLACE;
 
-        GfxPsoCreateInfo pso_info(
+        GfxPsoCreateInfo pipeline_info(
             RHIRasterizeInfo::Preset(),
             {},
             {
@@ -51,59 +44,63 @@ public:
                 RHIColorAttachmentInfo::Preset(PF_A2R10G10B10_UNORM_PACK32), // normal
                 RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM)            // metal_rough_ao
             },
-            ds_info, // depth buf
+            depth_stencil_info,
             context.textures.depth_linear_sampler.tex->GetFormat()
         );
 
         GeometryPassPipeline::MutationSet mutation_set{};
         mutation_set.SetMutation<GeometryPassPipeline::SHADOW_DEPTH_PASS>(false);
 
-        Shader& vtx = ShaderManager::Get().CompileShader(
+        Shader& vertex_shader = ShaderManager::Get().CompileShader(
             ST_VERTEX, "pipelines/raster/deferred/geometry/GeometryPassVertex.hlsl", mutation_set
         );
-        Shader& frag = ShaderManager::Get().CompileShader(
+        Shader& fragment_shader = ShaderManager::Get().CompileShader(
             ST_FRAGMENT, "pipelines/raster/deferred/geometry/GeometryPassPixel.hlsl", mutation_set
         );
 
-        m_pso = ShaderManager::Get().Raster().Vertex(vtx).Pixel(frag).Build<GeometryPassPipeline>(
-            std::move(pso_info)
-        );
+        pipeline = ShaderManager::Get()
+                       .Raster()
+                       .Vertex(vertex_shader)
+                       .Pixel(fragment_shader)
+                       .Build<GeometryPassPipeline>(std::move(pipeline_info));
     }
 
-    void Process(RasterContext& context, RasterConfig& ui_config, const Camera& camera) {
+    void Process(RasterContext& context, RasterConfig& raster_config, const Camera& camera) {
         const auto& gpu_scene_res = context.GetGpuSceneRes();
 
-        const bool use_occlusion_culling = ui_config.enable_occlusion_culling &&
+        const bool use_occlusion_culling = raster_config.enable_occlusion_culling &&
                                            context.hiz_data.previous_valid &&
                                            context.textures.hiz_previous.tex != nullptr &&
                                            context.hiz_data.mip_count > 0;
 
-        // Culling pass 始终运行（Nanite 模型：LOD 选择 + 可选的 frustum/occlusion 剔除）
-        CullingPass::CullStatistics stats;
+        // Culling always runs to select LODs; frustum and Hi-Z rejection remain configurable.
+        CullingPass::CullStatistics culling_stats;
         CullingPass::CullingOptions culling_options{
-            ui_config.enable_frustum_culling,
+            raster_config.enable_frustum_culling,
             use_occlusion_culling,
-            ui_config.cluster_lod_error_threshold,
-            ui_config.force_lod_level
+            raster_config.cluster_lod_error_threshold,
+            raster_config.force_lod_level
         };
 
-        m_culling_pass.Process(
+        culling_pass.Process(
             context,
             camera,
             gpu_scene_res,
             context.gpu_culling_buffers.geometry,
-            &stats,
+            &culling_stats,
             RasterTool::GetGeometryCullingProfileScopeName(),
             culling_options
         );
 
-        ui_config.culling_stats.total_instances_before     = stats.total_instances_before;
-        ui_config.culling_stats.total_instances_after      = stats.total_instances_after;
-        ui_config.culling_stats.visible_draws              = stats.visible_draws;
-        ui_config.culling_stats.total_draws                = stats.total_draws;
-        ui_config.culling_stats.frustum_culled_instances   = stats.frustum_culled_instances;
-        ui_config.culling_stats.occlusion_culled_instances = stats.occlusion_culled_instances;
-        ui_config.culling_stats.lod_culled_instances       = stats.lod_culled_instances;
+        raster_config.culling_stats.total_instances_before = culling_stats.total_instances_before;
+        raster_config.culling_stats.total_instances_after  = culling_stats.total_instances_after;
+        raster_config.culling_stats.visible_draws          = culling_stats.visible_draws;
+        raster_config.culling_stats.total_draws            = culling_stats.total_draws;
+        raster_config.culling_stats.frustum_culled_instances =
+            culling_stats.frustum_culled_instances;
+        raster_config.culling_stats.occlusion_culled_instances =
+            culling_stats.occlusion_culled_instances;
+        raster_config.culling_stats.lod_culled_instances = culling_stats.lod_culled_instances;
 
         GeometryPassBindlessParam param;
         param.world2clip = Transpose(camera.GetViewProjectionMatrix());
@@ -118,23 +115,25 @@ public:
         param.texcoord0_buf_hdl             = gpu_scene_res.texcoord0_buf.hdl;
         param.material_buf_hdl              = gpu_scene_res.material_buf.hdl;
 
-        param.enable_alpha_test             = ui_config.geometry_enable_alpha_test ? 1 : 0;
-        param.alpha_test_blend_pixel_cutoff = ui_config.geometry_alpha_test_blend_pixel_cutoff;
-        param.debug_visualization_mode      = static_cast<uint>(ui_config.geometry_debug_visualization);
+        param.enable_alpha_test = raster_config.geometry_enable_alpha_test ? 1 : 0;
+        param.alpha_test_blend_pixel_cutoff =
+            raster_config.geometry_alpha_test_blend_pixel_cutoff;
+        param.debug_visualization_mode =
+            static_cast<uint>(raster_config.geometry_debug_visualization);
 
-        auto rect2d = context.textures.base_color.GetRect2D();
+        const auto render_area = context.textures.base_color.GetRect2D();
         assert(
-            rect2d == context.textures.normal.GetRect2D() &&
-            rect2d == context.textures.metal_rough_ao.GetRect2D()
+            render_area == context.textures.normal.GetRect2D() &&
+            render_area == context.textures.metal_rough_ao.GetRect2D()
         );
 
         context.cmd_list.PushScopeWithTimeScope(RasterTool::GetGeometryDrawProfileScopeName());
-        auto draw = context.cmd_list.Gfx(m_pso, context.bdls, param);
+        auto draw_command = context.cmd_list.Gfx(pipeline, context.bdls, param);
 
         const auto& visibility = context.gpu_culling_buffers.geometry;
-        draw.DrawIndirect(
+        draw_command.DrawIndirect(
             "Geometry Pass",
-            rect2d,
+            render_area,
             {},
             IndexBuffer{gpu_scene_res.index_buf.buf->GetView(), EIndexElementType::IET_UINT32},
             visibility.draw_cmd_buf->GetView(),
@@ -150,8 +149,8 @@ public:
     }
 
 private:
-    GeometryPassPipeline m_pso;
-    CullingPass          m_culling_pass;
+    GeometryPassPipeline pipeline;
+    CullingPass          culling_pass;
 };
 
 } // namespace Moer::Render::Raster

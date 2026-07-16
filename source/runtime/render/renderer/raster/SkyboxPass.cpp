@@ -1,24 +1,26 @@
+#include "SkyboxPass.h"
+
+// Implements skybox exposure correction and full-screen background rendering.
 #include "RasterResource.h"
 #include "RasterTextures.h"
 #include "RasterTool.h"
-#include "SkyboxPass.h"
 
 namespace Moer::Render::Raster {
 SkyboxPass::SkyboxPass(RasterContext& context) {
-    RHIDepthStencilStateInfo ds_info(false, CO_GREATER_OR_EQUAL);
+    RHIDepthStencilStateInfo depth_stencil_info(false, CO_GREATER_OR_EQUAL);
 
-    GfxPsoCreateInfo pso_full_screen_info(
+    GfxPsoCreateInfo pipeline_info(
         RHIRasterizeInfo::Preset(),
         {},
         {RHIColorAttachmentInfo::Preset(context.textures.lighting_output.tex->GetFormat())},
-        ds_info,
+        depth_stencil_info,
         context.textures.depth_linear_sampler.tex->GetFormat()
     );
 
     skybox_pipeline = context.manager.Raster()
                           .Vertex("core/utils/FullScreenQuad.hlsl")
                           .Pixel("pipelines/raster/deferred/env_and_atmo/SkyboxPass.frag.hlsl")
-                          .Build<SkyboxPipeline>(std::move(pso_full_screen_info));
+                          .Build<SkyboxPipeline>(std::move(pipeline_info));
 }
 
 void SkyboxPass::Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera) {
@@ -34,18 +36,21 @@ void SkyboxPass::Process(RasterContext& context, const RasterConfig& ui_config, 
     skybox_param.camera_pos = camera.GetPosition();
     skybox_param.clip2world = Transpose(camera.GetViewProjectionMatrixInv());
 
-    DepthAttachment depth_att(context.textures.depth_linear_sampler.tex->GetView().GetTexture());
-    depth_att.action = EAttachmentAction::AC_DS_LOAD_STORE;
+    DepthAttachment depth_attachment(
+        context.textures.depth_linear_sampler.tex->GetView().GetTexture()
+    );
+    depth_attachment.action = EAttachmentAction::AC_DS_LOAD_STORE;
 
     context.cmd_list.Gfx(skybox_pipeline, context.bdls, skybox_param)
         .Draw(
             "Skybox Pass",
             context.textures.lighting_output.GetRect2D(),
             std::move(RasterTool::GetFullScreenDrawDatas()),
-            depth_att,
+            depth_attachment,
+            // Preserve lighting written by the previous deferred pass.
             ColorAttachment{
                 context.textures.lighting_output.tex, EAttachmentAction::AC_LOAD_STORE, float4(0, 0, 0, 0)
-            } //防止清空
+            }
         );
 }
 

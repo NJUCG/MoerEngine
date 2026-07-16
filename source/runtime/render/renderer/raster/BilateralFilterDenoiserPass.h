@@ -1,7 +1,7 @@
 ﻿#pragma once
 
+// Filters AI-produced lighting noise into the raster denoiser output target.
 #include "math/Function.h"
-#include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 
@@ -19,53 +19,54 @@ public:
     DEFINE_SHADER_ARGS(bdls, param);
 };
 
-/**
- * MARK: BilateralFilterDenoiser Pass
- * 
- * 这个Pass主要是为了解决TensorRT Pass网络产生的噪点；
- * 注意，这个pass重用了ao_output作为输出
- */
+/** Filters TensorRT output into the dedicated denoiser target when bilateral denoising is enabled. */
 class BilateralFilterDenoiserPass {
 public:
-    BilateralFilterDenoiserPass(RasterContext& context) : m_output_image(context.textures.denoiser_output) {
-        GfxPsoCreateInfo pso_full_screen_info(
-            RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(m_output_image.tex->GetFormat())}
+    BilateralFilterDenoiserPass(RasterContext& context) :
+        output_image(context.textures.denoiser_output) {
+        GfxPsoCreateInfo pipeline_info(
+            RHIRasterizeInfo::Preset(),
+            {},
+            {RHIColorAttachmentInfo::Preset(output_image.tex->GetFormat())}
         );
 
-        m_bfd_pipeline = context.manager.Raster()
-                             .Vertex("core/utils/FullScreenQuad.hlsl")
-                             .Pixel("pipelines/postprocess/denoise/BilateralFilterDenoiser.hlsl")
-                             .Build<BilateralFilterDenoiserPipeline>(std::move(pso_full_screen_info));
+        pipeline = context.manager.Raster()
+                       .Vertex("core/utils/FullScreenQuad.hlsl")
+                       .Pixel("pipelines/postprocess/denoise/BilateralFilterDenoiser.hlsl")
+                       .Build<BilateralFilterDenoiserPipeline>(std::move(pipeline_info));
     }
 
-    TextureWithHandle
-    Process(RasterContext& context, const RasterConfig& ui_config, TextureWithHandle input_image) {
-        if (ui_config.denoiser_mode == EDenoiserMode::NONE) {
-            return input_image; // 直接返回输入
+    TextureWithHandle Process(
+        RasterContext&      context,
+        const RasterConfig& raster_config,
+        TextureWithHandle   input_image
+    ) {
+        if (raster_config.denoiser_mode == EDenoiserMode::NONE) {
+            return input_image;
         }
 
         BilateralFilterDenoiserPipelineBindlessParam param;
 
         param.inv_resolution       = 1.0f / float2(context.textures.ao_output.GetSize());
-        param.kernel_radius        = ui_config.denoiser_bfd_kernel_radius;
-        param.spatial_sigma_square = ui_config.denoiser_bfd_spatial_sigma_square;
-        param.range_sigma_square   = ui_config.denoiser_bfd_range_sigma_square;
+        param.kernel_radius        = raster_config.denoiser_bfd_kernel_radius;
+        param.spatial_sigma_square = raster_config.denoiser_bfd_spatial_sigma_square;
+        param.range_sigma_square   = raster_config.denoiser_bfd_range_sigma_square;
         param.input_image          = input_image.hdl;
 
-        context.cmd_list.Gfx(m_bfd_pipeline, context.bdls, param)
+        context.cmd_list.Gfx(pipeline, context.bdls, param)
             .Draw(
                 "BilateralFilterDenoiser Pass",
-                m_output_image.GetRect2D(),
+                output_image.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment(m_output_image.tex)
+                ColorAttachment(output_image.tex)
             );
 
-        return m_output_image;
+        return output_image;
     }
 
 private:
-    BilateralFilterDenoiserPipeline m_bfd_pipeline;
-    TextureWithHandle&              m_output_image;
+    BilateralFilterDenoiserPipeline pipeline;
+    TextureWithHandle&              output_image;
 };
 
 } // namespace Moer::Render::Raster

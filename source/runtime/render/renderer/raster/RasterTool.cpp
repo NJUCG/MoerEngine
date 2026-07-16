@@ -1,3 +1,4 @@
+// Implements small utilities shared by otherwise independent raster passes.
 #include "RasterTool.h"
 
 #include "RasterConfig.h"
@@ -29,10 +30,6 @@ constexpr StaticArray<std::string_view, CSM_MAX_CASCADES> s_shadow_draw_scope_na
     "Raster Shadow Draw CSM3"
 };
 
-constexpr std::string_view s_rt_scene_build_blas_scope_name  = "RTScene BuildBLAS";
-constexpr std::string_view s_rt_scene_build_tlas_scope_name  = "RTScene BuildTLAS";
-constexpr std::string_view s_rt_scene_update_tlas_scope_name = "RTScene UpdateTLAS";
-
 std::string BuildDebugLogSiteKey(std::source_location location) {
     std::ostringstream stream;
     stream << location.file_name() << ':' << location.line();
@@ -48,47 +45,13 @@ double FindGpuTime(const ProfileData& profile_data, std::string_view name) {
     return -1.0;
 }
 
-void LogRtSceneProfiling(CommandQueue& gfx_queue) {
-    const auto profile_data = gfx_queue.GetProfilerEntry();
-    if (profile_data.gpu_entries.empty()) {
-        return;
-    }
-
-    const double graphics_exec = FindGpuTime(profile_data, "Graphics Exec");
-    const double build_blas    = FindGpuTime(profile_data, s_rt_scene_build_blas_scope_name);
-    const double build_tlas    = FindGpuTime(profile_data, s_rt_scene_build_tlas_scope_name);
-    const double update_tlas   = FindGpuTime(profile_data, s_rt_scene_update_tlas_scope_name);
-    if (build_blas < 0.0 && build_tlas < 0.0 && update_tlas < 0.0) {
-        return;
-    }
-
-    std::ostringstream stream;
-    stream.setf(std::ios::fixed);
-    stream.precision(3);
-    stream << "[RTSceneProfile] ScenePending GPU(ms)";
-    if (graphics_exec >= 0.0) {
-        stream << " GraphicsExec=" << graphics_exec;
-    }
-    if (build_blas >= 0.0) {
-        stream << " BuildBLAS=" << build_blas;
-    }
-    if (build_tlas >= 0.0) {
-        stream << " BuildTLAS=" << build_tlas;
-    }
-    if (update_tlas >= 0.0) {
-        stream << " UpdateTLAS=" << update_tlas;
-    }
-
-    LOG_DEBUG("{}", stream.str());
-}
-
 } // namespace
 
 // 返回屏幕空间全屏三角形绘制共用的 draw 参数。
 Array<SingleDrawParam> RasterTool::GetFullScreenDrawDatas() {
-    Array<SingleDrawParam> full_screen_draw_datas;
-    full_screen_draw_datas.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
-    return full_screen_draw_datas;
+    Array<SingleDrawParam> draw_data;
+    draw_data.emplace_back(SingleDrawParam{3, 1, 0, 0, 0});
+    return draw_data;
 }
 
 // 返回整个阴影深度阶段使用的 profiling scope 名称。
@@ -123,9 +86,13 @@ std::string_view RasterTool::GetShadowDrawProfileScopeName(uint cascade_index) {
     return s_shadow_draw_scope_names[cascade_index];
 }
 
-void RasterTool::LogDebugEverySeconds(std::string_view str, double seconds, std::source_location location) {
+void RasterTool::LogDebugEverySeconds(
+    std::string_view     message,
+    double               seconds,
+    std::source_location location
+) {
     if (seconds <= 0.0) {
-        LOG_DEBUG("{}", str);
+        LOG_DEBUG("{}", message);
         return;
     }
 
@@ -134,7 +101,7 @@ void RasterTool::LogDebugEverySeconds(std::string_view str, double seconds, std:
     const std::string site_key = BuildDebugLogSiteKey(location);
     auto [timer_it, inserted]  = s_debug_log_timers.try_emplace(site_key, seconds, true);
     if (inserted || timer_it->second.Tick()) {
-        LOG_DEBUG("{}", str);
+        LOG_DEBUG("{}", message);
     }
 }
 
@@ -210,7 +177,6 @@ void RasterTool::ExecuteScenePendingCommands(
 
     gfx_queue.Execute(commands.gfx_queue_cmd_list.Submit().TickProfiling());
     gfx_queue.Sync();
-    // LogRtSceneProfiling(gfx_queue);
 }
 
 } // namespace Moer::Render::Raster

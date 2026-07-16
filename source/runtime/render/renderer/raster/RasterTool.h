@@ -1,3 +1,4 @@
+// Provides shared raster draw data, profiling labels, throttled logging, and scene command submission.
 #pragma once
 
 #include "misc/STL.h"
@@ -32,7 +33,7 @@ public:
     static std::string_view GetShadowDrawProfileScopeName(uint cascade_index);
 
     static void LogDebugEverySeconds(
-        std::string_view      str,
+        std::string_view      message,
         double                seconds,
         std::source_location  location = std::source_location::current()
     );

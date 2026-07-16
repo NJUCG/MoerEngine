@@ -1,17 +1,18 @@
 ﻿#include "BloomPass.h"
 
+// Implements the prefilter, downsample, upsample, and additive-composite bloom stages.
 #include "RasterResource.h"
 #include "RasterTextures.h"
 #include "RasterTool.h"
 
 namespace Moer::Render::Raster {
 BloomPass::BloomPass(RasterContext& context) {
-    RHIRasterizeInfo rast_info    = RHIRasterizeInfo::Preset();
-    EPixelFormat     bloom_format = PF_B10G11R11_UFLOAT_PACK32;
-    EPixelFormat     scene_format = context.textures.lighting_output.tex->GetFormat();
+    const RHIRasterizeInfo rasterize_info = RHIRasterizeInfo::Preset();
+    const EPixelFormat     bloom_format   = PF_B10G11R11_UFLOAT_PACK32;
+    const EPixelFormat     scene_format   = context.textures.lighting_output.tex->GetFormat();
 
     GfxPsoCreateInfo prefilter_info(
-        rast_info, {}, {RHIColorAttachmentInfo::Preset<Moer::Render::Blend::NONE>(bloom_format)}
+        rasterize_info, {}, {RHIColorAttachmentInfo::Preset<Moer::Render::Blend::NONE>(bloom_format)}
     );
     prefilter_pipeline = context.manager.Raster()
                              .Vertex("core/utils/FullScreenQuad.hlsl")
@@ -19,7 +20,7 @@ BloomPass::BloomPass(RasterContext& context) {
                              .Build<BloomPassPrefilterPipeline>(std::move(prefilter_info));
 
     GfxPsoCreateInfo downsample_info(
-        rast_info, {}, {RHIColorAttachmentInfo::Preset<Moer::Render::Blend::NONE>(bloom_format)}
+        rasterize_info, {}, {RHIColorAttachmentInfo::Preset<Moer::Render::Blend::NONE>(bloom_format)}
     );
     downsample_pipeline = context.manager.Raster()
                               .Vertex("core/utils/FullScreenQuad.hlsl")
@@ -27,7 +28,7 @@ BloomPass::BloomPass(RasterContext& context) {
                               .Build<BloomPassDownSamplePipeline>(std::move(downsample_info));
 
     GfxPsoCreateInfo upsample_info(
-        rast_info, {}, {RHIColorAttachmentInfo::Preset<Moer::Render::Blend::NONE>(bloom_format)}
+        rasterize_info, {}, {RHIColorAttachmentInfo::Preset<Moer::Render::Blend::NONE>(bloom_format)}
     );
     upsample_pipeline = context.manager.Raster()
                             .Vertex("core/utils/FullScreenQuad.hlsl")
@@ -35,7 +36,9 @@ BloomPass::BloomPass(RasterContext& context) {
                             .Build<BloomPassUpSamplePipeline>(std::move(upsample_info));
 
     GfxPsoCreateInfo apply_info(
-        rast_info, {}, {RHIColorAttachmentInfo::Preset<Moer::Render::Blend::ADDITIVE_BLEND>(scene_format)}
+        rasterize_info,
+        {},
+        {RHIColorAttachmentInfo::Preset<Moer::Render::Blend::ADDITIVE_BLEND>(scene_format)}
     );
     apply_pipeline = context.manager.Raster()
                          .Vertex("core/utils/FullScreenQuad.hlsl")
@@ -44,19 +47,23 @@ BloomPass::BloomPass(RasterContext& context) {
 }
 
 TextureWithHandle
-BloomPass::Process(RasterContext& context, const RasterConfig& ui_config, TextureWithHandle& input_texture) {
-    if (!ui_config.bloom_enabled) {
+BloomPass::Process(
+    RasterContext&      context,
+    const RasterConfig& raster_config,
+    TextureWithHandle&  input_texture
+) {
+    if (!raster_config.bloom_enabled) {
         return input_texture;
     }
 
-    const uint mip_cnt = context.textures.bloom_downsample_chain.tex->GetNumMips();
+    const uint mip_count = context.textures.bloom_downsample_chain.tex->GetNumMips();
 
     Sampler             linear_sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE};
     BloomPrefilterParam prefilter_param;
     prefilter_param.threshold = 20.0f;
     prefilter_param.knee      = 0.5f;
 
-    //Prefilter Pass
+    // Extract highlights into mip 0 before constructing the lower-resolution pyramid.
     context.cmd_list
         .Gfx(prefilter_pipeline, input_texture.tex->GetView(0, 1), linear_sampler, prefilter_param)
         .Draw(
@@ -71,54 +78,64 @@ BloomPass::Process(RasterContext& context, const RasterConfig& ui_config, Textur
             }
         );
 
-    // Downsample Pass
-    for (uint i = 1; i < mip_cnt; ++i) {
+    // Downsample pass.
+    for (uint mip_index = 1; mip_index < mip_count; ++mip_index) {
         BloomDownsampleParam downsample_param;
 
-        uint2 src_size            = context.textures.bloom_downsample_chain.GetSize(i - 1);
-        downsample_param.inv_size = float2(1.0f / src_size.x, 1.0f / src_size.y);
+        const uint2 source_size =
+            context.textures.bloom_downsample_chain.GetSize(mip_index - 1);
+        downsample_param.inv_size = float2(1.0f / source_size.x, 1.0f / source_size.y);
 
         context.cmd_list
             .Gfx(
                 downsample_pipeline,
-                context.textures.bloom_downsample_chain.tex->GetView(i - 1, 1),
+                context.textures.bloom_downsample_chain.tex->GetView(mip_index - 1, 1),
                 linear_sampler,
                 downsample_param
             )
             .Draw(
-                std::format("Downsample Pass #{}", i),
-                context.textures.bloom_downsample_chain.GetRect2D(i),
+                std::format("Downsample Pass #{}", mip_index),
+                context.textures.bloom_downsample_chain.GetRect2D(mip_index),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment{context.textures.bloom_downsample_chain.tex, AC_LOAD_STORE, float4(0), i}
+                ColorAttachment{
+                    context.textures.bloom_downsample_chain.tex,
+                    AC_LOAD_STORE,
+                    float4(0),
+                    mip_index
+                }
             );
     }
 
-    // Upsample Pass
-    for (int i = (int)mip_cnt - 2; i >= 0; --i) {
+    // Upsample pass. The separate chain avoids sampling from the mip currently being written.
+    for (int mip_index = static_cast<int>(mip_count) - 2; mip_index >= 0; --mip_index) {
         BloomUpsampleParam upsample_param;
 
-        uint2 small_size             = context.textures.bloom_downsample_chain.GetSize(i + 1);
+        const uint2 small_size = context.textures.bloom_downsample_chain.GetSize(mip_index + 1);
         upsample_param.inv_size      = float2(1.0f / small_size.x, 1.0f / small_size.y);
         upsample_param.filter_radius = 1.2f;
 
-        TextureView upsample_src = (i == (int)mip_cnt - 2) ?
-                                       context.textures.bloom_downsample_chain.tex->GetView(i + 1, 1) :
-                                       context.textures.bloom_upsample_chain.tex->GetView(i + 1, 1);
+        const TextureView upsample_source =
+            mip_index == static_cast<int>(mip_count) - 2 ?
+                context.textures.bloom_downsample_chain.tex->GetView(mip_index + 1, 1) :
+                context.textures.bloom_upsample_chain.tex->GetView(mip_index + 1, 1);
 
         context.cmd_list
             .Gfx(
                 upsample_pipeline,
-                upsample_src,
-                context.textures.bloom_downsample_chain.tex->GetView(i, 1),
+                upsample_source,
+                context.textures.bloom_downsample_chain.tex->GetView(mip_index, 1),
                 linear_sampler,
                 upsample_param
             )
             .Draw(
-                std::format("Bloom Upsample Pass #{}", i),
-                context.textures.bloom_upsample_chain.GetRect2D(i),
+                std::format("Bloom Upsample Pass #{}", mip_index),
+                context.textures.bloom_upsample_chain.GetRect2D(mip_index),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
                 ColorAttachment{
-                    context.textures.bloom_upsample_chain.tex, AC_CLEAR_STORE, float4(0), (uint32)i
+                    context.textures.bloom_upsample_chain.tex,
+                    AC_CLEAR_STORE,
+                    float4(0),
+                    static_cast<uint32>(mip_index)
                 }
             );
     }
