@@ -1,5 +1,6 @@
-#include "scripting/ScriptingModule.h"
+// 负责注册嵌入式 moer Python 模块使用的值类型与场景操作 API。
 
+#include "scripting/ScriptingModule.h"
 // 修改这里的 pybind11 绑定时，也要同步维护同目录下的 stubs/moer/__init__.pyi。
 // 这份 stub 主要给 VS Code / Pylance 做静态补全和签名提示，不参与运行时 import。
 
@@ -22,7 +23,7 @@
 #include "scripting/SceneCall.h"
 
 // 这个头文件只提供 entt::entity 的 pybind11 type_caster 特化
-// => 如果别的 .cpp 里也直接进行了entt::entity 相关的 pybind11 绑定或 cast，
+// => 如果别的 .cpp 里也直接进行了 entt::entity 相关的 pybind11 绑定或 cast，
 //    那个翻译单元也必须单独 include 这个头文件！
 #include "scripting/PybindEnttEntityCaster.h" // IWYU pragma: keep
 
@@ -245,7 +246,7 @@ void BindEntityComponentFlags(py::module_& module) {
         .def_readwrite("is_main_light", &Scene::EntityComponentFlags::is_main_light);
 }
 
-void BindImportSceneFromFileResult(py::module_& module) {
+void BindSceneImportResult(py::module_& module) {
     py::class_<Scene::ImportSceneFromFileResult> result_class(module, "SceneImportResult");
     result_class.attr("__doc__") = "Result of synchronously importing a scene file into the current scene.";
     result_class.def(py::init<>())
@@ -369,10 +370,12 @@ void BindCreateProceduralRenderableResult(py::module_& module) {
         });
 }
 
-void BindSceneApi(py::module_& module) {
-    py::class_<MainThreadCommandQueue> scene_api_class(module, "SceneApi");
-    scene_api_class.attr("__doc__") = "Access the current runtime scene. Entity values are Python int "
-                                      "handles and are not stable across scene reloads.";
+namespace {
+
+using SceneApiClass = py::class_<MainThreadCommandQueue>;
+
+// 按职责拆分绑定代码，但调用顺序必须与 Python API 的声明顺序保持一致。
+void BindSceneInspectionApi(SceneApiClass& scene_api_class) {
     scene_api_class
         .def(
             "get_source_file_path",
@@ -535,7 +538,11 @@ void BindSceneApi(py::module_& module) {
             },
             py::arg("entity"),
             "Return the node local transform for a valid node entity handle, or None if invalid."
-        )
+        );
+}
+
+void BindSceneImportApi(SceneApiClass& scene_api_class) {
+    scene_api_class
         .def(
             "import_scene_from_file",
             [](MainThreadCommandQueue& command_queue, const std::string& file_path) {
@@ -545,7 +552,11 @@ void BindSceneApi(py::module_& module) {
             },
             py::arg("file_path"),
             "Synchronously import a scene file into the current scene and return the import result."
-        )
+        );
+}
+
+void BindScenePrimaryEntityQueryApi(SceneApiClass& scene_api_class) {
+    scene_api_class
         .def(
             "get_main_camera_entity",
             [](MainThreadCommandQueue& command_queue) {
@@ -572,7 +583,11 @@ void BindSceneApi(py::module_& module) {
                 });
             },
             "Return the main point light entity handle."
-        )
+        );
+}
+
+void BindSceneCreationApi(SceneApiClass& scene_api_class) {
+    scene_api_class
         .def(
             "create_entity",
             [](MainThreadCommandQueue& command_queue, const std::string& name) {
@@ -612,7 +627,11 @@ void BindSceneApi(py::module_& module) {
             },
             py::arg("create_info"),
             "Create a runtime procedural renderable and return all created entity handles."
-        )
+        );
+}
+
+void BindSceneUpdateApi(SceneApiClass& scene_api_class) {
+    scene_api_class
         .def(
             "set_node_name",
             [](MainThreadCommandQueue& command_queue, entt::entity entity, const std::string& name) {
@@ -688,7 +707,11 @@ void BindSceneApi(py::module_& module) {
             },
             py::arg("child_entity"),
             "Detach an existing node entity from its parent and reattach it to the root node."
-        )
+        );
+}
+
+void BindSceneDestructionApi(SceneApiClass& scene_api_class) {
+    scene_api_class
         .def(
             "destroy_entity",
             [](MainThreadCommandQueue& command_queue, entt::entity entity) {
@@ -731,6 +754,21 @@ void BindSceneApi(py::module_& module) {
         );
 }
 
+} // namespace
+
+void BindSceneApi(py::module_& module) {
+    SceneApiClass scene_api_class(module, "SceneApi");
+    scene_api_class.attr("__doc__") = "Access the current runtime scene. Entity values are Python int "
+                                      "handles and are not stable across scene reloads.";
+
+    BindSceneInspectionApi(scene_api_class);
+    BindSceneImportApi(scene_api_class);
+    BindScenePrimaryEntityQueryApi(scene_api_class);
+    BindSceneCreationApi(scene_api_class);
+    BindSceneUpdateApi(scene_api_class);
+    BindSceneDestructionApi(scene_api_class);
+}
+
 void SetActiveSceneCommandQueue(MainThreadCommandQueue* command_queue) {
     g_active_scene_command_queue.store(command_queue, std::memory_order_release);
 }
@@ -754,7 +792,7 @@ PYBIND11_EMBEDDED_MODULE(moer, module) {
     Moer::scripting::BindNodeLocalTransform(module);
     Moer::scripting::BindNodeSubtreeStats(module);
     Moer::scripting::BindEntityComponentFlags(module);
-    Moer::scripting::BindImportSceneFromFileResult(module);
+    Moer::scripting::BindSceneImportResult(module);
     Moer::scripting::BindPointLightCreateInfo(module);
     Moer::scripting::BindEntityWithNodeCreateInfo(module);
     Moer::scripting::BindMaterialCreateInfo(module);

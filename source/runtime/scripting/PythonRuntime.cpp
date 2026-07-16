@@ -1,3 +1,5 @@
+// 负责嵌入式 Python 解释器的配置、生命周期管理与脚本执行。
+
 #include "scripting/PythonRuntime.h"
 
 #include "log/LogSystem.h"
@@ -180,22 +182,14 @@ PythonRuntime::ExecuteSnippet(const ScriptExecutionRequest& request, const py::d
 }
 
 py::dict PythonRuntime::GetSharedGlobals() const {
-    if (!m_is_initialized) {
-        throw std::runtime_error("PythonRuntime is not initialized.");
-    }
-
-    EnsureOwnerThread();
+    EnsureReadyForAccess();
 
     py::gil_scoped_acquire guard;
     return m_state->globals;
 }
 
 py::dict PythonRuntime::CopySharedGlobals() const {
-    if (!m_is_initialized) {
-        throw std::runtime_error("PythonRuntime is not initialized.");
-    }
-
-    EnsureOwnerThread();
+    EnsureReadyForAccess();
 
     py::gil_scoped_acquire guard;
     return m_state->globals.attr("copy")().cast<py::dict>();
@@ -250,6 +244,14 @@ void PythonRuntime::EnsureOwnerThread() const {
     if (m_owner_thread_id != std::this_thread::get_id()) {
         throw std::runtime_error("PythonRuntime must be used from its owner thread.");
     }
+}
+
+void PythonRuntime::EnsureReadyForAccess() const {
+    if (!m_is_initialized) {
+        throw std::runtime_error("PythonRuntime is not initialized.");
+    }
+
+    EnsureOwnerThread();
 }
 
 } // namespace Moer::scripting

@@ -42,7 +42,7 @@ public:
     }
 
     void cancel() {
-        // TODO: Add ScriptHost-backed cancellation support.
+        // TODO: 接入由 ScriptHost 驱动的取消链路。
     }
 
 private:
