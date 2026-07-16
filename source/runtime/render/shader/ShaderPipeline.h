@@ -1,8 +1,9 @@
 #ifndef MOER_SHADER_PIPELINE_H
 #define MOER_SHADER_PIPELINE_H
+
+// 定义 Shader 参数声明、参数打包以及各类渲染管线的通用基础设施。
 #include "math/Matrix.h"
 #include "misc/STL.h"
-// #include "rhi/RHI.h"
 #include "resources/vertexfactory/VertexAttributes.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -30,12 +31,16 @@ template<typename T>
 using TConstantStruct = T;
 
 template<typename T>
-struct TConstsant {
+struct TConstant {
     using type = T;
     T value;
 };
 
-}; // namespace Moer::Render
+// 兼容旧调用方；新代码使用拼写正确的 TConstant。
+template<typename T>
+using TConstsant [[deprecated("Use TConstant instead")]] = TConstant<T>;
+
+} // namespace Moer::Render
 
 #define BEGIN_SHADER_PARAMS using InnerTArg = ShaderArgs < TDummy,
 
@@ -52,7 +57,7 @@ struct TConstsant {
     StringType(name) using name = ShaderArg<BufferArg<max_num>, GetStringType(name)>
 
 #define DEFINE_SHADER_CONSTANT_STRUCT(type, name) \
-    StringType(name) using name = ShaderArg<TConstsant<type>, GetStringType(name)>
+    StringType(name) using name = ShaderArg<TConstant<type>, GetStringType(name)>
 
 #define DEFINE_SHADER_SAMPLER(name) StringType(name) using name = ShaderArg<SamplerArg, GetStringType(name)>
 
@@ -152,57 +157,17 @@ struct ShaderArgEnum {
     static constexpr uint           array_size = 1;
 };
 
-// struct Arguments {
-//     Arguments() = default;
-//     Arguments(UnorderedMap<uint, TArg> _args) : args(std::move(_args)) {
-//     }
-
-//     // Array<TArg> args;
-//     TArg& operator[](uint _idx) {
-//         return args[_idx];
-//     }
-
-//     const TArg& operator[](uint _idx) const {
-//         return args.at(_idx);
-//     }
-//     uint Size() const {
-//         return args.size();
-//     }
-//     UnorderedMap<uint, TArg> args;
-// };
-
 struct ArrayArguments {
     ArrayArguments() = default;
     ArrayArguments(uint _arg_cnt, uint _const_size, bool _b_use_bdls) :
         args(_arg_cnt),
         constants(_const_size),
         b_use_bindless(_b_use_bdls) {}
-    ArrayArguments(ArrayArguments&& _other) {
-        args           = std::move(_other.args);
-        constants      = std::move(_other.constants);
-        b_use_bindless = _other.b_use_bindless;
-    }
+    ArrayArguments(ArrayArguments&&)                 = default;
+    ArrayArguments(const ArrayArguments&)            = default;
+    ArrayArguments& operator=(ArrayArguments&&)      = default;
+    ArrayArguments& operator=(const ArrayArguments&) = default;
 
-    ArrayArguments(const ArrayArguments& _other) {
-        args           = _other.args;
-        constants      = _other.constants;
-        b_use_bindless = _other.b_use_bindless;
-    }
-    ArrayArguments& operator=(ArrayArguments&& _other) {
-        args           = std::move(_other.args);
-        constants      = std::move(_other.constants);
-        b_use_bindless = _other.b_use_bindless;
-        return *this;
-    }
-
-    ArrayArguments& operator=(const ArrayArguments& _other) {
-        args           = _other.args;
-        constants      = _other.constants;
-        b_use_bindless = _other.b_use_bindless;
-        return *this;
-    }
-
-    // Array<TArg> args;
     TArg& operator[](uint _idx) {
         return args[_idx];
     }
@@ -342,81 +307,71 @@ struct ShaderArgs {
         static const std::size_t value = 1 + Index<T, std::tuple<Types...>>::value;
     };
     template<typename T>
-    struct is_constant_type {
+    struct IsConstantType {
         static constexpr bool value = !std::is_same_v<typename T::type::type, NonConstant>;
     };
 
     static constexpr uint32 GetConstantSize() {
-        //if TArg is a constant, add the size of TArg to the total size, other wise add 0
-        return (0 + ... + (is_constant_type<Args>::value ? sizeof(typename Args::type) : 0)) / sizeof(uint);
+        return (0 + ... + (IsConstantType<Args>::value ? sizeof(typename Args::type) : 0)) / sizeof(uint);
     }
 
     static constexpr bool IsUsingBdls() {
-        //if TArg is a constant, add the size of TArg to the total size, other wise add 0
         return (... || (Args::arg_type == SDA_BindlessArray));
     }
 
-    // constexpr uint32 static GetConstantSize() {
-    //     //if TArg is a constant, add the size of TArg to the total size, other wise add 0
-    //     return (0 + ... + (std::is_same_v<typename Args::type, TConstsant<typename Args::type::type>> ? sizeof(typename Args::type) : 0)) / sizeof(uint);
-    // }
-    using t_texture_array_arg = std::span<
-        TextureView>; // note here assume span with 'dynamic_extent', mostly 'Array<T> => span<T>', not 'T arr[N] => span<T,N>'
-    using t_buffer_array_arg = std::span<BufferView>;
+    // 动态 extent 的 span 用于同时接收 Array 和其他连续资源视图容器。
+    using TTextureArrayArg = std::span<TextureView>;
+    using TBufferArrayArg  = std::span<BufferView>;
 
     template<typename T>
     using RemoveConstRefT = std::remove_const_t<std::remove_reference_t<T>>;
 
     template<typename T, typename TArg>
         requires std::is_same_v<RemoveConstRefT<T>, TextureView> ||
-                 std::is_same_v<RemoveConstRefT<T>, t_texture_array_arg> ||
+                 std::is_same_v<RemoveConstRefT<T>, TTextureArrayArg> ||
                  std::is_same_v<RemoveConstRefT<T>, BufferView> ||
-                 std::is_same_v<RemoveConstRefT<T>, t_buffer_array_arg> ||
+                 std::is_same_v<RemoveConstRefT<T>, TBufferArrayArg> ||
                  std::is_same_v<RemoveConstRefT<T>, Sampler> ||
                  std::is_same_v<RemoveConstRefT<T>, TextureRef> ||
                  std::is_same_v<RemoveConstRefT<T>, BufferRef> ||
-                 std::is_same_v<typename TArg::type, TConstsant<RemoveConstRefT<T>>> ||
+                 std::is_same_v<typename TArg::type, TConstant<RemoveConstRefT<T>>> ||
                  std::is_same_v<RemoveConstRefT<T>, BindlessArrayRef> ||
                  std::is_same_v<RemoveConstRefT<T>, RaytracingTlasRef> ||
                  std::is_same_v<RemoveConstRefT<T>, ArrayArgReference>
     static void SetParam(T&& _t, ArrayArguments& _arg_setter) {
-        using cpp_type       = typename TArg::type;
+        using CppArgType     = typename TArg::type;
         constexpr auto index = Index<TArg, tuple_helper>::value;
-        using Type           = RemoveConstRefT<T>;
-        if constexpr (is_template_of_v<cpp_type, Moer::Render::TextureArg>) {
-            //do texture stuff
-            if constexpr (std::is_same_v<Type, TextureRef>) {
+        using ValueType      = RemoveConstRefT<T>;
+        if constexpr (is_template_of_v<CppArgType, Moer::Render::TextureArg>) {
+            if constexpr (std::is_same_v<ValueType, TextureRef>) {
                 _arg_setter[index] = _t->GetView();
-                //do texture stuff
-            } else if constexpr (std::is_same_v<Type, TextureView>) {
+            } else if constexpr (std::is_same_v<ValueType, TextureView>) {
                 _arg_setter[index] = std::forward<T>(_t);
-            } else if constexpr (std::is_same_v<Type, t_texture_array_arg>) {
+            } else if constexpr (std::is_same_v<ValueType, TTextureArrayArg>) {
                 _arg_setter[index] = TextureViewArray(_t.begin(), _t.end());
             } else {
                 if constexpr (true)
                     assert(0 && "not a buffer type");
             }
-        } else if constexpr (is_template_of_v<cpp_type, BufferArg>) {
-            //do buffer stuff
-            if constexpr (std::is_same_v<Type, BufferRef>) {
+        } else if constexpr (is_template_of_v<CppArgType, BufferArg>) {
+            if constexpr (std::is_same_v<ValueType, BufferRef>) {
                 _arg_setter[index] = _t->GetView();
-            } else if constexpr (std::is_same_v<Type, BufferView>) {
+            } else if constexpr (std::is_same_v<ValueType, BufferView>) {
                 _arg_setter[index] = std::forward<T>(_t);
-            } else if constexpr (std::is_same_v<Type, t_buffer_array_arg>) {
+            } else if constexpr (std::is_same_v<ValueType, TBufferArrayArg>) {
                 _arg_setter[index] = BufferViewArray(_t.begin(), _t.end());
             } else {
                 if constexpr (true)
                     assert(0 && "not a buffer type");
             }
-        } else if constexpr (std::is_same_v<cpp_type, SamplerArg>) {
+        } else if constexpr (std::is_same_v<CppArgType, SamplerArg>) {
             _arg_setter[index] = std::forward<T>(_t);
-        } else if constexpr (std::is_same_v<cpp_type, BindlessArg>) {
+        } else if constexpr (std::is_same_v<CppArgType, BindlessArg>) {
             _arg_setter[index] = std::forward<T>(_t);
 
-        } else if constexpr (std::is_same_v<cpp_type, TLASArg>) {
+        } else if constexpr (std::is_same_v<CppArgType, TLASArg>) {
             _arg_setter[index] = std::forward<T>(_t);
         } else {
-            //constant
             assert(_arg_setter.constants.size() == sizeof(T) / sizeof(uint) && "constant size mismatch");
             std::memcpy(_arg_setter.constants.data(), &_t, sizeof(T));
         }
@@ -426,10 +381,9 @@ struct ShaderArgs {
     static ArrayArguments SetParams(std::index_sequence<Is...>, T&&... _args) {
         ArrayArguments arg_setter(arg_size, GetConstantSize(), IsUsingBdls());
         (..., SetParam<T, std::tuple_element_t<Is, tuple_helper>>((std::forward<T>(_args)), arg_setter));
-        return std::move(arg_setter);
+        return arg_setter;
     }
 
-    // TPipeline& pipeline;
 };
 
 class ShaderPipeline {
@@ -493,7 +447,7 @@ public:
     name(const name& _other)            = delete; \
     name& operator=(const name& _other) = delete;
 
-#define COPY_CONSTRUCTOR(name)                                 \
+#define DEFINE_PIPELINE_CONSTRUCTORS(name)                     \
     name(name&& _other) : ShaderPipeline(std::move(_other)) {} \
     name() : ShaderPipeline() {}
 
@@ -502,7 +456,7 @@ public:
     RasterPipeline(PipelineHandle _handle) :
         ShaderPipeline(_handle),
         RHIResource(RRT_GRAPHIC_PIPELINE_STATE) {}
-    COPY_CONSTRUCTOR(RasterPipeline);
+    DEFINE_PIPELINE_CONSTRUCTORS(RasterPipeline);
 };
 
 class ComputePipeline : public ShaderPipeline, public RHIResource {
@@ -510,7 +464,7 @@ public:
     ComputePipeline(PipelineHandle _handle) :
         ShaderPipeline(_handle),
         RHIResource(RRT_COMPUTE_PIPELINE_STATE) {}
-    COPY_CONSTRUCTOR(ComputePipeline);
+    DEFINE_PIPELINE_CONSTRUCTORS(ComputePipeline);
 };
 
 class RTPipeline : public ShaderPipeline, public RHIResource {
@@ -519,35 +473,36 @@ public:
     RTPipeline(PipelineHandle _handle) :
         ShaderPipeline(_handle),
         RHIResource(RRT_RAY_TRACING_PIPELINE_STATE) {}
-    COPY_CONSTRUCTOR(RTPipeline);
+    DEFINE_PIPELINE_CONSTRUCTORS(RTPipeline);
 };
 
-struct ParamBlockAllcateInfo {
-    //ideally we can allocate param/descriptor block from global descriptor pool(vk) or descriptor heap(dx)
-    //when set params, we can allocate a descriptor set or descriptor buffer offset from the pool and bind it to the pipeline
-    //and the allocation info is stored in this struct, like descriptor buffer offset, descriptor sets key
-    //and when parameter changes, when using descriptor buffer, we can copy the data to the descriptor buffer,
-    //we can maintain a cpu end descriptor buffer and a gpu version descriptor buffer to avoid descriptor buffer update
-    //but question is, how do we know whether to delete the descriptor allocated from the pool
-    //life is short, use bindless maybe a better choice
+struct ParameterBlockAllocationInfo {
+    // 为未来的非 Bindless 参数分配方案保留扩展点，例如 descriptor set 或 descriptor buffer 偏移。
+    // 具体方案必须先明确描述符所有权与释放时机，当前实现暂不在这里引入生命周期逻辑。
 };
+
+using ParamBlockAllcateInfo [[deprecated("Use ParameterBlockAllocationInfo instead")]] =
+    ParameterBlockAllocationInfo;
+
 template<typename TPipeline>
     requires std::is_base_of_v<ShaderPipeline, TPipeline>
-struct ParamterBlock {
+struct ParameterBlock {
     using PipelineType = TPipeline;
     template<typename... TArgs>
     void SetParams(TArgs&&... _args) {
         args       = TPipeline::SetArgs(std::forward<TArgs>(_args)...);
         b_args_set = true;
     }
-    ParamBlockAllcateInfo* alloc_info = nullptr;
-    ArrayArguments         args;
-    bool                   b_args_set = false;
+    ParameterBlockAllocationInfo* allocation_info = nullptr;
+    ArrayArguments                args;
+    bool                          b_args_set = false;
 };
 
+template<typename TPipeline>
+using ParamterBlock [[deprecated("Use ParameterBlock instead")]] = ParameterBlock<TPipeline>;
+
 template<typename T>
-concept is_shader_pipeline = requires(T _t) {
-    // T::SetArgs(std::declval<typename T::tuple_helper>());
+concept is_shader_pipeline = requires {
     T::GetHashArray();
     T::GetHashCodeArray();
 };

@@ -1,3 +1,4 @@
+// 负责调用 DXC 编译 Shader，并从 DXIL/SPIR-V 结果中提取资源绑定信息。
 #include "DirectXShaderCompiler.h"
 #include "config/ConfigManager.h"
 #include "misc/Hash.h"
@@ -34,8 +35,6 @@
 #include "shader/ShaderCommon.h"
 #include "spirv_cross.hpp"
 #include <d3d12shader.h>
-
-// std::function<ShaderCompilerOutput*(const ShaderCompilerInput& input)> DXCompiler::s_compiler_func_table[EShaderPlatform::SP_Num]{};
 
 using Microsoft::WRL::ComPtr;
 using ShaderParametersInfoMap   = Moer::Render::ShaderParametersInfoMap;
@@ -118,7 +117,7 @@ private:
 };
 
 DXCompiler::Impl::Impl() {
-    // Initialize DXC library
+    // Library 提供 include handler，Compiler 与 Utils 分别负责编译和结果处理。
     HRESULT hres = DxcCreateInstance(CLSID_DxcLibrary, IID_PPV_ARGS(&library));
     if (FAILED(hres)) {
         LOG_ERROR("dxcompiler library load fail.");
@@ -132,7 +131,6 @@ DXCompiler::Impl::Impl() {
         return;
     }
 
-    // Initialize DXC utility
     hres = DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils));
     if (FAILED(hres)) {
         LOG_ERROR("Could not init DXC Utiliy");
@@ -147,58 +145,18 @@ DXCompiler::Impl::~Impl() {
     compiler        = nullptr;
 }
 
-// static ComPtr<IDxcCompiler3>      compiler        = nullptr;
-// static ComPtr<IDxcValidator>      validator       = nullptr;
-// static ComPtr<IDxcLibrary>        library         = nullptr;
-// static ComPtr<IDxcUtils>          utils           = nullptr;
-// static ComPtr<IDxcIncludeHandler> include_handler = nullptr;
-
 DXCompiler& DXCompiler::GetInstance() {
     static DXCompiler s_compiler;
     return s_compiler;
 }
 DXCompiler::~DXCompiler() {
-    // utils->Release();
-    // library->Release();
-    // compiler->Release();
-    // delete reflector;
     MoerDelete(impl);
 }
 
 DXCompiler::DXCompiler() {
     impl = MoerNew(Impl)();
-    // // Initialize DXC library
-    // HRESULT hres = DxcCreateInstance(CLSID_DxcLibrary, IID_PPV_ARGS(&library));
-    // if (FAILED(hres)) {
-    //     LOG_ERROR("dxcompiler library load fail.");
-    //     return;
-    // }
-    // library->CreateIncludeHandler(&include_handler);
-
-    // hres = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler));
-    // if (FAILED(hres)) {
-    //     LOG_ERROR("Could not init DXC Compiler");
-    //     return;
-    // }
-
-    // // Initialize DXC utility
-    // hres = DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils));
-    // if (FAILED(hres)) {
-    //     LOG_ERROR("Could not init DXC Utiliy");
-    //     return;
-    // }
-    // utils->AddRef();
-    // library->AddRef();
-    // compiler->AddRef();
-    // include_handler->AddRef();
-
-    // s_compiler_func_table[SP_WIN_D3D_SM6] = std::bind(&DXCompiler::CompileD3D12, this, std::placeholders::_1);
-    // s_compiler_func_table[SP_VULKAN_SM6]  = std::bind(&DXCompiler::CompileVulkan, this, std::placeholders::_1);
-
-    // if (g_rhi->GetType() == ERHIType::Vulkan)
-    //     reflector = new DirectXShaderReflectorVulkan();
 }
-bool LoadCache(long long _last_write_time, const ShaderCompilerInput& input, ShaderCompilerOutput& output);
+
 void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompilerOutput& _output) {
     const auto dxc_header_path =
         Moer::ConfigManager::GetInstance().GetWorkspacePath() / "3rdparty" / "dxc_2026_02_20" / "inc";
@@ -224,16 +182,8 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         arguments.push_back(L"-fvk-auto-shift-bindings");
         arguments.push_back(L"-fspv-preserve-interface");
         arguments.push_back(L"-DVULKAN=1");
-        // arguments.push_back(L"-fspv-flatten-resource-arrays");
-
-        // - new dxc(like https://www.nuget.org/packages/Microsoft.Direct3D.DXC/1.8.2502.8) support ResourceDescriptorHeap for spirv
-        //   and require extra extension/capability for RT.
-        //   however now meet bug https://github.com/microsoft/DirectXShaderCompiler/issues/7181. seems fixed, but not release yet.
-        // - for dx, dxc output dxil by default, but not preserve inactive resource binding. while spirv can.
-        //   now still use dxil for dx due to above bug
-        //arguments.push_back(L"-fspv-extension=SPV_EXT_descriptor_indexing");
-        //arguments.push_back(L"-fspv-extension=SPV_KHR_ray_tracing");
-        //arguments.push_back(L"-fspv-extension=SPV_KHR_ray_query");
+        // 新版 DXC 的 SPIR-V ResourceDescriptorHeap 仍受上游问题 #7181 影响；
+        // 在对应版本稳定前，DX 平台继续输出 DXIL，Vulkan 平台继续使用当前 SPIR-V 参数组合。
     };
 
     auto set_default_args = [add_dx_arg, add_vk_arg, dxc_header_path, dxc_hlsl_header_path](
@@ -246,19 +196,16 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
 
         arguments.push_back(GetPlatform(_type, _platform));
         arguments.push_back(L"-E");
-        // std::wstring entry_point(_entry_point.begin(), _entry_point.end());
         arguments.emplace_back(std::wstring(_entry_point.begin(), _entry_point.end()));
         arguments.push_back(L"-I");
         arguments.push_back(Moer::ConfigManager::GetInstance().GetEngineShaderPath().generic_wstring());
         arguments.push_back(L"-I");
         arguments.push_back(Moer::ConfigManager::GetInstance().GetEngineShaderSharedPath().generic_wstring());
-        // Allow shaders to include vendored DXC standard headers like hlsl/vk/khr/cooperative_matrix.h.
+        // 允许 Shader 引用随仓库提供的 DXC 标准头，例如 cooperative_matrix.h。
         arguments.push_back(L"-I");
         arguments.push_back(dxc_header_path.generic_wstring());
         arguments.push_back(L"-I");
         arguments.push_back(dxc_hlsl_header_path.generic_wstring());
-        // arguments.push_back(L"-Zpr");
-        // arguments.push_back(L"-all-resources-bound");
         if (_platform == SP_WIN_D3D_SM6)
             add_dx_arg(arguments);
         else if (_platform == SP_VULKAN_SM6)
@@ -266,8 +213,6 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
     };
     auto add_debug_arg = [](Moer::Array<std::wstring>& arguments) {
         arguments.push_back(DXC_ARG_ALL_RESOURCES_BOUND);
-        //arguments.push_back(DXC_ARG_OPTIMIZATION_LEVEL0);
-        //  arguments.push_back(DXC_ARG_SKIP_OPTIMIZATIONS);
         arguments.push_back(DXC_ARG_OPTIMIZATION_LEVEL3);
         arguments.push_back(DXC_ARG_DEBUG_NAME_FOR_BINARY);
     };
@@ -309,14 +254,11 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
             (root_path / _input.relative_source_file_path).string(),
             e.what()
         );
-        throw; // 继续抛异常，这里解决不了
+        // 此处没有足够上下文恢复，交由上层统一决定是否终止 Shader 编译流程。
+        throw;
     }
 
     auto last_write_time = std::filesystem::last_write_time(file_path);
-
-    // if (LoadCache(last_write_time.time_since_epoch().count(), _input, _output)) {
-    //     return;
-    // }
 
     Moer::Array<std::wstring> arguments = {file_path.generic_wstring().c_str()};
 
@@ -343,7 +285,7 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         ComPtr<IDxcResult> result{nullptr};
 
         ComPtr<IDxcBlobEncoding> source_blob;
-        //replace in async io service later on
+        // 编译接口要求完整源码缓冲区，因此这里先同步读取；异步化应由上层批处理编译负责。
         auto file_data = read_data_from_file(file_path);
         utils->CreateBlob(file_data.data(), file_data.size(), CP_UTF8, &source_blob);
         DxcBuffer buffer{
@@ -374,7 +316,7 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
                 DxcShaderHash* shader_hash = (DxcShaderHash*)p_hash->GetBufferPointer();
                 memcpy(result_hash, shader_hash->HashDigest, sizeof(result_hash));
             } else {
-                //fallback
+                // 某些 DXC 版本不返回 HASH 输出，此时对二进制两半分别计算稳定哈希。
                 IDxcBlob* code;
                 result->GetResult(&code);
                 const uint8_t*   data = (uint8_t*)code->GetBufferPointer();
@@ -404,11 +346,11 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         if (_input.target_info.shader_platform == SP_VULKAN_SM6) {
             ReflectSPIRV(result, _output.parameter_map);
         } else {
-            //dx12, reflect through dxil
+            // D3D12 使用 DXIL 反射，Vulkan 使用 SPIR-V 反射。
             ReflectDXIL(result, _input, _output.parameter_map);
         }
 
-        auto fill_succuss_data =
+        auto fill_success_data =
             [&_output, &last_write_time, &file_path, &result, &file_data, &_input, &result_hash,
              tracking_handler]() {
                 IDxcBlob* code;
@@ -420,7 +362,6 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
 
                 _output.b_succeeded      = true;
                 _output.shader_name_hash = _input.shader_name_hash;
-                // _output.compiled_hash.FromData(data, size);
                 _output.compiled_hash1              = result_hash[0];
                 _output.compiled_hash2              = result_hash[1];
                 _output.mutation_id                 = _input.mutation_id;
@@ -440,7 +381,7 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
                 }
             };
 
-        fill_succuss_data();
+        fill_success_data();
         tracking_handler->Release();
     }
 }
@@ -527,7 +468,6 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
 
     {
         std::span<Moer::uint> spirv_code_span((Moer::uint*)data, size / sizeof(Moer::uint));
-        //spirv-cross test
         spirv_cross::Compiler        comp(spirv_code_span.data(), spirv_code_span.size());
         spirv_cross::ShaderResources resources = comp.get_shader_resources();
 
@@ -606,9 +546,6 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
                 target->resource_type = _srt;
                 target->stage_bits    = uint(ToPipelineStageFlag(comp.get_execution_model()));
                 target->custom_flag.active |= is_active;
-                // if (is_active) {
-                //     LOG_INFO("active bdls name : {}", name);
-                // }
             };
 
         auto handle_res =
@@ -652,10 +589,8 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
         for (auto& resource : resources.separate_images) {
             auto type = comp.get_type(resource.base_type_id);
             if (type.image.dim == spv::DimBuffer) {
-                // LOG_INFO("Buffer name : {} set : {} binding : {}", name, set, binding);
                 handle_res(resource, VDT_UNIFORM_TEXEL_BUFFER, EShaderResourceType::SRT_SRV);
             } else {
-                // LOG_INFO("Texture name : {} set : {} binding : {}", name, set, binding);
                 handle_all_res(resource, VDT_SAMPLED_IMAGE, EShaderResourceType::SRT_SRV);
             }
         }
@@ -666,8 +601,6 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
 
         for (auto& resource : resources.storage_buffers) {
             spirv_cross::Bitset buffer_flags = comp.get_buffer_block_flags(resource.id);
-            // GET_RESOURCE_DEFAULT_INFOS(resource);
-            // LOG_INFO("storage buffer name : {} set : {} binding : {}", name, set, binding);
             handle_all_res(
                 resource,
                 VDT_STORAGE_BUFFER,
@@ -698,7 +631,6 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
             param.spirv.resources.data  = constant;
         }
 
-        //accel
         for (auto& resource : resources.acceleration_structures) {
             handle_all_res(resource, VDT_ACCELERATION_STRUCTURE, SRT_SRV);
         }
@@ -726,7 +658,7 @@ void DXCompiler::Impl::ReflectDXIL(
 ) {
     using Moer::uint;
 
-    // Get shader reflection data.
+    // DXC 将反射数据作为独立输出返回，不能直接复用编译后的 Shader Blob。
     ComPtr<IDxcBlob> reflectionBlob{};
     DX_CHECK_HRESULT(result->GetOutput(DXC_OUT_REFLECTION, IID_PPV_ARGS(&reflectionBlob), nullptr));
 
@@ -741,11 +673,8 @@ void DXCompiler::Impl::ReflectDXIL(
     D3D12_SHADER_DESC shaderDesc{};
     shaderReflection->GetDesc(&shaderDesc);
 
-    // todo InputParameters for vs, inputlayout ?
-
     Moer::UnorderedMap<std::string, ReflectParamInfo> reflect_map;
 
-    constexpr std::string_view bdls_suffix       = "_114514_bdls";
     constexpr std::string_view bdls_array_suffix = "_array_114514_bdls";
     auto                       is_bdls_array     = [&](const std::string& _name) {
         return _name.ends_with(bdls_array_suffix);
@@ -757,22 +686,16 @@ void DXCompiler::Impl::ReflectDXIL(
 
         std::string name = shaderInputBindDesc.Name;
         if (is_bdls_array(name)) {
-            name = ReflectParamInfo::bdls_name; // our internal appointment
+            name = ReflectParamInfo::bdls_name; // Bindless 数组统一映射到内部保留名称。
         }
         auto& param_info = reflect_map[name].dxil;
         param_info.slot  = shaderInputBindDesc.BindPoint;
         param_info.space = shaderInputBindDesc.Space;
         param_info.count = shaderInputBindDesc.BindCount;
 
-        //if (param_info.count == 0) {// Texture2D<float4> xxx[]; -> count=0
-        //    if (!std::string(shaderInputBindDesc.Name).ends_with(bdls_suffix)) {
-        //        LOG_ERROR("bindless shader resource '{}' should end with '_114514_bdls' in '{}'", shaderInputBindDesc.Name, _input.shader_name);
-        //    }
-        //}
-
         switch (shaderInputBindDesc.Type) {
             case D3D_SIT_CBUFFER: {
-                // now suppose to be constant buffer, maybe change to root constant later.
+                // 当前统一按 ConstantBuffer 反射；如需 RootConstant，应在参数模型层单独设计。
                 param_info.type = uint(ED3D12ShaderVariableType::ConstantBuffer);
                 auto* cb        = shaderReflection->GetConstantBufferByName(shaderInputBindDesc.Name);
                 assert(cb);
@@ -801,11 +724,9 @@ void DXCompiler::Impl::ReflectDXIL(
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE2DMS:
                         param_info.type = uint(ED3D12ShaderVariableType::Texture2DMS);
-                        //num_sample = shaderInputBindDesc.NumSamples;
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE2DMSARRAY:
                         param_info.type = uint(ED3D12ShaderVariableType::Texture2DMSArray);
-                        //num_sample = shaderInputBindDesc.NumSamples;
                         break;
                     case D3D_SRV_DIMENSION_TEXTURE3D:
                         param_info.type = uint(ED3D12ShaderVariableType::Texture3D);
@@ -831,7 +752,7 @@ void DXCompiler::Impl::ReflectDXIL(
                 param_info.type = uint(ED3D12ShaderVariableType::Sampler);
                 break;
             case D3D_SIT_UAV_RWTYPED: {
-                // todo? Shader Model 6.7 introduces writable multi-sampled texture resource. https://microsoft.github.io/DirectX-Specs/d3d/HLSL_SM_6_7_Advanced_Texture_Ops.html#writable-msaa-textures
+                // Shader Model 6.7 才引入可写多重采样纹理；当前枚举仅覆盖现有编译目标使用的类型。
                 const auto dim = shaderInputBindDesc.Dimension;
                 switch (dim) {
                     case D3D_SRV_DIMENSION_BUFFER:
