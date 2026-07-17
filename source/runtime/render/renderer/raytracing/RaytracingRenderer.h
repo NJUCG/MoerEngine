@@ -32,7 +32,14 @@ public:
 
     RaytracingFramePacket   PrepareFrame(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks);
     RaytracingFrameFeedback RenderFrame(RaytracingFramePacket frame_packet);
+    // Retained for source/ABI compatibility with tools that apply feedback
+    // without editor lifecycle hooks.
     void ApplyFrameFeedback(RaytracingFrameFeedback feedback, RaytracingConfig& target_config);
+    void ApplyFrameFeedback(
+        RaytracingFrameFeedback feedback,
+        RaytracingConfig&       target_config,
+        const EngineHooks&      hooks
+    );
     void Shutdown(const EngineHooks& hooks);
 
     bool RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks);

@@ -5,6 +5,7 @@
 #include "misc/STL.h"
 
 #include <functional>
+#include <string_view>
 
 namespace Moer {
 
@@ -14,6 +15,12 @@ class Scene;
 
 class Editor {
 public:
+    struct StartupHooks {
+        bool main_window_visible = true;
+        std::function<void(std::string_view title, std::string_view detail)> on_progress;
+        std::function<void()> on_first_main_present;
+    };
+
     struct ExtraHooks {
         std::function<void(Scene&)> on_tick_test;
     };
@@ -22,16 +29,20 @@ public:
     virtual ~Editor();
 
     void Init(int argc, const char** argv);
+    void Init(int argc, const char** argv, StartupHooks startup_hooks);
     void Run();
     void Run(const ExtraHooks& extra_hooks);
-    void ShutDown();
+    void ShutDown() noexcept;
 
     Engine&       GetEngine();
     const Engine& GetEngine() const;
 
 private:
+    void ReportStartupProgress(std::string_view title, std::string_view detail) const noexcept;
+
     UniquePtr<Engine>   m_engine;
     UniquePtr<EditorUI> m_editor_ui;
+    StartupHooks        m_startup_hooks;
 };
 
 } // namespace Moer

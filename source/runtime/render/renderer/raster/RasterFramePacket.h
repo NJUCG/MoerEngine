@@ -31,6 +31,7 @@ static_assert(!std::is_copy_constructible_v<RasterFramePacket>);
 
 struct RasterFrameFeedback {
     uint64_t                    frame_id = 0;
+    PresentReceiptRef           main_present_receipt{};
     RasterConfig::CullingStats  culling_stats{};
     CooperativeOpsStatus        cooperative_ops_status{};
     Array<std::string>          displayable_frame_buffer_names;

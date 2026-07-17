@@ -61,6 +61,72 @@ Renderer::Renderer(uint2 initial_resolution, const SharedPtr<EditorConfig> confi
 
 Renderer::~Renderer() = default;
 
+PresentReceiptRef Renderer::CreateMainPresentReceipt(bool scene_content_ready) {
+    if (first_main_present_confirmed.load(std::memory_order_acquire)) {
+        return {};
+    }
+
+    constexpr auto scene_ready_grace_period = std::chrono::seconds(3);
+    const auto     now                      = std::chrono::steady_clock::now();
+    if (!scene_content_ready) {
+        if (!first_present_candidate_started_at.has_value()) {
+            first_present_candidate_started_at = now;
+            return {};
+        }
+        if (now - *first_present_candidate_started_at < scene_ready_grace_period) {
+            return {};
+        }
+    }
+
+    if (!first_present_receipt_logged) {
+        first_present_receipt_logged = true;
+        if (scene_content_ready) {
+            LOG_INFO(
+                "[Startup][Renderer] First-present receipt armed: scene_content_ready=true."
+            );
+        } else {
+            LOG_WARNING(
+                "[Startup][Renderer] Scene content was not ready within 3 seconds of the first "
+                "drawable frame; arming a fallback Present receipt so the editor remains usable."
+            );
+        }
+    }
+    return MakeShared<PresentReceipt>();
+}
+
+void Renderer::ApplyMainPresentReceipt(const PresentReceiptRef& receipt, const EngineHooks& hooks) {
+    assert(IsCurrentlyGameThread());
+    if (!receipt || first_main_present_confirmed.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    const PresentReceiptResult result = receipt->WaitForSubmission();
+    if (!result.resolved) {
+        LOG_WARNING(
+            "[Startup][Renderer] Timed out after 10 seconds while waiting for the main-window "
+            "Present receipt; keeping the Splash responsive and retrying on a later frame."
+        );
+        return;
+    }
+    if (result.recreate_swapchain) {
+        main_swapchain_recreate_requested.store(true, std::memory_order_release);
+        LOG_INFO(
+            "[Startup][Renderer] Main swapchain requested recreation before the startup handoff."
+        );
+    }
+    if (!result.submitted) {
+        return;
+    }
+
+    bool expected = false;
+    if (first_main_present_confirmed.compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel, std::memory_order_acquire
+        ) &&
+        hooks.on_first_main_present) {
+        hooks.on_first_main_present();
+    }
+}
+
 void Renderer::ReleaseResources() {
     if (resources_released) {
         return;
@@ -105,7 +171,18 @@ void Renderer::PrepareRenderFrame(const WindowFrameState& window_frame) {
         timeline->Wait(time - max_frame_in_flight);
     }
 
-    if (window_frame.state != EWindowState::SizeChanged) {
+    const bool recreate_requested =
+        main_swapchain_recreate_requested.exchange(false, std::memory_order_acq_rel);
+    if (window_frame.state == EWindowState::Hiding) {
+        if (recreate_requested) {
+            // A zero-extent swapchain cannot be recreated. Preserve the WSI
+            // recovery request until the window has a drawable extent again.
+            main_swapchain_recreate_requested.store(true, std::memory_order_release);
+        }
+        return;
+    }
+
+    if (window_frame.state != EWindowState::SizeChanged && !recreate_requested) {
         return;
     }
 

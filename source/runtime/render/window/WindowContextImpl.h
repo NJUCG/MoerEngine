@@ -22,6 +22,7 @@ public:
     virtual void SetTitle(WindowHandle*, const char* _new_title)                     = 0;
     virtual void RequestClose(WindowHandle*)                                          = 0;
     virtual bool ShouldClose(WindowHandle*) const                                    = 0;
+    virtual void ShowMainWindow()                                                    = 0;
 
     virtual void* GetNativeWindow(WindowHandle*) const = 0;
 

@@ -24,6 +24,7 @@ public:
     virtual void  SetTitle(WindowHandle*, const char* _new_title) override;
     virtual void  RequestClose(WindowHandle*) override;
     virtual bool  ShouldClose(WindowHandle*) const override;
+    virtual void  ShowMainWindow() override;
     virtual void* GetNativeWindow(WindowHandle*) const override;
 
 private:
@@ -52,6 +53,10 @@ private:
 private:
     void InitVulkan();
     void InitD3D12();
+
+    bool m_deferred_fullscreen        = false;
+    int  m_deferred_fullscreen_width  = 0;
+    int  m_deferred_fullscreen_height = 0;
 };
 } // namespace Moer
 #endif

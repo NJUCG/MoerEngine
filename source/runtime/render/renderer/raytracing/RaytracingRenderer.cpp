@@ -722,7 +722,10 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             );
         }
         if (output_view.extent.x == swapchain->size.x && output_view.extent.y == swapchain->size.y) {
-            gfx_queue.Present(swapchain, state.output);
+            feedback.main_present_receipt = CreateMainPresentReceipt(
+                frame_packet.scene_updates.scene_ready && frame_packet.runtime_assets_ready
+            );
+            gfx_queue.Present(swapchain, state.output, feedback.main_present_receipt);
         } else {
             LOG_WARNING(
                 "Skipping stale raytracing main-window present: source={}x{}, swapchain={}x{}.",
@@ -747,7 +750,7 @@ void RaytracingRenderer::ApplyFrameFeedback(
     RaytracingFrameFeedback feedback,
     RaytracingConfig&       target_config
 ) {
-    assert(!IsRenderThreadInitialized() || IsCurrentlyGameThread());
+    assert(IsCurrentlyGameThread());
     if (feedback.has_grid_cell_size) {
         target_config.grid_config.cell_size = feedback.grid_cell_size;
     }
@@ -761,9 +764,19 @@ void RaytracingRenderer::ApplyFrameFeedback(
     debug_ui_material_texture_names = std::move(feedback.material_texture_names);
 }
 
+void RaytracingRenderer::ApplyFrameFeedback(
+    RaytracingFrameFeedback feedback,
+    RaytracingConfig&       target_config,
+    const EngineHooks&      hooks
+) {
+    assert(IsCurrentlyGameThread());
+    ApplyMainPresentReceipt(feedback.main_present_receipt, hooks);
+    ApplyFrameFeedback(std::move(feedback), target_config);
+}
+
 bool RaytracingRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
     ApplyFrameFeedback(
-        RenderFrame(PrepareFrame(editor_config, hooks)), editor_config->raytracing_config
+        RenderFrame(PrepareFrame(editor_config, hooks)), editor_config->raytracing_config, hooks
     );
     return !hooks.should_reload || !hooks.should_reload();
 }

@@ -250,6 +250,7 @@ public:
         SwapchainRef                          swapchain;
         TextureRef                            source_texture;
         TextureView                           source_view;
+        PresentReceiptRef                     receipt;
         uint64                                timeline;
         uint64                                serial;
         std::chrono::steady_clock::time_point enqueued_at;
@@ -260,6 +261,7 @@ public:
             SwapchainRef&&                       _swapchain,
             TextureRef&&                         _source_texture,
             TextureView                          _source_view,
+            PresentReceiptRef                    _receipt,
             uint64                               _timeline,
             uint64                               _serial,
             std::chrono::steady_clock::time_point _enqueued_at,
@@ -268,6 +270,7 @@ public:
             swapchain(std::move(_swapchain)),
             source_texture(std::move(_source_texture)),
             source_view(_source_view),
+            receipt(std::move(_receipt)),
             timeline(_timeline),
             serial(_serial),
             enqueued_at(_enqueued_at),
@@ -285,7 +288,11 @@ public:
     ~VkCommandQueue();
     WaitEvent   Execute(CmdSubmit&& _submit) override;
     void        Wait(WaitEvent _event) override;
-    void        Present(SwapchainRef _viewport, TextureView _view) override;
+    void Present(
+        SwapchainRef      _viewport,
+        TextureView       _view,
+        PresentReceiptRef _receipt = {}
+    ) override;
     void        Sync() override;
     ProfileData GetProfilerEntry() override;
 
@@ -406,6 +413,7 @@ private:
         SwapchainRef&& _swapchain,
         TextureRef&&   _source_texture,
         TextureView    _source_view,
+        PresentReceiptRef _receipt,
         uint64         _timeline,
         uint64         _serial
     );

@@ -30,6 +30,12 @@ target_link_libraries(${editor_library_target}
     PRIVATE nfd
 )
 
+if(WIN32)
+    # StartupSplash is a renderer-independent native Win32/GDI window.
+    target_link_libraries(${editor_library_target} PRIVATE user32 gdi32)
+    target_compile_definitions(${editor_library_target} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+endif()
+
 target_include_directories(
   ${editor_library_target}
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>

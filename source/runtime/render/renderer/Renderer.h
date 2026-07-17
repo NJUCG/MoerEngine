@@ -13,6 +13,9 @@
 #include "common/UIRenderer.h"
 #include "common/UiCombinePass.h"
 
+#include <atomic>
+#include <chrono>
+#include <optional>
 #include <string_view>
 
 namespace Moer::Render {
@@ -44,6 +47,13 @@ struct EngineHooks {
     std::function<void(std::string)> on_unregister_ui_func;
 
     std::function<void()> on_show_config_sub_ui;
+
+    // Reports coarse startup stages without coupling Runtime to an editor UI.
+    std::function<void(std::string_view title, std::string_view detail)> on_startup_progress;
+
+    // Invoked on the Game Thread after the first submitted main-swapchain Present.
+    // Engine gates this hook for its full lifetime, including renderer reloads.
+    std::function<void()> on_first_main_present;
 
     // Raster
     std::function<void(const Array<std::string>&)> on_raster_register_frame_buffer_names;
@@ -88,6 +98,8 @@ public:
 
 protected:
     void               PrepareRenderFrame(const WindowFrameState& window_frame);
+    PresentReceiptRef  CreateMainPresentReceipt(bool scene_content_ready);
+    void ApplyMainPresentReceipt(const PresentReceiptRef& receipt, const EngineHooks& hooks);
     [[nodiscard]] bool IsFramePrepareProfilingEnabled() const {
         return frame_prepare_profile_state != nullptr;
     }
@@ -121,6 +133,10 @@ protected:
     uint64   time;
     bool     first_load;
     bool     resources_released = false;
+    mutable std::atomic<bool> first_main_present_confirmed{false};
+    std::atomic<bool> main_swapchain_recreate_requested{false};
+    std::optional<std::chrono::steady_clock::time_point> first_present_candidate_started_at;
+    bool first_present_receipt_logged = false;
     uint     max_frame_in_flight;
 
     UniquePtr<FramePrepareProfileState> frame_prepare_profile_state;

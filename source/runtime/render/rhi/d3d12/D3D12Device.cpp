@@ -589,7 +589,13 @@ CommandQueue& D3D12Device::GetCommandQueue(EQueueType _type) {
         virtual WaitEvent Execute(CmdSubmit&& _submit) {
             return {};
         };
-        virtual void        Present(SwapchainRef _swapchain, TextureView _target) {};
+        virtual void Present(
+            SwapchainRef _swapchain, TextureView _target, PresentReceiptRef _receipt = {}
+        ) {
+            if (_receipt) {
+                _receipt->Resolve(false);
+            }
+        };
         virtual void        Sync() {};
         virtual ProfileData GetProfilerEntry() {
             return {};
@@ -1569,7 +1575,14 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
     return WaitEvent(uint64(&queue_fence), next_fence_value);
 }
 
-void D3D12GraphicsCommandQueue::Present(SwapchainRef _swapchain, TextureView _target) {
+void D3D12GraphicsCommandQueue::Present(
+    SwapchainRef      _swapchain,
+    TextureView       _target,
+    PresentReceiptRef _receipt
+) {
+    if (_receipt) {
+        _receipt->Resolve(false);
+    }
     FATAL("not implemented");
 }
 

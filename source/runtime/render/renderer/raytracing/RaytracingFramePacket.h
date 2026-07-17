@@ -37,6 +37,7 @@ struct RaytracingFramePacket {
 
 struct RaytracingFrameFeedback {
     uint64 frame_id = 0;
+    PresentReceiptRef main_present_receipt{};
 
     bool  has_grid_cell_size = false;
     float grid_cell_size     = 1.0f;
