@@ -192,11 +192,13 @@ SceneUpdateBatch Scene::PrepareUpdateBatch(bool is_run_test_case, bool capture_g
         return batch;
     }
 
+    bool full_gpu_scene_rebuild = false;
     if (HasPendingGpuSceneUpdate()) {
         batch.initial_gpu_update = m_cpu_scene->BuildGpuSceneUpdate(
             true, true, true, true, true, true
         );
         ConsumePendingGpuSceneUpdate();
+        full_gpu_scene_rebuild = true;
     }
 
     batch.tick_state = Tick(is_run_test_case);
@@ -205,6 +207,7 @@ SceneUpdateBatch Scene::PrepareUpdateBatch(bool is_run_test_case, bool capture_g
             true, true, true, true, true, true
         );
         ConsumePendingGpuSceneUpdate();
+        full_gpu_scene_rebuild = true;
     } else if (batch.tick_state) {
         const bool update_lights = batch.tick_state.updated_light || batch.tick_state.created_light ||
                                    batch.tick_state.destroyed_light;
@@ -239,7 +242,7 @@ SceneUpdateBatch Scene::PrepareUpdateBatch(bool is_run_test_case, bool capture_g
         batch.main_point_light = registry.get<const ecs::CLightPoint>(point_entity);
     }
 
-    const bool geometry_changed = batch.tick_state.updated_transform ||
+    const bool geometry_changed = full_gpu_scene_rebuild || batch.tick_state.updated_transform ||
                                   batch.tick_state.created_transform || batch.tick_state.rebuilt_mesh ||
                                   batch.tick_state.rebuilt_rt_blas;
     if (capture_geometry_snapshot || geometry_changed) {

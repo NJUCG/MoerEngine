@@ -85,6 +85,9 @@ public:
             float4   scale_data{};
             float3   snapped_light_space_center = float3(0.f, 0.f, 0.f);
             float    world_units_per_texel      = 0.0f;
+            float3   light_direction            = float3(0.f, 0.f, 0.f);
+            float    absolute_light_z_min       = 0.0f;
+            float    absolute_light_z_max       = 0.0f;
             uint64_t last_update_frame          = 0; // TODO: 后续接入最大陈旧帧数刷新
         };
 
