@@ -2,6 +2,7 @@
 #include "GeometryPass.h"
 #include "RasterConfig.h"
 #include "math/Function.h"
+#include "misc/BoundingBox.h"
 #include "shader/ShaderPipeline.h"
 
 #include <optional>
@@ -45,6 +46,8 @@ public:
     void RenderPointShadows(RasterContext& context, const RasterConfig& config, const Camera& camera);
 
 private:
+    bool RefreshShadowCasterBounds(RasterContext& context);
+
     void RenderShadow(
         RasterContext&      context,
         const RasterConfig& config,
@@ -59,5 +62,9 @@ private:
     uint                    enabled_cascade_layers;
     ShadowDepthPassPipeline m_pso;
     CullingPass             m_culling_pass;
+    Array<Box3D>            m_shadow_caster_bounds;
+    uint64_t                m_shadow_caster_bounds_generation = 0u;
+    bool                    m_shadow_caster_bounds_valid      = false;
+    bool                    m_log_cascade_bounds_next_render  = false;
 };
 } // namespace Moer::Render::Raster

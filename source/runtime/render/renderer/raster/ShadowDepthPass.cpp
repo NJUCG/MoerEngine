@@ -8,6 +8,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "scene/LogicalComponents.h"
+#include "scene/Scene.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderMutation.h"
@@ -30,6 +31,13 @@ struct CSMCascadeCandidate {
     float4   scale_data{};
     float3   snapped_light_space_center = float3(0.f, 0.f, 0.f);
     float    world_units_per_texel      = 0.0f;
+    float3   light_direction            = float3(0.f, 0.f, 0.f);
+    float    absolute_light_z_min       = 0.0f;
+    float    absolute_light_z_max       = 0.0f;
+    float    receiver_z_min             = 0.0f;
+    float    receiver_z_max             = 0.0f;
+    uint     intersecting_caster_count  = 0u;
+    bool     used_legacy_z_fallback     = false;
 };
 
 struct CSMCascadeSphere {
@@ -165,7 +173,29 @@ void store_shadow_cache_entry(
     shadow_cache_entry.scale_data                 = candidate.scale_data;
     shadow_cache_entry.snapped_light_space_center = candidate.snapped_light_space_center;
     shadow_cache_entry.world_units_per_texel      = candidate.world_units_per_texel;
+    shadow_cache_entry.light_direction            = candidate.light_direction;
+    shadow_cache_entry.absolute_light_z_min       = candidate.absolute_light_z_min;
+    shadow_cache_entry.absolute_light_z_max       = candidate.absolute_light_z_max;
     shadow_cache_entry.last_update_frame          = frame_index;
+}
+
+bool is_shadow_cache_projection_compatible(
+    const CSMCascadeCandidate& candidate,
+    const ShadowCacheEntry&    shadow_cache_entry
+) {
+    const float direction_delta = Lengthf(candidate.light_direction - shadow_cache_entry.light_direction);
+    if (direction_delta > 1e-5f) {
+        return false;
+    }
+
+    const float width_epsilon = Max(candidate.world_units_per_texel * 0.01f, 1e-5f);
+    if (std::abs(candidate.scale_data.x - shadow_cache_entry.scale_data.x) > width_epsilon) {
+        return false;
+    }
+
+    const float z_epsilon = Max(candidate.world_units_per_texel * 0.1f, 1e-4f);
+    return candidate.absolute_light_z_min >= shadow_cache_entry.absolute_light_z_min - z_epsilon &&
+           candidate.absolute_light_z_max <= shadow_cache_entry.absolute_light_z_max + z_epsilon;
 }
 
 float get_shadow_cache_move_in_texels(
@@ -197,6 +227,36 @@ CSMCascadeSphere build_cascade_bounding_sphere(const StaticArray<float3, 8>& fru
         sphere.radius = Max(sphere.radius, Lengthf(corner - sphere.center));
     }
     return sphere;
+}
+
+bool is_finite(const float3& value) {
+    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+Box3D transform_bounds_to_snapped_light_space(
+    const Box3D&    world_bounds,
+    const float3x3& world_to_light_view_rotate_only,
+    const float3&   snapped_light_space_center
+) {
+    if (!world_bounds.IsValid() || !is_finite(world_bounds.min) || !is_finite(world_bounds.max)) {
+        return {};
+    }
+
+    const float3 world_center = world_bounds.GetCenter();
+    const float3 world_half   = world_bounds.GetExtent() * 0.5f;
+    const float3 light_center = world_to_light_view_rotate_only * world_center - snapped_light_space_center;
+    const float3 light_half   = float3(
+        std::abs(world_to_light_view_rotate_only[0][0]) * world_half.x +
+            std::abs(world_to_light_view_rotate_only[0][1]) * world_half.y +
+            std::abs(world_to_light_view_rotate_only[0][2]) * world_half.z,
+        std::abs(world_to_light_view_rotate_only[1][0]) * world_half.x +
+            std::abs(world_to_light_view_rotate_only[1][1]) * world_half.y +
+            std::abs(world_to_light_view_rotate_only[1][2]) * world_half.z,
+        std::abs(world_to_light_view_rotate_only[2][0]) * world_half.x +
+            std::abs(world_to_light_view_rotate_only[2][1]) * world_half.y +
+            std::abs(world_to_light_view_rotate_only[2][2]) * world_half.z
+    );
+    return Box3D(light_center - light_half, light_center + light_half);
 }
 
 void tick_and_log_shadow_cache(
@@ -254,11 +314,14 @@ CSMCascadeCandidate build_csm_cascade_candidate(
     const Camera&       camera,
     const RasterConfig& ui_config,
     const float         frustum_near_ratio,
-    const float         frustum_far_ratio
+    const float         frustum_far_ratio,
+    const Array<Box3D>& shadow_caster_bounds,
+    const bool          shadow_caster_bounds_valid
 ) {
     CSMCascadeCandidate candidate{};
 
     const float3 normalized_light_dir = Normalizef(light_direction);
+    candidate.light_direction         = normalized_light_dir;
     const float3 light_world_up       = get_stable_light_up(normalized_light_dir);
     const float3 light_right          = Normalizef(Cross(normalized_light_dir, light_world_up));
     const float3 light_up             = Normalizef(Cross(light_right, normalized_light_dir));
@@ -342,19 +405,56 @@ CSMCascadeCandidate build_csm_cascade_candidate(
     float aabb_min_z_in_light_space = min.z + light_z_offset;
     float aabb_max_z_in_light_space = max.z + light_z_offset;
 
-    // 突发奇想的一个trick，用于修复以下问题：
-    //   LightView2LightClip矩阵，会剔除摄像机视锥后方的一些Mesh。但是这些Mesh也需要产生阴影！
-    // 这个Trick，可以便捷地解决这个问题。如果这个问题还会出现的话，只需要把下面的这个1.0f常数调大就可以了
-    // 带来的缺点，就是z轴精度会降低（毕竟值域变大了）；但是我们有Inverse Depth，所以这个并不重要！
-    float z_delta = (max.z - min.z) * 1.0f;
+    candidate.receiver_z_min = aabb_min_z_in_light_space;
+    candidate.receiver_z_max = aabb_max_z_in_light_space;
+
+    const float half_ortho_width = stable_ortho_width * 0.5f;
+    const float xy_guard         = candidate.world_units_per_texel * 2.0f;
+    if (shadow_caster_bounds_valid) {
+        for (const Box3D& world_bounds : shadow_caster_bounds) {
+            const Box3D light_bounds = transform_bounds_to_snapped_light_space(
+                world_bounds, world_to_light_view_rotate_only, candidate.snapped_light_space_center
+            );
+            if (!light_bounds.IsValid()) {
+                continue;
+            }
+
+            const bool overlaps_x = light_bounds.max.x >= -half_ortho_width - xy_guard &&
+                                    light_bounds.min.x <= half_ortho_width + xy_guard;
+            const bool overlaps_y = light_bounds.max.y >= -half_ortho_width - xy_guard &&
+                                    light_bounds.min.y <= half_ortho_width + xy_guard;
+            if (!overlaps_x || !overlaps_y) {
+                continue;
+            }
+
+            ++candidate.intersecting_caster_count;
+            // In this light space, a blocker has a greater Z than the receiver. The receiver
+            // frustum already supplies the downstream bound, so extending it with caster min-Z
+            // only wastes depth precision and inflates PCSS distance scaling.
+            aabb_max_z_in_light_space = Max(aabb_max_z_in_light_space, light_bounds.max.z);
+        }
+    }
+
+    // Receiver geometry fixes the stable XY projection. Only primitive bounds intersecting that
+    // XY prism extend the light-space Z slab; a small pad absorbs numeric and bounds jitter.
+    float z_padding = 0.0f;
+    if (shadow_caster_bounds_valid) {
+        const float z_span = Max(aabb_max_z_in_light_space - aabb_min_z_in_light_space, 1e-3f);
+        z_padding          = Max(0.01f, Max(candidate.world_units_per_texel * 2.0f, z_span * 0.005f));
+    } else {
+        // The geometry snapshot is optional. Until the first snapshot arrives, retain the legacy
+        // receiver-thickness expansion so a transient missing snapshot cannot drop valid casters.
+        z_padding                        = Max(max.z - min.z, 1e-3f);
+        candidate.used_legacy_z_fallback = true;
+    }
 
     float4x4 light_view_to_light_clip = MakeOrthoMatrixRH(
         -0.5f * stable_ortho_width,
         0.5f * stable_ortho_width,
         -0.5f * stable_ortho_width,
         0.5f * stable_ortho_width,
-        aabb_min_z_in_light_space - z_delta,
-        aabb_max_z_in_light_space + z_delta
+        aabb_min_z_in_light_space - z_padding,
+        aabb_max_z_in_light_space + z_padding
     );
     light_view_to_light_clip[2][2] *= -1.f; // 反转z轴
 
@@ -367,13 +467,15 @@ CSMCascadeCandidate build_csm_cascade_candidate(
 
     // 保存正交矩阵数据，供PCSS方向光软阴影使用
     float ortho_width = stable_ortho_width;
-    float z_near_val  = aabb_min_z_in_light_space - z_delta;
-    float z_far_val   = aabb_max_z_in_light_space + z_delta;
+    float z_near_val  = aabb_min_z_in_light_space - z_padding;
+    float z_far_val   = aabb_max_z_in_light_space + z_padding;
     float z_range     = z_far_val - z_near_val;
 
     // x: Width, y: Height, z: ZRange, w: NearPlane
     candidate.scale_data        = float4(ortho_width, ortho_width, z_range, z_near_val);
     candidate.world2shadow_clip = world_to_light_orth_matrix;
+    candidate.absolute_light_z_min = z_near_val + candidate.snapped_light_space_center.z;
+    candidate.absolute_light_z_max = z_far_val + candidate.snapped_light_space_center.z;
 
     return candidate; // RVO
 }
@@ -404,6 +506,49 @@ ShadowDepthPass::ShadowDepthPass(RasterContext& context) : m_culling_pass(contex
     m_pso = ShaderManager::Get().Raster().Vertex(vtx).Pixel(frag).Build<ShadowDepthPassPipeline>(
         std::move(pso_info)
     );
+}
+
+bool ShadowDepthPass::RefreshShadowCasterBounds(RasterContext& context) {
+    const SceneUpdateBatch& scene_updates = context.GetSceneUpdates();
+    if (!scene_updates.scene_ready) {
+        if (!m_shadow_caster_bounds_valid && m_shadow_caster_bounds.empty()) {
+            return false;
+        }
+
+        m_shadow_caster_bounds.clear();
+        m_shadow_caster_bounds_valid = false;
+        ++m_shadow_caster_bounds_generation;
+        if (m_shadow_caster_bounds_generation == 0u) {
+            ++m_shadow_caster_bounds_generation;
+        }
+        m_log_cascade_bounds_next_render = true;
+        LOG_DEBUG(
+            "[CSM] Shadow caster bounds invalidated while the scene is not ready: generation={}.",
+            m_shadow_caster_bounds_generation
+        );
+        return true;
+    }
+
+    if (!scene_updates.geometry) {
+        return false;
+    }
+
+    m_shadow_caster_bounds       = scene_updates.geometry->primitive_bounds;
+    m_shadow_caster_bounds_valid = true;
+    ++m_shadow_caster_bounds_generation;
+    if (m_shadow_caster_bounds_generation == 0u) {
+        ++m_shadow_caster_bounds_generation;
+    }
+    m_log_cascade_bounds_next_render = true;
+    LOG_INFO(
+        "[CSM] Shadow caster bounds rebuilt: generation={}, primitive_bounds={}, leaf_primitives={}, "
+        "skipped_invalid={}.",
+        m_shadow_caster_bounds_generation,
+        m_shadow_caster_bounds.size(),
+        scene_updates.geometry->leaf_primitive_count,
+        scene_updates.geometry->skipped_invalid_count
+    );
+    return true;
 }
 
 void ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterConfig& ui_config) {
@@ -615,7 +760,9 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
             camera,
             ui_config,
             frustum_near_ratio,
-            frustum_far_ratio
+            frustum_far_ratio,
+            m_shadow_caster_bounds,
+            m_shadow_caster_bounds_valid
         );
         auto&      shadow_cache_entry = context.csm_data.shadow_cache_entries[cascade_index];
         const bool shadow_cache_eligible =
@@ -625,7 +772,11 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
         const float shadow_cache_move_distance_in_texels =
             shadow_cache_entry.valid ? get_shadow_cache_move_in_texels(shadow_candidate, shadow_cache_entry) :
                                        0.0f;
+        const bool shadow_cache_projection_compatible =
+            shadow_cache_entry.valid &&
+            is_shadow_cache_projection_compatible(shadow_candidate, shadow_cache_entry);
         const bool shadow_cache_dirty = shadow_cache_settings_changed || !shadow_cache_entry.valid ||
+                                        !shadow_cache_projection_compatible ||
                                         (shadow_cache_eligible && shadow_cache_move_distance_in_texels >
                                                                       shadow_cache_threshold_in_texels);
         const bool reuse_shadow_cache = shadow_cache_eligible && !shadow_cache_dirty;
@@ -634,6 +785,21 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
         shadow_cache_reuse_flags[cascade_index]          = reuse_shadow_cache;
         shadow_cache_move_in_texels[cascade_index]       = shadow_cache_move_distance_in_texels;
         shadow_cache_thresholds_in_texels[cascade_index] = shadow_cache_threshold_in_texels;
+
+        if (m_log_cascade_bounds_next_render) {
+            LOG_INFO(
+                "[CSM] cascade={} primitive_bounds={} xy_intersections={} receiver_z=[{}, {}] final_z=[{}, "
+                "{}] fallback={}.",
+                cascade_index,
+                m_shadow_caster_bounds.size(),
+                shadow_candidate.intersecting_caster_count,
+                shadow_candidate.receiver_z_min,
+                shadow_candidate.receiver_z_max,
+                shadow_candidate.scale_data.w,
+                shadow_candidate.scale_data.w + shadow_candidate.scale_data.z,
+                shadow_candidate.used_legacy_z_fallback ? 1 : 0
+            );
+        }
 
         if (reuse_shadow_cache) {
             context.lighting_data.world2shadow_clip[cascade_index] = shadow_cache_entry.world2shadow_clip;
@@ -668,6 +834,8 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
         store_shadow_cache_entry(shadow_cache_entry, shadow_candidate, shadow_cache_frame_index);
     }
 
+    m_log_cascade_bounds_next_render = false;
+
     // // 取消注释本段代码，可以在每帧渲染时，输出 Shadow Cache 的状态日志，便于调试和观察 Shadow Cache 的行为
     // tick_and_log_shadow_cache(
     //     ui_config,
@@ -681,6 +849,14 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
 }
 
 void ShadowDepthPass::Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera) {
+    const bool  shadow_caster_bounds_changed = RefreshShadowCasterBounds(context);
+    const auto& scene_tick_state             = context.GetSceneUpdates().tick_state;
+    const bool  main_light_changed =
+        scene_tick_state.updated_light || scene_tick_state.created_light || scene_tick_state.destroyed_light;
+    if (shadow_caster_bounds_changed || main_light_changed) {
+        invalidate_shadow_cache_entries(context.csm_data);
+    }
+
     if (ui_config.shadow_map_mode != EShadowMapMode::CSM &&
         ui_config.shadow_map_mode != EShadowMapMode::CSM_AUTO) {
         invalidate_shadow_cache_entries(context.csm_data);
