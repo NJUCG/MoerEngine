@@ -44,7 +44,9 @@ struct GridConfig {
 };
 
 struct ReSTIRDIInitialSampleConfig {
-    uint local_light_sample_mode = Render::s_di_local_light_sample_mode_grid;
+    uint local_light_sample_mode                = Render::s_di_local_light_sample_mode_grid;
+    bool enable_adaptive_local_light_sampling   = true;
+    int  grid_min_local_light_count             = 64;
 };
 
 struct ReSTIRDITemporalResampleConfig {

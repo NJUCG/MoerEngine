@@ -31,7 +31,6 @@ main(uint2 dtid
   float3 diffuse = 0.f;
   float3 specular = 0.f;
   float light_dist = 0.f;
-  float2 cur_luminance = 0.f;
 
   float3 debug_color_red = float3(1, 0, 0);
   float3 debug_color_green = float3(0, 1, 0);
@@ -48,8 +47,6 @@ main(uint2 dtid
         res, surface, l_sample, resample_params.enable_prev_tlas,
         true /* visibility reuse */, diffuse, specular, light_dist);
 
-    cur_luminance.x = STL::Color::Luminance(diffuse * surface.diffuse_albedo);
-    cur_luminance.y = STL::Color::Luminance(specular);
     specular /= max(surface.specular_f0, 0.001f);
 
 
@@ -61,8 +58,6 @@ main(uint2 dtid
       b_use_red = true;
     }
   }
-  rw_restir_luminance[pixel_pos] = cur_luminance;
-
   // rw_diffuse_lighting[pixel_pos] = float4(diffuse, light_dist);
   // rw_specular_lighting[pixel_pos] = float4(specular, light_dist);
 

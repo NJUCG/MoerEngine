@@ -47,6 +47,17 @@ struct RaytracingFrameFeedback {
 
     ProfileData        profiler_data{};
     Array<std::string> material_texture_names;
+
+    uint64 renderer_tlas_build_count = 0;
+    uint64 renderer_tlas_skip_count  = 0;
+    uint64 scene_tlas_update_count   = 0;
+    uint64 rt_instance_revision      = 0;
+    uint64 current_tlas_revision     = 0;
+    uint64 previous_tlas_revision    = 0;
+    uint configured_local_light_sample_mode    = s_di_local_light_sample_mode_uniform;
+    uint effective_local_light_sample_mode     = s_di_local_light_sample_mode_uniform;
+    bool adaptive_local_light_fallback_applied = false;
+    uint local_light_count                     = 0;
 };
 
 } // namespace Moer::Render::Raytracing

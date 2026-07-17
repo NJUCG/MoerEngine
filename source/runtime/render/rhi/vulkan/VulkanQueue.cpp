@@ -1223,6 +1223,7 @@ class VkCmdVisitor : VulkanDeviceObject {
     VkTracker&             tracker;
     const TCachedArgArray& cached_args;
     ProfilerStorage*       profiler = nullptr;
+    bool                   query_profiling_enabled = false;
 
 public:
     VkCmdVisitor(
@@ -1231,14 +1232,16 @@ public:
         VkTracker&             _tracker,
         VulkanCmdList&         _cmd_list,
         const TCachedArgArray& _cached_args,
-        ProfilerStorage*       _profiler = nullptr
+        ProfilerStorage*       _profiler = nullptr,
+        bool                   _query_profiling_enabled = false
     ) :
         VulkanDeviceObject(&_device),
         allocator(_allocator),
         tracker(_tracker),
         cmd_list(_cmd_list),
         cached_args(_cached_args),
-        profiler(_profiler) {}
+        profiler(_profiler),
+        query_profiling_enabled(_query_profiling_enabled) {}
 
     void VisitCmd(const Command* _cmd) {
         switch (_cmd->Type()) {
@@ -1440,6 +1443,15 @@ public:
         static float4 dispatch_color = {0.0f, 0.0f, 1.0f, 1.0f};
         cmd_list.BeginLabel(_cmd.name, dispatch_color);
         const auto& param = _cmd.Param();
+        const auto  profile_section_name = _cmd.ProfileSectionName();
+        const bool query_timestamp = query_profiling_enabled && profile_section_name != "Other";
+
+        if (query_timestamp) {
+            assert(profiler && "profiler is not set");
+            profiler->BeginProfilerSession(
+                cmd_list, profile_section_name, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+            );
+        }
 
         const PipelineHandle& pso = _cmd.Pipeline();
         cmd_list.SetPso(_cmd.Pipeline());
@@ -1461,6 +1473,12 @@ public:
             },
             param
         );
+
+        if (query_timestamp) {
+            profiler->EndProfilerSession(
+                cmd_list, profile_section_name, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+            );
+        }
 
         cmd_list.EndLabel();
     }
@@ -2350,13 +2368,13 @@ public:
     void Visit(const ScopeCmd& _cmd) {
         if (_cmd.IsPush()) {
             cmd_list.BeginLabel(_cmd.ScopeName(), {0.0f, 1.0f, 0.0f, 1.0f});
-            if (_cmd.QueryTimestamp()) {
+            if (_cmd.QueryTimestamp() && query_profiling_enabled) {
                 assert(profiler && "profiler is not set");
                 profiler->BeginProfilerSession(cmd_list, _cmd.ScopeName());
             }
         } else {
             cmd_list.EndLabel();
-            if (_cmd.QueryTimestamp()) {
+            if (_cmd.QueryTimestamp() && query_profiling_enabled) {
                 assert(profiler && "profiler is not set");
                 profiler->EndProfilerSession(cmd_list, _cmd.ScopeName());
             }
@@ -2896,26 +2914,30 @@ int ProfilerStorage::GetQueryStorageIndex(std::string_view _name) {
     return name2sample[name].index;
 }
 
-void ProfilerStorage::BeginProfilerSession(VulkanCmdList& _cmd_list, std::string_view _name) {
+void ProfilerStorage::BeginProfilerSession(
+    VulkanCmdList&          _cmd_list,
+    std::string_view        _name,
+    VkPipelineStageFlagBits _stage
+) {
     if (!active) {
         return;
     }
     uint idx = GetQueryStorageIndex(_name) * 2 + 0 + cur_frame * s_max_num_profiler_queries_per_frame;
-    vkCmdWriteTimestamp(
-        _cmd_list.GetHandle(), kBeginTimestampStage, timestamp_pool.GetHandle(), idx
-    );
+    vkCmdWriteTimestamp(_cmd_list.GetHandle(), _stage, timestamp_pool.GetHandle(), idx);
     SetQueryUsed(idx);
     assert(IsQueryUsed(idx + 1) == false && "Query already used");
 }
 
-void ProfilerStorage::EndProfilerSession(VulkanCmdList& _cmd_list, std::string_view _name) {
+void ProfilerStorage::EndProfilerSession(
+    VulkanCmdList&          _cmd_list,
+    std::string_view        _name,
+    VkPipelineStageFlagBits _stage
+) {
     if (!active) {
         return;
     }
     uint idx = GetQueryStorageIndex(_name) * 2 + 1 + cur_frame * s_max_num_profiler_queries_per_frame;
-    vkCmdWriteTimestamp(
-        _cmd_list.GetHandle(), kEndTimestampStage, timestamp_pool.GetHandle(), idx
-    );
+    vkCmdWriteTimestamp(_cmd_list.GetHandle(), _stage, timestamp_pool.GetHandle(), idx);
     SetQueryUsed(idx);
     assert(IsQueryUsed(idx - 1) == true && "Query not used");
 }
@@ -3218,7 +3240,13 @@ void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline, uint64 _s
 
     //Visitor for actual command recording
     VkCmdVisitor visitor(
-        vk_device, vk_allocator, tracker, vk_allocator.GetCmdList(), _submit.cached_args, &profiler_storage
+        vk_device,
+        vk_allocator,
+        tracker,
+        vk_allocator.GetCmdList(),
+        _submit.cached_args,
+        &profiler_storage,
+        _submit.b_tick_profiling
     );
 
     //Visitor for barrier generation
@@ -3405,7 +3433,7 @@ void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline, uint64 _s
                     diagnostics.descriptor_begin,
                     diagnostics.descriptor_bytes
                 );
-                if (cmd->Type() == Command::EType::Scope) {
+                if (_submit.b_tick_profiling && cmd->Type() == Command::EType::Scope) {
                     const auto& scope = *static_cast<const ScopeCmd*>(cmd);
                     if (scope.QueryTimestamp()) {
                         serial_golden->RecordQueryEvent(
@@ -3413,6 +3441,20 @@ void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline, uint64 _s
                             scope.ScopeName(),
                             scope.IsPush() ? ProfilerStorage::kBeginTimestampStage
                                            : ProfilerStorage::kEndTimestampStage
+                        );
+                    }
+                } else if (_submit.b_tick_profiling && cmd->Type() == Command::EType::ShaderDispatch) {
+                    const auto& dispatch = *static_cast<const DispatchCmd*>(cmd);
+                    if (dispatch.ProfileSectionName() != "Other") {
+                        serial_golden->RecordQueryEvent(
+                            SerialQueryEvent::Begin,
+                            dispatch.ProfileSectionName(),
+                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                        );
+                        serial_golden->RecordQueryEvent(
+                            SerialQueryEvent::End,
+                            dispatch.ProfileSectionName(),
+                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
                         );
                     }
                 }

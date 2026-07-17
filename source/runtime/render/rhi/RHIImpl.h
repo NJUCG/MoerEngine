@@ -1279,6 +1279,7 @@ private:
     // const PipelineHandle& pipeline;
     PipelineHandle          pipeline{};
     DispatchParam           param;
+    std::string_view        profile_section_name{"Other"};
     // ArrayArguments          args;
     TShaderArgArray args;
     DispatchCmd(ArrayArguments&& _args) : Command(EType::ShaderDispatch), args(std::move(_args)) {}
@@ -1288,21 +1289,25 @@ public:
         TShaderArgArray&& _args,
         PipelineHandle&   _handle,
         uint3             _param,
+        ProfileSection    _profile_section,
         std::string_view  _name = typenames[uint(EType::ShaderDispatch)]
     ) :
         Command(EType::ShaderDispatch, _name),
         param(_param),
         pipeline(_handle),
+        profile_section_name(_profile_section.name),
         args(std::move(_args)) {}
     DispatchCmd(
         TShaderArgArray&& _args,
         PipelineHandle&   _handle,
         BufferView        _indirect,
+        ProfileSection    _profile_section,
         std::string_view  _name = typenames[uint(EType::ShaderDispatch)]
     ) :
         Command(EType::ShaderDispatch, _name),
         pipeline(_handle),
         param(DispatchIndirectParam{_indirect}),
+        profile_section_name(_profile_section.name),
         args(std::move(_args)) {}
 
     EQueueType GetQueueType() const override {
@@ -1320,6 +1325,9 @@ public:
     }
     auto Param() const {
         return param;
+    }
+    std::string_view ProfileSectionName() const {
+        return profile_section_name;
     }
 };
 

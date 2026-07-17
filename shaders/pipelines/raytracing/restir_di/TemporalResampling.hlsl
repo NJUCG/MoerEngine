@@ -77,8 +77,6 @@ main(uint2 dtid
   }
 #endif
 
-  rw_temporal_sample_pos[pixel_pos] = temporal_pixel_pos;
-
   Moer::DI::StoreReservoir(
       res, resample_params.restir_di_params.reservoir_buffer_params, pixel_pos,
       resample_params.restir_di_params.buffer_indices
