@@ -456,7 +456,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         );
     }
 
-    bool skip_present = false;
+    bool              skip_present = false;
+    PresentReceiptRef main_present_receipt{};
     if (frame_packet.window.state == EWindowState::Hiding) {
         // 窗口最小化后无法 present，此处主动让出线程，避免高频空转。
         std::this_thread::yield();
@@ -1172,7 +1173,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             );
         }
         if (output_view.extent.x == swapchain->size.x && output_view.extent.y == swapchain->size.y) {
-            gfx_queue.Present(swapchain, default_output_texture);
+            main_present_receipt =
+                CreateMainPresentReceipt(frame_packet.scene_updates.scene_ready);
+            gfx_queue.Present(swapchain, default_output_texture, main_present_receipt);
         } else {
             LOG_WARNING(
                 "Skipping stale main-window present: source={}x{}, swapchain={}x{}.",
@@ -1186,7 +1189,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     }
 
     RasterFrameFeedback feedback{};
-    feedback.frame_id               = frame_packet.frame_id;
+    feedback.frame_id              = frame_packet.frame_id;
+    feedback.main_present_receipt  = std::move(main_present_receipt);
     feedback.culling_stats          = frame_packet.raster_config.culling_stats;
     feedback.cooperative_ops_status = frame_packet.raster_config.cooperative_ops_status;
     if (frame_packet.frame_id == 0) {
@@ -1210,7 +1214,8 @@ void RasterRenderer::ApplyFrameFeedback(
     RasterConfig&       target_config,
     const EngineHooks&  hooks
 ) {
-    assert(!IsRenderThreadInitialized() || IsCurrentlyGameThread());
+    assert(IsCurrentlyGameThread());
+    ApplyMainPresentReceipt(feedback.main_present_receipt, hooks);
     target_config.culling_stats          = feedback.culling_stats;
     target_config.cooperative_ops_status = feedback.cooperative_ops_status;
     if (!feedback.displayable_frame_buffer_names.empty() &&

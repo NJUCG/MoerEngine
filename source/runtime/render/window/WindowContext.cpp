@@ -43,6 +43,10 @@ WindowHandle* WindowContext::GetMainWindow() {
     return &WindowImpl::GetInstance().main_window_handle;
 };
 
+void WindowContext::ShowMainWindow() {
+    WindowImpl::GetInstance().ShowMainWindow();
+}
+
 void WindowContext::CreateVulkanSurface(
     void*         instance,
     WindowHandle* window,

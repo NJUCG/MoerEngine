@@ -32,6 +32,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 // namespace
 using namespace Moer::Render;
@@ -442,19 +443,43 @@ void Engine::ValidateCommandLine(int argc, const char** argv) {
 }
 
 Engine::~Engine() {
-    assert(m_has_shutdown && "Engine::ShutDown() was not called before Engine destruction!");
+    ShutDown();
 }
 
-void Engine::Init(int argc, const char** argv) {
+void Engine::Init(
+    int                            argc,
+    const char**                   argv,
+    bool                           main_window_visible,
+    const StartupProgressCallback& on_startup_progress
+) {
     ScopedLogTimer startup_timer("[Startup][Engine] Engine::Init total");
+
+    bool startup_logging_ready = false;
+    const auto report_startup = [&](std::string_view title, std::string_view detail) {
+        try {
+            if (on_startup_progress) {
+                on_startup_progress(title, detail);
+            }
+        } catch (...) {
+            // Startup reporting is optional and must never prevent the editor
+            // from reaching its normal error handling path.
+        }
+        if (startup_logging_ready) {
+            LOG_INFO("[Startup][Progress] {} - {}", title, detail);
+        }
+    };
+
+    report_startup("Starting engine core", "Initializing logging and configuration");
 
     // Init LogSystem
     LogSystem::Init(); // for LOG_DEBUG & LOG_TRACE when debug mode
+    startup_logging_ready = true;
 
     // Init ConfigManager
     std::filesystem::path path = argv[0];
     path = path.filename().string().find(".exe") != std::string::npos ? path.parent_path() : path;
 
+    report_startup("Reading configuration", path.string());
     LOG_INFO("Workspace Path : {}", path.string());
 
     if (ContainsNonAscii(path)) {
@@ -486,7 +511,9 @@ void Engine::Init(int argc, const char** argv) {
     }
 
     // Init TaskSystem
+    report_startup("Starting worker services", "Creating task-graph worker threads");
     TaskSystem::Init();
+    m_task_system_initialized = true;
 
     LOG_INFO("[Threading] GameThread id = {}", GetGameThreadId());
     LOG_INFO(
@@ -500,6 +527,7 @@ void Engine::Init(int argc, const char** argv) {
     );
 
     if (config.engine.threading.render_thread) {
+        report_startup("Starting render thread", "Creating the configured render-thread service");
         m_max_frame_lag = std::min(config.engine.threading.max_frame_lag, uint{1});
         if (config.engine.threading.max_frame_lag > 1) {
             LOG_WARNING(
@@ -533,6 +561,14 @@ void Engine::Init(int argc, const char** argv) {
         return ERHIType::Vulkan;
     }();
 
+    report_startup(
+        "Initializing graphics device",
+        rhi_type == ERHIType::Vulkan ? "Creating the Vulkan device, queues, and descriptors" :
+                                       "Creating the D3D12 device, queues, and descriptors"
+    );
+    // Dispose is safe when initialization leaves a partially constructed
+    // implementation behind, so arm cleanup before entering the backend.
+    m_render_device_initialized = true;
     RenderDevice::Init(
         std::move(
             DeviceInitInfo{
@@ -547,7 +583,9 @@ void Engine::Init(int argc, const char** argv) {
         )
     );
 
+    report_startup("Loading shader cache", "Restoring compiled shaders and pipeline metadata");
     ShaderManager::Get(); // Explicit Init ShaderManager
+    m_shader_manager_initialized = true;
 
     m_editor_config = MakeShared<EditorConfig>();
     m_editor_config->selected_render_method =
@@ -576,19 +614,27 @@ void Engine::Init(int argc, const char** argv) {
         b_fullscreen
     );
 
+    report_startup(
+        "Creating editor window",
+        main_window_visible ? "Preparing the main window" : "Keeping the main window hidden until its first frame"
+    );
     WindowContext::Init(SurfaceInitInfo(
         RenderDevice::Get().GetRHIType(),
         m_editor_config->GetResolution().x,
         m_editor_config->GetResolution().y,
         "MoerEditor",
-        b_fullscreen
+        b_fullscreen,
+        main_window_visible
     ));
+    m_window_context_initialized = true;
 
+    report_startup("Loading editor resources", "Uploading editor textures and environment assets");
     m_runtime_assets =
         MakeUnique<RuntimeAssets>(ConfigManager::GetInstance().GetEditorResourcePath(), RenderDevice::Get());
     m_runtime_assets->WaitUntilReady();
     LOG_INFO("[Threading] RuntimeAssets are immutable-ready before renderer/UI frame overlap begins.");
 
+    report_startup("Starting editor services", "Initializing Python scripting and remote control");
     m_script_host = MakeUnique<scripting::ScriptHost>(scripting::PythonRuntimeConfig::Default());
     m_script_host->Start();
 
@@ -603,10 +649,28 @@ void Engine::Init(int argc, const char** argv) {
     if (remote_enabled_by_config && !m_remote_module->SetEnabled(true)) {
         LOG_WARNING("Remote module failed to start. Continue running without remote access.");
     }
+    report_startup("Engine core ready", "Preparing the editor interface");
 }
 
 void Engine::Run(const EngineHooks& hooks) {
     EngineHooks runtime_hooks = hooks;
+    auto        on_first_main_present = std::move(runtime_hooks.on_first_main_present);
+    runtime_hooks.on_first_main_present =
+        [this, callback = std::move(on_first_main_present)]() mutable {
+            assert(IsCurrentlyGameThread());
+            if (m_first_main_present_notified) {
+                return;
+            }
+            m_first_main_present_notified = true;
+            LOG_INFO("[Startup][Engine] First main-window present submitted on the Game Thread.");
+            if (callback) {
+                try {
+                    callback();
+                } catch (...) {
+                    LOG_WARNING("[Startup][Engine] Ignoring an exception from the first-present hook.");
+                }
+            }
+        };
     const bool thread_profile_logging =
         ConfigManager::GetInstance().GetConfig().engine.threading.profile_logging;
     runtime_hooks.on_tick_scripting = [this](Scene& scene) {
@@ -660,9 +724,24 @@ void Engine::Run(const EngineHooks& hooks) {
 
         const bool use_render_thread = m_render_thread_service != nullptr;
 
+        if (runtime_hooks.on_startup_progress && !m_first_main_present_notified) {
+            runtime_hooks.on_startup_progress(
+                "Loading scene and renderer",
+                selected_render_method == ERenderMethod::Raster ?
+                    "Loading the scene and creating Raster pipelines" :
+                    "Loading the scene and creating Raytracing pipelines"
+            );
+        }
+
         if (use_render_thread) {
             m_render_thread_service->RunAndWait(std::move(create_renderer));
             assert(m_renderer && m_renderer->SupportsSynchronizedRenderThread());
+
+            if (runtime_hooks.on_startup_progress && !m_first_main_present_notified) {
+                runtime_hooks.on_startup_progress(
+                    "Preparing first frame", "Uploading scene data and warming the renderer"
+                );
+            }
 
             if (runtime_hooks.on_show_config_sub_ui) {
                 runtime_hooks.on_show_config_sub_ui();
@@ -702,9 +781,13 @@ void Engine::Run(const EngineHooks& hooks) {
                     [raytracing_renderer](Raytracing::RaytracingFramePacket frame_packet) {
                         return raytracing_renderer->RenderFrame(std::move(frame_packet));
                     },
-                    [this, raytracing_renderer](Raytracing::RaytracingFrameFeedback feedback) {
+                    [this, raytracing_renderer, &runtime_hooks](
+                        Raytracing::RaytracingFrameFeedback feedback
+                    ) {
                         raytracing_renderer->ApplyFrameFeedback(
-                            std::move(feedback), m_editor_config->raytracing_config
+                            std::move(feedback),
+                            m_editor_config->raytracing_config,
+                            runtime_hooks
                         );
                     },
                     [&runtime_hooks]() {
@@ -718,6 +801,11 @@ void Engine::Run(const EngineHooks& hooks) {
             }
         } else {
             create_renderer();
+            if (runtime_hooks.on_startup_progress && !m_first_main_present_notified) {
+                runtime_hooks.on_startup_progress(
+                    "Preparing first frame", "Uploading scene data and warming the renderer"
+                );
+            }
             if (runtime_hooks.on_show_config_sub_ui) {
                 runtime_hooks.on_show_config_sub_ui();
             }
@@ -729,7 +817,8 @@ void Engine::Run(const EngineHooks& hooks) {
                         raytracing_renderer->PrepareFrame(m_editor_config, runtime_hooks);
                     raytracing_renderer->ApplyFrameFeedback(
                         raytracing_renderer->RenderFrame(std::move(frame_packet)),
-                        m_editor_config->raytracing_config
+                        m_editor_config->raytracing_config,
+                        runtime_hooks
                     );
 
                     if (runtime_hooks.should_reload && runtime_hooks.should_reload()) {
@@ -882,33 +971,73 @@ scripting::ScriptExecutionFuture Engine::SubmitScriptExecution(scripting::Script
     return scripting::ScriptExecutionFuture(promise.get_future());
 }
 
-void Engine::ShutDown() {
+void Engine::ShutDown() noexcept {
+    if (m_has_shutdown) {
+        return;
+    }
+    m_has_shutdown = true;
+
+    const auto cleanup = []<typename Action>(Action&& action) noexcept {
+        try {
+            std::forward<Action>(action)();
+        } catch (...) {
+            // Shutdown is also the rollback path for partial startup. Continue
+            // releasing later subsystems even if one cleanup operation fails.
+        }
+    };
+
     if (m_remote_module) {
-        m_remote_module->Stop();
+        cleanup([this]() { m_remote_module->Stop(); });
         m_remote_module.reset();
     }
 
     if (m_script_host) {
-        m_script_host->CancelPendingSceneCommands("Scene became unavailable during engine shutdown.");
-        m_script_host->Stop();
+        cleanup([this]() {
+            m_script_host->CancelPendingSceneCommands(
+                "Scene became unavailable during engine shutdown."
+            );
+            m_script_host->Stop();
+        });
         m_script_host.reset();
     }
 
+    if (m_renderer && m_render_thread_service) {
+        cleanup([this]() {
+            m_render_thread_service->RunAndWait([this]() { m_renderer.reset(); });
+        });
+    }
+    // RunAndWait can itself fail while unwinding a render-thread exception.
+    // Destruction on the Game Thread is the final shutdown fallback.
+    m_renderer.reset();
+
     if (m_render_thread_service) {
-        LOG_INFO("[Threading] Stopping Render Thread service.");
-        m_render_thread_service->Stop();
+        cleanup([this]() {
+            LOG_INFO("[Threading] Stopping Render Thread service.");
+            m_render_thread_service->Stop();
+            LOG_INFO("[Threading] Render Thread service stopped.");
+        });
         m_render_thread_service.reset();
-        LOG_INFO("[Threading] Render Thread service stopped.");
     }
 
     m_runtime_assets.reset(); // 释放RuntimeAssets资源
 
-    WindowContext::ShutDown();
-    ShaderManager::ShutDown();
-    RenderDevice::Dispose();
-    TaskSystem::ShutDown();
-
-    m_has_shutdown = true;
+    if (m_window_context_initialized) {
+        m_window_context_initialized = false;
+        cleanup([]() { WindowContext::ShutDown(); });
+    }
+    if (m_shader_manager_initialized) {
+        m_shader_manager_initialized = false;
+        cleanup([]() { ShaderManager::ShutDown(); });
+    }
+    if (m_render_device_initialized) {
+        m_render_device_initialized = false;
+        cleanup([]() { RenderDevice::Dispose(); });
+    }
+    if (m_task_system_initialized) {
+        m_task_system_initialized = false;
+        cleanup([]() { TaskSystem::ShutDown(); });
+    }
+    m_editor_config.reset();
 }
 
 void Engine::Init3rdParty() {

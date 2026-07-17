@@ -12,9 +12,12 @@
 #include "rhi/RHIResource.h"
 #include "shader/ShaderPipeline.h"
 #include <array>
+#include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <functional>
 #include <misc/STL.h>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -1298,6 +1301,48 @@ struct ProfileData {
     Array<ProfileResultEntry> gpu_entries;
     Array<ProfileResultEntry> cpu_entries;
 };
+
+struct PresentReceiptResult {
+    bool resolved              = false;
+    bool submitted            = false;
+    bool recreate_swapchain   = false;
+};
+
+class PresentReceipt {
+public:
+    void Resolve(bool _submitted, bool _recreate_swapchain = false) {
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            if (resolved) {
+                return;
+            }
+            result.resolved            = true;
+            result.submitted           = _submitted;
+            result.recreate_swapchain  = _recreate_swapchain;
+            resolved                   = true;
+        }
+        cv.notify_all();
+    }
+
+    [[nodiscard]] PresentReceiptResult WaitForSubmission(
+        std::chrono::milliseconds _timeout = std::chrono::seconds(10)
+    ) {
+        std::unique_lock<std::mutex> lock(mutex);
+        if (!cv.wait_for(lock, _timeout, [this]() { return resolved; })) {
+            return {};
+        }
+        return result;
+    }
+
+private:
+    std::mutex               mutex;
+    std::condition_variable  cv;
+    PresentReceiptResult     result{};
+    bool                     resolved{false};
+};
+
+using PresentReceiptRef = SharedPtr<PresentReceipt>;
+
 class RENDER_API CommandQueue {
 public:
     CommandQueue() {};
@@ -1305,7 +1350,11 @@ public:
     void                Test();
     virtual void        Wait(WaitEvent _event)                                = 0;
     virtual WaitEvent   Execute(CmdSubmit&& _submit)                          = 0;
-    virtual void        Present(SwapchainRef _swapchain, TextureView _target) = 0;
+    virtual void Present(
+        SwapchainRef      _swapchain,
+        TextureView       _target,
+        PresentReceiptRef _receipt = {}
+    ) = 0;
     virtual void        Sync()                                                = 0;
     virtual ProfileData GetProfilerEntry()                                    = 0;
 

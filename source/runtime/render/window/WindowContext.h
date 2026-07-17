@@ -47,13 +47,15 @@ struct RENDER_API SurfaceInitInfo {
         uint32_t           _width,
         uint32_t           _height,
         const std::string& _title,
-        bool               _full_screen
+        bool               _full_screen,
+        bool               _visible = true
     ) :
         rhi_type(_rhi_type),
         width(_width),
         height(_height),
         title(_title),
-        b_fullscreen(_full_screen) {}
+        b_fullscreen(_full_screen),
+        b_visible(_visible) {}
 
     SurfaceInitInfo() : SurfaceInitInfo(ERHIType::Vulkan, 1920, 1080, "untitled", false) {}
 
@@ -63,6 +65,7 @@ struct RENDER_API SurfaceInitInfo {
     std::string title{"MoerEngine"};
     bool        b_fullscreen{false};
     bool        b_vsync{false};
+    bool        b_visible{true};
 };
 //mean to support multi window creation and io-management
 class RENDER_API WindowContext {
@@ -79,6 +82,7 @@ public:
     static void          SetFocusMode(WindowHandle*, bool focused);
     static bool          GetFocusMode(WindowHandle*);
     static WindowHandle* GetMainWindow();
+    static void          ShowMainWindow();
     static void          SetTitle(WindowHandle*, const char* newTitle);
     static void          RequestClose(WindowHandle*);
     static bool          ShouldClose(WindowHandle*);

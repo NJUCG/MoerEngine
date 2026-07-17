@@ -5,6 +5,8 @@
 #include "scripting/ScriptExecutionFuture.h"
 #include "scripting/ScriptExecutionRequest.h"
 
+#include <string_view>
+
 namespace Moer::scripting {
 class ScriptHost;
 }
@@ -21,12 +23,20 @@ class RenderThreadService;
 
 class RENDER_API Engine {
 public:
+    using StartupProgressCallback =
+        std::function<void(std::string_view title, std::string_view detail)>;
+
     Engine();
     virtual ~Engine();
 
     static void ValidateCommandLine(int argc, const char** argv);
 
-    void Init(int argc, const char** argv);
+    void Init(
+        int                            argc,
+        const char**                   argv,
+        bool                           main_window_visible = true,
+        const StartupProgressCallback& on_startup_progress = {}
+    );
     void Run(const Render::EngineHooks& hooks);
     void RequestExit();
 
@@ -34,7 +44,7 @@ public:
     remote::RemoteModuleController GetRemoteModuleController() const;
 
     scripting::ScriptExecutionFuture SubmitScriptExecution(scripting::ScriptExecutionRequest request);
-    void                             ShutDown();
+    void                             ShutDown() noexcept;
 
     uint2& GetResolution() {
         return m_editor_config->GetResolution();
@@ -71,6 +81,11 @@ private:
 
     uint m_max_frame_lag = 0;
     bool m_has_shutdown = false;
+    bool m_first_main_present_notified = false;
+    bool m_task_system_initialized     = false;
+    bool m_render_device_initialized   = false;
+    bool m_shader_manager_initialized  = false;
+    bool m_window_context_initialized  = false;
 
     // Validation state is accessed only by Game Thread hooks. Render work is drained before reload.
     ERendererSwitchValidationStage m_renderer_switch_validation_stage =

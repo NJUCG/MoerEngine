@@ -3,6 +3,7 @@
 #include "Engine.h"
 
 #include "EditorUI.h"
+#include "window/WindowContext.h"
 
 using namespace Moer::Render;
 
@@ -10,11 +11,30 @@ namespace Moer {
 
 Editor::Editor() = default;
 
-Editor::~Editor() = default;
+Editor::~Editor() {
+    ShutDown();
+}
 
 void Editor::Init(int argc, const char** argv) {
+    Init(argc, argv, StartupHooks{});
+}
+
+void Editor::Init(int argc, const char** argv, StartupHooks startup_hooks) {
+    m_startup_hooks = std::move(startup_hooks);
+    ReportStartupProgress("Starting MoerEditor", "Initializing the engine core");
     m_engine = MakeUnique<Engine>();
-    m_engine->Init(argc, argv);
+    try {
+        m_engine->Init(
+            argc,
+            argv,
+            m_startup_hooks.main_window_visible,
+            m_startup_hooks.on_progress
+        );
+    } catch (...) {
+        m_engine->ShutDown();
+        m_engine.reset();
+        throw;
+    }
 }
 
 void Editor::Run() {
@@ -23,6 +43,7 @@ void Editor::Run() {
 
 void Editor::Run(const ExtraHooks& extra_hooks) {
     // UI 的生命周期限定在 Engine::Run 内，因为其渲染器资源依赖当前运行的 Engine。
+    ReportStartupProgress("Preparing editor interface", "Building ImGui fonts and GPU resources");
     m_editor_ui = MakeUnique<EditorUI>(
         MakeUnique<Render::UIRenderer>(RenderDevice::Get()),
         m_engine->GetEditorConfig(),
@@ -89,6 +110,26 @@ void Editor::Run(const ExtraHooks& extra_hooks) {
                 [this]() {
                     m_editor_ui->SetShowRenderConfigSubUI(true);
                 },
+            .on_startup_progress =
+                [this](std::string_view title, std::string_view detail) {
+                    ReportStartupProgress(title, detail);
+                },
+            .on_first_main_present =
+                [this]() {
+                    ReportStartupProgress("Opening MoerEditor", "The first rendered frame is ready");
+                    if (!m_startup_hooks.main_window_visible) {
+                        WindowContext::ShowMainWindow();
+                        m_startup_hooks.main_window_visible = true;
+                    }
+                    if (m_startup_hooks.on_first_main_present) {
+                        try {
+                            m_startup_hooks.on_first_main_present();
+                        } catch (...) {
+                            // Startup presentation is auxiliary. A client hook
+                            // must not interrupt the renderer after Present.
+                        }
+                    }
+                },
 
             // Raster
             .on_raster_register_frame_buffer_names =
@@ -101,9 +142,22 @@ void Editor::Run(const ExtraHooks& extra_hooks) {
     m_editor_ui.reset();
 }
 
-void Editor::ShutDown() {
-    m_engine->ShutDown();
-    m_engine.reset();
+void Editor::ReportStartupProgress(std::string_view title, std::string_view detail) const noexcept {
+    try {
+        if (m_startup_hooks.on_progress) {
+            m_startup_hooks.on_progress(title, detail);
+        }
+    } catch (...) {
+        // Optional startup UI must not participate in Editor failure paths.
+    }
+}
+
+void Editor::ShutDown() noexcept {
+    m_editor_ui.reset();
+    if (m_engine) {
+        m_engine->ShutDown();
+        m_engine.reset();
+    }
 }
 
 Engine& Editor::GetEngine() {

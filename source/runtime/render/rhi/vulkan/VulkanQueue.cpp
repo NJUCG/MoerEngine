@@ -3595,12 +3595,19 @@ void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline, uint64 _s
     }
 }
 
-void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
+void VkCommandQueue::Present(
+    SwapchainRef      _sc,
+    TextureView       _view,
+    PresentReceiptRef _receipt
+) {
     assert(_view.texture != nullptr && "Present source texture is null");
     TextureRef source_texture{_view.texture};
 
     if (vk_device.IsFaulted()) {
         vk_device.RecordRejectedPresent();
+        if (_receipt) {
+            _receipt->Resolve(false);
+        }
         return;
     }
 
@@ -3621,6 +3628,7 @@ void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
                 std::move(_sc),
                 std::move(source_texture),
                 _view,
+                std::move(_receipt),
                 current_timeline,
                 serial,
                 enqueued_at,
@@ -3640,14 +3648,24 @@ void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view) {
     if (thread_profile) {
         const auto work_started = std::chrono::steady_clock::now();
         PresentNow(
-            std::move(_sc), std::move(source_texture), _view, current_timeline, current_timeline
+            std::move(_sc),
+            std::move(source_texture),
+            _view,
+            std::move(_receipt),
+            current_timeline,
+            current_timeline
         );
         const double work_ms =
             RhiThreadProfileMilliseconds(work_started, std::chrono::steady_clock::now());
         RecordThreadingProfile(ERhiWorkKind::Present, work_ms, 0.0, work_ms, 0);
     } else {
         PresentNow(
-            std::move(_sc), std::move(source_texture), _view, current_timeline, current_timeline
+            std::move(_sc),
+            std::move(source_texture),
+            _view,
+            std::move(_receipt),
+            current_timeline,
+            current_timeline
         );
     }
 }
@@ -3656,6 +3674,7 @@ void VkCommandQueue::PresentNow(
     SwapchainRef&& _sc,
     TextureRef&&   _source_texture,
     TextureView    _view,
+    PresentReceiptRef _receipt,
     uint64         _timeline,
     uint64         _serial
 ) {
@@ -3673,6 +3692,9 @@ void VkCommandQueue::PresentNow(
     };
     if (vk_device.IsFaulted()) {
         vk_device.RecordRejectedPresent();
+        if (_receipt) {
+            _receipt->Resolve(false);
+        }
         const VkResult rejected_result = vk_device.GetFirstFaultResult();
         timeline->Fail(rejected_result);
         std::unique_lock<std::mutex> lock(event_mutex);
@@ -3696,6 +3718,9 @@ void VkCommandQueue::PresentNow(
     auto& vk_tracker   = vk_allocator.GetTracker();
     if (!sc->WaitFrameInFlight()) {
         vk_device.RecordRejectedPresent();
+        if (_receipt) {
+            _receipt->Resolve(false);
+        }
         const VkResult rejected_result = GetRejectedSubmitResult(vk_device);
         timeline->Fail(rejected_result);
         std::unique_lock<std::mutex> lock(event_mutex);
@@ -3713,9 +3738,14 @@ void VkCommandQueue::PresentNow(
         return;
     }
     auto acquire = sc->AquireNextImage(rhi_thread_enabled ? 0 : 50'000'000);
+    bool recreate_swapchain =
+        acquire.outcome.status == EVulkanOperationStatus::Recreate;
 
     Array<std::function<void()>> callbacks;
     if (!acquire.HasImage()) {
+        if (_receipt) {
+            _receipt->Resolve(false, recreate_swapchain);
+        }
         if (acquire.outcome.status == EVulkanOperationStatus::Faulted ||
             acquire.outcome.status == EVulkanOperationStatus::Rejected) {
             timeline->Fail(acquire.outcome.result);
@@ -3795,13 +3825,22 @@ void VkCommandQueue::PresentNow(
     } else {
         timeline->Fail(submit_outcome.result);
     }
-    VulkanOperationResult final_outcome  = submit_outcome;
+    VulkanOperationResult final_outcome = submit_outcome;
+    bool                  present_accepted = false;
     if (submit_outcome.WasSubmitted()) {
         const VulkanOperationResult present_outcome =
             sc->Present(queue.GetHandle(), idx, _timeline, _serial);
+        present_accepted =
+            present_outcome.result == VK_SUCCESS || present_outcome.result == VK_SUBOPTIMAL_KHR;
+        recreate_swapchain =
+            recreate_swapchain ||
+            present_outcome.status == EVulkanOperationStatus::Recreate;
         if (!present_outcome.Succeeded()) {
             final_outcome = present_outcome;
         }
+    }
+    if (_receipt) {
+        _receipt->Resolve(present_accepted, recreate_swapchain);
     }
     {
         std::unique_lock<std::mutex> lock(event_mutex);
@@ -4353,6 +4392,7 @@ void VkCommandQueue::RhiThreadMain() {
                                 std::move(_work.swapchain),
                                 std::move(_work.source_texture),
                                 _work.source_view,
+                                std::move(_work.receipt),
                                 _work.timeline,
                                 _work.serial
                             );

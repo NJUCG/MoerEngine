@@ -1,5 +1,6 @@
 #include "GLFWWindowImpl.h"
 
+#include "Core.h"
 #include "misc/MMemory.h"
 #include "platform/Platform.h"
 #include "rhi/RHI.h"
@@ -57,19 +58,37 @@ void GLFWWindowImpl::Init(const SurfaceInitInfo& info) {
     } else {
         assert(0 && "Unknown RHI type, code error.");
     }
+    glfwWindowHint(GLFW_VISIBLE, info.b_visible ? GLFW_TRUE : GLFW_FALSE);
 
     int          width   = info.width;
     int          height  = info.height;
     GLFWmonitor* monitor = nullptr;
+    m_deferred_fullscreen        = false;
+    m_deferred_fullscreen_width  = 0;
+    m_deferred_fullscreen_height = 0;
     if (info.b_fullscreen) {
         // 全屏模式
-        monitor                 = glfwGetPrimaryMonitor();
-        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
-        width                   = mode->width;
-        height                  = mode->height;
+        GLFWmonitor*       fullscreen_monitor = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode               = glfwGetVideoMode(fullscreen_monitor);
+        width                                 = mode->width;
+        height                                = mode->height;
+
+        if (info.b_visible) {
+            monitor = fullscreen_monitor;
+        } else {
+            // GLFW_VISIBLE is ignored for full-screen windows. Bootstrap as a
+            // hidden windowed window at the target mode size, then enter full
+            // screen from ShowMainWindow() after the first frame is ready.
+            m_deferred_fullscreen        = true;
+            m_deferred_fullscreen_width  = width;
+            m_deferred_fullscreen_height = height;
+        }
     }
 
     GLFWwindow* window = glfwCreateWindow(width, height, info.title.c_str(), monitor, nullptr);
+    // Window hints persist across creations. Restore the normal default so editor platform
+    // windows are not accidentally created hidden after a hidden main-window bootstrap.
+    glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
 
     glfwSetWindowUserPointer(window, this);
 
@@ -339,6 +358,49 @@ void GLFWWindowImpl::RequestClose(WindowHandle* _window) {
 
 bool GLFWWindowImpl::ShouldClose(WindowHandle* _window) const {
     return glfwWindowShouldClose((GLFWwindow*)_window->window);
+}
+void GLFWWindowImpl::ShowMainWindow() {
+    assert(IsCurrentlyGameThread() && "GLFW main-window visibility must be changed on the Game Thread.");
+    auto* window = (GLFWwindow*)main_window_handle.window;
+    if (m_deferred_fullscreen) {
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        if (monitor != nullptr) {
+            // glfwGetError reports and clears the oldest pending error. Clear
+            // unrelated startup errors so the result below belongs to this
+            // monitor transition.
+            glfwGetError(nullptr);
+            glfwSetWindowMonitor(
+                window,
+                monitor,
+                0,
+                0,
+                m_deferred_fullscreen_width,
+                m_deferred_fullscreen_height,
+                GLFW_DONT_CARE
+            );
+            const char* glfw_error_description = nullptr;
+            const int   glfw_error = glfwGetError(&glfw_error_description);
+            if (glfw_error == GLFW_NO_ERROR) {
+                LOG_INFO(
+                    "[Startup][Window] Entered deferred full-screen mode at {}x{}.",
+                    m_deferred_fullscreen_width,
+                    m_deferred_fullscreen_height
+                );
+            } else {
+                LOG_ERROR(
+                    "[Startup][Window] Failed to enter deferred full-screen mode: error={}, description={}",
+                    glfw_error,
+                    glfw_error_description ? glfw_error_description : "<none>"
+                );
+            }
+        } else {
+            LOG_WARNING(
+                "Unable to enter deferred full-screen mode because no primary monitor is available."
+            );
+        }
+        m_deferred_fullscreen = false;
+    }
+    glfwShowWindow(window);
 }
 void* GLFWWindowImpl::GetNativeWindow(WindowHandle* _window) const {
 #if PLATFORM_WINDOWS

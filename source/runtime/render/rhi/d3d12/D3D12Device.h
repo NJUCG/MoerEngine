@@ -1025,7 +1025,11 @@ public:
     // queue.signal is not exposed, exist in cmdsubmit.signalevent
     void        Wait(WaitEvent _event) override;
     WaitEvent   Execute(CmdSubmit&& _submit) override;
-    void        Present(SwapchainRef _swapchain, TextureView _target) override;
+    void Present(
+        SwapchainRef      _swapchain,
+        TextureView       _target,
+        PresentReceiptRef _receipt = {}
+    ) override;
     void        Sync() override;
     ProfileData GetProfilerEntry() override {
         return {};
