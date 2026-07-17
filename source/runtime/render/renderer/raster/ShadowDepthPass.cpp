@@ -539,15 +539,22 @@ bool ShadowDepthPass::RefreshShadowCasterBounds(RasterContext& context) {
     if (m_shadow_caster_bounds_generation == 0u) {
         ++m_shadow_caster_bounds_generation;
     }
-    m_log_cascade_bounds_next_render = true;
-    LOG_INFO(
-        "[CSM] Shadow caster bounds rebuilt: generation={}, primitive_bounds={}, leaf_primitives={}, "
-        "skipped_invalid={}.",
-        m_shadow_caster_bounds_generation,
-        m_shadow_caster_bounds.size(),
-        scene_updates.geometry->leaf_primitive_count,
-        scene_updates.geometry->skipped_invalid_count
-    );
+    if (m_shadow_caster_bounds_generation == 1u) {
+        m_shadow_caster_bounds_log_timer.Reset(false);
+        m_log_cascade_bounds_next_render = true;
+    } else {
+        m_log_cascade_bounds_next_render = m_shadow_caster_bounds_log_timer.Tick();
+    }
+    if (m_log_cascade_bounds_next_render) {
+        LOG_INFO(
+            "[CSM] Shadow caster bounds rebuilt: generation={}, primitive_bounds={}, leaf_primitives={}, "
+            "skipped_invalid={}.",
+            m_shadow_caster_bounds_generation,
+            m_shadow_caster_bounds.size(),
+            scene_updates.geometry->leaf_primitive_count,
+            scene_updates.geometry->skipped_invalid_count
+        );
+    }
     return true;
 }
 

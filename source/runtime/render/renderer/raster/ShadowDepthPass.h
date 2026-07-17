@@ -3,6 +3,7 @@
 #include "RasterConfig.h"
 #include "math/Function.h"
 #include "misc/BoundingBox.h"
+#include "misc/Timer.h"
 #include "shader/ShaderPipeline.h"
 
 #include <optional>
@@ -66,5 +67,6 @@ private:
     uint64_t                m_shadow_caster_bounds_generation = 0u;
     bool                    m_shadow_caster_bounds_valid      = false;
     bool                    m_log_cascade_bounds_next_render  = false;
+    LoopedTimer             m_shadow_caster_bounds_log_timer{5.0, false};
 };
 } // namespace Moer::Render::Raster
