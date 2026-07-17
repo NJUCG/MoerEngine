@@ -606,7 +606,7 @@ void DrawSplashContent(HDC dc, const RECT& client, const WindowContext& context)
         L"MoerEngine",
         -1,
         &product_rect,
-        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_NOCLIP
     );
 
     RECT edition_rect{
