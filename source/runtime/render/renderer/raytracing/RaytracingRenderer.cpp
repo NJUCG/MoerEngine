@@ -29,7 +29,10 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cstdlib>
+#include <limits>
 #include <new>
+#include <sstream>
 #include <thread>
 
 namespace Moer::Render::Raytracing {
@@ -51,6 +54,118 @@ bool EqualQuaternion(const Quaternion& lhs, const Quaternion& rhs) {
            lhs.vec.w == rhs.vec.w;
 }
 
+double FindGpuTime(const ProfileData& profile_data, std::string_view name) {
+    for (const auto& entry : profile_data.gpu_entries) {
+        if (entry.name == name) {
+            return entry.time;
+        }
+    }
+    return -1.0;
+}
+
+bool IsProfileLogEnabled() {
+    static const bool enabled = []() {
+        const char* value = std::getenv("MOER_RT_PROFILE_LOG");
+        return value && value[0] != '\0' && std::string_view(value) != "0";
+    }();
+    return enabled;
+}
+
+bool IsLegacyTlasUpdateEnabled() {
+    static const bool enabled = []() {
+        const char* value = std::getenv("MOER_RT_TLAS_EVERY_FRAME");
+        return value && value[0] != '\0' && std::string_view(value) != "0";
+    }();
+    return enabled;
+}
+
+bool IsLightGridForced() {
+    static const bool enabled = []() {
+        const char* value = std::getenv("MOER_RT_FORCE_LIGHT_GRID");
+        return value && value[0] != '\0' && std::string_view(value) != "0";
+    }();
+    return enabled;
+}
+
+std::string_view LocalLightSampleModeName(uint mode) {
+    switch (mode) {
+        case s_di_local_light_sample_mode_uniform:
+            return "Uniform";
+        case s_di_local_light_sample_mode_power_ris:
+            return "PowerRIS";
+        case s_di_local_light_sample_mode_grid:
+            return "Grid";
+        default:
+            return "Unknown";
+    }
+}
+
+void TickAndLogProfiling(const RaytracingFrameFeedback& feedback) {
+    const ProfileData& profile_data = feedback.profiler_data;
+    if (!IsProfileLogEnabled() || profile_data.gpu_entries.empty()) {
+        return;
+    }
+
+    static LoopedTimer timer(1.0, true);
+    if (!timer.Tick()) {
+        return;
+    }
+
+    constexpr std::pair<std::string_view, std::string_view> entries[] = {
+        {"GraphicsExec", "Graphics Exec"},
+        {"PrepareLights", "PrepareLights"},
+        {"GBuffer", "GBufferPass"},
+        {"LightingTotal", "LightingPass"},
+        {"DIPresampleLocal", "ReSTIR DI Presample Local"},
+        {"DIPresampleEnv", "ReSTIR DI Presample Environment"},
+        {"DIPresampleGrid", "ReSTIR DI Presample Grid"},
+        {"DIInitial", "ReSTIR DI Initial"},
+        {"DITemporal", "ReSTIR DI Temporal"},
+        {"DISpatial", "ReSTIR DI Spatial"},
+        {"DIShade", "ReSTIR DI Shade"},
+        {"RendererTLAS", "RTScene RendererTLAS"},
+        {"TLASBuild", "RTScene BuildTLAS"},
+        {"TLASUpdate", "RTScene UpdateTLAS"},
+        {"AntiAlias", "AntiAliasPass"},
+        {"ToneMapping", "ToneMappingPass"},
+    };
+
+    std::ostringstream stream;
+    stream.setf(std::ios::fixed);
+    stream.precision(3);
+    stream << "[RaytracingProfile] GPU(ms)";
+    double di_shader_sum = 0.0;
+    for (const auto& [key, scope_name] : entries) {
+        const double duration = FindGpuTime(profile_data, scope_name);
+        if (duration >= 0.0) {
+            stream << ' ' << key << '=' << duration;
+            if (key.starts_with("DI")) {
+                di_shader_sum += duration;
+            }
+        }
+    }
+    const double lighting_total = FindGpuTime(profile_data, "LightingPass");
+    if (lighting_total >= 0.0) {
+        stream << " DIShaderSum=" << di_shader_sum
+               << " LightingUnattributed=" << lighting_total - di_shader_sum;
+    }
+    stream << " TLASPolicy=" << (IsLegacyTlasUpdateEnabled() ? "LegacyEveryFrame" : "RevisionGated")
+           << " RendererTLASBuilds=" << feedback.renderer_tlas_build_count
+           << " RendererTLASSkips=" << feedback.renderer_tlas_skip_count
+           << " SceneTLASUpdates=" << feedback.scene_tlas_update_count
+           << " RTRevision=" << feedback.rt_instance_revision
+           << " CurrentTLASRevision=" << feedback.current_tlas_revision
+           << " PreviousTLASRevision=" << feedback.previous_tlas_revision
+           << " ConfiguredLocalLightSampling="
+           << LocalLightSampleModeName(feedback.configured_local_light_sample_mode)
+           << " EffectiveLocalLightSampling="
+           << LocalLightSampleModeName(feedback.effective_local_light_sample_mode)
+           << " AdaptiveFallback="
+           << (feedback.adaptive_local_light_fallback_applied ? "Applied" : "NotApplied")
+           << " LocalLights=" << feedback.local_light_count;
+    LOG_INFO("{}", stream.str());
+}
+
 void ExecuteSceneUpdate(
     RenderScene&     render_scene,
     GpuSceneUpdate&& update,
@@ -67,6 +182,8 @@ void ExecuteSceneUpdate(
 } // namespace
 
 struct RaytracingRenderer::RuntimeState {
+    static constexpr uint64 invalid_tlas_revision = std::numeric_limits<uint64>::max();
+
     bool b_new_env_map = false;
 
     TextureRef         env_map{};
@@ -90,6 +207,13 @@ struct RaytracingRenderer::RuntimeState {
 
     bool b_feedback_valid = false;
     bool b_export         = false;
+
+    uint64 rt_instance_revision      = 0;
+    uint64 current_tlas_revision     = invalid_tlas_revision;
+    uint64 previous_tlas_revision    = invalid_tlas_revision;
+    uint64 renderer_tlas_build_count = 0;
+    uint64 renderer_tlas_skip_count  = 0;
+    uint64 scene_tlas_update_count   = 0;
 
     std::filesystem::path exported_file_path;
 
@@ -464,11 +588,21 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         state.b_export = ui_config.export_cfg.b_export;
 
         if (state.rt_scene) {
-            for (size_t i = 0; i < state.rt_scene->GetInstanceCount(); i++) {
-                auto& instance = state.rt_scene->GetInstance(i);
-                state.rt_scene->MarkModified(instance.instance_id);
+            const bool needs_tlas_build = IsLegacyTlasUpdateEnabled() ||
+                                          state.current_tlas_revision != state.rt_instance_revision;
+            if (needs_tlas_build) {
+                for (size_t i = 0; i < state.rt_scene->GetInstanceCount(); i++) {
+                    auto& instance = state.rt_scene->GetInstance(i);
+                    state.rt_scene->MarkModified(instance.instance_id);
+                }
+                cmd_list.PushScopeWithTimeScope("RTScene RendererTLAS");
+                cmd_list.UpdateRaytracingScene(state.rt_scene);
+                cmd_list.PopScopeWithTimeScope();
+                state.current_tlas_revision = state.rt_instance_revision;
+                ++state.renderer_tlas_build_count;
+            } else {
+                ++state.renderer_tlas_skip_count;
             }
-            cmd_list.UpdateRaytracingScene(state.rt_scene);
         }
 
         ToneMappingPass::Params tone_params{};
@@ -498,6 +632,12 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
 
             di_initial_sample_config.local_light_sample_mode =
                 ui_config.restir_di_cfg.initial_sample_config.local_light_sample_mode;
+            state.rt_ctx->config.enable_adaptive_local_light_sampling =
+                ui_config.restir_di_cfg.initial_sample_config.enable_adaptive_local_light_sampling &&
+                !IsLightGridForced();
+            state.rt_ctx->config.grid_min_local_light_count = static_cast<uint>(std::max(
+                ui_config.restir_di_cfg.initial_sample_config.grid_min_local_light_count, 1
+            ));
             di_initial_sample_config.env_map_is =
                 state.importance_sampling_context.GetLightBufferParams().env_light.light_cnt;
             di_temporal_resampling_config.bias_correction_mode =
@@ -561,7 +701,12 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         state.rt_ctx->Tick(camera, state.antialias_pass->GetPixelOffset());
         state.prepare_light_pass->Process(cmd_list, *state.rt_ctx, scene_snapshot);
         state.g_buffer_pass->Process(cmd_list, *state.rt_ctx);
-        state.lighting_pass->Process(cmd_list, *state.rt_ctx);
+        const auto local_light_sampling = state.lighting_pass->Process(cmd_list, *state.rt_ctx);
+        feedback.configured_local_light_sample_mode = local_light_sampling.configured_mode;
+        feedback.effective_local_light_sample_mode  = local_light_sampling.effective_mode;
+        feedback.adaptive_local_light_fallback_applied =
+            local_light_sampling.adaptive_fallback_applied;
+        feedback.local_light_count = local_light_sampling.local_light_count;
 
 #if WITH_NRD
         {
@@ -705,6 +850,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
 
     if (state.rt_scene) {
         state.rt_scene->AdvanceFrame();
+        std::swap(state.current_tlas_revision, state.previous_tlas_revision);
     }
 
     time++;
@@ -739,6 +885,12 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     }
 
     feedback.profiler_data = gfx_queue.GetProfilerEntry();
+    feedback.renderer_tlas_build_count = state.renderer_tlas_build_count;
+    feedback.renderer_tlas_skip_count  = state.renderer_tlas_skip_count;
+    feedback.scene_tlas_update_count   = state.scene_tlas_update_count;
+    feedback.rt_instance_revision      = state.rt_instance_revision;
+    feedback.current_tlas_revision     = state.current_tlas_revision;
+    feedback.previous_tlas_revision    = state.previous_tlas_revision;
     feedback.material_texture_names.reserve(state.material_textures.size());
     for (const auto& entry : state.material_textures) {
         feedback.material_texture_names.emplace_back(entry.first);
@@ -751,6 +903,7 @@ void RaytracingRenderer::ApplyFrameFeedback(
     RaytracingConfig&       target_config
 ) {
     assert(IsCurrentlyGameThread());
+    TickAndLogProfiling(feedback);
     if (feedback.has_grid_cell_size) {
         target_config.grid_config.cell_size = feedback.grid_cell_size;
     }
@@ -842,21 +995,42 @@ void RaytracingRenderer::RefreshSceneRuntimeRefs() {
     state.rt_ctx->SetRaytracingScene(state.rt_scene);
     if (rt_scene_changed) {
         state.b_feedback_valid = false;
+        state.current_tlas_revision  = RuntimeState::invalid_tlas_revision;
+        state.previous_tlas_revision = RuntimeState::invalid_tlas_revision;
     }
 }
 
 void RaytracingRenderer::ExecuteSceneUpdates(SceneUpdateBatch& batch) {
-    bool updated = false;
+    auto& state = *runtime_state;
+    bool  updated = false;
+    bool  rt_scene_updated = false;
     if (batch.initial_gpu_update) {
+        const bool has_rt_update = batch.initial_gpu_update->raytracing_update !=
+                                   EGpuSceneRaytracingUpdate::None;
         ExecuteSceneUpdate(*render_scene, std::move(*batch.initial_gpu_update), device, gfx_queue);
-        updated = true;
+        updated          = true;
+        rt_scene_updated = rt_scene_updated || has_rt_update;
+        if (has_rt_update) {
+            ++state.rt_instance_revision;
+            ++state.scene_tlas_update_count;
+        }
     }
     if (batch.update_gpu_update) {
+        const bool has_rt_update = batch.update_gpu_update->raytracing_update !=
+                                   EGpuSceneRaytracingUpdate::None;
         ExecuteSceneUpdate(*render_scene, std::move(*batch.update_gpu_update), device, gfx_queue);
-        updated = true;
+        updated          = true;
+        rt_scene_updated = rt_scene_updated || has_rt_update;
+        if (has_rt_update) {
+            ++state.rt_instance_revision;
+            ++state.scene_tlas_update_count;
+        }
     }
     if (updated) {
         RefreshSceneRuntimeRefs();
+    }
+    if (rt_scene_updated && state.rt_scene) {
+        state.current_tlas_revision = state.rt_instance_revision;
     }
 }
 

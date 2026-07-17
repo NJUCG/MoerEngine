@@ -34,6 +34,8 @@ public:
 namespace Moer::Render {
 
 struct ProfileSection {
+    // Non-"Other" names must be unique across timestamped scopes and dispatches
+    // within one profiled submission because each name owns one query pair.
     std::string_view name;
     explicit ProfileSection(const char* _name) : name(_name) {}
 };

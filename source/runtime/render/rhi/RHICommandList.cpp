@@ -107,7 +107,7 @@ void CommandList::ComputeDispatcher::Dispatch(
             _name
         );
     }
-    cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _group_count));
+    cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _group_count, _section));
     cmd_list.commands.back()->name = _name;
 }
 
@@ -116,7 +116,7 @@ void CommandList::ComputeDispatcher::DispatchIndirect(
     std::string_view _name,
     ProfileSection   _section
 ) {
-    cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _indirect));
+    cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _indirect, _section));
     cmd_list.commands.back()->name = _name;
 }
 

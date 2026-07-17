@@ -133,8 +133,16 @@ struct ProfilerStorage {
         return data;
     }
 
-    void BeginProfilerSession(VulkanCmdList& _cmd, std::string_view _name);
-    void EndProfilerSession(VulkanCmdList& _cmd, std::string_view _name);
+    void BeginProfilerSession(
+        VulkanCmdList&           _cmd,
+        std::string_view         _name,
+        VkPipelineStageFlagBits  _stage = kBeginTimestampStage
+    );
+    void EndProfilerSession(
+        VulkanCmdList&           _cmd,
+        std::string_view         _name,
+        VkPipelineStageFlagBits  _stage = kEndTimestampStage
+    );
     QueryFrameDiagnostics GetCurrentFrameQueryDiagnostics() const;
 
     bool               active = false;

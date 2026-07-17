@@ -102,6 +102,18 @@ void RaytracingUI::ShowConfig() {
                         m_config.restir_di_cfg.initial_sample_config.local_light_sample_mode = index;
                     }
                 }
+                ImGui::Checkbox(
+                    "Adaptive Grid Fallback",
+                    &m_config.restir_di_cfg.initial_sample_config.enable_adaptive_local_light_sampling
+                );
+                if (m_config.restir_di_cfg.initial_sample_config.enable_adaptive_local_light_sampling) {
+                    ImGui::SliderInt(
+                        "Grid Min Local Lights",
+                        &m_config.restir_di_cfg.initial_sample_config.grid_min_local_light_count,
+                        1,
+                        1024
+                    );
+                }
                 ImGui::TreePop();
             }
             ImGui::TreePop();

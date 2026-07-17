@@ -93,9 +93,16 @@ public:
 
 class LightingPass {
 public:
+    struct LocalLightSamplingDecision {
+        uint configured_mode           = s_di_local_light_sample_mode_uniform;
+        uint effective_mode            = s_di_local_light_sample_mode_uniform;
+        bool adaptive_fallback_applied = false;
+        uint local_light_count          = 0;
+    };
+
     LightingPass(class ShaderManager& manager, BindlessArrayRef bindless_array);
 
-    void Process(CommandList& cmd_list, RTContext& rt_ctx);
+    LocalLightSamplingDecision Process(CommandList& cmd_list, RTContext& rt_ctx);
 
 private:
     BindlessArrayRef bindless_array;

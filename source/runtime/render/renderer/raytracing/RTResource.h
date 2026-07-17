@@ -68,6 +68,8 @@ struct RTContext {
         float4      reblur_specular_hit_dist_params;
         EFinalColor final_color;
         uint        denoiser_mode;
+        bool        enable_adaptive_local_light_sampling = true;
+        uint        grid_min_local_light_count           = 64;
     };
 
 public:
