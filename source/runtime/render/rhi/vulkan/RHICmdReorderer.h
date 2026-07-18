@@ -1441,8 +1441,13 @@ public:
     }
 
     void VisitCmd(const ScopeCmd* _cmd) {
+        const uint64 scope_layer = m_cmd_lists.size();
+        AddCmd(_cmd, scope_layer);
+        // A marker owns its layer. Work after a push (and barriers for that
+        // work) must be recorded inside the label; work after a pop must start
+        // outside it. Sharing a layer lets preprocessing barriers escape or
+        // bleed into the adjacent RenderDoc scope.
         layer_offset = m_cmd_lists.size();
-        AddCmd(_cmd, layer_offset);
     }
 
     void VisitCmd(const CustomCmd* _cmd) {

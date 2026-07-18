@@ -522,9 +522,20 @@ void ImGuiRenderBackend::RenderGUI(
     auto& render_data = *static_cast<ImGuiData*>(backend_data);
 
     _cmd_list.UpdateBindlessArray(bindless_array);
-    RenderGuiDrawPacket(_frame.main_viewport, _main_framebuffer, _cmd_list, render_data, *this);
-    for (auto& viewport : _frame.platform_viewports) {
-        if (viewport.framebuffer) {
+    if (!_frame.main_viewport.commands.empty()) {
+        ScopedGpuMarker viewport_marker(
+            _cmd_list, "Main Viewport", GpuMarkerPalette::Ui()
+        );
+        RenderGuiDrawPacket(_frame.main_viewport, _main_framebuffer, _cmd_list, render_data, *this);
+    }
+    for (size_t viewport_index = 0; viewport_index < _frame.platform_viewports.size(); ++viewport_index) {
+        auto& viewport = _frame.platform_viewports[viewport_index];
+        if (viewport.framebuffer && !viewport.commands.empty()) {
+            ScopedGpuMarker viewport_marker(
+                _cmd_list,
+                std::format("Platform Viewport {}", viewport_index),
+                GpuMarkerPalette::Ui()
+            );
             RenderGuiDrawPacket(viewport, viewport.framebuffer->GetView(), _cmd_list, render_data, *this);
         }
     }

@@ -16,19 +16,60 @@
 namespace Moer::Render::Raster {
 
 namespace {
-constexpr StaticArray<std::string_view, CSM_MAX_CASCADES> s_shadow_culling_scope_names = {
+constexpr StaticArray<std::string_view, CSM_MAX_CASCADES> s_csm_shadow_cascade_marker_names = {
+    "CSM Cascade 0",
+    "CSM Cascade 1",
+    "CSM Cascade 2",
+    "CSM Cascade 3"
+};
+
+constexpr StaticArray<std::string_view, CSM_MAX_CASCADES> s_csm_shadow_culling_scope_names = {
     "Raster Shadow Culling CSM0",
     "Raster Shadow Culling CSM1",
     "Raster Shadow Culling CSM2",
     "Raster Shadow Culling CSM3"
 };
 
-constexpr StaticArray<std::string_view, CSM_MAX_CASCADES> s_shadow_draw_scope_names = {
+constexpr StaticArray<std::string_view, CSM_MAX_CASCADES> s_csm_shadow_draw_scope_names = {
     "Raster Shadow Draw CSM0",
     "Raster Shadow Draw CSM1",
     "Raster Shadow Draw CSM2",
     "Raster Shadow Draw CSM3"
 };
+
+constexpr StaticArray<std::string_view, CUBE_FACE_Num> s_point_shadow_face_marker_names = {
+    "Point Shadow Face +X",
+    "Point Shadow Face -X",
+    "Point Shadow Face +Y",
+    "Point Shadow Face -Y",
+    "Point Shadow Face +Z",
+    "Point Shadow Face -Z"
+};
+
+constexpr StaticArray<std::string_view, CUBE_FACE_Num> s_point_shadow_culling_scope_names = {
+    "Raster PointShadow Culling +X",
+    "Raster PointShadow Culling -X",
+    "Raster PointShadow Culling +Y",
+    "Raster PointShadow Culling -Y",
+    "Raster PointShadow Culling +Z",
+    "Raster PointShadow Culling -Z"
+};
+
+constexpr StaticArray<std::string_view, CUBE_FACE_Num> s_point_shadow_draw_scope_names = {
+    "Raster PointShadow Draw +X",
+    "Raster PointShadow Draw -X",
+    "Raster PointShadow Draw +Y",
+    "Raster PointShadow Draw -Y",
+    "Raster PointShadow Draw +Z",
+    "Raster PointShadow Draw -Z"
+};
+
+static_assert(s_csm_shadow_cascade_marker_names.size() == CSM_MAX_CASCADES);
+static_assert(s_csm_shadow_culling_scope_names.size() == CSM_MAX_CASCADES);
+static_assert(s_csm_shadow_draw_scope_names.size() == CSM_MAX_CASCADES);
+static_assert(s_point_shadow_face_marker_names.size() == CUBE_FACE_Num);
+static_assert(s_point_shadow_culling_scope_names.size() == CUBE_FACE_Num);
+static_assert(s_point_shadow_draw_scope_names.size() == CUBE_FACE_Num);
 
 std::string BuildDebugLogSiteKey(std::source_location location) {
     std::ostringstream stream;
@@ -74,16 +115,36 @@ std::string_view RasterTool::GetGeometryDrawProfileScopeName() {
     return "Raster Geometry Draw";
 }
 
-// 返回某个级联阴影视锥剔除 dispatch 使用的 profiling scope 名称。
-std::string_view RasterTool::GetShadowCullingProfileScopeName(uint cascade_index) {
+// 返回某个级联阴影的可视 marker 名称。
+std::string_view RasterTool::GetCsmShadowCascadeMarkerName(uint cascade_index) {
     assert(cascade_index < CSM_MAX_CASCADES);
-    return s_shadow_culling_scope_names[cascade_index];
+    return s_csm_shadow_cascade_marker_names[cascade_index];
 }
 
-// 返回某个级联阴影绘制提交使用的 profiling scope 名称。
-std::string_view RasterTool::GetShadowDrawProfileScopeName(uint cascade_index) {
+// 返回某个级联阴影视锥剔除 dispatch 使用的 profiling scope 名称。
+std::string_view RasterTool::GetCsmShadowCullingProfileScopeName(uint cascade_index) {
     assert(cascade_index < CSM_MAX_CASCADES);
-    return s_shadow_draw_scope_names[cascade_index];
+    return s_csm_shadow_culling_scope_names[cascade_index];
+}
+
+std::string_view RasterTool::GetCsmShadowDrawProfileScopeName(uint cascade_index) {
+    assert(cascade_index < CSM_MAX_CASCADES);
+    return s_csm_shadow_draw_scope_names[cascade_index];
+}
+
+std::string_view RasterTool::GetPointShadowFaceMarkerName(uint face) {
+    assert(face < CUBE_FACE_Num);
+    return s_point_shadow_face_marker_names[face];
+}
+
+std::string_view RasterTool::GetPointShadowCullingProfileScopeName(uint face) {
+    assert(face < CUBE_FACE_Num);
+    return s_point_shadow_culling_scope_names[face];
+}
+
+std::string_view RasterTool::GetPointShadowDrawProfileScopeName(uint face) {
+    assert(face < CUBE_FACE_Num);
+    return s_point_shadow_draw_scope_names[face];
 }
 
 void RasterTool::LogDebugEverySeconds(
@@ -129,21 +190,29 @@ void RasterTool::TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig
     stream.setf(std::ios::fixed);
     stream.precision(3);
 
-    const double graphics_exec      = find_gpu_time("Graphics Exec");
-    const double shadow_culling_sum = sum_gpu_times(s_shadow_culling_scope_names);
-    const double shadow_draw_sum    = sum_gpu_times(s_shadow_draw_scope_names);
-    const double geometry_culling   = find_gpu_time(GetGeometryCullingProfileScopeName());
-    const double geometry_draw      = find_gpu_time(GetGeometryDrawProfileScopeName());
+    const double graphics_exec            = find_gpu_time("Graphics Exec");
+    const double csm_shadow_culling_sum   = sum_gpu_times(s_csm_shadow_culling_scope_names);
+    const double csm_shadow_draw_sum      = sum_gpu_times(s_csm_shadow_draw_scope_names);
+    const double point_shadow_culling_sum = sum_gpu_times(s_point_shadow_culling_scope_names);
+    const double point_shadow_draw_sum    = sum_gpu_times(s_point_shadow_draw_scope_names);
+    const double geometry_culling        = find_gpu_time(GetGeometryCullingProfileScopeName());
+    const double geometry_draw           = find_gpu_time(GetGeometryDrawProfileScopeName());
 
     stream << "[RasterProfile] GPU(ms)";
     if (graphics_exec >= 0.0) {
         stream << " GraphicsExec=" << graphics_exec;
     }
-    if (shadow_culling_sum > 0.0) {
-        stream << " ShadowCullSum=" << shadow_culling_sum;
+    if (csm_shadow_culling_sum > 0.0) {
+        stream << " CsmShadowCullSum=" << csm_shadow_culling_sum;
     }
-    if (shadow_draw_sum > 0.0) {
-        stream << " ShadowDrawSum=" << shadow_draw_sum;
+    if (csm_shadow_draw_sum > 0.0) {
+        stream << " CsmShadowDrawSum=" << csm_shadow_draw_sum;
+    }
+    if (point_shadow_culling_sum > 0.0) {
+        stream << " PointShadowCullSum=" << point_shadow_culling_sum;
+    }
+    if (point_shadow_draw_sum > 0.0) {
+        stream << " PointShadowDrawSum=" << point_shadow_draw_sum;
     }
     if (geometry_culling >= 0.0) {
         stream << " GeometryCull=" << geometry_culling;

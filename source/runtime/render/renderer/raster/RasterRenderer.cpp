@@ -520,6 +520,10 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             );
         }
 
+        ScopedGpuMarker renderer_marker(
+            cmd_list, "Raster Renderer", GpuMarkerPalette::Renderer()
+        );
+
         const Camera& main_camera = scene_updates.main_camera;
         Camera        camera      = frame_packet.render_camera;
 
@@ -970,11 +974,16 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         };
 
         auto execute_linear = [&]() {
-            auto linear_schedule = [](
-                                       std::string_view,
-                                       auto&&,
-                                       auto&& execute
-                                   ) { std::forward<decltype(execute)>(execute)(); };
+            ScopedGpuMarker pipeline_marker(
+                cmd_list, "Raster Linear Pipeline", GpuMarkerPalette::RenderGraph()
+            );
+            auto linear_schedule = [&](std::string_view name, auto&&, auto&& execute) {
+                const std::string marker_name = std::format("Pass: {}", name);
+                ScopedGpuMarker pass_marker(
+                    cmd_list, marker_name, GpuMarkerPalette::Pass()
+                );
+                std::forward<decltype(execute)>(execute)();
+            };
             define_raster_passes(linear_schedule);
         };
 
@@ -1094,10 +1103,16 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 execute_linear();
             } else {
                 auto graph_schedule = [&](std::string_view name, auto&& setup, auto&& execute) {
+                    const std::string marker_name = std::format("Pass: {}", name);
                     graph.AddPass(
                         name,
                         std::forward<decltype(setup)>(setup),
-                        std::forward<decltype(execute)>(execute)
+                        [&, marker_name, execute = std::forward<decltype(execute)>(execute)]() mutable {
+                            ScopedGpuMarker pass_marker(
+                                cmd_list, marker_name, GpuMarkerPalette::Pass()
+                            );
+                            execute();
+                        }
                     );
                 };
                 define_raster_passes(graph_schedule);
@@ -1113,7 +1128,13 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                             LOG_INFO("[RenderGraph][DebugDump]\n{}", dump);
                         }
                     }
+                    ScopedGpuMarker graph_marker(
+                        cmd_list,
+                        "Raster RenderGraph: RasterFrame",
+                        GpuMarkerPalette::RenderGraph()
+                    );
                     if (!graph.Execute()) {
+                        graph_marker.Close();
                         render_graph_fallback_latched = true;
                         LOG_ERROR(
                             "[RenderGraph][Fallback] Raster graph execution was rejected before any pass: {}. "
@@ -1158,7 +1179,16 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     time++;
     // Host 同步的 copy 操作已经完成。此处触发 timeline，向 validation layer 传递执行顺序，
     // 无需再额外等待 copy queue。
-    gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources().TickProfiling());
+    gfx_queue.Execute(
+        cmd_list.Submit()
+            .DebugLabel(
+                std::format("Raster Frame {}", frame_packet.frame_id),
+                GpuMarkerPalette::Frame()
+            )
+            .Signal(timeline, time)
+            .DeleteResources()
+            .TickProfiling()
+    );
 
     if (!skip_present) {
         const auto output_view = default_output_texture->GetView();

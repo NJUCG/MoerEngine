@@ -739,6 +739,10 @@ struct VulkanSerialGoldenTrace::Impl {
                 hash.Add(command.IsPush() ? 1u : 0u);
                 hash.Add(command.QueryTimestamp() ? 1u : 0u);
                 hash.AddString(command.ScopeName());
+                AddFloat(hash, command.Color().x);
+                AddFloat(hash, command.Color().y);
+                AddFloat(hash, command.Color().z);
+                AddFloat(hash, command.Color().w);
                 break;
             }
             case Command::EType::Count:

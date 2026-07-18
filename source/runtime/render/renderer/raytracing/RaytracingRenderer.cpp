@@ -548,7 +548,14 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             gfx_queue.Sync();
         }
 
+        ScopedGpuMarker renderer_marker(
+            cmd_list, "Raytracing Renderer", GpuMarkerPalette::Renderer()
+        );
+
         if (state.b_new_env_map) {
+            ScopedGpuMarker environment_marker(
+                cmd_list, "Pass: Environment Setup", GpuMarkerPalette::Pass()
+            );
             auto src_env_map = runtime_assets.GetDefaultEnvMap();
             state.env_map    = device.CreateTexture(
                 src_env_map->GetName(),
@@ -591,6 +598,9 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             const bool needs_tlas_build = IsLegacyTlasUpdateEnabled() ||
                                           state.current_tlas_revision != state.rt_instance_revision;
             if (needs_tlas_build) {
+                ScopedGpuMarker tlas_marker(
+                    cmd_list, "Pass: Scene Acceleration Structure", GpuMarkerPalette::Pass()
+                );
                 for (size_t i = 0; i < state.rt_scene->GetInstanceCount(); i++) {
                     auto& instance = state.rt_scene->GetInstance(i);
                     state.rt_scene->MarkModified(instance.instance_id);
@@ -699,9 +709,23 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         cmd_list.UpdateBindlessArray(bindless_array);
 
         state.rt_ctx->Tick(camera, state.antialias_pass->GetPixelOffset());
-        state.prepare_light_pass->Process(cmd_list, *state.rt_ctx, scene_snapshot);
-        state.g_buffer_pass->Process(cmd_list, *state.rt_ctx);
+        {
+            ScopedGpuMarker pass_marker(
+                cmd_list, "Pass: Prepare Lights", GpuMarkerPalette::Pass()
+            );
+            state.prepare_light_pass->Process(cmd_list, *state.rt_ctx, scene_snapshot);
+        }
+        {
+            ScopedGpuMarker pass_marker(
+                cmd_list, "Pass: GBuffer", GpuMarkerPalette::Pass()
+            );
+            state.g_buffer_pass->Process(cmd_list, *state.rt_ctx);
+        }
+        ScopedGpuMarker lighting_marker(
+            cmd_list, "Pass: Lighting", GpuMarkerPalette::Pass()
+        );
         const auto local_light_sampling = state.lighting_pass->Process(cmd_list, *state.rt_ctx);
+        lighting_marker.Close();
         feedback.configured_local_light_sample_mode = local_light_sampling.configured_mode;
         feedback.effective_local_light_sample_mode  = local_light_sampling.effective_mode;
         feedback.adaptive_local_light_fallback_applied =
@@ -723,6 +747,9 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             }
 
             if (denoiser != nrd::Denoiser::MAX_NUM) {
+                ScopedGpuMarker denoiser_marker(
+                    cmd_list, "Pass: Radiance Denoising", GpuMarkerPalette::Pass()
+                );
                 state.nrd_interface->Begin();
                 state.nrd_interface->UpdateCommonSettings(
                     state.nrd_time++,
@@ -758,25 +785,50 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         }
 #endif
 
-        state.composition_pass->Process(cmd_list, *state.rt_ctx);
-        state.antialias_pass->Process(
-            cmd_list,
-            aa_params,
-            state.b_feedback_valid,
-            state.rt_ctx->frame_rt.hdr_color,
-            state.rt_ctx->frame_rt.resolved_color
-        );
-        state.tone_mapping_pass->Process(
-            cmd_list,
-            tone_params,
-            state.rt_ctx->frame_rt.resolved_color,
-            state.rt_ctx->frame_rt.ldr_color
-        );
-        state.visualize_pass->Process(cmd_list, *state.rt_ctx, state.visualize_config, bindless_array);
+        {
+            ScopedGpuMarker pass_marker(
+                cmd_list, "Pass: Composition", GpuMarkerPalette::Pass()
+            );
+            state.composition_pass->Process(cmd_list, *state.rt_ctx);
+        }
+        {
+            ScopedGpuMarker pass_marker(
+                cmd_list, "Pass: Anti Aliasing", GpuMarkerPalette::Pass()
+            );
+            state.antialias_pass->Process(
+                cmd_list,
+                aa_params,
+                state.b_feedback_valid,
+                state.rt_ctx->frame_rt.hdr_color,
+                state.rt_ctx->frame_rt.resolved_color
+            );
+        }
+        {
+            ScopedGpuMarker pass_marker(
+                cmd_list, "Pass: Tone Mapping", GpuMarkerPalette::Pass()
+            );
+            state.tone_mapping_pass->Process(
+                cmd_list,
+                tone_params,
+                state.rt_ctx->frame_rt.resolved_color,
+                state.rt_ctx->frame_rt.ldr_color
+            );
+        }
+        {
+            ScopedGpuMarker pass_marker(
+                cmd_list, "Pass: Visualize", GpuMarkerPalette::Pass()
+            );
+            state.visualize_pass->Process(
+                cmd_list, *state.rt_ctx, state.visualize_config, bindless_array
+            );
+        }
 
         const auto& debug_input = frame_packet.debug_input;
         if (debug_input.show_final_texture &&
             state.material_textures.contains(debug_input.selected_material_texture_name)) {
+            ScopedGpuMarker debug_texture_marker(
+                cmd_list, "Pass: Debug Texture", GpuMarkerPalette::Pass()
+            );
             TextureRef texture = state.material_textures[debug_input.selected_material_texture_name].tex;
             ShowTextureParams show_texture_params{};
             show_texture_params.dst_dim = resolution;
@@ -795,7 +847,15 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         state.b_feedback_valid = true;
 
         if (state.b_export) {
-            gfx_queue.Execute(cmd_list.Submit().TickProfiling());
+            renderer_marker.Close();
+            gfx_queue.Execute(
+                cmd_list.Submit()
+                    .DebugLabel(
+                        std::format("Raytracing Export Frame {}", frame_packet.frame_id),
+                        GpuMarkerPalette::Frame()
+                    )
+                    .TickProfiling()
+            );
             gfx_queue.Sync();
             DumpTextureToFile(
                 ui_config.export_cfg,
@@ -854,7 +914,16 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     }
 
     time++;
-    gfx_queue.Execute(cmd_list.Submit().Signal(timeline, time).DeleteResources().TickProfiling());
+    gfx_queue.Execute(
+        cmd_list.Submit()
+            .DebugLabel(
+                std::format("Raytracing Frame {}", frame_packet.frame_id),
+                GpuMarkerPalette::Frame()
+            )
+            .Signal(timeline, time)
+            .DeleteResources()
+            .TickProfiling()
+    );
     if (!skip_present) {
         const auto output_view = state.output->GetView();
         if (frame_packet.window.state == EWindowState::SizeChanged) {

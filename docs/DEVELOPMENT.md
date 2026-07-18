@@ -249,3 +249,7 @@ Shaders文件夹架构及相关规范见`/shaders/README.md`。
    * 有没有用什么设计模式？有没有什么容易出错的地方？有没有什么多线程相关内容？
    * etc...
 5. 命名是否存在歧义或者不规范
+
+## 6. RenderDoc GPU Marker
+
+渲染 pass、GPU 计时区间和帧提交标签应遵循统一层级、颜色与命名约定。添加或修改 marker 前请阅读 [RenderDoc GPU Marker 指南](RENDERDOC.md)，尤其注意 timestamp key 的单次提交唯一性和 marker 对 RHI 命令重排边界的影响。
