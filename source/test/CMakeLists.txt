@@ -32,6 +32,13 @@ target_link_libraries(${test_target}
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
+set(test_target TestRHICommandMarker)
+add_executable(${test_target} "RHICommandMarkerTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+
 set(test_target TestExternalCpuJoin)
 add_executable(${test_target} "ExternalCpuJoinTest.cpp")
 target_link_libraries(${test_target}

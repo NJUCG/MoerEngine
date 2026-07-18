@@ -1543,11 +1543,17 @@ private:
 //command for push/pop debug scope
 struct ScopeCmd : public Command {
 public:
-    ScopeCmd(std::string_view _name, bool _push, bool _query_timestamp) :
+    ScopeCmd(
+        std::string_view _name,
+        bool             _push,
+        bool             _query_timestamp,
+        float4           _color = GpuMarkerPalette::Scope()
+    ) :
         Command(EType::Scope, _name),
         b_push(_push),
         scope_name(_name),
-        b_query_timestamp(_query_timestamp) {}
+        b_query_timestamp(_query_timestamp),
+        color(_color) {}
 
 public:
     EQueueType GetQueueType() const override {
@@ -1565,11 +1571,15 @@ public:
     bool QueryTimestamp() const {
         return b_query_timestamp;
     }
+    const float4& Color() const {
+        return color;
+    }
 
 private:
     bool        b_push            = false;
     bool        b_query_timestamp = false;
     std::string scope_name;
+    float4      color = GpuMarkerPalette::Scope();
 };
 
 struct CustomCmd : public Command {

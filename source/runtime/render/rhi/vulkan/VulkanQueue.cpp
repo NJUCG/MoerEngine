@@ -1225,6 +1225,27 @@ class VkCmdVisitor : VulkanDeviceObject {
     ProfilerStorage*       profiler = nullptr;
     bool                   query_profiling_enabled = false;
 
+    class ScopedNativeLabel {
+    public:
+        ScopedNativeLabel(
+            VulkanCmdList&   _cmd_list,
+            std::string_view _name,
+            float4           _color
+        ) : cmd_list(_cmd_list) {
+            cmd_list.BeginLabel(_name, _color);
+        }
+
+        ~ScopedNativeLabel() {
+            cmd_list.EndLabel();
+        }
+
+        ScopedNativeLabel(const ScopedNativeLabel&)            = delete;
+        ScopedNativeLabel& operator=(const ScopedNativeLabel&) = delete;
+
+    private:
+        VulkanCmdList& cmd_list;
+    };
+
 public:
     VkCmdVisitor(
         VulkanDevice&          _device,
@@ -1315,6 +1336,7 @@ public:
         }
     };
     void Visit(const UploadBufferCmd& _cmd) {
+        ScopedNativeLabel marker(cmd_list, _cmd.name, GpuMarkerPalette::Transfer());
         auto          tmp_buffer = _cmd.staging_buffer;
         VulkanBuffer* buffer     = reinterpret_cast<VulkanBuffer*>(_cmd.Handle());
         cmd_list.CopyBuffer(
@@ -1327,6 +1349,7 @@ public:
     }
 
     void Visit(const UploadTextureCmd& _cmd) {
+        ScopedNativeLabel marker(cmd_list, _cmd.name, GpuMarkerPalette::Transfer());
         auto           tmp_buffer = _cmd.staging_buffer;
         VulkanTexture* texture    = reinterpret_cast<VulkanTexture*>(_cmd.Handle());
         cmd_list.CopyBufferToTexture(
@@ -1342,6 +1365,7 @@ public:
     }
 
     void Visit(const CopyBufferCmd& _cmd) {
+        ScopedNativeLabel marker(cmd_list, _cmd.name, GpuMarkerPalette::Transfer());
         VulkanBuffer* src_buffer = reinterpret_cast<VulkanBuffer*>(_cmd.SrcHandle());
         VulkanBuffer* dst_buffer = reinterpret_cast<VulkanBuffer*>(_cmd.DstHandle());
 
@@ -1349,6 +1373,7 @@ public:
     }
 
     void Visit(const CopyBackBufferCmd& _cmd) {
+        ScopedNativeLabel marker(cmd_list, _cmd.name, GpuMarkerPalette::Transfer());
         VulkanBuffer* src_buffer = reinterpret_cast<VulkanBuffer*>(_cmd.Handle());
         auto          tmp_buffer = _cmd.staging_buffer;
 
@@ -1371,6 +1396,7 @@ public:
     }
 
     void Visit(const CopyBackTextureCmd& _cmd) {
+        ScopedNativeLabel marker(cmd_list, _cmd.name, GpuMarkerPalette::Transfer());
         VulkanTexture* src_texture = reinterpret_cast<VulkanTexture*>(_cmd.Handle());
         auto           tmp_buffer  = _cmd.staging_buffer;
 
@@ -1394,6 +1420,7 @@ public:
     }
 
     void Visit(const CopyTextureCmd& _cmd) {
+        ScopedNativeLabel marker(cmd_list, _cmd.name, GpuMarkerPalette::Transfer());
         VulkanTexture* src_texture = reinterpret_cast<VulkanTexture*>(_cmd.SrcHandle());
         VulkanTexture* dst_texture = reinterpret_cast<VulkanTexture*>(_cmd.DstHandle());
 
@@ -1409,6 +1436,7 @@ public:
     }
 
     void Visit(const CopyBufferToTextureCmd& _cmd) {
+        ScopedNativeLabel marker(cmd_list, _cmd.name, GpuMarkerPalette::Transfer());
         VulkanBuffer*  src_buffer  = reinterpret_cast<VulkanBuffer*>(_cmd.SrcHandle());
         VulkanTexture* dst_texture = reinterpret_cast<VulkanTexture*>(_cmd.DstHandle());
 
@@ -1425,6 +1453,7 @@ public:
     }
 
     void Visit(const CopyTextureToBufferCmd& _cmd) {
+        ScopedNativeLabel marker(cmd_list, _cmd.name, GpuMarkerPalette::Transfer());
         VulkanTexture* src_texture = reinterpret_cast<VulkanTexture*>(_cmd.SrcHandle());
         VulkanBuffer*  dst_buffer  = reinterpret_cast<VulkanBuffer*>(_cmd.DstHandle());
 
@@ -2065,6 +2094,7 @@ public:
     // }
 
     void Visit(const ClearResourceCmd& _cmd) {
+        ScopedNativeLabel marker(cmd_list, _cmd.name, GpuMarkerPalette::Transfer());
         std::visit(
             Overload{
                 [&](const TextureView& _arg) {
@@ -2367,17 +2397,17 @@ public:
 
     void Visit(const ScopeCmd& _cmd) {
         if (_cmd.IsPush()) {
-            cmd_list.BeginLabel(_cmd.ScopeName(), {0.0f, 1.0f, 0.0f, 1.0f});
+            cmd_list.BeginLabel(_cmd.ScopeName(), _cmd.Color());
             if (_cmd.QueryTimestamp() && query_profiling_enabled) {
                 assert(profiler && "profiler is not set");
                 profiler->BeginProfilerSession(cmd_list, _cmd.ScopeName());
             }
         } else {
-            cmd_list.EndLabel();
             if (_cmd.QueryTimestamp() && query_profiling_enabled) {
                 assert(profiler && "profiler is not set");
                 profiler->EndProfilerSession(cmd_list, _cmd.ScopeName());
             }
+            cmd_list.EndLabel();
         }
     }
 
@@ -2908,10 +2938,20 @@ void ProfilerStorage::CollectProfiling(VkCommandBuffer _cb) {
 
 int ProfilerStorage::GetQueryStorageIndex(std::string_view _name) {
     const std::string name{_name};
-    if (name2sample.find(name) == name2sample.end()) {
-        name2sample[name] = Sample(name2sample.size());
+    if (const auto found = name2sample.find(name); found != name2sample.end()) {
+        return found->second.index;
     }
-    return name2sample[name].index;
+    if (name2sample.size() >= s_query_max_storage) {
+        LOG_ERROR(
+            "GPU profiler query-name capacity ({}) exhausted; skipping timestamp scope '{}'.",
+            s_query_max_storage,
+            name
+        );
+        return -1;
+    }
+    const int index = static_cast<int>(name2sample.size());
+    name2sample.emplace(name, Sample(index));
+    return index;
 }
 
 void ProfilerStorage::BeginProfilerSession(
@@ -2922,7 +2962,11 @@ void ProfilerStorage::BeginProfilerSession(
     if (!active) {
         return;
     }
-    uint idx = GetQueryStorageIndex(_name) * 2 + 0 + cur_frame * s_max_num_profiler_queries_per_frame;
+    const int storage_index = GetQueryStorageIndex(_name);
+    if (storage_index < 0) {
+        return;
+    }
+    uint idx = storage_index * 2 + 0 + cur_frame * s_max_num_profiler_queries_per_frame;
     vkCmdWriteTimestamp(_cmd_list.GetHandle(), _stage, timestamp_pool.GetHandle(), idx);
     SetQueryUsed(idx);
     assert(IsQueryUsed(idx + 1) == false && "Query already used");
@@ -2936,7 +2980,11 @@ void ProfilerStorage::EndProfilerSession(
     if (!active) {
         return;
     }
-    uint idx = GetQueryStorageIndex(_name) * 2 + 1 + cur_frame * s_max_num_profiler_queries_per_frame;
+    const int storage_index = GetQueryStorageIndex(_name);
+    if (storage_index < 0) {
+        return;
+    }
+    uint idx = storage_index * 2 + 1 + cur_frame * s_max_num_profiler_queries_per_frame;
     vkCmdWriteTimestamp(_cmd_list.GetHandle(), _stage, timestamp_pool.GetHandle(), idx);
     SetQueryUsed(idx);
     assert(IsQueryUsed(idx - 1) == true && "Query not used");
@@ -3350,10 +3398,15 @@ void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline, uint64 _s
             }
         }
 
-        std::string_view queue_label = queue.GetType() == EQueueType::Graphics ? "Graphics Exec" :
-                                       queue.GetType() == EQueueType::Compute  ? "Compute Exec" :
-                                                                                 "Copy Exec";
-        vk_allocator.GetCmdList().BeginLabel(queue_label, {1.0f, 0.0f, 0.0f, 1.0f});
+        const std::string_view queue_label = !_submit.debug_label.empty() ?
+                                                 std::string_view(_submit.debug_label) :
+                                             queue.GetType() == EQueueType::Graphics ? "Graphics Exec" :
+                                             queue.GetType() == EQueueType::Compute  ? "Compute Exec" :
+                                                                                       "Copy Exec";
+        const float4 queue_label_color = !_submit.debug_label.empty() ?
+                                             _submit.debug_label_color :
+                                             float4{1.0f, 0.0f, 0.0f, 1.0f};
+        vk_allocator.GetCmdList().BeginLabel(queue_label, queue_label_color);
     }
 
     uint layer = 0;
@@ -3361,11 +3414,13 @@ void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline, uint64 _s
         uint32 raw_layer_index = 0;
         for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
             const uint32 current_raw_layer = raw_layer_index++;
-            if (layer == 0) {
-                vk_allocator.GetCmdList().BeginLabel("Begin Layers", {0.0f, 0.0f, 1.0f, 1.0f});
-            }
             if (cmd_list.head == nullptr) {
                 continue;
+            }
+            if (layer == 0) {
+                vk_allocator.GetCmdList().BeginLabel(
+                    "[RHI Diagnostics] Command Layers", {0.15f, 0.25f, 0.55f, 1.0f}
+                );
             }
             reorder_timer.Start();
             for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
@@ -3378,7 +3433,7 @@ void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline, uint64 _s
             reorder_timer.Stop();
             preprocess_time += reorder_timer.ElapsedMilliseconds();
             vk_allocator.GetCmdList().InsertLabel(
-                std::format("Layer {}", layer++), {0.0f, 0.0f, 1.0f, 1.0f}
+                std::format("[RHI] Layer {}", layer++), {0.15f, 0.25f, 0.55f, 1.0f}
             );
             RecordLayerTiming& layer_timing = record_sample->layer_timings[current_raw_layer];
             struct DeferredCommandDiagnostics {
@@ -3469,9 +3524,6 @@ void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline, uint64 _s
         // counters, per-command clocks, hashes, allocations, formatting, or output.
         // The pre-existing preprocess timer and debug-label formatting remain unchanged.
         for (const CmdReorderer::LinkedCommandList& cmd_list : cmd_lists) {
-            if (layer == 0) {
-                vk_allocator.GetCmdList().BeginLabel("Begin Layers", {0.0f, 0.0f, 1.0f, 1.0f});
-            }
             if (cmd_list.head == nullptr) {
                 continue;
             }
@@ -3483,15 +3535,12 @@ void VkCommandQueue::ExecuteNow(CmdSubmit&& _submit, uint64 _timeline, uint64 _s
             tracker.DispatchBarriers(vk_allocator.GetCmdList());
             reorder_timer.Stop();
             preprocess_time += reorder_timer.ElapsedMilliseconds();
-            vk_allocator.GetCmdList().InsertLabel(
-                std::format("Layer {}", layer++), {0.0f, 0.0f, 1.0f, 1.0f}
-            );
             for (const auto* cmdnode = cmd_list.head; cmdnode != nullptr; cmdnode = cmdnode->next) {
                 visitor.VisitCmd(cmdnode->cmd);
             }
         }
     }
-    if (layer > 0) {
+    if (record_sample && layer > 0) {
         vk_allocator.GetCmdList().EndLabel();
     }
 
@@ -3827,7 +3876,8 @@ void VkCommandQueue::PresentNow(
     auto* swaphchain_tex = ResourceCast(sc->GetSwapchainImage(idx).texture);
     {
         vk_cmd_list.Begin();
-        vk_cmd_list.BeginLabel("Present", {0.0f, 1.0f, 1.0f, 1.0f});
+        const std::string present_label = std::format("Present: {}", vk_src_tex->GetName());
+        vk_cmd_list.BeginLabel(present_label, {0.0f, 0.85f, 0.95f, 1.0f});
         vk_tracker.SetPassType(EPassType::Graphics);
         vk_tracker.RecordState(vk_src_tex, vk_tracker.ReadTexture(vk_src_tex, ETextureState::TRANSFER));
         vk_tracker.RecordState(
@@ -3837,7 +3887,7 @@ void VkCommandQueue::PresentNow(
         vk_tracker.DispatchBarriers(vk_cmd_list);
         //copy
         //todo: need transaction
-        vk_cmd_list.InsertLabel("Copy Present Image", {0.0f, 0.0f, 0.0f, 1.0f});
+        vk_cmd_list.InsertLabel("Copy Present Image", GpuMarkerPalette::Transfer());
         vk_cmd_list.CopyTexture(vk_src_tex, swaphchain_tex, _view.extent, {0, 0, 0}, {0, 0, 0}, 0, 0);
         vk_tracker.RecordState(
             swaphchain_tex, VK_ACCESS_2_NONE, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_COPY_BIT

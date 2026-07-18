@@ -56,7 +56,7 @@ private:
         const Rect2D&       rect,
         TextureView         depth_view,
         std::string_view    pass_name,
-        std::optional<uint> csm_profile_layer = std::nullopt
+        std::optional<std::string_view> profile_scope_name = std::nullopt
     );
 
 private:

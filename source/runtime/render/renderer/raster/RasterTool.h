@@ -16,7 +16,7 @@ class RenderDevice;
 
 namespace Moer::Render::Raster {
 
-class RasterTool {
+class RENDER_API RasterTool {
 public:
     static Array<SingleDrawParam> GetFullScreenDrawDatas();
 
@@ -28,9 +28,17 @@ public:
 
     static std::string_view GetGeometryDrawProfileScopeName();
 
-    static std::string_view GetShadowCullingProfileScopeName(uint cascade_index);
+    static std::string_view GetCsmShadowCascadeMarkerName(uint cascade_index);
 
-    static std::string_view GetShadowDrawProfileScopeName(uint cascade_index);
+    static std::string_view GetCsmShadowCullingProfileScopeName(uint cascade_index);
+
+    static std::string_view GetCsmShadowDrawProfileScopeName(uint cascade_index);
+
+    static std::string_view GetPointShadowFaceMarkerName(uint face);
+
+    static std::string_view GetPointShadowCullingProfileScopeName(uint face);
+
+    static std::string_view GetPointShadowDrawProfileScopeName(uint face);
 
     static void LogDebugEverySeconds(
         std::string_view      message,

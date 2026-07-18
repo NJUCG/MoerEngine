@@ -76,6 +76,9 @@ void RenderUiDrawFrame(
     EUiDrawExecutionThread _execution_thread
 ) {
     if (_frame.backend) {
+        ScopedGpuMarker ui_marker(
+            _cmd_list, "Editor UI", GpuMarkerPalette::Ui()
+        );
         _frame.backend->RenderGUI(_cmd_list, _main_framebuffer, _frame, _execution_thread);
     }
 }

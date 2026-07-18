@@ -819,13 +819,19 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
         context.lighting_data.scale_data[cascade_index]        = shadow_candidate.scale_data;
         context.csm_data.world2shadow_clip[cascade_index]      = shadow_candidate.world2shadow_clip;
 
+        ScopedGpuMarker cascade_marker(
+            context.cmd_list,
+            RasterTool::GetCsmShadowCascadeMarkerName(cascade_index),
+            GpuMarkerPalette::Subpass()
+        );
+
         m_culling_pass.Process(
             context,
             context.lighting_data.world2shadow_clip[cascade_index],
             context.GetGpuSceneRes(),
             context.gpu_culling_buffers.shadow,
             nullptr,
-            RasterTool::GetShadowCullingProfileScopeName(cascade_index)
+            RasterTool::GetCsmShadowCullingProfileScopeName(cascade_index)
         );
 
         RenderShadow(
@@ -835,7 +841,7 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
             Rect2D(0, 0, ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
             context.csm_data.shadow_map_textures[cascade_index].tex->GetView(),
             std::format("Shadow Depth Pass - {}", cascade_index),
-            cascade_index
+            RasterTool::GetCsmShadowDrawProfileScopeName(cascade_index)
         );
 
         store_shadow_cache_entry(shadow_cache_entry, shadow_candidate, shadow_cache_frame_index);
@@ -921,7 +927,7 @@ void ShadowDepthPass::RenderPointShadows(
         float3 dir;
         float3 up;
     };
-    static const FaceInfo faces[] = {
+    static const FaceInfo faces[CUBE_FACE_Num] = {
         {{1, 0, 0}, {0, -1, 0}},  // +X (Right) - Vulkan Y-down usually implies Up is -Y for horizontal faces
         {{-1, 0, 0}, {0, -1, 0}}, // -X (Left)
         {{0, 1, 0}, {0, 0, 1}},   // +Y (Top)   - Up is +Z
@@ -931,12 +937,18 @@ void ShadowDepthPass::RenderPointShadows(
     };
 
     // 4. 遍历 6 个面进行渲染
-    for (uint face = 0; face < 6; ++face) {
+    for (uint face = 0; face < CUBE_FACE_Num; ++face) {
         float3   light_pos = cube_res.light_pos;
         float4x4 view      = MakeLookatViewMatrixRH(light_pos, light_pos + faces[face].dir, faces[face].up);
         float4x4 view_proj = proj * view;
 
         TextureView face_view = TextureView(cube_res.tex.Get()).Slice(face, 1);
+
+        ScopedGpuMarker face_marker(
+            context.cmd_list,
+            RasterTool::GetPointShadowFaceMarkerName(face),
+            GpuMarkerPalette::Subpass()
+        );
 
         m_culling_pass.Process(
             context,
@@ -944,7 +956,7 @@ void ShadowDepthPass::RenderPointShadows(
             context.GetGpuSceneRes(),
             context.gpu_culling_buffers.shadow,
             nullptr,
-            RasterTool::GetShadowCullingProfileScopeName(face)
+            RasterTool::GetPointShadowCullingProfileScopeName(face)
         );
 
         RenderShadow(
@@ -954,7 +966,7 @@ void ShadowDepthPass::RenderPointShadows(
             Rect2D(0, 0, config.shadow_csm_sm_size, config.shadow_csm_sm_size),
             face_view,
             std::format("PointShadow L{} F{}", light_idx, face),
-            std::nullopt
+            RasterTool::GetPointShadowDrawProfileScopeName(face)
         );
     }
 }
@@ -965,8 +977,8 @@ void ShadowDepthPass::RenderShadow(
     const float4x4&     view_proj,
     const Rect2D&       rect,
     TextureView         depth_view,
-    std::string_view    pass_name,
-    std::optional<uint> csm_profile_layer
+    std::string_view                pass_name,
+    std::optional<std::string_view> profile_scope_name
 ) {
     GeometryPassBindlessParam param;
     param.world2clip = Transpose(view_proj);
@@ -985,10 +997,8 @@ void ShadowDepthPass::RenderShadow(
     param.enable_alpha_test             = config.geometry_enable_alpha_test ? 1 : 0;
     param.alpha_test_blend_pixel_cutoff = config.geometry_alpha_test_blend_pixel_cutoff;
 
-    if (csm_profile_layer.has_value()) {
-        context.cmd_list.PushScopeWithTimeScope(
-            RasterTool::GetShadowDrawProfileScopeName(csm_profile_layer.value())
-        );
+    if (profile_scope_name.has_value()) {
+        context.cmd_list.PushScopeWithTimeScope(profile_scope_name.value());
     }
 
     auto draw = context.cmd_list.Gfx(m_pso, context.bdls, param);
@@ -1006,7 +1016,7 @@ void ShadowDepthPass::RenderShadow(
         DepthAttachment(depth_view.GetTexture())
     );
 
-    if (csm_profile_layer.has_value()) {
+    if (profile_scope_name.has_value()) {
         context.cmd_list.PopScopeWithTimeScope();
     }
 }

@@ -208,6 +208,34 @@ void WriteBarrierWaitsForPriorRead() {
     Expect(FindCommandLayer(reorderer, &write_barrier) == 1, "write barrier missed the prior-read WAR edge");
 }
 
+void ScopeCommandsOwnExclusiveLayers() {
+    TCachedArgArray cached_args;
+    CmdReorderer   reorderer(MakeFunctionTable(), cached_args);
+
+    ScopeCmd renderer_push("Renderer", true, false, GpuMarkerPalette::Renderer());
+    ScopeCmd pass_push("Pass", true, false, GpuMarkerPalette::Pass());
+    std::array<byte, 16> first_data{};
+    UploadBufferCmd first_work(0x6100, 0, first_data.size(), first_data.data());
+    ScopeCmd pass_pop("Pass", false, false, GpuMarkerPalette::Pass());
+    std::array<byte, 16> second_data{};
+    UploadBufferCmd second_work(0x6200, 0, second_data.size(), second_data.data());
+    ScopeCmd renderer_pop("Renderer", false, false, GpuMarkerPalette::Renderer());
+
+    reorderer.AcceptCmd(&renderer_push);
+    reorderer.AcceptCmd(&pass_push);
+    reorderer.AcceptCmd(&first_work);
+    reorderer.AcceptCmd(&pass_pop);
+    reorderer.AcceptCmd(&second_work);
+    reorderer.AcceptCmd(&renderer_pop);
+
+    Expect(FindCommandLayer(reorderer, &renderer_push) == 0, "renderer push did not own layer 0");
+    Expect(FindCommandLayer(reorderer, &pass_push) == 1, "nested pass push shared a marker layer");
+    Expect(FindCommandLayer(reorderer, &first_work) == 2, "pass work escaped before its push marker");
+    Expect(FindCommandLayer(reorderer, &pass_pop) == 3, "pass pop shared its work layer");
+    Expect(FindCommandLayer(reorderer, &second_work) == 4, "following work remained inside prior pass");
+    Expect(FindCommandLayer(reorderer, &renderer_pop) == 5, "renderer pop did not own the final layer");
+}
+
 void CommandResourcePreprocessingIsTaskGraphIndependent() {
     std::exception_ptr worker_error;
     std::jthread worker([&] {
@@ -349,6 +377,7 @@ int main() {
         ReadBarrierParticipatesInFollowingWarDependency();
         MultiResourceBarrierPublishesEveryAccessAtItsFinalLayer();
         WriteBarrierWaitsForPriorRead();
+        ScopeCommandsOwnExclusiveLayers();
         CommandResourcePreprocessingIsTaskGraphIndependent();
         std::cout << "RHI command reorderer tests passed\n";
         return 0;

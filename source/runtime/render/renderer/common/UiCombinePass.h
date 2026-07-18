@@ -73,6 +73,9 @@ public:
         TextureView  input_ui_texture,
         TextureView  default_output_texture
     ) {
+        ScopedGpuMarker ui_composition_marker(
+            cmd_list, "UI Composition", GpuMarkerPalette::Ui()
+        );
         if (is_separate_window && input_window_frame_buffer.GetTexture()) {
             assert(
                 sample_texture_pipelines.contains(input_window_frame_buffer.format) &&

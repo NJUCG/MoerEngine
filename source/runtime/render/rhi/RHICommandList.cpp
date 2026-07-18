@@ -121,6 +121,18 @@ void CommandList::ComputeDispatcher::DispatchIndirect(
 }
 
 CmdSubmit CommandList::Submit() {
+    if (!scope_stack.empty()) {
+        assert(scope_stack.empty() && "CommandList::Submit called with unclosed GPU marker scopes");
+        // Keep release builds/captures structurally valid even if a caller
+        // violates the API contract. Debug builds fail above at the source.
+        while (!scope_stack.empty()) {
+            const ScopeState& scope = scope_stack.top();
+            commands.push_back(
+                MakeUnique<ScopeCmd>(scope.name, false, scope.query_timestamp, scope.color)
+            );
+            scope_stack.pop();
+        }
+    }
     CmdSubmit submit(
         std::move(commands),
         std::move(callbacks),
@@ -130,6 +142,7 @@ CmdSubmit CommandList::Submit() {
     commands.clear();
     callbacks.clear();
     success_callbacks.clear();
+    timestamp_scope_names.clear();
     return std::move(submit);
 }
 
@@ -355,25 +368,54 @@ void CommandList::ClearResource(TextureView _texture, uint _value) {
     commands.emplace_back(MakeUnique<ClearResourceCmd>(_texture, _value));
 }
 
-void CommandList::PushScope(std::string_view _name) {
-    commands.push_back(MakeUnique<ScopeCmd>(_name, true, false));
-    scope_stack.emplace(_name);
+void CommandList::PushScope(std::string_view _name, float4 _color) {
+    assert(!_name.empty() && "GPU marker scope name must not be empty");
+    const std::string scope_name = _name.empty() ? "Unnamed GPU Scope" : std::string(_name);
+    commands.push_back(MakeUnique<ScopeCmd>(scope_name, true, false, _color));
+    scope_stack.emplace(ScopeState{scope_name, _color, false});
 }
 
-void CommandList::PushScopeWithTimeScope(std::string_view _name) {
-    commands.push_back(MakeUnique<ScopeCmd>(_name, true, true));
-    scope_stack.emplace(_name);
+void CommandList::PushScopeWithTimeScope(std::string_view _name, float4 _color) {
+    assert(!_name.empty() && "GPU timestamp scope name must not be empty");
+    const std::string scope_name = _name.empty() ? "Unnamed GPU Timestamp Scope" : std::string(_name);
+    const bool unique_timestamp_name = timestamp_scope_names.emplace(scope_name).second;
+    assert(
+        unique_timestamp_name &&
+        "GPU timestamp scope names must be unique within a CommandList submission"
+    );
+
+    // In release builds, a duplicate remains useful as a visual marker but
+    // deliberately does not allocate/reuse an ambiguous profiler query pair.
+    commands.push_back(MakeUnique<ScopeCmd>(scope_name, true, unique_timestamp_name, _color));
+    scope_stack.emplace(ScopeState{scope_name, _color, unique_timestamp_name});
 }
 
 void CommandList::PopScope() {
-    assert(!scope_stack.empty() && "PopScope called without a matching PushScope");
-    commands.push_back(MakeUnique<ScopeCmd>(scope_stack.top(), false, false));
+    if (scope_stack.empty()) {
+        assert(false && "PopScope called without a matching PushScope");
+        return;
+    }
+    const ScopeState& scope = scope_stack.top();
+    assert(!scope.query_timestamp && "PopScope must match PushScope, not PushScopeWithTimeScope");
+    commands.push_back(
+        MakeUnique<ScopeCmd>(scope.name, false, scope.query_timestamp, scope.color)
+    );
     scope_stack.pop();
 }
 
 void CommandList::PopScopeWithTimeScope() {
-    assert(!scope_stack.empty() && "PopScopeWithTimeScope called without a matching push");
-    commands.push_back(MakeUnique<ScopeCmd>(scope_stack.top(), false, true));
+    if (scope_stack.empty()) {
+        assert(false && "PopScopeWithTimeScope called without a matching push");
+        return;
+    }
+    const ScopeState& scope = scope_stack.top();
+    assert(
+        scope.query_timestamp &&
+        "PopScopeWithTimeScope must match PushScopeWithTimeScope, not PushScope"
+    );
+    commands.push_back(
+        MakeUnique<ScopeCmd>(scope.name, false, scope.query_timestamp, scope.color)
+    );
     scope_stack.pop();
 }
 #pragma region[ raytracing ]

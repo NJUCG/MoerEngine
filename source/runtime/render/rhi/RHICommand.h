@@ -20,6 +20,7 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -38,6 +39,40 @@ struct ProfileSection {
     // within one profiled submission because each name owns one query pair.
     std::string_view name;
     explicit ProfileSection(const char* _name) : name(_name) {}
+};
+
+// RenderDoc/PIX marker colors are kept in one palette so frame captures use a
+// stable visual language across renderers and passes.
+namespace GpuMarkerPalette {
+inline float4 Frame() noexcept {
+    return {0.18f, 0.42f, 0.90f, 1.0f};
+}
+inline float4 Renderer() noexcept {
+    return {0.20f, 0.65f, 0.90f, 1.0f};
+}
+inline float4 RenderGraph() noexcept {
+    return {0.58f, 0.36f, 0.88f, 1.0f};
+}
+inline float4 Pass() noexcept {
+    return {0.18f, 0.72f, 0.52f, 1.0f};
+}
+inline float4 Subpass() noexcept {
+    return {0.42f, 0.78f, 0.34f, 1.0f};
+}
+inline float4 Ui() noexcept {
+    return {0.95f, 0.52f, 0.18f, 1.0f};
+}
+inline float4 Transfer() noexcept {
+    return {0.90f, 0.72f, 0.18f, 1.0f};
+}
+inline float4 Scope() noexcept {
+    return {0.35f, 0.75f, 0.45f, 1.0f};
+}
+} // namespace GpuMarkerPalette
+
+enum class EGpuMarkerMode : uint8_t {
+    Label,
+    Timestamp,
 };
 
 struct Command {
@@ -227,6 +262,8 @@ struct CmdSubmit {
     bool               b_sync{false}; //force sync queue timeline
     bool               b_tick_profiling{false};
     bool               b_delete_resources{false};
+    std::string        debug_label;
+    float4             debug_label_color = GpuMarkerPalette::Frame();
 
     CmdSubmit&& Wait(Fence* _fence, uint64 _wait_value) {
         wait_events.emplace_back(uint64(_fence), _wait_value);
@@ -253,6 +290,15 @@ struct CmdSubmit {
         return std::move(*this);
     }
 
+    CmdSubmit&& DebugLabel(
+        std::string_view _label,
+        float4           _color = GpuMarkerPalette::Frame()
+    ) {
+        debug_label       = _label;
+        debug_label_color = _color;
+        return std::move(*this);
+    }
+
     CmdSubmit(CmdSubmit&& _other) noexcept {
         cmds               = std::move(_other.cmds);
         callbacks          = std::move(_other.callbacks);
@@ -263,6 +309,8 @@ struct CmdSubmit {
         b_sync             = _other.b_sync;
         b_tick_profiling   = _other.b_tick_profiling;
         b_delete_resources = _other.b_delete_resources;
+        debug_label        = std::move(_other.debug_label);
+        debug_label_color  = _other.debug_label_color;
     }
 
     CmdSubmit& operator=(CmdSubmit&& _other) noexcept {
@@ -275,6 +323,8 @@ struct CmdSubmit {
         b_sync             = _other.b_sync;
         b_tick_profiling   = _other.b_tick_profiling;
         b_delete_resources = _other.b_delete_resources;
+        debug_label        = std::move(_other.debug_label);
+        debug_label_color  = _other.debug_label_color;
         return *this;
     }
     CmdSubmit(
@@ -1068,10 +1118,16 @@ public:
     RENDER_API void ClearResource(TextureView _texture, float4 _color);
     RENDER_API void ClearResource(TextureView _texture, uint32_t _value);
 
-    RENDER_API void PushScope(std::string_view _name);
+    RENDER_API void PushScope(
+        std::string_view _name,
+        float4           _color = GpuMarkerPalette::Scope()
+    );
     RENDER_API void PopScope();
 
-    RENDER_API void PushScopeWithTimeScope(std::string_view _name);
+    RENDER_API void PushScopeWithTimeScope(
+        std::string_view _name,
+        float4           _color = GpuMarkerPalette::Scope()
+    );
     RENDER_API void PopScopeWithTimeScope();
 
     template<typename T, typename... Args>
@@ -1290,7 +1346,62 @@ private:
     Array<std::function<void()>> callbacks;
     Array<std::function<void()>> success_callbacks;
     TCachedArgArray              cached_args;
-    Stack<std::string>           scope_stack;
+    struct ScopeState {
+        std::string name;
+        float4      color;
+        bool        query_timestamp = false;
+    };
+
+    Stack<ScopeState>            scope_stack;
+    UnorderedSet<std::string>    timestamp_scope_names;
+};
+
+// Non-copyable, non-movable RAII wrapper used by high-level render code. It guarantees that a
+// visual/timestamp scope is closed on every return path and prevents a scope
+// from leaking across CommandList::Submit(). Keeping the guard immobile also
+// prevents a non-top scope from being moved and accidentally popping a nested
+// marker.
+class [[nodiscard]] ScopedGpuMarker {
+public:
+    ScopedGpuMarker(
+        CommandList&  _cmd_list,
+        std::string_view _name,
+        float4        _color = GpuMarkerPalette::Scope(),
+        EGpuMarkerMode _mode = EGpuMarkerMode::Label
+    ) :
+        cmd_list(&_cmd_list),
+        mode(_mode) {
+        if (mode == EGpuMarkerMode::Timestamp) {
+            cmd_list->PushScopeWithTimeScope(_name, _color);
+        } else {
+            cmd_list->PushScope(_name, _color);
+        }
+    }
+
+    ~ScopedGpuMarker() {
+        Close();
+    }
+
+    ScopedGpuMarker(const ScopedGpuMarker&)            = delete;
+    ScopedGpuMarker& operator=(const ScopedGpuMarker&) = delete;
+    ScopedGpuMarker(ScopedGpuMarker&&)                 = delete;
+    ScopedGpuMarker& operator=(ScopedGpuMarker&&)      = delete;
+
+    void Close() noexcept {
+        if (!cmd_list) {
+            return;
+        }
+        if (mode == EGpuMarkerMode::Timestamp) {
+            cmd_list->PopScopeWithTimeScope();
+        } else {
+            cmd_list->PopScope();
+        }
+        cmd_list = nullptr;
+    }
+
+private:
+    CommandList*   cmd_list = nullptr;
+    EGpuMarkerMode mode     = EGpuMarkerMode::Label;
 };
 class QueueCmd {};
 
