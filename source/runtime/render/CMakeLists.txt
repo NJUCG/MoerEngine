@@ -6,10 +6,25 @@ configure_file(${moer_runtime_render_dir}/config.h.in ${moer_runtime_render_dir}
 
 file(GLOB_RECURSE render_module_headers CONFIGURE_DEPENDS "*.h" ".hpp" "*.hlsli")
 file(GLOB_RECURSE render_module_sources CONFIGURE_DEPENDS "*.cpp")
+file(GLOB_RECURSE render_shader_sources CONFIGURE_DEPENDS
+    "${moer_shader_dir}/*.hlsl"
+    "${moer_shader_dir}/*.hlsli"
+)
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${render_module_headers} ${render_module_sources} )
+source_group(TREE "${moer_shader_dir}" PREFIX "shaders" FILES ${render_shader_sources})
 
-add_library(${target_name} SHARED ${render_module_headers} ${render_module_sources})
+# Keep runtime-compiled shaders in the main render target's project model so Rider
+# restores their HLSL analysis context after a restart. HEADER_FILE_ONLY prevents
+# CMake from sending them to the C++ compiler.
+set_source_files_properties(${render_shader_sources} PROPERTIES
+    HEADER_FILE_ONLY TRUE
+)
+add_library(${target_name} SHARED
+    ${render_module_headers}
+    ${render_module_sources}
+    ${render_shader_sources}
+)
 add_library(Moer::Render ALIAS ${target_name})
 
 target_compile_definitions(${target_name} PRIVATE RENDER_MODULE_SHARED_LIB)
@@ -22,6 +37,8 @@ endif()
 set_target_properties(${target_name} PROPERTIES FOLDER "runtime")
 
 target_include_directories(${target_name}
+    PRIVATE $<BUILD_INTERFACE:${moer_shader_dir}>
+    PRIVATE $<BUILD_INTERFACE:${moer_runtime_render_dir}/shaderheaders>
     PUBLIC $<BUILD_INTERFACE:${moer_runtime_core_dir}>
 	PUBLIC $<BUILD_INTERFACE:${moer_runtime_render_dir}>
     PUBLIC $<BUILD_INTERFACE:${moer_runtime_resource_dir}>

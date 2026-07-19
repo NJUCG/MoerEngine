@@ -1,0 +1,8 @@
+# clang-format has no dedicated HLSL language mode. HLSL is close enough to
+# C++ for layout formatting, so inherit the repository's C++ style here.
+BasedOnStyle: InheritParentConfig
+Language: Cpp
+
+# Shader include order can be significant because included files may define
+# macros, types, or resources consumed by later includes.
+SortIncludes: false
