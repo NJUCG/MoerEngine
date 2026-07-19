@@ -5,7 +5,6 @@
 main(uint2 dtid
      : SV_DispatchThreadID) {
   uint2 pixel_pos = dtid.xy;
-  // printf("pixel_pos: %d %d\n", pixel_pos.x, pixel_pos.y);
 
   Moer::RandomState rng = Moer::RandomState::Create(pixel_pos, 1 * 13 + resample_params.frame_idx);
   Moer::RandomState tile_rng =
@@ -41,16 +40,10 @@ main(uint2 dtid
       res.StoreVisibility(0.f, true);
     }
   }
-//   if(res.IsValid())
-//   printf("res light idx %d light data %d pixel pos %d %d\n", res.GetLightIndex(), res.light_data, pixel_pos.x,
-//          pixel_pos.y);
+
   Moer::DI::StoreReservoir(
       res, resample_params.restir_di_params.reservoir_buffer_params, pixel_pos,
       resample_params.restir_di_params.buffer_indices
           .initial_sample_output_buff_idx);
 
-//   if(dtid.x == 0 && dtid.y == 0){
-//     printf("initial sample output buff idx %d\n", resample_params.restir_di_params.buffer_indices
-//     .shading_input_buff_idx);
-//   }
 }

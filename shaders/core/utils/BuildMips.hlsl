@@ -8,6 +8,7 @@
 
 groupshared float4 g_colors[16];
 
+// Warning: do not change the group size. The algorithm is hardcoded to process 16x16 tiles.
 [numthreads(256, 1, 1)] void main(uint2 gid
                                   : SV_GroupID, uint tid
                                   : SV_GroupThreadID) {
@@ -21,10 +22,6 @@ groupshared float4 g_colors[16];
     src_colors[1] = src[src_pos + int2(1, 0)];
     src_colors[2] = src[src_pos + int2(0, 1)];
     src_colors[3] = src[src_pos + int2(1, 1)];
-
-    //print src colors
-    // if(param.src_mip_level == 5)
-    // printf("src_colors[0] %f %f %f %f\n", src_colors[0].x, src_colors[0].y, src_colors[0].z, src_colors[0].w);
 
   }
 
