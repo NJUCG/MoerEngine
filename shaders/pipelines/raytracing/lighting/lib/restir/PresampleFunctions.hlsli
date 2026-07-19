@@ -10,7 +10,6 @@ namespace SampleFunc {
 void SamplePdfMip(inout RandomState _rng, Texture2D<float> _pdf_tex,
                   uint2 tex_size, out uint2 _pos, out float _pdf) {
   int last_mip = max(0, int(floor(log2(float(tex_size.x)))));
-  //   printf("last_mip: %d\n", last_mip);
   _pos = uint2(0, 0);
   _pdf = 1.f;
 
@@ -132,9 +131,6 @@ void SampleLocalLightsForGrid(inout RandomState _rng,
   float selected_target_pdf = 0.f;
   float weight_sum = 0.f;
 
-  float inv_num_samples =
-      1.f / float(_grid_params.common_params.num_build_samples);
-
   DI::LocalLightSelectionContext ctx;
   switch (_grid_params.common_params.local_light_sample_mode) {
   case s_di_local_light_sample_mode_power_ris:
@@ -154,7 +150,6 @@ void SampleLocalLightsForGrid(inout RandomState _rng,
     float rnd = _rng.GetFloat();
 
     ctx.SelectNext(_rng, cur_light_info, rnd_light_idx, inv_pdf);
-    inv_pdf *= inv_num_samples;
 
     float target_pdf = PolymorphicLight::GetVolumeWeight(
         cur_light_info, cell_center, cell_radius);
@@ -170,8 +165,19 @@ void SampleLocalLightsForGrid(inout RandomState _rng,
     }
   }
 
+  // One-sample RIS estimator. Here p_hat is the unnormalized target, q is the
+  // proposal PDF, and M is num_build_samples:
+  //   w_i = p_hat(x_i) / q(x_i)
+  //   I_hat_RIS = (sum_i(w_i) / M) * f(y) / p_hat(y)
+  // The reservoir selects y proportional to w_i, so 1/M can be applied after
+  // selection. `weight` stores sum_i(w_i) / (M * p_hat(y)) as the effective
+  // inverse proposal weight consumed by later light sampling.
   float weight =
-      (selected_target_pdf > 0.f) ? weight_sum / selected_target_pdf : 0.f;
+      (selected_target_pdf > 0.f)
+          ? weight_sum /
+                (float(_grid_params.common_params.num_build_samples) *
+                 selected_target_pdf)
+          : 0.f;
   bool compact = false;
 
   if (weight > 0.f) {
