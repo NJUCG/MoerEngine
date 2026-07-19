@@ -49,13 +49,13 @@ void BuildTriangleUvSampleGrad(
 
     if (len01_sq < len02_sq && len01_sq < len12_sq) {
         short_grad = edge01 * (2.0f / 3.0f);
-        long_grad  = (edge02 + edge12) * (1.0f / 3.0f);
+        long_grad  = uv2 - center_uv;
     } else if (len02_sq < len01_sq && len02_sq < len12_sq) {
         short_grad = edge02 * (2.0f / 3.0f);
-        long_grad  = (edge01 + edge12) * (1.0f / 3.0f);
+        long_grad  = uv1 - center_uv;
     } else {
         short_grad = edge12 * (2.0f / 3.0f);
-        long_grad  = (edge01 + edge02) * (1.0f / 3.0f);
+        long_grad  = uv0 - center_uv;
     }
 }
 
