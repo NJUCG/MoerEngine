@@ -59,7 +59,9 @@ float ComputeLightBrdfMisWeight(Surface _surface, LightSample _light_sample,
 
   float light_solid_angle_pdf = _light_sample.SolidAnglePdf();
 
-  bool b_non_brdf = _configs.num_brdf == 0 || light_solid_angle_pdf <= 0.f ||
+  bool b_non_brdf = _configs.brdf_mis_weight == 0.f ||
+                    _light_sample.IsAnalytic() ||
+                    light_solid_angle_pdf <= 0.f ||
                     isinf(light_solid_angle_pdf) ||
                     isnan(light_solid_angle_pdf);
   if (b_non_brdf)
@@ -403,8 +405,11 @@ Reservoir SampleBrdf(inout RandomState _rng, SampleConfigs _sample_configs,
 
     bool b_is_env = light_idx == _light_buffer_params.env_light.light_idx;
     float target_pdf = _surface.GetLightSampleTargetPdf(candidate);
+    float light_mis_weight =
+        b_is_env ? _sample_configs.env_map_mis_weight
+                 : _sample_configs.local_light_mis_weight;
     float mis_weight = ComputeLightBrdfMisWeight(
-        _surface, candidate, src_pdf, _sample_configs.brdf_mis_weight, b_is_env,
+        _surface, candidate, src_pdf, light_mis_weight, b_is_env,
         _sample_configs);
 
     float ris_rnd = _rng.GetFloat();

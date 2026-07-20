@@ -185,6 +185,24 @@ struct Surface {
     }
 
     float GetLightSampleTargetPdf(LightSample _sample) {
+        // ReSTIR DI target function (unnormalized; despite the "Pdf" name):
+        //   C(y)       = Li(y) * ((1 - F) * rho_d * fd_cos + fs_cos)
+        //   p_hat(y)   = luminance(C(y)) / p_omega(y | light)
+        // where fd_cos and fs_cos already include max(dot(N, L), 0), and
+        // p_omega(y | light) is the conditional solid-angle PDF for sampling
+        // point y after its light has been selected.
+        //
+        // The full proposal is deliberately evaluated in two parts:
+        //   q_full(y) = q_light(light) * p_omega(y | light)
+        // This function divides C(y) by the conditional p_omega term. Reservoir
+        // streaming later divides p_hat(y) by q_light (or by the corresponding
+        // light/BRDF MIS proposal), giving the complete importance weight:
+        //   w(y) = luminance(C(y)) / q_full(y)
+        // Thus light area appearing in both the power proposal and p_omega is
+        // proposal correction, not duplicated emitted energy.
+        //
+        // Visibility is intentionally omitted here (V = 1) and evaluated only
+        // for the selected sample.
         if (_sample.solid_angle_pdf <= 0.f)
             return 0.f;
 
