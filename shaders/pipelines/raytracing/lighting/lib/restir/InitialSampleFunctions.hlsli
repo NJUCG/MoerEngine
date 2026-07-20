@@ -212,10 +212,8 @@ Reservoir SampleLocalLights(inout RandomState _rng,
 
     ctx.SelectNext(_rng, light_info, light_idx, inv_pdf);
     float2 uv = _rng.GetFloat2();
-    if (StreamLocalLightAtUV(_rng, _sample_configs, _surface, light_idx, uv,
-                             inv_pdf, light_info, res, _light_sample)) {
-      continue;
-    }
+    StreamLocalLightAtUV(_rng, _sample_configs, _surface, light_idx, uv,
+                         inv_pdf, light_info, res, _light_sample);
   }
 
   res.FinalizeRIS(1.f, _sample_configs.num_mis);
