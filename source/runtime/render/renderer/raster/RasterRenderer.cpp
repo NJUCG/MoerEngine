@@ -595,32 +595,32 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             window_framebuffer_view.GetTexture() != nullptr;
 
         struct RasterGraphResources {
-            RenderGraph::ResourceHandle scene;
-            RenderGraph::ResourceHandle shadow_maps;
-            RenderGraph::ResourceHandle probe_volume;
-            RenderGraph::ResourceHandle lighting_data;
-            RenderGraph::ResourceHandle base_color;
-            RenderGraph::ResourceHandle normal;
-            RenderGraph::ResourceHandle metal_rough_ao;
-            RenderGraph::ResourceHandle depth;
-            RenderGraph::ResourceHandle hiz_current;
-            RenderGraph::ResourceHandle hiz_previous;
-            RenderGraph::ResourceHandle shadow_mask;
-            RenderGraph::ResourceHandle lighting_output;
-            RenderGraph::ResourceHandle ao_working_set;
-            RenderGraph::ResourceHandle motion_vectors;
-            RenderGraph::ResourceHandle ao_output;
-            RenderGraph::ResourceHandle denoiser_output;
-            RenderGraph::ResourceHandle ssr_output;
-            RenderGraph::ResourceHandle aa_output;
-            RenderGraph::ResourceHandle bloom_chain;
-            RenderGraph::ResourceHandle tonemapping_state;
-            RenderGraph::ResourceHandle tonemapping_output;
-            RenderGraph::ResourceHandle selected_framebuffer;
-            RenderGraph::ResourceHandle ui_framebuffer;
-            RenderGraph::ResourceHandle window_framebuffer;
-            RenderGraph::ResourceHandle output;
-            RenderGraph::ResourceHandle processing_image;
+            RenderGraph::TokenHandle   scene;
+            RenderGraph::TokenHandle   shadow_maps;
+            RenderGraph::TokenHandle   probe_volume;
+            RenderGraph::BufferHandle  lighting_data;
+            RenderGraph::TextureHandle base_color;
+            RenderGraph::TextureHandle normal;
+            RenderGraph::TextureHandle metal_rough_ao;
+            RenderGraph::TextureHandle depth;
+            RenderGraph::TextureHandle hiz_current;
+            RenderGraph::TextureHandle hiz_previous;
+            RenderGraph::TextureHandle shadow_mask;
+            RenderGraph::TextureHandle lighting_output;
+            RenderGraph::TokenHandle   ao_working_set;
+            RenderGraph::TokenHandle   motion_vectors;
+            RenderGraph::TextureHandle ao_output;
+            RenderGraph::TextureHandle denoiser_output;
+            RenderGraph::TextureHandle ssr_output;
+            RenderGraph::TextureHandle aa_output;
+            RenderGraph::TokenHandle   bloom_chain;
+            RenderGraph::TokenHandle   tonemapping_state;
+            RenderGraph::TextureHandle tonemapping_output;
+            RenderGraph::TextureHandle selected_framebuffer;
+            RenderGraph::TextureHandle ui_framebuffer;
+            RenderGraph::TextureHandle window_framebuffer;
+            RenderGraph::TextureHandle output;
+            RenderGraph::TokenHandle   processing_image;
         } graph_resources{};
 
         auto define_raster_passes = [&](auto&& schedule) {
@@ -628,7 +628,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 "ShadowDepth",
                 [&](RenderGraph::PassBuilder& builder) {
                     builder.Read(graph_resources.scene)
-                        .Write(graph_resources.shadow_maps, "all-cascades-and-cube-faces")
+                        .Write(graph_resources.shadow_maps)
                         .SideEffect();
                 },
                 [&]() {
@@ -660,7 +660,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 "Geometry",
                 [&](RenderGraph::PassBuilder& builder) {
                     builder.Read(graph_resources.scene)
-                        .Read(graph_resources.hiz_previous, "all-mips")
+                        .Read(graph_resources.hiz_previous)
                         .Write(graph_resources.base_color)
                         .Write(graph_resources.normal)
                         .Write(graph_resources.metal_rough_ao)
@@ -688,15 +688,15 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 "HiZBuild",
                 [&](RenderGraph::PassBuilder& builder) {
                     builder.Read(graph_resources.depth)
-                        .Write(graph_resources.hiz_current, "all-mips");
+                        .Write(graph_resources.hiz_current);
                 },
                 [&]() { hiz_build_pass->Process(raster_context); }
             );
             schedule(
                 "CommitHiZHistory",
                 [&](RenderGraph::PassBuilder& builder) {
-                    builder.Read(graph_resources.hiz_current, "all-mips")
-                        .Write(graph_resources.hiz_previous, "all-mips")
+                    builder.Read(graph_resources.hiz_current)
+                        .Write(graph_resources.hiz_previous)
                         .SideEffect();
                 },
                 [&]() { raster_context.CommitHiZHistory(camera.GetViewProjectionMatrix()); }
@@ -873,7 +873,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 "Bloom",
                 [&](RenderGraph::PassBuilder& builder) {
                     builder.ReadWrite(graph_resources.processing_image)
-                        .Write(graph_resources.bloom_chain, "all-mips");
+                        .Write(graph_resources.bloom_chain);
                 },
                 [&]() {
                     processing_image = bloom_pass->Process(raster_context, raster_config, processing_image);
@@ -989,31 +989,49 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
         if (render_graph_enabled && !render_graph_fallback_latched) {
             RenderGraph graph("RasterFrame");
+            auto import_physical_texture = [&](std::string_view name, Texture* physical_texture) {
+                assert(physical_texture != nullptr);
+                RenderGraph::TextureAspect aspects = RenderGraph::TextureAspect::None;
+                const auto rhi_aspects = physical_texture->GetAspectFlags();
+                if (uint32_t(rhi_aspects & ETextureAspectFlags::COLOR) != 0) {
+                    aspects = aspects | RenderGraph::TextureAspect::Color;
+                }
+                if (uint32_t(rhi_aspects & ETextureAspectFlags::DEPTH_SLICE) != 0) {
+                    aspects = aspects | RenderGraph::TextureAspect::Depth;
+                }
+                if (uint32_t(rhi_aspects & ETextureAspectFlags::STENCIL_SLICE) != 0) {
+                    aspects = aspects | RenderGraph::TextureAspect::Stencil;
+                }
+                assert(aspects != RenderGraph::TextureAspect::None);
+                return graph.ImportTexture(
+                    name,
+                    physical_texture,
+                    RenderGraph::TextureDesc{
+                        .mip_count = physical_texture->GetNumMips(),
+                        .layer_count = physical_texture->GetNumArray(),
+                        .aspects = aspects
+                    }
+                );
+            };
             auto import_texture = [&](std::string_view name, const auto& texture) {
                 // DepthBufferRef wraps a TextureRef while ordinary texture handles point at the
                 // Texture directly. Canonicalize every texture import to the TextureView's physical
                 // Texture so aliases (including the two depth sampler wrappers and the editor view)
                 // resolve to one graph resource.
-                return graph.Import(
-                    name,
-                    RenderGraph::ResourceKind::Texture,
-                    texture->GetView().GetTexture()
-                );
+                return import_physical_texture(name, texture->GetView().GetTexture());
             };
 
-            graph_resources.scene = graph.Import(
-                "scene", RenderGraph::ResourceKind::Token, render_scene.get()
-            );
-            graph_resources.shadow_maps = graph.Import(
-                "shadow_maps", RenderGraph::ResourceKind::Token, &raster_context.csm_data
-            );
-            graph_resources.probe_volume = graph.Import(
-                "probe_volume", RenderGraph::ResourceKind::Token, &raster_context.probe_volume
-            );
-            graph_resources.lighting_data = graph.Import(
+            graph_resources.scene = graph.ImportToken("scene", render_scene.get());
+            graph_resources.shadow_maps =
+                graph.ImportToken("shadow_maps", &raster_context.csm_data);
+            graph_resources.probe_volume =
+                graph.ImportToken("probe_volume", &raster_context.probe_volume);
+            auto* lighting_data_buffer = raster_context.lighting_data_buffer.buf.Get();
+            assert(lighting_data_buffer != nullptr);
+            graph_resources.lighting_data = graph.ImportBuffer(
                 "lighting_data",
-                RenderGraph::ResourceKind::Buffer,
-                raster_context.lighting_data_buffer.buf.Get()
+                lighting_data_buffer,
+                RenderGraph::BufferDesc{.byte_size = lighting_data_buffer->GetByteSize()}
             );
             graph_resources.base_color =
                 import_texture("base_color", raster_context.textures.base_color.tex);
@@ -1033,12 +1051,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 import_texture("shadow_mask", raster_context.textures.shadow_mask.tex);
             graph_resources.lighting_output =
                 import_texture("lighting_output", raster_context.textures.lighting_output.tex);
-            graph_resources.ao_working_set = graph.Import(
-                "ao_working_set", RenderGraph::ResourceKind::Token, ao_pass.get()
-            );
-            graph_resources.motion_vectors = graph.Import(
-                "motion_vectors", RenderGraph::ResourceKind::Token, rtao_denoiser_pass.get()
-            );
+            graph_resources.ao_working_set = graph.ImportToken("ao_working_set", ao_pass.get());
+            graph_resources.motion_vectors =
+                graph.ImportToken("motion_vectors", rtao_denoiser_pass.get());
             graph_resources.ao_output =
                 import_texture("ao_output", raster_context.textures.ao_output.tex);
             graph_resources.denoiser_output =
@@ -1047,22 +1062,17 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 import_texture("ssr_output", raster_context.textures.ssr_output.tex);
             graph_resources.aa_output =
                 import_texture("aa_output", raster_context.textures.aa_output.tex);
-            graph_resources.bloom_chain = graph.Import(
-                "bloom_chain", RenderGraph::ResourceKind::Token, bloom_pass.get()
-            );
-            graph_resources.tonemapping_state = graph.Import(
-                "tonemapping_state", RenderGraph::ResourceKind::Token, tonemapping_pass.get()
-            );
+            graph_resources.bloom_chain = graph.ImportToken("bloom_chain", bloom_pass.get());
+            graph_resources.tonemapping_state =
+                graph.ImportToken("tonemapping_state", tonemapping_pass.get());
             graph_resources.tonemapping_output =
                 import_texture("tonemapping_output", raster_context.textures.tonemapping_output.tex);
             if (frame_packet.ui_composition.enabled) {
-                graph_resources.selected_framebuffer = graph.Import(
-                    "selected_framebuffer",
-                    RenderGraph::ResourceKind::Texture,
-                    selected_framebuffer_view.GetTexture()
+                graph_resources.selected_framebuffer = import_physical_texture(
+                    "selected_framebuffer", selected_framebuffer_view.GetTexture()
                 );
 
-                RenderGraph::ResourceHandle expected_validation_resource;
+                RenderGraph::TextureHandle expected_validation_resource;
                 const auto& validation_name = frame_packet.validation_selected_frame_buffer_name;
                 if (validation_name == "base_color") {
                     expected_validation_resource = graph_resources.base_color;
@@ -1087,17 +1097,13 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             graph_resources.ui_framebuffer =
                 import_texture("ui_framebuffer", raster_context.textures.ui_frame_buffer.tex);
             if (ui_writes_external_window) {
-                graph_resources.window_framebuffer = graph.Import(
-                    "window_framebuffer",
-                    RenderGraph::ResourceKind::Texture,
-                    window_framebuffer_view.GetTexture()
+                graph_resources.window_framebuffer = import_physical_texture(
+                    "window_framebuffer", window_framebuffer_view.GetTexture()
                 );
             }
             graph_resources.output =
                 import_texture("output", raster_context.textures.output.tex);
-            graph_resources.processing_image = graph.CreateTransient(
-                "processing_image", RenderGraph::ResourceKind::Token
-            );
+            graph_resources.processing_image = graph.CreateTransientToken("processing_image");
 
             if (render_graph_fallback_latched) {
                 execute_linear();
