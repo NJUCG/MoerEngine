@@ -4,27 +4,36 @@
 # ============================================================
 
 # CUDA
-set(WITH_CUDA OFF CACHE BOOL "WITH_CUDA" FORCE)
-set(LIBTORCH_DIR "/path/to/libtorch" CACHE PATH "LIBTORCH_DIR" FORCE)
-set(TENSORRT_DIR "/path/to/tensorrt" CACHE PATH "TENSORRT_DIR" FORCE)
+# Do not FORCE cache defaults here. Command-line -D values are the build API used by
+# presets and CI jobs; a local EnableFeatures.cmake may still opt in to FORCE when the
+# developer intentionally wants the file to own the configuration.
+option(WITH_CUDA "Build CUDA/LibTorch/TensorRT integration" OFF)
+set(LIBTORCH_DIR "" CACHE PATH "LibTorch root directory")
+set(TENSORRT_DIR "" CACHE PATH "TensorRT root directory")
 
 # NRD
-set(WITH_NRD OFF CACHE BOOL "WITH_NRD" FORCE)
-set(NRD_ROOT "/path/to/nrd"  CACHE PATH "NRD_ROOT" FORCE)
+option(WITH_NRD "Build NVIDIA NRD integration" OFF)
+set(NRD_ROOT "" CACHE PATH "NRD source root directory")
 
 # RenderDoc
-set(WITH_RENDERDOC OFF CACHE BOOL "WITH_RENDERDOC" FORCE)
-set(RENDERDOC_ROOT "/path/to/renderdoc"  CACHE PATH "RENDERDOC_ROOT" FORCE)
+option(WITH_RENDERDOC "Build RenderDoc integration" OFF)
+set(RENDERDOC_ROOT "" CACHE PATH "RenderDoc SDK root directory")
 
 # Profile
-set(WITH_PROFILE OFF CACHE BOOL "WITH_PROFILE" FORCE)
+option(WITH_PROFILE "Build profiling integration" OFF)
+
+# Local matrix validation needs command-line feature values to be authoritative
+# while leaving a developer's normal EnableFeatures.cmake untouched.
+option(MOER_IGNORE_ENABLE_FEATURES "Ignore local EnableFeatures.cmake overrides" OFF)
 
 # ============================================================
 # Load user overrides from EnableFeatures.cmake
 # template: template.EnableFeatures.cmake
 # ============================================================
 
-if (EXISTS "${CMAKE_SOURCE_DIR}/EnableFeatures.cmake")
+if (MOER_IGNORE_ENABLE_FEATURES)
+    message(STATUS "EnableFeatures.cmake ignored for explicit feature validation")
+elseif (EXISTS "${CMAKE_SOURCE_DIR}/EnableFeatures.cmake")
     include("${CMAKE_SOURCE_DIR}/EnableFeatures.cmake")
     message(STATUS "EnableFeatures.cmake found")
 else()

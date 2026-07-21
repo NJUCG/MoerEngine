@@ -30,6 +30,7 @@ class Scenario:
     expect_exit_after_ready: bool = False
     ready_log_pattern: str | None = None
     ready_settle_seconds: float | None = None
+    require_profile_logs: bool = True
 
     @property
     def effective_rhi_thread(self) -> bool:
@@ -224,6 +225,22 @@ FAULT_SCENARIOS = (
     ),
 )
 
+FEATURE_VALIDATION_SCENARIOS = (
+    Scenario(
+        "feature_renderer_switch",
+        "Raster",
+        True,
+        True,
+        False,
+        1,
+        editor_args=("--threading-renderer-switch-validation", "--no-splash"),
+        renderer_switch_validation=True,
+        expect_exit_after_ready=True,
+        ready_log_pattern="[ThreadingValidation][RendererSwitch] Complete:",
+        require_profile_logs=False,
+    ),
+)
+
 SCENARIOS = {
     scenario.name: scenario
     for scenario in (
@@ -231,6 +248,7 @@ SCENARIOS = {
         *RENDERGRAPH_SCENARIOS,
         *RENDERGRAPH_RESOURCE_SCENARIOS,
         *FAULT_SCENARIOS,
+        *FEATURE_VALIDATION_SCENARIOS,
     )
 }
 
@@ -243,6 +261,7 @@ SCENARIO_SETS = {
     ),
     "soak": ("raster_rt1_rhi", "ray_rt1_rhi"),
     "fault": tuple(scenario.name for scenario in FAULT_SCENARIOS),
+    "feature": tuple(scenario.name for scenario in FEATURE_VALIDATION_SCENARIOS),
 }
 
 SECTION_PATTERN = re.compile(r"^\s*\[([^]]+)]\s*(?:#.*)?$")
@@ -347,20 +366,21 @@ def required_patterns(scenario: Scenario) -> list[str]:
             f"[Threading] {scenario.renderer} frames execute on "
             f"{execution_thread} thread id ="
         ),
-        "[ThreadingProfile][RHI]",
     ]
-    if not scenario.fault_validation:
-        patterns.extend(
-            [
-                "[ThreadingProfile][Prepare]",
-                "[ThreadingProfile][RHIRecord]",
-            ]
-        )
+    if scenario.require_profile_logs:
+        patterns.append("[ThreadingProfile][RHI]")
+        if not scenario.fault_validation:
+            patterns.extend(
+                [
+                    "[ThreadingProfile][Prepare]",
+                    "[ThreadingProfile][RHIRecord]",
+                ]
+            )
     if scenario.effective_rhi_thread:
         patterns.append("[Threading] RHIThread id =")
     if scenario.render_thread and scenario.max_frame_lag == 1:
         patterns.append("[Threading] GT/RT overlap active")
-    if scenario.render_thread:
+    if scenario.render_thread and scenario.require_profile_logs:
         patterns.append("[ThreadingProfile][RT]")
     if scenario.renderer == "Raster":
         patterns.append(

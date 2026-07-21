@@ -44,6 +44,20 @@ Run the three-scenario smoke set:
 python tools/threading/run_matrix.py --set smoke --base-config template.MoerEngine.toml
 ```
 
+Run the self-terminating optional-feature renderer lifecycle check:
+
+```powershell
+python tools/threading/run_matrix.py --set feature --base-config template.MoerEngine.toml
+```
+
+The `feature_renderer_switch` scenario uses the linear Raster path and validates
+Raster reload, Raster-to-Raytracing, Raytracing-to-Raster, normal shutdown, and
+the exact renderer destruction counts. It is intentionally independent of the
+dedicated RenderGraph validation set so it can gate every optional-feature
+build without coupling feature coverage to RenderGraph coverage. It gates on
+functional lifecycle markers rather than periodic profiling markers, which are
+not guaranteed to be emitted before a fast Release validation run exits.
+
 Run the full functional matrix:
 
 ```powershell
@@ -165,6 +179,7 @@ python tools/threading/run_matrix.py --set full --dry-run --base-config template
 | `ray_rt0_rhi` | Raytracing | n/a | n/a | on | on | off | 0 | no |
 | `ray_rt1_rhi` | Raytracing | n/a | n/a | on | on | off | 1 | yes |
 | `ray_rt1_rhi_fault_present_submit` | Raytracing | n/a | n/a | on | on | off | 1 | no |
+| `feature_renderer_switch` | Raster→Raster→Raytracing→Raster | off | off | on | on | off | 1 | no |
 
 ## Pass Criteria
 

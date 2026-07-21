@@ -29,7 +29,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # 统一输出路径：MSVC 与 Clang(Ninja) 均使用 target/bin/<Config>/ 与 target/lib/<Config>/
 # $<CONFIG> 在 multi-config(MSVC) 下为构建时选择的配置，在 single-config(Ninja) 下为 CMAKE_BUILD_TYPE
 set(CMAKE_INSTALL_PREFIX "${moer_root_dir}/target")
-set(BINARY_ROOT_DIR "${moer_root_dir}/target")
+set(BINARY_ROOT_DIR "${moer_root_dir}/target" CACHE PATH "Root directory for build outputs")
 
 # set output folder (使用 generator expression 保证两种生成器输出目录一致)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>")

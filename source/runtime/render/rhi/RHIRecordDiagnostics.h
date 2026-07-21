@@ -462,28 +462,6 @@ struct SerialBarrierItem {
 };
 
 class SerialBarrierSectionBuilder {
-public:
-    void Add(const SerialBarrierItem& _item) {
-        items.push_back(_item);
-    }
-
-    SerialGoldenSection Finish() {
-        std::sort(items.begin(), items.end(), [](const SerialBarrierItem& _lhs, const SerialBarrierItem& _rhs) {
-            return Key(_lhs) < Key(_rhs);
-        });
-
-        StableRecordHash hash;
-        hash.Add(0x4241525249455253ull);
-        hash.Add(static_cast<uint64_t>(items.size()));
-        bool complete = true;
-        for (const SerialBarrierItem& item : items) {
-            AddItem(hash, item);
-            complete &= item.resource.complete && item.resource.kind != StableObjectKind::Opaque &&
-                        item.queue_roles_complete;
-        }
-        return {hash.Value(), static_cast<uint32_t>(items.size()), complete};
-    }
-
 private:
     static auto Key(const SerialBarrierItem& _item) {
         return std::tuple{
@@ -513,6 +491,29 @@ private:
         };
     }
 
+public:
+    void Add(const SerialBarrierItem& _item) {
+        items.push_back(_item);
+    }
+
+    SerialGoldenSection Finish() {
+        std::sort(items.begin(), items.end(), [](const SerialBarrierItem& _lhs, const SerialBarrierItem& _rhs) {
+            return Key(_lhs) < Key(_rhs);
+        });
+
+        StableRecordHash hash;
+        hash.Add(0x4241525249455253ull);
+        hash.Add(static_cast<uint64_t>(items.size()));
+        bool complete = true;
+        for (const SerialBarrierItem& item : items) {
+            AddItem(hash, item);
+            complete &= item.resource.complete && item.resource.kind != StableObjectKind::Opaque &&
+                        item.queue_roles_complete;
+        }
+        return {hash.Value(), static_cast<uint32_t>(items.size()), complete};
+    }
+
+private:
     static void AddItem(StableRecordHash& _hash, const SerialBarrierItem& _item) {
         _hash.Add(0x424152524945525full);
         _hash.Add(_item.group_ordinal);
