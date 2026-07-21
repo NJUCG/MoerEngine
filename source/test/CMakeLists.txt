@@ -24,6 +24,7 @@ target_link_libraries(${test_target}
     PRIVATE Moer::Render
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME RenderGraphContract COMMAND $<TARGET_FILE:${test_target}>)
 
 set(test_target TestRHICmdReorderer)
 add_executable(${test_target} "RHICmdReordererTest.cpp")
