@@ -1016,25 +1016,33 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
         if (!resource.imported && !resource_ever_written[resource_index]) {
             return Fail("transient resource has no producer: " + resource.name);
         }
-        if (!resource.imported && resource.exported) {
+        if (resource.exported) {
             const auto& final_states = normalized_final_states[resource_index];
             const bool exported_ranges_initialized = std::all_of(
                 resource_cells[resource_index].begin(),
                 resource_cells[resource_index].end(),
                 [&](const AtomicCell& cell) {
-                    const bool exported_cell = resource.whole_resource_exported ||
-                                               std::any_of(
-                                                   final_states.begin(),
-                                                   final_states.end(),
-                                                   [&](const NormalizedStateDeclaration& final) {
-                                                       return RangesOverlap(final.range, cell.range);
-                                                   }
-                                               );
-                    return !exported_cell || cell.initialized;
+                    bool read_boundary = false;
+                    bool typed_exported_cell = false;
+                    for (const auto& final : final_states) {
+                        if (RangesOverlap(final.range, cell.range)) {
+                            typed_exported_cell = true;
+                            read_boundary |= HasRead(final.boundary_access);
+                        }
+                    }
+                    const bool exported_cell = resource.whole_resource_exported || typed_exported_cell;
+                    const bool contents_required = !resource.imported || read_boundary;
+                    return !exported_cell || !contents_required || cell.initialized;
                 }
             );
             if (!exported_ranges_initialized) {
-                return Fail("exported transient resource has uninitialized subresources: " + resource.name);
+                return Fail(
+                    std::string(
+                        resource.imported ?
+                            "exported imported resource has uninitialized subresources required by a read boundary: " :
+                            "exported transient resource has uninitialized subresources: "
+                    ) + resource.name
+                );
             }
         }
     }

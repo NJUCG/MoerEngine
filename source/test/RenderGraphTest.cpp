@@ -2795,12 +2795,196 @@ void TestUndefinedImportMustBeInitializedBeforeRead(TestSuite& suite) {
         },
         [] {}
     );
+    write_graph.Export(
+        write_buffer,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read,
+        RenderGraph::BufferRange{.offset = 0, .size = 64}
+    );
     suite.Check(write_graph.Compile(), test_name, write_graph.GetCompileError());
     const auto* barrier = FindBarrier(write_graph.GetCompiledPlan(), write_buffer.Untyped(), {}, write);
     suite.Check(
         barrier != nullptr && barrier->discard_previous_contents,
         test_name,
         "the first write after Undefined must be represented as a discard transition"
+    );
+    const auto* initialized_export_barrier =
+        FindBarrier(write_graph.GetCompiledPlan(), write_buffer.Untyped(), write, {});
+    suite.Check(
+        initialized_export_barrier != nullptr && initialized_export_barrier->export_boundary &&
+            !initialized_export_barrier->discard_previous_contents &&
+            initialized_export_barrier->after_access == RenderGraph::AccessMode::Read,
+        test_name,
+        "a range initialized in the graph must remain exportable to an external reader"
+    );
+
+    RenderGraph read_export_graph("UndefinedReadExport");
+    const auto  read_export_buffer = read_export_graph.ImportBuffer(
+        "Buffer", &physical, RenderGraph::BufferDesc{.byte_size = 128}
+    );
+    read_export_graph.SetInitialState(
+        read_export_buffer,
+        RenderGraph::BufferState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None,
+        RenderGraph::BufferRange::Whole()
+    );
+    read_export_graph.Export(
+        read_export_buffer,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read,
+        RenderGraph::BufferRange{.offset = 0, .size = 64}
+    );
+    read_export_graph.AddPass(
+        "SideEffect",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect();
+        },
+        [] {}
+    );
+    suite.Check(
+        !read_export_graph.Compile() &&
+            Contains(read_export_graph.GetCompileError(), "uninitialized subresources"),
+        test_name,
+        "an untouched Undefined import must not be exported to an external reader"
+    );
+
+    RenderGraph write_export_graph("UndefinedWriteExport");
+    const auto  write_export_buffer = write_export_graph.ImportBuffer(
+        "Buffer", &physical, RenderGraph::BufferDesc{.byte_size = 128}
+    );
+    write_export_graph.SetInitialState(
+        write_export_buffer,
+        RenderGraph::BufferState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None,
+        RenderGraph::BufferRange::Whole()
+    );
+    write_export_graph.Export(
+        write_export_buffer,
+        RenderGraph::BufferState::UnorderedAccess,
+        RenderGraph::QueueRole::Compute,
+        RenderGraph::AccessMode::Write,
+        RenderGraph::BufferRange{.offset = 0, .size = 64}
+    );
+    write_export_graph.AddPass(
+        "SideEffect",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect();
+        },
+        [] {}
+    );
+    suite.Check(
+        write_export_graph.Compile(),
+        test_name,
+        "an external writer does not require preserved imported contents: " +
+            write_export_graph.GetCompileError()
+    );
+    const auto* write_export_barrier =
+        FindBarrier(write_export_graph.GetCompiledPlan(), write_export_buffer.Untyped(), {}, {});
+    suite.Check(
+        write_export_barrier != nullptr && write_export_barrier->export_boundary &&
+            write_export_barrier->discard_previous_contents &&
+            write_export_barrier->state_transition && write_export_barrier->memory_dependency &&
+            write_export_barrier->after_access == RenderGraph::AccessMode::Write &&
+            write_export_barrier->range.kind == RenderGraph::ResourceKind::Buffer &&
+            write_export_barrier->range.buffer.offset == 0 &&
+            write_export_barrier->range.buffer.size == 64 &&
+            write_export_graph.GetCompiledPlan().state_plan_complete,
+        test_name,
+        "a write-only export of Undefined contents must remain an explicit discard boundary"
+    );
+
+    RenderGraph read_write_export_graph("UndefinedReadWriteExport");
+    const auto  read_write_export_buffer = read_write_export_graph.ImportBuffer(
+        "Buffer", &physical, RenderGraph::BufferDesc{.byte_size = 128}
+    );
+    read_write_export_graph.SetInitialState(
+        read_write_export_buffer,
+        RenderGraph::BufferState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None,
+        RenderGraph::BufferRange{.offset = 0, .size = 64}
+    );
+    read_write_export_graph.Export(
+        read_write_export_buffer,
+        RenderGraph::BufferState::UnorderedAccess,
+        RenderGraph::QueueRole::Compute,
+        RenderGraph::AccessMode::ReadWrite,
+        RenderGraph::BufferRange{.offset = 0, .size = 64}
+    );
+    read_write_export_graph.AddPass(
+        "SideEffect",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect();
+        },
+        [] {}
+    );
+    suite.Check(
+        !read_write_export_graph.Compile() &&
+            Contains(read_write_export_graph.GetCompileError(), "uninitialized subresources"),
+        test_name,
+        "a ReadWrite export must preserve the same initialization requirement as a read"
+    );
+
+    RenderGraph disjoint_export_graph("DisjointUndefinedReadExport");
+    const auto  disjoint_export_buffer = disjoint_export_graph.ImportBuffer(
+        "Buffer", &physical, RenderGraph::BufferDesc{.byte_size = 128}
+    );
+    disjoint_export_graph.SetInitialState(
+        disjoint_export_buffer,
+        RenderGraph::BufferState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None,
+        RenderGraph::BufferRange{.offset = 0, .size = 64}
+    );
+    disjoint_export_graph.Export(
+        disjoint_export_buffer,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read,
+        RenderGraph::BufferRange{.offset = 64, .size = 64}
+    );
+    disjoint_export_graph.AddPass(
+        "SideEffect",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect();
+        },
+        [] {}
+    );
+    suite.Check(
+        disjoint_export_graph.Compile(),
+        test_name,
+        "an Undefined import range must not invalidate a disjoint typed export: " +
+            disjoint_export_graph.GetCompileError()
+    );
+
+    RenderGraph legacy_export_graph("LegacyUndefinedExport");
+    const auto  legacy_export_buffer = legacy_export_graph.ImportBuffer(
+        "Buffer", &physical, RenderGraph::BufferDesc{.byte_size = 128}
+    );
+    legacy_export_graph.SetInitialState(
+        legacy_export_buffer,
+        RenderGraph::BufferState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None,
+        RenderGraph::BufferRange{.offset = 0, .size = 64}
+    );
+    legacy_export_graph.Export(legacy_export_buffer);
+    legacy_export_graph.AddPass(
+        "SideEffect",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect();
+        },
+        [] {}
+    );
+    suite.Check(
+        legacy_export_graph.Compile(),
+        test_name,
+        "legacy import export has no external read contract and must remain compatible: " +
+            legacy_export_graph.GetCompileError()
     );
 }
 
