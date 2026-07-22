@@ -35,6 +35,10 @@ const char* ToString(RenderGraph::ResourceKind kind) {
 
 const char* ToString(RenderGraph::AccessMode mode) {
     switch (mode) {
+        case RenderGraph::AccessMode::Unknown:
+            return "unknown";
+        case RenderGraph::AccessMode::None:
+            return "none";
         case RenderGraph::AccessMode::Read:
             return "R";
         case RenderGraph::AccessMode::Write:
@@ -55,8 +59,114 @@ const char* ToString(RenderGraph::EdgeReasonKind kind) {
             return "WAR";
         case RenderGraph::EdgeReasonKind::WriteAfterWrite:
             return "WAW";
+        case RenderGraph::EdgeReasonKind::StateTransition:
+            return "state";
+        case RenderGraph::EdgeReasonKind::QueueOwnership:
+            return "ownership";
     }
     return "unknown";
+}
+
+const char* ToString(RenderGraph::QueueRole queue) {
+    switch (queue) {
+        case RenderGraph::QueueRole::None:
+            return "none";
+        case RenderGraph::QueueRole::Graphics:
+            return "graphics";
+        case RenderGraph::QueueRole::Compute:
+            return "compute";
+        case RenderGraph::QueueRole::Copy:
+            return "copy";
+    }
+    return "unknown";
+}
+
+const char* ToString(RenderGraph::PipelineType pipeline) {
+    switch (pipeline) {
+        case RenderGraph::PipelineType::None:
+            return "none";
+        case RenderGraph::PipelineType::Graphics:
+            return "graphics";
+        case RenderGraph::PipelineType::Compute:
+            return "compute";
+        case RenderGraph::PipelineType::RayTracing:
+            return "raytracing";
+        case RenderGraph::PipelineType::Copy:
+            return "copy";
+    }
+    return "unknown";
+}
+
+const char* ToString(RenderGraph::TextureState state) {
+    switch (state) {
+        case RenderGraph::TextureState::Automatic:
+            return "automatic";
+        case RenderGraph::TextureState::Undefined:
+            return "undefined";
+        case RenderGraph::TextureState::TransferSource:
+            return "transfer-src";
+        case RenderGraph::TextureState::TransferDestination:
+            return "transfer-dst";
+        case RenderGraph::TextureState::ShaderResource:
+            return "shader-resource";
+        case RenderGraph::TextureState::Sampled:
+            return "sampled";
+        case RenderGraph::TextureState::RenderTarget:
+            return "render-target";
+        case RenderGraph::TextureState::DepthStencilRead:
+            return "depth-read";
+        case RenderGraph::TextureState::DepthStencilWrite:
+            return "depth-write";
+        case RenderGraph::TextureState::UnorderedAccess:
+            return "unordered-access";
+        case RenderGraph::TextureState::Present:
+            return "present";
+    }
+    return "unknown";
+}
+
+const char* ToString(RenderGraph::BufferState state) {
+    switch (state) {
+        case RenderGraph::BufferState::Automatic:
+            return "automatic";
+        case RenderGraph::BufferState::Undefined:
+            return "undefined";
+        case RenderGraph::BufferState::TransferSource:
+            return "transfer-src";
+        case RenderGraph::BufferState::TransferDestination:
+            return "transfer-dst";
+        case RenderGraph::BufferState::VertexBuffer:
+            return "vertex-buffer";
+        case RenderGraph::BufferState::IndexBuffer:
+            return "index-buffer";
+        case RenderGraph::BufferState::IndirectArgument:
+            return "indirect-argument";
+        case RenderGraph::BufferState::ShaderResource:
+            return "shader-resource";
+        case RenderGraph::BufferState::UnorderedAccess:
+            return "unordered-access";
+        case RenderGraph::BufferState::AccelerationStructureBuildInput:
+            return "as-build-input";
+        case RenderGraph::BufferState::AccelerationStructureRead:
+            return "as-read";
+        case RenderGraph::BufferState::AccelerationStructureWrite:
+            return "as-write";
+    }
+    return "unknown";
+}
+
+void AppendState(std::ostringstream& stream, const RenderGraph::ResourceState& state) {
+    switch (state.kind) {
+        case RenderGraph::ResourceKind::Texture:
+            stream << ToString(state.texture);
+            break;
+        case RenderGraph::ResourceKind::Buffer:
+            stream << ToString(state.buffer);
+            break;
+        case RenderGraph::ResourceKind::Token:
+            stream << "logical";
+            break;
+    }
 }
 
 void AppendTextureAspects(std::ostringstream& stream, RenderGraph::TextureAspect aspects) {
@@ -121,7 +231,11 @@ void AppendVersion(std::ostringstream& stream, uint32_t version) {
 } // namespace
 
 RenderGraph::RenderGraph(std::string_view graph_name) :
+    RenderGraph(graph_name, QueueTopology::SingleQueue()) {}
+
+RenderGraph::RenderGraph(std::string_view graph_name, QueueTopology topology) :
     name(graph_name),
+    queue_topology(topology),
     graph_id(s_next_graph_id.fetch_add(1, std::memory_order_relaxed)) {
     assert(graph_id != 0 && "RenderGraph id counter wrapped.");
 }
@@ -133,7 +247,16 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Read(ResourceHandle resource
     if (graph.IsValidResource(resource)) {
         typed_range = ResourceRange::Whole(graph.resources[resource.index].kind);
     }
-    graph.AddAccess(pass_index, resource, AccessMode::Read, typed_range, false, range);
+    graph.AddAccess(
+        pass_index,
+        resource,
+        AccessMode::Read,
+        typed_range,
+        ResourceState{.kind = typed_range.kind},
+        false,
+        false,
+        range
+    );
     return *this;
 }
 
@@ -142,7 +265,16 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Write(ResourceHandle resourc
     if (graph.IsValidResource(resource)) {
         typed_range = ResourceRange::Whole(graph.resources[resource.index].kind);
     }
-    graph.AddAccess(pass_index, resource, AccessMode::Write, typed_range, false, range);
+    graph.AddAccess(
+        pass_index,
+        resource,
+        AccessMode::Write,
+        typed_range,
+        ResourceState{.kind = typed_range.kind},
+        false,
+        false,
+        range
+    );
     return *this;
 }
 
@@ -152,56 +284,217 @@ RenderGraph::PassBuilder::ReadWrite(ResourceHandle resource, std::string_view ra
     if (graph.IsValidResource(resource)) {
         typed_range = ResourceRange::Whole(graph.resources[resource.index].kind);
     }
-    graph.AddAccess(pass_index, resource, AccessMode::ReadWrite, typed_range, false, range);
+    graph.AddAccess(
+        pass_index,
+        resource,
+        AccessMode::ReadWrite,
+        typed_range,
+        ResourceState{.kind = typed_range.kind},
+        false,
+        false,
+        range
+    );
     return *this;
 }
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::Read(TextureHandle resource, TextureRange range) {
-    graph.AddAccess(pass_index, resource.Untyped(), AccessMode::Read, ResourceRange::Texture(range), true);
+    graph.AddAccess(
+        pass_index,
+        resource.Untyped(),
+        AccessMode::Read,
+        ResourceRange::Texture(range),
+        ResourceState::Texture(TextureState::Automatic),
+        true,
+        false
+    );
     return *this;
 }
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::Write(TextureHandle resource, TextureRange range) {
-    graph.AddAccess(pass_index, resource.Untyped(), AccessMode::Write, ResourceRange::Texture(range), true);
+    graph.AddAccess(
+        pass_index,
+        resource.Untyped(),
+        AccessMode::Write,
+        ResourceRange::Texture(range),
+        ResourceState::Texture(TextureState::Automatic),
+        true,
+        false
+    );
     return *this;
 }
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::ReadWrite(TextureHandle resource, TextureRange range) {
     graph.AddAccess(
-        pass_index, resource.Untyped(), AccessMode::ReadWrite, ResourceRange::Texture(range), true
+        pass_index,
+        resource.Untyped(),
+        AccessMode::ReadWrite,
+        ResourceRange::Texture(range),
+        ResourceState::Texture(TextureState::Automatic),
+        true,
+        false
+    );
+    return *this;
+}
+
+RenderGraph::PassBuilder&
+RenderGraph::PassBuilder::Read(TextureHandle resource, TextureState state, TextureRange range) {
+    graph.AddAccess(
+        pass_index,
+        resource.Untyped(),
+        AccessMode::Read,
+        ResourceRange::Texture(range),
+        ResourceState::Texture(state),
+        true,
+        true
+    );
+    return *this;
+}
+
+RenderGraph::PassBuilder&
+RenderGraph::PassBuilder::Write(TextureHandle resource, TextureState state, TextureRange range) {
+    graph.AddAccess(
+        pass_index,
+        resource.Untyped(),
+        AccessMode::Write,
+        ResourceRange::Texture(range),
+        ResourceState::Texture(state),
+        true,
+        true
+    );
+    return *this;
+}
+
+RenderGraph::PassBuilder&
+RenderGraph::PassBuilder::ReadWrite(TextureHandle resource, TextureState state, TextureRange range) {
+    graph.AddAccess(
+        pass_index,
+        resource.Untyped(),
+        AccessMode::ReadWrite,
+        ResourceRange::Texture(range),
+        ResourceState::Texture(state),
+        true,
+        true
     );
     return *this;
 }
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::Read(BufferHandle resource, BufferRange range) {
-    graph.AddAccess(pass_index, resource.Untyped(), AccessMode::Read, ResourceRange::Buffer(range), true);
+    graph.AddAccess(
+        pass_index,
+        resource.Untyped(),
+        AccessMode::Read,
+        ResourceRange::Buffer(range),
+        ResourceState::Buffer(BufferState::Automatic),
+        true,
+        false
+    );
     return *this;
 }
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::Write(BufferHandle resource, BufferRange range) {
-    graph.AddAccess(pass_index, resource.Untyped(), AccessMode::Write, ResourceRange::Buffer(range), true);
+    graph.AddAccess(
+        pass_index,
+        resource.Untyped(),
+        AccessMode::Write,
+        ResourceRange::Buffer(range),
+        ResourceState::Buffer(BufferState::Automatic),
+        true,
+        false
+    );
     return *this;
 }
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::ReadWrite(BufferHandle resource, BufferRange range) {
     graph.AddAccess(
-        pass_index, resource.Untyped(), AccessMode::ReadWrite, ResourceRange::Buffer(range), true
+        pass_index,
+        resource.Untyped(),
+        AccessMode::ReadWrite,
+        ResourceRange::Buffer(range),
+        ResourceState::Buffer(BufferState::Automatic),
+        true,
+        false
+    );
+    return *this;
+}
+
+RenderGraph::PassBuilder&
+RenderGraph::PassBuilder::Read(BufferHandle resource, BufferState state, BufferRange range) {
+    graph.AddAccess(
+        pass_index,
+        resource.Untyped(),
+        AccessMode::Read,
+        ResourceRange::Buffer(range),
+        ResourceState::Buffer(state),
+        true,
+        true
+    );
+    return *this;
+}
+
+RenderGraph::PassBuilder&
+RenderGraph::PassBuilder::Write(BufferHandle resource, BufferState state, BufferRange range) {
+    graph.AddAccess(
+        pass_index,
+        resource.Untyped(),
+        AccessMode::Write,
+        ResourceRange::Buffer(range),
+        ResourceState::Buffer(state),
+        true,
+        true
+    );
+    return *this;
+}
+
+RenderGraph::PassBuilder&
+RenderGraph::PassBuilder::ReadWrite(BufferHandle resource, BufferState state, BufferRange range) {
+    graph.AddAccess(
+        pass_index,
+        resource.Untyped(),
+        AccessMode::ReadWrite,
+        ResourceRange::Buffer(range),
+        ResourceState::Buffer(state),
+        true,
+        true
     );
     return *this;
 }
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::Read(TokenHandle resource) {
-    graph.AddAccess(pass_index, resource.Untyped(), AccessMode::Read, ResourceRange::Token(), true);
+    graph.AddAccess(
+        pass_index,
+        resource.Untyped(),
+        AccessMode::Read,
+        ResourceRange::Token(),
+        ResourceState::Token(),
+        true,
+        false
+    );
     return *this;
 }
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::Write(TokenHandle resource) {
-    graph.AddAccess(pass_index, resource.Untyped(), AccessMode::Write, ResourceRange::Token(), true);
+    graph.AddAccess(
+        pass_index,
+        resource.Untyped(),
+        AccessMode::Write,
+        ResourceRange::Token(),
+        ResourceState::Token(),
+        true,
+        false
+    );
     return *this;
 }
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::ReadWrite(TokenHandle resource) {
-    graph.AddAccess(pass_index, resource.Untyped(), AccessMode::ReadWrite, ResourceRange::Token(), true);
+    graph.AddAccess(
+        pass_index,
+        resource.Untyped(),
+        AccessMode::ReadWrite,
+        ResourceRange::Token(),
+        ResourceState::Token(),
+        true,
+        false
+    );
     return *this;
 }
 
@@ -212,6 +505,12 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::DependsOn(PassHandle depende
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::SideEffect() {
     graph.MarkSideEffect(pass_index);
+    return *this;
+}
+
+RenderGraph::PassBuilder&
+RenderGraph::PassBuilder::ExecuteOn(QueueRole queue, PipelineType pipeline) {
+    graph.SetExecutionDomain(pass_index, queue, pipeline);
     return *this;
 }
 
@@ -409,6 +708,76 @@ void RenderGraph::Export(ResourceHandle resource) {
     resources[resource.index].exported = true;
 }
 
+void RenderGraph::SetInitialState(
+    TextureHandle resource,
+    TextureState  state,
+    QueueRole     owner_queue,
+    AccessMode    last_access,
+    TextureRange  range
+) {
+    AddStateDeclaration(
+        resource.Untyped(),
+        ResourceRange::Texture(range),
+        ResourceState::Texture(state),
+        owner_queue,
+        last_access,
+        true
+    );
+}
+
+void RenderGraph::SetInitialState(
+    BufferHandle resource,
+    BufferState  state,
+    QueueRole    owner_queue,
+    AccessMode   last_access,
+    BufferRange  range
+) {
+    AddStateDeclaration(
+        resource.Untyped(),
+        ResourceRange::Buffer(range),
+        ResourceState::Buffer(state),
+        owner_queue,
+        last_access,
+        true
+    );
+}
+
+void RenderGraph::Export(
+    TextureHandle resource,
+    TextureState  final_state,
+    QueueRole     owner_queue,
+    AccessMode    next_access,
+    TextureRange  range
+) {
+    Export(resource.Untyped());
+    AddStateDeclaration(
+        resource.Untyped(),
+        ResourceRange::Texture(range),
+        ResourceState::Texture(final_state),
+        owner_queue,
+        next_access,
+        false
+    );
+}
+
+void RenderGraph::Export(
+    BufferHandle resource,
+    BufferState  final_state,
+    QueueRole    owner_queue,
+    AccessMode   next_access,
+    BufferRange  range
+) {
+    Export(resource.Untyped());
+    AddStateDeclaration(
+        resource.Untyped(),
+        ResourceRange::Buffer(range),
+        ResourceState::Buffer(final_state),
+        owner_queue,
+        next_access,
+        false
+    );
+}
+
 RenderGraph::PassHandle
 RenderGraph::AddPass(std::string_view pass_name, const SetupCallback& setup, ExecuteCallback execute) {
     if (!InvalidateCompile()) {
@@ -471,11 +840,21 @@ bool RenderGraph::Execute() {
 std::string RenderGraph::Dump() const {
     std::ostringstream stream;
     stream << "graph='" << name
-           << "' frontend=typed-rdg mode=serial barrier_owner=rhi_command_preprocess compiled="
+           << "' frontend=typed-rdg mode=serial barrier_owner=existing_rhi_vulkan_path "
+              "sync_plan=shadow external_endpoints=unbound state_plan="
+           << (compiled_plan.state_plan_complete ? "complete" : "incomplete") << " compiled="
            << (compiled ? "true" : "false") << " executed=" << (executed ? "true" : "false")
            << " passes=" << passes.size() << " resources=" << resources.size();
     if (!compile_error.empty()) {
         stream << " error='" << compile_error << "'";
+    }
+    stream << '\n';
+
+    stream << "queue_topology:";
+    for (const QueueRole role : {QueueRole::Graphics, QueueRole::Compute, QueueRole::Copy}) {
+        const auto binding = queue_topology.Resolve(role);
+        stream << ' ' << ToString(role) << "=native" << binding.native_queue_id << "/family"
+               << binding.family_id;
     }
     stream << '\n';
 
@@ -487,6 +866,8 @@ std::string RenderGraph::Dump() const {
         const auto& pass = passes[pass_index];
         stream << "  [" << item_index << "] " << pass.name << " declared=" << pass_index
                << " scheduled=" << (has_execution_order ? "true" : "false")
+               << " queue=" << ToString(pass.domain.queue)
+               << " pipeline=" << ToString(pass.domain.pipeline)
                << " side_effect=" << (pass.side_effect ? "true" : "false") << " accesses=[";
         for (uint32_t access_index = 0; access_index < pass.accesses.size(); ++access_index) {
             const auto& access = pass.accesses[access_index];
@@ -505,6 +886,8 @@ std::string RenderGraph::Dump() const {
             } else {
                 stream << "legacy=" << access.legacy_range;
             }
+            stream << " state=";
+            AppendState(stream, access.state);
             stream << ')';
         }
         stream << "]\n";
@@ -519,9 +902,17 @@ std::string RenderGraph::Dump() const {
             stream << " desc=[mips=" << resource.texture_desc.mip_count
                    << " layers=" << resource.texture_desc.layer_count << " aspects=";
             AppendTextureAspects(stream, resource.texture_desc.aspects);
-            stream << ']';
+            stream << " sharing="
+                   << (resource.texture_desc.sharing_mode == TextureDesc::SharingMode::Exclusive ?
+                           "exclusive" :
+                           "concurrent")
+                   << ']';
         } else if (resource.kind == ResourceKind::Buffer && resource.typed_desc) {
-            stream << " desc=[bytes=" << resource.buffer_desc.byte_size << ']';
+            stream << " desc=[bytes=" << resource.buffer_desc.byte_size << " sharing="
+                   << (resource.buffer_desc.sharing_mode == TextureDesc::SharingMode::Exclusive ?
+                           "exclusive" :
+                           "concurrent")
+                   << ']';
         }
         stream << " first=";
         if (resource.first_use == PassHandle::InvalidIndex) {
@@ -549,7 +940,8 @@ std::string RenderGraph::Dump() const {
             }
             stream << aliases[alias_index];
         }
-        stream << "]\n";
+        stream << "] initial_states=" << resource.initial_states.size()
+               << " final_states=" << resource.final_states.size() << "\n";
     }
 
     stream << "compiled_accesses:\n";
@@ -557,6 +949,9 @@ std::string RenderGraph::Dump() const {
         stream << "  " << passes[access.pass.index].name << ' ' << ToString(access.mode) << ':'
                << resources[access.resource.index].name << ' ';
         AppendRange(stream, access.range);
+        stream << " state=";
+        AppendState(stream, access.state);
+        stream << " domain=" << ToString(access.domain.queue) << '/' << ToString(access.domain.pipeline);
         stream << " version=";
         AppendVersion(stream, access.input_version);
         stream << "->";
@@ -586,6 +981,162 @@ std::string RenderGraph::Dump() const {
         stream << "]\n";
     }
 
+    auto append_pass_endpoint = [&](PassHandle pass, bool import_boundary, bool export_boundary) {
+        if (pass.IsValid() && pass.owner_id == graph_id && pass.index < passes.size()) {
+            stream << passes[pass.index].name;
+        } else if (import_boundary) {
+            stream << "<import>";
+        } else if (export_boundary) {
+            stream << "<export>";
+        } else {
+            stream << "<initial>";
+        }
+    };
+
+    stream << "barriers:\n";
+    for (uint32_t barrier_index = 0; barrier_index < compiled_plan.barriers.size(); ++barrier_index) {
+        const auto& barrier = compiled_plan.barriers[barrier_index];
+        stream << "  [" << barrier_index << "] " << resources[barrier.resource.index].name << '@';
+        AppendRange(stream, barrier.range);
+        stream << ' ';
+        append_pass_endpoint(barrier.src_pass, barrier.import_boundary, false);
+        stream << '(' << ToString(barrier.src_domain.queue) << '/'
+               << ToString(barrier.src_domain.pipeline) << ' ';
+        AppendState(stream, barrier.before_state);
+        stream << ' ' << ToString(barrier.before_access) << ") -> ";
+        append_pass_endpoint(barrier.dst_pass, false, barrier.export_boundary);
+        stream << '(' << ToString(barrier.dst_domain.queue) << '/'
+               << ToString(barrier.dst_domain.pipeline) << ' ';
+        AppendState(stream, barrier.after_state);
+        stream << ' ' << ToString(barrier.after_access) << ") flags=[";
+        bool wrote_flag = false;
+        auto append_flag = [&](bool enabled, const char* flag) {
+            if (!enabled) {
+                return;
+            }
+            if (wrote_flag) {
+                stream << ',';
+            }
+            stream << flag;
+            wrote_flag = true;
+        };
+        append_flag(barrier.execution_dependency, "execution");
+        append_flag(barrier.memory_dependency, "memory");
+        append_flag(barrier.state_transition, "transition");
+        append_flag(barrier.queue_dependency, "queue");
+        append_flag(barrier.queue_ownership, "ownership");
+        append_flag(barrier.discard_previous_contents, "discard");
+        append_flag(barrier.import_boundary, "import");
+        append_flag(barrier.export_boundary, "export");
+        append_flag(barrier.source_state_unknown, "unknown-src");
+        if (!wrote_flag) {
+            stream << "none";
+        }
+        stream << "] sources=[";
+        for (uint32_t source_index = 0; source_index < barrier.sources.size(); ++source_index) {
+            if (source_index != 0) {
+                stream << ',';
+            }
+            const auto& source = barrier.sources[source_index];
+            append_pass_endpoint(source.pass, false, false);
+            stream << '(' << ToString(source.domain.queue) << '/'
+                   << ToString(source.domain.pipeline) << ' ';
+            AppendState(stream, source.state);
+            stream << ' ' << ToString(source.access) << ')';
+        }
+        stream << "]\n";
+    }
+
+    stream << "barrier_placements:\n  prologue=[";
+    for (uint32_t index = 0; index < compiled_plan.prologue_barriers.size(); ++index) {
+        if (index != 0) {
+            stream << ',';
+        }
+        stream << compiled_plan.prologue_barriers[index];
+    }
+    stream << "] epilogue=[";
+    for (uint32_t index = 0; index < compiled_plan.epilogue_barriers.size(); ++index) {
+        if (index != 0) {
+            stream << ',';
+        }
+        stream << compiled_plan.epilogue_barriers[index];
+    }
+    stream << "]\n";
+
+    stream << "queue_batches:\n";
+    for (const auto& batch : compiled_plan.queue_batches) {
+        stream << "  [" << batch.id << "] " << ToString(batch.queue.role) << " native="
+               << batch.queue.native_queue_id << " family=" << batch.queue.family_id << " passes=[";
+        for (uint32_t pass_index = 0; pass_index < batch.passes.size(); ++pass_index) {
+            if (pass_index != 0) {
+                stream << ',';
+            }
+            stream << passes[batch.passes[pass_index].index].name;
+        }
+        stream << "] pre=[";
+        for (uint32_t index = 0; index < batch.pre_barriers.size(); ++index) {
+            if (index != 0) {
+                stream << ',';
+            }
+            stream << batch.pre_barriers[index];
+        }
+        stream << "] post=[";
+        for (uint32_t index = 0; index < batch.post_barriers.size(); ++index) {
+            if (index != 0) {
+                stream << ',';
+            }
+            stream << batch.post_barriers[index];
+        }
+        stream << "] waits=[";
+        for (uint32_t index = 0; index < batch.wait_syncs.size(); ++index) {
+            if (index != 0) {
+                stream << ',';
+            }
+            stream << batch.wait_syncs[index];
+        }
+        stream << "] signals=[";
+        for (uint32_t index = 0; index < batch.signal_syncs.size(); ++index) {
+            if (index != 0) {
+                stream << ',';
+            }
+            stream << batch.signal_syncs[index];
+        }
+        stream << "]\n";
+    }
+
+    stream << "queue_syncs:\n";
+    for (const auto& sync : compiled_plan.queue_syncs) {
+        stream << "  [" << sync.id << "] batch" << sync.signal_batch << " -> batch"
+               << sync.wait_batch << " mode=" << (sync.gpu_wait_required ? "gpu" : "host-fifo")
+               << " edges=[";
+        for (uint32_t index = 0; index < sync.dependency_edges.size(); ++index) {
+            if (index != 0) {
+                stream << ',';
+            }
+            stream << sync.dependency_edges[index];
+        }
+        stream << "] barriers=[";
+        for (uint32_t index = 0; index < sync.barriers.size(); ++index) {
+            if (index != 0) {
+                stream << ',';
+            }
+            stream << sync.barriers[index];
+        }
+        stream << "]\n";
+    }
+
+    stream << "pass_barriers:\n";
+    for (const auto& placement : compiled_plan.pass_barriers) {
+        stream << "  " << passes[placement.pass.index].name << " before=[";
+        for (uint32_t index = 0; index < placement.before.size(); ++index) {
+            if (index != 0) {
+                stream << ',';
+            }
+            stream << placement.before[index];
+        }
+        stream << "]\n";
+    }
+
     stream << "dependency_waves:\n";
     for (uint32_t wave_index = 0; wave_index < compiled_plan.dependency_waves.size(); ++wave_index) {
         stream << "  [" << wave_index << "] [";
@@ -606,7 +1157,9 @@ void RenderGraph::AddAccess(
     ResourceHandle   resource,
     AccessMode       mode,
     ResourceRange    range,
+    ResourceState    state,
     bool             typed,
+    bool             explicit_state,
     std::string_view legacy_range
 ) {
     if (!InvalidateCompile()) {
@@ -628,9 +1181,63 @@ void RenderGraph::AddAccess(
         );
         return;
     }
+    if (state.kind != resources[resource.index].kind) {
+        declaration_errors.emplace_back(
+            "pass '" + passes[pass_index].name + "' used a state with the wrong resource kind"
+        );
+        return;
+    }
+    if (mode == AccessMode::None || mode == AccessMode::Unknown) {
+        declaration_errors.emplace_back(
+            "pass '" + passes[pass_index].name + "' declared an invalid access mode"
+        );
+        return;
+    }
     passes[pass_index].accesses.push_back(
-        AccessDeclaration{resource, mode, range, std::string(legacy_range), typed}
+        AccessDeclaration{
+            resource,
+            mode,
+            range,
+            state,
+            std::string(legacy_range),
+            typed,
+            explicit_state
+        }
     );
+}
+
+void RenderGraph::AddStateDeclaration(
+    ResourceHandle resource,
+    ResourceRange  range,
+    ResourceState  state,
+    QueueRole      queue,
+    AccessMode     boundary_access,
+    bool           initial
+) {
+    if (!InvalidateCompile()) {
+        return;
+    }
+    if (!IsValidResource(resource)) {
+        declaration_errors.emplace_back("state declaration received an invalid resource handle");
+        return;
+    }
+    auto& declaration = resources[resource.index];
+    if (declaration.kind == ResourceKind::Token || range.kind != declaration.kind ||
+        state.kind != declaration.kind) {
+        declaration_errors.emplace_back(
+            "state declaration has the wrong resource kind for '" + declaration.name + "'"
+        );
+        return;
+    }
+    if (initial && !declaration.imported) {
+        declaration_errors.emplace_back(
+            "only imported resources may declare an initial state: " + declaration.name
+        );
+        return;
+    }
+    StateDeclaration state_declaration{range, state, queue, boundary_access};
+    auto&            target = initial ? declaration.initial_states : declaration.final_states;
+    target.push_back(std::move(state_declaration));
 }
 
 void RenderGraph::AddDependency(uint32_t pass_index, PassHandle dependency) {
@@ -660,6 +1267,21 @@ void RenderGraph::MarkSideEffect(uint32_t pass_index) {
         return;
     }
     passes[pass_index].side_effect = true;
+}
+
+void RenderGraph::SetExecutionDomain(
+    uint32_t pass_index,
+    QueueRole queue,
+    PipelineType pipeline
+) {
+    if (!InvalidateCompile()) {
+        return;
+    }
+    if (pass_index >= passes.size()) {
+        declaration_errors.emplace_back("execution-domain declaration has invalid pass index");
+        return;
+    }
+    passes[pass_index].domain = ExecutionDomain{queue, pipeline};
 }
 
 bool RenderGraph::InvalidateCompile() {

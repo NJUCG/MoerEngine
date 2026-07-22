@@ -57,6 +57,51 @@ private:
     return std::find(wave.passes.begin(), wave.passes.end(), pass) != wave.passes.end();
 }
 
+[[nodiscard]] const RenderGraph::CompiledBarrier* FindBarrier(
+    const RenderGraph::CompiledPlan& plan,
+    RenderGraph::ResourceHandle      resource,
+    RenderGraph::PassHandle          src,
+    RenderGraph::PassHandle          dst
+) {
+    const auto found = std::find_if(
+        plan.barriers.begin(),
+        plan.barriers.end(),
+        [&](const RenderGraph::CompiledBarrier& barrier) {
+            return barrier.resource == resource && barrier.src_pass == src && barrier.dst_pass == dst;
+        }
+    );
+    return found == plan.barriers.end() ? nullptr : &*found;
+}
+
+[[nodiscard]] const RenderGraph::CompiledAccess* FindAccess(
+    const RenderGraph::CompiledPlan& plan,
+    RenderGraph::PassHandle          pass,
+    RenderGraph::ResourceHandle      resource
+) {
+    const auto found = std::find_if(
+        plan.accesses.begin(),
+        plan.accesses.end(),
+        [&](const RenderGraph::CompiledAccess& access) {
+            return access.pass == pass && access.resource == resource;
+        }
+    );
+    return found == plan.accesses.end() ? nullptr : &*found;
+}
+
+[[nodiscard]] bool HasBarrierSource(
+    const RenderGraph::CompiledBarrier& barrier,
+    RenderGraph::PassHandle             pass,
+    RenderGraph::AccessMode             access
+) {
+    return std::any_of(
+        barrier.sources.begin(),
+        barrier.sources.end(),
+        [&](const RenderGraph::CompiledBarrierSource& source) {
+            return source.pass == pass && source.access == access;
+        }
+    );
+}
+
 void TestStableSerialCallbackOrder(TestSuite& suite) {
     constexpr std::string_view test_name = "stable serial callback order";
     RenderGraph                graph("StableSerial");
@@ -894,6 +939,1141 @@ void TestMultipleReadersProduceAllWarEdges(TestSuite& suite) {
     );
 }
 
+void TestExplicitStateValidation(TestSuite& suite) {
+    constexpr std::string_view test_name = "explicit state validation";
+
+    struct TextureCase {
+        RenderGraph::AccessMode   access;
+        RenderGraph::TextureState state;
+        RenderGraph::QueueRole    queue;
+        RenderGraph::PipelineType pipeline;
+        bool                      valid;
+    };
+    const std::vector<TextureCase> texture_cases{
+        {RenderGraph::AccessMode::Read,
+         RenderGraph::TextureState::Sampled,
+         RenderGraph::QueueRole::Graphics,
+         RenderGraph::PipelineType::Graphics,
+         true},
+        {RenderGraph::AccessMode::Write,
+         RenderGraph::TextureState::RenderTarget,
+         RenderGraph::QueueRole::Graphics,
+         RenderGraph::PipelineType::Graphics,
+         true},
+        {RenderGraph::AccessMode::ReadWrite,
+         RenderGraph::TextureState::UnorderedAccess,
+         RenderGraph::QueueRole::Compute,
+         RenderGraph::PipelineType::Compute,
+         true},
+        {RenderGraph::AccessMode::Read,
+         RenderGraph::TextureState::TransferSource,
+         RenderGraph::QueueRole::Copy,
+         RenderGraph::PipelineType::Copy,
+         true},
+        {RenderGraph::AccessMode::Write,
+         RenderGraph::TextureState::Sampled,
+         RenderGraph::QueueRole::Graphics,
+         RenderGraph::PipelineType::Graphics,
+         false},
+        {RenderGraph::AccessMode::Read,
+         RenderGraph::TextureState::TransferDestination,
+         RenderGraph::QueueRole::Copy,
+         RenderGraph::PipelineType::Copy,
+         false},
+        {RenderGraph::AccessMode::Read,
+         RenderGraph::TextureState::RenderTarget,
+         RenderGraph::QueueRole::Graphics,
+         RenderGraph::PipelineType::Graphics,
+         false},
+        {RenderGraph::AccessMode::Read,
+         RenderGraph::TextureState::Automatic,
+         RenderGraph::QueueRole::Graphics,
+         RenderGraph::PipelineType::Graphics,
+         false},
+        {RenderGraph::AccessMode::Read,
+         RenderGraph::TextureState::Sampled,
+         RenderGraph::QueueRole::Copy,
+         RenderGraph::PipelineType::Copy,
+         false},
+        {RenderGraph::AccessMode::Write,
+         RenderGraph::TextureState::RenderTarget,
+         RenderGraph::QueueRole::Compute,
+         RenderGraph::PipelineType::Compute,
+         false},
+    };
+
+    for (uint32_t index = 0; index < texture_cases.size(); ++index) {
+        const auto& current = texture_cases[index];
+        RenderGraph graph("TextureStateCase");
+        int         physical = 0;
+        const auto  texture = graph.ImportTexture("Texture", &physical, RenderGraph::TextureDesc{});
+        graph.AddPass(
+            "Access",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(current.queue, current.pipeline);
+                switch (current.access) {
+                    case RenderGraph::AccessMode::Read:
+                        builder.Read(texture, current.state);
+                        break;
+                    case RenderGraph::AccessMode::Write:
+                        builder.Write(texture, current.state);
+                        break;
+                    case RenderGraph::AccessMode::ReadWrite:
+                        builder.ReadWrite(texture, current.state);
+                        break;
+                    default:
+                        break;
+                }
+            },
+            [] {}
+        );
+        suite.Check(
+            graph.Compile() == current.valid,
+            test_name,
+            "texture state/access/domain case " + std::to_string(index) + " had the wrong validity"
+        );
+    }
+
+    struct BufferCase {
+        RenderGraph::AccessMode  access;
+        RenderGraph::BufferState state;
+        RenderGraph::QueueRole   queue;
+        RenderGraph::PipelineType pipeline;
+        bool                     valid;
+    };
+    const std::vector<BufferCase> buffer_cases{
+        {RenderGraph::AccessMode::Read,
+         RenderGraph::BufferState::ShaderResource,
+         RenderGraph::QueueRole::Compute,
+         RenderGraph::PipelineType::Compute,
+         true},
+        {RenderGraph::AccessMode::Write,
+         RenderGraph::BufferState::TransferDestination,
+         RenderGraph::QueueRole::Copy,
+         RenderGraph::PipelineType::Copy,
+         true},
+        {RenderGraph::AccessMode::Read,
+         RenderGraph::BufferState::VertexBuffer,
+         RenderGraph::QueueRole::Graphics,
+         RenderGraph::PipelineType::Graphics,
+         true},
+        {RenderGraph::AccessMode::Write,
+         RenderGraph::BufferState::ShaderResource,
+         RenderGraph::QueueRole::Compute,
+         RenderGraph::PipelineType::Compute,
+         false},
+        {RenderGraph::AccessMode::Read,
+         RenderGraph::BufferState::AccelerationStructureWrite,
+         RenderGraph::QueueRole::Compute,
+         RenderGraph::PipelineType::RayTracing,
+         false},
+        {RenderGraph::AccessMode::Read,
+         RenderGraph::BufferState::VertexBuffer,
+         RenderGraph::QueueRole::Compute,
+         RenderGraph::PipelineType::Compute,
+         false},
+    };
+
+    for (uint32_t index = 0; index < buffer_cases.size(); ++index) {
+        const auto& current = buffer_cases[index];
+        RenderGraph graph("BufferStateCase");
+        int         physical = 0;
+        const auto  buffer = graph.ImportBuffer("Buffer", &physical, RenderGraph::BufferDesc{.byte_size = 64});
+        graph.AddPass(
+            "Access",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(current.queue, current.pipeline);
+                switch (current.access) {
+                    case RenderGraph::AccessMode::Read:
+                        builder.Read(buffer, current.state);
+                        break;
+                    case RenderGraph::AccessMode::Write:
+                        builder.Write(buffer, current.state);
+                        break;
+                    case RenderGraph::AccessMode::ReadWrite:
+                        builder.ReadWrite(buffer, current.state);
+                        break;
+                    default:
+                        break;
+                }
+            },
+            [] {}
+        );
+        suite.Check(
+            graph.Compile() == current.valid,
+            test_name,
+            "buffer state/access/domain case " + std::to_string(index) + " had the wrong validity"
+        );
+    }
+}
+
+void TestSameStateMemoryDependencies(TestSuite& suite) {
+    constexpr std::string_view test_name = "same-state memory dependencies";
+    auto add_compute_access = [](
+                                  RenderGraph&             graph,
+                                  std::string_view         name,
+                                  RenderGraph::BufferHandle buffer,
+                                  RenderGraph::AccessMode  mode
+                              ) {
+        return graph.AddPass(
+            name,
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+                if (mode == RenderGraph::AccessMode::Read) {
+                    builder.Read(buffer, RenderGraph::BufferState::UnorderedAccess);
+                } else {
+                    builder.Write(buffer, RenderGraph::BufferState::UnorderedAccess);
+                }
+            },
+            [] {}
+        );
+    };
+
+    for (const auto second_mode : {RenderGraph::AccessMode::Read, RenderGraph::AccessMode::Write}) {
+        RenderGraph graph("UavWriteDependency");
+        int         physical = 0;
+        const auto  buffer = graph.ImportBuffer("Uav", &physical, RenderGraph::BufferDesc{.byte_size = 64});
+        graph.SetInitialState(
+            buffer,
+            RenderGraph::BufferState::UnorderedAccess,
+            RenderGraph::QueueRole::Compute,
+            RenderGraph::AccessMode::Read
+        );
+        const auto first  = add_compute_access(graph, "FirstWrite", buffer, RenderGraph::AccessMode::Write);
+        const auto second = add_compute_access(graph, "SecondAccess", buffer, second_mode);
+        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+        const auto* barrier = FindBarrier(graph.GetCompiledPlan(), buffer.Untyped(), first, second);
+        suite.Check(
+            barrier != nullptr && barrier->memory_dependency && !barrier->state_transition,
+            test_name,
+            second_mode == RenderGraph::AccessMode::Read ?
+                "same-state UAV W->R must emit only a memory dependency" :
+                "same-state UAV W->W must emit only a memory dependency"
+        );
+    }
+
+    RenderGraph read_graph("UavReadRead");
+    int         physical = 0;
+    const auto  buffer = read_graph.ImportBuffer("Uav", &physical, RenderGraph::BufferDesc{.byte_size = 64});
+    read_graph.SetInitialState(
+        buffer,
+        RenderGraph::BufferState::UnorderedAccess,
+        RenderGraph::QueueRole::Compute,
+        RenderGraph::AccessMode::Read
+    );
+    const auto first  = add_compute_access(read_graph, "FirstRead", buffer, RenderGraph::AccessMode::Read);
+    const auto second = add_compute_access(read_graph, "SecondRead", buffer, RenderGraph::AccessMode::Read);
+    suite.Check(read_graph.Compile(), test_name, read_graph.GetCompileError());
+    suite.Check(
+        FindBarrier(read_graph.GetCompiledPlan(), buffer.Untyped(), first, second) == nullptr,
+        test_name,
+        "same-state R->R must not emit a barrier"
+    );
+}
+
+void TestImportAndExportBoundaries(TestSuite& suite) {
+    constexpr std::string_view test_name = "import and export boundaries";
+
+    RenderGraph known_graph("KnownImport");
+    int         known_physical = 0;
+    const auto  known = known_graph.ImportBuffer(
+        "Known", &known_physical, RenderGraph::BufferDesc{.byte_size = 64}
+    );
+    known_graph.SetInitialState(
+        known,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    const auto known_read = known_graph.AddPass(
+        "Read",
+        [known](RenderGraph::PassBuilder& builder) {
+            builder.Read(known, RenderGraph::BufferState::ShaderResource);
+        },
+        [] {}
+    );
+    suite.Check(known_graph.Compile(), test_name, known_graph.GetCompileError());
+    const auto& known_plan = known_graph.GetCompiledPlan();
+    const auto* known_barrier = FindBarrier(known_plan, known.Untyped(), {}, known_read);
+    suite.Check(
+        known_plan.state_plan_complete && known_plan.prologue_barriers.size() == 1 &&
+            known_barrier != nullptr && known_barrier->import_boundary &&
+            !known_barrier->source_state_unknown && !known_barrier->state_transition,
+        test_name,
+        "a known import must produce a complete, known-source prologue record"
+    );
+
+    RenderGraph unknown_graph("UnknownImport");
+    int         unknown_physical = 0;
+    const auto  unknown = unknown_graph.ImportBuffer(
+        "Unknown", &unknown_physical, RenderGraph::BufferDesc{.byte_size = 64}
+    );
+    const auto unknown_read = unknown_graph.AddPass(
+        "Read",
+        [unknown](RenderGraph::PassBuilder& builder) {
+            builder.Read(unknown, RenderGraph::BufferState::ShaderResource);
+        },
+        [] {}
+    );
+    suite.Check(unknown_graph.Compile(), test_name, unknown_graph.GetCompileError());
+    const auto& unknown_plan = unknown_graph.GetCompiledPlan();
+    const auto* unknown_barrier = FindBarrier(unknown_plan, unknown.Untyped(), {}, unknown_read);
+    suite.Check(
+        !unknown_plan.state_plan_complete && unknown_plan.prologue_barriers.size() == 1 &&
+            unknown_barrier != nullptr && unknown_barrier->import_boundary &&
+            unknown_barrier->source_state_unknown && unknown_barrier->state_transition,
+        test_name,
+        "an unknown import must remain visibly incomplete and transition at its first use"
+    );
+
+    RenderGraph final_graph("FinalState");
+    const auto  output = final_graph.CreateTransientBuffer(
+        "Output", RenderGraph::BufferDesc{.byte_size = 64}
+    );
+    const auto write = final_graph.AddPass(
+        "Write",
+        [output](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.Write(output, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [] {}
+    );
+    final_graph.Export(
+        output,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    suite.Check(final_graph.Compile(), test_name, final_graph.GetCompileError());
+    const auto& final_plan = final_graph.GetCompiledPlan();
+    const auto* final_barrier = FindBarrier(final_plan, output.Untyped(), write, {});
+    suite.Check(
+        final_plan.epilogue_barriers.size() == 1 && final_barrier != nullptr &&
+            final_barrier->export_boundary && final_barrier->state_transition &&
+            final_barrier->memory_dependency,
+        test_name,
+        "an explicit final state must create a state-and-memory epilogue barrier"
+    );
+
+    RenderGraph untouched_graph("UntouchedExport");
+    int         untouched_physical = 0;
+    const auto  untouched = untouched_graph.ImportBuffer(
+        "Untouched", &untouched_physical, RenderGraph::BufferDesc{.byte_size = 64}
+    );
+    untouched_graph.SetInitialState(
+        untouched,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    untouched_graph.Export(
+        untouched,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    untouched_graph.AddPass(
+        "SideEffect",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect();
+        },
+        [] {}
+    );
+    suite.Check(untouched_graph.Compile(), test_name, untouched_graph.GetCompileError());
+    const auto& untouched_plan = untouched_graph.GetCompiledPlan();
+    const auto* untouched_barrier = FindBarrier(untouched_plan, untouched.Untyped(), {}, {});
+    suite.Check(
+        untouched_plan.epilogue_barriers.size() == 1 && untouched_barrier != nullptr &&
+            untouched_barrier->export_boundary && !untouched_barrier->state_transition &&
+            !untouched_barrier->memory_dependency,
+        test_name,
+        "an untouched imported resource must still retain its explicit export boundary"
+    );
+}
+
+void TestQueueTopologySynchronization(TestSuite& suite) {
+    constexpr std::string_view test_name = "queue topology synchronization";
+    auto check_case = [&](RenderGraph::QueueTopology topology,
+                          RenderGraph::TextureDesc::SharingMode sharing,
+                          bool                                  queue_dependency,
+                          bool                                  ownership,
+                          bool                                  gpu_wait,
+                          std::string_view                      expectation) {
+        RenderGraph graph("QueueTopology", topology);
+        const auto  buffer = graph.CreateTransientBuffer(
+            "Shared", RenderGraph::BufferDesc{.byte_size = 64, .sharing_mode = sharing}
+        );
+        const auto producer = graph.AddPass(
+            "Produce",
+            [buffer](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+                builder.Write(buffer, RenderGraph::BufferState::UnorderedAccess);
+            },
+            [] {}
+        );
+        const auto consumer = graph.AddPass(
+            "Consume",
+            [buffer](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics);
+                builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+            },
+            [] {}
+        );
+        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+        const auto& plan = graph.GetCompiledPlan();
+        const auto* barrier = FindBarrier(plan, buffer.Untyped(), producer, consumer);
+        suite.Check(
+            barrier != nullptr && barrier->queue_dependency == queue_dependency &&
+                barrier->queue_ownership == ownership,
+            test_name,
+            expectation
+        );
+        suite.Check(
+            plan.queue_syncs.size() == 1 && plan.queue_syncs.front().gpu_wait_required == gpu_wait,
+            test_name,
+            "queue synchronization mode must follow native queue identity"
+        );
+    };
+
+    check_case(
+        RenderGraph::QueueTopology::SingleQueue(),
+        RenderGraph::TextureDesc::SharingMode::Exclusive,
+        false,
+        false,
+        false,
+        "logical roles on one native queue must not transfer ownership"
+    );
+    check_case(
+        RenderGraph::QueueTopology{
+            .graphics = {RenderGraph::QueueRole::Graphics, 0, 0},
+            .compute  = {RenderGraph::QueueRole::Compute, 1, 0},
+            .copy     = {RenderGraph::QueueRole::Copy, 2, 0},
+        },
+        RenderGraph::TextureDesc::SharingMode::Exclusive,
+        true,
+        false,
+        true,
+        "different native queues in one family require synchronization but no ownership transfer"
+    );
+    check_case(
+        RenderGraph::QueueTopology::DedicatedQueues(),
+        RenderGraph::TextureDesc::SharingMode::Exclusive,
+        true,
+        true,
+        true,
+        "different families must transfer an exclusive resource"
+    );
+    check_case(
+        RenderGraph::QueueTopology::DedicatedQueues(),
+        RenderGraph::TextureDesc::SharingMode::Concurrent,
+        true,
+        false,
+        true,
+        "different families must not transfer a concurrent resource"
+    );
+}
+
+void TestTokenCrossQueueSyncHasNoOwnership(TestSuite& suite) {
+    constexpr std::string_view test_name = "token cross-queue synchronization";
+    RenderGraph graph("TokenSync", RenderGraph::QueueTopology::DedicatedQueues());
+    const auto  token = graph.CreateTransientToken("Token");
+    const auto  producer = graph.AddPass(
+        "Produce",
+        [token](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.Write(token);
+        },
+        [] {}
+    );
+    const auto consumer = graph.AddPass(
+        "Consume",
+        [token](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics);
+            builder.Read(token);
+        },
+        [] {}
+    );
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    suite.Check(
+        HasEdgeReason(
+            plan, producer, consumer, RenderGraph::EdgeReasonKind::ReadAfterWrite, token.Untyped()
+        ) &&
+            plan.queue_syncs.size() == 1 && plan.queue_syncs.front().gpu_wait_required,
+        test_name,
+        "a token hazard must create cross-native-queue synchronization"
+    );
+    suite.Check(
+        plan.barriers.empty(),
+        test_name,
+        "a logical token must never create resource state or ownership barriers"
+    );
+}
+
+void TestBatchPairSyncDeduplication(TestSuite& suite) {
+    constexpr std::string_view test_name = "batch-pair synchronization deduplication";
+    RenderGraph graph("SyncDedup", RenderGraph::QueueTopology::DedicatedQueues());
+    const auto  first = graph.CreateTransientBuffer("First", RenderGraph::BufferDesc{.byte_size = 64});
+    const auto  second = graph.CreateTransientBuffer("Second", RenderGraph::BufferDesc{.byte_size = 64});
+    graph.AddPass(
+        "ProduceFirst",
+        [first](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.Write(first, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [] {}
+    );
+    graph.AddPass(
+        "ProduceSecond",
+        [second](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.Write(second, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [] {}
+    );
+    graph.AddPass(
+        "ConsumeBoth",
+        [first, second](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics);
+            builder.Read(first, RenderGraph::BufferState::ShaderResource);
+            builder.Read(second, RenderGraph::BufferState::ShaderResource);
+        },
+        [] {}
+    );
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    suite.Check(
+        plan.queue_batches.size() == 2 && plan.queue_syncs.size() == 1,
+        test_name,
+        "all dependencies between one producer/consumer batch pair must share one sync"
+    );
+    suite.Check(
+        !plan.queue_syncs.empty() && plan.queue_syncs.front().dependency_edges.size() == 2 &&
+            plan.queue_syncs.front().barriers.size() == 2,
+        test_name,
+        "the deduplicated sync must retain both dependency edges and both barriers"
+    );
+}
+
+void TestPipelineDomainsAndBarrierSources(TestSuite& suite) {
+    constexpr std::string_view test_name = "pipeline domains and barrier sources";
+    RenderGraph graph("DomainsAndSources", RenderGraph::QueueTopology::DedicatedQueues());
+    const auto  buffer = graph.CreateTransientBuffer("Shared", RenderGraph::BufferDesc{.byte_size = 64});
+    const auto producer = graph.AddPass(
+        "Producer",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.Write(buffer, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [] {}
+    );
+    const auto reader_a = graph.AddPass(
+        "ReaderA",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::RayTracing);
+            builder.Read(buffer, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [] {}
+    );
+    const auto reader_b = graph.AddPass(
+        "ReaderB",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::RayTracing);
+            builder.Read(buffer, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [] {}
+    );
+    const auto writer = graph.AddPass(
+        "Writer",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::RayTracing);
+            builder.Write(buffer, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [] {}
+    );
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    const auto* producer_access = FindAccess(plan, producer, buffer.Untyped());
+    const auto* reader_access   = FindAccess(plan, reader_a, buffer.Untyped());
+    suite.Check(
+        producer_access != nullptr &&
+            producer_access->domain == RenderGraph::ExecutionDomain{
+                RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute
+            } &&
+            reader_access != nullptr &&
+            reader_access->domain == RenderGraph::ExecutionDomain{
+                RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::RayTracing
+            },
+        test_name,
+        "compiled accesses must retain their declared pipeline domains"
+    );
+
+    const auto reader_a_barrier = std::find_if(
+        plan.barriers.begin(), plan.barriers.end(), [&](const RenderGraph::CompiledBarrier& barrier) {
+            return barrier.resource == buffer.Untyped() && barrier.dst_pass == reader_a;
+        }
+    );
+    suite.Check(
+        reader_a_barrier != plan.barriers.end() && reader_a_barrier->src_domain.pipeline ==
+                                                          RenderGraph::PipelineType::Compute &&
+            reader_a_barrier->dst_domain.pipeline == RenderGraph::PipelineType::RayTracing &&
+            HasBarrierSource(*reader_a_barrier, producer, RenderGraph::AccessMode::Write),
+        test_name,
+        "a fan-out barrier must retain the producer source and both pipeline scopes"
+    );
+
+    const auto fan_in = std::find_if(
+        plan.barriers.begin(), plan.barriers.end(), [&](const RenderGraph::CompiledBarrier& barrier) {
+            return barrier.resource == buffer.Untyped() && barrier.dst_pass == writer;
+        }
+    );
+    suite.Check(
+        fan_in != plan.barriers.end() &&
+            HasBarrierSource(*fan_in, producer, RenderGraph::AccessMode::Write) &&
+            HasBarrierSource(*fan_in, reader_a, RenderGraph::AccessMode::Read) &&
+            HasBarrierSource(*fan_in, reader_b, RenderGraph::AccessMode::Read),
+        test_name,
+        "a fan-in write barrier must retain the writer and every active reader source"
+    );
+}
+
+void TestPartialRangeBarrier(TestSuite& suite) {
+    constexpr std::string_view test_name = "partial-range barrier";
+    RenderGraph graph("PartialBarrier");
+    int         physical = 0;
+    const auto  buffer = graph.ImportBuffer("Buffer", &physical, RenderGraph::BufferDesc{.byte_size = 128});
+    graph.SetInitialState(
+        buffer,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    const auto write = graph.AddPass(
+        "WriteMiddle",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Write(
+                buffer,
+                RenderGraph::BufferState::UnorderedAccess,
+                RenderGraph::BufferRange{.offset = 32, .size = 32}
+            );
+        },
+        [] {}
+    );
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto* barrier = FindBarrier(graph.GetCompiledPlan(), buffer.Untyped(), {}, write);
+    suite.Check(
+        barrier != nullptr && barrier->range.kind == RenderGraph::ResourceKind::Buffer &&
+            barrier->range.buffer == RenderGraph::BufferRange{.offset = 32, .size = 32},
+        test_name,
+        "a partial access must emit one barrier for exactly its canonical byte interval"
+    );
+}
+
+void TestMixedQueueExecuteRemainsDeclarationOrder(TestSuite& suite) {
+    constexpr std::string_view test_name = "mixed-queue serial execution order";
+    RenderGraph graph("MixedQueueExecute", RenderGraph::QueueTopology::DedicatedQueues());
+    std::vector<int> callbacks;
+    const auto first = graph.AddPass(
+        "Compute",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute)
+                .SideEffect();
+        },
+        [&] {
+            callbacks.push_back(1);
+        }
+    );
+    const auto second = graph.AddPass(
+        "Graphics",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
+                .SideEffect();
+        },
+        [&] {
+            callbacks.push_back(2);
+        }
+    );
+    const auto third = graph.AddPass(
+        "Copy",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::PipelineType::Copy).SideEffect();
+        },
+        [&] {
+            callbacks.push_back(3);
+        }
+    );
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(
+        graph.GetCompiledPlan().execution_order ==
+            std::vector<RenderGraph::PassHandle>{first, second, third},
+        test_name,
+        "mixed logical queues must not change the production execution order"
+    );
+    suite.Check(graph.Execute(), test_name, graph.GetCompileError());
+    suite.Check(
+        callbacks == std::vector<int>{1, 2, 3},
+        test_name,
+        "mixed-queue callbacks must still execute serially in declaration order"
+    );
+}
+
+[[nodiscard]] std::string BuildStageTwoDump(TestSuite& suite, std::string_view test_name) {
+    RenderGraph graph("StageTwoDump", RenderGraph::QueueTopology::DedicatedQueues());
+    const auto  buffer = graph.CreateTransientBuffer(
+        "Output",
+        RenderGraph::BufferDesc{
+            .byte_size = 128,
+            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Exclusive,
+        }
+    );
+    graph.AddPass(
+        "CopyProduce",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::PipelineType::Copy);
+            builder.Write(
+                buffer,
+                RenderGraph::BufferState::TransferDestination,
+                RenderGraph::BufferRange{.offset = 0, .size = 64}
+            );
+            builder.Write(
+                buffer,
+                RenderGraph::BufferState::TransferDestination,
+                RenderGraph::BufferRange{.offset = 64, .size = 64}
+            );
+        },
+        [] {}
+    );
+    graph.AddPass(
+        "ComputeConsume",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+        },
+        [] {}
+    );
+    graph.Export(
+        buffer,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    return graph.Dump();
+}
+
+void TestStageTwoDumpDeterminism(TestSuite& suite) {
+    constexpr std::string_view test_name = "Stage 2 dump determinism";
+    const std::string first  = BuildStageTwoDump(suite, test_name);
+    const std::string second = BuildStageTwoDump(suite, test_name);
+    suite.Check(first == second, test_name, "equivalent Stage 2 plans must have byte-identical dumps");
+    suite.Check(
+        Contains(first, "barrier_owner=existing_rhi_vulkan_path") &&
+            Contains(first, "sync_plan=shadow external_endpoints=unbound") &&
+            Contains(first, "barriers:\n") && Contains(first, "queue_batches:\n") &&
+            Contains(first, "queue_syncs:\n") && Contains(first, "pipeline=compute") &&
+            Contains(first, "flags=[execution,memory,transition,queue,ownership"),
+        test_name,
+        "the deterministic dump must retain state, domain, queue, and ownership decisions"
+    );
+}
+
+void TestBarrierSourcesIgnoreUnrelatedLastRead(TestSuite& suite) {
+    constexpr std::string_view test_name = "barrier sources ignore unrelated last read";
+    RenderGraph graph(
+        "SourceEndpoint",
+        RenderGraph::QueueTopology{
+            .graphics = {RenderGraph::QueueRole::Graphics, 0, 0},
+            .compute  = {RenderGraph::QueueRole::Compute, 1, 0},
+            .copy     = {RenderGraph::QueueRole::Copy, 2, 0},
+        }
+    );
+    const auto buffer = graph.CreateTransientBuffer(
+        "Concurrent",
+        RenderGraph::BufferDesc{
+            .byte_size    = 64,
+            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Concurrent,
+        }
+    );
+    const auto writer = graph.AddPass(
+        "Writer",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Write(buffer, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [] {}
+    );
+    const auto compute_read = graph.AddPass(
+        "ComputeRead",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.Read(buffer, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [] {}
+    );
+    const auto graphics_read = graph.AddPass(
+        "GraphicsRead",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Read(buffer, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [] {}
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    const auto* barrier = FindBarrier(plan, buffer.Untyped(), writer, graphics_read);
+    suite.Check(
+        barrier != nullptr && !barrier->queue_dependency && barrier->src_pass == writer &&
+            HasBarrierSource(*barrier, writer, RenderGraph::AccessMode::Write) &&
+            !HasBarrierSource(*barrier, compute_read, RenderGraph::AccessMode::Read),
+        test_name,
+        "an unrelated R/R endpoint must not replace the actual RAW source or create a queue handoff"
+    );
+    const bool has_orphan_gpu_sync = std::any_of(
+        plan.queue_syncs.begin(),
+        plan.queue_syncs.end(),
+        [](const RenderGraph::CompiledQueueSync& sync) {
+            return sync.signal_batch == 1 && sync.wait_batch == 2 && sync.gpu_wait_required;
+        }
+    );
+    suite.Check(
+        !has_orphan_gpu_sync,
+        test_name,
+        "the unrelated compute read must not produce a GPU wait before the final graphics read"
+    );
+}
+
+void TestFanInBarrierPlacementCoversEverySourceBatch(TestSuite& suite) {
+    constexpr std::string_view test_name = "fan-in barrier placement covers every source batch";
+    RenderGraph graph("FanInPlacement", RenderGraph::QueueTopology::DedicatedQueues());
+    int         physical = 0;
+    const auto  buffer = graph.ImportBuffer(
+        "Concurrent",
+        &physical,
+        RenderGraph::BufferDesc{
+            .byte_size    = 64,
+            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Concurrent,
+        }
+    );
+    graph.SetInitialState(
+        buffer,
+        RenderGraph::BufferState::TransferSource,
+        RenderGraph::QueueRole::Copy,
+        RenderGraph::AccessMode::Read
+    );
+    const auto copy_read = graph.AddPass(
+        "CopyRead",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::PipelineType::Copy);
+            builder.Read(buffer, RenderGraph::BufferState::TransferSource);
+        },
+        [] {}
+    );
+    const auto graphics_read = graph.AddPass(
+        "GraphicsRead",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Read(buffer, RenderGraph::BufferState::TransferSource);
+        },
+        [] {}
+    );
+    const auto compute_write = graph.AddPass(
+        "ComputeWrite",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.Write(buffer, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [] {}
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    const auto barrier_it = std::find_if(
+        plan.barriers.begin(),
+        plan.barriers.end(),
+        [&](const RenderGraph::CompiledBarrier& barrier) {
+            return barrier.resource == buffer.Untyped() && barrier.dst_pass == compute_write &&
+                   HasBarrierSource(barrier, copy_read, RenderGraph::AccessMode::Read) &&
+                   HasBarrierSource(barrier, graphics_read, RenderGraph::AccessMode::Read);
+        }
+    );
+    suite.Check(barrier_it != plan.barriers.end(), test_name, "the fan-in barrier must retain both readers");
+    if (barrier_it == plan.barriers.end()) {
+        return;
+    }
+    const uint32_t barrier_index = static_cast<uint32_t>(barrier_it - plan.barriers.begin());
+    suite.Check(
+        plan.queue_batches.size() == 3 &&
+            std::find(
+                plan.queue_batches[0].post_barriers.begin(),
+                plan.queue_batches[0].post_barriers.end(),
+                barrier_index
+            ) != plan.queue_batches[0].post_barriers.end() &&
+            std::find(
+                plan.queue_batches[1].post_barriers.begin(),
+                plan.queue_batches[1].post_barriers.end(),
+                barrier_index
+            ) != plan.queue_batches[1].post_barriers.end(),
+        test_name,
+        "every cross-native source batch must receive the split-release placement hint"
+    );
+    const uint32_t associated_syncs = static_cast<uint32_t>(std::count_if(
+        plan.queue_syncs.begin(),
+        plan.queue_syncs.end(),
+        [&](const RenderGraph::CompiledQueueSync& sync) {
+            return sync.wait_batch == 2 && sync.gpu_wait_required &&
+                   std::find(sync.barriers.begin(), sync.barriers.end(), barrier_index) !=
+                       sync.barriers.end();
+        }
+    ));
+    suite.Check(
+        associated_syncs == 2,
+        test_name,
+        "the barrier must be associated with both GPU waits feeding the destination batch"
+    );
+}
+
+void TestUntouchedBoundaryWriteRequiresMemoryDependency(TestSuite& suite) {
+    constexpr std::string_view test_name = "untouched boundary write dependency";
+    RenderGraph graph("UntouchedBoundaryWrite");
+    int         physical = 0;
+    const auto  buffer = graph.ImportBuffer("Buffer", &physical, RenderGraph::BufferDesc{.byte_size = 64});
+    graph.SetInitialState(
+        buffer,
+        RenderGraph::BufferState::UnorderedAccess,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Write
+    );
+    graph.Export(
+        buffer,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    graph.AddPass(
+        "SideEffect",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect();
+        },
+        [] {}
+    );
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto* barrier = FindBarrier(graph.GetCompiledPlan(), buffer.Untyped(), {}, {});
+    suite.Check(
+        barrier != nullptr && barrier->memory_dependency && barrier->state_transition,
+        test_name,
+        "an untouched imported write must be made visible to the declared external reader"
+    );
+}
+
+[[nodiscard]] std::string BuildCompatibleStateOrderDump(
+    TestSuite& suite,
+    std::string_view test_name,
+    bool reverse
+) {
+    RenderGraph graph("CompatibleStateOrder");
+    int         physical = 0;
+    const auto  texture = graph.ImportTexture("Texture", &physical, RenderGraph::TextureDesc{});
+    graph.SetInitialState(
+        texture,
+        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    graph.AddPass(
+        "Read",
+        [=](RenderGraph::PassBuilder& builder) {
+            if (reverse) {
+                builder.Read(texture, RenderGraph::TextureState::Sampled);
+                builder.Read(texture, RenderGraph::TextureState::ShaderResource);
+            } else {
+                builder.Read(texture, RenderGraph::TextureState::ShaderResource);
+                builder.Read(texture, RenderGraph::TextureState::Sampled);
+            }
+        },
+        [] {}
+    );
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(
+        !graph.GetCompiledPlan().accesses.empty() &&
+            graph.GetCompiledPlan().accesses.front().state == RenderGraph::ResourceState::Texture(
+                RenderGraph::TextureState::ShaderResource
+            ),
+        test_name,
+        "compatible shader-read states must canonicalize to one stable state"
+    );
+    const std::string dump = graph.Dump();
+    const auto        compiled_plan_offset = dump.find("compiled_accesses:\n");
+    return compiled_plan_offset == std::string::npos ? dump : dump.substr(compiled_plan_offset);
+}
+
+void TestCompatibleStateCanonicalization(TestSuite& suite) {
+    constexpr std::string_view test_name = "compatible state canonicalization";
+    const auto forward = BuildCompatibleStateOrderDump(suite, test_name, false);
+    const auto reverse = BuildCompatibleStateOrderDump(suite, test_name, true);
+    suite.Check(
+        forward == reverse,
+        test_name,
+        "swapping compatible declarations in one pass must not change the compiled-plan dump"
+    );
+}
+
+void TestReadTransitionWaitsForEveryActiveReader(TestSuite& suite) {
+    constexpr std::string_view test_name = "read transition waits for every active reader";
+    RenderGraph graph("ReadTransitionFanIn", RenderGraph::QueueTopology::DedicatedQueues());
+    int         physical = 0;
+    const auto  buffer = graph.ImportBuffer(
+        "Concurrent",
+        &physical,
+        RenderGraph::BufferDesc{
+            .byte_size    = 64,
+            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Concurrent,
+        }
+    );
+    graph.SetInitialState(
+        buffer,
+        RenderGraph::BufferState::TransferSource,
+        RenderGraph::QueueRole::Copy,
+        RenderGraph::AccessMode::Read
+    );
+    const auto copy_read = graph.AddPass(
+        "CopyRead",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::PipelineType::Copy);
+            builder.Read(buffer, RenderGraph::BufferState::TransferSource);
+        },
+        [] {}
+    );
+    const auto graphics_read = graph.AddPass(
+        "GraphicsRead",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Read(buffer, RenderGraph::BufferState::TransferSource);
+        },
+        [] {}
+    );
+    const auto compute_read = graph.AddPass(
+        "ComputeRead",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+        },
+        [] {}
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    const auto barrier = std::find_if(
+        plan.barriers.begin(),
+        plan.barriers.end(),
+        [&](const RenderGraph::CompiledBarrier& candidate) {
+            return candidate.resource == buffer.Untyped() && candidate.dst_pass == compute_read &&
+                   candidate.state_transition;
+        }
+    );
+    suite.Check(
+        barrier != plan.barriers.end() &&
+            HasBarrierSource(*barrier, copy_read, RenderGraph::AccessMode::Read) &&
+            HasBarrierSource(*barrier, graphics_read, RenderGraph::AccessMode::Read) &&
+            HasEdgeReason(
+                plan,
+                copy_read,
+                compute_read,
+                RenderGraph::EdgeReasonKind::StateTransition,
+                buffer.Untyped()
+            ) &&
+            HasEdgeReason(
+                plan,
+                graphics_read,
+                compute_read,
+                RenderGraph::EdgeReasonKind::StateTransition,
+                buffer.Untyped()
+            ),
+        test_name,
+        "a read-only state transition must fan in every reader still using the previous state"
+    );
+}
+
+void TestUndefinedImportMustBeInitializedBeforeRead(TestSuite& suite) {
+    constexpr std::string_view test_name = "undefined import initialization";
+    int                        physical = 0;
+
+    RenderGraph read_graph("UndefinedRead");
+    const auto  read_buffer = read_graph.ImportBuffer(
+        "Buffer", &physical, RenderGraph::BufferDesc{.byte_size = 128}
+    );
+    read_graph.SetInitialState(
+        read_buffer,
+        RenderGraph::BufferState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None,
+        RenderGraph::BufferRange{.offset = 0, .size = 64}
+    );
+    read_graph.AddPass(
+        "InvalidRead",
+        [read_buffer](RenderGraph::PassBuilder& builder) {
+            builder.Read(
+                read_buffer,
+                RenderGraph::BufferState::ShaderResource,
+                RenderGraph::BufferRange{.offset = 0, .size = 64}
+            );
+        },
+        [] {}
+    );
+    suite.Check(
+        !read_graph.Compile() && Contains(read_graph.GetCompileError(), "read before its first producer"),
+        test_name,
+        "an explicit Undefined range must reject a read before initialization"
+    );
+
+    RenderGraph write_graph("UndefinedWrite");
+    const auto  write_buffer = write_graph.ImportBuffer(
+        "Buffer", &physical, RenderGraph::BufferDesc{.byte_size = 128}
+    );
+    write_graph.SetInitialState(
+        write_buffer,
+        RenderGraph::BufferState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None,
+        RenderGraph::BufferRange{.offset = 0, .size = 64}
+    );
+    const auto write = write_graph.AddPass(
+        "Initialize",
+        [write_buffer](RenderGraph::PassBuilder& builder) {
+            builder.Write(
+                write_buffer,
+                RenderGraph::BufferState::UnorderedAccess,
+                RenderGraph::BufferRange{.offset = 0, .size = 64}
+            );
+        },
+        [] {}
+    );
+    suite.Check(write_graph.Compile(), test_name, write_graph.GetCompileError());
+    const auto* barrier = FindBarrier(write_graph.GetCompiledPlan(), write_buffer.Untyped(), {}, write);
+    suite.Check(
+        barrier != nullptr && barrier->discard_previous_contents,
+        test_name,
+        "the first write after Undefined must be represented as a discard transition"
+    );
+}
+
+void TestUnknownExportMakesStatePlanIncomplete(TestSuite& suite) {
+    constexpr std::string_view test_name = "unknown exported state plan";
+    RenderGraph graph("UnknownExport");
+    int         physical = 0;
+    const auto  buffer = graph.ImportBuffer("Buffer", &physical, RenderGraph::BufferDesc{.byte_size = 64});
+    graph.Export(buffer);
+    graph.AddPass(
+        "SideEffect",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect();
+        },
+        [] {}
+    );
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(
+        !graph.GetCompiledPlan().state_plan_complete,
+        test_name,
+        "an exported physical cell with no known state must keep the plan visibly incomplete"
+    );
+}
+
 } // namespace
 
 int main() {
@@ -916,6 +2096,23 @@ int main() {
     TestUnknownTextureAspectIsRejected(suite);
     TestTypedAliasDescriptorMismatchIsRejected(suite);
     TestMultipleReadersProduceAllWarEdges(suite);
+    TestExplicitStateValidation(suite);
+    TestSameStateMemoryDependencies(suite);
+    TestImportAndExportBoundaries(suite);
+    TestQueueTopologySynchronization(suite);
+    TestTokenCrossQueueSyncHasNoOwnership(suite);
+    TestBatchPairSyncDeduplication(suite);
+    TestPipelineDomainsAndBarrierSources(suite);
+    TestPartialRangeBarrier(suite);
+    TestMixedQueueExecuteRemainsDeclarationOrder(suite);
+    TestStageTwoDumpDeterminism(suite);
+    TestBarrierSourcesIgnoreUnrelatedLastRead(suite);
+    TestFanInBarrierPlacementCoversEverySourceBatch(suite);
+    TestUntouchedBoundaryWriteRequiresMemoryDependency(suite);
+    TestCompatibleStateCanonicalization(suite);
+    TestReadTransitionWaitsForEveryActiveReader(suite);
+    TestUndefinedImportMustBeInitializedBeforeRead(suite);
+    TestUnknownExportMakesStatePlanIncomplete(suite);
 
     if (suite.FailureCount() != 0) {
         std::cerr << "TestRenderGraph: " << suite.FailureCount() << " failure(s)\n";
