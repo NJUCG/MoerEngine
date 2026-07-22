@@ -180,6 +180,19 @@ template<typename ResourceDeclaration>
                false;
 }
 
+void RetainCurrentOwnerFamilySources(
+    std::vector<RenderGraph::CompiledBarrierSource>& sources,
+    const RenderGraph::QueueTopology&                topology,
+    RenderGraph::QueueRole                           owner_queue
+) {
+    assert(owner_queue != RenderGraph::QueueRole::None);
+    const uint32_t owner_family = topology.Resolve(owner_queue).family_id;
+    std::erase_if(sources, [&](const RenderGraph::CompiledBarrierSource& source) {
+        return source.domain.queue == RenderGraph::QueueRole::None ||
+               topology.Resolve(source.domain.queue).family_id != owner_family;
+    });
+}
+
 } // namespace
 
 bool RenderGraphCompiler::Compile() {
@@ -766,6 +779,14 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                     for (const auto& reader : cell.readers) {
                         append_source(reader);
                     }
+                    if (queue_ownership) {
+                        // Only accesses in the currently owning family can participate in the
+                        // next release. Older-family readers are already ordered through the
+                        // ownership chain and must not receive another release placement.
+                        RetainCurrentOwnerFamilySources(
+                            barrier_sources, graph.queue_topology, cell.last_domain.queue
+                        );
+                    }
                     if (cell.last_access != RenderGraph::PassHandle::InvalidIndex &&
                         barrier_sources.empty()) {
                         append_source(RenderGraph::CompiledBarrierSource{
@@ -805,17 +826,37 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                     }
                 }
 
-                if (!state_transition && usage.explicit_state &&
-                    cell.state_established_pass != RenderGraph::PassHandle::InvalidIndex &&
-                    cell.state_established_pass != pass_index) {
-                    const auto& established_pass = graph.passes[cell.state_established_pass];
+                if (physical_resource && !state_transition && !queue_ownership &&
+                    cell.availability_established_pass != RenderGraph::PassHandle::InvalidIndex &&
+                    cell.availability_established_pass != pass_index) {
+                    const auto& established_pass =
+                        graph.passes[cell.availability_established_pass];
                     if (graph.queue_topology.Resolve(established_pass.domain.queue).native_queue_id !=
                         graph.queue_topology.Resolve(pass.domain.queue).native_queue_id) {
                         AddEdge(
-                            cell.state_established_pass,
+                            cell.availability_established_pass,
                             pass_index,
                             RenderGraph::CompiledEdgeReason{
                                 .kind           = RenderGraph::EdgeReasonKind::StateTransition,
+                                .resource       = resource_handle,
+                                .range          = cell.range,
+                                .input_version  = cell.version,
+                                .output_version = cell.version
+                            }
+                        );
+                    }
+                }
+                if (!state_transition && !queue_ownership &&
+                    cell.ownership_established_pass != RenderGraph::PassHandle::InvalidIndex &&
+                    cell.ownership_established_pass != pass_index) {
+                    const auto& established_pass = graph.passes[cell.ownership_established_pass];
+                    if (graph.queue_topology.Resolve(established_pass.domain.queue).native_queue_id !=
+                        graph.queue_topology.Resolve(pass.domain.queue).native_queue_id) {
+                        AddEdge(
+                            cell.ownership_established_pass,
+                            pass_index,
+                            RenderGraph::CompiledEdgeReason{
+                                .kind           = RenderGraph::EdgeReasonKind::QueueOwnership,
                                 .resource       = resource_handle,
                                 .range          = cell.range,
                                 .input_version  = cell.version,
@@ -911,6 +952,17 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                     cell.initialized                      = true;
                     resource_ever_written[resource_index] = true;
                 } else {
+                    if (state_transition || queue_ownership) {
+                        // The current read is ordered after the complete old frontier and becomes
+                        // the only reader needed for later state/ownership transitions. Same-state
+                        // concurrent reads keep accumulating above because neither flag is set.
+                        cell.readers.clear();
+                        // The previous writer's visibility and dependency are now carried
+                        // transitively by this read. Preserve the logical version, but drop the
+                        // old writer endpoint so queue planning cannot lower a stale direct sync.
+                        cell.last_writer        = RenderGraph::PassHandle::InvalidIndex;
+                        cell.last_writer_source = {};
+                    }
                     const auto reader = RenderGraph::CompiledBarrierSource{
                         .pass   = RenderGraph::PassHandle{pass_index, graph.graph_id},
                         .state  = next_state,
@@ -939,10 +991,21 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                 cell.last_mode   = access_mode;
                 cell.state       = next_state;
                 cell.state_known = usage.explicit_state;
-                if (state_transition) {
-                    cell.state_established_pass = pass_index;
-                } else if (!usage.explicit_state) {
-                    cell.state_established_pass = RenderGraph::PassHandle::InvalidIndex;
+                const bool import_availability = import_boundary && memory_dependency;
+                if (physical_resource &&
+                    (usage.write || import_availability || state_transition || queue_ownership)) {
+                    // This pass has ordered the complete prior frontier and becomes the source of
+                    // state/data availability for sibling native queues. Automatic accesses still
+                    // inherit this dependency even though they make the logical state unknown.
+                    cell.availability_established_pass = pass_index;
+                }
+                if (((usage.write || import_availability) && IsExclusive(resource)) ||
+                    queue_ownership ||
+                    (state_transition && IsExclusive(resource))) {
+                    // Writes and import-memory barriers similarly become the authoritative
+                    // frontier inside the current owner family, so sibling native queues never
+                    // bypass external availability or wait on an older acquire.
+                    cell.ownership_established_pass = pass_index;
                 }
             }
         }
@@ -954,14 +1017,23 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
             return Fail("transient resource has no producer: " + resource.name);
         }
         if (!resource.imported && resource.exported) {
-            const bool fully_initialized = std::all_of(
+            const auto& final_states = normalized_final_states[resource_index];
+            const bool exported_ranges_initialized = std::all_of(
                 resource_cells[resource_index].begin(),
                 resource_cells[resource_index].end(),
-                [](const AtomicCell& cell) {
-                    return cell.initialized;
+                [&](const AtomicCell& cell) {
+                    const bool exported_cell = resource.whole_resource_exported ||
+                                               std::any_of(
+                                                   final_states.begin(),
+                                                   final_states.end(),
+                                                   [&](const NormalizedStateDeclaration& final) {
+                                                       return RangesOverlap(final.range, cell.range);
+                                                   }
+                                               );
+                    return !exported_cell || cell.initialized;
                 }
             );
-            if (!fully_initialized) {
+            if (!exported_ranges_initialized) {
                 return Fail("exported transient resource has uninitialized subresources: " + resource.name);
             }
         }
@@ -1115,6 +1187,25 @@ bool RenderGraphCompiler::BuildFinalBarriers() {
                 std::find(sources.begin(), sources.end(), cell.last_writer_source) == sources.end()) {
                 sources.push_back(cell.last_writer_source);
             }
+            bool queue_ownership = false;
+            if (cell.last_domain.queue != RenderGraph::QueueRole::None) {
+                const auto src_queue = graph.queue_topology.Resolve(cell.last_domain.queue);
+                const auto dst_queue = graph.queue_topology.Resolve(final->queue);
+                queue_ownership = IsExclusive(resource) && src_queue.family_id != dst_queue.family_id;
+            }
+            if (queue_ownership) {
+                RetainCurrentOwnerFamilySources(
+                    sources, graph.queue_topology, cell.last_domain.queue
+                );
+                if (sources.empty() && cell.last_access != RenderGraph::PassHandle::InvalidIndex) {
+                    sources.push_back(RenderGraph::CompiledBarrierSource{
+                        .pass   = RenderGraph::PassHandle{cell.last_access, graph.graph_id},
+                        .state  = cell.state,
+                        .access = cell.last_mode,
+                        .domain = cell.last_domain,
+                    });
+                }
+            }
             const bool source_write = std::any_of(
                 sources.begin(), sources.end(), [](const RenderGraph::CompiledBarrierSource& source) {
                     return HasWrite(source.access);
@@ -1124,12 +1215,6 @@ bool RenderGraphCompiler::BuildFinalBarriers() {
             const bool memory_dependency =
                 final->boundary_access != RenderGraph::AccessMode::None &&
                 (source_write || boundary_source_write || HasWrite(final->boundary_access));
-            bool queue_ownership = false;
-            if (cell.last_domain.queue != RenderGraph::QueueRole::None) {
-                const auto src_queue = graph.queue_topology.Resolve(cell.last_domain.queue);
-                const auto dst_queue = graph.queue_topology.Resolve(final->queue);
-                queue_ownership = IsExclusive(resource) && src_queue.family_id != dst_queue.family_id;
-            }
             AddBarrier(
                 resource_index,
                 cell,
@@ -1159,9 +1244,18 @@ void RenderGraphCompiler::AuditStatePlanCompleteness() {
         if (resource.kind == ResourceKind::Token) {
             continue;
         }
+        const auto& final_states = normalized_final_states[resource_index];
         for (const auto& cell : resource_cells[resource_index]) {
-            const bool participates_in_plan =
-                resource.exported || cell.last_access != RenderGraph::PassHandle::InvalidIndex;
+            const bool exported_cell = resource.whole_resource_exported ||
+                                       std::any_of(
+                                           final_states.begin(),
+                                           final_states.end(),
+                                           [&](const NormalizedStateDeclaration& final) {
+                                               return RangesOverlap(final.range, cell.range);
+                                           }
+                                       );
+            const bool participates_in_plan = exported_cell ||
+                                              cell.last_access != RenderGraph::PassHandle::InvalidIndex;
             if (participates_in_plan && !cell.state_known) {
                 graph.compiled_plan.state_plan_complete = false;
                 return;

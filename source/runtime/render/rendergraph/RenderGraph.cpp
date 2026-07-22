@@ -698,14 +698,21 @@ RenderGraph::ResourceHandle RenderGraph::CreateTransientInternal(
 }
 
 void RenderGraph::Export(ResourceHandle resource) {
+    MarkExported(resource, true);
+}
+
+bool RenderGraph::MarkExported(ResourceHandle resource, bool whole_resource) {
     if (!InvalidateCompile()) {
-        return;
+        return false;
     }
     if (!IsValidResource(resource)) {
         declaration_errors.emplace_back("Export received an invalid resource handle");
-        return;
+        return false;
     }
-    resources[resource.index].exported = true;
+    auto& declaration                    = resources[resource.index];
+    declaration.exported                = true;
+    declaration.whole_resource_exported |= whole_resource;
+    return true;
 }
 
 void RenderGraph::SetInitialState(
@@ -749,7 +756,9 @@ void RenderGraph::Export(
     AccessMode    next_access,
     TextureRange  range
 ) {
-    Export(resource.Untyped());
+    if (!MarkExported(resource.Untyped(), false)) {
+        return;
+    }
     AddStateDeclaration(
         resource.Untyped(),
         ResourceRange::Texture(range),
@@ -767,7 +776,9 @@ void RenderGraph::Export(
     AccessMode   next_access,
     BufferRange  range
 ) {
-    Export(resource.Untyped());
+    if (!MarkExported(resource.Untyped(), false)) {
+        return;
+    }
     AddStateDeclaration(
         resource.Untyped(),
         ResourceRange::Buffer(range),

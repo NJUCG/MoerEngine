@@ -369,6 +369,7 @@ public:
         ReadAfterWrite,
         WriteAfterRead,
         WriteAfterWrite,
+        /** State/data availability established on another native queue. */
         StateTransition,
         QueueOwnership,
     };
@@ -450,7 +451,7 @@ public:
         bool             import_boundary = false;
         bool             export_boundary = false;
         bool             source_state_unknown = false;
-        /** All RAW/WAR/WAW/state predecessors whose scopes must be represented by lowering. */
+        /** Authoritative synchronization frontier whose scopes must be represented by lowering. */
         std::vector<CompiledBarrierSource> sources{};
     };
 
@@ -497,7 +498,7 @@ public:
         std::vector<PassHandle> topological_order{};
         /** Current production order. It remains declaration-order and serial. */
         std::vector<PassHandle> execution_order{};
-        /** RAW/WAR/WAW and explicit dependencies only, without fake serial edges. */
+        /** Minimal hazard, explicit, state, and ownership frontier without fake serial edges. */
         std::vector<CompiledEdge> edges{};
         /** Atomic subresource/range accesses with logical input/output versions. */
         std::vector<CompiledAccess>   accesses{};
@@ -721,6 +722,7 @@ private:
         bool                     typed_desc = false;
         bool                     imported   = false;
         bool                     exported   = false;
+        bool                     whole_resource_exported = false;
         std::vector<StateDeclaration> initial_states{};
         std::vector<StateDeclaration> final_states{};
         uint32_t                 first_use  = PassHandle::InvalidIndex;
@@ -767,6 +769,7 @@ private:
         AccessMode     boundary_access,
         bool           initial
     );
+    bool MarkExported(ResourceHandle resource, bool whole_resource);
     void AddDependency(uint32_t pass_index, PassHandle dependency);
     void MarkSideEffect(uint32_t pass_index);
     void SetExecutionDomain(uint32_t pass_index, QueueRole queue, PipelineType pipeline);

@@ -36,7 +36,8 @@ private:
         uint32_t                   last_writer = RenderGraph::PassHandle::InvalidIndex;
         RenderGraph::CompiledBarrierSource last_writer_source{};
         uint32_t                   last_access = RenderGraph::PassHandle::InvalidIndex;
-        uint32_t                   state_established_pass = RenderGraph::PassHandle::InvalidIndex;
+        uint32_t                   availability_established_pass = RenderGraph::PassHandle::InvalidIndex;
+        uint32_t                   ownership_established_pass = RenderGraph::PassHandle::InvalidIndex;
         uint32_t                   version     = RenderGraph::InvalidVersion;
         RenderGraph::ResourceState state{};
         RenderGraph::ExecutionDomain last_domain{

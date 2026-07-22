@@ -679,6 +679,77 @@ void TestExportedTransientRequiresWholeResourceInitialization(TestSuite& suite) 
     suite.Check(complete_graph.Execute(), test_name, complete_graph.GetCompileError());
 }
 
+void TestTypedPartialExportRequiresOnlyDeclaredRange(TestSuite& suite) {
+    constexpr std::string_view test_name = "typed partial export initialization";
+
+    RenderGraph valid_graph("TypedPartialExport");
+    const auto  valid_texture = valid_graph.CreateTransientTexture(
+        "PartialMipChain", RenderGraph::TextureDesc{.mip_count = 2, .layer_count = 1}
+    );
+    const auto write_mip_zero = valid_graph.AddPass(
+        "WriteMip0",
+        [valid_texture](RenderGraph::PassBuilder& builder) {
+            builder.Write(
+                valid_texture,
+                RenderGraph::TextureState::RenderTarget,
+                RenderGraph::TextureRange::Mips(0, 1)
+            );
+        },
+        [] {}
+    );
+    valid_graph.Export(
+        valid_texture,
+        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read,
+        RenderGraph::TextureRange::Mips(0, 1)
+    );
+
+    suite.Check(valid_graph.Compile(), test_name, valid_graph.GetCompileError());
+    const auto& valid_plan = valid_graph.GetCompiledPlan();
+    const auto* final_barrier = FindBarrier(
+        valid_plan, valid_texture.Untyped(), write_mip_zero, {}
+    );
+    suite.Check(
+        final_barrier != nullptr && final_barrier->export_boundary &&
+            final_barrier->range.kind == RenderGraph::ResourceKind::Texture &&
+            final_barrier->range.texture.mip_first == 0 &&
+            final_barrier->range.texture.mip_count == 1 &&
+            valid_plan.state_plan_complete,
+        test_name,
+        "a typed partial export must cover only its initialized declared range"
+    );
+
+    RenderGraph invalid_graph("UninitializedTypedPartialExport");
+    const auto  invalid_texture = invalid_graph.CreateTransientTexture(
+        "PartialMipChain", RenderGraph::TextureDesc{.mip_count = 2, .layer_count = 1}
+    );
+    invalid_graph.AddPass(
+        "WriteMip0",
+        [invalid_texture](RenderGraph::PassBuilder& builder) {
+            builder.Write(
+                invalid_texture,
+                RenderGraph::TextureState::RenderTarget,
+                RenderGraph::TextureRange::Mips(0, 1)
+            );
+        },
+        [] {}
+    );
+    invalid_graph.Export(
+        invalid_texture,
+        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read,
+        RenderGraph::TextureRange::Mips(1, 1)
+    );
+    suite.Check(
+        !invalid_graph.Compile() &&
+            Contains(invalid_graph.GetCompileError(), "uninitialized subresources"),
+        test_name,
+        "a typed partial export must still reject an uninitialized declared range"
+    );
+}
+
 void TestTypedBufferRangeHazards(TestSuite& suite) {
     constexpr std::string_view test_name = "typed buffer range hazards";
     RenderGraph                graph("BufferRanges");
@@ -1373,6 +1444,680 @@ void TestQueueTopologySynchronization(TestSuite& suite) {
     );
 }
 
+void TestExclusiveOwnershipUsesCurrentOwnerFamily(TestSuite& suite) {
+    constexpr std::string_view test_name = "exclusive ownership follows current owner family";
+    RenderGraph graph("OwnershipChain", RenderGraph::QueueTopology::DedicatedQueues());
+    int         physical = 0;
+    const auto  buffer = graph.ImportBuffer(
+        "Shared",
+        &physical,
+        RenderGraph::BufferDesc{
+            .byte_size    = 64,
+            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Exclusive,
+        }
+    );
+    graph.SetInitialState(
+        buffer,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    const auto graphics_read = graph.AddPass(
+        "GraphicsRead",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+        },
+        [] {}
+    );
+    const auto compute_read = graph.AddPass(
+        "ComputeRead",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+        },
+        [] {}
+    );
+    const auto copy_read = graph.AddPass(
+        "CopyRead",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::PipelineType::Copy);
+            builder.Read(buffer, RenderGraph::BufferState::TransferSource);
+        },
+        [] {}
+    );
+    graph.Export(
+        buffer,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    const auto* transfer = FindBarrier(plan, buffer.Untyped(), compute_read, copy_read);
+    suite.Check(
+        transfer != nullptr && transfer->queue_ownership && transfer->sources.size() == 1 &&
+            HasBarrierSource(*transfer, compute_read, RenderGraph::AccessMode::Read) &&
+            !HasBarrierSource(*transfer, graphics_read, RenderGraph::AccessMode::Read),
+        test_name,
+        "the second transfer must release only from the currently owning Compute family"
+    );
+    const auto* final_transfer = FindBarrier(plan, buffer.Untyped(), copy_read, {});
+    suite.Check(
+        final_transfer != nullptr && final_transfer->export_boundary &&
+            final_transfer->queue_ownership && final_transfer->sources.size() == 1 &&
+            HasBarrierSource(*final_transfer, copy_read, RenderGraph::AccessMode::Read),
+        test_name,
+        "the export transfer must release only from the final Copy owner"
+    );
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            compute_read,
+            copy_read,
+            RenderGraph::EdgeReasonKind::QueueOwnership,
+            buffer.Untyped()
+        ) &&
+            !HasEdgeReason(
+                plan,
+                graphics_read,
+                copy_read,
+                RenderGraph::EdgeReasonKind::QueueOwnership,
+                buffer.Untyped()
+            ),
+        test_name,
+        "the ownership chain must be Graphics-to-Compute-to-Copy without a stale Graphics-to-Copy edge"
+    );
+    const auto graphics_to_copy = std::find_if(
+        plan.queue_syncs.begin(),
+        plan.queue_syncs.end(),
+        [](const RenderGraph::CompiledQueueSync& sync) {
+            return sync.signal_queue.role == RenderGraph::QueueRole::Graphics &&
+                   sync.wait_queue.role == RenderGraph::QueueRole::Copy;
+        }
+    );
+    suite.Check(
+        plan.queue_syncs.size() == 2 && graphics_to_copy == plan.queue_syncs.end(),
+        test_name,
+        "the second transfer must not create a redundant Graphics-to-Copy queue sync"
+    );
+}
+
+void TestOwnershipWriterChainUsesCurrentFrontier(TestSuite& suite) {
+    constexpr std::string_view test_name = "ownership writer chain uses current frontier";
+    RenderGraph graph("WriterOwnershipChain", RenderGraph::QueueTopology::DedicatedQueues());
+    const auto  buffer = graph.CreateTransientBuffer(
+        "Shared", RenderGraph::BufferDesc{.byte_size = 64}
+    );
+    const auto writer = graph.AddPass(
+        "GraphicsWrite",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Write(buffer, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [] {}
+    );
+    const auto compute_read = graph.AddPass(
+        "ComputeRead",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+        },
+        [] {}
+    );
+    const auto copy_read = graph.AddPass(
+        "CopyRead",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::PipelineType::Copy);
+            builder.Read(buffer, RenderGraph::BufferState::TransferSource);
+        },
+        [] {}
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    const auto* transfer = FindBarrier(plan, buffer.Untyped(), compute_read, copy_read);
+    suite.Check(
+        transfer != nullptr && transfer->queue_ownership && transfer->sources.size() == 1 &&
+            HasBarrierSource(*transfer, compute_read, RenderGraph::AccessMode::Read) &&
+            !HasBarrierSource(*transfer, writer, RenderGraph::AccessMode::Write),
+        test_name,
+        "the second transfer must use only the read that established the current frontier"
+    );
+    suite.Check(
+        !HasEdgeReason(
+            plan,
+            writer,
+            copy_read,
+            RenderGraph::EdgeReasonKind::ReadAfterWrite,
+            buffer.Untyped()
+        ) &&
+            !HasEdgeReason(
+                plan,
+                writer,
+                copy_read,
+                RenderGraph::EdgeReasonKind::StateTransition,
+                buffer.Untyped()
+            ) &&
+            !HasEdgeReason(
+                plan,
+                writer,
+                copy_read,
+                RenderGraph::EdgeReasonKind::QueueOwnership,
+                buffer.Untyped()
+            ),
+        test_name,
+        "an old writer must not remain a direct dependency after a read transfer"
+    );
+    const auto stale_sync = std::find_if(
+        plan.queue_syncs.begin(),
+        plan.queue_syncs.end(),
+        [&](const RenderGraph::CompiledQueueSync& sync) {
+            return sync.signal_pass == writer && sync.wait_pass == copy_read;
+        }
+    );
+    suite.Check(
+        plan.queue_syncs.size() == 2 && stale_sync == plan.queue_syncs.end(),
+        test_name,
+        "the ownership chain must not lower a stale Graphics-to-Copy GPU wait"
+    );
+}
+
+void TestAutomaticReadsPreserveAvailabilityFrontier(TestSuite& suite) {
+    constexpr std::string_view test_name = "automatic reads preserve availability frontier";
+    RenderGraph graph("AutomaticAvailability", RenderGraph::QueueTopology::DedicatedQueues());
+    const auto  buffer = graph.CreateTransientBuffer(
+        "Concurrent",
+        RenderGraph::BufferDesc{
+            .byte_size    = 64,
+            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Concurrent,
+        }
+    );
+    const auto writer = graph.AddPass(
+        "GraphicsWrite",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Write(buffer, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [] {}
+    );
+    const auto transition = graph.AddPass(
+        "GraphicsTransition",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+        },
+        [] {}
+    );
+    const auto automatic_compute_a = graph.AddPass(
+        "ComputeAutomaticA",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.Read(buffer);
+        },
+        [] {}
+    );
+    graph.AddPass(
+        "GraphicsAutomatic",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Read(buffer);
+        },
+        [] {}
+    );
+    const auto automatic_compute_b = graph.AddPass(
+        "ComputeAutomaticB",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.Read(buffer);
+        },
+        [] {}
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            transition,
+            automatic_compute_a,
+            RenderGraph::EdgeReasonKind::StateTransition,
+            buffer.Untyped()
+        ) &&
+            HasEdgeReason(
+                plan,
+                transition,
+                automatic_compute_b,
+                RenderGraph::EdgeReasonKind::StateTransition,
+                buffer.Untyped()
+            ) &&
+            !HasEdgeReason(
+                plan,
+                writer,
+                automatic_compute_b,
+                RenderGraph::EdgeReasonKind::ReadAfterWrite,
+                buffer.Untyped()
+            ),
+        test_name,
+        "Automatic reads must inherit, preserve, and not bypass the transition availability frontier"
+    );
+    const uint32_t transition_syncs = static_cast<uint32_t>(std::count_if(
+        plan.queue_syncs.begin(),
+        plan.queue_syncs.end(),
+        [&](const RenderGraph::CompiledQueueSync& sync) {
+            return sync.signal_pass == transition && sync.gpu_wait_required;
+        }
+    ));
+    suite.Check(
+        transition_syncs == 2,
+        test_name,
+        "each later Compute batch must wait for the retained availability frontier"
+    );
+}
+
+void TestOwnershipAcquireOrdersSiblingNativeQueue(TestSuite& suite) {
+    constexpr std::string_view test_name = "ownership acquire orders sibling native queue";
+    RenderGraph graph(
+        "OwnershipAcquireFrontier",
+        RenderGraph::QueueTopology{
+            .graphics = {RenderGraph::QueueRole::Graphics, 1, 1},
+            .compute  = {RenderGraph::QueueRole::Compute, 2, 1},
+            .copy     = {RenderGraph::QueueRole::Copy, 0, 0},
+        }
+    );
+    int        physical = 0;
+    const auto buffer = graph.ImportBuffer(
+        "Shared", &physical, RenderGraph::BufferDesc{.byte_size = 64}
+    );
+    graph.SetInitialState(
+        buffer,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Copy,
+        RenderGraph::AccessMode::Read
+    );
+    const auto acquire = graph.AddPass(
+        "GraphicsAcquire",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+        },
+        [] {}
+    );
+    const auto sibling_read = graph.AddPass(
+        "ComputeRead",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+        },
+        [] {}
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            acquire,
+            sibling_read,
+            RenderGraph::EdgeReasonKind::QueueOwnership,
+            buffer.Untyped()
+        ),
+        test_name,
+        "a sibling native queue must wait for the pass that acquired family ownership"
+    );
+    suite.Check(
+        plan.queue_syncs.size() == 1 && plan.queue_syncs.front().gpu_wait_required &&
+            plan.queue_syncs.front().signal_pass == acquire &&
+            plan.queue_syncs.front().wait_pass == sibling_read,
+        test_name,
+        "the ownership acquire frontier must lower to one cross-native GPU wait"
+    );
+}
+
+void TestImportAvailabilityOrdersSiblingNativeQueue(TestSuite& suite) {
+    constexpr std::string_view test_name = "import availability orders sibling native queue";
+    RenderGraph graph(
+        "ImportAvailabilityFrontier",
+        RenderGraph::QueueTopology{
+            .graphics = {RenderGraph::QueueRole::Graphics, 1, 1},
+            .compute  = {RenderGraph::QueueRole::Compute, 2, 1},
+            .copy     = {RenderGraph::QueueRole::Copy, 0, 0},
+        }
+    );
+    int        physical = 0;
+    const auto buffer = graph.ImportBuffer(
+        "Shared", &physical, RenderGraph::BufferDesc{.byte_size = 64}
+    );
+    graph.SetInitialState(
+        buffer,
+        RenderGraph::BufferState::UnorderedAccess,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Write
+    );
+    const auto first_read = graph.AddPass(
+        "GraphicsRead",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Read(buffer);
+        },
+        [] {}
+    );
+    const auto sibling_read = graph.AddPass(
+        "ComputeRead",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.Read(buffer);
+        },
+        [] {}
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    const auto* boundary = FindBarrier(plan, buffer.Untyped(), {}, first_read);
+    suite.Check(
+        boundary != nullptr && boundary->import_boundary && boundary->memory_dependency &&
+            !boundary->state_transition && !boundary->queue_ownership,
+        test_name,
+        "the first read must acquire the external write through an import memory barrier"
+    );
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            first_read,
+            sibling_read,
+            RenderGraph::EdgeReasonKind::StateTransition,
+            buffer.Untyped()
+        ) &&
+            HasEdgeReason(
+                plan,
+                first_read,
+                sibling_read,
+                RenderGraph::EdgeReasonKind::QueueOwnership,
+                buffer.Untyped()
+            ) &&
+            plan.queue_syncs.size() == 1 && plan.queue_syncs.front().gpu_wait_required &&
+            plan.queue_syncs.front().signal_pass == first_read &&
+            plan.queue_syncs.front().wait_pass == sibling_read,
+        test_name,
+        "an Automatic sibling access must wait for the pass that acquired external availability"
+    );
+}
+
+void TestOwnershipTransitionCollapsesReaderFrontier(TestSuite& suite) {
+    constexpr std::string_view test_name = "ownership transition collapses reader frontier";
+    RenderGraph graph(
+        "OwnershipStateFrontier",
+        RenderGraph::QueueTopology{
+            .graphics = {RenderGraph::QueueRole::Graphics, 1, 1},
+            .compute  = {RenderGraph::QueueRole::Compute, 2, 1},
+            .copy     = {RenderGraph::QueueRole::Copy, 0, 0},
+        }
+    );
+    int        physical = 0;
+    const auto buffer = graph.ImportBuffer(
+        "Shared", &physical, RenderGraph::BufferDesc{.byte_size = 64}
+    );
+    graph.SetInitialState(
+        buffer,
+        RenderGraph::BufferState::TransferSource,
+        RenderGraph::QueueRole::Copy,
+        RenderGraph::AccessMode::Read
+    );
+    const auto old_owner_read = graph.AddPass(
+        "CopyRead",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::PipelineType::Copy);
+            builder.Read(buffer, RenderGraph::BufferState::TransferSource);
+        },
+        [] {}
+    );
+    const auto acquire = graph.AddPass(
+        "GraphicsAcquire",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+        },
+        [] {}
+    );
+    const auto transition = graph.AddPass(
+        "ComputeTransition",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.Read(buffer, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [] {}
+    );
+    const auto sibling_read = graph.AddPass(
+        "GraphicsSiblingRead",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Read(buffer, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [] {}
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    const auto* barrier = FindBarrier(plan, buffer.Untyped(), acquire, transition);
+    suite.Check(
+        barrier != nullptr && barrier->state_transition && !barrier->queue_ownership &&
+            barrier->sources.size() == 1 &&
+            HasBarrierSource(*barrier, acquire, RenderGraph::AccessMode::Read) &&
+            !HasBarrierSource(*barrier, old_owner_read, RenderGraph::AccessMode::Read),
+        test_name,
+        "a same-family transition must not reuse a reader from the family that lost ownership"
+    );
+    suite.Check(
+        !HasEdgeReason(
+            plan,
+            old_owner_read,
+            transition,
+            RenderGraph::EdgeReasonKind::StateTransition,
+            buffer.Untyped()
+        ),
+        test_name,
+        "the collapsed reader frontier must avoid a stale Copy-to-Compute transition edge"
+    );
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            transition,
+            sibling_read,
+            RenderGraph::EdgeReasonKind::StateTransition,
+            buffer.Untyped()
+        ) &&
+            HasEdgeReason(
+                plan,
+                transition,
+                sibling_read,
+                RenderGraph::EdgeReasonKind::QueueOwnership,
+                buffer.Untyped()
+            ) &&
+            !HasEdgeReason(
+                plan,
+                acquire,
+                sibling_read,
+                RenderGraph::EdgeReasonKind::QueueOwnership,
+                buffer.Untyped()
+            ),
+        test_name,
+        "a state transition must advance both availability anchors past the old acquire pass"
+    );
+}
+
+void TestWriterAdvancesAvailabilityFrontiers(TestSuite& suite) {
+    constexpr std::string_view test_name = "writer advances availability frontiers";
+    RenderGraph graph(
+        "WriterFrontier",
+        RenderGraph::QueueTopology{
+            .graphics = {RenderGraph::QueueRole::Graphics, 1, 1},
+            .compute  = {RenderGraph::QueueRole::Compute, 2, 1},
+            .copy     = {RenderGraph::QueueRole::Copy, 0, 0},
+        }
+    );
+    int        physical = 0;
+    const auto buffer = graph.ImportBuffer(
+        "Shared", &physical, RenderGraph::BufferDesc{.byte_size = 64}
+    );
+    graph.SetInitialState(
+        buffer,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    const auto transition = graph.AddPass(
+        "GraphicsTransition",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Read(buffer, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [] {}
+    );
+    const auto writer = graph.AddPass(
+        "ComputeWrite",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.Write(buffer, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [] {}
+    );
+    graph.AddPass(
+        "GraphicsRead",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Read(buffer, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [] {}
+    );
+    const auto sibling_read = graph.AddPass(
+        "ComputeRead",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.Read(buffer, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [] {}
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            writer,
+            sibling_read,
+            RenderGraph::EdgeReasonKind::ReadAfterWrite,
+            buffer.Untyped()
+        ) &&
+            !HasEdgeReason(
+                plan,
+                transition,
+                sibling_read,
+                RenderGraph::EdgeReasonKind::StateTransition,
+                buffer.Untyped()
+            ) &&
+            !HasEdgeReason(
+                plan,
+                transition,
+                sibling_read,
+                RenderGraph::EdgeReasonKind::QueueOwnership,
+                buffer.Untyped()
+            ),
+        test_name,
+        "the writer must replace older state and ownership establishment anchors"
+    );
+    const auto stale_sync = std::find_if(
+        plan.queue_syncs.begin(),
+        plan.queue_syncs.end(),
+        [&](const RenderGraph::CompiledQueueSync& sync) {
+            return sync.signal_pass == transition && sync.wait_pass == sibling_read;
+        }
+    );
+    suite.Check(
+        stale_sync == plan.queue_syncs.end(),
+        test_name,
+        "an older transition must not create a direct GPU sync to a post-write reader"
+    );
+}
+
+void TestOwnershipEpochDoesNotReusePriorFamilySources(TestSuite& suite) {
+    constexpr std::string_view test_name = "ownership epochs do not reuse prior family sources";
+    RenderGraph graph(
+        "OwnershipEpochs",
+        RenderGraph::QueueTopology{
+            .graphics = {RenderGraph::QueueRole::Graphics, 0, 0},
+            .compute  = {RenderGraph::QueueRole::Compute, 1, 1},
+            .copy     = {RenderGraph::QueueRole::Copy, 2, 2},
+        }
+    );
+    int        physical = 0;
+    const auto buffer = graph.ImportBuffer(
+        "Shared", &physical, RenderGraph::BufferDesc{.byte_size = 64}
+    );
+    graph.SetInitialState(
+        buffer,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    const auto graphics_epoch_zero = graph.AddPass(
+        "GraphicsEpochZero",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+        },
+        [] {}
+    );
+    const auto compute_epoch_zero = graph.AddPass(
+        "ComputeEpochZero",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+        },
+        [] {}
+    );
+    const auto graphics_epoch_one = graph.AddPass(
+        "GraphicsEpochOne",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+        },
+        [] {}
+    );
+    const auto compute_epoch_one = graph.AddPass(
+        "ComputeEpochOne",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+        },
+        [] {}
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    const auto* transfer = FindBarrier(
+        plan, buffer.Untyped(), graphics_epoch_one, compute_epoch_one
+    );
+    suite.Check(
+        transfer != nullptr && transfer->queue_ownership && transfer->sources.size() == 1 &&
+            HasBarrierSource(*transfer, graphics_epoch_one, RenderGraph::AccessMode::Read) &&
+            !HasBarrierSource(*transfer, graphics_epoch_zero, RenderGraph::AccessMode::Read) &&
+            !HasBarrierSource(*transfer, compute_epoch_zero, RenderGraph::AccessMode::Read),
+        test_name,
+        "a repeated family must expose only the source from its current ownership epoch"
+    );
+    suite.Check(
+        !HasEdgeReason(
+            plan,
+            graphics_epoch_zero,
+            compute_epoch_one,
+            RenderGraph::EdgeReasonKind::QueueOwnership,
+            buffer.Untyped()
+        ),
+        test_name,
+        "a prior Graphics ownership epoch must not transfer directly to the later Compute epoch"
+    );
+    const auto stale_sync = std::find_if(
+        plan.queue_syncs.begin(),
+        plan.queue_syncs.end(),
+        [&](const RenderGraph::CompiledQueueSync& sync) {
+            return sync.signal_pass == graphics_epoch_zero && sync.wait_pass == compute_epoch_one;
+        }
+    );
+    suite.Check(
+        stale_sync == plan.queue_syncs.end(),
+        test_name,
+        "a prior ownership epoch must not create a stale cross-family sync"
+    );
+}
+
 void TestTokenCrossQueueSyncHasNoOwnership(TestSuite& suite) {
     constexpr std::string_view test_name = "token cross-queue synchronization";
     RenderGraph graph("TokenSync", RenderGraph::QueueTopology::DedicatedQueues());
@@ -1458,7 +2203,13 @@ void TestBatchPairSyncDeduplication(TestSuite& suite) {
 void TestPipelineDomainsAndBarrierSources(TestSuite& suite) {
     constexpr std::string_view test_name = "pipeline domains and barrier sources";
     RenderGraph graph("DomainsAndSources", RenderGraph::QueueTopology::DedicatedQueues());
-    const auto  buffer = graph.CreateTransientBuffer("Shared", RenderGraph::BufferDesc{.byte_size = 64});
+    const auto buffer = graph.CreateTransientBuffer(
+        "Shared",
+        RenderGraph::BufferDesc{
+            .byte_size    = 64,
+            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Concurrent,
+        }
+    );
     const auto producer = graph.AddPass(
         "Producer",
         [buffer](RenderGraph::PassBuilder& builder) {
@@ -2090,6 +2841,7 @@ int main() {
     TestTypedTextureLayerAndAspectHazards(suite);
     TestTransientTextureInitializationIsPerSubresource(suite);
     TestExportedTransientRequiresWholeResourceInitialization(suite);
+    TestTypedPartialExportRequiresOnlyDeclaredRange(suite);
     TestTypedBufferRangeHazards(suite);
     TestLogicalResourceVersions(suite);
     TestInvalidTypedRangeIsRejected(suite);
@@ -2100,6 +2852,14 @@ int main() {
     TestSameStateMemoryDependencies(suite);
     TestImportAndExportBoundaries(suite);
     TestQueueTopologySynchronization(suite);
+    TestExclusiveOwnershipUsesCurrentOwnerFamily(suite);
+    TestOwnershipWriterChainUsesCurrentFrontier(suite);
+    TestAutomaticReadsPreserveAvailabilityFrontier(suite);
+    TestOwnershipAcquireOrdersSiblingNativeQueue(suite);
+    TestImportAvailabilityOrdersSiblingNativeQueue(suite);
+    TestOwnershipTransitionCollapsesReaderFrontier(suite);
+    TestWriterAdvancesAvailabilityFrontiers(suite);
+    TestOwnershipEpochDoesNotReusePriorFamilySources(suite);
     TestTokenCrossQueueSyncHasNoOwnership(suite);
     TestBatchPairSyncDeduplication(suite);
     TestPipelineDomainsAndBarrierSources(suite);
