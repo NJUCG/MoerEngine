@@ -3308,6 +3308,98 @@ void TestUnknownExportMakesStatePlanIncomplete(TestSuite& suite) {
     );
 }
 
+void TestMergedAccessStateDeterminesPlanCompleteness(TestSuite& suite) {
+    constexpr std::string_view test_name = "merged access state completeness";
+
+    const auto check_whole_resource_merge = [&](bool automatic_first) {
+        RenderGraph graph(
+            automatic_first ? "AutomaticThenExplicitState" : "ExplicitThenAutomaticState"
+        );
+        const auto texture = graph.CreateTransientTexture(
+            "Color", RenderGraph::TextureDesc{.mip_count = 1, .layer_count = 1}
+        );
+        const auto pass = graph.AddPass(
+            "WriteColor",
+            [=](RenderGraph::PassBuilder& builder) {
+                if (automatic_first) {
+                    builder.Write(texture);
+                    builder.Write(texture, RenderGraph::TextureState::RenderTarget);
+                } else {
+                    builder.Write(texture, RenderGraph::TextureState::RenderTarget);
+                    builder.Write(texture);
+                }
+            },
+            [] {}
+        );
+
+        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+        const auto& plan   = graph.GetCompiledPlan();
+        const auto* access = FindAccess(plan, pass, texture.Untyped());
+        suite.Check(
+            plan.state_plan_complete && plan.accesses.size() == 1 && access != nullptr &&
+                access->mode == RenderGraph::AccessMode::Write &&
+                access->state == RenderGraph::ResourceState::Texture(
+                                     RenderGraph::TextureState::RenderTarget
+                                 ),
+            test_name,
+            "an explicit declaration must canonicalize the same atomic cell regardless of order"
+        );
+    };
+
+    check_whole_resource_merge(true);
+    check_whole_resource_merge(false);
+
+    RenderGraph disjoint_graph("DisjointAutomaticAndExplicitStates");
+    const auto  disjoint_texture = disjoint_graph.CreateTransientTexture(
+        "MipChain", RenderGraph::TextureDesc{.mip_count = 2, .layer_count = 1}
+    );
+    disjoint_graph.AddPass(
+        "WriteMips",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Write(
+                disjoint_texture,
+                RenderGraph::TextureState::RenderTarget,
+                RenderGraph::TextureRange::Mips(0, 1)
+            );
+            builder.Write(disjoint_texture, RenderGraph::TextureRange::Mips(1, 1));
+        },
+        [] {}
+    );
+
+    suite.Check(disjoint_graph.Compile(), test_name, disjoint_graph.GetCompileError());
+    suite.Check(
+        !disjoint_graph.GetCompiledPlan().state_plan_complete,
+        test_name,
+        "an automatic declaration on a disjoint atomic cell must keep the plan incomplete"
+    );
+
+    RenderGraph history_graph("AutomaticHistoryThenExplicitState");
+    const auto  history_texture = history_graph.CreateTransientTexture(
+        "History", RenderGraph::TextureDesc{.mip_count = 1, .layer_count = 1}
+    );
+    history_graph.AddPass(
+        "AutomaticWrite",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Write(history_texture);
+        },
+        [] {}
+    );
+    history_graph.AddPass(
+        "ExplicitWrite",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Write(history_texture, RenderGraph::TextureState::RenderTarget);
+        },
+        [] {}
+    );
+
+    suite.Check(history_graph.Compile(), test_name, history_graph.GetCompileError());
+    suite.Check(
+        !history_graph.GetCompiledPlan().state_plan_complete,
+        test_name,
+        "a later explicit state must not hide an unknown state from an earlier pass"
+    );
+}
+
 } // namespace
 
 int main() {
@@ -3358,6 +3450,7 @@ int main() {
     TestReadTransitionWaitsForEveryActiveReader(suite);
     TestUndefinedImportMustBeInitializedBeforeRead(suite);
     TestUnknownExportMakesStatePlanIncomplete(suite);
+    TestMergedAccessStateDeterminesPlanCompleteness(suite);
 
     if (suite.FailureCount() != 0) {
         std::cerr << "TestRenderGraph: " << suite.FailureCount() << " failure(s)\n";
