@@ -503,7 +503,6 @@ bool RenderGraphCompiler::ValidateAccessState(
             return Fail("pass '" + graph.passes[pass_index].name +
                         "' explicitly requested the automatic state");
         }
-        graph.compiled_plan.state_plan_complete = false;
         return true;
     }
 

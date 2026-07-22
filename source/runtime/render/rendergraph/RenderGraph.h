@@ -635,6 +635,11 @@ public:
         Export(resource.Untyped());
     }
 
+    /**
+     * Boundary owner_queue identifies the queue family that owns the resource before/after the
+     * graph. It is not the execution domain of the external access; external pipeline and
+     * synchronization endpoints remain unbound in the shadow plan.
+     */
     void SetInitialState(
         TextureHandle resource,
         TextureState  state,
