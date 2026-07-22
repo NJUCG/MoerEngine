@@ -941,6 +941,212 @@ void TestUnknownTextureAspectIsRejected(TestSuite& suite) {
     );
 }
 
+void TestTextureAttachmentStateMatchesSelectedAspects(TestSuite& suite) {
+    constexpr std::string_view test_name = "texture attachment state aspect validation";
+    auto add_side_effect = [](RenderGraph& graph) {
+        graph.AddPass(
+            "SideEffect",
+            [](RenderGraph::PassBuilder& builder) {
+                builder.SideEffect();
+            },
+            [] {}
+        );
+    };
+
+    RenderGraph color_access_graph("ColorAsDepthAttachment");
+    const auto  color_access = color_access_graph.CreateTransientTexture(
+        "Color", RenderGraph::TextureDesc{.aspects = RenderGraph::TextureAspect::Color}
+    );
+    color_access_graph.AddPass(
+        "InvalidDepthWrite",
+        [color_access](RenderGraph::PassBuilder& builder) {
+            builder.Write(color_access, RenderGraph::TextureState::DepthStencilWrite);
+        },
+        [] {}
+    );
+    suite.Check(
+        !color_access_graph.Compile() &&
+            Contains(color_access_graph.GetCompileError(), "selected aspects"),
+        test_name,
+        "a color pass range must reject depth/stencil attachment states"
+    );
+
+    RenderGraph depth_access_graph("DepthAsColorAttachment");
+    const auto  depth_access = depth_access_graph.CreateTransientTexture(
+        "Depth", RenderGraph::TextureDesc{.aspects = RenderGraph::TextureAspect::Depth}
+    );
+    depth_access_graph.AddPass(
+        "InvalidColorWrite",
+        [depth_access](RenderGraph::PassBuilder& builder) {
+            builder.Write(depth_access, RenderGraph::TextureState::RenderTarget);
+        },
+        [] {}
+    );
+    suite.Check(
+        !depth_access_graph.Compile() &&
+            Contains(depth_access_graph.GetCompileError(), "selected aspects"),
+        test_name,
+        "a depth pass range must reject the color render-target state"
+    );
+
+    RenderGraph depth_storage_graph("DepthAsStorageImage");
+    const auto  depth_storage = depth_storage_graph.CreateTransientTexture(
+        "Depth", RenderGraph::TextureDesc{.aspects = RenderGraph::TextureAspect::Depth}
+    );
+    depth_storage_graph.AddPass(
+        "InvalidStorageAccess",
+        [depth_storage](RenderGraph::PassBuilder& builder) {
+            builder.ReadWrite(depth_storage, RenderGraph::TextureState::UnorderedAccess);
+        },
+        [] {}
+    );
+    suite.Check(
+        !depth_storage_graph.Compile() &&
+            Contains(depth_storage_graph.GetCompileError(), "selected aspects"),
+        test_name,
+        "the portable depth/stencil model must reject unordered-access image states"
+    );
+
+    RenderGraph initial_graph("InvalidInitialAttachmentAspect");
+    int         initial_physical = 0;
+    const auto  initial_texture = initial_graph.ImportTexture(
+        "Color",
+        &initial_physical,
+        RenderGraph::TextureDesc{.aspects = RenderGraph::TextureAspect::Color}
+    );
+    initial_graph.SetInitialState(
+        initial_texture,
+        RenderGraph::TextureState::DepthStencilRead,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    add_side_effect(initial_graph);
+    suite.Check(
+        !initial_graph.Compile() && Contains(initial_graph.GetCompileError(), "selected aspects"),
+        test_name,
+        "an imported color range must reject a depth/stencil boundary state"
+    );
+
+    RenderGraph final_graph("InvalidFinalAttachmentAspect");
+    int         final_physical = 0;
+    const auto  final_texture = final_graph.ImportTexture(
+        "Depth",
+        &final_physical,
+        RenderGraph::TextureDesc{.aspects = RenderGraph::TextureAspect::Depth}
+    );
+    final_graph.SetInitialState(
+        final_texture,
+        RenderGraph::TextureState::DepthStencilRead,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    final_graph.Export(
+        final_texture,
+        RenderGraph::TextureState::RenderTarget,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Write
+    );
+    add_side_effect(final_graph);
+    suite.Check(
+        !final_graph.Compile() && Contains(final_graph.GetCompileError(), "selected aspects"),
+        test_name,
+        "an exported depth range must reject the color render-target state"
+    );
+
+    RenderGraph present_graph("InvalidPresentAspect");
+    int         present_physical = 0;
+    const auto  present_texture = present_graph.ImportTexture(
+        "Depth",
+        &present_physical,
+        RenderGraph::TextureDesc{.aspects = RenderGraph::TextureAspect::Depth}
+    );
+    present_graph.SetInitialState(
+        present_texture,
+        RenderGraph::TextureState::DepthStencilRead,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    present_graph.Export(
+        present_texture,
+        RenderGraph::TextureState::Present,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    add_side_effect(present_graph);
+    suite.Check(
+        !present_graph.Compile() && Contains(present_graph.GetCompileError(), "selected aspects"),
+        test_name,
+        "only color aspects may cross a Present boundary"
+    );
+
+    RenderGraph color_present_graph("ValidColorPresent");
+    int         color_present_physical = 0;
+    const auto  color_present_texture = color_present_graph.ImportTexture(
+        "Color",
+        &color_present_physical,
+        RenderGraph::TextureDesc{.aspects = RenderGraph::TextureAspect::Color}
+    );
+    color_present_graph.SetInitialState(
+        color_present_texture,
+        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    color_present_graph.Export(
+        color_present_texture,
+        RenderGraph::TextureState::Present,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    add_side_effect(color_present_graph);
+    suite.Check(
+        color_present_graph.Compile(),
+        test_name,
+        "a color texture must remain exportable to Present: " +
+            color_present_graph.GetCompileError()
+    );
+
+    RenderGraph valid_graph("ValidDepthStencilAspects");
+    int         valid_physical = 0;
+    const auto  valid_texture = valid_graph.ImportTexture(
+        "DepthStencil",
+        &valid_physical,
+        RenderGraph::TextureDesc{
+            .aspects = RenderGraph::TextureAspect::Depth | RenderGraph::TextureAspect::Stencil
+        }
+    );
+    valid_graph.SetInitialState(
+        valid_texture,
+        RenderGraph::TextureState::DepthStencilRead,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    valid_graph.AddPass(
+        "ReadDepth",
+        [valid_texture](RenderGraph::PassBuilder& builder) {
+            builder.Read(
+                valid_texture,
+                RenderGraph::TextureState::DepthStencilRead,
+                RenderGraph::TextureRange{.aspects = RenderGraph::TextureAspect::Depth}
+            );
+        },
+        [] {}
+    );
+    valid_graph.Export(
+        valid_texture,
+        RenderGraph::TextureState::DepthStencilRead,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read,
+        RenderGraph::TextureRange{.aspects = RenderGraph::TextureAspect::Stencil}
+    );
+    suite.Check(
+        valid_graph.Compile(),
+        test_name,
+        "depth and stencil subsets must accept depth/stencil attachment states: " +
+            valid_graph.GetCompileError()
+    );
+}
+
 void TestTypedAliasDescriptorMismatchIsRejected(TestSuite& suite) {
     constexpr std::string_view test_name = "typed alias descriptor mismatch";
     RenderGraph                graph("AliasDescriptorMismatch");
@@ -1708,6 +1914,99 @@ void TestAutomaticReadsPreserveAvailabilityFrontier(TestSuite& suite) {
         transition_syncs == 2,
         test_name,
         "each later Compute batch must wait for the retained availability frontier"
+    );
+}
+
+void TestSameNativeReadsDependOnTransitionFrontier(TestSuite& suite) {
+    constexpr std::string_view test_name = "same-native reads depend on transition frontier";
+    RenderGraph graph("SameNativeAvailability", RenderGraph::QueueTopology::SingleQueue());
+    const auto  buffer = graph.CreateTransientBuffer(
+        "Buffer", RenderGraph::BufferDesc{.byte_size = 64}
+    );
+    const auto writer = graph.AddPass(
+        "Write",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Write(buffer, RenderGraph::BufferState::UnorderedAccess);
+        },
+        [] {}
+    );
+    const auto transition = graph.AddPass(
+        "TransitionRead",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+        },
+        [] {}
+    );
+    const auto sibling_a = graph.AddPass(
+        "CompatibleReadA",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+        },
+        [] {}
+    );
+    const auto sibling_b = graph.AddPass(
+        "CompatibleReadB",
+        [buffer](RenderGraph::PassBuilder& builder) {
+            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+        },
+        [] {}
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            transition,
+            sibling_a,
+            RenderGraph::EdgeReasonKind::StateTransition,
+            buffer.Untyped()
+        ) &&
+            HasEdgeReason(
+                plan,
+                transition,
+                sibling_b,
+                RenderGraph::EdgeReasonKind::StateTransition,
+                buffer.Untyped()
+            ) &&
+            !HasEdgeReason(
+                plan,
+                writer,
+                sibling_a,
+                RenderGraph::EdgeReasonKind::ReadAfterWrite,
+                buffer.Untyped()
+            ) &&
+            !HasEdgeReason(
+                plan,
+                writer,
+                sibling_b,
+                RenderGraph::EdgeReasonKind::ReadAfterWrite,
+                buffer.Untyped()
+            ) &&
+            !HasEdgeReason(
+                plan,
+                sibling_a,
+                sibling_b,
+                RenderGraph::EdgeReasonKind::StateTransition,
+                buffer.Untyped()
+            ),
+        test_name,
+        "compatible reads must fan out from the transition frontier without restoring a stale writer"
+    );
+    suite.Check(
+        plan.dependency_waves.size() == 3 && WaveContains(plan.dependency_waves[0], writer) &&
+            WaveContains(plan.dependency_waves[1], transition) &&
+            WaveContains(plan.dependency_waves[2], sibling_a) &&
+            WaveContains(plan.dependency_waves[2], sibling_b),
+        test_name,
+        "the writer, transition, and compatible sibling reads must occupy three dependency waves"
+    );
+    suite.Check(
+        FindBarrier(plan, buffer.Untyped(), transition, sibling_a) == nullptr &&
+            FindBarrier(plan, buffer.Untyped(), transition, sibling_b) == nullptr &&
+            plan.queue_syncs.empty(),
+        test_name,
+        "a same-state same-queue availability edge must not create a barrier or queue sync"
     );
 }
 
@@ -3030,6 +3329,7 @@ int main() {
     TestLogicalResourceVersions(suite);
     TestInvalidTypedRangeIsRejected(suite);
     TestUnknownTextureAspectIsRejected(suite);
+    TestTextureAttachmentStateMatchesSelectedAspects(suite);
     TestTypedAliasDescriptorMismatchIsRejected(suite);
     TestMultipleReadersProduceAllWarEdges(suite);
     TestExplicitStateValidation(suite);
@@ -3039,6 +3339,7 @@ int main() {
     TestExclusiveOwnershipUsesCurrentOwnerFamily(suite);
     TestOwnershipWriterChainUsesCurrentFrontier(suite);
     TestAutomaticReadsPreserveAvailabilityFrontier(suite);
+    TestSameNativeReadsDependOnTransitionFrontier(suite);
     TestOwnershipAcquireOrdersSiblingNativeQueue(suite);
     TestImportAvailabilityOrdersSiblingNativeQueue(suite);
     TestOwnershipTransitionCollapsesReaderFrontier(suite);

@@ -78,6 +78,7 @@ private:
     bool ValidateAccessState(
         uint32_t                          pass_index,
         const RenderGraph::ResourceDeclaration& resource,
+        const RenderGraph::ResourceRange& range,
         RenderGraph::AccessMode           mode,
         const RenderGraph::ResourceState& state,
         bool                              explicit_state

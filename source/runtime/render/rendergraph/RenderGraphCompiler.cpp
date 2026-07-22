@@ -103,6 +103,27 @@ ReasonLess(const RenderGraph::CompiledEdgeReason& lhs, const RenderGraph::Compil
     return false;
 }
 
+[[nodiscard]] bool TextureStateSupportsAspects(
+    RenderGraph::TextureState state,
+    TextureAspect             aspects
+) {
+    const uint8_t selected = AspectMask(aspects);
+    switch (state) {
+        case RenderGraph::TextureState::RenderTarget:
+        case RenderGraph::TextureState::UnorderedAccess:
+        case RenderGraph::TextureState::Present:
+            return selected == AspectMask(TextureAspect::Color);
+        case RenderGraph::TextureState::DepthStencilRead:
+        case RenderGraph::TextureState::DepthStencilWrite: {
+            const uint8_t depth_stencil = AspectMask(TextureAspect::Depth) |
+                                          AspectMask(TextureAspect::Stencil);
+            return selected != 0 && (selected & depth_stencil) == selected;
+        }
+        default:
+            return true;
+    }
+}
+
 [[nodiscard]] bool BufferStateSupports(
     RenderGraph::BufferState state,
     RenderGraph::AccessMode  mode
@@ -270,7 +291,12 @@ bool RenderGraphCompiler::NormalizeDeclarations() {
             ResourceRange normalized{};
             if (!NormalizeRange(resource, access.range, normalized) ||
                 !ValidateAccessState(
-                    pass_index, resource, access.mode, access.state, access.explicit_state
+                    pass_index,
+                    resource,
+                    normalized,
+                    access.mode,
+                    access.state,
+                    access.explicit_state
                 )) {
                 return false;
             }
@@ -332,6 +358,15 @@ bool RenderGraphCompiler::NormalizeDeclarations() {
                 ResourceRange normalized{};
                 if (!NormalizeRange(resource, declaration.range, normalized)) {
                     return false;
+                }
+                if (resource.kind == ResourceKind::Texture &&
+                    !TextureStateSupportsAspects(
+                        declaration.state.texture, normalized.texture.aspects
+                    )) {
+                    return Fail(
+                        "boundary texture state is incompatible with the selected aspects on resource '" +
+                        resource.name + "'"
+                    );
                 }
                 normalized_states.push_back(
                     NormalizedStateDeclaration{
@@ -455,6 +490,7 @@ bool RenderGraphCompiler::ValidateExecutionDomain(uint32_t pass_index) {
 bool RenderGraphCompiler::ValidateAccessState(
     uint32_t                                pass_index,
     const RenderGraph::ResourceDeclaration& resource,
+    const RenderGraph::ResourceRange&       range,
     RenderGraph::AccessMode                 mode,
     const RenderGraph::ResourceState&       state,
     bool                                    explicit_state
@@ -485,6 +521,11 @@ bool RenderGraphCompiler::ValidateAccessState(
                                       state.texture == RenderGraph::TextureState::DepthStencilWrite;
         if (attachment_state && pass.domain.pipeline != RenderGraph::PipelineType::Graphics) {
             return Fail("attachment state requires the graphics pipeline in pass '" + pass.name + "'");
+        }
+        if (!TextureStateSupportsAspects(state.texture, range.texture.aspects)) {
+            return Fail(
+                "texture state is incompatible with the selected aspects in pass '" + pass.name + "'"
+            );
         }
     } else {
         supported     = BufferStateSupports(state.buffer, mode) &&
@@ -829,22 +870,17 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                 if (physical_resource && !state_transition && !queue_ownership &&
                     cell.availability_established_pass != RenderGraph::PassHandle::InvalidIndex &&
                     cell.availability_established_pass != pass_index) {
-                    const auto& established_pass =
-                        graph.passes[cell.availability_established_pass];
-                    if (graph.queue_topology.Resolve(established_pass.domain.queue).native_queue_id !=
-                        graph.queue_topology.Resolve(pass.domain.queue).native_queue_id) {
-                        AddEdge(
-                            cell.availability_established_pass,
-                            pass_index,
-                            RenderGraph::CompiledEdgeReason{
-                                .kind           = RenderGraph::EdgeReasonKind::StateTransition,
-                                .resource       = resource_handle,
-                                .range          = cell.range,
-                                .input_version  = cell.version,
-                                .output_version = cell.version
-                            }
-                        );
-                    }
+                    AddEdge(
+                        cell.availability_established_pass,
+                        pass_index,
+                        RenderGraph::CompiledEdgeReason{
+                            .kind           = RenderGraph::EdgeReasonKind::StateTransition,
+                            .resource       = resource_handle,
+                            .range          = cell.range,
+                            .input_version  = cell.version,
+                            .output_version = cell.version
+                        }
+                    );
                 }
                 if (!state_transition && !queue_ownership &&
                     cell.ownership_established_pass != RenderGraph::PassHandle::InvalidIndex &&
@@ -995,8 +1031,8 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                 if (physical_resource &&
                     (usage.write || import_availability || state_transition || queue_ownership)) {
                     // This pass has ordered the complete prior frontier and becomes the source of
-                    // state/data availability for sibling native queues. Automatic accesses still
-                    // inherit this dependency even though they make the logical state unknown.
+                    // state/data availability for later accesses. Automatic accesses still inherit
+                    // this dependency even though they make the logical state unknown.
                     cell.availability_established_pass = pass_index;
                 }
                 if (((usage.write || import_availability) && IsExclusive(resource)) ||

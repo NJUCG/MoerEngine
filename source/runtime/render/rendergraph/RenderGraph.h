@@ -369,7 +369,7 @@ public:
         ReadAfterWrite,
         WriteAfterRead,
         WriteAfterWrite,
-        /** State/data availability established on another native queue. */
+        /** State/data availability established by a prior pass. */
         StateTransition,
         QueueOwnership,
     };
