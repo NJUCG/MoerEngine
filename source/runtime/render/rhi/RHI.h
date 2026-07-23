@@ -37,9 +37,15 @@ struct DeviceInitInfo {
     ERHIType         rhi_type;
     std::string_view name;
     std::string_view rhi_api_version;
-    bool             rhi_thread = false;
-    bool             rhi_bypass = true;
-    bool             thread_profile_logging = false;
+    bool             rhi_thread                          = false;
+    bool             rhi_bypass                          = true;
+    bool             thread_profile_logging              = false;
+    bool             parallel_recording                  = false;
+    uint32_t         parallel_record_workers              = 0;
+    bool             parallel_record_verify              = false;
+    bool             parallel_record_profile             = false;
+    uint32_t         parallel_record_min_work_units_per_job = 64;
+    uint64_t         parallel_record_worker_throw_trigger = 0;
     uint64_t         vulkan_present_submit_fault_trigger = 0;
 };
 namespace Moer::Render {

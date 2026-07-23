@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RenderAPI.h"
+#include "rhi/RHIExecutor.h"
 
 #include <cstdint>
 #include <functional>
@@ -14,14 +15,14 @@ namespace Moer::Render {
 class RenderGraphCompiler;
 
 /**
- * Serial frontend backed by a typed RDG compiler.
+ * Typed RDG frontend with an opt-in command-recording schedule.
  *
  * The compiler owns typed resource declarations, subresource-aware hazards,
  * logical resource versions, stable dependency analysis and lifetimes. The
  * RDG does not own physical tracked state or emit barriers in this stage; the
- * existing RHI/Vulkan command path remains responsible. Execute deliberately
- * stays synchronous and serial until command recording has an independent
- * ownership contract.
+ * existing RHI/Vulkan command path remains responsible. Legacy callbacks stay
+ * serial. Explicit record callbacks may be assigned independent CommandLists
+ * while preserving stable source order.
  */
 class RENDER_API RenderGraph {
 public:
@@ -296,6 +297,25 @@ public:
         friend bool operator==(const ExecutionDomain&, const ExecutionDomain&) = default;
     };
 
+    /** CPU callback/CommandList ownership; distinct from backend translate policy. */
+    enum class PassExecutionClass : uint8_t {
+        /** Caller-thread callback whose commands are sealed by the graph observer. */
+        MainThread,
+        /**
+         * Caller-thread, CPU-only preparation/history callback. It may order
+         * Token resources or Reference GPU identities, never seals commands,
+         * and is excluded from the prospective GPU queue plan.
+         */
+        CpuPrepare,
+        /**
+         * Caller-thread hard boundary that owns its command/submission scope.
+         * Used for external Vulkan/CUDA synchronization and unmanaged submission.
+         */
+        ExternalControl,
+        SerialRecord,
+        ParallelRecordEligible,
+    };
+
     /** RDG-neutral states; these do not depend on the legacy RHI enum ordinals. */
     enum class TextureState : uint8_t {
         Automatic,
@@ -415,6 +435,20 @@ public:
     };
 
     /**
+     * Stable CPU recording unit. The first implementation deliberately keeps
+     * one pass per batch; coalescing is a later optimization and must not alter
+     * callback ownership or source order.
+     */
+    struct CompiledRecordingBatch {
+        uint32_t                id = 0;
+        QueueBinding            queue{};
+        std::vector<PassHandle> passes{};
+        PassExecutionClass      execution = PassExecutionClass::SerialRecord;
+        uint32_t                workload = 1;
+        uint32_t                dependency_wave = PassHandle::InvalidIndex;
+    };
+
+    /**
      * One canonical synchronization decision for one atomic resource cell. The future backend may
      * lower a queue_ownership record into paired release/acquire barriers; RDG itself does not emit
      * physical barriers in this stage.
@@ -489,22 +523,25 @@ public:
     };
 
     /**
-     * Immutable compiler diagnostics for the current serial executor. This is shadow metadata,
-     * not an executable submission plan: queue_syncs only describe internal pass/batch edges,
-     * while external import/export/present synchronization endpoints are intentionally absent.
+     * Immutable compiler output. recording_batches is an executable CPU
+     * ownership schedule. GPU queue/barrier fields remain shadow metadata:
+     * queue_syncs only describe internal pass/batch edges, while external
+     * import/export/present synchronization endpoints are intentionally absent.
      */
     struct CompiledPlan {
         /** Stable topological order of semantic dependencies. */
         std::vector<PassHandle> topological_order{};
-        /** Current production order. It remains declaration-order and serial. */
+        /** Stable production order. CPU recording policy is described separately below. */
         std::vector<PassHandle> execution_order{};
         /** Minimal hazard, explicit, state, and ownership frontier without fake serial edges. */
         std::vector<CompiledEdge> edges{};
         /** Atomic subresource/range accesses with logical input/output versions. */
         std::vector<CompiledAccess>   accesses{};
         std::vector<CompiledResource> resources{};
-        /** Dependency-only waves for diagnostics. They are not yet an execution schedule. */
+        /** Semantic dependency waves; CPU recording groups apply their own edge taxonomy. */
         std::vector<CompiledWave> dependency_waves{};
+        /** Stable one-pass CPU recording batches with explicit thread-safety classification. */
+        std::vector<CompiledRecordingBatch> recording_batches{};
         /** Canonical state/memory/ownership decisions, prior to backend-specific lowering. */
         std::vector<CompiledBarrier> barriers{};
         /** Prospective multi-queue batches and their GPU wait/signal relationships. */
@@ -527,6 +564,7 @@ public:
             accesses.clear();
             resources.clear();
             dependency_waves.clear();
+            recording_batches.clear();
             barriers.clear();
             queue_batches.clear();
             queue_syncs.clear();
@@ -586,9 +624,32 @@ public:
         PassBuilder& Write(TokenHandle resource);
         PassBuilder& ReadWrite(TokenHandle resource);
 
+        /**
+         * Declares that a CPU callback observes only the resource identity and
+         * extends its logical graph lifetime. Reference does not itself own the
+         * physical object or declare a GPU content access, version, barrier, or
+         * queue dependency; the callback must capture an owning ref and record
+         * passes must still declare their real GPU reads.
+         */
+        PassBuilder& Reference(ResourceHandle resource);
+        PassBuilder& Reference(TextureHandle resource) {
+            return Reference(resource.Untyped());
+        }
+        PassBuilder& Reference(BufferHandle resource) {
+            return Reference(resource.Untyped());
+        }
+        PassBuilder& Reference(TokenHandle resource) {
+            return Reference(resource.Untyped());
+        }
+
         PassBuilder& DependsOn(PassHandle dependency);
         PassBuilder& SideEffect();
         PassBuilder& ExecuteOn(QueueRole queue, PipelineType pipeline);
+        PassBuilder& MainThread();
+        PassBuilder& CpuPrepare();
+        PassBuilder& ExternalControl();
+        PassBuilder& SerialRecord(uint32_t workload = 1);
+        PassBuilder& ParallelRecord(uint32_t workload = 1);
 
     private:
         PassBuilder(RenderGraph& graph, uint32_t pass_index) : graph(graph), pass_index(pass_index) {}
@@ -599,8 +660,22 @@ public:
         friend class RenderGraph;
     };
 
-    using SetupCallback   = std::function<void(PassBuilder&)>;
-    using ExecuteCallback = std::function<void()>;
+    struct ExecutedPassInfo {
+        PassHandle       handle{};
+        std::string_view name{};
+        ExecutionDomain domain{};
+        bool             side_effect{false};
+        PassExecutionClass execution_class = PassExecutionClass::MainThread;
+    };
+
+    using SetupCallback         = std::function<void(PassBuilder&)>;
+    using ExecuteCallback       = std::function<void()>;
+    using RecordCallback        = std::function<void(CommandList&)>;
+    using PassCompletedCallback = std::function<void(const ExecutedPassInfo&)>;
+    /** May attach submit metadata; CommandList and gate ownership are immutable. */
+    using RecordingSourceSetupCallback =
+        std::function<void(const ExecutedPassInfo&, RHIRecordingSource&)>;
+    using RecordingBatchPublisher = std::function<void(Array<RHIRecordingSource>&&)>;
 
     explicit RenderGraph(std::string_view name = "RenderGraph");
     RenderGraph(std::string_view name, QueueTopology topology);
@@ -670,12 +745,42 @@ public:
     );
 
     PassHandle AddPass(std::string_view name, const SetupCallback& setup, ExecuteCallback execute);
+    PassHandle AddRecordPass(
+        std::string_view     name,
+        const SetupCallback& setup,
+        RecordCallback       record,
+        PassExecutionClass   execution = PassExecutionClass::SerialRecord,
+        uint32_t             workload = 1
+    );
 
     /** Compiles declarations without emitting barriers or recording RHI commands. */
     bool Compile();
 
-    /** Executes callbacks synchronously and serially once in declaration order. */
+    /** Executes callbacks synchronously and serially once in compiled order. */
     bool Execute();
+
+    /**
+     * Executes callbacks serially and invokes the observer after each callback
+     * has completely returned. The observer can safely seal the commands just
+     * recorded by that pass without allowing GPU scopes to cross a submission.
+     */
+    bool Execute(const PassCompletedCallback& after_pass);
+
+    /**
+     * Executes legacy callbacks on the caller and explicit record callbacks on
+     * independently owned CommandLists. Contiguous eligible passes on one queue
+     * are dispatched together even when texture/buffer GPU hazards place them
+     * in different dependency waves: those hazards constrain submission, not
+     * immutable CPU command recording. Token hazards and explicit DependsOn
+     * edges remain CPU recording boundaries. Sources are registered with RHI
+     * in compiled order and joined before the next caller-thread pass.
+     */
+    bool ExecuteRecording(
+        const PassCompletedCallback&        after_main_thread_pass,
+        const RecordingSourceSetupCallback& configure_recording_source = {},
+        bool                                parallel_recording_enabled = true,
+        const RecordingBatchPublisher&      publish_recording_batch = {}
+    );
 
     [[nodiscard]] bool IsCompiled() const {
         return compiled;
@@ -737,10 +842,14 @@ private:
     struct PassDeclaration {
         std::string                    name{};
         std::vector<AccessDeclaration> accesses{};
+        std::vector<ResourceHandle>    references{};
         std::vector<PassHandle>        explicit_dependencies{};
         ExecuteCallback                execute{};
+        RecordCallback                 record{};
         ExecutionDomain               domain{};
         bool                           side_effect = false;
+        PassExecutionClass             execution_class = PassExecutionClass::MainThread;
+        uint32_t                       workload = 1;
     };
 
     ResourceHandle ImportInternal(
@@ -776,8 +885,14 @@ private:
     );
     bool MarkExported(ResourceHandle resource, bool whole_resource);
     void AddDependency(uint32_t pass_index, PassHandle dependency);
+    void AddReference(uint32_t pass_index, ResourceHandle resource);
     void MarkSideEffect(uint32_t pass_index);
     void SetExecutionDomain(uint32_t pass_index, QueueRole queue, PipelineType pipeline);
+    void SetPassExecutionClass(
+        uint32_t           pass_index,
+        PassExecutionClass execution_class,
+        uint32_t           workload
+    );
     bool InvalidateCompile();
     bool FailCompile(std::string message);
 

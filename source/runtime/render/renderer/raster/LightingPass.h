@@ -21,6 +21,26 @@ public:
 
 class LightingPass {
 public:
+    /**
+     * Immutable recording input captured on the render thread. Bindless handles
+     * alone do not own their resources, so every referenced buffer/texture is
+     * retained until the recorded source reaches a terminal submit callback.
+     */
+    struct RecordParameters {
+        MaterialPassBindlessParam pass_param{};
+        BufferRef                 lighting_data{};
+        BufferRef                 light_buffer_owner{};
+        BindlessArrayRef          bindless{};
+        TextureRef                base_color_owner{};
+        TextureRef                normal_owner{};
+        TextureRef                metal_rough_ao_owner{};
+        DepthBufferRef            depth_owner{};
+        TextureRef                cubemap_owner{};
+        TextureRef                shadow_mask_owner{};
+        TextureRef                output{};
+        Rect2D                    render_area{};
+    };
+
     LightingPass(RasterContext& context) {
         GfxPsoCreateInfo pipeline_info(
             RHIRasterizeInfo::Preset(),
@@ -34,8 +54,10 @@ public:
                        .Build<PbrMaterialShadingPipeline>(std::move(pipeline_info));
     }
 
-    void Process(RasterContext& context, const RasterConfig& ui_config) {
-        MaterialPassBindlessParam pass_param{};
+    [[nodiscard]] RecordParameters
+    Prepare(const RasterContext& context, const RasterConfig& ui_config) const {
+        RecordParameters parameters{};
+        auto&            pass_param = parameters.pass_param;
         pass_param.extra_ambient_color     = ui_config.shading_extra_ambient_color;
         pass_param.extra_ambient_intensity = ui_config.shading_extra_ambient_intensity;
         pass_param.enable_extra_ambient    = ui_config.shading_enable_extra_ambient;
@@ -46,17 +68,43 @@ public:
         pass_param.gbuffer_metal_rough_ao = context.textures.metal_rough_ao.hdl;
         pass_param.gbuffer_depth          = context.textures.depth_nearest_sampler.hdl;
 
-        pass_param.light_buf_hdl      = context.GetGpuSceneRes().light_buf.hdl;
+        const auto& gpu_scene_res     = context.GetGpuSceneRes();
+        pass_param.light_buf_hdl      = gpu_scene_res.light_buf.hdl;
         pass_param.cubemap_handle     = context.textures.cubemap_tex.hdl;
         pass_param.shadow_mask_handle = context.textures.shadow_mask.hdl;
 
-        context.cmd_list.Gfx(pipeline, context.lighting_data_buffer.buf, context.bdls, pass_param)
+        parameters.lighting_data        = context.lighting_data_buffer.buf;
+        parameters.light_buffer_owner   = gpu_scene_res.light_buf.buf;
+        parameters.bindless             = context.bdls;
+        parameters.base_color_owner     = context.textures.base_color.tex;
+        parameters.normal_owner         = context.textures.normal.tex;
+        parameters.metal_rough_ao_owner = context.textures.metal_rough_ao.tex;
+        parameters.depth_owner          = context.textures.depth_nearest_sampler.tex;
+        parameters.cubemap_owner        = context.textures.cubemap_tex.tex;
+        parameters.shadow_mask_owner    = context.textures.shadow_mask.tex;
+        parameters.output               = context.textures.lighting_output.tex;
+        parameters.render_area          = context.textures.lighting_output.GetRect2D();
+        return parameters;
+    }
+
+    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
+        cmd_list
+            .Gfx(
+                pipeline,
+                parameters.lighting_data,
+                parameters.bindless,
+                parameters.pass_param
+            )
             .Draw(
                 "Lighting Pass",
-                context.textures.lighting_output.GetRect2D(),
+                parameters.render_area,
                 std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment(context.textures.lighting_output.tex)
+                ColorAttachment(parameters.output)
             );
+    }
+
+    void Process(RasterContext& context, const RasterConfig& ui_config) {
+        Record(context.cmd_list, Prepare(context, ui_config));
     }
 
 private:

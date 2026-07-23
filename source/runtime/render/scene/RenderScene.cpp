@@ -3,6 +3,7 @@
 #include "RenderThread.h"
 #include "log/LogSystem.h"
 #include "rhi/RHI.h"
+#include "rhi/RHIExecutor.h"
 
 namespace Moer::Render {
 
@@ -26,6 +27,10 @@ GpuScene::PendingCommandList RenderScene::ApplyUpdate(GpuSceneUpdate&& update) {
     );
 
     if (update.full_rebuild) {
+        // Device idle only covers work already submitted to Vulkan. Drain the
+        // upper submission owner first so no queued translation can retain the
+        // scene resources that are about to be replaced.
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
         RenderDevice::Get().WaitIdle();
         m_gpu_scene = MakeUnique<GpuScene>(m_bindless_array);
     }

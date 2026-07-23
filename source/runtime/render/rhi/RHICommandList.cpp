@@ -30,7 +30,14 @@ void CommandQueue::Test() {
     draw_dispatcher.Draw(Rect2D{}, std::move(draw_data), ColorAttachment{nullptr});
 }
 
-CommandList::CommandList() {}
+CommandList::CommandList() : CommandList(EQueueType::Graphics) {}
+
+CommandList::CommandList(EQueueType _queue_type) : queue_type(_queue_type) {
+    assert(
+        _queue_type == EQueueType::Graphics || _queue_type == EQueueType::Compute ||
+        _queue_type == EQueueType::Copy
+    );
+}
 // void CommandList::ArgSetter::SetBuffer(uint64 _index, BufferView _buffer) {
 //     auto idx          = handle.GetBindingIdx(_index);
 //     temp_args[_index] = _buffer;
@@ -139,11 +146,45 @@ CmdSubmit CommandList::Submit() {
         std::move(success_callbacks),
         std::move(cached_args)
     );
+    const bool has_submit_side_effects =
+        !submit.callbacks.empty() || !submit.success_callbacks.empty() ||
+        !submit.wait_events.empty() || !submit.signal_events.empty() ||
+        submit.b_delete_resources;
+    if (!submit.cmds.empty() || has_submit_side_effects) {
+        submit.segments.emplace_back(RHISubmitSegment{
+            .queue = queue_type,
+            .begin = 0,
+            .end   = submit.cmds.size(),
+        });
+    }
+    submit.translate_execution_class = translate_execution_class;
     commands.clear();
     callbacks.clear();
     success_callbacks.clear();
     timestamp_scope_names.clear();
+    translate_execution_class = ERHITranslateExecutionClass::Parallel;
     return std::move(submit);
+}
+
+Array<std::function<void()>> CommandList::DrainOrdinaryCallbacksForRejection() {
+    Array<std::function<void()>> cleanup_callbacks = std::move(callbacks);
+
+    // This is deliberately not implemented in terms of Submit(). A failed
+    // producer may leave a partially-built barrier or an unmatched marker;
+    // neither is executable, and Submit() correctly asserts on that shape in
+    // Debug builds. Destroying the command payload releases its strong refs
+    // without manufacturing end-marker commands or submission segments.
+    commands.clear();
+    callbacks.clear();
+    success_callbacks.clear();
+    cached_args.clear();
+    current_barriers = nullptr;
+    while (!scope_stack.empty()) {
+        scope_stack.pop();
+    }
+    timestamp_scope_names.clear();
+    translate_execution_class = ERHITranslateExecutionClass::Parallel;
+    return cleanup_callbacks;
 }
 
 bool CommandList::IsEmpty() const {

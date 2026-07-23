@@ -1,4 +1,6 @@
 #include "rhi/RHIRecordDiagnostics.h"
+#include "rhi/RHIBindlessUpdateLifecycle.h"
+#include "rhi/RHIImpl.h"
 
 #include <algorithm>
 #include <array>
@@ -47,6 +49,16 @@ void CapabilityTableIsExplicitAndFailClosed() {
         Command::EType::MultiDraw,
         Command::EType::ClearResource,
     };
+    constexpr std::array expected_parallel_safe{
+        Command::EType::BufferToBuffer,
+        Command::EType::BufferToTexture,
+        Command::EType::TextureToBuffer,
+        Command::EType::TextureToTexture,
+        Command::EType::ShaderDispatch,
+        Command::EType::SetDrawState,
+        Command::EType::MultiDraw,
+        Command::EType::ClearResource,
+    };
     uint32_t serial_count    = 0;
     uint32_t candidate_count = 0;
     uint32_t safe_count      = 0;
@@ -76,15 +88,44 @@ void CapabilityTableIsExplicitAndFailClosed() {
             traits.measurement_candidate == expected_candidate,
             "measurement-candidate command set changed unexpectedly"
         );
+        const bool expected_safe =
+            std::find(expected_parallel_safe.begin(), expected_parallel_safe.end(), type) !=
+            expected_parallel_safe.end();
+        Expect(
+            (traits.capability == RecordCapability::ParallelPrimarySafe) == expected_safe,
+            "parallel-primary-safe command set changed unexpectedly"
+        );
     }
 
     Expect(serial_count > 0, "capability table has no serial fallback entries");
     Expect(candidate_count == 4, "unexpected Phase 9.0 candidate command count");
-    Expect(safe_count == 0, "Phase 9.0 must not claim a command is parallel-safe yet");
+    Expect(safe_count == expected_parallel_safe.size(), "unexpected parallel-safe command count");
     Expect(
         GetCommandRecordTraits(Command::EType::Count).capability == RecordCapability::SerialOnly,
         "invalid command type did not fail closed"
     );
+}
+
+void ParallelReplayContractExcludesSideEffects() {
+    constexpr std::array replay_safe{
+        Command::EType::BufferToBuffer,
+        Command::EType::BufferToTexture,
+        Command::EType::TextureToBuffer,
+        Command::EType::TextureToTexture,
+        Command::EType::ShaderDispatch,
+        Command::EType::SetDrawState,
+        Command::EType::MultiDraw,
+        Command::EType::ClearResource,
+    };
+    for (const Command::EType type : replay_safe) {
+        Expect(IsParallelRecordReplaySafe(type), "parallel whitelist is not replay safe");
+    }
+    Expect(!IsParallelRecordReplaySafe(Command::EType::UploadBuffer),
+           "payload-mutating upload was marked replay safe");
+    Expect(!IsParallelRecordReplaySafe(Command::EType::Scope),
+           "profiler scope was marked replay safe");
+    Expect(!IsParallelRecordReplaySafe(Command::EType::Custom),
+           "host callback command was marked replay safe");
 }
 
 void TopologyDigestIsDeterministicAndOrderSensitive() {
@@ -554,11 +595,204 @@ void UnresolvedAndOpaqueObjectsFailClosed() {
     Expect(!summary.complete, "incomplete section produced a complete serial golden");
 }
 
+class MockBindlessArray final : public BindlessArray {
+public:
+    explicit MockBindlessArray(uint32_t* _discard_count) : discard_count(_discard_count) {}
+
+    Moer::uint AllocateTexture(const TextureView&, Sampler) override { return 0; }
+    Moer::uint AllocateBuffer(BufferView) override { return 0; }
+    void UnbindTexture(Moer::uint) override {}
+    void UnbindBuffer(Moer::uint) override {}
+    Moer::uint64 ArrayHandle() const override { return 0; }
+
+protected:
+    Moer::UniquePtr<Command> CreateUpdateCommand() override { return {}; }
+    void DiscardUpdateCommand(const Moer::Array<UpdateCmd>&) override { ++*discard_count; }
+    void Destroy() override { delete this; }
+
+private:
+    uint32_t* discard_count;
+};
+
+std::unique_ptr<UpdateBindlessArrayCmd> MakeEmptyBindlessUpdate(BindlessArrayRef _array) {
+    return std::make_unique<UpdateBindlessArrayCmd>(
+        std::move(_array),
+        Moer::Array<BindlessArray::UpdateCmd>{},
+        Moer::Array<Moer::byte>{},
+        Moer::Array<std::pair<Moer::uint, Moer::uint>>{},
+        Moer::Array<Moer::byte>{},
+        Moer::Array<std::pair<Moer::uint, Moer::uint>>{},
+        Moer::Array<Moer::byte>{},
+        Moer::Array<std::pair<Moer::uint, Moer::uint>>{}
+    );
+}
+
+void BindlessUpdateLifecycleIsOneShotAndDiscardSafe() {
+    uint32_t discard_count = 0;
+    BindlessArrayRef array(new MockBindlessArray(&discard_count));
+
+    {
+        auto dropped = MakeEmptyBindlessUpdate(array);
+    }
+    Expect(discard_count == 1, "dropped bindless update did not roll back once");
+
+    std::shared_ptr<std::atomic_bool> finalization_token;
+    {
+        auto handed_off = MakeEmptyBindlessUpdate(array);
+        Expect(handed_off->HandOffUpdates(), "first bindless handoff was rejected");
+        Expect(!handed_off->HandOffUpdates(), "bindless update allowed a second handoff");
+        finalization_token = handed_off->UpdateFinalizationToken();
+    }
+    Expect(discard_count == 1, "handed-off bindless update was rolled back on destruction");
+    Expect(
+        !finalization_token->exchange(true),
+        "bindless finalization token was consumed before retirement"
+    );
+    Expect(finalization_token->exchange(true), "bindless finalization token was not one-shot");
+}
+
+void BindlessGenerationClaimsRejectStaleAndSplitOwnership() {
+    constexpr uint64_t token = 17;
+    constexpr uint64_t generation = 41;
+    using State = BindlessUpdateSlotState;
+
+    Expect(
+        ClassifyBindlessUpdateSlot(
+            generation, generation, 0, 0, generation, generation, token
+        ) == State::Original,
+        "unclaimed bindless generation was not recognized as current"
+    );
+    Expect(
+        ClassifyBindlessUpdateSlot(
+            generation + 1,
+            generation + 1,
+            token,
+            token,
+            generation,
+            generation,
+            token
+        ) == State::ClaimedByCommand,
+        "matching bindless lifecycle claim was not recognized"
+    );
+    Expect(
+        ClassifyBindlessUpdateSlot(
+            generation + 1,
+            generation + 1,
+            token + 1,
+            token + 1,
+            generation,
+            generation,
+            token
+        ) == State::Stale,
+        "foreign bindless lifecycle claim was accepted"
+    );
+    Expect(
+        ClassifyBindlessUpdateSlot(
+            generation + 1,
+            generation,
+            token,
+            0,
+            generation,
+            generation,
+            token
+        ) == State::Stale,
+        "split global/typed bindless ownership was accepted"
+    );
+    Expect(
+        ClassifyBindlessUpdateSlot(
+            generation + 2,
+            generation + 2,
+            0,
+            0,
+            generation,
+            generation,
+            token
+        ) == State::Stale,
+        "reused bindless generation was accepted by an old command"
+    );
+    Expect(
+        ClassifyBindlessUpdateSlot(
+            generation, generation, 0, 0, generation, generation, 0
+        ) == State::Stale,
+        "tokenless bindless update was accepted"
+    );
+    constexpr uint64_t exhausted = std::numeric_limits<uint64_t>::max();
+    Expect(
+        ClassifyBindlessUpdateSlot(
+            exhausted, exhausted, token, token, exhausted, exhausted, token
+        ) == State::Stale,
+        "exhausted bindless generation wrapped into a valid claim"
+    );
+
+    using Action = BindlessUpdateFinalizationAction;
+    Expect(
+        GetBindlessUpdateFinalizationAction(State::Original, false, true) == Action::Ignore,
+        "successful bindless allocation was retired"
+    );
+    Expect(
+        GetBindlessUpdateFinalizationAction(State::ClaimedByCommand, true, true) ==
+            Action::Retire,
+        "successful bindless free was not retired at GPU completion"
+    );
+    Expect(
+        GetBindlessUpdateFinalizationAction(State::Original, false, false) == Action::Retire,
+        "rejected bindless allocation was not cancelled"
+    );
+    Expect(
+        GetBindlessUpdateFinalizationAction(State::ClaimedByCommand, true, false) ==
+            Action::Restore,
+        "rejected bindless free was retired without GPU ordering"
+    );
+    Expect(
+        GetBindlessUpdateFinalizationAction(State::Stale, true, false) == Action::Ignore,
+        "stale bindless update was allowed to mutate current ownership"
+    );
+
+    uint64_t array_generation = generation + 1;
+    uint64_t typed_generation = generation + 1;
+    uint64_t array_claim      = token;
+    uint64_t typed_claim      = token;
+    Expect(
+        RollbackBindlessUpdateSlotClaim(
+            array_generation,
+            typed_generation,
+            array_claim,
+            typed_claim,
+            generation,
+            generation,
+            token
+        ),
+        "owned bindless lifecycle claim could not be rolled back"
+    );
+    Expect(
+        array_generation == generation && typed_generation == generation &&
+            array_claim == 0 && typed_claim == 0,
+        "bindless lifecycle rollback did not restore the original generation"
+    );
+    array_generation = generation + 1;
+    typed_generation = generation + 1;
+    array_claim      = token + 1;
+    typed_claim      = token + 1;
+    Expect(
+        !RollbackBindlessUpdateSlotClaim(
+            array_generation,
+            typed_generation,
+            array_claim,
+            typed_claim,
+            generation,
+            generation,
+            token
+        ),
+        "foreign bindless lifecycle claim was rolled back"
+    );
+}
+
 } // namespace
 
 int main() {
     try {
         CapabilityTableIsExplicitAndFailClosed();
+        ParallelReplayContractExcludesSideEffects();
         TopologyDigestIsDeterministicAndOrderSensitive();
         PredictionRejectsSingleUnitAndModelsEligibleLayer();
         StableTokensIgnorePointersAndCaptureAliasTopology();
@@ -568,6 +802,8 @@ int main() {
         QueryDigestIgnoresRingPlacementButPreservesEvents();
         CombinedDigestKeepsSectionIdentity();
         UnresolvedAndOpaqueObjectsFailClosed();
+        BindlessUpdateLifecycleIsOneShotAndDiscardSafe();
+        BindlessGenerationClaimsRejectStaleAndSplitOwnership();
         std::cout << "RHI record diagnostic tests passed\n";
         return 0;
     } catch (const std::exception& error) {

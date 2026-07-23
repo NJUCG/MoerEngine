@@ -11,21 +11,21 @@ void RHIResource::Destroy() {
 }
 namespace Moer::Render {
 
-uint2 TextureWithHandle::GetSize(uint mip) {
+uint2 TextureWithHandle::GetSize(uint mip) const {
     return uint2(std::max(1u, tex->GetExtent().x >> mip), std::max(1u, tex->GetExtent().y >> mip));
 }
-uint TextureWithHandle::GetSizeX(uint mip) {
+uint TextureWithHandle::GetSizeX(uint mip) const {
     return std::max(1u, tex->GetExtent().x >> mip);
 }
-uint TextureWithHandle::GetSizeY(uint mip) {
+uint TextureWithHandle::GetSizeY(uint mip) const {
     return std::max(1u, tex->GetExtent().y >> mip);
 }
-Rect2D TextureWithHandle::GetRect2D(uint mip) {
+Rect2D TextureWithHandle::GetRect2D(uint mip) const {
     uint2 size = GetSize(mip);
     return Rect2D(0, 0, size.x, size.y);
 }
 
-uint TextureWithHandle::GetMipHandle(uint mip) {
+uint TextureWithHandle::GetMipHandle(uint mip) const {
     if (mip_handles.size() > mip) {
         return mip_handles[mip];
     }

@@ -13,6 +13,7 @@
 #include "misc/MMemory.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
+#include "rhi/RHIExecutor.h"
 
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -278,9 +279,12 @@ static uint UploadFontAtlasAndCreatePipelines(
             CommandList cmd_list;
             cmd_list.CopyFrom(std::move(font_pixels), font_texture);
 
-            auto& graphics_queue = device.GetCommandQueue(EQueueType::Graphics);
-            graphics_queue.Execute(std::move(cmd_list.Submit()));
-            graphics_queue.Sync();
+            RHIExecutor::Get().Submit(
+                EQueueType::Graphics,
+                std::move(cmd_list.Submit()),
+                ERHIExecSubmitFlags::FlushGPU
+            );
+            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
             _backend_data->font_texture = font_texture;
             font_texture_handle =
@@ -559,7 +563,6 @@ void ImGuiRenderBackend::PresentWindows(
         (_execution_thread == EUiDrawExecutionThread::Game && IsCurrentlyGameThread()) ||
         (_execution_thread == EUiDrawExecutionThread::Render && IsCurrentlyRenderThread())
     );
-    auto& graphics_queue = device.GetCommandQueue(EQueueType::Graphics);
     for (const auto& viewport : _frame.platform_viewports) {
         if (viewport.swapchain && viewport.framebuffer) {
             const auto framebuffer_view = viewport.framebuffer->GetView();
@@ -574,7 +577,9 @@ void ImGuiRenderBackend::PresentWindows(
                 );
                 continue;
             }
-            graphics_queue.Present(viewport.swapchain, viewport.framebuffer);
+            RHIExecutor::Get().Present(
+                RHIPresentRequest(viewport.swapchain, framebuffer_view), true
+            );
         }
     }
 }
@@ -811,9 +816,8 @@ void CreateOrResizeViewportResources(
         return;
     }
 
-    auto& graphics_queue = _device.GetCommandQueue(EQueueType::Graphics);
     if (has_swapchain || _resources->framebuffer) {
-        graphics_queue.Sync();
+        RHIExecutor::Get().Sync(ERHISyncDepth::Present);
     }
 
     Moer::WindowHandle handle{static_cast<Moer::WindowType*>(_platform_window)};
@@ -858,7 +862,7 @@ void ReleaseViewportResources(
     }
     assert(!IsRenderThreadRunning() || IsCurrentlyRenderThread());
 
-    _device.GetCommandQueue(EQueueType::Graphics).Sync();
+    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
     if (_resources->swapchain) {
         _resources->swapchain->Sync();
     }
@@ -1029,6 +1033,11 @@ void GuiSwapBuffers(ImGuiViewport* _viewport, void*) {
     if (!viewport_data || !viewport_data->render_resources) {
         return;
     }
-    backend_data.render_backend->device.GetCommandQueue(Moer::Render::EQueueType::Graphics)
-        .Present(viewport_data->render_resources->swapchain, viewport_data->render_resources->framebuffer);
+    RHIExecutor::Get().Present(
+        RHIPresentRequest(
+            viewport_data->render_resources->swapchain,
+            viewport_data->render_resources->framebuffer->GetView()
+        ),
+        true
+    );
 }

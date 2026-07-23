@@ -81,6 +81,41 @@ void MarkerScopesAreBalancedColoredAndImmobile() {
     Expect(ScopeAt(next_submit, 0).QueryTimestamp(), "second submission lost timestamp profiling");
 }
 
+void ProfilingPhasesPreserveOneLogicalFrame() {
+    CommandList complete_list;
+    CmdSubmit complete = complete_list.Submit().TickProfiling();
+    Expect(complete.EmitsProfilingQueries(), "complete profiling phase must emit queries");
+    Expect(
+        complete.BeginsProfilingFrame() && complete.EndsProfilingFrame(),
+        "TickProfiling must remain a complete single-submit frame"
+    );
+
+    CommandList begin_list;
+    CmdSubmit begin = begin_list.Submit().SetProfilingPhase(ERHIProfilingPhase::Begin);
+    Expect(
+        begin.EmitsProfilingQueries() && begin.BeginsProfilingFrame() &&
+            !begin.EndsProfilingFrame(),
+        "split profiling begin phase has incorrect boundaries"
+    );
+
+    CommandList continue_list;
+    CmdSubmit continuation =
+        continue_list.Submit().SetProfilingPhase(ERHIProfilingPhase::Continue);
+    Expect(
+        continuation.EmitsProfilingQueries() && !continuation.BeginsProfilingFrame() &&
+            !continuation.EndsProfilingFrame(),
+        "split profiling continuation must only emit pass queries"
+    );
+
+    CommandList end_list;
+    CmdSubmit end = end_list.Submit().SetProfilingPhase(ERHIProfilingPhase::End);
+    Expect(
+        end.EmitsProfilingQueries() && !end.BeginsProfilingFrame() &&
+            end.EndsProfilingFrame(),
+        "split profiling end phase has incorrect boundaries"
+    );
+}
+
 void PointAndCsmMarkerNamesAreCompleteAndDisjoint() {
     std::set<std::string_view> point_faces;
     std::set<std::string_view> point_culling;
@@ -123,6 +158,7 @@ void PointAndCsmMarkerNamesAreCompleteAndDisjoint() {
 int main() {
     try {
         MarkerScopesAreBalancedColoredAndImmobile();
+        ProfilingPhasesPreserveOneLogicalFrame();
         PointAndCsmMarkerNamesAreCompleteAndDisjoint();
         std::cout << "RHI command marker tests passed\n";
         return 0;

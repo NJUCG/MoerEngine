@@ -67,6 +67,7 @@ private:
     bool BuildExecutionOrder();
     void BuildQueuePlan();
     void BuildDependencyWaves();
+    void BuildRecordingBatches();
     void BuildLifetimes();
 
     bool NormalizeRange(

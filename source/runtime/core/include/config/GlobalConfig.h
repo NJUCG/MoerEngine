@@ -32,11 +32,16 @@ struct CORE_API GlobalConfig {
 
     struct Engine {
         struct Threading {
-            bool render_thread   = false;
-            bool rhi_thread      = false;
-            bool rhi_bypass      = true;
-            bool profile_logging = false;
-            uint max_frame_lag   = 0;
+            bool render_thread           = false;
+            bool rhi_thread              = false;
+            bool rhi_bypass              = true;
+            bool profile_logging         = false;
+            bool parallel_recording      = false;
+            uint parallel_record_workers = 0;
+            bool parallel_record_verify  = false;
+            bool parallel_record_profile = false;
+            uint parallel_record_min_work_units_per_job = 64;
+            uint max_frame_lag           = 0;
         } threading;
 
         struct RHI {
@@ -53,6 +58,7 @@ struct CORE_API GlobalConfig {
                 bool low_quality_mode;
                 bool render_graph;
                 bool render_graph_debug_dump;
+                bool render_graph_parallel_recording;
             } raster;
 
         } render;

@@ -10,6 +10,7 @@
 #include "misc/Traits.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "rhi/RHISubmissionTopology.h"
 #include "shader/ShaderPipeline.h"
 #include <array>
 #include <chrono>
@@ -251,17 +252,36 @@ struct DispatchMeshData {
         return DispatchMeshData{IndirectDrawParam{_buffer, _count_buffer, _max_cnt, _stride}};
     }
 };
+
+// A normal TickProfiling submit owns a complete profiler frame.  Upper-level
+// submission runtimes may instead split that frame across several immutable
+// command sources while preserving one query-pool/reset/advance transaction.
+enum class ERHIProfilingPhase : uint8 {
+    Disabled,
+    Complete,
+    Begin,
+    Continue,
+    End,
+};
+
 struct CmdSubmit {
     Array<UniquePtr<Command>>        cmds;
     Array<std::function<void(void)>> callbacks;
     Array<std::function<void(void)>> success_callbacks;
     TCachedArgArray                  cached_args;
+    Array<RHISubmitSegment>          segments;
 
     Array<WaitEvent>   wait_events;
     Array<SignalEvent> signal_events;
     bool               b_sync{false}; //force sync queue timeline
+    // Kept as a compatibility bit for code which treats profiling as a submit
+    // capability.  profiling_phase is authoritative for split frames.
     bool               b_tick_profiling{false};
+    ERHIProfilingPhase profiling_phase{ERHIProfilingPhase::Disabled};
     bool               b_delete_resources{false};
+    ERHITranslateExecutionClass translate_execution_class{
+        ERHITranslateExecutionClass::Parallel
+    };
     std::string        debug_label;
     float4             debug_label_color = GpuMarkerPalette::Frame();
 
@@ -280,6 +300,11 @@ struct CmdSubmit {
         return std::move(*this);
     }
 
+    CmdSubmit&& SetTranslateExecutionClass(ERHITranslateExecutionClass _execution_class) {
+        translate_execution_class = _execution_class;
+        return std::move(*this);
+    }
+
     CmdSubmit&& DeleteResources() {
         b_delete_resources = true;
         return std::move(*this);
@@ -287,7 +312,37 @@ struct CmdSubmit {
 
     CmdSubmit&& TickProfiling() {
         b_tick_profiling = true;
+        profiling_phase  = ERHIProfilingPhase::Complete;
         return std::move(*this);
+    }
+
+    CmdSubmit&& SetProfilingPhase(ERHIProfilingPhase _phase) {
+        profiling_phase  = _phase;
+        b_tick_profiling = _phase != ERHIProfilingPhase::Disabled;
+        return std::move(*this);
+    }
+
+    ERHIProfilingPhase ProfilingPhase() const noexcept {
+        // Preserve Complete semantics for any legacy producer which still
+        // writes the compatibility bit directly.
+        return profiling_phase != ERHIProfilingPhase::Disabled ?
+                   profiling_phase :
+               b_tick_profiling ? ERHIProfilingPhase::Complete :
+                                  ERHIProfilingPhase::Disabled;
+    }
+
+    bool EmitsProfilingQueries() const noexcept {
+        return ProfilingPhase() != ERHIProfilingPhase::Disabled;
+    }
+
+    bool BeginsProfilingFrame() const noexcept {
+        const ERHIProfilingPhase phase = ProfilingPhase();
+        return phase == ERHIProfilingPhase::Complete || phase == ERHIProfilingPhase::Begin;
+    }
+
+    bool EndsProfilingFrame() const noexcept {
+        const ERHIProfilingPhase phase = ProfilingPhase();
+        return phase == ERHIProfilingPhase::Complete || phase == ERHIProfilingPhase::End;
     }
 
     CmdSubmit&& DebugLabel(
@@ -306,9 +361,12 @@ struct CmdSubmit {
         wait_events        = std::move(_other.wait_events);
         signal_events      = std::move(_other.signal_events);
         cached_args        = std::move(_other.cached_args);
+        segments           = std::move(_other.segments);
         b_sync             = _other.b_sync;
         b_tick_profiling   = _other.b_tick_profiling;
+        profiling_phase    = _other.profiling_phase;
         b_delete_resources = _other.b_delete_resources;
+        translate_execution_class = _other.translate_execution_class;
         debug_label        = std::move(_other.debug_label);
         debug_label_color  = _other.debug_label_color;
     }
@@ -320,9 +378,12 @@ struct CmdSubmit {
         wait_events        = std::move(_other.wait_events);
         signal_events      = std::move(_other.signal_events);
         cached_args        = std::move(_other.cached_args);
+        segments           = std::move(_other.segments);
         b_sync             = _other.b_sync;
         b_tick_profiling   = _other.b_tick_profiling;
+        profiling_phase    = _other.profiling_phase;
         b_delete_resources = _other.b_delete_resources;
+        translate_execution_class = _other.translate_execution_class;
         debug_label        = std::move(_other.debug_label);
         debug_label_color  = _other.debug_label_color;
         return *this;
@@ -1008,6 +1069,7 @@ public:
 
 public:
     RENDER_API CommandList();
+    RENDER_API explicit CommandList(EQueueType _queue_type);
     class Impl;
 
     template<is_shader_pipeline TGfxPso, typename... TArgs>
@@ -1269,9 +1331,27 @@ public:
 
     RENDER_API ArrayArgReference RegisterArgs(ArrayArguments&& _args);
 
+    // Terminal rejection-only ownership path. The producer must have stopped
+    // mutating this CommandList before it is called. It destructively drops all
+    // partial GPU commands, cached arguments, success callbacks and unclosed
+    // scopes, returning only ordinary callbacks that must run for CPU/resource
+    // cleanup. Unlike Submit(), this never creates a GPU-submittable payload.
+    RENDER_API Array<std::function<void()>> DrainOrdinaryCallbacksForRejection();
+
     RENDER_API CmdSubmit Submit();
 
     RENDER_API bool IsEmpty() const;
+
+    EQueueType GetQueueType() const noexcept {
+        return queue_type;
+    }
+
+    CommandList& SetTranslateExecutionClass(
+        ERHITranslateExecutionClass _execution_class
+    ) noexcept {
+        translate_execution_class = _execution_class;
+        return *this;
+    }
 
 private:
     friend DrawDispatcher;
@@ -1346,6 +1426,10 @@ private:
     Array<std::function<void()>> callbacks;
     Array<std::function<void()>> success_callbacks;
     TCachedArgArray              cached_args;
+    EQueueType                   queue_type{EQueueType::Graphics};
+    ERHITranslateExecutionClass  translate_execution_class{
+        ERHITranslateExecutionClass::Parallel
+    };
     struct ScopeState {
         std::string name;
         float4      color;

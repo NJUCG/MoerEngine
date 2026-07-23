@@ -11,6 +11,10 @@ TaskGraph& TaskGraph::GetInterface() {
     return *instance;
 }
 
+bool TaskGraph::IsInitialized() noexcept {
+    return instance != nullptr;
+}
+
 void TaskGraph::Init() {
     if (instance == nullptr) {
         instance = MoerNew(TaskGraph)();

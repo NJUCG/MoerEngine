@@ -721,6 +721,10 @@ struct UpdateBindlessArrayCmd : public Command {
 private:
     UpdateBindlessArrayCmd() : Command(EType::UpdateBindlessArray) {}
     mutable BindlessArrayRef        array;
+    mutable std::atomic_bool         updates_handed_off{false};
+    std::shared_ptr<std::atomic_bool> updates_finalized{
+        std::make_shared<std::atomic_bool>(false)
+    };
     Array<BindlessArray::UpdateCmd> update_cmds;
     Array<byte>                     array_data;
     Array<std::pair<uint, uint>>    array_indices_dat;
@@ -730,6 +734,18 @@ private:
     Array<std::pair<uint, uint>>    texture_indices_dat;
 
 public:
+    ~UpdateBindlessArrayCmd() override {
+        if (array && !updates_handed_off.load(std::memory_order_acquire)) {
+            try {
+                array->DiscardUpdateCommand(update_cmds);
+            } catch (...) {
+                // Destructors must not turn a dropped command list into a
+                // process termination. Backends keep membership ownership
+                // alive independently, so a failed rollback remains safe.
+            }
+        }
+    }
+
     UpdateBindlessArrayCmd(
         BindlessArrayRef                  _array,
         Array<BindlessArray::UpdateCmd>&& _update_cmds,
@@ -761,6 +777,18 @@ public:
     }
     const auto& UpdateCommands() const {
         return update_cmds;
+    }
+    bool HandOffUpdates() const {
+        bool expected = false;
+        return updates_handed_off.compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel, std::memory_order_acquire
+        );
+    }
+    bool UpdatesHandedOff() const {
+        return updates_handed_off.load(std::memory_order_acquire);
+    }
+    const auto& UpdateFinalizationToken() const {
+        return updates_finalized;
     }
     const auto& ArrayIndicesData() const {
         return array_indices_dat;

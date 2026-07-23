@@ -1,6 +1,7 @@
 #include "RaytracingRenderer.h"
 
 #include "RTResource.h"
+#include "rhi/RHIExecutor.h"
 #include "taskgraph/TaskGraph.h"
 
 #include <stb/stb_image_write.h>
@@ -27,6 +28,7 @@ void RaytracingRenderer::DumpTextureToFile(
     std::filesystem::path& exported_file_path,
     std::string_view       suffix
 ) {
+    (void)gfx_queue;
     CommandList command_list{};
 
     auto dequantize_half = [](short value, bool gamma_correct = true) {
@@ -81,8 +83,12 @@ void RaytracingRenderer::DumpTextureToFile(
         return;
     }
 
-    gfx_queue.Execute(command_list.Submit().TickProfiling());
-    gfx_queue.Sync();
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        command_list.Submit().TickProfiling(),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
     if (hdr) {
         assert(

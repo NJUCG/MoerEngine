@@ -110,8 +110,8 @@ public:
     };
 
     struct PendingCommandList {
-        CommandList copy_queue_cmd_list;
-        CommandList gfx_queue_cmd_list;
+        CommandList copy_queue_cmd_list{EQueueType::Copy};
+        CommandList gfx_queue_cmd_list{EQueueType::Graphics};
     };
 
     /**

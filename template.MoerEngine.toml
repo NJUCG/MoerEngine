@@ -20,6 +20,12 @@ rhi_thread = false
 rhi_bypass = true
 max_frame_lag = 0
 profile_logging = false
+parallel_recording = false
+parallel_record_workers = 0
+parallel_record_verify = false
+parallel_record_profile = false
+# Backend CPU-recording work units per job; this is not a draw-count threshold.
+parallel_record_min_work_units_per_job = 64
 
 [engine.rhi]
 type = "Vulkan"
@@ -37,6 +43,7 @@ default_render_method = "Raster"
 enable_shadow = true
 render_graph = false
 render_graph_debug_dump = false
+render_graph_parallel_recording = false
 
 # 推荐AMD GPU或低配显卡启用本设置
 # 该选项会启用光栅化低质量模式：

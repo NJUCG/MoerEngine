@@ -2,12 +2,15 @@
 #include "PixelFormat.h"
 #include "VulkanAllocator.h"
 #include "VulkanCommand.h"
+#include "VulkanDescriptor.h"
 #include "VulkanFault.h"
 // #include "VulkanDevice.h"
 #include "misc/LockFree.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIIO.h"
+#include "rhi/ExternalCpuJoinPool.h"
+#include "rhi/RHIParallelRecord.h"
 #include "rhi/RHIRecordDiagnostics.h"
 #include "vulkan/vulkan_core.h"
 #include <atomic>
@@ -15,10 +18,14 @@
 #include <condition_variable>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <string_view>
 #include <thread>
 #include <variant>
 namespace Moer::Render {
+class CmdReorderer;
+struct FunctionTable;
+
 static constexpr uint s_queue_max_frame_in_flight = 3;
 static constexpr uint s_query_max_storage         = 8 * 64;
 class VkNativeQueue {
@@ -30,6 +37,11 @@ public:
         VulkanCmdList&               _cmdlist,
         const VulkanOperationContext& _context,
         VkFence                       _fence = VK_NULL_HANDLE
+    );
+    VulkanOperationResult Submit(
+        std::span<VulkanCmdList* const> _cmdlists,
+        const VulkanOperationContext&   _context,
+        VkFence                         _fence = VK_NULL_HANDLE
     );
     VulkanOperationResult SubmitEmpty(
         const VulkanOperationContext& _context,
@@ -191,9 +203,31 @@ struct VulkanSubmissionEvent {
     bool                   gpu_submitted{false};
 };
 
+// Result returned to the upper submission runtime.  A queue timeline is only
+// publishable as a dependency when vkQueueSubmit/SubmitEmpty actually accepted
+// the work; retry/recreate/rejected paths deliberately carry no completion.
+struct VulkanRuntimeSubmissionResult {
+    VulkanOperationResult   outcome{};
+    std::optional<WaitEvent> completion{};
+
+    [[nodiscard]] bool WasSubmitted() const {
+        return completion.has_value();
+    }
+
+    [[nodiscard]] bool IsHardFailure() const {
+        return outcome.status == EVulkanOperationStatus::Faulted ||
+               outcome.status == EVulkanOperationStatus::Rejected;
+    }
+};
+
 struct VulkanCallbackBatch {
     Array<std::function<void()>> callbacks;
     bool                         success_only{false};
+};
+
+struct VulkanAllocatorBatch {
+    Array<UniquePtr<VulkanAllocator>> submitted;
+    Array<UniquePtr<VulkanAllocator>> abandoned;
 };
 
 struct VulkanDeferredReleaseBatch {
@@ -207,6 +241,8 @@ public:
     using EventType = std::variant<
         VulkanSubmissionEvent,
         UniquePtr<VulkanAllocator>,
+        VulkanAllocatorBatch,
+        VulkanDescriptorPushLease,
         UniquePtr<VulkanPresentor>,
         VulkanCallbackBatch,
         VulkanDeferredReleaseBatch,
@@ -291,7 +327,13 @@ public:
         VulkanDevice& _device,
         EQueueType    _type,
         bool          _enable_rhi_thread = false,
-        bool          _thread_profile_logging = false
+        bool          _thread_profile_logging = false,
+        bool          _parallel_recording = false,
+        uint32_t      _parallel_record_workers = 0,
+        bool          _parallel_record_verify = false,
+        bool          _parallel_record_profile = false,
+        uint32_t      _parallel_record_min_work_units_per_job = 64,
+        uint64_t      _parallel_record_worker_throw_trigger = 0
     );
     ~VkCommandQueue();
     WaitEvent   Execute(CmdSubmit&& _submit) override;
@@ -319,6 +361,8 @@ public:
 #endif
 
 private:
+    friend class VulkanSubmissionExecutor;
+
     enum class ERhiWorkKind : uint8 { Execute, Present };
 
     struct RhiWorkProfileTotals {
@@ -416,14 +460,122 @@ private:
         UnorderedSet<uint64>   observed_golden_manifests;
     };
 
-    void                       ExecuteNow(CmdSubmit&& _submit, uint64 _timeline, uint64 _serial);
-    void PresentNow(
+    struct ParallelRecordProfileSample {
+        bool   requested{false};
+        bool   planned{false};
+        bool   effective{false};
+        bool   worker_fallback{false};
+        double record_wall_ms{0.0};
+        double execute_cpu_wall_ms{0.0};
+        double reorder_ms{0.0};
+        double preprocess_ms{0.0};
+        double worker_join_ms{0.0};
+        double submit_cpu_ms{0.0};
+        uint32 layers{0};
+        uint32 jobs{0};
+        uint64 work_units{0};
+        uint32 ordered_cb{0};
+        uint32 max_active{0};
+    };
+
+    struct ParallelRecordProfileState {
+        ParallelRecordProfileState() : window_start(std::chrono::steady_clock::now()) {}
+
+        std::chrono::steady_clock::time_point window_start;
+        Array<double> record_samples_ms;
+        Array<double> execute_cpu_samples_ms;
+        uint64 samples{0};
+        uint64 requested{0};
+        uint64 planned{0};
+        uint64 effective{0};
+        uint64 worker_fallbacks{0};
+        double reorder_total_ms{0.0};
+        double preprocess_total_ms{0.0};
+        double worker_join_total_ms{0.0};
+        double submit_cpu_total_ms{0.0};
+        uint64 layer_total{0};
+        uint64 job_total{0};
+        uint64 work_unit_total{0};
+        uint64 ordered_cb_total{0};
+        uint32 max_active{0};
+    };
+
+    // Current-backend ownership packet at the translate/submit boundary. The
+    // command buffers remain valid because their allocator owners travel in
+    // the same move-only packet until the completion queue takes ownership.
+    struct CurrentVulkanRecordedSubmitProfile {
+        bool                                  enabled{false};
+        std::chrono::steady_clock::time_point execute_started{};
+        ParallelRecordProfileSample           sample{};
+    };
+
+    struct CurrentVulkanRecordedSubmit {
+        CurrentVulkanRecordedSubmit(
+            CmdSubmit&&                   _submit,
+            const VulkanOperationContext& _context,
+            uint64                        _timeline
+        ) :
+            submit(std::move(_submit)), context(_context), timeline(_timeline) {}
+
+        CurrentVulkanRecordedSubmit(const CurrentVulkanRecordedSubmit&) = delete;
+        CurrentVulkanRecordedSubmit& operator=(const CurrentVulkanRecordedSubmit&) = delete;
+        CurrentVulkanRecordedSubmit(CurrentVulkanRecordedSubmit&&) noexcept = default;
+        CurrentVulkanRecordedSubmit& operator=(CurrentVulkanRecordedSubmit&&) noexcept = default;
+
+        CmdSubmit                               submit;
+        VulkanOperationContext                  context;
+        uint64                                  timeline{0};
+        bool                                    has_commands{false};
+        Array<VulkanCmdList*>                   ordered_cmd_lists;
+        VulkanAllocatorBatch                    allocators;
+        std::optional<VulkanDescriptorPushLease> descriptor_lease;
+        Array<RHIResource*>                     deferred_releases;
+        CurrentVulkanRecordedSubmitProfile      profile;
+        std::optional<std::unique_lock<std::mutex>> runtime_execution_lock{};
+    };
+
+    struct CurrentVulkanSubmitResult {
+        VulkanOperationResult outcome{};
+        uint32                ordered_cmd_list_count{0};
+    };
+
+    void                       ExecuteNow(
+        CmdSubmit&& _submit,
+        uint64 _timeline,
+        uint64 _serial,
+        std::optional<CurrentVulkanRecordedSubmit>* _out_recorded = nullptr,
+        bool _runtime_owner = false
+    );
+    CurrentVulkanSubmitResult SubmitRecorded(CurrentVulkanRecordedSubmit _recorded);
+    std::optional<CurrentVulkanRecordedSubmit> TranslateForRuntime(CmdSubmit&& _submit);
+    VulkanRuntimeSubmissionResult SubmitRecordedForRuntime(
+        CurrentVulkanRecordedSubmit _recorded
+    );
+    void RejectForRuntime(CmdSubmit&& _submit, VkResult _result);
+    VulkanRuntimeSubmissionResult PresentForRuntime(
+        SwapchainRef _swapchain,
+        TextureView _source,
+        PresentReceiptRef _receipt
+    );
+    bool                       TryExecuteParallel(
+        CmdSubmit&                    _submit,
+        uint64                        _timeline,
+        uint64                        _serial,
+        const VulkanOperationContext& _context,
+        const FunctionTable&           _function_table,
+        const CmdReorderer&            _reorderer,
+        double                         _reorder_time,
+        std::chrono::steady_clock::time_point _profile_started,
+        std::optional<CurrentVulkanRecordedSubmit>* _out_recorded = nullptr
+    );
+    VulkanRuntimeSubmissionResult PresentNow(
         SwapchainRef&& _swapchain,
         TextureRef&&   _source_texture,
         TextureView    _source_view,
         PresentReceiptRef _receipt,
         uint64         _timeline,
-        uint64         _serial
+        uint64         _serial,
+        bool           _runtime_owner = false
     );
     void                       RhiThreadMain();
     void                       CompletionThreadMain();
@@ -441,10 +593,20 @@ private:
         double       _work_ms,
         uint32       _enqueue_depth
     );
+    void                       RecordParallelRecordProfile(
+        const ParallelRecordProfileSample& _sample
+    );
+    void                       FlushParallelRecordProfile();
+    void                       BeginSplitProfilingCpuFrame();
+    void                       AccumulateSplitProfilingCpuFrame(
+        double _reorder_ms,
+        double _preprocess_ms
+    );
+    void                       EndSplitProfilingCpuFrame();
+    void                       ResetSplitProfilingCpuFrame();
 
 private:
     std::atomic<uint64>                                last_frame{0};
-    uint64                                             descriptor_submission{0};
     CircularQueue<uint64, s_queue_max_frame_in_flight> executed_queue;
     std::atomic<uint64>                                cpu_settled_frame = 0;
     CircularQueue<uint64, s_queue_max_frame_in_flight> presented_queue;
@@ -458,7 +620,24 @@ private:
     ProfileData                                        cached_profiler_entry;
     std::mutex                                         profiler_mutex;
 
+    struct SplitProfilingCpuFrame {
+        bool                                  active{false};
+        std::chrono::steady_clock::time_point started{};
+        double                                reorder_ms{0.0};
+        double                                preprocess_ms{0.0};
+    } split_profiling_cpu_frame;
+
     bool                    rhi_thread_enabled{false};
+    bool                    parallel_record_requested{false};
+    bool                    parallel_record_verify{false};
+    bool                    parallel_record_profile_enabled{false};
+    uint32                  parallel_record_workers{0};
+    uint32                  parallel_record_min_work_units_per_job{64};
+    UniquePtr<ExternalCpuJoinPool> parallel_record_pool;
+    uint64                  parallel_record_batch_serial{0};
+    uint64                  parallel_record_worker_throw_trigger{0};
+    std::atomic<uint64>     parallel_record_worker_attempts{0};
+    UniquePtr<ParallelRecordProfileState> parallel_record_profile;
     UniquePtr<RhiThreadProfileState> thread_profile;
     bool                    rhi_worker_running{false};
     std::atomic<uint32_t>   rhi_thread_id{0};
@@ -478,6 +657,7 @@ private:
 class VkCopyQueue : public CopyQueue {
 public:
     friend VulkanDevice;
+    friend class VulkanSubmissionExecutor;
     VkCopyQueue(VulkanDevice& _device);
     ~VkCopyQueue();
     using EventType = std::variant<
@@ -507,6 +687,7 @@ public:
 
     IOWaitEvt Execute(IOQueueSubmission&& _submit) override;
     IOWaitEvt Execute(CmdSubmit&& _submit) override;
+    VulkanRuntimeSubmissionResult ExecuteForRuntime(CmdSubmit&& _submit);
     FenceRef  GetFenceHandle() override;
     void      Sync(uint64 _timeline) override;
 
@@ -556,6 +737,14 @@ private:
     void RHIThreadLoop();
 
 private:
+    void RejectForRuntime(CmdSubmit&& _submit, VkResult _result);
+
+    struct TrackedExecuteResult {
+        VulkanRuntimeSubmissionResult runtime{};
+        uint64                        logical_timeline{0};
+    };
+
+    TrackedExecuteResult ExecuteTracked(CmdSubmit&& _submit);
     UniquePtr<VulkanAllocator>                GetAllocator();
     void                                      Complete(uint64 _timeline);
     LockFreeQueueBase<VulkanAllocator, false> allocators;

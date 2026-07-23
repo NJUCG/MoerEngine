@@ -6,6 +6,7 @@
 #include "misc/Timer.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
+#include "rhi/RHIExecutor.h"
 #include "scene/Scene.h"
 
 #include <cassert>
@@ -240,12 +241,20 @@ void RasterTool::ExecuteScenePendingCommands(
     CommandQueue&                  gfx_queue
 ) {
     assert(!IsRenderThreadInitialized() || IsCurrentlyRenderThread());
+    (void)gfx_queue;
 
-    auto copy_evt = device.GetCopyQueue().Execute(commands.copy_queue_cmd_list.Submit());
-    device.GetCopyQueue().Sync(copy_evt.timeline);
-
-    gfx_queue.Execute(commands.gfx_queue_cmd_list.Submit().TickProfiling());
-    gfx_queue.Sync();
+    (void)device;
+    Array<RHIBackendSubmissionBatchEntry> submissions{};
+    submissions.emplace_back(EQueueType::Copy, commands.copy_queue_cmd_list.Submit());
+    submissions.emplace_back(
+        EQueueType::Graphics,
+        commands.gfx_queue_cmd_list.Submit().TickProfiling()
+    );
+    RHIExecutor::Get().Submit(
+        std::move(submissions),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 }
 
 } // namespace Moer::Render::Raster
