@@ -149,6 +149,8 @@ Commit信息，请遵循 [Conventional Commits](https://www.conventionalcommits.
 
 此外，**请务必检查头文件是否有额外要求！**例如，`volk` 要求include头文件前定义平台相关宏、`NRD` 要求特定的头文件include顺序。这种情况下，请 **务必创建一个单独的头文件来封装该依赖库的include逻辑**，否则会导致其他开发者错误的include行为。
 
+Vulkan 后端统一通过 `rhi/vulkan/VulkanCommon.h` 获取 Vulkan 声明。Render 模块内不要直接 include `<volk.h>`、`<vulkan/vulkan_core.h>` 或平台 Vulkan 头文件；公开或消费 Vulkan 类型的 CMake target 应链接 `Moer::VulkanHeaders`，由它传递 `VK_NO_PROTOTYPES`、平台宏、头文件路径和 Volk 依赖。`source/profile/VkLayer.cpp` 是独立 Vulkan Layer，不受 Render 模块规则约束。修改该契约后，应构建 `TestVulkanHeaderContract` 并运行名为 `VulkanHeaderContract` 的 CTest。
+
 ### C++规范
 
 MoerEngine开发早期使用 `.clang-tidy` 对命名风格进行规范，但强制性较弱，导致风格不统一，历史遗留问题大。

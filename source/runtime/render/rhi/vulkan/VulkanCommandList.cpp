@@ -18,7 +18,6 @@
 
 #include "VulkanAllocator.h"
 #include "shader/ShaderPipeline.h"
-#include "vulkan/vulkan_core.h"
 
 #include <cstdint>
 #include <optional>

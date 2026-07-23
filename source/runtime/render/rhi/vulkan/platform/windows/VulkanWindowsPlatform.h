@@ -5,26 +5,6 @@
 #ifndef VULKAN_WINDOWS_PLATFORM_H
 #define VULKAN_WINDOWS_PLATFORM_H
 
-#ifndef VK_USE_PLATFORM_WIN32_KHR
-#define VK_USE_PLATFORM_WIN32_KHR 1
-#endif
-#ifndef VK_USE_PLATFORM_WIN32_KHX
-#define VK_USE_PLATFORM_WIN32_KHX 1
-#endif
-#ifndef RHI_RAYTRACING
-#define RHI_RAYTRACING 1
-#endif
-
-#define VULKAN_RHI_RAYTRACING               (RHI_RAYTRACING)
-#define VULKAN_SUPPORTS_SCALAR_BLOCK_LAYOUT (VULKAN_RHI_RAYTRACING)
-
-#if VULKAN_RHI_RAYTRACING
-#define VK_API_VERSION VK_API_VERSION_1_3
-#else
-#define VK_API_VERSION VK_API_VERSION_1_1
-#endif // VULKAN_RHI_RAYTRACING
-
-// and now, include the GenericPlatform class
 #include "../../VulkanTypeDefs.h"
 #include "../VulkanGenericPlatform.h"
 
@@ -37,7 +17,7 @@ public:
     static void CreateSurface(void* _window_handle, VkInstance _instance, VkSurfaceKHR& _surface);
 };
 
-} // namespace Moer::Render
+using VulkanPlatform = VulkanWindowsPlatform;
 
-using VulkanPlatform = Moer::Render::VulkanWindowsPlatform;
+} // namespace Moer::Render
 #endif // VULKAN_WINDOWS_PLATFORM_H

@@ -20,7 +20,6 @@
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
-#include "vulkan/vulkan_core.h"
 #include "window/WindowContext.h"
 #include <atomic>
 #include <mutex>

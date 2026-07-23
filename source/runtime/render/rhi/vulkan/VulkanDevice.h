@@ -19,7 +19,6 @@
 #include "VulkanPlatform.h"
 #include "VulkanQueue.h"
 #include "VulkanTypeDefs.h"
-#include "vulkan/vulkan_core.h"
 #include "vulkanextension/VulkanExtension.h"
 
 // #include <vk_mem_alloc.h>

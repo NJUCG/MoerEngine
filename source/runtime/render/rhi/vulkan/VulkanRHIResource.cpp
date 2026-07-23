@@ -26,13 +26,11 @@
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
 #include "vulkan/vk_enum_string_helper.h"
-#include "vulkan/vulkan_core.h"
 
 #include <limits>
 
 #if WITH_CUDA
 #include "platform/windows/WindowsSecurityAttributes.h"
-#include <vulkan/vulkan_win32.h>
 #endif
 
 #include <memory>

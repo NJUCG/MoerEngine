@@ -7,7 +7,6 @@
 #include "VulkanTypeDefs.h"
 #include "rhi/RHIResource.h"
 // #include "spirv_reflect.h"
-#include "vulkan/vulkan_core.h"
 
 #define VK_DESCRIPTOR_TYPE_BEGIN_RANGE (VK_DESCRIPTOR_TYPE_SAMPLER)
 #define VK_DESCRIPTOR_TYPE_END_RANGE   (VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT)

@@ -22,7 +22,6 @@
 
 #include "VulkanCustomCommand.h"
 #include "shader/ShaderPipeline.h"
-#include "vulkan/vulkan_core.h"
 
 #include <algorithm>
 #include <cmath>

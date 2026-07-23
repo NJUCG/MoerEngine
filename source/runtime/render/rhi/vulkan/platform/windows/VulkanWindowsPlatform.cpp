@@ -4,12 +4,6 @@
 #include "VulkanWindowsPlatform.h"
 #include "../../VulkanMacroUtils.h"
 
-#include <vulkan/vulkan_core.h>
-
-#if defined(_WIN32) || defined(_WIN64)
-#include <vulkan/vulkan_win32.h>
-#endif
-
 namespace Moer::Render {
 void VulkanWindowsPlatform::GetInstanceLayers(TLayerArray& _layers) {
 #ifndef NDEBUG

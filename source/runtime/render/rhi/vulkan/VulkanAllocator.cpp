@@ -4,7 +4,6 @@
 #include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
 #include "VulkanResourceTracker.h"
-#include "vulkan/vulkan_core.h"
 namespace Moer::Render {
 
 // VulkanAllocatorBase

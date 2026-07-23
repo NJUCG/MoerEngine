@@ -18,7 +18,6 @@
 #include "VulkanFault.h"
 #include "VulkanSwapChain.h"
 #include "VulkanTypeDefs.h"
-#include "vulkan/vulkan_core.h"
 #include <atomic>
 #include <cstddef>
 #include <mutex>
