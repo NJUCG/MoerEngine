@@ -2,7 +2,6 @@
 #include "VulkanDebugCallback.h"
 
 #include "log/LogSystem.h"
-#include "vulkan/vulkan_core.h"
 #include <atomic>
 #include <chrono>
 #include <mutex>

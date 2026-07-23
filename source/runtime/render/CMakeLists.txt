@@ -27,6 +27,20 @@ add_library(${target_name} SHARED
 )
 add_library(Moer::Render ALIAS ${target_name})
 
+# Public dependency contract for every header under rhi/vulkan. Keeping Volk,
+# Vulkan platform declarations, and VMA includes on one interface target makes
+# the required macros available before any consumer can parse Vulkan headers.
+add_library(moer_vulkan_headers INTERFACE)
+add_library(Moer::VulkanHeaders ALIAS moer_vulkan_headers)
+target_include_directories(moer_vulkan_headers INTERFACE
+    $<BUILD_INTERFACE:${moer_runtime_render_dir}>
+    $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanMemoryAllocator>
+)
+target_link_libraries(moer_vulkan_headers INTERFACE
+    volk
+    Moer::Core
+)
+
 target_compile_definitions(${target_name} PRIVATE RENDER_MODULE_SHARED_LIB)
 
 if (MSVC)
@@ -44,15 +58,13 @@ target_include_directories(${target_name}
     PUBLIC $<BUILD_INTERFACE:${moer_runtime_resource_dir}>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/spdlog/include>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/glfw/include>
-    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/volk>
-    PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/VulkanMemoryAllocator>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/imgui>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/smaa>
     PUBLIC $<BUILD_INTERFACE:${moer_third_party_dir}/SPIRV-Cross>
 )
 target_link_libraries(${target_name}
     # PUBLIC ${vulkan_lib}
-    PUBLIC volk
+    PUBLIC Moer::VulkanHeaders
 	PUBLIC dxc
     PUBLIC glfw
     PUBLIC ImGui::imgui

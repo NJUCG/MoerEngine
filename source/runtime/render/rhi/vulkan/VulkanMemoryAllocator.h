@@ -1,5 +1,7 @@
 #pragma once
 
+#include "VulkanCommon.h"
+
 #if defined(_WIN32) || defined(_WIN64)
 #define VMA_EXTERNAL_MEMORY       1
 #define VMA_EXTERNAL_MEMORY_WIN32 1

@@ -5,9 +5,9 @@
 #ifndef VULKAN_TYPEDEFS_H
 #define VULKAN_TYPEDEFS_H
 
+#include "VulkanCommon.h"
 #include "misc/STL.h"
 
-#include <volk.h>
 namespace Moer::Render {
 class VulkanDeviceExtension;
 

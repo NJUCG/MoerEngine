@@ -10,7 +10,6 @@
 
 #include "misc/MacroUtils.h"
 #include "rhi/RHIResource.h"
-#include "vulkan/vulkan_core.h"
 
 #include <cassert>
 #include <stdexcept>

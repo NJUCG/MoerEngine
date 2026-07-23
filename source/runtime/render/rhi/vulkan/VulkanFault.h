@@ -1,7 +1,7 @@
 #pragma once
 
+#include "VulkanCommon.h"
 #include "rhi/RHICommon.h"
-#include "vulkan/vulkan_core.h"
 
 #include <cstdint>
 #include <string_view>

@@ -6,7 +6,6 @@
 #include "../../vulkan/VulkanDescriptor.h"
 #include "../../vulkan/VulkanDevice.h"
 #include "../../vulkan/VulkanRHIResource.h"
-#include "vulkan/vulkan_core.h"
 
 namespace Moer::Render::Ext {
 

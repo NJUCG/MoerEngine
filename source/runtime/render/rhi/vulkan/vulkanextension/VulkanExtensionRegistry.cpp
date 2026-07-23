@@ -2,10 +2,6 @@
 #include "VulkanExtensionFactories.h"
 #include "platform/Platform.h"
 
-#if PLATFORM_WINDOWS
-#include "../platform/windows/VulkanWindowsPlatform.h"
-#endif
-
 namespace Moer::Render {
 
 static constexpr VulkanExtensionDesc vulkan_extension_descs[] = {
@@ -87,7 +83,7 @@ static constexpr VulkanExtensionDesc vulkan_extension_descs[] = {
         .optional = true,
         .factory  = &CreateVulkanNVCooperativeVectorExtension,
     },
-#if VULKAN_RHI_RAYTRACING
+#if PLATFORM_WINDOWS
     {
         .kind     = EVulkanExtensionKind::Device,
         .name     = VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,

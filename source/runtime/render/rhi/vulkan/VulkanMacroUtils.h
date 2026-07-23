@@ -5,6 +5,7 @@
 #ifndef VULKAN_MACRO_UTILS_H
 #define VULKAN_MACRO_UTILS_H
 
+#include "VulkanCommon.h"
 #include "log/LogSystem.h"
 
 #define VK_CHECK_RESULT(f)                                                                           \
@@ -29,7 +30,6 @@
     }
 
 #if defined(_DEBUG) || defined(DEBUG)
-#define VK_NO_PROTOTYPES
 #include <vulkan/vk_enum_string_helper.h>
 #define VK_TYPE_TO_STRING(type, value)  string_##type(value)
 #define VK_FLAGS_TO_STRING(type, value) string_##type(value).c_str()

@@ -5,16 +5,12 @@
 #ifndef VULKAN_GENERIC_PLATFORM_H
 #define VULKAN_GENERIC_PLATFORM_H
 
+#include "../VulkanCommon.h"
 #include "misc/STL.h"
-
-#include <volk.h>
 
 namespace Moer::Render {
 
-class VulkanDevice;
 class VulkanDeviceFeatures;
-
-} // namespace Moer::Render
 
 class VulkanGenericPlatform {
 public:
@@ -23,7 +19,9 @@ public:
     // create the platform-specific surface object - required
     static VkSurfaceKHR CreateSurface();
     // Allow the platform code to restrict the device features
-    static void RestrictEnabledPhysicalDeviceFeatures(Moer::Render::VulkanDeviceFeatures* _gpu_features);
+    static void RestrictEnabledPhysicalDeviceFeatures(VulkanDeviceFeatures* _gpu_features);
 };
+
+} // namespace Moer::Render
 
 #endif // VULKAN_GENERIC_PLATFORM_H

@@ -103,6 +103,18 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME VulkanSubmissionRequestDispatchContract COMMAND $<TARGET_FILE:${test_target}>)
 
+# Compile-time contract for the engine's Volk integration. The source
+# intentionally includes vulkan_core.h before engine Vulkan headers to ensure
+# VK_NO_PROTOTYPES propagates through the same lightweight header interface
+# used by Moer::Render.
+set(test_target TestVulkanHeaderContract)
+add_executable(${test_target} "VulkanHeaderContractTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::VulkanHeaders
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanHeaderContract COMMAND $<TARGET_FILE:${test_target}>)
+
 # Vulkan integration seam for ordered multi-primary submission and the
 # recoverable worker-failure path. It is intentionally run explicitly because
 # it requires a Vulkan-capable machine; the CPU-only contracts above remain in

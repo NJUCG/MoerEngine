@@ -19,8 +19,11 @@
                 "_DEBUG",
                 "UNICODE",
                 "_UNICODE",
-                "WITH_CUDA=1" // See: source/cuda/CMakeLists.txt
+                "VK_NO_PROTOTYPES",
+                "VK_USE_PLATFORM_WIN32_KHR",
+                "WITH_CUDA=0"
             ],
+            "compileCommands": "${workspaceFolder}/build/compile_commands.json",
             "windowsSdkVersion": "10.0.22621.0",
             "cStandard": "c17",
             "intelliSenseMode": "windows-msvc-x64",

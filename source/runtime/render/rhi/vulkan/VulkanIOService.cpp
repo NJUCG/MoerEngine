@@ -7,7 +7,6 @@
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIIO.h"
-#include "vulkan/vulkan_core.h"
 #include <atomic>
 #include <memory>
 #include <mutex>

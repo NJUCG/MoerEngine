@@ -28,14 +28,9 @@
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/ThreadManager.h"
 #include "vulkan/vk_enum_string_helper.h"
-#include "vulkan/vulkan_core.h"
 
 // #include <vk_mem_alloc.h>
 #include "VulkanMemoryAllocator.h"
-
-#if PLATFORM_WINDOWS
-#include <vulkan/vulkan_win32.h>
-#endif
 
 #include "VulkanIOService.h"
 #include <algorithm>

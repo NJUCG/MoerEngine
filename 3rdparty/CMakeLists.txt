@@ -74,10 +74,11 @@ set_target_folder(mimalloc-static ${third_party_folder}/mimalloc)
 # message(STATUS "Found mimalloc installed at: ${MIMALLOC_LIBRARY_DIR} (${MIMALLOC_VERSION_DIR})")
 
 # volk
+set(VOLK_STATIC_DEFINES VK_NO_PROTOTYPES)
 if (WIN32)
-    set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_WIN32_KHR)
+    list(APPEND VOLK_STATIC_DEFINES VK_USE_PLATFORM_WIN32_KHR)
 elseif(LINUX)
-    set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_XLIB_KHR)
+    list(APPEND VOLK_STATIC_DEFINES VK_USE_PLATFORM_XLIB_KHR)
 endif()
 set(VULKAN_HEADERS_INSTALL_DIR ${moer_third_party_dir}/VulkanSDK)
 add_subdirectory(volk)

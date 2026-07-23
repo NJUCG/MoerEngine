@@ -7,7 +7,6 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include "vulkan/vulkan_core.h"
 namespace Moer::Render {
 class VulkanSerialGoldenTrace;
 struct SerialQueueFamilyMap;

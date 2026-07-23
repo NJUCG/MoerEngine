@@ -1,5 +1,6 @@
 #pragma once
 #include "PixelFormat.h"
+#include "VulkanCommon.h"
 #include "VulkanAllocator.h"
 #include "VulkanCommand.h"
 #include "VulkanDescriptor.h"
@@ -12,7 +13,6 @@
 #include "rhi/ExternalCpuJoinPool.h"
 #include "rhi/RHIParallelRecord.h"
 #include "rhi/RHIRecordDiagnostics.h"
-#include "vulkan/vulkan_core.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>

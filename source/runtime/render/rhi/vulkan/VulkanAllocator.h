@@ -1,11 +1,11 @@
 #pragma once
+#include "VulkanCommon.h"
 #include "RHICmdReorderer.h"
 #include "VulkanCommand.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
 #include "VulkanResourceTracker.h"
 #include "rhi/RHICommon.h"
-#include "vulkan/vulkan_core.h"
 
 namespace Moer::Render {
 

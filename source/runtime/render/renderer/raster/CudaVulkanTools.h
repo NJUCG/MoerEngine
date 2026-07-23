@@ -23,10 +23,6 @@
 #include "RasterResource.h"
 
 #include <windows.h>
-// 1
-#include <vulkan/vulkan_core.h>
-// 2
-#include <vulkan/vulkan_win32.h>
 
 namespace Moer::Render::Raster {
 

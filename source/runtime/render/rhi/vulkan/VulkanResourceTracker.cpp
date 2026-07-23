@@ -9,7 +9,6 @@
 #include "log/LogSystem.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
-#include "vulkan/vulkan_core.h"
 
 #include <type_traits>
 
