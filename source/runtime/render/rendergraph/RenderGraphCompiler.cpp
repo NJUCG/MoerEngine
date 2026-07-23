@@ -1430,13 +1430,28 @@ void RenderGraphCompiler::BuildQueuePlan() {
     std::vector<uint32_t> pass_to_batch(
         graph.passes.size(), RenderGraph::PassHandle::InvalidIndex
     );
+    bool force_new_managed_batch = false;
     for (const auto pass_handle : graph.compiled_plan.execution_order) {
         const auto& pass    = graph.passes[pass_handle.index];
         if (pass.execution_class == RenderGraph::PassExecutionClass::CpuPrepare) {
             continue;
         }
         const auto  binding = graph.queue_topology.Resolve(pass.domain.queue);
-        if (graph.compiled_plan.queue_batches.empty() ||
+        if (pass.execution_class == RenderGraph::PassExecutionClass::ExternalControl) {
+            const uint32_t batch_id =
+                static_cast<uint32_t>(graph.compiled_plan.queue_batches.size());
+            graph.compiled_plan.queue_batches.push_back(RenderGraph::CompiledQueueBatch{
+                .id               = batch_id,
+                .queue            = binding,
+                .passes           = {pass_handle},
+                .external_control = true,
+            });
+            pass_to_batch[pass_handle.index] = batch_id;
+            force_new_managed_batch          = true;
+            continue;
+        }
+        if (graph.compiled_plan.queue_batches.empty() || force_new_managed_batch ||
+            graph.compiled_plan.queue_batches.back().external_control ||
             graph.compiled_plan.queue_batches.back().queue.role != binding.role) {
             const uint32_t batch_id =
                 static_cast<uint32_t>(graph.compiled_plan.queue_batches.size());
@@ -1445,6 +1460,7 @@ void RenderGraphCompiler::BuildQueuePlan() {
                 .queue = binding,
             });
         }
+        force_new_managed_batch = false;
         auto& batch = graph.compiled_plan.queue_batches.back();
         batch.passes.push_back(pass_handle);
         pass_to_batch[pass_handle.index] = batch.id;

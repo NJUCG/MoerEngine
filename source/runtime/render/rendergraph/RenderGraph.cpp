@@ -1,5 +1,6 @@
 #include "rendergraph/RenderGraph.h"
 
+#include "log/LogSystem.h"
 #include "rendergraph/RenderGraphCompiler.h"
 #include "rhi/RHIExecutor.h"
 #include "taskgraph/TaskGraph.h"
@@ -10,6 +11,7 @@
 #include <exception>
 #include <mutex>
 #include <sstream>
+#include <unordered_set>
 #include <utility>
 
 namespace Moer::Render {
@@ -1206,6 +1208,9 @@ bool RenderGraph::ExecuteRecording(
         }
 
         const bool task_graph_available = TaskGraph::IsInitialized();
+        const bool task_graph_dispatch =
+            first_batch.execution == PassExecutionClass::ParallelRecordEligible &&
+            parallel_recording_enabled && task_graph_available;
         if (first_batch.execution == PassExecutionClass::SerialRecord ||
             !parallel_recording_enabled || !task_graph_available) {
             for (auto& job : jobs) {
@@ -1258,6 +1263,35 @@ bool RenderGraph::ExecuteRecording(
             std::lock_guard lock(error->mutex);
             compile_error = error->message.empty() ? "recording batch failed" : error->message;
             return false;
+        }
+        if (task_graph_dispatch && group_end - batch_index > 1) {
+            std::ostringstream pass_list;
+            for (size_t index = batch_index; index < group_end; ++index) {
+                if (index != batch_index) {
+                    pass_list << ',';
+                }
+                const auto pass_handle = compiled_plan.recording_batches[index].passes.front();
+                pass_list << passes[pass_handle.index].name;
+            }
+
+            const std::string pass_names = pass_list.str();
+            const std::string dispatch_key = name + '\n' + pass_names;
+            static std::mutex                      logged_dispatch_mutex;
+            static std::unordered_set<std::string> logged_dispatches;
+            bool                                   first_dispatch = false;
+            {
+                std::lock_guard lock(logged_dispatch_mutex);
+                first_dispatch = logged_dispatches.emplace(dispatch_key).second;
+            }
+            if (first_dispatch) {
+                LOG_INFO(
+                    "[RenderGraph][ParallelRecordDispatch] graph={} passes=[{}] "
+                    "dispatch=task-graph worker_jobs={} completed=true",
+                    name,
+                    pass_names,
+                    group_end - batch_index
+                );
+            }
         }
         pending_gate_guard.Disarm();
         batch_index = group_end;
@@ -1505,7 +1539,9 @@ std::string RenderGraph::Dump() const {
     stream << "queue_batches:\n";
     for (const auto& batch : compiled_plan.queue_batches) {
         stream << "  [" << batch.id << "] " << ToString(batch.queue.role) << " native="
-               << batch.queue.native_queue_id << " family=" << batch.queue.family_id << " passes=[";
+               << batch.queue.native_queue_id << " family=" << batch.queue.family_id
+               << " external_control=" << (batch.external_control ? "true" : "false")
+               << " passes=[";
         for (uint32_t pass_index = 0; pass_index < batch.passes.size(); ++pass_index) {
             if (pass_index != 0) {
                 stream << ',';

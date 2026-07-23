@@ -306,6 +306,23 @@ FEATURE_VALIDATION_SCENARIOS = (
     ),
 )
 
+UPPER_PARALLEL_RECORD_GATES = (
+    r"cpu=parallel-record workload=1 wave=[0-9]+ passes=\[HiZBuild\]",
+    r"cpu=parallel-record workload=1 wave=[0-9]+ passes=\[DirectionalShadowMask\]",
+    r"cpu=parallel-record workload=1 wave=[0-9]+ passes=\[Lighting\]",
+    r"cpu=parallel-record workload=1 wave=[0-9]+ passes=\[Skybox\]",
+    (
+        r"\[RenderGraph\]\[ParallelRecordDispatch\] graph=RasterFrame "
+        r"passes=\[HiZBuild,DirectionalShadowMask\] dispatch=task-graph "
+        r"worker_jobs=2 completed=true"
+    ),
+    (
+        r"\[RenderGraph\]\[ParallelRecordDispatch\] graph=RasterFrame "
+        r"passes=\[Lighting,Skybox\] dispatch=task-graph "
+        r"worker_jobs=2 completed=true"
+    ),
+)
+
 SCENARIOS = {
     scenario.name: scenario
     for scenario in (
@@ -547,6 +564,9 @@ def build_verifier_command(
         command.append("--expect-exit-after-ready")
     for pattern in required_patterns(scenario):
         command.extend(["--require-log-pattern", pattern])
+    if scenario.render_graph_parallel_recording:
+        for pattern in UPPER_PARALLEL_RECORD_GATES:
+            command.extend(["--require-log-min-count", pattern, "1"])
     if scenario.renderer == "Raster":
         raster_mode_marker = (
             "[RenderGraph] Raster execution mode: "

@@ -70,7 +70,11 @@ covering snapshot ownership across renderer teardown. All four leave the lower
 `engine.threading.parallel_recording` switch off and use the Raster-only exit
 or renderer-switch completion marker, so they validate RDG recording ownership,
 join behavior, and normal shutdown without coupling the result to the separate
-lower parallel translator.
+lower parallel translator. Parallel variants also require the graph dump to
+classify `HiZBuild`, `DirectionalShadowMask`, `Lighting`, and `Skybox` as
+`parallel-record`, and require completed TaskGraph dispatch markers for both
+two-pass production groups. A silent no-TaskGraph serial fallback therefore
+fails the feature gate.
 
 Run the full functional matrix:
 

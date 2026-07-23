@@ -92,6 +92,17 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME VulkanParallelRecordWorkEstimatorContract COMMAND $<TARGET_FILE:${test_target}>)
 
+# CPU-only fault-injection contract for the Vulkan submission worker's
+# per-request exception barrier. It verifies Submit rejection ownership and
+# unconditional Sync/Stop completion without requiring a Vulkan device.
+set(test_target TestVulkanSubmissionRequestDispatch)
+add_executable(${test_target} "VulkanSubmissionRequestDispatchTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanSubmissionRequestDispatchContract COMMAND $<TARGET_FILE:${test_target}>)
+
 # Vulkan integration seam for ordered multi-primary submission and the
 # recoverable worker-failure path. It is intentionally run explicitly because
 # it requires a Vulkan-capable machine; the CPU-only contracts above remain in

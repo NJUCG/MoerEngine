@@ -3606,7 +3606,7 @@ void TestExternalControlIsAnUnmanagedJoinBoundary(TestSuite& suite) {
         },
         [&] { events.emplace_back("external"); }
     );
-    graph.AddPass(
+    const auto managed = graph.AddPass(
         "ManagedMain",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Read(released).DependsOn(external).SideEffect();
@@ -3623,6 +3623,18 @@ void TestExternalControlIsAnUnmanagedJoinBoundary(TestSuite& suite) {
             Contains(graph.Dump(), "cpu=external-control"),
         test_name,
         "the compiler and dump must retain the explicit external-control policy"
+    );
+    suite.Check(
+        plan.queue_batches.size() == 3 &&
+            plan.queue_batches[0].passes == std::vector{plan.recording_batches[0].passes.front()} &&
+            !plan.queue_batches[0].external_control &&
+            plan.queue_batches[1].passes == std::vector{external} &&
+            plan.queue_batches[1].external_control &&
+            plan.queue_batches[2].passes == std::vector{managed} &&
+            !plan.queue_batches[2].external_control &&
+            Contains(graph.Dump(), "external_control=true passes=[External]"),
+        test_name,
+        "external control must be a standalone queue batch that managed lowering cannot cross"
     );
 
     size_t published_groups = 0;

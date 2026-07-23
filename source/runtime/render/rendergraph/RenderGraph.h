@@ -512,6 +512,12 @@ public:
         QueueBinding            queue{};
         std::vector<PassHandle> passes{};
         /**
+         * An externally managed submit/synchronization scope. It is always a
+         * standalone batch so managed lowering cannot place commands or
+         * barriers across the external-control boundary.
+         */
+        bool                    external_control = false;
+        /**
          * Correlated split acquire/release placement hints. An index in pre/post never means that the
          * full CompiledBarrier should be emitted again; pass_barriers and prologue/epilogue remain the
          * canonical boundaries. Export transitions are deliberately epilogue-only.

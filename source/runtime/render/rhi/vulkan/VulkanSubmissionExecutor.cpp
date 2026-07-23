@@ -216,35 +216,6 @@ void ResolveRejectedPresent(std::optional<RHIPresentRequest>& _present) {
     }
 }
 
-// The current producer emits one whole-submit segment. Multi-segment expansion
-// needs the resource-state dependency graph to synthesize cross-queue GPU waits;
-// accepting it before that layer exists would silently weaken ordering.
-Array<RHIBackendSubmissionBatchEntry> TakeSingleSegmentEntries(
-    RHIBackendSubmissionBatch&& _batch
-) {
-    Array<RHIBackendSubmissionBatchEntry> expanded{};
-    expanded.reserve(_batch.submits.size());
-
-    for (size_t source_index = 0; source_index < _batch.submits.size(); ++source_index) {
-        RHIBackendSubmissionBatchEntry& source = _batch.submits[source_index];
-        const RHISourceSubmitPlan& source_plan = _batch.topology.source_plans[source_index];
-        if (source_plan.segment_plan_count == 0) {
-            continue;
-        }
-
-        assert(source_plan.segment_plan_count == 1);
-        const RHISubmissionSegmentPlan& segment_plan =
-            _batch.topology.segments[source_plan.segment_plan_begin];
-        source.submit.segments = {RHISubmitSegment{
-            .queue = segment_plan.segment.queue,
-            .begin = 0,
-            .end   = source.submit.cmds.size(),
-        }};
-        expanded.emplace_back(segment_plan.segment.queue, std::move(source.submit));
-    }
-    return expanded;
-}
-
 } // namespace
 
 VulkanSubmissionExecutor::VulkanSubmissionExecutor() :
@@ -368,36 +339,119 @@ void VulkanSubmissionExecutor::Run() {
             requests.pop_front();
         }
 
-        if (request.kind == ERequestKind::Submit) {
-            ProcessBatch(std::move(request.batch));
-            continue;
-        }
-        ProcessSync(request.sync_depth);
-        CompleteRequest(request.completion);
-        if (request.kind == ERequestKind::Stop) {
+        BatchExceptionState exception_state{};
+        const VulkanSubmissionDetail::WorkerRequestDispatchResult dispatch_result =
+            VulkanSubmissionDetail::DispatchWorkerRequestNoexcept(
+                request.kind,
+                [&] {
+                    if (request.kind == ERequestKind::Submit) {
+                        ProcessBatch(request.batch, exception_state);
+                    } else {
+                        ProcessSync(request.sync_depth);
+                    }
+                },
+                [&] {
+                    hard_failed         = true;
+                    hard_failure_result = static_cast<int32>(VK_ERROR_UNKNOWN);
+                    RejectBatch(
+                        std::move(request.batch),
+                        hard_failure_result,
+                        "unhandled submission request exception",
+                        exception_state.first_unconsumed_source,
+                        &exception_state.first_unconsumed_source
+                    );
+                },
+                [&] { CompleteRequest(request.completion); },
+                [&](VulkanSubmissionDetail::EWorkerRequestFailurePhase _phase,
+                    const std::exception_ptr& _exception) {
+                    hard_failed         = true;
+                    hard_failure_result = static_cast<int32>(VK_ERROR_UNKNOWN);
+                    ReportRequestFailure(request.kind, _phase, _exception);
+                }
+            );
+        if (dispatch_result.stop) {
             break;
         }
+    }
+}
+
+void VulkanSubmissionExecutor::ReportRequestFailure(
+    ERequestKind                                        _kind,
+    VulkanSubmissionDetail::EWorkerRequestFailurePhase _phase,
+    const std::exception_ptr&                           _exception
+) noexcept {
+    const char* kind_name = "Submit";
+    switch (_kind) {
+        case ERequestKind::Submit:
+            break;
+        case ERequestKind::Sync:
+            kind_name = "Sync";
+            break;
+        case ERequestKind::Stop:
+            kind_name = "Stop";
+            break;
+    }
+
+    const char* phase_name = "process";
+    switch (_phase) {
+        case VulkanSubmissionDetail::EWorkerRequestFailurePhase::Process:
+            break;
+        case VulkanSubmissionDetail::EWorkerRequestFailurePhase::Reject:
+            phase_name = "reject";
+            break;
+        case VulkanSubmissionDetail::EWorkerRequestFailurePhase::Complete:
+            phase_name = "complete";
+            break;
+    }
+
+    try {
+        if (_exception) {
+            std::rethrow_exception(_exception);
+        }
+    } catch (const std::exception& error) {
+        try {
+            LOG_ERROR(
+                "[RHIExecutor][Vulkan] request={} phase={} threw: {}",
+                kind_name,
+                phase_name,
+                error.what()
+            );
+        } catch (...) {
+        }
+        return;
+    } catch (...) {
+    }
+
+    try {
+        LOG_ERROR(
+            "[RHIExecutor][Vulkan] request={} phase={} threw an unknown exception",
+            kind_name,
+            phase_name
+        );
+    } catch (...) {
     }
 }
 
 void VulkanSubmissionExecutor::RejectBatch(
     RHIBackendSubmissionBatch&& _batch,
     int32                       _result,
-    std::string_view            _reason
+    std::string_view            _reason,
+    size_t                      _first_source,
+    size_t*                     _next_unconsumed_source
 ) {
-    LOG_ERROR(
-        "[RHIExecutor][Vulkan] reject batch={} sources={} reason={}",
-        _batch.sequence,
-        _batch.submits.size(),
-        _reason
-    );
-
+    const size_t first_source = std::min(_first_source, _batch.submits.size());
     ResolveRejectedPresent(_batch.present);
     const VkResult result = static_cast<VkResult>(_result);
-    for (RHIBackendSubmissionBatchEntry& entry : _batch.submits) {
+    for (size_t source_index = first_source;
+         source_index < _batch.submits.size();
+         ++source_index) {
+        RHIBackendSubmissionBatchEntry& entry = _batch.submits[source_index];
         if (entry.queue == EQueueType::Copy) {
             auto& queue = static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
             queue.RejectForRuntime(std::move(entry.submit), result);
+            if (_next_unconsumed_source != nullptr) {
+                *_next_unconsumed_source = source_index + 1;
+            }
             continue;
         }
 
@@ -409,15 +463,30 @@ void VulkanSubmissionExecutor::RejectBatch(
             RenderDevice::Get().GetCommandQueue(queue_type)
         );
         queue.RejectForRuntime(std::move(entry.submit), result);
+        if (_next_unconsumed_source != nullptr) {
+            *_next_unconsumed_source = source_index + 1;
+        }
     }
+
+    LOG_ERROR(
+        "[RHIExecutor][Vulkan] reject batch={} sources={} reason={}",
+        _batch.sequence,
+        _batch.submits.size() - first_source,
+        _reason
+    );
 }
 
-void VulkanSubmissionExecutor::ProcessBatch(RHIBackendSubmissionBatch&& _batch) {
+void VulkanSubmissionExecutor::ProcessBatch(
+    RHIBackendSubmissionBatch& _batch,
+    BatchExceptionState&       _exception_state
+) {
     if (hard_failed) {
         RejectBatch(
             std::move(_batch),
             hard_failure_result,
-            "submission runtime is latched after a hard failure"
+            "submission runtime is latched after a hard failure",
+            0,
+            &_exception_state.first_unconsumed_source
         );
         return;
     }
@@ -438,7 +507,9 @@ void VulkanSubmissionExecutor::ProcessBatch(RHIBackendSubmissionBatch&& _batch) 
         RejectBatch(
             std::move(_batch),
             static_cast<int32>(VK_ERROR_UNKNOWN),
-            preflight.reason
+            preflight.reason,
+            0,
+            &_exception_state.first_unconsumed_source
         );
         return;
     }
@@ -455,29 +526,47 @@ void VulkanSubmissionExecutor::ProcessBatch(RHIBackendSubmissionBatch&& _batch) 
         );
     }
 
-    Array<RHIBackendSubmissionBatchEntry> entries = TakeSingleSegmentEntries(std::move(_batch));
     auto reject_remaining = [&](size_t _begin, VkResult _result, std::string_view _reason) {
         if (_result == VK_SUCCESS) {
             _result = VK_ERROR_UNKNOWN;
         }
         hard_failed         = true;
         hard_failure_result = static_cast<int32>(_result);
-        RHIBackendSubmissionBatch rejected{};
-        rejected.sequence = _batch.sequence;
-        rejected.present  = std::move(_batch.present);
-        rejected.submits.reserve(entries.size() - std::min(_begin, entries.size()));
-        for (size_t index = _begin; index < entries.size(); ++index) {
-            rejected.submits.emplace_back(
-                entries[index].queue, std::move(entries[index].submit)
-            );
-        }
+        _exception_state.first_unconsumed_source =
+            std::min(_begin, _batch.submits.size());
         RejectBatch(
-            std::move(rejected), static_cast<int32>(_result), _reason
+            std::move(_batch),
+            static_cast<int32>(_result),
+            _reason,
+            _exception_state.first_unconsumed_source,
+            &_exception_state.first_unconsumed_source
         );
+        _exception_state.first_unconsumed_source = _batch.submits.size();
     };
 
-    for (size_t entry_index = 0; entry_index < entries.size(); ++entry_index) {
-        RHIBackendSubmissionBatchEntry& entry = entries[entry_index];
+    // Keep every source in the request-owned batch until its queue call has
+    // returned. If reorder, descriptor-lease, allocator, or native recording
+    // setup throws, Run's request barrier can still terminalize the current
+    // source callbacks/signals and every later source. Moving all sources into
+    // a temporary expansion array here would lose those obligations on unwind.
+    for (size_t source_index = 0; source_index < _batch.submits.size(); ++source_index) {
+        RHIBackendSubmissionBatchEntry& entry = _batch.submits[source_index];
+        const RHISourceSubmitPlan& source_plan =
+            _batch.topology.source_plans[source_index];
+        if (source_plan.segment_plan_count == 0) {
+            _exception_state.first_unconsumed_source = source_index + 1;
+            continue;
+        }
+
+        assert(source_plan.segment_plan_count == 1);
+        const RHISubmissionSegmentPlan& segment_plan =
+            _batch.topology.segments[source_plan.segment_plan_begin];
+        entry.submit.segments = {RHISubmitSegment{
+            .queue = segment_plan.segment.queue,
+            .begin = 0,
+            .end   = entry.submit.cmds.size(),
+        }};
+
         if (ordered_tail_queue.has_value() && *ordered_tail_queue != entry.queue &&
             ordered_gpu_tail.has_value()) {
             // Native queue submit order only applies within one queue. Chain
@@ -489,6 +578,9 @@ void VulkanSubmissionExecutor::ProcessBatch(RHIBackendSubmissionBatch&& _batch) 
             auto& copy_queue = static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
             const VulkanRuntimeSubmissionResult submit_result =
                 copy_queue.ExecuteForRuntime(std::move(entry.submit));
+            // ExecuteForRuntime has now either submitted or terminalized this
+            // source. Never reject it again if later bookkeeping/logging throws.
+            _exception_state.first_unconsumed_source = source_index + 1;
             if (submit_result.WasSubmitted()) {
                 assert(submit_result.completion.has_value());
                 last_copy_timeline = std::max(
@@ -512,7 +604,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHIBackendSubmissionBatch&& _batch) 
                 );
                 used_queues[static_cast<size_t>(EQueueType::Copy)] = true;
                 reject_remaining(
-                    entry_index + 1,
+                    source_index + 1,
                     submit_result.outcome.result,
                     "Copy submission hard failure"
                 );
@@ -528,6 +620,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHIBackendSubmissionBatch&& _batch) 
             // publishes a CPU completion marker, including rejected paths.
             used_queues[static_cast<size_t>(entry.queue)] = true;
             if (!recorded) {
+                _exception_state.first_unconsumed_source = source_index + 1;
                 LOG_ERROR(
                     "[RHIExecutor][Vulkan] batch={} source_queue={} translation failed",
                     _batch.sequence,
@@ -538,12 +631,15 @@ void VulkanSubmissionExecutor::ProcessBatch(RHIBackendSubmissionBatch&& _batch) 
                                             vk_device.GetFirstFaultResult() :
                                             VK_ERROR_UNKNOWN;
                 reject_remaining(
-                    entry_index + 1, result, "command translation failure"
+                    source_index + 1, result, "command translation failure"
                 );
                 return;
             }
             const VulkanRuntimeSubmissionResult submit_result =
                 queue.SubmitRecordedForRuntime(std::move(*recorded));
+            // SubmitRecordedForRuntime owns the recorded packet through its
+            // terminal result, including native rejection.
+            _exception_state.first_unconsumed_source = source_index + 1;
             if (submit_result.WasSubmitted()) {
                 assert(submit_result.completion.has_value());
                 ordered_gpu_tail   = *submit_result.completion;
@@ -559,7 +655,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHIBackendSubmissionBatch&& _batch) 
                     static_cast<int32>(submit_result.outcome.result)
                 );
                 reject_remaining(
-                    entry_index + 1,
+                    source_index + 1,
                     submit_result.outcome.result,
                     "command submission hard failure"
                 );
@@ -586,7 +682,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHIBackendSubmissionBatch&& _batch) 
                                             graphics_queue.vk_device.GetFirstFaultResult() :
                                             VK_ERROR_UNKNOWN;
                 reject_remaining(
-                    entries.size(), result, "Present bridge translation failure"
+                    _batch.submits.size(), result, "Present bridge translation failure"
                 );
                 return;
             }
@@ -600,7 +696,7 @@ void VulkanSubmissionExecutor::ProcessBatch(RHIBackendSubmissionBatch&& _batch) 
                     static_cast<int32>(bridge_result.outcome.result)
                 );
                 reject_remaining(
-                    entries.size(),
+                    _batch.submits.size(),
                     bridge_result.outcome.result,
                     "Present bridge submission failure"
                 );
@@ -614,8 +710,15 @@ void VulkanSubmissionExecutor::ProcessBatch(RHIBackendSubmissionBatch&& _batch) 
         const VulkanRuntimeSubmissionResult present_result = graphics_queue.PresentForRuntime(
             std::move(present.swapchain),
             present.source,
-            std::move(present.receipt)
+            // Keep the request's receipt reference until PresentForRuntime
+            // returns. If it throws after taking its by-value copy, Run can
+            // still resolve this retained receipt through RejectBatch.
+            present.receipt
         );
+        // PresentForRuntime has now terminalized or retained the copied receipt.
+        // Clear the request copy before any later diagnostic/bookkeeping can
+        // throw, preserving an accepted/retry Present's existing semantics.
+        _batch.present.reset();
         // Retry/Recreate still owns a logical timeline and completion marker;
         // Sync must drain that CPU-side retirement even though no GPU tail was
         // produced.

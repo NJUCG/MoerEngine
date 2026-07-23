@@ -328,6 +328,63 @@ bool BlockingWaitReportsTerminalStatus() {
     return okay;
 }
 
+bool ShutdownDrainsTerminalSourceBehindPendingHead() {
+    RHIExecutor::StartUp();
+
+    std::atomic<int> ordinary_callbacks{0};
+    std::atomic<int> success_callbacks{0};
+    auto pending_list  = Moer::MakeShared<CommandList>(EQueueType::Graphics);
+    auto terminal_list = Moer::MakeShared<CommandList>(EQueueType::Graphics);
+    terminal_list->AddCallback([&ordinary_callbacks] {
+        ordinary_callbacks.fetch_add(1);
+    });
+    terminal_list->AddSuccessCallback([&success_callbacks] {
+        success_callbacks.fetch_add(1);
+    });
+
+    auto pending_gate  = RHIRecordingGate::Create();
+    auto terminal_gate = RHIRecordingGate::Create(true);
+    RHIExecutor::Get().SubmitRecording(
+        pending_list,
+        pending_gate,
+        ERHIExecSubmitFlags::None
+    );
+    RHIExecutor::Get().SubmitRecording(
+        terminal_list,
+        terminal_gate,
+        ERHIExecSubmitFlags::None
+    );
+
+    // The pending head keeps the already-complete second source in the handoff
+    // FIFO. Shutdown must remain bounded, leave the first source opaque, and
+    // drain only the terminal source's ordinary cleanup exactly once.
+    RHIExecutor::ShutDown();
+
+    CmdSubmit drained_terminal = terminal_list->Submit();
+    const bool okay =
+        Expect(
+            ordinary_callbacks.load() == 1,
+            "shutdown did not run terminal recording cleanup exactly once"
+        ) &&
+        Expect(
+            success_callbacks.load() == 0,
+            "shutdown ran a success-only callback for an unpublished recording"
+        ) &&
+        Expect(
+            drained_terminal.cmds.empty() && drained_terminal.callbacks.empty() &&
+                drained_terminal.success_callbacks.empty() &&
+                drained_terminal.segments.empty(),
+            "shutdown left a terminal cancelled recording source undrained"
+        ) &&
+        Expect(
+            pending_gate->Status() == ERHIRecordingStatus::Pending,
+            "shutdown changed the producer-owned pending gate"
+        );
+
+    pending_gate->Signal();
+    return okay;
+}
+
 bool ShutdownCancelsAnUnsignalledGate() {
     RHIExecutorRecordingHandoffQueue queue{};
     queue.Start();
@@ -403,6 +460,7 @@ int main() {
         !FailedGateRejectsOnlyItsGroupAndPreservesFifo() ||
         !FailedRecordingDrainsCleanupExactlyOnce() ||
         !BlockingWaitReportsTerminalStatus() ||
+        !ShutdownDrainsTerminalSourceBehindPendingHead() ||
         !ShutdownCancelsAnUnsignalledGate()) {
         return EXIT_FAILURE;
     }

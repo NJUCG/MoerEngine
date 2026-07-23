@@ -109,14 +109,64 @@ void FinalizeCancelledRecordingSources(
     std::string_view             _reason
 ) {
     // A source protected by an incomplete recording gate must remain opaque:
-    // even reading IsEmpty(), let alone calling Submit(), races its producer.
-    // Cancellation therefore only releases the executor's shared ownership. No
-    // submit callback (ordinary or success-only) is visible until the gate has
-    // completed and a CmdSubmit has actually been materialized.
+    // even reading IsEmpty(), let alone draining callbacks, races its producer.
+    // A terminal gate, however, is the ownership handoff point and its ordinary
+    // callbacks still own CPU/resource cleanup even when shutdown cancels the
+    // FIFO before the source can be materialized. Success-only callbacks must
+    // never run because no GPU submission was published.
+    size_t terminal_source_count = 0;
+    size_t opaque_source_count   = 0;
+    size_t cleanup_callback_count = 0;
+    for (RHIRecordingSource& source : _sources) {
+        const bool terminal =
+            source.completion &&
+            source.completion->Status() != ERHIRecordingStatus::Pending;
+        if (!terminal) {
+            ++opaque_source_count;
+            continue;
+        }
+
+        ++terminal_source_count;
+        if (!source.command_list) {
+            continue;
+        }
+        try {
+            auto source_callbacks =
+                source.command_list->DrainOrdinaryCallbacksForRejection();
+            cleanup_callback_count += source_callbacks.size();
+            for (std::function<void()>& callback : source_callbacks) {
+                if (!callback) {
+                    continue;
+                }
+                try {
+                    callback();
+                } catch (const std::exception& exception) {
+                    LOG_ERROR(
+                        "[RHIExecutor] cancelled-recording cleanup callback threw: {}",
+                        exception.what()
+                    );
+                } catch (...) {
+                    LOG_ERROR("[RHIExecutor] cancelled-recording cleanup callback threw");
+                }
+            }
+        } catch (const std::exception& exception) {
+            LOG_ERROR(
+                "[RHIExecutor] failed to drain cancelled recording source cleanup: {}",
+                exception.what()
+            );
+        } catch (...) {
+            LOG_ERROR("[RHIExecutor] failed to drain cancelled recording source cleanup");
+        }
+    }
+
     LOG_WARNING(
-        "[RHIExecutor] rejected {} recording source(s): {}",
+        "[RHIExecutor] rejected {} recording source(s): {}; "
+        "terminal_sources={} opaque_sources={} cleanup_callbacks={}",
         _sources.size(),
-        _reason
+        _reason,
+        terminal_source_count,
+        opaque_source_count,
+        cleanup_callback_count
     );
     _sources.clear();
 }
