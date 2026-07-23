@@ -543,6 +543,15 @@ def main() -> int:
                 wait_process_alive(process, args.startup_settle_seconds)
 
             if not args.expect_exit_after_ready:
+                # Startup splash and editor share a process. Re-resolve the
+                # largest visible top-level window after the ready/settle gate
+                # so capture and WM_CLOSE target the editor rather than a stale
+                # splash HWND discovered during process launch.
+                refreshed_hwnd = find_main_window(process, 5.0)
+                if refreshed_hwnd:
+                    main_hwnd = refreshed_hwnd
+                    report["main_hwnd"] = int(main_hwnd)
+
                 if args.detach_configs:
                     for start_x_ratio in (0.765, 0.75, 0.78):
                         drag_window_tab(main_hwnd, start_x_ratio, 70, 1900, 300)

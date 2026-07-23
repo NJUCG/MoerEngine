@@ -7,6 +7,7 @@
 #include "misc/Timer.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
+#include "rhi/RHIExecutor.h"
 #include "rhi/RHIResource.h"
 #include "rhi/plugin/NrdPlugin.h"
 #include "scene/GpuScene.h"
@@ -172,11 +173,20 @@ void ExecuteSceneUpdate(
     RenderDevice&    device,
     CommandQueue&    gfx_queue
 ) {
+    (void)gfx_queue;
+    (void)device;
     auto scene_cmd_list = render_scene.ApplyUpdate(std::move(update));
-    auto copy_event     = device.GetCopyQueue().Execute(scene_cmd_list.copy_queue_cmd_list.Submit());
-    device.GetCopyQueue().Sync(copy_event.timeline);
-    gfx_queue.Execute(scene_cmd_list.gfx_queue_cmd_list.Submit().TickProfiling());
-    gfx_queue.Sync();
+    Array<RHIBackendSubmissionBatchEntry> submissions{};
+    submissions.emplace_back(EQueueType::Copy, scene_cmd_list.copy_queue_cmd_list.Submit());
+    submissions.emplace_back(
+        EQueueType::Graphics,
+        scene_cmd_list.gfx_queue_cmd_list.Submit().TickProfiling()
+    );
+    RHIExecutor::Get().Submit(
+        std::move(submissions),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 }
 
 } // namespace
@@ -544,8 +554,10 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             RefreshSceneRuntimeRefs();
             state.rt_ctx->FillLowDiscrepancySequence(cmd_list);
             cmd_list.UpdateBindlessArray(bindless_array);
-            gfx_queue.Execute(cmd_list.Submit());
-            gfx_queue.Sync();
+            RHIExecutor::Get().Submit(
+                EQueueType::Graphics, cmd_list.Submit(), ERHIExecSubmitFlags::FlushGPU
+            );
+            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
         }
 
         ScopedGpuMarker renderer_marker(
@@ -848,15 +860,17 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
 
         if (state.b_export) {
             renderer_marker.Close();
-            gfx_queue.Execute(
+            RHIExecutor::Get().Submit(
+                EQueueType::Graphics,
                 cmd_list.Submit()
                     .DebugLabel(
                         std::format("Raytracing Export Frame {}", frame_packet.frame_id),
                         GpuMarkerPalette::Frame()
                     )
-                    .TickProfiling()
+                    .TickProfiling(),
+                ERHIExecSubmitFlags::FlushGPU
             );
-            gfx_queue.Sync();
+            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
             DumpTextureToFile(
                 ui_config.export_cfg,
                 state.rt_ctx->frame_rt,
@@ -914,7 +928,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     }
 
     time++;
-    gfx_queue.Execute(
+    CmdSubmit frame_submit =
         cmd_list.Submit()
             .DebugLabel(
                 std::format("Raytracing Frame {}", frame_packet.frame_id),
@@ -922,8 +936,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             )
             .Signal(timeline, time)
             .DeleteResources()
-            .TickProfiling()
-    );
+            .TickProfiling();
+    std::optional<RHIPresentRequest> present_request{};
     if (!skip_present) {
         const auto output_view = state.output->GetView();
         if (frame_packet.window.state == EWindowState::SizeChanged) {
@@ -940,7 +954,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             feedback.main_present_receipt = CreateMainPresentReceipt(
                 frame_packet.scene_updates.scene_ready && frame_packet.runtime_assets_ready
             );
-            gfx_queue.Present(swapchain, state.output, feedback.main_present_receipt);
+            present_request.emplace(swapchain, output_view, feedback.main_present_receipt);
         } else {
             LOG_WARNING(
                 "Skipping stale raytracing main-window present: source={}x{}, swapchain={}x{}.",
@@ -950,6 +964,15 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 swapchain->size.y
             );
         }
+    }
+
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        std::move(frame_submit),
+        ERHIExecSubmitFlags::FlushGPU,
+        present_request ? &*present_request : nullptr
+    );
+    if (!skip_present) {
         PresentUiDrawFrame(frame_packet.ui_draw_frame, ui_execution_thread);
     }
 

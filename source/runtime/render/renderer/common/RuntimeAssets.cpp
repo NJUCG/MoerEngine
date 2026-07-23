@@ -5,6 +5,7 @@
 #include "misc/ScopedLogTimer.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
+#include "rhi/RHIExecutor.h"
 #include "rhi/RHIResource.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskGraph.h"
@@ -61,7 +62,7 @@ void RuntimeAssets::LoadTextures() {
             textures[name] = std::move(texture);
         };
 
-        CommandList cmd_list;
+        CommandList cmd_list(EQueueType::Copy);
         if (std::filesystem::exists(texture_path)) {
             for (const auto& entry : std::filesystem::directory_iterator(texture_path)) {
                 if (entry.path().extension() == ".png") {
@@ -125,15 +126,17 @@ void RuntimeAssets::LoadTextures() {
         }
         cmd_list.ExportResourcesToQueue(EQueueType::Graphics, std::move(exported_textures), {});
 
-        auto sync_time = device.GetCopyQueue().Execute(cmd_list.Submit());
-        device.GetCopyQueue().Sync(sync_time.timeline);
+        RHIExecutor::Get().Submit(
+            EQueueType::Copy,
+            cmd_list.Submit(),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     }
 }
 
 void RuntimeAssets::CompleteAndImportResources() {
     using namespace Render;
-    auto& graphics_queue = device.GetCommandQueue(EQueueType::Graphics);
-
     Array<ImportTexture> import_textures;
     import_textures.reserve(textures.size());
     for (const auto& texture_entry : textures) {
@@ -149,8 +152,12 @@ void RuntimeAssets::CompleteAndImportResources() {
     CopyQueue& copy_queue = device.GetCopyQueue();
 
     const auto copy_queue_timeline = copy_queue.GetFenceHandle();
-    graphics_queue.Execute(cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue()));
-    graphics_queue.Sync();
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        cmd_list.Submit().Wait(copy_queue_timeline, copy_queue_timeline->GetValue()),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     is_loaded.store(true, std::memory_order_seq_cst);
 }
 

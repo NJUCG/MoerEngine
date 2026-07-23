@@ -9,12 +9,14 @@
 #include "VulkanPlatform.h"
 #include "VulkanRHIResource.h"
 #include "VulkanResourceTracker.h"
+#include <memory>
 #include <string_view>
 
 namespace Moer::Render {
 class VulkanDevice;
 class VulkanDescriptorSetAllocator;
 class VulkanRHIGraphicsPipelineState;
+struct VulkanDescriptorPushLeaseState;
 
 struct PushConstantInfo;
 class VulkanCmdList {
@@ -24,12 +26,13 @@ private:
     VkCommandBuffer           command_buffer;
     class VulkanCmdAllocator* allocator;
     VulkanDevice&             device;
+    std::shared_ptr<VulkanDescriptorPushLeaseState> descriptor_push_lease;
 
 public:
     VulkanCmdList(VulkanCmdAllocator* _allocator, VulkanDevice& _device);
     ~VulkanCmdList();
-    void Begin();
-    void End();
+    [[nodiscard]] VkResult Begin();
+    [[nodiscard]] VkResult End();
     void
     CopyBuffer(VulkanBuffer* _src, VulkanBuffer* _dst, uint64 _size, uint64 _src_offset, uint64 _dst_offset);
     void CopyBufferToTexture(
@@ -138,6 +141,9 @@ public:
     void UploadDescriptors(const PipelineHandle& _pso_handle);
     void UploadPushConstants(const PipelineHandle& _pso_handle, std::span<const uint> _data);
     void BindDescriptors(const PipelineHandle& _pso_handle, const ArrayArguments& _args);
+    void SetDescriptorPushLease(std::shared_ptr<VulkanDescriptorPushLeaseState> _lease) {
+        descriptor_push_lease = std::move(_lease);
+    }
 
     //Raytracing
     void BuildAccelerationStructures(

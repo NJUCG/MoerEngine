@@ -248,6 +248,7 @@ bool RenderGraphCompiler::Compile() {
     AuditStatePlanCompleteness();
     BuildQueuePlan();
     BuildDependencyWaves();
+    BuildRecordingBatches();
     BuildLifetimes();
     graph.compiled = true;
     return true;
@@ -283,11 +284,47 @@ bool RenderGraphCompiler::NormalizeDeclarations() {
             return false;
         }
         const auto& pass = graph.passes[pass_index];
+        const bool has_execute = static_cast<bool>(pass.execute);
+        const bool has_record  = static_cast<bool>(pass.record);
+        if (has_execute == has_record) {
+            return Fail(
+                "pass '" + pass.name + "' must declare exactly one execute or record callback"
+            );
+        }
+        const bool caller_thread =
+            pass.execution_class == RenderGraph::PassExecutionClass::MainThread ||
+            pass.execution_class == RenderGraph::PassExecutionClass::CpuPrepare ||
+            pass.execution_class == RenderGraph::PassExecutionClass::ExternalControl;
+        if (has_execute && !caller_thread) {
+            return Fail(
+                "main-thread pass '" + pass.name + "' cannot use a command-recording class"
+            );
+        }
+        if (has_record && caller_thread) {
+            return Fail(
+                "record pass '" + pass.name + "' must use SerialRecord or ParallelRecordEligible"
+            );
+        }
+        if (pass.workload == 0) {
+            return Fail("pass '" + pass.name + "' has zero recording workload");
+        }
+        for (const auto reference : pass.references) {
+            if (!graph.IsValidResource(reference)) {
+                return Fail("pass '" + pass.name + "' has an invalid resource identity reference");
+            }
+        }
         for (const auto& access : pass.accesses) {
             if (!graph.IsValidResource(access.resource)) {
                 return Fail("pass '" + pass.name + "' references an invalid resource");
             }
             const auto&   resource = graph.resources[access.resource.index];
+            if (pass.execution_class == RenderGraph::PassExecutionClass::CpuPrepare &&
+                resource.kind != RenderGraph::ResourceKind::Token) {
+                return Fail(
+                    "cpu-prepare pass '" + pass.name +
+                    "' may only access token resources; use Reference for GPU resource identity"
+                );
+            }
             ResourceRange normalized{};
             if (!NormalizeRange(resource, access.range, normalized) ||
                 !ValidateAccessState(
@@ -1393,10 +1430,28 @@ void RenderGraphCompiler::BuildQueuePlan() {
     std::vector<uint32_t> pass_to_batch(
         graph.passes.size(), RenderGraph::PassHandle::InvalidIndex
     );
+    bool force_new_managed_batch = false;
     for (const auto pass_handle : graph.compiled_plan.execution_order) {
         const auto& pass    = graph.passes[pass_handle.index];
+        if (pass.execution_class == RenderGraph::PassExecutionClass::CpuPrepare) {
+            continue;
+        }
         const auto  binding = graph.queue_topology.Resolve(pass.domain.queue);
-        if (graph.compiled_plan.queue_batches.empty() ||
+        if (pass.execution_class == RenderGraph::PassExecutionClass::ExternalControl) {
+            const uint32_t batch_id =
+                static_cast<uint32_t>(graph.compiled_plan.queue_batches.size());
+            graph.compiled_plan.queue_batches.push_back(RenderGraph::CompiledQueueBatch{
+                .id               = batch_id,
+                .queue            = binding,
+                .passes           = {pass_handle},
+                .external_control = true,
+            });
+            pass_to_batch[pass_handle.index] = batch_id;
+            force_new_managed_batch          = true;
+            continue;
+        }
+        if (graph.compiled_plan.queue_batches.empty() || force_new_managed_batch ||
+            graph.compiled_plan.queue_batches.back().external_control ||
             graph.compiled_plan.queue_batches.back().queue.role != binding.role) {
             const uint32_t batch_id =
                 static_cast<uint32_t>(graph.compiled_plan.queue_batches.size());
@@ -1405,6 +1460,7 @@ void RenderGraphCompiler::BuildQueuePlan() {
                 .queue = binding,
             });
         }
+        force_new_managed_batch = false;
         auto& batch = graph.compiled_plan.queue_batches.back();
         batch.passes.push_back(pass_handle);
         pass_to_batch[pass_handle.index] = batch.id;
@@ -1468,6 +1524,10 @@ void RenderGraphCompiler::BuildQueuePlan() {
         const auto& edge = graph.compiled_plan.edges[edge_index];
         const uint32_t signal_batch = pass_to_batch[edge.src.index];
         const uint32_t wait_batch   = pass_to_batch[edge.dst.index];
+        if (signal_batch == RenderGraph::PassHandle::InvalidIndex ||
+            wait_batch == RenderGraph::PassHandle::InvalidIndex) {
+            continue;
+        }
         if (signal_batch == wait_batch) {
             continue;
         }
@@ -1597,6 +1657,33 @@ void RenderGraphCompiler::BuildDependencyWaves() {
     }
 }
 
+void RenderGraphCompiler::BuildRecordingBatches() {
+    std::vector<uint32_t> pass_to_wave(
+        graph.passes.size(),
+        RenderGraph::PassHandle::InvalidIndex
+    );
+    for (uint32_t wave_index = 0; wave_index < graph.compiled_plan.dependency_waves.size();
+         ++wave_index) {
+        for (const auto pass : graph.compiled_plan.dependency_waves[wave_index].passes) {
+            pass_to_wave[pass.index] = wave_index;
+        }
+    }
+
+    graph.compiled_plan.recording_batches.reserve(graph.compiled_plan.execution_order.size());
+    for (const auto pass_handle : graph.compiled_plan.execution_order) {
+        const auto& pass = graph.passes[pass_handle.index];
+        const auto  id = static_cast<uint32_t>(graph.compiled_plan.recording_batches.size());
+        graph.compiled_plan.recording_batches.push_back(RenderGraph::CompiledRecordingBatch{
+            .id              = id,
+            .queue           = graph.queue_topology.Resolve(pass.domain.queue),
+            .passes          = {pass_handle},
+            .execution       = pass.execution_class,
+            .workload        = pass.workload,
+            .dependency_wave = pass_to_wave[pass_handle.index],
+        });
+    }
+}
+
 void RenderGraphCompiler::BuildLifetimes() {
     std::vector<uint32_t> execution_position(graph.passes.size(), RenderGraph::PassHandle::InvalidIndex);
     for (uint32_t position = 0; position < graph.compiled_plan.execution_order.size(); ++position) {
@@ -1610,6 +1697,17 @@ void RenderGraphCompiler::BuildLifetimes() {
         resource.last_use       = resource.last_use == RenderGraph::PassHandle::InvalidIndex ?
                                       position :
                                       std::max(resource.last_use, position);
+    }
+
+    for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
+        const uint32_t position = execution_position[pass_index];
+        for (const auto reference : graph.passes[pass_index].references) {
+            auto& resource = graph.resources[reference.index];
+            resource.first_use = std::min(resource.first_use, position);
+            resource.last_use  = resource.last_use == RenderGraph::PassHandle::InvalidIndex ?
+                                     position :
+                                     std::max(resource.last_use, position);
+        }
     }
 
     graph.compiled_plan.resources.reserve(graph.resources.size());

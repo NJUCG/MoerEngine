@@ -12,6 +12,7 @@
 /build/*
 /target/*
 /.cache/
+/asset/shader_cache/
 /build_vs2022
 /cmake-build-*/
 

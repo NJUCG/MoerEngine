@@ -62,10 +62,16 @@ struct QueueFamilyIndices {
 };
 
 struct VulkanRHIConfig {
-    uint32 api_version = VK_API_VERSION_1_3;
-    bool   rhi_thread  = false;
-    bool   rhi_bypass  = true;
-    bool   thread_profile_logging = false;
+    uint32 api_version                  = VK_API_VERSION_1_3;
+    bool   rhi_thread                   = false;
+    bool   rhi_bypass                   = true;
+    bool   thread_profile_logging       = false;
+    bool   parallel_recording           = false;
+    uint32 parallel_record_workers      = 0;
+    bool   parallel_record_verify       = false;
+    bool   parallel_record_profile      = false;
+    uint32 parallel_record_min_work_units_per_job = 64;
+    uint64 parallel_record_worker_throw_trigger = 0;
     uint64 present_submit_fault_trigger = 0;
 };
 
@@ -340,8 +346,14 @@ private:
     UniquePtr<VkCommandQueue> gfx_queue{}; // VkCommandQueue是MoerEngine的封装！
     UniquePtr<VkCommandQueue> compute_queue{};
     UniquePtr<VkCopyQueue>    copy_queue{};
-    bool                      rhi_thread_enabled      = false;
-    bool                      thread_profile_logging = false;
+    bool                      rhi_thread_enabled            = false;
+    bool                      thread_profile_logging       = false;
+    bool                      parallel_recording           = false;
+    uint32                    parallel_record_workers      = 0;
+    bool                      parallel_record_verify       = false;
+    bool                      parallel_record_profile      = false;
+    uint32                    parallel_record_min_work_units_per_job = 64;
+    uint64                    parallel_record_worker_throw_trigger = 0;
     uint64                    present_submit_fault_trigger = 0;
     std::atomic<uint64>       present_submit_attempts{0};
 

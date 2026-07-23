@@ -231,6 +231,61 @@ uint64_t ParseVulkanPresentSubmitFaultTrigger(int argc, const char** argv) {
     return count;
 }
 
+uint64_t ParseParallelRecordWorkerThrowTrigger(int argc, const char** argv) {
+    constexpr std::string_view argument_name = "--parallel-record-fault-inject";
+    constexpr std::string_view prefix        = "--parallel-record-fault-inject=";
+    constexpr std::string_view point_prefix  = "worker-throw@";
+
+    std::optional<std::string_view> specification;
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view argument = argv[index];
+        std::optional<std::string_view> candidate;
+        if (argument == argument_name) {
+            if (index + 1 >= argc) {
+                throw std::invalid_argument(
+                    "--parallel-record-fault-inject requires worker-throw@<positive-count>"
+                );
+            }
+            candidate = std::string_view(argv[++index]);
+        } else if (argument.starts_with(prefix)) {
+            candidate = argument.substr(prefix.size());
+        }
+
+        if (!candidate.has_value()) {
+            continue;
+        }
+        if (specification.has_value()) {
+            throw std::invalid_argument(
+                "--parallel-record-fault-inject may be specified only once"
+            );
+        }
+        specification = *candidate;
+    }
+
+    if (!specification.has_value()) {
+        return 0;
+    }
+    if (!specification->starts_with(point_prefix)) {
+        throw std::invalid_argument(
+            "unsupported parallel-record fault point; expected worker-throw@<positive-count>"
+        );
+    }
+
+    const std::string_view count_text = specification->substr(point_prefix.size());
+    uint64_t               count      = 0;
+    const auto [end, error] = std::from_chars(
+        count_text.data(), count_text.data() + count_text.size(), count
+    );
+    if (count_text.empty() || error != std::errc{} || end != count_text.data() + count_text.size() ||
+        count == 0) {
+        throw std::invalid_argument(
+            "parallel-record worker fault trigger must be a positive integer: "
+            "worker-throw@<positive-count>"
+        );
+    }
+    return count;
+}
+
 bool ParseThreadingRendererSwitchValidation(int argc, const char** argv) {
     constexpr std::string_view argument_name = "--threading-renderer-switch-validation";
     constexpr std::string_view value_prefix  = "--threading-renderer-switch-validation=";
@@ -249,6 +304,31 @@ bool ParseThreadingRendererSwitchValidation(int argc, const char** argv) {
         if (enabled) {
             throw std::invalid_argument(
                 "--threading-renderer-switch-validation may be specified only once"
+            );
+        }
+        enabled = true;
+    }
+    return enabled;
+}
+
+bool ParseThreadingRasterLifecycleValidation(int argc, const char** argv) {
+    constexpr std::string_view argument_name = "--threading-raster-lifecycle-validation";
+    constexpr std::string_view value_prefix  = "--threading-raster-lifecycle-validation=";
+
+    bool enabled = false;
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view argument = argv[index];
+        if (argument.starts_with(value_prefix)) {
+            throw std::invalid_argument(
+                "--threading-raster-lifecycle-validation is a flag and does not accept a value"
+            );
+        }
+        if (argument != argument_name) {
+            continue;
+        }
+        if (enabled) {
+            throw std::invalid_argument(
+                "--threading-raster-lifecycle-validation may be specified only once"
             );
         }
         enabled = true;
@@ -412,11 +492,20 @@ Engine::Engine() {}
 
 void Engine::ValidateCommandLine(int argc, const char** argv) {
     (void)ParseVulkanPresentSubmitFaultTrigger(argc, argv);
+    (void)ParseParallelRecordWorkerThrowTrigger(argc, argv);
     const bool renderer_switch_validation =
         ParseThreadingRendererSwitchValidation(argc, argv);
+    const bool raster_lifecycle_validation =
+        ParseThreadingRasterLifecycleValidation(argc, argv);
     const auto raster_framebuffer_validation =
         ParseThreadingRasterFramebufferValidation(argc, argv);
-    if (!renderer_switch_validation && !raster_framebuffer_validation.has_value()) {
+    if (renderer_switch_validation && raster_lifecycle_validation) {
+        throw std::invalid_argument(
+            "renderer-switch and Raster lifecycle validation modes are mutually exclusive"
+        );
+    }
+    if (!renderer_switch_validation && !raster_lifecycle_validation &&
+        !raster_framebuffer_validation.has_value()) {
         return;
     }
 
@@ -498,11 +587,21 @@ void Engine::Init(
     const auto& config = ConfigManager::GetInstance().GetConfig();
     const uint64_t vulkan_present_submit_fault_trigger =
         ParseVulkanPresentSubmitFaultTrigger(argc, argv);
+    const uint64_t parallel_record_worker_throw_trigger =
+        ParseParallelRecordWorkerThrowTrigger(argc, argv);
     const bool renderer_switch_validation_enabled =
         ParseThreadingRendererSwitchValidation(argc, argv);
+    const bool raster_lifecycle_validation_enabled =
+        ParseThreadingRasterLifecycleValidation(argc, argv);
     const auto raster_framebuffer_validation =
         ParseThreadingRasterFramebufferValidation(argc, argv);
-    if ((renderer_switch_validation_enabled || raster_framebuffer_validation.has_value()) &&
+    if (renderer_switch_validation_enabled && raster_lifecycle_validation_enabled) {
+        throw std::invalid_argument(
+            "renderer-switch and Raster lifecycle validation modes are mutually exclusive"
+        );
+    }
+    if ((renderer_switch_validation_enabled || raster_lifecycle_validation_enabled ||
+         raster_framebuffer_validation.has_value()) &&
         config.engine.render.default_render_method != "Raster") {
         throw std::invalid_argument(
             "threading Raster validation requires "
@@ -518,12 +617,19 @@ void Engine::Init(
     LOG_INFO("[Threading] GameThread id = {}", GetGameThreadId());
     LOG_INFO(
         "[Threading] render_thread={}, rhi_thread={}, rhi_bypass={}, max_frame_lag={}, "
-        "profile_logging={}",
+        "profile_logging={}, parallel_recording={}, parallel_record_workers={}, "
+        "parallel_record_verify={}, parallel_record_profile={}, "
+        "parallel_record_min_work_units_per_job={}",
         config.engine.threading.render_thread,
         config.engine.threading.rhi_thread,
         config.engine.threading.rhi_bypass,
         config.engine.threading.max_frame_lag,
-        config.engine.threading.profile_logging
+        config.engine.threading.profile_logging,
+        config.engine.threading.parallel_recording,
+        config.engine.threading.parallel_record_workers,
+        config.engine.threading.parallel_record_verify,
+        config.engine.threading.parallel_record_profile,
+        config.engine.threading.parallel_record_min_work_units_per_job
     );
 
     if (config.engine.threading.render_thread) {
@@ -575,9 +681,17 @@ void Engine::Init(
                 .rhi_type        = rhi_type,
                 .name            = "MoerEngine",
                 .rhi_api_version = config.engine.rhi.api_version,
-                .rhi_thread      = config.engine.threading.rhi_thread,
-                .rhi_bypass      = config.engine.threading.rhi_bypass,
-                .thread_profile_logging = config.engine.threading.profile_logging,
+                .rhi_thread              = config.engine.threading.rhi_thread,
+                .rhi_bypass              = config.engine.threading.rhi_bypass,
+                .thread_profile_logging  = config.engine.threading.profile_logging,
+                .parallel_recording      = config.engine.threading.parallel_recording,
+                .parallel_record_workers = config.engine.threading.parallel_record_workers,
+                .parallel_record_verify  = config.engine.threading.parallel_record_verify,
+                .parallel_record_profile = config.engine.threading.parallel_record_profile,
+                .parallel_record_min_work_units_per_job =
+                    config.engine.threading.parallel_record_min_work_units_per_job,
+                .parallel_record_worker_throw_trigger =
+                    parallel_record_worker_throw_trigger,
                 .vulkan_present_submit_fault_trigger = vulkan_present_submit_fault_trigger,
             }
         )
@@ -601,6 +715,12 @@ void Engine::Init(
             "[ThreadingValidation][RendererSwitch] Enabled; sequence=Raster reload, "
             "Raster->Raytracing->Raster; "
             "stable_ready_gt_frames=12."
+        );
+    }
+    if (raster_lifecycle_validation_enabled) {
+        m_raster_lifecycle_validation_enabled = true;
+        LOG_INFO(
+            "[ThreadingValidation][RasterLifecycle] Enabled; stable_ready_gt_frames=12."
         );
     }
 
@@ -695,6 +815,15 @@ void Engine::Run(const EngineHooks& hooks) {
                 const bool validation_requested =
                     ConsumeRendererSwitchValidationReloadRequest();
                 return hook_requested || validation_requested;
+            };
+    } else if (m_raster_lifecycle_validation_enabled) {
+        auto on_tick_test = std::move(runtime_hooks.on_tick_test);
+        runtime_hooks.on_tick_test =
+            [this, on_tick_test = std::move(on_tick_test)](Scene& scene) {
+                if (on_tick_test) {
+                    on_tick_test(scene);
+                }
+                TickRasterLifecycleValidation(scene);
             };
     }
 
@@ -938,6 +1067,30 @@ void Engine::TickRendererSwitchValidation(Scene& scene) {
         case ERendererSwitchValidationStage::Failed:
             break;
     }
+}
+
+void Engine::TickRasterLifecycleValidation(Scene& scene) {
+    assert(IsCurrentlyGameThread());
+    constexpr uint k_stable_ready_gt_frames = 12;
+
+    if (!m_raster_lifecycle_validation_enabled) {
+        return;
+    }
+    if (!scene.IsReady()) {
+        m_raster_lifecycle_validation_ready_frames = 0;
+        return;
+    }
+    ++m_raster_lifecycle_validation_ready_frames;
+    if (m_raster_lifecycle_validation_ready_frames < k_stable_ready_gt_frames) {
+        return;
+    }
+
+    m_raster_lifecycle_validation_enabled = false;
+    LOG_INFO(
+        "[ThreadingValidation][RasterLifecycle] Complete: Raster stable for {} ready GT frames.",
+        k_stable_ready_gt_frames
+    );
+    WindowContext::RequestClose(WindowContext::GetMainWindow());
 }
 
 bool Engine::ConsumeRendererSwitchValidationReloadRequest() {

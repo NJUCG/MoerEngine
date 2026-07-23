@@ -56,9 +56,23 @@ namespace Moer::Render {
 namespace VkUtil = Moer::RHI::Vulkan::Util;
 
 VulkanDevice::VulkanDevice(const VulkanRHIConfig&& _config) : RenderDevice::Impl() {
-    rhi_thread_enabled      = _config.rhi_thread && !_config.rhi_bypass;
-    thread_profile_logging = _config.thread_profile_logging;
+    rhi_thread_enabled            = _config.rhi_thread && !_config.rhi_bypass;
+    thread_profile_logging        = _config.thread_profile_logging;
+    parallel_recording            = _config.parallel_recording;
+    parallel_record_workers       = _config.parallel_record_workers;
+    parallel_record_verify        = _config.parallel_record_verify;
+    parallel_record_profile       = _config.parallel_record_profile;
+    parallel_record_min_work_units_per_job =
+        std::max(1u, _config.parallel_record_min_work_units_per_job);
+    parallel_record_worker_throw_trigger =
+        _config.parallel_record_worker_throw_trigger;
     present_submit_fault_trigger = _config.present_submit_fault_trigger;
+    if (parallel_record_worker_throw_trigger != 0) {
+        LOG_INFO(
+            "[ParallelRecord][FaultConfig] point=worker-throw trigger={}",
+            parallel_record_worker_throw_trigger
+        );
+    }
     if (present_submit_fault_trigger != 0) {
         LOG_INFO(
             "[VulkanFault][Config] point=present-submit trigger={} mode=synthetic-device-lost",
@@ -491,7 +505,13 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
         *this,
         EQueueType::Graphics,
         rhi_thread_enabled,
-        thread_profile_logging
+        thread_profile_logging,
+        parallel_recording,
+        parallel_record_workers,
+        parallel_record_verify,
+        parallel_record_profile,
+        parallel_record_min_work_units_per_job,
+        parallel_record_worker_throw_trigger
     );
     SetResourceName(uint64(m_graphics_queue), VK_OBJECT_TYPE_QUEUE, "GraphicsQueue");
     compute_queue = MakeUnique<VkCommandQueue>(*this, EQueueType::Compute, false);

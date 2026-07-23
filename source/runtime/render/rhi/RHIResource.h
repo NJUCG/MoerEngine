@@ -156,11 +156,11 @@ struct TextureWithHandle {
     uint        hdl;         //主Handle
     Array<uint> mip_handles; //每个Mip的Handle
 
-    uint2  GetSize(uint mip = 0);
-    uint   GetSizeX(uint mip = 0);
-    uint   GetSizeY(uint mip = 0);
-    Rect2D GetRect2D(uint mip = 0);
-    uint   GetMipHandle(uint mip);
+    uint2  GetSize(uint mip = 0) const;
+    uint   GetSizeX(uint mip = 0) const;
+    uint   GetSizeY(uint mip = 0) const;
+    Rect2D GetRect2D(uint mip = 0) const;
+    uint   GetMipHandle(uint mip) const;
 };
 
 struct DepthBufferWithHandle {
@@ -801,6 +801,9 @@ public:
         uint8        num_mips;
         uint8        array_layer;
         uint8        array_count;
+        uint64        array_generation;
+        uint64        slot_generation;
+        uint64        command_token;
         bool         free;
     };
 
@@ -809,6 +812,9 @@ public:
         uint         array_idx;
         uint         slot;
         EPixelFormat format;
+        uint64       array_generation;
+        uint64       slot_generation;
+        uint64       command_token;
         bool         free;
     };
 
@@ -834,6 +840,7 @@ protected:
     friend class UpdateBindlessArrayCmd;
 
     virtual UniquePtr<class Command> CreateUpdateCommand() = 0;
+    virtual void DiscardUpdateCommand(const Array<UpdateCmd>&) {}
 };
 
 struct ArrayArgReference {

@@ -14,6 +14,7 @@ private:
 
 public:
     CORE_API static TaskGraph& GetInterface();
+    CORE_API static bool       IsInitialized() noexcept;
     static void                Init();
     static void                Shutdown();
     TaskGraph();

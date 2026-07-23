@@ -69,6 +69,7 @@ private:
     void ShutDown3rdParty();
 
     void TickRendererSwitchValidation(Scene& scene);
+    void TickRasterLifecycleValidation(Scene& scene);
     bool ConsumeRendererSwitchValidationReloadRequest();
 
     SharedPtr<EditorConfig>  m_editor_config;
@@ -92,6 +93,8 @@ private:
         ERendererSwitchValidationStage::Disabled;
     uint m_renderer_switch_validation_ready_frames = 0;
     bool m_renderer_switch_validation_reload_requested = false;
+    bool m_raster_lifecycle_validation_enabled = false;
+    uint m_raster_lifecycle_validation_ready_frames = 0;
 };
 
 } // namespace Moer

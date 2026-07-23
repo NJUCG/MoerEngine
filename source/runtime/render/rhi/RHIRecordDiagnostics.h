@@ -18,6 +18,10 @@ namespace Moer::Render {
 
 enum class RecordCapability : uint8_t {
     SerialOnly,
+    // The command body may be recorded on an allocator-local primary after
+    // the coordinator has completed resource-state preprocessing. Descriptor
+    // commands additionally require an immutable binder copy and a disjoint
+    // descriptor range lease.
     ParallelPrimarySafe,
 };
 
@@ -36,6 +40,10 @@ constexpr RecordConstraint operator|(RecordConstraint _lhs, RecordConstraint _rh
     return static_cast<RecordConstraint>(
         static_cast<uint32_t>(_lhs) | static_cast<uint32_t>(_rhs)
     );
+}
+
+constexpr bool HasRecordConstraint(RecordConstraint _value, RecordConstraint _constraint) {
+    return (static_cast<uint32_t>(_value) & static_cast<uint32_t>(_constraint)) != 0;
 }
 
 struct CommandRecordTraits {
@@ -60,23 +68,27 @@ constexpr CommandRecordTraits GetCommandRecordTraits(Command::EType _type) {
                     Constraint::MutatesCommandPayload | Constraint::AllocatorSideEffect |
                         Constraint::QueueOrHostSideEffect};
         case Type::BufferToBuffer:
-            return {"BufferToBuffer", Capability::SerialOnly, false, Constraint::GlobalResourceState};
+            return {"BufferToBuffer", Capability::ParallelPrimarySafe, false,
+                    Constraint::GlobalResourceState};
         case Type::BufferToTexture:
-            return {"BufferToTexture", Capability::SerialOnly, false, Constraint::GlobalResourceState};
+            return {"BufferToTexture", Capability::ParallelPrimarySafe, false,
+                    Constraint::GlobalResourceState};
         case Type::TextureToBuffer:
-            return {"TextureToBuffer", Capability::SerialOnly, false, Constraint::GlobalResourceState};
+            return {"TextureToBuffer", Capability::ParallelPrimarySafe, false,
+                    Constraint::GlobalResourceState};
         case Type::UploadTexture:
             return {"UploadTexture", Capability::SerialOnly, false,
                     Constraint::MutatesCommandPayload | Constraint::AllocatorSideEffect |
                         Constraint::GlobalResourceState};
         case Type::TextureToTexture:
-            return {"TextureToTexture", Capability::SerialOnly, false, Constraint::GlobalResourceState};
+            return {"TextureToTexture", Capability::ParallelPrimarySafe, false,
+                    Constraint::GlobalResourceState};
         case Type::CopyBackTexture:
             return {"CopyBackTexture", Capability::SerialOnly, false,
                     Constraint::MutatesCommandPayload | Constraint::AllocatorSideEffect |
                         Constraint::QueueOrHostSideEffect};
         case Type::ShaderDispatch:
-            return {"ShaderDispatch", Capability::SerialOnly, true,
+            return {"ShaderDispatch", Capability::ParallelPrimarySafe, true,
                     Constraint::SharedDescriptorBinder | Constraint::GlobalResourceState};
         case Type::BuildAccel:
             return {"BuildAccel", Capability::SerialOnly, false,
@@ -96,19 +108,19 @@ constexpr CommandRecordTraits GetCommandRecordTraits(Command::EType _type) {
                     Constraint::MutatesCommandPayload | Constraint::QueueOrHostSideEffect |
                         Constraint::GlobalResourceState};
         case Type::SetDrawState:
-            return {"SetDrawState", Capability::SerialOnly, true,
+            return {"SetDrawState", Capability::ParallelPrimarySafe, true,
                     Constraint::SharedDescriptorBinder | Constraint::GlobalResourceState};
         case Type::SetGeometryPassDrawState:
             return {"SetGeometryPassDrawState", Capability::SerialOnly, false,
                     Constraint::UnsupportedBackendPath};
         case Type::MultiDraw:
-            return {"MultiDraw", Capability::SerialOnly, true,
+            return {"MultiDraw", Capability::ParallelPrimarySafe, true,
                     Constraint::SharedDescriptorBinder | Constraint::GlobalResourceState};
         case Type::UpdateBindlessArray:
             return {"UpdateBindlessArray", Capability::SerialOnly, false,
                     Constraint::QueueOrHostSideEffect | Constraint::GlobalResourceState};
         case Type::ClearResource:
-            return {"ClearResource", Capability::SerialOnly, true,
+            return {"ClearResource", Capability::ParallelPrimarySafe, true,
                     Constraint::GlobalResourceState};
         case Type::Scope:
             return {"Scope", Capability::SerialOnly, false, Constraint::ProfilerOrScope};
@@ -123,6 +135,25 @@ constexpr CommandRecordTraits GetCommandRecordTraits(Command::EType _type) {
 
 constexpr bool IsParallelRecordCandidate(Command::EType _type) {
     return GetCommandRecordTraits(_type).measurement_candidate;
+}
+
+// A failed worker recording may be replayed on a fresh coordinator command
+// buffer only when visiting the command cannot consume payloads, allocate
+// transient resources, register completion callbacks, touch profiler/query
+// state, or perform host/queue side effects. Global resource state is allowed
+// because it is resolved exactly once by the coordinator before workers run;
+// descriptor binding is allowed because every visit uses an immutable binder
+// copy and a submit-local descriptor lease.
+constexpr bool IsParallelRecordReplaySafe(Command::EType _type) {
+    const CommandRecordTraits traits = GetCommandRecordTraits(_type);
+    constexpr RecordConstraint replay_forbidden =
+        RecordConstraint::MutatesCommandPayload |
+        RecordConstraint::AllocatorSideEffect |
+        RecordConstraint::ProfilerOrScope |
+        RecordConstraint::QueueOrHostSideEffect |
+        RecordConstraint::UnsupportedBackendPath;
+    return traits.capability == RecordCapability::ParallelPrimarySafe &&
+           !HasRecordConstraint(traits.constraints, replay_forbidden);
 }
 
 class StableRecordHash {

@@ -13,6 +13,7 @@
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "platform/Platform.h"
+#include "rhi/RHIExecutor.h"
 #include "rhi/vulkan/VulkanDevice.h"
 #include "rhi/vulkan/VulkanQueue.h"
 #include <cuda_runtime.h>
@@ -448,8 +449,12 @@ struct CudaSemaphore {
         vk_native_queue(CudaVulkanTools::getVulkanQueue(context.gfx_queue).GetVkNativeQueue()) {
 
         pfn_sync_vk = [&]() {
-            context.gfx_queue.Execute(context.cmd_list.Submit());
-            context.gfx_queue.Sync();
+            RHIExecutor::Get().Submit(
+                EQueueType::Graphics,
+                context.cmd_list.Submit(),
+                ERHIExecSubmitFlags::FlushGPU
+            );
+            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
         };
 
         LoadVulkanWin32PFN();

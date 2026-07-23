@@ -22,10 +22,12 @@ class Scenario:
     max_frame_lag: int
     render_graph: bool = False
     render_graph_debug_dump: bool = False
+    render_graph_parallel_recording: bool = False
     window_stress: bool = False
     editor_args: tuple[str, ...] = ()
     fault_validation: bool = False
     renderer_switch_validation: bool = False
+    raster_lifecycle_validation: bool = False
     framebuffer_validation: str | None = None
     expect_exit_after_ready: bool = False
     ready_log_pattern: str | None = None
@@ -239,6 +241,86 @@ FEATURE_VALIDATION_SCENARIOS = (
         ready_log_pattern="[ThreadingValidation][RendererSwitch] Complete:",
         require_profile_logs=False,
     ),
+    Scenario(
+        "feature_raster_graph_serial_recording",
+        "Raster",
+        True,
+        True,
+        False,
+        1,
+        render_graph=True,
+        render_graph_debug_dump=True,
+        editor_args=("--threading-raster-lifecycle-validation", "--no-splash"),
+        raster_lifecycle_validation=True,
+        expect_exit_after_ready=True,
+        ready_log_pattern="[ThreadingValidation][RasterLifecycle] Complete:",
+        require_profile_logs=False,
+    ),
+    Scenario(
+        "feature_raster_graph_parallel_recording",
+        "Raster",
+        True,
+        True,
+        False,
+        1,
+        render_graph=True,
+        render_graph_debug_dump=True,
+        render_graph_parallel_recording=True,
+        editor_args=("--threading-raster-lifecycle-validation", "--no-splash"),
+        raster_lifecycle_validation=True,
+        expect_exit_after_ready=True,
+        ready_log_pattern="[ThreadingValidation][RasterLifecycle] Complete:",
+        require_profile_logs=False,
+    ),
+    Scenario(
+        "feature_raster_graph_parallel_recording_gt",
+        "Raster",
+        False,
+        True,
+        False,
+        0,
+        render_graph=True,
+        render_graph_debug_dump=True,
+        render_graph_parallel_recording=True,
+        editor_args=("--threading-raster-lifecycle-validation", "--no-splash"),
+        raster_lifecycle_validation=True,
+        expect_exit_after_ready=True,
+        ready_log_pattern="[ThreadingValidation][RasterLifecycle] Complete:",
+        require_profile_logs=False,
+    ),
+    Scenario(
+        "feature_raster_graph_parallel_recording_reload_switch",
+        "Raster",
+        True,
+        True,
+        False,
+        1,
+        render_graph=True,
+        render_graph_debug_dump=True,
+        render_graph_parallel_recording=True,
+        editor_args=("--threading-renderer-switch-validation", "--no-splash"),
+        renderer_switch_validation=True,
+        expect_exit_after_ready=True,
+        ready_log_pattern="[ThreadingValidation][RendererSwitch] Complete:",
+        require_profile_logs=False,
+    ),
+)
+
+UPPER_PARALLEL_RECORD_GATES = (
+    r"cpu=parallel-record workload=1 wave=[0-9]+ passes=\[HiZBuild\]",
+    r"cpu=parallel-record workload=1 wave=[0-9]+ passes=\[DirectionalShadowMask\]",
+    r"cpu=parallel-record workload=1 wave=[0-9]+ passes=\[Lighting\]",
+    r"cpu=parallel-record workload=1 wave=[0-9]+ passes=\[Skybox\]",
+    (
+        r"\[RenderGraph\]\[ParallelRecordDispatch\] graph=RasterFrame "
+        r"passes=\[HiZBuild,DirectionalShadowMask\] dispatch=task-graph "
+        r"worker_jobs=2 completed=true"
+    ),
+    (
+        r"\[RenderGraph\]\[ParallelRecordDispatch\] graph=RasterFrame "
+        r"passes=\[Lighting,Skybox\] dispatch=task-graph "
+        r"worker_jobs=2 completed=true"
+    ),
 )
 
 SCENARIOS = {
@@ -291,6 +373,10 @@ def generate_config(base_text: str, scenario: Scenario) -> str:
             "engine.render.raster",
             "render_graph_debug_dump",
         ): scenario.render_graph_debug_dump,
+        (
+            "engine.render.raster",
+            "render_graph_parallel_recording",
+        ): scenario.render_graph_parallel_recording,
     }
     replaced = {target: 0 for target in replacements}
     current_section = ""
@@ -337,6 +423,9 @@ def generate_config(base_text: str, scenario: Scenario) -> str:
         ("engine.render.raster", "render_graph"): raster["render_graph"],
         ("engine.render.raster", "render_graph_debug_dump"): raster[
             "render_graph_debug_dump"
+        ],
+        ("engine.render.raster", "render_graph_parallel_recording"): raster[
+            "render_graph_parallel_recording"
         ],
     }
     if actual != replacements:
@@ -389,6 +478,14 @@ def required_patterns(scenario: Scenario) -> list[str]:
         )
         if scenario.render_graph:
             patterns.append("[RenderGraph][DebugDump]")
+            patterns.append(
+                "upper recording: "
+                + (
+                    "parallel-eligible"
+                    if scenario.render_graph_parallel_recording
+                    else "serial-fallback"
+                )
+            )
     if scenario.renderer_switch_validation:
         patterns.extend(
             [
@@ -401,6 +498,13 @@ def required_patterns(scenario: Scenario) -> list[str]:
                     "[Threading] Raytracing frames execute on "
                     f"{execution_thread} thread id ="
                 ),
+            ]
+        )
+    if scenario.raster_lifecycle_validation:
+        patterns.extend(
+            [
+                "[ThreadingValidation][RasterLifecycle] Enabled",
+                "[ThreadingValidation][RasterLifecycle] Complete:",
             ]
         )
     if scenario.framebuffer_validation:
@@ -460,6 +564,9 @@ def build_verifier_command(
         command.append("--expect-exit-after-ready")
     for pattern in required_patterns(scenario):
         command.extend(["--require-log-pattern", pattern])
+    if scenario.render_graph_parallel_recording:
+        for pattern in UPPER_PARALLEL_RECORD_GATES:
+            command.extend(["--require-log-min-count", pattern, "1"])
     if scenario.renderer == "Raster":
         raster_mode_marker = (
             "[RenderGraph] Raster execution mode: "
@@ -1214,6 +1321,7 @@ def main() -> int:
                 f"rhi={scenario.rhi_thread}, bypass={scenario.rhi_bypass}, "
                 f"lag={scenario.max_frame_lag}, graph={scenario.render_graph}, "
                 f"graph_dump={scenario.render_graph_debug_dump}, "
+                f"graph_parallel_record={scenario.render_graph_parallel_recording}, "
                 f"stress={scenario.window_stress}"
             )
         return 0

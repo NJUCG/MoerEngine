@@ -59,6 +59,9 @@ public:
 
     virtual void CompleteSuccess();
     virtual bool Reset();
+    // A recorder that was never submitted must not run success callbacks.
+    // It can still reset and return to the pool after all worker jobs joined.
+    bool ResetAbandoned();
 
 protected:
     std::optional<VulkanCmdAllocator> cmd_allocator;

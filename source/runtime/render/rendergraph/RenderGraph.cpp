@@ -1,11 +1,17 @@
 #include "rendergraph/RenderGraph.h"
 
+#include "log/LogSystem.h"
 #include "rendergraph/RenderGraphCompiler.h"
+#include "rhi/RHIExecutor.h"
+#include "taskgraph/TaskGraph.h"
 
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <exception>
+#include <mutex>
 #include <sstream>
+#include <unordered_set>
 #include <utility>
 
 namespace Moer::Render {
@@ -93,6 +99,22 @@ const char* ToString(RenderGraph::PipelineType pipeline) {
             return "raytracing";
         case RenderGraph::PipelineType::Copy:
             return "copy";
+    }
+    return "unknown";
+}
+
+const char* ToString(RenderGraph::PassExecutionClass execution) {
+    switch (execution) {
+        case RenderGraph::PassExecutionClass::MainThread:
+            return "main-thread";
+        case RenderGraph::PassExecutionClass::CpuPrepare:
+            return "cpu-prepare";
+        case RenderGraph::PassExecutionClass::ExternalControl:
+            return "external-control";
+        case RenderGraph::PassExecutionClass::SerialRecord:
+            return "serial-record";
+        case RenderGraph::PassExecutionClass::ParallelRecordEligible:
+            return "parallel-record";
     }
     return "unknown";
 }
@@ -498,6 +520,11 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::ReadWrite(TokenHandle resour
     return *this;
 }
 
+RenderGraph::PassBuilder& RenderGraph::PassBuilder::Reference(ResourceHandle resource) {
+    graph.AddReference(pass_index, resource);
+    return *this;
+}
+
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::DependsOn(PassHandle dependency) {
     graph.AddDependency(pass_index, dependency);
     return *this;
@@ -511,6 +538,45 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::SideEffect() {
 RenderGraph::PassBuilder&
 RenderGraph::PassBuilder::ExecuteOn(QueueRole queue, PipelineType pipeline) {
     graph.SetExecutionDomain(pass_index, queue, pipeline);
+    return *this;
+}
+
+[[nodiscard]] EQueueType ToRHIQueue(RenderGraph::QueueRole queue) {
+    switch (queue) {
+        case RenderGraph::QueueRole::Graphics:
+            return EQueueType::Graphics;
+        case RenderGraph::QueueRole::Compute:
+            return EQueueType::Compute;
+        case RenderGraph::QueueRole::Copy:
+            return EQueueType::Copy;
+        case RenderGraph::QueueRole::None:
+            return EQueueType::Ignore;
+    }
+    return EQueueType::Ignore;
+}
+
+RenderGraph::PassBuilder& RenderGraph::PassBuilder::MainThread() {
+    graph.SetPassExecutionClass(pass_index, PassExecutionClass::MainThread, 1);
+    return *this;
+}
+
+RenderGraph::PassBuilder& RenderGraph::PassBuilder::CpuPrepare() {
+    graph.SetPassExecutionClass(pass_index, PassExecutionClass::CpuPrepare, 1);
+    return *this;
+}
+
+RenderGraph::PassBuilder& RenderGraph::PassBuilder::ExternalControl() {
+    graph.SetPassExecutionClass(pass_index, PassExecutionClass::ExternalControl, 1);
+    return *this;
+}
+
+RenderGraph::PassBuilder& RenderGraph::PassBuilder::SerialRecord(uint32_t workload) {
+    graph.SetPassExecutionClass(pass_index, PassExecutionClass::SerialRecord, workload);
+    return *this;
+}
+
+RenderGraph::PassBuilder& RenderGraph::PassBuilder::ParallelRecord(uint32_t workload) {
+    graph.SetPassExecutionClass(pass_index, PassExecutionClass::ParallelRecordEligible, workload);
     return *this;
 }
 
@@ -821,6 +887,45 @@ RenderGraph::AddPass(std::string_view pass_name, const SetupCallback& setup, Exe
     return PassHandle{pass_index, graph_id};
 }
 
+RenderGraph::PassHandle RenderGraph::AddRecordPass(
+    std::string_view     pass_name,
+    const SetupCallback& setup,
+    RecordCallback       record,
+    PassExecutionClass   execution,
+    uint32_t             workload
+) {
+    if (!InvalidateCompile()) {
+        return {};
+    }
+    if (pass_name.empty()) {
+        declaration_errors.emplace_back("pass name cannot be empty");
+        return {};
+    }
+    if (!record) {
+        declaration_errors.emplace_back("pass has no record callback: " + std::string(pass_name));
+        return {};
+    }
+    if (std::any_of(passes.begin(), passes.end(), [&](const PassDeclaration& pass) {
+            return pass.name == pass_name;
+        })) {
+        declaration_errors.emplace_back("duplicate pass name: " + std::string(pass_name));
+        return {};
+    }
+
+    PassDeclaration pass{};
+    pass.name            = pass_name;
+    pass.record          = std::move(record);
+    pass.execution_class = execution;
+    pass.workload        = workload;
+    passes.emplace_back(std::move(pass));
+    const uint32_t pass_index = static_cast<uint32_t>(passes.size() - 1);
+    PassBuilder    builder(*this, pass_index);
+    if (setup) {
+        setup(builder);
+    }
+    return PassHandle{pass_index, graph_id};
+}
+
 bool RenderGraph::Compile() {
     if (executed) {
         compile_error = "graph has already executed and cannot be compiled again";
@@ -830,6 +935,10 @@ bool RenderGraph::Compile() {
 }
 
 bool RenderGraph::Execute() {
+    return Execute({});
+}
+
+bool RenderGraph::Execute(const PassCompletedCallback& after_pass) {
     if (!compiled) {
         compile_error = "Execute called before a successful Compile";
         return false;
@@ -838,12 +947,354 @@ bool RenderGraph::Execute() {
         compile_error = "a per-frame RenderGraph can only be executed once";
         return false;
     }
+    if (std::any_of(compiled_plan.execution_order.begin(),
+                    compiled_plan.execution_order.end(),
+                    [&](PassHandle handle) { return static_cast<bool>(passes[handle.index].record); })) {
+        compile_error = "serial Execute cannot run command-recording passes without owned CommandLists";
+        return false;
+    }
     executed = true;
 
     for (const PassHandle pass_handle : compiled_plan.execution_order) {
         auto& pass = passes[pass_handle.index];
         assert(pass.execute);
         pass.execute();
+        if (after_pass) {
+            after_pass(ExecutedPassInfo{
+                .handle      = pass_handle,
+                .name        = pass.name,
+                .domain      = pass.domain,
+                .side_effect = pass.side_effect,
+                .execution_class = pass.execution_class,
+            });
+        }
+    }
+    return true;
+}
+
+bool RenderGraph::ExecuteRecording(
+    const PassCompletedCallback&        after_main_thread_pass,
+    const RecordingSourceSetupCallback& configure_recording_source,
+    bool                                parallel_recording_enabled,
+    const RecordingBatchPublisher&      publish_recording_batch
+) {
+    if (!compiled) {
+        compile_error = "ExecuteRecording called before a successful Compile";
+        return false;
+    }
+    if (executed) {
+        compile_error = "a per-frame RenderGraph can only be executed once";
+        return false;
+    }
+    executed = true;
+
+    struct RecordingJob {
+        PassHandle          pass{};
+        std::string         pass_name{};
+        RecordCallback      record{};
+        SharedPtr<CommandList> command_list{};
+        RHIRecordingGateRef completion{};
+    };
+    struct RecordingError {
+        std::mutex  mutex{};
+        std::string message{};
+    };
+    struct PendingGateGuard {
+        const Array<RHIRecordingGateRef>* gates{nullptr};
+        bool                              armed{true};
+
+        ~PendingGateGuard() {
+            if (!armed || gates == nullptr) {
+                return;
+            }
+            for (const auto& gate : *gates) {
+                if (gate && gate->Status() == ERHIRecordingStatus::Pending) {
+                    gate->Fail();
+                }
+            }
+        }
+
+        void Disarm() noexcept {
+            armed = false;
+        }
+    };
+
+    auto make_pass_info = [&](PassHandle handle) {
+        const auto& pass = passes[handle.index];
+        return ExecutedPassInfo{
+            .handle          = handle,
+            .name            = pass.name,
+            .domain          = pass.domain,
+            .side_effect     = pass.side_effect,
+            .execution_class = pass.execution_class,
+        };
+    };
+
+    auto store_error = [](const std::shared_ptr<RecordingError>& error, std::string message) {
+        std::lock_guard lock(error->mutex);
+        if (error->message.empty()) {
+            error->message = std::move(message);
+        }
+    };
+
+    auto has_cpu_recording_dependency = [&](PassHandle candidate,
+                                            size_t     group_begin,
+                                            size_t     group_end) {
+        for (const auto& edge : compiled_plan.edges) {
+            if (edge.dst != candidate) {
+                continue;
+            }
+
+            const bool source_is_in_group = std::any_of(
+                compiled_plan.recording_batches.begin() + group_begin,
+                compiled_plan.recording_batches.begin() + group_end,
+                [&](const CompiledRecordingBatch& batch) {
+                    return batch.passes.size() == 1 && batch.passes.front() == edge.src;
+                }
+            );
+            if (!source_is_in_group) {
+                continue;
+            }
+
+            for (const auto& reason : edge.reasons) {
+                if (reason.kind == EdgeReasonKind::Explicit) {
+                    return true;
+                }
+                if (IsValidResource(reason.resource) &&
+                    resources[reason.resource.index].kind == ResourceKind::Token) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+
+    size_t batch_index = 0;
+    while (batch_index < compiled_plan.recording_batches.size()) {
+        const auto& first_batch = compiled_plan.recording_batches[batch_index];
+        if (first_batch.passes.size() != 1) {
+            compile_error = "recording execution currently requires one pass per compiled batch";
+            return false;
+        }
+
+        const PassHandle first_handle = first_batch.passes.front();
+        auto&            first_pass   = passes[first_handle.index];
+        if (first_batch.execution == PassExecutionClass::MainThread ||
+            first_batch.execution == PassExecutionClass::CpuPrepare ||
+            first_batch.execution == PassExecutionClass::ExternalControl) {
+            if (!first_pass.execute || first_pass.record) {
+                compile_error = "compiled caller-thread pass has an invalid callback shape: " +
+                                first_pass.name;
+                return false;
+            }
+            first_pass.execute();
+            if (first_batch.execution == PassExecutionClass::MainThread &&
+                after_main_thread_pass) {
+                after_main_thread_pass(make_pass_info(first_handle));
+            }
+            ++batch_index;
+            continue;
+        }
+
+        size_t group_end = batch_index + 1;
+        if (first_batch.execution == PassExecutionClass::ParallelRecordEligible) {
+            while (group_end < compiled_plan.recording_batches.size()) {
+                const auto& candidate = compiled_plan.recording_batches[group_end];
+                if (candidate.execution != PassExecutionClass::ParallelRecordEligible ||
+                    candidate.queue.role != first_batch.queue.role ||
+                    candidate.queue.native_queue_id != first_batch.queue.native_queue_id ||
+                    candidate.queue.family_id != first_batch.queue.family_id ||
+                    candidate.passes.size() != 1 ||
+                    has_cpu_recording_dependency(
+                        candidate.passes.front(), batch_index, group_end
+                    )) {
+                    break;
+                }
+                ++group_end;
+            }
+        }
+
+        Array<RecordingJob>        jobs{};
+        Array<RHIRecordingSource>  sources{};
+        Array<RHIRecordingGateRef> group_gates{};
+        jobs.reserve(group_end - batch_index);
+        sources.reserve(group_end - batch_index);
+        group_gates.reserve(group_end - batch_index);
+
+        for (size_t index = batch_index; index < group_end; ++index) {
+            const auto& batch = compiled_plan.recording_batches[index];
+            const auto  handle = batch.passes.front();
+            auto&       pass   = passes[handle.index];
+            const auto  queue  = ToRHIQueue(batch.queue.role);
+            if (!pass.record || pass.execute || queue == EQueueType::Ignore) {
+                compile_error = "compiled recording pass has an invalid callback or queue: " +
+                                pass.name;
+                return false;
+            }
+
+            RecordingJob job{
+                .pass         = handle,
+                .pass_name    = pass.name,
+                .record       = pass.record,
+                .command_list = MakeShared<CommandList>(queue),
+                .completion   = RHIRecordingGate::Create(),
+            };
+            RHIRecordingSource source{
+                .command_list = job.command_list,
+                .completion   = job.completion,
+            };
+            if (configure_recording_source) {
+                try {
+                    configure_recording_source(make_pass_info(handle), source);
+                } catch (const std::exception& exception) {
+                    compile_error = "recording source configuration failed for pass '" + pass.name +
+                                    "': " + exception.what();
+                    return false;
+                } catch (...) {
+                    compile_error = "recording source configuration failed for pass '" + pass.name + "'";
+                    return false;
+                }
+                if (source.command_list != job.command_list || source.completion != job.completion) {
+                    compile_error = "recording source configuration changed ownership for pass '" +
+                                    pass.name + "'";
+                    return false;
+                }
+            }
+            group_gates.emplace_back(job.completion);
+            jobs.emplace_back(std::move(job));
+            sources.emplace_back(std::move(source));
+        }
+
+        PendingGateGuard pending_gate_guard{.gates = &group_gates};
+
+        const auto error = std::make_shared<RecordingError>();
+        auto run_job = [error, store_error](RecordingJob job) mutable {
+            try {
+                job.record(*job.command_list);
+                // Keep every immutable capture alive until the submit reaches
+                // a terminal backend/rejection callback, not merely until CPU
+                // recording finishes.
+                job.command_list->AddCallback(
+                    [keepalive = std::move(job.record)]() mutable { keepalive = {}; }
+                );
+                job.completion->Signal();
+            } catch (const std::exception& exception) {
+                store_error(
+                    error,
+                    "record pass '" + job.pass_name + "' failed: " + exception.what()
+                );
+                job.completion->Fail();
+            } catch (...) {
+                store_error(error, "record pass '" + job.pass_name + "' failed");
+                job.completion->Fail();
+            }
+        };
+
+        // Register the unfinished sources before dispatch, matching the
+        // dev_parallel/UE-style producer-consumer handoff. RHI owns stable
+        // source order; worker completion order is irrelevant.
+        try {
+            if (publish_recording_batch) {
+                publish_recording_batch(std::move(sources));
+            } else {
+                RHIExecutor::Get().SubmitRecording(std::move(sources), ERHIExecSubmitFlags::None);
+            }
+        } catch (const std::exception& exception) {
+            compile_error = std::string("failed to publish recording batch: ") + exception.what();
+            return false;
+        } catch (...) {
+            compile_error = "failed to publish recording batch";
+            return false;
+        }
+
+        const bool task_graph_available = TaskGraph::IsInitialized();
+        const bool task_graph_dispatch =
+            first_batch.execution == PassExecutionClass::ParallelRecordEligible &&
+            parallel_recording_enabled && task_graph_available;
+        if (first_batch.execution == PassExecutionClass::SerialRecord ||
+            !parallel_recording_enabled || !task_graph_available) {
+            for (auto& job : jobs) {
+                run_job(std::move(job));
+            }
+        } else {
+            GraphEventArray record_events{};
+            record_events.reserve(jobs.size());
+            size_t dispatched_count = 0;
+            try {
+                for (; dispatched_count < jobs.size(); ++dispatched_count) {
+                    record_events.emplace_back(LambdaTask::Dispatch(
+                        [job = std::move(jobs[dispatched_count]), run_job]() mutable {
+                            run_job(std::move(job));
+                        }
+                    ));
+                }
+            } catch (const std::exception& exception) {
+                store_error(error, std::string("failed to dispatch recording task: ") + exception.what());
+                for (size_t index = dispatched_count; index < jobs.size(); ++index) {
+                    group_gates[index]->Fail();
+                }
+            } catch (...) {
+                store_error(error, "failed to dispatch recording task");
+                for (size_t index = dispatched_count; index < jobs.size(); ++index) {
+                    group_gates[index]->Fail();
+                }
+            }
+            if (!record_events.empty()) {
+                // Do not use TaskGraph::WaitUntilTasksComplete here. On a named Render Thread that
+                // wait is allowed to pump the same named queue, which can execute the next
+                // RenderFrame re-entrantly while this frame still owns mutable renderer state.
+                // The producer gate is the handoff contract: Signal/Fail happens only after the
+                // worker has stopped mutating its CommandList, and its condition variable gives the
+                // caller the required happens-before edge without processing unrelated RT work.
+                // Keep record_events alive until every producer is terminal so the task/event
+                // ownership also remains explicit across the blocking join.
+                for (const auto& gate : group_gates) {
+                    (void)gate->Wait();
+                }
+            }
+        }
+
+        bool group_succeeded = true;
+        for (const auto& gate : group_gates) {
+            group_succeeded =
+                gate->Wait() == ERHIRecordingStatus::Succeeded && group_succeeded;
+        }
+        if (!group_succeeded) {
+            std::lock_guard lock(error->mutex);
+            compile_error = error->message.empty() ? "recording batch failed" : error->message;
+            return false;
+        }
+        if (task_graph_dispatch && group_end - batch_index > 1) {
+            std::ostringstream pass_list;
+            for (size_t index = batch_index; index < group_end; ++index) {
+                if (index != batch_index) {
+                    pass_list << ',';
+                }
+                const auto pass_handle = compiled_plan.recording_batches[index].passes.front();
+                pass_list << passes[pass_handle.index].name;
+            }
+
+            const std::string pass_names = pass_list.str();
+            const std::string dispatch_key = name + '\n' + pass_names;
+            static std::mutex                      logged_dispatch_mutex;
+            static std::unordered_set<std::string> logged_dispatches;
+            bool                                   first_dispatch = false;
+            {
+                std::lock_guard lock(logged_dispatch_mutex);
+                first_dispatch = logged_dispatches.emplace(dispatch_key).second;
+            }
+            if (first_dispatch) {
+                LOG_INFO(
+                    "[RenderGraph][ParallelRecordDispatch] graph={} passes=[{}] "
+                    "dispatch=task-graph worker_jobs={} completed=true",
+                    name,
+                    pass_names,
+                    group_end - batch_index
+                );
+            }
+        }
+        pending_gate_guard.Disarm();
+        batch_index = group_end;
     }
     return true;
 }
@@ -879,6 +1330,8 @@ std::string RenderGraph::Dump() const {
                << " scheduled=" << (has_execution_order ? "true" : "false")
                << " queue=" << ToString(pass.domain.queue)
                << " pipeline=" << ToString(pass.domain.pipeline)
+               << " cpu=" << ToString(pass.execution_class)
+               << " workload=" << pass.workload
                << " side_effect=" << (pass.side_effect ? "true" : "false") << " accesses=[";
         for (uint32_t access_index = 0; access_index < pass.accesses.size(); ++access_index) {
             const auto& access = pass.accesses[access_index];
@@ -900,6 +1353,15 @@ std::string RenderGraph::Dump() const {
             stream << " state=";
             AppendState(stream, access.state);
             stream << ')';
+        }
+        stream << "] references=[";
+        for (uint32_t reference_index = 0; reference_index < pass.references.size();
+             ++reference_index) {
+            if (reference_index != 0) {
+                stream << ", ";
+            }
+            const auto reference = pass.references[reference_index];
+            stream << (IsValidResource(reference) ? resources[reference.index].name : "invalid");
         }
         stream << "]\n";
     }
@@ -1077,7 +1539,9 @@ std::string RenderGraph::Dump() const {
     stream << "queue_batches:\n";
     for (const auto& batch : compiled_plan.queue_batches) {
         stream << "  [" << batch.id << "] " << ToString(batch.queue.role) << " native="
-               << batch.queue.native_queue_id << " family=" << batch.queue.family_id << " passes=[";
+               << batch.queue.native_queue_id << " family=" << batch.queue.family_id
+               << " external_control=" << (batch.external_control ? "true" : "false")
+               << " passes=[";
         for (uint32_t pass_index = 0; pass_index < batch.passes.size(); ++pass_index) {
             if (pass_index != 0) {
                 stream << ',';
@@ -1157,6 +1621,27 @@ std::string RenderGraph::Dump() const {
                 stream << ", ";
             }
             stream << passes[wave.passes[pass_index].index].name;
+        }
+        stream << "]\n";
+    }
+
+    stream << "recording_batches:\n";
+    for (const auto& batch : compiled_plan.recording_batches) {
+        stream << "  [" << batch.id << "] queue=" << ToString(batch.queue.role)
+               << "/native" << batch.queue.native_queue_id << "/family" << batch.queue.family_id
+               << " cpu=" << ToString(batch.execution) << " workload=" << batch.workload
+               << " wave=";
+        if (batch.dependency_wave == PassHandle::InvalidIndex) {
+            stream << "none";
+        } else {
+            stream << batch.dependency_wave;
+        }
+        stream << " passes=[";
+        for (uint32_t index = 0; index < batch.passes.size(); ++index) {
+            if (index != 0) {
+                stream << ", ";
+            }
+            stream << passes[batch.passes[index].index].name;
         }
         stream << "]\n";
     }
@@ -1293,6 +1778,48 @@ void RenderGraph::SetExecutionDomain(
         return;
     }
     passes[pass_index].domain = ExecutionDomain{queue, pipeline};
+}
+
+void RenderGraph::AddReference(uint32_t pass_index, ResourceHandle resource) {
+    if (!InvalidateCompile()) {
+        return;
+    }
+    if (pass_index >= passes.size()) {
+        declaration_errors.emplace_back("resource reference has invalid pass index");
+        return;
+    }
+    if (!IsValidResource(resource)) {
+        declaration_errors.emplace_back(
+            "pass '" + passes[pass_index].name + "' references an invalid resource identity"
+        );
+        return;
+    }
+    auto& references = passes[pass_index].references;
+    if (std::find(references.begin(), references.end(), resource) == references.end()) {
+        references.emplace_back(resource);
+    }
+}
+
+void RenderGraph::SetPassExecutionClass(
+    uint32_t           pass_index,
+    PassExecutionClass execution_class,
+    uint32_t           workload
+) {
+    if (!InvalidateCompile()) {
+        return;
+    }
+    if (pass_index >= passes.size()) {
+        declaration_errors.emplace_back("recording-class declaration has invalid pass index");
+        return;
+    }
+    if (workload == 0) {
+        declaration_errors.emplace_back(
+            "pass '" + passes[pass_index].name + "' has zero recording workload"
+        );
+        return;
+    }
+    passes[pass_index].execution_class = execution_class;
+    passes[pass_index].workload        = workload;
 }
 
 bool RenderGraph::InvalidateCompile() {

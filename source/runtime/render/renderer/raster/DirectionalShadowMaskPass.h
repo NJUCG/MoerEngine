@@ -19,8 +19,24 @@ public:
 
 class DirectionalShadowMaskPass {
 public:
+    struct RecordParameters {
+        uint             normal_handle{0};
+        uint             depth_handle{0};
+        TextureRef       normal_owner{};
+        DepthBufferRef   depth_owner{};
+        StaticArray<DepthBufferRef, CSM_MAX_CASCADES> cascade_shadow_owners{};
+        StaticArray<TextureRef, RasterContext::PointShadowData::MAX_POINT_SHADOWS>
+            point_shadow_owners{};
+        BufferRef        lighting_data{};
+        BindlessArrayRef bindless{};
+        TextureRef       output{};
+        Rect2D           render_area{};
+    };
+
     DirectionalShadowMaskPass(RasterContext& context);
 
+    [[nodiscard]] RecordParameters Prepare(const RasterContext& context) const;
+    void Record(CommandList& cmd_list, const RecordParameters& parameters);
     void Process(RasterContext& context);
 
 private:

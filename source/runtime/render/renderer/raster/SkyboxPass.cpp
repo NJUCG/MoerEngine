@@ -23,8 +23,13 @@ SkyboxPass::SkyboxPass(RasterContext& context) {
                           .Build<SkyboxPipeline>(std::move(pipeline_info));
 }
 
-void SkyboxPass::Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera) {
-    SkyboxPassBindlessParam skybox_param;
+SkyboxPass::RecordParameters SkyboxPass::Prepare(
+    const RasterContext& context,
+    const RasterConfig&  ui_config,
+    const Camera&        camera
+) const {
+    RecordParameters parameters{};
+    auto&            skybox_param = parameters.pass_param;
     skybox_param.cubemap_handle = context.textures.cubemap_tex.hdl;
     const auto& directional_light = context.GetSceneUpdates().main_directional_light;
     if (directional_light && ui_config.skybox_exposure_correct_enabled) {
@@ -36,22 +41,33 @@ void SkyboxPass::Process(RasterContext& context, const RasterConfig& ui_config, 
     skybox_param.camera_pos = camera.GetPosition();
     skybox_param.clip2world = Transpose(camera.GetViewProjectionMatrixInv());
 
-    DepthAttachment depth_attachment(
-        context.textures.depth_linear_sampler.tex->GetView().GetTexture()
-    );
+    parameters.bindless      = context.bdls;
+    parameters.cubemap_owner = context.textures.cubemap_tex.tex;
+    parameters.depth_owner   = context.textures.depth_linear_sampler.tex;
+    parameters.output        = context.textures.lighting_output.tex;
+    parameters.render_area   = context.textures.lighting_output.GetRect2D();
+    return parameters;
+}
+
+void SkyboxPass::Record(CommandList& cmd_list, const RecordParameters& parameters) {
+    DepthAttachment depth_attachment(parameters.depth_owner->GetView().GetTexture());
     depth_attachment.action = EAttachmentAction::AC_DS_LOAD_STORE;
 
-    context.cmd_list.Gfx(skybox_pipeline, context.bdls, skybox_param)
+    cmd_list.Gfx(skybox_pipeline, parameters.bindless, parameters.pass_param)
         .Draw(
             "Skybox Pass",
-            context.textures.lighting_output.GetRect2D(),
+            parameters.render_area,
             std::move(RasterTool::GetFullScreenDrawDatas()),
             depth_attachment,
             // 保留上一个延迟光照 Pass 写入的结果。
             ColorAttachment{
-                context.textures.lighting_output.tex, EAttachmentAction::AC_LOAD_STORE, float4(0, 0, 0, 0)
+                parameters.output, EAttachmentAction::AC_LOAD_STORE, float4(0, 0, 0, 0)
             }
         );
+}
+
+void SkyboxPass::Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera) {
+    Record(context.cmd_list, Prepare(context, ui_config, camera));
 }
 
 } // namespace Moer::Render::Raster

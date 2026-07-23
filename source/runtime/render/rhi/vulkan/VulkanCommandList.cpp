@@ -21,6 +21,8 @@
 #include "vulkan/vulkan_core.h"
 
 #include <cstdint>
+#include <optional>
+#include <stdexcept>
 #include <stdint.h>
 #include <string>
 #include <variant>
@@ -176,17 +178,17 @@ VulkanCmdList::VulkanCmdList(VulkanCmdAllocator* _alloc, VulkanDevice& _device) 
 VulkanCmdList::~VulkanCmdList() {
     vkFreeCommandBuffers(device.GetDevice(), allocator->GetHandle(), 1, &command_buffer);
 }
-void VulkanCmdList::Begin() {
+VkResult VulkanCmdList::Begin() {
     VkCommandBufferBeginInfo begin_info = {
         .sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .pNext            = nullptr,
         .flags            = 0,
         .pInheritanceInfo = nullptr
     };
-    VK_CHECK_RESULT(vkBeginCommandBuffer(command_buffer, &begin_info));
+    return vkBeginCommandBuffer(command_buffer, &begin_info);
 }
-void VulkanCmdList::End() {
-    VK_CHECK_RESULT(vkEndCommandBuffer(command_buffer));
+VkResult VulkanCmdList::End() {
+    return vkEndCommandBuffer(command_buffer);
 }
 void VulkanCmdList::CopyBuffer(
     VulkanBuffer* _src,
@@ -598,10 +600,30 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& _pso_handle, const Arr
     auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(_pso_handle.handle);
 
     assert(vk_pso && vk_pso->bind_template != nullptr && "Pipeline state has no bind template!");
-    VulkanPipelineParamBinder& bind_template        = *vk_pso->bind_template;
-    VulkanDescriptorHeap&      descriptor_heap      = device.GetGlobalDescriptorHeap();
-    auto&                      set_binders          = bind_template.set_binders;
-    uint64                     g_global_desc_offset = descriptor_heap.current_offset;
+    // Pipeline metadata remains immutable across graphics/compute queues and
+    // parallel workers. Only the small per-bind address/offset arrays and push
+    // constant pointer are recorder-local; copying the full binder map would
+    // add unnecessary serial-path cost.
+    const VulkanPipelineParamBinder& bind_template = *vk_pso->bind_template;
+    const auto&                      set_binders   = bind_template.set_binders;
+    auto                             desc_buffers  = bind_template.desc_buffers;
+    auto desc_buffer_offsets = bind_template.desc_buffer_offsets;
+    VkPushConstantsInfoKHR push_constants_info = bind_template.push_constants_info;
+    VulkanDescriptorHeap&  descriptor_heap = device.GetGlobalDescriptorHeap();
+
+    uint64 descriptor_bytes = 0;
+    for (const auto& [set, binder] : set_binders) {
+        (void)set;
+        if (const auto* descriptor_set = std::get_if<VulkanDescriptorSetBinder>(&binder)) {
+            descriptor_bytes += descriptor_set->size;
+        }
+    }
+    const std::optional<uint64> descriptor_range =
+        descriptor_heap.ReservePushDescriptorRange(descriptor_push_lease, descriptor_bytes);
+    if (!descriptor_range.has_value()) {
+        throw std::runtime_error("descriptor submission lease exhausted");
+    }
+    uint64 next_descriptor_offset = *descriptor_range;
 
     for (auto& [set, binder] : set_binders) {
         std::visit(
@@ -609,22 +631,24 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& _pso_handle, const Arr
                 [&](const VulkanBindlessSetArray& _binder) {
                     BindlessArrayRef     array = std::get<BindlessArrayRef>(_args[_binder.param_idx]);
                     VulkanBindlessArray* bindless_array = static_cast<VulkanBindlessArray*>(array.Get());
-                    bind_template.desc_buffers[_binder.desc_idx].address =
+                    desc_buffers[_binder.desc_idx].address =
                         bindless_array->bindless_buffer_descs->DeviceAddress();
                 },
                 [&](const VulkanBindlessSetSampler& _binder) {
                     BindlessArrayRef     array = std::get<BindlessArrayRef>(_args[_binder.param_idx]);
                     VulkanBindlessArray* bindless_array = static_cast<VulkanBindlessArray*>(array.Get());
-                    bind_template.desc_buffers[_binder.desc_idx].address =
+                    desc_buffers[_binder.desc_idx].address =
                         bindless_array->bindless_texture_descs->DeviceAddress();
                 },
                 [&](const VulkanBindlessSetImage& _binder) {
                     BindlessArrayRef     array = std::get<BindlessArrayRef>(_args[_binder.param_idx]);
                     VulkanBindlessArray* bindless_array = static_cast<VulkanBindlessArray*>(array.Get());
-                    bind_template.desc_buffers[_binder.desc_idx].address =
+                    desc_buffers[_binder.desc_idx].address =
                         bindless_array->bindless_texture_descs->DeviceAddress();
                 },
                 [&](const VulkanDescriptorSetBinder& _binder) {
+                    const uint64 descriptor_set_offset = next_descriptor_offset;
+                    next_descriptor_offset += _binder.size;
                     //normal resources
                     for (uint i = 0; i < _binder.writers.size(); ++i) {
                         auto& writer = _binder.writers[i];
@@ -644,10 +668,17 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& _pso_handle, const Arr
                                 .format;
                         switch (writer.descriptorType) {
                             case VK_DESCRIPTOR_TYPE_SAMPLER: {
+                                if (writer.descriptorCount != 1) {
+                                    throw std::runtime_error(
+                                        "sampler descriptor arrays are not supported by ArrayArguments"
+                                    );
+                                }
                                 uint64 src_handle = descriptor_heap.GetSamplerDescIdx(
                                     std::get<Sampler>(_args[set_info.param_idx])
                                 );
-                                descriptor_heap.PushSamplerDesc(src_handle, _binder.binding_infos[i].offset);
+                                descriptor_heap.WriteSamplerDesc(
+                                    src_handle, descriptor_set_offset + _binder.binding_infos[i].offset
+                                );
                                 break;
                             }
                             case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: {
@@ -655,17 +686,33 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& _pso_handle, const Arr
                                 if (writer.descriptorCount > 1) {
                                     const TextureViewArray& textures =
                                         std::get<TextureViewArray>(_args[set_info.param_idx]);
-                                    uint desc_size = std::min(writer.descriptorCount, uint(textures.size()));
-                                    for (uint j = 0; j < desc_size; ++j) {
-                                        VkImageLayout layout = GetSamplerImageLayout(textures[j]);
-                                        uint64        src_handle =
-                                            descriptor_heap.GetImageDescIdx(&textures[j], layout);
-                                        descriptor_heap.PushImageDesc(
+                                    if (textures.empty()) {
+                                        throw std::runtime_error(
+                                            "sampled-image descriptor array is empty"
+                                        );
+                                    }
+                                    if (textures.size() > writer.descriptorCount) {
+                                        throw std::runtime_error(
+                                            "sampled-image descriptor array exceeds its declared capacity"
+                                        );
+                                    }
+                                    // Shader array declarations encode a maximum capacity. Partial
+                                    // binding is not enabled for these transient descriptor leases,
+                                    // so alias unused slots to the last valid caller-provided view.
+                                    for (uint j = 0; j < writer.descriptorCount; ++j) {
+                                        const TextureView& texture = textures[std::min<size_t>(
+                                            j, textures.size() - 1
+                                        )];
+                                        VkImageLayout layout = GetSamplerImageLayout(texture);
+                                        uint64 src_handle = descriptor_heap.GetImageDescIdx(
+                                            &texture, layout, writer.descriptorType
+                                        );
+                                        descriptor_heap.WriteImageDesc(
                                             src_handle,
-                                            _binder.binding_infos[i].offset +
-                                                j * device.GetOptionalProperties()
-                                                        .descriptor_buffer_properties
-                                                        .sampledImageDescriptorSize
+                                            descriptor_set_offset + _binder.binding_infos[i].offset +
+                                                j * descriptor_heap.GetDescriptorSize(
+                                                        writer.descriptorType
+                                                    )
                                         );
                                     }
                                     break;
@@ -674,81 +721,123 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& _pso_handle, const Arr
                                     GetSamplerImageLayout(std::get<TextureView>(_args[set_info.param_idx]));
 
                                 uint64 src_handle = descriptor_heap.GetImageDescIdx(
-                                    &std::get<TextureView>(_args[set_info.param_idx]), layout
+                                    &std::get<TextureView>(_args[set_info.param_idx]),
+                                    layout,
+                                    writer.descriptorType
                                 );
-                                descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[i].offset);
+                                descriptor_heap.WriteImageDesc(
+                                    src_handle, descriptor_set_offset + _binder.binding_infos[i].offset
+                                );
                                 break;
                             }
                             case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: {
                                 if (writer.descriptorCount > 1) {
                                     const TextureViewArray& textures =
                                         std::get<TextureViewArray>(_args[set_info.param_idx]);
-                                    uint desc_size = std::min(writer.descriptorCount, uint(textures.size()));
-                                    for (uint j = 0; j < desc_size; ++j) {
-                                        uint64 src_handle = descriptor_heap.GetImageDescIdx(
-                                            &textures[j], VK_IMAGE_LAYOUT_GENERAL
+                                    if (textures.empty()) {
+                                        throw std::runtime_error(
+                                            "storage-image descriptor array is empty"
                                         );
-                                        descriptor_heap.PushImageDesc(
+                                    }
+                                    if (textures.size() > writer.descriptorCount) {
+                                        throw std::runtime_error(
+                                            "storage-image descriptor array exceeds its declared capacity"
+                                        );
+                                    }
+                                    // Keep every fixed layout slot initialized while the shader's
+                                    // real element count controls which indices are semantically used.
+                                    for (uint j = 0; j < writer.descriptorCount; ++j) {
+                                        const TextureView& texture = textures[std::min<size_t>(
+                                            j, textures.size() - 1
+                                        )];
+                                        uint64 src_handle = descriptor_heap.GetImageDescIdx(
+                                            &texture,
+                                            VK_IMAGE_LAYOUT_GENERAL,
+                                            writer.descriptorType
+                                        );
+                                        descriptor_heap.WriteImageDesc(
                                             src_handle,
-                                            _binder.binding_infos[i].offset +
-                                                j * device.GetOptionalProperties()
-                                                        .descriptor_buffer_properties
-                                                        .storageImageDescriptorSize
+                                            descriptor_set_offset + _binder.binding_infos[i].offset +
+                                                j * descriptor_heap.GetDescriptorSize(
+                                                        writer.descriptorType
+                                                    )
                                         );
                                     }
                                     break;
                                 }
                                 uint64 src_handle = descriptor_heap.GetImageDescIdx(
-                                    &std::get<TextureView>(_args[set_info.param_idx]), VK_IMAGE_LAYOUT_GENERAL
+                                    &std::get<TextureView>(_args[set_info.param_idx]),
+                                    VK_IMAGE_LAYOUT_GENERAL,
+                                    writer.descriptorType
                                 );
-                                descriptor_heap.PushImageDesc(src_handle, _binder.binding_infos[i].offset);
+                                descriptor_heap.WriteImageDesc(
+                                    src_handle, descriptor_set_offset + _binder.binding_infos[i].offset
+                                );
                                 break;
                             }
-                            case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: {
-                                // VulkanBuffer* buffer     = ResourceCast(std::get<BufferView>(_args[set_info.param_idx]).GetBuffer());
-                                uint64 src_handle = descriptor_heap.GetBufferDescIdx(
-                                    std::get<BufferView>(_args[set_info.param_idx]),
-                                    writer.descriptorType,
-                                    format
-                                );
-                                descriptor_heap.PushUniformDesc(src_handle, _binder.binding_infos[i].offset);
-                                break;
-                            }
+                            case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
                             case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
                             case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
                             case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: {
+                                auto write_buffer_descriptor = [&](
+                                                                   const BufferView& _buffer,
+                                                                   uint64 _dst_offset
+                                                               ) {
+                                    const uint64 src_handle = descriptor_heap.GetBufferDescIdx(
+                                        _buffer, writer.descriptorType, format
+                                    );
+                                    if (writer.descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
+                                        descriptor_heap.WriteUniformDesc(src_handle, _dst_offset);
+                                    } else {
+                                        descriptor_heap.WriteStorageDesc(src_handle, _dst_offset);
+                                    }
+                                };
                                 if (writer.descriptorCount > 1) {
                                     const BufferViewArray& buffers =
                                         std::get<BufferViewArray>(_args[set_info.param_idx]);
-                                    for (uint j = 0; j < writer.descriptorCount; ++j) {
-                                        uint64 src_handle = descriptor_heap.GetBufferDescIdx(
-                                            buffers[j], writer.descriptorType, format
+                                    if (buffers.empty()) {
+                                        throw std::runtime_error(
+                                            "buffer descriptor array is empty"
                                         );
-                                        descriptor_heap.PushStorageDesc(
-                                            src_handle,
-                                            _binder.binding_infos[i].offset +
-                                                j * device.GetOptionalProperties()
-                                                        .descriptor_buffer_properties
-                                                        .storageBufferDescriptorSize
+                                    }
+                                    if (buffers.size() > writer.descriptorCount) {
+                                        throw std::runtime_error(
+                                            "buffer descriptor array exceeds its declared capacity"
+                                        );
+                                    }
+                                    // Match texture-array max-capacity semantics without relying on
+                                    // partially-bound descriptors or stale lease contents.
+                                    for (uint j = 0; j < writer.descriptorCount; ++j) {
+                                        write_buffer_descriptor(
+                                            buffers[std::min<size_t>(j, buffers.size() - 1)],
+                                            descriptor_set_offset + _binder.binding_infos[i].offset +
+                                                j * descriptor_heap.GetDescriptorSize(
+                                                        writer.descriptorType
+                                                    )
                                         );
                                     }
                                     break;
                                 }
-                                // VulkanBuffer* buffer     = ResourceCast(std::get<BufferView>(_args[set_info.param_idx]).GetBuffer());
-                                uint64 src_handle = descriptor_heap.GetBufferDescIdx(
+                                write_buffer_descriptor(
                                     std::get<BufferView>(_args[set_info.param_idx]),
-                                    writer.descriptorType,
-                                    format
+                                    descriptor_set_offset + _binder.binding_infos[i].offset
                                 );
-                                descriptor_heap.PushStorageDesc(src_handle, _binder.binding_infos[i].offset);
                                 break;
                             }
                             case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR: {
+                                if (writer.descriptorCount != 1) {
+                                    throw std::runtime_error(
+                                        "acceleration-structure descriptor arrays are not supported by "
+                                        "ArrayArguments"
+                                    );
+                                }
                                 VulkanAccelerationStructure* as = ResourceCast(
                                     std::get<RaytracingTlasRef>(_args[set_info.param_idx]).Get()
                                 );
                                 uint64 src_handle = descriptor_heap.GetAccelDescIdx(as);
-                                descriptor_heap.PushAccelDesc(src_handle, _binder.binding_infos[i].offset);
+                                descriptor_heap.WriteAccelDesc(
+                                    src_handle, descriptor_set_offset + _binder.binding_infos[i].offset
+                                );
                                 break;
                             }
                             case VK_DESCRIPTOR_TYPE_MAX_ENUM: {
@@ -756,28 +845,26 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& _pso_handle, const Arr
                                 break;
                             }
                             default: {
-                                assert(false && "Unsupported descriptor type!");
+                                throw std::runtime_error("unsupported descriptor type");
                             }
                         }
                     }
 
                     //set desc buffer offset
-                    bind_template.desc_buffer_offsets[_binder.offset_idx].offset =
-                        descriptor_heap.current_offset;
-                    descriptor_heap.IncrementOffset(_binder.size);
+                    desc_buffer_offsets[_binder.offset_idx].offset = descriptor_set_offset;
                     // device.vk_cmd_push_descriptor_set(command_buffer, _binder.bind_point, _binder.push_info.layout, _binder.push_info.set, _binder.writers.size(), _binder.writers.data());
                 }
             },
             binder
         );
     }
-    if (!bind_template.desc_buffers.empty()) {
+    if (!desc_buffers.empty()) {
         vkCmdBindDescriptorBuffersEXT(
-            command_buffer, bind_template.desc_buffers.size(), bind_template.desc_buffers.data()
+            command_buffer, desc_buffers.size(), desc_buffers.data()
         );
     }
 
-    for (const auto& desc_info : bind_template.desc_buffer_offsets) {
+    for (const auto& desc_info : desc_buffer_offsets) {
         uint   buffer_idx = desc_info.buf_idx;
         uint64 offset     = desc_info.offset;
         vkCmdSetDescriptorBufferOffsetsEXT(
@@ -785,9 +872,9 @@ void VulkanCmdList::BindDescriptors(const PipelineHandle& _pso_handle, const Arr
         );
     }
 
-    if (bind_template.push_constants_info.size > 0) {
-        bind_template.push_constants_info.pValues = _args.constants.data();
-        const auto& push_info                     = &bind_template.push_constants_info;
+    if (push_constants_info.size > 0) {
+        push_constants_info.pValues = _args.constants.data();
+        const auto& push_info       = &push_constants_info;
         vkCmdPushConstants(
             command_buffer,
             push_info->layout,

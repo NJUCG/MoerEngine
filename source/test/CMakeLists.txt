@@ -32,6 +32,7 @@ target_link_libraries(${test_target}
     PRIVATE Moer::Render
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME RHICmdReordererContract COMMAND $<TARGET_FILE:${test_target}>)
 
 set(test_target TestRHICommandMarker)
 add_executable(${test_target} "RHICommandMarkerTest.cpp")
@@ -39,6 +40,7 @@ target_link_libraries(${test_target}
     PRIVATE Moer::Render
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME RHICommandMarkerContract COMMAND $<TARGET_FILE:${test_target}>)
 
 set(test_target TestExternalCpuJoin)
 add_executable(${test_target} "ExternalCpuJoinTest.cpp")
@@ -46,9 +48,67 @@ target_link_libraries(${test_target}
     PRIVATE Moer::Render
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME ExternalCpuJoinContract COMMAND $<TARGET_FILE:${test_target}>)
 
 set(test_target TestRHIRecordDiagnostics)
 add_executable(${test_target} "RHIRecordDiagnosticsTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME RHIRecordDiagnosticsContract COMMAND $<TARGET_FILE:${test_target}>)
+
+set(test_target TestRHIParallelRecord)
+add_executable(${test_target} "RHIParallelRecordTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME RHIParallelRecordContract COMMAND $<TARGET_FILE:${test_target}>)
+
+set(test_target TestRHISubmissionTopology)
+add_executable(${test_target} "RHISubmissionTopologyTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME RHISubmissionTopologyContract COMMAND $<TARGET_FILE:${test_target}>)
+
+set(test_target TestRHIExecutorRecordingHandoff)
+add_executable(${test_target} "RHIExecutorRecordingHandoffTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME RHIExecutorRecordingHandoffContract COMMAND $<TARGET_FILE:${test_target}>)
+
+# CPU-only contract for the Vulkan recorder work heuristic. This uses RHI
+# command payloads but does not create a Vulkan instance or device.
+set(test_target TestVulkanParallelRecordWorkEstimator)
+add_executable(${test_target} "VulkanParallelRecordWorkEstimatorTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanParallelRecordWorkEstimatorContract COMMAND $<TARGET_FILE:${test_target}>)
+
+# CPU-only fault-injection contract for the Vulkan submission worker's
+# per-request exception barrier. It verifies Submit rejection ownership and
+# unconditional Sync/Stop completion without requiring a Vulkan device.
+set(test_target TestVulkanSubmissionRequestDispatch)
+add_executable(${test_target} "VulkanSubmissionRequestDispatchTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanSubmissionRequestDispatchContract COMMAND $<TARGET_FILE:${test_target}>)
+
+# Vulkan integration seam for ordered multi-primary submission and the
+# recoverable worker-failure path. It is intentionally run explicitly because
+# it requires a Vulkan-capable machine; the CPU-only contracts above remain in
+# the default CTest suite.
+set(test_target TestRHIParallelRecordVulkan)
+add_executable(${test_target} "RHIParallelRecordVulkanTest.cpp")
 target_link_libraries(${test_target}
     PRIVATE Moer::Render
 )

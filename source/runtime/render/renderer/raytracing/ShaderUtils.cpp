@@ -84,6 +84,10 @@ void ShaderUtils::GenerateMipPdf(
     const TextureView&     _env_map,
     std::span<TextureView> _integrated_mips
 ) {
+    if (_integrated_mips.empty()) {
+        return;
+    }
+
     PreprocessEnvironmentMapParams param;
     uint                           width  = _env_map.extent.x;
     uint                           height = _env_map.extent.y;
@@ -101,6 +105,10 @@ void ShaderUtils::GenerateMipPdf(
 }
 
 void ShaderUtils::GenerateMips(CommandList& _cmd_list, std::span<TextureView> _mips) {
+    if (_mips.empty()) {
+        return;
+    }
+
     BuildMipsParam param;
 
     uint width  = _mips[0].extent.x;

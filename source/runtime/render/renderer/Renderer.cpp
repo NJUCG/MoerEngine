@@ -7,6 +7,7 @@
 #include "misc/Timer.h"
 #include "renderer/EditorConfig.h"
 #include "rhi/RHI.h"
+#include "rhi/RHIExecutor.h"
 #include "scene/Scene.h"
 #include "shader/ShaderResourceManager.h"
 #include "window/WindowContext.h"
@@ -134,14 +135,18 @@ void Renderer::ReleaseResources() {
     resources_released = true;
 
     timeline->Wait(time);
-    gfx_queue.Sync();
+    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
     swapchain->Sync();
     device.WaitIdle();
 
     render_scene.reset();
     cmd_list.UpdateBindlessArray(bindless_array);
-    gfx_queue.Execute(cmd_list.Submit().DeleteResources());
-    gfx_queue.Sync();
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        cmd_list.Submit().DeleteResources(),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
     scene.Reset();
 }
@@ -186,7 +191,7 @@ void Renderer::PrepareRenderFrame(const WindowFrameState& window_frame) {
         return;
     }
 
-    gfx_queue.Sync();
+    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
     swapchain_create_info.size = {resolution.x, resolution.y};
     swapchain->Sync();
     swapchain->Recreate(swapchain_create_info);

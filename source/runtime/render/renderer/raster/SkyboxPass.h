@@ -19,8 +19,23 @@ public:
 
 class SkyboxPass {
 public:
+    struct RecordParameters {
+        SkyboxPassBindlessParam pass_param{};
+        BindlessArrayRef        bindless{};
+        TextureRef              cubemap_owner{};
+        DepthBufferRef          depth_owner{};
+        TextureRef              output{};
+        Rect2D                  render_area{};
+    };
+
     SkyboxPass(RasterContext& context);
 
+    [[nodiscard]] RecordParameters Prepare(
+        const RasterContext& context,
+        const RasterConfig&  ui_config,
+        const Camera&        camera
+    ) const;
+    void Record(CommandList& cmd_list, const RecordParameters& parameters);
     void Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
 
 private:

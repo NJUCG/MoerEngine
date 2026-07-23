@@ -38,6 +38,17 @@ GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_p
         toml_config.at_path("engine.threading.rhi_bypass").value_or(true);
     loaded_config.engine.threading.profile_logging =
         toml_config.at_path("engine.threading.profile_logging").value_or(false);
+    loaded_config.engine.threading.parallel_recording =
+        toml_config.at_path("engine.threading.parallel_recording").value_or(false);
+    loaded_config.engine.threading.parallel_record_workers =
+        toml_config.at_path("engine.threading.parallel_record_workers").value_or(uint{0});
+    loaded_config.engine.threading.parallel_record_verify =
+        toml_config.at_path("engine.threading.parallel_record_verify").value_or(false);
+    loaded_config.engine.threading.parallel_record_profile =
+        toml_config.at_path("engine.threading.parallel_record_profile").value_or(false);
+    loaded_config.engine.threading.parallel_record_min_work_units_per_job =
+        toml_config.at_path("engine.threading.parallel_record_min_work_units_per_job")
+            .value_or(uint{64});
     loaded_config.engine.threading.max_frame_lag =
         toml_config.at_path("engine.threading.max_frame_lag").value_or(uint{0});
 
@@ -57,6 +68,8 @@ GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_p
         toml_config.at_path("engine.render.raster.render_graph").value_or(false);
     loaded_config.engine.render.raster.render_graph_debug_dump =
         toml_config.at_path("engine.render.raster.render_graph_debug_dump").value_or(false);
+    loaded_config.engine.render.raster.render_graph_parallel_recording =
+        toml_config.at_path("engine.render.raster.render_graph_parallel_recording").value_or(false);
 
     loaded_config.engine.scene.scene_path =
         toml_config.at_path("engine.scene.scene_path").value_or("./asset/scenes/sponza/Sponza.gltf");

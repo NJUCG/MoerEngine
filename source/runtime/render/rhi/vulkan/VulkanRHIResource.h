@@ -574,6 +574,30 @@ protected:
 
 #pragma region viewable resources definitions
 
+struct VkBufferDescKey {
+    uint64   byte_offset{0};
+    uint64   byte_size{0};
+    VkFormat format{VK_FORMAT_UNDEFINED};
+
+    bool operator==(const VkBufferDescKey& _other) const {
+        return byte_offset == _other.byte_offset && byte_size == _other.byte_size &&
+               format == _other.format;
+    }
+
+    struct Hasher {
+        size_t operator()(const VkBufferDescKey& _key) const {
+            size_t hash = std::hash<uint64>()(_key.byte_offset);
+            hash ^= std::hash<uint64>()(_key.byte_size) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+            hash ^= std::hash<uint32>()(uint32(_key.format)) + 0x9e3779b9 + (hash << 6) +
+                    (hash >> 2);
+            return hash;
+        }
+    };
+};
+
+using VulkanBufferDescriptorIndices =
+    UnorderedMap<VkBufferDescKey, uint, VkBufferDescKey::Hasher>;
+
 class VulkanBuffer : public Buffer, VulkanDeviceObject {
 public:
     struct BufferAlloc {
@@ -604,15 +628,13 @@ public:
         return m_alloc.buffer;
     }
 
-    // int                   m_descriptor_idx = -1;
-    // UnorderedMap<uint64, uint> m_descriptor_indices;
-    UnorderedMap<uint64, uint> m_descriptor_indices[4];
+    VulkanBufferDescriptorIndices m_descriptor_indices[4];
 
     VkDescriptorType GetDescriptorType() const {
         return m_descriptor_type;
     }
 
-    UnorderedMap<uint64, uint>& GetDescriptorIndices(VkDescriptorType _type);
+    VulkanBufferDescriptorIndices& GetDescriptorIndices(VkDescriptorType _type);
 
 private:
     friend class TempBufferAllocator;
@@ -622,19 +644,30 @@ private:
 };
 
 struct VkTextureDescKey {
-    VkImageLayout layout;
-    uint8         mip_level;
-    uint8         mip_cnt;
+    VkDescriptorType descriptor_type;
+    VkImageLayout    layout;
+    uint8            mip_level;
+    uint8            mip_cnt;
+    uint8            array_layer;
+    uint8            array_count;
 
     bool operator==(const VkTextureDescKey& _other) const {
-        return layout == _other.layout && mip_level == _other.mip_level && mip_cnt == _other.mip_cnt;
+        return descriptor_type == _other.descriptor_type && layout == _other.layout &&
+               mip_level == _other.mip_level && mip_cnt == _other.mip_cnt &&
+               array_layer == _other.array_layer && array_count == _other.array_count;
     }
 
     struct Hasher {
         size_t operator()(const VkTextureDescKey& _key) const {
-            return std::hash<uint32_t>()(uint32_t(_key.layout)) ^
-                   std::hash<uint32_t>()(uint32_t(_key.mip_level)) ^
-                   std::hash<uint32_t>()(uint32_t(_key.mip_cnt));
+            size_t hash = std::hash<uint32>()(uint32(_key.descriptor_type));
+            hash ^= std::hash<uint32>()(uint32(_key.layout)) + 0x9e3779b9 + (hash << 6) +
+                    (hash >> 2);
+            const uint32 subresources = (uint32(_key.mip_level) << 24) |
+                                        (uint32(_key.mip_cnt) << 16) |
+                                        (uint32(_key.array_layer) << 8) |
+                                        uint32(_key.array_count);
+            hash ^= std::hash<uint32>()(subresources) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+            return hash;
         }
     };
 };
@@ -688,8 +721,27 @@ public:
         }
     }
 
-    int32 GetDescriptorIndex(uint _mip_level, uint _mip_idx, VkImageLayout _layout) {
-        VkTextureDescKey key = {_layout, uint8(_mip_level), uint8(_mip_idx)};
+    int32 GetDescriptorIndex(
+        uint             _mip_level,
+        uint             _mip_count,
+        VkImageLayout    _layout,
+        VkDescriptorType _descriptor_type = VK_DESCRIPTOR_TYPE_MAX_ENUM,
+        uint             _array_layer     = 0,
+        uint             _array_count     = 1
+    ) {
+        if (_descriptor_type == VK_DESCRIPTOR_TYPE_MAX_ENUM) {
+            _descriptor_type = _layout == VK_IMAGE_LAYOUT_GENERAL ?
+                                   VK_DESCRIPTOR_TYPE_STORAGE_IMAGE :
+                                   VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        }
+        VkTextureDescKey key = {
+            _descriptor_type,
+            _layout,
+            uint8(_mip_level),
+            uint8(_mip_count),
+            uint8(_array_layer),
+            uint8(_array_count)
+        };
         auto             it  = m_descriptor_indices.find(key);
         if (it != m_descriptor_indices.end()) {
             return it->second;
@@ -705,6 +757,7 @@ private:
         VmaAllocation alloc;
     } m_alloc;
     UnorderedMap<uint64, VkImageView> m_views;
+    mutable std::mutex                m_views_mutex;
     VkImageLayout                     m_preferred_layout = VK_IMAGE_LAYOUT_GENERAL;
 };
 
@@ -755,6 +808,11 @@ public:
         uint8  _array_count
     ) const;
     void DeAllocateResource(uint64 _handle);
+    void FinalizeUpdateCommand(
+        const Array<BindlessArray::UpdateCmd>& _updates,
+        bool                                    _gpu_update_succeeded
+    );
+    bool BeginUpdateCommand(const Array<BindlessArray::UpdateCmd>& _updates);
 
     //call on frame end free
     void OnFree(
@@ -773,6 +831,9 @@ public:
     void Unlock() {
         mtx.unlock();
     }
+    std::unique_lock<std::mutex> AcquireLock() {
+        return std::unique_lock<std::mutex>(mtx);
+    }
 
 public:
     VulkanBuffer* bindless_array_buffer;
@@ -784,11 +845,14 @@ public:
 
 private:
     std::mutex mtx;
+    void       TrackResource(RHIResource* _resource);
+    void       UntrackResource(uint64 _handle);
     void       TrackTextureView(uint _array_idx, const TextureView& _view);
     void       UntrackTextureView(uint _array_idx);
 
 protected:
     UniquePtr<Command>          CreateUpdateCommand() override;
+    void DiscardUpdateCommand(const Array<BindlessArray::UpdateCmd>& _updates) override;
     class VulkanDescriptorHeap& g_heap;
 
     LockFreeQueueBase<uint, true> free_texture_slots;
@@ -797,6 +861,13 @@ protected:
     std::atomic_uint              texture_slot_offset;
     std::atomic_uint              buffer_slot_offset;
     std::atomic_uint              slot_offset;
+    Array<uint64>                 array_slot_generations;
+    Array<uint64>                 texture_slot_generations;
+    Array<uint64>                 buffer_slot_generations;
+    Array<uint64>                 array_slot_claim_tokens;
+    Array<uint64>                 texture_slot_claim_tokens;
+    Array<uint64>                 buffer_slot_claim_tokens;
+    uint64                        next_update_command_token{0};
     //frame resources
     // Array<TextureUpdateInfo>     textures_allocated;
     // Array<BufferUpdateInfo>      buffers_allocated;
@@ -809,9 +880,18 @@ protected:
     Array<byte>                  buffer_dat;
     UnorderedMap<uint, uint>     temp_slot_to_cmd;
 
-    UnorderedSet<uint64>                                                   resource_allocated_set;
-    UnorderedMap<uint64, UnorderedSet<TextureSubresourceKeyT<VulkanTexture>, TextureSubresourceKeyHashT<VulkanTexture>>>
-        texture_view_map;
+    struct ResourceAllocationRecord {
+        CountableRef<RHIResource> resource;
+        uint32                    count{0};
+    };
+    UnorderedMap<uint64, ResourceAllocationRecord> resource_allocation_counts;
+    UnorderedMap<
+        uint64,
+        UnorderedMap<
+            TextureSubresourceKeyT<VulkanTexture>,
+            uint32,
+            TextureSubresourceKeyHashT<VulkanTexture>>>
+        texture_view_ref_counts;
     Array<TextureSubresourceKeyT<VulkanTexture>>                           texture_view_infos;
 };
 

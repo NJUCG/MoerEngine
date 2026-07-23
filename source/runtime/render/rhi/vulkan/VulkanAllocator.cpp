@@ -52,7 +52,11 @@ bool VulkanAllocatorBase::ResetCmdList() {
             .queue      = queue,
         }
     );
-    return result == VK_SUCCESS;
+    if (result == VK_SUCCESS) {
+        cmd_list->SetDescriptorPushLease({});
+        return true;
+    }
+    return false;
 }
 
 void VulkanAllocatorBase::CompleteSuccess() {
@@ -65,6 +69,12 @@ void VulkanAllocatorBase::CompleteSuccess() {
 
 bool VulkanAllocatorBase::Reset() {
     return ResetCmdList();
+}
+
+bool VulkanAllocatorBase::ResetAbandoned() {
+    on_complete.clear();
+    tracker.Reset();
+    return Reset();
 }
 
 // VulkanPresentor

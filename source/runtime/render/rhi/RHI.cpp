@@ -6,6 +6,7 @@
 #include "log/LogSystem.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
+#include "rhi/RHIExecutor.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderResourceManager.h"
 #include "vulkan/VulkanDevice.h"
@@ -19,9 +20,17 @@ VulkanRHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
     assert(_info.rhi_type == ERHIType::Vulkan);
 
     VulkanRHIConfig config;
-    config.rhi_thread             = _info.rhi_thread;
-    config.rhi_bypass             = _info.rhi_bypass;
-    config.thread_profile_logging = _info.thread_profile_logging;
+    config.rhi_thread                   = _info.rhi_thread;
+    config.rhi_bypass                   = _info.rhi_bypass;
+    config.thread_profile_logging       = _info.thread_profile_logging;
+    config.parallel_recording           = _info.parallel_recording;
+    config.parallel_record_workers      = _info.parallel_record_workers;
+    config.parallel_record_verify       = _info.parallel_record_verify;
+    config.parallel_record_profile      = _info.parallel_record_profile;
+    config.parallel_record_min_work_units_per_job =
+        _info.parallel_record_min_work_units_per_job;
+    config.parallel_record_worker_throw_trigger =
+        _info.parallel_record_worker_throw_trigger;
     config.present_submit_fault_trigger = _info.vulkan_present_submit_fault_trigger;
 
     std::string_view api = _info.rhi_api_version;
@@ -71,9 +80,11 @@ void RenderDevice::Init(DeviceInitInfo&& _info) {
             break;
     }
     Get().rhi_type = _info.rhi_type;
+    RHIExecutor::StartUp();
     Get().impl->PostInit();
 }
 void RenderDevice::Dispose() {
+    RHIExecutor::ShutDown();
     Get().impl.reset();
 }
 CommandQueue& RenderDevice::GetCommandQueue(EQueueType _type) {

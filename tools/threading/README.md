@@ -20,7 +20,7 @@ split into repeatable validation runs.
 Matrix configs set `engine.threading.profile_logging=true`. The regular and
 template configs keep it disabled, so normal editor runs do not emit profiling
 windows. They also set `engine.render.raster.render_graph` and
-`render_graph_debug_dump` explicitly for every scenario. The existing
+`render_graph_debug_dump` plus `render_graph_parallel_recording` explicitly for every scenario. The existing
 functional sets keep the RenderGraph path off; the dedicated `rendergraph` set
 enables both the graph and its one-time debug dump.
 
@@ -44,7 +44,7 @@ Run the three-scenario smoke set:
 python tools/threading/run_matrix.py --set smoke --base-config template.MoerEngine.toml
 ```
 
-Run the self-terminating optional-feature renderer lifecycle check:
+Run the self-terminating optional-feature lifecycle checks:
 
 ```powershell
 python tools/threading/run_matrix.py --set feature --base-config template.MoerEngine.toml
@@ -57,6 +57,24 @@ dedicated RenderGraph validation set so it can gate every optional-feature
 build without coupling feature coverage to RenderGraph coverage. It gates on
 functional lifecycle markers rather than periodic profiling markers, which are
 not guaranteed to be emitted before a fast Release validation run exits.
+
+The Raster recording feature checks form an isolated correctness matrix. Both
+`feature_raster_graph_serial_recording` and
+`feature_raster_graph_parallel_recording` use RT + threaded RHI; only the upper
+`render_graph_parallel_recording` switch differs. The
+`feature_raster_graph_parallel_recording_gt` variant exercises the same upper
+worker handoff without a Render Thread. The
+`feature_raster_graph_parallel_recording_reload_switch` variant keeps upper
+recording enabled while recreating Raster and switching Raster→Raytracing→Raster,
+covering snapshot ownership across renderer teardown. All four leave the lower
+`engine.threading.parallel_recording` switch off and use the Raster-only exit
+or renderer-switch completion marker, so they validate RDG recording ownership,
+join behavior, and normal shutdown without coupling the result to the separate
+lower parallel translator. Parallel variants also require the graph dump to
+classify `HiZBuild`, `DirectionalShadowMask`, `Lighting`, and `Skybox` as
+`parallel-record`, and require completed TaskGraph dispatch markers for both
+two-pass production groups. A silent no-TaskGraph serial fallback therefore
+fails the feature gate.
 
 Run the full functional matrix:
 
@@ -180,6 +198,10 @@ python tools/threading/run_matrix.py --set full --dry-run --base-config template
 | `ray_rt1_rhi` | Raytracing | n/a | n/a | on | on | off | 1 | yes |
 | `ray_rt1_rhi_fault_present_submit` | Raytracing | n/a | n/a | on | on | off | 1 | no |
 | `feature_renderer_switch` | Raster→Raster→Raytracing→Raster | off | off | on | on | off | 1 | no |
+| `feature_raster_graph_serial_recording` | Raster | on | on | on | on | off | 1 | no |
+| `feature_raster_graph_parallel_recording` | Raster | on | on | on | on | off | 1 | no |
+| `feature_raster_graph_parallel_recording_gt` | Raster | on | on | off | on | off | 0 | no |
+| `feature_raster_graph_parallel_recording_reload_switch` | Raster→Raster→Raytracing→Raster | on | on | on | on | off | 1 | no |
 
 ## Pass Criteria
 
@@ -281,7 +303,98 @@ cannot accidentally consume a stale report from an earlier run.
   one-second settle because its first two real presents already provide the
   frame captured after the third synthetic submit fault.
 - The base TOML is parsed after scenario values are patched, and all five
-  threading values, the renderer, and both Raster RenderGraph values are
+  threading values, the renderer, and all three Raster RenderGraph values are
   checked before launch.
 - `--continue-on-failure` is recommended for a full matrix so one failed
   scenario does not hide the state of later scenarios.
+
+## Parallel Command Recording Experiment
+
+There are two independent switches:
+
+```toml
+[engine.render.raster]
+# Upper topology: RDG batches record independent CommandLists on TaskGraph workers.
+render_graph_parallel_recording = false
+
+[engine.threading]
+# Lower topology: Vulkan translates eligible immutable command bodies in parallel.
+parallel_recording = false
+```
+
+The upper switch currently migrates two audited Raster recording groups:
+`HiZBuild` + `DirectionalShadowMask`, then `Lighting` + `Skybox`. Each pass owns
+an independent CommandList and an immutable, strongly-owned Prepare snapshot.
+The second pair deliberately spans two GPU dependency waves: GPU hazards still
+fix Lighting-before-Skybox submission, but do not serialize their CPU command
+recording. Token hazards and explicit `DependsOn` edges still split CPU record
+groups. `CpuPrepare` is a managed caller-thread join boundary with no command
+submission: it may access logical Tokens or `Reference` GPU identities and is
+excluded from the GPU queue plan. `ExternalControl` is reserved for
+TensorRT/Vulkan-CUDA work that owns its own submit/sync scope. Other mutable
+Raster passes remain explicit caller-thread boundaries until their state is
+similarly split.
+
+The Vulkan Graphics queue can experimentally translate/record safe command
+bodies on worker threads while retaining one coordinator for reorder, resource
+state tracking, barrier generation, and final submission. Worker command
+buffers are joined and assembled in stable layer/job order, then submitted by
+one ordered `vkQueueSubmit2`; parallel CPU recording does not reorder GPU work.
+
+The tracked template keeps the experiment off:
+
+```toml
+[engine.threading]
+parallel_recording = false
+parallel_record_workers = 0
+parallel_record_verify = false
+parallel_record_profile = false
+parallel_record_min_work_units_per_job = 64
+```
+
+`parallel_record_workers = 0` selects an automatic worker count. The minimum is
+a backend recording-work heuristic, not a top-level command count and not a
+draw count. Direct draw calls, mesh dispatches, argument writes, pipeline
+changes, and native copy/clear calls contribute units; GPU byte counts,
+dispatch group counts, and indirect draw counts do not. A wave needs at least
+two qualifying jobs, otherwise it safely uses the serial recorder.
+
+Run the five-mode Vulkan correctness/fallback gate after building the target:
+
+```powershell
+python tools/threading/run_parallel_record_vulkan_test.py `
+  --executable target/bin/Release/TestRHIParallelRecordVulkan.exe `
+  --outdir target/validation/parallel_record/release
+```
+
+The runner checks serial, forced-parallel, injected worker failure, production
+gate rejection, and production-heavy admission. It requires real worker
+overlap, stable `wave -> serial island -> wave` assembly, GPU readback
+correctness, exact failure/fallback counts, and clean Vulkan logs.
+
+For Release A/B, enable `parallel_record_profile` in isolated configs and feed
+at least two independent logs per side to `parallel_record_ab.py`. The parser
+is fail-closed for missing fields, invalid percentiles, impure baselines, and
+inconsistent `mode/requested/planned/effective/worker_fallbacks` counters. Its
+performance gate uses end-to-end `ExecuteNow` CPU percentiles, including the
+cost of assembling and submitting multiple command buffers. Record-only
+percentiles and submit averages remain attribution metrics.
+
+The result classes are:
+
+- `GO`: workers were admitted, at least 95% of planned submissions completed
+  on workers, p50 improved by both 15% and 0.2 ms, and p95/p99 did not regress.
+- `GATED`: the feature was requested but no workload met the profitability
+  floor, and the serial fallback stayed within the non-regression tolerance.
+- `EXPERIMENTAL`: any reliability, improvement, or tail gate was not met.
+
+UE's `r.RHICmdMinDrawsPerParallelCmdList=64` is a renderer-layer draw-task
+threshold. MoerEngine's current default of 64 backend work units only borrows
+the profitability-gate principle and conservative order of magnitude; the
+numbers are not semantically interchangeable. Likewise, `dev_parallel_rhi`
+uses whole-submit/segment translate tasks and stable submit assembly, whereas
+this experiment partitions safe ranges inside the current reordered submit.
+A shared recorder/translate context, fewer platform command buffers, and
+draw-range splitting within one large `MultiDraw` remain follow-up architecture
+work for both lines of evolution rather than existing `dev_parallel_rhi`
+features.
