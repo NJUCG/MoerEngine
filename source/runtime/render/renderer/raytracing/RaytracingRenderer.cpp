@@ -23,6 +23,7 @@
 #include "PreprocessLightPass.h"
 #include "RTResource.h"
 #include "ShaderUtils.h"
+#include "ShowTexturePass.h"
 #include "ToneMappingPass.h"
 #include "VisualizePass.h"
 
@@ -244,6 +245,7 @@ struct RaytracingRenderer::RuntimeState {
     UniquePtr<LightingPass>     lighting_pass;
     UniquePtr<CompositionPass>  composition_pass;
     UniquePtr<VisualizePass>    visualize_pass;
+    UniquePtr<ShowTexturePass>  show_texture_pass;
     UniquePtr<RTContext>        rt_ctx;
     UniquePtr<ToneMappingPass>  tone_mapping_pass;
 
@@ -281,6 +283,9 @@ struct RaytracingRenderer::RuntimeState {
             MakeUnique<CompositionPass>(renderer.device, renderer.manager, renderer.bindless_array)
         ),
         visualize_pass(MakeUnique<VisualizePass>(renderer.device, renderer.manager)),
+        show_texture_pass(
+            MakeUnique<ShowTexturePass>(renderer.manager, renderer.bindless_array)
+        ),
         rt_ctx(MakeUnique<RTContext>(shader_utils, importance_sampling_context, renderer.bindless_array)) {
         if (!std::filesystem::exists(exported_file_path)) {
             std::filesystem::create_directory(exported_file_path);
@@ -531,6 +536,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     bool graph_antialias_recorded           = false;
     bool graph_tone_mapping_recorded        = false;
     bool graph_visualize_recorded           = false;
+    bool graph_show_texture_recorded         = false;
     bool linear_gbuffer_recorded            = false;
     bool linear_lighting_recorded           = false;
     bool linear_antialias_recorded           = false;
@@ -541,6 +547,9 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     float tone_mapping_elapsed_for_commit   = 0.f;
     bool tone_mapping_enabled_for_commit    = false;
     LightingPass::LocalLightSamplingDecision local_light_sampling{};
+    TextureRef selected_debug_texture{};
+    bool       show_texture_requested        = false;
+    ShowTextureParams show_texture_params{};
 
     switch (frame_packet.window.state) {
         case EWindowState::Hiding:
@@ -773,6 +782,25 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         );
         cmd_list.UpdateBindlessArray(bindless_array);
 
+        const auto& debug_input = frame_packet.debug_input;
+        const auto selected_texture_it =
+            state.material_textures.find(
+                debug_input.selected_material_texture_name
+            );
+        show_texture_requested =
+            debug_input.show_final_texture &&
+            selected_texture_it != state.material_textures.end() &&
+            selected_texture_it->second.tex;
+        if (show_texture_requested) {
+            selected_debug_texture = selected_texture_it->second.tex;
+            show_texture_params.bdls_handle = selected_texture_it->second.hdl;
+            show_texture_params.mip_level = static_cast<uint>(
+                std::max(debug_input.mip_level, 0)
+            );
+            show_texture_params.use_bindless =
+                debug_input.use_bindless ? 1u : 0u;
+        }
+
         state.rt_ctx->Tick(camera, state.antialias_pass->GetPixelOffset());
         gbuffer_history_bit = state.rt_ctx->b_current_frame ? uint8(1) : uint8(2);
         const std::array<const Buffer*, 3> lighting_working_set{
@@ -877,14 +905,36 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                      *state.rt_ctx,
                      state.visualize_config
                  ));
+            const bool show_texture_in_graph =
+                visualize_in_graph && show_texture_requested;
+            RenderGraph::TextureHandle selected_graph_texture{};
+            if (show_texture_in_graph) {
+                selected_graph_texture = ImportRTGraphTexture(
+                    graph,
+                    "RT.selected_material_texture",
+                    selected_debug_texture
+                );
+            }
+            const bool show_texture_added =
+                !show_texture_in_graph ||
+                (visualize_added &&
+                 state.show_texture_pass->AddPass(
+                     graph,
+                     selected_graph_texture,
+                     graph_resources.ldr_color,
+                     show_texture_params,
+                     selected_debug_texture,
+                     state.rt_ctx->frame_rt.ldr_color
+                 ));
             if (!gbuffer_added || !lighting_added || !composition_added ||
-                !antialias_added || !tone_mapping_added || !visualize_added) {
+                !antialias_added || !tone_mapping_added || !visualize_added ||
+                !show_texture_added) {
                 state.render_graph_fallback_latched = true;
                 LOG_ERROR(
                     "[RenderGraph][Fallback] Raytracing primary graph could not "
                     "import a required GBuffer/Lighting/Composition/AntiAlias/"
-                    "ToneMapping/Visualize resource. Using the linear path for this "
-                    "renderer instance."
+                    "ToneMapping/Visualize/ShowTexture resource. Using the linear "
+                    "path for this renderer instance."
                 );
             } else if (!graph.Compile()) {
                 state.render_graph_fallback_latched = true;
@@ -957,6 +1007,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                     graph_tone_mapping_recorded =
                         tone_mapping_in_graph;
                     graph_visualize_recorded = visualize_in_graph;
+                    graph_show_texture_recorded =
+                        show_texture_in_graph;
                 } else {
                     state.render_graph_fallback_latched = true;
                     LOG_ERROR(
@@ -1094,21 +1146,15 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             linear_visualize_recorded = true;
         }
 
-        const auto& debug_input = frame_packet.debug_input;
-        if (debug_input.show_final_texture &&
-            state.material_textures.contains(debug_input.selected_material_texture_name)) {
+        if (show_texture_requested && !graph_show_texture_recorded) {
             ScopedGpuMarker debug_texture_marker(
                 cmd_list, "Pass: Debug Texture", GpuMarkerPalette::Pass()
             );
-            TextureRef texture = state.material_textures[debug_input.selected_material_texture_name].tex;
-            ShowTextureParams show_texture_params{};
-            show_texture_params.dst_dim = resolution;
-            show_texture_params.bdls_handle =
-                state.material_textures[debug_input.selected_material_texture_name].hdl;
-            show_texture_params.mip_level    = static_cast<uint>(debug_input.mip_level);
-            show_texture_params.use_bindless = debug_input.use_bindless;
-            state.shader_utils.ShowTexture(
-                cmd_list, bindless_array, show_texture_params, texture, state.rt_ctx->frame_rt.ldr_color
+            state.show_texture_pass->Process(
+                cmd_list,
+                show_texture_params,
+                selected_debug_texture,
+                state.rt_ctx->frame_rt.ldr_color
             );
         }
 
@@ -1388,6 +1434,42 @@ void RaytracingRenderer::RefreshSceneRuntimeRefs() {
     state.rt_scene = gpu_scene_res.rt_scene;
     state.rt_ctx->SetBindlessHandles(gpu_scene_res);
     state.rt_ctx->SetRaytracingScene(state.rt_scene);
+
+    state.material_textures.clear();
+    state.material_textures.reserve(gpu_scene_res.texture_array.size());
+    for (const TextureWithHandle& texture : gpu_scene_res.texture_array) {
+        if (!texture.tex ||
+            texture.tex->GetDimension() != ETextureDimension::TEX_2D ||
+            texture.tex->GetNumArray() != 1 ||
+            texture.tex->GetNumMips() == 0 ||
+            texture.tex->GetExtent().x == 0 ||
+            texture.tex->GetExtent().y == 0) {
+            continue;
+        }
+        std::string base_name(texture.tex->GetName());
+        if (base_name.empty()) {
+            base_name = std::format("Material Texture {}", texture.hdl);
+        }
+        std::string display_name = base_name;
+        if (state.material_textures.contains(display_name)) {
+            display_name =
+                std::format("{} [{}]", base_name, texture.hdl);
+        }
+        uint duplicate_index = 2;
+        while (state.material_textures.contains(display_name)) {
+            display_name = std::format(
+                "{} [{}:{}]",
+                base_name,
+                texture.hdl,
+                duplicate_index++
+            );
+        }
+        state.material_textures.emplace(
+            std::move(display_name),
+            texture
+        );
+    }
+
     if (rt_scene_changed) {
         state.b_feedback_valid = false;
         state.current_tlas_revision  = RuntimeState::invalid_tlas_revision;
