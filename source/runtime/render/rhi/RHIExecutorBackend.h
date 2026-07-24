@@ -78,6 +78,10 @@ public:
     virtual void          Enqueue(RHIBackendSubmissionBatch&& _batch) = 0;
     virtual GraphEventRef Sync(ERHISyncDepth _depth = ERHISyncDepth::RHI) = 0;
     virtual void          Flush(ERHIFlushDepth _depth = ERHIFlushDepth::SubmitGPU) = 0;
+    // Publish non-blocking cancellation before RHIExecutor waits for
+    // concurrent Sync callers. Backends without cancellable host waits may
+    // keep the default no-op implementation.
+    virtual void          BeginShutdown() noexcept {}
     virtual void          ShutDown() = 0;
 };
 

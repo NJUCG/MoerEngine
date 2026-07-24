@@ -1,6 +1,8 @@
 #include "rhi/RHIExecutorRecordingHandoff.h"
 
 #include "log/LogSystem.h"
+#include "platform/Platform.h"
+#include "rhi/RHIThreadOwnership.h"
 
 #include <cassert>
 #include <exception>
@@ -69,10 +71,13 @@ void RHIExecutorRecordingHandoffQueue::Start() {
     }
     assert(!worker.joinable());
     assert(pending.empty());
-    assert(inline_dispatches == 0);
     assert(!worker_busy);
+    // Publish admission only after the worker has been created successfully.
+    // std::jthread construction can throw (for example when the OS cannot
+    // allocate another thread); in that case the queue must remain stopped so
+    // callers cannot enqueue work that has no owner to drain it.
+    worker = std::jthread([this](std::stop_token _stop_token) { Run(_stop_token); });
     accepting = true;
-    worker    = std::jthread([this](std::stop_token _stop_token) { Run(_stop_token); });
 }
 
 void RHIExecutorRecordingHandoffQueue::EnqueueRecording(
@@ -97,20 +102,13 @@ void RHIExecutorRecordingHandoffQueue::EnqueueRecording(
 void RHIExecutorRecordingHandoffQueue::RouteReady(
     RHIExecutorRecordingHandoffWork&& _work
 ) {
-    bool run_inline = false;
-    bool reject     = false;
+    bool reject = false;
     {
         std::lock_guard lock(mutex);
         if (!accepting) {
             reject = true;
-        } else if (worker_busy || inline_dispatches != 0 || !pending.empty()) {
-            pending.emplace_back(std::move(_work));
         } else {
-            // Mark the direct operation active before releasing the lock. A
-            // concurrent recording handoff is then queued behind it and the
-            // worker waits for this count to return to zero.
-            ++inline_dispatches;
-            run_inline = true;
+            pending.emplace_back(std::move(_work));
         }
     }
 
@@ -118,18 +116,6 @@ void RHIExecutorRecordingHandoffQueue::RouteReady(
         ResolveNoThrow(_work, ERHIRecordingHandoffResult::Cancel);
         return;
     }
-    if (!run_inline) {
-        work_cv.notify_all();
-        return;
-    }
-
-    ResolveNoThrow(_work, ERHIRecordingHandoffResult::Consume);
-    {
-        std::lock_guard lock(mutex);
-        assert(inline_dispatches > 0);
-        --inline_dispatches;
-    }
-    idle_cv.notify_all();
     work_cv.notify_all();
 }
 
@@ -146,25 +132,25 @@ void RHIExecutorRecordingHandoffQueue::ShutDown() {
     }
 
     std::unique_lock lock(mutex);
-    idle_cv.wait(lock, [this] {
-        return inline_dispatches == 0 && !worker_busy && pending.empty();
-    });
+    idle_cv.wait(lock, [this] { return !worker_busy && pending.empty(); });
 }
 
 bool RHIExecutorRecordingHandoffQueue::IsIdle() const noexcept {
     std::lock_guard lock(mutex);
-    return pending.empty() && inline_dispatches == 0 && !worker_busy;
+    return pending.empty() && !worker_busy;
 }
 
 void RHIExecutorRecordingHandoffQueue::Run(std::stop_token _stop_token) noexcept {
+    Platform::SetCurrentThreadName("Moer RHI Executor");
+    RHIThreadRoleScope owner_scope(ERHIThreadRole::Executor);
+
     for (;;) {
         RHIExecutorRecordingHandoffWork work{};
         {
             std::unique_lock lock(mutex);
-            work_cv.wait(lock, _stop_token, [this] {
-                return inline_dispatches == 0 && !pending.empty();
-            });
-            if (_stop_token.stop_requested()) {
+            work_cv.wait(lock, _stop_token, [this] { return !pending.empty(); });
+            if (pending.empty()) {
+                assert(_stop_token.stop_requested());
                 break;
             }
             work = std::move(pending.front());
@@ -173,23 +159,27 @@ void RHIExecutorRecordingHandoffQueue::Run(std::stop_token _stop_token) noexcept
         }
 
         bool ready = true;
+        bool cancelled = false;
         for (const RHIRecordingGateRef& prerequisite : work.prerequisites) {
             if (!prerequisite) {
                 ready = false;
                 continue;
             }
-            const ERHIRecordingStatus status = prerequisite->Wait(_stop_token);
+            ERHIRecordingStatus status = prerequisite->Status();
+            if (status == ERHIRecordingStatus::Pending) {
+                status = prerequisite->Wait(_stop_token);
+            }
             if (status != ERHIRecordingStatus::Succeeded) {
                 ready = false;
             }
             // A producer failure does not make the remaining CommandLists
             // safe to inspect. Keep waiting until every gate is terminal. A
             // lifecycle cancellation is different: stop must remain bounded.
-            if (_stop_token.stop_requested()) {
+            if (status == ERHIRecordingStatus::Pending) {
+                cancelled = true;
                 break;
             }
         }
-        const bool cancelled = _stop_token.stop_requested();
 
         ResolveNoThrow(
             work,
@@ -232,9 +222,18 @@ void RHIExecutorRecordingHandoffQueue::ResolveNoThrow(
     try {
         _work.resolve(_result);
     } catch (const std::exception& exception) {
-        LOG_ERROR("[RHIExecutor] recording handoff resolver threw: {}", exception.what());
+        try {
+            LOG_ERROR(
+                "[RHIExecutor] recording handoff resolver threw: {}",
+                exception.what()
+            );
+        } catch (...) {
+        }
     } catch (...) {
-        LOG_ERROR("[RHIExecutor] recording handoff resolver threw");
+        try {
+            LOG_ERROR("[RHIExecutor] recording handoff resolver threw");
+        } catch (...) {
+        }
     }
 }
 

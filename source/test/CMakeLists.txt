@@ -82,6 +82,16 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHIExecutorRecordingHandoffContract COMMAND $<TARGET_FILE:${test_target}>)
 
+# CPU-only ownership contract for the Executor -> Translate -> Submission ->
+# Completion pipeline and the move-only queue lease crossing Translate/Submit.
+set(test_target TestRHIThreadOwnership)
+add_executable(${test_target} "RHIThreadOwnershipTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME RHIThreadOwnershipContract COMMAND $<TARGET_FILE:${test_target}>)
+
 # CPU-only contract for the Vulkan recorder work heuristic. This uses RHI
 # command payloads but does not create a Vulkan instance or device.
 set(test_target TestVulkanParallelRecordWorkEstimator)

@@ -163,9 +163,17 @@ static void FinalizeBindlessUpdatesOnce(
         reinterpret_cast<VulkanBindlessArray*>(_array.Get())
             ->FinalizeUpdateCommand(_updates, _gpu_update_succeeded);
     } catch (const std::exception& error) {
-        LOG_ERROR("Failed to finalize bindless update lifecycle: {}", error.what());
+        try {
+            LOG_ERROR(
+                "Failed to finalize bindless update lifecycle: {}", error.what()
+            );
+        } catch (...) {
+        }
     } catch (...) {
-        LOG_ERROR("Failed to finalize bindless update lifecycle: unknown error");
+        try {
+            LOG_ERROR("Failed to finalize bindless update lifecycle: unknown error");
+        } catch (...) {
+        }
     }
 }
 
@@ -198,9 +206,33 @@ static void InvokeCallbacksNoexcept(
         try {
             callback();
         } catch (const std::exception& error) {
-            LOG_ERROR("{} callback threw: {}", _context, error.what());
+            try {
+                LOG_ERROR("{} callback threw: {}", _context, error.what());
+            } catch (...) {
+            }
         } catch (...) {
-            LOG_ERROR("{} callback threw an unknown exception", _context);
+            try {
+                LOG_ERROR("{} callback threw an unknown exception", _context);
+            } catch (...) {
+            }
+        }
+    }
+}
+
+static void ResolvePresentReceiptNoexcept(
+    const PresentReceiptRef& _receipt,
+    bool                     _submitted,
+    bool                     _recreate_swapchain
+) noexcept {
+    if (!_receipt) {
+        return;
+    }
+    try {
+        _receipt->Resolve(_submitted, _recreate_swapchain);
+    } catch (...) {
+        try {
+            LOG_ERROR("[RHIExecutor][Vulkan] failed to resolve Present receipt");
+        } catch (...) {
         }
     }
 }
@@ -3218,11 +3250,14 @@ static std::string JoinRecordCounts(std::span<const uint32> _counts) {
 }
 
 static bool WaitForSubmittedDependencies(
-    VulkanDevice& _device, const Array<WaitEvent>& _wait_events
+    VulkanDevice&           _device,
+    const Array<WaitEvent>& _wait_events,
+    const std::atomic_bool* _continue_waiting = nullptr
 ) {
     for (const WaitEvent& event : _wait_events) {
         auto* fence = reinterpret_cast<VulkanFence*>(event.timeline_handle);
-        if (fence == nullptr || !fence->WaitSubmitted(event.value)) {
+        if (fence == nullptr ||
+            !fence->WaitSubmitted(event.value, _continue_waiting)) {
             return false;
         }
     }
@@ -3242,19 +3277,44 @@ static void MarkSubmissionAccepted(
     }
 }
 
-static void FailSubmissionSignals(
-    VulkanFence* _queue_timeline,
-    const Array<SignalEvent>& _signal_events,
-    VkResult _result
+static bool IsRecoverableUnsubmittedSignal(
+    VulkanDevice& _device, const VulkanOperationResult& _outcome
 ) {
-    if (_queue_timeline != nullptr) {
-        _queue_timeline->Fail(_result);
+    return _outcome.status == EVulkanOperationStatus::Rejected &&
+           !_device.IsFaulted() &&
+           _outcome.result != VK_ERROR_DEVICE_LOST;
+}
+
+static void TerminalizeUnsubmittedSignal(
+    VulkanDevice&                _device,
+    VulkanFence*                 _fence,
+    uint64                       _value,
+    const VulkanOperationResult& _outcome
+) {
+    if (_fence == nullptr) {
+        return;
     }
+    if (IsRecoverableUnsubmittedSignal(_device, _outcome)) {
+        _fence->Reject(_value);
+    } else {
+        const VkResult result =
+            _outcome.result != VK_SUCCESS ? _outcome.result : VK_ERROR_UNKNOWN;
+        _fence->Fail(result);
+    }
+}
+
+static void TerminalizeUnsubmittedSignals(
+    VulkanDevice&                _device,
+    const Array<SignalEvent>&    _signal_events,
+    const VulkanOperationResult& _outcome
+) {
     for (const SignalEvent& event : _signal_events) {
-        auto* fence = reinterpret_cast<VulkanFence*>(event.timeline_handle);
-        if (fence != nullptr) {
-            fence->Fail(_result);
-        }
+        TerminalizeUnsubmittedSignal(
+            _device,
+            reinterpret_cast<VulkanFence*>(event.timeline_handle),
+            event.value,
+            _outcome
+        );
     }
 }
 
@@ -3269,7 +3329,11 @@ static void TerminalizeRejectedSubmit(
     }
 
     _device.RecordRejectedSubmit();
-    FailSubmissionSignals(nullptr, _submit.signal_events, _result);
+    TerminalizeUnsubmittedSignals(
+        _device,
+        _submit.signal_events,
+        VulkanOperationResult{EVulkanOperationStatus::Rejected, _result}
+    );
     FinalizeRejectedBindlessUpdates(_submit);
 
     // Completion callbacks are the only user code retained on a rejected
@@ -3332,35 +3396,63 @@ VkCommandQueue::VkCommandQueue(
     }
     timeline = MoerNew(VulkanFence(vk_device));
 
-    completion_worker_running = true;
-    completion_thread         = std::jthread(&VkCommandQueue::CompletionThreadMain, this);
+    try {
+        completion_worker_running = true;
+        completion_thread =
+            std::jthread(&VkCommandQueue::CompletionThreadMain, this);
 
-    if (rhi_thread_enabled) {
-        rhi_worker_running = true;
-        rhi_thread         = std::jthread(&VkCommandQueue::RhiThreadMain, this);
-    }
+        if (rhi_thread_enabled) {
+            rhi_worker_running = true;
+            rhi_thread = std::jthread(&VkCommandQueue::RhiThreadMain, this);
+        }
 
-    LOG_INFO(
-        "[Threading] Vulkan {} queue RHI mode: {}",
-        _type == EQueueType::Graphics ? "graphics" : "compute",
-        rhi_thread_enabled ? "threaded" : "synchronous"
-    );
-    if (parallel_record_requested) {
         LOG_INFO(
-            "[ParallelRecord] queue={} requested=true effective={} workers={} "
-            "min_work_units_per_job={} reason={}",
-            _type == EQueueType::Graphics ? "Graphics" : "Compute",
-            parallel_record_pool != nullptr,
-            parallel_record_workers,
-            parallel_record_min_work_units_per_job,
-            parallel_record_pool ? "none" :
-            _type != EQueueType::Graphics ? "unsupported-queue" : "rhi-thread-disabled-or-bypass"
+            "[Threading] Vulkan {} queue RHI mode: {}",
+            _type == EQueueType::Graphics ? "graphics" : "compute",
+            rhi_thread_enabled ? "threaded" : "synchronous"
         );
-    }
-    if (parallel_record_profile) {
-        LOG_INFO(
-            "[ParallelRecordProfile][Config] queue=Graphics enabled=true window_ms=1000"
-        );
+        if (parallel_record_requested) {
+            LOG_INFO(
+                "[ParallelRecord] queue={} requested=true effective={} workers={} "
+                "min_work_units_per_job={} reason={}",
+                _type == EQueueType::Graphics ? "Graphics" : "Compute",
+                parallel_record_pool != nullptr,
+                parallel_record_workers,
+                parallel_record_min_work_units_per_job,
+                parallel_record_pool ? "none" :
+                _type != EQueueType::Graphics ? "unsupported-queue" :
+                                                "rhi-thread-disabled-or-bypass"
+            );
+        }
+        if (parallel_record_profile) {
+            LOG_INFO(
+                "[ParallelRecordProfile][Config] queue=Graphics enabled=true window_ms=1000"
+            );
+        }
+    } catch (...) {
+        if (rhi_thread_enabled) {
+            {
+                std::lock_guard lock(rhi_work_mutex);
+                rhi_worker_running = false;
+            }
+            rhi_work_cv.notify_all();
+            if (rhi_thread.joinable()) {
+                rhi_thread.join();
+            }
+        }
+
+        {
+            std::lock_guard lock(event_mutex);
+            completion_worker_running = false;
+        }
+        queue_cv.notify_all();
+        if (completion_thread.joinable()) {
+            completion_thread.join();
+        }
+
+        MoerDelete(timeline);
+        timeline = nullptr;
+        throw;
     }
 }
 
@@ -3407,7 +3499,99 @@ VkCommandQueue::~VkCommandQueue() {
     vk_device.RecordQueueSyncComplete();
 }
 
+bool VkCommandQueue::ClaimRuntimeOwnership() {
+    EExecutionOwnershipMode expected = EExecutionOwnershipMode::Unclaimed;
+    if (execution_ownership_mode.compare_exchange_strong(
+            expected,
+            EExecutionOwnershipMode::Runtime,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire
+        )) {
+        std::lock_guard lock(rhi_work_mutex);
+        if (!rhi_work_queue.empty() || enqueued_rhi_work != completed_rhi_work) {
+            execution_ownership_mode.store(
+                EExecutionOwnershipMode::Unclaimed, std::memory_order_release
+            );
+            LOG_ERROR(
+                "[RHIExecutor][Vulkan] cannot claim Runtime ownership for queue={} "
+                "with legacy work in flight",
+                static_cast<uint32>(queue.GetType())
+            );
+            return false;
+        }
+        try {
+            LOG_INFO(
+                "[RHIExecutor][Vulkan] queue={} ownership=Runtime",
+                static_cast<uint32>(queue.GetType())
+            );
+        } catch (...) {
+        }
+        runtime_dependency_waits_enabled.store(true, std::memory_order_release);
+        return true;
+    }
+    try {
+        LOG_ERROR(
+            "[RHIExecutor][Vulkan] queue={} Runtime ownership claim rejected mode={}",
+            static_cast<uint32>(queue.GetType()),
+            static_cast<uint32>(expected)
+        );
+    } catch (...) {
+    }
+    return false;
+}
+
+void VkCommandQueue::ReleaseRuntimeOwnership() noexcept {
+    CancelRuntimeDependencyWaits();
+    EExecutionOwnershipMode expected = EExecutionOwnershipMode::Runtime;
+    const bool released = execution_ownership_mode.compare_exchange_strong(
+        expected,
+        EExecutionOwnershipMode::Unclaimed,
+        std::memory_order_acq_rel,
+        std::memory_order_acquire
+    );
+    assert(released && "only the owning Vulkan runtime may release a queue claim");
+}
+
+void VkCommandQueue::CancelRuntimeDependencyWaits() noexcept {
+    runtime_dependency_waits_enabled.store(false, std::memory_order_release);
+}
+
+bool VkCommandQueue::ClaimLegacyOwnership(std::string_view _operation) {
+    EExecutionOwnershipMode expected = EExecutionOwnershipMode::Unclaimed;
+    if (execution_ownership_mode.compare_exchange_strong(
+            expected,
+            EExecutionOwnershipMode::Legacy,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire
+        )) {
+        LOG_INFO(
+            "[Threading] Vulkan queue={} ownership=Legacy first_operation={}",
+            static_cast<uint32>(queue.GetType()),
+            _operation
+        );
+        return true;
+    }
+    if (expected == EExecutionOwnershipMode::Legacy) {
+        return true;
+    }
+    LOG_ERROR(
+        "[RHIExecutor][Vulkan] rejected legacy {} on Runtime-owned queue={}",
+        _operation,
+        static_cast<uint32>(queue.GetType())
+    );
+    return false;
+}
+
 WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
+    if (!ClaimLegacyOwnership("Execute")) {
+        TerminalizeRejectedSubmit(
+            vk_device,
+            std::move(_submit),
+            VK_ERROR_UNKNOWN,
+            "[VulkanQueue] rejected mixed Runtime/Legacy submit"
+        );
+        return {uint64(timeline), last_frame.load(std::memory_order_acquire)};
+    }
     if (vk_device.IsFaulted()) {
         TerminalizeRejectedSubmit(
             vk_device,
@@ -3462,91 +3646,285 @@ WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
 }
 
 std::optional<VkCommandQueue::CurrentVulkanRecordedSubmit>
-VkCommandQueue::TranslateForRuntime(CmdSubmit&& _submit) {
-    std::unique_lock<std::mutex> execution_lock(exec_mtx);
-    const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
-    std::optional<CurrentVulkanRecordedSubmit> recorded{};
-    ExecuteNow(
-        std::move(_submit),
-        current_timeline,
-        current_timeline,
-        &recorded,
-        true
+VkCommandQueue::TranslateForRuntime(CmdSubmit&& _submit) noexcept {
+    assert(
+        execution_ownership_mode.load(std::memory_order_acquire) ==
+            EExecutionOwnershipMode::Runtime &&
+        "runtime translate requires an exclusively claimed queue"
     );
-    if (recorded) {
-        recorded->runtime_execution_lock.emplace(std::move(execution_lock));
+    assert(
+        GetCurrentRHIThreadRole() == ERHIThreadRole::Translate &&
+        "runtime command translation must run on the Translate owner"
+    );
+    auto execution_lease = runtime_execution_gate.Acquire();
+    uint64 current_timeline = 0;
+    bool translation_terminalized = false;
+    std::optional<CurrentVulkanRecordedSubmit> recorded{};
+    try {
+        std::unique_lock<std::mutex> execution_lock(exec_mtx);
+        current_timeline =
+            last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
+        ExecuteNow(
+            std::move(_submit),
+            current_timeline,
+            current_timeline,
+            &recorded,
+            true,
+            &translation_terminalized
+        );
+    } catch (const std::exception& error) {
+        try {
+            LOG_ERROR(
+                "[RHIExecutor][Vulkan] command translation threw: {}",
+                error.what()
+            );
+        } catch (...) {
+        }
+    } catch (...) {
+        try {
+            LOG_ERROR("[RHIExecutor][Vulkan] command translation threw");
+        } catch (...) {
+        }
     }
-    return recorded;
+    if (recorded) {
+        recorded->execution_lease = std::move(execution_lease);
+        return recorded;
+    }
+    if (translation_terminalized) {
+        return std::nullopt;
+    }
+
+    if (current_timeline == 0) {
+        RejectForRuntime(std::move(_submit), VK_ERROR_UNKNOWN);
+        return std::nullopt;
+    }
+
+    // A timeline is reserved before translation begins. Unexpected translate
+    // failures must still publish a matching Completion retirement; otherwise
+    // queue Sync would wait forever on an orphaned last_frame value.
+    CurrentVulkanRecordedSubmit rejected{
+        std::move(_submit),
+        VulkanOperationContext{
+            .operation   = EVulkanFaultOperation::QueueSubmit,
+            .queue_type  = queue.GetType(),
+            .queue       = queue.GetHandle(),
+            .timeline    = current_timeline,
+            .work_serial = current_timeline,
+        },
+        current_timeline
+    };
+    rejected.execution_lease       = std::move(execution_lease);
+    rejected.retirement_outcome    = {
+        EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN
+    };
+    rejected.native_submit_resolved = true;
+    vk_device.RecordRejectedSubmit();
+    CommitRuntimeSubmitCompletion(rejected, rejected.retirement_outcome);
+    return std::nullopt;
 }
 
 VulkanRuntimeSubmissionResult VkCommandQueue::SubmitRecordedForRuntime(
     CurrentVulkanRecordedSubmit _recorded
-) {
+) noexcept {
     assert(
-        _recorded.runtime_execution_lock.has_value() &&
-        _recorded.runtime_execution_lock->owns_lock() &&
+        GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
+        "runtime native submit must run on the Submission owner"
+    );
+    assert(
+        _recorded.execution_lease.OwnsGate() &&
         "runtime recorded submit must retain queue execution ownership"
     );
     const uint64 submitted_timeline = _recorded.timeline;
     const bool split_profiling_frame =
         _recorded.submit.EmitsProfilingQueries() &&
         _recorded.submit.ProfilingPhase() != ERHIProfilingPhase::Complete;
-    const CurrentVulkanSubmitResult submit_result =
-        SubmitRecorded(std::move(_recorded));
-    if (split_profiling_frame && !submit_result.outcome.WasSubmitted()) {
+
+    try {
+        std::unique_lock<std::mutex> execution_lock(exec_mtx);
+        const CurrentVulkanSubmitResult submit_result =
+            SubmitRecorded(_recorded, &runtime_dependency_waits_enabled);
+        if (split_profiling_frame && !submit_result.outcome.WasSubmitted()) {
+            ResetSplitProfilingCpuFrame();
+        }
+    } catch (const std::exception& error) {
+        try {
+            LOG_ERROR(
+                "[RHIExecutor][Vulkan] recorded submission threw before retirement: {}",
+                error.what()
+            );
+        } catch (...) {
+        }
+    } catch (...) {
+        try {
+            LOG_ERROR(
+                "[RHIExecutor][Vulkan] recorded submission threw before retirement"
+            );
+        } catch (...) {
+        }
+    }
+
+    if (!_recorded.native_submit_resolved) {
+        queue.DiscardPendingSubmitState();
+        vk_device.RecordRejectedSubmit();
+        _recorded.retirement_outcome = {
+            EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN
+        };
+        _recorded.native_submit_resolved = true;
+    }
+    if (!_recorded.completion_committed) {
+        CommitRuntimeSubmitCompletion(_recorded, _recorded.retirement_outcome);
+    }
+    if (split_profiling_frame && !_recorded.retirement_outcome.WasSubmitted()) {
         ResetSplitProfilingCpuFrame();
     }
-    VulkanRuntimeSubmissionResult runtime_result{.outcome = submit_result.outcome};
-    if (submit_result.outcome.WasSubmitted()) {
+
+    VulkanRuntimeSubmissionResult runtime_result{
+        .outcome               = _recorded.retirement_outcome,
+        .recoverable_rejection = _recorded.recoverable_rejection,
+    };
+    if (_recorded.retirement_outcome.WasSubmitted()) {
         runtime_result.completion = WaitEvent{uint64(timeline), submitted_timeline};
     }
     return runtime_result;
 }
 
-void VkCommandQueue::RejectForRuntime(CmdSubmit&& _submit, VkResult _result) {
-    ResetSplitProfilingCpuFrame();
-    TerminalizeRejectedSubmit(
-        vk_device,
-        std::move(_submit),
-        _result,
-        "[RHIExecutor][Vulkan] rejected command submit"
+void VkCommandQueue::RejectRecordedForRuntime(
+    CurrentVulkanRecordedSubmit&& _recorded,
+    VkResult                       _result
+) noexcept {
+    assert(
+        _recorded.execution_lease.OwnsGate() &&
+        "a failed Translate -> Submission handoff must retain queue ownership"
     );
+    if (_result == VK_SUCCESS) {
+        _result = VK_ERROR_UNKNOWN;
+    }
+    ResetSplitProfilingCpuFrame();
+    vk_device.RecordRejectedSubmit();
+    _recorded.retirement_outcome = {
+        EVulkanOperationStatus::Rejected, _result
+    };
+    _recorded.native_submit_resolved = true;
+    if (!_recorded.completion_committed) {
+        CommitRuntimeSubmitCompletion(_recorded, _recorded.retirement_outcome);
+    }
+}
+
+void VkCommandQueue::RejectForRuntime(CmdSubmit&& _submit, VkResult _result) noexcept {
+    ResetSplitProfilingCpuFrame();
+    if (_result == VK_SUCCESS) {
+        _result = VK_ERROR_UNKNOWN;
+    }
+    vk_device.RecordRejectedSubmit();
+
+    try {
+        TerminalizeUnsubmittedSignals(
+            vk_device,
+            _submit.signal_events,
+            VulkanOperationResult{
+                EVulkanOperationStatus::Rejected, _result
+            }
+        );
+        // Rejection is now externally observable. Completion must not retain
+        // and dereference the raw fence pointers after a waiter releases its
+        // last FenceRef.
+        _submit.signal_events.clear();
+        std::unique_lock<std::mutex> lock(event_mutex);
+        const uint64 retirement_serial = retirement_enqueued_serial + 1;
+        event_queue.emplace_back(
+            std::in_place_type<VulkanSubmitCompletionBatch>,
+            0,
+            true,
+            retirement_serial,
+            VulkanOperationResult{EVulkanOperationStatus::Rejected, _result},
+            VulkanOperationContext{
+                .operation  = EVulkanFaultOperation::QueueSubmit,
+                .queue_type = queue.GetType(),
+                .queue      = queue.GetHandle(),
+            },
+            false,
+            false,
+            std::move(_submit),
+            VulkanAllocatorBatch{},
+            std::optional<VulkanDescriptorPushLease>{},
+            Array<RHIResource*>{}
+        );
+        retirement_enqueued_serial = retirement_serial;
+    } catch (...) {
+        // Continuing would destroy callbacks/signals outside Completion and
+        // violate the ownership contract. Allocation failure is therefore
+        // treated as an unrecoverable runtime bookkeeping failure.
+        std::terminate();
+    }
+    queue_cv.notify_one();
 }
 
 VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
     SwapchainRef _swapchain,
     TextureView _source,
     PresentReceiptRef _receipt
-) {
+) noexcept {
+    assert(
+        execution_ownership_mode.load(std::memory_order_acquire) ==
+            EExecutionOwnershipMode::Runtime &&
+        "runtime Present requires an exclusively claimed queue"
+    );
+    assert(
+        GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
+        "runtime Present must run on the Submission owner"
+    );
     assert(_source.texture != nullptr && "Present source texture is null");
-    TextureRef source_texture{_source.texture};
-    if (vk_device.IsFaulted()) {
+    try {
+        TextureRef source_texture{_source.texture};
+        if (vk_device.IsFaulted()) {
+            vk_device.RecordRejectedPresent();
+            ResolvePresentReceiptNoexcept(_receipt, false, false);
+            return {
+                .outcome = {
+                    EVulkanOperationStatus::Rejected,
+                    vk_device.GetFirstFaultResult()
+                }
+            };
+        }
+
+        auto execution_lease = runtime_execution_gate.Acquire();
+        std::unique_lock<std::mutex> execution_lock(exec_mtx);
+        const uint64 current_timeline =
+            last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
+        return PresentNow(
+            std::move(_swapchain),
+            std::move(source_texture),
+            _source,
+            std::move(_receipt),
+            current_timeline,
+            current_timeline,
+            true
+        );
+    } catch (...) {
         vk_device.RecordRejectedPresent();
-        if (_receipt) {
-            _receipt->Resolve(false);
+        ResolvePresentReceiptNoexcept(_receipt, false, false);
+        try {
+            LOG_ERROR(
+                "[RHIExecutor][Vulkan] Present owner setup threw before timeline reservation"
+            );
+        } catch (...) {
         }
         return {
             .outcome = {
-                EVulkanOperationStatus::Rejected, vk_device.GetFirstFaultResult()
+                EVulkanOperationStatus::Rejected,
+                vk_device.IsFaulted() ?
+                    vk_device.GetFirstFaultResult() :
+                    VK_ERROR_UNKNOWN
             }
         };
     }
-
-    std::unique_lock<std::mutex> execution_lock(exec_mtx);
-    const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
-    return PresentNow(
-        std::move(_swapchain),
-        std::move(source_texture),
-        _source,
-        std::move(_receipt),
-        current_timeline,
-        current_timeline,
-        true
-    );
 }
 
 VkCommandQueue::CurrentVulkanSubmitResult
-VkCommandQueue::SubmitRecorded(CurrentVulkanRecordedSubmit _recorded) {
+VkCommandQueue::SubmitRecorded(
+    CurrentVulkanRecordedSubmit& _recorded,
+    const std::atomic_bool*       _continue_waiting
+) {
     assert(
         _recorded.has_commands == !_recorded.ordered_cmd_lists.empty() &&
         "recorded Vulkan submit command-list ownership mismatch"
@@ -3557,11 +3935,15 @@ VkCommandQueue::SubmitRecorded(CurrentVulkanRecordedSubmit _recorded) {
                                             std::chrono::steady_clock::time_point{};
     const auto end_tag = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     VulkanOperationResult submit_outcome{};
-    if (!WaitForSubmittedDependencies(vk_device, _recorded.submit.wait_events)) {
+    if (!WaitForSubmittedDependencies(
+            vk_device, _recorded.submit.wait_events, _continue_waiting
+        )) {
         vk_device.RecordRejectedSubmit();
         const VkResult rejected_result = GetRejectedSubmitResult(vk_device);
         submit_outcome = {EVulkanOperationStatus::Rejected, rejected_result};
-        FailSubmissionSignals(timeline, _recorded.submit.signal_events, rejected_result);
+        _recorded.recoverable_rejection = !vk_device.IsFaulted();
+        _recorded.native_submit_resolved = true;
+        _recorded.retirement_outcome     = submit_outcome;
     } else {
         queue.Signal(timeline, _recorded.timeline, end_tag);
         for (auto& event : _recorded.submit.wait_events) {
@@ -3585,20 +3967,17 @@ VkCommandQueue::SubmitRecorded(CurrentVulkanRecordedSubmit _recorded) {
                                  _recorded.context
                              ) :
                              queue.SubmitEmpty(_recorded.context);
+        _recorded.native_submit_resolved = true;
+        // Persist the native result before any signal-fence bookkeeping can
+        // throw. Once vkQueueSubmit2 has accepted the packet, every later
+        // exception must still retire it as GPU-submitted.
+        _recorded.retirement_outcome = submit_outcome;
         if (submit_outcome.WasSubmitted()) {
             MarkSubmissionAccepted(
                 timeline, _recorded.timeline, _recorded.submit.signal_events
             );
-        } else {
-            FailSubmissionSignals(
-                timeline, _recorded.submit.signal_events, submit_outcome.result
-            );
         }
     }
-    if (!submit_outcome.WasSubmitted()) {
-        FinalizeRejectedBindlessUpdates(_recorded.submit);
-    }
-
     const double profile_submit_cpu_ms = _recorded.profile.enabled ?
                                              RhiThreadProfileMilliseconds(
                                                  profile_submit_started,
@@ -3608,56 +3987,8 @@ VkCommandQueue::SubmitRecorded(CurrentVulkanRecordedSubmit _recorded) {
     const uint32 ordered_cmd_list_count =
         static_cast<uint32>(_recorded.ordered_cmd_lists.size());
 
-    {
-        std::unique_lock<std::mutex> lock(event_mutex);
-        event_queue.emplace_back(
-            VulkanSubmissionEvent{
-                submit_outcome, _recorded.context, submit_outcome.WasSubmitted()
-            },
-            _recorded.timeline,
-            false
-        );
-        event_queue.emplace_back(
-            std::move(_recorded.allocators), _recorded.timeline, false
-        );
-        if (_recorded.descriptor_lease.has_value()) {
-            event_queue.emplace_back(
-                std::move(*_recorded.descriptor_lease), _recorded.timeline, false
-            );
-        }
-        for (auto& event : _recorded.submit.signal_events) {
-            event_queue.emplace_back(
-                SignalEvent(event.timeline_handle, event.value), _recorded.timeline, false
-            );
-        }
-        if (!_recorded.submit.callbacks.empty()) {
-            event_queue.emplace_back(
-                VulkanCallbackBatch{std::move(_recorded.submit.callbacks), false},
-                _recorded.timeline,
-                false
-            );
-        }
-        if (!_recorded.submit.success_callbacks.empty()) {
-            event_queue.emplace_back(
-                VulkanCallbackBatch{std::move(_recorded.submit.success_callbacks), true},
-                _recorded.timeline,
-                false
-            );
-        }
-        if (!_recorded.deferred_releases.empty()) {
-            event_queue.emplace_back(
-                VulkanDeferredReleaseBatch{std::move(_recorded.deferred_releases)},
-                _recorded.timeline,
-                false
-            );
-        }
-        EnqueueCompletionMarker(_recorded.timeline);
-    }
-    queue_cv.notify_one();
+    CommitRuntimeSubmitCompletion(_recorded, submit_outcome);
 
-    if (_recorded.has_commands) {
-        executed_queue.Enqueue(_recorded.timeline);
-    }
     if (_recorded.profile.enabled) {
         _recorded.profile.sample.submit_cpu_ms = profile_submit_cpu_ms;
         _recorded.profile.sample.execute_cpu_wall_ms = RhiThreadProfileMilliseconds(
@@ -3671,6 +4002,63 @@ VkCommandQueue::SubmitRecorded(CurrentVulkanRecordedSubmit _recorded) {
         .outcome                = submit_outcome,
         .ordered_cmd_list_count = ordered_cmd_list_count,
     };
+}
+
+void VkCommandQueue::CommitRuntimeSubmitCompletion(
+    CurrentVulkanRecordedSubmit& _recorded,
+    const VulkanOperationResult&  _outcome
+) noexcept {
+    assert(!_recorded.completion_committed);
+    try {
+        if (!_outcome.WasSubmitted()) {
+            TerminalizeUnsubmittedSignal(
+                vk_device,
+                timeline,
+                _recorded.timeline,
+                _outcome
+            );
+            TerminalizeUnsubmittedSignals(
+                vk_device, _recorded.submit.signal_events, _outcome
+            );
+            // Exact signal rejection is published by Submission. Do not
+            // retain raw external fence pointers in the Completion packet.
+            _recorded.submit.signal_events.clear();
+            _recorded.allocators.abandoned.reserve(
+                _recorded.allocators.abandoned.size() +
+                _recorded.allocators.submitted.size()
+            );
+            for (auto& allocator : _recorded.allocators.submitted) {
+                _recorded.allocators.abandoned.emplace_back(
+                    std::move(allocator)
+                );
+            }
+            _recorded.allocators.submitted.clear();
+        }
+
+        std::unique_lock<std::mutex> lock(event_mutex);
+        const uint64 retirement_serial = retirement_enqueued_serial + 1;
+        event_queue.emplace_back(
+            std::in_place_type<VulkanSubmitCompletionBatch>,
+            _recorded.timeline,
+            true,
+            retirement_serial,
+            _outcome,
+            _recorded.context,
+            _outcome.WasSubmitted(),
+            _outcome.WasSubmitted(),
+            std::move(_recorded.submit),
+            std::move(_recorded.allocators),
+            std::move(_recorded.descriptor_lease),
+            std::move(_recorded.deferred_releases)
+        );
+        retirement_enqueued_serial     = retirement_serial;
+        _recorded.completion_committed = true;
+    } catch (...) {
+        // The packet may own command pools already submitted to the GPU. It is
+        // never safe to unwind and destroy it on the Submission owner.
+        std::terminate();
+    }
+    queue_cv.notify_one();
 }
 
 bool VkCommandQueue::TryExecuteParallel(
@@ -3949,12 +4337,15 @@ bool VkCommandQueue::TryExecuteParallel(
         if (_result == VK_SUCCESS) {
             _result = VK_ERROR_UNKNOWN;
         }
-        LOG_ERROR(
-            "[ParallelRecord] prepared batch {} rejected: reason={} VkResult={}",
-            batch_serial,
-            _reason,
-            static_cast<int32_t>(_result)
-        );
+        try {
+            LOG_ERROR(
+                "[ParallelRecord] prepared batch {} rejected: reason={} VkResult={}",
+                batch_serial,
+                _reason,
+                static_cast<int32_t>(_result)
+            );
+        } catch (...) {
+        }
         ResetSplitProfilingCpuFrame();
         // Once preprocessing/recording has begun, falling back to replaying
         // the whole packet is unsafe: serial commands may already have moved
@@ -3963,8 +4354,6 @@ bool VkCommandQueue::TryExecuteParallel(
         // so no later frame can consume partially prepared CPU-side state.
         vk_device.TryLatchFirstFault(_context, _result, false, false, true);
         vk_device.RecordRejectedSubmit();
-        FailSubmissionSignals(timeline, _submit.signal_events, _result);
-        FinalizeRejectedBindlessUpdates(_submit);
 
         Array<UniquePtr<VulkanAllocator>> abandoned_allocators;
         auto collect_allocator = [&](UniquePtr<VulkanAllocator>& _allocator) {
@@ -3982,53 +4371,42 @@ bool VkCommandQueue::TryExecuteParallel(
         collect_allocator(tracker_owner);
 
         Array<RHIResource*> deferred_releases = TakeDeferredReleases();
-        {
+        try {
             std::unique_lock<std::mutex> lock(event_mutex);
+            const uint64 retirement_serial = retirement_enqueued_serial + 1;
             event_queue.emplace_back(
-                VulkanSubmissionEvent{
-                    {EVulkanOperationStatus::Rejected, _result}, _context, false
+                std::in_place_type<VulkanSubmitCompletionBatch>,
+                _timeline,
+                true,
+                retirement_serial,
+                VulkanOperationResult{
+                    EVulkanOperationStatus::Rejected, _result
                 },
-                _timeline,
-                false
-            );
-            event_queue.emplace_back(
+                _context,
+                false,
+                true,
+                std::move(_submit),
                 VulkanAllocatorBatch{{}, std::move(abandoned_allocators)},
-                _timeline,
-                false
+                std::move(descriptor_lease),
+                std::move(deferred_releases)
             );
-            event_queue.emplace_back(std::move(descriptor_lease), _timeline, false);
-            for (auto& event : _submit.signal_events) {
-                event_queue.emplace_back(
-                    SignalEvent(event.timeline_handle, event.value), _timeline, false
-                );
-            }
-            if (!_submit.callbacks.empty()) {
-                event_queue.emplace_back(
-                    VulkanCallbackBatch{std::move(_submit.callbacks), false}, _timeline, false
-                );
-            }
-            if (!_submit.success_callbacks.empty()) {
-                event_queue.emplace_back(
-                    VulkanCallbackBatch{std::move(_submit.success_callbacks), true}, _timeline, false
-                );
-            }
-            if (!deferred_releases.empty()) {
-                event_queue.emplace_back(
-                    VulkanDeferredReleaseBatch{std::move(deferred_releases)}, _timeline, false
-                );
-            }
-            EnqueueCompletionMarker(_timeline);
+            retirement_enqueued_serial = retirement_serial;
+        } catch (...) {
+            std::terminate();
         }
         queue_cv.notify_one();
         if (parallel_record_verify) {
-            LOG_INFO(
-                "[ParallelRecord] batch={} requested=true effective=false "
-                "outcome=record-rejected reason={} coordinator={} VkResult={}",
-                batch_serial,
-                _reason,
-                Platform::GetCurrentThreadID(),
-                static_cast<int32_t>(_result)
-            );
+            try {
+                LOG_INFO(
+                    "[ParallelRecord] batch={} requested=true effective=false "
+                    "outcome=record-rejected reason={} coordinator={} VkResult={}",
+                    batch_serial,
+                    _reason,
+                    Platform::GetCurrentThreadID(),
+                    static_cast<int32_t>(_result)
+                );
+            } catch (...) {
+            }
         }
     };
 
@@ -4095,6 +4473,7 @@ bool VkCommandQueue::TryExecuteParallel(
             }
             for (size_t chunk_index = 0; chunk_index < runtime.chunks.size(); ++chunk_index) {
                 wave_jobs.emplace_back([&, layer_index, chunk_index] {
+                    RHIThreadRoleScope owner_scope(ERHIThreadRole::RecordWorker);
                     ParallelLayerRuntime& job_layer = runtime_layers[layer_index];
                     ParallelChunkRuntime& chunk     = job_layer.chunks[chunk_index];
                     const uint32 now_active =
@@ -4217,17 +4596,20 @@ bool VkCommandQueue::TryExecuteParallel(
             }
         }
         if (parallel_record_verify) {
-            LOG_INFO(
-                "[ParallelRecord][Wave] batch={} wave={} layers={}..{} jobs={} "
-                "join_completed={} worker_recorded={}",
-                batch_serial,
-                wave_index,
-                _first_layer,
-                _layer_end,
-                wave_jobs.size(),
-                join_result == ExternalJoinResult::Completed,
-                wave_recorded
-            );
+            try {
+                LOG_INFO(
+                    "[ParallelRecord][Wave] batch={} wave={} layers={}..{} jobs={} "
+                    "join_completed={} worker_recorded={}",
+                    batch_serial,
+                    wave_index,
+                    _first_layer,
+                    _layer_end,
+                    wave_jobs.size(),
+                    join_result == ExternalJoinResult::Completed,
+                    wave_recorded
+                );
+            } catch (...) {
+            }
         }
         // Native command-buffer failures are device/driver failures, not a
         // replayable translation exception. Match coordinator Begin/End by
@@ -4283,21 +4665,28 @@ bool VkCommandQueue::TryExecuteParallel(
                     visitor.VisitCmd(command);
                 }
             } catch (const StaleBindlessUpdateBatch& error) {
-                LOG_WARNING(
-                    "[ParallelRecord] fallback rejected stale bindless batch: layer={} error={}",
-                    layer_index,
-                    error.what()
-                );
+                try {
+                    LOG_WARNING(
+                        "[ParallelRecord] fallback rejected stale bindless batch: "
+                        "layer={} error={}",
+                        layer_index,
+                        error.what()
+                    );
+                } catch (...) {
+                }
                 reject_prepared_recording(
                     "stale-bindless-update", VK_ERROR_VALIDATION_FAILED_EXT
                 );
                 return false;
             } catch (const std::exception& error) {
-                LOG_ERROR(
-                    "[ParallelRecord] fallback record failed: layer={} error={}",
-                    layer_index,
-                    error.what()
-                );
+                try {
+                    LOG_ERROR(
+                        "[ParallelRecord] fallback record failed: layer={} error={}",
+                        layer_index,
+                        error.what()
+                    );
+                } catch (...) {
+                }
                 reject_prepared_recording(
                     "fallback-record-failed", VK_ERROR_OUT_OF_POOL_MEMORY
                 );
@@ -4359,11 +4748,15 @@ bool VkCommandQueue::TryExecuteParallel(
                 try {
                     record_layer_prefix(layer_index, primary_cmd);
                 } catch (const std::exception& error) {
-                    LOG_ERROR(
-                        "[ParallelRecord] coordinator prefix failed: layer={} error={}",
-                        layer_index,
-                        error.what()
-                    );
+                    try {
+                        LOG_ERROR(
+                            "[ParallelRecord] coordinator prefix failed: layer={} "
+                            "error={}",
+                            layer_index,
+                            error.what()
+                        );
+                    } catch (...) {
+                    }
                     reject_prepared_recording(
                         "coordinator-prefix-failed", VK_ERROR_OUT_OF_POOL_MEMORY
                     );
@@ -4405,14 +4798,17 @@ bool VkCommandQueue::TryExecuteParallel(
 
         const uint32 island_index = serial_island_count++;
         if (parallel_record_verify) {
-            LOG_INFO(
-                "[ParallelRecord][Island] batch={} island={} first_layer={} "
-                "joined_waves={}",
-                batch_serial,
-                island_index,
-                layer_index,
-                parallel_wave_count
-            );
+            try {
+                LOG_INFO(
+                    "[ParallelRecord][Island] batch={} island={} first_layer={} "
+                    "joined_waves={}",
+                    batch_serial,
+                    island_index,
+                    layer_index,
+                    parallel_wave_count
+                );
+            } catch (...) {
+            }
         }
 
         first_runtime.primary_allocator = GetAllocator();
@@ -4459,21 +4855,29 @@ bool VkCommandQueue::TryExecuteParallel(
                 island_exit_scopes = &runtime_layers[layer_index].scopes;
             }
         } catch (const StaleBindlessUpdateBatch& error) {
-            LOG_WARNING(
-                "[ParallelRecord] coordinator rejected stale bindless batch: layer={} error={}",
-                layer_index,
-                error.what()
-            );
+            try {
+                LOG_WARNING(
+                    "[ParallelRecord] coordinator rejected stale bindless batch: "
+                    "layer={} error={}",
+                    layer_index,
+                    error.what()
+                );
+            } catch (...) {
+            }
             reject_prepared_recording(
                 "stale-bindless-update", VK_ERROR_VALIDATION_FAILED_EXT
             );
             return true;
         } catch (const std::exception& error) {
-            LOG_ERROR(
-                "[ParallelRecord] coordinator island record failed: layer={} error={}",
-                layer_index,
-                error.what()
-            );
+            try {
+                LOG_ERROR(
+                    "[ParallelRecord] coordinator island record failed: layer={} "
+                    "error={}",
+                    layer_index,
+                    error.what()
+                );
+            } catch (...) {
+            }
             reject_prepared_recording(
                 "coordinator-record-failed", VK_ERROR_OUT_OF_POOL_MEMORY
             );
@@ -4592,7 +4996,7 @@ bool VkCommandQueue::TryExecuteParallel(
     if (_out_recorded != nullptr) {
         _out_recorded->emplace(std::move(recorded_submit));
     } else {
-        submit_result = SubmitRecorded(std::move(recorded_submit));
+        submit_result = SubmitRecorded(recorded_submit);
     }
 
     QueryFrameDiagnostics query_diagnostics{};
@@ -4625,7 +5029,8 @@ bool VkCommandQueue::TryExecuteParallel(
     }
 
     if (parallel_record_verify) {
-        LOG_INFO(
+        try {
+            LOG_INFO(
             "[ParallelRecord] batch={} requested=true effective={} outcome={} layers={} jobs={} "
             "work_units={} ordered_cb={} waves={} islands={} workers={} distinct_workers={} max_active={} "
             "coordinator={} submit_status={} "
@@ -4649,7 +5054,9 @@ bool VkCommandQueue::TryExecuteParallel(
             descriptor_bytes,
             query_diagnostics.digest,
             query_diagnostics.used_query_count
-        );
+            );
+        } catch (...) {
+        }
     }
     return true;
 }
@@ -4659,7 +5066,8 @@ void VkCommandQueue::ExecuteNow(
     uint64 _timeline,
     uint64 _serial,
     std::optional<CurrentVulkanRecordedSubmit>* _out_recorded,
-    bool _runtime_owner
+    bool _runtime_owner,
+    bool* _out_terminalized
 ) {
     assert(
         _runtime_owner || !rhi_thread_enabled ||
@@ -4684,28 +5092,33 @@ void VkCommandQueue::ExecuteNow(
         ResetSplitProfilingCpuFrame();
         vk_device.RecordRejectedSubmit();
         const VkResult rejected_result = vk_device.GetFirstFaultResult();
-        FailSubmissionSignals(timeline, _submit.signal_events, rejected_result);
-        std::unique_lock<std::mutex> lock(event_mutex);
-        event_queue.emplace_back(
-            VulkanSubmissionEvent{
-                {EVulkanOperationStatus::Rejected, rejected_result}, context
-            },
-            _timeline,
-            false
-        );
-        if (!_submit.callbacks.empty()) {
+        try {
+            std::unique_lock<std::mutex> lock(event_mutex);
+            const uint64 retirement_serial = retirement_enqueued_serial + 1;
             event_queue.emplace_back(
-                VulkanCallbackBatch{std::move(_submit.callbacks), false}, _timeline, false
+                std::in_place_type<VulkanSubmitCompletionBatch>,
+                _timeline,
+                true,
+                retirement_serial,
+                VulkanOperationResult{
+                    EVulkanOperationStatus::Rejected, rejected_result
+                },
+                context,
+                false,
+                true,
+                std::move(_submit),
+                VulkanAllocatorBatch{},
+                std::optional<VulkanDescriptorPushLease>{},
+                Array<RHIResource*>{}
             );
+            retirement_enqueued_serial = retirement_serial;
+        } catch (...) {
+            std::terminate();
         }
-        if (!_submit.success_callbacks.empty()) {
-            event_queue.emplace_back(
-                VulkanCallbackBatch{std::move(_submit.success_callbacks), true}, _timeline, false
-            );
-        }
-        EnqueueCompletionMarker(_timeline);
-        lock.unlock();
         queue_cv.notify_one();
+        if (_out_terminalized != nullptr) {
+            *_out_terminalized = true;
+        }
         return;
     }
 
@@ -4742,6 +5155,10 @@ void VkCommandQueue::ExecuteNow(
             parallel_profile_started,
             _out_recorded
         )) {
+        if (_out_terminalized != nullptr && _out_recorded != nullptr &&
+            !_out_recorded->has_value()) {
+            *_out_terminalized = true;
+        }
         return;
     }
 
@@ -4850,65 +5267,53 @@ void VkCommandQueue::ExecuteNow(
         if (_result == VK_SUCCESS) {
             _result = VK_ERROR_UNKNOWN;
         }
-        LOG_ERROR(
-            "[SerialRecord] batch {} rejected: reason={} VkResult={}",
-            _serial,
-            _reason,
-            static_cast<int32_t>(_result)
-        );
+        try {
+            LOG_ERROR(
+                "[SerialRecord] batch {} rejected: reason={} VkResult={}",
+                _serial,
+                _reason,
+                static_cast<int32_t>(_result)
+            );
+        } catch (...) {
+        }
         ResetSplitProfilingCpuFrame();
         // Recording may already have executed CPU-side preprocessing or
         // transient allocation. Replaying the packet is therefore unsafe.
         vk_device.TryLatchFirstFault(context, _result, false, false, true);
         vk_device.RecordRejectedSubmit();
-        FailSubmissionSignals(timeline, _submit.signal_events, _result);
-        FinalizeRejectedBindlessUpdates(_submit);
 
         Array<UniquePtr<VulkanAllocator>> abandoned_allocators;
         if (allocator_ptr) {
             abandoned_allocators.push_back(std::move(allocator_ptr));
         }
         Array<RHIResource*> deferred_releases = TakeDeferredReleases();
-        {
+        try {
             std::unique_lock<std::mutex> lock(event_mutex);
+            const uint64 retirement_serial = retirement_enqueued_serial + 1;
             event_queue.emplace_back(
-                VulkanSubmissionEvent{
-                    {EVulkanOperationStatus::Rejected, _result}, context, false
+                std::in_place_type<VulkanSubmitCompletionBatch>,
+                _timeline,
+                true,
+                retirement_serial,
+                VulkanOperationResult{
+                    EVulkanOperationStatus::Rejected, _result
                 },
-                _timeline,
-                false
-            );
-            event_queue.emplace_back(
+                context,
+                false,
+                true,
+                std::move(_submit),
                 VulkanAllocatorBatch{{}, std::move(abandoned_allocators)},
-                _timeline,
-                false
+                std::move(descriptor_lease),
+                std::move(deferred_releases)
             );
-            if (descriptor_lease.has_value()) {
-                event_queue.emplace_back(std::move(*descriptor_lease), _timeline, false);
-            }
-            for (auto& event : _submit.signal_events) {
-                event_queue.emplace_back(
-                    SignalEvent(event.timeline_handle, event.value), _timeline, false
-                );
-            }
-            if (!_submit.callbacks.empty()) {
-                event_queue.emplace_back(
-                    VulkanCallbackBatch{std::move(_submit.callbacks), false}, _timeline, false
-                );
-            }
-            if (!_submit.success_callbacks.empty()) {
-                event_queue.emplace_back(
-                    VulkanCallbackBatch{std::move(_submit.success_callbacks), true}, _timeline, false
-                );
-            }
-            if (!deferred_releases.empty()) {
-                event_queue.emplace_back(
-                    VulkanDeferredReleaseBatch{std::move(deferred_releases)}, _timeline, false
-                );
-            }
-            EnqueueCompletionMarker(_timeline);
+            retirement_enqueued_serial = retirement_serial;
+        } catch (...) {
+            std::terminate();
         }
         queue_cv.notify_one();
+        if (_out_terminalized != nullptr) {
+            *_out_terminalized = true;
+        }
     };
 
     auto record_serial_commands = [&] {
@@ -5159,7 +5564,12 @@ void VkCommandQueue::ExecuteNow(
         reject_serial_recording(failure.reason, failure.result);
         return;
     } catch (const StaleBindlessUpdateBatch& error) {
-        LOG_WARNING("[SerialRecord] rejected stale bindless batch: {}", error.what());
+        try {
+            LOG_WARNING(
+                "[SerialRecord] rejected stale bindless batch: {}", error.what()
+            );
+        } catch (...) {
+        }
         reject_serial_recording(
             "stale-bindless-update", VK_ERROR_VALIDATION_FAILED_EXT
         );
@@ -5239,7 +5649,7 @@ void VkCommandQueue::ExecuteNow(
     if (_out_recorded != nullptr) {
         _out_recorded->emplace(std::move(recorded_submit));
     } else {
-        submit_result = SubmitRecorded(std::move(recorded_submit));
+        submit_result = SubmitRecorded(recorded_submit);
     }
 
     if (has_cmd && complete_profiling_frame) {
@@ -5276,6 +5686,12 @@ void VkCommandQueue::Present(
     assert(_view.texture != nullptr && "Present source texture is null");
     TextureRef source_texture{_view.texture};
 
+    if (!ClaimLegacyOwnership("Present")) {
+        if (_receipt) {
+            _receipt->Resolve(false);
+        }
+        return;
+    }
     if (vk_device.IsFaulted()) {
         vk_device.RecordRejectedPresent();
         if (_receipt) {
@@ -5351,7 +5767,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
     uint64         _timeline,
     uint64         _serial,
     bool           _runtime_owner
-) {
+) noexcept {
     assert(
         _runtime_owner || !rhi_thread_enabled ||
         rhi_thread_id.load(std::memory_order_acquire) == Platform::GetCurrentThreadID()
@@ -5364,193 +5780,242 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
         .timeline    = _timeline,
         .work_serial = _serial,
     };
-    if (vk_device.IsFaulted()) {
-        vk_device.RecordRejectedPresent();
-        if (_receipt) {
-            _receipt->Resolve(false);
-        }
-        const VkResult rejected_result = vk_device.GetFirstFaultResult();
-        timeline->Fail(rejected_result);
-        std::unique_lock<std::mutex> lock(event_mutex);
-        event_queue.emplace_back(
-            VulkanSubmissionEvent{
-                {EVulkanOperationStatus::Rejected, rejected_result}, context, false
-            },
-            _timeline,
-            false
-        );
-        EnqueueCompletionMarker(_timeline);
-        lock.unlock();
-        queue_cv.notify_one();
-        return {
-            .outcome = {EVulkanOperationStatus::Rejected, rejected_result}
-        };
-    }
 
-    VkSwapchain* sc = ResourceCast(_sc.Get());
-    auto         presentor = std::move(GetPresentor());
-    auto& vk_allocator = *presentor;
-    auto& vk_cmd_list  = vk_allocator.GetCmdList();
-    auto& vk_tracker   = vk_allocator.GetTracker();
-    if (!sc->WaitFrameInFlight()) {
-        vk_device.RecordRejectedPresent();
-        if (_receipt) {
-            _receipt->Resolve(false);
-        }
-        const VkResult rejected_result = GetRejectedSubmitResult(vk_device);
-        timeline->Fail(rejected_result);
-        std::unique_lock<std::mutex> lock(event_mutex);
-        event_queue.emplace_back(
-            VulkanSubmissionEvent{
-                {EVulkanOperationStatus::Rejected, rejected_result}, context, false
-            },
-            _timeline,
-            false
-        );
-        event_queue.emplace_back(std::move(presentor), _timeline, false);
-        EnqueueCompletionMarker(_timeline);
-        lock.unlock();
-        queue_cv.notify_one();
-        return {
-            .outcome = {EVulkanOperationStatus::Rejected, rejected_result}
-        };
-    }
-    auto acquire = sc->AquireNextImage(rhi_thread_enabled ? 0 : 50'000'000);
-    bool recreate_swapchain =
-        acquire.outcome.status == EVulkanOperationStatus::Recreate;
+    VulkanOperationResult final_outcome{
+        EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN
+    };
+    bool                            gpu_submitted = false;
+    bool                            present_accepted = false;
+    bool                            recreate_swapchain = false;
+    EVulkanPresentorRetirementState presentor_state =
+        EVulkanPresentorRetirementState::Unused;
+    UniquePtr<VulkanPresentor> presentor{};
+    Array<RHIResource*>        deferred_releases{};
 
-    Array<std::function<void()>> callbacks;
-    if (!acquire.HasImage()) {
-        if (_receipt) {
-            _receipt->Resolve(false, recreate_swapchain);
-        }
-        if (acquire.outcome.status == EVulkanOperationStatus::Faulted ||
-            acquire.outcome.status == EVulkanOperationStatus::Rejected) {
-            timeline->Fail(acquire.outcome.result);
+    try {
+        if (vk_device.IsFaulted()) {
+            vk_device.RecordRejectedPresent();
+            final_outcome = {
+                EVulkanOperationStatus::Rejected,
+                vk_device.GetFirstFaultResult()
+            };
         } else {
-            presentors.Push(presentor.release());
-        }
+            VkSwapchain* sc = ResourceCast(_sc.Get());
+            presentor       = GetPresentor();
+            if (!sc->WaitFrameInFlight()) {
+                vk_device.RecordRejectedPresent();
+                final_outcome = {
+                    EVulkanOperationStatus::Rejected,
+                    GetRejectedSubmitResult(vk_device)
+                };
+            } else {
+                const VkSwapchain::AcquireResult acquire =
+                    sc->AquireNextImage(rhi_thread_enabled ? 0 : 50'000'000);
+                final_outcome      = acquire.outcome;
+                recreate_swapchain =
+                    acquire.outcome.status == EVulkanOperationStatus::Recreate;
 
-        Array<RHIResource*> deferred_releases = TakeDeferredReleases();
-        callbacks.emplace_back(
-            [swapchain = std::move(_sc), source_texture = std::move(_source_texture)]() mutable {}
-        );
-        {
-            std::unique_lock<std::mutex> lock(event_mutex);
-            event_queue.emplace_back(
-                VulkanSubmissionEvent{acquire.outcome, context, false}, _timeline, false
-            );
-            if (presentor) {
-                event_queue.emplace_back(std::move(presentor), _timeline, false);
+                if (acquire.HasImage()) {
+                    presentor_state =
+                        EVulkanPresentorRetirementState::RecordedNotSubmitted;
+                    auto& vk_allocator = *presentor;
+                    auto& vk_cmd_list  = vk_allocator.GetCmdList();
+                    auto& vk_tracker   = vk_allocator.GetTracker();
+                    auto* vk_src_tex   = static_cast<VulkanTexture*>(_view.texture);
+                    const uint idx     = acquire.image_index;
+                    auto* swapchain_tex =
+                        ResourceCast(sc->GetSwapchainImage(idx).texture);
+
+                    VK_CHECK_RESULT(vk_cmd_list.Begin());
+                    const std::string present_label =
+                        std::format("Present: {}", vk_src_tex->GetName());
+                    vk_cmd_list.BeginLabel(
+                        present_label, {0.0f, 0.85f, 0.95f, 1.0f}
+                    );
+                    vk_tracker.SetPassType(EPassType::Graphics);
+                    vk_tracker.RecordState(
+                        vk_src_tex,
+                        vk_tracker.ReadTexture(vk_src_tex, ETextureState::TRANSFER)
+                    );
+                    vk_tracker.RecordState(
+                        swapchain_tex,
+                        vk_tracker.WriteTexture(
+                            swapchain_tex, ETextureState::TRANSFER
+                        )
+                    );
+                    vk_tracker.ResolveBarriers();
+                    vk_tracker.DispatchBarriers(vk_cmd_list);
+                    vk_cmd_list.InsertLabel(
+                        "Copy Present Image", GpuMarkerPalette::Transfer()
+                    );
+                    vk_cmd_list.CopyTexture(
+                        vk_src_tex,
+                        swapchain_tex,
+                        _view.extent,
+                        {0, 0, 0},
+                        {0, 0, 0},
+                        0,
+                        0
+                    );
+                    vk_tracker.RecordState(
+                        swapchain_tex,
+                        VK_ACCESS_2_NONE,
+                        VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                        VK_PIPELINE_STAGE_2_COPY_BIT
+                    );
+                    vk_tracker.ResolveBarriers();
+                    vk_tracker.DispatchBarriers(vk_cmd_list);
+                    vk_tracker.RestoreState();
+                    vk_tracker.DispatchBarriers(vk_cmd_list);
+                    vk_cmd_list.EndLabel();
+                    VK_CHECK_RESULT(vk_cmd_list.End());
+                    vk_tracker.Reset();
+
+                    deferred_releases = TakeDeferredReleases();
+                    queue.Signal(
+                        timeline, _timeline, VK_PIPELINE_STAGE_2_COPY_BIT
+                    );
+                    queue.Wait(
+                        acquire.ready_semaphore,
+                        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+                    );
+                    queue.Signal(
+                        sc->GetRenderFinishedFence(idx),
+                        VK_PIPELINE_STAGE_2_COPY_BIT
+                    );
+                    const VulkanOperationResult submit_outcome =
+                        queue.Submit(vk_allocator.GetCmdList(), context);
+                    final_outcome = submit_outcome;
+                    gpu_submitted = submit_outcome.WasSubmitted();
+                    if (gpu_submitted) {
+                        presentor_state =
+                            EVulkanPresentorRetirementState::Submitted;
+                        timeline->MarkSubmitted(_timeline);
+
+                        const VulkanOperationResult present_outcome =
+                            sc->Present(
+                                queue.GetHandle(), idx, _timeline, _serial
+                            );
+                        present_accepted =
+                            present_outcome.result == VK_SUCCESS ||
+                            present_outcome.result == VK_SUBOPTIMAL_KHR;
+                        recreate_swapchain =
+                            recreate_swapchain ||
+                            present_outcome.status ==
+                                EVulkanOperationStatus::Recreate;
+                        if (!present_outcome.Succeeded()) {
+                            final_outcome = present_outcome;
+                        }
+                    }
+                } else {
+                    deferred_releases = TakeDeferredReleases();
+                }
             }
-            event_queue.emplace_back(
-                VulkanCallbackBatch{std::move(callbacks), false}, _timeline, false
-            );
-            if (!deferred_releases.empty()) {
-                event_queue.emplace_back(
-                    VulkanDeferredReleaseBatch{std::move(deferred_releases)}, _timeline, false
-                );
-            }
-            EnqueueCompletionMarker(_timeline);
         }
-        queue_cv.notify_one();
-        return {.outcome = acquire.outcome};
+    } catch (const std::exception& error) {
+        queue.DiscardPendingSubmitState();
+        vk_device.RecordRejectedPresent();
+        final_outcome = {
+            EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN
+        };
+        try {
+            LOG_ERROR(
+                "[RHIExecutor][Vulkan] Present threw before retirement: {}",
+                error.what()
+            );
+        } catch (...) {
+        }
+    } catch (...) {
+        queue.DiscardPendingSubmitState();
+        vk_device.RecordRejectedPresent();
+        final_outcome = {
+            EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN
+        };
+        try {
+            LOG_ERROR("[RHIExecutor][Vulkan] Present threw before retirement");
+        } catch (...) {
+        }
     }
 
-    //copy
-    auto* vk_src_tex     = static_cast<VulkanTexture*>(_view.texture);
-    const uint idx       = acquire.image_index;
-    auto* swaphchain_tex = ResourceCast(sc->GetSwapchainImage(idx).texture);
-    {
-        VK_CHECK_RESULT(vk_cmd_list.Begin());
-        const std::string present_label = std::format("Present: {}", vk_src_tex->GetName());
-        vk_cmd_list.BeginLabel(present_label, {0.0f, 0.85f, 0.95f, 1.0f});
-        vk_tracker.SetPassType(EPassType::Graphics);
-        vk_tracker.RecordState(vk_src_tex, vk_tracker.ReadTexture(vk_src_tex, ETextureState::TRANSFER));
-        vk_tracker.RecordState(
-            swaphchain_tex, vk_tracker.WriteTexture(swaphchain_tex, ETextureState::TRANSFER)
-        );
-        vk_tracker.ResolveBarriers();
-        vk_tracker.DispatchBarriers(vk_cmd_list);
-        //copy
-        //todo: need transaction
-        vk_cmd_list.InsertLabel("Copy Present Image", GpuMarkerPalette::Transfer());
-        vk_cmd_list.CopyTexture(vk_src_tex, swaphchain_tex, _view.extent, {0, 0, 0}, {0, 0, 0}, 0, 0);
-        vk_tracker.RecordState(
-            swaphchain_tex, VK_ACCESS_2_NONE, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_COPY_BIT
-        );
-        vk_tracker.ResolveBarriers();
-        vk_tracker.DispatchBarriers(vk_cmd_list);
-
-        vk_tracker.RestoreState();
-        vk_tracker.DispatchBarriers(vk_cmd_list);
-        vk_cmd_list.EndLabel();
-        VK_CHECK_RESULT(vk_cmd_list.End());
-        vk_tracker.Reset();
-        // vk_tracker.PropagateState();
-    }
-
-    Array<RHIResource*> deferred_releases = TakeDeferredReleases();
-    callbacks.emplace_back(
-        [swapchain = std::move(_sc), source_texture = std::move(_source_texture)]() mutable {}
+    CommitPresentCompletion(
+        final_outcome,
+        context,
+        gpu_submitted,
+        presentor_state,
+        std::move(presentor),
+        std::move(_sc),
+        std::move(_source_texture),
+        std::move(deferred_releases),
+        _timeline
     );
 
-    queue.Signal(timeline, _timeline, VK_PIPELINE_STAGE_2_COPY_BIT);
-    queue.Wait(acquire.ready_semaphore, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-    queue.Signal(sc->GetRenderFinishedFence(idx), VK_PIPELINE_STAGE_2_COPY_BIT);
-    VulkanOperationResult submit_outcome = queue.Submit(vk_allocator.GetCmdList(), context);
-    if (submit_outcome.WasSubmitted()) {
-        timeline->MarkSubmitted(_timeline);
-    } else {
-        timeline->Fail(submit_outcome.result);
-    }
-    VulkanOperationResult final_outcome = submit_outcome;
-    bool                  present_accepted = false;
-    if (submit_outcome.WasSubmitted()) {
-        const VulkanOperationResult present_outcome =
-            sc->Present(queue.GetHandle(), idx, _timeline, _serial);
-        present_accepted =
-            present_outcome.result == VK_SUCCESS || present_outcome.result == VK_SUBOPTIMAL_KHR;
-        recreate_swapchain =
-            recreate_swapchain ||
-            present_outcome.status == EVulkanOperationStatus::Recreate;
-        if (!present_outcome.Succeeded()) {
-            final_outcome = present_outcome;
-        }
-    }
-    if (_receipt) {
-        _receipt->Resolve(present_accepted, recreate_swapchain);
-    }
-    {
-        std::unique_lock<std::mutex> lock(event_mutex);
-        event_queue.emplace_back(
-            VulkanSubmissionEvent{final_outcome, context, submit_outcome.WasSubmitted()},
-            _timeline,
-            false
-        );
-        event_queue.emplace_back(std::move(presentor), _timeline, false);
-        event_queue.emplace_back(
-            VulkanCallbackBatch{std::move(callbacks), false}, _timeline, false
-        );
-        if (!deferred_releases.empty()) {
-            event_queue.emplace_back(
-                VulkanDeferredReleaseBatch{std::move(deferred_releases)}, _timeline, false
-            );
-        }
-        EnqueueCompletionMarker(_timeline);
-    }
-    if (submit_outcome.WasSubmitted()) {
-        presented_queue.Enqueue(_timeline);
-    }
-    queue_cv.notify_one();
+    ResolvePresentReceiptNoexcept(
+        _receipt, present_accepted, recreate_swapchain
+    );
+
     VulkanRuntimeSubmissionResult runtime_result{.outcome = final_outcome};
-    if (submit_outcome.WasSubmitted()) {
+    if (gpu_submitted) {
         runtime_result.completion = WaitEvent{uint64(timeline), _timeline};
     }
     return runtime_result;
 }
 
+void VkCommandQueue::CommitPresentCompletion(
+    const VulkanOperationResult&    _outcome,
+    const VulkanOperationContext&   _context,
+    bool                            _gpu_submitted,
+    EVulkanPresentorRetirementState _presentor_state,
+    UniquePtr<VulkanPresentor>&&    _presentor,
+    SwapchainRef&&                  _swapchain,
+    TextureRef&&                    _source_texture,
+    Array<RHIResource*>&&           _deferred_releases,
+    uint64                          _timeline
+) noexcept {
+    try {
+        if (!_gpu_submitted &&
+            (_outcome.status == EVulkanOperationStatus::Rejected ||
+             _outcome.status == EVulkanOperationStatus::Faulted)) {
+            TerminalizeUnsubmittedSignal(
+                vk_device, timeline, _timeline, _outcome
+            );
+        }
+        std::unique_lock<std::mutex> lock(event_mutex);
+        const uint64 retirement_serial = retirement_enqueued_serial + 1;
+        event_queue.emplace_back(
+            std::in_place_type<VulkanPresentCompletionBatch>,
+            _timeline,
+            true,
+            retirement_serial,
+            _outcome,
+            _context,
+            _gpu_submitted,
+            true,
+            _presentor_state,
+            std::move(_presentor),
+            std::move(_swapchain),
+            std::move(_source_texture),
+            std::move(_deferred_releases)
+        );
+        retirement_enqueued_serial = retirement_serial;
+    } catch (...) {
+        // A submitted presentor must never unwind on the Submission owner.
+        std::terminate();
+    }
+    queue_cv.notify_one();
+}
+
 void VkCommandQueue::Sync() {
+    if (GetCurrentRHIThreadRole() == ERHIThreadRole::Completion) {
+        try {
+            LOG_ERROR(
+                "[RHIExecutor][Vulkan] queue={} Completion owner cannot block "
+                "on a retirement queue",
+                static_cast<uint32>(queue.GetType())
+            );
+        } catch (...) {
+        }
+        return;
+    }
     assert(
         !rhi_thread_enabled ||
         rhi_thread_id.load(std::memory_order_acquire) != Platform::GetCurrentThreadID()
@@ -5570,7 +6035,7 @@ void VkCommandQueue::Sync() {
         target_timeline = last_frame.load(std::memory_order_relaxed);
     }
 
-    Complete(target_timeline);
+    CompleteAll(target_timeline);
 
     if (vk_device.IsFaulted()) {
         return;
@@ -5602,21 +6067,21 @@ ProfileData VkCommandQueue::GetProfilerEntry() {
 }
 
 UniquePtr<VulkanAllocator> VkCommandQueue::GetAllocator() {
-    if (executed_queue.Full()) {
-        Complete(executed_queue.Front());
-    }
+    // Completion publishes only successfully completed and reset allocators
+    // into this pool. Pool membership is therefore the reuse gate; if
+    // Completion is delayed by unrelated CPU callbacks, allocate overflow
+    // storage instead of stalling the Translate owner.
     auto allocator = std::move(UniquePtr<VulkanAllocator>(allocators.Pop()));
     if (allocator) {
-        // allocator->ResetCmdList();
         return std::move(allocator);
     }
     return MakeUnique<VulkanAllocator>(&vk_device, queue.GetType());
 }
 
 UniquePtr<VulkanPresentor> VkCommandQueue::GetPresentor() {
-    if (presented_queue.Full()) {
-        Complete(presented_queue.Front());
-    }
+    // Presentors follow the same completion-owned pool contract as command
+    // allocators. A temporary pool miss is capacity pressure, not a reason for
+    // Submission to wait on arbitrary completion callbacks.
     auto presentor = std::move(UniquePtr<VulkanPresentor>(presentors.Pop()));
     if (presentor) {
         return std::move(presentor);
@@ -5644,7 +6109,11 @@ Array<RHIResource*> VkCommandQueue::TakeDeferredReleases() {
 }
 
 void VkCommandQueue::EnqueueCompletionMarker(uint64 _timeline) {
-    event_queue.emplace_back(VulkanCompletionMarker{}, _timeline, true);
+    const uint64 retirement_serial = retirement_enqueued_serial + 1;
+    event_queue.emplace_back(
+        VulkanCompletionMarker{}, _timeline, true, retirement_serial
+    );
+    retirement_enqueued_serial = retirement_serial;
 }
 
 void VkCommandQueue::EnsureRecordCalibration() {
@@ -6158,6 +6627,7 @@ void VkCommandQueue::RhiThreadMain() {
     Platform::SetCurrentThreadName(
         queue.GetType() == EQueueType::Graphics ? "Moer RHI Thread" : "Moer Compute RHI"
     );
+    RHIThreadRoleScope owner_scope(ERHIThreadRole::Submission);
     rhi_thread_id.store(Platform::GetCurrentThreadID(), std::memory_order_release);
     LOG_INFO(
         "[Threading] RHIThread id = {}, queue = {}",
@@ -6243,6 +6713,7 @@ void VkCommandQueue::CompletionThreadMain() {
     Platform::SetCurrentThreadName(
         queue.GetType() == EQueueType::Graphics ? "Vulkan Gfx Completion" : "Vulkan Compute Completion"
     );
+    RHIThreadRoleScope owner_scope(ERHIThreadRole::Completion);
 
     bool batch_gpu_success = false;
     bool batch_release_safe = false;
@@ -6273,9 +6744,14 @@ void VkCommandQueue::CompletionThreadMain() {
                         (_submission.outcome.status == EVulkanOperationStatus::Retry ||
                          _submission.outcome.status == EVulkanOperationStatus::Recreate);
                     if (!_submission.gpu_submitted) {
-                        if (_submission.outcome.status == EVulkanOperationStatus::Faulted ||
-                            _submission.outcome.status == EVulkanOperationStatus::Rejected) {
+                        if (_submission.outcome.status ==
+                            EVulkanOperationStatus::Faulted) {
                             timeline->Fail(_submission.outcome.result);
+                        } else if (
+                            _submission.outcome.status ==
+                            EVulkanOperationStatus::Rejected
+                        ) {
+                            timeline->Reject(event_timeline);
                         }
                         return;
                     }
@@ -6291,10 +6767,245 @@ void VkCommandQueue::CompletionThreadMain() {
                         timeline->Fail(wait_result);
                     }
                 },
+                [this, event_timeline, &batch_gpu_success, &batch_release_safe](
+                    VulkanSubmitCompletionBatch& _batch
+                ) {
+                    batch_gpu_success = false;
+                    batch_release_safe =
+                        !_batch.gpu_submitted &&
+                        (_batch.outcome.status == EVulkanOperationStatus::Retry ||
+                         _batch.outcome.status == EVulkanOperationStatus::Recreate);
+
+                    VkResult completion_result = _batch.outcome.result;
+                    if (completion_result == VK_SUCCESS && !_batch.gpu_submitted) {
+                        completion_result = VK_ERROR_UNKNOWN;
+                    }
+                    const bool recoverable_rejection =
+                        !_batch.gpu_submitted &&
+                        _batch.outcome.status ==
+                            EVulkanOperationStatus::Rejected &&
+                        !vk_device.IsFaulted() &&
+                        _batch.outcome.result != VK_ERROR_DEVICE_LOST;
+
+                    if (_batch.gpu_submitted) {
+                        VulkanOperationContext wait_context = _batch.context;
+                        wait_context.operation = EVulkanFaultOperation::TimelineHostWait;
+                        const VkResult wait_result =
+                            timeline->HostWait(event_timeline, wait_context);
+                        if (wait_result == VK_SUCCESS && !vk_device.IsDeviceLost()) {
+                            timeline->Notify(event_timeline);
+                            batch_gpu_success = true;
+                            batch_release_safe = true;
+                            completion_result = VK_SUCCESS;
+                        } else {
+                            completion_result =
+                                wait_result != VK_SUCCESS ?
+                                    wait_result :
+                                vk_device.IsFaulted() ?
+                                    vk_device.GetFirstFaultResult() :
+                                    VK_ERROR_DEVICE_LOST;
+                            if (_batch.owns_queue_timeline) {
+                                timeline->Fail(completion_result);
+                            }
+                        }
+                    } else if (_batch.owns_queue_timeline) {
+                        if (recoverable_rejection) {
+                            timeline->Reject(event_timeline);
+                        } else {
+                            timeline->Fail(completion_result);
+                        }
+                    }
+
+                    bool recycle_batch =
+                        batch_gpu_success && !vk_device.IsFaulted();
+                    if (recycle_batch) {
+                        for (auto& allocator : _batch.allocators.submitted) {
+                            recycle_batch =
+                                allocator->CompleteSuccess() && recycle_batch;
+                        }
+                    }
+                    if (recycle_batch) {
+                        for (auto& allocator : _batch.allocators.submitted) {
+                            recycle_batch = allocator->Reset() && recycle_batch;
+                        }
+                    }
+                    if (recycle_batch && !vk_device.IsFaulted()) {
+                        for (auto& allocator : _batch.allocators.submitted) {
+                            allocators.Push(allocator.release());
+                        }
+                    } else {
+                        for (auto& allocator : _batch.allocators.submitted) {
+                            if (!allocator) {
+                                continue;
+                            }
+                            vk_device.RecordAllocatorQuarantine();
+                            vk_device.RecordSkippedCommandPoolReset();
+                            allocator_quarantine.emplace_back(std::move(allocator));
+                        }
+                    }
+                    for (auto& allocator : _batch.allocators.abandoned) {
+                        if (!vk_device.IsFaulted() && allocator->ResetAbandoned()) {
+                            allocators.Push(allocator.release());
+                        } else if (allocator) {
+                            vk_device.RecordAllocatorQuarantine();
+                            vk_device.RecordSkippedCommandPoolReset();
+                            allocator_quarantine.emplace_back(std::move(allocator));
+                        }
+                    }
+
+                    if (_batch.descriptor_lease.has_value()) {
+                        vk_device.GetGlobalDescriptorHeap().RecyclePushDescriptors(
+                            std::move(*_batch.descriptor_lease)
+                        );
+                        _batch.descriptor_lease.reset();
+                    }
+
+                    for (const SignalEvent& event : _batch.submit.signal_events) {
+                        auto* fence =
+                            reinterpret_cast<VulkanFence*>(event.timeline_handle);
+                        if (fence == nullptr) {
+                            continue;
+                        }
+                        if (batch_gpu_success) {
+                            fence->Notify(event.value);
+                        } else if (recoverable_rejection) {
+                            fence->Reject(event.value);
+                        } else {
+                            fence->Fail(completion_result);
+                        }
+                    }
+
+                    if (!_batch.gpu_submitted) {
+                        FinalizeRejectedBindlessUpdates(_batch.submit);
+                    }
+                    Array<std::function<void()>> callbacks =
+                        std::move(_batch.submit.callbacks);
+                    Array<std::function<void()>> success_callbacks =
+                        std::move(_batch.submit.success_callbacks);
+                    _batch.submit.cmds.clear();
+                    _batch.submit.cached_args.clear();
+                    _batch.submit.segments.clear();
+                    _batch.submit.wait_events.clear();
+                    _batch.submit.signal_events.clear();
+                    _batch.submit.debug_label.clear();
+
+                    InvokeCallbacksNoexcept(
+                        callbacks, "[VulkanQueue] runtime completion"
+                    );
+                    if (batch_gpu_success) {
+                        InvokeCallbacksNoexcept(
+                            success_callbacks,
+                            "[VulkanQueue] runtime success completion"
+                        );
+                    }
+
+                    if (batch_gpu_success || batch_release_safe) {
+                        for (auto* resource : _batch.deferred_releases) {
+                            MoerDelete(resource);
+                        }
+                    } else {
+                        for (auto* resource : _batch.deferred_releases) {
+                            vk_device.EnqueueDeferredRelease(resource);
+                        }
+                    }
+                    _batch.deferred_releases.clear();
+                },
+                [this, event_timeline, &batch_gpu_success, &batch_release_safe](
+                    VulkanPresentCompletionBatch& _batch
+                ) {
+                    batch_gpu_success = false;
+                    batch_release_safe =
+                        !_batch.gpu_submitted &&
+                        _batch.presentor_state ==
+                            EVulkanPresentorRetirementState::Unused &&
+                        (_batch.outcome.status == EVulkanOperationStatus::Retry ||
+                         _batch.outcome.status ==
+                             EVulkanOperationStatus::Recreate);
+
+                    VkResult completion_result = _batch.outcome.result;
+                    if (_batch.gpu_submitted) {
+                        VulkanOperationContext wait_context = _batch.context;
+                        wait_context.operation =
+                            EVulkanFaultOperation::TimelineHostWait;
+                        const VkResult wait_result =
+                            timeline->HostWait(event_timeline, wait_context);
+                        if (wait_result == VK_SUCCESS &&
+                            !vk_device.IsDeviceLost()) {
+                            timeline->Notify(event_timeline);
+                            batch_gpu_success = true;
+                            batch_release_safe = true;
+                            completion_result = VK_SUCCESS;
+                        } else {
+                            completion_result =
+                                wait_result != VK_SUCCESS ?
+                                    wait_result :
+                                vk_device.IsFaulted() ?
+                                    vk_device.GetFirstFaultResult() :
+                                    VK_ERROR_DEVICE_LOST;
+                            if (_batch.owns_queue_timeline) {
+                                timeline->Fail(completion_result);
+                            }
+                        }
+                    } else if (
+                        _batch.owns_queue_timeline &&
+                        _batch.outcome.status ==
+                            EVulkanOperationStatus::Faulted
+                    ) {
+                        if (completion_result == VK_SUCCESS) {
+                            completion_result = VK_ERROR_UNKNOWN;
+                        }
+                        timeline->Fail(completion_result);
+                    } else if (
+                        _batch.owns_queue_timeline &&
+                        _batch.outcome.status ==
+                            EVulkanOperationStatus::Rejected
+                    ) {
+                        timeline->Reject(event_timeline);
+                    }
+
+                    if (_batch.presentor) {
+                        bool recycle_presentor = false;
+                        if (_batch.presentor_state ==
+                                EVulkanPresentorRetirementState::Submitted &&
+                            batch_gpu_success && !vk_device.IsFaulted()) {
+                            recycle_presentor =
+                                _batch.presentor->CompleteSuccess() &&
+                                _batch.presentor->Reset();
+                        } else if (
+                            _batch.presentor_state ==
+                                EVulkanPresentorRetirementState::Unused &&
+                            batch_release_safe && !vk_device.IsFaulted()
+                        ) {
+                            // No command buffer was begun, matching the
+                            // previous acquire-retry fast recycle path.
+                            recycle_presentor = true;
+                        }
+
+                        if (recycle_presentor && !vk_device.IsFaulted()) {
+                            presentors.Push(_batch.presentor.release());
+                        } else {
+                            vk_device.RecordAllocatorQuarantine();
+                            vk_device.RecordSkippedCommandPoolReset();
+                            presentor_quarantine.emplace_back(
+                                std::move(_batch.presentor)
+                            );
+                        }
+                    }
+
+                    if (batch_gpu_success || batch_release_safe) {
+                        for (auto* resource : _batch.deferred_releases) {
+                            MoerDelete(resource);
+                        }
+                    } else {
+                        for (auto* resource : _batch.deferred_releases) {
+                            vk_device.EnqueueDeferredRelease(resource);
+                        }
+                    }
+                    _batch.deferred_releases.clear();
+                },
                 [this, &batch_gpu_success](UniquePtr<VulkanAllocator>& _allocator) {
                     if (batch_gpu_success && !vk_device.IsFaulted()) {
-                        _allocator->CompleteSuccess();
-                        if (_allocator->Reset()) {
+                        if (_allocator->CompleteSuccess() && _allocator->Reset()) {
                             allocators.Push(_allocator.release());
                             return;
                         }
@@ -6307,8 +7018,11 @@ void VkCommandQueue::CompletionThreadMain() {
                     bool recycle_batch = batch_gpu_success && !vk_device.IsFaulted();
                     if (recycle_batch) {
                         for (auto& allocator : _batch.submitted) {
-                            allocator->CompleteSuccess();
+                            recycle_batch =
+                                allocator->CompleteSuccess() && recycle_batch;
                         }
+                    }
+                    if (recycle_batch) {
                         for (auto& allocator : _batch.submitted) {
                             recycle_batch = allocator->Reset() && recycle_batch;
                         }
@@ -6343,8 +7057,7 @@ void VkCommandQueue::CompletionThreadMain() {
                 },
                 [this, &batch_gpu_success](UniquePtr<VulkanPresentor>& _presentor) {
                     if (batch_gpu_success && !vk_device.IsFaulted()) {
-                        _presentor->CompleteSuccess();
-                        if (_presentor->Reset()) {
+                        if (_presentor->CompleteSuccess() && _presentor->Reset()) {
                             presentors.Push(_presentor.release());
                             return;
                         }
@@ -6394,19 +7107,28 @@ void VkCommandQueue::CompletionThreadMain() {
                    !cpu_settled_frame.compare_exchange_weak(
                        completed, event_timeline, std::memory_order_release, std::memory_order_relaxed
                    )) {}
+            const uint64 retirement_serial = evt->retirement_serial;
+            uint64 settled_serial =
+                retirement_settled_serial.load(std::memory_order_relaxed);
+            while (settled_serial < retirement_serial &&
+                   !retirement_settled_serial.compare_exchange_weak(
+                       settled_serial,
+                       retirement_serial,
+                       std::memory_order_release,
+                       std::memory_order_relaxed
+                   )) {}
             queue_cv.notify_all();
         }
     }
 }
 
-void VkCommandQueue::Complete(uint64 _timeline) {
-    if (_timeline == 0) {
-        return;
-    }
-
+void VkCommandQueue::CompleteAll(uint64 _timeline) {
     std::unique_lock<std::mutex> lock(event_mutex);
-    queue_cv.wait(lock, [this, _timeline]() {
-        return cpu_settled_frame.load(std::memory_order_acquire) >= _timeline;
+    const uint64 target_retirement_serial = retirement_enqueued_serial;
+    queue_cv.wait(lock, [this, _timeline, target_retirement_serial]() {
+        return cpu_settled_frame.load(std::memory_order_acquire) >= _timeline &&
+               retirement_settled_serial.load(std::memory_order_acquire) >=
+                   target_retirement_serial;
     });
 }
 
@@ -6420,16 +7142,50 @@ VkCopyQueue::VkCopyQueue(VulkanDevice& _device) :
     queue(EQueueType::Copy, _device) {
     timeline = MoerNew(VulkanFence)(_device);
     enabled  = true;
-    thread   = std::jthread([this]() {
-        ExecuteThread();
-    });
+    try {
+        thread = std::jthread([this]() {
+            ExecuteThread();
+        });
+        submission_thread = std::jthread([this]() {
+            SubmissionThreadMain();
+        });
+    } catch (...) {
+        {
+            std::lock_guard lock(submission_mutex);
+            submission_accepting.store(false, std::memory_order_release);
+        }
+        submission_cv.notify_all();
+        if (submission_thread.joinable()) {
+            submission_thread.join();
+        }
+
+        enabled.store(false, std::memory_order_release);
+        queue_cv.notify_all();
+        if (thread.joinable()) {
+            thread.join();
+        }
+        timeline = nullptr;
+        throw;
+    }
 }
 
 VkCopyQueue::~VkCopyQueue() {
-    Complete(last_frame);
-    enabled = false;
+    CancelRuntimeDependencyWaits();
+    {
+        std::lock_guard lock(submission_mutex);
+        submission_accepting.store(false, std::memory_order_release);
+    }
+    submission_cv.notify_all();
+    if (submission_thread.joinable()) {
+        submission_thread.join();
+    }
+
+    CompleteAll(last_frame);
+    enabled.store(false, std::memory_order_release);
     queue_cv.notify_all();
-    thread.join();
+    if (thread.joinable()) {
+        thread.join();
+    }
     //clear allocators
     Array<VulkanAllocator*> allocs;
     allocators.PopAll(allocs);
@@ -6439,6 +7195,14 @@ VkCopyQueue::~VkCopyQueue() {
     allocator_quarantine.clear();
     timeline = nullptr;
     device.RecordQueueSyncComplete();
+}
+
+void VkCopyQueue::EnableRuntimeDependencyWaits() noexcept {
+    dependency_waits_enabled.store(true, std::memory_order_release);
+}
+
+void VkCopyQueue::CancelRuntimeDependencyWaits() noexcept {
+    dependency_waits_enabled.store(false, std::memory_order_release);
 }
 static constexpr uint64 fread_segment_size = 1024 * 64; // 64KB
 IOWaitEvt               VkCopyQueue::Execute(IOQueueSubmission&& _submission) {
@@ -6501,35 +7265,263 @@ IOWaitEvt               VkCopyQueue::Execute(IOQueueSubmission&& _submission) {
 
 //TODO:看看barrier
 IOWaitEvt VkCopyQueue::Execute(CmdSubmit&& _evt) {
-    TrackedExecuteResult result = ExecuteTracked(std::move(_evt));
+    TrackedExecuteResult result = ExecuteOnSubmissionOwner(std::move(_evt));
+    if (!result.runtime.outcome.WasSubmitted()) {
+        return {0, 0};
+    }
     return {uint64(timeline.Get()), result.logical_timeline};
 }
 
-VulkanRuntimeSubmissionResult VkCopyQueue::ExecuteForRuntime(CmdSubmit&& _evt) {
-    return ExecuteTracked(std::move(_evt)).runtime;
+VulkanRuntimeSubmissionResult VkCopyQueue::ExecuteForRuntime(CmdSubmit&& _evt) noexcept {
+    assert(
+        GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
+        "runtime Copy submission must originate from a Submission owner"
+    );
+    return ExecuteOnSubmissionOwner(std::move(_evt)).runtime;
 }
 
-VkCopyQueue::TrackedExecuteResult VkCopyQueue::ExecuteTracked(CmdSubmit&& _evt) {
-    auto current_timeline = last_frame;
-    if (device.IsFaulted()) {
-        TerminalizeRejectedSubmit(
-            device,
-            std::move(_evt),
-            device.GetFirstFaultResult(),
-            "[VulkanCopyQueue] rejected submit"
-        );
-        return {
-            .runtime = {
-                .outcome = {
-                    EVulkanOperationStatus::Rejected, device.GetFirstFaultResult()
-                }
+VkCopyQueue::TrackedExecuteResult VkCopyQueue::ExecuteOnSubmissionOwner(
+    CmdSubmit&& _submit
+) noexcept {
+    const auto rejected_result = [this](VkResult _result) {
+        if (_result == VK_SUCCESS) {
+            _result = VK_ERROR_UNKNOWN;
+        }
+        return TrackedExecuteResult{
+            .runtime = VulkanRuntimeSubmissionResult{
+                .outcome = VulkanOperationResult{
+                    EVulkanOperationStatus::Rejected, _result
+                },
             },
-            .logical_timeline = current_timeline,
+            .logical_timeline = 0,
+        };
+    };
+
+    if (submission_thread_id.load(std::memory_order_acquire) ==
+        Platform::GetCurrentThreadID()) {
+        try {
+            LOG_ERROR(
+                "[RHIExecutor][Vulkan] Recursive Copy submission on its owner "
+                "thread was rejected"
+            );
+        } catch (...) {
+        }
+        const VkResult result = GetRejectedSubmitResult(device);
+        RejectForRuntime(std::move(_submit), result);
+        return rejected_result(result);
+    }
+
+    UniquePtr<CopySubmissionRequest> request{};
+    std::future<TrackedExecuteResult> completion{};
+    bool                              queued = false;
+    try {
+        request    = MakeUnique<CopySubmissionRequest>(std::move(_submit));
+        completion = request->completion.get_future();
+        {
+            std::lock_guard lock(submission_mutex);
+            if (submission_accepting.load(std::memory_order_acquire)) {
+                submission_requests.emplace_back(std::move(request));
+                queued = true;
+            }
+        }
+
+        if (!queued) {
+            const VkResult result = GetRejectedSubmitResult(device);
+            RejectForRuntime(std::move(request->submit), result);
+            return rejected_result(result);
+        }
+        submission_cv.notify_one();
+    } catch (...) {
+        const VkResult result = GetRejectedSubmitResult(device);
+        if (!queued) {
+            if (request) {
+                RejectForRuntime(std::move(request->submit), result);
+            } else {
+                RejectForRuntime(std::move(_submit), result);
+            }
+        }
+        try {
+            LOG_ERROR(
+                "[RHIExecutor][Vulkan] Failed to enqueue Copy submission owner work"
+            );
+        } catch (...) {
+        }
+        return rejected_result(result);
+    }
+
+    try {
+        return completion.get();
+    } catch (...) {
+        try {
+            LOG_ERROR(
+                "[RHIExecutor][Vulkan] Copy submission owner failed to publish "
+                "its request result"
+            );
+        } catch (...) {
+        }
+        return rejected_result(GetRejectedSubmitResult(device));
+    }
+}
+
+void VkCopyQueue::SubmissionThreadMain() {
+    Platform::SetCurrentThreadName("Moer Vulkan Copy Submission");
+    RHIThreadRoleScope owner_scope(ERHIThreadRole::Submission);
+    submission_thread_id.store(
+        Platform::GetCurrentThreadID(), std::memory_order_release
+    );
+
+    for (;;) {
+        UniquePtr<CopySubmissionRequest> request{};
+        {
+            std::unique_lock lock(submission_mutex);
+            submission_cv.wait(lock, [this]() {
+                return !submission_accepting.load(std::memory_order_acquire) ||
+                       !submission_requests.empty();
+            });
+            if (submission_requests.empty()) {
+                assert(
+                    !submission_accepting.load(std::memory_order_acquire) &&
+                    "Copy submission owner woke without work"
+                );
+                break;
+            }
+            request = std::move(submission_requests.front());
+            submission_requests.pop_front();
+        }
+
+        TrackedExecuteResult result =
+            ExecuteTracked(std::move(request->submit));
+        try {
+            request->completion.set_value(std::move(result));
+        } catch (...) {
+            try {
+                LOG_ERROR(
+                    "[RHIExecutor][Vulkan] Copy submission owner could not resolve "
+                    "an accepted request"
+                );
+            } catch (...) {
+            }
+        }
+    }
+
+    submission_thread_id.store(0, std::memory_order_release);
+}
+
+VkCopyQueue::TrackedExecuteResult VkCopyQueue::ExecuteTracked(CmdSubmit&& _evt) noexcept {
+    RuntimeExecuteState state{};
+    std::unique_lock<std::mutex> execution_lock(exec_mutex);
+    try {
+        return ExecuteTrackedImpl(_evt, state);
+    } catch (const std::exception& error) {
+        try {
+            LOG_ERROR(
+                "[RHIExecutor][Vulkan] Copy execution threw before retirement: {}",
+                error.what()
+            );
+        } catch (...) {
+        }
+    } catch (...) {
+        try {
+            LOG_ERROR("[RHIExecutor][Vulkan] Copy execution threw before retirement");
+        } catch (...) {
+        }
+    }
+
+    if (state.completion_committed) {
+        VulkanRuntimeSubmissionResult runtime_result{
+            .outcome               = state.outcome,
+            .recoverable_rejection = state.recoverable_rejection,
+        };
+        if (state.outcome.WasSubmitted()) {
+            runtime_result.completion =
+                WaitEvent{uint64(timeline.Get()), state.logical_timeline};
+        }
+        return {
+            .runtime          = std::move(runtime_result),
+            .logical_timeline = state.logical_timeline,
         };
     }
-    Array<UniquePtr<Command>> cmds = std::move(_evt.cmds);
+
+    queue.DiscardPendingSubmitState();
+    if (!state.native_submit_resolved) {
+        state.outcome = {
+            EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN
+        };
+        state.native_submit_resolved = true;
+        device.RecordRejectedSubmit();
+    }
+
+    // A recorded allocator which did not reach a native submit must be reset
+    // by Completion as abandoned.  If native submission was accepted it must
+    // remain in the submitted set until the GPU timeline completes.
+    if (!state.outcome.WasSubmitted()) {
+        for (auto& allocator : state.allocators.submitted) {
+            state.allocators.abandoned.emplace_back(std::move(allocator));
+        }
+        state.allocators.submitted.clear();
+    }
+
+    CommitRuntimeSubmitCompletion(
+        std::move(_evt),
+        std::move(state.allocators),
+        state.outcome,
+        state.context,
+        state.logical_timeline,
+        state.timeline_reserved
+    );
+    state.completion_committed = true;
+
+    VulkanRuntimeSubmissionResult runtime_result{
+        .outcome               = state.outcome,
+        .recoverable_rejection = state.recoverable_rejection,
+    };
+    if (state.outcome.WasSubmitted()) {
+        runtime_result.completion =
+            WaitEvent{uint64(timeline.Get()), state.logical_timeline};
+    }
+    return {
+        .runtime          = std::move(runtime_result),
+        .logical_timeline = state.logical_timeline,
+    };
+}
+
+VkCopyQueue::TrackedExecuteResult VkCopyQueue::ExecuteTrackedImpl(
+    CmdSubmit& _evt,
+    RuntimeExecuteState& _state
+) {
+    _state.logical_timeline = last_frame;
+    _state.context = VulkanOperationContext{
+        .operation  = EVulkanFaultOperation::QueueSubmit,
+        .queue_type = EQueueType::Copy,
+        .queue      = queue.GetHandle(),
+    };
+
+    if (device.IsFaulted()) {
+        const VkResult rejected_result = device.GetFirstFaultResult();
+        device.RecordRejectedSubmit();
+        _state.outcome = {
+            EVulkanOperationStatus::Rejected, rejected_result
+        };
+        _state.native_submit_resolved = true;
+        CommitRuntimeSubmitCompletion(
+            std::move(_evt),
+            std::move(_state.allocators),
+            _state.outcome,
+            _state.context,
+            0,
+            false
+        );
+        _state.completion_committed = true;
+        return {
+            .runtime = {
+                .outcome = _state.outcome
+            },
+            .logical_timeline = _state.logical_timeline,
+        };
+    }
+
     const bool has_queue_work =
-        !cmds.empty() || !_evt.wait_events.empty() || !_evt.signal_events.empty() ||
+        !_evt.cmds.empty() || !_evt.wait_events.empty() || !_evt.signal_events.empty() ||
         !_evt.callbacks.empty() || !_evt.success_callbacks.empty();
     if (has_queue_work) {
 
@@ -6541,9 +7533,9 @@ VkCopyQueue::TrackedExecuteResult VkCopyQueue::ExecuteTracked(CmdSubmit&& _evt) 
         };
         CmdReorderer reorderer{function_table, _evt.cached_args};
 
-        std::unique_lock<std::mutex> lk(exec_mutex);
-        auto                         allocator    = GetAllocator();
-        auto&                        vk_allocator = *allocator;
+        _state.allocators.submitted.reserve(1);
+        _state.allocators.submitted.emplace_back(GetAllocator());
+        auto& vk_allocator = *_state.allocators.submitted.front();
         auto&                        vk_cmd_list  = vk_allocator.GetCmdList();
         auto&                        vk_tracker   = vk_allocator.GetTracker();
 
@@ -6552,7 +7544,7 @@ VkCopyQueue::TrackedExecuteResult VkCopyQueue::ExecuteTracked(CmdSubmit&& _evt) 
         );
         VkCmdVisitor visitor(device, vk_allocator, vk_tracker, vk_cmd_list, _evt.cached_args);
 
-        for (const auto& cmd : cmds) {
+        for (const auto& cmd : _evt.cmds) {
             // preprocessor.VisitCmd(cmd.get());
             reorderer.AcceptCmd(cmd.get());
         }
@@ -6587,27 +7579,32 @@ VkCopyQueue::TrackedExecuteResult VkCopyQueue::ExecuteTracked(CmdSubmit&& _evt) 
         vk_cmd_list.EndLabel();
         VK_CHECK_RESULT(vk_cmd_list.End());
         vk_tracker.Reset();
-        //event queue
 
-        auto current_timeline = ++last_frame;
-        const VulkanOperationContext context{
+        _state.logical_timeline = ++last_frame;
+        _state.timeline_reserved = true;
+        _state.context = VulkanOperationContext{
             .operation   = EVulkanFaultOperation::QueueSubmit,
             .queue_type  = EQueueType::Copy,
             .queue       = queue.GetHandle(),
-            .timeline    = current_timeline,
-            .work_serial = current_timeline,
+            .timeline    = _state.logical_timeline,
+            .work_serial = _state.logical_timeline,
         };
-        VulkanOperationResult submit_outcome{};
-        if (!WaitForSubmittedDependencies(device, _evt.wait_events)) {
+        if (!WaitForSubmittedDependencies(
+                device, _evt.wait_events, &dependency_waits_enabled
+            )) {
             device.RecordRejectedSubmit();
             const VkResult rejected_result = GetRejectedSubmitResult(device);
-            submit_outcome = {EVulkanOperationStatus::Rejected, rejected_result};
-            FailSubmissionSignals(timeline.Get(), _evt.signal_events, rejected_result);
+            _state.outcome = {
+                EVulkanOperationStatus::Rejected, rejected_result
+            };
+            _state.recoverable_rejection = !device.IsFaulted();
+            _state.native_submit_resolved = true;
         } else {
-            queue.Signal(timeline, current_timeline, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-            if (current_timeline > 1) {
-                queue.Wait(timeline, current_timeline - 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
-            }
+            queue.Signal(
+                timeline,
+                _state.logical_timeline,
+                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+            );
             for (auto& evt : _evt.wait_events) {
                 queue.Wait(reinterpret_cast<VulkanFence*>(evt.timeline_handle), evt.value);
             }
@@ -6618,65 +7615,133 @@ VkCopyQueue::TrackedExecuteResult VkCopyQueue::ExecuteTracked(CmdSubmit&& _evt) 
                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
                 );
             }
-            submit_outcome = queue.Submit(vk_allocator.GetCmdList(), context);
-            if (submit_outcome.WasSubmitted()) {
-                MarkSubmissionAccepted(timeline.Get(), current_timeline, _evt.signal_events);
-            } else {
-                FailSubmissionSignals(timeline.Get(), _evt.signal_events, submit_outcome.result);
+            _state.outcome =
+                queue.Submit(vk_allocator.GetCmdList(), _state.context);
+            _state.native_submit_resolved = true;
+            if (_state.outcome.WasSubmitted()) {
+                MarkSubmissionAccepted(
+                    timeline.Get(),
+                    _state.logical_timeline,
+                    _evt.signal_events
+                );
             }
         }
-        {
-            std::unique_lock<std::mutex> lock(event_mutex);
-            event_queue.emplace_back(
-                VulkanSubmissionEvent{submit_outcome, context, submit_outcome.WasSubmitted()},
-                current_timeline,
-                false
-            );
-            event_queue.emplace_back(std::move(allocator), current_timeline, false);
-            for (auto& evt : _evt.signal_events) {
-                event_queue.emplace_back(
-                    IOSignalEvt(evt.timeline_handle, evt.value), current_timeline, false
-                );
+
+        if (!_state.outcome.WasSubmitted()) {
+            for (auto& allocator : _state.allocators.submitted) {
+                _state.allocators.abandoned.emplace_back(std::move(allocator));
             }
-            if (!_evt.callbacks.empty()) {
-                event_queue.emplace_back(
-                    VulkanCallbackBatch{std::move(_evt.callbacks), false}, current_timeline, false
-                );
-            }
-            if (!_evt.success_callbacks.empty()) {
-                event_queue.emplace_back(
-                    VulkanCallbackBatch{std::move(_evt.success_callbacks), true}, current_timeline, false
-                );
-            }
-            event_queue.emplace_back(VulkanCompletionMarker{}, current_timeline, true);
-            queue_cv.notify_one();
+            _state.allocators.submitted.clear();
         }
-        VulkanRuntimeSubmissionResult runtime_result{.outcome = submit_outcome};
-        if (submit_outcome.WasSubmitted()) {
-            runtime_result.completion = WaitEvent{uint64(timeline.Get()), current_timeline};
+
+        CommitRuntimeSubmitCompletion(
+            std::move(_evt),
+            std::move(_state.allocators),
+            _state.outcome,
+            _state.context,
+            _state.logical_timeline,
+            _state.timeline_reserved
+        );
+        _state.completion_committed = true;
+
+        VulkanRuntimeSubmissionResult runtime_result{
+            .outcome               = _state.outcome,
+            .recoverable_rejection = _state.recoverable_rejection,
+        };
+        if (_state.outcome.WasSubmitted()) {
+            runtime_result.completion =
+                WaitEvent{uint64(timeline.Get()), _state.logical_timeline};
         }
         return {
             .runtime          = std::move(runtime_result),
-            .logical_timeline = current_timeline,
+            .logical_timeline = _state.logical_timeline,
         };
     }
     return {
         .runtime          = {},
-        .logical_timeline = current_timeline,
+        .logical_timeline = _state.logical_timeline,
     };
 }
 
-void VkCopyQueue::RejectForRuntime(CmdSubmit&& _submit, VkResult _result) {
-    TerminalizeRejectedSubmit(
-        device,
+void VkCopyQueue::RejectForRuntime(CmdSubmit&& _submit, VkResult _result) noexcept {
+    if (_result == VK_SUCCESS) {
+        _result = VK_ERROR_UNKNOWN;
+    }
+    device.RecordRejectedSubmit();
+    CommitRuntimeSubmitCompletion(
         std::move(_submit),
-        _result,
-        "[RHIExecutor][Vulkan] rejected Copy submit"
+        VulkanAllocatorBatch{},
+        VulkanOperationResult{EVulkanOperationStatus::Rejected, _result},
+        VulkanOperationContext{
+            .operation  = EVulkanFaultOperation::QueueSubmit,
+            .queue_type = EQueueType::Copy,
+            .queue      = queue.GetHandle(),
+        },
+        0,
+        false
     );
 }
 
+void VkCopyQueue::CommitRuntimeSubmitCompletion(
+    CmdSubmit&&                  _submit,
+    VulkanAllocatorBatch&&       _allocators,
+    const VulkanOperationResult& _outcome,
+    const VulkanOperationContext& _context,
+    uint64                        _logical_timeline,
+    bool                          _has_queue_timeline_reservation
+) noexcept {
+    try {
+        if (!_outcome.WasSubmitted()) {
+            if (_has_queue_timeline_reservation) {
+                TerminalizeUnsubmittedSignal(
+                    device,
+                    timeline.Get(),
+                    _logical_timeline,
+                    _outcome
+                );
+            }
+            TerminalizeUnsubmittedSignals(
+                device, _submit.signal_events, _outcome
+            );
+            // Exact signal rejection is published by Submission. Do not
+            // retain raw external fence pointers in the Completion packet.
+            _submit.signal_events.clear();
+        }
+        std::unique_lock<std::mutex> lock(event_mutex);
+        const uint64 retirement_serial = retirement_enqueued_serial + 1;
+        event_queue.emplace_back(
+            std::in_place_type<VulkanSubmitCompletionBatch>,
+            _logical_timeline,
+            true,
+            retirement_serial,
+            _outcome,
+            _context,
+            _outcome.WasSubmitted(),
+            _has_queue_timeline_reservation,
+            std::move(_submit),
+            std::move(_allocators),
+            std::optional<VulkanDescriptorPushLease>{},
+            Array<RHIResource*>{}
+        );
+        retirement_enqueued_serial = retirement_serial;
+    } catch (...) {
+        std::terminate();
+    }
+    queue_cv.notify_one();
+}
+
 void VkCopyQueue::Sync(uint64 _timeline) {
-    Complete(_timeline);
+    if (GetCurrentRHIThreadRole() == ERHIThreadRole::Completion) {
+        try {
+            LOG_ERROR(
+                "[RHIExecutor][Vulkan] Copy Completion owner cannot block on "
+                "a retirement queue"
+            );
+        } catch (...) {
+        }
+        return;
+    }
+    CompleteAll(_timeline);
 }
 
 FenceRef VkCopyQueue::GetFenceHandle() {
@@ -6684,6 +7749,8 @@ FenceRef VkCopyQueue::GetFenceHandle() {
 }
 
 void VkCopyQueue::ExecuteThread() {
+    Platform::SetCurrentThreadName("Vulkan Copy Completion");
+    RHIThreadRoleScope owner_scope(ERHIThreadRole::Completion);
     bool batch_gpu_success = false;
     while (true) {
         std::optional<IOEvent> evt;
@@ -6705,9 +7772,14 @@ void VkCopyQueue::ExecuteThread() {
                 [this, event_timeline, &batch_gpu_success](VulkanSubmissionEvent& _submission) {
                     batch_gpu_success = false;
                     if (!_submission.gpu_submitted) {
-                        if (_submission.outcome.status == EVulkanOperationStatus::Faulted ||
-                            _submission.outcome.status == EVulkanOperationStatus::Rejected) {
+                        if (_submission.outcome.status ==
+                            EVulkanOperationStatus::Faulted) {
                             timeline->Fail(_submission.outcome.result);
+                        } else if (
+                            _submission.outcome.status ==
+                            EVulkanOperationStatus::Rejected
+                        ) {
+                            timeline->Reject(event_timeline);
                         }
                         return;
                     }
@@ -6721,10 +7793,144 @@ void VkCopyQueue::ExecuteThread() {
                         timeline->Fail(result);
                     }
                 },
+                [this, event_timeline, &batch_gpu_success](
+                    VulkanSubmitCompletionBatch& _batch
+                ) {
+                    batch_gpu_success = false;
+                    VkResult completion_result = _batch.outcome.result;
+                    if (completion_result == VK_SUCCESS && !_batch.gpu_submitted) {
+                        completion_result = VK_ERROR_UNKNOWN;
+                    }
+                    const bool recoverable_rejection =
+                        !_batch.gpu_submitted &&
+                        _batch.outcome.status ==
+                            EVulkanOperationStatus::Rejected &&
+                        !device.IsFaulted() &&
+                        _batch.outcome.result != VK_ERROR_DEVICE_LOST;
+
+                    if (_batch.gpu_submitted) {
+                        VulkanOperationContext wait_context = _batch.context;
+                        wait_context.operation = EVulkanFaultOperation::TimelineHostWait;
+                        const VkResult wait_result =
+                            timeline->HostWait(event_timeline, wait_context);
+                        if (wait_result == VK_SUCCESS && !device.IsDeviceLost()) {
+                            timeline->Notify(event_timeline);
+                            batch_gpu_success = true;
+                            completion_result = VK_SUCCESS;
+                        } else {
+                            completion_result =
+                                wait_result != VK_SUCCESS ?
+                                    wait_result :
+                                device.IsFaulted() ?
+                                    device.GetFirstFaultResult() :
+                                    VK_ERROR_DEVICE_LOST;
+                            if (_batch.owns_queue_timeline) {
+                                timeline->Fail(completion_result);
+                            }
+                        }
+                    } else if (_batch.owns_queue_timeline) {
+                        if (recoverable_rejection) {
+                            timeline->Reject(event_timeline);
+                        } else {
+                            timeline->Fail(completion_result);
+                        }
+                    }
+
+                    bool recycle_batch =
+                        batch_gpu_success && !device.IsFaulted();
+                    if (recycle_batch) {
+                        for (auto& allocator : _batch.allocators.submitted) {
+                            recycle_batch =
+                                allocator->CompleteSuccess() && recycle_batch;
+                        }
+                    }
+                    if (recycle_batch) {
+                        for (auto& allocator : _batch.allocators.submitted) {
+                            recycle_batch = allocator->Reset() && recycle_batch;
+                        }
+                    }
+                    if (recycle_batch && !device.IsFaulted()) {
+                        for (auto& allocator : _batch.allocators.submitted) {
+                            allocators.Push(allocator.release());
+                        }
+                    } else {
+                        for (auto& allocator : _batch.allocators.submitted) {
+                            if (!allocator) {
+                                continue;
+                            }
+                            device.RecordAllocatorQuarantine();
+                            device.RecordSkippedCommandPoolReset();
+                            allocator_quarantine.emplace_back(std::move(allocator));
+                        }
+                    }
+                    for (auto& allocator : _batch.allocators.abandoned) {
+                        if (!device.IsFaulted() && allocator->ResetAbandoned()) {
+                            allocators.Push(allocator.release());
+                        } else if (allocator) {
+                            device.RecordAllocatorQuarantine();
+                            device.RecordSkippedCommandPoolReset();
+                            allocator_quarantine.emplace_back(std::move(allocator));
+                        }
+                    }
+
+                    if (_batch.descriptor_lease.has_value()) {
+                        device.GetGlobalDescriptorHeap().RecyclePushDescriptors(
+                            std::move(*_batch.descriptor_lease)
+                        );
+                        _batch.descriptor_lease.reset();
+                    }
+
+                    for (const SignalEvent& event : _batch.submit.signal_events) {
+                        auto* fence =
+                            reinterpret_cast<VulkanFence*>(event.timeline_handle);
+                        if (fence == nullptr) {
+                            continue;
+                        }
+                        if (batch_gpu_success) {
+                            fence->Notify(event.value);
+                        } else if (recoverable_rejection) {
+                            fence->Reject(event.value);
+                        } else {
+                            fence->Fail(completion_result);
+                        }
+                    }
+
+                    if (!_batch.gpu_submitted) {
+                        FinalizeRejectedBindlessUpdates(_batch.submit);
+                    }
+                    Array<std::function<void()>> callbacks =
+                        std::move(_batch.submit.callbacks);
+                    Array<std::function<void()>> success_callbacks =
+                        std::move(_batch.submit.success_callbacks);
+                    _batch.submit.cmds.clear();
+                    _batch.submit.cached_args.clear();
+                    _batch.submit.segments.clear();
+                    _batch.submit.wait_events.clear();
+                    _batch.submit.signal_events.clear();
+                    _batch.submit.debug_label.clear();
+
+                    InvokeCallbacksNoexcept(
+                        callbacks, "[VulkanCopyQueue] runtime completion"
+                    );
+                    if (batch_gpu_success) {
+                        InvokeCallbacksNoexcept(
+                            success_callbacks,
+                            "[VulkanCopyQueue] runtime success completion"
+                        );
+                    }
+
+                    for (auto* resource : _batch.deferred_releases) {
+                        if (batch_gpu_success) {
+                            MoerDelete(resource);
+                        } else {
+                            device.EnqueueDeferredRelease(resource);
+                        }
+                    }
+                    _batch.deferred_releases.clear();
+                },
                 [this, &batch_gpu_success](UniquePtr<VulkanAllocator>& _allocator) {
                     if (batch_gpu_success && !device.IsFaulted()) {
-                        _allocator->CompleteSuccess();
-                        if (_allocator->Reset()) {
+                        if (_allocator->CompleteSuccess() && _allocator->Reset()) {
                             allocators.Push(_allocator.release());
                             return;
                         }
@@ -6763,6 +7969,16 @@ void VkCopyQueue::ExecuteThread() {
                    !cpu_settled_frame.compare_exchange_weak(
                        settled,
                        event_timeline,
+                       std::memory_order_release,
+                       std::memory_order_relaxed
+                   )) {}
+            const uint64 retirement_serial = evt->retirement_serial;
+            uint64 settled_serial =
+                retirement_settled_serial.load(std::memory_order_relaxed);
+            while (settled_serial < retirement_serial &&
+                   !retirement_settled_serial.compare_exchange_weak(
+                       settled_serial,
+                       retirement_serial,
                        std::memory_order_release,
                        std::memory_order_relaxed
                    )) {}
@@ -6866,6 +8082,16 @@ void VkCopyQueue::IOThreadLoop() {
 }
 
 void VkCopyQueue::RHIThreadLoop() {
+    try {
+        LOG_ERROR(
+            "[RHIExecutor][Vulkan] Legacy Copy RHIThreadLoop is disabled; "
+            "native Copy submission belongs to Moer Vulkan Copy Submission"
+        );
+    } catch (...) {
+    }
+    assert(false && "legacy Copy RHIThreadLoop bypasses the Submission owner");
+    return;
+
     while (enabled) {
         CommandList cmdlist;
         uint64      timeline;
@@ -6945,7 +8171,14 @@ void VkCopyQueue::RHIThreadLoop() {
                     false
                 );
             }
-            event_queue.emplace_back(VulkanCompletionMarker{}, current_timeline, true);
+            const uint64 retirement_serial = retirement_enqueued_serial + 1;
+            event_queue.emplace_back(
+                VulkanCompletionMarker{},
+                current_timeline,
+                true,
+                retirement_serial
+            );
+            retirement_enqueued_serial = retirement_serial;
             queue_cv.notify_one();
         }
         {
@@ -6956,9 +8189,6 @@ void VkCopyQueue::RHIThreadLoop() {
 }
 
 UniquePtr<VulkanAllocator> VkCopyQueue::GetAllocator() {
-    if (last_frame >= device.cmd_alloc_limits) {
-        Complete(last_frame);
-    }
     auto allocator = std::move(UniquePtr<VulkanAllocator>(allocators.Pop()));
     if (allocator) {
         // allocator->ResetCmdList();
@@ -6967,13 +8197,13 @@ UniquePtr<VulkanAllocator> VkCopyQueue::GetAllocator() {
     return MakeUnique<VulkanAllocator>(&device, EQueueType::Copy);
 }
 
-void VkCopyQueue::Complete(uint64 _timeline) {
-    if (_timeline == 0) {
-        return;
-    }
+void VkCopyQueue::CompleteAll(uint64 _timeline) {
     std::unique_lock<std::mutex> lock(event_mutex);
-    settled_cv.wait(lock, [this, _timeline]() {
-        return cpu_settled_frame.load(std::memory_order_acquire) >= _timeline;
+    const uint64 target_retirement_serial = retirement_enqueued_serial;
+    settled_cv.wait(lock, [this, _timeline, target_retirement_serial]() {
+        return cpu_settled_frame.load(std::memory_order_acquire) >= _timeline &&
+               retirement_settled_serial.load(std::memory_order_acquire) >=
+                   target_retirement_serial;
     });
 }
 #pragma endregion

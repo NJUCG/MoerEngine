@@ -13,6 +13,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
+#include "rhi/RHIThreadOwnership.h"
 
 #include "VulkanPlatform.h"
 
@@ -598,44 +599,60 @@ void VkSwapchain::EnqueuePresent(uint64 _present_idx) {
     cur_present_cnt.fetch_add(1, std::memory_order_acq_rel);
     auto& thread = present_threads[_present_idx % max_frames_in_flight];
     assert(!thread.joinable() && "Present fence slot must be retired before reuse");
-    thread = std::jthread([this, _present_idx]() {
-        const uint64 frame_index = _present_idx % max_frames_in_flight;
-        while (!device.IsDeviceLost()) {
-            const VulkanOperationContext wait_context{
-                .operation  = EVulkanFaultOperation::PresentFenceWait,
-                .queue_type = EQueueType::Graphics,
-                .queue      = device.GetPresentQueue(),
-                .timeline   = _present_idx,
-            };
-            const VkResult result = vkWaitForFences(
-                device.GetDevice(), 1, &in_flight_fences[frame_index], VK_TRUE, 50'000'000
-            );
-            if (result == VK_TIMEOUT) {
-                continue;
-            }
-            if (result == VK_SUCCESS && !device.IsDeviceLost()) {
-                const VkResult reset_result = device.ResetFence(
-                    in_flight_fences[frame_index],
-                    VulkanOperationContext{
-                        .operation  = EVulkanFaultOperation::PresentFenceReset,
-                        .queue_type = EQueueType::Graphics,
-                        .queue      = device.GetPresentQueue(),
-                        .timeline   = _present_idx,
-                    }
+    try {
+        thread = std::jthread([this, _present_idx]() {
+            RHIThreadRoleScope owner_scope(ERHIThreadRole::Completion);
+            const uint64 frame_index = _present_idx % max_frames_in_flight;
+            while (!device.IsDeviceLost()) {
+                const VulkanOperationContext wait_context{
+                    .operation  = EVulkanFaultOperation::PresentFenceWait,
+                    .queue_type = EQueueType::Graphics,
+                    .queue      = device.GetPresentQueue(),
+                    .timeline   = _present_idx,
+                };
+                const VkResult result = vkWaitForFences(
+                    device.GetDevice(),
+                    1,
+                    &in_flight_fences[frame_index],
+                    VK_TRUE,
+                    50'000'000
                 );
-                if (reset_result != VK_SUCCESS) {
-                    break;
+                if (result == VK_TIMEOUT) {
+                    continue;
                 }
-            } else if (result != VK_SUCCESS) {
-                device.TryLatchFirstFault(wait_context, result);
-                if (result != VK_ERROR_DEVICE_LOST) {
-                    device.EmergencyExitWithoutVulkanCleanup(wait_context, result);
+                if (result == VK_SUCCESS && !device.IsDeviceLost()) {
+                    const VkResult reset_result = device.ResetFence(
+                        in_flight_fences[frame_index],
+                        VulkanOperationContext{
+                            .operation  =
+                                EVulkanFaultOperation::PresentFenceReset,
+                            .queue_type = EQueueType::Graphics,
+                            .queue      = device.GetPresentQueue(),
+                            .timeline   = _present_idx,
+                        }
+                    );
+                    if (reset_result != VK_SUCCESS) {
+                        break;
+                    }
+                } else if (result != VK_SUCCESS) {
+                    device.TryLatchFirstFault(wait_context, result);
+                    if (result != VK_ERROR_DEVICE_LOST) {
+                        device.EmergencyExitWithoutVulkanCleanup(
+                            wait_context, result
+                        );
+                    }
                 }
+                break;
             }
-            break;
-        }
-        OnFinishPresent(_present_idx);
-    });
+            OnFinishPresent(_present_idx);
+        });
+    } catch (...) {
+        // vkQueuePresentKHR has already accepted this frame and incremented
+        // cur_present_cnt. Continuing without a waiter would make Sync hang
+        // forever and allow an in-flight present fence to be reused.
+        cur_present_cnt.fetch_sub(1, std::memory_order_acq_rel);
+        std::terminate();
+    }
 }
 
 void VkSwapchain::Sync() {

@@ -6,6 +6,45 @@
 #include "VulkanResourceTracker.h"
 namespace Moer::Render {
 
+namespace {
+
+bool InvokeAllocatorCompletionCallbacksNoexcept(
+    Array<std::function<void()>>& _callbacks,
+    std::string_view              _owner
+) noexcept {
+    bool succeeded = true;
+    for (auto& callback : _callbacks) {
+        try {
+            if (callback) {
+                callback();
+            }
+        } catch (const std::exception& error) {
+            succeeded = false;
+            try {
+                LOG_ERROR(
+                    "[RHIExecutor][Vulkan] {} completion callback threw: {}",
+                    _owner,
+                    error.what()
+                );
+            } catch (...) {
+            }
+        } catch (...) {
+            succeeded = false;
+            try {
+                LOG_ERROR(
+                    "[RHIExecutor][Vulkan] {} completion callback threw",
+                    _owner
+                );
+            } catch (...) {
+            }
+        }
+    }
+    _callbacks.clear();
+    return succeeded;
+}
+
+} // namespace
+
 // VulkanAllocatorBase
 VulkanAllocatorBase::VulkanAllocatorBase(VulkanDevice* _device, EQueueType _type) :
     VulkanDeviceObject(_device),
@@ -58,12 +97,10 @@ bool VulkanAllocatorBase::ResetCmdList() {
     return false;
 }
 
-void VulkanAllocatorBase::CompleteSuccess() {
-    //execute post complete functions if needed
-    for (auto& func : on_complete) {
-        func();
-    }
-    on_complete.clear();
+bool VulkanAllocatorBase::CompleteSuccess() noexcept {
+    return InvokeAllocatorCompletionCallbacksNoexcept(
+        on_complete, "allocator"
+    );
 }
 
 bool VulkanAllocatorBase::Reset() {
@@ -82,12 +119,10 @@ VulkanPresentor::VulkanPresentor(VulkanDevice* _device, EQueueType _type) :
 
 VulkanPresentor::~VulkanPresentor() {}
 
-void VulkanPresentor::CompleteSuccess() {
-    //execute post complete functions if needed
-    for (auto& func : on_complete) {
-        func();
-    }
-    on_complete.clear();
+bool VulkanPresentor::CompleteSuccess() noexcept {
+    return InvokeAllocatorCompletionCallbacksNoexcept(
+        on_complete, "presentor"
+    );
 }
 
 #pragma region[ Query Pool ]
@@ -185,12 +220,10 @@ void VulkanAllocator::ResetBufferAlloc() {
     shader_buffer_allocator.Reset();
 }
 
-void VulkanAllocator::CompleteSuccess() {
-    //execute post complete functions if needed
-    for (auto& func : on_complete) {
-        func();
-    }
-    on_complete.clear();
+bool VulkanAllocator::CompleteSuccess() noexcept {
+    return InvokeAllocatorCompletionCallbacksNoexcept(
+        on_complete, "allocator"
+    );
 }
 
 bool VulkanAllocator::Reset() {

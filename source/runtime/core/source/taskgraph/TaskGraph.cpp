@@ -121,8 +121,11 @@ EThread::Type TaskGraph::GetCurrentThread(bool localQueue) {
             (localQueue ? EThread::LOCAL_QUEUE : EThread::MAIN_QUEUE)
         );
     }
-    assert(false);
-    return EThread::UNKNOWN_THREAD;
+    // Dedicated runtime owners such as the RHI Executor are intentionally not
+    // TaskGraph workers. Treat them as external callers so GraphEvent::Wait()
+    // installs an ordinary completion event instead of indexing a named
+    // worker queue. This matches the dev_parallel_rhi ownership model.
+    return EThread::SetPriority(EThread::UNKNOWN_THREAD, EThread::NORMAL_PRI);
 }
 bool TaskGraph::IsThreadProcessingTask(EThread::Type index) {
     return m_workers[EThread::GetThreadIndex(index)].task_thread->IsProcessingTask(

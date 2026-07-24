@@ -1043,18 +1043,23 @@ public:
     uint64 GetDeviceValue() const;
 
     void Wait(uint64_t _value) override;
+    void Reject(uint64_t _value) override;
     // can be called on any thread to block current thread
     void Sync(uint64);
     // can be called on any thread to signal fence
     void  Notify(uint64);
     void  MarkSubmitted(uint64_t _value);
-    bool  WaitSubmitted(uint64_t _value);
-    VkResult HostWait(
+    RENDER_API bool WaitSubmitted(
+        uint64_t               _value,
+        const std::atomic_bool* _continue_waiting = nullptr
+    );
+    RENDER_API bool IsRejected(uint64_t _value) const;
+    RENDER_API VkResult HostWait(
         uint64_t                      _value,
         const VulkanOperationContext& _context = VulkanOperationContext{}
     );
-    void  Fail(VkResult _result);
-    bool  IsFailed() const;
+    RENDER_API void Fail(VkResult _result);
+    RENDER_API bool IsFailed() const;
     void  SignalHost(uint64_t _value);
     auto& GetFence() {
         return timeline;
@@ -1070,6 +1075,7 @@ private:
     std::condition_variable cv;
     mutable std::mutex      cv_m;
     uint64                  submitted_value{0};
+    UnorderedSet<uint64>    rejected_values;
     bool                    failed{false};
     VkResult                failure_result{VK_SUCCESS};
 };

@@ -2,6 +2,7 @@
 
 #include "log/LogSystem.h"
 #include "rhi/RHI.h"
+#include "rhi/RHIThreadOwnership.h"
 #include "vulkan/VulkanSubmissionExecutor.h"
 
 #include <algorithm>
@@ -13,6 +14,18 @@
 
 namespace Moer::Render {
 namespace {
+
+bool RejectOwnedThreadBlockingCall(std::string_view _operation) {
+    if (IsRHIBlockingCallAllowedOnCurrentThread()) {
+        return false;
+    }
+    LOG_ERROR(
+        "[RHIExecutor] rejected blocking {} from {} owner thread to prevent a self-join",
+        _operation,
+        RHIThreadRoleName(GetCurrentRHIThreadRole())
+    );
+    return true;
+}
 
 template<typename F>
 class ScopeExit {
@@ -51,9 +64,17 @@ bool BatchHasWork(const RHIBackendSubmissionBatch& _batch) {
     return !_batch.submits.empty() || _batch.present.has_value();
 }
 
-void ResolveRejectedPresent(RHIPresentRequest* _present) {
-    if (_present != nullptr && _present->receipt) {
+void ResolveRejectedPresent(RHIPresentRequest* _present) noexcept {
+    if (_present == nullptr || !_present->receipt) {
+        return;
+    }
+    try {
         _present->receipt->Resolve(false);
+    } catch (...) {
+        try {
+            LOG_ERROR("[RHIExecutor] rejected Present receipt resolver threw");
+        } catch (...) {
+        }
     }
 }
 
@@ -65,7 +86,7 @@ void ResolveRejectedPresent(RHIPresentRequest* _present) {
 void FinalizeRejectedSubmissions(
     Array<RHIBackendSubmissionBatchEntry>&& _submits,
     std::string_view                         _reason
-) {
+) noexcept {
     size_t callback_count       = 0;
     size_t success_callback_cnt = 0;
     size_t signal_count         = 0;
@@ -75,15 +96,49 @@ void FinalizeRejectedSubmissions(
         signal_count += entry.submit.signal_events.size();
     }
 
-    LOG_ERROR(
-        "[RHIExecutor] rejected {} frontend submit(s): {}; callbacks={} "
-        "success_callbacks_skipped={} signal_events_unpublished={}",
-        _submits.size(),
-        _reason,
-        callback_count,
-        success_callback_cnt,
-        signal_count
-    );
+    try {
+        LOG_ERROR(
+            "[RHIExecutor] rejected {} frontend submit(s): {}; callbacks={} "
+            "success_callbacks_skipped={} signal_events_rejected={}",
+            _submits.size(),
+            _reason,
+            callback_count,
+            success_callback_cnt,
+            signal_count
+        );
+    } catch (...) {
+    }
+
+    // A rejected producer must publish a terminal failure before ordinary
+    // callbacks run. Otherwise a later submission can wait forever for a
+    // timeline value which this frontend path silently discarded.
+    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
+        for (const SignalEvent& signal : entry.submit.signal_events) {
+            auto* fence = reinterpret_cast<Fence*>(signal.timeline_handle);
+            if (fence == nullptr) {
+                continue;
+            }
+            try {
+                fence->Reject(signal.value);
+            } catch (const std::exception& exception) {
+                try {
+                    LOG_ERROR(
+                        "[RHIExecutor] rejected-submit signal terminalization "
+                        "threw: {}",
+                        exception.what()
+                    );
+                } catch (...) {
+                }
+            } catch (...) {
+                try {
+                    LOG_ERROR(
+                        "[RHIExecutor] rejected-submit signal terminalization threw"
+                    );
+                } catch (...) {
+                }
+            }
+        }
+    }
 
     for (RHIBackendSubmissionBatchEntry& entry : _submits) {
         for (std::function<void()>& callback : entry.submit.callbacks) {
@@ -93,14 +148,60 @@ void FinalizeRejectedSubmissions(
             try {
                 callback();
             } catch (const std::exception& exception) {
-                LOG_ERROR(
-                    "[RHIExecutor] rejected-submit completion callback threw: {}",
-                    exception.what()
-                );
+                try {
+                    LOG_ERROR(
+                        "[RHIExecutor] rejected-submit completion callback threw: {}",
+                        exception.what()
+                    );
+                } catch (...) {
+                }
             } catch (...) {
-                LOG_ERROR("[RHIExecutor] rejected-submit completion callback threw");
+                try {
+                    LOG_ERROR("[RHIExecutor] rejected-submit completion callback threw");
+                } catch (...) {
+                }
             }
         }
+    }
+}
+
+void FinalizeRejectedBackendBatch(
+    RHIBackendSubmissionBatch&& _batch,
+    std::string_view             _reason
+) noexcept {
+    RHIPresentRequest* present =
+        _batch.present.has_value() ? &*_batch.present : nullptr;
+    ResolveRejectedPresent(present);
+    FinalizeRejectedSubmissions(std::move(_batch.submits), _reason);
+}
+
+void ReportBackendCreationFailure(
+    std::string_view          _operation,
+    const std::exception_ptr& _failure
+) noexcept {
+    try {
+        if (_failure) {
+            std::rethrow_exception(_failure);
+        }
+    } catch (const std::exception& exception) {
+        try {
+            LOG_ERROR(
+                "[RHIExecutor] backend creation failed during {}: {}",
+                _operation,
+                exception.what()
+            );
+        } catch (...) {
+        }
+        return;
+    } catch (...) {
+    }
+
+    try {
+        LOG_ERROR(
+            "[RHIExecutor] backend creation failed during {} with an unknown exception",
+            _operation
+        );
+    } catch (...) {
     }
 }
 
@@ -450,6 +551,9 @@ RHIExecutor& RHIExecutor::Get() {
 }
 
 void RHIExecutor::StartUp() {
+    if (RejectOwnedThreadBlockingCall("StartUp")) {
+        return;
+    }
     RHIExecutor& executor = Get();
     std::unique_lock submit_lock(executor.submit_mutex);
     executor.lifecycle_cv.wait(submit_lock, [&executor] {
@@ -469,7 +573,11 @@ void RHIExecutor::StartUp() {
 
 std::shared_ptr<RHIBackendExecutor> RHIExecutor::GetBackendExecutorLocked() {
     if (!backend_executor) {
-        backend_executor = CreateBackendExecutor();
+        std::shared_ptr<RHIBackendExecutor> created = CreateBackendExecutor();
+        if (!created) {
+            throw std::runtime_error("RHI backend factory returned no executor");
+        }
+        backend_executor = std::move(created);
     }
     return backend_executor;
 }
@@ -572,7 +680,9 @@ void RHIExecutor::SubmitReady(
         }
 
         RHIBackendSubmissionBatch          batch{};
+        RHIBackendSubmissionBatch          failed_batch{};
         std::shared_ptr<RHIBackendExecutor> backend{};
+        std::exception_ptr                  backend_creation_failure{};
         bool                                rejected = false;
         {
             std::lock_guard dispatch_lock(dispatch_mutex);
@@ -586,17 +696,34 @@ void RHIExecutor::SubmitReady(
                         pending_submits.emplace_back(std::move(entry));
                     }
                     pending_present.emplace(std::move(*_present));
-                    batch   = TakePendingBatchLocked();
-                    backend = GetBackendExecutorLocked();
+                    try {
+                        // Construct the backend before detaching the accepted
+                        // payload from executor ownership. If construction
+                        // fails, move that payload into an explicit rejection
+                        // batch instead of letting a resolver exception destroy
+                        // callbacks and the Present receipt silently.
+                        backend = GetBackendExecutorLocked();
+                        batch   = TakePendingBatchLocked();
+                    } catch (...) {
+                        backend_creation_failure = std::current_exception();
+                        failed_batch             = TakePendingBatchLocked();
+                    }
                 }
             }
-            if (!rejected) {
+            if (!rejected && !backend_creation_failure) {
                 batch.topology = BuildBatchTopology(batch);
                 backend->Enqueue(std::move(batch));
                 if (HasRHIExecSubmitFlag(_flags, ERHIExecSubmitFlags::FlushGPU)) {
                     backend->Flush(ERHIFlushDepth::SubmitGPU);
                 }
             }
+        }
+        if (backend_creation_failure) {
+            ReportBackendCreationFailure("Present", backend_creation_failure);
+            FinalizeRejectedBackendBatch(
+                std::move(failed_batch), "backend creation failed while publishing Present"
+            );
+            return;
         }
         if (rejected) {
             ResolveRejectedPresent(_present);
@@ -837,31 +964,53 @@ void RHIExecutor::FlushReady(ERHIFlushDepth _depth) {
         }
     }
 
-    std::lock_guard dispatch_lock(dispatch_mutex);
-    RHIBackendSubmissionBatch batch{};
+    RHIBackendSubmissionBatch          batch{};
+    RHIBackendSubmissionBatch          failed_batch{};
     std::shared_ptr<RHIBackendExecutor> backend;
+    std::exception_ptr                  backend_creation_failure{};
     {
-        std::lock_guard lock(submit_mutex);
-        if (lifecycle_state != ELifecycleState::Running) {
-            return;
+        std::lock_guard dispatch_lock(dispatch_mutex);
+        {
+            std::lock_guard lock(submit_mutex);
+            if (lifecycle_state != ELifecycleState::Running) {
+                return;
+            }
+            const bool has_pending_work =
+                !pending_submits.empty() || pending_present.has_value();
+            if (has_pending_work) {
+                try {
+                    backend = GetBackendExecutorLocked();
+                    batch   = TakePendingBatchLocked();
+                } catch (...) {
+                    backend_creation_failure = std::current_exception();
+                    failed_batch             = TakePendingBatchLocked();
+                }
+            } else {
+                backend = backend_executor;
+            }
         }
-        batch   = TakePendingBatchLocked();
-        if (BatchHasWork(batch)) {
-            backend = GetBackendExecutorLocked();
-        } else {
-            backend = backend_executor;
+        if (!backend_creation_failure) {
+            if (BatchHasWork(batch)) {
+                batch.topology = BuildBatchTopology(batch);
+                backend->Enqueue(std::move(batch));
+            }
+            if (backend) {
+                backend->Flush(_depth);
+            }
         }
     }
-    if (BatchHasWork(batch)) {
-        batch.topology = BuildBatchTopology(batch);
-        backend->Enqueue(std::move(batch));
-    }
-    if (backend) {
-        backend->Flush(_depth);
+    if (backend_creation_failure) {
+        ReportBackendCreationFailure("Flush", backend_creation_failure);
+        FinalizeRejectedBackendBatch(
+            std::move(failed_batch), "backend creation failed while flushing"
+        );
     }
 }
 
 void RHIExecutor::Sync(ERHISyncDepth _depth) {
+    if (RejectOwnedThreadBlockingCall("Sync")) {
+        return;
+    }
     auto completion = std::make_shared<HandoffSyncCompletion>();
     recording_handoff.RouteReady(RHIExecutorRecordingHandoffWork{
         .prerequisites = {},
@@ -884,8 +1033,15 @@ void RHIExecutor::SyncReady(ERHISyncDepth _depth) {
     }
 
     std::shared_ptr<RHIBackendExecutor> backend{};
+    RHIBackendSubmissionBatch           failed_batch{};
+    std::exception_ptr                   backend_creation_failure{};
     bool                                sync_registered = false;
-    auto finish_sync_call = [this, &sync_registered] {
+    auto finish_sync_call = [this, &sync_registered, &backend] {
+        // A zero active-sync count is the shutdown handoff point. Release this
+        // call's backend ownership before publishing that point so StartUp can
+        // never race a stale queue-ownership lease, even if SyncReady is later
+        // called from something other than the joined handoff worker.
+        backend.reset();
         if (!sync_registered) {
             return;
         }
@@ -904,9 +1060,16 @@ void RHIExecutor::SyncReady(ERHISyncDepth _depth) {
         {
             std::lock_guard lock(submit_mutex);
             if (lifecycle_state == ELifecycleState::Running) {
-                batch = TakePendingBatchLocked();
-                if (BatchHasWork(batch)) {
-                    backend = GetBackendExecutorLocked();
+                const bool has_pending_work =
+                    !pending_submits.empty() || pending_present.has_value();
+                if (has_pending_work) {
+                    try {
+                        backend = GetBackendExecutorLocked();
+                        batch   = TakePendingBatchLocked();
+                    } catch (...) {
+                        backend_creation_failure = std::current_exception();
+                        failed_batch             = TakePendingBatchLocked();
+                    }
                 } else {
                     backend = backend_executor;
                 }
@@ -916,13 +1079,23 @@ void RHIExecutor::SyncReady(ERHISyncDepth _depth) {
                 }
             }
         }
-        if (BatchHasWork(batch)) {
-            batch.topology = BuildBatchTopology(batch);
-            backend->Enqueue(std::move(batch));
+        if (!backend_creation_failure) {
+            if (BatchHasWork(batch)) {
+                batch.topology = BuildBatchTopology(batch);
+                backend->Enqueue(std::move(batch));
+            }
+            if (backend) {
+                backend->Flush(ERHIFlushDepth::SubmitGPU);
+            }
         }
-        if (backend) {
-            backend->Flush(ERHIFlushDepth::SubmitGPU);
-        }
+    }
+
+    if (backend_creation_failure) {
+        ReportBackendCreationFailure("Sync", backend_creation_failure);
+        FinalizeRejectedBackendBatch(
+            std::move(failed_batch), "backend creation failed while synchronizing"
+        );
+        return;
     }
 
     GraphEventRef completion = backend ? backend->Sync(_depth) : GraphEventRef{};
@@ -932,8 +1105,13 @@ void RHIExecutor::SyncReady(ERHISyncDepth _depth) {
 }
 
 void RHIExecutor::ShutDown() {
+    if (RejectOwnedThreadBlockingCall("ShutDown")) {
+        return;
+    }
     RHIExecutor& executor = Get();
     uint64       shutdown_to_complete = 0;
+    std::shared_ptr<RHIBackendExecutor> backend_to_cancel{};
+    std::shared_ptr<RHIBackendExecutor> backend{};
 
     {
         std::unique_lock lock(executor.submit_mutex);
@@ -949,37 +1127,20 @@ void RHIExecutor::ShutDown() {
         }
         executor.lifecycle_state = ELifecycleState::Stopping;
         shutdown_to_complete     = ++executor.shutdown_generation;
+        backend_to_cancel        = executor.backend_executor;
     }
 
-    // Stop accepting handoffs before taking the final pending batch. The
-    // worker's stop token interrupts an unfinished recording gate, rejects it
-    // and every later FIFO operation, and joins without depending on producer
-    // progress. Any callback already inside SubmitReady/SyncReady is allowed
-    // to finish before backend ownership is detached below.
-    executor.recording_handoff.ShutDown();
-
-    RHIBackendSubmissionBatch batch{};
-    std::shared_ptr<RHIBackendExecutor> backend;
-    {
-        std::lock_guard dispatch_lock(executor.dispatch_mutex);
-        {
-            std::lock_guard lock(executor.submit_mutex);
-            batch = executor.TakePendingBatchLocked();
-            if (BatchHasWork(batch)) {
-                executor.GetBackendExecutorLocked();
-            }
-            backend = std::move(executor.backend_executor);
-        }
-        if (BatchHasWork(batch) && backend) {
-            batch.topology = BuildBatchTopology(batch);
-            backend->Enqueue(std::move(batch));
-        }
-        if (backend) {
-            backend->Flush(ERHIFlushDepth::SubmitGPU);
-        }
-    }
-
-    auto finish_shutdown = [&executor, shutdown_to_complete] {
+    // Install lifecycle completion before any operation that can allocate or
+    // otherwise throw. In particular, lazy backend construction must never
+    // strand concurrent Shutdown/StartUp callers behind a permanent Stopping
+    // state.
+    auto finish_shutdown =
+        [&executor, shutdown_to_complete, &backend, &backend_to_cancel] {
+        // StartUp may begin as soon as Stopped is published. Drop every local
+        // reference to the old backend first so its queue ownership leases are
+        // released before a replacement backend tries to claim them.
+        backend.reset();
+        backend_to_cancel.reset();
         {
             std::lock_guard lock(executor.submit_mutex);
             executor.completed_shutdown_generation = std::max(
@@ -992,9 +1153,67 @@ void RHIExecutor::ShutDown() {
     };
     ScopeExit finish_shutdown_guard(std::move(finish_shutdown));
 
-    // Backend shutdown may wait for its worker and GPU queues.  The dispatch
-    // gate is deliberately released first; the Stopping state keeps later
-    // publishers out while concurrent Shutdown/Sync callers wait on the CV.
+    // Publish backend cancellation before joining the handoff owner. That
+    // owner may currently be inside SyncReady waiting behind a Submission
+    // dependency which can no longer acquire a producer during shutdown.
+    if (backend_to_cancel) {
+        backend_to_cancel->BeginShutdown();
+    }
+
+    // Stop accepting handoffs before taking the final pending batch. The
+    // worker's stop token interrupts an unfinished recording gate, rejects it
+    // and every later FIFO operation, and joins without depending on producer
+    // progress. Any callback already inside SubmitReady/SyncReady is allowed
+    // to finish before backend ownership is detached below.
+    executor.recording_handoff.ShutDown();
+
+    RHIBackendSubmissionBatch           batch{};
+    RHIBackendSubmissionBatch           failed_batch{};
+    std::exception_ptr                   backend_creation_failure{};
+    {
+        std::lock_guard dispatch_lock(executor.dispatch_mutex);
+        {
+            std::lock_guard lock(executor.submit_mutex);
+            const bool has_pending_work =
+                !executor.pending_submits.empty() ||
+                executor.pending_present.has_value();
+            if (has_pending_work) {
+                try {
+                    executor.GetBackendExecutorLocked();
+                    batch = executor.TakePendingBatchLocked();
+                } catch (...) {
+                    backend_creation_failure = std::current_exception();
+                    failed_batch = executor.TakePendingBatchLocked();
+                }
+            }
+            backend = std::move(executor.backend_executor);
+        }
+        if (!backend_creation_failure && BatchHasWork(batch) && backend) {
+            batch.topology = BuildBatchTopology(batch);
+            backend->Enqueue(std::move(batch));
+        }
+        if (!backend_creation_failure && backend) {
+            backend->Flush(ERHIFlushDepth::SubmitGPU);
+        }
+    }
+
+    if (backend_creation_failure) {
+        ReportBackendCreationFailure("ShutDown", backend_creation_failure);
+        FinalizeRejectedBackendBatch(
+            std::move(failed_batch), "backend creation failed during shutdown"
+        );
+    }
+
+    // Cancel backend host waits before waiting for concurrent Sync calls.
+    // Otherwise a Sync already queued behind an unpublished dependency would
+    // wait for backend ShutDown, while ShutDown waited for that same Sync.
+    if (backend) {
+        backend->BeginShutdown();
+    }
+
+    // Backend shutdown may wait for its worker and GPU queues. The dispatch
+    // gate is deliberately released first; Stopping keeps later publishers
+    // out while concurrent Shutdown/Sync callers wait on the CV.
     {
         std::unique_lock lock(executor.submit_mutex);
         executor.lifecycle_cv.wait(lock, [&executor] {

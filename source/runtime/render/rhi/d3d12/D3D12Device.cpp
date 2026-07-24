@@ -12,6 +12,7 @@
 #include "../vulkan/RHICmdReorderer.h"
 #include <algorithm>
 #include <config.h>
+#include <exception>
 #include <filesystem>
 #include <optional>
 #include <platform/Platform.h>
@@ -1486,6 +1487,46 @@ void D3D12GraphicsCommandQueue::Wait(WaitEvent _event) {
 }
 
 WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
+    const bool rejected_dependency = std::any_of(
+        _submit.wait_events.begin(),
+        _submit.wait_events.end(),
+        [](const WaitEvent& _event) {
+            const auto* fence =
+                reinterpret_cast<const D3D12Fence*>(_event.timeline_handle);
+            return fence == nullptr || fence->IsRejected(_event.value);
+        }
+    );
+    if (rejected_dependency) {
+        // A rejected producer is terminal, but not successfully complete.
+        // Propagate that state instead of inserting a native queue wait which
+        // can never resolve and would wedge every later D3D12 submission.
+        for (const SignalEvent& event : _submit.signal_events) {
+            auto* fence = reinterpret_cast<D3D12Fence*>(event.timeline_handle);
+            if (fence != nullptr) {
+                fence->Reject(event.value);
+            }
+        }
+        for (std::function<void()>& callback : _submit.callbacks) {
+            if (!callback) {
+                continue;
+            }
+            try {
+                callback();
+            } catch (const std::exception& exception) {
+                LOG_ERROR(
+                    "[RHIExecutor][D3D12] rejected-submit callback threw: {}",
+                    exception.what()
+                );
+            } catch (...) {
+                LOG_ERROR("[RHIExecutor][D3D12] rejected-submit callback threw");
+            }
+        }
+        _submit.success_callbacks.clear();
+        return WaitEvent{
+            uint64(&queue_fence),
+            last_submitted_fence_value.load(std::memory_order_acquire)
+        };
+    }
 
     auto allocator = RequestCommandResourceAllocator();
     auto cmd_list  = allocator->GetCommandList();
@@ -1621,6 +1662,19 @@ void D3D12Fence::Wait(uint64_t _value) {
     WaitOnHost(_value);
 }
 
+void D3D12Fence::Reject(uint64_t _value) {
+    {
+        std::lock_guard lock(rejection_mutex);
+        rejected_values.emplace(_value);
+    }
+    SetEvent(event);
+}
+
+bool D3D12Fence::IsRejected(uint64 _value) const {
+    std::lock_guard lock(rejection_mutex);
+    return rejected_values.contains(_value);
+}
+
 bool D3D12Fence::IsFenceComplete(uint64 _value) {
     // ref directx-graphics-samples
     // maybe need a lock..
@@ -1631,10 +1685,12 @@ bool D3D12Fence::IsFenceComplete(uint64 _value) {
 }
 
 void D3D12Fence::WaitOnHost(uint64 _value) {
-    if (IsFenceComplete(_value))
+    if (IsFenceComplete(_value) || IsRejected(_value))
         return;
-    fence->SetEventOnCompletion(_value, event);
-    WaitForSingleObjectEx(event, INFINITE, FALSE);
+    DX_CHECK_HRESULT(fence->SetEventOnCompletion(_value, event));
+    while (!IsFenceComplete(_value) && !IsRejected(_value)) {
+        WaitForSingleObjectEx(event, 50, FALSE);
+    }
     //OnScopeExit([&]() { ResetEvent(event); });// maybe useful
     //ResetEvent(event);
 }

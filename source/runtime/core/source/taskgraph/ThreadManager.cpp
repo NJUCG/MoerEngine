@@ -115,8 +115,8 @@ const char* ThreadManager::GetRunnableThreadName(uint32_t id) {
 RunnableThread* ThreadManager::GetRunnableThread(uint32_t id) {
     if (id == g_game_thread_id)
         return nullptr;
-    auto* thread = m_threads.at(id);
-    return thread;
+    const auto target = m_threads.find(id);
+    return target == m_threads.end() ? nullptr : target->second;
 }
 
 void RunnableThread::Setup(uint64_t _affinity) {

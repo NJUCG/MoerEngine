@@ -4024,13 +4024,27 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
 
     void VulkanFence::Wait(uint64_t _value) {
         std::unique_lock<std::mutex> _(cv_m);
-        while (current_value < _value && !failed && !m_device->IsFaulted()) {
+        while (current_value < _value &&
+               !rejected_values.contains(_value) &&
+               !failed &&
+               !m_device->IsFaulted()) {
             cv.wait_for(_, std::chrono::milliseconds(50));
         }
-        if (current_value < _value && !failed && m_device->IsFaulted()) {
+        if (current_value < _value &&
+            !rejected_values.contains(_value) &&
+            !failed &&
+            m_device->IsFaulted()) {
             failed         = true;
             failure_result = m_device->GetFirstFaultResult();
         }
+    }
+
+    void VulkanFence::Reject(uint64_t _value) {
+        {
+            std::unique_lock<std::mutex> lock(cv_m);
+            rejected_values.emplace(_value);
+        }
+        cv.notify_all();
     }
 
     void VulkanFence::Notify(uint64_t _value) {
@@ -4050,20 +4064,44 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         cv.notify_all();
     }
 
-    bool VulkanFence::WaitSubmitted(uint64_t _value) {
+    bool VulkanFence::WaitSubmitted(
+        uint64_t _value,
+        const std::atomic_bool* _continue_waiting
+    ) {
         std::unique_lock<std::mutex> lock(cv_m);
-        while (submitted_value < _value && !failed && !m_device->IsFaulted()) {
+        while (
+            submitted_value < _value &&
+            !rejected_values.contains(_value) &&
+            !failed &&
+            !m_device->IsFaulted() &&
+            (_continue_waiting == nullptr ||
+             _continue_waiting->load(std::memory_order_acquire))
+        ) {
             cv.wait_for(lock, std::chrono::milliseconds(50));
         }
-        return submitted_value >= _value && !failed && !m_device->IsFaulted();
+        return submitted_value >= _value &&
+               !rejected_values.contains(_value) &&
+               !failed &&
+               !m_device->IsFaulted();
+    }
+
+    bool VulkanFence::IsRejected(uint64_t _value) const {
+        std::unique_lock<std::mutex> lock(cv_m);
+        return rejected_values.contains(_value);
     }
 
     void VulkanFence::Sync(uint64_t _value) {
         std::unique_lock<std::mutex> _(cv_m);
-        while (current_value < _value && !failed && !m_device->IsFaulted()) {
+        while (current_value < _value &&
+               !rejected_values.contains(_value) &&
+               !failed &&
+               !m_device->IsFaulted()) {
             cv.wait_for(_, std::chrono::milliseconds(50));
         }
-        if (current_value < _value && !failed && m_device->IsFaulted()) {
+        if (current_value < _value &&
+            !rejected_values.contains(_value) &&
+            !failed &&
+            m_device->IsFaulted()) {
             failed         = true;
             failure_result = m_device->GetFirstFaultResult();
         }
@@ -4076,6 +4114,17 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         info.pSemaphores    = &timeline;
         constexpr uint64_t wait_slice_ns = 50'000'000;
         while (!m_device->IsDeviceLost()) {
+            {
+                std::unique_lock<std::mutex> lock(cv_m);
+                if (rejected_values.contains(_value)) {
+                    return VK_ERROR_UNKNOWN;
+                }
+                if (failed) {
+                    return failure_result != VK_SUCCESS ?
+                               failure_result :
+                               VK_ERROR_UNKNOWN;
+                }
+            }
             const VkResult result = vkWaitSemaphores(m_device->GetDevice(), &info, wait_slice_ns);
             if (result == VK_SUCCESS) {
                 return VK_SUCCESS;

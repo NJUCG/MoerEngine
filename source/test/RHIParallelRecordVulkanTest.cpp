@@ -4,9 +4,15 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIExecutor.h"
+#include "rhi/RHIThreadOwnership.h"
+#include "rhi/vulkan/VulkanCustomCommand.h"
+#include "rhi/vulkan/VulkanQueue.h"
+#include "rhi/vulkan/VulkanRHIResource.h"
 #include "taskgraph/TaskSystem.h"
 
+#include <atomic>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -14,10 +20,12 @@
 #include <filesystem>
 #include <iostream>
 #include <mutex>
+#include <semaphore>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 using namespace Moer;
@@ -30,17 +38,63 @@ constexpr uint32 kIterations   = 24;
 constexpr uint32 kHeavyCopiesPerWave = 48;
 constexpr uint32 kHeavyCopyCount = kHeavyCopiesPerWave * 2;
 
+class TranslateProbeCommand final : public VkCustomDispatchCmd {
+public:
+    explicit TranslateProbeCommand(std::binary_semaphore* _translated) :
+        translated(_translated) {}
+
+    void Execute(const VkDispatchContext&) const override {
+        translated->release();
+    }
+
+    EQueueType GetQueueType() const override {
+        return EQueueType::Graphics;
+    }
+
+private:
+    std::span<const ResourceUsage> GetResourceUsages() const override {
+        return {};
+    }
+
+    std::binary_semaphore* translated;
+};
+
+class OneShotSemaphoreRelease final {
+public:
+    explicit OneShotSemaphoreRelease(std::binary_semaphore& _semaphore) :
+        semaphore(_semaphore) {}
+
+    ~OneShotSemaphoreRelease() {
+        Release();
+    }
+
+    OneShotSemaphoreRelease(const OneShotSemaphoreRelease&) = delete;
+    OneShotSemaphoreRelease& operator=(const OneShotSemaphoreRelease&) = delete;
+
+    void Release() noexcept {
+        if (!armed) {
+            return;
+        }
+        armed = false;
+        semaphore.release();
+    }
+
+private:
+    std::binary_semaphore& semaphore;
+    bool                   armed{true};
+};
+
 template<size_t N>
-Array<byte> OwnedBytes(const std::array<uint32, N>& _values) {
-    Array<byte> bytes(sizeof(uint32) * N);
+Array<Moer::byte> OwnedBytes(const std::array<uint32, N>& _values) {
+    Array<Moer::byte> bytes(sizeof(uint32) * N);
     std::memcpy(bytes.data(), _values.data(), bytes.size());
     return bytes;
 }
 
 template<size_t N>
-std::span<byte> WritableBytes(std::array<uint32, N>& _values) {
+std::span<Moer::byte> WritableBytes(std::array<uint32, N>& _values) {
     return {
-        reinterpret_cast<byte*>(_values.data()),
+        reinterpret_cast<Moer::byte*>(_values.data()),
         sizeof(uint32) * N,
     };
 }
@@ -387,6 +441,184 @@ void RunPendingSourceTopologyBatch() {
     );
 }
 
+void RunContinuousFrameInFlightRetirement() {
+    using namespace std::chrono_literals;
+
+    auto& device = RenderDevice::Get();
+
+    constexpr uint64 frame_count   = 16;
+    constexpr uint64 max_in_flight = s_queue_max_frame_in_flight;
+    constexpr size_t element_count = 32;
+    const EBufferUsageFlags usage =
+        EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
+
+    BufferRef frame_output =
+        device.CreateBuffer<uint32>("continuous_frame_output", element_count, usage);
+    FenceRef frame_fence = device.CreateFence();
+
+    std::array<uint32, element_count> expected{};
+    std::array<uint32, element_count> readback{};
+    std::mutex                        callback_mutex{};
+    std::vector<uint64>               callback_order{};
+    uint64                            submitted_frame = 0;
+    std::binary_semaphore             blocked_callback_entered{0};
+    std::binary_semaphore             release_blocked_callback{0};
+    std::binary_semaphore             fourth_translate_reached{0};
+    OneShotSemaphoreRelease release_guard(release_blocked_callback);
+
+    try {
+        for (uint64 frame = 0; frame < frame_count; ++frame) {
+            // Match Renderer::PrepareRenderFrame(): allow three outstanding
+            // frames and wait only on the shared external completion fence.
+            // Deliberately do not call RHIExecutor::Sync() inside the loop.
+            if (submitted_frame >= max_in_flight) {
+                frame_fence->Wait(submitted_frame - max_in_flight);
+            }
+            if (frame == max_in_flight) {
+                if (!blocked_callback_entered.try_acquire_for(5s)) {
+                    throw std::runtime_error(
+                        "continuous frame-in-flight Completion callback did not block"
+                    );
+                }
+                // Make the capacity condition deterministic: the first three
+                // packets reached native submission while frame 1's ordinary
+                // Completion callback is still blocked.
+                std::atomic_bool continue_waiting_for_submission{true};
+                std::jthread submission_deadline(
+                    [&continue_waiting_for_submission](std::stop_token _stop) {
+                        const auto deadline =
+                            std::chrono::steady_clock::now() + 5s;
+                        while (!_stop.stop_requested() &&
+                               std::chrono::steady_clock::now() < deadline) {
+                            std::this_thread::sleep_for(10ms);
+                        }
+                        if (!_stop.stop_requested()) {
+                            continue_waiting_for_submission.store(
+                                false, std::memory_order_release
+                            );
+                        }
+                    }
+                );
+                const bool submitted = ResourceCast(frame_fence.Get())
+                                           ->WaitSubmitted(
+                                               submitted_frame,
+                                               &continue_waiting_for_submission
+                                           );
+                submission_deadline.request_stop();
+                submission_deadline.join();
+                if (!submitted) {
+                    throw std::runtime_error(
+                        "continuous frame-in-flight packets were not submitted "
+                        "before the deadline"
+                    );
+                }
+            }
+
+            std::array<uint32, element_count> frame_values{};
+            for (uint32 index = 0; index < frame_values.size(); ++index) {
+                frame_values[index] =
+                    0x68000000u + static_cast<uint32>(frame) * 4096u +
+                    index * 23u;
+            }
+            if (frame + 1 == frame_count) {
+                expected = frame_values;
+            }
+
+            CommandList commands(EQueueType::Graphics);
+            if (frame == max_in_flight) {
+                commands.AddCustomCommand(
+                    MakeUnique<TranslateProbeCommand>(&fourth_translate_reached),
+                    "ContinuousFrameTranslateProbe"
+                );
+            }
+            commands.CopyFrom(
+                OwnedBytes(frame_values),
+                frame_output->GetView(),
+                "ContinuousFrameUpload"
+            );
+            if (frame + 1 == frame_count) {
+                commands.CopyFrom(
+                    frame_output->GetView(),
+                    WritableBytes(readback),
+                    "ContinuousFrameReadback"
+                );
+            }
+            commands.AddCallback([&, completed_frame = frame + 1] {
+                {
+                    std::lock_guard lock(callback_mutex);
+                    callback_order.push_back(completed_frame);
+                }
+                if (completed_frame == 1) {
+                    blocked_callback_entered.release();
+                    release_blocked_callback.acquire();
+                }
+            });
+
+            submitted_frame = frame + 1;
+            CmdSubmit submit = commands.Submit();
+            submit.Signal(frame_fence.Get(), submitted_frame);
+            RHIExecutor::Get().Submit(
+                EQueueType::Graphics,
+                std::move(submit),
+                ERHIExecSubmitFlags::FlushGPU
+            );
+            if (frame == max_in_flight) {
+                const bool translated_while_completion_blocked =
+                    fourth_translate_reached.try_acquire_for(5s);
+                release_guard.Release();
+                if (!translated_while_completion_blocked) {
+                    throw std::runtime_error(
+                        "Completion callback blocked allocator pool reuse"
+                    );
+                }
+            }
+        }
+
+        frame_fence->Wait(frame_count);
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+        if (readback != expected) {
+            throw std::runtime_error(
+                "continuous frame-in-flight final GPU readback mismatch"
+            );
+        }
+        if (callback_order.size() != frame_count) {
+            throw std::runtime_error(
+                "continuous frame-in-flight callbacks did not all retire"
+            );
+        }
+        for (uint64 frame = 0; frame < frame_count; ++frame) {
+            if (callback_order[frame] != frame + 1) {
+                throw std::runtime_error(
+                    "continuous frame-in-flight callback ordering mismatch"
+                );
+            }
+        }
+    } catch (...) {
+        const std::exception_ptr failure = std::current_exception();
+        // Keep every callback capture and the external Vulkan fence alive
+        // until all accepted packets have retired. This avoids turning an
+        // assertion failure into use-after-free or semaphore-in-use noise.
+        release_guard.Release();
+        try {
+            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        } catch (...) {
+            // Unwinding would destroy callback captures and the external
+            // Vulkan fence while accepted packets may still reference them.
+            std::terminate();
+        }
+        std::rethrow_exception(failure);
+    }
+
+    LOG_INFO(
+        "[TESTCASE][PASS] name=ContinuousFrameInFlightRetirement "
+        "frames={} max_in_flight={} intermediate_sync=0 shared_fence=1 "
+        "allocator_reuse=completion_pool overflow=true blocked_callback_frame=1",
+        frame_count,
+        max_in_flight
+    );
+}
+
 void RunCrossQueueTopologyBatch() {
     auto& device = RenderDevice::Get();
     constexpr size_t element_count = 32;
@@ -472,6 +704,486 @@ void RunCrossQueueTopologyBatch() {
     );
 }
 
+void RunRecoverableCopyDependencyRejection() {
+    using namespace std::chrono_literals;
+
+    auto& device = RenderDevice::Get();
+
+    FenceRef dependency      = device.CreateFence();
+    FenceRef shared_done     = device.CreateFence();
+    FenceRef stale_wait_done = device.CreateFence();
+    dependency->Reject(1);
+
+    BufferRef destination = device.CreateBuffer<uint32>(
+        "recoverable_copy_destination",
+        4,
+        EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST
+    );
+    const std::array<uint32, 4> expected{17, 29, 43, 71};
+    const std::array<uint32, 4> stale_values{101, 103, 107, 109};
+    std::array<uint32, 4>       readback{};
+    std::atomic<uint32>         blocker_callbacks{0};
+    std::atomic<uint32>         blocker_success_callbacks{0};
+    std::atomic<uint32>         rejected_callbacks{0};
+    std::atomic<uint32>         rejected_success_callbacks{0};
+    std::atomic<uint32>         recovered_callbacks{0};
+    std::atomic<uint32>         recovered_success_callbacks{0};
+    std::atomic<uint32>         stale_wait_callbacks{0};
+    std::atomic<uint32>         stale_wait_success_callbacks{0};
+    std::atomic<uint32>         dependent_callbacks{0};
+    std::atomic<uint32>         dependent_success_callbacks{0};
+    std::binary_semaphore       blocker_entered{0};
+    std::binary_semaphore       release_blocker{0};
+    OneShotSemaphoreRelease     release_guard(release_blocker);
+
+    try {
+        CommandList blocker(EQueueType::Copy);
+        blocker.AddCallback([&] {
+            blocker_callbacks.fetch_add(1, std::memory_order_relaxed);
+            blocker_entered.release();
+            release_blocker.acquire();
+        });
+        blocker.AddSuccessCallback([&] {
+            blocker_success_callbacks.fetch_add(1, std::memory_order_relaxed);
+        });
+        RHIExecutor::Get().Submit(
+            EQueueType::Copy,
+            blocker.Submit(),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+        if (!blocker_entered.try_acquire_for(5s)) {
+            throw std::runtime_error(
+                "recoverable rejection test could not block Copy Completion"
+            );
+        }
+
+    CommandList rejected(EQueueType::Copy);
+    rejected.CopyFrom(
+        OwnedBytes(std::array<uint32, 4>{1, 2, 3, 4}),
+        destination->GetView(),
+        "RecoverableCopyRejected"
+    );
+    rejected.AddCallback([&] {
+        rejected_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    rejected.AddSuccessCallback([&] {
+        rejected_success_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    CmdSubmit rejected_submit = rejected.Submit();
+    rejected_submit.Wait(dependency.Get(), 1).Signal(shared_done.Get(), 1);
+
+    CommandList recovered(EQueueType::Copy);
+    recovered.CopyFrom(
+        OwnedBytes(expected),
+        destination->GetView(),
+        "RecoverableCopyUpload"
+    );
+    recovered.AddCallback([&] {
+        recovered_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    recovered.AddSuccessCallback([&] {
+        recovered_success_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    CmdSubmit recovered_submit = recovered.Submit();
+    recovered_submit.Signal(shared_done.Get(), 2);
+
+    CommandList stale_wait(EQueueType::Copy);
+    stale_wait.CopyFrom(
+        OwnedBytes(stale_values),
+        destination->GetView(),
+        "RejectedStaleTimelineWait"
+    );
+    stale_wait.AddCallback([&] {
+        stale_wait_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    stale_wait.AddSuccessCallback([&] {
+        stale_wait_success_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    CmdSubmit stale_wait_submit = stale_wait.Submit();
+    stale_wait_submit.Wait(shared_done.Get(), 1).Signal(
+        stale_wait_done.Get(), 1
+    );
+
+    CommandList dependent(EQueueType::Copy);
+    dependent.CopyFrom(
+        destination->GetView(),
+        WritableBytes(readback),
+        "RecoveredTimelineDependencyReadback"
+    );
+    dependent.AddCallback([&] {
+        dependent_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    dependent.AddSuccessCallback([&] {
+        dependent_success_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    CmdSubmit dependent_submit = dependent.Submit();
+    dependent_submit.Wait(shared_done.Get(), 2);
+
+    RHIExecutor::Get().Submit(
+        EQueueType::Copy,
+        std::move(rejected_submit),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Submit(
+        EQueueType::Copy,
+        std::move(recovered_submit),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Submit(
+        EQueueType::Copy,
+        std::move(stale_wait_submit),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Submit(
+        EQueueType::Copy,
+        std::move(dependent_submit),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+
+    auto* shared_vk_fence = ResourceCast(shared_done.Get());
+    auto* stale_vk_fence  = ResourceCast(stale_wait_done.Get());
+    std::atomic_bool continue_waiting{true};
+    std::jthread publication_deadline(
+        [&continue_waiting](std::stop_token _stop) {
+            const auto deadline = std::chrono::steady_clock::now() + 5s;
+            while (!_stop.stop_requested() &&
+                   std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(10ms);
+            }
+            if (!_stop.stop_requested()) {
+                continue_waiting.store(false, std::memory_order_release);
+            }
+        }
+    );
+    const bool stale_wait_submitted =
+        stale_vk_fence->WaitSubmitted(1, &continue_waiting);
+    publication_deadline.request_stop();
+    publication_deadline.join();
+    if (stale_wait_submitted || !stale_vk_fence->IsRejected(1)) {
+        throw std::runtime_error(
+            "Submission did not publish a rejected stale-value dependency "
+            "before Completion"
+        );
+    }
+    if (!shared_vk_fence->IsRejected(1) ||
+        !shared_vk_fence->WaitSubmitted(2) ||
+        shared_vk_fence->HostWait(2) != VK_SUCCESS ||
+        shared_vk_fence->HostWait(1) != VK_ERROR_UNKNOWN) {
+        throw std::runtime_error(
+            "reused external fence lost its exact rejection or accepted value"
+        );
+    }
+
+    release_guard.Release();
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    if (!shared_vk_fence->IsRejected(1) ||
+        shared_vk_fence->IsRejected(2) ||
+        shared_vk_fence->IsFailed() ||
+        !stale_vk_fence->IsRejected(1) ||
+        stale_vk_fence->IsFailed()) {
+        throw std::runtime_error(
+            "recoverable Copy rejection poisoned the reusable external fence"
+        );
+    }
+    if (shared_vk_fence->WaitSubmitted(1) ||
+        !shared_vk_fence->WaitSubmitted(2) ||
+        shared_done->GetValue() < 2 ||
+        readback != expected) {
+        throw std::runtime_error(
+            "reused external fence did not recover at its next timeline value"
+        );
+    }
+    if (blocker_callbacks.load(std::memory_order_acquire) != 1 ||
+        blocker_success_callbacks.load(std::memory_order_acquire) != 1 ||
+        rejected_callbacks.load(std::memory_order_acquire) != 1 ||
+        rejected_success_callbacks.load(std::memory_order_acquire) != 0 ||
+        recovered_callbacks.load(std::memory_order_acquire) != 1 ||
+        recovered_success_callbacks.load(std::memory_order_acquire) != 1 ||
+        stale_wait_callbacks.load(std::memory_order_acquire) != 1 ||
+        stale_wait_success_callbacks.load(std::memory_order_acquire) != 0 ||
+        dependent_callbacks.load(std::memory_order_acquire) != 1 ||
+        dependent_success_callbacks.load(std::memory_order_acquire) != 1) {
+        throw std::runtime_error(
+            "recoverable Copy rejection callbacks retired incorrectly"
+        );
+    }
+    } catch (...) {
+        const std::exception_ptr failure = std::current_exception();
+        release_guard.Release();
+        try {
+            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        } catch (...) {
+            std::terminate();
+        }
+        std::rethrow_exception(failure);
+    }
+
+    LOG_INFO(
+        "[TESTCASE][PASS] name=RecoverableCopyDependencyRejection "
+        "fence=reused rejected=N recovered=N+1 stale_wait=rejected "
+        "publication=Submission"
+    );
+}
+
+void RunRuntimeRejectCompletionOwnership() {
+    using namespace std::chrono_literals;
+
+    auto&    device        = RenderDevice::Get();
+    FenceRef dependency    = device.CreateFence();
+    FenceRef graphics_done = device.CreateFence();
+    FenceRef copy_done     = device.CreateFence();
+    BufferRef rejected_destination = device.CreateBuffer<uint32>(
+        "runtime_reject_destination",
+        4,
+        EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST
+    );
+    ResourceCast(dependency.Get())->Fail(VK_ERROR_UNKNOWN);
+
+    std::atomic<uint32> ordinary_callbacks{0};
+    std::atomic<uint32> success_callbacks{0};
+    std::atomic<uint32> wrong_owner_callbacks{0};
+    std::atomic<uint32> signals_not_failed_before_callback{0};
+    std::atomic<uint32> completion_sync_guard_returns{0};
+    std::atomic<bool>   sync_started{false};
+    std::atomic<bool>   sync_returned{false};
+    std::atomic<bool>   returned_before_release{false};
+    std::atomic<bool>   helper_timed_out{false};
+    std::binary_semaphore copy_callback_entered{0};
+    std::binary_semaphore release_copy_callback{0};
+    std::binary_semaphore copy_callback_finished{0};
+
+    auto validate_completion_owner = [&] {
+        if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion) {
+            wrong_owner_callbacks.fetch_add(1, std::memory_order_relaxed);
+        }
+    };
+
+    CommandList graphics(EQueueType::Graphics);
+    graphics.CopyFrom(
+        OwnedBytes(std::array<uint32, 4>{1, 2, 3, 4}),
+        rejected_destination->GetView(),
+        "RuntimeRejectRecordedCopy"
+    );
+    graphics.AddCallback([&] {
+        validate_completion_owner();
+        device.GetCopyQueue().Sync(0);
+        completion_sync_guard_returns.fetch_add(1, std::memory_order_relaxed);
+        if (!ResourceCast(graphics_done.Get())->IsRejected(1)) {
+            signals_not_failed_before_callback.fetch_add(
+                1, std::memory_order_relaxed
+            );
+        }
+        ordinary_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    graphics.AddSuccessCallback([&] {
+        success_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    CmdSubmit graphics_submit = graphics.Submit();
+    graphics_submit.Wait(dependency.Get(), 1).Signal(graphics_done.Get(), 1);
+
+    CommandList copy(EQueueType::Copy);
+    copy.AddCallback([&] {
+        validate_completion_owner();
+        device.GetCommandQueue(EQueueType::Graphics).Sync();
+        completion_sync_guard_returns.fetch_add(1, std::memory_order_relaxed);
+        if (!ResourceCast(copy_done.Get())->IsRejected(1)) {
+            signals_not_failed_before_callback.fetch_add(
+                1, std::memory_order_relaxed
+            );
+        }
+        copy_callback_entered.release();
+        release_copy_callback.acquire();
+        ordinary_callbacks.fetch_add(1, std::memory_order_relaxed);
+        copy_callback_finished.release();
+    });
+    copy.AddSuccessCallback([&] {
+        success_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    CmdSubmit copy_submit = copy.Submit();
+    copy_submit.Signal(copy_done.Get(), 1);
+
+    std::jthread callback_gate([&] {
+        if (!copy_callback_entered.try_acquire_for(5s)) {
+            helper_timed_out.store(true, std::memory_order_release);
+            release_copy_callback.release();
+            return;
+        }
+        const auto sync_deadline = std::chrono::steady_clock::now() + 5s;
+        while (!sync_started.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < sync_deadline) {
+            std::this_thread::yield();
+        }
+        if (!sync_started.load(std::memory_order_acquire)) {
+            helper_timed_out.store(true, std::memory_order_release);
+        }
+        std::this_thread::sleep_for(250ms);
+        returned_before_release.store(
+            sync_returned.load(std::memory_order_acquire),
+            std::memory_order_release
+        );
+        release_copy_callback.release();
+        if (!copy_callback_finished.try_acquire_for(5s)) {
+            helper_timed_out.store(true, std::memory_order_release);
+        }
+    });
+
+    Array<RHIBackendSubmissionBatchEntry> submits{};
+    submits.emplace_back(EQueueType::Graphics, std::move(graphics_submit));
+    submits.emplace_back(EQueueType::Copy, std::move(copy_submit));
+    RHIExecutor::Get().Submit(
+        std::move(submits), ERHIExecSubmitFlags::FlushGPU
+    );
+
+    sync_started.store(true, std::memory_order_release);
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    sync_returned.store(true, std::memory_order_release);
+    callback_gate.join();
+
+    if (helper_timed_out.load(std::memory_order_acquire)) {
+        throw std::runtime_error("runtime rejection Completion callback timed out");
+    }
+    if (returned_before_release.load(std::memory_order_acquire)) {
+        throw std::runtime_error(
+            "RHI Sync returned before a rejected Copy packet retired on Completion"
+        );
+    }
+    if (ordinary_callbacks.load(std::memory_order_acquire) != 2 ||
+        success_callbacks.load(std::memory_order_acquire) != 0) {
+        throw std::runtime_error(
+            "runtime rejection callbacks did not retire exactly once"
+        );
+    }
+    if (wrong_owner_callbacks.load(std::memory_order_acquire) != 0) {
+        throw std::runtime_error(
+            "runtime rejection callback ran outside the Completion owner"
+        );
+    }
+    if (completion_sync_guard_returns.load(std::memory_order_acquire) != 2) {
+        throw std::runtime_error(
+            "Completion owner cross-queue Sync did not return without blocking"
+        );
+    }
+    if (signals_not_failed_before_callback.load(std::memory_order_acquire) != 0) {
+        throw std::runtime_error(
+            "runtime rejection callback ran before its signal fence failed"
+        );
+    }
+    if (!ResourceCast(graphics_done.Get())->IsRejected(1) ||
+        !ResourceCast(copy_done.Get())->IsRejected(1) ||
+        ResourceCast(graphics_done.Get())->IsFailed() ||
+        ResourceCast(copy_done.Get())->IsFailed()) {
+        throw std::runtime_error(
+            "runtime rejection did not terminalize the exact external signal value"
+        );
+    }
+
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (ordinary_callbacks.load(std::memory_order_acquire) != 2 ||
+        success_callbacks.load(std::memory_order_acquire) != 0) {
+        throw std::runtime_error(
+            "a second Sync replayed runtime rejection callbacks"
+        );
+    }
+    LOG_INFO(
+        "[TESTCASE][PASS] name=RuntimeRejectCompletionOwnership "
+        "sources=2 queues=Graphics,Copy callback_owner=Completion "
+        "cross_queue_sync=guarded sync_retirement=serial"
+    );
+}
+
+void RunShutdownDependencyCancellation() {
+    using namespace std::chrono_literals;
+
+    auto& device = RenderDevice::Get();
+
+    FenceRef graphics_dependency = device.CreateFence();
+    FenceRef copy_dependency     = device.CreateFence();
+    FenceRef graphics_done       = device.CreateFence();
+    FenceRef copy_done           = device.CreateFence();
+    std::atomic<uint32> callbacks{0};
+    std::atomic<uint32> success_callbacks{0};
+    std::atomic<bool>   sync_returned{false};
+    std::binary_semaphore sync_started{0};
+
+    CommandList graphics(EQueueType::Graphics);
+    graphics.AddCallback([&] {
+        callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    graphics.AddSuccessCallback([&] {
+        success_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    CmdSubmit graphics_submit = graphics.Submit();
+    graphics_submit.Wait(graphics_dependency.Get(), 1)
+        .Signal(graphics_done.Get(), 1);
+
+    CommandList copy(EQueueType::Copy);
+    copy.AddCallback([&] {
+        callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    copy.AddSuccessCallback([&] {
+        success_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    CmdSubmit copy_submit = copy.Submit();
+    copy_submit.Wait(copy_dependency.Get(), 1).Signal(copy_done.Get(), 1);
+
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        std::move(graphics_submit),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Submit(
+        EQueueType::Copy,
+        std::move(copy_submit),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+
+    std::jthread sync_waiter([&] {
+        sync_started.release();
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        sync_returned.store(true, std::memory_order_release);
+    });
+    sync_started.acquire();
+    std::this_thread::sleep_for(100ms);
+    if (sync_returned.load(std::memory_order_acquire)) {
+        throw std::runtime_error(
+            "Sync returned before unpublished dependencies were cancelled"
+        );
+    }
+
+    // Both dependency values are intentionally never published. Shutdown must
+    // cancel Submission-owner host waits, terminalize both packets on their
+    // Completion owners, release a concurrent Sync, and join every service
+    // thread without a Shutdown <-> Sync dependency cycle.
+    RHIExecutor::ShutDown();
+    sync_waiter.join();
+
+    if (callbacks.load(std::memory_order_acquire) != 2 ||
+        success_callbacks.load(std::memory_order_acquire) != 0) {
+        throw std::runtime_error(
+            "shutdown dependency cancellation retired callbacks incorrectly"
+        );
+    }
+    if (!ResourceCast(graphics_done.Get())->IsRejected(1) ||
+        !ResourceCast(copy_done.Get())->IsRejected(1) ||
+        ResourceCast(graphics_done.Get())->IsFailed() ||
+        ResourceCast(copy_done.Get())->IsFailed()) {
+        throw std::runtime_error(
+            "shutdown dependency cancellation did not reject external signal values"
+        );
+    }
+    if (!sync_returned.load(std::memory_order_acquire)) {
+        throw std::runtime_error(
+            "shutdown dependency cancellation did not release concurrent Sync"
+        );
+    }
+
+    LOG_INFO(
+        "[TESTCASE][PASS] name=ShutdownDependencyCancellation "
+        "queues=Graphics,Copy dependency=unpublished concurrent_sync=drained"
+    );
+}
+
 } // namespace
 
 int main(int argc, const char** argv) {
@@ -510,7 +1222,13 @@ int main(int argc, const char** argv) {
         );
         RunUpperTopologyBatch();
         RunPendingSourceTopologyBatch();
+        RunContinuousFrameInFlightRetirement();
+        RunRecoverableCopyDependencyRejection();
         RunCrossQueueTopologyBatch();
+        RunRuntimeRejectCompletionOwnership();
+        // This explicitly stops the runtime and must remain the final test
+        // before device disposal.
+        RunShutdownDependencyCancellation();
 
         RenderDevice::Dispose();
         render_device_initialized = false;

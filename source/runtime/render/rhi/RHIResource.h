@@ -1013,6 +1013,13 @@ public:
     Fence() : RHIResource(RRT_GPU_FENCE) {}
     virtual uint64_t GetValue() const      = 0;
     virtual void     Wait(uint64_t _value) = 0;
+
+    // Terminalize a timeline value which can no longer be published because
+    // its owning submission was rejected before reaching a GPU queue. This is
+    // deliberately distinct from host-signalling the value: treating rejected
+    // producer work as successfully complete could let dependent GPU work read
+    // resources which were never written.
+    virtual void Reject(uint64_t _value) = 0;
 };
 
 struct BackBufferInfo {

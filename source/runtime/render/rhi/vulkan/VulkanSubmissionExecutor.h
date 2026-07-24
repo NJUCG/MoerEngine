@@ -6,16 +6,21 @@
 #include <condition_variable>
 #include <deque>
 #include <exception>
+#include <future>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string_view>
 #include <thread>
+#include <type_traits>
+#include <utility>
 
 namespace Moer::Render {
 
-// Owns the upper RHI submission stream for Vulkan. Translation remains
-// streaming (one source submission at a time) so descriptor leases can retire
-// while later work is being prepared; native queue submission order is stable.
+// Owns the upper RHI submission stream for Vulkan. The translate owner prepares
+// one source at a time, then transfers its move-only packet to the sole native
+// Submission owner. The conservative one-packet window preserves the current
+// failure and queue-ordering semantics while making thread ownership explicit.
 class VulkanSubmissionExecutor final : public RHIBackendExecutor {
 public:
     VulkanSubmissionExecutor();
@@ -24,6 +29,7 @@ public:
     void          Enqueue(RHIBackendSubmissionBatch&& _batch) override;
     GraphEventRef Sync(ERHISyncDepth _depth = ERHISyncDepth::RHI) override;
     void          Flush(ERHIFlushDepth _depth = ERHIFlushDepth::SubmitGPU) override;
+    void          BeginShutdown() noexcept override;
     void          ShutDown() override;
 
 private:
@@ -52,7 +58,37 @@ private:
         size_t first_unconsumed_source{0};
     };
 
-    void Run();
+    struct SubmissionWork {
+        std::packaged_task<void()> execute{};
+    };
+
+    void RunExecutor();
+    void RunSubmission();
+    bool EnqueueSubmissionWork(SubmissionWork&& _work);
+    void StopSubmissionThread();
+
+    template<typename Function>
+    auto ExecuteOnSubmissionThread(Function&& _function)
+        -> std::invoke_result_t<Function> {
+        using Result = std::invoke_result_t<Function>;
+
+        std::packaged_task<Result()> typed_task(std::forward<Function>(_function));
+        std::future<Result>          result = typed_task.get_future();
+        SubmissionWork work{
+            .execute = std::packaged_task<void()>(
+                [task = std::move(typed_task)]() mutable { task(); }
+            ),
+        };
+        if (!EnqueueSubmissionWork(std::move(work))) {
+            throw std::runtime_error("Vulkan Submission owner is not accepting work");
+        }
+        if constexpr (std::is_void_v<Result>) {
+            result.get();
+        } else {
+            return result.get();
+        }
+    }
+
     void ProcessBatch(
         RHIBackendSubmissionBatch& _batch,
         BatchExceptionState&       _exception_state
@@ -75,9 +111,11 @@ private:
     std::mutex                 mutex{};
     std::condition_variable    cv{};
     std::deque<Request>        requests{};
-    std::jthread               thread{};
+    std::jthread               executor_thread{};
     bool                       accepting{true};
+    bool                       constructor_abort{false};
     bool                       stopped{false};
+    bool                       claims_owned{false};
     bool                       hard_failed{false};
     bool                       logged_multi_source_topology{false};
     int32                      hard_failure_result{0};
@@ -86,6 +124,12 @@ private:
     uint64                     last_copy_timeline{0};
     std::optional<EQueueType>  ordered_tail_queue{};
     std::optional<WaitEvent>   ordered_gpu_tail{};
+
+    std::mutex                 submission_mutex{};
+    std::condition_variable    submission_cv{};
+    std::deque<SubmissionWork> submission_work{};
+    std::jthread               submission_thread{};
+    bool                       submission_accepting{true};
 };
 
 } // namespace Moer::Render
