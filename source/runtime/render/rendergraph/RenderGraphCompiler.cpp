@@ -503,6 +503,11 @@ bool RenderGraphCompiler::ValidateExecutionDomain(uint32_t pass_index) {
     if (queue == RenderGraph::QueueRole::None || domain == RenderGraph::PipelineType::None) {
         return Fail("pass '" + pass.name + "' has an incomplete execution domain");
     }
+    if (!graph.queue_topology.Resolve(queue).available) {
+        return Fail(
+            "pass '" + pass.name + "' targets an unavailable logical queue"
+        );
+    }
     if (queue == RenderGraph::QueueRole::Copy && domain != RenderGraph::PipelineType::Copy) {
         return Fail("copy queue pass '" + pass.name + "' must use the copy pipeline domain");
     }

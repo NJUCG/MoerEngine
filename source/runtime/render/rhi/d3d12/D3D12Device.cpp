@@ -606,6 +606,32 @@ CommandQueue& D3D12Device::GetCommandQueue(EQueueType _type) {
     return queue;
 }
 
+RHIQueueTopology D3D12Device::GetQueueTopology() const {
+    // The current D3D12 backend exposes only its Graphics command queue.
+    // Compute/Copy must remain fail-closed until their native queues and
+    // executor submission paths are implemented.
+    return RHIQueueTopology{
+        .graphics = RHIQueueBinding{
+            .queue = EQueueType::Graphics,
+            .native_queue_id = 0,
+            .family_id = 0,
+            .available = true,
+        },
+        .compute = RHIQueueBinding{
+            .queue = EQueueType::Compute,
+            .native_queue_id = 0,
+            .family_id = 0,
+            .available = false,
+        },
+        .copy = RHIQueueBinding{
+            .queue = EQueueType::Copy,
+            .native_queue_id = 0,
+            .family_id = 0,
+            .available = false,
+        },
+    };
+}
+
 CopyQueue& D3D12Device::GetCopyQueue() {
     // TODO: 在此处插入 return 语句
     struct DummyCopyQueue : CopyQueue {

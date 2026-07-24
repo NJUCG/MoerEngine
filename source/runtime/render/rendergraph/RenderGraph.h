@@ -251,13 +251,14 @@ public:
         QueueRole role            = QueueRole::None;
         uint32_t  native_queue_id = 0;
         uint32_t  family_id       = 0;
+        bool      available       = true;
 
         friend bool operator==(const QueueBinding&, const QueueBinding&) = default;
     };
 
     /**
-     * Maps logical roles to actual queues. Tests may provide a fake topology; production currently
-     * uses SingleQueue() until the RHI submission path consumes the compiled plan.
+     * Maps logical roles to actual queues. Tests may provide a fake topology;
+     * active production graphs should snapshot QueueTopology::FromRHI().
      */
     struct QueueTopology {
         QueueBinding graphics{QueueRole::Graphics, 0, 0};
@@ -275,6 +276,9 @@ public:
                 .copy     = QueueBinding{QueueRole::Copy, 2, 2},
             };
         }
+
+        /** Snapshot the initialized RHI's real native queue/family mapping. */
+        [[nodiscard]] RENDER_API static QueueTopology FromRHI();
 
         [[nodiscard]] constexpr QueueBinding Resolve(QueueRole role) const {
             switch (role) {
@@ -560,10 +564,11 @@ public:
     };
 
     /**
-     * Immutable compiler output. recording_batches is an executable CPU
-     * ownership schedule. GPU queue/barrier fields remain shadow metadata:
-     * queue_syncs only describe internal pass/batch edges, while external
-     * import/export/present synchronization endpoints are intentionally absent.
+     * Immutable compiler output. recording_batches is the executable CPU
+     * ownership schedule; barriers, queue_batches, and queue_syncs are the
+     * active Graphics/Compute lowering contract. Queue syncs describe managed
+     * internal pass/batch edges only. External import/export/present
+     * synchronization endpoints remain intentionally absent.
      */
     struct CompiledPlan {
         /** Stable topological order of semantic dependencies. */

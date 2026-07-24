@@ -725,6 +725,62 @@ void VulkanSubmissionExecutor::ProcessBatch(
             _exception_state.first_unconsumed_source = _batch.submits.size();
         };
 
+    const RHIQueueTopology queue_topology =
+        RenderDevice::Get().GetQueueTopology();
+    auto same_native_queue = [&](EQueueType lhs, EQueueType rhs) {
+        return queue_topology.Resolve(lhs).native_queue_id ==
+               queue_topology.Resolve(rhs).native_queue_id;
+    };
+    auto append_unique_wait = [](CmdSubmit& submit, WaitEvent event) {
+        const bool exists = std::any_of(
+            submit.wait_events.begin(),
+            submit.wait_events.end(),
+            [&](const WaitEvent& candidate) {
+                return candidate.timeline_handle == event.timeline_handle &&
+                       candidate.value == event.value;
+            }
+        );
+        if (!exists) {
+            submit.wait_events.emplace_back(event);
+        }
+    };
+    auto append_frontier_waits =
+        [&](CmdSubmit& submit,
+            EQueueType target_queue,
+            const auto& frontier) {
+            for (size_t index = 0; index < frontier.size(); ++index) {
+                if (!frontier[index].has_value()) {
+                    continue;
+                }
+                const auto source_queue = static_cast<EQueueType>(index);
+                if (same_native_queue(source_queue, target_queue)) {
+                    continue;
+                }
+                append_unique_wait(submit, *frontier[index]);
+            }
+        };
+    auto mark_scope_queue_seen = [&](EQueueType queue) {
+        for (size_t index = 0; index < async_scope_seen_queues.size();
+             ++index) {
+            if (same_native_queue(static_cast<EQueueType>(index), queue)) {
+                async_scope_seen_queues[index] = true;
+            }
+        }
+    };
+    auto update_frontier =
+        [&](EQueueType queue, WaitEvent completion, bool collapse) {
+            if (collapse) {
+                gpu_frontier.fill(std::nullopt);
+            } else {
+                for (size_t index = 0; index < gpu_frontier.size(); ++index) {
+                    if (same_native_queue(static_cast<EQueueType>(index), queue)) {
+                        gpu_frontier[index].reset();
+                    }
+                }
+            }
+            gpu_frontier[static_cast<size_t>(queue)] = completion;
+        };
+
     // Keep every source in the request-owned batch until its queue call has
     // returned. If reorder, descriptor-lease, allocator, or native recording
     // setup throws, Run's request barrier can still terminalize the current
@@ -748,12 +804,38 @@ void VulkanSubmissionExecutor::ProcessBatch(
             .end   = entry.submit.cmds.size(),
         }};
 
-        if (ordered_tail_queue.has_value() && *ordered_tail_queue != entry.queue &&
-            ordered_gpu_tail.has_value()) {
-            // Native queue submit order only applies within one queue. Chain
-            // adjacent cross-queue source submissions through their timeline
-            // semaphores so the stable topology order is also a GPU order.
-            entry.submit.wait_events.emplace_back(*ordered_gpu_tail);
+        const uint64 async_scope = entry.submit.async_queue_scope;
+        if (async_scope == 0) {
+            // Legacy/direct submits retain a conservative total GPU order.
+            active_async_queue_scope = 0;
+            async_scope_entry_frontier.fill(std::nullopt);
+            async_scope_seen_queues.fill(false);
+            append_frontier_waits(entry.submit, entry.queue, gpu_frontier);
+        } else {
+            if (active_async_queue_scope != async_scope) {
+                // A new graph transaction begins after the complete prior
+                // frontier. Each native queue waits that frozen entry
+                // frontier once, while explicit RDG waits order work inside
+                // the scope.
+                active_async_queue_scope    = async_scope;
+                async_scope_entry_frontier  = gpu_frontier;
+                async_scope_seen_queues.fill(false);
+                if (!logged_async_queue_scope) {
+                    LOG_INFO(
+                        "[RHIExecutor][Vulkan][AsyncQueueScope] "
+                        "mode=dependency-led native_submit_owner=serial "
+                        "legacy_boundary=frontier"
+                    );
+                    logged_async_queue_scope = true;
+                }
+            }
+            const size_t queue_index = static_cast<size_t>(entry.queue);
+            if (!async_scope_seen_queues[queue_index]) {
+                append_frontier_waits(
+                    entry.submit, entry.queue, async_scope_entry_frontier
+                );
+                mark_scope_queue_seen(entry.queue);
+            }
         }
         if (entry.queue == EQueueType::Copy) {
             auto& copy_queue = static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
@@ -771,8 +853,11 @@ void VulkanSubmissionExecutor::ProcessBatch(
                 last_copy_timeline = std::max(
                     last_copy_timeline, submit_result.completion->value
                 );
-                ordered_gpu_tail   = *submit_result.completion;
-                ordered_tail_queue = EQueueType::Copy;
+                update_frontier(
+                    EQueueType::Copy,
+                    *submit_result.completion,
+                    async_scope == 0
+                );
                 used_queues[static_cast<size_t>(EQueueType::Copy)] = true;
             } else if (submit_result.IsRecoverableRejection()) {
                 // A failed prerequisite did not reach vkQueueSubmit. Drain the
@@ -854,8 +939,11 @@ void VulkanSubmissionExecutor::ProcessBatch(
             _exception_state.first_unconsumed_source = source_index + 1;
             if (submit_result.WasSubmitted()) {
                 assert(submit_result.completion.has_value());
-                ordered_gpu_tail   = *submit_result.completion;
-                ordered_tail_queue = entry.queue;
+                update_frontier(
+                    entry.queue,
+                    *submit_result.completion,
+                    async_scope == 0
+                );
                 used_queues[static_cast<size_t>(entry.queue)] = true;
             } else if (submit_result.IsRecoverableRejection()) {
                 reject_remaining_recoverable(
@@ -884,15 +972,16 @@ void VulkanSubmissionExecutor::ProcessBatch(
     }
 
     if (_batch.present) {
+        active_async_queue_scope = 0;
+        async_scope_entry_frontier.fill(std::nullopt);
+        async_scope_seen_queues.fill(false);
         RHIPresentRequest& present = *_batch.present;
         auto& graphics_queue = static_cast<VkCommandQueue&>(
             RenderDevice::Get().GetCommandQueue(EQueueType::Graphics)
         );
-        if (ordered_tail_queue.has_value() &&
-            *ordered_tail_queue != EQueueType::Graphics && ordered_gpu_tail.has_value()) {
-            CommandList bridge_commands(EQueueType::Graphics);
-            CmdSubmit   bridge = bridge_commands.Submit();
-            bridge.wait_events.emplace_back(*ordered_gpu_tail);
+        CmdSubmit bridge = CommandList(EQueueType::Graphics).Submit();
+        append_frontier_waits(bridge, EQueueType::Graphics, gpu_frontier);
+        if (!bridge.wait_events.empty()) {
             std::optional<VkCommandQueue::CurrentVulkanRecordedSubmit> recorded =
                 graphics_queue.TranslateForRuntime(std::move(bridge));
             used_queues[static_cast<size_t>(EQueueType::Graphics)] = true;
@@ -950,8 +1039,9 @@ void VulkanSubmissionExecutor::ProcessBatch(
                 return;
             }
             assert(bridge_result.completion.has_value());
-            ordered_gpu_tail   = *bridge_result.completion;
-            ordered_tail_queue = EQueueType::Graphics;
+            update_frontier(
+                EQueueType::Graphics, *bridge_result.completion, true
+            );
             used_queues[static_cast<size_t>(EQueueType::Graphics)] = true;
         }
         const VulkanRuntimeSubmissionResult present_result = ExecuteOnSubmissionThread(
@@ -975,8 +1065,9 @@ void VulkanSubmissionExecutor::ProcessBatch(
         used_queues[static_cast<size_t>(EQueueType::Graphics)] = true;
         if (present_result.WasSubmitted()) {
             assert(present_result.completion.has_value());
-            ordered_gpu_tail   = *present_result.completion;
-            ordered_tail_queue = EQueueType::Graphics;
+            update_frontier(
+                EQueueType::Graphics, *present_result.completion, true
+            );
             used_queues[static_cast<size_t>(EQueueType::Graphics)] = true;
         }
         if (present_result.IsHardFailure()) {
@@ -1014,8 +1105,10 @@ void VulkanSubmissionExecutor::ProcessSync(ERHISyncDepth _depth) {
         RenderDevice::Get().GetCommandQueue(EQueueType::Compute).Sync();
         RenderDevice::Get().GetCopyQueue().Sync(last_copy_timeline);
     });
-    ordered_gpu_tail.reset();
-    ordered_tail_queue.reset();
+    gpu_frontier.fill(std::nullopt);
+    async_scope_entry_frontier.fill(std::nullopt);
+    async_scope_seen_queues.fill(false);
+    active_async_queue_scope = 0;
     used_queues.fill(false);
     last_copy_timeline = 0;
     LOG_INFO("[RHIExecutor][Vulkan] sync complete depth={}", static_cast<uint32>(_depth));

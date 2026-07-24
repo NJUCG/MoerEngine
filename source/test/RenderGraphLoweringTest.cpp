@@ -440,6 +440,491 @@ void ExpectLowerFailure(
     RenderGraph&     graph,
     std::string_view test_name,
     std::string_view expected
+);
+
+void TestCrossNativeTokenSynchronization(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "cross-native token synchronization is lowered";
+    RenderGraph graph("CrossNativeTokenSync", RenderGraph::QueueTopology::DedicatedQueues());
+    const auto token = graph.CreateTransientToken("GraphicsToCompute");
+    const auto producer = graph.AddPass(
+        "GraphicsProducer",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Graphics
+                   )
+                .Write(token)
+                .SideEffect();
+        },
+        [] {}
+    );
+    const auto consumer = graph.AddPass(
+        "ComputeConsumer",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Compute,
+                       RenderGraph::PipelineType::Compute
+                   )
+                .Read(token)
+                .SideEffect();
+        },
+        [] {}
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    RenderGraphLowering::LoweredPlan lowered{};
+    std::string error{};
+    suite.Check(RenderGraphLowering::Lower(graph, lowered, error), test_name, error);
+    suite.Check(
+        lowered.queue_syncs.size() == 1 &&
+            lowered.queue_syncs.front().correlation_id == 0 &&
+            lowered.queue_syncs.front().signal_pass == producer &&
+            lowered.queue_syncs.front().wait_pass == consumer &&
+            lowered.queue_syncs.front().signal_queue ==
+                graph.GetQueueTopology().Resolve(RenderGraph::QueueRole::Graphics) &&
+            lowered.queue_syncs.front().wait_queue ==
+                graph.GetQueueTopology().Resolve(RenderGraph::QueueRole::Compute),
+        test_name,
+        "the token hazard must become one Graphics-to-Compute lowered GPU sync"
+    );
+    suite.Check(
+        lowered.prologue.empty() && lowered.Before(consumer).empty(),
+        test_name,
+        "a token-only dependency must not manufacture a physical barrier"
+    );
+}
+
+void TestSameNativeTokenSynchronizationNeedsNoGpuSync(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "same-native token synchronization needs no lowered GPU sync";
+    RenderGraph graph("SameNativeTokenSync", RenderGraph::QueueTopology::SingleQueue());
+    const auto token = graph.CreateTransientToken("GraphicsToCompute");
+    graph.AddPass(
+        "GraphicsProducer",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Graphics
+                   )
+                .Write(token)
+                .SideEffect();
+        },
+        [] {}
+    );
+    graph.AddPass(
+        "ComputeConsumer",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Compute,
+                       RenderGraph::PipelineType::Compute
+                   )
+                .Read(token)
+                .SideEffect();
+        },
+        [] {}
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(
+        graph.GetCompiledPlan().queue_syncs.size() == 1 &&
+            !graph.GetCompiledPlan().queue_syncs.front().gpu_wait_required,
+        test_name,
+        "the compiler must retain the logical queue edge without requesting a GPU wait"
+    );
+    RenderGraphLowering::LoweredPlan lowered{};
+    std::string error{};
+    suite.Check(RenderGraphLowering::Lower(graph, lowered, error), test_name, error);
+    suite.Check(
+        lowered.queue_syncs.empty(),
+        test_name,
+        "logical roles sharing one native queue must rely on native submission order"
+    );
+}
+
+void TestSameNativePhysicalBarrierRetainsSourceScope(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "same-native physical queue barrier retains source scope";
+    BufferRef buffer = MoerNew(FakeBuffer)(256);
+    RenderGraph graph("SameNativePhysicalBarrier", RenderGraph::QueueTopology::SingleQueue());
+    const auto data = graph.ImportBuffer(
+        "Shared",
+        buffer,
+        RenderGraph::BufferDesc{.byte_size = 256}
+    );
+    graph.SetInitialState(
+        data,
+        RenderGraph::BufferState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None
+    );
+    graph.AddPass(
+        "GraphicsWrite",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Write(data, RenderGraph::BufferState::UnorderedAccess).SideEffect();
+        },
+        [] {}
+    );
+    const auto consumer = graph.AddPass(
+        "ComputeRead",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Compute,
+                       RenderGraph::PipelineType::Compute
+                   )
+                .Read(data, RenderGraph::BufferState::ShaderResource)
+                .SideEffect();
+        },
+        [] {}
+    );
+    graph.Export(
+        data,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Compute,
+        RenderGraph::AccessMode::Read
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    RenderGraphLowering::LoweredPlan lowered{};
+    std::string error{};
+    suite.Check(RenderGraphLowering::Lower(graph, lowered, error), test_name, error);
+    const auto before_consumer = lowered.Before(consumer);
+    const auto barrier = std::find_if(
+        before_consumer.begin(),
+        before_consumer.end(),
+        [](const RenderGraphLowering::LoweredInstruction& instruction) {
+            return instruction.instruction_kind ==
+                       RenderGraphLowering::InstructionKind::Barrier &&
+                   instruction.after_state ==
+                       RenderGraph::ResourceState::Buffer(
+                           RenderGraph::BufferState::ShaderResource
+                       );
+        }
+    );
+    suite.Check(
+        lowered.queue_syncs.empty() &&
+            barrier != before_consumer.end() &&
+            !barrier->queue_acquire &&
+            barrier->source.stages != ERHIPipelineStageFlags::PS_NONE &&
+            barrier->source.access == ERHIAccessFlags::SHADER_WRITE,
+        test_name,
+        "one native queue needs no GPU wait but must retain its producer scope"
+    );
+}
+
+void TestSameFamilyQueueBarrierLowersToAcquire(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "same-family queue barrier lowers to destination acquire";
+    const RenderGraph::QueueTopology topology{
+        .graphics = {RenderGraph::QueueRole::Graphics, 0, 0},
+        .compute  = {RenderGraph::QueueRole::Compute, 1, 0},
+        .copy     = {RenderGraph::QueueRole::Copy, 2, 0},
+    };
+    BufferRef buffer = MoerNew(FakeBuffer)(256);
+    RenderGraph graph("SameFamilyQueueAcquire", topology);
+    const auto data = graph.ImportBuffer(
+        "Shared",
+        buffer,
+        RenderGraph::BufferDesc{
+            .byte_size    = 256,
+            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Exclusive,
+        }
+    );
+    graph.SetInitialState(
+        data,
+        RenderGraph::BufferState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None
+    );
+    graph.AddPass(
+        "GraphicsWrite",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Write(data, RenderGraph::BufferState::UnorderedAccess).SideEffect();
+        },
+        [] {}
+    );
+    const auto consumer = graph.AddPass(
+        "ComputeRead",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Compute,
+                       RenderGraph::PipelineType::Compute
+                   )
+                .Read(data, RenderGraph::BufferState::ShaderResource)
+                .SideEffect();
+        },
+        [] {}
+    );
+    graph.Export(
+        data,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Compute,
+        RenderGraph::AccessMode::Read
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    RenderGraphLowering::LoweredPlan lowered{};
+    std::string error{};
+    suite.Check(RenderGraphLowering::Lower(graph, lowered, error), test_name, error);
+    const auto before_consumer = lowered.Before(consumer);
+    const auto acquire = std::find_if(
+        before_consumer.begin(),
+        before_consumer.end(),
+        [](const RenderGraphLowering::LoweredInstruction& instruction) {
+            return instruction.instruction_kind ==
+                       RenderGraphLowering::InstructionKind::Barrier &&
+                   instruction.queue_acquire;
+        }
+    );
+    suite.Check(
+        lowered.queue_syncs.size() == 1 &&
+            acquire != before_consumer.end() &&
+            acquire->source.stages == ERHIPipelineStageFlags::PS_NONE &&
+            acquire->source.access == ERHIAccessFlags::UNDEFINED &&
+            acquire->destination.stages == ERHIPipelineStageFlags::PS_COMPUTE_SHADER &&
+            acquire->destination.access == ERHIAccessFlags::SHADER_READ,
+        test_name,
+        "the GPU wait must be paired with a destination-local acquire whose source scope is empty"
+    );
+}
+
+void TestMixedQueueFanInRetainsLocalSourceScope(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "mixed queue fan-in retains the local source scope";
+    const RenderGraph::QueueTopology topology{
+        .graphics = {RenderGraph::QueueRole::Graphics, 0, 0},
+        .compute  = {RenderGraph::QueueRole::Compute, 1, 0},
+        .copy     = {RenderGraph::QueueRole::Copy, 2, 0},
+    };
+    BufferRef buffer = MoerNew(FakeBuffer)(256);
+    RenderGraph graph("MixedQueueFanIn", topology);
+    const auto data = graph.ImportBuffer(
+        "Shared",
+        buffer,
+        RenderGraph::BufferDesc{.byte_size = 256}
+    );
+    graph.SetInitialState(
+        data,
+        RenderGraph::BufferState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None
+    );
+    graph.AddPass(
+        "InitialGraphicsWrite",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Write(data, RenderGraph::BufferState::UnorderedAccess).SideEffect();
+        },
+        [] {}
+    );
+    const auto graphics_reader = graph.AddPass(
+        "GraphicsRead",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Read(data, RenderGraph::BufferState::ShaderResource).SideEffect();
+        },
+        [] {}
+    );
+    const auto compute_reader = graph.AddPass(
+        "ComputeRead",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Compute,
+                       RenderGraph::PipelineType::Compute
+                   )
+                .Read(data, RenderGraph::BufferState::ShaderResource)
+                .SideEffect();
+        },
+        [] {}
+    );
+    const auto final_writer = graph.AddPass(
+        "FinalGraphicsWrite",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Write(data, RenderGraph::BufferState::UnorderedAccess).SideEffect();
+        },
+        [] {}
+    );
+    graph.Export(
+        data,
+        RenderGraph::BufferState::UnorderedAccess,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Write
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    RenderGraphLowering::LoweredPlan lowered{};
+    std::string error{};
+    suite.Check(RenderGraphLowering::Lower(graph, lowered, error), test_name, error);
+    const auto before_writer = lowered.Before(final_writer);
+    const auto barrier = std::find_if(
+        before_writer.begin(),
+        before_writer.end(),
+        [&](const RenderGraphLowering::LoweredInstruction& instruction) {
+            return instruction.queue_acquire &&
+                   std::find(
+                       instruction.source_frontier.begin(),
+                       instruction.source_frontier.end(),
+                       graphics_reader
+                   ) != instruction.source_frontier.end() &&
+                   std::find(
+                       instruction.source_frontier.begin(),
+                       instruction.source_frontier.end(),
+                       compute_reader
+                   ) != instruction.source_frontier.end();
+        }
+    );
+    suite.Check(
+        barrier != before_writer.end() &&
+            HasFlag(
+                barrier->source.stages,
+                ERHIPipelineStageFlags::PS_ALL_GRAPHICS
+            ) &&
+            !HasFlag(
+                barrier->source.stages,
+                ERHIPipelineStageFlags::PS_COMPUTE_SHADER
+            ) &&
+            barrier->source.access == ERHIAccessFlags::SHADER_READ,
+        test_name,
+        "the semaphore covers the remote source while the barrier retains "
+        "the same-native graphics source"
+    );
+}
+
+void TestCrossFamilyExclusiveOwnershipFailsClosed(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "cross-family exclusive ownership remains fail-closed";
+    BufferRef buffer = MoerNew(FakeBuffer)(256);
+    RenderGraph graph("CrossFamilyOwnership", RenderGraph::QueueTopology::DedicatedQueues());
+    const auto data = graph.ImportBuffer(
+        "Exclusive",
+        buffer,
+        RenderGraph::BufferDesc{
+            .byte_size    = 256,
+            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Exclusive,
+        }
+    );
+    graph.SetInitialState(
+        data,
+        RenderGraph::BufferState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None
+    );
+    graph.AddPass(
+        "GraphicsWrite",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Write(data, RenderGraph::BufferState::UnorderedAccess).SideEffect();
+        },
+        [] {}
+    );
+    graph.AddPass(
+        "ComputeRead",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Compute,
+                       RenderGraph::PipelineType::Compute
+                   )
+                .Read(data, RenderGraph::BufferState::ShaderResource)
+                .SideEffect();
+        },
+        [] {}
+    );
+    graph.Export(
+        data,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Compute,
+        RenderGraph::AccessMode::Read
+    );
+
+    ExpectLowerFailure(
+        suite,
+        graph,
+        test_name,
+        "queue-family ownership requires paired release/acquire lowering"
+    );
+}
+
+void TestMissingCrossNativeSyncFailsClosed(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "missing cross-native queue sync fails closed";
+    RenderGraph graph(
+        "MissingCrossNativeSync",
+        RenderGraph::QueueTopology::DedicatedQueues()
+    );
+    const auto token = graph.CreateTransientToken("GraphicsToCompute");
+    graph.AddPass(
+        "Graphics",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Write(token).SideEffect();
+        },
+        [] {}
+    );
+    graph.AddPass(
+        "Compute",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Compute,
+                       RenderGraph::PipelineType::Compute
+                   )
+                .Read(token)
+                .SideEffect();
+        },
+        [] {}
+    );
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    auto& plan = const_cast<RenderGraph::CompiledPlan&>(
+        graph.GetCompiledPlan()
+    );
+    plan.queue_syncs.clear();
+    for (auto& batch : plan.queue_batches) {
+        batch.signal_syncs.clear();
+        batch.wait_syncs.clear();
+    }
+
+    RenderGraphLowering::LoweredPlan lowered{};
+    std::string error{};
+    suite.Check(
+        !RenderGraphLowering::Lower(graph, lowered, error) &&
+            Contains(
+                error,
+                "cross-native dependency edge is not correlated"
+            ) &&
+            lowered.prologue.empty() && lowered.passes.empty() &&
+            lowered.queue_syncs.empty(),
+        test_name,
+        error
+    );
+}
+
+void TestUnavailableQueueFailsAtCompile(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "unavailable logical queue fails at compile";
+    auto topology = RenderGraph::QueueTopology::SingleQueue();
+    topology.compute.available = false;
+    RenderGraph graph("UnavailableCompute", topology);
+    const auto token = graph.CreateTransientToken("ComputeOnly");
+    graph.AddPass(
+        "Compute",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Compute,
+                       RenderGraph::PipelineType::Compute
+                   )
+                .Write(token)
+                .SideEffect();
+        },
+        [] {}
+    );
+    suite.Check(
+        !graph.Compile() &&
+            Contains(graph.GetCompileError(), "unavailable logical queue"),
+        test_name,
+        graph.GetCompileError()
+    );
+}
+
+void ExpectLowerFailure(
+    TestSuite&       suite,
+    RenderGraph&     graph,
+    std::string_view test_name,
+    std::string_view expected
 ) {
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     RenderGraphLowering::LoweredPlan lowered{};
@@ -448,7 +933,8 @@ void ExpectLowerFailure(
     suite.Check(!result, test_name, "lowering unexpectedly succeeded");
     suite.Check(Contains(error, expected), test_name, error);
     suite.Check(
-        lowered.prologue.empty() && lowered.passes.empty(),
+        lowered.prologue.empty() && lowered.passes.empty() &&
+            lowered.queue_syncs.empty(),
         test_name,
         "failed lowering must not expose a partial plan"
     );
@@ -590,38 +1076,6 @@ void TestFailClosedContracts(TestSuite& suite) {
         ExpectLowerFailure(suite, graph, name, "Present boundary");
     }
     {
-        constexpr std::string_view name = "non-graphics logical queue rejected";
-        BufferRef buffer = MoerNew(FakeBuffer)(64);
-        RenderGraph graph(name, RenderGraph::QueueTopology::SingleQueue());
-        const auto handle =
-            graph.ImportBuffer("Buffer", buffer, RenderGraph::BufferDesc{.byte_size = 64});
-        graph.SetInitialState(
-            handle,
-            RenderGraph::BufferState::Undefined,
-            RenderGraph::QueueRole::None,
-            RenderGraph::AccessMode::None
-        );
-        graph.AddPass(
-            "Compute",
-            [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(
-                           RenderGraph::QueueRole::Compute,
-                           RenderGraph::PipelineType::Compute
-                       )
-                    .Write(handle, RenderGraph::BufferState::UnorderedAccess)
-                    .SideEffect();
-            },
-            [] {}
-        );
-        graph.Export(
-            handle,
-            RenderGraph::BufferState::ShaderResource,
-            RenderGraph::QueueRole::Compute,
-            RenderGraph::AccessMode::Read
-        );
-        ExpectLowerFailure(suite, graph, name, "Graphics logical queue");
-    }
-    {
         constexpr std::string_view name = "external control rejected";
         BufferRef buffer = MoerNew(FakeBuffer)(64);
         RenderGraph graph(name);
@@ -702,6 +1156,14 @@ int main() {
     TestShaderResourceAndSampledLayoutsRemainDistinct(suite);
     TestDepthAttachmentReadUsesBackendAttachmentLayout(suite);
     TestSameStateReadGetsStateSeed(suite);
+    TestCrossNativeTokenSynchronization(suite);
+    TestSameNativeTokenSynchronizationNeedsNoGpuSync(suite);
+    TestSameNativePhysicalBarrierRetainsSourceScope(suite);
+    TestSameFamilyQueueBarrierLowersToAcquire(suite);
+    TestMixedQueueFanInRetainsLocalSourceScope(suite);
+    TestCrossFamilyExclusiveOwnershipFailsClosed(suite);
+    TestMissingCrossNativeSyncFailsClosed(suite);
+    TestUnavailableQueueFailsAtCompile(suite);
     TestFailClosedContracts(suite);
 
     if (suite.FailureCount() != 0) {

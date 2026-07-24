@@ -10,11 +10,23 @@
 
 namespace Moer::Render {
 
+struct RHIRecordingFencePoint {
+    FenceRef fence{};
+    uint64   value{0};
+};
+
 struct RHIRecordingSubmitMetadata {
     std::optional<std::string>                 debug_label{};
     float4                                     debug_label_color{GpuMarkerPalette::Pass()};
     std::optional<ERHIProfilingPhase>          profiling_phase{};
     std::optional<ERHITranslateExecutionClass> translate_execution_class{};
+    Array<RHIRecordingFencePoint>              wait_fences{};
+    Array<RHIRecordingFencePoint>              signal_fences{};
+    /**
+     * Non-zero scopes opt a contiguous graph transaction into dependency-led
+     * cross-native-queue overlap. Zero preserves the legacy total GPU order.
+     */
+    uint64                                     async_queue_scope{0};
 };
 
 // One independently recorded source. completion must be signalled only after

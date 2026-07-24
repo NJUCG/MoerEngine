@@ -68,6 +68,9 @@ RenderDevice& RenderDevice::Get() {
     static RenderDevice device;
     return device;
 }
+bool RenderDevice::IsInitialized() {
+    return Get().impl != nullptr;
+}
 void RenderDevice::Init(DeviceInitInfo&& _info) {
     switch (_info.rhi_type) {
         case ERHIType::Vulkan:

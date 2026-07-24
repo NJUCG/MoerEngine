@@ -15,10 +15,10 @@ namespace Moer::Render {
  * CPU-only lowering of a complete RenderGraph compiler plan.
  *
  * Active lowering intentionally supports a narrow, auditable subset: strongly
- * bound imported or allocation-backed transient resources, explicit states at
- * every physical access and external boundary, and the Graphics logical queue
- * only. Unsupported plans fail closed before producing any instructions. RHI
- * command materialization is a separate step.
+ * bound imported or allocation-backed transient resources and explicit states
+ * at every physical access and external boundary. Graphics/Compute queue DAGs
+ * are executable; queue-family ownership and unmanaged external endpoints
+ * remain fail-closed until paired lowering is available.
  */
 class RENDER_API RenderGraphLowering {
 public:
@@ -92,6 +92,16 @@ public:
         bool import_boundary           = false;
         bool export_boundary           = false;
         bool transient_alias           = false;
+        /** Destination-side visibility/layout barrier after a GPU queue wait. */
+        bool queue_acquire              = false;
+    };
+
+    struct QueueSyncInstruction {
+        uint32_t                correlation_id = 0;
+        RenderGraph::PassHandle signal_pass{};
+        RenderGraph::PassHandle wait_pass{};
+        RenderGraph::QueueBinding signal_queue{};
+        RenderGraph::QueueBinding wait_queue{};
     };
 
     struct PassInstructions {
@@ -109,6 +119,8 @@ public:
         std::vector<LoweredInstruction> prologue{};
         /** Stable RenderGraph execution order, excluding CPU-only prepare passes. */
         std::vector<PassInstructions> passes{};
+        /** Cross-native-queue synchronization points consumed by RHI metadata. */
+        std::vector<QueueSyncInstruction> queue_syncs{};
 
         void Clear();
 

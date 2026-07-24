@@ -582,8 +582,8 @@ private:
     Array<BufferBarrier>  write_buffers;
     Array<ExplicitTextureBarrier> explicit_textures;
     Array<ExplicitBufferBarrier>  explicit_buffers;
-    EQueueType            src_queue;
-    EQueueType            dst_queue;
+    EQueueType            src_queue{EQueueType::Ignore};
+    EQueueType            dst_queue{EQueueType::Ignore};
     bool                  b_queue_transition = false;
 
 public:
@@ -713,7 +713,7 @@ public:
     }
 
     EQueueType GetQueueType() const override {
-        return EQueueType::Graphics;
+        return src_queue != EQueueType::Ignore ? src_queue : dst_queue;
     }
     const auto& ReadTextures() const {
         return read_textures;
@@ -1813,6 +1813,8 @@ public:
     virtual CommandQueue& GetCommandQueue(EQueueType _type) = 0;
 
     virtual CopyQueue& GetCopyQueue() = 0;
+
+    virtual RHIQueueTopology GetQueueTopology() const = 0;
 
     virtual SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info) = 0;
 

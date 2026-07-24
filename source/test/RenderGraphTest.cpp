@@ -2791,8 +2791,8 @@ void TestStageTwoDumpDeterminism(TestSuite& suite) {
     const std::string second = BuildStageTwoDump(suite, test_name);
     suite.Check(first == second, test_name, "equivalent Stage 2 plans must have byte-identical dumps");
     suite.Check(
-        Contains(first, "barrier_owner=existing_rhi_vulkan_path") &&
-            Contains(first, "sync_plan=shadow external_endpoints=unbound") &&
+        Contains(first, "barrier_plan=explicit") &&
+            Contains(first, "sync_plan=queue-dag external_endpoints=unbound") &&
             Contains(first, "barriers:\n") && Contains(first, "queue_batches:\n") &&
             Contains(first, "queue_syncs:\n") && Contains(first, "pipeline=compute") &&
             Contains(first, "flags=[execution,memory,transition,queue,ownership"),

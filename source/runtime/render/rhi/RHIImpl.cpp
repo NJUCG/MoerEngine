@@ -89,6 +89,10 @@ FenceRef RenderDevice::CreateFence() {
     return impl->CreateFence();
 }
 
+RHIQueueTopology RenderDevice::GetQueueTopology() const {
+    return impl->GetQueueTopology();
+}
+
 SwapchainRef RenderDevice::CreateSwapchain(const SwapchainCreateInfo& _info) {
     return impl->CreateSwapchain(_info);
 }

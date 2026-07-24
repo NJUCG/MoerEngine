@@ -112,6 +112,7 @@ public:
     RENDER_API static void          Init(DeviceInitInfo&& _info);
     RENDER_API static void          Dispose();
     RENDER_API static RenderDevice& Get();
+    RENDER_API static bool          IsInitialized();
 
 public:
     template<typename TElement>
@@ -200,6 +201,9 @@ public:
     RENDER_API CommandQueue& GetCommandQueue(EQueueType _type);
 
     RENDER_API CopyQueue& GetCopyQueue();
+
+    /** Physical queue/family mapping used by executable render-graph plans. */
+    RENDER_API RHIQueueTopology GetQueueTopology() const;
 
     RENDER_API SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info);
 

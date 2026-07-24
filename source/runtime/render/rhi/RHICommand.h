@@ -297,6 +297,10 @@ struct CmdSubmit {
     ERHITranslateExecutionClass translate_execution_class{
         ERHITranslateExecutionClass::Parallel
     };
+    // Non-zero only for a validated upper-level queue DAG. Backends may use
+    // this to relax conservative cross-queue total ordering while retaining
+    // native per-queue submission order.
+    uint64             async_queue_scope{0};
     std::string        debug_label;
     float4             debug_label_color = GpuMarkerPalette::Frame();
 
@@ -392,6 +396,7 @@ struct CmdSubmit {
         b_delete_resources = _other.b_delete_resources;
         resource_state_ownership = _other.resource_state_ownership;
         translate_execution_class = _other.translate_execution_class;
+        async_queue_scope  = _other.async_queue_scope;
         debug_label        = std::move(_other.debug_label);
         debug_label_color  = _other.debug_label_color;
     }
@@ -410,6 +415,7 @@ struct CmdSubmit {
         b_delete_resources = _other.b_delete_resources;
         resource_state_ownership = _other.resource_state_ownership;
         translate_execution_class = _other.translate_execution_class;
+        async_queue_scope  = _other.async_queue_scope;
         debug_label        = std::move(_other.debug_label);
         debug_label_color  = _other.debug_label_color;
         return *this;

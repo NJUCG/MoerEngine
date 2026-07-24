@@ -171,6 +171,28 @@ void FinalizeRejectedSubmissions(
     }
 }
 
+void RejectRecordingSignalMetadata(
+    const Array<RHIRecordingSource>& _sources
+) noexcept {
+    // Metadata is prepared source-by-source and preparation can allocate.
+    // If any step throws, the entire immutable recording transaction is
+    // rejected, including producer values not yet copied into CmdSubmit.
+    // Fence rejection is idempotent, so already-materialized values may be
+    // terminalized again by FinalizeRejectedSubmissions below.
+    for (const RHIRecordingSource& source : _sources) {
+        for (const RHIRecordingFencePoint& point :
+             source.submit_metadata.signal_fences) {
+            if (!point.fence.IsValid() || point.value == 0) {
+                continue;
+            }
+            try {
+                point.fence->Reject(point.value);
+            } catch (...) {
+            }
+        }
+    }
+}
+
 void FinalizeRejectedBackendBatch(
     RHIBackendSubmissionBatch&& _batch,
     std::string_view             _reason
@@ -215,6 +237,7 @@ void FinalizeCancelledRecordingSources(
     Array<RHIRecordingSource>&& _sources,
     std::string_view             _reason
 ) {
+    RejectRecordingSignalMetadata(_sources);
     // A source protected by an incomplete recording gate must remain opaque:
     // even reading IsEmpty(), let alone draining callbacks, races its producer.
     // A terminal gate, however, is the ownership handoff point and its ordinary
@@ -282,6 +305,7 @@ void FinalizeFailedRecordingSources(
     Array<RHIRecordingSource>&& _sources,
     std::string_view             _reason
 ) {
+    RejectRecordingSignalMetadata(_sources);
     // Reject is emitted only after every producer gate is terminal. This is
     // the ownership point at which failed/partial CommandLists are immutable
     // and may be destructively drained for their ordinary cleanup callbacks.
@@ -903,7 +927,10 @@ void RHIExecutor::SubmitRecording(
                     if (!IsSubmissionQueue(queue)) {
                         throw std::runtime_error("recorded source changed to an invalid queue");
                     }
-                    if (source.command_list->IsEmpty()) {
+                    const bool metadata_queue_work =
+                        !source.submit_metadata.wait_fences.empty() ||
+                        !source.submit_metadata.signal_fences.empty();
+                    if (source.command_list->IsEmpty() && !metadata_queue_work) {
                         continue;
                     }
                     submits.emplace_back(queue, source.command_list->Submit());
@@ -924,12 +951,49 @@ void RHIExecutor::SubmitRecording(
                     if (metadata.translate_execution_class) {
                         submit.SetTranslateExecutionClass(*metadata.translate_execution_class);
                     }
+                    submit.async_queue_scope = metadata.async_queue_scope;
+
+                    auto sync_keepalive = std::make_shared<Array<FenceRef>>();
+                    sync_keepalive->reserve(
+                        metadata.wait_fences.size() +
+                        metadata.signal_fences.size()
+                    );
+                    for (const RHIRecordingFencePoint& point :
+                         metadata.wait_fences) {
+                        if (!point.fence.IsValid() || point.value == 0) {
+                            throw std::invalid_argument(
+                                "recording wait fence point is invalid"
+                            );
+                        }
+                        submit.wait_events.emplace_back(
+                            uint64(point.fence.Get()), point.value
+                        );
+                        sync_keepalive->emplace_back(point.fence);
+                    }
+                    for (const RHIRecordingFencePoint& point :
+                         metadata.signal_fences) {
+                        if (!point.fence.IsValid() || point.value == 0) {
+                            throw std::invalid_argument(
+                                "recording signal fence point is invalid"
+                            );
+                        }
+                        submit.signal_events.emplace_back(
+                            uint64(point.fence.Get()), point.value
+                        );
+                        sync_keepalive->emplace_back(point.fence);
+                    }
+                    if (!sync_keepalive->empty()) {
+                        // CmdSubmit callbacks are retained by the native
+                        // completion packet on success and rejection alike.
+                        submit.callbacks.emplace_back([sync_keepalive] {});
+                    }
                 }
             } catch (const std::exception& exception) {
                 LOG_ERROR(
                     "[RHIExecutor] failed to materialize recording sources: {}",
                     exception.what()
                 );
+                RejectRecordingSignalMetadata(payload->sources);
                 FinalizeRejectedSubmissions(
                     std::move(submits),
                     "recording source finalization failed"
@@ -937,6 +1001,7 @@ void RHIExecutor::SubmitRecording(
                 return;
             } catch (...) {
                 LOG_ERROR("[RHIExecutor] failed to materialize recording sources");
+                RejectRecordingSignalMetadata(payload->sources);
                 FinalizeRejectedSubmissions(
                     std::move(submits),
                     "recording source finalization failed"

@@ -3,6 +3,7 @@
 #include "log/LogSystem.h"
 #include "rendergraph/RenderGraphCompiler.h"
 #include "rendergraph/RenderGraphLowering.h"
+#include "rhi/RHI.h"
 #include "rhi/RHIExecutor.h"
 #include "rhi/RHIThreadOwnership.h"
 #include "taskgraph/TaskGraph.h"
@@ -259,6 +260,23 @@ void AppendVersion(std::ostringstream& stream, uint32_t version) {
 
 RenderGraph::RenderGraph(std::string_view graph_name) :
     RenderGraph(graph_name, QueueTopology::SingleQueue()) {}
+
+RenderGraph::QueueTopology RenderGraph::QueueTopology::FromRHI() {
+    const RHIQueueTopology topology = RenderDevice::Get().GetQueueTopology();
+    auto convert = [](QueueRole role, const RHIQueueBinding& binding) {
+        return QueueBinding{
+            .role            = role,
+            .native_queue_id = binding.native_queue_id,
+            .family_id       = binding.family_id,
+            .available       = binding.available,
+        };
+    };
+    return QueueTopology{
+        .graphics = convert(QueueRole::Graphics, topology.graphics),
+        .compute  = convert(QueueRole::Compute, topology.compute),
+        .copy     = convert(QueueRole::Copy, topology.copy),
+    };
+}
 
 RenderGraph::RenderGraph(std::string_view graph_name, QueueTopology topology) :
     name(graph_name),
@@ -580,6 +598,9 @@ struct MaterializedPassState {
     std::vector<BarrierCreateInfo>                    before{};
     std::vector<BarrierCreateInfo>                    after{};
     std::vector<RenderGraphLowering::PhysicalBinding> keepalive{};
+    Array<RHIRecordingFencePoint>                     wait_fences{};
+    Array<RHIRecordingFencePoint>                     signal_fences{};
+    uint64                                            async_queue_scope{0};
 
     [[nodiscard]] bool RequiresCompletionLifetime() const {
         return !before.empty() || !after.empty() || !keepalive.empty();
@@ -1269,6 +1290,7 @@ bool RenderGraph::ExecuteRecording(
     std::vector<MaterializedPassState> active_pass_states(passes.size());
     TransientBindingReleaseGuard transient_release_guard{};
     bool active_has_physical_main_thread = false;
+    bool active_async_multiqueue          = false;
     RenderGraphTransientAllocator* active_transient_allocator = nullptr;
     if (active_recording.enabled) {
         active_transient_allocator =
@@ -1289,6 +1311,73 @@ bool RenderGraph::ExecuteRecording(
         if (!RenderGraphLowering::Lower(*this, lowered_plan, lowering_error)) {
             compile_error = std::move(lowering_error);
             return false;
+        }
+        const bool active_uses_non_graphics_queue = std::any_of(
+            compiled_plan.queue_batches.begin(),
+            compiled_plan.queue_batches.end(),
+            [](const CompiledQueueBatch& batch) {
+                return batch.queue.role != QueueRole::Graphics;
+            }
+        );
+        if (active_uses_non_graphics_queue) {
+            if (!RenderDevice::IsInitialized()) {
+                compile_error =
+                    "active non-Graphics queue lowering requires an initialized RHI";
+                return false;
+            }
+            const QueueTopology runtime_topology = QueueTopology::FromRHI();
+            for (const auto& batch : compiled_plan.queue_batches) {
+                if (batch.queue.role == QueueRole::None ||
+                    batch.queue != runtime_topology.Resolve(batch.queue.role)) {
+                    compile_error =
+                        "compiled queue topology does not match the initialized "
+                        "RHI; construct the graph with QueueTopology::FromRHI()";
+                    return false;
+                }
+            }
+        }
+        if (!compiled_plan.queue_batches.empty()) {
+            const uint32_t first_native_queue =
+                compiled_plan.queue_batches.front().queue.native_queue_id;
+            active_async_multiqueue = std::any_of(
+                compiled_plan.queue_batches.begin() + 1,
+                compiled_plan.queue_batches.end(),
+                [&](const CompiledQueueBatch& batch) {
+                    return batch.queue.native_queue_id != first_native_queue;
+                }
+            );
+        }
+        if (active_async_multiqueue &&
+            (configure_recording_source || publish_recording_batch)) {
+            compile_error =
+                "active multi-queue lowering requires the built-in immutable "
+                "RHI graph handoff";
+            return false;
+        }
+        if (active_uses_non_graphics_queue) {
+            const bool has_caller_thread_gpu_pass = std::any_of(
+                compiled_plan.queue_batches.begin(),
+                compiled_plan.queue_batches.end(),
+                [&](const CompiledQueueBatch& batch) {
+                    return std::any_of(
+                        batch.passes.begin(),
+                        batch.passes.end(),
+                        [&](PassHandle pass) {
+                            const auto execution =
+                                passes[pass.index].execution_class;
+                            return execution != PassExecutionClass::SerialRecord &&
+                                   execution !=
+                                       PassExecutionClass::ParallelRecordEligible;
+                        }
+                    );
+                }
+            );
+            if (has_caller_thread_gpu_pass) {
+                compile_error =
+                    "active non-Graphics queue lowering requires every GPU pass "
+                    "to use the managed recording handoff";
+                return false;
+            }
         }
 
         auto append_instruction =
@@ -1339,6 +1428,38 @@ bool RenderGraph::ExecuteRecording(
                     return false;
                 }
             }
+            if (active_async_multiqueue) {
+                materialized.async_queue_scope = graph_id;
+            }
+        }
+
+        try {
+            for (const auto& sync : lowered_plan.queue_syncs) {
+                FenceRef fence = RenderDevice::Get().CreateFence();
+                if (!fence.IsValid()) {
+                    compile_error =
+                        "RHI returned no fence for active multi-queue sync " +
+                        std::to_string(sync.correlation_id);
+                    return false;
+                }
+                active_pass_states[sync.signal_pass.index]
+                    .signal_fences.emplace_back(
+                        RHIRecordingFencePoint{.fence = fence, .value = 1}
+                    );
+                active_pass_states[sync.wait_pass.index]
+                    .wait_fences.emplace_back(
+                        RHIRecordingFencePoint{.fence = std::move(fence), .value = 1}
+                    );
+            }
+        } catch (const std::exception& exception) {
+            compile_error =
+                std::string("failed to create active multi-queue synchronization: ") +
+                exception.what();
+            return false;
+        } catch (...) {
+            compile_error =
+                "failed to create active multi-queue synchronization";
+            return false;
         }
 
         for (uint32_t pass_index = 0; pass_index < passes.size(); ++pass_index) {
@@ -1838,9 +1959,6 @@ bool RenderGraph::ExecuteRecording(
             while (group_end < compiled_plan.recording_batches.size()) {
                 const auto& candidate = compiled_plan.recording_batches[group_end];
                 if (candidate.execution != PassExecutionClass::ParallelRecordEligible ||
-                    candidate.queue.role != first_batch.queue.role ||
-                    candidate.queue.native_queue_id != first_batch.queue.native_queue_id ||
-                    candidate.queue.family_id != first_batch.queue.family_id ||
                     candidate.passes.size() != 1 ||
                     has_cpu_recording_dependency(
                         candidate.passes.front(), batch_index, group_end
@@ -1887,6 +2005,15 @@ bool RenderGraph::ExecuteRecording(
                 .completion   = job.completion,
                 .commit       = active_recording_commit,
             };
+            if (active_recording.enabled) {
+                const auto& pass_state = active_pass_states[handle.index];
+                source.submit_metadata.wait_fences =
+                    pass_state.wait_fences;
+                source.submit_metadata.signal_fences =
+                    pass_state.signal_fences;
+                source.submit_metadata.async_queue_scope =
+                    pass_state.async_queue_scope;
+            }
             if (active_recording.enabled) {
                 try {
                     auto lease =
@@ -2216,8 +2343,8 @@ bool RenderGraph::ExecuteRecording(
 std::string RenderGraph::Dump() const {
     std::ostringstream stream;
     stream << "graph='" << name
-           << "' frontend=typed-rdg mode=serial barrier_owner=existing_rhi_vulkan_path "
-              "sync_plan=shadow external_endpoints=unbound state_plan="
+           << "' frontend=typed-rdg mode=compiled barrier_plan=explicit "
+              "sync_plan=queue-dag external_endpoints=unbound state_plan="
            << (compiled_plan.state_plan_complete ? "complete" : "incomplete") << " compiled="
            << (compiled ? "true" : "false") << " executed=" << (executed ? "true" : "false")
            << " passes=" << passes.size() << " resources=" << resources.size();
@@ -2481,6 +2608,7 @@ std::string RenderGraph::Dump() const {
     for (const auto& batch : compiled_plan.queue_batches) {
         stream << "  [" << batch.id << "] " << ToString(batch.queue.role) << " native="
                << batch.queue.native_queue_id << " family=" << batch.queue.family_id
+               << " available=" << (batch.queue.available ? "true" : "false")
                << " external_control=" << (batch.external_control ? "true" : "false")
                << " passes=[";
         for (uint32_t pass_index = 0; pass_index < batch.passes.size(); ++pass_index) {

@@ -337,7 +337,8 @@ void AppendInstruction(
            << " discard=" << instruction.discard_previous_contents
            << " import=" << instruction.import_boundary
            << " export=" << instruction.export_boundary
-           << " transient_alias=" << instruction.transient_alias;
+           << " transient_alias=" << instruction.transient_alias
+           << " queue_acquire=" << instruction.queue_acquire;
 }
 
 } // namespace
@@ -345,6 +346,7 @@ void AppendInstruction(
 void RenderGraphLowering::LoweredPlan::Clear() {
     prologue.clear();
     passes.clear();
+    queue_syncs.clear();
 }
 
 const RenderGraphLowering::PassInstructions*
@@ -380,7 +382,15 @@ RenderGraphLowering::LoweredPlan::Keepalive(RenderGraph::PassHandle pass) const 
 
 std::string RenderGraphLowering::LoweredPlan::Dump() const {
     std::ostringstream stream;
-    stream << "lowered prologue=" << prologue.size() << " passes=" << passes.size() << "\n";
+    stream << "lowered prologue=" << prologue.size() << " passes=" << passes.size()
+           << " queue_syncs=" << queue_syncs.size() << "\n";
+    for (const auto& sync : queue_syncs) {
+        stream << "sync=" << sync.correlation_id
+               << " signal_pass=" << sync.signal_pass.index
+               << " wait_pass=" << sync.wait_pass.index
+               << " signal_native=" << sync.signal_queue.native_queue_id
+               << " wait_native=" << sync.wait_queue.native_queue_id << "\n";
+    }
     for (const auto& instruction : prologue) {
         stream << "prologue ";
         AppendInstruction(stream, instruction);
@@ -433,36 +443,270 @@ bool RenderGraphLowering::Lower(
         return fail("compiled resource table is incomplete");
     }
 
-    std::vector<bool> gpu_pass(graph.passes.size(), false);
+    auto supported_queue = [](RenderGraph::QueueRole role) {
+        return role == RenderGraph::QueueRole::Graphics ||
+               role == RenderGraph::QueueRole::Compute;
+    };
+    std::vector<bool>     gpu_pass(graph.passes.size(), false);
+    std::vector<uint32_t> pass_queue_batch(
+        graph.passes.size(), RenderGraph::PassHandle::InvalidIndex
+    );
     for (const auto& pass : graph.passes) {
         if (pass.execution_class == RenderGraph::PassExecutionClass::ExternalControl) {
             return fail("ExternalControl pass is outside the managed lowering domain: '" +
                         pass.name + "'");
         }
     }
-    for (const auto& batch : compiled.queue_batches) {
+    std::vector<bool> execution_member(graph.passes.size(), false);
+    if (compiled.execution_order.size() != graph.passes.size()) {
+        return fail("execution order does not cover every declared pass");
+    }
+    for (const auto pass : compiled.execution_order) {
+        if (!graph.IsValidPass(pass) || execution_member[pass.index]) {
+            return fail("execution order contains an invalid or duplicate pass");
+        }
+        execution_member[pass.index] = true;
+    }
+    if (compiled.recording_batches.size() != compiled.execution_order.size()) {
+        return fail("recording schedule does not cover the execution order");
+    }
+    for (uint32_t batch_index = 0;
+         batch_index < compiled.recording_batches.size();
+         ++batch_index) {
+        const auto& batch = compiled.recording_batches[batch_index];
+        const auto  pass  = compiled.execution_order[batch_index];
+        const auto& declaration = graph.passes[pass.index];
+        if (batch.id != batch_index || batch.passes.size() != 1 ||
+            batch.passes.front() != pass ||
+            batch.queue != graph.queue_topology.Resolve(declaration.domain.queue) ||
+            batch.execution != declaration.execution_class ||
+            batch.workload != declaration.workload) {
+            return fail(
+                "recording schedule disagrees with stable execution order"
+            );
+        }
+    }
+    for (uint32_t batch_index = 0; batch_index < compiled.queue_batches.size();
+         ++batch_index) {
+        const auto& batch = compiled.queue_batches[batch_index];
         if (batch.external_control) {
             return fail("external-control queue batch is outside the managed lowering domain");
         }
-        if (batch.queue.role != RenderGraph::QueueRole::Graphics) {
-            return fail("only the Graphics logical queue is supported");
+        if (batch.id != batch_index || !batch.queue.available ||
+            !supported_queue(batch.queue.role)) {
+            return fail(
+                "queue batch has an unsupported role or unstable identifier"
+            );
+        }
+        if (batch.queue != graph.queue_topology.Resolve(batch.queue.role)) {
+            return fail("queue batch binding disagrees with the graph topology");
+        }
+        if (batch.passes.empty()) {
+            return fail("queue batch contains no GPU pass");
         }
         for (const auto pass : batch.passes) {
-            if (!graph.IsValidPass(pass)) {
-                return fail("queue batch references an invalid pass");
+            if (!graph.IsValidPass(pass) || !execution_member[pass.index]) {
+                return fail("queue batch references a pass outside execution order");
+            }
+            if (gpu_pass[pass.index]) {
+                return fail("GPU pass belongs to more than one queue batch");
             }
             gpu_pass[pass.index] = true;
-            if (graph.passes[pass.index].domain.queue != RenderGraph::QueueRole::Graphics) {
+            pass_queue_batch[pass.index] = batch_index;
+            if (graph.passes[pass.index].domain.queue != batch.queue.role) {
                 return fail("GPU pass '" + graph.passes[pass.index].name +
-                            "' does not use the Graphics logical queue");
+                            "' disagrees with its queue batch role");
             }
         }
     }
-    for (const auto& sync : compiled.queue_syncs) {
-        if (sync.gpu_wait_required ||
-            sync.signal_queue.role != RenderGraph::QueueRole::Graphics ||
-            sync.wait_queue.role != RenderGraph::QueueRole::Graphics) {
-            return fail("cross-queue synchronization is not supported");
+    for (const auto pass : compiled.execution_order) {
+        const bool should_be_gpu =
+            graph.passes[pass.index].execution_class !=
+            RenderGraph::PassExecutionClass::CpuPrepare;
+        if (gpu_pass[pass.index] != should_be_gpu) {
+            return fail(
+                should_be_gpu ?
+                    "execution-order GPU pass has no queue batch" :
+                    "CpuPrepare pass unexpectedly belongs to a queue batch"
+            );
+        }
+    }
+    for (uint32_t batch_index = 0; batch_index < compiled.queue_batches.size();
+         ++batch_index) {
+        const auto& batch = compiled.queue_batches[batch_index];
+        std::vector<bool> seen_signals(compiled.queue_syncs.size(), false);
+        for (const uint32_t sync_index : batch.signal_syncs) {
+            if (sync_index >= compiled.queue_syncs.size() ||
+                seen_signals[sync_index] ||
+                compiled.queue_syncs[sync_index].signal_batch != batch_index) {
+                return fail("queue batch has an invalid or duplicate signal sync");
+            }
+            seen_signals[sync_index] = true;
+        }
+        std::vector<bool> seen_waits(compiled.queue_syncs.size(), false);
+        for (const uint32_t sync_index : batch.wait_syncs) {
+            if (sync_index >= compiled.queue_syncs.size() ||
+                seen_waits[sync_index] ||
+                compiled.queue_syncs[sync_index].wait_batch != batch_index) {
+                return fail("queue batch has an invalid or duplicate wait sync");
+            }
+            seen_waits[sync_index] = true;
+        }
+    }
+    std::vector<QueueSyncInstruction> lowered_queue_syncs{};
+    lowered_queue_syncs.reserve(compiled.queue_syncs.size());
+    for (uint32_t sync_index = 0; sync_index < compiled.queue_syncs.size();
+         ++sync_index) {
+        const auto& sync = compiled.queue_syncs[sync_index];
+        if (sync.id != sync_index ||
+            sync.signal_batch >= compiled.queue_batches.size() ||
+            sync.wait_batch >= compiled.queue_batches.size() ||
+            !graph.IsValidPass(sync.signal_pass) ||
+            !graph.IsValidPass(sync.wait_pass) ||
+            !supported_queue(sync.signal_queue.role) ||
+            !supported_queue(sync.wait_queue.role)) {
+            return fail("queue synchronization record is malformed");
+        }
+        const bool duplicate_pair = std::any_of(
+            compiled.queue_syncs.begin(),
+            compiled.queue_syncs.begin() + sync_index,
+            [&](const RenderGraph::CompiledQueueSync& candidate) {
+                return candidate.signal_batch == sync.signal_batch &&
+                       candidate.wait_batch == sync.wait_batch;
+            }
+        );
+        if (duplicate_pair || sync.signal_batch >= sync.wait_batch) {
+            return fail(
+                duplicate_pair ?
+                    "queue synchronization batch pair is duplicated" :
+                    "queue synchronization is not forward ordered"
+            );
+        }
+        const auto& signal_batch = compiled.queue_batches[sync.signal_batch];
+        const auto& wait_batch   = compiled.queue_batches[sync.wait_batch];
+        if (signal_batch.passes.empty() || wait_batch.passes.empty() ||
+            sync.signal_pass != signal_batch.passes.back() ||
+            sync.wait_pass != wait_batch.passes.front() ||
+            sync.signal_queue != signal_batch.queue ||
+            sync.wait_queue != wait_batch.queue ||
+            pass_queue_batch[sync.signal_pass.index] != sync.signal_batch ||
+            pass_queue_batch[sync.wait_pass.index] != sync.wait_batch) {
+            return fail("queue synchronization endpoints disagree with their batches");
+        }
+        if (std::count(
+                signal_batch.signal_syncs.begin(),
+                signal_batch.signal_syncs.end(),
+                sync_index
+            ) != 1 ||
+            std::count(
+                wait_batch.wait_syncs.begin(),
+                wait_batch.wait_syncs.end(),
+                sync_index
+            ) != 1) {
+            return fail("queue synchronization is not owned by both endpoint batches");
+        }
+        const bool crosses_native =
+            sync.signal_queue.native_queue_id != sync.wait_queue.native_queue_id;
+        if (sync.gpu_wait_required != crosses_native) {
+            return fail("queue synchronization GPU-wait policy disagrees with topology");
+        }
+        if (sync.gpu_wait_required && sync.dependency_edges.empty()) {
+            return fail(
+                "cross-native queue synchronization has no dependency edge"
+            );
+        }
+        std::vector<bool> seen_edges(compiled.edges.size(), false);
+        for (const uint32_t edge_index : sync.dependency_edges) {
+            if (edge_index >= compiled.edges.size() || seen_edges[edge_index]) {
+                return fail(
+                    "queue synchronization has an invalid or duplicate dependency edge"
+                );
+            }
+            seen_edges[edge_index] = true;
+            const auto& edge = compiled.edges[edge_index];
+            if (!graph.IsValidPass(edge.src) || !graph.IsValidPass(edge.dst) ||
+                pass_queue_batch[edge.src.index] != sync.signal_batch ||
+                pass_queue_batch[edge.dst.index] != sync.wait_batch) {
+                return fail(
+                    "queue synchronization dependency edge disagrees with its batches"
+                );
+            }
+        }
+        std::vector<bool> seen_barriers(compiled.barriers.size(), false);
+        for (const uint32_t barrier_index : sync.barriers) {
+            if (barrier_index >= compiled.barriers.size() ||
+                seen_barriers[barrier_index]) {
+                return fail(
+                    "queue synchronization has an invalid or duplicate barrier"
+                );
+            }
+            seen_barriers[barrier_index] = true;
+            const auto& barrier = compiled.barriers[barrier_index];
+            const bool matching_destination =
+                graph.IsValidPass(barrier.dst_pass) &&
+                pass_queue_batch[barrier.dst_pass.index] == sync.wait_batch;
+            const bool matching_source = std::any_of(
+                barrier.sources.begin(),
+                barrier.sources.end(),
+                [&](const RenderGraph::CompiledBarrierSource& source) {
+                    return graph.IsValidPass(source.pass) &&
+                           pass_queue_batch[source.pass.index] ==
+                               sync.signal_batch;
+                }
+            );
+            if (!matching_destination || !matching_source) {
+                return fail(
+                    "queue synchronization barrier disagrees with its batches"
+                );
+            }
+        }
+        if (sync.gpu_wait_required) {
+            lowered_queue_syncs.push_back(QueueSyncInstruction{
+                .correlation_id = sync.id,
+                .signal_pass    = sync.signal_pass,
+                .wait_pass      = sync.wait_pass,
+                .signal_queue   = sync.signal_queue,
+                .wait_queue     = sync.wait_queue,
+            });
+        }
+    }
+    for (uint32_t edge_index = 0; edge_index < compiled.edges.size();
+         ++edge_index) {
+        const auto& edge = compiled.edges[edge_index];
+        if (!graph.IsValidPass(edge.src) || !graph.IsValidPass(edge.dst)) {
+            return fail("compiled dependency edge references an invalid pass");
+        }
+        const uint32_t signal_batch = pass_queue_batch[edge.src.index];
+        const uint32_t wait_batch   = pass_queue_batch[edge.dst.index];
+        if (signal_batch == RenderGraph::PassHandle::InvalidIndex ||
+            wait_batch == RenderGraph::PassHandle::InvalidIndex ||
+            signal_batch == wait_batch) {
+            continue;
+        }
+        const auto& signal_queue = compiled.queue_batches[signal_batch].queue;
+        const auto& wait_queue   = compiled.queue_batches[wait_batch].queue;
+        if (signal_queue.native_queue_id == wait_queue.native_queue_id) {
+            continue;
+        }
+        const auto sync = std::find_if(
+            compiled.queue_syncs.begin(),
+            compiled.queue_syncs.end(),
+            [&](const RenderGraph::CompiledQueueSync& candidate) {
+                return candidate.signal_batch == signal_batch &&
+                       candidate.wait_batch == wait_batch &&
+                       candidate.gpu_wait_required &&
+                       std::find(
+                           candidate.dependency_edges.begin(),
+                           candidate.dependency_edges.end(),
+                           edge_index
+                       ) != candidate.dependency_edges.end();
+            }
+        );
+        if (sync == compiled.queue_syncs.end()) {
+            return fail(
+                "cross-native dependency edge is not correlated with an "
+                "executable GPU sync"
+            );
         }
     }
 
@@ -485,8 +729,8 @@ bool RenderGraphLowering::Lower(
         if (!IsKnownAccess(access.mode)) {
             return fail("physical access uses Unknown access on resource '" + resource.name + "'");
         }
-        if (access.domain.queue != RenderGraph::QueueRole::Graphics) {
-            return fail("physical access does not use the Graphics logical queue on resource '" +
+        if (!supported_queue(access.domain.queue)) {
+            return fail("physical access uses an unsupported logical queue on resource '" +
                         resource.name + "'");
         }
         if (access.state.kind == ResourceKind::Texture &&
@@ -527,8 +771,9 @@ bool RenderGraphLowering::Lower(
             }
             return true;
         }
-        if (state.queue != RenderGraph::QueueRole::Graphics) {
-            error = "only Graphics boundary ownership is supported on resource '" + resource.name + "'";
+        if (!supported_queue(state.queue)) {
+            error = "boundary uses an unsupported queue on resource '" +
+                    resource.name + "'";
             return false;
         }
         return true;
@@ -724,6 +969,7 @@ bool RenderGraphLowering::Lower(
     }
 
     LoweredPlan candidate{};
+    candidate.queue_syncs = lowered_queue_syncs;
     candidate.passes.reserve(compiled.execution_order.size());
     for (const auto pass : compiled.execution_order) {
         if (!graph.IsValidPass(pass)) {
@@ -802,6 +1048,7 @@ bool RenderGraphLowering::Lower(
 
     auto lower_instruction = [&](uint32_t barrier_index, LoweredInstruction& instruction) {
         const auto& barrier = compiled.barriers[barrier_index];
+        bool queue_acquire = false;
         if (!graph.IsValidResource(barrier.resource)) {
             error = "barrier references an invalid resource";
             return false;
@@ -811,9 +1058,57 @@ bool RenderGraphLowering::Lower(
             error = "token barrier cannot be physically lowered";
             return false;
         }
-        if (barrier.queue_dependency || barrier.queue_ownership) {
-            error = "queue dependency or ownership transfer is not supported";
+        if (barrier.queue_ownership) {
+            error =
+                "queue-family ownership requires paired release/acquire lowering";
             return false;
+        }
+        if (barrier.queue_dependency &&
+            (!barrier.src_pass.IsValid() || !barrier.dst_pass.IsValid())) {
+            error =
+                "cross-queue external boundary lacks a managed synchronization endpoint";
+            return false;
+        }
+        if (barrier.queue_dependency) {
+            for (const auto& source : barrier.sources) {
+                if (!graph.IsValidPass(source.pass)) {
+                    error = "queue barrier contains an invalid source pass";
+                    return false;
+                }
+                const uint32_t signal_batch =
+                    pass_queue_batch[source.pass.index];
+                const uint32_t wait_batch =
+                    pass_queue_batch[barrier.dst_pass.index];
+                if (signal_batch == RenderGraph::PassHandle::InvalidIndex ||
+                    wait_batch == RenderGraph::PassHandle::InvalidIndex) {
+                    error = "queue barrier source or destination has no queue batch";
+                    return false;
+                }
+                if (compiled.queue_batches[signal_batch].queue.native_queue_id ==
+                    compiled.queue_batches[wait_batch].queue.native_queue_id) {
+                    continue;
+                }
+                queue_acquire = true;
+                const auto sync = std::find_if(
+                    compiled.queue_syncs.begin(),
+                    compiled.queue_syncs.end(),
+                    [&](const RenderGraph::CompiledQueueSync& candidate) {
+                        return candidate.signal_batch == signal_batch &&
+                               candidate.wait_batch == wait_batch &&
+                               candidate.gpu_wait_required &&
+                               std::find(
+                                   candidate.barriers.begin(),
+                                   candidate.barriers.end(),
+                                   barrier_index
+                               ) != candidate.barriers.end();
+                    }
+                );
+                if (sync == compiled.queue_syncs.end()) {
+                    error =
+                        "queue barrier is not correlated with an executable GPU sync";
+                    return false;
+                }
+            }
         }
         if (barrier.source_state_unknown) {
             error = "barrier source state is unknown";
@@ -835,13 +1130,13 @@ bool RenderGraphLowering::Lower(
         }
         if (barrier.dst_pass.IsValid()) {
             if (!graph.IsValidPass(barrier.dst_pass) ||
-                barrier.dst_domain.queue != RenderGraph::QueueRole::Graphics) {
-                error = "barrier destination is not a valid Graphics pass";
+                !supported_queue(barrier.dst_domain.queue)) {
+                error = "barrier destination is not a supported GPU pass";
                 return false;
             }
         } else if (!barrier.export_boundary ||
-                   barrier.dst_domain.queue != RenderGraph::QueueRole::Graphics) {
-            error = "barrier has no managed Graphics destination";
+                   !supported_queue(barrier.dst_domain.queue)) {
+            error = "barrier has no managed supported destination";
             return false;
         }
 
@@ -870,6 +1165,7 @@ bool RenderGraphLowering::Lower(
             .import_boundary         = barrier.import_boundary,
             .export_boundary         = barrier.export_boundary,
             .transient_alias         = barrier.transient_alias,
+            .queue_acquire           = queue_acquire,
         };
 
         if (resource.kind == ResourceKind::Texture) {
@@ -888,7 +1184,7 @@ bool RenderGraphLowering::Lower(
             bool first_source = true;
             for (const auto& source : barrier.sources) {
                 if (!graph.IsValidPass(source.pass) ||
-                    source.domain.queue != RenderGraph::QueueRole::Graphics ||
+                    !supported_queue(source.domain.queue) ||
                     !IsKnownAccess(source.access) || source.state.IsAutomatic()) {
                     error = "barrier fan-in contains an unsupported source";
                     return false;
@@ -898,6 +1194,23 @@ bool RenderGraphLowering::Lower(
                     return false;
                 }
                 instruction.source_frontier.push_back(source.pass);
+                const uint32_t source_batch =
+                    pass_queue_batch[source.pass.index];
+                const uint32_t destination_batch =
+                    barrier.dst_pass.IsValid() ?
+                        pass_queue_batch[barrier.dst_pass.index] :
+                        RenderGraph::PassHandle::InvalidIndex;
+                const bool contributes_local_scope =
+                    !instruction.queue_acquire ||
+                    (source_batch != RenderGraph::PassHandle::InvalidIndex &&
+                     destination_batch != RenderGraph::PassHandle::InvalidIndex &&
+                     compiled.queue_batches[source_batch]
+                             .queue.native_queue_id ==
+                         compiled.queue_batches[destination_batch]
+                             .queue.native_queue_id);
+                if (!contributes_local_scope) {
+                    continue;
+                }
                 if (first_source) {
                     instruction.source = source_scope;
                     first_source = false;
@@ -940,6 +1253,14 @@ bool RenderGraphLowering::Lower(
                 error
             )) {
             return false;
+        }
+        if (instruction.queue_acquire && barrier.sources.empty()) {
+            // The semaphore wait supplies the cross-queue memory dependency.
+            // This destination-local barrier performs visibility/layout
+            // adoption without pretending its source scope executes on the
+            // consumer queue.
+            instruction.source.stages = ERHIPipelineStageFlags::PS_NONE;
+            instruction.source.access = ERHIAccessFlags::UNDEFINED;
         }
         if (instruction.discard_previous_contents && !barrier.before_state.IsUndefined()) {
             error = "discard flag requires an Undefined source state";

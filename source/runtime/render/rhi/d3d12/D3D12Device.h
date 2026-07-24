@@ -1129,6 +1129,8 @@ public:
 
     CopyQueue& GetCopyQueue() override;
 
+    RHIQueueTopology GetQueueTopology() const override;
+
     SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info) override;
 
 private:

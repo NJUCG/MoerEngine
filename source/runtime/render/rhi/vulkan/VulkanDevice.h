@@ -123,6 +123,8 @@ public:
 
     CopyQueue& GetCopyQueue() override;
 
+    RHIQueueTopology GetQueueTopology() const override;
+
     SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info) override;
 
     IOInterfaceRef CreateIOInterface(CopyQueue& _copy_queue) override;

@@ -1257,6 +1257,46 @@ enum class EQueueType : uint8 {
     Num,
     Ignore
 };
+
+/**
+ * Backend-neutral physical queue identity. native_queue_id distinguishes
+ * independently ordered native queues; family_id distinguishes explicit
+ * queue-family ownership domains (Vulkan) and may be shared by otherwise
+ * independent queues.
+ */
+struct RHIQueueBinding {
+    EQueueType queue           = EQueueType::Ignore;
+    uint32_t   native_queue_id = 0;
+    uint32_t   family_id       = 0;
+    /** False when the backend does not expose this logical submission role. */
+    bool       available       = true;
+
+    friend bool operator==(const RHIQueueBinding&, const RHIQueueBinding&) = default;
+};
+
+struct RHIQueueTopology {
+    RHIQueueBinding graphics{EQueueType::Graphics, 0, 0};
+    RHIQueueBinding compute{EQueueType::Compute, 0, 0};
+    RHIQueueBinding copy{EQueueType::Copy, 0, 0};
+
+    [[nodiscard]] constexpr RHIQueueBinding Resolve(EQueueType _queue) const {
+        switch (_queue) {
+            case EQueueType::Graphics:
+                return graphics;
+            case EQueueType::Compute:
+                return compute;
+            case EQueueType::Copy:
+                return copy;
+            case EQueueType::Num:
+            case EQueueType::Ignore:
+                return {};
+        }
+        return {};
+    }
+
+    friend bool operator==(const RHIQueueTopology&, const RHIQueueTopology&) = default;
+};
+
 struct ReflectParamInfo {
     ReflectParamInfo() {
         memset(this, 0, sizeof(ReflectParamInfo));
