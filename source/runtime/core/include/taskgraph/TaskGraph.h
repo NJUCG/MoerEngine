@@ -15,8 +15,8 @@ private:
 public:
     CORE_API static TaskGraph& GetInterface();
     CORE_API static bool       IsInitialized() noexcept;
-    static void                Init();
-    static void                Shutdown();
+    CORE_API static void       Init();
+    CORE_API static void       Shutdown();
     TaskGraph();
     ~TaskGraph();
     CORE_API void WaitUntilTasksComplete(const GraphEventArray& task_events, EThread::Type currentThread);

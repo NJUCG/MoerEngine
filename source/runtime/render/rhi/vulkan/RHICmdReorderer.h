@@ -1472,6 +1472,10 @@ public:
         };
         _cmd->IterateArgs(func);
 
+        // A side-effect-only custom dispatch may intentionally expose no
+        // resource usages. Keep it in the isolated custom-command scope
+        // instead of converting the initial -1 layer to UINT64_MAX.
+        m_dispatch_layer = GetLayerWithOffset(m_dispatch_layer);
         for (const auto& write_res : m_arg_write_resources) {
             RecordWrite(std::get<1>(write_res), std::get<0>(write_res), m_dispatch_layer);
         }

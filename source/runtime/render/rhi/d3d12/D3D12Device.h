@@ -594,6 +594,7 @@ private:
     ComPtr<ID3D12Fence> fence;
     HANDLE              event;
     std::atomic<uint64> current_value = 0;
+    std::atomic_bool    rejected{false};
 
 public:
     D3D12Fence(D3D12Device* _device);
@@ -605,8 +606,12 @@ public:
     }
     uint64_t GetValue() const override; // by default, get latest value, not cached 'current_value'
     void     Wait(uint64_t _value) override;
+    void     Reject(uint64_t _value) override;
 
     bool IsFenceComplete(uint64 _value);
+    bool IsRejected() const noexcept {
+        return rejected.load(std::memory_order_acquire);
+    }
     void WaitOnHost(uint64 _value);
     void SignalOnHost(uint64 _value);
 };

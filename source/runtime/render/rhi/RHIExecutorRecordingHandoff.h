@@ -97,8 +97,10 @@ public:
     // already complete. Used by SubmitRecording.
     void EnqueueRecording(RHIExecutorRecordingHandoffWork&& _work);
 
-    // Runs inline when the FIFO is idle, otherwise queues behind the active
-    // recording handoff. This is the ordering path for ordinary RHI controls.
+    // Always enters the Executor worker FIFO, including when no recording
+    // prerequisite is active. This gives accepted Submit/Present/Flush/Sync
+    // work one stable thread owner and prevents callback affinity from
+    // depending on whether a recording handoff happened to be pending.
     void RouteReady(RHIExecutorRecordingHandoffWork&& _work);
 
     void ShutDown();
@@ -116,7 +118,6 @@ private:
     std::condition_variable                   idle_cv;
     std::deque<RHIExecutorRecordingHandoffWork> pending{};
     std::jthread                              worker{};
-    size_t                                    inline_dispatches{0};
     bool                                      accepting{false};
     bool                                      worker_busy{false};
 };

@@ -13,10 +13,12 @@
 #include "rhi/ExternalCpuJoinPool.h"
 #include "rhi/RHIParallelRecord.h"
 #include "rhi/RHIRecordDiagnostics.h"
+#include "rhi/RHIThreadOwnership.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <functional>
+#include <future>
 #include <mutex>
 #include <optional>
 #include <string_view>
@@ -59,6 +61,10 @@ public:
         VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
     );
     void Signal(VkSemaphore _semaphore, VkPipelineStageFlags2 _stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    void DiscardPendingSubmitState() noexcept {
+        wait_infos.clear();
+        signal_infos.clear();
+    }
     VkQueue GetHandle() const {
         return queue;
     }
@@ -209,6 +215,7 @@ struct VulkanSubmissionEvent {
 struct VulkanRuntimeSubmissionResult {
     VulkanOperationResult   outcome{};
     std::optional<WaitEvent> completion{};
+    bool                     recoverable_rejection{false};
 
     [[nodiscard]] bool WasSubmitted() const {
         return completion.has_value();
@@ -216,7 +223,13 @@ struct VulkanRuntimeSubmissionResult {
 
     [[nodiscard]] bool IsHardFailure() const {
         return outcome.status == EVulkanOperationStatus::Faulted ||
-               outcome.status == EVulkanOperationStatus::Rejected;
+               (outcome.status == EVulkanOperationStatus::Rejected &&
+                !recoverable_rejection);
+    }
+
+    [[nodiscard]] bool IsRecoverableRejection() const {
+        return outcome.status == EVulkanOperationStatus::Rejected &&
+               recoverable_rejection;
     }
 };
 
@@ -234,12 +247,123 @@ struct VulkanDeferredReleaseBatch {
     Array<RHIResource*> resources;
 };
 
+// Runtime-recorded submissions cross the Submission -> Completion boundary as
+// one move-only ownership packet.  Keeping the command payload, allocator
+// retirement, descriptor lease, callbacks, signals, and deferred releases in
+// one variant alternative makes that handoff atomic: no exception can leave a
+// partially published completion sequence behind.
+struct VulkanSubmitCompletionBatch {
+    VulkanSubmitCompletionBatch(
+        VulkanOperationResult                    _outcome,
+        VulkanOperationContext                   _context,
+        bool                                     _gpu_submitted,
+        bool                                     _owns_queue_timeline,
+        CmdSubmit&&                              _submit,
+        VulkanAllocatorBatch&&                   _allocators,
+        std::optional<VulkanDescriptorPushLease>&& _descriptor_lease,
+        Array<RHIResource*>&&                    _deferred_releases
+    ) noexcept :
+        outcome(_outcome),
+        context(_context),
+        gpu_submitted(_gpu_submitted),
+        owns_queue_timeline(_owns_queue_timeline),
+        submit(std::move(_submit)),
+        allocators(std::move(_allocators)),
+        descriptor_lease(std::move(_descriptor_lease)),
+        deferred_releases(std::move(_deferred_releases)) {}
+
+    VulkanSubmitCompletionBatch(
+        VulkanOperationResult      _outcome,
+        VulkanOperationContext     _context,
+        bool                       _gpu_submitted,
+        bool                       _owns_queue_timeline,
+        CmdSubmit&&                _submit,
+        VulkanAllocatorBatch&&     _allocators,
+        VulkanDescriptorPushLease&& _descriptor_lease,
+        Array<RHIResource*>&&      _deferred_releases
+    ) noexcept :
+        outcome(_outcome),
+        context(_context),
+        gpu_submitted(_gpu_submitted),
+        owns_queue_timeline(_owns_queue_timeline),
+        submit(std::move(_submit)),
+        allocators(std::move(_allocators)),
+        descriptor_lease(std::move(_descriptor_lease)),
+        deferred_releases(std::move(_deferred_releases)) {}
+
+    VulkanSubmitCompletionBatch(const VulkanSubmitCompletionBatch&) = delete;
+    VulkanSubmitCompletionBatch& operator=(const VulkanSubmitCompletionBatch&) = delete;
+    VulkanSubmitCompletionBatch(VulkanSubmitCompletionBatch&&) noexcept = default;
+    VulkanSubmitCompletionBatch& operator=(VulkanSubmitCompletionBatch&&) noexcept = default;
+
+    VulkanOperationResult                    outcome;
+    VulkanOperationContext                   context;
+    bool                                     gpu_submitted{false};
+    bool                                     owns_queue_timeline{false};
+    CmdSubmit                                submit;
+    VulkanAllocatorBatch                     allocators;
+    std::optional<VulkanDescriptorPushLease> descriptor_lease;
+    Array<RHIResource*>                      deferred_releases;
+};
+
+enum class EVulkanPresentorRetirementState : uint8_t {
+    Unused,
+    RecordedNotSubmitted,
+    Submitted,
+};
+
+// Present has a different submission contract from CmdSubmit: native copy
+// submission can succeed even when vkQueuePresentKHR asks for swapchain
+// recreation. Keep its presentor and retained resources in one move-only
+// packet so they cross Submission -> Completion atomically.
+struct VulkanPresentCompletionBatch {
+    VulkanPresentCompletionBatch(
+        VulkanOperationResult              _outcome,
+        VulkanOperationContext             _context,
+        bool                               _gpu_submitted,
+        bool                               _owns_queue_timeline,
+        EVulkanPresentorRetirementState    _presentor_state,
+        UniquePtr<VulkanPresentor>&&       _presentor,
+        SwapchainRef&&                     _swapchain,
+        TextureRef&&                       _source_texture,
+        Array<RHIResource*>&&              _deferred_releases
+    ) noexcept :
+        outcome(_outcome),
+        context(_context),
+        gpu_submitted(_gpu_submitted),
+        owns_queue_timeline(_owns_queue_timeline),
+        presentor_state(_presentor_state),
+        presentor(std::move(_presentor)),
+        swapchain(std::move(_swapchain)),
+        source_texture(std::move(_source_texture)),
+        deferred_releases(std::move(_deferred_releases)) {}
+
+    VulkanPresentCompletionBatch(const VulkanPresentCompletionBatch&) = delete;
+    VulkanPresentCompletionBatch& operator=(const VulkanPresentCompletionBatch&) = delete;
+    VulkanPresentCompletionBatch(VulkanPresentCompletionBatch&&) noexcept = default;
+    VulkanPresentCompletionBatch& operator=(VulkanPresentCompletionBatch&&) noexcept = default;
+
+    VulkanOperationResult           outcome;
+    VulkanOperationContext          context;
+    bool                            gpu_submitted{false};
+    bool                            owns_queue_timeline{false};
+    EVulkanPresentorRetirementState presentor_state{
+        EVulkanPresentorRetirementState::Unused
+    };
+    UniquePtr<VulkanPresentor>      presentor;
+    SwapchainRef                    swapchain;
+    TextureRef                      source_texture;
+    Array<RHIResource*>             deferred_releases;
+};
+
 struct VulkanCompletionMarker {};
 
 class VkCommandQueue : public CommandQueue {
 public:
     using EventType = std::variant<
         VulkanSubmissionEvent,
+        VulkanSubmitCompletionBatch,
+        VulkanPresentCompletionBatch,
         UniquePtr<VulkanAllocator>,
         VulkanAllocatorBatch,
         VulkanDescriptorPushLease,
@@ -255,17 +379,47 @@ public:
         EventType event;
         uint64    timeline;
         bool      wake_thread;
+        uint64    retirement_serial;
         template<typename Arg>
             requires std::is_constructible_v<EventType, Arg&&>
         QueueEvent(Arg&& _event, uint64 _timeline, bool _wake_thread) :
             event(std::forward<Arg>(_event)),
             timeline(_timeline),
-            wake_thread(_wake_thread) {}
+            wake_thread(_wake_thread),
+            retirement_serial(0) {}
+
+        template<typename Arg>
+            requires std::is_constructible_v<EventType, Arg&&>
+        QueueEvent(
+            Arg&&  _event,
+            uint64 _timeline,
+            bool   _wake_thread,
+            uint64 _retirement_serial
+        ) :
+            event(std::forward<Arg>(_event)),
+            timeline(_timeline),
+            wake_thread(_wake_thread),
+            retirement_serial(_retirement_serial) {}
+
+        template<typename Event, typename... Args>
+            requires std::is_constructible_v<Event, Args&&...>
+        QueueEvent(
+            std::in_place_type_t<Event>,
+            uint64 _timeline,
+            bool   _wake_thread,
+            uint64 _retirement_serial,
+            Args&&... _args
+        ) noexcept(std::is_nothrow_constructible_v<Event, Args&&...>) :
+            event(std::in_place_type<Event>, std::forward<Args>(_args)...),
+            timeline(_timeline),
+            wake_thread(_wake_thread),
+            retirement_serial(_retirement_serial) {}
 
         QueueEvent(QueueEvent&& _other) noexcept :
             event(std::move(_other.event)),
             timeline(_other.timeline),
-            wake_thread(_other.wake_thread) {}
+            wake_thread(_other.wake_thread),
+            retirement_serial(_other.retirement_serial) {}
     };
 
     struct RhiExecuteWork {
@@ -531,7 +685,13 @@ private:
         std::optional<VulkanDescriptorPushLease> descriptor_lease;
         Array<RHIResource*>                     deferred_releases;
         CurrentVulkanRecordedSubmitProfile      profile;
-        std::optional<std::unique_lock<std::mutex>> runtime_execution_lock{};
+        RHITransferableOwnershipGate::Lease     execution_lease{};
+        VulkanOperationResult                   retirement_outcome{
+            EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN
+        };
+        bool                                    recoverable_rejection{false};
+        bool                                    native_submit_resolved{false};
+        bool                                    completion_committed{false};
     };
 
     struct CurrentVulkanSubmitResult {
@@ -544,19 +704,31 @@ private:
         uint64 _timeline,
         uint64 _serial,
         std::optional<CurrentVulkanRecordedSubmit>* _out_recorded = nullptr,
-        bool _runtime_owner = false
+        bool _runtime_owner = false,
+        bool* _out_terminalized = nullptr
     );
-    CurrentVulkanSubmitResult SubmitRecorded(CurrentVulkanRecordedSubmit _recorded);
-    std::optional<CurrentVulkanRecordedSubmit> TranslateForRuntime(CmdSubmit&& _submit);
+    CurrentVulkanSubmitResult SubmitRecorded(
+        CurrentVulkanRecordedSubmit& _recorded,
+        const std::atomic_bool*       _continue_waiting = nullptr
+    );
+    std::optional<CurrentVulkanRecordedSubmit>
+        TranslateForRuntime(CmdSubmit&& _submit) noexcept;
     VulkanRuntimeSubmissionResult SubmitRecordedForRuntime(
         CurrentVulkanRecordedSubmit _recorded
-    );
-    void RejectForRuntime(CmdSubmit&& _submit, VkResult _result);
+    ) noexcept;
+    void RejectRecordedForRuntime(
+        CurrentVulkanRecordedSubmit&& _recorded,
+        VkResult                       _result
+    ) noexcept;
+    void RejectForRuntime(CmdSubmit&& _submit, VkResult _result) noexcept;
+    [[nodiscard]] bool ClaimRuntimeOwnership();
+    void ReleaseRuntimeOwnership() noexcept;
+    void CancelRuntimeDependencyWaits() noexcept;
     VulkanRuntimeSubmissionResult PresentForRuntime(
         SwapchainRef _swapchain,
         TextureView _source,
         PresentReceiptRef _receipt
-    );
+    ) noexcept;
     bool                       TryExecuteParallel(
         CmdSubmit&                    _submit,
         uint64                        _timeline,
@@ -576,14 +748,29 @@ private:
         uint64         _timeline,
         uint64         _serial,
         bool           _runtime_owner = false
-    );
+    ) noexcept;
     void                       RhiThreadMain();
     void                       CompletionThreadMain();
     Array<RHIResource*>        TakeDeferredReleases();
     void                       EnqueueCompletionMarker(uint64 _timeline);
+    void                       CommitRuntimeSubmitCompletion(
+        CurrentVulkanRecordedSubmit& _recorded,
+        const VulkanOperationResult&  _outcome
+    ) noexcept;
+    void                       CommitPresentCompletion(
+        const VulkanOperationResult&       _outcome,
+        const VulkanOperationContext&      _context,
+        bool                               _gpu_submitted,
+        EVulkanPresentorRetirementState    _presentor_state,
+        UniquePtr<VulkanPresentor>&&       _presentor,
+        SwapchainRef&&                     _swapchain,
+        TextureRef&&                       _source_texture,
+        Array<RHIResource*>&&              _deferred_releases,
+        uint64                             _timeline
+    ) noexcept;
     UniquePtr<VulkanAllocator> GetAllocator();
     UniquePtr<VulkanPresentor> GetPresentor();
-    void                       Complete(uint64 _timeline);
+    void                       CompleteAll(uint64 _timeline);
     void                       EnsureRecordCalibration();
     void                       RecordRhiRecordProfile(const RhiRecordExecuteSample& _sample);
     void                       RecordThreadingProfile(
@@ -606,10 +793,17 @@ private:
     void                       ResetSplitProfilingCpuFrame();
 
 private:
+    enum class EExecutionOwnershipMode : uint8_t {
+        Unclaimed,
+        Legacy,
+        Runtime,
+    };
+
+    [[nodiscard]] bool ClaimLegacyOwnership(std::string_view _operation);
     std::atomic<uint64>                                last_frame{0};
-    CircularQueue<uint64, s_queue_max_frame_in_flight> executed_queue;
     std::atomic<uint64>                                cpu_settled_frame = 0;
-    CircularQueue<uint64, s_queue_max_frame_in_flight> presented_queue;
+    uint64                                             retirement_enqueued_serial{0};
+    std::atomic<uint64>                                retirement_settled_serial{0};
     VulkanFence*                                       timeline = nullptr;
     std::mutex                                         event_mutex;
     bool                                               completion_worker_running{false};
@@ -649,6 +843,11 @@ private:
     std::condition_variable rhi_work_done_cv;
 
     std::mutex   exec_mtx;
+    RHITransferableOwnershipGate runtime_execution_gate;
+    std::atomic<EExecutionOwnershipMode> execution_ownership_mode{
+        EExecutionOwnershipMode::Unclaimed
+    };
+    std::atomic_bool runtime_dependency_waits_enabled{true};
     std::jthread completion_thread;
     std::jthread rhi_thread;
     Array<UniquePtr<VulkanAllocator>> allocator_quarantine;
@@ -662,6 +861,7 @@ public:
     ~VkCopyQueue();
     using EventType = std::variant<
         VulkanSubmissionEvent,
+        VulkanSubmitCompletionBatch,
         UniquePtr<VulkanAllocator>,
         UniquePtr<VulkanPresentor>,
         VulkanCallbackBatch,
@@ -672,22 +872,52 @@ public:
         EventType event;
         uint64    timeline;
         bool      wake_thread;
+        uint64    retirement_serial;
         template<typename Arg>
             requires std::is_constructible_v<EventType, Arg&&>
         IOEvent(Arg&& _event, uint64 _timeline, bool _wake_thread) :
             event(std::forward<Arg>(_event)),
             timeline(_timeline),
-            wake_thread(_wake_thread) {}
+            wake_thread(_wake_thread),
+            retirement_serial(0) {}
+
+        template<typename Arg>
+            requires std::is_constructible_v<EventType, Arg&&>
+        IOEvent(
+            Arg&&  _event,
+            uint64 _timeline,
+            bool   _wake_thread,
+            uint64 _retirement_serial
+        ) :
+            event(std::forward<Arg>(_event)),
+            timeline(_timeline),
+            wake_thread(_wake_thread),
+            retirement_serial(_retirement_serial) {}
+
+        template<typename Event, typename... Args>
+            requires std::is_constructible_v<Event, Args&&...>
+        IOEvent(
+            std::in_place_type_t<Event>,
+            uint64 _timeline,
+            bool   _wake_thread,
+            uint64 _retirement_serial,
+            Args&&... _args
+        ) noexcept(std::is_nothrow_constructible_v<Event, Args&&...>) :
+            event(std::in_place_type<Event>, std::forward<Args>(_args)...),
+            timeline(_timeline),
+            wake_thread(_wake_thread),
+            retirement_serial(_retirement_serial) {}
 
         IOEvent(IOEvent&& _other) noexcept :
             event(std::move(_other.event)),
             timeline(_other.timeline),
-            wake_thread(_other.wake_thread) {}
+            wake_thread(_other.wake_thread),
+            retirement_serial(_other.retirement_serial) {}
     };
 
     IOWaitEvt Execute(IOQueueSubmission&& _submit) override;
     IOWaitEvt Execute(CmdSubmit&& _submit) override;
-    VulkanRuntimeSubmissionResult ExecuteForRuntime(CmdSubmit&& _submit);
+    VulkanRuntimeSubmissionResult ExecuteForRuntime(CmdSubmit&& _submit) noexcept;
     FenceRef  GetFenceHandle() override;
     void      Sync(uint64 _timeline) override;
 
@@ -737,16 +967,53 @@ private:
     void RHIThreadLoop();
 
 private:
-    void RejectForRuntime(CmdSubmit&& _submit, VkResult _result);
+    void RejectForRuntime(CmdSubmit&& _submit, VkResult _result) noexcept;
+    void EnableRuntimeDependencyWaits() noexcept;
+    void CancelRuntimeDependencyWaits() noexcept;
 
     struct TrackedExecuteResult {
         VulkanRuntimeSubmissionResult runtime{};
         uint64                        logical_timeline{0};
     };
 
-    TrackedExecuteResult ExecuteTracked(CmdSubmit&& _submit);
+    struct RuntimeExecuteState {
+        uint64                   logical_timeline{0};
+        VulkanOperationContext   context{};
+        VulkanOperationResult    outcome{
+            EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN
+        };
+        VulkanAllocatorBatch     allocators{};
+        bool                     timeline_reserved{false};
+        bool                     recoverable_rejection{false};
+        bool                     native_submit_resolved{false};
+        bool                     completion_committed{false};
+    };
+
+    struct CopySubmissionRequest {
+        explicit CopySubmissionRequest(CmdSubmit&& _submit) :
+            submit(std::move(_submit)) {}
+
+        std::promise<TrackedExecuteResult> completion;
+        CmdSubmit                          submit;
+    };
+
+    TrackedExecuteResult ExecuteOnSubmissionOwner(CmdSubmit&& _submit) noexcept;
+    void                 SubmissionThreadMain();
+    TrackedExecuteResult ExecuteTracked(CmdSubmit&& _submit) noexcept;
+    TrackedExecuteResult ExecuteTrackedImpl(
+        CmdSubmit&           _submit,
+        RuntimeExecuteState& _state
+    );
+    void CommitRuntimeSubmitCompletion(
+        CmdSubmit&&                 _submit,
+        VulkanAllocatorBatch&&      _allocators,
+        const VulkanOperationResult& _outcome,
+        const VulkanOperationContext& _context,
+        uint64                       _logical_timeline,
+        bool                         _owns_queue_timeline
+    ) noexcept;
     UniquePtr<VulkanAllocator>                GetAllocator();
-    void                                      Complete(uint64 _timeline);
+    void                                      CompleteAll(uint64 _timeline);
     LockFreeQueueBase<VulkanAllocator, false> allocators;
     DEQueue<IOEvent>                          event_queue;
 
@@ -755,6 +1022,8 @@ private:
 
     uint                    last_frame     = 0;
     std::atomic<uint64>     cpu_settled_frame = 0;
+    uint64                  retirement_enqueued_serial{0};
+    std::atomic<uint64>     retirement_settled_serial{0};
     VulkanFenceRef          timeline       = nullptr;
     std::mutex              event_mutex;
     std::atomic_bool        enabled{false};
@@ -762,6 +1031,14 @@ private:
     std::condition_variable settled_cv;
     VkNativeQueue           queue;
     std::jthread            thread;
+
+    DEQueue<UniquePtr<CopySubmissionRequest>> submission_requests;
+    std::mutex                                  submission_mutex;
+    std::condition_variable                     submission_cv;
+    std::atomic_bool                            submission_accepting{true};
+    std::atomic_bool                            dependency_waits_enabled{true};
+    std::jthread                                submission_thread;
+    std::atomic<uint32>                         submission_thread_id{0};
 
     //tmp
     LockFreeQueueBase<IOCmd> commands;

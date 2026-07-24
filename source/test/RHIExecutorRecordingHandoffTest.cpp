@@ -1,4 +1,5 @@
 #include "rhi/RHIExecutor.h"
+#include "rhi/RHIThreadOwnership.h"
 
 #include <atomic>
 #include <chrono>
@@ -91,45 +92,52 @@ bool PerSourceGatesPreserveFifo() {
            );
 }
 
-bool InlineReadyWorkCannotBeOvertaken() {
+bool ReadyWorkUsesStableExecutorOwnerAndCannotBeOvertaken() {
     RHIExecutorRecordingHandoffQueue queue{};
     queue.Start();
 
     ResolutionLog log{};
     std::mutex block_mutex;
     std::condition_variable block_cv;
-    bool inline_entered = false;
-    bool release_inline = false;
+    bool first_entered = false;
+    bool release_first = false;
+    const std::thread::id caller_thread = std::this_thread::get_id();
+    std::thread::id first_owner{};
+    std::thread::id second_owner{};
+    ERHIThreadRole first_role{ERHIThreadRole::Unknown};
+    ERHIThreadRole second_role{ERHIThreadRole::Unknown};
 
-    std::jthread inline_thread([&] {
-        queue.RouteReady(RHIExecutorRecordingHandoffWork{
-            .prerequisites = {},
-            .resolve = [&](ERHIRecordingHandoffResult _result) {
-                {
-                    std::unique_lock lock(block_mutex);
-                    inline_entered = true;
-                    block_cv.notify_all();
-                    block_cv.wait(lock, [&] { return release_inline; });
-                }
-                log.Push(1, _result);
-            },
-        });
+    queue.RouteReady(RHIExecutorRecordingHandoffWork{
+        .prerequisites = {},
+        .resolve = [&](ERHIRecordingHandoffResult _result) {
+            {
+                std::unique_lock lock(block_mutex);
+                first_owner = std::this_thread::get_id();
+                first_role  = GetCurrentRHIThreadRole();
+                first_entered = true;
+                block_cv.notify_all();
+                block_cv.wait(lock, [&] { return release_first; });
+            }
+            log.Push(1, _result);
+        },
     });
 
     {
         std::unique_lock lock(block_mutex);
-        if (!block_cv.wait_for(lock, 2s, [&] { return inline_entered; })) {
-            release_inline = true;
+        if (!block_cv.wait_for(lock, 2s, [&] { return first_entered; })) {
+            release_first = true;
             block_cv.notify_all();
             queue.ShutDown();
-            return Expect(false, "inline ready work did not start");
+            return Expect(false, "ready work did not start on the Executor worker");
         }
     }
 
     auto completed_gate = RHIRecordingGate::Create(true);
     queue.EnqueueRecording(RHIExecutorRecordingHandoffWork{
         .prerequisites = {completed_gate},
-        .resolve = [&log](ERHIRecordingHandoffResult _result) {
+        .resolve = [&log, &second_owner, &second_role](ERHIRecordingHandoffResult _result) {
+            second_owner = std::this_thread::get_id();
+            second_role  = GetCurrentRHIThreadRole();
             log.Push(2, _result);
         },
     });
@@ -137,7 +145,7 @@ bool InlineReadyWorkCannotBeOvertaken() {
     if (!Expect(log.Snapshot().empty(), "recording work overtook active ready work")) {
         {
             std::lock_guard lock(block_mutex);
-            release_inline = true;
+            release_first = true;
         }
         block_cv.notify_all();
         queue.ShutDown();
@@ -146,17 +154,26 @@ bool InlineReadyWorkCannotBeOvertaken() {
 
     {
         std::lock_guard lock(block_mutex);
-        release_inline = true;
+        release_first = true;
     }
     block_cv.notify_all();
-    inline_thread.join();
 
     const bool completed = log.WaitForSize(2);
     const auto entries   = log.Snapshot();
     queue.ShutDown();
     return Expect(completed, "queued recording work did not run") &&
-           Expect(entries.size() == 2, "unexpected inline-order result count") &&
-           Expect(entries[0].first == 1 && entries[1].first == 2, "inline order changed");
+           Expect(entries.size() == 2, "unexpected ready-work result count") &&
+           Expect(entries[0].first == 1 && entries[1].first == 2, "ready-work order changed") &&
+           Expect(
+               first_owner != caller_thread && second_owner != caller_thread,
+               "accepted ready work ran on the caller thread"
+           ) &&
+           Expect(first_owner == second_owner, "ready work changed Executor owner thread") &&
+           Expect(
+               first_role == ERHIThreadRole::Executor &&
+                   second_role == ERHIThreadRole::Executor,
+               "ready work did not run under the Executor role"
+           );
 }
 
 bool FailedGateRejectsOnlyItsGroupAndPreservesFifo() {
@@ -453,15 +470,71 @@ bool ShutdownCancelsAnUnsignalledGate() {
     return okay;
 }
 
+bool ShutdownDrainsAcceptedReadyWork() {
+    RHIExecutorRecordingHandoffQueue queue{};
+    queue.Start();
+
+    ResolutionLog        log{};
+    std::mutex           mutex;
+    std::condition_variable cv;
+    bool                 first_entered{false};
+    bool                 release_first{false};
+
+    queue.RouteReady(RHIExecutorRecordingHandoffWork{
+        .resolve = [&](ERHIRecordingHandoffResult _result) {
+            {
+                std::unique_lock lock(mutex);
+                first_entered = true;
+                cv.notify_all();
+                cv.wait(lock, [&] { return release_first; });
+            }
+            log.Push(1, _result);
+        },
+    });
+    {
+        std::unique_lock lock(mutex);
+        if (!cv.wait_for(lock, 2s, [&] { return first_entered; })) {
+            release_first = true;
+            cv.notify_all();
+            queue.ShutDown();
+            return Expect(false, "ready shutdown head did not enter the Executor");
+        }
+    }
+    queue.RouteReady(RHIExecutorRecordingHandoffWork{
+        .resolve = [&log](ERHIRecordingHandoffResult _result) {
+            log.Push(2, _result);
+        },
+    });
+
+    std::jthread shutdown_thread([&] { queue.ShutDown(); });
+    {
+        std::lock_guard lock(mutex);
+        release_first = true;
+    }
+    cv.notify_all();
+    shutdown_thread.join();
+
+    const auto entries = log.Snapshot();
+    return Expect(entries.size() == 2, "shutdown dropped accepted ready work") &&
+           Expect(entries[0].first == 1 && entries[1].first == 2, "shutdown reordered ready work") &&
+           Expect(
+               entries[0].second == ERHIRecordingHandoffResult::Consume &&
+                   entries[1].second == ERHIRecordingHandoffResult::Consume,
+               "shutdown cancelled work that was already safe for the Executor to drain"
+           );
+}
+
 } // namespace
 
 int main() {
-    if (!PerSourceGatesPreserveFifo() || !InlineReadyWorkCannotBeOvertaken() ||
+    if (!PerSourceGatesPreserveFifo() ||
+        !ReadyWorkUsesStableExecutorOwnerAndCannotBeOvertaken() ||
         !FailedGateRejectsOnlyItsGroupAndPreservesFifo() ||
         !FailedRecordingDrainsCleanupExactlyOnce() ||
         !BlockingWaitReportsTerminalStatus() ||
         !ShutdownDrainsTerminalSourceBehindPendingHead() ||
-        !ShutdownCancelsAnUnsignalledGate()) {
+        !ShutdownCancelsAnUnsignalledGate() ||
+        !ShutdownDrainsAcceptedReadyWork()) {
         return EXIT_FAILURE;
     }
     std::cout << "RHIExecutor recording handoff contract passed\n";

@@ -57,7 +57,10 @@ public:
         on_complete.push_back(std::move(_func));
     }
 
-    virtual void CompleteSuccess();
+    // Completion callbacks are user-extensible and must never escape the
+    // Completion owner. A false result quarantines the allocator instead of
+    // resetting/reusing partially finalized state.
+    virtual bool CompleteSuccess() noexcept;
     virtual bool Reset();
     // A recorder that was never submitted must not run success callbacks.
     // It can still reset and return to the pool after all worker jobs joined.
@@ -101,7 +104,7 @@ public:
     VulkanPresentor(VulkanDevice* _device, EQueueType _queue_type);
     virtual ~VulkanPresentor();
 
-    void CompleteSuccess() override;
+    bool CompleteSuccess() noexcept override;
 };
 
 class VulkanAllocator : public VulkanAllocatorBase {
@@ -118,7 +121,7 @@ public:
 
     void ResetBufferAlloc();
 
-    void CompleteSuccess() override;
+    bool CompleteSuccess() noexcept override;
     bool Reset() override;
     //staging buffer allocate with block strategy
 private:
