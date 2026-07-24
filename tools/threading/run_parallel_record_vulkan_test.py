@@ -30,10 +30,105 @@ def _require(condition: bool, message: str) -> None:
         raise VulkanTestError(message)
 
 
+def _testcase_marker(name: str, text: str) -> tuple[str, dict[str, str]] | None:
+    matches = list(
+        re.finditer(
+            rf"\[TESTCASE\]\[(?P<status>PASS|SKIP)\]"
+            rf"[^\r\n]*\bname={re.escape(name)}(?:\s|$)[^\r\n]*",
+            text,
+        )
+    )
+    _require(
+        len(matches) <= 1,
+        f"{name}: expected at most one terminal marker, got {len(matches)}",
+    )
+    if not matches:
+        return None
+    marker = matches[0]
+    fields = dict(
+        re.findall(r"(?:^|\s)([A-Za-z0-9_]+)=([^\s]+)", marker.group(0))
+    )
+    return marker.group("status"), fields
+
+
 def validate_log(mode: str, text: str) -> None:
     _require("[TESTCASE][FAIL]" not in text, f"{mode}: test emitted a FAIL marker")
     _require("VUID-" not in text, f"{mode}: Vulkan validation VUID was emitted")
     _require("Validation Error" not in text, f"{mode}: Vulkan validation error was emitted")
+    if mode == "translate-hard":
+        retirement = re.search(
+            r"\[TESTCASE\]\[PASS\].*name=ParallelTranslateFailureRetirement"
+            r".*distinct_native=(?P<distinct>true|false)"
+            r".*suffix_recorded=(?P<suffix>true|false).*signals=failed"
+            r".*callbacks=exactly_once.*hard_latch=later_batch_failed",
+            text,
+        )
+        _require(
+            retirement is not None,
+            "translate-hard: missing failure-retirement PASS marker",
+        )
+        _require(
+            retirement.group("distinct") == retirement.group("suffix"),
+            "translate-hard: suffix recording disagrees with native queue topology",
+        )
+        _require(
+            re.search(
+                r"\[VulkanFault\]\[Summary\].*first_fault_count=1(?:\s|$)"
+                r".*native_submit_after_fault=0.*native_present_after_fault=0"
+                r".*device_lost=false",
+                text,
+            )
+            is not None,
+            "translate-hard: missing clean hard-fault ownership summary",
+        )
+        return
+
+    ready_marker = _testcase_marker("AsyncQueueParallelTranslateSmoke", text)
+    _require(
+        ready_marker is not None,
+        f"{mode}: missing ready-native-lane Translate smoke marker",
+    )
+    ready_status, ready_fields = ready_marker
+    if ready_status == "PASS":
+        _require(
+            ready_fields.get("sources") == "3"
+            and ready_fields.get("batch") == "1"
+            and ready_fields.get("source_order") == "G,G,C"
+            and ready_fields.get("first_ready_lanes") == "G,C"
+            and ready_fields.get("observed_submit_order") == "G,G,C"
+            and ready_fields.get("explicit_state") == "true"
+            and ready_fields.get("callbacks") == "exactly_once",
+            f"{mode}: incomplete ready-native-lane Translate PASS contract",
+        )
+    else:
+        _require(
+            ready_fields.get("reason")
+            in {"queue_unavailable", "native_queue_alias"}
+            and ready_fields.get("cpu_seam")
+            == "VulkanTranslateWaveScheduler",
+            f"{mode}: invalid ready-native-lane Translate SKIP contract",
+        )
+
+    recoverable_marker = _testcase_marker(
+        "ParallelTranslateRecoverableRejection", text
+    )
+    _require(
+        recoverable_marker is not None
+        and recoverable_marker[0] == "PASS",
+        f"{mode}: missing recoverable Translate retirement marker",
+    )
+    _, recoverable_fields = recoverable_marker
+    _require(
+        recoverable_fields.get("distinct_native")
+        == recoverable_fields.get("suffix_recorded")
+        and recoverable_fields.get("distinct_native") in {"true", "false"}
+        and recoverable_fields.get("signals") == "rejected"
+        and recoverable_fields.get("callbacks") == "exactly_once"
+        and recoverable_fields.get("runtime") == "recovered"
+        and recoverable_fields.get("same_scope_reentry") == "Compute",
+        f"{mode}: incomplete recoverable Translate retirement contract",
+    )
+
     expected_fault = "true" if mode == "fallback" else "false"
     expected_mode = "serial" if mode == "serial" else "parallel"
     expected_production_gate = "true" if mode in ("gated", "heavy") else "false"
@@ -142,7 +237,7 @@ def validate_log(mode: str, text: str) -> None:
 
 def run_case(executable: Path, outdir: Path, mode: str, timeout: float) -> Path:
     arguments: list[str] = []
-    if mode != "serial":
+    if mode in ("parallel", "fallback", "gated", "heavy"):
         arguments.append("--parallel")
     if mode == "fallback":
         arguments.append("--inject-worker-failure")
@@ -150,6 +245,8 @@ def run_case(executable: Path, outdir: Path, mode: str, timeout: float) -> Path:
         arguments.append("--production-gate")
     if mode == "heavy":
         arguments.append("--production-heavy")
+    if mode == "translate-hard":
+        arguments.append("--inject-translate-failure")
 
     completed = subprocess.run(
         [str(executable), *arguments],
@@ -192,7 +289,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         logs = [
             run_case(executable, args.outdir, mode, args.timeout)
-            for mode in ("serial", "parallel", "fallback", "gated", "heavy")
+            for mode in (
+                "serial",
+                "parallel",
+                "fallback",
+                "gated",
+                "heavy",
+                "translate-hard",
+            )
         ]
     except (OSError, subprocess.TimeoutExpired, VulkanTestError) as error:
         print(f"parallel Vulkan test: FAIL: {error}", file=sys.stderr)

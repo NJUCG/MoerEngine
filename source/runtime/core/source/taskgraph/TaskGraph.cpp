@@ -34,7 +34,7 @@ TaskThreadBase& TaskGraph::GetThread(ThreadIndex index) {
     return *m_workers[index].task_thread;
 }
 
-void TaskGraph::WakeUpWorkerThread(int32_t threadIndex, QueueIndex index) {
+void TaskGraph::WakeUpWorkerThread(int32_t threadIndex, QueueIndex index) noexcept {
     assert(threadIndex >= 0);
     m_workers[threadIndex].task_thread->Wake(index);
 }
@@ -217,7 +217,7 @@ void TaskGraph::QueueTask(
     EThread::Type  _prefered_thread,
     EThread::Type  _current_thread,
     bool           wake_worker
-) {
+) noexcept {
     if (EThread::GetThreadIndex(_prefered_thread) == EThread::UNKNOWN_THREAD) { //any thread is ok
         ThreadPriority priority                = task->GetPriority();
         int32_t        possible_thread_to_wake = m_task_queue[priority].Push(task, 0);
