@@ -336,7 +336,8 @@ void AppendInstruction(
            << " dst_layout=" << static_cast<uint32_t>(instruction.destination.layout)
            << " discard=" << instruction.discard_previous_contents
            << " import=" << instruction.import_boundary
-           << " export=" << instruction.export_boundary;
+           << " export=" << instruction.export_boundary
+           << " transient_alias=" << instruction.transient_alias;
 }
 
 } // namespace
@@ -427,6 +428,9 @@ bool RenderGraphLowering::Lower(
     const auto& compiled = graph.compiled_plan;
     if (!compiled.state_plan_complete) {
         return fail("compiled state plan is incomplete");
+    }
+    if (compiled.resources.size() != graph.resources.size()) {
+        return fail("compiled resource table is incomplete");
     }
 
     std::vector<bool> gpu_pass(graph.passes.size(), false);
@@ -535,11 +539,24 @@ bool RenderGraphLowering::Lower(
         if (resource.kind == ResourceKind::Token) {
             continue;
         }
-        if (!resource.imported) {
-            return fail("transient physical resource is not supported: '" + resource.name + "'");
+        if (!resource_has_access[resource_index] &&
+            resource.first_use == RenderGraph::PassHandle::InvalidIndex) {
+            continue;
         }
         if (!resource.typed_desc) {
             return fail("physical resource requires a typed descriptor: '" + resource.name + "'");
+        }
+        if (!resource.imported) {
+            const bool has_allocation_desc =
+                resource.kind == ResourceKind::Texture ?
+                    resource.transient_texture_desc.has_value() :
+                    resource.transient_buffer_desc.has_value();
+            if (!has_allocation_desc) {
+                return fail(
+                    "transient physical resource lacks an allocation descriptor: '" +
+                    resource.name + "'"
+                );
+            }
         }
         if (resource.kind == ResourceKind::Texture) {
             if (!resource.physical_texture.IsValid() ||
@@ -567,21 +584,115 @@ bool RenderGraphLowering::Lower(
         if (!resource_has_access[resource_index]) {
             continue;
         }
-        if (resource.initial_states.empty()) {
-            return fail("physical resource lacks an explicit initial state: '" + resource.name + "'");
-        }
-        if (!resource.exported || resource.final_states.empty()) {
-            return fail("physical resource lacks an explicit final state: '" + resource.name + "'");
-        }
-        for (const auto& state : resource.initial_states) {
-            if (!validate_boundary(resource, state, true)) {
-                return fail(std::move(error));
+        if (resource.imported) {
+            if (resource.initial_states.empty()) {
+                return fail(
+                    "physical resource lacks an explicit initial state: '" +
+                    resource.name + "'"
+                );
             }
+            if (!resource.exported || resource.final_states.empty()) {
+                return fail(
+                    "physical resource lacks an explicit final state: '" +
+                    resource.name + "'"
+                );
+            }
+            for (const auto& state : resource.initial_states) {
+                if (!validate_boundary(resource, state, true)) {
+                    return fail(std::move(error));
+                }
+            }
+        } else if (!resource.initial_states.empty()) {
+            return fail(
+                "allocation-backed transient resource must begin in its implicit "
+                "Undefined state: '" +
+                resource.name + "'"
+            );
+        }
+        if (resource.exported && resource.final_states.empty()) {
+            return fail(
+                "exported transient resource lacks an explicit final state: '" +
+                resource.name + "'"
+            );
         }
         for (const auto& state : resource.final_states) {
             if (!validate_boundary(resource, state, false)) {
                 return fail(std::move(error));
             }
+        }
+    }
+
+    std::vector<uint32_t> alias_barrier_owners(compiled.barriers.size(), 0);
+    for (const auto& alias : compiled.alias_boundaries) {
+        if (!graph.IsValidResource(alias.predecessor_resource) ||
+            !graph.IsValidResource(alias.successor_resource) ||
+            !graph.IsValidPass(alias.primary_src_pass) ||
+            !graph.IsValidPass(alias.dst_pass) ||
+            alias.source_frontier.empty() ||
+            alias.barrier_index >= compiled.barriers.size()) {
+            return fail("transient alias boundary contains an invalid handle or index");
+        }
+        const auto& predecessor =
+            graph.resources[alias.predecessor_resource.index];
+        const auto& successor =
+            graph.resources[alias.successor_resource.index];
+        const auto& predecessor_plan =
+            compiled.resources[alias.predecessor_resource.index];
+        const auto& successor_plan =
+            compiled.resources[alias.successor_resource.index];
+        if (predecessor.imported || successor.imported ||
+            predecessor.exported || successor.exported ||
+            predecessor.physical_identity == nullptr ||
+            predecessor.physical_identity != successor.physical_identity ||
+            predecessor_plan.transient_slot != alias.transient_slot ||
+            successor_plan.transient_slot != alias.transient_slot ||
+            predecessor_plan.last_use >= successor_plan.first_use) {
+            return fail(
+                "transient alias boundary does not bind one compatible non-overlapping "
+                "physical allocation"
+            );
+        }
+
+        const auto& barrier = compiled.barriers[alias.barrier_index];
+        ++alias_barrier_owners[alias.barrier_index];
+        if (!barrier.transient_alias ||
+            barrier.resource != alias.successor_resource ||
+            barrier.src_pass != alias.primary_src_pass ||
+            barrier.dst_pass != alias.dst_pass ||
+            barrier.sources.size() != alias.source_frontier.size() ||
+            !barrier.memory_dependency || !barrier.execution_dependency ||
+            barrier.queue_dependency || barrier.queue_ownership ||
+            barrier.discard_previous_contents || barrier.import_boundary ||
+            barrier.export_boundary || barrier.source_state_unknown) {
+            return fail("transient alias boundary disagrees with its compiled barrier");
+        }
+        for (uint32_t source_index = 0;
+             source_index < alias.source_frontier.size();
+             ++source_index) {
+            if (barrier.sources[source_index].pass !=
+                alias.source_frontier[source_index]) {
+                return fail(
+                    "transient alias barrier dropped or reordered a source frontier"
+                );
+            }
+        }
+        if (alias.source_frontier.back() != alias.primary_src_pass) {
+            return fail(
+                "transient alias primary source is not its latest frontier source"
+            );
+        }
+    }
+    for (uint32_t barrier_index = 0;
+         barrier_index < compiled.barriers.size();
+         ++barrier_index) {
+        const uint32_t owner_count = alias_barrier_owners[barrier_index];
+        if ((compiled.barriers[barrier_index].transient_alias &&
+             owner_count != 1) ||
+            (!compiled.barriers[barrier_index].transient_alias &&
+             owner_count != 0)) {
+            return fail(
+                "transient alias barrier does not have exactly one boundary owner"
+            );
         }
     }
 
@@ -758,6 +869,7 @@ bool RenderGraphLowering::Lower(
             .discard_previous_contents = barrier.discard_previous_contents,
             .import_boundary         = barrier.import_boundary,
             .export_boundary         = barrier.export_boundary,
+            .transient_alias         = barrier.transient_alias,
         };
 
         if (resource.kind == ResourceKind::Texture) {
@@ -908,13 +1020,19 @@ bool RenderGraphLowering::Lower(
         if (graph.resources[access.resource.index].kind == ResourceKind::Token) {
             continue;
         }
-        if (!has_boundary(access, true)) {
-            return fail("physical access lacks a matching explicit import boundary on resource '" +
-                        graph.resources[access.resource.index].name + "'");
+        const auto& declaration = graph.resources[access.resource.index];
+        if (declaration.imported && !has_boundary(access, true)) {
+            return fail(
+                "physical access lacks a matching explicit import boundary on resource '" +
+                declaration.name + "'"
+            );
         }
-        if (!has_boundary(access, false)) {
-            return fail("physical access lacks a matching explicit export boundary on resource '" +
-                        graph.resources[access.resource.index].name + "'");
+        if ((declaration.imported || declaration.exported) &&
+            !has_boundary(access, false)) {
+            return fail(
+                "physical access lacks a matching explicit export boundary on resource '" +
+                declaration.name + "'"
+            );
         }
     }
 

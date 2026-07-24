@@ -267,6 +267,16 @@ public:
         return (uint32_t)flags.GetRefCount(std::memory_order_relaxed);
     }
 
+    /**
+     * Acquire-loads the intrusive count before reporting sole ownership.
+     *
+     * This is the synchronization query for pools that reuse a resource after
+     * another thread drops its last external reference with DeRef(release).
+     */
+    [[nodiscard]] bool IsUniquelyReferenced() const {
+        return flags.GetRefCount(std::memory_order_acquire) == 1;
+    }
+
     bool IsValid() const {
         return flags.IsValid(std::memory_order_relaxed);
     }
@@ -484,6 +494,9 @@ public:
     }
     EBufferUsageFlags GetUsage() const {
         return info.usage;
+    }
+    EPixelFormat GetFormat() const {
+        return info.format;
     }
     const std::string_view GetName() const {
         return std::string_view(debug_name.has_value() ? debug_name.value().data() : default_name.data());

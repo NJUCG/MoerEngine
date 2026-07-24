@@ -235,10 +235,14 @@ bool RenderGraphCompiler::Compile() {
     }
 
     AuditStatePlanCompleteness();
+    BuildLifetimes();
+    BuildTransientAliasPlan();
+    if (!ValidateTransientAliasPlan()) {
+        return false;
+    }
     BuildQueuePlan();
     BuildDependencyWaves();
     BuildRecordingBatches();
-    BuildLifetimes();
     graph.compiled = true;
     return true;
 }
@@ -1074,7 +1078,28 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
 
     for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
         const auto& resource = graph.resources[resource_index];
-        if (!resource.imported && !resource_ever_written[resource_index]) {
+        const bool has_gpu_access = std::any_of(
+            graph.compiled_plan.accesses.begin(),
+            graph.compiled_plan.accesses.end(),
+            [&](const RenderGraph::CompiledAccess& access) {
+                return access.resource.index == resource_index;
+            }
+        );
+        const bool has_opaque_reference = std::any_of(
+            graph.passes.begin(),
+            graph.passes.end(),
+            [&](const RenderGraph::PassDeclaration& pass) {
+                return std::any_of(
+                    pass.references.begin(),
+                    pass.references.end(),
+                    [&](RenderGraph::ResourceHandle reference) {
+                        return reference.index == resource_index;
+                    }
+                );
+            }
+        );
+        if (!resource.imported && (has_gpu_access || has_opaque_reference) &&
+            !resource_ever_written[resource_index]) {
             return Fail("transient resource has no producer: " + resource.name);
         }
         if (resource.exported) {
@@ -1707,10 +1732,568 @@ void RenderGraphCompiler::BuildLifetimes() {
             .first_use     = resource.first_use,
             .last_use      = resource.last_use,
             .version_count = resource_version_counts[resource_index],
+            .transient_slot = RenderGraph::PassHandle::InvalidIndex,
             .imported      = resource.imported,
             .exported      = resource.exported
         });
     }
+}
+
+void RenderGraphCompiler::BuildTransientAliasPlan() {
+    using CompiledAccess = RenderGraph::CompiledAccess;
+
+    struct Candidate {
+        uint32_t              resource_index = RenderGraph::PassHandle::InvalidIndex;
+        const CompiledAccess* first_access   = nullptr;
+        const CompiledAccess* last_access    = nullptr;
+        bool                  reusable       = false;
+    };
+
+    struct AliasSlot {
+        uint32_t                  id              = RenderGraph::PassHandle::InvalidIndex;
+        uint32_t                  tail_resource   = RenderGraph::PassHandle::InvalidIndex;
+        uint32_t                  available_after = RenderGraph::PassHandle::InvalidIndex;
+    };
+
+    const auto is_whole_range =
+        [](const RenderGraph::ResourceDeclaration& resource,
+           const RenderGraph::ResourceRange&       range) {
+            if (range.kind != resource.kind) {
+                return false;
+            }
+            if (resource.kind == ResourceKind::Texture) {
+                return range.texture.aspects == resource.texture_desc.aspects &&
+                       range.texture.mip_first == 0 &&
+                       range.texture.mip_count == resource.texture_desc.mip_count &&
+                       range.texture.layer_first == 0 &&
+                       range.texture.layer_count == resource.texture_desc.layer_count;
+            }
+            if (resource.kind == ResourceKind::Buffer) {
+                return range.buffer.offset == 0 &&
+                       range.buffer.size == resource.buffer_desc.byte_size;
+            }
+            return false;
+        };
+
+    const auto descriptors_match =
+        [&](uint32_t lhs_index, uint32_t rhs_index) {
+            const auto& lhs = graph.resources[lhs_index];
+            const auto& rhs = graph.resources[rhs_index];
+            if (lhs.kind != rhs.kind) {
+                return false;
+            }
+            if (lhs.kind == ResourceKind::Texture) {
+                return lhs.transient_texture_desc.has_value() &&
+                       rhs.transient_texture_desc.has_value() &&
+                       *lhs.transient_texture_desc == *rhs.transient_texture_desc;
+            }
+            if (lhs.kind == ResourceKind::Buffer) {
+                return lhs.transient_buffer_desc.has_value() &&
+                       rhs.transient_buffer_desc.has_value() &&
+                       *lhs.transient_buffer_desc == *rhs.transient_buffer_desc;
+            }
+            return false;
+        };
+
+    std::vector<uint32_t> execution_position(
+        graph.passes.size(),
+        RenderGraph::PassHandle::InvalidIndex
+    );
+    for (uint32_t position = 0; position < graph.compiled_plan.execution_order.size();
+         ++position) {
+        execution_position[graph.compiled_plan.execution_order[position].index] = position;
+    }
+
+    std::vector<Candidate> candidates{};
+    candidates.reserve(graph.resources.size());
+    for (uint32_t resource_index = 0; resource_index < graph.resources.size();
+         ++resource_index) {
+        auto&       compiled_resource = graph.compiled_plan.resources[resource_index];
+        const auto& resource          = graph.resources[resource_index];
+        const bool  allocation_backed =
+            !resource.imported &&
+            (resource.transient_texture_desc.has_value() ||
+             resource.transient_buffer_desc.has_value());
+        if (!allocation_backed ||
+            compiled_resource.first_use == RenderGraph::PassHandle::InvalidIndex) {
+            continue;
+        }
+
+        Candidate candidate{.resource_index = resource_index};
+        std::vector<const CompiledAccess*> accesses{};
+        for (const auto& access : graph.compiled_plan.accesses) {
+            if (access.resource.index == resource_index) {
+                accesses.push_back(&access);
+            }
+        }
+
+        const bool has_opaque_reference =
+            std::any_of(
+                graph.passes.begin(),
+                graph.passes.end(),
+                [&](const RenderGraph::PassDeclaration& pass) {
+                    return std::any_of(
+                        pass.references.begin(),
+                        pass.references.end(),
+                        [&](RenderGraph::ResourceHandle reference) {
+                            return reference.index == resource_index;
+                        }
+                    );
+                }
+            );
+
+        uint32_t first_access_count = 0;
+        uint32_t last_access_count  = 0;
+        bool     accesses_are_safe  = !accesses.empty();
+        for (const auto* access : accesses) {
+            const uint32_t position = execution_position[access->pass.index];
+            if (position == compiled_resource.first_use) {
+                candidate.first_access = access;
+                ++first_access_count;
+            }
+            if (position == compiled_resource.last_use) {
+                candidate.last_access = access;
+                ++last_access_count;
+            }
+            accesses_are_safe &=
+                position != RenderGraph::PassHandle::InvalidIndex &&
+                access->domain.queue == RenderGraph::QueueRole::Graphics &&
+                !access->state.IsAutomatic() && !access->state.IsUndefined() &&
+                is_whole_range(resource, access->range);
+        }
+
+        candidate.reusable =
+            !resource.exported && !has_opaque_reference && accesses_are_safe &&
+            resource_cells[resource_index].size() == 1 &&
+            first_access_count == 1 && last_access_count == 1 &&
+            candidate.first_access != nullptr && candidate.last_access != nullptr &&
+            candidate.first_access->mode == RenderGraph::AccessMode::Write;
+        candidates.push_back(candidate);
+    }
+
+    std::sort(
+        candidates.begin(),
+        candidates.end(),
+        [&](const Candidate& lhs, const Candidate& rhs) {
+            const auto& lhs_resource =
+                graph.compiled_plan.resources[lhs.resource_index];
+            const auto& rhs_resource =
+                graph.compiled_plan.resources[rhs.resource_index];
+            return lhs_resource.first_use < rhs_resource.first_use ||
+                   (lhs_resource.first_use == rhs_resource.first_use &&
+                    lhs.resource_index < rhs.resource_index);
+        }
+    );
+
+    uint32_t               next_slot = 0;
+    std::vector<AliasSlot> reusable_slots{};
+    for (const auto& candidate : candidates) {
+        auto& compiled_resource =
+            graph.compiled_plan.resources[candidate.resource_index];
+
+        AliasSlot* selected_slot = nullptr;
+        if (candidate.reusable) {
+            for (auto& slot : reusable_slots) {
+                if (slot.available_after >= compiled_resource.first_use ||
+                    !descriptors_match(slot.tail_resource, candidate.resource_index)) {
+                    continue;
+                }
+                if (selected_slot == nullptr ||
+                    slot.available_after > selected_slot->available_after ||
+                    (slot.available_after == selected_slot->available_after &&
+                     slot.id < selected_slot->id)) {
+                    selected_slot = &slot;
+                }
+            }
+        }
+
+        std::vector<RenderGraph::CompiledBarrierSource> alias_sources{};
+        const AtomicCell* predecessor_cell = nullptr;
+        const RenderGraph::CompiledBarrierSource* primary_source = nullptr;
+        if (selected_slot != nullptr &&
+            resource_cells[selected_slot->tail_resource].size() == 1) {
+            predecessor_cell =
+                &resource_cells[selected_slot->tail_resource].front();
+            alias_sources = predecessor_cell->readers;
+            if (predecessor_cell->last_writer_source.pass.IsValid() &&
+                std::find(
+                    alias_sources.begin(),
+                    alias_sources.end(),
+                    predecessor_cell->last_writer_source
+                ) == alias_sources.end()) {
+                alias_sources.push_back(
+                    predecessor_cell->last_writer_source
+                );
+            }
+            std::sort(
+                alias_sources.begin(),
+                alias_sources.end(),
+                [&](const RenderGraph::CompiledBarrierSource& lhs,
+                    const RenderGraph::CompiledBarrierSource& rhs) {
+                    return execution_position[lhs.pass.index] <
+                           execution_position[rhs.pass.index];
+                }
+            );
+            alias_sources.erase(
+                std::unique(alias_sources.begin(), alias_sources.end()),
+                alias_sources.end()
+            );
+            if (!alias_sources.empty()) {
+                primary_source = &alias_sources.back();
+            }
+        }
+
+        RenderGraph::CompiledBarrier* alias_barrier       = nullptr;
+        uint32_t alias_barrier_index =
+            RenderGraph::PassHandle::InvalidIndex;
+        if (selected_slot != nullptr && predecessor_cell != nullptr &&
+            primary_source != nullptr &&
+            execution_position[primary_source->pass.index] <
+                compiled_resource.first_use) {
+            for (uint32_t barrier_index = 0;
+                 barrier_index < graph.compiled_plan.barriers.size();
+                 ++barrier_index) {
+                auto& barrier = graph.compiled_plan.barriers[barrier_index];
+                if (barrier.resource.index == candidate.resource_index &&
+                    barrier.dst_pass == candidate.first_access->pass &&
+                    barrier.range == candidate.first_access->range &&
+                    !barrier.src_pass.IsValid() && barrier.sources.empty() &&
+                    barrier.before_state.IsUndefined() &&
+                    barrier.after_state == candidate.first_access->state &&
+                    barrier.after_access == candidate.first_access->mode &&
+                    !barrier.import_boundary && !barrier.export_boundary) {
+                    alias_barrier       = &barrier;
+                    alias_barrier_index = barrier_index;
+                    break;
+                }
+            }
+        }
+
+        if (selected_slot == nullptr || alias_barrier == nullptr ||
+            predecessor_cell == nullptr || primary_source == nullptr) {
+            compiled_resource.transient_slot = next_slot;
+            if (candidate.reusable) {
+                reusable_slots.push_back(AliasSlot{
+                    .id              = next_slot,
+                    .tail_resource   = candidate.resource_index,
+                    .available_after = compiled_resource.last_use,
+                });
+            }
+            ++next_slot;
+            continue;
+        }
+
+        const auto predecessor_resource = selected_slot->tail_resource;
+        alias_barrier->src_pass       = primary_source->pass;
+        alias_barrier->before_state   = predecessor_cell->state;
+        alias_barrier->before_access  = primary_source->access;
+        alias_barrier->src_domain     = primary_source->domain;
+        alias_barrier->state_transition =
+            !StatesCompatible(predecessor_cell->state, candidate.first_access->state);
+        alias_barrier->memory_dependency         = true;
+        alias_barrier->execution_dependency      = true;
+        alias_barrier->queue_dependency          = false;
+        alias_barrier->queue_ownership           = false;
+        alias_barrier->discard_previous_contents = false;
+        alias_barrier->source_state_unknown      = false;
+        alias_barrier->transient_alias           = true;
+        alias_barrier->sources                    = alias_sources;
+
+        compiled_resource.transient_slot = selected_slot->id;
+        graph.compiled_plan.alias_boundaries.push_back(
+            RenderGraph::CompiledAliasBoundary{
+                .transient_slot       = selected_slot->id,
+                .predecessor_resource = RenderGraph::ResourceHandle{
+                    predecessor_resource, graph.graph_id
+                },
+                .successor_resource = RenderGraph::ResourceHandle{
+                    candidate.resource_index, graph.graph_id
+                },
+                .primary_src_pass = primary_source->pass,
+                .source_frontier = [&] {
+                    std::vector<RenderGraph::PassHandle> result{};
+                    result.reserve(alias_sources.size());
+                    for (const auto& source : alias_sources) {
+                        result.push_back(source.pass);
+                    }
+                    return result;
+                }(),
+                .dst_pass      = candidate.first_access->pass,
+                .barrier_index = alias_barrier_index,
+            }
+        );
+        for (const auto& source : alias_sources) {
+            assert(
+                execution_position[source.pass.index] <
+                compiled_resource.first_use
+            );
+            AddEdge(
+                source.pass.index,
+                candidate.first_access->pass.index,
+                RenderGraph::CompiledEdgeReason{
+                    .kind = RenderGraph::EdgeReasonKind::TransientAlias,
+                    .resource = RenderGraph::ResourceHandle{
+                        candidate.resource_index, graph.graph_id
+                    },
+                    .range          = candidate.first_access->range,
+                    .input_version  = candidate.first_access->input_version,
+                    .output_version = candidate.first_access->output_version,
+                }
+            );
+        }
+
+        selected_slot->tail_resource   = candidate.resource_index;
+        selected_slot->available_after = compiled_resource.last_use;
+    }
+
+    // Alias edges are added after the semantic topological audit. They always
+    // point forward in the immutable execution order, so the existing order
+    // remains valid; restore canonical edge/reason order for all consumers.
+    std::sort(
+        graph.compiled_plan.edges.begin(),
+        graph.compiled_plan.edges.end(),
+        [](const RenderGraph::CompiledEdge& lhs, const RenderGraph::CompiledEdge& rhs) {
+            return lhs.src.index < rhs.src.index ||
+                   (lhs.src.index == rhs.src.index && lhs.dst.index < rhs.dst.index);
+        }
+    );
+    for (auto& edge : graph.compiled_plan.edges) {
+        std::sort(edge.reasons.begin(), edge.reasons.end(), ReasonLess);
+    }
+}
+
+bool RenderGraphCompiler::ValidateTransientAliasPlan() {
+    const auto& plan = graph.compiled_plan;
+    if (plan.resources.size() != graph.resources.size()) {
+        return Fail("transient alias plan has an incomplete resource table");
+    }
+
+    std::vector<uint32_t> execution_position(
+        graph.passes.size(),
+        RenderGraph::PassHandle::InvalidIndex
+    );
+    std::vector<uint32_t> topological_position(
+        graph.passes.size(),
+        RenderGraph::PassHandle::InvalidIndex
+    );
+    for (uint32_t position = 0; position < plan.execution_order.size(); ++position) {
+        execution_position[plan.execution_order[position].index] = position;
+    }
+    for (uint32_t position = 0; position < plan.topological_order.size(); ++position) {
+        topological_position[plan.topological_order[position].index] = position;
+    }
+
+    const auto descriptors_match = [&](uint32_t lhs_index, uint32_t rhs_index) {
+        const auto& lhs = graph.resources[lhs_index];
+        const auto& rhs = graph.resources[rhs_index];
+        if (lhs.kind != rhs.kind) {
+            return false;
+        }
+        if (lhs.kind == ResourceKind::Texture) {
+            return lhs.transient_texture_desc.has_value() &&
+                   rhs.transient_texture_desc.has_value() &&
+                   *lhs.transient_texture_desc == *rhs.transient_texture_desc;
+        }
+        if (lhs.kind == ResourceKind::Buffer) {
+            return lhs.transient_buffer_desc.has_value() &&
+                   rhs.transient_buffer_desc.has_value() &&
+                   *lhs.transient_buffer_desc == *rhs.transient_buffer_desc;
+        }
+        return false;
+    };
+
+    const auto has_alias_edge =
+        [&](RenderGraph::PassHandle source,
+            RenderGraph::PassHandle destination,
+            RenderGraph::ResourceHandle resource,
+            const RenderGraph::ResourceRange& range) {
+            return std::any_of(
+                plan.edges.begin(),
+                plan.edges.end(),
+                [&](const RenderGraph::CompiledEdge& edge) {
+                    return edge.src == source && edge.dst == destination &&
+                           std::any_of(
+                               edge.reasons.begin(),
+                               edge.reasons.end(),
+                               [&](const RenderGraph::CompiledEdgeReason& reason) {
+                                   return reason.kind ==
+                                              RenderGraph::EdgeReasonKind::TransientAlias &&
+                                          reason.resource == resource &&
+                                          reason.range == range;
+                               }
+                           );
+                }
+            );
+        };
+
+    for (const auto& edge : plan.edges) {
+        if (!graph.IsValidPass(edge.src) || !graph.IsValidPass(edge.dst) ||
+            topological_position[edge.src.index] ==
+                RenderGraph::PassHandle::InvalidIndex ||
+            topological_position[edge.dst.index] ==
+                RenderGraph::PassHandle::InvalidIndex ||
+            topological_position[edge.src.index] >=
+                topological_position[edge.dst.index]) {
+            return Fail(
+                "transient alias planning invalidated the compiled topological order"
+            );
+        }
+    }
+
+    std::vector<uint32_t> alias_barrier_owners(plan.barriers.size(), 0);
+    for (const auto& alias : plan.alias_boundaries) {
+        if (!graph.IsValidResource(alias.predecessor_resource) ||
+            !graph.IsValidResource(alias.successor_resource) ||
+            !graph.IsValidPass(alias.primary_src_pass) ||
+            !graph.IsValidPass(alias.dst_pass) ||
+            alias.barrier_index >= plan.barriers.size() ||
+            alias.source_frontier.empty()) {
+            return Fail("transient alias boundary contains an invalid handle or index");
+        }
+
+        const uint32_t predecessor_index = alias.predecessor_resource.index;
+        const uint32_t successor_index   = alias.successor_resource.index;
+        const auto& predecessor = plan.resources[predecessor_index];
+        const auto& successor   = plan.resources[successor_index];
+        const auto& predecessor_declaration = graph.resources[predecessor_index];
+        const auto& successor_declaration   = graph.resources[successor_index];
+        if (predecessor.transient_slot == RenderGraph::PassHandle::InvalidIndex ||
+            predecessor.transient_slot != alias.transient_slot ||
+            successor.transient_slot != alias.transient_slot ||
+            predecessor.first_use == RenderGraph::PassHandle::InvalidIndex ||
+            predecessor.last_use == RenderGraph::PassHandle::InvalidIndex ||
+            successor.first_use == RenderGraph::PassHandle::InvalidIndex ||
+            successor.last_use == RenderGraph::PassHandle::InvalidIndex ||
+            predecessor.last_use >= successor.first_use ||
+            predecessor_declaration.imported ||
+            successor_declaration.imported ||
+            predecessor_declaration.exported ||
+            successor_declaration.exported ||
+            !descriptors_match(predecessor_index, successor_index)) {
+            return Fail("transient alias boundary violates slot or lifetime compatibility");
+        }
+
+        const auto& barrier = plan.barriers[alias.barrier_index];
+        ++alias_barrier_owners[alias.barrier_index];
+        if (!barrier.transient_alias ||
+            barrier.resource != alias.successor_resource ||
+            barrier.src_pass != alias.primary_src_pass ||
+            barrier.dst_pass != alias.dst_pass ||
+            !barrier.memory_dependency || !barrier.execution_dependency ||
+            barrier.queue_dependency || barrier.queue_ownership ||
+            barrier.discard_previous_contents || barrier.import_boundary ||
+            barrier.export_boundary || barrier.source_state_unknown ||
+            barrier.sources.size() != alias.source_frontier.size()) {
+            return Fail("transient alias boundary and barrier metadata disagree");
+        }
+
+        for (uint32_t source_index = 0;
+             source_index < alias.source_frontier.size();
+             ++source_index) {
+            const auto source = alias.source_frontier[source_index];
+            if (!graph.IsValidPass(source) ||
+                barrier.sources[source_index].pass != source ||
+                execution_position[source.index] ==
+                    RenderGraph::PassHandle::InvalidIndex ||
+                execution_position[alias.dst_pass.index] ==
+                    RenderGraph::PassHandle::InvalidIndex ||
+                execution_position[source.index] >=
+                    execution_position[alias.dst_pass.index] ||
+                !has_alias_edge(
+                    source,
+                    alias.dst_pass,
+                    alias.successor_resource,
+                    barrier.range
+                )) {
+                return Fail(
+                    "transient alias source frontier is not fully ordered before its successor"
+                );
+            }
+        }
+        if (alias.source_frontier.back() != alias.primary_src_pass) {
+            return Fail("transient alias primary source is not the latest frontier source");
+        }
+    }
+
+    for (uint32_t barrier_index = 0; barrier_index < plan.barriers.size();
+         ++barrier_index) {
+        const uint32_t owner_count = alias_barrier_owners[barrier_index];
+        if ((plan.barriers[barrier_index].transient_alias && owner_count != 1) ||
+            (!plan.barriers[barrier_index].transient_alias && owner_count != 0)) {
+            return Fail(
+                "transient alias barrier does not have exactly one boundary owner"
+            );
+        }
+    }
+
+    uint32_t max_slot = 0;
+    bool     has_slot = false;
+    for (const auto& resource : plan.resources) {
+        if (resource.transient_slot != RenderGraph::PassHandle::InvalidIndex) {
+            max_slot = std::max(max_slot, resource.transient_slot);
+            has_slot = true;
+        }
+    }
+    for (uint32_t slot = 0; has_slot && slot <= max_slot; ++slot) {
+        std::vector<uint32_t> occupants{};
+        for (uint32_t resource_index = 0; resource_index < plan.resources.size();
+             ++resource_index) {
+            if (plan.resources[resource_index].transient_slot == slot) {
+                occupants.push_back(resource_index);
+            }
+        }
+        if (occupants.empty()) {
+            continue;
+        }
+        std::sort(
+            occupants.begin(),
+            occupants.end(),
+            [&](uint32_t lhs, uint32_t rhs) {
+                const auto& lhs_resource = plan.resources[lhs];
+                const auto& rhs_resource = plan.resources[rhs];
+                return lhs_resource.first_use < rhs_resource.first_use ||
+                       (lhs_resource.first_use == rhs_resource.first_use &&
+                        lhs < rhs);
+            }
+        );
+        for (uint32_t index = 0; index < occupants.size(); ++index) {
+            const auto resource_index = occupants[index];
+            const auto& resource      = plan.resources[resource_index];
+            if (resource.first_use == RenderGraph::PassHandle::InvalidIndex ||
+                resource.last_use == RenderGraph::PassHandle::InvalidIndex ||
+                graph.resources[resource_index].imported) {
+                return Fail("transient slot contains an inactive or imported resource");
+            }
+            if (index == 0) {
+                continue;
+            }
+            const uint32_t predecessor_index = occupants[index - 1];
+            const auto& predecessor = plan.resources[predecessor_index];
+            if (predecessor.last_use >= resource.first_use ||
+                !descriptors_match(predecessor_index, resource_index)) {
+                return Fail(
+                    "transient slot occupants overlap or have incompatible descriptors"
+                );
+            }
+            const bool has_boundary = std::any_of(
+                plan.alias_boundaries.begin(),
+                plan.alias_boundaries.end(),
+                [&](const RenderGraph::CompiledAliasBoundary& alias) {
+                    return alias.transient_slot == slot &&
+                           alias.predecessor_resource.index ==
+                               predecessor_index &&
+                           alias.successor_resource.index == resource_index;
+                }
+            );
+            if (!has_boundary) {
+                return Fail(
+                    "adjacent transient slot occupants lack an alias boundary"
+                );
+            }
+        }
+    }
+
+    return true;
 }
 
 bool RenderGraphCompiler::RangesOverlap(const ResourceRange& lhs, const ResourceRange& rhs) {

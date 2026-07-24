@@ -449,6 +449,341 @@ void RunActiveRdgExplicitBarrierReadback(bool _parallel) {
     );
 }
 
+void RunActiveRdgTransientAliasReadback(bool _parallel) {
+    constexpr uint64_t byte_size = sizeof(uint32) * kElementCount;
+    const RGTransientBufferDesc transient_desc{
+        .element_count = kElementCount,
+        .stride        = sizeof(uint32),
+        .usage         = EBufferUsageFlags::TRANSFER_SRC |
+                         EBufferUsageFlags::TRANSFER_DST,
+    };
+
+    std::array<uint32, kElementCount> first_values{};
+    std::array<uint32, kElementCount> expected{};
+    std::array<uint32, kElementCount> readback{};
+    for (uint32 index = 0; index < expected.size(); ++index) {
+        first_values[index] = 0xA1200000u + index * 19u;
+        expected[index]     = 0xA1300000u + index * 53u + 7u;
+    }
+
+    RenderGraphResourcePool       pool{};
+    RenderGraphTransientAllocator allocator(pool);
+    RenderGraph graph("ActiveRdgTransientAlias");
+    const auto first =
+        graph.CreateTransientBuffer("AliasFirst", transient_desc);
+    const auto second =
+        graph.CreateTransientBuffer("AliasSecond", transient_desc);
+
+    graph.AddRecordPass(
+        "WriteAliasFirst",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Write(
+                    first,
+                    RenderGraph::BufferState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [&graph, first, first_values](CommandList& commands) {
+            const BufferRef physical = graph.GetPhysicalBuffer(first);
+            if (!physical.IsValid()) {
+                throw std::runtime_error(
+                    "first transient alias has no physical buffer"
+                );
+            }
+            commands.CopyFrom(
+                OwnedBytes(first_values),
+                physical->GetView(),
+                "ActiveRdgAliasFirstUpload"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "WriteAliasSecond",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Write(
+                    second,
+                    RenderGraph::BufferState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [&graph, second, expected](CommandList& commands) {
+            const BufferRef physical = graph.GetPhysicalBuffer(second);
+            if (!physical.IsValid()) {
+                throw std::runtime_error(
+                    "second transient alias has no physical buffer"
+                );
+            }
+            commands.CopyFrom(
+                OwnedBytes(expected),
+                physical->GetView(),
+                "ActiveRdgAliasSecondUpload"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "ReadAliasSecond",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Read(
+                    second,
+                    RenderGraph::BufferState::TransferSource
+                )
+                .SideEffect();
+        },
+        [&graph, second, &readback](CommandList& commands) {
+            const BufferRef physical = graph.GetPhysicalBuffer(second);
+            if (!physical.IsValid()) {
+                throw std::runtime_error(
+                    "transient alias readback has no physical buffer"
+                );
+            }
+            commands.CopyFrom(
+                physical->GetView(),
+                WritableBytes(readback),
+                "ActiveRdgAliasReadback"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+
+    if (!graph.Compile()) {
+        throw std::runtime_error(
+            "active RDG transient alias compile failed: " +
+            graph.GetCompileError()
+        );
+    }
+    const auto& plan = graph.GetCompiledPlan();
+    if (plan.resources[first.resource.index].transient_slot ==
+            RenderGraph::PassHandle::InvalidIndex ||
+        plan.resources[first.resource.index].transient_slot !=
+            plan.resources[second.resource.index].transient_slot ||
+        plan.alias_boundaries.size() != 1) {
+        throw std::runtime_error(
+            "active RDG transient alias compiler plan did not reuse one slot"
+        );
+    }
+    if (transient_desc.ByteSize() != byte_size) {
+        throw std::runtime_error("transient alias descriptor byte size mismatch");
+    }
+    if (!graph.ExecuteRecording(
+            {},
+            {},
+            _parallel,
+            {},
+            RenderGraph::ActiveRecordingOptions{
+                .enabled             = true,
+                .transient_allocator = &allocator,
+            }
+        )) {
+        throw std::runtime_error(
+            "active RDG transient alias execution failed: " +
+            graph.GetCompileError()
+        );
+    }
+    if (pool.BufferCount() != 1) {
+        throw std::runtime_error(
+            "active RDG transient aliases allocated more than one buffer"
+        );
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    if (readback != expected) {
+        throw std::runtime_error(
+            "active RDG transient alias readback mismatch"
+        );
+    }
+    if (pool.AvailableBufferCount() != 1) {
+        throw std::runtime_error(
+            "active RDG transient alias allocation did not retire at Completion"
+        );
+    }
+    LOG_INFO(
+        "[TESTCASE][PASS] name=ActiveRdgTransientAlias mode={} "
+        "passes=3 slots=1 buffers=1 state_owner=rdg readback=verified",
+        _parallel ? "parallel" : "serial"
+    );
+}
+
+void RunActiveRdgTransientTextureAliasReadback(bool _parallel) {
+    constexpr uint32 kWidth      = 4;
+    constexpr uint32 kHeight     = 4;
+    constexpr uint32 kTexelCount = kWidth * kHeight;
+    const RGTransientTextureDesc transient_desc{
+        .dimension    = ETextureDimension::TEX_2D,
+        .extent       = Extent3D(kWidth, kHeight, 1),
+        .format       = PF_R8G8B8A8_UNORM,
+        .usage        = ETextureUsageFlags::TRANSFER_SRC |
+                        ETextureUsageFlags::TRANSFER_DST,
+        .aspect_flags = ETextureAspectFlags::COLOR,
+        .mip_count    = 1,
+        .array_size   = 1,
+    };
+
+    std::array<uint32, kTexelCount> first_values{};
+    std::array<uint32, kTexelCount> expected{};
+    std::array<uint32, kTexelCount> readback{};
+    for (uint32 index = 0; index < kTexelCount; ++index) {
+        first_values[index] = 0xFF102030u + index;
+        expected[index]     = 0xFF405060u + index * 0x00010101u;
+    }
+
+    RenderGraphResourcePool       pool{};
+    RenderGraphTransientAllocator allocator(pool);
+    RenderGraph graph("ActiveRdgTransientTextureAlias");
+    const auto first =
+        graph.CreateTransientTexture("TextureAliasFirst", transient_desc);
+    const auto second =
+        graph.CreateTransientTexture("TextureAliasSecond", transient_desc);
+    graph.AddRecordPass(
+        "WriteTextureAliasFirst",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Write(
+                    first,
+                    RenderGraph::TextureState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [&graph, first, first_values](CommandList& commands) {
+            const TextureRef physical = graph.GetPhysicalTexture(first);
+            if (!physical.IsValid()) {
+                throw std::runtime_error(
+                    "first transient texture alias has no physical texture"
+                );
+            }
+            commands.CopyFrom(
+                OwnedBytes(first_values),
+                physical->GetView(),
+                "ActiveRdgTextureAliasFirstUpload"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "WriteTextureAliasSecond",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Write(
+                    second,
+                    RenderGraph::TextureState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [&graph, second, expected](CommandList& commands) {
+            const TextureRef physical = graph.GetPhysicalTexture(second);
+            if (!physical.IsValid()) {
+                throw std::runtime_error(
+                    "second transient texture alias has no physical texture"
+                );
+            }
+            commands.CopyFrom(
+                OwnedBytes(expected),
+                physical->GetView(),
+                "ActiveRdgTextureAliasSecondUpload"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "ReadTextureAliasSecond",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Read(
+                    second,
+                    RenderGraph::TextureState::TransferSource
+                )
+                .SideEffect();
+        },
+        [&graph, second, &readback](CommandList& commands) {
+            const TextureRef physical = graph.GetPhysicalTexture(second);
+            if (!physical.IsValid()) {
+                throw std::runtime_error(
+                    "transient texture alias readback has no physical texture"
+                );
+            }
+            commands.CopyFrom(
+                physical->GetView(),
+                WritableBytes(readback),
+                "ActiveRdgTextureAliasReadback"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+
+    if (!graph.Compile()) {
+        throw std::runtime_error(
+            "active RDG transient texture alias compile failed: " +
+            graph.GetCompileError()
+        );
+    }
+    const auto& plan = graph.GetCompiledPlan();
+    if (plan.resources[first.resource.index].transient_slot !=
+            plan.resources[second.resource.index].transient_slot ||
+        plan.alias_boundaries.size() != 1) {
+        throw std::runtime_error(
+            "active RDG transient texture alias did not reuse one slot"
+        );
+    }
+    if (!graph.ExecuteRecording(
+            {},
+            {},
+            _parallel,
+            {},
+            RenderGraph::ActiveRecordingOptions{
+                .enabled             = true,
+                .transient_allocator = &allocator,
+            }
+        )) {
+        throw std::runtime_error(
+            "active RDG transient texture alias execution failed: " +
+            graph.GetCompileError()
+        );
+    }
+    if (pool.TextureCount() != 1) {
+        throw std::runtime_error(
+            "active RDG transient texture aliases allocated more than one texture"
+        );
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (readback != expected) {
+        throw std::runtime_error(
+            "active RDG transient texture alias readback mismatch"
+        );
+    }
+    if (pool.AvailableTextureCount() != 1) {
+        throw std::runtime_error(
+            "active RDG transient texture alias did not retire at Completion"
+        );
+    }
+    LOG_INFO(
+        "[TESTCASE][PASS] name=ActiveRdgTransientTextureAlias mode={} "
+        "passes=3 slots=1 textures=1 state_owner=rdg readback=verified",
+        _parallel ? "parallel" : "serial"
+    );
+}
+
 void RunActiveRdgTextureArraySubrange(bool _parallel) {
     auto& device = RenderDevice::Get();
     constexpr uint32 kLayerCount = 4;
@@ -1488,6 +1823,31 @@ void RunShutdownDependencyCancellation() {
     );
 }
 
+void PrimeGlobalTransientPoolForDispose() {
+    auto& pool = RenderGraphResourcePool::Global();
+    pool.Reset();
+    const RGTransientBufferDesc desc{
+        .element_count = kElementCount,
+        .stride        = sizeof(uint32),
+        .usage         = EBufferUsageFlags::TRANSFER_SRC |
+                         EBufferUsageFlags::TRANSFER_DST,
+    };
+    {
+        BufferRef resource =
+            pool.AcquireBuffer("dispose_transient_pool_probe", desc);
+        if (!resource.IsValid()) {
+            throw std::runtime_error(
+                "global transient pool dispose probe allocation failed"
+            );
+        }
+    }
+    if (pool.BufferCount() != 1 || pool.AvailableBufferCount() != 1) {
+        throw std::runtime_error(
+            "global transient pool dispose probe did not become idle"
+        );
+    }
+}
+
 } // namespace
 
 int main(int argc, const char** argv) {
@@ -1525,6 +1885,8 @@ int main(int argc, const char** argv) {
             parallel, inject_worker_failure, production_gate, production_heavy
         );
         RunActiveRdgExplicitBarrierReadback(parallel);
+        RunActiveRdgTransientAliasReadback(parallel);
+        RunActiveRdgTransientTextureAliasReadback(parallel);
         RunActiveRdgTextureArraySubrange(parallel);
         RunExplicitTextureArrayRangeShapeChange(parallel);
         RunUpperTopologyBatch();
@@ -1533,11 +1895,22 @@ int main(int argc, const char** argv) {
         RunRecoverableCopyDependencyRejection();
         RunCrossQueueTopologyBatch();
         RunRuntimeRejectCompletionOwnership();
+        PrimeGlobalTransientPoolForDispose();
         // This explicitly stops the runtime and must remain the final test
         // before device disposal.
         RunShutdownDependencyCancellation();
 
         RenderDevice::Dispose();
+        if (RenderGraphResourcePool::Global().BufferCount() != 0 ||
+            RenderGraphResourcePool::Global().TextureCount() != 0) {
+            throw std::runtime_error(
+                "RenderDevice::Dispose did not reset the global transient pool"
+            );
+        }
+        LOG_INFO(
+            "[TESTCASE][PASS] name=TransientPoolDeviceDispose "
+            "shutdown_order=executor,pool,backend cached_resources=0"
+        );
         render_device_initialized = false;
         TaskSystem::ShutDown();
         task_system_initialized = false;

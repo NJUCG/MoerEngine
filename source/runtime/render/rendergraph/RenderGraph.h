@@ -1,11 +1,13 @@
 #pragma once
 
 #include "RenderAPI.h"
+#include "rendergraph/RenderGraphResourcePool.h"
 #include "rhi/RHIExecutor.h"
 
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -393,6 +395,13 @@ public:
         /** State/data availability established by a prior pass. */
         StateTransition,
         QueueOwnership,
+        /**
+         * Two non-overlapping logical transient resources reuse one physical
+         * whole-object allocation. This is an execution dependency, not a CPU
+         * recording dependency: immutable command lists may still be recorded
+         * in parallel and are submitted in compiled order.
+         */
+        TransientAlias,
     };
 
     struct CompiledAccess {
@@ -427,6 +436,8 @@ public:
         uint32_t       first_use     = PassHandle::InvalidIndex;
         uint32_t       last_use      = PassHandle::InvalidIndex;
         uint32_t       version_count = 0;
+        /** Compiler-assigned whole-object transient allocation slot. */
+        uint32_t       transient_slot = PassHandle::InvalidIndex;
         bool           imported      = false;
         bool           exported      = false;
     };
@@ -486,8 +497,27 @@ public:
         bool             import_boundary = false;
         bool             export_boundary = false;
         bool             source_state_unknown = false;
+        /** Whole-object transient reuse boundary between two logical resources. */
+        bool             transient_alias = false;
         /** Authoritative synchronization frontier whose scopes must be represented by lowering. */
         std::vector<CompiledBarrierSource> sources{};
+    };
+
+    /**
+     * Compiler-selected reuse of one descriptor-exact physical transient slot.
+     *
+     * This models whole RHI-object reuse. It is intentionally distinct from
+     * placed-resource / shared-heap aliasing.
+     */
+    struct CompiledAliasBoundary {
+        uint32_t       transient_slot = PassHandle::InvalidIndex;
+        ResourceHandle predecessor_resource{};
+        ResourceHandle successor_resource{};
+        /** Latest source for compact diagnostics; source_frontier is authoritative. */
+        PassHandle     primary_src_pass{};
+        std::vector<PassHandle> source_frontier{};
+        PassHandle     dst_pass{};
+        uint32_t       barrier_index = PassHandle::InvalidIndex;
     };
 
     struct CompiledQueueSync {
@@ -551,6 +581,8 @@ public:
         std::vector<CompiledRecordingBatch> recording_batches{};
         /** Canonical state/memory/ownership decisions, prior to backend-specific lowering. */
         std::vector<CompiledBarrier> barriers{};
+        /** Descriptor-exact, non-overlapping whole-object transient reuse boundaries. */
+        std::vector<CompiledAliasBoundary> alias_boundaries{};
         /** Prospective multi-queue batches and their GPU wait/signal relationships. */
         std::vector<CompiledQueueBatch> queue_batches{};
         std::vector<CompiledQueueSync>  queue_syncs{};
@@ -573,6 +605,7 @@ public:
             dependency_waves.clear();
             recording_batches.clear();
             barriers.clear();
+            alias_boundaries.clear();
             queue_batches.clear();
             queue_syncs.clear();
             pass_barriers.clear();
@@ -699,8 +732,9 @@ public:
     /**
      * Opts ExecuteRecording into the authoritative RDG state path.
      *
-     * Phase 11 materializes a fully validated Graphics-only lowered plan into
-     * explicit RHI barriers. Main-thread passes record into the caller-owned
+     * Active lowering materializes a fully validated Graphics-only plan into
+     * explicit RHI barriers and allocates descriptor-backed transients from a
+     * Completion-safe pool. Main-thread passes record into the caller-owned
      * list; independently recorded passes continue to own their own lists and
      * are mutation-sealed until one graph-wide RHI transaction commits. The
      * current backend-tracker bridge requires full-buffer ranges, all physical
@@ -709,11 +743,14 @@ public:
      * one graph. A physical MainThread graph must be isolated from nonphysical
      * passes and keep its caller-owned list unsealed until ExecuteRecording
      * returns (therefore no per-pass completion observer). Leaving enabled
-     * false preserves the legacy backend-tracked path.
+     * false preserves the legacy backend-tracked path and rejects active
+     * allocation-backed transient declarations.
      */
     struct ActiveRecordingOptions {
         bool         enabled                  = false;
         CommandList* main_thread_command_list = nullptr;
+        /** Defaults to the global completion-safe pool/allocator. */
+        RenderGraphTransientAllocator* transient_allocator = nullptr;
     };
 
     explicit RenderGraph(std::string_view name = "RenderGraph");
@@ -744,7 +781,28 @@ public:
     ResourceHandle CreateTransient(std::string_view name, ResourceKind kind);
     TextureHandle  CreateTransientTexture(std::string_view name, TextureDesc desc);
     BufferHandle   CreateTransientBuffer(std::string_view name, BufferDesc desc);
+    /**
+     * Allocation-backed transient declarations. The compiler shape is derived
+     * from the physical descriptor so range validation and pool keys cannot
+     * drift apart.
+     */
+    TextureHandle CreateTransientTexture(
+        std::string_view               name,
+        const RGTransientTextureDesc& allocation_desc
+    );
+    BufferHandle CreateTransientBuffer(
+        std::string_view              name,
+        const RGTransientBufferDesc& allocation_desc
+    );
     TokenHandle    CreateTransientToken(std::string_view name);
+
+    /**
+     * Valid during the declaring pass callback after active allocation.
+     * Retaining a physical ref beyond that callback is an RDG lifetime escape;
+     * declare PassBuilder::Reference wherever the object must remain live.
+     */
+    [[nodiscard]] TextureRef GetPhysicalTexture(TextureHandle resource) const;
+    [[nodiscard]] BufferRef  GetPhysicalBuffer(BufferHandle resource) const;
 
     void Export(ResourceHandle resource);
     void Export(TextureHandle resource) {
@@ -853,6 +911,7 @@ public:
 private:
     friend class RenderGraphCompiler;
     friend class RenderGraphLowering;
+    friend class RenderGraphTransientAllocator;
 
     struct AccessDeclaration {
         ResourceHandle resource{};
@@ -880,6 +939,8 @@ private:
         BufferRef                physical_buffer{};
         TextureDesc              texture_desc{};
         BufferDesc               buffer_desc{};
+        std::optional<RGTransientTextureDesc> transient_texture_desc{};
+        std::optional<RGTransientBufferDesc>  transient_buffer_desc{};
         bool                     typed_desc = false;
         bool                     imported   = false;
         bool                     exported   = false;
@@ -935,6 +996,7 @@ private:
         bool           initial
     );
     bool MarkExported(ResourceHandle resource, bool whole_resource);
+    void ReleaseNonExportedTransientBindings() noexcept;
     void AddDependency(uint32_t pass_index, PassHandle dependency);
     void AddReference(uint32_t pass_index, ResourceHandle resource);
     void MarkSideEffect(uint32_t pass_index);

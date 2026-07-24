@@ -4,6 +4,7 @@
 #include "RHIImpl.h"
 #include "d3d12/D3D12Device.h"
 #include "log/LogSystem.h"
+#include "rendergraph/RenderGraphResourcePool.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIExecutor.h"
@@ -85,6 +86,10 @@ void RenderDevice::Init(DeviceInitInfo&& _info) {
 }
 void RenderDevice::Dispose() {
     RHIExecutor::ShutDown();
+    // Pooled RHI objects must die while the backend implementation and its
+    // allocators are still alive. In-flight owners have already drained with
+    // the executor; Reset only releases the pool's final cache references.
+    RenderGraphResourcePool::Global().Reset();
     Get().impl.reset();
 }
 CommandQueue& RenderDevice::GetCommandQueue(EQueueType _type) {

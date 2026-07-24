@@ -69,6 +69,8 @@ private:
     void BuildDependencyWaves();
     void BuildRecordingBatches();
     void BuildLifetimes();
+    void BuildTransientAliasPlan();
+    bool ValidateTransientAliasPlan();
 
     bool NormalizeRange(
         const RenderGraph::ResourceDeclaration& resource,

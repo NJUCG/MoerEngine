@@ -14,10 +14,11 @@ namespace Moer::Render {
 /**
  * CPU-only lowering of a complete RenderGraph compiler plan.
  *
- * Phase 11 intentionally supports a narrow, auditable subset: strongly bound
- * imported resources, explicit states at every physical access and boundary,
- * and the Graphics logical queue only. Unsupported plans fail closed before
- * producing any instructions. RHI command materialization is a separate step.
+ * Active lowering intentionally supports a narrow, auditable subset: strongly
+ * bound imported or allocation-backed transient resources, explicit states at
+ * every physical access and external boundary, and the Graphics logical queue
+ * only. Unsupported plans fail closed before producing any instructions. RHI
+ * command materialization is a separate step.
  */
 class RENDER_API RenderGraphLowering {
 public:
@@ -90,6 +91,7 @@ public:
         bool discard_previous_contents = false;
         bool import_boundary           = false;
         bool export_boundary           = false;
+        bool transient_alias           = false;
     };
 
     struct PassInstructions {

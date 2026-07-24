@@ -128,6 +128,9 @@ public:
         return CreateBuffer(_name, _element_cnt, sizeof(TElement), _usage, _format);
     }
 
+    /** Runtime-stride allocation used by resource pools and typed graph allocators. */
+    RENDER_API BufferRef CreateBuffer(std::string_view _name, const BufferInfo& _info);
+
     RENDER_API BufferRef CreateStagingBuffer(uint64_t _byte_size);
 
     RENDER_API TextureRef CreateTexture(

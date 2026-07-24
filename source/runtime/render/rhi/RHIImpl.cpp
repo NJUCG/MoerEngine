@@ -6,6 +6,10 @@
 #include "shader/ShaderResourceManager.h"
 
 #include "rhi/plugin/NrdPlugin.h"
+
+#include <limits>
+#include <stdexcept>
+
 namespace Moer::Render {
 PipelineHandle RenderDevice::CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) {
     return impl->CreatePipeline(std::move(_pso_info), std::move(_shaders));
@@ -97,6 +101,19 @@ BufferRef RenderDevice::CreateBuffer(
     EPixelFormat      _format
 ) {
     return impl->CreateBuffer(_name, _element_cnt, _stride, _usage, _format);
+}
+
+BufferRef RenderDevice::CreateBuffer(std::string_view _name, const BufferInfo& _info) {
+    if (_info.size > std::numeric_limits<uint>::max()) {
+        throw std::out_of_range("buffer element count exceeds the current RHI limit");
+    }
+    return CreateBuffer(
+        _name,
+        static_cast<uint>(_info.size),
+        _info.stride,
+        _info.usage,
+        _info.format
+    );
 }
 
 IOInterfaceRef RenderDevice::CreateIOInterface(CopyQueue& _copy_queue) {

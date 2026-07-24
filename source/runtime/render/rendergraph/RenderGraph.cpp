@@ -72,6 +72,8 @@ const char* ToString(RenderGraph::EdgeReasonKind kind) {
             return "state";
         case RenderGraph::EdgeReasonKind::QueueOwnership:
             return "ownership";
+        case RenderGraph::EdgeReasonKind::TransientAlias:
+            return "transient-alias";
     }
     return "unknown";
 }
@@ -558,13 +560,29 @@ RenderGraph::PassBuilder::ExecuteOn(QueueRole queue, PipelineType pipeline) {
     return EQueueType::Ignore;
 }
 
+[[nodiscard]] RenderGraph::TextureAspect
+RaiseTextureAspects(ETextureAspectFlags aspects) {
+    RenderGraph::TextureAspect result = RenderGraph::TextureAspect::None;
+    const uint32_t mask = static_cast<uint32_t>(aspects);
+    if ((mask & static_cast<uint32_t>(ETextureAspectFlags::COLOR)) != 0) {
+        result = result | RenderGraph::TextureAspect::Color;
+    }
+    if ((mask & static_cast<uint32_t>(ETextureAspectFlags::DEPTH_SLICE)) != 0) {
+        result = result | RenderGraph::TextureAspect::Depth;
+    }
+    if ((mask & static_cast<uint32_t>(ETextureAspectFlags::STENCIL_SLICE)) != 0) {
+        result = result | RenderGraph::TextureAspect::Stencil;
+    }
+    return result;
+}
+
 struct MaterializedPassState {
     std::vector<BarrierCreateInfo>                    before{};
     std::vector<BarrierCreateInfo>                    after{};
     std::vector<RenderGraphLowering::PhysicalBinding> keepalive{};
 
-    [[nodiscard]] bool HasPhysicalState() const {
-        return !before.empty() || !after.empty();
+    [[nodiscard]] bool RequiresCompletionLifetime() const {
+        return !before.empty() || !after.empty() || !keepalive.empty();
     }
 };
 
@@ -850,8 +868,88 @@ RenderGraph::CreateTransientBuffer(std::string_view resource_name, BufferDesc de
     return BufferHandle{CreateTransientInternal(resource_name, ResourceKind::Buffer, nullptr, &desc)};
 }
 
+RenderGraph::TextureHandle RenderGraph::CreateTransientTexture(
+    std::string_view               resource_name,
+    const RGTransientTextureDesc& allocation_desc
+) {
+    if (!allocation_desc.IsValid()) {
+        if (InvalidateCompile()) {
+            declaration_errors.emplace_back(
+                "transient texture allocation descriptor is invalid: " +
+                std::string(resource_name)
+            );
+        }
+        return {};
+    }
+    const TextureDesc logical_desc{
+        .mip_count   = allocation_desc.mip_count,
+        .layer_count = allocation_desc.PhysicalLayerCount(),
+        .aspects     = RaiseTextureAspects(allocation_desc.aspect_flags),
+    };
+    const auto handle =
+        TextureHandle{CreateTransientInternal(
+            resource_name,
+            ResourceKind::Texture,
+            &logical_desc,
+            nullptr
+        )};
+    if (handle.IsValid()) {
+        resources[handle.resource.index].transient_texture_desc =
+            allocation_desc;
+    }
+    return handle;
+}
+
+RenderGraph::BufferHandle RenderGraph::CreateTransientBuffer(
+    std::string_view              resource_name,
+    const RGTransientBufferDesc& allocation_desc
+) {
+    if (!allocation_desc.IsValid()) {
+        if (InvalidateCompile()) {
+            declaration_errors.emplace_back(
+                "transient buffer allocation descriptor is invalid: " +
+                std::string(resource_name)
+            );
+        }
+        return {};
+    }
+    const BufferDesc logical_desc{.byte_size = allocation_desc.ByteSize()};
+    const auto handle =
+        BufferHandle{CreateTransientInternal(
+            resource_name,
+            ResourceKind::Buffer,
+            nullptr,
+            &logical_desc
+        )};
+    if (handle.IsValid()) {
+        resources[handle.resource.index].transient_buffer_desc =
+            allocation_desc;
+    }
+    return handle;
+}
+
 RenderGraph::TokenHandle RenderGraph::CreateTransientToken(std::string_view resource_name) {
     return TokenHandle{CreateTransientInternal(resource_name, ResourceKind::Token, nullptr, nullptr)};
+}
+
+TextureRef RenderGraph::GetPhysicalTexture(TextureHandle resource) const {
+    if (!IsValidResource(resource.Untyped())) {
+        return {};
+    }
+    const auto& declaration = resources[resource.resource.index];
+    return declaration.kind == ResourceKind::Texture ?
+               declaration.physical_texture :
+               TextureRef{};
+}
+
+BufferRef RenderGraph::GetPhysicalBuffer(BufferHandle resource) const {
+    if (!IsValidResource(resource.Untyped())) {
+        return {};
+    }
+    const auto& declaration = resources[resource.resource.index];
+    return declaration.kind == ResourceKind::Buffer ?
+               declaration.physical_buffer :
+               BufferRef{};
 }
 
 RenderGraph::ResourceHandle RenderGraph::CreateTransientInternal(
@@ -1086,6 +1184,20 @@ bool RenderGraph::Execute(const PassCompletedCallback& after_pass) {
         compile_error = "a per-frame RenderGraph can only be executed once";
         return false;
     }
+    const bool has_active_allocation_backed_transient = std::any_of(
+        compiled_plan.resources.begin(),
+        compiled_plan.resources.end(),
+        [](const CompiledResource& resource) {
+            return !resource.imported &&
+                   resource.first_use != PassHandle::InvalidIndex &&
+                   resource.transient_slot != PassHandle::InvalidIndex;
+        }
+    );
+    if (has_active_allocation_backed_transient) {
+        compile_error =
+            "allocation-backed transient resources require active ExecuteRecording";
+        return false;
+    }
     if (std::any_of(compiled_plan.execution_order.begin(),
                     compiled_plan.execution_order.end(),
                     [&](PassHandle handle) { return static_cast<bool>(passes[handle.index].record); })) {
@@ -1127,9 +1239,51 @@ bool RenderGraph::ExecuteRecording(
         return false;
     }
 
+    struct TransientBindingReleaseGuard {
+        RenderGraphTransientAllocator* allocator{nullptr};
+        RenderGraph*                   graph{nullptr};
+        bool                           armed{false};
+
+        ~TransientBindingReleaseGuard() {
+            if (armed && allocator != nullptr && graph != nullptr) {
+                allocator->ReleaseNonExported(*graph);
+            }
+        }
+    };
+
+    const bool has_active_allocation_backed_transient = std::any_of(
+        compiled_plan.resources.begin(),
+        compiled_plan.resources.end(),
+        [](const CompiledResource& resource) {
+            return !resource.imported &&
+                   resource.first_use != PassHandle::InvalidIndex &&
+                   resource.transient_slot != PassHandle::InvalidIndex;
+        }
+    );
+    if (has_active_allocation_backed_transient && !active_recording.enabled) {
+        compile_error =
+            "allocation-backed transient resources require active recording";
+        return false;
+    }
+
     std::vector<MaterializedPassState> active_pass_states(passes.size());
+    TransientBindingReleaseGuard transient_release_guard{};
     bool active_has_physical_main_thread = false;
+    RenderGraphTransientAllocator* active_transient_allocator = nullptr;
     if (active_recording.enabled) {
+        active_transient_allocator =
+            active_recording.transient_allocator != nullptr ?
+                active_recording.transient_allocator :
+                &RenderGraphTransientAllocator::Global();
+        std::string allocation_error{};
+        if (!active_transient_allocator->Prepare(*this, allocation_error)) {
+            compile_error = std::move(allocation_error);
+            return false;
+        }
+        transient_release_guard.allocator = active_transient_allocator;
+        transient_release_guard.graph     = this;
+        transient_release_guard.armed     = true;
+
         RenderGraphLowering::LoweredPlan lowered_plan{};
         std::string                      lowering_error{};
         if (!RenderGraphLowering::Lower(*this, lowered_plan, lowering_error)) {
@@ -1189,7 +1343,7 @@ bool RenderGraph::ExecuteRecording(
 
         for (uint32_t pass_index = 0; pass_index < passes.size(); ++pass_index) {
             const auto& state = active_pass_states[pass_index];
-            if (!state.HasPhysicalState()) {
+            if (!state.RequiresCompletionLifetime()) {
                 continue;
             }
             if (state.keepalive.empty()) {
@@ -1269,7 +1423,7 @@ bool RenderGraph::ExecuteRecording(
                     return batch.execution != PassExecutionClass::MainThread ||
                            batch.passes.size() != 1 ||
                            !active_pass_states[batch.passes.front().index]
-                                .HasPhysicalState();
+                                .RequiresCompletionLifetime();
                 }
             );
             if (has_nonphysical_or_nonmain_batch) {
@@ -1577,7 +1731,8 @@ bool RenderGraph::ExecuteRecording(
             const auto& pass_state = active_pass_states[first_handle.index];
             bool        main_thread_lifetime_attached = false;
             const bool  active_physical_main_thread =
-                active_recording.enabled && pass_state.HasPhysicalState();
+                active_recording.enabled &&
+                pass_state.RequiresCompletionLifetime();
             auto attach_main_thread_lifetime = [&] {
                 if (!active_physical_main_thread ||
                     main_thread_lifetime_attached) {
@@ -2159,10 +2314,13 @@ std::string RenderGraph::Dump() const {
             stream << resource.last_use;
         }
         uint32_t version_count = 0;
+        uint32_t transient_slot = PassHandle::InvalidIndex;
         if (index < compiled_plan.resources.size()) {
-            version_count = compiled_plan.resources[index].version_count;
+            version_count  = compiled_plan.resources[index].version_count;
+            transient_slot = compiled_plan.resources[index].transient_slot;
         }
-        stream << " versions=" << version_count << " exported=" << (resource.exported ? "true" : "false")
+        stream << " versions=" << version_count
+               << " exported=" << (resource.exported ? "true" : "false")
                << " aliases=[";
         auto aliases = resource.aliases;
         std::sort(aliases.begin(), aliases.end());
@@ -2172,7 +2330,13 @@ std::string RenderGraph::Dump() const {
             }
             stream << aliases[alias_index];
         }
-        stream << "] initial_states=" << resource.initial_states.size()
+        stream << "] slot=";
+        if (transient_slot == PassHandle::InvalidIndex) {
+            stream << "none";
+        } else {
+            stream << transient_slot;
+        }
+        stream << " initial_states=" << resource.initial_states.size()
                << " final_states=" << resource.final_states.size() << "\n";
     }
 
@@ -2261,6 +2425,7 @@ std::string RenderGraph::Dump() const {
         append_flag(barrier.import_boundary, "import");
         append_flag(barrier.export_boundary, "export");
         append_flag(barrier.source_state_unknown, "unknown-src");
+        append_flag(barrier.transient_alias, "transient-alias");
         if (!wrote_flag) {
             stream << "none";
         }
@@ -2277,6 +2442,23 @@ std::string RenderGraph::Dump() const {
             stream << ' ' << ToString(source.access) << ')';
         }
         stream << "]\n";
+    }
+
+    stream << "alias_boundaries:\n";
+    for (const auto& alias : compiled_plan.alias_boundaries) {
+        stream << "  slot=" << alias.transient_slot << ' '
+               << resources[alias.predecessor_resource.index].name << " -> "
+               << resources[alias.successor_resource.index].name << " passes="
+               << passes[alias.primary_src_pass.index].name << "->"
+               << passes[alias.dst_pass.index].name
+               << " frontier=[";
+        for (uint32_t index = 0; index < alias.source_frontier.size(); ++index) {
+            if (index != 0) {
+                stream << ',';
+            }
+            stream << passes[alias.source_frontier[index].index].name;
+        }
+        stream << "] barrier=" << alias.barrier_index << '\n';
     }
 
     stream << "barrier_placements:\n  prologue=[";
@@ -2589,11 +2771,23 @@ bool RenderGraph::InvalidateCompile() {
     compiled = false;
     compile_error.clear();
     compiled_plan.Clear();
+    ReleaseNonExportedTransientBindings();
     for (auto& resource : resources) {
         resource.first_use = PassHandle::InvalidIndex;
         resource.last_use  = PassHandle::InvalidIndex;
     }
     return true;
+}
+
+void RenderGraph::ReleaseNonExportedTransientBindings() noexcept {
+    for (auto& resource : resources) {
+        if (resource.imported || resource.exported) {
+            continue;
+        }
+        resource.physical_identity = nullptr;
+        resource.physical_texture  = {};
+        resource.physical_buffer   = {};
+    }
 }
 
 bool RenderGraph::FailCompile(std::string message) {
