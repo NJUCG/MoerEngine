@@ -3,7 +3,7 @@
 
 // ReSTIR DI 预采样、时序/空间复用以及最终样本着色。
 
-#include "RTResource.h"
+#include "RaytracingGraphResources.h"
 #include "rhi/RHI.h"
 #include "shader/ShaderPipeline.h"
 
@@ -100,15 +100,80 @@ public:
         uint local_light_count          = 0;
     };
 
+    struct PreparedCommand {
+        ResampleConstants           constants{};
+        LocalLightSamplingDecision sampling_decision{};
+        bool                       record_presample_light = false;
+        bool                       record_presample_env   = false;
+        bool                       record_presample_grid  = false;
+        uint3                      presample_light_dispatch{};
+        uint3                      presample_env_dispatch{};
+        uint3                      presample_grid_dispatch{};
+        uint3                      screen_dispatch{};
+    };
+
+    struct RecordResources {
+        RaytracingTlasRef tlas{};
+        RaytracingTlasRef prev_tlas{};
+
+        BufferRef constants_buf{};
+        BufferRef light_reservoir_buf{};
+        BufferRef ris_buf{};
+        BufferRef ris_light_data_buf{};
+        BufferRef neighbor_offset_buf{};
+        BufferRef light_mapping_buf{};
+        BufferRef light_data_buf{};
+        BufferRef primitive_to_light_buf{};
+
+        TextureRef diffuse_lighting{};
+        TextureRef specular_lighting{};
+        TextureRef temporal_sample_pos{};
+        TextureRef gradients{};
+        TextureRef restir_luminance{};
+        TextureRef prev_diffuse_lighting{};
+        TextureRef local_light_pdf{};
+        TextureRef env_pdf{};
+        TextureRef env_map{};
+
+        BindlessArrayRef bindless_array{};
+    };
+
     LightingPass(class ShaderManager& manager, BindlessArrayRef bindless_array);
 
     LocalLightSamplingDecision Process(CommandList& cmd_list, RTContext& rt_ctx);
+    bool AddPasses(
+        RenderGraph&                 graph,
+        const RTGraphFrameResources& graph_resources,
+        const RTContext&             rt_ctx,
+        LocalLightSamplingDecision&  sampling_decision
+    );
 
 private:
-    BindlessArrayRef bindless_array;
+    enum class ELightingDispatch : uint8_t {
+        PresampleLight,
+        PresampleEnvMap,
+        PresampleLightGrid,
+        GenerateInitialSample,
+        TemporalResample,
+        SpatialResample,
+        ShadeSample
+    };
 
-    ResampleConstants constants;
-    Array<byte>       upload_data;
+    PreparedCommand Prepare(const RTContext& rt_ctx) const;
+    RecordResources CaptureResources(const RTContext& rt_ctx) const;
+    void RecordConstantsUpload(
+        CommandList&           cmd_list,
+        const PreparedCommand& command,
+        const RecordResources& resources
+    ) const;
+    void RecordDispatch(
+        CommandList&           cmd_list,
+        const PreparedCommand& command,
+        const RecordResources& resources,
+        ELightingDispatch      dispatch
+    );
+
+    BindlessArrayRef bindless_array;
 
     PresampleLightPipeline        presample_light_pipeline;
     PresampleEnvMapPipeline       presample_env_map_pipeline;

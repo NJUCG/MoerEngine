@@ -148,8 +148,8 @@ void GBufferPass::RecordLegacyTailBridge(
 ) const {
     // Active RDG sources own explicit GENERAL-layout exports, while the
     // remaining legacy tail starts a fresh backend tracker. Seed every
-    // bindless GBuffer history read explicitly so Lighting cannot observe the
-    // preferred GENERAL layout through a sampled-image descriptor.
+    // sampled legacy-tail input explicitly so NRD/Composition cannot observe
+    // the preferred GENERAL layout through a sampled-image descriptor.
     const FrameResources& frame = rt_ctx.frame_rt;
     Array<ReadTexture> sampled_inputs{
         {frame.view_depth->GetView(), ETextureState::SAMPLE},
@@ -162,6 +162,8 @@ void GBufferPass::RecordLegacyTailBridge(
         {frame.prev_normal->GetView(), ETextureState::SAMPLE},
         {frame.emission->GetView(), ETextureState::SAMPLE},
         {frame.motion->GetView(), ETextureState::SAMPLE},
+        {frame.diffuse_lighting->GetView(), ETextureState::SAMPLE},
+        {frame.specular_lighting->GetView(), ETextureState::SAMPLE},
     };
 #if WITH_NRD
     sampled_inputs.emplace_back(
@@ -171,6 +173,17 @@ void GBufferPass::RecordLegacyTailBridge(
         }
     );
 #endif
+    if (rt_ctx.env_map) {
+        // Lighting and Composition both sample the bindless environment map.
+        // The graph exports it to the preferred GENERAL boundary, so seed the
+        // fresh legacy tracker with the descriptor's sampled layout as well.
+        sampled_inputs.emplace_back(
+            ReadTexture{
+                rt_ctx.env_map->GetView(0, rt_ctx.env_map->GetNumMips()),
+                ETextureState::SAMPLE
+            }
+        );
+    }
     cmd_list.TextureBarriers(
         EQueueType::Graphics,
         EQueueType::Graphics,

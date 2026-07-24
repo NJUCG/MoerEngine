@@ -23,6 +23,8 @@ struct RTGraphFrameResources {
     RenderGraph::TextureHandle motion{};
     RenderGraph::TextureHandle clip_depth{};
     RenderGraph::TextureHandle normal_roughness{};
+    RenderGraph::TextureHandle diffuse_lighting{};
+    RenderGraph::TextureHandle specular_lighting{};
 
     RenderGraph::TextureHandle current_view_depth{};
     RenderGraph::TextureHandle current_diffuse_albedo{};
@@ -102,7 +104,11 @@ inline RTGraphFrameResources RegisterRTGraphFrameResources(
         .emission         = ImportRTGraphTexture(graph, "RT.emission", frame.emission),
         .motion           = ImportRTGraphTexture(graph, "RT.motion", frame.motion),
         .clip_depth       = ImportRTGraphTexture(graph, "RT.clip_depth", frame.clip_depth),
-        .normal_roughness = ImportRTGraphTexture(graph, "RT.normal_roughness", frame.normal_roughness)
+        .normal_roughness = ImportRTGraphTexture(graph, "RT.normal_roughness", frame.normal_roughness),
+        .diffuse_lighting =
+            ImportRTGraphTexture(graph, "RT.diffuse_lighting", frame.diffuse_lighting),
+        .specular_lighting =
+            ImportRTGraphTexture(graph, "RT.specular_lighting", frame.specular_lighting)
     };
 
     resources.current_view_depth = resources.current_frame ? resources.view_depth :
