@@ -53,6 +53,11 @@ render_graph_parallel_recording = false
 # - 抗锯齿：SMAA_1X => FXAA Simplified
 low_quality_mode = false
 
+[engine.render.raytracing]
+render_graph = false
+render_graph_debug_dump = false
+render_graph_parallel_recording = false
+
 [engine.scene]
 # 注：Toml中使用单引号包裹路径，可以避免反斜杠被识别为转义符
 # 注：scene_path支持绝对路径

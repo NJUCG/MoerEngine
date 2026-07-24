@@ -60,7 +60,7 @@ private:
 
     void EnsureDebugUiRegistered(const EngineHooks& hooks);
     void RefreshSceneRuntimeRefs();
-    void ExecuteSceneUpdates(SceneUpdateBatch& batch);
+    bool ExecuteSceneUpdates(SceneUpdateBatch& batch);
     void RecreateFrameResources(uint2 new_extent);
 
     void DumpTextureToFile(

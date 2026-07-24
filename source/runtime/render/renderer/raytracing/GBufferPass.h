@@ -3,7 +3,7 @@
 
 // 生成 Raytracing GBuffer，并转换为降噪器所需布局。
 
-#include "RTResource.h"
+#include "RaytracingGraphResources.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 
@@ -65,15 +65,54 @@ public:
 
 class GBufferPass {
 public:
+    struct PreparedCommand {
+        GBufferPassParams params{};
+        GBufferConstants  constants{};
+        uint3             dispatch_groups{};
+    };
+
+    struct RecordResources {
+        TextureRef        view_depth{};
+        TextureRef        diffuse_albedo{};
+        TextureRef        specular_roughness{};
+        TextureRef        normal{};
+        TextureRef        emission{};
+        TextureRef        motion{};
+        TextureRef        clip_depth{};
+        TextureRef        normal_roughness{};
+        RaytracingTlasRef tlas{};
+        BindlessArrayRef  bindless_array{};
+    };
+
     GBufferPass(class RenderDevice& device, class ShaderManager& manager, BindlessArrayRef bindless_array);
     void Process(class CommandList& cmd_list, RTContext& rt_ctx);
+    void RecordLegacyTailBridge(class CommandList& cmd_list, const RTContext& rt_ctx) const;
+    bool AddPasses(
+        RenderGraph&                 graph,
+        const RTGraphFrameResources& graph_resources,
+        const RTContext&             rt_ctx,
+        bool                         tlas_built_this_frame,
+        bool                         normal_roughness_readable
+    );
 
 private:
+    PreparedCommand Prepare(const RTContext& rt_ctx) const;
+    RecordResources CaptureResources(const RTContext& rt_ctx) const;
+    void RecordConstantsUpload(CommandList& cmd_list, const PreparedCommand& command);
+    void RecordTraceGBuffer(
+        CommandList&           cmd_list,
+        const PreparedCommand& command,
+        const RecordResources& resources
+    );
+    void RecordPostProcessGBuffer(
+        CommandList&           cmd_list,
+        const PreparedCommand& command,
+        const RecordResources& resources
+    );
+
     BindlessArrayRef bindless_array;
 
-    BufferRef        gbuffer_constants;
-    GBufferConstants constants{};
-    Array<byte>      upload_data;
+    BufferRef gbuffer_constants;
 
     RaytracingGBufferPipeline  gbuffer_pipeline;
     PostProcessGBufferPipeline gbuffer_postprocess_pipeline;
