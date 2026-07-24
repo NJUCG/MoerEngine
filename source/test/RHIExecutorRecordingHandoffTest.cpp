@@ -306,6 +306,69 @@ bool FailedRecordingDrainsCleanupExactlyOnce() {
     return okay;
 }
 
+bool FailedCommitRejectsCompletedSources() {
+    RHIExecutor::StartUp();
+
+    std::atomic<int> ordinary_callbacks{0};
+    std::atomic<int> success_callbacks{0};
+    auto command_list = Moer::MakeShared<CommandList>(EQueueType::Graphics);
+    command_list->AddCallback([&ordinary_callbacks] {
+        ordinary_callbacks.fetch_add(1);
+    });
+    command_list->AddSuccessCallback([&success_callbacks] {
+        success_callbacks.fetch_add(1);
+    });
+
+    auto producer_complete = RHIRecordingGate::Create(true);
+    auto graph_commit      = RHIRecordingGate::Create();
+    Moer::Array<RHIRecordingSource> sources{};
+    sources.emplace_back(RHIRecordingSource{
+        .command_list = command_list,
+        .completion   = producer_complete,
+        .commit       = graph_commit,
+    });
+    RHIExecutor::Get().SubmitRecording(
+        std::move(sources),
+        ERHIExecSubmitFlags::None
+    );
+
+    std::atomic<bool> sync_returned{false};
+    std::jthread sync_thread([&] {
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        sync_returned.store(true, std::memory_order_release);
+    });
+    std::this_thread::sleep_for(30ms);
+    bool okay = Expect(
+                    !sync_returned.load(std::memory_order_acquire),
+                    "completed producer bypassed its pending graph commit"
+                ) &&
+                Expect(
+                    ordinary_callbacks.load() == 0 &&
+                        success_callbacks.load() == 0,
+                    "callbacks ran before the graph transaction resolved"
+                );
+
+    graph_commit->Fail();
+    sync_thread.join();
+    okay &= Expect(
+        ordinary_callbacks.load() == 1,
+        "failed graph commit did not run ordinary cleanup exactly once"
+    );
+    okay &= Expect(
+        success_callbacks.load() == 0,
+        "failed graph commit ran a success-only callback"
+    );
+
+    CmdSubmit drained = command_list->Submit();
+    okay &= Expect(
+        drained.cmds.empty() && drained.callbacks.empty() &&
+            drained.success_callbacks.empty() && drained.segments.empty(),
+        "failed graph commit left a submittable source behind"
+    );
+    RHIExecutor::ShutDown();
+    return okay;
+}
+
 bool BlockingWaitReportsTerminalStatus() {
     auto succeeded_gate = RHIRecordingGate::Create();
     std::atomic<ERHIRecordingStatus> waited_status{ERHIRecordingStatus::Pending};
@@ -531,6 +594,7 @@ int main() {
         !ReadyWorkUsesStableExecutorOwnerAndCannotBeOvertaken() ||
         !FailedGateRejectsOnlyItsGroupAndPreservesFifo() ||
         !FailedRecordingDrainsCleanupExactlyOnce() ||
+        !FailedCommitRejectsCompletedSources() ||
         !BlockingWaitReportsTerminalStatus() ||
         !ShutdownDrainsTerminalSourceBehindPendingHead() ||
         !ShutdownCancelsAnUnsignalledGate() ||

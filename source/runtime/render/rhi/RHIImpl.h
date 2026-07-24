@@ -553,6 +553,26 @@ struct BufferBarrier {
     uint64       offset{};
     uint64       byte_size{};
 };
+
+struct ExplicitTextureBarrier {
+    uint64              handle{};
+    BarrierState        src_state{};
+    BarrierState        dst_state{};
+    ETextureAspectFlags texture_aspects{ETextureAspectFlags::NONE};
+    uint8               mip_level{};
+    uint8               mip_count{1};
+    uint8               array_layer{};
+    uint8               array_count{1};
+};
+
+struct ExplicitBufferBarrier {
+    uint64       handle{};
+    BarrierState src_state{};
+    BarrierState dst_state{};
+    uint64       offset{};
+    uint64       byte_size{};
+};
+
 struct BarrierCmd : public Command {
 private:
     BarrierCmd() : Command(EType::Barrier) {}
@@ -560,6 +580,8 @@ private:
     Array<TextureBarrier> write_textures;
     Array<BufferBarrier>  read_buffers;
     Array<BufferBarrier>  write_buffers;
+    Array<ExplicitTextureBarrier> explicit_textures;
+    Array<ExplicitBufferBarrier>  explicit_buffers;
     EQueueType            src_queue;
     EQueueType            dst_queue;
     bool                  b_queue_transition = false;
@@ -618,6 +640,47 @@ public:
         return *this;
     }
 
+    BarrierCmd& AddExplicitBarrier(const BarrierCreateInfo& _barrier) {
+        std::visit(
+            [this, &_barrier](const auto& _resource) {
+                using TResource = std::decay_t<decltype(_resource)>;
+                if constexpr (std::is_same_v<TResource, TextureView>) {
+                    assert(_resource.GetTexture() != nullptr && "explicit texture barrier requires a texture");
+                    assert(
+                        _barrier.texture_aspects != ETextureAspectFlags::NONE &&
+                        "explicit texture barrier requires a non-empty aspect mask"
+                    );
+                    explicit_textures.emplace_back(ExplicitTextureBarrier{
+                        .handle          = reinterpret_cast<uint64>(_resource.GetTexture()),
+                        .src_state       = _barrier.src_state,
+                        .dst_state       = _barrier.dst_state,
+                        .texture_aspects = _barrier.texture_aspects,
+                        .mip_level       = _resource.mip_level,
+                        .mip_count       = _resource.num_mips,
+                        .array_layer     = _resource.array_layer,
+                        .array_count     = _resource.num_array,
+                    });
+                } else {
+                    static_assert(std::is_same_v<TResource, BufferView>);
+                    assert(_resource.GetBuffer() != nullptr && "explicit buffer barrier requires a buffer");
+                    assert(
+                        _barrier.texture_aspects == ETextureAspectFlags::NONE &&
+                        "buffer barriers cannot carry texture aspects"
+                    );
+                    explicit_buffers.emplace_back(ExplicitBufferBarrier{
+                        .handle     = reinterpret_cast<uint64>(_resource.GetBuffer()),
+                        .src_state  = _barrier.src_state,
+                        .dst_state  = _barrier.dst_state,
+                        .offset     = _resource.GetByteOffset(),
+                        .byte_size  = _resource.GetByteSize(),
+                    });
+                }
+            },
+            _barrier.resource
+        );
+        return *this;
+    }
+
     BarrierCmd(
         uint       _read_tex_cnt,
         uint       _write_tex_cnt,
@@ -636,6 +699,19 @@ public:
         write_buffers.reserve(_write_buf_cnt);
     }
 
+    BarrierCmd(
+        uint       _explicit_barrier_count,
+        EQueueType _src_queue,
+        EQueueType _dst_queue
+    ) :
+        Command(EType::Barrier),
+        src_queue(_src_queue),
+        dst_queue(_dst_queue),
+        b_queue_transition(_src_queue != _dst_queue) {
+        explicit_textures.reserve(_explicit_barrier_count);
+        explicit_buffers.reserve(_explicit_barrier_count);
+    }
+
     EQueueType GetQueueType() const override {
         return EQueueType::Graphics;
     }
@@ -650,6 +726,15 @@ public:
     }
     const auto& WriteBuffers() const {
         return write_buffers;
+    }
+    const auto& ExplicitTextures() const {
+        return explicit_textures;
+    }
+    const auto& ExplicitBuffers() const {
+        return explicit_buffers;
+    }
+    bool HasExplicitBarriers() const {
+        return !explicit_textures.empty() || !explicit_buffers.empty();
     }
     const bool IsQueueTransition() const {
         return b_queue_transition;

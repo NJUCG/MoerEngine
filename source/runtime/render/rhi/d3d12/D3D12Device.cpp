@@ -1160,6 +1160,11 @@ struct D3D12CommandPreprocessVisitor {
     }
 
     void Visit(const BarrierCmd& _cmd) {
+        if (_cmd.HasExplicitBarriers()) {
+            FATAL(
+                "D3D12 does not yet materialize graph-owned explicit BarrierCmd"
+            );
+        }
         // we not ignore _cmd.IsQueueTransition()
         ASSERT(!_cmd.IsQueueTransition());
 

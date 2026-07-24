@@ -2,13 +2,16 @@
 
 #include "log/LogSystem.h"
 #include "rendergraph/RenderGraphCompiler.h"
+#include "rendergraph/RenderGraphLowering.h"
 #include "rhi/RHIExecutor.h"
+#include "rhi/RHIThreadOwnership.h"
 #include "taskgraph/TaskGraph.h"
 
 #include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <exception>
+#include <limits>
 #include <mutex>
 #include <sstream>
 #include <unordered_set>
@@ -555,6 +558,90 @@ RenderGraph::PassBuilder::ExecuteOn(QueueRole queue, PipelineType pipeline) {
     return EQueueType::Ignore;
 }
 
+struct MaterializedPassState {
+    std::vector<BarrierCreateInfo>                    before{};
+    std::vector<BarrierCreateInfo>                    after{};
+    std::vector<RenderGraphLowering::PhysicalBinding> keepalive{};
+
+    [[nodiscard]] bool HasPhysicalState() const {
+        return !before.empty() || !after.empty();
+    }
+};
+
+[[nodiscard]] BarrierState
+ToBarrierState(const RenderGraphLowering::Scope& scope, bool texture) {
+    return texture ? BarrierState::Texture(scope.stages, scope.access, scope.layout) :
+                     BarrierState::Buffer(scope.stages, scope.access);
+}
+
+[[nodiscard]] bool MaterializeInstruction(
+    const RenderGraphLowering::LoweredInstruction& instruction,
+    BarrierCreateInfo&                             output,
+    std::string&                                   error
+) {
+    if (instruction.resource_kind == RenderGraph::ResourceKind::Texture) {
+        const auto& binding = instruction.physical.texture;
+        const auto& range   = instruction.range.texture;
+        if (!binding.IsValid() || instruction.texture_aspects == ETextureAspectFlags::NONE) {
+            error = "texture instruction has no physical binding or aspect";
+            return false;
+        }
+        if (instruction.texture_aspects != binding->GetAspectFlags()) {
+            error =
+                "partial-aspect texture state is not supported by the active "
+                "backend-tracker bridge";
+            return false;
+        }
+        constexpr uint32_t max_view_index = std::numeric_limits<uint8_t>::max();
+        if (range.mip_count == 0 || range.layer_count == 0 ||
+            range.mip_first > max_view_index || range.mip_count > max_view_index ||
+            range.layer_first > max_view_index || range.layer_count > max_view_index ||
+            range.mip_first + range.mip_count > binding->GetNumMips() ||
+            range.layer_first + range.layer_count > binding->GetNumArray()) {
+            error = "texture instruction range cannot be represented by an RHI TextureView";
+            return false;
+        }
+
+        TextureView view(binding);
+        view.mip_level   = static_cast<uint8>(range.mip_first);
+        view.num_mips    = static_cast<uint8>(range.mip_count);
+        view.array_layer = static_cast<uint8>(range.layer_first);
+        view.num_array   = static_cast<uint8>(range.layer_count);
+        output = BarrierCreateInfo::Transition(
+            view,
+            ToBarrierState(instruction.source, true),
+            ToBarrierState(instruction.destination, true),
+            instruction.texture_aspects
+        );
+        return true;
+    }
+
+    if (instruction.resource_kind == RenderGraph::ResourceKind::Buffer) {
+        const auto& binding = instruction.physical.buffer;
+        const auto& range   = instruction.range.buffer;
+        if (!binding.IsValid() || range.size == 0 || range.offset > binding->GetByteSize() ||
+            range.size > binding->GetByteSize() - range.offset) {
+            error = "buffer instruction has no physical binding or has an invalid range";
+            return false;
+        }
+        if (range.offset != 0 || range.size != binding->GetByteSize()) {
+            error =
+                "partial buffer state is not supported by the active "
+                "backend-tracker bridge";
+            return false;
+        }
+        output = BarrierCreateInfo::Transition(
+            BufferView(binding.Get(), range.offset, range.size, 1),
+            ToBarrierState(instruction.source, false),
+            ToBarrierState(instruction.destination, false)
+        );
+        return true;
+    }
+
+    error = "token instruction cannot be materialized as an RHI barrier";
+    return false;
+}
+
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::MainThread() {
     graph.SetPassExecutionClass(pass_index, PassExecutionClass::MainThread, 1);
     return *this;
@@ -592,10 +679,62 @@ RenderGraph::ImportTexture(std::string_view resource_name, const void* physical_
     };
 }
 
+RenderGraph::TextureHandle
+RenderGraph::ImportTexture(std::string_view resource_name, TextureRef texture, TextureDesc desc) {
+    if (!texture.IsValid()) {
+        InvalidateCompile();
+        declaration_errors.emplace_back(
+            "strong texture import requires a valid resource: " + std::string(resource_name)
+        );
+        return {};
+    }
+    const auto handle =
+        ImportInternal(resource_name, ResourceKind::Texture, texture.Get(), &desc, nullptr);
+    if (handle.IsValid()) {
+        auto& resource = resources[handle.index];
+        if (resource.physical_texture.IsValid() &&
+            resource.physical_texture.Get() != texture.Get()) {
+            declaration_errors.emplace_back(
+                "strong texture import conflicts with the canonical physical resource: " +
+                std::string(resource_name)
+            );
+            return {};
+        }
+        resource.physical_texture = std::move(texture);
+    }
+    return TextureHandle{handle};
+}
+
 RenderGraph::BufferHandle
 RenderGraph::ImportBuffer(std::string_view resource_name, const void* physical_identity, BufferDesc desc) {
     return BufferHandle{ImportInternal(resource_name, ResourceKind::Buffer, physical_identity, nullptr, &desc)
     };
+}
+
+RenderGraph::BufferHandle
+RenderGraph::ImportBuffer(std::string_view resource_name, BufferRef buffer, BufferDesc desc) {
+    if (!buffer.IsValid()) {
+        InvalidateCompile();
+        declaration_errors.emplace_back(
+            "strong buffer import requires a valid resource: " + std::string(resource_name)
+        );
+        return {};
+    }
+    const auto handle =
+        ImportInternal(resource_name, ResourceKind::Buffer, buffer.Get(), nullptr, &desc);
+    if (handle.IsValid()) {
+        auto& resource = resources[handle.index];
+        if (resource.physical_buffer.IsValid() &&
+            resource.physical_buffer.Get() != buffer.Get()) {
+            declaration_errors.emplace_back(
+                "strong buffer import conflicts with the canonical physical resource: " +
+                std::string(resource_name)
+            );
+            return {};
+        }
+        resource.physical_buffer = std::move(buffer);
+    }
+    return BufferHandle{handle};
 }
 
 RenderGraph::TokenHandle
@@ -976,7 +1115,8 @@ bool RenderGraph::ExecuteRecording(
     const PassCompletedCallback&        after_main_thread_pass,
     const RecordingSourceSetupCallback& configure_recording_source,
     bool                                parallel_recording_enabled,
-    const RecordingBatchPublisher&      publish_recording_batch
+    const RecordingBatchPublisher&      publish_recording_batch,
+    const ActiveRecordingOptions&       active_recording
 ) {
     if (!compiled) {
         compile_error = "ExecuteRecording called before a successful Compile";
@@ -986,7 +1126,160 @@ bool RenderGraph::ExecuteRecording(
         compile_error = "a per-frame RenderGraph can only be executed once";
         return false;
     }
-    executed = true;
+
+    std::vector<MaterializedPassState> active_pass_states(passes.size());
+    bool active_has_physical_main_thread = false;
+    if (active_recording.enabled) {
+        RenderGraphLowering::LoweredPlan lowered_plan{};
+        std::string                      lowering_error{};
+        if (!RenderGraphLowering::Lower(*this, lowered_plan, lowering_error)) {
+            compile_error = std::move(lowering_error);
+            return false;
+        }
+
+        auto append_instruction =
+            [&](const RenderGraphLowering::LoweredInstruction& instruction,
+                std::vector<BarrierCreateInfo>&                 destination,
+                std::string_view                                placement) {
+                BarrierCreateInfo barrier{};
+                std::string       materialization_error{};
+                if (!MaterializeInstruction(instruction, barrier, materialization_error)) {
+                    compile_error =
+                        "RenderGraph active lowering " + std::string(placement) +
+                        " instruction " + std::to_string(instruction.correlation_id) +
+                        " failed: " + materialization_error;
+                    return false;
+                }
+                destination.emplace_back(std::move(barrier));
+                return true;
+            };
+
+        for (const auto& instruction : lowered_plan.prologue) {
+            if (!IsValidPass(instruction.dst_pass) ||
+                !append_instruction(
+                    instruction,
+                    active_pass_states[instruction.dst_pass.index].before,
+                    "prologue"
+                )) {
+                if (compile_error.empty()) {
+                    compile_error =
+                        "RenderGraph active lowering prologue has no valid destination pass";
+                }
+                return false;
+            }
+        }
+        for (const auto& pass_instructions : lowered_plan.passes) {
+            if (!IsValidPass(pass_instructions.pass)) {
+                compile_error = "RenderGraph active lowering references an invalid pass";
+                return false;
+            }
+            auto& materialized = active_pass_states[pass_instructions.pass.index];
+            materialized.keepalive = pass_instructions.keepalive;
+            for (const auto& instruction : pass_instructions.before) {
+                if (!append_instruction(instruction, materialized.before, "before-pass")) {
+                    return false;
+                }
+            }
+            for (const auto& instruction : pass_instructions.after) {
+                if (!append_instruction(instruction, materialized.after, "after-pass")) {
+                    return false;
+                }
+            }
+        }
+
+        for (uint32_t pass_index = 0; pass_index < passes.size(); ++pass_index) {
+            const auto& state = active_pass_states[pass_index];
+            if (!state.HasPhysicalState()) {
+                continue;
+            }
+            if (state.keepalive.empty()) {
+                compile_error =
+                    "RenderGraph active lowering produced physical commands without keepalive "
+                    "ownership for pass '" +
+                    passes[pass_index].name + "'";
+                return false;
+            }
+            const auto execution = passes[pass_index].execution_class;
+            if (execution == PassExecutionClass::CpuPrepare ||
+                execution == PassExecutionClass::ExternalControl) {
+                compile_error =
+                    "RenderGraph active lowering cannot materialize physical state for pass '" +
+                    passes[pass_index].name + "' on its execution class";
+                return false;
+            }
+            if (execution == PassExecutionClass::MainThread) {
+                active_has_physical_main_thread = true;
+                if (active_recording.main_thread_command_list == nullptr) {
+                    compile_error =
+                        "RenderGraph active lowering requires a caller-owned CommandList for "
+                        "main-thread pass '" +
+                        passes[pass_index].name + "'";
+                    return false;
+                }
+                if (active_recording.main_thread_command_list->GetQueueType() !=
+                    EQueueType::Graphics) {
+                    compile_error =
+                        "RenderGraph active lowering requires a Graphics caller-owned CommandList";
+                    return false;
+                }
+                if (!active_recording.main_thread_command_list->IsEmpty()) {
+                    compile_error =
+                        "RenderGraph active lowering requires an isolated empty caller-owned "
+                        "CommandList";
+                    return false;
+                }
+            }
+        }
+        if (active_has_physical_main_thread && after_main_thread_pass) {
+            compile_error =
+                "RenderGraph active lowering requires caller-owned MainThread "
+                "commands to remain unsealed until ExecuteRecording returns";
+            return false;
+        }
+
+        const bool has_any_managed_record_pass = std::any_of(
+            compiled_plan.recording_batches.begin(),
+            compiled_plan.recording_batches.end(),
+            [](const CompiledRecordingBatch& batch) {
+                return batch.execution == PassExecutionClass::SerialRecord ||
+                       batch.execution ==
+                           PassExecutionClass::ParallelRecordEligible;
+            }
+        );
+        const bool has_any_caller_thread_pass = std::any_of(
+            compiled_plan.recording_batches.begin(),
+            compiled_plan.recording_batches.end(),
+            [](const CompiledRecordingBatch& batch) {
+                return batch.execution == PassExecutionClass::MainThread ||
+                       batch.execution == PassExecutionClass::CpuPrepare ||
+                       batch.execution == PassExecutionClass::ExternalControl;
+            }
+        );
+        if (has_any_caller_thread_pass && has_any_managed_record_pass) {
+            compile_error =
+                "RenderGraph active lowering does not yet support mixing "
+                "caller-thread and managed record passes in one transaction";
+            return false;
+        }
+        if (active_has_physical_main_thread) {
+            const bool has_nonphysical_or_nonmain_batch = std::any_of(
+                compiled_plan.recording_batches.begin(),
+                compiled_plan.recording_batches.end(),
+                [&](const CompiledRecordingBatch& batch) {
+                    return batch.execution != PassExecutionClass::MainThread ||
+                           batch.passes.size() != 1 ||
+                           !active_pass_states[batch.passes.front().index]
+                                .HasPhysicalState();
+                }
+            );
+            if (has_nonphysical_or_nonmain_batch) {
+                compile_error =
+                    "RenderGraph active MainThread lowering currently requires "
+                    "an isolated graph of physical MainThread passes";
+                return false;
+            }
+        }
+    }
 
     struct RecordingJob {
         PassHandle          pass{};
@@ -994,10 +1287,18 @@ bool RenderGraph::ExecuteRecording(
         RecordCallback      record{};
         SharedPtr<CommandList> command_list{};
         RHIRecordingGateRef completion{};
+        std::vector<BarrierCreateInfo>                    before{};
+        std::vector<BarrierCreateInfo>                    after{};
+        std::vector<RenderGraphLowering::PhysicalBinding> keepalive{};
     };
     struct RecordingError {
         std::mutex  mutex{};
         std::string message{};
+    };
+    struct RecordingLifetime {
+        std::vector<RenderGraphLowering::PhysicalBinding> keepalive{};
+        RecordCallback                                    record{};
+        ExecuteCallback                                   execute{};
     };
     struct PendingGateGuard {
         const Array<RHIRecordingGateRef>* gates{nullptr};
@@ -1018,6 +1319,172 @@ bool RenderGraph::ExecuteRecording(
             armed = false;
         }
     };
+    struct ProducerGateGuard {
+        RHIRecordingGateRef gate{};
+        bool                armed{true};
+
+        ~ProducerGateGuard() {
+            if (armed && gate &&
+                gate->Status() == ERHIRecordingStatus::Pending) {
+                gate->Fail();
+            }
+        }
+
+        void Disarm() noexcept {
+            armed = false;
+        }
+    };
+    struct ManagedRecordingOwner {
+        // Members are destroyed in reverse declaration order: release the
+        // lease before dropping the strong CommandList owner.
+        SharedPtr<CommandList>                    command_list{};
+        CommandList::ManagedRecordingLease        lease{};
+    };
+    struct ActiveMainCommandStreamGuard {
+        CommandList* command_list{nullptr};
+        std::optional<CommandList::ManagedRecordingLease> lease{};
+        bool armed{false};
+
+        void Abort() noexcept {
+            if (!armed) {
+                return;
+            }
+            lease.reset();
+            if (command_list != nullptr) {
+                try {
+                    auto cleanup_callbacks =
+                        command_list->DrainOrdinaryCallbacksForRejection();
+                    for (auto& callback : cleanup_callbacks) {
+                        if (!callback) {
+                            continue;
+                        }
+                        try {
+                            callback();
+                        } catch (const std::exception& exception) {
+                            LOG_ERROR(
+                                "[RenderGraph] rejected MainThread cleanup "
+                                "callback threw: {}",
+                                exception.what()
+                            );
+                        } catch (...) {
+                            LOG_ERROR(
+                                "[RenderGraph] rejected MainThread cleanup "
+                                "callback threw"
+                            );
+                        }
+                    }
+                } catch (const std::exception& exception) {
+                    LOG_ERROR(
+                        "[RenderGraph] failed to drain rejected MainThread "
+                        "commands: {}",
+                        exception.what()
+                    );
+                } catch (...) {
+                    LOG_ERROR(
+                        "[RenderGraph] failed to drain rejected MainThread commands"
+                    );
+                }
+            }
+            armed = false;
+        }
+
+        void Commit() noexcept {
+            lease.reset();
+            armed = false;
+        }
+
+        ~ActiveMainCommandStreamGuard() {
+            Abort();
+        }
+    };
+    struct ActiveRecordingTransactionGuard {
+        RHIRecordingGateRef* commit{nullptr};
+        Array<ManagedRecordingOwner>* owners{nullptr};
+        bool armed{false};
+
+        void ReleaseLeases() noexcept {
+            if (owners == nullptr) {
+                return;
+            }
+            for (auto& owner : *owners) {
+                owner.lease.Release();
+            }
+            owners->clear();
+        }
+
+        ~ActiveRecordingTransactionGuard() {
+            if (!armed) {
+                return;
+            }
+            // Release the frontend mutation lock before failing the commit
+            // gate. The RHI handoff may wake immediately and drain rejected
+            // sources on its executor thread.
+            ReleaseLeases();
+            if (commit != nullptr && *commit) {
+                (*commit)->Fail();
+            }
+        }
+
+        bool Commit() noexcept {
+            if (!armed || commit == nullptr || !*commit) {
+                return true;
+            }
+            // A successful commit is the only point at which the RHI worker
+            // may seal graph-managed CommandLists.
+            ReleaseLeases();
+            if (!(*commit)->Signal()) {
+                return false;
+            }
+            armed = false;
+            return true;
+        }
+    };
+
+    RHIRecordingGateRef active_recording_commit{};
+    Array<ManagedRecordingOwner> active_recording_owners{};
+    try {
+        if (active_recording.enabled) {
+            active_recording_commit = RHIRecordingGate::Create();
+        }
+    } catch (const std::exception& exception) {
+        compile_error =
+            std::string("failed to create active recording transaction: ") +
+            exception.what();
+        return false;
+    } catch (...) {
+        compile_error = "failed to create active recording transaction";
+        return false;
+    }
+    ActiveRecordingTransactionGuard active_transaction_guard{
+        .commit = &active_recording_commit,
+        .owners = &active_recording_owners,
+        .armed  = active_recording.enabled,
+    };
+    ActiveMainCommandStreamGuard active_main_stream_guard{
+        .command_list =
+            active_has_physical_main_thread ?
+                active_recording.main_thread_command_list :
+                nullptr,
+    };
+    if (active_has_physical_main_thread) {
+        try {
+            active_main_stream_guard.lease.emplace(
+                active_recording.main_thread_command_list
+                    ->AcquireManagedRecordingLease()
+            );
+            active_main_stream_guard.armed = true;
+        } catch (const std::exception& exception) {
+            compile_error =
+                std::string("failed to acquire active MainThread recording lease: ") +
+                exception.what();
+            return false;
+        } catch (...) {
+            compile_error =
+                "failed to acquire active MainThread recording lease";
+            return false;
+        }
+    }
+    executed = true;
 
     auto make_pass_info = [&](PassHandle handle) {
         const auto& pass = passes[handle.index];
@@ -1036,6 +1503,25 @@ bool RenderGraph::ExecuteRecording(
             error->message = std::move(message);
         }
     };
+    auto attach_recording_lifetime =
+        [](CommandList&                                      command_list,
+           std::vector<RenderGraphLowering::PhysicalBinding> keepalive,
+           RecordCallback                                    record,
+           ExecuteCallback                                   execute = {}) {
+            auto lifetime = std::make_shared<RecordingLifetime>(
+                RecordingLifetime{
+                    .keepalive = std::move(keepalive),
+                    .record    = std::move(record),
+                    .execute   = std::move(execute),
+                }
+            );
+            // Ordinary callbacks run before success callbacks. Holding the
+            // same token in both tails keeps raw command/callback captures
+            // alive through every user callback on success, failure, or
+            // cancellation.
+            command_list.AddCallback([lifetime] {});
+            command_list.AddSuccessCallback([lifetime] {});
+        };
 
     auto has_cpu_recording_dependency = [&](PassHandle candidate,
                                             size_t     group_begin,
@@ -1087,7 +1573,103 @@ bool RenderGraph::ExecuteRecording(
                                 first_pass.name;
                 return false;
             }
-            first_pass.execute();
+
+            const auto& pass_state = active_pass_states[first_handle.index];
+            bool        main_thread_lifetime_attached = false;
+            const bool  active_physical_main_thread =
+                active_recording.enabled && pass_state.HasPhysicalState();
+            auto attach_main_thread_lifetime = [&] {
+                if (!active_physical_main_thread ||
+                    main_thread_lifetime_attached) {
+                    return;
+                }
+                attach_recording_lifetime(
+                    *active_recording.main_thread_command_list,
+                    pass_state.keepalive,
+                    {},
+                    first_pass.execute
+                );
+                main_thread_lifetime_attached = true;
+            };
+            auto reject_main_thread =
+                [&](std::string message) {
+                    if (active_has_physical_main_thread) {
+                        try {
+                            attach_main_thread_lifetime();
+                        } catch (const std::exception& exception) {
+                            message +=
+                                "; failed to retain MainThread recording lifetime: ";
+                            message += exception.what();
+                        } catch (...) {
+                            message +=
+                                "; failed to retain MainThread recording lifetime";
+                        }
+
+                        active_main_stream_guard.Abort();
+                    }
+                    compile_error = std::move(message);
+                    return false;
+                };
+
+            try {
+                if (active_physical_main_thread) {
+                    auto& command_list =
+                        *active_recording.main_thread_command_list;
+                    command_list.SetResourceStateOwnership(
+                        ERHIResourceStateOwnership::Explicit
+                    );
+                    if (!pass_state.before.empty()) {
+                        command_list.Barriers(
+                            std::span<const BarrierCreateInfo>(
+                                pass_state.before.data(),
+                                pass_state.before.size()
+                            )
+                        );
+                    }
+                }
+
+                const uint64 main_thread_seal_generation =
+                    active_physical_main_thread ?
+                        active_recording.main_thread_command_list
+                            ->GetSealGeneration() :
+                        0;
+                first_pass.execute();
+
+                if (active_physical_main_thread &&
+                    active_recording.main_thread_command_list
+                            ->GetSealGeneration() !=
+                        main_thread_seal_generation) {
+                    throw std::logic_error(
+                        "active MainThread callback sealed its managed CommandList"
+                    );
+                }
+                if (active_physical_main_thread &&
+                    !active_recording.main_thread_command_list
+                         ->HasExplicitResourceStateOwnership()) {
+                    throw std::logic_error(
+                        "active MainThread callback changed explicit state ownership"
+                    );
+                }
+                if (active_physical_main_thread && !pass_state.after.empty()) {
+                    active_recording.main_thread_command_list->Barriers(
+                        std::span<const BarrierCreateInfo>(
+                            pass_state.after.data(), pass_state.after.size()
+                        )
+                    );
+                }
+                if (active_physical_main_thread) {
+                    attach_main_thread_lifetime();
+                }
+            } catch (const std::exception& exception) {
+                return reject_main_thread(
+                    "main-thread pass '" + first_pass.name +
+                    "' failed: " + exception.what()
+                );
+            } catch (...) {
+                return reject_main_thread(
+                    "main-thread pass '" + first_pass.name + "' failed"
+                );
+            }
             if (first_batch.execution == PassExecutionClass::MainThread &&
                 after_main_thread_pass) {
                 after_main_thread_pass(make_pass_info(first_handle));
@@ -1139,12 +1721,48 @@ bool RenderGraph::ExecuteRecording(
                 .command_list = MakeShared<CommandList>(queue),
                 .completion   = RHIRecordingGate::Create(),
             };
+            if (active_recording.enabled) {
+                const auto& pass_state = active_pass_states[handle.index];
+                job.before             = pass_state.before;
+                job.after              = pass_state.after;
+                job.keepalive          = pass_state.keepalive;
+            }
             RHIRecordingSource source{
                 .command_list = job.command_list,
                 .completion   = job.completion,
+                .commit       = active_recording_commit,
             };
+            if (active_recording.enabled) {
+                try {
+                    auto lease =
+                        job.command_list->AcquireManagedRecordingLease();
+                    active_recording_owners.emplace_back(
+                        ManagedRecordingOwner{
+                            .command_list = job.command_list,
+                            .lease        = std::move(lease),
+                        }
+                    );
+                } catch (const std::exception& exception) {
+                    compile_error =
+                        "failed to acquire managed recording lease for pass '" +
+                        pass.name + "': " + exception.what();
+                    return false;
+                } catch (...) {
+                    compile_error =
+                        "failed to acquire managed recording lease for pass '" +
+                        pass.name + "'";
+                    return false;
+                }
+            }
             if (configure_recording_source) {
                 try {
+                    // Configuration may run while an earlier transaction
+                    // group is already waiting in the handoff FIFO. Treat it
+                    // as an admission owner so Sync/Flush cannot self-join
+                    // behind the pending graph commit gate.
+                    RHIThreadRoleScope configuration_owner(
+                        ERHIThreadRole::RecordWorker
+                    );
                     configure_recording_source(make_pass_info(handle), source);
                 } catch (const std::exception& exception) {
                     compile_error = "recording source configuration failed for pass '" + pass.name +
@@ -1154,9 +1772,36 @@ bool RenderGraph::ExecuteRecording(
                     compile_error = "recording source configuration failed for pass '" + pass.name + "'";
                     return false;
                 }
-                if (source.command_list != job.command_list || source.completion != job.completion) {
+                if (source.command_list != job.command_list ||
+                    source.completion != job.completion ||
+                    source.commit != active_recording_commit) {
                     compile_error = "recording source configuration changed ownership for pass '" +
                                     pass.name + "'";
+                    return false;
+                }
+                if (job.completion->Status() != ERHIRecordingStatus::Pending) {
+                    compile_error =
+                        "recording source configuration completed the producer gate for pass '" +
+                        pass.name + "'; the gate must remain pending until recording finishes";
+                    return false;
+                }
+                if (active_recording_commit &&
+                    active_recording_commit->Status() !=
+                        ERHIRecordingStatus::Pending) {
+                    compile_error =
+                        "recording source configuration completed the active "
+                        "transaction gate for pass '" +
+                        pass.name + "'";
+                    return false;
+                }
+                if (!source.command_list->IsEmpty() ||
+                    source.command_list->HasExplicitResourceStateOwnership() ||
+                    source.command_list->GetTranslateExecutionClass() !=
+                        ERHITranslateExecutionClass::Parallel) {
+                    compile_error =
+                        "recording source configuration may only change submit metadata "
+                        "for pass '" +
+                        pass.name + "'";
                     return false;
                 }
             }
@@ -1168,32 +1813,122 @@ bool RenderGraph::ExecuteRecording(
         PendingGateGuard pending_gate_guard{.gates = &group_gates};
 
         const auto error = std::make_shared<RecordingError>();
-        auto run_job = [error, store_error](RecordingJob job) mutable {
+        auto run_job =
+            [error, store_error, attach_recording_lifetime](RecordingJob job) mutable {
+            RHIThreadRoleScope record_owner(ERHIThreadRole::RecordWorker);
+            ProducerGateGuard producer_gate_guard{.gate = job.completion};
+            bool lifetime_attached = false;
+            auto attach_lifetime = [&] {
+                if (lifetime_attached) {
+                    return;
+                }
+                attach_recording_lifetime(
+                    *job.command_list,
+                    std::move(job.keepalive),
+                    std::move(job.record)
+                );
+                lifetime_attached = true;
+            };
+            auto fail_job =
+                [&](std::string_view detail, bool has_detail) noexcept {
+                    try {
+                        std::string message =
+                            "record pass '" + job.pass_name + "' failed";
+                        if (has_detail) {
+                            message += ": ";
+                            message += detail;
+                        }
+                        store_error(error, std::move(message));
+                    } catch (...) {
+                    }
+                    try {
+                        attach_lifetime();
+                    } catch (...) {
+                        try {
+                            store_error(
+                                error,
+                                "record pass '" + job.pass_name +
+                                    "' failed while retaining its recording "
+                                    "lifetime"
+                            );
+                        } catch (...) {
+                        }
+                    }
+                    job.completion->Fail();
+                    producer_gate_guard.Disarm();
+                };
             try {
+                const bool owns_explicit_state = !job.keepalive.empty();
+                if (owns_explicit_state || !job.before.empty() || !job.after.empty()) {
+                    job.command_list->SetResourceStateOwnership(
+                        ERHIResourceStateOwnership::Explicit
+                    );
+                }
+                if (!job.before.empty()) {
+                    job.command_list->Barriers(
+                        std::span<const BarrierCreateInfo>(
+                            job.before.data(), job.before.size()
+                        )
+                    );
+                }
+                const uint64 seal_generation =
+                    job.command_list->GetSealGeneration();
                 job.record(*job.command_list);
-                // Keep every immutable capture alive until the submit reaches
-                // a terminal backend/rejection callback, not merely until CPU
-                // recording finishes.
-                job.command_list->AddCallback(
-                    [keepalive = std::move(job.record)]() mutable { keepalive = {}; }
-                );
-                job.completion->Signal();
+                if (job.command_list->GetSealGeneration() != seal_generation) {
+                    throw std::logic_error(
+                        "record callback sealed its managed CommandList"
+                    );
+                }
+                if (owns_explicit_state &&
+                    !job.command_list->HasExplicitResourceStateOwnership()) {
+                    throw std::logic_error(
+                        "record callback changed explicit state ownership"
+                    );
+                }
+                if (job.command_list->GetTranslateExecutionClass() !=
+                    ERHITranslateExecutionClass::Parallel) {
+                    throw std::logic_error(
+                        "record callback changed its managed translation class"
+                    );
+                }
+                if (!job.after.empty()) {
+                    job.command_list->Barriers(
+                        std::span<const BarrierCreateInfo>(
+                            job.after.data(), job.after.size()
+                        )
+                    );
+                }
+                attach_lifetime();
+                if (!job.completion->Signal()) {
+                    throw std::logic_error(
+                        "recording completion gate was completed before its producer"
+                    );
+                }
+                producer_gate_guard.Disarm();
             } catch (const std::exception& exception) {
-                store_error(
-                    error,
-                    "record pass '" + job.pass_name + "' failed: " + exception.what()
-                );
-                job.completion->Fail();
+                fail_job(exception.what(), true);
             } catch (...) {
-                store_error(error, "record pass '" + job.pass_name + "' failed");
-                job.completion->Fail();
+                fail_job({}, false);
             }
         };
 
         // Register the unfinished sources before dispatch, matching the
         // dev_parallel/UE-style producer-consumer handoff. RHI owns stable
         // source order; worker completion order is irrelevant.
+        Array<uint64> publication_generations{};
+        publication_generations.reserve(jobs.size());
+        for (const auto& job : jobs) {
+            publication_generations.emplace_back(
+                job.command_list->GetSealGeneration()
+            );
+        }
         try {
+            // Publication is an admission-only phase. The producers have not
+            // started yet, so a custom publisher must not block on their gates
+            // or on RHI work routed behind this pending handoff.
+            RHIThreadRoleScope publication_owner(
+                ERHIThreadRole::RecordWorker
+            );
             if (publish_recording_batch) {
                 publish_recording_batch(std::move(sources));
             } else {
@@ -1205,6 +1940,24 @@ bool RenderGraph::ExecuteRecording(
         } catch (...) {
             compile_error = "failed to publish recording batch";
             return false;
+        }
+        for (size_t index = 0; index < jobs.size(); ++index) {
+            const auto& job = jobs[index];
+            if (job.completion->Status() != ERHIRecordingStatus::Pending ||
+                job.command_list->GetSealGeneration() !=
+                    publication_generations[index] ||
+                !job.command_list->IsEmpty() ||
+                job.command_list->HasExplicitResourceStateOwnership() ||
+                job.command_list->GetTranslateExecutionClass() !=
+                    ERHITranslateExecutionClass::Parallel ||
+                (active_recording_commit &&
+                 active_recording_commit->Status() !=
+                     ERHIRecordingStatus::Pending)) {
+                compile_error =
+                    "recording batch publisher mutated pending source state for pass '" +
+                    job.pass_name + "'";
+                return false;
+            }
         }
 
         const bool task_graph_available = TaskGraph::IsInitialized();
@@ -1296,6 +2049,12 @@ bool RenderGraph::ExecuteRecording(
         pending_gate_guard.Disarm();
         batch_index = group_end;
     }
+    if (!active_transaction_guard.Commit()) {
+        compile_error =
+            "active recording transaction gate completed before graph commit";
+        return false;
+    }
+    active_main_stream_guard.Commit();
     return true;
 }
 

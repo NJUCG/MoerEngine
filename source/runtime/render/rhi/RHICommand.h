@@ -17,6 +17,7 @@
 #include <condition_variable>
 #include <filesystem>
 #include <functional>
+#include <initializer_list>
 #include <misc/STL.h>
 #include <mutex>
 #include <optional>
@@ -264,6 +265,17 @@ enum class ERHIProfilingPhase : uint8 {
     End,
 };
 
+// Selects the owner of resource-state lifetime across one immutable submit.
+// BackendTracked preserves the legacy behavior: the backend infers command
+// states and restores resources to their preferred state at submit end.
+// Explicit is used by an upper-level compiler (for example RDG): barriers in
+// the command stream are authoritative and the backend must not append a
+// restore-to-preferred-state epilogue.
+enum class ERHIResourceStateOwnership : uint8 {
+    BackendTracked,
+    Explicit,
+};
+
 struct CmdSubmit {
     Array<UniquePtr<Command>>        cmds;
     Array<std::function<void(void)>> callbacks;
@@ -279,6 +291,9 @@ struct CmdSubmit {
     bool               b_tick_profiling{false};
     ERHIProfilingPhase profiling_phase{ERHIProfilingPhase::Disabled};
     bool               b_delete_resources{false};
+    ERHIResourceStateOwnership resource_state_ownership{
+        ERHIResourceStateOwnership::BackendTracked
+    };
     ERHITranslateExecutionClass translate_execution_class{
         ERHITranslateExecutionClass::Parallel
     };
@@ -303,6 +318,15 @@ struct CmdSubmit {
     CmdSubmit&& SetTranslateExecutionClass(ERHITranslateExecutionClass _execution_class) {
         translate_execution_class = _execution_class;
         return std::move(*this);
+    }
+
+    CmdSubmit&& SetResourceStateOwnership(ERHIResourceStateOwnership _ownership) {
+        resource_state_ownership = _ownership;
+        return std::move(*this);
+    }
+
+    bool HasExplicitResourceStateOwnership() const noexcept {
+        return resource_state_ownership == ERHIResourceStateOwnership::Explicit;
     }
 
     CmdSubmit&& DeleteResources() {
@@ -366,6 +390,7 @@ struct CmdSubmit {
         b_tick_profiling   = _other.b_tick_profiling;
         profiling_phase    = _other.profiling_phase;
         b_delete_resources = _other.b_delete_resources;
+        resource_state_ownership = _other.resource_state_ownership;
         translate_execution_class = _other.translate_execution_class;
         debug_label        = std::move(_other.debug_label);
         debug_label_color  = _other.debug_label_color;
@@ -383,6 +408,7 @@ struct CmdSubmit {
         b_tick_profiling   = _other.b_tick_profiling;
         profiling_phase    = _other.profiling_phase;
         b_delete_resources = _other.b_delete_resources;
+        resource_state_ownership = _other.resource_state_ownership;
         translate_execution_class = _other.translate_execution_class;
         debug_label        = std::move(_other.debug_label);
         debug_label_color  = _other.debug_label_color;
@@ -427,6 +453,81 @@ struct ReadBuffer {
 struct WriteBuffer {
     BufferView   buffer;
     EBufferState state;
+};
+
+// Fully specified barrier state used by graph-owned command streams. Texture
+// layouts are explicit instead of being inferred from access bits so present,
+// depth-read and transfer-src/dst transitions remain distinguishable.
+struct BarrierState {
+    ERHIPipelineStageFlags stage{ERHIPipelineStageFlags::PS_NONE};
+    ERHIAccessFlags        access{ERHIAccessFlags::UNDEFINED};
+    ETextureLayout         texture_layout{ETextureLayout::TEXTURE_LAYOUT_UNDEFINED};
+
+    auto operator<=>(const BarrierState&) const = default;
+
+    static BarrierState Buffer(
+        ERHIPipelineStageFlags _stage,
+        ERHIAccessFlags        _access
+    ) {
+        return {.stage = _stage, .access = _access};
+    }
+
+    static BarrierState Texture(
+        ERHIPipelineStageFlags _stage,
+        ERHIAccessFlags        _access,
+        ETextureLayout         _layout
+    ) {
+        return {.stage = _stage, .access = _access, .texture_layout = _layout};
+    }
+};
+
+inline constexpr bool BarrierStateWrites(const BarrierState& _state) {
+    return (_state.access & ERHIAccessFlags::SHADER_WRITE) != ERHIAccessFlags::UNDEFINED ||
+           (_state.access & ERHIAccessFlags::COLOR_ATTACHMENT_WRITE) !=
+               ERHIAccessFlags::UNDEFINED ||
+           (_state.access & ERHIAccessFlags::DEPTH_STENCIL_WRITE) !=
+               ERHIAccessFlags::UNDEFINED ||
+           (_state.access & ERHIAccessFlags::TRANSFER_WRITE) != ERHIAccessFlags::UNDEFINED ||
+           (_state.access & ERHIAccessFlags::MEMORY_WRITE) != ERHIAccessFlags::UNDEFINED ||
+           (_state.access & ERHIAccessFlags::CPU_WRITE_BIT) != ERHIAccessFlags::UNDEFINED ||
+           (_state.access & ERHIAccessFlags::UNORDERED_ACCESS_VIEW) !=
+               ERHIAccessFlags::UNDEFINED;
+}
+
+struct BarrierCreateInfo {
+    std::variant<TextureView, BufferView> resource;
+    BarrierState                          src_state{};
+    BarrierState                          dst_state{};
+    // Required for texture barriers. NONE is intentionally invalid at
+    // materialization time; callers must state whether color, depth, stencil,
+    // or a plane subset is transitioned.
+    ETextureAspectFlags texture_aspects{ETextureAspectFlags::NONE};
+
+    static BarrierCreateInfo Transition(
+        TextureView         _texture,
+        BarrierState        _src_state,
+        BarrierState        _dst_state,
+        ETextureAspectFlags _texture_aspects
+    ) {
+        return {
+            .resource        = _texture,
+            .src_state       = _src_state,
+            .dst_state       = _dst_state,
+            .texture_aspects = _texture_aspects,
+        };
+    }
+
+    static BarrierCreateInfo Transition(
+        BufferView  _buffer,
+        BarrierState _src_state,
+        BarrierState _dst_state
+    ) {
+        return {
+            .resource  = _buffer,
+            .src_state = _src_state,
+            .dst_state = _dst_state,
+        };
+    }
 };
 
 struct DrawBatchElement {
@@ -513,11 +614,39 @@ concept is_arg = std::is_same_v<std::remove_reference_t<TInArg>(), BufferView> |
 class CommandList {
 
 public:
+    // A graph-managed recorder owns this lease while user code is allowed to
+    // append commands. Submit() and rejection draining fail before mutating
+    // the list until the lease is released, so an untrusted record callback
+    // cannot split or publish a partially lowered command stream.
+    class RENDER_API ManagedRecordingLease final {
+    public:
+        ManagedRecordingLease() = default;
+        ~ManagedRecordingLease();
+
+        ManagedRecordingLease(const ManagedRecordingLease&)            = delete;
+        ManagedRecordingLease& operator=(const ManagedRecordingLease&) = delete;
+
+        ManagedRecordingLease(ManagedRecordingLease&& _other) noexcept;
+        ManagedRecordingLease& operator=(ManagedRecordingLease&& _other) noexcept;
+
+        void Release() noexcept;
+        [[nodiscard]] bool IsActive() const noexcept {
+            return command_list != nullptr;
+        }
+
+    private:
+        friend class CommandList;
+        explicit ManagedRecordingLease(CommandList& _command_list) noexcept :
+            command_list(&_command_list) {}
+
+        CommandList* command_list{nullptr};
+    };
+
     CommandList(const CommandList&)            = delete;
     CommandList& operator=(const CommandList&) = delete;
 
-    CommandList(CommandList&&)            = default;
-    CommandList& operator=(CommandList&&) = default;
+    RENDER_API CommandList(CommandList&& _other);
+    RENDER_API CommandList& operator=(CommandList&& _other);
 
 public:
     struct RENDER_API DrawDispatcher {
@@ -1238,6 +1367,39 @@ public:
         EndBarriers();
     }
 
+    // Explicit barrier seam for an upper-level state compiler. Unlike the
+    // legacy overload above, both sides of the dependency and the texture
+    // layout/aspect are carried verbatim to the backend.
+    RENDER_API void Barriers(
+        std::span<const BarrierCreateInfo> _barriers,
+        EQueueType                         _src_queue,
+        EQueueType                         _dst_queue
+    );
+
+    void Barriers(
+        std::initializer_list<BarrierCreateInfo> _barriers,
+        EQueueType                               _src_queue,
+        EQueueType                               _dst_queue
+    ) {
+        Barriers(
+            std::span<const BarrierCreateInfo>(_barriers.begin(), _barriers.size()),
+            _src_queue,
+            _dst_queue
+        );
+    }
+
+    void Barriers(std::span<const BarrierCreateInfo> _barriers) {
+        Barriers(_barriers, queue_type, queue_type);
+    }
+
+    void Barriers(std::initializer_list<BarrierCreateInfo> _barriers) {
+        Barriers(
+            std::span<const BarrierCreateInfo>(_barriers.begin(), _barriers.size()),
+            queue_type,
+            queue_type
+        );
+    }
+
     void TextureBarriers(
         EQueueType            _src_queue,
         EQueueType            _dst_queue,
@@ -1340,7 +1502,15 @@ public:
 
     RENDER_API CmdSubmit Submit();
 
+    // CommandList must remain at a stable address for the lifetime of the
+    // returned lease.
+    RENDER_API ManagedRecordingLease AcquireManagedRecordingLease();
+
     RENDER_API bool IsEmpty() const;
+
+    [[nodiscard]] uint64 GetSealGeneration() const noexcept {
+        return seal_generation;
+    }
 
     EQueueType GetQueueType() const noexcept {
         return queue_type;
@@ -1351,6 +1521,21 @@ public:
     ) noexcept {
         translate_execution_class = _execution_class;
         return *this;
+    }
+
+    CommandList& SetResourceStateOwnership(
+        ERHIResourceStateOwnership _ownership
+    ) noexcept {
+        resource_state_ownership = _ownership;
+        return *this;
+    }
+
+    bool HasExplicitResourceStateOwnership() const noexcept {
+        return resource_state_ownership == ERHIResourceStateOwnership::Explicit;
+    }
+
+    ERHITranslateExecutionClass GetTranslateExecutionClass() const noexcept {
+        return translate_execution_class;
     }
 
 private:
@@ -1430,6 +1615,14 @@ private:
     ERHITranslateExecutionClass  translate_execution_class{
         ERHITranslateExecutionClass::Parallel
     };
+    ERHIResourceStateOwnership   resource_state_ownership{
+        ERHIResourceStateOwnership::BackendTracked
+    };
+    // Monotonic mutation epoch for destructive sealing/draining operations.
+    // Managed recorders snapshot it around user callbacks so a callback cannot
+    // silently split or discard a graph-owned command stream.
+    uint64 seal_generation{0};
+    uint32 managed_recording_lease_count{0};
     struct ScopeState {
         std::string name;
         float4      color;

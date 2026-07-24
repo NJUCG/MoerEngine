@@ -13,16 +13,17 @@
 namespace Moer::Render {
 
 class RenderGraphCompiler;
+class RenderGraphLowering;
 
 /**
  * Typed RDG frontend with an opt-in command-recording schedule.
  *
  * The compiler owns typed resource declarations, subresource-aware hazards,
- * logical resource versions, stable dependency analysis and lifetimes. The
- * RDG does not own physical tracked state or emit barriers in this stage; the
- * existing RHI/Vulkan command path remains responsible. Legacy callbacks stay
- * serial. Explicit record callbacks may be assigned independent CommandLists
- * while preserving stable source order.
+ * logical resource versions, stable dependency analysis and lifetimes. Its
+ * default execution remains backend-tracked for compatibility; the guarded
+ * active path lowers a complete supported state plan into authoritative RHI
+ * barriers. Legacy callbacks stay serial. Explicit record callbacks may be
+ * assigned independent CommandLists while preserving stable source order.
  */
 class RENDER_API RenderGraph {
 public:
@@ -678,10 +679,42 @@ public:
     using ExecuteCallback       = std::function<void()>;
     using RecordCallback        = std::function<void(CommandList&)>;
     using PassCompletedCallback = std::function<void(const ExecutedPassInfo&)>;
-    /** May attach submit metadata; CommandList and gate ownership are immutable. */
+    /**
+     * May attach submit metadata; CommandList, producer gate and transaction
+     * gate ownership are immutable. It must not wait on RHI work.
+     */
     using RecordingSourceSetupCallback =
         std::function<void(const ExecutedPassInfo&, RHIRecordingSource&)>;
+    /**
+     * Admission-only callback invoked before the corresponding producers
+     * start. It may move the immutable pending sources into a nonblocking
+     * handoff, but must not mutate/seal their CommandLists, replace or complete
+     * their producer/transaction gates, wait on those gates, or call blocking
+     * RHI lifecycle operations such as Sync. Producer completion is joined by
+     * ExecuteRecording; active lowering releases every published group through
+     * one graph-wide commit gate only after the whole graph succeeds.
+     */
     using RecordingBatchPublisher = std::function<void(Array<RHIRecordingSource>&&)>;
+
+    /**
+     * Opts ExecuteRecording into the authoritative RDG state path.
+     *
+     * Phase 11 materializes a fully validated Graphics-only lowered plan into
+     * explicit RHI barriers. Main-thread passes record into the caller-owned
+     * list; independently recorded passes continue to own their own lists and
+     * are mutation-sealed until one graph-wide RHI transaction commits. The
+     * current backend-tracker bridge requires full-buffer ranges, all physical
+     * texture aspects, and an initially empty main-thread list. Active lowering
+     * fails closed when caller-thread and managed-record passes are mixed in
+     * one graph. A physical MainThread graph must be isolated from nonphysical
+     * passes and keep its caller-owned list unsealed until ExecuteRecording
+     * returns (therefore no per-pass completion observer). Leaving enabled
+     * false preserves the legacy backend-tracked path.
+     */
+    struct ActiveRecordingOptions {
+        bool         enabled                  = false;
+        CommandList* main_thread_command_list = nullptr;
+    };
 
     explicit RenderGraph(std::string_view name = "RenderGraph");
     RenderGraph(std::string_view name, QueueTopology topology);
@@ -697,6 +730,14 @@ public:
 
     TextureHandle ImportTexture(std::string_view name, const void* physical_identity, TextureDesc desc);
     BufferHandle  ImportBuffer(std::string_view name, const void* physical_identity, BufferDesc desc);
+    /**
+     * Strong physical imports used by active lowering. The graph keeps the
+     * resource alive through compilation, recording and lowered-plan handoff.
+     * The raw-pointer overloads above remain declaration-only compatibility
+     * APIs and are deliberately rejected by active lowering.
+     */
+    TextureHandle ImportTexture(std::string_view name, TextureRef texture, TextureDesc desc);
+    BufferHandle  ImportBuffer(std::string_view name, BufferRef buffer, BufferDesc desc);
     TokenHandle   ImportToken(std::string_view name, const void* physical_identity = nullptr);
 
     /** Legacy transient API. Prefer the typed declarations below for new code. */
@@ -785,7 +826,8 @@ public:
         const PassCompletedCallback&        after_main_thread_pass,
         const RecordingSourceSetupCallback& configure_recording_source = {},
         bool                                parallel_recording_enabled = true,
-        const RecordingBatchPublisher&      publish_recording_batch = {}
+        const RecordingBatchPublisher&      publish_recording_batch = {},
+        const ActiveRecordingOptions&        active_recording = {}
     );
 
     [[nodiscard]] bool IsCompiled() const {
@@ -810,6 +852,7 @@ public:
 
 private:
     friend class RenderGraphCompiler;
+    friend class RenderGraphLowering;
 
     struct AccessDeclaration {
         ResourceHandle resource{};
@@ -833,6 +876,8 @@ private:
         std::vector<std::string> aliases{};
         ResourceKind             kind              = ResourceKind::Token;
         const void*              physical_identity = nullptr;
+        TextureRef               physical_texture{};
+        BufferRef                physical_buffer{};
         TextureDesc              texture_desc{};
         BufferDesc               buffer_desc{};
         bool                     typed_desc = false;

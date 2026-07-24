@@ -10,6 +10,7 @@
 #include "rhi/RHIResourceInitilizer.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
+#include <stdexcept>
 namespace Moer::Render {
 
 void CommandQueue::Test() {
@@ -37,6 +38,78 @@ CommandList::CommandList(EQueueType _queue_type) : queue_type(_queue_type) {
         _queue_type == EQueueType::Graphics || _queue_type == EQueueType::Compute ||
         _queue_type == EQueueType::Copy
     );
+}
+
+CommandList::CommandList(CommandList&& _other) :
+    CommandList(_other.queue_type) {
+    *this = std::move(_other);
+}
+
+CommandList& CommandList::operator=(CommandList&& _other) {
+    if (this == &_other) {
+        return *this;
+    }
+    if (managed_recording_lease_count != 0 ||
+        _other.managed_recording_lease_count != 0) {
+        throw std::logic_error(
+            "CommandList move is forbidden while graph-managed recording is active"
+        );
+    }
+
+    commands                    = std::move(_other.commands);
+    current_barriers            = _other.current_barriers;
+    callbacks                   = std::move(_other.callbacks);
+    success_callbacks           = std::move(_other.success_callbacks);
+    cached_args                 = std::move(_other.cached_args);
+    queue_type                  = _other.queue_type;
+    translate_execution_class   = _other.translate_execution_class;
+    resource_state_ownership    = _other.resource_state_ownership;
+    seal_generation             = _other.seal_generation;
+    scope_stack                 = std::move(_other.scope_stack);
+    timestamp_scope_names       = std::move(_other.timestamp_scope_names);
+
+    _other.current_barriers          = nullptr;
+    _other.translate_execution_class =
+        ERHITranslateExecutionClass::Parallel;
+    _other.resource_state_ownership =
+        ERHIResourceStateOwnership::BackendTracked;
+    _other.seal_generation = 0;
+    return *this;
+}
+
+CommandList::ManagedRecordingLease::~ManagedRecordingLease() {
+    Release();
+}
+
+CommandList::ManagedRecordingLease::ManagedRecordingLease(
+    ManagedRecordingLease&& _other
+) noexcept :
+    command_list(std::exchange(_other.command_list, nullptr)) {}
+
+CommandList::ManagedRecordingLease&
+CommandList::ManagedRecordingLease::operator=(ManagedRecordingLease&& _other) noexcept {
+    if (this != &_other) {
+        Release();
+        command_list = std::exchange(_other.command_list, nullptr);
+    }
+    return *this;
+}
+
+void CommandList::ManagedRecordingLease::Release() noexcept {
+    if (command_list == nullptr) {
+        return;
+    }
+    assert(command_list->managed_recording_lease_count > 0);
+    --command_list->managed_recording_lease_count;
+    command_list = nullptr;
+}
+
+CommandList::ManagedRecordingLease CommandList::AcquireManagedRecordingLease() {
+    if (managed_recording_lease_count != 0) {
+        throw std::logic_error("CommandList already has a managed recording lease");
+    }
+    ++managed_recording_lease_count;
+    return ManagedRecordingLease(*this);
 }
 // void CommandList::ArgSetter::SetBuffer(uint64 _index, BufferView _buffer) {
 //     auto idx          = handle.GetBindingIdx(_index);
@@ -128,6 +201,12 @@ void CommandList::ComputeDispatcher::DispatchIndirect(
 }
 
 CmdSubmit CommandList::Submit() {
+    if (managed_recording_lease_count != 0) {
+        throw std::logic_error(
+            "CommandList::Submit is forbidden while graph-managed recording is active"
+        );
+    }
+    ++seal_generation;
     if (!scope_stack.empty()) {
         assert(scope_stack.empty() && "CommandList::Submit called with unclosed GPU marker scopes");
         // Keep release builds/captures structurally valid even if a caller
@@ -158,15 +237,23 @@ CmdSubmit CommandList::Submit() {
         });
     }
     submit.translate_execution_class = translate_execution_class;
+    submit.resource_state_ownership   = resource_state_ownership;
     commands.clear();
     callbacks.clear();
     success_callbacks.clear();
     timestamp_scope_names.clear();
     translate_execution_class = ERHITranslateExecutionClass::Parallel;
+    resource_state_ownership  = ERHIResourceStateOwnership::BackendTracked;
     return std::move(submit);
 }
 
 Array<std::function<void()>> CommandList::DrainOrdinaryCallbacksForRejection() {
+    if (managed_recording_lease_count != 0) {
+        throw std::logic_error(
+            "CommandList rejection draining is forbidden while graph-managed recording is active"
+        );
+    }
+    ++seal_generation;
     Array<std::function<void()>> cleanup_callbacks = std::move(callbacks);
 
     // This is deliberately not implemented in terms of Submit(). A failed
@@ -184,6 +271,7 @@ Array<std::function<void()>> CommandList::DrainOrdinaryCallbacksForRejection() {
     }
     timestamp_scope_names.clear();
     translate_execution_class = ERHITranslateExecutionClass::Parallel;
+    resource_state_ownership  = ERHIResourceStateOwnership::BackendTracked;
     return cleanup_callbacks;
 }
 
@@ -486,6 +574,37 @@ void CommandList::AddCustomCommand(UniquePtr<Command>&& _cmd, std::string_view _
 }
 
 #pragma endregion
+
+void CommandList::Barriers(
+    std::span<const BarrierCreateInfo> _barriers,
+    EQueueType                         _src_queue,
+    EQueueType                         _dst_queue
+) {
+    if (_barriers.empty()) {
+        throw std::invalid_argument("explicit barrier batch cannot be empty");
+    }
+    if (_src_queue != _dst_queue) {
+        assert(
+            _src_queue == _dst_queue &&
+            "explicit barriers cannot perform queue ownership transfer"
+        );
+        throw std::invalid_argument(
+            "explicit barriers require one queue; use paired queue import/export"
+        );
+    }
+    commands.push_back(
+        MakeUnique<BarrierCmd>(
+            static_cast<uint>(_barriers.size()), _src_queue, _dst_queue
+        )
+    );
+    auto* barrier_cmd = static_cast<BarrierCmd*>(commands.back().get());
+    for (const BarrierCreateInfo& barrier : _barriers) {
+        barrier_cmd->AddExplicitBarrier(barrier);
+    }
+    // Recording an authoritative src/dst dependency opts this submit out of
+    // the backend's legacy restore-to-preferred-state epilogue.
+    resource_state_ownership = ERHIResourceStateOwnership::Explicit;
+}
 
 void CommandList::AddCallback(std::function<void()>&& _callback) {
     callbacks.emplace_back(std::move(_callback));

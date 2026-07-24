@@ -1,6 +1,7 @@
 #include "Core.h"
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
+#include "rendergraph/RenderGraph.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIExecutor.h"
@@ -296,6 +297,309 @@ void RunOrderedReadback(
         _production_gate,
         _production_heavy,
         kIterations
+    );
+}
+
+void RunActiveRdgExplicitBarrierReadback(bool _parallel) {
+    auto& device = RenderDevice::Get();
+    const EBufferUsageFlags usage =
+        EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
+    constexpr uint64_t byte_size = sizeof(uint32) * kElementCount;
+
+    BufferRef source =
+        device.CreateBuffer<uint32>("active_rdg_source", kElementCount, usage);
+    BufferRef destination =
+        device.CreateBuffer<uint32>("active_rdg_destination", kElementCount, usage);
+
+    std::array<uint32, kElementCount> values{};
+    std::array<uint32, kElementCount> readback{};
+    for (uint32 index = 0; index < values.size(); ++index) {
+        values[index] = 0xA1100000u + index * 37u + 11u;
+    }
+
+    RenderGraph graph("ActiveRdgExplicitBarrier");
+    const auto source_handle = graph.ImportBuffer(
+        "Source",
+        source,
+        RenderGraph::BufferDesc{.byte_size = byte_size}
+    );
+    const auto destination_handle = graph.ImportBuffer(
+        "Destination",
+        destination,
+        RenderGraph::BufferDesc{.byte_size = byte_size}
+    );
+    graph.SetInitialState(
+        source_handle,
+        RenderGraph::BufferState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None
+    );
+    graph.SetInitialState(
+        destination_handle,
+        RenderGraph::BufferState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None
+    );
+
+    graph.AddRecordPass(
+        "Upload",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Write(
+                    source_handle,
+                    RenderGraph::BufferState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [source, values](CommandList& commands) {
+            commands.CopyFrom(
+                OwnedBytes(values), source->GetView(), "ActiveRdgUpload"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "Copy",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Read(source_handle, RenderGraph::BufferState::TransferSource)
+                .Write(
+                    destination_handle,
+                    RenderGraph::BufferState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [source, destination](CommandList& commands) {
+            commands.CopyFrom(
+                source->GetView(),
+                destination->GetView(),
+                "ActiveRdgBufferCopy"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "Readback",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Read(
+                    destination_handle,
+                    RenderGraph::BufferState::TransferSource
+                )
+                .SideEffect();
+        },
+        [destination, &readback](CommandList& commands) {
+            commands.CopyFrom(
+                destination->GetView(),
+                WritableBytes(readback),
+                "ActiveRdgReadback"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.Export(
+        source_handle,
+        RenderGraph::BufferState::TransferSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    graph.Export(
+        destination_handle,
+        RenderGraph::BufferState::TransferSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+
+    if (!graph.Compile()) {
+        throw std::runtime_error(
+            "active RDG compile failed: " + graph.GetCompileError()
+        );
+    }
+    if (!graph.ExecuteRecording(
+            {},
+            {},
+            _parallel,
+            {},
+            RenderGraph::ActiveRecordingOptions{.enabled = true}
+        )) {
+        throw std::runtime_error(
+            "active RDG execution failed: " + graph.GetCompileError()
+        );
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    if (readback != values) {
+        throw std::runtime_error(
+            "active RDG explicit barrier readback mismatch"
+        );
+    }
+    LOG_INFO(
+        "[TESTCASE][PASS] name=ActiveRdgExplicitBarrier mode={} "
+        "passes=3 state_owner=rdg readback=verified",
+        _parallel ? "parallel" : "serial"
+    );
+}
+
+void RunActiveRdgTextureArraySubrange(bool _parallel) {
+    auto& device = RenderDevice::Get();
+    constexpr uint32 kLayerCount = 4;
+    constexpr uint32 kFirstLayer = 1;
+    constexpr uint32 kTestLayerCount = 2;
+    TextureRef texture = device.CreateTexture(
+        "active_rdg_array_subrange",
+        Extent3D(8, 8, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC,
+        1,
+        kLayerCount
+    );
+
+    RenderGraph graph("ActiveRdgTextureArraySubrange");
+    const auto texture_handle = graph.ImportTexture(
+        "ArrayTexture",
+        texture,
+        RenderGraph::TextureDesc{
+            .mip_count   = 1,
+            .layer_count = kLayerCount,
+            .aspects     = RenderGraph::TextureAspect::Color,
+        }
+    );
+    auto range =
+        RenderGraph::TextureRange::Layers(kFirstLayer, kTestLayerCount);
+    range.aspects = RenderGraph::TextureAspect::Color;
+    graph.SetInitialState(
+        texture_handle,
+        RenderGraph::TextureState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None,
+        range
+    );
+    graph.AddRecordPass(
+        "ClearArrayLayers",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Write(
+                    texture_handle,
+                    RenderGraph::TextureState::TransferDestination,
+                    range
+                )
+                .SideEffect();
+        },
+        [texture](CommandList& commands) {
+            commands.ClearResource(
+                texture->GetView().Slice(kFirstLayer, kTestLayerCount),
+                float4{0.125f, 0.25f, 0.5f, 1.0f}
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.Export(
+        texture_handle,
+        RenderGraph::TextureState::TransferDestination,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Write,
+        range
+    );
+
+    if (!graph.Compile()) {
+        throw std::runtime_error(
+            "active RDG texture array compile failed: " + graph.GetCompileError()
+        );
+    }
+    if (!graph.ExecuteRecording(
+            {},
+            {},
+            _parallel,
+            {},
+            RenderGraph::ActiveRecordingOptions{.enabled = true}
+        )) {
+        throw std::runtime_error(
+            "active RDG texture array execution failed: " + graph.GetCompileError()
+        );
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    LOG_INFO(
+        "[TESTCASE][PASS] name=ActiveRdgTextureArraySubrange mode={} "
+        "layers={}+{} state_owner=rdg",
+        _parallel ? "parallel" : "serial",
+        kFirstLayer,
+        kTestLayerCount
+    );
+}
+
+void RunExplicitTextureArrayRangeShapeChange(bool _parallel) {
+    auto& device = RenderDevice::Get();
+    constexpr uint32 kLayerCount = 4;
+    constexpr uint32 kFirstLayer = 1;
+    constexpr uint32 kSubsetLayerCount = 2;
+    TextureRef texture = device.CreateTexture(
+        "explicit_array_shape_change",
+        Extent3D(8, 8, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::TRANSFER_DST,
+        1,
+        kLayerCount
+    );
+    const TextureView whole = texture->GetView().Slice(0, kLayerCount);
+    const TextureView subset =
+        texture->GetView().Slice(kFirstLayer, kSubsetLayerCount);
+    const BarrierState undefined = BarrierState::Texture(
+        ERHIPipelineStageFlags::PS_TOP_OF_PIPE,
+        ERHIAccessFlags::UNDEFINED,
+        ETextureLayout::TEXTURE_LAYOUT_UNDEFINED
+    );
+    const BarrierState transfer_destination = BarrierState::Texture(
+        ERHIPipelineStageFlags::PS_TRANSFER,
+        ERHIAccessFlags::TRANSFER_WRITE,
+        ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST
+    );
+
+    CommandList commands(EQueueType::Graphics);
+    commands.Barriers({
+        BarrierCreateInfo::Transition(
+            whole,
+            undefined,
+            transfer_destination,
+            ETextureAspectFlags::COLOR
+        ),
+    });
+    commands.ClearResource(whole, float4{0.125f, 0.25f, 0.5f, 1.0f});
+    commands.Barriers({
+        BarrierCreateInfo::Transition(
+            subset,
+            transfer_destination,
+            transfer_destination,
+            ETextureAspectFlags::COLOR
+        ),
+    });
+    commands.ClearResource(subset, float4{0.75f, 0.5f, 0.25f, 1.0f});
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        commands.Submit(),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    LOG_INFO(
+        "[TESTCASE][PASS] name=ExplicitTextureArrayRangeShapeChange mode={} "
+        "shape=0+{}->{}+{} state_owner=explicit",
+        _parallel ? "parallel" : "serial",
+        kLayerCount,
+        kFirstLayer,
+        kSubsetLayerCount
     );
 }
 
@@ -1220,6 +1524,9 @@ int main(int argc, const char** argv) {
         RunOrderedReadback(
             parallel, inject_worker_failure, production_gate, production_heavy
         );
+        RunActiveRdgExplicitBarrierReadback(parallel);
+        RunActiveRdgTextureArraySubrange(parallel);
+        RunExplicitTextureArrayRangeShapeChange(parallel);
         RunUpperTopologyBatch();
         RunPendingSourceTopologyBatch();
         RunContinuousFrameInFlightRetirement();

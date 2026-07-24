@@ -834,6 +834,49 @@ public:
     }
 
     void VisitCmd(const BarrierCmd* _cmd) {
+        if (_cmd->HasExplicitBarriers()) {
+            // A materialized transition is a command-stream boundary, not a
+            // resource access that may share a dependency layer. Give it the
+            // next exclusive layer and advance the global offset so neither
+            // its prefix nor following work can cross the barrier.
+            const int64 layer = std::max<int64>(
+                static_cast<int64>(m_cmd_lists.size()),
+                GetLayerWithOffset(0)
+            );
+            for (const ExplicitBufferBarrier& barrier :
+                 _cmd->ExplicitBuffers()) {
+                auto* range_handle = static_cast<RangeHandle*>(
+                    GetHandle(barrier.handle, ResourceType::Texture_Buffer)
+                );
+                RecordWrite(
+                    range_handle,
+                    Range(barrier.offset, barrier.byte_size),
+                    layer
+                );
+                m_write_resources.emplace(range_handle->handle);
+            }
+            for (const ExplicitTextureBarrier& barrier :
+                 _cmd->ExplicitTextures()) {
+                auto* range_handle = static_cast<RangeHandle*>(
+                    GetHandle(barrier.handle, ResourceType::Texture_Buffer)
+                );
+                RecordWrite(
+                    range_handle,
+                    Range(
+                        barrier.mip_level,
+                        barrier.mip_count,
+                        barrier.array_layer,
+                        barrier.array_count
+                    ),
+                    layer
+                );
+                m_write_resources.emplace(range_handle->handle);
+            }
+            AddCmd(_cmd, layer);
+            layer_offset = static_cast<int64>(m_cmd_lists.size());
+            return;
+        }
+
         int64               layer = 0;
         Array<RangeHandle*> read_resources;
         Array<Range>        read_ranges;

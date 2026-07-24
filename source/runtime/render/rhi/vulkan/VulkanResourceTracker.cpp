@@ -10,6 +10,7 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 
+#include <stdexcept>
 #include <type_traits>
 
 namespace Moer::Render {
@@ -417,6 +418,15 @@ void VkTracker::RecordState(
     uint32_t                 _src_queue_family,
     uint32_t                 _dst_queue_family
 ) {
+    if (explicit_partial_buffers.contains(_buffer)) {
+        LOG_CRITICAL(
+            "A partial-range explicit buffer barrier cannot be followed by "
+            "backend-inferred state tracking in the same submit"
+        );
+        throw std::logic_error(
+            "mixed explicit partial buffer barrier and inferred buffer state"
+        );
+    }
     MarkWriteable(_buffer, IsWriteState(_access));
     pending_buffers.insert(_buffer);
 
@@ -786,32 +796,85 @@ void VkTracker::RecordState(
     uint32_t                 _src_queue_family,
     uint32_t                 _dst_queue_family
 ) {
+    if (explicit_partial_aspect_textures.contains(_texture)) {
+        LOG_CRITICAL(
+            "A partial-aspect explicit texture barrier cannot be followed by "
+            "backend-inferred state tracking in the same submit"
+        );
+        throw std::logic_error(
+            "mixed explicit partial-aspect barrier and inferred texture state"
+        );
+    }
     uint8 resolved_mip_count =
         _mip_count == kRemainingSubresource ? uint8(_texture->GetNumMips() - _mip_level) : _mip_count;
+    uint8 resolved_array_count =
+        _array_count == kRemainingSubresource ?
+            uint8(_texture->GetNumArray() - _array_layer) :
+            _array_count;
+    bool has_explicit_texture_state = false;
+    for (const auto& explicit_range : explicit_texture_ranges) {
+        if (explicit_range.texture == _texture) {
+            has_explicit_texture_state = true;
+            break;
+        }
+    }
 
     // Decompose multi-mip ranges into per-mip entries to prevent overlapping
     // subresource ranges in barriers (Vulkan requires oldLayout to match the
     // actual current layout; overlapping ranges cause desynchronized tracking).
     // （RecordState的时候，需要把多mip的range分解为单mip的range，否则会把0~5和0~1+2~5识别成完全不同的资源）
-    if (resolved_mip_count > 1) {
+    // Explicit RDG ranges may legally change array shape between passes (for
+    // example layers 0+4 followed by 1+2). Once a texture enters the explicit
+    // state domain, use atomic mip/layer tracker keys without widening the
+    // native barriers or changing legacy-only submits.
+    if (resolved_mip_count > 1 ||
+        (has_explicit_texture_state && resolved_array_count > 1)) {
         for (uint8_t i = 0; i < resolved_mip_count; ++i) {
-            RecordState(
-                _texture,
-                _access,
-                _layout,
-                _stage,
-                _mip_level + i,
-                1,
-                _array_layer,
-                _array_count,
-                _src_queue_family,
-                _dst_queue_family
-            );
+            const uint8 layer_count =
+                has_explicit_texture_state ? resolved_array_count : 1;
+            for (uint8 layer = 0; layer < layer_count; ++layer) {
+                RecordState(
+                    _texture,
+                    _access,
+                    _layout,
+                    _stage,
+                    _mip_level + i,
+                    1,
+                    has_explicit_texture_state ?
+                        static_cast<uint8>(_array_layer + layer) :
+                        _array_layer,
+                    has_explicit_texture_state ? 1 : resolved_array_count,
+                    _src_queue_family,
+                    _dst_queue_family
+                );
+            }
         }
         return;
     }
 
     auto         key = MakeTextureStateKey(_texture, _mip_level, 1, _array_layer, _array_count);
+    for (const auto& explicit_range : explicit_texture_ranges) {
+        if (!TextureSubresourceRangesOverlap(explicit_range, key) ||
+            explicit_range == key) {
+            continue;
+        }
+        LOG_CRITICAL(
+            "An explicit texture range cannot be followed by an overlapping "
+            "backend-inferred range with a different shape: explicit "
+            "mip={}+{} layer={}+{}, inferred mip={}+{} layer={}+{}",
+            explicit_range.mip_level,
+            explicit_range.mip_count,
+            explicit_range.array_layer,
+            explicit_range.array_count,
+            key.mip_level,
+            key.mip_count,
+            key.array_layer,
+            key.array_count
+        );
+        throw std::logic_error(
+            "mixed explicit and inferred texture ranges have incompatible shapes"
+        );
+    }
     TextureState state{
         VK_ACCESS_2_NONE,
         VK_IMAGE_LAYOUT_UNDEFINED,
@@ -861,6 +924,162 @@ void VkTracker::RecordState(
             is_write = is_write || it->second.src_layout != it->second.dst_layout;
     }
     MarkWriteable(key, is_write);
+}
+
+void VkTracker::EmitExplicitBarrier(
+    VulkanBuffer*         _buffer,
+    uint64                _offset,
+    uint64                _byte_size,
+    VkPipelineStageFlags2 _src_stage,
+    VkAccessFlags2        _src_access,
+    VkPipelineStageFlags2 _dst_stage,
+    VkAccessFlags2        _dst_access
+) {
+    if (_buffer == nullptr || _byte_size == 0 ||
+        _offset > _buffer->GetByteSize() ||
+        _byte_size > _buffer->GetByteSize() - _offset) {
+        LOG_CRITICAL(
+            "Invalid explicit buffer barrier range: offset={} size={}",
+            _offset,
+            _byte_size
+        );
+        throw std::out_of_range("invalid explicit buffer barrier range");
+    }
+
+    buffer_barriers.emplace_back(VkBufferMemoryBarrier2{
+        .sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+        .pNext               = nullptr,
+        .srcStageMask        = _src_stage,
+        .srcAccessMask       = _src_access,
+        .dstStageMask        = _dst_stage,
+        .dstAccessMask       = _dst_access,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer              = _buffer->GetHandle(),
+        .offset              = _offset,
+        .size                = _byte_size,
+    });
+
+    if (_offset == 0 && _byte_size == _buffer->GetByteSize()) {
+        buffer_states[_buffer] = BufferState{
+            .src_access      = static_cast<VkAccessFlagBits2>(_dst_access),
+            .src_stage       = static_cast<VkPipelineStageFlagBits2>(_dst_stage),
+            .dst_access      = VK_ACCESS_2_NONE,
+            .dst_stage       = VK_PIPELINE_STAGE_2_NONE,
+            .src_queue_family = VK_QUEUE_FAMILY_IGNORED,
+            .dst_queue_family = VK_QUEUE_FAMILY_IGNORED,
+        };
+        MarkWriteable(_buffer, IsWriteState(_dst_access));
+    } else {
+        explicit_partial_buffers.insert(_buffer);
+    }
+}
+
+void VkTracker::EmitExplicitBarrier(
+    VulkanTexture*        _texture,
+    VkImageAspectFlags    _aspects,
+    uint8                 _mip_level,
+    uint8                 _mip_count,
+    uint8                 _array_layer,
+    uint8                 _array_count,
+    VkPipelineStageFlags2 _src_stage,
+    VkAccessFlags2        _src_access,
+    VkImageLayout         _src_layout,
+    VkPipelineStageFlags2 _dst_stage,
+    VkAccessFlags2        _dst_access,
+    VkImageLayout         _dst_layout
+) {
+    if (_texture == nullptr) {
+        throw std::invalid_argument("explicit texture barrier requires a texture");
+    }
+    ValidateSubresourceRange(
+        _texture, _mip_level, _mip_count, _array_layer, _array_count
+    );
+    const VkImageAspectFlags available_aspects =
+        VulkanEnumTranslator::METoVKImageAspectFlags(_texture->GetAspectFlags());
+    if (_aspects == 0 || (_aspects & ~available_aspects) != 0) {
+        LOG_CRITICAL(
+            "Invalid explicit texture aspect mask: requested={:#x} available={:#x}",
+            static_cast<uint32>(_aspects),
+            static_cast<uint32>(available_aspects)
+        );
+        throw std::invalid_argument("explicit texture barrier aspect is unavailable");
+    }
+
+    const uint8 resolved_mip_count =
+        _mip_count == kRemainingSubresource ?
+            uint8(_texture->GetNumMips() - _mip_level) :
+            _mip_count;
+    const uint8 resolved_array_count =
+        _array_count == kRemainingSubresource ?
+            uint8(_texture->GetNumArray() - _array_layer) :
+            _array_count;
+
+    texture_barriers.emplace_back(VkImageMemoryBarrier2{
+        .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+        .pNext               = nullptr,
+        .srcStageMask        = _src_stage,
+        .srcAccessMask       = _src_access,
+        .dstStageMask        = _dst_stage,
+        .dstAccessMask       = _dst_access,
+        .oldLayout           = _src_layout,
+        .newLayout           = _dst_layout,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image               = _texture->GetHandle(),
+        .subresourceRange =
+            VkImageSubresourceRange{
+                .aspectMask     = _aspects,
+                .baseMipLevel   = _mip_level,
+                .levelCount     = resolved_mip_count,
+                .baseArrayLayer = _array_layer,
+                .layerCount     = resolved_array_count,
+            },
+    });
+
+    if (_aspects != available_aspects) {
+        // The native barrier above remains exact. The legacy inferred tracker
+        // cannot represent aspect-split state, so reject any later inferred
+        // access instead of silently widening it.
+        explicit_partial_aspect_textures.insert(_texture);
+        return;
+    }
+
+    for (uint8 mip = 0; mip < resolved_mip_count; ++mip) {
+        for (uint8 layer = 0; layer < resolved_array_count; ++layer) {
+            const TextureSubresourceKeyT<VulkanTexture> key = MakeTextureStateKey(
+                _texture,
+                static_cast<uint8>(_mip_level + mip),
+                1,
+                static_cast<uint8>(_array_layer + layer),
+                1
+            );
+            texture_states[key] = TextureState{
+                .src_access       = static_cast<VkAccessFlagBits2>(_dst_access),
+                .src_layout       = _dst_layout,
+                .src_stage        = static_cast<VkPipelineStageFlagBits2>(_dst_stage),
+                .dst_access       = VK_ACCESS_2_NONE,
+                .dst_layout       = VK_IMAGE_LAYOUT_UNDEFINED,
+                .dst_stage        = VK_PIPELINE_STAGE_2_NONE,
+                .src_queue_family = VK_QUEUE_FAMILY_IGNORED,
+                .dst_queue_family = VK_QUEUE_FAMILY_IGNORED,
+            };
+            explicit_texture_ranges.insert(key);
+            MarkWriteable(key, IsWriteState(_dst_layout, _dst_access));
+        }
+    }
+    if (IsWriteState(_dst_layout, _dst_access)) {
+        // Keep the declared aggregate view as a conservative bindless lookup
+        // key while the authoritative state table remains mip/layer atomic.
+        // HandleBindless performs overlap-based current-write exclusion.
+        writed_state_textures.insert(MakeTextureStateKey(
+            _texture,
+            _mip_level,
+            resolved_mip_count,
+            _array_layer,
+            resolved_array_count
+        ));
+    }
 }
 
 void VkTracker::ResolveBarriers() {
@@ -1222,6 +1441,12 @@ void VkTracker::Reset() {
     writed_state_buffers.clear();
     write_blas_states.clear();
     flush_buffer_states.clear();
+    flush_buffer_ranges.clear();
+    pending_buffers.clear();
+    pending_textures.clear();
+    explicit_partial_buffers.clear();
+    explicit_partial_aspect_textures.clear();
+    explicit_texture_ranges.clear();
     exported_buffers.clear();
     exported_textures.clear();
 }

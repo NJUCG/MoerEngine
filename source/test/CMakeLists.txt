@@ -26,6 +26,22 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RenderGraphContract COMMAND $<TARGET_FILE:${test_target}>)
 
+set(test_target TestRenderGraphLowering)
+add_executable(${test_target} "RenderGraphLoweringTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME RenderGraphLoweringContract COMMAND $<TARGET_FILE:${test_target}>)
+
+set(test_target TestRenderGraphActiveLowering)
+add_executable(${test_target} "RenderGraphActiveLoweringTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME RenderGraphActiveLoweringContract COMMAND $<TARGET_FILE:${test_target}>)
+
 set(test_target TestRHICmdReorderer)
 add_executable(${test_target} "RHICmdReordererTest.cpp")
 target_link_libraries(${test_target}
@@ -33,6 +49,14 @@ target_link_libraries(${test_target}
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHICmdReordererContract COMMAND $<TARGET_FILE:${test_target}>)
+
+set(test_target TestRHIExplicitBarrier)
+add_executable(${test_target} "RHIExplicitBarrierTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME RHIExplicitBarrierContract COMMAND $<TARGET_FILE:${test_target}>)
 
 set(test_target TestRHICommandMarker)
 add_executable(${test_target} "RHICommandMarkerTest.cpp")

@@ -19,11 +19,17 @@ bool RejectOwnedThreadBlockingCall(std::string_view _operation) {
     if (IsRHIBlockingCallAllowedOnCurrentThread()) {
         return false;
     }
+    const ERHIThreadRole role = GetCurrentRHIThreadRole();
     LOG_ERROR(
         "[RHIExecutor] rejected blocking {} from {} owner thread to prevent a self-join",
         _operation,
-        RHIThreadRoleName(GetCurrentRHIThreadRole())
+        RHIThreadRoleName(role)
     );
+    if (role == ERHIThreadRole::RecordWorker) {
+        throw std::logic_error(
+            "blocking RHI lifecycle call is forbidden from a record worker"
+        );
+    }
     return true;
 }
 
@@ -221,7 +227,7 @@ void FinalizeCancelledRecordingSources(
     for (RHIRecordingSource& source : _sources) {
         const bool terminal =
             source.completion &&
-            source.completion->Status() != ERHIRecordingStatus::Pending;
+            source.completion.Status() != ERHIRecordingStatus::Pending;
         if (!terminal) {
             ++opaque_source_count;
             continue;
@@ -286,7 +292,7 @@ void FinalizeFailedRecordingSources(
         _sources.end(),
         [](const RHIRecordingSource& _source) {
             return _source.completion &&
-                   _source.completion->Status() != ERHIRecordingStatus::Pending;
+                   _source.completion.Status() != ERHIRecordingStatus::Pending;
         }
     );
     if (!all_terminal) {
@@ -847,9 +853,17 @@ void RHIExecutor::SubmitRecording(
     payload->flags   = _flags;
 
     std::vector<RHIRecordingGateRef> prerequisites{};
-    prerequisites.reserve(payload->sources.size());
+    prerequisites.reserve(payload->sources.size() * 2);
     for (const RHIRecordingSource& source : payload->sources) {
-        prerequisites.emplace_back(source.completion);
+        prerequisites.emplace_back(source.completion.gate);
+        if (source.commit &&
+            std::find(
+                prerequisites.begin(),
+                prerequisites.end(),
+                source.commit.gate
+            ) == prerequisites.end()) {
+            prerequisites.emplace_back(source.commit.gate);
+        }
     }
 
     recording_handoff.EnqueueRecording(RHIExecutorRecordingHandoffWork{

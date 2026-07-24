@@ -56,6 +56,38 @@ private:
 
 using RHIRecordingGateRef = std::shared_ptr<RHIRecordingGate>;
 
+// Read-only publication capability. Producers retain RHIRecordingGateRef and
+// therefore the only Signal/Fail authority; setup/publisher extensions and the
+// RHI consumer may observe status but cannot complete a gate early.
+class RENDER_API RHIRecordingGateView final {
+public:
+    RHIRecordingGateView() = default;
+    RHIRecordingGateView(const RHIRecordingGateRef& _gate) : gate(_gate) {}
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return static_cast<bool>(gate);
+    }
+
+    [[nodiscard]] bool IsComplete() const noexcept {
+        return gate && gate->IsComplete();
+    }
+
+    [[nodiscard]] ERHIRecordingStatus Status() const noexcept {
+        return gate ? gate->Status() : ERHIRecordingStatus::Pending;
+    }
+
+    friend bool operator==(
+        const RHIRecordingGateView& _lhs,
+        const RHIRecordingGateView& _rhs
+    ) noexcept {
+        return _lhs.gate == _rhs.gate;
+    }
+
+private:
+    friend class RHIExecutor;
+    RHIRecordingGateRef gate{};
+};
+
 enum class ERHIRecordingHandoffResult : uint8_t {
     Consume,
     // Every prerequisite reached a terminal state, but at least one producer

@@ -167,14 +167,6 @@ ReasonLess(const RenderGraph::CompiledEdgeReason& lhs, const RenderGraph::Compil
     if (previous == next) {
         return true;
     }
-    if (previous.kind == ResourceKind::Texture) {
-        const bool previous_shader_read =
-            previous.texture == RenderGraph::TextureState::ShaderResource ||
-            previous.texture == RenderGraph::TextureState::Sampled;
-        const bool next_shader_read = next.texture == RenderGraph::TextureState::ShaderResource ||
-                                      next.texture == RenderGraph::TextureState::Sampled;
-        return previous_shader_read && next_shader_read;
-    }
     return false;
 }
 
@@ -186,9 +178,6 @@ ReasonLess(const RenderGraph::CompiledEdgeReason& lhs, const RenderGraph::Compil
         return lhs;
     }
     assert(StatesCompatible(lhs, rhs));
-    if (lhs.kind == ResourceKind::Texture) {
-        return RenderGraph::ResourceState::Texture(RenderGraph::TextureState::ShaderResource);
-    }
     return lhs;
 }
 

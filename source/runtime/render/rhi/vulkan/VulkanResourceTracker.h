@@ -17,6 +17,38 @@ struct BarrierSemanticDiagnostics {
     uint32 texture_count{0};
     uint32 memory_count{0};
 };
+
+template<typename TTexture>
+[[nodiscard]] constexpr bool TextureSubresourceRangesOverlap(
+    const TextureSubresourceKeyT<TTexture>& lhs,
+    const TextureSubresourceKeyT<TTexture>& rhs
+) {
+    const auto overlaps = [](uint8 first_a,
+                             uint8 count_a,
+                             uint8 first_b,
+                             uint8 count_b) {
+        const uint16 end_a =
+            static_cast<uint16>(first_a) + static_cast<uint16>(count_a);
+        const uint16 end_b =
+            static_cast<uint16>(first_b) + static_cast<uint16>(count_b);
+        return static_cast<uint16>(first_a) < end_b &&
+               static_cast<uint16>(first_b) < end_a;
+    };
+    return lhs.texture == rhs.texture &&
+           overlaps(
+               lhs.mip_level,
+               lhs.mip_count,
+               rhs.mip_level,
+               rhs.mip_count
+           ) &&
+           overlaps(
+               lhs.array_layer,
+               lhs.array_count,
+               rhs.array_layer,
+               rhs.array_count
+           );
+}
+
 class VkTracker {
 private:
     struct BufferRange {
@@ -147,6 +179,33 @@ public:
         uint32_t _dst_queue_family = VK_QUEUE_FAMILY_IGNORED
     );
 
+    // Graph-owned barriers bypass state inference. Both sides of the native
+    // dependency are emitted verbatim, then the local tracker adopts dst so a
+    // following legacy-inferred read observes the already-materialized state.
+    void EmitExplicitBarrier(
+        VulkanBuffer*         _buffer,
+        uint64                _offset,
+        uint64                _byte_size,
+        VkPipelineStageFlags2 _src_stage,
+        VkAccessFlags2        _src_access,
+        VkPipelineStageFlags2 _dst_stage,
+        VkAccessFlags2        _dst_access
+    );
+    void EmitExplicitBarrier(
+        VulkanTexture*        _texture,
+        VkImageAspectFlags    _aspects,
+        uint8                 _mip_level,
+        uint8                 _mip_count,
+        uint8                 _array_layer,
+        uint8                 _array_count,
+        VkPipelineStageFlags2 _src_stage,
+        VkAccessFlags2        _src_access,
+        VkImageLayout         _src_layout,
+        VkPipelineStageFlags2 _dst_stage,
+        VkAccessFlags2        _dst_access,
+        VkImageLayout         _dst_layout
+    );
+
     void SetPassType(EPassType _type) {
         pass_type = _type;
     }
@@ -229,6 +288,15 @@ private:
 
     UnorderedMap<VulkanBuffer*, BufferState> flush_buffer_states;
     UnorderedMap<VulkanBuffer*, BufferRange> flush_buffer_ranges;
+    Set<VulkanBuffer*>                       explicit_partial_buffers;
+    Set<VulkanTexture*>                      explicit_partial_aspect_textures;
+    // Explicit texture state is tracked at atomic mip/layer granularity.
+    // Inferred accesses to a texture in this set are decomposed the same way,
+    // so legal RDG range-shape changes cannot restart from preferred state.
+    UnorderedSet<
+        TextureSubresourceKeyT<VulkanTexture>,
+        TextureSubresourceKeyHashT<VulkanTexture>>
+        explicit_texture_ranges;
 };
 } // namespace Moer::Render
 #endif

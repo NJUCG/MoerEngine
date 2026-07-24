@@ -567,6 +567,7 @@ struct VulkanSerialGoldenTrace::Impl {
             case Command::EType::Barrier: {
                 const auto& command = *static_cast<const BarrierCmd*>(_command);
                 hash.Add(command.IsQueueTransition() ? 1u : 0u);
+                hash.Add(command.HasExplicitBarriers() ? 1u : 0u);
                 hash.Add(static_cast<uint64_t>(command.GetSrcQueue()));
                 hash.Add(static_cast<uint64_t>(command.GetDstQueue()));
                 auto hash_texture_barriers = [&](const auto& barriers) {
@@ -595,6 +596,53 @@ struct VulkanSerialGoldenTrace::Impl {
                 hash_texture_barriers(command.WriteTextures());
                 hash_buffer_barriers(command.ReadBuffers());
                 hash_buffer_barriers(command.WriteBuffers());
+                hash.Add(command.ExplicitTextures().size());
+                for (const ExplicitTextureBarrier& barrier :
+                     command.ExplicitTextures()) {
+                    resources.push_back(
+                        RegisterTexture(
+                            reinterpret_cast<Texture*>(
+                                uintptr_t(barrier.handle)
+                            )
+                        )
+                    );
+                    hash.Add(static_cast<uint64_t>(barrier.src_state.stage));
+                    hash.Add(static_cast<uint64_t>(barrier.src_state.access));
+                    hash.Add(
+                        static_cast<uint64_t>(
+                            barrier.src_state.texture_layout
+                        )
+                    );
+                    hash.Add(static_cast<uint64_t>(barrier.dst_state.stage));
+                    hash.Add(static_cast<uint64_t>(barrier.dst_state.access));
+                    hash.Add(
+                        static_cast<uint64_t>(
+                            barrier.dst_state.texture_layout
+                        )
+                    );
+                    hash.Add(static_cast<uint64_t>(barrier.texture_aspects));
+                    hash.Add(barrier.mip_level);
+                    hash.Add(barrier.mip_count);
+                    hash.Add(barrier.array_layer);
+                    hash.Add(barrier.array_count);
+                }
+                hash.Add(command.ExplicitBuffers().size());
+                for (const ExplicitBufferBarrier& barrier :
+                     command.ExplicitBuffers()) {
+                    resources.push_back(
+                        RegisterBuffer(
+                            reinterpret_cast<Buffer*>(
+                                uintptr_t(barrier.handle)
+                            )
+                        )
+                    );
+                    hash.Add(static_cast<uint64_t>(barrier.src_state.stage));
+                    hash.Add(static_cast<uint64_t>(barrier.src_state.access));
+                    hash.Add(static_cast<uint64_t>(barrier.dst_state.stage));
+                    hash.Add(static_cast<uint64_t>(barrier.dst_state.access));
+                    hash.Add(barrier.offset);
+                    hash.Add(barrier.byte_size);
+                }
                 break;
             }
             case Command::EType::QueueTransfer: {
