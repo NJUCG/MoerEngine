@@ -26,6 +26,9 @@ struct RTGraphFrameResources {
     RenderGraph::TextureHandle diffuse_lighting{};
     RenderGraph::TextureHandle specular_lighting{};
     RenderGraph::TextureHandle hdr_color{};
+    RenderGraph::TextureHandle resolved_color{};
+    RenderGraph::TextureHandle feedback_color_ping{};
+    RenderGraph::TextureHandle feedback_color_pong{};
     RenderGraph::TextureHandle env_map{};
 
     RenderGraph::TextureHandle current_view_depth{};
@@ -111,7 +114,20 @@ inline RTGraphFrameResources RegisterRTGraphFrameResources(
             ImportRTGraphTexture(graph, "RT.diffuse_lighting", frame.diffuse_lighting),
         .specular_lighting =
             ImportRTGraphTexture(graph, "RT.specular_lighting", frame.specular_lighting),
-        .hdr_color = ImportRTGraphTexture(graph, "RT.hdr_color", frame.hdr_color)
+        .hdr_color =
+            ImportRTGraphTexture(graph, "RT.hdr_color", frame.hdr_color),
+        .resolved_color =
+            ImportRTGraphTexture(graph, "RT.resolved_color", frame.resolved_color),
+        .feedback_color_ping = ImportRTGraphTexture(
+            graph,
+            "RT.feedback_color_ping",
+            frame.feedback_color_ping
+        ),
+        .feedback_color_pong = ImportRTGraphTexture(
+            graph,
+            "RT.feedback_color_pong",
+            frame.feedback_color_pong
+        )
     };
     if (rt_ctx.env_map) {
         resources.env_map =

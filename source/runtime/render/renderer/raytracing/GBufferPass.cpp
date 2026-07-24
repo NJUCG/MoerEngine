@@ -145,7 +145,8 @@ void GBufferPass::Process(CommandList& cmd_list, RTContext& rt_ctx) {
 void GBufferPass::RecordLegacyTailBridge(
     CommandList&     cmd_list,
     const RTContext& rt_ctx,
-    bool             composition_recorded
+    bool             composition_recorded,
+    bool             antialias_recorded
 ) const {
     // Active RDG sources own explicit GENERAL-layout exports, while the
     // remaining legacy tail starts a fresh backend tracker. Seed every
@@ -166,9 +167,14 @@ void GBufferPass::RecordLegacyTailBridge(
         {frame.diffuse_lighting->GetView(), ETextureState::SAMPLE},
         {frame.specular_lighting->GetView(), ETextureState::SAMPLE},
     };
-    if (composition_recorded) {
+    if (composition_recorded && !antialias_recorded) {
         sampled_inputs.emplace_back(
             ReadTexture{frame.hdr_color->GetView(), ETextureState::SAMPLE}
+        );
+    }
+    if (antialias_recorded) {
+        sampled_inputs.emplace_back(
+            ReadTexture{frame.resolved_color->GetView(), ETextureState::SAMPLE}
         );
     }
 #if WITH_NRD

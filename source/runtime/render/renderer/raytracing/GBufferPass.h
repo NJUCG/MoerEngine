@@ -89,7 +89,8 @@ public:
     void RecordLegacyTailBridge(
         class CommandList& cmd_list,
         const RTContext&   rt_ctx,
-        bool               composition_recorded
+        bool               composition_recorded,
+        bool               antialias_recorded
     ) const;
     bool AddPasses(
         RenderGraph&                 graph,

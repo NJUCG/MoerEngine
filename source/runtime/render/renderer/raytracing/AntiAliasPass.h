@@ -3,11 +3,12 @@
 
 // 提供时序抗锯齿 Pass 和逐帧相机抖动。
 
-#include "RTResource.h"
+#include "RaytracingGraphResources.h"
 #include "RaytracingConfig.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
+#include "shaderheaders/shared/postprocess/ShaderParameters.h"
 
 namespace Moer::Render::Raytracing {
 
@@ -40,6 +41,19 @@ public:
         TextureRef feedback_color_pong;
     };
 
+    struct PreparedCommand {
+        TAAParams params{};
+        uint3     dispatch_groups{};
+    };
+
+    struct RecordResources {
+        TextureRef input{};
+        TextureRef output{};
+        TextureRef motion{};
+        TextureRef feedback_read{};
+        TextureRef feedback_write{};
+    };
+
     AntialiasPass(RenderDevice& device, class ShaderManager& manager, CreateInfo info);
 
     void Process(
@@ -49,22 +63,60 @@ public:
         TextureRef   _input,
         TextureRef   _output
     );
-    void   AdvanceFrame();
+    bool AddPasses(
+        RenderGraph&                 graph,
+        const RTGraphFrameResources& graph_resources,
+        const RTContext&             rt_ctx,
+        Params                       params,
+        bool                         prev_view_valid,
+        TextureRef                   input,
+        TextureRef                   output
+    );
+    void   CommitAcceptedFrame();
     void   SetJitter(EJitter _jitter_mode);
     float2 GetPixelOffset() const;
+    bool   IsHistoryReadyForGraph() const;
 
 private:
-    TAAPipeline taa_pipeline;
+    struct RecordingOwner {
+        BufferRef   constants{};
+        TAAPipeline pipeline{};
+    };
+
+    PreparedCommand Prepare(
+        Params            params,
+        bool              prev_view_valid,
+        const TextureRef& input,
+        const TextureRef& output
+    ) const;
+    RecordResources CaptureResources(
+        TextureRef input,
+        TextureRef output
+    ) const;
+    static void RecordConstantsUpload(
+        CommandList&           cmd_list,
+        const RecordingOwner&  owner,
+        const PreparedCommand& command
+    );
+    static void RecordTAA(
+        CommandList&           cmd_list,
+        RecordingOwner&        owner,
+        const PreparedCommand& command,
+        const RecordResources& resources
+    );
 
     uint    frame_idx   = 0;
     float2  jitter      = float2(0.f);
     EJitter jitter_mode = EJitter::MSAA;
 
-    BufferRef constant_buffer;
-
     TextureRef motion;
     TextureRef feedback_color_ping;
     TextureRef feedback_color_pong;
+    TextureRef feedback_slot_zero;
+    TextureRef feedback_slot_one;
+    uint8      initialized_history_mask = 0;
+
+    SharedPtr<RecordingOwner> recording_owner;
 };
 } // namespace Moer::Render::Raytracing
 #endif

@@ -528,8 +528,10 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     bool split_graph_profiling_frame       = false;
     bool graph_primary_recorded             = false;
     bool graph_composition_recorded         = false;
+    bool graph_antialias_recorded           = false;
     bool linear_gbuffer_recorded            = false;
     bool linear_lighting_recorded           = false;
+    bool linear_antialias_recorded           = false;
     bool nrd_recorded                       = false;
     uint8 gbuffer_history_bit               = 0;
     LightingPass::LocalLightSamplingDecision local_light_sampling{};
@@ -797,6 +799,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         if (state.render_graph_enabled && !state.render_graph_fallback_latched &&
             state.gbuffer_initialized_history_mask == uint8(0b11) &&
             state.lighting_initialized_reservoir_mask == uint8(0b111) &&
+            (nrd_active_this_frame ||
+             state.antialias_pass->IsHistoryReadyForGraph()) &&
             !render_graph_boundary_frame) {
             RenderGraph graph(
                 nrd_active_this_frame ?
@@ -829,12 +833,26 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                      graph_resources,
                      *state.rt_ctx
                  ));
-            if (!gbuffer_added || !lighting_added || !composition_added) {
+            const bool antialias_in_graph = composition_in_graph;
+            const bool antialias_added =
+                !antialias_in_graph ||
+                (composition_added &&
+                 state.antialias_pass->AddPasses(
+                     graph,
+                     graph_resources,
+                     *state.rt_ctx,
+                     aa_params,
+                     state.b_feedback_valid,
+                     state.rt_ctx->frame_rt.hdr_color,
+                     state.rt_ctx->frame_rt.resolved_color
+                 ));
+            if (!gbuffer_added || !lighting_added || !composition_added ||
+                !antialias_added) {
                 state.render_graph_fallback_latched = true;
                 LOG_ERROR(
                     "[RenderGraph][Fallback] Raytracing primary graph could not "
-                    "import a required GBuffer/Lighting/Composition resource. "
-                    "Using the linear path for this renderer instance."
+                    "import a required GBuffer/Lighting/Composition/AntiAlias "
+                    "resource. Using the linear path for this renderer instance."
                 );
             } else if (!graph.Compile()) {
                 state.render_graph_fallback_latched = true;
@@ -903,6 +921,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                     )) {
                     graph_primary_recorded     = true;
                     graph_composition_recorded = composition_in_graph;
+                    graph_antialias_recorded   = antialias_in_graph;
                 } else {
                     state.render_graph_fallback_latched = true;
                     LOG_ERROR(
@@ -933,7 +952,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             state.g_buffer_pass->RecordLegacyTailBridge(
                 cmd_list,
                 *state.rt_ctx,
-                graph_composition_recorded
+                graph_composition_recorded,
+                graph_antialias_recorded
             );
         }
         feedback.configured_local_light_sample_mode = local_light_sampling.configured_mode;
@@ -1002,7 +1022,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             );
             state.composition_pass->Process(cmd_list, *state.rt_ctx);
         }
-        {
+        if (!graph_antialias_recorded) {
             ScopedGpuMarker pass_marker(
                 cmd_list, "Pass: Anti Aliasing", GpuMarkerPalette::Pass()
             );
@@ -1013,6 +1033,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 state.rt_ctx->frame_rt.hdr_color,
                 state.rt_ctx->frame_rt.resolved_color
             );
+            linear_antialias_recorded = true;
         }
         {
             ScopedGpuMarker pass_marker(
@@ -1054,8 +1075,6 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
 
         state.rt_ctx->AdvanceFrame();
         state.tone_mapping_pass->AdvanceFrame(camera.GetDeltaTime());
-        state.antialias_pass->AdvanceFrame();
-        state.b_feedback_valid = true;
 
         if (state.b_export) {
             renderer_marker.Close();
@@ -1175,6 +1194,10 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         ERHIExecSubmitFlags::FlushGPU,
         present_request ? &*present_request : nullptr
     );
+    if (linear_antialias_recorded || graph_antialias_recorded) {
+        state.antialias_pass->CommitAcceptedFrame();
+        state.b_feedback_valid = true;
+    }
     if (linear_gbuffer_recorded || graph_primary_recorded) {
         state.gbuffer_initialized_history_mask |= gbuffer_history_bit;
     }
