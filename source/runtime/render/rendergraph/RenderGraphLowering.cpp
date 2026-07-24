@@ -338,7 +338,19 @@ void AppendInstruction(
            << " import=" << instruction.import_boundary
            << " export=" << instruction.export_boundary
            << " transient_alias=" << instruction.transient_alias
-           << " queue_acquire=" << instruction.queue_acquire;
+           << " queue_acquire=" << instruction.queue_acquire
+           << " transfer_src_role="
+           << static_cast<uint32_t>(instruction.transfer_source.role)
+           << " transfer_src_native="
+           << instruction.transfer_source.native_queue_id
+           << " transfer_src_family="
+           << instruction.transfer_source.family_id
+           << " transfer_dst_role="
+           << static_cast<uint32_t>(instruction.transfer_destination.role)
+           << " transfer_dst_native="
+           << instruction.transfer_destination.native_queue_id
+           << " transfer_dst_family="
+           << instruction.transfer_destination.family_id;
 }
 
 } // namespace
@@ -389,7 +401,28 @@ std::string RenderGraphLowering::LoweredPlan::Dump() const {
                << " signal_pass=" << sync.signal_pass.index
                << " wait_pass=" << sync.wait_pass.index
                << " signal_native=" << sync.signal_queue.native_queue_id
-               << " wait_native=" << sync.wait_queue.native_queue_id << "\n";
+               << " wait_native=" << sync.wait_queue.native_queue_id
+               << " signal_batch=" << sync.signal_batch
+               << " wait_batch=" << sync.wait_batch
+               << " synthetic_ownership_join="
+               << sync.synthetic_ownership_join
+               << " ownership_joins=[";
+        for (uint32_t index = 0; index < sync.ownership_join_barriers.size(); ++index) {
+            if (index != 0) {
+                stream << ",";
+            }
+            stream << sync.ownership_join_barriers[index];
+        }
+        stream << "] ownership_transfers=[";
+        for (uint32_t index = 0;
+             index < sync.ownership_transfer_barriers.size();
+             ++index) {
+            if (index != 0) {
+                stream << ",";
+            }
+            stream << sync.ownership_transfer_barriers[index];
+        }
+        stream << "]\n";
     }
     for (const auto& instruction : prologue) {
         stream << "prologue ";
@@ -445,7 +478,8 @@ bool RenderGraphLowering::Lower(
 
     auto supported_queue = [](RenderGraph::QueueRole role) {
         return role == RenderGraph::QueueRole::Graphics ||
-               role == RenderGraph::QueueRole::Compute;
+               role == RenderGraph::QueueRole::Compute ||
+               role == RenderGraph::QueueRole::Copy;
     };
     std::vector<bool>     gpu_pass(graph.passes.size(), false);
     std::vector<uint32_t> pass_queue_batch(
@@ -667,6 +701,8 @@ bool RenderGraphLowering::Lower(
                 .wait_pass      = sync.wait_pass,
                 .signal_queue   = sync.signal_queue,
                 .wait_queue     = sync.wait_queue,
+                .signal_batch   = sync.signal_batch,
+                .wait_batch     = sync.wait_batch,
             });
         }
     }
@@ -1058,15 +1094,20 @@ bool RenderGraphLowering::Lower(
             error = "token barrier cannot be physically lowered";
             return false;
         }
-        if (barrier.queue_ownership) {
-            error =
-                "queue-family ownership requires paired release/acquire lowering";
-            return false;
-        }
         if (barrier.queue_dependency &&
             (!barrier.src_pass.IsValid() || !barrier.dst_pass.IsValid())) {
             error =
                 "cross-queue external boundary lacks a managed synchronization endpoint";
+            return false;
+        }
+        if (barrier.queue_ownership &&
+            (!barrier.queue_dependency || barrier.import_boundary ||
+             barrier.export_boundary || barrier.transient_alias ||
+             barrier.sources.empty() || !barrier.src_pass.IsValid() ||
+             !barrier.dst_pass.IsValid())) {
+            error =
+                "queue-family ownership requires one internal managed source "
+                "frontier and destination";
             return false;
         }
         if (barrier.queue_dependency) {
@@ -1201,7 +1242,7 @@ bool RenderGraphLowering::Lower(
                         pass_queue_batch[barrier.dst_pass.index] :
                         RenderGraph::PassHandle::InvalidIndex;
                 const bool contributes_local_scope =
-                    !instruction.queue_acquire ||
+                    barrier.queue_ownership || !instruction.queue_acquire ||
                     (source_batch != RenderGraph::PassHandle::InvalidIndex &&
                      destination_batch != RenderGraph::PassHandle::InvalidIndex &&
                      compiled.queue_batches[source_batch]
@@ -1269,6 +1310,70 @@ bool RenderGraphLowering::Lower(
         return true;
     };
 
+    uint32_t next_synthetic_sync_id =
+        static_cast<uint32_t>(compiled.queue_syncs.size());
+    auto find_lowered_sync =
+        [&](uint32_t signal_batch,
+            uint32_t wait_batch) -> QueueSyncInstruction* {
+            const auto found = std::find_if(
+                candidate.queue_syncs.begin(),
+                candidate.queue_syncs.end(),
+                [&](const QueueSyncInstruction& sync) {
+                    return sync.signal_batch == signal_batch &&
+                           sync.wait_batch == wait_batch;
+                }
+            );
+            return found == candidate.queue_syncs.end() ? nullptr : &*found;
+        };
+    auto append_unique_barrier =
+        [](std::vector<uint32_t>& barriers, uint32_t barrier_index) {
+            if (std::find(barriers.begin(), barriers.end(), barrier_index) ==
+                barriers.end()) {
+                barriers.push_back(barrier_index);
+            }
+        };
+    auto ensure_ownership_join =
+        [&](uint32_t signal_batch,
+            uint32_t wait_batch,
+            uint32_t barrier_index) {
+            if (signal_batch >= compiled.queue_batches.size() ||
+                wait_batch >= compiled.queue_batches.size() ||
+                signal_batch >= wait_batch) {
+                error =
+                    "ownership fan-in join is not a forward queue-batch edge";
+                return false;
+            }
+            const auto& signal = compiled.queue_batches[signal_batch];
+            const auto& wait   = compiled.queue_batches[wait_batch];
+            if (signal.queue.native_queue_id ==
+                wait.queue.native_queue_id) {
+                error =
+                    "ownership fan-in join redundantly targets one native queue";
+                return false;
+            }
+            if (auto* existing =
+                    find_lowered_sync(signal_batch, wait_batch);
+                existing != nullptr) {
+                append_unique_barrier(
+                    existing->ownership_join_barriers,
+                    barrier_index
+                );
+                return true;
+            }
+            candidate.queue_syncs.push_back(QueueSyncInstruction{
+                .correlation_id = next_synthetic_sync_id++,
+                .signal_pass    = signal.passes.back(),
+                .wait_pass      = wait.passes.front(),
+                .signal_queue   = signal.queue,
+                .wait_queue     = wait.queue,
+                .signal_batch   = signal_batch,
+                .wait_batch     = wait_batch,
+                .synthetic_ownership_join = true,
+                .ownership_join_barriers = {barrier_index},
+            });
+            return true;
+        };
+
     for (uint32_t barrier_index = 0; barrier_index < compiled.barriers.size(); ++barrier_index) {
         const auto& barrier = compiled.barriers[barrier_index];
         if (prologue[barrier_index] && epilogue[barrier_index]) {
@@ -1291,6 +1396,167 @@ bool RenderGraphLowering::Lower(
         LoweredInstruction instruction{};
         if (!lower_instruction(barrier_index, instruction)) {
             return fail("barrier " + std::to_string(barrier_index) + ": " + std::move(error));
+        }
+        if (barrier.queue_ownership) {
+            const uint32_t destination_batch =
+                pass_queue_batch[barrier.dst_pass.index];
+            if (destination_batch == RenderGraph::PassHandle::InvalidIndex ||
+                destination_batch >= compiled.queue_batches.size()) {
+                return fail(
+                    "ownership destination has no managed queue batch"
+                );
+            }
+            const auto& destination_binding =
+                compiled.queue_batches[destination_batch].queue;
+
+            struct SourceNativeTail {
+                uint32_t native_queue_id = 0;
+                uint32_t batch = RenderGraph::PassHandle::InvalidIndex;
+            };
+            std::vector<SourceNativeTail> source_tails{};
+            uint32_t source_family = RenderGraph::PassHandle::InvalidIndex;
+            for (const auto& source : barrier.sources) {
+                if (!graph.IsValidPass(source.pass)) {
+                    return fail(
+                        "ownership source frontier contains an invalid pass"
+                    );
+                }
+                const uint32_t source_batch =
+                    pass_queue_batch[source.pass.index];
+                if (source_batch == RenderGraph::PassHandle::InvalidIndex ||
+                    source_batch >= compiled.queue_batches.size() ||
+                    source_batch >= destination_batch) {
+                    return fail(
+                        "ownership source is not a forward managed queue batch"
+                    );
+                }
+                const auto& source_binding =
+                    compiled.queue_batches[source_batch].queue;
+                if (source_binding.role != source.domain.queue) {
+                    return fail(
+                        "ownership source domain disagrees with its queue batch"
+                    );
+                }
+                if (source_family == RenderGraph::PassHandle::InvalidIndex) {
+                    source_family = source_binding.family_id;
+                } else if (source_family != source_binding.family_id) {
+                    return fail(
+                        "ownership source frontier spans multiple queue families"
+                    );
+                }
+                auto tail = std::find_if(
+                    source_tails.begin(),
+                    source_tails.end(),
+                    [&](const SourceNativeTail& candidate_tail) {
+                        return candidate_tail.native_queue_id ==
+                               source_binding.native_queue_id;
+                    }
+                );
+                if (tail == source_tails.end()) {
+                    source_tails.push_back(SourceNativeTail{
+                        .native_queue_id = source_binding.native_queue_id,
+                        .batch           = source_batch,
+                    });
+                } else {
+                    tail->batch = std::max(tail->batch, source_batch);
+                }
+            }
+            if (source_tails.empty() ||
+                source_family == RenderGraph::PassHandle::InvalidIndex ||
+                source_family == destination_binding.family_id) {
+                return fail(
+                    "ownership transfer does not cross two distinct queue families"
+                );
+            }
+
+            const auto release_tail = std::max_element(
+                source_tails.begin(),
+                source_tails.end(),
+                [](const SourceNativeTail& lhs,
+                   const SourceNativeTail& rhs) {
+                    return lhs.batch < rhs.batch;
+                }
+            );
+            const uint32_t release_batch = release_tail->batch;
+            const auto& release_binding =
+                compiled.queue_batches[release_batch].queue;
+            if (release_binding.family_id != source_family ||
+                release_binding.native_queue_id ==
+                    destination_binding.native_queue_id) {
+                return fail(
+                    "ownership release owner disagrees with the source family "
+                    "or destination native queue"
+                );
+            }
+
+            for (const SourceNativeTail& tail : source_tails) {
+                if (tail.native_queue_id ==
+                    release_binding.native_queue_id) {
+                    continue;
+                }
+                if (!ensure_ownership_join(
+                        tail.batch,
+                        release_batch,
+                        barrier_index
+                    )) {
+                    return fail(
+                        "barrier " + std::to_string(barrier_index) +
+                        ": " + std::move(error)
+                    );
+                }
+            }
+
+            QueueSyncInstruction* transfer_sync =
+                find_lowered_sync(release_batch, destination_batch);
+            if (transfer_sync == nullptr ||
+                transfer_sync->signal_queue != release_binding ||
+                transfer_sync->wait_queue != destination_binding) {
+                return fail(
+                    "ownership release is not correlated with its "
+                    "release-to-acquire GPU sync"
+                );
+            }
+            append_unique_barrier(
+                transfer_sync->ownership_transfer_barriers,
+                barrier_index
+            );
+
+            auto* release_pass = find_mutable_pass(
+                compiled.queue_batches[release_batch].passes.back()
+            );
+            auto* acquire_pass = find_mutable_pass(barrier.dst_pass);
+            if (release_pass == nullptr || acquire_pass == nullptr) {
+                return fail(
+                    "ownership release/acquire endpoint is not a GPU pass"
+                );
+            }
+
+            LoweredInstruction release = instruction;
+            release.instruction_kind = InstructionKind::QueueRelease;
+            release.queue_acquire = false;
+            release.transfer_source = release_binding;
+            release.transfer_destination = destination_binding;
+
+            LoweredInstruction acquire = instruction;
+            acquire.instruction_kind = InstructionKind::QueueAcquire;
+            acquire.queue_acquire = true;
+            acquire.transfer_source = release_binding;
+            acquire.transfer_destination = destination_binding;
+
+            const auto keepalive = std::find_if(
+                release_pass->keepalive.begin(),
+                release_pass->keepalive.end(),
+                [&](const PhysicalBinding& binding) {
+                    return binding.resource == instruction.physical.resource &&
+                           binding.Identity() == instruction.physical.Identity();
+                }
+            );
+            if (keepalive == release_pass->keepalive.end()) {
+                release_pass->keepalive.push_back(instruction.physical);
+            }
+            release_pass->after.push_back(std::move(release));
+            acquire_pass->before.push_back(std::move(acquire));
+            continue;
         }
         if (prologue[barrier_index]) {
             candidate.prologue.push_back(std::move(instruction));
@@ -1417,6 +1683,89 @@ bool RenderGraphLowering::Lower(
             .before_access           = access.mode,
             .after_access            = access.mode,
         });
+    }
+
+    for (uint32_t barrier_index = 0;
+         barrier_index < compiled.barriers.size();
+         ++barrier_index) {
+        if (!compiled.barriers[barrier_index].queue_ownership) {
+            continue;
+        }
+        const LoweredInstruction* release = nullptr;
+        const LoweredInstruction* acquire = nullptr;
+        uint32_t release_count = 0;
+        uint32_t acquire_count = 0;
+        for (const auto& pass : candidate.passes) {
+            for (const auto& instruction : pass.after) {
+                if (instruction.barrier_index == barrier_index &&
+                    instruction.instruction_kind ==
+                        InstructionKind::QueueRelease) {
+                    release = &instruction;
+                    ++release_count;
+                }
+            }
+            for (const auto& instruction : pass.before) {
+                if (instruction.barrier_index == barrier_index &&
+                    instruction.instruction_kind ==
+                        InstructionKind::QueueAcquire) {
+                    acquire = &instruction;
+                    ++acquire_count;
+                }
+            }
+        }
+        if (release_count != 1 || acquire_count != 1 ||
+            release == nullptr || acquire == nullptr) {
+            return fail(
+                "ownership barrier does not have exactly one release/acquire pair"
+            );
+        }
+        const auto same_scope = [](const Scope& lhs, const Scope& rhs) {
+            return lhs.stages == rhs.stages &&
+                   lhs.access == rhs.access &&
+                   lhs.layout == rhs.layout &&
+                   lhs.has_texture_layout == rhs.has_texture_layout;
+        };
+        if (release->correlation_id != acquire->correlation_id ||
+            release->resource != acquire->resource ||
+            release->resource_kind != acquire->resource_kind ||
+            !(release->range == acquire->range) ||
+            release->texture_aspects != acquire->texture_aspects ||
+            release->physical.Identity() != acquire->physical.Identity() ||
+            release->before_state != acquire->before_state ||
+            release->after_state != acquire->after_state ||
+            release->before_access != acquire->before_access ||
+            release->after_access != acquire->after_access ||
+            !same_scope(release->source, acquire->source) ||
+            !same_scope(release->destination, acquire->destination) ||
+            release->transfer_source != acquire->transfer_source ||
+            release->transfer_destination !=
+                acquire->transfer_destination ||
+            release->transfer_source.family_id ==
+                release->transfer_destination.family_id) {
+            return fail(
+                "ownership release/acquire pair lost canonical state, range, "
+                "resource, or endpoints"
+            );
+        }
+        const uint32_t transfer_sync_count = static_cast<uint32_t>(
+            std::count_if(
+                candidate.queue_syncs.begin(),
+                candidate.queue_syncs.end(),
+                [&](const QueueSyncInstruction& sync) {
+                    return std::find(
+                               sync.ownership_transfer_barriers.begin(),
+                               sync.ownership_transfer_barriers.end(),
+                               barrier_index
+                           ) != sync.ownership_transfer_barriers.end();
+                }
+            )
+        );
+        if (transfer_sync_count != 1) {
+            return fail(
+                "ownership release/acquire pair does not own exactly one "
+                "transfer sync"
+            );
+        }
     }
 
     output = std::move(candidate);

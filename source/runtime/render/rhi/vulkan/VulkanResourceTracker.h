@@ -49,6 +49,41 @@ template<typename TTexture>
            );
 }
 
+template<typename TBuffer>
+struct BufferByteRangeT {
+    TBuffer* buffer{nullptr};
+    uint64   offset{0};
+    uint64   byte_size{0};
+};
+
+template<typename TBuffer>
+[[nodiscard]] constexpr bool BufferByteRangesOverlap(
+    const BufferByteRangeT<TBuffer>& lhs,
+    const BufferByteRangeT<TBuffer>& rhs
+) {
+    if (lhs.buffer != rhs.buffer || lhs.byte_size == 0 || rhs.byte_size == 0) {
+        return false;
+    }
+    return lhs.offset <= rhs.offset ?
+               lhs.byte_size > rhs.offset - lhs.offset :
+               rhs.byte_size > lhs.offset - rhs.offset;
+}
+
+template<typename TTexture>
+struct TextureAspectSubresourceRangeT {
+    TextureSubresourceKeyT<TTexture> subresource{};
+    VkImageAspectFlags               aspects{0};
+};
+
+template<typename TTexture>
+[[nodiscard]] constexpr bool TextureAspectSubresourceRangesOverlap(
+    const TextureAspectSubresourceRangeT<TTexture>& lhs,
+    const TextureAspectSubresourceRangeT<TTexture>& rhs
+) {
+    return (lhs.aspects & rhs.aspects) != 0 &&
+           TextureSubresourceRangesOverlap(lhs.subresource, rhs.subresource);
+}
+
 class VkTracker {
 private:
     struct BufferRange {
@@ -179,13 +214,17 @@ public:
         uint32_t _dst_queue_family = VK_QUEUE_FAMILY_IGNORED
     );
 
-    // Graph-owned barriers bypass state inference. Both sides of the native
-    // dependency are emitted verbatim, then the local tracker adopts dst so a
-    // following legacy-inferred read observes the already-materialized state.
+    // Graph-owned barriers bypass state inference. Local and acquire barriers
+    // adopt dst so a following inferred access observes the materialized
+    // state. A release only emits its native half: destination state belongs
+    // exclusively to the acquire-side tracker.
     void EmitExplicitBarrier(
         VulkanBuffer*         _buffer,
         uint64                _offset,
         uint64                _byte_size,
+        EBarrierQueueTransferPhase _phase,
+        uint32_t              _src_queue_family,
+        uint32_t              _dst_queue_family,
         VkPipelineStageFlags2 _src_stage,
         VkAccessFlags2        _src_access,
         VkPipelineStageFlags2 _dst_stage,
@@ -198,6 +237,9 @@ public:
         uint8                 _mip_count,
         uint8                 _array_layer,
         uint8                 _array_count,
+        EBarrierQueueTransferPhase _phase,
+        uint32_t              _src_queue_family,
+        uint32_t              _dst_queue_family,
         VkPipelineStageFlags2 _src_stage,
         VkAccessFlags2        _src_access,
         VkImageLayout         _src_layout,
@@ -290,6 +332,9 @@ private:
     UnorderedMap<VulkanBuffer*, BufferRange> flush_buffer_ranges;
     Set<VulkanBuffer*>                       explicit_partial_buffers;
     Set<VulkanTexture*>                      explicit_partial_aspect_textures;
+    Array<BufferByteRangeT<VulkanBuffer>> explicit_released_buffer_ranges;
+    Array<TextureAspectSubresourceRangeT<VulkanTexture>>
+        explicit_released_texture_ranges;
     // Explicit texture state is tracked at atomic mip/layer granularity.
     // Inferred accesses to a texture in this set are decomposed the same way,
     // so legal RDG range-shape changes cannot restart from preferred state.

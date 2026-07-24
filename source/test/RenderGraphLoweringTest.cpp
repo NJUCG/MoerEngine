@@ -788,24 +788,185 @@ void TestMixedQueueFanInRetainsLocalSourceScope(TestSuite& suite) {
     );
 }
 
-void TestCrossFamilyExclusiveOwnershipFailsClosed(TestSuite& suite) {
-    constexpr std::string_view test_name =
-        "cross-family exclusive ownership remains fail-closed";
-    BufferRef buffer = MoerNew(FakeBuffer)(256);
-    RenderGraph graph("CrossFamilyOwnership", RenderGraph::QueueTopology::DedicatedQueues());
-    const auto data = graph.ImportBuffer(
+void TestCrossFamilyExclusiveOwnershipLowersPairedTransfer(TestSuite& suite) {
+    constexpr std::string_view test_name = "cross-family exclusive ownership lowers one paired transfer";
+    TextureRef                 texture   = MoerNew(FakeTexture)(2, 2, ETextureAspectFlags::COLOR);
+    RenderGraph                graph("CrossFamilyOwnership", RenderGraph::QueueTopology::DedicatedQueues());
+    const auto                 data = graph.ImportTexture(
         "Exclusive",
-        buffer,
-        RenderGraph::BufferDesc{
-            .byte_size    = 256,
-            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Exclusive,
+        texture,
+        RenderGraph::TextureDesc{
+                            .mip_count    = 2,
+                            .layer_count  = 2,
+                            .aspects      = RenderGraph::TextureAspect::Color,
+                            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Exclusive,
         }
     );
     graph.SetInitialState(
         data,
-        RenderGraph::BufferState::Undefined,
+        RenderGraph::TextureState::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
+    );
+    const auto producer = graph.AddPass(
+        "GraphicsWrite",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Write(data, RenderGraph::TextureState::UnorderedAccess).SideEffect();
+        },
+        [] {}
+    );
+    const auto consumer = graph.AddPass(
+        "ComputeRead",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute)
+                .Read(data, RenderGraph::TextureState::Sampled)
+                .SideEffect();
+        },
+        [] {}
+    );
+    graph.Export(
+        data,
+        RenderGraph::TextureState::Sampled,
+        RenderGraph::QueueRole::Compute,
+        RenderGraph::AccessMode::Read
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& compiled          = graph.GetCompiledPlan();
+    const auto  ownership_barrier = std::find_if(
+        compiled.barriers.begin(),
+        compiled.barriers.end(),
+        [&](const RenderGraph::CompiledBarrier& barrier) {
+            return barrier.resource == data.Untyped() && barrier.dst_pass == consumer &&
+                   barrier.queue_ownership;
+        }
+    );
+    suite.Check(
+        ownership_barrier != compiled.barriers.end(),
+        test_name,
+        "compiler did not retain the internal ownership transfer"
+    );
+    if (ownership_barrier == compiled.barriers.end()) {
+        return;
+    }
+    const uint32_t ownership_barrier_index =
+        static_cast<uint32_t>(ownership_barrier - compiled.barriers.begin());
+
+    RenderGraphLowering::LoweredPlan lowered{};
+    std::string                      error{};
+    suite.Check(RenderGraphLowering::Lower(graph, lowered, error), test_name, error);
+
+    const auto after_producer = lowered.After(producer);
+    const auto release        = std::find_if(
+        after_producer.begin(),
+        after_producer.end(),
+        [&](const RenderGraphLowering::LoweredInstruction& instruction) {
+            return instruction.instruction_kind == RenderGraphLowering::InstructionKind::QueueRelease &&
+                   instruction.correlation_id == ownership_barrier_index;
+        }
+    );
+    const auto before_consumer = lowered.Before(consumer);
+    const auto acquire         = std::find_if(
+        before_consumer.begin(),
+        before_consumer.end(),
+        [&](const RenderGraphLowering::LoweredInstruction& instruction) {
+            return instruction.instruction_kind == RenderGraphLowering::InstructionKind::QueueAcquire &&
+                   instruction.correlation_id == ownership_barrier_index;
+        }
+    );
+    uint32_t release_count = 0;
+    uint32_t acquire_count = 0;
+    for (const auto& pass : lowered.passes) {
+        release_count += static_cast<uint32_t>(std::count_if(
+            pass.after.begin(),
+            pass.after.end(),
+            [&](const RenderGraphLowering::LoweredInstruction& instruction) {
+                return instruction.instruction_kind == RenderGraphLowering::InstructionKind::QueueRelease &&
+                       instruction.correlation_id == ownership_barrier_index;
+            }
+        ));
+        acquire_count += static_cast<uint32_t>(std::count_if(
+            pass.before.begin(),
+            pass.before.end(),
+            [&](const RenderGraphLowering::LoweredInstruction& instruction) {
+                return instruction.instruction_kind == RenderGraphLowering::InstructionKind::QueueAcquire &&
+                       instruction.correlation_id == ownership_barrier_index;
+            }
+        ));
+    }
+    suite.Check(
+        release_count == 1 && acquire_count == 1 && release != after_producer.end() &&
+            acquire != before_consumer.end(),
+        test_name,
+        "one ownership barrier must lower to exactly one release and one acquire"
+    );
+    if (release == after_producer.end() || acquire == before_consumer.end()) {
+        return;
+    }
+
+    suite.Check(
+        release->barrier_index == ownership_barrier_index &&
+            acquire->barrier_index == ownership_barrier_index && release->resource == acquire->resource &&
+            release->resource == data.Untyped() && release->range == acquire->range &&
+            release->before_state == acquire->before_state && release->after_state == acquire->after_state &&
+            release->source.layout == acquire->source.layout &&
+            release->destination.layout == acquire->destination.layout &&
+            release->source.layout == ETextureLayout::TEXTURE_LAYOUT_COMMON &&
+            release->destination.layout == ETextureLayout::TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        test_name,
+        "paired halves must preserve identical correlation, resource, range, state and layout"
+    );
+
+    const auto& topology = graph.GetQueueTopology();
+    suite.Check(
+        release->transfer_source == topology.graphics && acquire->transfer_source == topology.graphics &&
+            release->transfer_destination == topology.compute &&
+            acquire->transfer_destination == topology.compute &&
+            release->transfer_source.family_id != release->transfer_destination.family_id &&
+            !release->queue_acquire && acquire->queue_acquire,
+        test_name,
+        "paired halves must retain the Graphics-to-Compute family transfer"
+    );
+
+    const auto transfer_sync = std::find_if(
+        lowered.queue_syncs.begin(),
+        lowered.queue_syncs.end(),
+        [&](const RenderGraphLowering::QueueSyncInstruction& sync) {
+            return std::find(
+                       sync.ownership_transfer_barriers.begin(),
+                       sync.ownership_transfer_barriers.end(),
+                       ownership_barrier_index
+                   ) != sync.ownership_transfer_barriers.end();
+        }
+    );
+    suite.Check(
+        transfer_sync != lowered.queue_syncs.end() && transfer_sync->signal_pass == producer &&
+            transfer_sync->wait_pass == consumer && transfer_sync->signal_queue == topology.graphics &&
+            transfer_sync->wait_queue == topology.compute,
+        test_name,
+        "release owner must signal the destination acquire through its correlated GPU sync"
+    );
+}
+
+void TestCrossFamilyOwnershipFanInUsesOneReleaseOwner(TestSuite& suite) {
+    constexpr std::string_view       test_name = "cross-family ownership fan-in uses one release owner";
+    const RenderGraph::QueueTopology topology{
+        .graphics = {RenderGraph::QueueRole::Graphics, 0, 0},
+        .compute  = {RenderGraph::QueueRole::Compute, 1, 0},
+        .copy     = {RenderGraph::QueueRole::Copy, 2, 1},
+    };
+    BufferRef   buffer = MoerNew(FakeBuffer)(256);
+    RenderGraph graph("CrossFamilyOwnershipFanIn", topology);
+    const auto  data = graph.ImportBuffer(
+        "Exclusive",
+        buffer,
+        RenderGraph::BufferDesc{
+             .byte_size    = 256,
+             .sharing_mode = RenderGraph::TextureDesc::SharingMode::Exclusive,
+        }
+    );
+    graph.SetInitialState(
+        data, RenderGraph::BufferState::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None
     );
     graph.AddPass(
         "GraphicsWrite",
@@ -814,30 +975,165 @@ void TestCrossFamilyExclusiveOwnershipFailsClosed(TestSuite& suite) {
         },
         [] {}
     );
-    graph.AddPass(
+    const auto graphics_reader = graph.AddPass(
+        "GraphicsRead",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Read(data, RenderGraph::BufferState::ShaderResource).SideEffect();
+        },
+        [] {}
+    );
+    const auto compute_reader = graph.AddPass(
         "ComputeRead",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(
-                       RenderGraph::QueueRole::Compute,
-                       RenderGraph::PipelineType::Compute
-                   )
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute)
                 .Read(data, RenderGraph::BufferState::ShaderResource)
+                .SideEffect();
+        },
+        [] {}
+    );
+    const auto copy_writer = graph.AddPass(
+        "CopyWrite",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::PipelineType::Copy)
+                .Write(data, RenderGraph::BufferState::TransferDestination)
                 .SideEffect();
         },
         [] {}
     );
     graph.Export(
         data,
-        RenderGraph::BufferState::ShaderResource,
-        RenderGraph::QueueRole::Compute,
-        RenderGraph::AccessMode::Read
+        RenderGraph::BufferState::TransferDestination,
+        RenderGraph::QueueRole::Copy,
+        RenderGraph::AccessMode::Write
     );
 
-    ExpectLowerFailure(
-        suite,
-        graph,
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& compiled          = graph.GetCompiledPlan();
+    const auto  ownership_barrier = std::find_if(
+        compiled.barriers.begin(),
+        compiled.barriers.end(),
+        [&](const RenderGraph::CompiledBarrier& barrier) {
+            return barrier.resource == data.Untyped() && barrier.dst_pass == copy_writer &&
+                   barrier.queue_ownership &&
+                   std::find_if(
+                       barrier.sources.begin(),
+                       barrier.sources.end(),
+                       [&](const RenderGraph::CompiledBarrierSource& source) {
+                           return source.pass == graphics_reader;
+                       }
+                   ) != barrier.sources.end() &&
+                   std::find_if(
+                       barrier.sources.begin(),
+                       barrier.sources.end(),
+                       [&](const RenderGraph::CompiledBarrierSource& source) {
+                           return source.pass == compute_reader;
+                       }
+                   ) != barrier.sources.end();
+        }
+    );
+    suite.Check(
+        ownership_barrier != compiled.barriers.end(),
         test_name,
-        "queue-family ownership requires paired release/acquire lowering"
+        "compiler did not retain both source-family native queue readers"
+    );
+    if (ownership_barrier == compiled.barriers.end()) {
+        return;
+    }
+    const uint32_t ownership_barrier_index =
+        static_cast<uint32_t>(ownership_barrier - compiled.barriers.begin());
+
+    RenderGraphLowering::LoweredPlan lowered{};
+    std::string                      error{};
+    suite.Check(RenderGraphLowering::Lower(graph, lowered, error), test_name, error);
+
+    uint32_t release_count = 0;
+    for (const auto& pass : lowered.passes) {
+        release_count += static_cast<uint32_t>(std::count_if(
+            pass.after.begin(),
+            pass.after.end(),
+            [&](const RenderGraphLowering::LoweredInstruction& instruction) {
+                return instruction.instruction_kind == RenderGraphLowering::InstructionKind::QueueRelease &&
+                       instruction.correlation_id == ownership_barrier_index;
+            }
+        ));
+    }
+    const auto after_compute   = lowered.After(compute_reader);
+    const auto compute_release = std::find_if(
+        after_compute.begin(),
+        after_compute.end(),
+        [&](const RenderGraphLowering::LoweredInstruction& instruction) {
+            return instruction.instruction_kind == RenderGraphLowering::InstructionKind::QueueRelease &&
+                   instruction.correlation_id == ownership_barrier_index;
+        }
+    );
+    const auto after_graphics       = lowered.After(graphics_reader);
+    const bool graphics_has_release = std::any_of(
+        after_graphics.begin(),
+        after_graphics.end(),
+        [&](const RenderGraphLowering::LoweredInstruction& instruction) {
+            return instruction.instruction_kind == RenderGraphLowering::InstructionKind::QueueRelease &&
+                   instruction.correlation_id == ownership_barrier_index;
+        }
+    );
+    suite.Check(
+        release_count == 1 && compute_release != after_compute.end() && !graphics_has_release &&
+            compute_release->transfer_source == topology.compute &&
+            compute_release->transfer_destination == topology.copy,
+        test_name,
+        "the maximum source batch must be the unique Compute release owner"
+    );
+
+    const auto before_copy  = lowered.Before(copy_writer);
+    const auto copy_acquire = std::find_if(
+        before_copy.begin(),
+        before_copy.end(),
+        [&](const RenderGraphLowering::LoweredInstruction& instruction) {
+            return instruction.instruction_kind == RenderGraphLowering::InstructionKind::QueueAcquire &&
+                   instruction.correlation_id == ownership_barrier_index;
+        }
+    );
+    suite.Check(
+        copy_acquire != before_copy.end() && copy_acquire->transfer_source == topology.compute &&
+            copy_acquire->transfer_destination == topology.copy,
+        test_name,
+        "the Copy destination must acquire from the designated Compute release owner"
+    );
+
+    const auto ownership_join = std::find_if(
+        lowered.queue_syncs.begin(),
+        lowered.queue_syncs.end(),
+        [&](const RenderGraphLowering::QueueSyncInstruction& sync) {
+            return sync.signal_queue == topology.graphics && sync.wait_queue == topology.compute &&
+                   std::find(
+                       sync.ownership_join_barriers.begin(),
+                       sync.ownership_join_barriers.end(),
+                       ownership_barrier_index
+                   ) != sync.ownership_join_barriers.end();
+        }
+    );
+    suite.Check(
+        ownership_join != lowered.queue_syncs.end(),
+        test_name,
+        "the other source native queue must join the designated release batch"
+    );
+
+    const auto transfer_sync = std::find_if(
+        lowered.queue_syncs.begin(),
+        lowered.queue_syncs.end(),
+        [&](const RenderGraphLowering::QueueSyncInstruction& sync) {
+            return sync.signal_queue == topology.compute &&
+                   sync.wait_queue == topology.copy &&
+                   std::find(
+                       sync.ownership_transfer_barriers.begin(),
+                       sync.ownership_transfer_barriers.end(),
+                       ownership_barrier_index
+                   ) != sync.ownership_transfer_barriers.end();
+        }
+    );
+    suite.Check(
+        transfer_sync != lowered.queue_syncs.end(),
+        test_name,
+        "the unique release owner must signal the Copy acquire"
     );
 }
 
@@ -1161,7 +1457,8 @@ int main() {
     TestSameNativePhysicalBarrierRetainsSourceScope(suite);
     TestSameFamilyQueueBarrierLowersToAcquire(suite);
     TestMixedQueueFanInRetainsLocalSourceScope(suite);
-    TestCrossFamilyExclusiveOwnershipFailsClosed(suite);
+    TestCrossFamilyExclusiveOwnershipLowersPairedTransfer(suite);
+    TestCrossFamilyOwnershipFanInUsesOneReleaseOwner(suite);
     TestMissingCrossNativeSyncFailsClosed(suite);
     TestUnavailableQueueFailsAtCompile(suite);
     TestFailClosedContracts(suite);

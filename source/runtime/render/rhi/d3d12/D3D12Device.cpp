@@ -1445,7 +1445,11 @@ struct D3D12CommandVisitor {
                 Visit(static_cast<const CopyTextureCmd&>(*_cmd));
                 break;
             case Command::EType::Barrier:
-                break; // no-op
+                FATAL(
+                    "D3D12 copy visitor does not materialize explicit or "
+                    "legacy BarrierCmd"
+                );
+                break;
             case Command::EType::ShaderDispatch:
                 Visit(static_cast<const DispatchCmd&>(*_cmd));
                 break;

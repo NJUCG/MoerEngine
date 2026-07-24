@@ -42,6 +42,7 @@ bool IsCopyCommand(Command::EType _type) {
         case Command::EType::UploadTexture:
         case Command::EType::TextureToTexture:
         case Command::EType::CopyBackTexture:
+        case Command::EType::Barrier:
         case Command::EType::QueueTransfer:
             return true;
         default:

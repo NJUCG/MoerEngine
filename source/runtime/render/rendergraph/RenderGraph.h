@@ -465,9 +465,9 @@ public:
     };
 
     /**
-     * One canonical synchronization decision for one atomic resource cell. The future backend may
-     * lower a queue_ownership record into paired release/acquire barriers; RDG itself does not emit
-     * physical barriers in this stage.
+     * One canonical synchronization decision for one atomic resource cell.
+     * Lowering materializes queue_ownership as one paired release/acquire;
+     * RDG compilation itself remains backend-neutral.
      */
     struct CompiledBarrierSource {
         PassHandle      pass{};
@@ -566,8 +566,8 @@ public:
     /**
      * Immutable compiler output. recording_batches is the executable CPU
      * ownership schedule; barriers, queue_batches, and queue_syncs are the
-     * active Graphics/Compute lowering contract. Queue syncs describe managed
-     * internal pass/batch edges only. External import/export/present
+     * active Graphics/Compute/Copy lowering contract. Queue syncs describe
+     * managed internal pass/batch edges only. External import/export/present
      * synchronization endpoints remain intentionally absent.
      */
     struct CompiledPlan {

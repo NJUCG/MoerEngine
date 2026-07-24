@@ -500,6 +500,47 @@ inline constexpr bool BarrierStateWrites(const BarrierState& _state) {
                ERHIAccessFlags::UNDEFINED;
 }
 
+enum class EBarrierQueueTransferPhase : uint8 {
+    None,
+    Release,
+    Acquire,
+};
+
+/**
+ * Logical endpoints for one half of an exclusive queue-family ownership
+ * transfer. Backends resolve the logical queues through their authoritative
+ * topology; family indices are deliberately not cached in the command stream.
+ */
+struct BarrierQueueTransfer {
+    EBarrierQueueTransferPhase phase{EBarrierQueueTransferPhase::None};
+    EQueueType                 src_queue{EQueueType::Ignore};
+    EQueueType                 dst_queue{EQueueType::Ignore};
+
+    [[nodiscard]] static constexpr BarrierQueueTransfer Release(
+        EQueueType _src_queue,
+        EQueueType _dst_queue
+    ) {
+        return {
+            .phase     = EBarrierQueueTransferPhase::Release,
+            .src_queue = _src_queue,
+            .dst_queue = _dst_queue,
+        };
+    }
+
+    [[nodiscard]] static constexpr BarrierQueueTransfer Acquire(
+        EQueueType _src_queue,
+        EQueueType _dst_queue
+    ) {
+        return {
+            .phase     = EBarrierQueueTransferPhase::Acquire,
+            .src_queue = _src_queue,
+            .dst_queue = _dst_queue,
+        };
+    }
+
+    friend bool operator==(const BarrierQueueTransfer&, const BarrierQueueTransfer&) = default;
+};
+
 struct BarrierCreateInfo {
     std::variant<TextureView, BufferView> resource;
     BarrierState                          src_state{};
@@ -508,6 +549,7 @@ struct BarrierCreateInfo {
     // materialization time; callers must state whether color, depth, stencil,
     // or a plane subset is transitioned.
     ETextureAspectFlags texture_aspects{ETextureAspectFlags::NONE};
+    BarrierQueueTransfer queue_transfer{};
 
     static BarrierCreateInfo Transition(
         TextureView         _texture,

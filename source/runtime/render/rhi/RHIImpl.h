@@ -559,6 +559,7 @@ struct ExplicitTextureBarrier {
     BarrierState        src_state{};
     BarrierState        dst_state{};
     ETextureAspectFlags texture_aspects{ETextureAspectFlags::NONE};
+    BarrierQueueTransfer queue_transfer{};
     uint8               mip_level{};
     uint8               mip_count{1};
     uint8               array_layer{};
@@ -569,6 +570,7 @@ struct ExplicitBufferBarrier {
     uint64       handle{};
     BarrierState src_state{};
     BarrierState dst_state{};
+    BarrierQueueTransfer queue_transfer{};
     uint64       offset{};
     uint64       byte_size{};
 };
@@ -655,6 +657,7 @@ public:
                         .src_state       = _barrier.src_state,
                         .dst_state       = _barrier.dst_state,
                         .texture_aspects = _barrier.texture_aspects,
+                        .queue_transfer  = _barrier.queue_transfer,
                         .mip_level       = _resource.mip_level,
                         .mip_count       = _resource.num_mips,
                         .array_layer     = _resource.array_layer,
@@ -671,6 +674,7 @@ public:
                         .handle     = reinterpret_cast<uint64>(_resource.GetBuffer()),
                         .src_state  = _barrier.src_state,
                         .dst_state  = _barrier.dst_state,
+                        .queue_transfer = _barrier.queue_transfer,
                         .offset     = _resource.GetByteOffset(),
                         .byte_size  = _resource.GetByteSize(),
                     });

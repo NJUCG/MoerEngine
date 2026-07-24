@@ -618,6 +618,38 @@ ToBarrierState(const RenderGraphLowering::Scope& scope, bool texture) {
     BarrierCreateInfo&                             output,
     std::string&                                   error
 ) {
+    auto materialize_transfer = [&]() {
+        if (instruction.instruction_kind !=
+                RenderGraphLowering::InstructionKind::QueueRelease &&
+            instruction.instruction_kind !=
+                RenderGraphLowering::InstructionKind::QueueAcquire) {
+            output.queue_transfer = {};
+            return true;
+        }
+        const auto src_queue = ToRHIQueue(instruction.transfer_source.role);
+        const auto dst_queue =
+            ToRHIQueue(instruction.transfer_destination.role);
+        if ((src_queue != EQueueType::Graphics &&
+             src_queue != EQueueType::Compute &&
+             src_queue != EQueueType::Copy) ||
+            (dst_queue != EQueueType::Graphics &&
+             dst_queue != EQueueType::Compute &&
+             dst_queue != EQueueType::Copy) ||
+            src_queue == dst_queue ||
+            instruction.transfer_source.family_id ==
+                instruction.transfer_destination.family_id) {
+            error =
+                "queue ownership instruction has invalid logical or family endpoints";
+            return false;
+        }
+        output.queue_transfer =
+            instruction.instruction_kind ==
+                    RenderGraphLowering::InstructionKind::QueueRelease ?
+                BarrierQueueTransfer::Release(src_queue, dst_queue) :
+                BarrierQueueTransfer::Acquire(src_queue, dst_queue);
+        return true;
+    };
+
     if (instruction.resource_kind == RenderGraph::ResourceKind::Texture) {
         const auto& binding = instruction.physical.texture;
         const auto& range   = instruction.range.texture;
@@ -652,7 +684,7 @@ ToBarrierState(const RenderGraphLowering::Scope& scope, bool texture) {
             ToBarrierState(instruction.destination, true),
             instruction.texture_aspects
         );
-        return true;
+        return materialize_transfer();
     }
 
     if (instruction.resource_kind == RenderGraph::ResourceKind::Buffer) {
@@ -674,7 +706,7 @@ ToBarrierState(const RenderGraphLowering::Scope& scope, bool texture) {
             ToBarrierState(instruction.source, false),
             ToBarrierState(instruction.destination, false)
         );
-        return true;
+        return materialize_transfer();
     }
 
     error = "token instruction cannot be materialized as an RHI barrier";

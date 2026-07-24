@@ -2,6 +2,7 @@
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
 #include "rendergraph/RenderGraph.h"
+#include "rendergraph/RenderGraphLowering.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIExecutor.h"
@@ -11,6 +12,7 @@
 #include "rhi/vulkan/VulkanRHIResource.h"
 #include "taskgraph/TaskSystem.h"
 
+#include <algorithm>
 #include <atomic>
 #include <array>
 #include <chrono>
@@ -456,6 +458,8 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         topology.graphics.native_queue_id != topology.compute.native_queue_id;
     const bool same_queue_family =
         topology.graphics.family_id == topology.compute.family_id;
+    const bool graphics_compute_available =
+        topology.graphics.available && topology.compute.available;
     if (dedicated_compute) {
         RenderGraph stale_topology_graph("ActiveRdgRejectStaleTopology");
         const auto graphics_done =
@@ -805,17 +809,17 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         );
     }
 
-    if (dedicated_compute && same_queue_family) {
+    if (graphics_compute_available && dedicated_compute) {
         QueueBuffer shared_source{
             .buffer = device.CreateBuffer<uint32>(
-                "active_rdg_same_family_shared_source",
+                "active_rdg_distinct_native_shared_source",
                 kElementCount,
                 usage
             ),
         };
         QueueBuffer shared_destination{
             .buffer = device.CreateBuffer<uint32>(
-                "active_rdg_same_family_shared_destination",
+                "active_rdg_distinct_native_shared_destination",
                 kElementCount,
                 usage
             ),
@@ -827,7 +831,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         shared_destination.values = shared_source.values;
 
         RenderGraph physical_graph(
-            "ActiveRdgSameFamilyPhysicalRaw", topology
+            "ActiveRdgDistinctNativePhysicalRaw", topology
         );
         const auto source_handle = physical_graph.ImportBuffer(
             "SharedSource",
@@ -847,7 +851,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                 RenderGraph::AccessMode::None
             );
         }
-        physical_graph.AddRecordPass(
+        const auto graphics_write_pass = physical_graph.AddRecordPass(
             "GraphicsWriteShared",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
@@ -864,12 +868,12 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                 commands.CopyFrom(
                     OwnedBytes(shared_source.values),
                     shared_source.buffer->GetView(),
-                    "ActiveRdgSameFamilyGraphicsWrite"
+                    "ActiveRdgDistinctNativeGraphicsWrite"
                 );
             },
             RenderGraph::PassExecutionClass::ParallelRecordEligible
         );
-        physical_graph.AddRecordPass(
+        const auto compute_read_pass = physical_graph.AddRecordPass(
             "ComputeReadShared",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
@@ -890,7 +894,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                 commands.CopyFrom(
                     shared_source.buffer->GetView(),
                     shared_destination.buffer->GetView(),
-                    "ActiveRdgSameFamilyComputeRead"
+                    "ActiveRdgDistinctNativeComputeRead"
                 );
             },
             RenderGraph::PassExecutionClass::ParallelRecordEligible
@@ -916,9 +920,115 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                 }
             )) {
             throw std::runtime_error(
-                "same-family physical RAW did not compile with a GPU sync: " +
+                "distinct-native physical RAW did not compile with a GPU sync: " +
                 physical_graph.GetCompileError()
             );
+        }
+        RenderGraphLowering::LoweredPlan lowered{};
+        std::string                     lowering_error{};
+        if (!RenderGraphLowering::Lower(
+                physical_graph, lowered, lowering_error
+            )) {
+            throw std::runtime_error(
+                "distinct-native physical RAW lowering failed: " +
+                lowering_error
+            );
+        }
+
+        const auto is_source_resource =
+            [source = source_handle.Untyped()](
+                const RenderGraphLowering::LoweredInstruction& instruction
+            ) {
+                return instruction.resource == source;
+            };
+        const auto before_compute = lowered.Before(compute_read_pass);
+        const auto after_graphics = lowered.After(graphics_write_pass);
+        if (same_queue_family) {
+            const auto local_acquire = std::find_if(
+                before_compute.begin(),
+                before_compute.end(),
+                [&](const RenderGraphLowering::LoweredInstruction& instruction) {
+                    return is_source_resource(instruction) &&
+                           instruction.instruction_kind ==
+                               RenderGraphLowering::InstructionKind::Barrier &&
+                           instruction.queue_acquire;
+                }
+            );
+            const bool has_ownership_half = std::any_of(
+                    after_graphics.begin(),
+                    after_graphics.end(),
+                    [](const RenderGraphLowering::LoweredInstruction& instruction) {
+                        return instruction.instruction_kind ==
+                               RenderGraphLowering::InstructionKind::QueueRelease;
+                    }
+                ) ||
+                std::any_of(
+                    before_compute.begin(),
+                    before_compute.end(),
+                    [](const RenderGraphLowering::LoweredInstruction& instruction) {
+                        return instruction.instruction_kind ==
+                               RenderGraphLowering::InstructionKind::QueueAcquire;
+                    }
+                );
+            if (local_acquire == before_compute.end() ||
+                has_ownership_half) {
+                throw std::runtime_error(
+                    "same-family physical RAW did not lower to one "
+                    "destination-local acquire"
+                );
+            }
+        } else {
+            const auto release = std::find_if(
+                after_graphics.begin(),
+                after_graphics.end(),
+                [&](const RenderGraphLowering::LoweredInstruction& instruction) {
+                    return is_source_resource(instruction) &&
+                           instruction.instruction_kind ==
+                               RenderGraphLowering::InstructionKind::QueueRelease;
+                }
+            );
+            const auto acquire = std::find_if(
+                before_compute.begin(),
+                before_compute.end(),
+                [&](const RenderGraphLowering::LoweredInstruction& instruction) {
+                    return is_source_resource(instruction) &&
+                           instruction.instruction_kind ==
+                               RenderGraphLowering::InstructionKind::QueueAcquire;
+                }
+            );
+            if (release == after_graphics.end() ||
+                acquire == before_compute.end() ||
+                release->barrier_index ==
+                    RenderGraphLowering::InvalidBarrierIndex ||
+                release->barrier_index != acquire->barrier_index ||
+                release->transfer_source != topology.graphics ||
+                release->transfer_destination != topology.compute ||
+                acquire->transfer_source != topology.graphics ||
+                acquire->transfer_destination != topology.compute) {
+                throw std::runtime_error(
+                    "distinct-family physical RAW did not lower to a matched "
+                    "Graphics-release/Compute-acquire pair"
+                );
+            }
+            const bool transfer_sync_correlated = std::any_of(
+                lowered.queue_syncs.begin(),
+                lowered.queue_syncs.end(),
+                [&](const RenderGraphLowering::QueueSyncInstruction& sync) {
+                    return sync.signal_queue == topology.graphics &&
+                           sync.wait_queue == topology.compute &&
+                           std::find(
+                               sync.ownership_transfer_barriers.begin(),
+                               sync.ownership_transfer_barriers.end(),
+                               release->barrier_index
+                           ) != sync.ownership_transfer_barriers.end();
+                }
+            );
+            if (!transfer_sync_correlated) {
+                throw std::runtime_error(
+                    "distinct-family physical RAW release/acquire pair is not "
+                    "correlated with its GPU queue sync"
+                );
+            }
         }
         if (!physical_graph.ExecuteRecording(
                 {},
@@ -928,7 +1038,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                 RenderGraph::ActiveRecordingOptions{.enabled = true}
             )) {
             throw std::runtime_error(
-                "same-family physical RAW active execution failed: " +
+                "distinct-native physical RAW active execution failed: " +
                 physical_graph.GetCompileError()
             );
         }
@@ -936,7 +1046,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         physical_readback.CopyFrom(
             shared_destination.buffer->GetView(),
             WritableBytes(shared_destination.readback),
-            "ActiveRdgSameFamilyPhysicalReadback"
+            "ActiveRdgDistinctNativePhysicalReadback"
         );
         RHIExecutor::Get().Submit(
             EQueueType::Compute,
@@ -946,18 +1056,21 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
         if (shared_destination.readback != shared_destination.values) {
             throw std::runtime_error(
-                "same-family physical RAW readback mismatch"
+                "distinct-native physical RAW readback mismatch"
             );
         }
         LOG_INFO(
-            "[TESTCASE][PASS] name=ActiveRdgSameFamilyPhysicalRaw "
-            "producer=Graphics consumer=Compute barrier=acquire readback=verified"
+            "[TESTCASE][PASS] name=ActiveRdgDistinctNativePhysicalRaw "
+            "producer=Graphics consumer=Compute ownership={} readback=verified",
+            same_queue_family ? "local-acquire" : "release-acquire"
         );
     } else {
         LOG_INFO(
-            "[TESTCASE][SKIP] name=ActiveRdgSameFamilyPhysicalRaw "
-            "reason=queue_topology compute_native={} graphics_native={} "
+            "[TESTCASE][SKIP] name=ActiveRdgDistinctNativePhysicalRaw "
+            "reason={} compute_native={} graphics_native={} "
             "compute_family={} graphics_family={}",
+            graphics_compute_available ? "shared_native_queue" :
+                                         "queue_unavailable",
             topology.compute.native_queue_id,
             topology.graphics.native_queue_id,
             topology.compute.family_id,
@@ -1200,6 +1313,414 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         topology.compute.native_queue_id,
         topology.graphics.native_queue_id,
         has_gpu_sync
+    );
+}
+
+void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
+    auto&      device   = RenderDevice::Get();
+    const auto topology = RenderGraph::QueueTopology::FromRHI();
+    if (!topology.copy.available ||
+        topology.graphics.native_queue_id == topology.copy.native_queue_id) {
+        LOG_INFO(
+            "[TESTCASE][SKIP] name=ActiveRdgGraphicsCopyRoundTrip "
+            "reason={} graphics_native={} copy_native={} graphics_family={} "
+            "copy_family={}",
+            topology.copy.available ? "shared_native_queue" :
+                                      "copy_queue_unavailable",
+            topology.graphics.native_queue_id,
+            topology.copy.native_queue_id,
+            topology.graphics.family_id,
+            topology.copy.family_id
+        );
+        return;
+    }
+
+    constexpr uint64_t byte_size = sizeof(uint32) * kElementCount;
+    const EBufferUsageFlags usage =
+        EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
+    BufferRef source = device.CreateBuffer<uint32>(
+        "active_rdg_graphics_copy_round_trip_source",
+        kElementCount,
+        usage
+    );
+    BufferRef intermediate = device.CreateBuffer<uint32>(
+        "active_rdg_graphics_copy_round_trip_intermediate",
+        kElementCount,
+        usage
+    );
+    BufferRef destination = device.CreateBuffer<uint32>(
+        "active_rdg_graphics_copy_round_trip_destination",
+        kElementCount,
+        usage
+    );
+    std::array<uint32, kElementCount> expected{};
+    std::array<uint32, kElementCount> readback{};
+    for (uint32 index = 0; index < expected.size(); ++index) {
+        expected[index] = 0xC7400000u + index * 73u + 29u;
+    }
+
+    RenderGraph graph("ActiveRdgGraphicsCopyRoundTrip", topology);
+    const auto source_handle = graph.ImportBuffer(
+        "RoundTripSource",
+        source,
+        RenderGraph::BufferDesc{
+            .byte_size    = byte_size,
+            .sharing_mode =
+                RenderGraph::TextureDesc::SharingMode::Exclusive,
+        }
+    );
+    const auto intermediate_handle = graph.ImportBuffer(
+        "RoundTripIntermediate",
+        intermediate,
+        RenderGraph::BufferDesc{
+            .byte_size    = byte_size,
+            .sharing_mode =
+                RenderGraph::TextureDesc::SharingMode::Exclusive,
+        }
+    );
+    const auto destination_handle = graph.ImportBuffer(
+        "RoundTripDestination",
+        destination,
+        RenderGraph::BufferDesc{
+            .byte_size    = byte_size,
+            .sharing_mode =
+                RenderGraph::TextureDesc::SharingMode::Exclusive,
+        }
+    );
+    for (const auto handle : {
+             source_handle,
+             intermediate_handle,
+             destination_handle,
+         }) {
+        graph.SetInitialState(
+            handle,
+            RenderGraph::BufferState::Undefined,
+            RenderGraph::QueueRole::None,
+            RenderGraph::AccessMode::None
+        );
+    }
+
+    const auto graphics_upload = graph.AddRecordPass(
+        "GraphicsUploadSource",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Write(
+                    source_handle,
+                    RenderGraph::BufferState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [source, expected](CommandList& commands) {
+            commands.CopyFrom(
+                OwnedBytes(expected),
+                source->GetView(),
+                "ActiveRdgGraphicsCopyRoundTripUpload"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    const auto copy_to_intermediate = graph.AddRecordPass(
+        "CopyToIntermediate",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Copy,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Read(
+                    source_handle,
+                    RenderGraph::BufferState::TransferSource
+                )
+                .Write(
+                    intermediate_handle,
+                    RenderGraph::BufferState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [source, intermediate](CommandList& commands) {
+            commands.CopyFrom(
+                source->GetView(),
+                intermediate->GetView(),
+                "ActiveRdgGraphicsCopyRoundTripToCopy"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    const auto graphics_copy_to_destination = graph.AddRecordPass(
+        "GraphicsCopyToDestination",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Read(
+                    intermediate_handle,
+                    RenderGraph::BufferState::TransferSource
+                )
+                .Write(
+                    destination_handle,
+                    RenderGraph::BufferState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [intermediate, destination](CommandList& commands) {
+            commands.CopyFrom(
+                intermediate->GetView(),
+                destination->GetView(),
+                "ActiveRdgGraphicsCopyRoundTripToGraphics"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "GraphicsReadback",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Read(
+                    destination_handle,
+                    RenderGraph::BufferState::TransferSource
+                )
+                .SideEffect();
+        },
+        [destination, &readback](CommandList& commands) {
+            commands.CopyFrom(
+                destination->GetView(),
+                WritableBytes(readback),
+                "ActiveRdgGraphicsCopyRoundTripReadback"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.Export(
+        source_handle,
+        RenderGraph::BufferState::TransferSource,
+        RenderGraph::QueueRole::Copy,
+        RenderGraph::AccessMode::Read
+    );
+    graph.Export(
+        intermediate_handle,
+        RenderGraph::BufferState::TransferSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    graph.Export(
+        destination_handle,
+        RenderGraph::BufferState::TransferSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+
+    if (!graph.Compile()) {
+        throw std::runtime_error(
+            "Graphics-Copy round trip compile failed: " +
+            graph.GetCompileError()
+        );
+    }
+    const size_t gpu_sync_count = std::count_if(
+        graph.GetCompiledPlan().queue_syncs.begin(),
+        graph.GetCompiledPlan().queue_syncs.end(),
+        [](const RenderGraph::CompiledQueueSync& sync) {
+            return sync.gpu_wait_required;
+        }
+    );
+    if (gpu_sync_count != 2) {
+        throw std::runtime_error(
+            "Graphics-Copy round trip did not compile exactly two native "
+            "queue synchronization points"
+        );
+    }
+
+    RenderGraphLowering::LoweredPlan lowered{};
+    std::string                     lowering_error{};
+    if (!RenderGraphLowering::Lower(graph, lowered, lowering_error)) {
+        throw std::runtime_error(
+            "Graphics-Copy round trip lowering failed: " + lowering_error
+        );
+    }
+    const bool same_queue_family =
+        topology.graphics.family_id == topology.copy.family_id;
+    const auto validate_boundary =
+        [&](std::string_view             label,
+            RenderGraph::BufferHandle    resource,
+            RenderGraph::PassHandle      producer,
+            RenderGraph::PassHandle      consumer,
+            RenderGraph::QueueBinding    source_queue,
+            RenderGraph::QueueBinding    destination_queue) {
+            const auto after_producer  = lowered.After(producer);
+            const auto before_consumer = lowered.Before(consumer);
+            const auto matches_resource =
+                [resource = resource.Untyped()](
+                    const RenderGraphLowering::LoweredInstruction& instruction
+                ) {
+                    return instruction.resource == resource;
+                };
+            const auto count_kind =
+                [&](auto instructions,
+                    RenderGraphLowering::InstructionKind kind) {
+                    return std::count_if(
+                        instructions.begin(),
+                        instructions.end(),
+                        [&](const RenderGraphLowering::LoweredInstruction&
+                                instruction) {
+                            return matches_resource(instruction) &&
+                                   instruction.instruction_kind == kind;
+                        }
+                    );
+                };
+
+            if (same_queue_family) {
+                const auto local_acquire = std::find_if(
+                    before_consumer.begin(),
+                    before_consumer.end(),
+                    [&](const RenderGraphLowering::LoweredInstruction&
+                            instruction) {
+                        return matches_resource(instruction) &&
+                               instruction.instruction_kind ==
+                                   RenderGraphLowering::InstructionKind::Barrier &&
+                               instruction.queue_acquire;
+                    }
+                );
+                const size_t local_acquire_count = std::count_if(
+                    before_consumer.begin(),
+                    before_consumer.end(),
+                    [&](const RenderGraphLowering::LoweredInstruction&
+                            instruction) {
+                        return matches_resource(instruction) &&
+                               instruction.instruction_kind ==
+                                   RenderGraphLowering::InstructionKind::Barrier &&
+                               instruction.queue_acquire;
+                    }
+                );
+                if (local_acquire_count != 1 ||
+                    count_kind(
+                        after_producer,
+                        RenderGraphLowering::InstructionKind::QueueRelease
+                    ) != 0 ||
+                    count_kind(
+                        before_consumer,
+                        RenderGraphLowering::InstructionKind::QueueAcquire
+                    ) != 0 ||
+                    local_acquire->source.stages !=
+                        ERHIPipelineStageFlags::PS_NONE ||
+                    local_acquire->source.access !=
+                        ERHIAccessFlags::UNDEFINED) {
+                    throw std::runtime_error(
+                        std::string(label) +
+                        " did not lower to a destination-local acquire"
+                    );
+                }
+                return;
+            }
+
+            const auto release = std::find_if(
+                after_producer.begin(),
+                after_producer.end(),
+                [&](const RenderGraphLowering::LoweredInstruction&
+                        instruction) {
+                    return matches_resource(instruction) &&
+                           instruction.instruction_kind ==
+                               RenderGraphLowering::InstructionKind::
+                                   QueueRelease;
+                }
+            );
+            const auto acquire = std::find_if(
+                before_consumer.begin(),
+                before_consumer.end(),
+                [&](const RenderGraphLowering::LoweredInstruction&
+                        instruction) {
+                    return matches_resource(instruction) &&
+                           instruction.instruction_kind ==
+                               RenderGraphLowering::InstructionKind::
+                                   QueueAcquire;
+                }
+            );
+            if (count_kind(
+                    after_producer,
+                    RenderGraphLowering::InstructionKind::QueueRelease
+                ) != 1 ||
+                count_kind(
+                    before_consumer,
+                    RenderGraphLowering::InstructionKind::QueueAcquire
+                ) != 1 ||
+                release == after_producer.end() ||
+                acquire == before_consumer.end() ||
+                release->barrier_index ==
+                    RenderGraphLowering::InvalidBarrierIndex ||
+                release->barrier_index != acquire->barrier_index ||
+                release->transfer_source != source_queue ||
+                release->transfer_destination != destination_queue ||
+                acquire->transfer_source != source_queue ||
+                acquire->transfer_destination != destination_queue) {
+                throw std::runtime_error(
+                    std::string(label) +
+                    " did not lower to one matched release/acquire pair"
+                );
+            }
+            const size_t correlated_sync_count = std::count_if(
+                lowered.queue_syncs.begin(),
+                lowered.queue_syncs.end(),
+                [&](const RenderGraphLowering::QueueSyncInstruction& sync) {
+                    return sync.signal_queue == source_queue &&
+                           sync.wait_queue == destination_queue &&
+                           std::find(
+                               sync.ownership_transfer_barriers.begin(),
+                               sync.ownership_transfer_barriers.end(),
+                               release->barrier_index
+                           ) != sync.ownership_transfer_barriers.end();
+                    }
+            );
+            if (correlated_sync_count != 1) {
+                throw std::runtime_error(
+                    std::string(label) +
+                    " release/acquire pair is not correlated with its GPU sync"
+                );
+            }
+        };
+    validate_boundary(
+        "Graphics-to-Copy source transfer",
+        source_handle,
+        graphics_upload,
+        copy_to_intermediate,
+        topology.graphics,
+        topology.copy
+    );
+    validate_boundary(
+        "Copy-to-Graphics intermediate transfer",
+        intermediate_handle,
+        copy_to_intermediate,
+        graphics_copy_to_destination,
+        topology.copy,
+        topology.graphics
+    );
+
+    if (!graph.ExecuteRecording(
+            {},
+            {},
+            _parallel,
+            {},
+            RenderGraph::ActiveRecordingOptions{.enabled = true}
+        )) {
+        throw std::runtime_error(
+            "Graphics-Copy round trip active execution failed: " +
+            graph.GetCompileError()
+        );
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (readback != expected) {
+        throw std::runtime_error(
+            "Graphics-Copy round trip readback mismatch"
+        );
+    }
+    LOG_INFO(
+        "[TESTCASE][PASS] name=ActiveRdgGraphicsCopyRoundTrip mode={} "
+        "ownership={} transfers=2 readback=verified",
+        _parallel ? "parallel" : "serial",
+        same_queue_family ? "local-acquire" : "release-acquire"
     );
 }
 
@@ -2640,6 +3161,7 @@ int main(int argc, const char** argv) {
         );
         RunActiveRdgExplicitBarrierReadback(parallel);
         RunActiveRdgAsyncQueueDag(parallel);
+        RunActiveRdgGraphicsCopyRoundTrip(parallel);
         RunActiveRdgTransientAliasReadback(parallel);
         RunActiveRdgTransientTextureAliasReadback(parallel);
         RunActiveRdgTextureArraySubrange(parallel);

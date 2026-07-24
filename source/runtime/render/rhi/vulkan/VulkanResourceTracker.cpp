@@ -418,6 +418,14 @@ void VkTracker::RecordState(
     uint32_t                 _src_queue_family,
     uint32_t                 _dst_queue_family
 ) {
+    for (const auto& released_range : explicit_released_buffer_ranges) {
+        if (released_range.buffer == _buffer) {
+            throw std::logic_error(
+                "a queue-release buffer barrier must be the final overlapping "
+                "access in its submit"
+            );
+        }
+    }
     if (explicit_partial_buffers.contains(_buffer)) {
         LOG_CRITICAL(
             "A partial-range explicit buffer barrier cannot be followed by "
@@ -811,6 +819,30 @@ void VkTracker::RecordState(
         _array_count == kRemainingSubresource ?
             uint8(_texture->GetNumArray() - _array_layer) :
             _array_count;
+    const TextureAspectSubresourceRangeT<VulkanTexture> requested_range{
+        .subresource = MakeTextureStateKey(
+            _texture,
+            _mip_level,
+            resolved_mip_count,
+            _array_layer,
+            resolved_array_count
+        ),
+        .aspects = VulkanEnumTranslator::METoVKImageAspectFlags(
+            _texture->GetAspectFlags()
+        ),
+    };
+    for (const auto& released_range :
+         explicit_released_texture_ranges) {
+        if (TextureAspectSubresourceRangesOverlap(
+                released_range,
+                requested_range
+            )) {
+            throw std::logic_error(
+                "a queue-release texture barrier must be the final overlapping "
+                "access in its submit"
+            );
+        }
+    }
     bool has_explicit_texture_state = false;
     for (const auto& explicit_range : explicit_texture_ranges) {
         if (explicit_range.texture == _texture) {
@@ -930,6 +962,9 @@ void VkTracker::EmitExplicitBarrier(
     VulkanBuffer*         _buffer,
     uint64                _offset,
     uint64                _byte_size,
+    EBarrierQueueTransferPhase _phase,
+    uint32_t              _src_queue_family,
+    uint32_t              _dst_queue_family,
     VkPipelineStageFlags2 _src_stage,
     VkAccessFlags2        _src_access,
     VkPipelineStageFlags2 _dst_stage,
@@ -945,20 +980,75 @@ void VkTracker::EmitExplicitBarrier(
         );
         throw std::out_of_range("invalid explicit buffer barrier range");
     }
+    const BufferByteRangeT<VulkanBuffer> transfer_range{
+        .buffer    = _buffer,
+        .offset    = _offset,
+        .byte_size = _byte_size,
+    };
+    for (const auto& released_range : explicit_released_buffer_ranges) {
+        if (BufferByteRangesOverlap(released_range, transfer_range)) {
+            throw std::logic_error(
+                "a queue-release buffer barrier must be the final overlapping "
+                "access in its submit"
+            );
+        }
+    }
+    if (_phase != EBarrierQueueTransferPhase::None &&
+        _phase != EBarrierQueueTransferPhase::Release &&
+        _phase != EBarrierQueueTransferPhase::Acquire) {
+        throw std::invalid_argument(
+            "explicit buffer barrier carries an unknown transfer phase"
+        );
+    }
+    const bool ownership =
+        _phase != EBarrierQueueTransferPhase::None;
+    if ((ownership &&
+         (_src_queue_family == VK_QUEUE_FAMILY_IGNORED ||
+          _dst_queue_family == VK_QUEUE_FAMILY_IGNORED ||
+          _src_queue_family == _dst_queue_family)) ||
+        (!ownership &&
+         (_src_queue_family != VK_QUEUE_FAMILY_IGNORED ||
+          _dst_queue_family != VK_QUEUE_FAMILY_IGNORED))) {
+        throw std::invalid_argument(
+            "explicit buffer barrier carries an invalid queue-family pair"
+        );
+    }
+
+    const VkPipelineStageFlags2 native_src_stage =
+        _phase == EBarrierQueueTransferPhase::Acquire ?
+            VK_PIPELINE_STAGE_2_NONE :
+            _src_stage;
+    const VkAccessFlags2 native_src_access =
+        _phase == EBarrierQueueTransferPhase::Acquire ?
+            VK_ACCESS_2_NONE :
+            _src_access;
+    const VkPipelineStageFlags2 native_dst_stage =
+        _phase == EBarrierQueueTransferPhase::Release ?
+            VK_PIPELINE_STAGE_2_NONE :
+            _dst_stage;
+    const VkAccessFlags2 native_dst_access =
+        _phase == EBarrierQueueTransferPhase::Release ?
+            VK_ACCESS_2_NONE :
+            _dst_access;
 
     buffer_barriers.emplace_back(VkBufferMemoryBarrier2{
         .sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
         .pNext               = nullptr,
-        .srcStageMask        = _src_stage,
-        .srcAccessMask       = _src_access,
-        .dstStageMask        = _dst_stage,
-        .dstAccessMask       = _dst_access,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .srcStageMask        = native_src_stage,
+        .srcAccessMask       = native_src_access,
+        .dstStageMask        = native_dst_stage,
+        .dstAccessMask       = native_dst_access,
+        .srcQueueFamilyIndex = _src_queue_family,
+        .dstQueueFamilyIndex = _dst_queue_family,
         .buffer              = _buffer->GetHandle(),
         .offset              = _offset,
         .size                = _byte_size,
     });
+
+    if (_phase == EBarrierQueueTransferPhase::Release) {
+        explicit_released_buffer_ranges.emplace_back(transfer_range);
+        return;
+    }
 
     if (_offset == 0 && _byte_size == _buffer->GetByteSize()) {
         buffer_states[_buffer] = BufferState{
@@ -982,6 +1072,9 @@ void VkTracker::EmitExplicitBarrier(
     uint8                 _mip_count,
     uint8                 _array_layer,
     uint8                 _array_count,
+    EBarrierQueueTransferPhase _phase,
+    uint32_t              _src_queue_family,
+    uint32_t              _dst_queue_family,
     VkPipelineStageFlags2 _src_stage,
     VkAccessFlags2        _src_access,
     VkImageLayout         _src_layout,
@@ -1005,6 +1098,26 @@ void VkTracker::EmitExplicitBarrier(
         );
         throw std::invalid_argument("explicit texture barrier aspect is unavailable");
     }
+    if (_phase != EBarrierQueueTransferPhase::None &&
+        _phase != EBarrierQueueTransferPhase::Release &&
+        _phase != EBarrierQueueTransferPhase::Acquire) {
+        throw std::invalid_argument(
+            "explicit texture barrier carries an unknown transfer phase"
+        );
+    }
+    const bool ownership =
+        _phase != EBarrierQueueTransferPhase::None;
+    if ((ownership &&
+         (_src_queue_family == VK_QUEUE_FAMILY_IGNORED ||
+          _dst_queue_family == VK_QUEUE_FAMILY_IGNORED ||
+          _src_queue_family == _dst_queue_family)) ||
+        (!ownership &&
+         (_src_queue_family != VK_QUEUE_FAMILY_IGNORED ||
+          _dst_queue_family != VK_QUEUE_FAMILY_IGNORED))) {
+        throw std::invalid_argument(
+            "explicit texture barrier carries an invalid queue-family pair"
+        );
+    }
 
     const uint8 resolved_mip_count =
         _mip_count == kRemainingSubresource ?
@@ -1014,18 +1127,56 @@ void VkTracker::EmitExplicitBarrier(
         _array_count == kRemainingSubresource ?
             uint8(_texture->GetNumArray() - _array_layer) :
             _array_count;
+    const TextureAspectSubresourceRangeT<VulkanTexture> transfer_range{
+        .subresource = MakeTextureStateKey(
+            _texture,
+            _mip_level,
+            resolved_mip_count,
+            _array_layer,
+            resolved_array_count
+        ),
+        .aspects = _aspects,
+    };
+    for (const auto& released_range :
+         explicit_released_texture_ranges) {
+        if (TextureAspectSubresourceRangesOverlap(
+                released_range,
+                transfer_range
+            )) {
+            throw std::logic_error(
+                "a queue-release texture barrier must be the final overlapping "
+                "access in its submit"
+            );
+        }
+    }
+    const VkPipelineStageFlags2 native_src_stage =
+        _phase == EBarrierQueueTransferPhase::Acquire ?
+            VK_PIPELINE_STAGE_2_NONE :
+            _src_stage;
+    const VkAccessFlags2 native_src_access =
+        _phase == EBarrierQueueTransferPhase::Acquire ?
+            VK_ACCESS_2_NONE :
+            _src_access;
+    const VkPipelineStageFlags2 native_dst_stage =
+        _phase == EBarrierQueueTransferPhase::Release ?
+            VK_PIPELINE_STAGE_2_NONE :
+            _dst_stage;
+    const VkAccessFlags2 native_dst_access =
+        _phase == EBarrierQueueTransferPhase::Release ?
+            VK_ACCESS_2_NONE :
+            _dst_access;
 
     texture_barriers.emplace_back(VkImageMemoryBarrier2{
         .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
         .pNext               = nullptr,
-        .srcStageMask        = _src_stage,
-        .srcAccessMask       = _src_access,
-        .dstStageMask        = _dst_stage,
-        .dstAccessMask       = _dst_access,
+        .srcStageMask        = native_src_stage,
+        .srcAccessMask       = native_src_access,
+        .dstStageMask        = native_dst_stage,
+        .dstAccessMask       = native_dst_access,
         .oldLayout           = _src_layout,
         .newLayout           = _dst_layout,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .srcQueueFamilyIndex = _src_queue_family,
+        .dstQueueFamilyIndex = _dst_queue_family,
         .image               = _texture->GetHandle(),
         .subresourceRange =
             VkImageSubresourceRange{
@@ -1036,6 +1187,11 @@ void VkTracker::EmitExplicitBarrier(
                 .layerCount     = resolved_array_count,
             },
     });
+
+    if (_phase == EBarrierQueueTransferPhase::Release) {
+        explicit_released_texture_ranges.emplace_back(transfer_range);
+        return;
+    }
 
     if (_aspects != available_aspects) {
         // The native barrier above remains exact. The legacy inferred tracker
@@ -1446,6 +1602,8 @@ void VkTracker::Reset() {
     pending_textures.clear();
     explicit_partial_buffers.clear();
     explicit_partial_aspect_textures.clear();
+    explicit_released_buffer_ranges.clear();
+    explicit_released_texture_ranges.clear();
     explicit_texture_ranges.clear();
     exported_buffers.clear();
     exported_textures.clear();

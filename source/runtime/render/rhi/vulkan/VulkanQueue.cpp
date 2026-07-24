@@ -810,18 +810,6 @@ struct VkCmdPreprocessor {
 
     void Visit(const BarrierCmd* _cmd) {
         if (_cmd->HasExplicitBarriers()) {
-            if (_cmd->IsQueueTransition()) {
-                LOG_CRITICAL(
-                    "Explicit BarrierCmd cannot perform queue ownership transfer "
-                    "({} -> {}); use paired ExportResourcesToQueue/"
-                    "ImportResourcesFromQueue commands",
-                    static_cast<uint>(_cmd->GetSrcQueue()),
-                    static_cast<uint>(_cmd->GetDstQueue())
-                );
-                throw std::logic_error(
-                    "cross-queue explicit barrier must use paired queue-transfer commands"
-                );
-            }
             if (_cmd->GetSrcQueue() != current_queue ||
                 _cmd->GetDstQueue() != current_queue) {
                 LOG_CRITICAL(
@@ -833,6 +821,56 @@ struct VkCmdPreprocessor {
                 throw std::logic_error("explicit barrier recorded on the wrong queue");
             }
 
+            const auto resolve_transfer =
+                [&](const BarrierQueueTransfer& transfer) {
+                    std::pair<uint32_t, uint32_t> families{
+                        VK_QUEUE_FAMILY_IGNORED,
+                        VK_QUEUE_FAMILY_IGNORED,
+                    };
+                    if (transfer.phase == EBarrierQueueTransferPhase::None) {
+                        return families;
+                    }
+                    if (transfer.phase != EBarrierQueueTransferPhase::Release &&
+                        transfer.phase != EBarrierQueueTransferPhase::Acquire) {
+                        throw std::invalid_argument(
+                            "Vulkan ownership barrier carries an unknown phase"
+                        );
+                    }
+                    if ((transfer.src_queue != EQueueType::Graphics &&
+                         transfer.src_queue != EQueueType::Compute &&
+                         transfer.src_queue != EQueueType::Copy) ||
+                        (transfer.dst_queue != EQueueType::Graphics &&
+                         transfer.dst_queue != EQueueType::Compute &&
+                         transfer.dst_queue != EQueueType::Copy) ||
+                        transfer.src_queue == transfer.dst_queue) {
+                        throw std::invalid_argument(
+                            "Vulkan ownership barrier requires distinct managed "
+                            "Graphics/Compute/Copy endpoints"
+                        );
+                    }
+                    const EQueueType expected_queue =
+                        transfer.phase == EBarrierQueueTransferPhase::Release ?
+                            transfer.src_queue :
+                            transfer.dst_queue;
+                    if (current_queue != expected_queue) {
+                        throw std::logic_error(
+                            "Vulkan ownership barrier recorded on the wrong endpoint"
+                        );
+                    }
+                    families.first =
+                        device.GetQueueFamilyIndex(transfer.src_queue);
+                    families.second =
+                        device.GetQueueFamilyIndex(transfer.dst_queue);
+                    if (families.first == VK_QUEUE_FAMILY_IGNORED ||
+                        families.second == VK_QUEUE_FAMILY_IGNORED ||
+                        families.first == families.second) {
+                        throw std::invalid_argument(
+                            "Vulkan ownership barrier requires two distinct queue families"
+                        );
+                    }
+                    return families;
+                };
+
             for (const ExplicitBufferBarrier& barrier : _cmd->ExplicitBuffers()) {
                 if (barrier.src_state.texture_layout !=
                         ETextureLayout::TEXTURE_LAYOUT_UNDEFINED ||
@@ -842,10 +880,15 @@ struct VkCmdPreprocessor {
                         "explicit buffer barrier cannot carry a texture layout"
                     );
                 }
+                const auto [src_family, dst_family] =
+                    resolve_transfer(barrier.queue_transfer);
                 tracker.EmitExplicitBarrier(
                     reinterpret_cast<VulkanBuffer*>(barrier.handle),
                     barrier.offset,
                     barrier.byte_size,
+                    barrier.queue_transfer.phase,
+                    src_family,
+                    dst_family,
                     VulkanEnumTranslator::METoVkPipelineStageFlags2(
                         barrier.src_state.stage
                     ),
@@ -876,6 +919,8 @@ struct VkCmdPreprocessor {
                         "explicit texture barrier carries an unsupported layout"
                     );
                 }
+                const auto [src_family, dst_family] =
+                    resolve_transfer(barrier.queue_transfer);
                 tracker.EmitExplicitBarrier(
                     reinterpret_cast<VulkanTexture*>(barrier.handle),
                     VulkanEnumTranslator::METoVKImageAspectFlags(
@@ -885,6 +930,9 @@ struct VkCmdPreprocessor {
                     barrier.mip_count,
                     barrier.array_layer,
                     barrier.array_count,
+                    barrier.queue_transfer.phase,
+                    src_family,
+                    dst_family,
                     VulkanEnumTranslator::METoVkPipelineStageFlags2(
                         barrier.src_state.stage
                     ),

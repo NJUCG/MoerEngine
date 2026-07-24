@@ -16,9 +16,9 @@ namespace Moer::Render {
  *
  * Active lowering intentionally supports a narrow, auditable subset: strongly
  * bound imported or allocation-backed transient resources and explicit states
- * at every physical access and external boundary. Graphics/Compute queue DAGs
- * are executable; queue-family ownership and unmanaged external endpoints
- * remain fail-closed until paired lowering is available.
+ * at every physical access and external boundary. Graphics/Compute/Copy queue
+ * DAGs and internal exclusive queue-family transfers are executable;
+ * unmanaged external ownership endpoints remain fail-closed.
  */
 class RENDER_API RenderGraphLowering {
 public:
@@ -34,6 +34,10 @@ public:
          * across independently submitted CommandLists.
          */
         StateSeed,
+        /** Source-family half emitted after the designated producer batch. */
+        QueueRelease,
+        /** Destination-family half emitted before the consuming pass. */
+        QueueAcquire,
     };
 
     struct Scope {
@@ -94,6 +98,9 @@ public:
         bool transient_alias           = false;
         /** Destination-side visibility/layout barrier after a GPU queue wait. */
         bool queue_acquire              = false;
+        /** Canonical logical endpoints shared by paired release/acquire halves. */
+        RenderGraph::QueueBinding transfer_source{};
+        RenderGraph::QueueBinding transfer_destination{};
     };
 
     struct QueueSyncInstruction {
@@ -102,6 +109,13 @@ public:
         RenderGraph::PassHandle wait_pass{};
         RenderGraph::QueueBinding signal_queue{};
         RenderGraph::QueueBinding wait_queue{};
+        uint32_t signal_batch = RenderGraph::PassHandle::InvalidIndex;
+        uint32_t wait_batch   = RenderGraph::PassHandle::InvalidIndex;
+        /** Added by lowering to join a fan-in frontier at one release owner. */
+        bool synthetic_ownership_join = false;
+        std::vector<uint32_t> ownership_join_barriers{};
+        /** Ownership transfers whose release->acquire ordering uses this sync. */
+        std::vector<uint32_t> ownership_transfer_barriers{};
     };
 
     struct PassInstructions {

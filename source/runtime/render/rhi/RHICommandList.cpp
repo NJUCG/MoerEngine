@@ -583,24 +583,110 @@ void CommandList::Barriers(
     if (_barriers.empty()) {
         throw std::invalid_argument("explicit barrier batch cannot be empty");
     }
-    if (_src_queue != _dst_queue) {
-        assert(
-            _src_queue == _dst_queue &&
-            "explicit barriers cannot perform queue ownership transfer"
-        );
+    if (_src_queue == EQueueType::Ignore || _src_queue == EQueueType::Num ||
+        _src_queue != _dst_queue || _src_queue != queue_type) {
         throw std::invalid_argument(
-            "explicit barriers require one queue; use paired queue import/export"
+            "explicit barrier command affinity must match its CommandList queue"
         );
     }
-    commands.push_back(
-        MakeUnique<BarrierCmd>(
-            static_cast<uint>(_barriers.size()), _src_queue, _dst_queue
-        )
+
+    const auto is_supported_ownership_queue = [](EQueueType queue) {
+        return queue == EQueueType::Graphics || queue == EQueueType::Compute ||
+               queue == EQueueType::Copy;
+    };
+    for (const BarrierCreateInfo& barrier : _barriers) {
+        const auto& transfer = barrier.queue_transfer;
+        switch (transfer.phase) {
+            case EBarrierQueueTransferPhase::None:
+                if (!((transfer.src_queue == EQueueType::Ignore &&
+                       transfer.dst_queue == EQueueType::Ignore) ||
+                      (transfer.src_queue == queue_type &&
+                       transfer.dst_queue == queue_type))) {
+                    throw std::invalid_argument(
+                        "local explicit barrier endpoints must be ignored or match "
+                        "the CommandList queue"
+                    );
+                }
+                break;
+            case EBarrierQueueTransferPhase::Release:
+            case EBarrierQueueTransferPhase::Acquire:
+                if (!is_supported_ownership_queue(transfer.src_queue) ||
+                    !is_supported_ownership_queue(transfer.dst_queue) ||
+                    transfer.src_queue == transfer.dst_queue) {
+                    throw std::invalid_argument(
+                        "queue ownership barrier requires distinct managed "
+                        "Graphics/Compute/Copy endpoints"
+                    );
+                }
+                if ((transfer.phase == EBarrierQueueTransferPhase::Release &&
+                     queue_type != transfer.src_queue) ||
+                    (transfer.phase == EBarrierQueueTransferPhase::Acquire &&
+                     queue_type != transfer.dst_queue)) {
+                    throw std::invalid_argument(
+                        "queue ownership barrier was recorded on the wrong endpoint"
+                    );
+                }
+                break;
+            default:
+                throw std::invalid_argument(
+                    "explicit barrier carries an unknown queue-transfer phase"
+                );
+        }
+
+        std::visit(
+            [&](const auto& resource) {
+                using TResource = std::decay_t<decltype(resource)>;
+                if constexpr (std::is_same_v<TResource, TextureView>) {
+                    const auto* texture = resource.GetTexture();
+                    const auto aspects =
+                        static_cast<uint32_t>(barrier.texture_aspects);
+                    const auto available_aspects =
+                        texture == nullptr ? 0u :
+                        static_cast<uint32_t>(texture->GetAspectFlags());
+                    if (texture == nullptr || resource.num_mips == 0 ||
+                        resource.num_array == 0 ||
+                        resource.mip_level >= texture->GetNumMips() ||
+                        resource.num_mips >
+                            texture->GetNumMips() - resource.mip_level ||
+                        resource.array_layer >= texture->GetNumArray() ||
+                        resource.num_array >
+                            texture->GetNumArray() - resource.array_layer ||
+                        aspects == 0 || (aspects & ~available_aspects) != 0) {
+                        throw std::invalid_argument(
+                            "explicit texture barrier has an invalid resource, "
+                            "range, or aspect"
+                        );
+                    }
+                } else {
+                    static_assert(std::is_same_v<TResource, BufferView>);
+                    const auto* buffer = resource.GetBuffer();
+                    if (buffer == nullptr || resource.GetByteSize() == 0 ||
+                        resource.GetByteOffset() > buffer->GetByteSize() ||
+                        resource.GetByteSize() >
+                            buffer->GetByteSize() - resource.GetByteOffset() ||
+                        barrier.texture_aspects != ETextureAspectFlags::NONE ||
+                        barrier.src_state.texture_layout !=
+                            ETextureLayout::TEXTURE_LAYOUT_UNDEFINED ||
+                        barrier.dst_state.texture_layout !=
+                            ETextureLayout::TEXTURE_LAYOUT_UNDEFINED) {
+                        throw std::invalid_argument(
+                            "explicit buffer barrier has an invalid resource, "
+                            "range, aspect, or texture layout"
+                        );
+                    }
+                }
+            },
+            barrier.resource
+        );
+    }
+
+    auto barrier_cmd = MakeUnique<BarrierCmd>(
+        static_cast<uint>(_barriers.size()), _src_queue, _dst_queue
     );
-    auto* barrier_cmd = static_cast<BarrierCmd*>(commands.back().get());
     for (const BarrierCreateInfo& barrier : _barriers) {
         barrier_cmd->AddExplicitBarrier(barrier);
     }
+    commands.push_back(std::move(barrier_cmd));
     // Recording an authoritative src/dst dependency opts this submit out of
     // the backend's legacy restore-to-preferred-state epilogue.
     resource_state_ownership = ERHIResourceStateOwnership::Explicit;
