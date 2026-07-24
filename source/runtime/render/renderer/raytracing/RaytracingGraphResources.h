@@ -25,6 +25,8 @@ struct RTGraphFrameResources {
     RenderGraph::TextureHandle normal_roughness{};
     RenderGraph::TextureHandle diffuse_lighting{};
     RenderGraph::TextureHandle specular_lighting{};
+    RenderGraph::TextureHandle hdr_color{};
+    RenderGraph::TextureHandle env_map{};
 
     RenderGraph::TextureHandle current_view_depth{};
     RenderGraph::TextureHandle current_diffuse_albedo{};
@@ -108,8 +110,13 @@ inline RTGraphFrameResources RegisterRTGraphFrameResources(
         .diffuse_lighting =
             ImportRTGraphTexture(graph, "RT.diffuse_lighting", frame.diffuse_lighting),
         .specular_lighting =
-            ImportRTGraphTexture(graph, "RT.specular_lighting", frame.specular_lighting)
+            ImportRTGraphTexture(graph, "RT.specular_lighting", frame.specular_lighting),
+        .hdr_color = ImportRTGraphTexture(graph, "RT.hdr_color", frame.hdr_color)
     };
+    if (rt_ctx.env_map) {
+        resources.env_map =
+            ImportRTGraphTexture(graph, "RT.env_map", rt_ctx.env_map);
+    }
 
     resources.current_view_depth = resources.current_frame ? resources.view_depth :
                                                              resources.prev_view_depth;

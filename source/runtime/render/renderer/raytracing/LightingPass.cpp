@@ -476,14 +476,7 @@ bool LightingPass::AddPasses(
             resources.env_pdf
         );
     }
-    RenderGraph::TextureHandle env_map{};
-    if (resources.env_map) {
-        env_map = ImportRTGraphTexture(
-            graph,
-            "RT.Lighting.env_map",
-            resources.env_map
-        );
-    }
+    const RenderGraph::TextureHandle env_map = graph_resources.env_map;
 
     graph.SetInitialState(
         constants,

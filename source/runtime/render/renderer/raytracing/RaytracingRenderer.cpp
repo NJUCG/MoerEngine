@@ -324,7 +324,7 @@ RaytracingRenderer::RaytracingRenderer(
     runtime_state->render_graph_parallel_recording =
         graph_config.render_graph_parallel_recording;
     LOG_INFO(
-        "[RenderGraph] Raytracing execution mode: {}, pre-denoise recording: {}",
+        "[RenderGraph] Raytracing execution mode: {}, primary graph recording: {}",
         runtime_state->render_graph_enabled ? "graph-pilot" : "linear",
         runtime_state->render_graph_parallel_recording ? "parallel-eligible" :
                                                          "serial"
@@ -526,7 +526,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     PrepareRenderFrame(frame_packet.window);
     bool skip_present                       = false;
     bool split_graph_profiling_frame       = false;
-    bool graph_pre_denoise_recorded         = false;
+    bool graph_primary_recorded             = false;
+    bool graph_composition_recorded         = false;
     bool linear_gbuffer_recorded            = false;
     bool linear_lighting_recorded           = false;
     bool nrd_recorded                       = false;
@@ -561,6 +562,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             state.first_load || state.b_new_env_map ||
             frame_packet.window.state == EWindowState::SizeChanged ||
             ui_config.export_cfg.b_export;
+        const bool nrd_active_this_frame =
+            IsNrdDenoiserActive(ui_config.denoiser_cfg.denoiser_type);
         const bool scene_tlas_updated =
             ExecuteSceneUpdates(frame_packet.scene_updates);
 
@@ -795,7 +798,11 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             state.gbuffer_initialized_history_mask == uint8(0b11) &&
             state.lighting_initialized_reservoir_mask == uint8(0b111) &&
             !render_graph_boundary_frame) {
-            RenderGraph graph("Raytracing.PreDenoise");
+            RenderGraph graph(
+                nrd_active_this_frame ?
+                    "Raytracing.PreDenoise" :
+                    "Raytracing.FrameCore"
+            );
             const RTGraphFrameResources graph_resources =
                 RegisterRTGraphFrameResources(graph, *state.rt_ctx);
             const bool gbuffer_added = state.g_buffer_pass->AddPasses(
@@ -813,17 +820,26 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                     *state.rt_ctx,
                     local_light_sampling
                 );
-            if (!gbuffer_added || !lighting_added) {
+            const bool composition_in_graph = !nrd_active_this_frame;
+            const bool composition_added =
+                !composition_in_graph ||
+                (lighting_added &&
+                 state.composition_pass->AddPasses(
+                     graph,
+                     graph_resources,
+                     *state.rt_ctx
+                 ));
+            if (!gbuffer_added || !lighting_added || !composition_added) {
                 state.render_graph_fallback_latched = true;
                 LOG_ERROR(
-                    "[RenderGraph][Fallback] Raytracing pre-denoise graph could "
-                    "not import a required GBuffer/Lighting resource. Using the "
-                    "linear path for this renderer instance."
+                    "[RenderGraph][Fallback] Raytracing primary graph could not "
+                    "import a required GBuffer/Lighting/Composition resource. "
+                    "Using the linear path for this renderer instance."
                 );
             } else if (!graph.Compile()) {
                 state.render_graph_fallback_latched = true;
                 LOG_ERROR(
-                    "[RenderGraph][Fallback] Raytracing pre-denoise graph compile "
+                    "[RenderGraph][Fallback] Raytracing primary graph compile "
                     "failed before execution: {}. Using the linear path for "
                     "this renderer instance.",
                     graph.GetCompileError()
@@ -885,20 +901,21 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                         {},
                         RenderGraph::ActiveRecordingOptions{.enabled = true}
                     )) {
-                    graph_pre_denoise_recorded = true;
+                    graph_primary_recorded     = true;
+                    graph_composition_recorded = composition_in_graph;
                 } else {
                     state.render_graph_fallback_latched = true;
                     LOG_ERROR(
-                        "[RenderGraph][Fallback] Raytracing pre-denoise graph "
+                        "[RenderGraph][Fallback] Raytracing primary graph "
                         "recording failed before transaction commit: {}. "
-                        "Re-recording GBuffer and Lighting linearly this frame "
-                        "and using the linear path from the next frame.",
+                        "Re-recording its managed passes linearly this frame and "
+                        "using the linear path from the next frame.",
                         graph.GetCompileError()
                     );
                 }
             }
         }
-        if (!graph_pre_denoise_recorded) {
+        if (!graph_primary_recorded) {
             ScopedGpuMarker pass_marker(
                 cmd_list, "Pass: GBuffer", GpuMarkerPalette::Pass()
             );
@@ -915,7 +932,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         } else {
             state.g_buffer_pass->RecordLegacyTailBridge(
                 cmd_list,
-                *state.rt_ctx
+                *state.rt_ctx,
+                graph_composition_recorded
             );
         }
         feedback.configured_local_light_sample_mode = local_light_sampling.configured_mode;
@@ -978,7 +996,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         }
 #endif
 
-        {
+        if (!graph_composition_recorded) {
             ScopedGpuMarker pass_marker(
                 cmd_list, "Pass: Composition", GpuMarkerPalette::Pass()
             );
@@ -1157,7 +1175,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         ERHIExecSubmitFlags::FlushGPU,
         present_request ? &*present_request : nullptr
     );
-    if (linear_gbuffer_recorded || graph_pre_denoise_recorded) {
+    if (linear_gbuffer_recorded || graph_primary_recorded) {
         state.gbuffer_initialized_history_mask |= gbuffer_history_bit;
     }
     if (linear_lighting_recorded) {
@@ -1184,7 +1202,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             );
         }
     }
-    if (graph_pre_denoise_recorded) {
+    if (graph_primary_recorded) {
         state.normal_roughness_readable = true;
     } else if (linear_gbuffer_recorded) {
         state.normal_roughness_readable = nrd_recorded;

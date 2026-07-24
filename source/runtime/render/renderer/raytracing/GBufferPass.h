@@ -86,7 +86,11 @@ public:
 
     GBufferPass(class RenderDevice& device, class ShaderManager& manager, BindlessArrayRef bindless_array);
     void Process(class CommandList& cmd_list, RTContext& rt_ctx);
-    void RecordLegacyTailBridge(class CommandList& cmd_list, const RTContext& rt_ctx) const;
+    void RecordLegacyTailBridge(
+        class CommandList& cmd_list,
+        const RTContext&   rt_ctx,
+        bool               composition_recorded
+    ) const;
     bool AddPasses(
         RenderGraph&                 graph,
         const RTGraphFrameResources& graph_resources,

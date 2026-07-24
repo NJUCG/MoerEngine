@@ -3,7 +3,7 @@
 
 // 将 GBuffer 数据与直接光照输出合成为 HDR 场景颜色。
 
-#include "RTResource.h"
+#include "RaytracingGraphResources.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/ShaderParameters.h"
 
@@ -55,21 +55,61 @@ public:
 
 class CompositionPass {
 public:
+    struct PreparedCommand {
+        CompositingConstants constants{};
+        uint3                dispatch_groups{};
+    };
+
+    struct RecordResources {
+        TextureRef       hdr_color{};
+        TextureRef       motion{};
+        TextureRef       view_depth{};
+        TextureRef       diffuse_albedo{};
+        TextureRef       specular_roughness{};
+        TextureRef       normal{};
+        TextureRef       emission{};
+        TextureRef       diffuse_lighting{};
+        TextureRef       specular_lighting{};
+        TextureRef       denoised_diffuse_lighting{};
+        TextureRef       denoised_specular_lighting{};
+        TextureRef       env_map{};
+        BindlessArrayRef bindless_array{};
+    };
+
     CompositionPass(
         class RenderDevice&  device,
         class ShaderManager& manager,
         BindlessArrayRef     bindless_array
     );
     void Process(class CommandList& cmd_list, RTContext& rt_ctx);
+    bool AddPasses(
+        RenderGraph&                 graph,
+        const RTGraphFrameResources& graph_resources,
+        const RTContext&             rt_ctx
+    );
 
 private:
-    BindlessArrayRef bindless_array;
+    struct RecordingOwner {
+        BufferRef               constants{};
+        CompositionPassPipeline pipeline{};
+    };
 
-    BufferRef            composition_constants;
-    CompositingConstants constants{};
-    Array<byte>          upload_data;
+    PreparedCommand Prepare(const RTContext& rt_ctx) const;
+    RecordResources CaptureResources(const RTContext& rt_ctx) const;
+    static void RecordConstantsUpload(
+        CommandList&           cmd_list,
+        const RecordingOwner&  owner,
+        const PreparedCommand& command
+    );
+    static void RecordComposition(
+        CommandList&           cmd_list,
+        RecordingOwner&        owner,
+        const PreparedCommand& command,
+        const RecordResources& resources
+    );
 
-    CompositionPassPipeline composition_pipeline;
+    BindlessArrayRef         bindless_array;
+    SharedPtr<RecordingOwner> recording_owner;
 };
 
 } // namespace Moer::Render::Raytracing
