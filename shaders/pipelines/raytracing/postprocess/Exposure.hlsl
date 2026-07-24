@@ -38,17 +38,20 @@ void main() {
 
       target_exposure = clamp(target_exposure, params.min_adapted_luminance,
                               params.max_adapted_luminance);
+      if (!(target_exposure > 0.0f) || !isfinite(target_exposure)) {
+        target_exposure = params.min_adapted_luminance;
+      }
 
       float old_exposure = asfloat(exposure[0]);
       float diff = old_exposure - target_exposure;
 
       float adaption_speed = (diff < 0) ? params.eye_adaptation_speed_up
                                         : params.eye_adaptation_speed_down;
-      if (adaption_speed > 0.0f) {
+      // Zero is the explicit reset sentinel.  It also keeps an uninitialized
+      // or non-finite history value out of the temporal adaptation path.
+      if (old_exposure > 0.0f && isfinite(old_exposure) &&
+          params.frame_time > 0.0f && adaption_speed > 0.0f) {
         target_exposure += diff * exp2(-params.frame_time * adaption_speed);
-      }
-      if(params.frame_time <= 0.0f) {
-        printf("target exposure is %f, old exposure %f frame time %f\n",target_exposure, old_exposure, params.frame_time);
       }
 
       exposure[0] = asuint(target_exposure);

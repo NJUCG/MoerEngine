@@ -90,7 +90,8 @@ public:
         class CommandList& cmd_list,
         const RTContext&   rt_ctx,
         bool               composition_recorded,
-        bool               antialias_recorded
+        bool               antialias_recorded,
+        bool               tone_mapping_recorded
     ) const;
     bool AddPasses(
         RenderGraph&                 graph,

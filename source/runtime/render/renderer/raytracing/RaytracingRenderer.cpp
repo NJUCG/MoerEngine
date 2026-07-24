@@ -529,11 +529,15 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     bool graph_primary_recorded             = false;
     bool graph_composition_recorded         = false;
     bool graph_antialias_recorded           = false;
+    bool graph_tone_mapping_recorded        = false;
     bool linear_gbuffer_recorded            = false;
     bool linear_lighting_recorded           = false;
     bool linear_antialias_recorded           = false;
+    bool linear_tone_mapping_recorded       = false;
     bool nrd_recorded                       = false;
     uint8 gbuffer_history_bit               = 0;
+    float tone_mapping_elapsed_for_commit   = 0.f;
+    bool tone_mapping_enabled_for_commit    = false;
     LightingPass::LocalLightSamplingDecision local_light_sampling{};
 
     switch (frame_packet.window.state) {
@@ -736,6 +740,9 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             tone_params.histogram_high_percentile = tone_cfg.histogram_high_percentile;
             tone_params.white_point               = tone_cfg.white_point;
             tone_params.enable_tone_mapping       = tone_cfg.enable_tone_mapping;
+            tone_mapping_elapsed_for_commit        = camera.GetDeltaTime();
+            tone_mapping_enabled_for_commit =
+                tone_params.enable_tone_mapping;
 
             const auto& aa_cfg             = ui_config.aa_cfg;
             aa_params.clamping_factor      = aa_cfg.clamping_factor;
@@ -846,13 +853,26 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                      state.rt_ctx->frame_rt.hdr_color,
                      state.rt_ctx->frame_rt.resolved_color
                  ));
+            const bool tone_mapping_in_graph = antialias_in_graph;
+            const bool tone_mapping_added =
+                !tone_mapping_in_graph ||
+                (antialias_added &&
+                 state.tone_mapping_pass->AddPasses(
+                     graph,
+                     graph_resources,
+                     *state.rt_ctx,
+                     tone_params,
+                     state.rt_ctx->frame_rt.resolved_color,
+                     state.rt_ctx->frame_rt.ldr_color
+                 ));
             if (!gbuffer_added || !lighting_added || !composition_added ||
-                !antialias_added) {
+                !antialias_added || !tone_mapping_added) {
                 state.render_graph_fallback_latched = true;
                 LOG_ERROR(
                     "[RenderGraph][Fallback] Raytracing primary graph could not "
-                    "import a required GBuffer/Lighting/Composition/AntiAlias "
-                    "resource. Using the linear path for this renderer instance."
+                    "import a required GBuffer/Lighting/Composition/AntiAlias/"
+                    "ToneMapping resource. Using the linear path for this "
+                    "renderer instance."
                 );
             } else if (!graph.Compile()) {
                 state.render_graph_fallback_latched = true;
@@ -922,6 +942,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                     graph_primary_recorded     = true;
                     graph_composition_recorded = composition_in_graph;
                     graph_antialias_recorded   = antialias_in_graph;
+                    graph_tone_mapping_recorded =
+                        tone_mapping_in_graph;
                 } else {
                     state.render_graph_fallback_latched = true;
                     LOG_ERROR(
@@ -953,7 +975,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 cmd_list,
                 *state.rt_ctx,
                 graph_composition_recorded,
-                graph_antialias_recorded
+                graph_antialias_recorded,
+                graph_tone_mapping_recorded
             );
         }
         feedback.configured_local_light_sample_mode = local_light_sampling.configured_mode;
@@ -1035,7 +1058,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             );
             linear_antialias_recorded = true;
         }
-        {
+        if (!graph_tone_mapping_recorded) {
             ScopedGpuMarker pass_marker(
                 cmd_list, "Pass: Tone Mapping", GpuMarkerPalette::Pass()
             );
@@ -1045,6 +1068,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 state.rt_ctx->frame_rt.resolved_color,
                 state.rt_ctx->frame_rt.ldr_color
             );
+            linear_tone_mapping_recorded = true;
         }
         {
             ScopedGpuMarker pass_marker(
@@ -1074,7 +1098,6 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         }
 
         state.rt_ctx->AdvanceFrame();
-        state.tone_mapping_pass->AdvanceFrame(camera.GetDeltaTime());
 
         if (state.b_export) {
             renderer_marker.Close();
@@ -1197,6 +1220,12 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     if (linear_antialias_recorded || graph_antialias_recorded) {
         state.antialias_pass->CommitAcceptedFrame();
         state.b_feedback_valid = true;
+    }
+    if (linear_tone_mapping_recorded || graph_tone_mapping_recorded) {
+        state.tone_mapping_pass->CommitAcceptedFrame(
+            tone_mapping_elapsed_for_commit,
+            tone_mapping_enabled_for_commit
+        );
     }
     if (linear_gbuffer_recorded || graph_primary_recorded) {
         state.gbuffer_initialized_history_mask |= gbuffer_history_bit;
