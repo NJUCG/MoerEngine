@@ -1493,7 +1493,7 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
         [](const WaitEvent& _event) {
             const auto* fence =
                 reinterpret_cast<const D3D12Fence*>(_event.timeline_handle);
-            return fence == nullptr || fence->IsRejected();
+            return fence == nullptr || fence->IsRejected(_event.value);
         }
     );
     if (rejected_dependency) {
@@ -1662,9 +1662,17 @@ void D3D12Fence::Wait(uint64_t _value) {
     WaitOnHost(_value);
 }
 
-void D3D12Fence::Reject(uint64_t) {
-    rejected.store(true, std::memory_order_release);
+void D3D12Fence::Reject(uint64_t _value) {
+    {
+        std::lock_guard lock(rejection_mutex);
+        rejected_values.emplace(_value);
+    }
     SetEvent(event);
+}
+
+bool D3D12Fence::IsRejected(uint64 _value) const {
+    std::lock_guard lock(rejection_mutex);
+    return rejected_values.contains(_value);
 }
 
 bool D3D12Fence::IsFenceComplete(uint64 _value) {
@@ -1677,10 +1685,10 @@ bool D3D12Fence::IsFenceComplete(uint64 _value) {
 }
 
 void D3D12Fence::WaitOnHost(uint64 _value) {
-    if (IsFenceComplete(_value) || IsRejected())
+    if (IsFenceComplete(_value) || IsRejected(_value))
         return;
     DX_CHECK_HRESULT(fence->SetEventOnCompletion(_value, event));
-    while (!IsFenceComplete(_value) && !IsRejected()) {
+    while (!IsFenceComplete(_value) && !IsRejected(_value)) {
         WaitForSingleObjectEx(event, 50, FALSE);
     }
     //OnScopeExit([&]() { ResetEvent(event); });// maybe useful

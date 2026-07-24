@@ -705,12 +705,14 @@ void RunCrossQueueTopologyBatch() {
 }
 
 void RunRecoverableCopyDependencyRejection() {
+    using namespace std::chrono_literals;
+
     auto& device = RenderDevice::Get();
 
-    FenceRef dependency     = device.CreateFence();
-    FenceRef rejected_done  = device.CreateFence();
-    FenceRef recovered_done = device.CreateFence();
-    ResourceCast(dependency.Get())->Fail(VK_ERROR_UNKNOWN);
+    FenceRef dependency      = device.CreateFence();
+    FenceRef shared_done     = device.CreateFence();
+    FenceRef stale_wait_done = device.CreateFence();
+    dependency->Reject(1);
 
     BufferRef destination = device.CreateBuffer<uint32>(
         "recoverable_copy_destination",
@@ -718,10 +720,42 @@ void RunRecoverableCopyDependencyRejection() {
         EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST
     );
     const std::array<uint32, 4> expected{17, 29, 43, 71};
+    const std::array<uint32, 4> stale_values{101, 103, 107, 109};
     std::array<uint32, 4>       readback{};
+    std::atomic<uint32>         blocker_callbacks{0};
+    std::atomic<uint32>         blocker_success_callbacks{0};
     std::atomic<uint32>         rejected_callbacks{0};
+    std::atomic<uint32>         rejected_success_callbacks{0};
     std::atomic<uint32>         recovered_callbacks{0};
     std::atomic<uint32>         recovered_success_callbacks{0};
+    std::atomic<uint32>         stale_wait_callbacks{0};
+    std::atomic<uint32>         stale_wait_success_callbacks{0};
+    std::atomic<uint32>         dependent_callbacks{0};
+    std::atomic<uint32>         dependent_success_callbacks{0};
+    std::binary_semaphore       blocker_entered{0};
+    std::binary_semaphore       release_blocker{0};
+    OneShotSemaphoreRelease     release_guard(release_blocker);
+
+    try {
+        CommandList blocker(EQueueType::Copy);
+        blocker.AddCallback([&] {
+            blocker_callbacks.fetch_add(1, std::memory_order_relaxed);
+            blocker_entered.release();
+            release_blocker.acquire();
+        });
+        blocker.AddSuccessCallback([&] {
+            blocker_success_callbacks.fetch_add(1, std::memory_order_relaxed);
+        });
+        RHIExecutor::Get().Submit(
+            EQueueType::Copy,
+            blocker.Submit(),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+        if (!blocker_entered.try_acquire_for(5s)) {
+            throw std::runtime_error(
+                "recoverable rejection test could not block Copy Completion"
+            );
+        }
 
     CommandList rejected(EQueueType::Copy);
     rejected.CopyFrom(
@@ -732,19 +766,17 @@ void RunRecoverableCopyDependencyRejection() {
     rejected.AddCallback([&] {
         rejected_callbacks.fetch_add(1, std::memory_order_relaxed);
     });
+    rejected.AddSuccessCallback([&] {
+        rejected_success_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
     CmdSubmit rejected_submit = rejected.Submit();
-    rejected_submit.Wait(dependency.Get(), 1).Signal(rejected_done.Get(), 1);
+    rejected_submit.Wait(dependency.Get(), 1).Signal(shared_done.Get(), 1);
 
     CommandList recovered(EQueueType::Copy);
     recovered.CopyFrom(
         OwnedBytes(expected),
         destination->GetView(),
         "RecoverableCopyUpload"
-    );
-    recovered.CopyFrom(
-        destination->GetView(),
-        WritableBytes(readback),
-        "RecoverableCopyReadback"
     );
     recovered.AddCallback([&] {
         recovered_callbacks.fetch_add(1, std::memory_order_relaxed);
@@ -753,7 +785,39 @@ void RunRecoverableCopyDependencyRejection() {
         recovered_success_callbacks.fetch_add(1, std::memory_order_relaxed);
     });
     CmdSubmit recovered_submit = recovered.Submit();
-    recovered_submit.Signal(recovered_done.Get(), 1);
+    recovered_submit.Signal(shared_done.Get(), 2);
+
+    CommandList stale_wait(EQueueType::Copy);
+    stale_wait.CopyFrom(
+        OwnedBytes(stale_values),
+        destination->GetView(),
+        "RejectedStaleTimelineWait"
+    );
+    stale_wait.AddCallback([&] {
+        stale_wait_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    stale_wait.AddSuccessCallback([&] {
+        stale_wait_success_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    CmdSubmit stale_wait_submit = stale_wait.Submit();
+    stale_wait_submit.Wait(shared_done.Get(), 1).Signal(
+        stale_wait_done.Get(), 1
+    );
+
+    CommandList dependent(EQueueType::Copy);
+    dependent.CopyFrom(
+        destination->GetView(),
+        WritableBytes(readback),
+        "RecoveredTimelineDependencyReadback"
+    );
+    dependent.AddCallback([&] {
+        dependent_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    dependent.AddSuccessCallback([&] {
+        dependent_success_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    CmdSubmit dependent_submit = dependent.Submit();
+    dependent_submit.Wait(shared_done.Get(), 2);
 
     RHIExecutor::Get().Submit(
         EQueueType::Copy,
@@ -765,30 +829,100 @@ void RunRecoverableCopyDependencyRejection() {
         std::move(recovered_submit),
         ERHIExecSubmitFlags::FlushGPU
     );
+    RHIExecutor::Get().Submit(
+        EQueueType::Copy,
+        std::move(stale_wait_submit),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Submit(
+        EQueueType::Copy,
+        std::move(dependent_submit),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+
+    auto* shared_vk_fence = ResourceCast(shared_done.Get());
+    auto* stale_vk_fence  = ResourceCast(stale_wait_done.Get());
+    std::atomic_bool continue_waiting{true};
+    std::jthread publication_deadline(
+        [&continue_waiting](std::stop_token _stop) {
+            const auto deadline = std::chrono::steady_clock::now() + 5s;
+            while (!_stop.stop_requested() &&
+                   std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(10ms);
+            }
+            if (!_stop.stop_requested()) {
+                continue_waiting.store(false, std::memory_order_release);
+            }
+        }
+    );
+    const bool stale_wait_submitted =
+        stale_vk_fence->WaitSubmitted(1, &continue_waiting);
+    publication_deadline.request_stop();
+    publication_deadline.join();
+    if (stale_wait_submitted || !stale_vk_fence->IsRejected(1)) {
+        throw std::runtime_error(
+            "Submission did not publish a rejected stale-value dependency "
+            "before Completion"
+        );
+    }
+    if (!shared_vk_fence->IsRejected(1) ||
+        !shared_vk_fence->WaitSubmitted(2) ||
+        shared_vk_fence->HostWait(2) != VK_SUCCESS ||
+        shared_vk_fence->HostWait(1) != VK_ERROR_UNKNOWN) {
+        throw std::runtime_error(
+            "reused external fence lost its exact rejection or accepted value"
+        );
+    }
+
+    release_guard.Release();
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
-    if (!ResourceCast(rejected_done.Get())->IsFailed()) {
+    if (!shared_vk_fence->IsRejected(1) ||
+        shared_vk_fence->IsRejected(2) ||
+        shared_vk_fence->IsFailed() ||
+        !stale_vk_fence->IsRejected(1) ||
+        stale_vk_fence->IsFailed()) {
         throw std::runtime_error(
-            "recoverable Copy rejection did not fail its external signal"
+            "recoverable Copy rejection poisoned the reusable external fence"
         );
     }
-    if (ResourceCast(recovered_done.Get())->IsFailed() ||
+    if (shared_vk_fence->WaitSubmitted(1) ||
+        !shared_vk_fence->WaitSubmitted(2) ||
+        shared_done->GetValue() < 2 ||
         readback != expected) {
         throw std::runtime_error(
-            "Copy submission after a recoverable rejection did not complete"
+            "reused external fence did not recover at its next timeline value"
         );
     }
-    if (rejected_callbacks.load(std::memory_order_acquire) != 1 ||
+    if (blocker_callbacks.load(std::memory_order_acquire) != 1 ||
+        blocker_success_callbacks.load(std::memory_order_acquire) != 1 ||
+        rejected_callbacks.load(std::memory_order_acquire) != 1 ||
+        rejected_success_callbacks.load(std::memory_order_acquire) != 0 ||
         recovered_callbacks.load(std::memory_order_acquire) != 1 ||
-        recovered_success_callbacks.load(std::memory_order_acquire) != 1) {
+        recovered_success_callbacks.load(std::memory_order_acquire) != 1 ||
+        stale_wait_callbacks.load(std::memory_order_acquire) != 1 ||
+        stale_wait_success_callbacks.load(std::memory_order_acquire) != 0 ||
+        dependent_callbacks.load(std::memory_order_acquire) != 1 ||
+        dependent_success_callbacks.load(std::memory_order_acquire) != 1) {
         throw std::runtime_error(
             "recoverable Copy rejection callbacks retired incorrectly"
         );
     }
+    } catch (...) {
+        const std::exception_ptr failure = std::current_exception();
+        release_guard.Release();
+        try {
+            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        } catch (...) {
+            std::terminate();
+        }
+        std::rethrow_exception(failure);
+    }
 
     LOG_INFO(
         "[TESTCASE][PASS] name=RecoverableCopyDependencyRejection "
-        "rejected=N recovered=N+1 owner=CopySubmission"
+        "fence=reused rejected=N recovered=N+1 stale_wait=rejected "
+        "publication=Submission"
     );
 }
 
@@ -835,7 +969,7 @@ void RunRuntimeRejectCompletionOwnership() {
         validate_completion_owner();
         device.GetCopyQueue().Sync(0);
         completion_sync_guard_returns.fetch_add(1, std::memory_order_relaxed);
-        if (!ResourceCast(graphics_done.Get())->IsFailed()) {
+        if (!ResourceCast(graphics_done.Get())->IsRejected(1)) {
             signals_not_failed_before_callback.fetch_add(
                 1, std::memory_order_relaxed
             );
@@ -853,7 +987,7 @@ void RunRuntimeRejectCompletionOwnership() {
         validate_completion_owner();
         device.GetCommandQueue(EQueueType::Graphics).Sync();
         completion_sync_guard_returns.fetch_add(1, std::memory_order_relaxed);
-        if (!ResourceCast(copy_done.Get())->IsFailed()) {
+        if (!ResourceCast(copy_done.Get())->IsRejected(1)) {
             signals_not_failed_before_callback.fetch_add(
                 1, std::memory_order_relaxed
             );
@@ -935,10 +1069,12 @@ void RunRuntimeRejectCompletionOwnership() {
             "runtime rejection callback ran before its signal fence failed"
         );
     }
-    if (!ResourceCast(graphics_done.Get())->IsFailed() ||
-        !ResourceCast(copy_done.Get())->IsFailed()) {
+    if (!ResourceCast(graphics_done.Get())->IsRejected(1) ||
+        !ResourceCast(copy_done.Get())->IsRejected(1) ||
+        ResourceCast(graphics_done.Get())->IsFailed() ||
+        ResourceCast(copy_done.Get())->IsFailed()) {
         throw std::runtime_error(
-            "runtime rejection did not fail every external signal fence"
+            "runtime rejection did not terminalize the exact external signal value"
         );
     }
 
@@ -1028,10 +1164,12 @@ void RunShutdownDependencyCancellation() {
             "shutdown dependency cancellation retired callbacks incorrectly"
         );
     }
-    if (!ResourceCast(graphics_done.Get())->IsFailed() ||
-        !ResourceCast(copy_done.Get())->IsFailed()) {
+    if (!ResourceCast(graphics_done.Get())->IsRejected(1) ||
+        !ResourceCast(copy_done.Get())->IsRejected(1) ||
+        ResourceCast(graphics_done.Get())->IsFailed() ||
+        ResourceCast(copy_done.Get())->IsFailed()) {
         throw std::runtime_error(
-            "shutdown dependency cancellation did not fail external signals"
+            "shutdown dependency cancellation did not reject external signal values"
         );
     }
     if (!sync_returned.load(std::memory_order_acquire)) {

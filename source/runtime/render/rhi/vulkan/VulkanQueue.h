@@ -1010,7 +1010,7 @@ private:
         const VulkanOperationResult& _outcome,
         const VulkanOperationContext& _context,
         uint64                       _logical_timeline,
-        bool                         _owns_queue_timeline
+        bool                         _has_queue_timeline_reservation
     ) noexcept;
     UniquePtr<VulkanAllocator>                GetAllocator();
     void                                      CompleteAll(uint64 _timeline);

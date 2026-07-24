@@ -594,7 +594,8 @@ private:
     ComPtr<ID3D12Fence> fence;
     HANDLE              event;
     std::atomic<uint64> current_value = 0;
-    std::atomic_bool    rejected{false};
+    mutable std::mutex   rejection_mutex;
+    UnorderedSet<uint64> rejected_values;
 
 public:
     D3D12Fence(D3D12Device* _device);
@@ -609,9 +610,7 @@ public:
     void     Reject(uint64_t _value) override;
 
     bool IsFenceComplete(uint64 _value);
-    bool IsRejected() const noexcept {
-        return rejected.load(std::memory_order_acquire);
-    }
+    bool IsRejected(uint64 _value) const;
     void WaitOnHost(uint64 _value);
     void SignalOnHost(uint64 _value);
 };

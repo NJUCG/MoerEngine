@@ -3277,19 +3277,44 @@ static void MarkSubmissionAccepted(
     }
 }
 
-static void FailSubmissionSignals(
-    VulkanFence* _queue_timeline,
-    const Array<SignalEvent>& _signal_events,
-    VkResult _result
+static bool IsRecoverableUnsubmittedSignal(
+    VulkanDevice& _device, const VulkanOperationResult& _outcome
 ) {
-    if (_queue_timeline != nullptr) {
-        _queue_timeline->Fail(_result);
+    return _outcome.status == EVulkanOperationStatus::Rejected &&
+           !_device.IsFaulted() &&
+           _outcome.result != VK_ERROR_DEVICE_LOST;
+}
+
+static void TerminalizeUnsubmittedSignal(
+    VulkanDevice&                _device,
+    VulkanFence*                 _fence,
+    uint64                       _value,
+    const VulkanOperationResult& _outcome
+) {
+    if (_fence == nullptr) {
+        return;
     }
+    if (IsRecoverableUnsubmittedSignal(_device, _outcome)) {
+        _fence->Reject(_value);
+    } else {
+        const VkResult result =
+            _outcome.result != VK_SUCCESS ? _outcome.result : VK_ERROR_UNKNOWN;
+        _fence->Fail(result);
+    }
+}
+
+static void TerminalizeUnsubmittedSignals(
+    VulkanDevice&                _device,
+    const Array<SignalEvent>&    _signal_events,
+    const VulkanOperationResult& _outcome
+) {
     for (const SignalEvent& event : _signal_events) {
-        auto* fence = reinterpret_cast<VulkanFence*>(event.timeline_handle);
-        if (fence != nullptr) {
-            fence->Fail(_result);
-        }
+        TerminalizeUnsubmittedSignal(
+            _device,
+            reinterpret_cast<VulkanFence*>(event.timeline_handle),
+            event.value,
+            _outcome
+        );
     }
 }
 
@@ -3304,7 +3329,11 @@ static void TerminalizeRejectedSubmit(
     }
 
     _device.RecordRejectedSubmit();
-    FailSubmissionSignals(nullptr, _submit.signal_events, _result);
+    TerminalizeUnsubmittedSignals(
+        _device,
+        _submit.signal_events,
+        VulkanOperationResult{EVulkanOperationStatus::Rejected, _result}
+    );
     FinalizeRejectedBindlessUpdates(_submit);
 
     // Completion callbacks are the only user code retained on a rejected
@@ -3789,6 +3818,17 @@ void VkCommandQueue::RejectForRuntime(CmdSubmit&& _submit, VkResult _result) noe
     vk_device.RecordRejectedSubmit();
 
     try {
+        TerminalizeUnsubmittedSignals(
+            vk_device,
+            _submit.signal_events,
+            VulkanOperationResult{
+                EVulkanOperationStatus::Rejected, _result
+            }
+        );
+        // Rejection is now externally observable. Completion must not retain
+        // and dereference the raw fence pointers after a waiter releases its
+        // last FenceRef.
+        _submit.signal_events.clear();
         std::unique_lock<std::mutex> lock(event_mutex);
         const uint64 retirement_serial = retirement_enqueued_serial + 1;
         event_queue.emplace_back(
@@ -3971,6 +4011,18 @@ void VkCommandQueue::CommitRuntimeSubmitCompletion(
     assert(!_recorded.completion_committed);
     try {
         if (!_outcome.WasSubmitted()) {
+            TerminalizeUnsubmittedSignal(
+                vk_device,
+                timeline,
+                _recorded.timeline,
+                _outcome
+            );
+            TerminalizeUnsubmittedSignals(
+                vk_device, _recorded.submit.signal_events, _outcome
+            );
+            // Exact signal rejection is published by Submission. Do not
+            // retain raw external fence pointers in the Completion packet.
+            _recorded.submit.signal_events.clear();
             _recorded.allocators.abandoned.reserve(
                 _recorded.allocators.abandoned.size() +
                 _recorded.allocators.submitted.size()
@@ -5920,6 +5972,13 @@ void VkCommandQueue::CommitPresentCompletion(
     uint64                          _timeline
 ) noexcept {
     try {
+        if (!_gpu_submitted &&
+            (_outcome.status == EVulkanOperationStatus::Rejected ||
+             _outcome.status == EVulkanOperationStatus::Faulted)) {
+            TerminalizeUnsubmittedSignal(
+                vk_device, timeline, _timeline, _outcome
+            );
+        }
         std::unique_lock<std::mutex> lock(event_mutex);
         const uint64 retirement_serial = retirement_enqueued_serial + 1;
         event_queue.emplace_back(
@@ -6685,9 +6744,14 @@ void VkCommandQueue::CompletionThreadMain() {
                         (_submission.outcome.status == EVulkanOperationStatus::Retry ||
                          _submission.outcome.status == EVulkanOperationStatus::Recreate);
                     if (!_submission.gpu_submitted) {
-                        if (_submission.outcome.status == EVulkanOperationStatus::Faulted ||
-                            _submission.outcome.status == EVulkanOperationStatus::Rejected) {
+                        if (_submission.outcome.status ==
+                            EVulkanOperationStatus::Faulted) {
                             timeline->Fail(_submission.outcome.result);
+                        } else if (
+                            _submission.outcome.status ==
+                            EVulkanOperationStatus::Rejected
+                        ) {
+                            timeline->Reject(event_timeline);
                         }
                         return;
                     }
@@ -6716,6 +6780,12 @@ void VkCommandQueue::CompletionThreadMain() {
                     if (completion_result == VK_SUCCESS && !_batch.gpu_submitted) {
                         completion_result = VK_ERROR_UNKNOWN;
                     }
+                    const bool recoverable_rejection =
+                        !_batch.gpu_submitted &&
+                        _batch.outcome.status ==
+                            EVulkanOperationStatus::Rejected &&
+                        !vk_device.IsFaulted() &&
+                        _batch.outcome.result != VK_ERROR_DEVICE_LOST;
 
                     if (_batch.gpu_submitted) {
                         VulkanOperationContext wait_context = _batch.context;
@@ -6739,7 +6809,11 @@ void VkCommandQueue::CompletionThreadMain() {
                             }
                         }
                     } else if (_batch.owns_queue_timeline) {
-                        timeline->Fail(completion_result);
+                        if (recoverable_rejection) {
+                            timeline->Reject(event_timeline);
+                        } else {
+                            timeline->Fail(completion_result);
+                        }
                     }
 
                     bool recycle_batch =
@@ -6794,6 +6868,8 @@ void VkCommandQueue::CompletionThreadMain() {
                         }
                         if (batch_gpu_success) {
                             fence->Notify(event.value);
+                        } else if (recoverable_rejection) {
+                            fence->Reject(event.value);
                         } else {
                             fence->Fail(completion_result);
                         }
@@ -6872,15 +6948,19 @@ void VkCommandQueue::CompletionThreadMain() {
                         }
                     } else if (
                         _batch.owns_queue_timeline &&
-                        (_batch.outcome.status ==
-                             EVulkanOperationStatus::Faulted ||
-                         _batch.outcome.status ==
-                             EVulkanOperationStatus::Rejected)
+                        _batch.outcome.status ==
+                            EVulkanOperationStatus::Faulted
                     ) {
                         if (completion_result == VK_SUCCESS) {
                             completion_result = VK_ERROR_UNKNOWN;
                         }
                         timeline->Fail(completion_result);
+                    } else if (
+                        _batch.owns_queue_timeline &&
+                        _batch.outcome.status ==
+                            EVulkanOperationStatus::Rejected
+                    ) {
+                        timeline->Reject(event_timeline);
                     }
 
                     if (_batch.presentor) {
@@ -7387,7 +7467,7 @@ VkCopyQueue::TrackedExecuteResult VkCopyQueue::ExecuteTracked(CmdSubmit&& _evt) 
         state.outcome,
         state.context,
         state.logical_timeline,
-        state.timeline_reserved && state.outcome.WasSubmitted()
+        state.timeline_reserved
     );
     state.completion_committed = true;
 
@@ -7560,7 +7640,7 @@ VkCopyQueue::TrackedExecuteResult VkCopyQueue::ExecuteTrackedImpl(
             _state.outcome,
             _state.context,
             _state.logical_timeline,
-            _state.outcome.WasSubmitted()
+            _state.timeline_reserved
         );
         _state.completion_committed = true;
 
@@ -7608,9 +7688,25 @@ void VkCopyQueue::CommitRuntimeSubmitCompletion(
     const VulkanOperationResult& _outcome,
     const VulkanOperationContext& _context,
     uint64                        _logical_timeline,
-    bool                          _owns_queue_timeline
+    bool                          _has_queue_timeline_reservation
 ) noexcept {
     try {
+        if (!_outcome.WasSubmitted()) {
+            if (_has_queue_timeline_reservation) {
+                TerminalizeUnsubmittedSignal(
+                    device,
+                    timeline.Get(),
+                    _logical_timeline,
+                    _outcome
+                );
+            }
+            TerminalizeUnsubmittedSignals(
+                device, _submit.signal_events, _outcome
+            );
+            // Exact signal rejection is published by Submission. Do not
+            // retain raw external fence pointers in the Completion packet.
+            _submit.signal_events.clear();
+        }
         std::unique_lock<std::mutex> lock(event_mutex);
         const uint64 retirement_serial = retirement_enqueued_serial + 1;
         event_queue.emplace_back(
@@ -7621,7 +7717,7 @@ void VkCopyQueue::CommitRuntimeSubmitCompletion(
             _outcome,
             _context,
             _outcome.WasSubmitted(),
-            _owns_queue_timeline,
+            _has_queue_timeline_reservation,
             std::move(_submit),
             std::move(_allocators),
             std::optional<VulkanDescriptorPushLease>{},
@@ -7676,9 +7772,14 @@ void VkCopyQueue::ExecuteThread() {
                 [this, event_timeline, &batch_gpu_success](VulkanSubmissionEvent& _submission) {
                     batch_gpu_success = false;
                     if (!_submission.gpu_submitted) {
-                        if (_submission.outcome.status == EVulkanOperationStatus::Faulted ||
-                            _submission.outcome.status == EVulkanOperationStatus::Rejected) {
+                        if (_submission.outcome.status ==
+                            EVulkanOperationStatus::Faulted) {
                             timeline->Fail(_submission.outcome.result);
+                        } else if (
+                            _submission.outcome.status ==
+                            EVulkanOperationStatus::Rejected
+                        ) {
+                            timeline->Reject(event_timeline);
                         }
                         return;
                     }
@@ -7700,6 +7801,12 @@ void VkCopyQueue::ExecuteThread() {
                     if (completion_result == VK_SUCCESS && !_batch.gpu_submitted) {
                         completion_result = VK_ERROR_UNKNOWN;
                     }
+                    const bool recoverable_rejection =
+                        !_batch.gpu_submitted &&
+                        _batch.outcome.status ==
+                            EVulkanOperationStatus::Rejected &&
+                        !device.IsFaulted() &&
+                        _batch.outcome.result != VK_ERROR_DEVICE_LOST;
 
                     if (_batch.gpu_submitted) {
                         VulkanOperationContext wait_context = _batch.context;
@@ -7722,7 +7829,11 @@ void VkCopyQueue::ExecuteThread() {
                             }
                         }
                     } else if (_batch.owns_queue_timeline) {
-                        timeline->Fail(completion_result);
+                        if (recoverable_rejection) {
+                            timeline->Reject(event_timeline);
+                        } else {
+                            timeline->Fail(completion_result);
+                        }
                     }
 
                     bool recycle_batch =
@@ -7777,6 +7888,8 @@ void VkCopyQueue::ExecuteThread() {
                         }
                         if (batch_gpu_success) {
                             fence->Notify(event.value);
+                        } else if (recoverable_rejection) {
+                            fence->Reject(event.value);
                         } else {
                             fence->Fail(completion_result);
                         }
