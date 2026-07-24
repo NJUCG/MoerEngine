@@ -1,6 +1,7 @@
 #include "Core.h"
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
+#include "platform/Platform.h"
 #include "rendergraph/RenderGraph.h"
 #include "rendergraph/RenderGraphLowering.h"
 #include "rhi/RHI.h"
@@ -8,6 +9,8 @@
 #include "rhi/RHIExecutor.h"
 #include "rhi/RHIThreadOwnership.h"
 #include "rhi/vulkan/VulkanCustomCommand.h"
+#include "rhi/vulkan/VulkanDevice.h"
+#include "rhi/vulkan/VulkanIOService.h"
 #include "rhi/vulkan/VulkanQueue.h"
 #include "rhi/vulkan/VulkanRHIResource.h"
 #include "rhi/vulkan/VulkanSubmissionDiagnostics.h"
@@ -199,6 +202,192 @@ public:
 private:
     VulkanSourceSubmissionObserver observer{};
     bool                           installed{false};
+};
+
+class NativeSubmissionCapture final {
+public:
+    static void Observe(
+        void*                              _context,
+        const VulkanNativeSubmissionEvent& _event
+    ) noexcept {
+        auto& capture = *static_cast<NativeSubmissionCapture*>(_context);
+        const size_t index =
+            capture.count.fetch_add(1, std::memory_order_acq_rel);
+        if (index >= capture.events.size()) {
+            capture.overflow.store(true, std::memory_order_release);
+            return;
+        }
+        capture.events[index] = _event;
+    }
+
+    [[nodiscard]] size_t Count() const noexcept {
+        return count.load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] bool Overflowed() const noexcept {
+        return overflow.load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] const VulkanNativeSubmissionEvent& Event(
+        size_t _index
+    ) const noexcept {
+        return events[_index];
+    }
+
+private:
+    std::array<VulkanNativeSubmissionEvent, 16> events{};
+    std::atomic<size_t>                         count{0};
+    std::atomic<bool>                           overflow{false};
+};
+
+class ScopedNativeSubmissionObserver final {
+public:
+    explicit ScopedNativeSubmissionObserver(
+        NativeSubmissionCapture& _capture
+    ) :
+        observer{
+            .context  = &_capture,
+            .callback = &NativeSubmissionCapture::Observe,
+        } {
+        if (!TryInstallVulkanNativeSubmissionObserver(&observer)) {
+            throw std::runtime_error(
+                "Vulkan native submission observer was already installed"
+            );
+        }
+        installed = true;
+    }
+
+    ~ScopedNativeSubmissionObserver() noexcept {
+        if (installed &&
+            !RemoveVulkanNativeSubmissionObserver(&observer)) {
+            std::terminate();
+        }
+    }
+
+    ScopedNativeSubmissionObserver(
+        const ScopedNativeSubmissionObserver&
+    ) = delete;
+    ScopedNativeSubmissionObserver& operator=(
+        const ScopedNativeSubmissionObserver&
+    ) = delete;
+
+private:
+    VulkanNativeSubmissionObserver observer{};
+    bool                           installed{false};
+};
+
+class CopyDependencyWaitCapture final {
+public:
+    static void Observe(
+        void*                                        _context,
+        const VulkanSubmissionDependencyWaitEvent& _event
+    ) noexcept {
+        auto& capture =
+            *static_cast<CopyDependencyWaitCapture*>(_context);
+        if (_event.queue != EQueueType::Copy) {
+            return;
+        }
+        if (_event.thread_role != ERHIThreadRole::Submission) {
+            capture.wrong_owner.store(true, std::memory_order_release);
+        }
+        if (capture.count.fetch_add(1, std::memory_order_acq_rel) == 0) {
+            capture.entered.release();
+        }
+    }
+
+    std::binary_semaphore entered{0};
+    std::atomic<uint32>   count{0};
+    std::atomic<bool>     wrong_owner{false};
+};
+
+class ScopedDependencyWaitObserver final {
+public:
+    explicit ScopedDependencyWaitObserver(
+        CopyDependencyWaitCapture& _capture
+    ) :
+        observer{
+            .context  = &_capture,
+            .callback = &CopyDependencyWaitCapture::Observe,
+        } {
+        if (!TryInstallVulkanSubmissionDependencyWaitObserver(
+                &observer
+            )) {
+            throw std::runtime_error(
+                "Vulkan dependency-wait observer was already installed"
+            );
+        }
+        installed = true;
+    }
+
+    ~ScopedDependencyWaitObserver() noexcept {
+        if (installed &&
+            !RemoveVulkanSubmissionDependencyWaitObserver(&observer)) {
+            std::terminate();
+        }
+    }
+
+    ScopedDependencyWaitObserver(
+        const ScopedDependencyWaitObserver&
+    ) = delete;
+    ScopedDependencyWaitObserver& operator=(
+        const ScopedDependencyWaitObserver&
+    ) = delete;
+
+private:
+    VulkanSubmissionDependencyWaitObserver observer{};
+    bool                                   installed{false};
+};
+
+class BackendSyncWaitCapture final {
+public:
+    static void Observe(
+        void*                             _context,
+        const VulkanBackendSyncWaitEvent&
+    ) noexcept {
+        auto& capture = *static_cast<BackendSyncWaitCapture*>(_context);
+        if (capture.count.fetch_add(1, std::memory_order_acq_rel) == 0) {
+            capture.entered.release();
+        }
+    }
+
+    std::binary_semaphore entered{0};
+    std::atomic<uint32>   count{0};
+};
+
+class ScopedBackendSyncWaitObserver final {
+public:
+    explicit ScopedBackendSyncWaitObserver(
+        BackendSyncWaitCapture& _capture
+    ) :
+        observer{
+            .context  = &_capture,
+            .callback = &BackendSyncWaitCapture::Observe,
+        } {
+        if (!TryInstallVulkanBackendSyncWaitObserver(&observer)) {
+            throw std::runtime_error(
+                "Vulkan backend Sync-wait observer was already installed"
+            );
+        }
+        installed = true;
+    }
+
+    ~ScopedBackendSyncWaitObserver() noexcept {
+        if (installed &&
+            !RemoveVulkanBackendSyncWaitObserver(&observer)) {
+            std::terminate();
+        }
+    }
+
+    ScopedBackendSyncWaitObserver(
+        const ScopedBackendSyncWaitObserver&
+    ) = delete;
+    ScopedBackendSyncWaitObserver& operator=(
+        const ScopedBackendSyncWaitObserver&
+    ) = delete;
+
+private:
+    VulkanBackendSyncWaitObserver observer{};
+    bool                          installed{false};
 };
 
 template<size_t N>
@@ -1439,14 +1628,11 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
 void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
     auto&      device   = RenderDevice::Get();
     const auto topology = RenderGraph::QueueTopology::FromRHI();
-    if (!topology.copy.available ||
-        topology.graphics.native_queue_id == topology.copy.native_queue_id) {
+    if (!topology.copy.available) {
         LOG_INFO(
             "[TESTCASE][SKIP] name=ActiveRdgGraphicsCopyRoundTrip "
-            "reason={} graphics_native={} copy_native={} graphics_family={} "
+            "reason=copy_queue_unavailable graphics_native={} copy_native={} graphics_family={} "
             "copy_family={}",
-            topology.copy.available ? "shared_native_queue" :
-                                      "copy_queue_unavailable",
             topology.graphics.native_queue_id,
             topology.copy.native_queue_id,
             topology.graphics.family_id,
@@ -1648,10 +1834,14 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
             return sync.gpu_wait_required;
         }
     );
-    if (gpu_sync_count != 2) {
+    const bool native_alias =
+        topology.graphics.native_queue_id ==
+        topology.copy.native_queue_id;
+    const size_t expected_gpu_sync_count = native_alias ? 0 : 2;
+    if (gpu_sync_count != expected_gpu_sync_count) {
         throw std::runtime_error(
-            "Graphics-Copy round trip did not compile exactly two native "
-            "queue synchronization points"
+            "Graphics-Copy round trip GPU synchronization count disagrees "
+            "with native queue aliasing"
         );
     }
 
@@ -1838,9 +2028,14 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
     }
     LOG_INFO(
         "[TESTCASE][PASS] name=ActiveRdgGraphicsCopyRoundTrip mode={} "
-        "ownership={} transfers=2 readback=verified",
+        "ownership={} transfers=2 gpu_syncs={} graphics_native={} "
+        "copy_native={} native_alias={} readback=verified",
         _parallel ? "parallel" : "serial",
-        same_queue_family ? "local-acquire" : "release-acquire"
+        same_queue_family ? "local-acquire" : "release-acquire",
+        gpu_sync_count,
+        topology.graphics.native_queue_id,
+        topology.copy.native_queue_id,
+        native_alias
     );
 }
 
@@ -2703,6 +2898,7 @@ void RunContinuousFrameInFlightRetirement() {
 
 void RunCrossQueueTopologyBatch() {
     auto& device = RenderDevice::Get();
+    const RHIQueueTopology topology = device.GetQueueTopology();
     constexpr size_t element_count = 32;
     const EBufferUsageFlags usage =
         EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
@@ -2714,6 +2910,8 @@ void RunCrossQueueTopologyBatch() {
 
     std::array<uint32, element_count> expected{};
     std::array<uint32, element_count> readback{};
+    std::array<std::atomic<uint32>, 4> ordinary_callbacks{};
+    std::array<std::atomic<uint32>, 4> success_callbacks{};
     for (uint32 index = 0; index < expected.size(); ++index) {
         expected[index] = 0x53000000u + index * 43u;
     }
@@ -2769,6 +2967,22 @@ void RunCrossQueueTopologyBatch() {
         copy_stage->GetView(), WritableBytes(readback), "TopologyCrossQueueReadback"
     );
 
+    for (size_t index = 0; index < command_lists.size(); ++index) {
+        command_lists[index].AddCallback([&, index] {
+            ordinary_callbacks[index].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        command_lists[index].AddSuccessCallback([&, index] {
+            success_callbacks[index].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+    }
+
+    NativeSubmissionCapture        native_capture{};
+    ScopedNativeSubmissionObserver native_observer(native_capture);
+    const uint32 main_thread_id = Platform::GetCurrentThreadID();
     for (CommandList& command_list : command_lists) {
         const EQueueType queue = command_list.GetQueueType();
         RHIExecutor::Get().Submit(
@@ -2780,9 +2994,69 @@ void RunCrossQueueTopologyBatch() {
     if (readback != expected) {
         throw std::runtime_error("cross-queue topology GPU ordering mismatch");
     }
+    if (native_capture.Overflowed() || native_capture.Count() != 4) {
+        throw std::runtime_error(
+            "cross-queue batch did not issue exactly four native submits"
+        );
+    }
+    constexpr std::array expected_queues{
+        EQueueType::Graphics,
+        EQueueType::Compute,
+        EQueueType::Copy,
+        EQueueType::Graphics,
+    };
+    const uint32 submission_thread_id =
+        native_capture.Event(0).thread_id;
+    for (size_t index = 0; index < expected_queues.size(); ++index) {
+        const VulkanNativeSubmissionEvent& event =
+            native_capture.Event(index);
+        if (event.queue != expected_queues[index] ||
+            event.thread_role != ERHIThreadRole::Submission ||
+            event.thread_id != submission_thread_id ||
+            event.thread_id == main_thread_id ||
+            !event.outcome.WasSubmitted()) {
+            throw std::runtime_error(
+                "Graphics/Compute/Copy native submit escaped the sole "
+                "Submission owner or changed source order"
+            );
+        }
+        if (ordinary_callbacks[index].load(std::memory_order_acquire) != 1 ||
+            success_callbacks[index].load(std::memory_order_acquire) != 1) {
+            throw std::runtime_error(
+                "cross-queue callbacks did not retire exactly once"
+            );
+        }
+    }
+    const bool native_alias =
+        native_capture.Event(0).native_queue_handle ==
+        native_capture.Event(2).native_queue_handle;
+    if (native_alias !=
+        (topology.graphics.native_queue_id ==
+         topology.copy.native_queue_id)) {
+        throw std::runtime_error(
+            "observed Graphics/Copy native queue alias disagrees with topology"
+        );
+    }
+
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (native_capture.Count() != 4) {
+        throw std::runtime_error(
+            "a second Sync unexpectedly issued another native submit"
+        );
+    }
+    for (size_t index = 0; index < ordinary_callbacks.size(); ++index) {
+        if (ordinary_callbacks[index].load(std::memory_order_acquire) != 1 ||
+            success_callbacks[index].load(std::memory_order_acquire) != 1) {
+            throw std::runtime_error(
+                "a second Sync replayed cross-queue callbacks"
+            );
+        }
+    }
     LOG_INFO(
         "[TESTCASE][PASS] name=CrossQueueSubmissionTopology "
-        "batches=4 queues=Graphics,Compute,Copy,Graphics ownership=explicit"
+        "batches=4 queues=Graphics,Compute,Copy,Graphics ownership=explicit "
+        "native_owner=verified native_alias={} callbacks=exactly_once replay=0",
+        native_alias
     );
 }
 
@@ -3230,6 +3504,8 @@ void RunRecoverableCopyDependencyRejection() {
     std::binary_semaphore       blocker_entered{0};
     std::binary_semaphore       release_blocker{0};
     OneShotSemaphoreRelease     release_guard(release_blocker);
+    NativeSubmissionCapture        native_capture{};
+    ScopedNativeSubmissionObserver native_observer(native_capture);
 
     try {
         CommandList blocker(EQueueType::Copy);
@@ -3403,6 +3679,44 @@ void RunRecoverableCopyDependencyRejection() {
             "recoverable Copy rejection callbacks retired incorrectly"
         );
     }
+    if (native_capture.Overflowed() || native_capture.Count() != 3) {
+        throw std::runtime_error(
+            "rejected Copy packets reached native submit or accepted packets "
+            "were lost"
+        );
+    }
+    const uint32 submission_thread_id =
+        native_capture.Event(0).thread_id;
+    for (size_t index = 0; index < native_capture.Count(); ++index) {
+        const VulkanNativeSubmissionEvent& event =
+            native_capture.Event(index);
+        if (event.queue != EQueueType::Copy ||
+            event.thread_role != ERHIThreadRole::Submission ||
+            event.thread_id != submission_thread_id ||
+            !event.outcome.WasSubmitted()) {
+            throw std::runtime_error(
+                "accepted Copy recovery packets escaped the sole native "
+                "Submission owner"
+            );
+        }
+    }
+
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (native_capture.Count() != 3 ||
+        blocker_callbacks.load(std::memory_order_acquire) != 1 ||
+        blocker_success_callbacks.load(std::memory_order_acquire) != 1 ||
+        rejected_callbacks.load(std::memory_order_acquire) != 1 ||
+        rejected_success_callbacks.load(std::memory_order_acquire) != 0 ||
+        recovered_callbacks.load(std::memory_order_acquire) != 1 ||
+        recovered_success_callbacks.load(std::memory_order_acquire) != 1 ||
+        stale_wait_callbacks.load(std::memory_order_acquire) != 1 ||
+        stale_wait_success_callbacks.load(std::memory_order_acquire) != 0 ||
+        dependent_callbacks.load(std::memory_order_acquire) != 1 ||
+        dependent_success_callbacks.load(std::memory_order_acquire) != 1) {
+        throw std::runtime_error(
+            "a second Sync replayed recoverable Copy retirement"
+        );
+    }
     } catch (...) {
         const std::exception_ptr failure = std::current_exception();
         release_guard.Release();
@@ -3417,7 +3731,179 @@ void RunRecoverableCopyDependencyRejection() {
     LOG_INFO(
         "[TESTCASE][PASS] name=RecoverableCopyDependencyRejection "
         "fence=reused rejected=N recovered=N+1 stale_wait=rejected "
-        "publication=Submission"
+        "publication=Submission native_rejected=0 native_accepted=3 "
+        "native_owner=verified runtime=recovered replay=0"
+    );
+}
+
+void RunDirectCopyExecuteRejected() {
+    auto& device = RenderDevice::Get();
+    FenceRef done = device.CreateFence();
+    std::atomic<uint32> ordinary_callbacks{0};
+    std::atomic<uint32> success_callbacks{0};
+
+    CommandList direct(EQueueType::Copy);
+    direct.AddCallback([&] {
+        ordinary_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    direct.AddSuccessCallback([&] {
+        success_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    CmdSubmit submit = direct.Submit();
+    submit.Signal(done.Get(), 1);
+
+    NativeSubmissionCapture        native_capture{};
+    ScopedNativeSubmissionObserver native_observer(native_capture);
+    device.GetCopyQueue().Execute(std::move(submit));
+    auto* vk_done = ResourceCast(done.Get());
+    if (!vk_done->IsRejected(1) || vk_done->IsFailed()) {
+        throw std::runtime_error(
+            "direct Copy Execute did not fail closed at the Runtime ownership "
+            "boundary"
+        );
+    }
+
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (native_capture.Count() != 0 ||
+        ordinary_callbacks.load(std::memory_order_acquire) != 1 ||
+        success_callbacks.load(std::memory_order_acquire) != 0) {
+        throw std::runtime_error(
+            "direct Copy rejection reached native submit or retired callbacks "
+            "incorrectly"
+        );
+    }
+
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (native_capture.Count() != 0 ||
+        ordinary_callbacks.load(std::memory_order_acquire) != 1 ||
+        success_callbacks.load(std::memory_order_acquire) != 0) {
+        throw std::runtime_error(
+            "direct Copy rejection replayed on a second Sync"
+        );
+    }
+
+    LOG_INFO(
+        "[TESTCASE][PASS] name=DirectCopyExecuteRejected "
+        "runtime_claim=exclusive native_submit=0 callbacks=exactly_once "
+        "signal=rejected replay=0"
+    );
+}
+
+void RunVulkanStorageUnifiedCopySubmission() {
+    auto& device = RenderDevice::Get();
+    auto* vulkan_device =
+        static_cast<VulkanDevice*>(device.GetImpl());
+    auto& copy_queue =
+        static_cast<VkCopyQueue&>(device.GetCopyQueue());
+
+    constexpr size_t element_count = 16;
+    constexpr size_t byte_size = sizeof(uint32) * element_count;
+    std::array<uint32, element_count> first_values{};
+    std::array<uint32, element_count> expected{};
+    std::array<uint32, element_count> readback{};
+    for (uint32 index = 0; index < expected.size(); ++index) {
+        first_values[index] = 0x15A00000u + index * 19u + 3u;
+        expected[index]     = 0x15B00000u + index * 37u + 9u;
+    }
+
+    BufferRef destination = device.CreateBuffer<uint32>(
+        "phase15b_io_copy_destination",
+        element_count,
+        EBufferUsageFlags::TRANSFER_SRC |
+            EBufferUsageFlags::TRANSFER_DST
+    );
+    FenceRef done = device.CreateFence();
+    NativeSubmissionCapture native_capture{};
+    {
+        ScopedNativeSubmissionObserver native_observer(native_capture);
+        VulkanStorage storage(*vulkan_device, copy_queue);
+
+        storage.Enqueue(
+            first_values.data(),
+            0,
+            ResourceCast(destination.Get()),
+            0,
+            byte_size
+        );
+        storage.EnqueueSignal(done, 1);
+        storage.Commit();
+        if (ResourceCast(done.Get())->HostWait(1) != VK_SUCCESS) {
+            throw std::runtime_error(
+                "first Vulkan storage Copy commit did not signal completion"
+            );
+        }
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+        // The first session is now terminal. A second Enqueue must recycle it
+        // without dropping the newly staged command or signal.
+        storage.Enqueue(
+            expected.data(),
+            0,
+            ResourceCast(destination.Get()),
+            0,
+            byte_size
+        );
+        storage.EnqueueSignal(done, 2);
+        storage.Commit();
+        if (ResourceCast(done.Get())->HostWait(2) != VK_SUCCESS) {
+            throw std::runtime_error(
+                "second Vulkan storage Copy commit did not signal completion"
+            );
+        }
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    }
+
+    if (native_capture.Overflowed() || native_capture.Count() != 2) {
+        throw std::runtime_error(
+            "Vulkan storage commits did not issue exactly two native submits"
+        );
+    }
+    const uint32 submission_thread_id =
+        native_capture.Event(0).thread_id;
+    for (size_t index = 0; index < native_capture.Count(); ++index) {
+        const VulkanNativeSubmissionEvent& event =
+            native_capture.Event(index);
+        if (event.queue != EQueueType::Copy ||
+            event.thread_role != ERHIThreadRole::Submission ||
+            event.thread_id != submission_thread_id ||
+            event.thread_id == Platform::GetCurrentThreadID() ||
+            !event.outcome.WasSubmitted()) {
+            throw std::runtime_error(
+                "Vulkan storage Copy commit escaped the unified "
+                "Submission owner"
+            );
+        }
+    }
+    if (ResourceCast(done.Get())->IsRejected(1) ||
+        ResourceCast(done.Get())->IsRejected(2) ||
+        ResourceCast(done.Get())->IsFailed()) {
+        throw std::runtime_error(
+            "Vulkan storage Copy signals were terminalized incorrectly"
+        );
+    }
+
+    CommandList verify(EQueueType::Copy);
+    verify.CopyFrom(
+        destination->GetView(),
+        WritableBytes(readback),
+        "Phase15BIOCopyReadback"
+    );
+    RHIExecutor::Get().Submit(
+        EQueueType::Copy,
+        verify.Submit(),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (readback != expected) {
+        throw std::runtime_error(
+            "Vulkan storage unified Copy submission readback mismatch"
+        );
+    }
+
+    LOG_INFO(
+        "[TESTCASE][PASS] name=VulkanStorageUnifiedCopySubmission "
+        "commits=2 signals=2 native_submit=2 native_owner=Submission "
+        "session_recycle=verified readback=verified"
     );
 }
 
@@ -3599,7 +4085,12 @@ void RunShutdownDependencyCancellation() {
     std::atomic<uint32> callbacks{0};
     std::atomic<uint32> success_callbacks{0};
     std::atomic<bool>   sync_returned{false};
-    std::binary_semaphore sync_started{0};
+    NativeSubmissionCapture        native_capture{};
+    ScopedNativeSubmissionObserver native_observer(native_capture);
+    CopyDependencyWaitCapture      copy_wait_capture{};
+    ScopedDependencyWaitObserver   wait_observer(copy_wait_capture);
+    BackendSyncWaitCapture         sync_wait_capture{};
+    ScopedBackendSyncWaitObserver  sync_wait_observer(sync_wait_capture);
 
     CommandList graphics(EQueueType::Graphics);
     graphics.AddCallback([&] {
@@ -3623,26 +4114,35 @@ void RunShutdownDependencyCancellation() {
     copy_submit.Wait(copy_dependency.Get(), 1).Signal(copy_done.Get(), 1);
 
     RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(graphics_submit),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Submit(
         EQueueType::Copy,
         std::move(copy_submit),
         ERHIExecSubmitFlags::FlushGPU
     );
+    if (!copy_wait_capture.entered.try_acquire_for(5s) ||
+        copy_wait_capture.count.load(std::memory_order_acquire) != 1 ||
+        copy_wait_capture.wrong_owner.load(std::memory_order_acquire) ||
+        native_capture.Count() != 0) {
+        throw std::runtime_error(
+            "Copy did not enter its unpublished dependency wait on the sole "
+            "Submission owner"
+        );
+    }
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        std::move(graphics_submit),
+        ERHIExecSubmitFlags::FlushGPU
+    );
 
     std::jthread sync_waiter([&] {
-        sync_started.release();
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
         sync_returned.store(true, std::memory_order_release);
     });
-    sync_started.acquire();
-    std::this_thread::sleep_for(100ms);
-    if (sync_returned.load(std::memory_order_acquire)) {
+    if (!sync_wait_capture.entered.try_acquire_for(5s) ||
+        sync_wait_capture.count.load(std::memory_order_acquire) != 1 ||
+        sync_returned.load(std::memory_order_acquire)) {
         throw std::runtime_error(
-            "Sync returned before unpublished dependencies were cancelled"
+            "concurrent Sync was not registered behind the unpublished "
+            "dependency wait"
         );
     }
 
@@ -3672,10 +4172,17 @@ void RunShutdownDependencyCancellation() {
             "shutdown dependency cancellation did not release concurrent Sync"
         );
     }
+    if (native_capture.Count() != 0) {
+        throw std::runtime_error(
+            "shutdown-cancelled dependencies reached native submit"
+        );
+    }
 
     LOG_INFO(
         "[TESTCASE][PASS] name=ShutdownDependencyCancellation "
-        "queues=Graphics,Copy dependency=unpublished concurrent_sync=drained"
+        "queues=Copy,Graphics copy_wait=entered "
+        "dependency=unpublished native_submit=0 sync_wait=registered "
+        "concurrent_sync=drained"
     );
 }
 
@@ -3764,6 +4271,8 @@ int main(int argc, const char** argv) {
         RunContinuousFrameInFlightRetirement();
         RunRecoverableCopyDependencyRejection();
         RunCrossQueueTopologyBatch();
+        RunDirectCopyExecuteRejected();
+        RunVulkanStorageUnifiedCopySubmission();
         RunAsyncQueueParallelTranslateSmoke();
         RunParallelTranslateRecoverableRejection();
         RunRuntimeRejectCompletionOwnership();

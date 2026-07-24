@@ -297,6 +297,7 @@ VulkanSubmissionExecutor::VulkanSubmissionExecutor() {
         static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
     bool graphics_claimed = false;
     bool compute_claimed  = false;
+    bool copy_claimed     = false;
     try {
         graphics_claimed = graphics_queue.ClaimRuntimeOwnership();
         if (!graphics_claimed) {
@@ -310,7 +311,12 @@ VulkanSubmissionExecutor::VulkanSubmissionExecutor() {
                 "Vulkan Compute queue ownership conflicts with legacy execution"
             );
         }
-        copy_queue.EnableRuntimeDependencyWaits();
+        copy_claimed = copy_queue.ClaimRuntimeOwnership();
+        if (!copy_claimed) {
+            throw std::runtime_error(
+                "Vulkan Copy queue ownership conflicts with legacy execution"
+            );
+        }
         claims_owned = true;
 
         submission_thread = std::jthread([this] { RunSubmission(); });
@@ -336,6 +342,9 @@ VulkanSubmissionExecutor::VulkanSubmissionExecutor() {
         if (submission_thread.joinable()) {
             StopSubmissionThread();
         }
+        if (copy_claimed) {
+            copy_queue.ReleaseRuntimeOwnership();
+        }
         if (compute_claimed) {
             compute_queue.ReleaseRuntimeOwnership();
         }
@@ -356,6 +365,9 @@ VulkanSubmissionExecutor::~VulkanSubmissionExecutor() {
         auto& compute_queue = static_cast<VkCommandQueue&>(
             RenderDevice::Get().GetCommandQueue(EQueueType::Compute)
         );
+        auto& copy_queue =
+            static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
+        copy_queue.ReleaseRuntimeOwnership();
         compute_queue.ReleaseRuntimeOwnership();
         graphics_queue.ReleaseRuntimeOwnership();
         claims_owned = false;
@@ -415,6 +427,7 @@ GraphEventRef VulkanSubmissionExecutor::Sync(ERHISyncDepth _depth) {
         });
     }
     cv.notify_one();
+    NotifyVulkanBackendSyncWait();
     completion->Wait();
     return MakeCompletedEvent();
 }
@@ -1326,17 +1339,43 @@ void VulkanSubmissionExecutor::ProcessBatch(
         const uint64 async_scope = entry.submit.async_queue_scope;
         if (entry.queue == EQueueType::Copy) {
             auto& copy_queue = static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
-            const VulkanRuntimeSubmissionResult submit_result =
-                ExecuteOnSubmissionThread(
+            std::optional<VkCopyQueue::CurrentVulkanCopyRecordedSubmit>
+                recorded =
+                    copy_queue.TranslateForRuntime(std::move(entry.submit));
+            used_queues[static_cast<size_t>(EQueueType::Copy)] = true;
+            if (!recorded) {
+                _exception_state.first_unconsumed_source =
+                    source_index + 1;
+                const VkResult result = copy_queue.device.IsFaulted() ?
+                                            copy_queue.device.GetFirstFaultResult() :
+                                            VK_ERROR_UNKNOWN;
+                LOG_ERROR(
+                    "[RHIExecutor][Vulkan] batch={} Copy translation failed result={}",
+                    _batch.sequence,
+                    static_cast<int32>(result)
+                );
+                reject_remaining(
+                    source_index + 1,
+                    result,
+                    "Copy translation failure"
+                );
+                return;
+            }
+
+            VulkanRuntimeSubmissionResult submit_result{};
+            try {
+                submit_result = ExecuteOnSubmissionThread(
                     [
                         &copy_queue,
-                        submit = &entry.submit,
+                        packet = &*recorded,
                         batch_sequence = _batch.sequence,
                         source_index = static_cast<uint32>(source_index),
                         async_scope
                     ]() mutable {
                         VulkanRuntimeSubmissionResult result =
-                            copy_queue.ExecuteForRuntime(std::move(*submit));
+                            copy_queue.SubmitRecordedForRuntime(
+                                std::move(*packet)
+                            );
                         if (result.WasSubmitted()) {
                             NotifySourceSubmitted(
                                 batch_sequence,
@@ -1348,7 +1387,21 @@ void VulkanSubmissionExecutor::ProcessBatch(
                         return result;
                     }
                 );
-            // ExecuteForRuntime has now either submitted or terminalized this
+            } catch (...) {
+                ReportRequestFailure(
+                    ERequestKind::Submit,
+                    VulkanSubmissionDetail::EWorkerRequestFailurePhase::Process,
+                    std::current_exception()
+                );
+                copy_queue.RejectRecordedForRuntime(
+                    std::move(*recorded), VK_ERROR_UNKNOWN
+                );
+                submit_result.outcome = {
+                    EVulkanOperationStatus::Rejected,
+                    VK_ERROR_UNKNOWN
+                };
+            }
+            // SubmitRecordedForRuntime has now either submitted or terminalized this
             // source. Never reject it again if later bookkeeping/logging throws.
             _exception_state.first_unconsumed_source = source_index + 1;
             if (submit_result.WasSubmitted()) {
@@ -1361,13 +1414,11 @@ void VulkanSubmissionExecutor::ProcessBatch(
                     *submit_result.completion,
                     async_scope == 0
                 );
-                used_queues[static_cast<size_t>(EQueueType::Copy)] = true;
             } else if (submit_result.IsRecoverableRejection()) {
                 // A failed prerequisite did not reach vkQueueSubmit. Drain the
                 // current source on Completion, reject the rest of this
                 // topology batch, and keep the runtime available for a later
                 // independent batch.
-                used_queues[static_cast<size_t>(EQueueType::Copy)] = true;
                 reject_remaining_recoverable(
                     source_index + 1,
                     submit_result.outcome.result,
@@ -1384,7 +1435,6 @@ void VulkanSubmissionExecutor::ProcessBatch(
                 // A failed native Copy submit still publishes a CPU retirement
                 // marker. ProcessSync always enters Copy Sync, whose independent
                 // retirement serial drains it without reading Copy-owner state.
-                used_queues[static_cast<size_t>(EQueueType::Copy)] = true;
                 reject_remaining(
                     source_index + 1,
                     submit_result.outcome.result,

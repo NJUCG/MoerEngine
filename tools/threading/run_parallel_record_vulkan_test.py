@@ -51,6 +51,126 @@ def _testcase_marker(name: str, text: str) -> tuple[str, dict[str, str]] | None:
     return marker.group("status"), fields
 
 
+def _require_phase15b_copy_contracts(mode: str, text: str) -> None:
+    round_trip = _testcase_marker("ActiveRdgGraphicsCopyRoundTrip", text)
+    _require(
+        round_trip is not None,
+        f"{mode}: missing active RDG Graphics-Copy round-trip marker",
+    )
+    round_trip_status, round_trip_fields = round_trip
+    if round_trip_status == "PASS":
+        native_alias = round_trip_fields.get("native_alias")
+        expected_gpu_syncs = "0" if native_alias == "true" else "2"
+        expected_mode = "serial" if mode == "serial" else "parallel"
+        graphics_native = round_trip_fields.get("graphics_native")
+        copy_native = round_trip_fields.get("copy_native")
+        _require(
+            native_alias in {"true", "false"}
+            and round_trip_fields.get("mode") == expected_mode
+            and round_trip_fields.get("ownership")
+            in {"local-acquire", "release-acquire"}
+            and round_trip_fields.get("transfers") == "2"
+            and round_trip_fields.get("gpu_syncs") == expected_gpu_syncs
+            and graphics_native is not None
+            and copy_native is not None
+            and ((graphics_native == copy_native) == (native_alias == "true"))
+            and round_trip_fields.get("readback") == "verified",
+            f"{mode}: incomplete active RDG Graphics-Copy round-trip contract",
+        )
+    else:
+        _require(
+            round_trip_fields.get("reason") == "copy_queue_unavailable",
+            f"{mode}: invalid active RDG Graphics-Copy round-trip SKIP contract",
+        )
+
+    recoverable_copy = _testcase_marker(
+        "RecoverableCopyDependencyRejection", text
+    )
+    _require(
+        recoverable_copy is not None and recoverable_copy[0] == "PASS",
+        f"{mode}: missing recoverable Copy rejection marker",
+    )
+    _, recoverable_copy_fields = recoverable_copy
+    _require(
+        recoverable_copy_fields.get("fence") == "reused"
+        and recoverable_copy_fields.get("rejected") == "N"
+        and recoverable_copy_fields.get("recovered") == "N+1"
+        and recoverable_copy_fields.get("stale_wait") == "rejected"
+        and recoverable_copy_fields.get("publication") == "Submission"
+        and recoverable_copy_fields.get("native_rejected") == "0"
+        and recoverable_copy_fields.get("native_accepted") == "3"
+        and recoverable_copy_fields.get("native_owner") == "verified"
+        and recoverable_copy_fields.get("runtime") == "recovered"
+        and recoverable_copy_fields.get("replay") == "0",
+        f"{mode}: incomplete recoverable Copy rejection contract",
+    )
+
+    cross_queue = _testcase_marker("CrossQueueSubmissionTopology", text)
+    _require(
+        cross_queue is not None and cross_queue[0] == "PASS",
+        f"{mode}: missing cross-queue Submission ownership marker",
+    )
+    _, cross_queue_fields = cross_queue
+    _require(
+        cross_queue_fields.get("batches") == "4"
+        and cross_queue_fields.get("queues")
+        == "Graphics,Compute,Copy,Graphics"
+        and cross_queue_fields.get("ownership") == "explicit"
+        and cross_queue_fields.get("native_owner") == "verified"
+        and cross_queue_fields.get("native_alias") in {"true", "false"}
+        and cross_queue_fields.get("callbacks") == "exactly_once"
+        and cross_queue_fields.get("replay") == "0",
+        f"{mode}: incomplete cross-queue Submission ownership contract",
+    )
+
+    direct_copy = _testcase_marker("DirectCopyExecuteRejected", text)
+    _require(
+        direct_copy is not None and direct_copy[0] == "PASS",
+        f"{mode}: missing direct Copy fail-closed marker",
+    )
+    _, direct_copy_fields = direct_copy
+    _require(
+        direct_copy_fields.get("runtime_claim") == "exclusive"
+        and direct_copy_fields.get("native_submit") == "0"
+        and direct_copy_fields.get("callbacks") == "exactly_once"
+        and direct_copy_fields.get("signal") == "rejected"
+        and direct_copy_fields.get("replay") == "0",
+        f"{mode}: incomplete direct Copy fail-closed contract",
+    )
+
+    io_copy = _testcase_marker("VulkanStorageUnifiedCopySubmission", text)
+    _require(
+        io_copy is not None and io_copy[0] == "PASS",
+        f"{mode}: missing VulkanStorage unified Copy submission marker",
+    )
+    _, io_copy_fields = io_copy
+    _require(
+        io_copy_fields.get("commits") == "2"
+        and io_copy_fields.get("signals") == "2"
+        and io_copy_fields.get("native_submit") == "2"
+        and io_copy_fields.get("native_owner") == "Submission"
+        and io_copy_fields.get("session_recycle") == "verified"
+        and io_copy_fields.get("readback") == "verified",
+        f"{mode}: incomplete VulkanStorage unified Copy submission contract",
+    )
+
+    shutdown = _testcase_marker("ShutdownDependencyCancellation", text)
+    _require(
+        shutdown is not None and shutdown[0] == "PASS",
+        f"{mode}: missing shutdown dependency cancellation marker",
+    )
+    _, shutdown_fields = shutdown
+    _require(
+        shutdown_fields.get("queues") == "Copy,Graphics"
+        and shutdown_fields.get("copy_wait") == "entered"
+        and shutdown_fields.get("dependency") == "unpublished"
+        and shutdown_fields.get("native_submit") == "0"
+        and shutdown_fields.get("sync_wait") == "registered"
+        and shutdown_fields.get("concurrent_sync") == "drained",
+        f"{mode}: incomplete shutdown dependency cancellation contract",
+    )
+
+
 def validate_log(mode: str, text: str) -> None:
     _require("[TESTCASE][FAIL]" not in text, f"{mode}: test emitted a FAIL marker")
     _require("VUID-" not in text, f"{mode}: Vulkan validation VUID was emitted")
@@ -128,6 +248,8 @@ def validate_log(mode: str, text: str) -> None:
         and recoverable_fields.get("same_scope_reentry") == "Compute",
         f"{mode}: incomplete recoverable Translate retirement contract",
     )
+
+    _require_phase15b_copy_contracts(mode, text)
 
     expected_fault = "true" if mode == "fallback" else "false"
     expected_mode = "serial" if mode == "serial" else "parallel"

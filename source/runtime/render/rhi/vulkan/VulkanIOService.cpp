@@ -6,11 +6,13 @@
 #include "misc/LockFree.h"
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
+#include "rhi/RHIExecutor.h"
 #include "rhi/RHIIO.h"
 #include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <semaphore>
 #include <thread>
 #include <type_traits>
 namespace Moer::Render {
@@ -23,6 +25,60 @@ struct VulkanIOTask {
     Array<IOSignalEvt>    signal_evts;
 };
 
+static void CompleteVulkanIOTaskNoexcept(VulkanIOTask* _task) noexcept {
+    if (!_task || !_task->callback) {
+        return;
+    }
+    try {
+        _task->callback();
+    } catch (...) {
+        try {
+            LOG_ERROR("[VulkanIO] task completion callback threw");
+        } catch (...) {
+        }
+    }
+}
+
+static void RejectVulkanIOTaskSignalsNoexcept(VulkanIOTask* _task) noexcept {
+    if (!_task) {
+        return;
+    }
+    for (const IOSignalEvt& signal : _task->signal_evts) {
+        if (signal.handle == 0) {
+            continue;
+        }
+        try {
+            reinterpret_cast<Fence*>(signal.handle)->Reject(signal.timeline);
+        } catch (...) {
+            try {
+                LOG_ERROR("[VulkanIO] failed to reject unpublished signal timeline={}", signal.timeline);
+            } catch (...) {
+            }
+        }
+    }
+}
+
+struct VulkanIOTaskCompletionState {
+    explicit VulkanIOTaskCompletionState(std::shared_ptr<VulkanIOTask> _task) : task(std::move(_task)) {}
+
+    void Complete() noexcept {
+        if (completed.exchange(true, std::memory_order_acq_rel)) {
+            return;
+        }
+        CompleteVulkanIOTaskNoexcept(task.get());
+        task.reset();
+        done.release();
+    }
+
+    void Wait() noexcept {
+        done.acquire();
+    }
+
+    std::shared_ptr<VulkanIOTask> task{};
+    std::binary_semaphore         done{0};
+    std::atomic_bool              completed{false};
+};
+
 void VulkanCommitSession::Commit() {
     if (signal_events.empty()) {
         CommitWithoutSignal();
@@ -33,7 +89,8 @@ void VulkanCommitSession::Commit() {
 
 bool VulkanCommitSession::IsComplete() const {
     // Check if all tasks are completed
-    return pending_tasks.load(std::memory_order_acquire) == task_count;
+    return task_count != 0 &&
+           pending_tasks.load(std::memory_order_acquire) == task_count;
 }
 
 void VulkanCommitSession::Enqueue(FileHandle _handle, size_t _file_offset, void* _ptr, size_t _len) {
@@ -137,6 +194,7 @@ void VulkanCommitSession::CommitSignaled() {
     tsk->callback     = [this]() {
         ++pending_tasks;
     };
+    task_count++;
     CommitIOTask(tsk);
 }
 
@@ -146,7 +204,7 @@ void VulkanCommitSession::CommitIOTask(VulkanIOTask* _tsk) {
 
 struct VulkanIOTaskThread {
     std::jthread                    thread;
-    bool                            enabled = true;
+    std::atomic_bool                enabled{true};
     LockFreeQueueBase<VulkanIOTask> queue;
     VulkanIOTaskThread() {
         thread = std::jthread([this]() {
@@ -155,125 +213,177 @@ struct VulkanIOTaskThread {
     }
 
     ~VulkanIOTaskThread() {
-        enabled = false;
+        enabled.store(false, std::memory_order_release);
         thread.join();
     }
 
     void InnerWorkLoop() {
-        while (enabled) {
-            VulkanIOTask* task;
-            if (task = queue.Pop(); task) {
-                // Process the submission
-                // ...
-                auto copy_file_to_mem =
-                    [&](const FileDesc& _src, size_t _file_offset, std::span<ubyte> _dst) {
-                        FILE* result_handle = nullptr;
-                        fopen_s(&result_handle, (const char*)_src.handle.file, "r");
-                        if (!result_handle) {
-                            SPDLOG_ERROR("Failed to open file {}", (const char*)_src.handle.file);
-                            assert(false && "Failed to open file");
-                        }
-                        std::fseek(result_handle, _file_offset, SEEK_SET);
-                        std::fread(_dst.data(), sizeof(ubyte), _dst.size_bytes(), result_handle);
-                        std::fclose(result_handle);
-                    };
-                uint64 temp_size = 0;
-                for (auto& cmd : task->file_cmds) {
-                    // Process each command
+        for (;;) {
+            VulkanIOTask* raw_task = nullptr;
+            if (raw_task = queue.Pop(); raw_task) {
+                std::shared_ptr<VulkanIOTask> task{};
+                try {
+                    task = std::shared_ptr<VulkanIOTask>(raw_task, [](VulkanIOTask* _task) {
+                        MoerDelete(_task);
+                    });
+                } catch (...) {
+                    // Control-block allocation can fail before shared ownership
+                    // is established. Retire every externally visible promise
+                    // before releasing the raw task so no waiter is orphaned.
+                    RejectVulkanIOTaskSignalsNoexcept(raw_task);
+                    CompleteVulkanIOTaskNoexcept(raw_task);
+                    MoerDelete(raw_task);
+                    try {
+                        LOG_ERROR("[VulkanIO] failed to take ownership of queued task");
+                    } catch (...) {
+                    }
+                    continue;
+                }
+                std::shared_ptr<VulkanIOTaskCompletionState> completion{};
+                try {
+                    completion = std::make_shared<VulkanIOTaskCompletionState>(task);
+                    // Process the submission
                     // ...
-                    std::visit(
-                        Overload{
-                            [&](RawDataDesc& _dst) {
-                                copy_file_to_mem(std::get<FileDesc>(cmd.src), cmd.file_offset, _dst.data);
-                            },
-                            [&](BufferViewDesc& _dst) {
-                                temp_size += cmd.SizeByte();
-                            },
-                            [&](TextureViewDesc& _dst) {
-                                temp_size += cmd.SizeByte();
+                    auto copy_file_to_mem =
+                        [&](const FileDesc& _src, size_t _file_offset, std::span<ubyte> _dst) {
+                            FILE* result_handle = nullptr;
+                            fopen_s(&result_handle, (const char*)_src.handle.file, "r");
+                            if (!result_handle) {
+                                SPDLOG_ERROR("Failed to open file {}", (const char*)_src.handle.file);
+                                assert(false && "Failed to open file");
                             }
-                        },
-                        cmd.dst
+                            std::fseek(result_handle, _file_offset, SEEK_SET);
+                            std::fread(_dst.data(), sizeof(ubyte), _dst.size_bytes(), result_handle);
+                            std::fclose(result_handle);
+                        };
+                    uint64 temp_size = 0;
+                    for (auto& cmd : task->file_cmds) {
+                        // Process each command
+                        // ...
+                        std::visit(
+                            Overload{
+                                [&](RawDataDesc& _dst) {
+                                    copy_file_to_mem(std::get<FileDesc>(cmd.src), cmd.file_offset, _dst.data);
+                                },
+                                [&](BufferViewDesc& _dst) {
+                                    temp_size += cmd.SizeByte();
+                                },
+                                [&](TextureViewDesc& _dst) {
+                                    temp_size += cmd.SizeByte();
+                                }
+                            },
+                            cmd.dst
+                        );
+                    }
+                    Array<ubyte> temp_buffer;
+                    temp_buffer.resize(temp_size);
+                    temp_size = 0;
+                    CommandList cmd_list{EQueueType::Copy};
+                    for (auto& cmd : task->file_cmds) {
+                        std::visit(
+                            Overload{
+                                [&](RawDataDesc& _dst) {},
+                                [&](BufferViewDesc& _dst) {
+                                    copy_file_to_mem(
+                                        std::get<FileDesc>(cmd.src),
+                                        cmd.file_offset,
+                                        std::span<ubyte>(temp_buffer.data() + temp_size, _dst.size)
+                                    );
+                                    VulkanBuffer* buffer = (VulkanBuffer*)_dst.handle;
+                                    cmd_list.CopyFrom(
+                                        std::span<byte>((byte*)temp_buffer.data() + temp_size, _dst.size),
+                                        buffer->GetView(_dst.offset, _dst.size)
+                                    );
+                                    temp_size += cmd.SizeByte();
+                                },
+                                [&](TextureViewDesc& _dst) {
+                                    copy_file_to_mem(
+                                        std::get<FileDesc>(cmd.src),
+                                        cmd.file_offset,
+                                        std::span<ubyte>(temp_buffer.data() + temp_size, _dst.GetByteSize())
+                                    );
+                                    VulkanTexture* texture = (VulkanTexture*)_dst.handle;
+                                    TextureView view(texture, _dst.pixel_fmt, _dst.mip_offset, _dst.mip_cnt);
+                                    view.offset = _dst.offset;
+                                    view.extent = _dst.size;
+                                    cmd_list.CopyFrom(
+                                        std::span<byte>(
+                                            (byte*)temp_buffer.data() + temp_size, _dst.GetByteSize()
+                                        ),
+                                        view
+                                    );
+                                    temp_size += cmd.SizeByte();
+                                }
+                            },
+                            cmd.dst
+                        );
+                    }
+                    for (auto& cmd : task->mem_cmds) {
+                        std::visit(
+                            Overload{
+                                [&](RawDataDesc& _src) {},
+                                [&](BufferViewDesc& _dst) {
+                                    const RawDataDesc& src    = std::get<RawDataDesc>(cmd.src);
+                                    VulkanBuffer*      buffer = (VulkanBuffer*)_dst.handle;
+                                    cmd_list.CopyFrom(
+                                        std::span<byte>((byte*)src.data.data(), src.data.size_bytes()),
+                                        buffer->GetView(_dst.offset, _dst.size)
+                                    );
+                                },
+                                [&](TextureViewDesc& _dst) {
+                                    const RawDataDesc& src     = std::get<RawDataDesc>(cmd.src);
+                                    VulkanTexture*     texture = (VulkanTexture*)_dst.handle;
+                                    TextureView view(texture, _dst.pixel_fmt, _dst.mip_offset, _dst.mip_cnt);
+                                    view.offset = _dst.offset;
+                                    view.extent = _dst.size;
+                                    cmd_list.CopyFrom(
+                                        std::span<byte>((byte*)src.data.data(), src.data.size_bytes()), view
+                                    );
+                                }
+                            },
+                            cmd.dst
+                        );
+                    }
+
+                    // Copy GPU work shares the same Translate -> Submission ->
+                    // Completion ownership pipeline as renderer work. The IO
+                    // thread remains a file-read/assembly producer only.
+                    CmdSubmit submit = cmd_list.Submit();
+                    for (const IOSignalEvt& signal : task->signal_evts) {
+                        submit.Signal(reinterpret_cast<Fence*>(signal.handle), signal.timeline);
+                    }
+                    submit.callbacks.emplace_back([completion]() {
+                        completion->Complete();
+                    });
+                    RHIExecutor::Get().Submit(
+                        EQueueType::Copy, std::move(submit), ERHIExecSubmitFlags::FlushGPU
                     );
+                } catch (...) {
+                    // No successful publication occurred, so every promised
+                    // timeline must become terminal before the session does.
+                    RejectVulkanIOTaskSignalsNoexcept(task.get());
+                    if (completion) {
+                        completion->Complete();
+                    } else {
+                        CompleteVulkanIOTaskNoexcept(task.get());
+                    }
+                    try {
+                        LOG_ERROR("[VulkanIO] task assembly or publication threw");
+                    } catch (...) {
+                    }
                 }
-                Array<ubyte> temp_buffer;
-                temp_buffer.resize(temp_size);
-                temp_size = 0;
-                CommandList cmd_list{};
-                for (auto& cmd : task->file_cmds) {
-                    std::visit(
-                        Overload{
-                            [&](RawDataDesc& _dst) {},
-                            [&](BufferViewDesc& _dst) {
-                                copy_file_to_mem(
-                                    std::get<FileDesc>(cmd.src),
-                                    cmd.file_offset,
-                                    std::span<ubyte>(temp_buffer.data() + temp_size, _dst.size)
-                                );
-                                VulkanBuffer* buffer = (VulkanBuffer*)_dst.handle;
-                                cmd_list.CopyFrom(
-                                    std::span<byte>((byte*)temp_buffer.data() + temp_size, _dst.size),
-                                    buffer->GetView(_dst.offset, _dst.size)
-                                );
-                                temp_size += cmd.SizeByte();
-                            },
-                            [&](TextureViewDesc& _dst) {
-                                copy_file_to_mem(
-                                    std::get<FileDesc>(cmd.src),
-                                    cmd.file_offset,
-                                    std::span<ubyte>(temp_buffer.data() + temp_size, _dst.GetByteSize())
-                                );
-                                VulkanTexture* texture = (VulkanTexture*)_dst.handle;
-                                TextureView    view(texture, _dst.pixel_fmt, _dst.mip_offset, _dst.mip_cnt);
-                                view.offset = _dst.offset;
-                                view.extent = _dst.size;
-                                cmd_list.CopyFrom(
-                                    std::span<byte>(
-                                        (byte*)temp_buffer.data() + temp_size, _dst.GetByteSize()
-                                    ),
-                                    view
-                                );
-                                temp_size += cmd.SizeByte();
-                            }
-                        },
-                        cmd.dst
-                    );
-                }
-                for (auto& cmd : task->mem_cmds) {
-                    std::visit(
-                        Overload{
-                            [&](RawDataDesc& _src) {},
-                            [&](BufferViewDesc& _dst) {
-                                const RawDataDesc& src    = std::get<RawDataDesc>(cmd.src);
-                                VulkanBuffer*      buffer = (VulkanBuffer*)_dst.handle;
-                                cmd_list.CopyFrom(
-                                    std::span<byte>((byte*)src.data.data(), src.data.size_bytes()),
-                                    buffer->GetView(_dst.offset, _dst.size)
-                                );
-                            },
-                            [&](TextureViewDesc& _dst) {
-                                const RawDataDesc& src     = std::get<RawDataDesc>(cmd.src);
-                                VulkanTexture*     texture = (VulkanTexture*)_dst.handle;
-                                TextureView view(texture, _dst.pixel_fmt, _dst.mip_offset, _dst.mip_cnt);
-                                view.offset = _dst.offset;
-                                view.extent = _dst.size;
-                                cmd_list.CopyFrom(
-                                    std::span<byte>((byte*)src.data.data(), src.data.size_bytes()), view
-                                );
-                            }
-                        },
-                        cmd.dst
-                    );
+                if (completion) {
+                    // Wait only for this Copy packet's ordinary Completion
+                    // callback. This avoids coupling IO latency to unrelated
+                    // Graphics/Compute work while keeping session lifetime
+                    // valid until the task is terminal.
+                    completion->Wait();
                 }
 
-                // Execute the command list
-                auto& copy_queue = task->session->io_interface.GetQueue();
-                auto  evt        = copy_queue.Execute(std::move(cmd_list.Submit()));
-                copy_queue.Sync(evt.timeline);
-                task->callback();
-
-            } else {
+            } else if (enabled.load(std::memory_order_acquire)) {
                 std::this_thread::yield();
+            } else {
+                break;
             }
         }
     }
@@ -283,6 +393,7 @@ static constexpr uint64_t max_chunk_size = 1024 * 1024 * 64; // 64MB
 VulkanIOInterface::VulkanIOInterface(VulkanDevice& _device, VkCopyQueue& _queue) :
     m_device(_device),
     m_queue(_queue) {
+    event   = _device.CreateFence();
     storage = MoerNew(VulkanStorage)(_device, _queue);
 }
 
@@ -607,7 +718,7 @@ uint64 VulkanIOInterface::Execute(IOCommandList&& _cmdlist) {
 }
 
 WaitEvent VulkanIOInterface::GetWaitEvent(uint64 _timeline) {
-    return {uint64(event.Get()), timeline};
+    return {uint64(event.Get()), _timeline};
 }
 
 void VulkanIOInterface::Sync(uint64 _timeline) {
@@ -624,13 +735,27 @@ void VulkanIOInterface::Tick() {
         }
     }
     if (!callbacks.empty()) {
-        if (event->GetValue() >= callbacks.front().timeline) {
-            auto& callback = callbacks.front();
+        auto*        event_fence       = ResourceCast(event.Get());
+        const uint64 callback_timeline = callbacks.front().timeline;
+        const bool   terminal          = event->GetValue() >= callback_timeline ||
+                              event_fence->IsRejected(callback_timeline) || event_fence->IsFailed();
+        if (terminal) {
+            // Remove the terminal batch before invoking user code. A throwing
+            // or re-entrant callback must never replay already attempted
+            // callbacks or retain the batch's file handles indefinitely.
+            VkExecCallback callback = std::move(callbacks.front());
+            callbacks.pop();
             for (auto& cb : callback.callback) {
-                cb();
+                try {
+                    cb();
+                } catch (...) {
+                    try {
+                        LOG_ERROR("[VulkanIO] user completion callback threw");
+                    } catch (...) {
+                    }
+                }
             }
             callback.Clear();
-            callbacks.pop();
         }
     } else {
         //yield if no callback
@@ -686,11 +811,26 @@ VulkanStorage::VulkanStorage(VulkanDevice& _device, VkCopyQueue& _queue) : copy_
     task_thread = MoerNew(VulkanIOTaskThread)();
 }
 
+VulkanStorage::~VulkanStorage() {
+    MoerDelete(task_thread);
+    task_thread = nullptr;
+    MoerDelete(current_session);
+    current_session = nullptr;
+}
+
 VulkanCommitSession* VulkanStorage::GetCurrentSession() {
-    if (current_session && !current_session->IsComplete()) {
-        return current_session;
+    if (current_session) {
+        // A completion can race with the caller staging the next command on
+        // the same session. Never recycle a session that still owns
+        // uncommitted commands, and do not consider a fresh zero-task session
+        // complete.
+        if (!current_session->IsComplete() ||
+            current_session->HasUncommittedWork()) {
+            return current_session;
+        }
+        MoerDelete(current_session);
+        current_session = nullptr;
     }
-    assert(!current_session && "current session not signaled!");
     current_session = MoerNew(VulkanCommitSession)(*this);
     return current_session;
 }

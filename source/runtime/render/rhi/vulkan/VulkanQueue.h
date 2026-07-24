@@ -18,7 +18,6 @@
 #include <chrono>
 #include <condition_variable>
 #include <functional>
-#include <future>
 #include <mutex>
 #include <optional>
 #include <string_view>
@@ -917,7 +916,6 @@ public:
 
     IOWaitEvt Execute(IOQueueSubmission&& _submit) override;
     IOWaitEvt Execute(CmdSubmit&& _submit) override;
-    VulkanRuntimeSubmissionResult ExecuteForRuntime(CmdSubmit&& _submit) noexcept;
     FenceRef  GetFenceHandle() override;
     void      Sync(uint64 _timeline) override;
 
@@ -971,46 +969,50 @@ private:
     void EnableRuntimeDependencyWaits() noexcept;
     void CancelRuntimeDependencyWaits() noexcept;
 
-    struct TrackedExecuteResult {
-        VulkanRuntimeSubmissionResult runtime{};
-        uint64                        logical_timeline{0};
-    };
-
-    struct RuntimeExecuteState {
-        uint64                   logical_timeline{0};
-        VulkanOperationContext   context{};
-        VulkanOperationResult    outcome{
-            EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN
-        };
-        VulkanAllocatorBatch     allocators{};
-        bool                     timeline_reserved{false};
-        bool                     recoverable_rejection{false};
-        bool                     native_submit_resolved{false};
-        bool                     completion_committed{false};
-    };
-
-    struct CopySubmissionRequest {
-        explicit CopySubmissionRequest(CmdSubmit&& _submit) :
+    struct CurrentVulkanCopyRecordedSubmit {
+        explicit CurrentVulkanCopyRecordedSubmit(CmdSubmit&& _submit) :
             submit(std::move(_submit)) {}
 
-        std::promise<TrackedExecuteResult> completion;
-        CmdSubmit                          submit;
+        CurrentVulkanCopyRecordedSubmit(
+            const CurrentVulkanCopyRecordedSubmit&
+        ) = delete;
+        CurrentVulkanCopyRecordedSubmit& operator=(
+            const CurrentVulkanCopyRecordedSubmit&
+        ) = delete;
+        CurrentVulkanCopyRecordedSubmit(
+            CurrentVulkanCopyRecordedSubmit&&
+        ) noexcept = default;
+        CurrentVulkanCopyRecordedSubmit& operator=(
+            CurrentVulkanCopyRecordedSubmit&&
+        ) noexcept = default;
+
+        CmdSubmit                           submit;
+        VulkanOperationContext              context{};
+        uint64                              logical_timeline{0};
+        VulkanAllocatorBatch                allocators{};
+        RHITransferableOwnershipGate::Lease execution_lease{};
+        VulkanOperationResult               retirement_outcome{
+            EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN
+        };
+        bool recoverable_rejection{false};
+        bool native_submit_resolved{false};
+        bool completion_committed{false};
     };
 
-    TrackedExecuteResult ExecuteOnSubmissionOwner(CmdSubmit&& _submit) noexcept;
-    void                 SubmissionThreadMain();
-    TrackedExecuteResult ExecuteTracked(CmdSubmit&& _submit) noexcept;
-    TrackedExecuteResult ExecuteTrackedImpl(
-        CmdSubmit&           _submit,
-        RuntimeExecuteState& _state
-    );
+    std::optional<CurrentVulkanCopyRecordedSubmit>
+        TranslateForRuntime(CmdSubmit&& _submit) noexcept;
+    VulkanRuntimeSubmissionResult SubmitRecordedForRuntime(
+        CurrentVulkanCopyRecordedSubmit _recorded
+    ) noexcept;
+    void RejectRecordedForRuntime(
+        CurrentVulkanCopyRecordedSubmit&& _recorded,
+        VkResult                           _result
+    ) noexcept;
+    [[nodiscard]] bool ClaimRuntimeOwnership();
+    void ReleaseRuntimeOwnership() noexcept;
     void CommitRuntimeSubmitCompletion(
-        CmdSubmit&&                 _submit,
-        VulkanAllocatorBatch&&      _allocators,
-        const VulkanOperationResult& _outcome,
-        const VulkanOperationContext& _context,
-        uint64                       _logical_timeline,
-        bool                         _has_queue_timeline_reservation
+        CurrentVulkanCopyRecordedSubmit& _recorded,
+        const VulkanOperationResult&      _outcome
     ) noexcept;
     UniquePtr<VulkanAllocator>                GetAllocator();
     void                                      CompleteAll(uint64 _timeline);
@@ -1018,9 +1020,14 @@ private:
     DEQueue<IOEvent>                          event_queue;
 
 private:
+    enum class EExecutionOwnershipMode : uint8_t {
+        Unclaimed,
+        Runtime,
+    };
+
     VulkanDevice& device;
 
-    uint                    last_frame     = 0;
+    std::atomic<uint64>     last_frame{0};
     std::atomic<uint64>     cpu_settled_frame = 0;
     uint64                  retirement_enqueued_serial{0};
     std::atomic<uint64>     retirement_settled_serial{0};
@@ -1032,18 +1039,16 @@ private:
     VkNativeQueue           queue;
     std::jthread            thread;
 
-    DEQueue<UniquePtr<CopySubmissionRequest>> submission_requests;
-    std::mutex                                  submission_mutex;
-    std::condition_variable                     submission_cv;
-    std::atomic_bool                            submission_accepting{true};
-    std::atomic_bool                            dependency_waits_enabled{true};
-    std::jthread                                submission_thread;
-    std::atomic<uint32>                         submission_thread_id{0};
+    std::atomic_bool dependency_waits_enabled{true};
 
     //tmp
     LockFreeQueueBase<IOCmd> commands;
 
     std::mutex                                     exec_mutex;
+    RHITransferableOwnershipGate                   runtime_execution_gate;
+    std::atomic<EExecutionOwnershipMode>           execution_ownership_mode{
+        EExecutionOwnershipMode::Unclaimed
+    };
     Array<VkSemaphore>                             pending_semaphores;
     Queue<std::pair<IOQueueCommandList&&, uint64>> io_thread_cmds;
     std::mutex                                     io_mutex;

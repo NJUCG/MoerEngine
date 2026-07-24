@@ -25,6 +25,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
+#include "VulkanSubmissionDiagnostics.h"
 #include "vulkan/vk_enum_string_helper.h"
 
 #include <limits>
@@ -4066,9 +4067,12 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
 
     bool VulkanFence::WaitSubmitted(
         uint64_t _value,
-        const std::atomic_bool* _continue_waiting
+        const std::atomic_bool* _continue_waiting,
+        EQueueType              _waiting_queue,
+        uint32                  _dependency_count
     ) {
         std::unique_lock<std::mutex> lock(cv_m);
+        bool notified_blocked_wait = false;
         while (
             submitted_value < _value &&
             !rejected_values.contains(_value) &&
@@ -4077,6 +4081,13 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
             (_continue_waiting == nullptr ||
              _continue_waiting->load(std::memory_order_acquire))
         ) {
+            if (!notified_blocked_wait) {
+                NotifyVulkanSubmissionDependencyWaitBlocked(
+                    _waiting_queue,
+                    _dependency_count
+                );
+                notified_blocked_wait = true;
+            }
             cv.wait_for(lock, std::chrono::milliseconds(50));
         }
         return submitted_value >= _value &&

@@ -1,6 +1,7 @@
 #include "VulkanAllocator.h"
 #include "VulkanDevice.h"
 #include "VulkanQueue.h"
+#include "RenderAPI.h"
 #include "misc/STL.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
@@ -47,12 +48,16 @@ private:
     Array<IOSignalEvt> signal_events;
     std::atomic_uint   pending_tasks = 0;
     bool               signaled      = false;
-    uint               task_count    = 1;
+    uint               task_count    = 0;
 
     void CommitWithoutSignal();
     void CommitSignaled();
     void FlushAllCommit();
     void CommitIOTask(class VulkanIOTask*);
+    bool HasUncommittedWork() const {
+        return !file_cmds.empty() || !mem_cmds.empty() ||
+               !signal_events.empty();
+    }
 };
 
 struct VkExecCallback {
@@ -116,11 +121,12 @@ private:
     uint64                timeline = 0;
 };
 
-class VulkanStorage {
+class RENDER_API VulkanStorage {
 public:
     friend VulkanCommitSession;
     friend class VulkanIOTaskThread;
     VulkanStorage(VulkanDevice& _device, VkCopyQueue& _copy_queue);
+    ~VulkanStorage();
     void Enqueue(FileHandle _handle, size_t _file_offset, void* _ptr, size_t _len);
     void Enqueue(FileHandle _handle, size_t _file_offset, void* _buffer_ptr, size_t _offset, size_t _len);
     void Enqueue(
@@ -153,7 +159,7 @@ private:
 
 private:
     VkCopyQueue&               copy_queue;
-    VulkanCommitSession*       current_session;
+    VulkanCommitSession*       current_session{nullptr};
     struct VulkanIOTaskThread* task_thread;
 };
 } // namespace Moer::Render

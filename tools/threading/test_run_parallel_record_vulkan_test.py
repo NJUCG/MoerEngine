@@ -22,6 +22,26 @@ def pass_line(
         "[TESTCASE][PASS] name=ParallelTranslateRecoverableRejection "
         "distinct_native=true suffix_recorded=true signals=rejected "
         "callbacks=exactly_once runtime=recovered same_scope_reentry=Compute\n"
+        "[TESTCASE][PASS] name=ActiveRdgGraphicsCopyRoundTrip "
+        f"mode={mode} ownership=release-acquire transfers=2 gpu_syncs=2 "
+        "graphics_native=0 copy_native=2 native_alias=false readback=verified\n"
+        "[TESTCASE][PASS] name=RecoverableCopyDependencyRejection "
+        "fence=reused rejected=N recovered=N+1 stale_wait=rejected "
+        "publication=Submission native_rejected=0 native_accepted=3 "
+        "native_owner=verified runtime=recovered replay=0\n"
+        "[TESTCASE][PASS] name=CrossQueueSubmissionTopology "
+        "batches=4 queues=Graphics,Compute,Copy,Graphics ownership=explicit "
+        "native_owner=verified native_alias=false callbacks=exactly_once "
+        "replay=0\n"
+        "[TESTCASE][PASS] name=DirectCopyExecuteRejected "
+        "runtime_claim=exclusive native_submit=0 callbacks=exactly_once "
+        "signal=rejected replay=0\n"
+        "[TESTCASE][PASS] name=VulkanStorageUnifiedCopySubmission "
+        "commits=2 signals=2 native_submit=2 native_owner=Submission "
+        "session_recycle=verified readback=verified\n"
+        "[TESTCASE][PASS] name=ShutdownDependencyCancellation "
+        "queues=Copy,Graphics copy_wait=entered dependency=unpublished "
+        "native_submit=0 sync_wait=registered concurrent_sync=drained\n"
     )
 
 
@@ -94,6 +114,104 @@ class VulkanRunnerTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(
             runner.VulkanTestError, "incomplete recoverable"
+        ):
+            runner.validate_log("serial", text)
+
+    def test_copy_contracts_require_real_native_submission_owner(self) -> None:
+        text = pass_line("serial", "false").replace(
+            "native_owner=verified runtime=recovered",
+            "native_owner=legacy runtime=recovered",
+            1,
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "recoverable Copy rejection"
+        ):
+            runner.validate_log("serial", text)
+
+    def test_copy_contracts_require_rejected_packets_skip_native_submit(
+        self,
+    ) -> None:
+        text = pass_line("serial", "false").replace(
+            "native_rejected=0 native_accepted=3",
+            "native_rejected=1 native_accepted=3",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "recoverable Copy rejection"
+        ):
+            runner.validate_log("serial", text)
+
+    def test_copy_contracts_require_alias_aware_gpu_sync_count(self) -> None:
+        text = pass_line("serial", "false").replace(
+            "gpu_syncs=2 graphics_native=0 copy_native=2 native_alias=false",
+            "gpu_syncs=2 graphics_native=0 copy_native=0 native_alias=true",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "Graphics-Copy round-trip"
+        ):
+            runner.validate_log("serial", text)
+
+    def test_copy_contracts_require_deterministic_shutdown_wait(self) -> None:
+        text = pass_line("serial", "false").replace(
+            "copy_wait=entered dependency=unpublished",
+            "copy_wait=unobserved dependency=unpublished",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "shutdown dependency cancellation"
+        ):
+            runner.validate_log("serial", text)
+
+    def test_copy_contracts_require_cross_queue_native_owner(self) -> None:
+        text = pass_line("serial", "false").replace(
+            "ownership=explicit native_owner=verified native_alias=false",
+            "ownership=explicit native_owner=legacy native_alias=false",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "cross-queue Submission ownership"
+        ):
+            runner.validate_log("serial", text)
+
+    def test_copy_contracts_require_direct_execute_skip_native_submit(
+        self,
+    ) -> None:
+        text = pass_line("serial", "false").replace(
+            "runtime_claim=exclusive native_submit=0 callbacks=exactly_once",
+            "runtime_claim=exclusive native_submit=1 callbacks=exactly_once",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "direct Copy fail-closed"
+        ):
+            runner.validate_log("serial", text)
+
+    def test_copy_contracts_require_io_session_recycle_and_native_submit(
+        self,
+    ) -> None:
+        text = pass_line("serial", "false").replace(
+            "commits=2 signals=2 native_submit=2 native_owner=Submission",
+            "commits=2 signals=2 native_submit=1 native_owner=Submission",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "VulkanStorage unified Copy submission"
+        ):
+            runner.validate_log("serial", text)
+
+    def test_copy_contracts_require_shutdown_skip_native_submit(self) -> None:
+        text = pass_line("serial", "false").replace(
+            "dependency=unpublished native_submit=0 sync_wait=registered",
+            "dependency=unpublished native_submit=1 sync_wait=registered",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "shutdown dependency cancellation"
+        ):
+            runner.validate_log("serial", text)
+
+    def test_copy_contracts_require_round_trip_mode(self) -> None:
+        text = pass_line("serial", "false").replace(
+            "mode=serial ownership=release-acquire transfers=2",
+            "mode=parallel ownership=release-acquire transfers=2",
+            1,
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "Graphics-Copy round-trip"
         ):
             runner.validate_log("serial", text)
 
