@@ -530,10 +530,12 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     bool graph_composition_recorded         = false;
     bool graph_antialias_recorded           = false;
     bool graph_tone_mapping_recorded        = false;
+    bool graph_visualize_recorded           = false;
     bool linear_gbuffer_recorded            = false;
     bool linear_lighting_recorded           = false;
     bool linear_antialias_recorded           = false;
     bool linear_tone_mapping_recorded       = false;
+    bool linear_visualize_recorded          = false;
     bool nrd_recorded                       = false;
     uint8 gbuffer_history_bit               = 0;
     float tone_mapping_elapsed_for_commit   = 0.f;
@@ -865,13 +867,23 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                      state.rt_ctx->frame_rt.resolved_color,
                      state.rt_ctx->frame_rt.ldr_color
                  ));
+            const bool visualize_in_graph = tone_mapping_in_graph;
+            const bool visualize_added =
+                !visualize_in_graph ||
+                (tone_mapping_added &&
+                 state.visualize_pass->AddPasses(
+                     graph,
+                     graph_resources,
+                     *state.rt_ctx,
+                     state.visualize_config
+                 ));
             if (!gbuffer_added || !lighting_added || !composition_added ||
-                !antialias_added || !tone_mapping_added) {
+                !antialias_added || !tone_mapping_added || !visualize_added) {
                 state.render_graph_fallback_latched = true;
                 LOG_ERROR(
                     "[RenderGraph][Fallback] Raytracing primary graph could not "
                     "import a required GBuffer/Lighting/Composition/AntiAlias/"
-                    "ToneMapping resource. Using the linear path for this "
+                    "ToneMapping/Visualize resource. Using the linear path for this "
                     "renderer instance."
                 );
             } else if (!graph.Compile()) {
@@ -944,6 +956,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                     graph_antialias_recorded   = antialias_in_graph;
                     graph_tone_mapping_recorded =
                         tone_mapping_in_graph;
+                    graph_visualize_recorded = visualize_in_graph;
                 } else {
                     state.render_graph_fallback_latched = true;
                     LOG_ERROR(
@@ -976,7 +989,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 *state.rt_ctx,
                 graph_composition_recorded,
                 graph_antialias_recorded,
-                graph_tone_mapping_recorded
+                graph_tone_mapping_recorded,
+                graph_visualize_recorded
             );
         }
         feedback.configured_local_light_sample_mode = local_light_sampling.configured_mode;
@@ -1070,13 +1084,14 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             );
             linear_tone_mapping_recorded = true;
         }
-        {
+        if (!graph_visualize_recorded) {
             ScopedGpuMarker pass_marker(
                 cmd_list, "Pass: Visualize", GpuMarkerPalette::Pass()
             );
             state.visualize_pass->Process(
-                cmd_list, *state.rt_ctx, state.visualize_config, bindless_array
+                cmd_list, *state.rt_ctx, state.visualize_config
             );
+            linear_visualize_recorded = true;
         }
 
         const auto& debug_input = frame_packet.debug_input;
@@ -1257,7 +1272,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     if (graph_primary_recorded) {
         state.normal_roughness_readable = true;
     } else if (linear_gbuffer_recorded) {
-        state.normal_roughness_readable = nrd_recorded;
+        state.normal_roughness_readable =
+            nrd_recorded || linear_visualize_recorded;
     }
     if (!skip_present) {
         PresentUiDrawFrame(frame_packet.ui_draw_frame, ui_execution_thread);

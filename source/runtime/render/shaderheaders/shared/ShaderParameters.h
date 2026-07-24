@@ -266,9 +266,8 @@ struct CompositingConstants {
 };
 
 struct VisualizeParams {
-    ViewParam                 main_view;
-    RaytracingBindlessHandles bindless_handles;
-    Grid::Params              grid_params;
+    ViewParam    main_view;
+    Grid::Params grid_params;
 
     uint2  output_size;
     float2 resolution_scale;

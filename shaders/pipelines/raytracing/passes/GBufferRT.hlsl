@@ -89,6 +89,13 @@ float3 UintHashToColor(uint _idx) {
 #if !USE_RAYQUERY
     uint2 pixel_pos = DispatchRaysIndex().xy;
 #endif
+    uint output_width;
+    uint output_height;
+    gbuffer_view_depth.GetDimensions(output_width, output_height);
+    if (any(pixel_pos >= uint2(output_width, output_height))) {
+        return;
+    }
+
     RayDesc ray = Moer::SetupPrimaryRay(pixel_pos, gbuffer_constants.main_view);
 
     uint instance_mask = Moer::RTVM_ALL;

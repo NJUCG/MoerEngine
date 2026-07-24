@@ -41,6 +41,14 @@ float GetModifiedRoughnessFromNormalVariance(float _roughness,
 
 [numthreads(16, 16, 1)] void main(uint2 _pixel_pos
                                   : SV_DISPATCHTHREADID) {
+  uint width;
+  uint height;
+  rw_specular_roughness.GetDimensions(width, height);
+  const uint2 extent = uint2(width, height);
+  if (any(_pixel_pos >= extent)) {
+    return;
+  }
+
   float3 normal = Math::OctToNdirUnorm32(r_normal[_pixel_pos]);
   float4 spec_roughness =
       Moer::Unpack_R8G8B8A8_Gamma_UFLOAT(rw_specular_roughness[_pixel_pos]);
@@ -57,7 +65,8 @@ float GetModifiedRoughnessFromNormalVariance(float _roughness,
     for (int j = -1; j <= 1; j++) {
       if (i == 0 && j == 0)
         continue;
-      uint2 pos = _pixel_pos + uint2(i, j);
+      int2 pos = clamp(int2(_pixel_pos) + int2(i, j), int2(0, 0),
+                       int2(extent) - 1);
 
       float3 p_normal = Math::OctToNdirUnorm32(r_normal[pos]);
       float p_z = r_view_depth[pos];
@@ -85,5 +94,15 @@ float GetModifiedRoughnessFromNormalVariance(float _roughness,
 #if WITH_NRD
   rw_normal_roughness[_pixel_pos] =
       NRD_FrontEnd_PackNormalAndRoughness(normal, roughness, 0u);
+#else
+  // Match the configured NRD RGBA8_UNORM normal and linear roughness
+  // encoding even when the denoiser plugin is disabled. Visualize and other
+  // graph consumers can then rely on this resource being initialized.
+  float max_normal_component =
+      max(abs(normal.x), max(abs(normal.y), abs(normal.z)));
+  float3 encoded_normal =
+      normal / max(max_normal_component, 1e-6f) * 0.5f + 0.5f;
+  rw_normal_roughness[_pixel_pos] =
+      float4(encoded_normal, saturate(roughness));
 #endif
 }

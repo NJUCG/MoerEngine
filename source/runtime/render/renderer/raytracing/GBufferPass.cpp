@@ -147,13 +147,31 @@ void GBufferPass::RecordLegacyTailBridge(
     const RTContext& rt_ctx,
     bool             composition_recorded,
     bool             antialias_recorded,
-    bool             tone_mapping_recorded
+    bool             tone_mapping_recorded,
+    bool             visualize_recorded
 ) const {
     // Active RDG sources own explicit GENERAL-layout exports, while the
     // remaining legacy tail starts a fresh backend tracker. Seed every
     // sampled legacy-tail input explicitly so NRD/Composition cannot observe
     // the preferred GENERAL layout through a sampled-image descriptor.
     const FrameResources& frame = rt_ctx.frame_rt;
+    if (visualize_recorded) {
+        // A complete FrameCore graph owns the renderer through Visualize.
+        // The fresh legacy tail only needs the two possible UI inputs. Both
+        // transitions target graphics sampling; its submit epilogue restores
+        // debug_color to the UAV-capable texture's preferred GENERAL layout.
+        cmd_list.TextureBarriers(
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            EPassType::Graphics,
+            Array<ReadTexture>{
+                {frame.debug_color->GetView(), ETextureState::SAMPLE},
+                {frame.ldr_color->GetView(), ETextureState::SAMPLE},
+            }
+        );
+        return;
+    }
+
     Array<ReadTexture> sampled_inputs{
         {frame.view_depth->GetView(), ETextureState::SAMPLE},
         {frame.diffuse_albedo->GetView(), ETextureState::SAMPLE},
@@ -165,6 +183,8 @@ void GBufferPass::RecordLegacyTailBridge(
         {frame.prev_normal->GetView(), ETextureState::SAMPLE},
         {frame.emission->GetView(), ETextureState::SAMPLE},
         {frame.motion->GetView(), ETextureState::SAMPLE},
+        {frame.clip_depth->GetView(), ETextureState::SAMPLE},
+        {frame.normal_roughness->GetView(), ETextureState::SAMPLE},
         {frame.diffuse_lighting->GetView(), ETextureState::SAMPLE},
         {frame.specular_lighting->GetView(), ETextureState::SAMPLE},
     };
@@ -183,14 +203,6 @@ void GBufferPass::RecordLegacyTailBridge(
             ReadTexture{frame.ldr_color->GetView(), ETextureState::SAMPLE}
         );
     }
-#if WITH_NRD
-    sampled_inputs.emplace_back(
-        ReadTexture{
-            frame.normal_roughness->GetView(),
-            ETextureState::SAMPLE
-        }
-    );
-#endif
     if (rt_ctx.env_map) {
         // Lighting and Composition both sample the bindless environment map.
         // The graph exports it to the preferred GENERAL boundary, so seed the
@@ -272,13 +284,12 @@ bool GBufferPass::AddPasses(
     );
     initial_texture(
         graph_resources.clip_depth,
-        RenderGraph::TextureState::UnorderedAccess,
-        RenderGraph::AccessMode::Write
+        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::AccessMode::Read
     );
-#if WITH_NRD
     // The mixed graph/legacy frame tail restores UAV-capable textures to the
     // Vulkan backend's preferred GENERAL layout. Preserve whether the last
-    // meaningful access was an NRD read or a GBuffer write.
+    // meaningful access was a Visualize/NRD read or a GBuffer write.
     initial_texture(
         graph_resources.normal_roughness,
         normal_roughness_readable ?
@@ -288,7 +299,6 @@ bool GBufferPass::AddPasses(
             RenderGraph::AccessMode::Read :
             RenderGraph::AccessMode::Write
     );
-#endif
     graph.SetInitialState(
         constants,
         RenderGraph::BufferState::ShaderResource,
@@ -395,13 +405,11 @@ bool GBufferPass::AddPasses(
                 .Read(
                     graph_resources.current_view_depth,
                     RenderGraph::TextureState::Sampled
+                )
+                .Write(
+                    graph_resources.normal_roughness,
+                    RenderGraph::TextureState::UnorderedAccess
                 );
-#if WITH_NRD
-            builder.Write(
-                graph_resources.normal_roughness,
-                RenderGraph::TextureState::UnorderedAccess
-            );
-#endif
         },
         [this, command, resources](CommandList& cmd_list) {
             ScopedGpuMarker marker(
@@ -441,16 +449,14 @@ bool GBufferPass::AddPasses(
     }
     export_texture(
         graph_resources.clip_depth,
-        RenderGraph::TextureState::UnorderedAccess,
-        RenderGraph::AccessMode::Write
+        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::AccessMode::Read
     );
-#if WITH_NRD
     export_texture(
         graph_resources.normal_roughness,
         RenderGraph::TextureState::ShaderResource,
         RenderGraph::AccessMode::Read
     );
-#endif
     graph.Export(
         constants,
         RenderGraph::BufferState::ShaderResource,

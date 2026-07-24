@@ -28,6 +28,7 @@ struct RTGraphFrameResources {
     RenderGraph::TextureHandle hdr_color{};
     RenderGraph::TextureHandle resolved_color{};
     RenderGraph::TextureHandle ldr_color{};
+    RenderGraph::TextureHandle debug_color{};
     RenderGraph::TextureHandle feedback_color_ping{};
     RenderGraph::TextureHandle feedback_color_pong{};
     RenderGraph::TextureHandle env_map{};
@@ -121,6 +122,8 @@ inline RTGraphFrameResources RegisterRTGraphFrameResources(
             ImportRTGraphTexture(graph, "RT.resolved_color", frame.resolved_color),
         .ldr_color =
             ImportRTGraphTexture(graph, "RT.ldr_color", frame.ldr_color),
+        .debug_color =
+            ImportRTGraphTexture(graph, "RT.debug_color", frame.debug_color),
         .feedback_color_ping = ImportRTGraphTexture(
             graph,
             "RT.feedback_color_ping",
