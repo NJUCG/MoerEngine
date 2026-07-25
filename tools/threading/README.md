@@ -359,7 +359,7 @@ changes, and native copy/clear calls contribute units; GPU byte counts,
 dispatch group counts, and indirect draw counts do not. A wave needs at least
 two qualifying jobs, otherwise it safely uses the serial recorder.
 
-Run the six-mode Vulkan correctness/fallback gate after building the target:
+Run the seven-mode Vulkan correctness/fallback gate after building the target:
 
 ```powershell
 python tools/threading/run_parallel_record_vulkan_test.py `
@@ -368,8 +368,9 @@ python tools/threading/run_parallel_record_vulkan_test.py `
 ```
 
 The runner checks serial, forced-parallel, injected worker failure, production
-gate rejection, production-heavy admission, and hard cross-queue Translate
-failure retirement. It requires real worker overlap, stable
+gate rejection, production-heavy admission, hard cross-queue Translate failure
+retirement, and multi-segment prefix-submit/suffix-failure retirement. It
+requires real worker overlap, stable
 `wave -> serial island -> wave` assembly, GPU readback correctness, exact
 failure/fallback counts, no native submit after the injected hard fault, and
 clean Vulkan logs. The ready-native-lane gate accepts a PASS only when the
