@@ -56,6 +56,38 @@ TryInstallVulkanSourceSubmissionObserver(const VulkanSourceSubmissionObserver* _
 [[nodiscard]] RENDER_API bool
 RemoveVulkanSourceSubmissionObserver(const VulkanSourceSubmissionObserver* _observer) noexcept;
 
+struct VulkanBatchPreflightRejectionEvent {
+    uint64         batch_sequence{0};
+    uint32         thread_id{0};
+    ERHIThreadRole thread_role{ERHIThreadRole::Unknown};
+    bool           executable_preflight{false};
+};
+
+using VulkanBatchPreflightRejectionCallback =
+    void (*)(void*, const VulkanBatchPreflightRejectionEvent&) noexcept;
+
+struct VulkanBatchPreflightRejectionObserver {
+    void*                                 context{nullptr};
+    VulkanBatchPreflightRejectionCallback callback{nullptr};
+};
+
+// Narrow diagnostic seam reached after batch validation fails and before any
+// accepted pipeline prefix is drained or the malformed batch is terminalized.
+// The callback runs on the Translate owner and must not block or re-enter RHI.
+// Observer storage is caller-owned and must remain immutable while installed.
+// Quiesce Translate work before removal, then remove the observer before
+// destroying it or its context; removal does not wait for a callback that has
+// already loaded the observer. It is only queried on an already-failing
+// preflight path.
+[[nodiscard]] RENDER_API bool
+TryInstallVulkanBatchPreflightRejectionObserver(
+    const VulkanBatchPreflightRejectionObserver* _observer
+) noexcept;
+[[nodiscard]] RENDER_API bool
+RemoveVulkanBatchPreflightRejectionObserver(
+    const VulkanBatchPreflightRejectionObserver* _observer
+) noexcept;
+
 // A direct observation at the VkNativeQueue -> VulkanDevice submit boundary.
 // Unlike the source-packet observer above, this proves which OS thread and RHI
 // role actually invoked the native queue operation.

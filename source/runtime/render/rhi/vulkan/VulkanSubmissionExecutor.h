@@ -1,12 +1,16 @@
 #pragma once
 
 #include "rhi/RHIExecutorBackend.h"
+#include "rhi/RHISubmissionPipelinePolicy.h"
+#include "VulkanQueue.h"
 #include "VulkanSubmissionRequestDispatch.h"
 
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <exception>
 #include <future>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -25,7 +29,7 @@ namespace Moer::Render {
 // GPU execution across distinct native queues.
 class VulkanSubmissionExecutor final : public RHIBackendExecutor {
 public:
-    VulkanSubmissionExecutor();
+    explicit VulkanSubmissionExecutor(uint32 _batch_window = 2);
     ~VulkanSubmissionExecutor() override;
 
     void          Enqueue(RHIBackendSubmissionBatch&& _batch) override;
@@ -65,6 +69,53 @@ private:
         std::packaged_task<void()> execute{};
     };
 
+    struct PipelineFailure {
+        size_t reject_from{std::numeric_limits<size_t>::max()};
+        int32  result{0};
+        bool   recoverable{false};
+    };
+
+    struct PipelineSourceSlot {
+        EQueueType queue{EQueueType::Ignore};
+        uint64     async_queue_scope{0};
+        uint32     original_source_index{0};
+        uint32     source_segment_index{0};
+        uint32     source_segment_count{1};
+        bool       cross_native_predecessor_wait{false};
+        std::optional<VkCommandQueue::CurrentVulkanRecordedSubmit> command_packet{};
+    };
+
+    struct PipelineBatchState {
+        explicit PipelineBatchState(
+            uint64                      _sequence,
+            size_t                      _source_count,
+            std::shared_ptr<Completion> _completion
+        );
+
+        void AddWork() noexcept;
+        void FinishWork() noexcept;
+        void Seal() noexcept;
+        void PublishFailure(
+            size_t _reject_from,
+            int32  _result,
+            bool   _recoverable
+        ) noexcept;
+        [[nodiscard]] PipelineFailure ReadFailure() const noexcept;
+
+        uint64                       sequence{0};
+        Array<PipelineSourceSlot>    slots{};
+        std::shared_ptr<Completion>  completion{};
+        RHISubmissionPipelinePolicy::PipelineBatchWorkState work_state{};
+        std::atomic_bool             completion_signalled{false};
+        mutable std::mutex           failure_mutex{};
+        PipelineFailure              failure{};
+    };
+
+    struct StreamPosition {
+        uint64 batch_sequence{0};
+        size_t source_index{0};
+    };
+
     void RunExecutor();
     void RunSubmission();
     bool EnqueueSubmissionWork(SubmissionWork&& _work);
@@ -96,6 +147,27 @@ private:
         RHIBackendSubmissionBatch& _batch,
         BatchExceptionState&       _exception_state
     );
+    void ExecutePipelineSource(
+        const std::shared_ptr<PipelineBatchState>& _batch,
+        size_t                                     _source_index
+    ) noexcept;
+    void WaitForPipelineCapacity();
+    void DrainPipelineBatches();
+    void PrepareStreamSubmit(CmdSubmit& _submit, EQueueType _queue);
+    void UpdateStreamFrontier(
+        EQueueType _queue,
+        WaitEvent  _completion,
+        bool       _collapse
+    );
+    void ResetStreamScope() noexcept;
+    void LatchHardFailure(
+        StreamPosition _position,
+        int32          _result
+    ) noexcept;
+    [[nodiscard]] bool IsHardFailureAtOrBefore(
+        StreamPosition _position,
+        int32*         _result = nullptr
+    ) const noexcept;
     void ProcessSync(ERHISyncDepth _depth);
     void RejectBatch(
         RHIBackendSubmissionBatch&& _batch,
@@ -119,13 +191,20 @@ private:
     bool                       constructor_abort{false};
     bool                       stopped{false};
     bool                       claims_owned{false};
-    bool                       hard_failed{false};
     bool                       logged_multi_source_topology{false};
     bool                       logged_multi_segment_topology{false};
     bool                       logged_async_queue_scope{false};
-    bool                                                    logged_parallel_translate_wave{false};
-    int32                      hard_failure_result{0};
+    bool                       logged_parallel_translate_wave{false};
+    bool                       logged_cross_batch_pipeline{false};
     std::shared_ptr<Completion> stop_completion{};
+    size_t                     batch_window{2};
+    bool                       graphics_compute_share_native_lane{false};
+    std::deque<std::shared_ptr<Completion>> in_flight_batches{};
+
+    mutable std::mutex         hard_failure_mutex{};
+    std::optional<StreamPosition> hard_failure_position{};
+    int32                      hard_failure_result{0};
+
     StaticArray<bool, static_cast<size_t>(EQueueType::Num)> used_queues{};
     uint64                     last_copy_timeline{0};
     StaticArray<

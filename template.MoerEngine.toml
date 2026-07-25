@@ -26,6 +26,10 @@ parallel_record_verify = false
 parallel_record_profile = false
 # Backend CPU-recording work units per job; this is not a draw-count threshold.
 parallel_record_min_work_units_per_job = 64
+# Bounded number of RHI batches allowed to overlap Translate and Submission.
+# Runtime clamps this value to the supported range [1, 8].
+# If Graphics and Compute alias the same native queue, the effective window is 1.
+submission_batch_window = 2
 
 [engine.rhi]
 type = "Vulkan"

@@ -7,6 +7,7 @@
 #include "remote/RemoteModule.h"
 #include "RenderThread.h"
 #include "rhi/RHI.h"
+#include "rhi/RHISubmissionPipelinePolicy.h"
 #include "scripting/PythonRuntimeConfig.h"
 #include "scripting/ScriptHost.h"
 #include "shader/ShaderResourceManager.h"
@@ -595,6 +596,18 @@ void Engine::Init(
         ParseThreadingRasterLifecycleValidation(argc, argv);
     const auto raster_framebuffer_validation =
         ParseThreadingRasterFramebufferValidation(argc, argv);
+    const uint submission_batch_window =
+        RHISubmissionPipelinePolicy::ClampBatchWindow(
+            config.engine.threading.submission_batch_window
+        );
+    if (submission_batch_window != config.engine.threading.submission_batch_window) {
+        LOG_WARNING(
+            "[Threading] submission_batch_window={} is outside the supported range; "
+            "clamping to {}.",
+            config.engine.threading.submission_batch_window,
+            submission_batch_window
+        );
+    }
     if (renderer_switch_validation_enabled && raster_lifecycle_validation_enabled) {
         throw std::invalid_argument(
             "renderer-switch and Raster lifecycle validation modes are mutually exclusive"
@@ -619,7 +632,7 @@ void Engine::Init(
         "[Threading] render_thread={}, rhi_thread={}, rhi_bypass={}, max_frame_lag={}, "
         "profile_logging={}, parallel_recording={}, parallel_record_workers={}, "
         "parallel_record_verify={}, parallel_record_profile={}, "
-        "parallel_record_min_work_units_per_job={}",
+        "parallel_record_min_work_units_per_job={}, submission_batch_window={}",
         config.engine.threading.render_thread,
         config.engine.threading.rhi_thread,
         config.engine.threading.rhi_bypass,
@@ -629,7 +642,8 @@ void Engine::Init(
         config.engine.threading.parallel_record_workers,
         config.engine.threading.parallel_record_verify,
         config.engine.threading.parallel_record_profile,
-        config.engine.threading.parallel_record_min_work_units_per_job
+        config.engine.threading.parallel_record_min_work_units_per_job,
+        submission_batch_window
     );
 
     if (config.engine.threading.render_thread) {
@@ -690,6 +704,7 @@ void Engine::Init(
                 .parallel_record_profile = config.engine.threading.parallel_record_profile,
                 .parallel_record_min_work_units_per_job =
                     config.engine.threading.parallel_record_min_work_units_per_job,
+                .submission_batch_window = submission_batch_window,
                 .parallel_record_worker_throw_trigger =
                     parallel_record_worker_throw_trigger,
                 .vulkan_present_submit_fault_trigger = vulkan_present_submit_fault_trigger,
