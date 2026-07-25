@@ -17,17 +17,21 @@ void Expect(bool _condition, const char* _message) {
     }
 }
 
-RHIQueueTopology MakeTopology(
+constexpr RHIQueueTopology MakeTopology(
     bool     _graphics_available,
     uint32_t _graphics_native,
     bool     _compute_available,
-    uint32_t _compute_native
+    uint32_t _compute_native,
+    bool     _copy_available,
+    uint32_t _copy_native
 ) {
     RHIQueueTopology topology{};
     topology.graphics.available       = _graphics_available;
     topology.graphics.native_queue_id = _graphics_native;
     topology.compute.available        = _compute_available;
     topology.compute.native_queue_id  = _compute_native;
+    topology.copy.available           = _copy_available;
+    topology.copy.native_queue_id     = _copy_native;
     return topology;
 }
 
@@ -54,25 +58,56 @@ void DistinctNativeQueuesPreserveTheClampedWindow() {
         RHIQueueTopology result{};
         result.graphics.native_queue_id = 3;
         result.compute.native_queue_id  = 7;
+        result.copy.native_queue_id     = 11;
         return result;
     }();
     static_assert(!GraphicsComputeShareNativeLane(topology));
+    static_assert(!HasAvailableNativeLaneAlias(topology));
     static_assert(ResolveEffectiveBatchWindow(0, topology) == 1);
     static_assert(ResolveEffectiveBatchWindow(2, topology) == 2);
     static_assert(ResolveEffectiveBatchWindow(9, topology) == 8);
 }
 
-void GraphicsComputeAliasForcesOneBatchInFlight() {
+void AnyAvailableNativeLaneAliasForcesOneBatchInFlight() {
     using namespace RHISubmissionPipelinePolicy;
 
-    const RHIQueueTopology topology = MakeTopology(true, 5, true, 5);
+    constexpr RHIQueueTopology graphics_compute =
+        MakeTopology(true, 5, true, 5, true, 9);
     Expect(
-        GraphicsComputeShareNativeLane(topology),
+        GraphicsComputeShareNativeLane(graphics_compute),
         "available Graphics/Compute alias was not detected"
     );
     Expect(
-        ResolveEffectiveBatchWindow(8, topology) == 1,
+        HasAvailableNativeLaneAlias(graphics_compute) &&
+            ResolveEffectiveBatchWindow(8, graphics_compute) == 1,
         "Graphics/Compute alias did not force a single in-flight batch"
+    );
+
+    constexpr RHIQueueTopology graphics_copy =
+        MakeTopology(true, 13, true, 17, true, 13);
+    static_assert(!GraphicsComputeShareNativeLane(graphics_copy));
+    Expect(
+        HasAvailableNativeLaneAlias(graphics_copy) &&
+            ResolveEffectiveBatchWindow(8, graphics_copy) == 1,
+        "Graphics/Copy alias did not force a single in-flight batch"
+    );
+
+    constexpr RHIQueueTopology compute_copy =
+        MakeTopology(true, 19, true, 23, true, 23);
+    static_assert(!GraphicsComputeShareNativeLane(compute_copy));
+    Expect(
+        HasAvailableNativeLaneAlias(compute_copy) &&
+            ResolveEffectiveBatchWindow(8, compute_copy) == 1,
+        "Compute/Copy alias did not force a single in-flight batch"
+    );
+
+    constexpr RHIQueueTopology all_alias =
+        MakeTopology(true, 29, true, 29, true, 29);
+    Expect(
+        GraphicsComputeShareNativeLane(all_alias) &&
+            HasAvailableNativeLaneAlias(all_alias) &&
+            ResolveEffectiveBatchWindow(8, all_alias) == 1,
+        "three-way native queue alias did not force a single in-flight batch"
     );
 }
 
@@ -80,9 +115,10 @@ void UnavailableLogicalQueuesDoNotTriggerAliasFallback() {
     using namespace RHISubmissionPipelinePolicy;
 
     const RHIQueueTopology compute_unavailable =
-        MakeTopology(true, 0, false, 0);
+        MakeTopology(true, 0, false, 0, true, 2);
     Expect(
-        !GraphicsComputeShareNativeLane(compute_unavailable),
+        !GraphicsComputeShareNativeLane(compute_unavailable) &&
+            !HasAvailableNativeLaneAlias(compute_unavailable),
         "unavailable Compute queue triggered alias fallback"
     );
     Expect(
@@ -91,14 +127,34 @@ void UnavailableLogicalQueuesDoNotTriggerAliasFallback() {
     );
 
     const RHIQueueTopology graphics_unavailable =
-        MakeTopology(false, 11, true, 11);
+        MakeTopology(false, 11, true, 11, true, 17);
     Expect(
-        !GraphicsComputeShareNativeLane(graphics_unavailable),
+        !GraphicsComputeShareNativeLane(graphics_unavailable) &&
+            !HasAvailableNativeLaneAlias(graphics_unavailable),
         "unavailable Graphics queue triggered alias fallback"
     );
     Expect(
         ResolveEffectiveBatchWindow(9, graphics_unavailable) == 8,
         "unavailable Graphics queue bypassed the ordinary clamp"
+    );
+
+    const RHIQueueTopology copy_unavailable =
+        MakeTopology(true, 31, true, 37, false, 31);
+    Expect(
+        !HasAvailableNativeLaneAlias(copy_unavailable),
+        "unavailable Copy queue triggered alias fallback"
+    );
+    Expect(
+        ResolveEffectiveBatchWindow(6, copy_unavailable) == 6,
+        "unavailable Copy queue changed the configured batch window"
+    );
+
+    const RHIQueueTopology only_copy_available =
+        MakeTopology(false, 41, false, 41, true, 41);
+    Expect(
+        !HasAvailableNativeLaneAlias(only_copy_available) &&
+            ResolveEffectiveBatchWindow(3, only_copy_available) == 3,
+        "unavailable duplicate logical queues aliased the sole available Copy queue"
     );
 }
 
@@ -221,7 +277,7 @@ int main() {
     try {
         ClampContract();
         DistinctNativeQueuesPreserveTheClampedWindow();
-        GraphicsComputeAliasForcesOneBatchInFlight();
+        AnyAvailableNativeLaneAliasForcesOneBatchInFlight();
         UnavailableLogicalQueuesDoNotTriggerAliasFallback();
         BatchWorkStateSequentialContract();
         BatchWorkStateSealFinishRaceHasOneTerminalOwner();

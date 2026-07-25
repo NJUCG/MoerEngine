@@ -18,6 +18,7 @@
 #include <thread>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 namespace Moer::Render {
 
@@ -75,6 +76,11 @@ private:
         bool   recoverable{false};
     };
 
+    using RecordedSourcePacket = std::variant<
+        std::monostate,
+        VkCommandQueue::CurrentVulkanRecordedSubmit,
+        VkCopyQueue::CurrentVulkanCopyRecordedSubmit>;
+
     struct PipelineSourceSlot {
         EQueueType queue{EQueueType::Ignore};
         uint64     async_queue_scope{0};
@@ -82,7 +88,7 @@ private:
         uint32     source_segment_index{0};
         uint32     source_segment_count{1};
         bool       cross_native_predecessor_wait{false};
-        std::optional<VkCommandQueue::CurrentVulkanRecordedSubmit> command_packet{};
+        RecordedSourcePacket recorded_packet{};
     };
 
     struct PipelineBatchState {
@@ -151,6 +157,33 @@ private:
         const std::shared_ptr<PipelineBatchState>& _batch,
         size_t                                     _source_index
     ) noexcept;
+    [[nodiscard]] RecordedSourcePacket TranslateSourceForRuntime(
+        EQueueType _queue,
+        CmdSubmit&& _submit
+    ) noexcept;
+    [[nodiscard]] VulkanRuntimeSubmissionResult SubmitRecordedSourceForRuntime(
+        EQueueType            _queue,
+        RecordedSourcePacket&& _packet
+    ) noexcept;
+    void RejectRecordedSourceForRuntime(
+        EQueueType             _queue,
+        RecordedSourcePacket&& _packet,
+        VkResult               _result
+    ) noexcept;
+    void RejectSourceForRuntime(
+        EQueueType _queue,
+        CmdSubmit&& _submit,
+        VkResult    _result
+    ) noexcept;
+    [[nodiscard]] static bool HasRecordedSourcePacket(
+        const RecordedSourcePacket& _packet
+    ) noexcept;
+    [[nodiscard]] static CmdSubmit* GetRecordedSourceSubmit(
+        RecordedSourcePacket& _packet
+    ) noexcept;
+    [[nodiscard]] VkResult GetQueueFaultResult(
+        EQueueType _queue
+    ) const noexcept;
     void WaitForPipelineCapacity();
     void DrainPipelineBatches();
     void PrepareStreamSubmit(CmdSubmit& _submit, EQueueType _queue);
@@ -198,7 +231,7 @@ private:
     bool                       logged_cross_batch_pipeline{false};
     std::shared_ptr<Completion> stop_completion{};
     size_t                     batch_window{2};
-    bool                       graphics_compute_share_native_lane{false};
+    bool                       runtime_queues_share_native_lane{false};
     std::deque<std::shared_ptr<Completion>> in_flight_batches{};
 
     mutable std::mutex         hard_failure_mutex{};

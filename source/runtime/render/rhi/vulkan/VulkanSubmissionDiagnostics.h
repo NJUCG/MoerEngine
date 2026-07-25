@@ -31,6 +31,40 @@ struct VulkanSourceSubmissionObserver {
     VulkanSourceSubmissionCallback callback{nullptr};
 };
 
+enum class EVulkanSourceTranslationPhase : uint8_t {
+    Begin = 0,
+    Recorded,
+    Failed,
+};
+
+// Observation around one explicit-RDG source's Translate operation. Recorded
+// proves that the move-only packet has acquired its queue allocator/session
+// state and is ready for the stable Submission cursor; it does not imply a
+// native submit.
+struct VulkanSourceTranslationEvent {
+    uint64                        batch_sequence{0};
+    uint32                        source_index{0};
+    uint32                        original_source_index{0};
+    uint32                        source_segment_index{0};
+    uint32                        source_segment_count{1};
+    EQueueType                    queue{EQueueType::Ignore};
+    uint32                        native_queue_id{0};
+    uint64                        async_queue_scope{0};
+    uint32                        thread_id{0};
+    ERHIThreadRole                thread_role{ERHIThreadRole::Unknown};
+    EVulkanSourceTranslationPhase phase{
+        EVulkanSourceTranslationPhase::Begin
+    };
+};
+
+using VulkanSourceTranslationCallback =
+    void (*)(void*, const VulkanSourceTranslationEvent&) noexcept;
+
+struct VulkanSourceTranslationObserver {
+    void*                           context{nullptr};
+    VulkanSourceTranslationCallback callback{nullptr};
+};
+
 // Narrow for-testing seam for the real multi-segment completion aggregate.
 // It deliberately exposes only observable callback ordering/counts, not the
 // backend-private aggregate or its synchronization storage.
@@ -55,6 +89,18 @@ RunVulkanMultiSegmentCompletionProbeForTesting();
 TryInstallVulkanSourceSubmissionObserver(const VulkanSourceSubmissionObserver* _observer) noexcept;
 [[nodiscard]] RENDER_API bool
 RemoveVulkanSourceSubmissionObserver(const VulkanSourceSubmissionObserver* _observer) noexcept;
+
+// Observer storage is caller-owned and immutable while installed. The
+// callback runs on a Translate owner and must be short, non-blocking, noexcept,
+// and must not re-enter RHI. Quiesce the observed work before removal.
+[[nodiscard]] RENDER_API bool
+TryInstallVulkanSourceTranslationObserver(
+    const VulkanSourceTranslationObserver* _observer
+) noexcept;
+[[nodiscard]] RENDER_API bool
+RemoveVulkanSourceTranslationObserver(
+    const VulkanSourceTranslationObserver* _observer
+) noexcept;
 
 struct VulkanBatchPreflightRejectionEvent {
     uint64         batch_sequence{0};

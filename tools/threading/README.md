@@ -359,7 +359,7 @@ changes, and native copy/clear calls contribute units; GPU byte counts,
 dispatch group counts, and indirect draw counts do not. A wave needs at least
 two qualifying jobs, otherwise it safely uses the serial recorder.
 
-Run the seven-mode Vulkan correctness/fallback gate after building the target:
+Run the nine-mode Vulkan correctness/fallback gate after building the target:
 
 ```powershell
 python tools/threading/run_parallel_record_vulkan_test.py `
@@ -369,17 +369,30 @@ python tools/threading/run_parallel_record_vulkan_test.py `
 
 The runner checks serial, forced-parallel, injected worker failure, production
 gate rejection, production-heavy admission, hard cross-queue Translate failure
-retirement, and multi-segment prefix-submit/suffix-failure retirement. It
-requires real worker overlap, stable
+retirement, multi-segment prefix-submit/suffix-failure retirement, and bounded
+Submission-pipeline windows 1 and 2. It requires real worker overlap, stable
 `wave -> serial island -> wave` assembly, GPU readback correctness, exact
 failure/fallback counts, no native submit after the injected hard fault, and
 clean Vulkan logs. The ready-native-lane gate accepts a PASS only when the
-`G,G,C` source order produces first-ready `G,C` Translate lanes and an actually
-observed serial Submission-owner order of `G,G,C`; a SKIP is limited to an
-unavailable or aliased native queue and must retain the CPU scheduler seam.
-The recoverable gate also requires matching native-lane/suffix-recording
-observations, exact rejected signals, exactly-once callbacks, and successful
-same-scope runtime re-entry.
+`G,G,C,Copy` source order produces first-ready `G,C,Copy` Translate lanes and
+an actually observed serial Submission-owner order of `G,G,C,Copy`. When Copy
+aliases Graphics or Compute, the marker must explicitly report
+`first_ready_lanes=alias_fallback`; Graphics and Compute still need distinct
+native lanes. A SKIP is limited to queue unavailability or a
+Graphics/Compute native alias, must report all three native queue identities,
+and must retain the `VulkanTranslateWaveScheduler` CPU seam.
+
+The recoverable and shutdown gates use a Graphics-to-Copy suffix to prove that
+Copy translation remains on the Translate owner, native submission remains on
+the Submission owner, the readback is verified, callbacks retire exactly once,
+and rejected work is neither natively submitted nor replayed. Bounded window-2
+overlap falls back to effective window 1 when any available
+Graphics/Compute/Copy native-queue pair aliases. Its overlap marker must carry
+all three stable queue identities, blocked admission, and the
+`RHISubmissionPipelinePolicy` CPU seam. A focused bounded subtest may report
+`reason=queue_unavailable` only when its required logical queues are absent;
+the runner validates that SKIP separately instead of weakening the remaining
+available-queue contracts.
 
 For Release A/B, enable `parallel_record_profile` in isolated configs and feed
 at least two independent logs per side to `parallel_record_ab.py`. The parser

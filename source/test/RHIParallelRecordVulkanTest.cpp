@@ -7,6 +7,7 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIExecutor.h"
+#include "rhi/RHISubmissionPipelinePolicy.h"
 #include "rhi/RHIThreadOwnership.h"
 #include "rhi/vulkan/VulkanCustomCommand.h"
 #include "rhi/vulkan/VulkanDevice.h"
@@ -234,7 +235,7 @@ public:
 
 private:
     uint64                                     async_queue_scope{0};
-    std::array<VulkanSourceSubmissionEvent, 3> events{};
+    std::array<VulkanSourceSubmissionEvent, 16> events{};
     std::atomic<size_t>                        count{0};
     std::atomic<bool>                          overflow{false};
 };
@@ -264,6 +265,157 @@ public:
 private:
     VulkanSourceSubmissionObserver observer{};
     bool                           installed{false};
+};
+
+class SourceTranslationCapture final {
+public:
+    explicit SourceTranslationCapture(
+        uint64     _async_queue_scope,
+        EQueueType _queue_filter = EQueueType::Ignore
+    ) :
+        async_queue_scope(_async_queue_scope),
+        queue_filter(_queue_filter) {}
+
+    static void Observe(
+        void*                               _context,
+        const VulkanSourceTranslationEvent& _event
+    ) noexcept {
+        auto& capture =
+            *static_cast<SourceTranslationCapture*>(_context);
+        if (_event.async_queue_scope != capture.async_queue_scope) {
+            return;
+        }
+        if (capture.queue_filter != EQueueType::Ignore &&
+            _event.queue != capture.queue_filter) {
+            return;
+        }
+
+        const size_t phase =
+            static_cast<size_t>(_event.phase);
+        if (_event.source_index >= MaxSources ||
+            phase >= PhaseCount) {
+            capture.overflow.store(true, std::memory_order_release);
+            return;
+        }
+        const size_t index =
+            static_cast<size_t>(_event.source_index) *
+                PhaseCount +
+            phase;
+        const bool duplicate =
+            capture.claimed[index].exchange(
+                true, std::memory_order_acq_rel
+            );
+        if (duplicate) {
+            capture.duplicate.store(true, std::memory_order_release);
+            return;
+        }
+        capture.events[index] = _event;
+        capture.seen[index].store(
+            true, std::memory_order_release
+        );
+        if (_event.thread_role != ERHIThreadRole::Translate) {
+            capture.wrong_owner.store(true, std::memory_order_release);
+        }
+        if (_event.queue == EQueueType::Copy &&
+            _event.phase ==
+                EVulkanSourceTranslationPhase::Recorded &&
+            !capture.copy_recorded_signalled.exchange(
+                true, std::memory_order_acq_rel
+            )) {
+            capture.copy_recorded.release();
+        }
+    }
+
+    [[nodiscard]] bool Seen(
+        uint32                        _source_index,
+        EVulkanSourceTranslationPhase _phase
+    ) const noexcept {
+        if (_source_index >= MaxSources) {
+            return false;
+        }
+        const size_t index =
+            static_cast<size_t>(_source_index) *
+                PhaseCount +
+            static_cast<size_t>(_phase);
+        return seen[index].load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] const VulkanSourceTranslationEvent& Event(
+        uint32                        _source_index,
+        EVulkanSourceTranslationPhase _phase
+    ) const noexcept {
+        const size_t index =
+            static_cast<size_t>(_source_index) *
+                PhaseCount +
+            static_cast<size_t>(_phase);
+        return events[index];
+    }
+
+    [[nodiscard]] bool IsValid() const noexcept {
+        return !overflow.load(std::memory_order_acquire) &&
+               !duplicate.load(std::memory_order_acquire) &&
+               !wrong_owner.load(std::memory_order_acquire);
+    }
+
+    std::binary_semaphore copy_recorded{0};
+
+private:
+    static constexpr size_t MaxSources = 16;
+    static constexpr size_t PhaseCount = 3;
+
+    uint64 async_queue_scope{0};
+    EQueueType queue_filter{EQueueType::Ignore};
+    std::array<
+        VulkanSourceTranslationEvent,
+        MaxSources * PhaseCount> events{};
+    std::array<
+        std::atomic<bool>,
+        MaxSources * PhaseCount> claimed{};
+    std::array<
+        std::atomic<bool>,
+        MaxSources * PhaseCount> seen{};
+    std::atomic<bool> overflow{false};
+    std::atomic<bool> duplicate{false};
+    std::atomic<bool> wrong_owner{false};
+    std::atomic<bool> copy_recorded_signalled{false};
+};
+
+class ScopedSourceTranslationObserver final {
+public:
+    explicit ScopedSourceTranslationObserver(
+        SourceTranslationCapture& _capture
+    ) :
+        observer{
+            .context  = &_capture,
+            .callback = &SourceTranslationCapture::Observe,
+        } {
+        if (!TryInstallVulkanSourceTranslationObserver(
+                &observer
+            )) {
+            throw std::runtime_error(
+                "Vulkan source translation observer was already installed"
+            );
+        }
+        installed = true;
+    }
+
+    ~ScopedSourceTranslationObserver() noexcept {
+        if (installed &&
+            !RemoveVulkanSourceTranslationObserver(&observer)) {
+            std::terminate();
+        }
+    }
+
+    ScopedSourceTranslationObserver(
+        const ScopedSourceTranslationObserver&
+    ) = delete;
+    ScopedSourceTranslationObserver& operator=(
+        const ScopedSourceTranslationObserver&
+    ) = delete;
+
+private:
+    VulkanSourceTranslationObserver observer{};
+    bool                            installed{false};
 };
 
 class NativeSubmissionCapture final {
@@ -3218,47 +3370,111 @@ void RunCrossQueueTopologyBatch() {
 void RunAsyncQueueParallelTranslateSmoke() {
     using namespace std::chrono_literals;
 
-    const RHIQueueTopology topology = RenderDevice::Get().GetQueueTopology();
-    if (!topology.graphics.available || !topology.compute.available) {
+    auto&                  device   = RenderDevice::Get();
+    const RHIQueueTopology topology = device.GetQueueTopology();
+    if (!topology.graphics.available ||
+        !topology.compute.available ||
+        !topology.copy.available) {
         LOG_INFO(
             "[TESTCASE][SKIP] name=AsyncQueueParallelTranslateSmoke "
-            "graphics_native={} compute_native={} reason=queue_unavailable "
+            "graphics_available={} compute_available={} copy_available={} "
+            "graphics_native={} compute_native={} copy_native={} "
+            "reason=queue_unavailable "
             "cpu_seam=VulkanTranslateWaveScheduler",
+            topology.graphics.available,
+            topology.compute.available,
+            topology.copy.available,
             topology.graphics.native_queue_id,
-            topology.compute.native_queue_id
+            topology.compute.native_queue_id,
+            topology.copy.native_queue_id
         );
         return;
     }
     if (topology.graphics.native_queue_id == topology.compute.native_queue_id) {
         LOG_INFO(
             "[TESTCASE][SKIP] name=AsyncQueueParallelTranslateSmoke "
-            "graphics_native={} compute_native={} reason=native_queue_alias "
+            "graphics_available={} compute_available={} copy_available={} "
+            "graphics_native={} compute_native={} copy_native={} "
+            "reason=graphics_compute_native_alias "
             "cpu_seam=VulkanTranslateWaveScheduler",
+            topology.graphics.available,
+            topology.compute.available,
+            topology.copy.available,
             topology.graphics.native_queue_id,
-            topology.compute.native_queue_id
+            topology.compute.native_queue_id,
+            topology.copy.native_queue_id
         );
         return;
     }
 
-    constexpr uint64                   async_queue_scope = 0x5048415345313541ull;
-    SourceSubmissionCapture            submission_capture(async_queue_scope);
-    ScopedSourceSubmissionObserver     submission_observer(submission_capture);
-    std::array<std::atomic<uint32>, 3> ordinary_callbacks{};
-    std::array<std::atomic<uint32>, 3> success_callbacks{};
-    std::binary_semaphore              graphics_front_entered{0};
-    std::binary_semaphore              graphics_tail_entered{0};
-    std::binary_semaphore              compute_later_entered{0};
-    std::binary_semaphore              release_graphics_front{0};
-    std::binary_semaphore              release_compute_later{0};
-    OneShotSemaphoreRelease            release_graphics_guard(release_graphics_front);
-    OneShotSemaphoreRelease            release_compute_guard(release_compute_later);
+    constexpr uint64 async_queue_scope =
+        0x5048415345313545ull;
+    constexpr std::array<uint32, 8> copy_expected{
+        0x15E00001u,
+        0x15E00002u,
+        0x15E00003u,
+        0x15E00004u,
+        0x15E00005u,
+        0x15E00006u,
+        0x15E00007u,
+        0x15E00008u,
+    };
+    std::array<uint32, copy_expected.size()> copy_readback{};
+    BufferRef copy_buffer = device.CreateBuffer<uint32>(
+        "phase15e_copy_ready_lane",
+        copy_expected.size(),
+        EBufferUsageFlags::TRANSFER_SRC |
+            EBufferUsageFlags::TRANSFER_DST
+    );
+    FenceRef copy_done = device.CreateFence();
+
+    SourceSubmissionCapture        submission_capture(
+        async_queue_scope
+    );
+    ScopedSourceSubmissionObserver submission_observer(
+        submission_capture
+    );
+    SourceTranslationCapture        translation_capture(
+        async_queue_scope
+    );
+    ScopedSourceTranslationObserver translation_observer(
+        translation_capture
+    );
+    NativeSubmissionCapture        native_capture{};
+    ScopedNativeSubmissionObserver native_observer(
+        native_capture
+    );
+    std::array<std::atomic<uint32>, 4> ordinary_callbacks{};
+    std::array<std::atomic<uint32>, 4> success_callbacks{};
+    std::binary_semaphore graphics_front_entered{0};
+    std::binary_semaphore graphics_tail_entered{0};
+    std::binary_semaphore compute_later_entered{0};
+    std::binary_semaphore release_graphics_front{0};
+    std::binary_semaphore release_compute_later{0};
+    OneShotSemaphoreRelease release_graphics_guard(
+        release_graphics_front
+    );
+    OneShotSemaphoreRelease release_compute_guard(
+        release_compute_later
+    );
+    const bool copy_has_independent_native_lane =
+        topology.copy.native_queue_id !=
+            topology.graphics.native_queue_id &&
+        topology.copy.native_queue_id !=
+            topology.compute.native_queue_id;
+    const uint32 main_thread_id =
+        Platform::GetCurrentThreadID();
 
     try {
         CommandList graphics_front(EQueueType::Graphics);
-        graphics_front.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+        graphics_front.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
         graphics_front.AddCustomCommand(
             MakeUnique<BlockingTranslateProbeCommand>(
-                EQueueType::Graphics, &graphics_front_entered, &release_graphics_front
+                EQueueType::Graphics,
+                &graphics_front_entered,
+                &release_graphics_front
             ),
             "AsyncQueueGraphicsFrontBlockingTranslateProbe"
         );
@@ -3269,14 +3485,23 @@ void RunAsyncQueueParallelTranslateSmoke() {
             success_callbacks[0].fetch_add(1, std::memory_order_relaxed);
         });
         CmdSubmit graphics_front_submit = graphics_front.Submit();
-        graphics_front_submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-        graphics_front_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+        graphics_front_submit.SetTranslateExecutionClass(
+            ERHITranslateExecutionClass::Parallel
+        );
+        graphics_front_submit.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
         graphics_front_submit.async_queue_scope = async_queue_scope;
 
         CommandList graphics_tail(EQueueType::Graphics);
-        graphics_tail.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+        graphics_tail.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
         graphics_tail.AddCustomCommand(
-            MakeUnique<TranslateProbeCommand>(&graphics_tail_entered), "AsyncQueueGraphicsTailTranslateProbe"
+            MakeUnique<TranslateProbeCommand>(
+                &graphics_tail_entered
+            ),
+            "AsyncQueueGraphicsTailTranslateProbe"
         );
         graphics_tail.AddCallback([&] {
             ordinary_callbacks[1].fetch_add(1, std::memory_order_relaxed);
@@ -3285,15 +3510,23 @@ void RunAsyncQueueParallelTranslateSmoke() {
             success_callbacks[1].fetch_add(1, std::memory_order_relaxed);
         });
         CmdSubmit graphics_tail_submit = graphics_tail.Submit();
-        graphics_tail_submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-        graphics_tail_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+        graphics_tail_submit.SetTranslateExecutionClass(
+            ERHITranslateExecutionClass::Parallel
+        );
+        graphics_tail_submit.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
         graphics_tail_submit.async_queue_scope = async_queue_scope;
 
         CommandList compute_later(EQueueType::Compute);
-        compute_later.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+        compute_later.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
         compute_later.AddCustomCommand(
             MakeUnique<BlockingTranslateProbeCommand>(
-                EQueueType::Compute, &compute_later_entered, &release_compute_later
+                EQueueType::Compute,
+                &compute_later_entered,
+                &release_compute_later
             ),
             "AsyncQueueComputeLaterBlockingTranslateProbe"
         );
@@ -3304,67 +3537,281 @@ void RunAsyncQueueParallelTranslateSmoke() {
             success_callbacks[2].fetch_add(1, std::memory_order_relaxed);
         });
         CmdSubmit compute_later_submit = compute_later.Submit();
-        compute_later_submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-        compute_later_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+        compute_later_submit.SetTranslateExecutionClass(
+            ERHITranslateExecutionClass::Parallel
+        );
+        compute_later_submit.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
         compute_later_submit.async_queue_scope = async_queue_scope;
 
-        Array<RHIBackendSubmissionBatchEntry> submits{};
-        submits.emplace_back(EQueueType::Graphics, std::move(graphics_front_submit));
-        submits.emplace_back(EQueueType::Graphics, std::move(graphics_tail_submit));
-        submits.emplace_back(EQueueType::Compute, std::move(compute_later_submit));
-        RHIExecutor::Get().Submit(std::move(submits), ERHIExecSubmitFlags::FlushGPU);
+        CommandList copy(EQueueType::Copy);
+        copy.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
+        copy.CopyFrom(
+            OwnedBytes(copy_expected),
+            copy_buffer->GetView(),
+            "Phase15ECopyReadyUpload"
+        );
+        copy.CopyFrom(
+            copy_buffer->GetView(),
+            WritableBytes(copy_readback),
+            "Phase15ECopyReadyReadback"
+        );
+        copy.AddCallback([&] {
+            ordinary_callbacks[3].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        copy.AddSuccessCallback([&] {
+            success_callbacks[3].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        CmdSubmit copy_submit = copy.Submit();
+        copy_submit.SetTranslateExecutionClass(
+            ERHITranslateExecutionClass::Parallel
+        );
+        copy_submit.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
+        copy_submit.async_queue_scope = async_queue_scope;
+        copy_submit.Signal(copy_done.Get(), 1);
 
-        const auto deadline                             = std::chrono::steady_clock::now() + 5s;
-        const bool graphics_front_translate_entered     = graphics_front_entered.try_acquire_until(deadline);
-        const bool compute_later_translate_entered      = compute_later_entered.try_acquire_until(deadline);
-        const bool graphics_tail_entered_before_release = graphics_tail_entered.try_acquire();
+        Array<RHIBackendSubmissionBatchEntry> submits{};
+        submits.emplace_back(
+            EQueueType::Graphics,
+            std::move(graphics_front_submit)
+        );
+        submits.emplace_back(
+            EQueueType::Graphics,
+            std::move(graphics_tail_submit)
+        );
+        submits.emplace_back(
+            EQueueType::Compute,
+            std::move(compute_later_submit)
+        );
+        submits.emplace_back(
+            EQueueType::Copy,
+            std::move(copy_submit)
+        );
+        RHIExecutor::Get().Submit(
+            std::move(submits),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+
+        const auto deadline =
+            std::chrono::steady_clock::now() + 5s;
+        const bool graphics_front_translate_entered =
+            graphics_front_entered.try_acquire_until(deadline);
+        const bool compute_later_translate_entered =
+            compute_later_entered.try_acquire_until(deadline);
+        bool copy_recorded_before_release = false;
+        if (copy_has_independent_native_lane) {
+            copy_recorded_before_release =
+                translation_capture.copy_recorded.try_acquire_until(
+                    deadline
+                );
+        }
+        const bool graphics_tail_entered_before_release =
+            graphics_tail_entered.try_acquire();
+        const bool source_submitted_before_release =
+            submission_capture.Count() != 0;
+        const bool native_submitted_before_release =
+            native_capture.Count() != 0;
         release_graphics_guard.Release();
         release_compute_guard.Release();
 
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
         const bool graphics_tail_translate_entered =
-            graphics_tail_entered_before_release || graphics_tail_entered.try_acquire();
+            graphics_tail_entered_before_release ||
+            graphics_tail_entered.try_acquire();
 
-        if (!graphics_front_translate_entered || !compute_later_translate_entered ||
-            graphics_tail_entered_before_release || !graphics_tail_translate_entered) {
-            throw std::runtime_error("ready native lane did not bypass a blocked same-native "
-                                     "successor while preserving its release gate");
+        if (!graphics_front_translate_entered ||
+            !compute_later_translate_entered ||
+            (copy_has_independent_native_lane &&
+             !copy_recorded_before_release) ||
+            graphics_tail_entered_before_release ||
+            source_submitted_before_release ||
+            native_submitted_before_release ||
+            !graphics_tail_translate_entered) {
+            throw std::runtime_error(
+                "G/C/Copy ready native lanes or stable submission cursor "
+                "violated their release contract"
+            );
+        }
+        if (copy_readback != copy_expected) {
+            throw std::runtime_error(
+                "Copy ready-lane GPU readback mismatch"
+            );
+        }
+        auto* vk_copy_done = ResourceCast(copy_done.Get());
+        if (vk_copy_done->HostWait(1) != VK_SUCCESS ||
+            vk_copy_done->IsRejected(1) ||
+            vk_copy_done->IsFailed()) {
+            throw std::runtime_error(
+                "Copy ready-lane signal did not complete successfully"
+            );
         }
         for (size_t index = 0; index < ordinary_callbacks.size(); ++index) {
-            if (ordinary_callbacks[index].load(std::memory_order_acquire) != 1 ||
-                success_callbacks[index].load(std::memory_order_acquire) != 1) {
-                throw std::runtime_error("parallel Translate callbacks did not retire exactly once");
+            if (ordinary_callbacks[index].load(
+                    std::memory_order_acquire
+                ) != 1 ||
+                success_callbacks[index].load(
+                    std::memory_order_acquire
+                ) != 1) {
+                throw std::runtime_error(
+                    "G/C/Copy parallel Translate callbacks did not "
+                    "retire exactly once"
+                );
             }
         }
 
-        if (submission_capture.Overflowed() || submission_capture.Count() != 3) {
-            throw std::runtime_error("parallel Translate did not produce exactly three observed "
-                                     "source submissions");
+        if (submission_capture.Overflowed() ||
+            submission_capture.Count() != 4) {
+            throw std::runtime_error(
+                "G/C/Copy parallel Translate did not produce exactly "
+                "four source submissions"
+            );
         }
         constexpr std::array expected_queues{
             EQueueType::Graphics,
             EQueueType::Graphics,
             EQueueType::Compute,
+            EQueueType::Copy,
         };
-        const uint64 observed_batch_sequence = submission_capture.Event(0).batch_sequence;
+        const uint64 observed_batch_sequence =
+            submission_capture.Event(0).batch_sequence;
         if (observed_batch_sequence == 0) {
-            throw std::runtime_error("Submission observer reported an invalid batch sequence");
+            throw std::runtime_error(
+                "Submission observer reported an invalid batch sequence"
+            );
         }
         for (size_t index = 0; index < expected_queues.size(); ++index) {
-            const VulkanSourceSubmissionEvent& event = submission_capture.Event(index);
-            if (event.source_index != index || event.queue != expected_queues[index] ||
+            const VulkanSourceSubmissionEvent& event =
+                submission_capture.Event(index);
+            if (event.source_index != index ||
+                event.queue != expected_queues[index] ||
                 event.batch_sequence != observed_batch_sequence) {
-                throw std::runtime_error("Submission owner did not preserve stable G,G,C source "
-                                         "order in one batch");
+                throw std::runtime_error(
+                    "Submission owner did not preserve stable G,G,C,Copy "
+                    "source order in one batch"
+                );
             }
         }
 
+        if (!translation_capture.IsValid()) {
+            throw std::runtime_error(
+                "source translation observer overflowed, duplicated a "
+                "phase, or observed a wrong owner"
+            );
+        }
+        for (size_t index = 0; index < expected_queues.size();
+             ++index) {
+            if (!translation_capture.Seen(
+                    static_cast<uint32>(index),
+                    EVulkanSourceTranslationPhase::Begin
+                ) ||
+                !translation_capture.Seen(
+                    static_cast<uint32>(index),
+                    EVulkanSourceTranslationPhase::Recorded
+                ) ||
+                translation_capture.Seen(
+                    static_cast<uint32>(index),
+                    EVulkanSourceTranslationPhase::Failed
+                )) {
+                throw std::runtime_error(
+                    "source translation observer lost a successful "
+                    "G/G/C/Copy phase"
+                );
+            }
+            const VulkanSourceTranslationEvent& event =
+                translation_capture.Event(
+                    static_cast<uint32>(index),
+                    EVulkanSourceTranslationPhase::Recorded
+                );
+            if (event.queue != expected_queues[index] ||
+                event.batch_sequence != observed_batch_sequence ||
+                event.thread_role != ERHIThreadRole::Translate ||
+                event.native_queue_id !=
+                    topology.Resolve(event.queue).native_queue_id) {
+                throw std::runtime_error(
+                    "source translation observer reported unstable "
+                    "identity or ownership"
+                );
+            }
+        }
+
+        if (native_capture.Overflowed() ||
+            native_capture.Count() != expected_queues.size()) {
+            throw std::runtime_error(
+                "G/G/C/Copy ready-lane batch did not issue exactly four "
+                "native submits"
+            );
+        }
+        const uint32 submission_thread_id =
+            native_capture.Event(0).thread_id;
+        for (size_t index = 0; index < expected_queues.size();
+             ++index) {
+            const VulkanNativeSubmissionEvent& event =
+                native_capture.Event(index);
+            if (event.queue != expected_queues[index] ||
+                event.thread_role != ERHIThreadRole::Submission ||
+                event.thread_id != submission_thread_id ||
+                event.thread_id == main_thread_id ||
+                !event.outcome.WasSubmitted()) {
+                throw std::runtime_error(
+                    "native G/G/C/Copy submit lost stable order or the "
+                    "sole Submission owner"
+                );
+            }
+        }
+        for (size_t lhs = 0; lhs < expected_queues.size(); ++lhs) {
+            for (size_t rhs = lhs + 1;
+                 rhs < expected_queues.size();
+                 ++rhs) {
+                const bool topology_alias =
+                    topology.Resolve(expected_queues[lhs])
+                        .native_queue_id ==
+                    topology.Resolve(expected_queues[rhs])
+                        .native_queue_id;
+                const bool observed_alias =
+                    native_capture.Event(lhs).native_queue_handle ==
+                    native_capture.Event(rhs).native_queue_handle;
+                if (topology_alias != observed_alias) {
+                    throw std::runtime_error(
+                        "native observer queue alias disagreed with "
+                        "RHIQueueTopology"
+                    );
+                }
+            }
+        }
+
+        const size_t source_count_before_replay =
+            submission_capture.Count();
+        const size_t native_count_before_replay =
+            native_capture.Count();
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
         for (size_t index = 0; index < ordinary_callbacks.size(); ++index) {
-            if (ordinary_callbacks[index].load(std::memory_order_acquire) != 1 ||
-                success_callbacks[index].load(std::memory_order_acquire) != 1) {
-                throw std::runtime_error("a second Sync replayed parallel Translate callbacks");
+            if (ordinary_callbacks[index].load(
+                    std::memory_order_acquire
+                ) != 1 ||
+                success_callbacks[index].load(
+                    std::memory_order_acquire
+                ) != 1) {
+                throw std::runtime_error(
+                    "a second Sync replayed G/C/Copy Translate callbacks"
+                );
             }
+        }
+        if (submission_capture.Count() !=
+                source_count_before_replay ||
+            native_capture.Count() !=
+                native_count_before_replay) {
+            throw std::runtime_error(
+                "a second Sync replayed source or native submission"
+            );
         }
     } catch (...) {
         const std::exception_ptr failure = std::current_exception();
@@ -3380,12 +3827,16 @@ void RunAsyncQueueParallelTranslateSmoke() {
 
     LOG_INFO(
         "[TESTCASE][PASS] name=AsyncQueueParallelTranslateSmoke "
-        "graphics_native={} compute_native={} sources=3 batch=1 "
-        "source_order=G,G,C first_ready_lanes=G,C "
-        "observed_submit_order=G,G,C async_scope={} explicit_state=true "
-        "callbacks=exactly_once",
+        "graphics_native={} compute_native={} copy_native={} "
+        "sources=4 batch=1 source_order=G,G,C,Copy "
+        "first_ready_lanes={} observed_submit_order=G,G,C,Copy "
+        "copy_translate_owner=Translate native_owner=Submission "
+        "async_scope={} explicit_state=true readback=verified "
+        "callbacks=exactly_once replay=0",
         topology.graphics.native_queue_id,
         topology.compute.native_queue_id,
+        topology.copy.native_queue_id,
+        copy_has_independent_native_lane ? "G,C,Copy" : "alias_fallback",
         async_queue_scope
     );
 }
@@ -3998,14 +4449,35 @@ void RunMultiSegmentPrefixSubmitSuffixTranslateFailure() {
 void RunParallelTranslateFailureRetirement() {
     auto&                  device            = RenderDevice::Get();
     const RHIQueueTopology topology          = device.GetQueueTopology();
-    constexpr uint64       async_queue_scope = 0x5048313541464149ull;
+    constexpr uint64       async_queue_scope = 0x5048313545464149ull;
 
     FenceRef                           graphics_done = device.CreateFence();
-    FenceRef                           compute_done  = device.CreateFence();
+    FenceRef                           copy_done     = device.CreateFence();
     FenceRef                           later_done    = device.CreateFence();
     std::array<std::atomic<uint32>, 3> ordinary_callbacks{};
     std::array<std::atomic<uint32>, 3> success_callbacks{};
-    std::binary_semaphore              compute_translated{0};
+    SourceSubmissionCapture            source_capture(async_queue_scope);
+    ScopedSourceSubmissionObserver     source_observer(source_capture);
+    SourceTranslationCapture           translation_capture(
+        async_queue_scope, EQueueType::Copy
+    );
+    ScopedSourceTranslationObserver translation_observer(
+        translation_capture
+    );
+    NativeSubmissionCapture        native_capture{};
+    ScopedNativeSubmissionObserver native_observer(native_capture);
+    constexpr std::array<uint32, 4> copy_values{
+        0x15E30001u,
+        0x15E30002u,
+        0x15E30003u,
+        0x15E30004u,
+    };
+    BufferRef copy_destination = device.CreateBuffer<uint32>(
+        "phase15e_hard_failure_copy_suffix",
+        copy_values.size(),
+        EBufferUsageFlags::TRANSFER_SRC |
+            EBufferUsageFlags::TRANSFER_DST
+    );
 
     CommandList graphics(EQueueType::Graphics);
     graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
@@ -4024,38 +4496,67 @@ void RunParallelTranslateFailureRetirement() {
     graphics_submit.async_queue_scope = async_queue_scope;
     graphics_submit.Signal(graphics_done.Get(), 1);
 
-    CommandList compute(EQueueType::Compute);
-    compute.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
-    compute.AddCustomCommand(
-        MakeUnique<TranslateProbeCommand>(&compute_translated), "ParallelTranslateRecordedSuffixProbe"
+    CommandList copy(EQueueType::Copy);
+    copy.SetResourceStateOwnership(
+        ERHIResourceStateOwnership::Explicit
     );
-    compute.AddCallback([&] {
+    copy.CopyFrom(
+        OwnedBytes(copy_values),
+        copy_destination->GetView(),
+        "ParallelTranslateRecordedCopySuffix"
+    );
+    copy.AddCallback([&] {
         ordinary_callbacks[1].fetch_add(1, std::memory_order_relaxed);
     });
-    compute.AddSuccessCallback([&] {
+    copy.AddSuccessCallback([&] {
         success_callbacks[1].fetch_add(1, std::memory_order_relaxed);
     });
-    CmdSubmit compute_submit = compute.Submit();
-    compute_submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-    compute_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
-    compute_submit.async_queue_scope = async_queue_scope;
-    compute_submit.Signal(compute_done.Get(), 1);
+    CmdSubmit copy_submit = copy.Submit();
+    copy_submit.SetTranslateExecutionClass(
+        ERHITranslateExecutionClass::Parallel
+    );
+    copy_submit.SetResourceStateOwnership(
+        ERHIResourceStateOwnership::Explicit
+    );
+    copy_submit.async_queue_scope = async_queue_scope;
+    copy_submit.Signal(copy_done.Get(), 1);
 
     Array<RHIBackendSubmissionBatchEntry> failing_batch{};
     failing_batch.emplace_back(EQueueType::Graphics, std::move(graphics_submit));
-    failing_batch.emplace_back(EQueueType::Compute, std::move(compute_submit));
+    failing_batch.emplace_back(EQueueType::Copy, std::move(copy_submit));
     RHIExecutor::Get().Submit(std::move(failing_batch), ERHIExecSubmitFlags::FlushGPU);
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
-    const bool distinct_native       = topology.graphics.native_queue_id != topology.compute.native_queue_id;
-    const bool suffix_was_translated = compute_translated.try_acquire();
+    const bool distinct_native =
+        topology.graphics.native_queue_id !=
+        topology.copy.native_queue_id;
+    const bool suffix_was_translated =
+        translation_capture.Seen(
+            1,
+            EVulkanSourceTranslationPhase::Recorded
+        );
     if (suffix_was_translated != distinct_native) {
         throw std::runtime_error("parallel Translate failure did not preserve native-lane wave "
                                  "dispatch semantics");
     }
-    if (!ResourceCast(graphics_done.Get())->IsFailed() || !ResourceCast(compute_done.Get())->IsFailed() ||
-        ResourceCast(graphics_done.Get())->IsRejected(1) || ResourceCast(compute_done.Get())->IsRejected(1)) {
+    if (!translation_capture.IsValid()) {
+        throw std::runtime_error(
+            "hard-failure Copy translation observer lost ownership or "
+            "published duplicate phases"
+        );
+    }
+    if (!ResourceCast(graphics_done.Get())->IsFailed() ||
+        !ResourceCast(copy_done.Get())->IsFailed() ||
+        ResourceCast(graphics_done.Get())->IsRejected(1) ||
+        ResourceCast(copy_done.Get())->IsRejected(1)) {
         throw std::runtime_error("hard parallel Translate failure did not fail every wave signal");
+    }
+    if (source_capture.Count() != 0 ||
+        native_capture.Count() != 0) {
+        throw std::runtime_error(
+            "hard-failure recorded Copy suffix reached source or native "
+            "submission"
+        );
     }
 
     // A hard Translate failure latches the backend. A later independent
@@ -4091,11 +4592,18 @@ void RunParallelTranslateFailureRetirement() {
             throw std::runtime_error("hard Translate failure replayed callback retirement");
         }
     }
+    if (source_capture.Count() != 0 ||
+        native_capture.Count() != 0) {
+        throw std::runtime_error(
+            "hard Translate failure replayed a rejected Copy packet"
+        );
+    }
 
     LOG_INFO(
         "[TESTCASE][PASS] name=ParallelTranslateFailureRetirement "
         "distinct_native={} suffix_recorded={} signals=failed "
-        "callbacks=exactly_once hard_latch=later_batch_failed",
+        "suffix_queue=Copy native_submit=0 callbacks=exactly_once "
+        "hard_latch=later_batch_failed replay=0",
         distinct_native,
         suffix_was_translated
     );
@@ -4847,9 +5355,12 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
     if (!topology.graphics.available || !topology.compute.available) {
         LOG_INFO(
             "[TESTCASE][SKIP] name=BoundedCrossBatchSubmissionPipeline "
-            "window={} reason=queue_unavailable graphics_native={} "
-            "compute_native={}",
+            "window={} reason=queue_unavailable "
+            "graphics_available={} compute_available={} "
+            "graphics_native={} compute_native={}",
             _batch_window,
+            topology.graphics.available,
+            topology.compute.available,
             topology.graphics.native_queue_id,
             topology.compute.native_queue_id
         );
@@ -4859,6 +5370,10 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
     constexpr uint64 async_queue_scope = 0x5048313544504950ull;
     const bool distinct_native =
         topology.graphics.native_queue_id != topology.compute.native_queue_id;
+    const bool runtime_native_alias =
+        RHISubmissionPipelinePolicy::HasAvailableNativeLaneAlias(
+            topology
+        );
     const uint32 main_thread_id = Platform::GetCurrentThreadID();
 
     SourceSubmissionCapture        source_capture(async_queue_scope);
@@ -4991,7 +5506,7 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
         );
 
         bool compute_translate_observed = false;
-        if (_batch_window == 2 && distinct_native) {
+        if (_batch_window == 2 && !runtime_native_alias) {
             compute_translate_observed =
                 compute_translated.try_acquire_for(5s);
             if (!compute_translate_observed ||
@@ -5015,7 +5530,7 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
                 compute_translated.try_acquire_for(250ms);
             if (compute_translate_observed) {
                 throw std::runtime_error(
-                    "Graphics/Compute native alias did not reduce the "
+                    "runtime native queue alias did not reduce the "
                     "effective window to 1"
                 );
             }
@@ -5024,9 +5539,10 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
                 "name=BoundedCrossBatchSubmissionPipelineOverlap "
                 "requested_window=2 effective_window=1 "
                 "reason=native_queue_alias graphics_native={} "
-                "compute_native={} admission=blocked",
+                "compute_native={} copy_native={} admission=blocked",
                 topology.graphics.native_queue_id,
-                topology.compute.native_queue_id
+                topology.compute.native_queue_id,
+                topology.copy.native_queue_id
             );
         }
 
@@ -5045,7 +5561,7 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
                 "cross-batch Translate probes did not execute exactly once"
             );
         }
-        if ((_batch_window == 1 || !distinct_native) &&
+        if ((_batch_window == 1 || runtime_native_alias) &&
             !compute_observed_release.load(std::memory_order_acquire)) {
             throw std::runtime_error(
                 "effective window 1 batch 1 Translate started before "
@@ -5164,8 +5680,10 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
         "queues=Graphics,Compute source_order=G,C "
         "native_owner=Submission signals=success callbacks=exactly_once replay=0",
         _batch_window,
-        !distinct_native,
-        _batch_window == 2 && distinct_native ? "verified" : "blocked"
+        runtime_native_alias,
+        _batch_window == 2 && !runtime_native_alias ?
+            "verified" :
+            "blocked"
     );
 }
 
@@ -5469,37 +5987,67 @@ void RunBoundedCrossBatchRecoverableRejection() {
 
     auto&                  device   = RenderDevice::Get();
     const RHIQueueTopology topology = device.GetQueueTopology();
-    if (!topology.graphics.available || !topology.compute.available) {
+    if (!topology.graphics.available || !topology.copy.available) {
         LOG_INFO(
             "[TESTCASE][SKIP] name=BoundedCrossBatchRecoverableRejection "
-            "reason=queue_unavailable graphics_native={} compute_native={}",
+            "window=2 reason=queue_unavailable "
+            "graphics_available={} copy_available={} "
+            "graphics_native={} copy_native={}",
+            topology.graphics.available,
+            topology.copy.available,
             topology.graphics.native_queue_id,
-            topology.compute.native_queue_id
+            topology.copy.native_queue_id
         );
         return;
     }
 
-    constexpr uint64 async_queue_scope = 0x504831354452454Aull;
-    const bool distinct_native =
-        topology.graphics.native_queue_id != topology.compute.native_queue_id;
-    const uint32 main_thread_id = Platform::GetCurrentThreadID();
+    constexpr uint64 async_queue_scope =
+        0x504831354552454Aull;
+    const bool runtime_native_alias =
+        RHISubmissionPipelinePolicy::HasAvailableNativeLaneAlias(
+            topology
+        );
+    const uint32 main_thread_id =
+        Platform::GetCurrentThreadID();
 
     SourceSubmissionCapture        source_capture(async_queue_scope);
     ScopedSourceSubmissionObserver source_observer(source_capture);
+    SourceTranslationCapture        translation_capture(
+        async_queue_scope, EQueueType::Copy
+    );
+    ScopedSourceTranslationObserver translation_observer(
+        translation_capture
+    );
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
-    DependencyWaitCapture          graphics_wait_capture{EQueueType::Graphics};
-    ScopedDependencyWaitObserver   wait_observer(graphics_wait_capture);
+    DependencyWaitCapture graphics_wait_capture{
+        EQueueType::Graphics
+    };
+    ScopedDependencyWaitObserver wait_observer(
+        graphics_wait_capture
+    );
 
     FenceRef dependency    = device.CreateFence();
     FenceRef graphics_done = device.CreateFence();
-    FenceRef compute_done  = device.CreateFence();
+    FenceRef copy_done     = device.CreateFence();
 
     std::array<std::atomic<uint32>, 2> ordinary_callbacks{};
     std::array<std::atomic<uint32>, 2> success_callbacks{};
-    std::binary_semaphore              graphics_translated{0};
-    std::binary_semaphore              compute_translated{0};
-    bool                               dependency_rejected{false};
+    std::binary_semaphore graphics_translated{0};
+    bool                  dependency_rejected{false};
+    constexpr std::array<uint32, 4> expected{
+        0x15E10001u,
+        0x15E10002u,
+        0x15E10003u,
+        0x15E10004u,
+    };
+    std::array<uint32, expected.size()> readback{};
+    BufferRef destination = device.CreateBuffer<uint32>(
+        "phase15e_cross_batch_copy_recovery",
+        expected.size(),
+        EBufferUsageFlags::TRANSFER_SRC |
+            EBufferUsageFlags::TRANSFER_DST
+    );
 
     const auto reject_dependency = [&] {
         if (dependency_rejected) {
@@ -5558,69 +6106,69 @@ void RunBoundedCrossBatchRecoverableRejection() {
             );
         }
 
-        CommandList compute(EQueueType::Compute);
-        compute.SetResourceStateOwnership(
+        CommandList copy(EQueueType::Copy);
+        copy.SetResourceStateOwnership(
             ERHIResourceStateOwnership::Explicit
         );
-        compute.AddCustomCommand(
-            MakeUnique<TranslateProbeCommand>(
-                &compute_translated, EQueueType::Compute
-            ),
-            "PipelineRecoverableComputeTranslateProbe"
+        copy.CopyFrom(
+            OwnedBytes(expected),
+            destination->GetView(),
+            "PipelineRecoverableCopyUpload"
         );
-        compute.AddCallback([&] {
+        copy.CopyFrom(
+            destination->GetView(),
+            WritableBytes(readback),
+            "PipelineRecoverableCopyReadback"
+        );
+        copy.AddCallback([&] {
             ordinary_callbacks[1].fetch_add(
                 1, std::memory_order_relaxed
             );
         });
-        compute.AddSuccessCallback([&] {
+        copy.AddSuccessCallback([&] {
             success_callbacks[1].fetch_add(
                 1, std::memory_order_relaxed
             );
         });
-        CmdSubmit compute_submit = compute.Submit();
-        compute_submit.SetTranslateExecutionClass(
+        CmdSubmit copy_submit = copy.Submit();
+        copy_submit.SetTranslateExecutionClass(
             ERHITranslateExecutionClass::Parallel
         );
-        compute_submit.SetResourceStateOwnership(
+        copy_submit.SetResourceStateOwnership(
             ERHIResourceStateOwnership::Explicit
         );
-        compute_submit.async_queue_scope = async_queue_scope;
-        compute_submit.Signal(compute_done.Get(), 1);
+        copy_submit.async_queue_scope = async_queue_scope;
+        copy_submit.Signal(copy_done.Get(), 1);
 
         RHIExecutor::Get().Submit(
-            EQueueType::Compute,
-            std::move(compute_submit),
+            EQueueType::Copy,
+            std::move(copy_submit),
             ERHIExecSubmitFlags::FlushGPU
         );
 
-        bool compute_translate_observed = false;
-        if (distinct_native) {
-            compute_translate_observed =
-                compute_translated.try_acquire_for(5s);
-            if (!compute_translate_observed) {
+        bool copy_translate_observed = false;
+        if (!runtime_native_alias) {
+            copy_translate_observed =
+                translation_capture.copy_recorded.try_acquire_for(
+                    5s
+                );
+            if (!copy_translate_observed) {
                 throw std::runtime_error(
-                    "window 2 did not Translate recoverable batch 1 while "
-                    "batch 0 Submission was blocked"
+                    "window 2 did not record Copy batch 1 while batch 0 "
+                    "Submission was blocked"
                 );
             }
         } else {
-            compute_translate_observed =
-                compute_translated.try_acquire_for(250ms);
-            if (compute_translate_observed) {
-                throw std::runtime_error(
-                    "recoverable alias topology admitted batch 1 before "
-                    "batch 0 reached a terminal state"
-                );
-            }
             LOG_INFO(
                 "[TESTCASE][PASS] "
                 "name=BoundedCrossBatchRecoverableRejectionOverlap "
                 "requested_window=2 effective_window=1 "
                 "reason=native_queue_alias graphics_native={} "
-                "compute_native={} admission=blocked",
+                "compute_native={} copy_native={} admission=blocked "
+                "cpu_seam=RHISubmissionPipelinePolicy",
                 topology.graphics.native_queue_id,
-                topology.compute.native_queue_id
+                topology.compute.native_queue_id,
+                topology.copy.native_queue_id
             );
         }
 
@@ -5633,10 +6181,28 @@ void RunBoundedCrossBatchRecoverableRejection() {
         reject_dependency();
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
-        if (!compute_translate_observed &&
-            !compute_translated.try_acquire()) {
+        if (!translation_capture.Seen(
+                0,
+                EVulkanSourceTranslationPhase::Recorded
+            )) {
             throw std::runtime_error(
-                "recoverable batch 1 did not Translate after batch 0 rejection"
+                "recoverable Copy batch 1 never reached recorded state"
+            );
+        }
+        const VulkanSourceTranslationEvent& translation_event =
+            translation_capture.Event(
+                0,
+                EVulkanSourceTranslationPhase::Recorded
+            );
+        if (!translation_capture.IsValid() ||
+            translation_event.queue != EQueueType::Copy ||
+            translation_event.native_queue_id !=
+                topology.copy.native_queue_id ||
+            translation_event.thread_role !=
+                ERHIThreadRole::Translate) {
+            throw std::runtime_error(
+                "recoverable Copy translation lost queue identity or "
+                "Translate ownership"
             );
         }
         if (ResourceCast(graphics_done.Get())->HostWait(1) !=
@@ -5647,11 +6213,16 @@ void RunBoundedCrossBatchRecoverableRejection() {
                 "recoverable batch 0 did not reject its exact signal value"
             );
         }
-        if (ResourceCast(compute_done.Get())->HostWait(1) != VK_SUCCESS ||
-            ResourceCast(compute_done.Get())->IsRejected(1) ||
-            ResourceCast(compute_done.Get())->IsFailed()) {
+        if (ResourceCast(copy_done.Get())->HostWait(1) != VK_SUCCESS ||
+            ResourceCast(copy_done.Get())->IsRejected(1) ||
+            ResourceCast(copy_done.Get())->IsFailed()) {
             throw std::runtime_error(
                 "recoverable batch 0 rejection contaminated batch 1"
+            );
+        }
+        if (readback != expected) {
+            throw std::runtime_error(
+                "recoverable Copy batch 1 readback mismatch"
             );
         }
         if (ordinary_callbacks[0].load(std::memory_order_acquire) != 1 ||
@@ -5674,10 +6245,10 @@ void RunBoundedCrossBatchRecoverableRejection() {
         if (source_event.batch_sequence == 0 ||
             source_event.source_index != 0 ||
             source_event.original_source_index != 0 ||
-            source_event.queue != EQueueType::Compute ||
+            source_event.queue != EQueueType::Copy ||
             source_event.async_queue_scope != async_queue_scope) {
             throw std::runtime_error(
-                "recovered batch 1 lost stable source identity"
+                "recovered Copy batch 1 lost stable source identity"
             );
         }
 
@@ -5689,12 +6260,12 @@ void RunBoundedCrossBatchRecoverableRejection() {
         }
         const VulkanNativeSubmissionEvent& native_event =
             native_capture.Event(0);
-        if (native_event.queue != EQueueType::Compute ||
+        if (native_event.queue != EQueueType::Copy ||
             native_event.thread_role != ERHIThreadRole::Submission ||
             native_event.thread_id == main_thread_id ||
             !native_event.outcome.WasSubmitted()) {
             throw std::runtime_error(
-                "recovered batch 1 escaped stable Submission ownership"
+                "recovered Copy batch 1 escaped stable Submission ownership"
             );
         }
 
@@ -5722,12 +6293,14 @@ void RunBoundedCrossBatchRecoverableRejection() {
     LOG_INFO(
         "[TESTCASE][PASS] name=BoundedCrossBatchRecoverableRejection "
         "window=2 native_alias={} overlap_assertion={} batches=2 "
+        "queues=Graphics,Copy "
         "batch0_native_submit=0 batch0_callbacks=ordinary1_success0 "
         "batch0_signal=rejected batch1_native_submit=1 "
         "batch1_callbacks=ordinary1_success1 batch1_signal=success "
-        "native_owner=Submission replay=0",
-        !distinct_native,
-        distinct_native ? "verified" : "blocked"
+        "copy_translate_owner=Translate native_owner=Submission "
+        "readback=verified replay=0",
+        runtime_native_alias,
+        runtime_native_alias ? "blocked" : "verified"
     );
 }
 
@@ -5736,24 +6309,37 @@ void RunBoundedPipelineShutdownCancellation() {
 
     auto&                  device   = RenderDevice::Get();
     const RHIQueueTopology topology = device.GetQueueTopology();
-    if (!topology.graphics.available || !topology.compute.available) {
+    if (!topology.graphics.available || !topology.copy.available) {
         LOG_INFO(
             "[TESTCASE][SKIP] name=BoundedPipelineShutdownCancellation "
-            "window=2 reason=queue_unavailable graphics_native={} "
-            "compute_native={}",
+            "window=2 reason=queue_unavailable "
+            "graphics_available={} copy_available={} "
+            "graphics_native={} copy_native={}",
+            topology.graphics.available,
+            topology.copy.available,
             topology.graphics.native_queue_id,
-            topology.compute.native_queue_id
+            topology.copy.native_queue_id
         );
         return;
     }
 
-    constexpr uint64 async_queue_scope = 0x5048313544534844ull;
-    const bool distinct_native =
-        topology.graphics.native_queue_id != topology.compute.native_queue_id;
-    const uint32 main_thread_id = Platform::GetCurrentThreadID();
+    constexpr uint64 async_queue_scope =
+        0x5048313545534844ull;
+    const bool runtime_native_alias =
+        RHISubmissionPipelinePolicy::HasAvailableNativeLaneAlias(
+            topology
+        );
+    const uint32 main_thread_id =
+        Platform::GetCurrentThreadID();
 
     SourceSubmissionCapture        source_capture(async_queue_scope);
     ScopedSourceSubmissionObserver source_observer(source_capture);
+    SourceTranslationCapture        translation_capture(
+        async_queue_scope, EQueueType::Copy
+    );
+    ScopedSourceTranslationObserver translation_observer(
+        translation_capture
+    );
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
     DependencyWaitCapture          graphics_wait_capture{EQueueType::Graphics};
@@ -5765,15 +6351,27 @@ void RunBoundedPipelineShutdownCancellation() {
 
     FenceRef dependency    = device.CreateFence();
     FenceRef graphics_done = device.CreateFence();
-    FenceRef compute_done  = device.CreateFence();
+    FenceRef copy_done     = device.CreateFence();
 
     std::array<std::atomic<uint32>, 2> ordinary_callbacks{};
     std::array<std::atomic<uint32>, 2> success_callbacks{};
-    std::binary_semaphore              graphics_translated{0};
-    std::binary_semaphore              compute_translated{0};
-    std::atomic<bool>                  sync_returned{false};
-    std::jthread                       sync_waiter{};
-    bool                               runtime_stopped{false};
+    std::binary_semaphore graphics_translated{0};
+    std::atomic<bool>     sync_returned{false};
+    std::jthread          sync_waiter{};
+    bool                  runtime_stopped{false};
+    constexpr std::array<uint32, 4> expected{
+        0x15E20001u,
+        0x15E20002u,
+        0x15E20003u,
+        0x15E20004u,
+    };
+    std::array<uint32, expected.size()> readback{};
+    BufferRef destination = device.CreateBuffer<uint32>(
+        "phase15e_shutdown_copy_suffix",
+        expected.size(),
+        EBufferUsageFlags::TRANSFER_SRC |
+            EBufferUsageFlags::TRANSFER_DST
+    );
 
     const auto stop_runtime = [&] {
         if (runtime_stopped) {
@@ -5832,69 +6430,69 @@ void RunBoundedPipelineShutdownCancellation() {
             );
         }
 
-        CommandList compute(EQueueType::Compute);
-        compute.SetResourceStateOwnership(
+        CommandList copy(EQueueType::Copy);
+        copy.SetResourceStateOwnership(
             ERHIResourceStateOwnership::Explicit
         );
-        compute.AddCustomCommand(
-            MakeUnique<TranslateProbeCommand>(
-                &compute_translated, EQueueType::Compute
-            ),
-            "PipelineShutdownComputeTranslateProbe"
+        copy.CopyFrom(
+            OwnedBytes(expected),
+            destination->GetView(),
+            "PipelineShutdownCopyUpload"
         );
-        compute.AddCallback([&] {
+        copy.CopyFrom(
+            destination->GetView(),
+            WritableBytes(readback),
+            "PipelineShutdownCopyReadback"
+        );
+        copy.AddCallback([&] {
             ordinary_callbacks[1].fetch_add(
                 1, std::memory_order_relaxed
             );
         });
-        compute.AddSuccessCallback([&] {
+        copy.AddSuccessCallback([&] {
             success_callbacks[1].fetch_add(
                 1, std::memory_order_relaxed
             );
         });
-        CmdSubmit compute_submit = compute.Submit();
-        compute_submit.SetTranslateExecutionClass(
+        CmdSubmit copy_submit = copy.Submit();
+        copy_submit.SetTranslateExecutionClass(
             ERHITranslateExecutionClass::Parallel
         );
-        compute_submit.SetResourceStateOwnership(
+        copy_submit.SetResourceStateOwnership(
             ERHIResourceStateOwnership::Explicit
         );
-        compute_submit.async_queue_scope = async_queue_scope;
-        compute_submit.Signal(compute_done.Get(), 1);
+        copy_submit.async_queue_scope = async_queue_scope;
+        copy_submit.Signal(copy_done.Get(), 1);
 
         RHIExecutor::Get().Submit(
-            EQueueType::Compute,
-            std::move(compute_submit),
+            EQueueType::Copy,
+            std::move(copy_submit),
             ERHIExecSubmitFlags::FlushGPU
         );
 
-        bool compute_translate_observed = false;
-        if (distinct_native) {
-            compute_translate_observed =
-                compute_translated.try_acquire_for(5s);
-            if (!compute_translate_observed) {
+        bool copy_translate_observed = false;
+        if (!runtime_native_alias) {
+            copy_translate_observed =
+                translation_capture.copy_recorded.try_acquire_for(
+                    5s
+                );
+            if (!copy_translate_observed) {
                 throw std::runtime_error(
-                    "window 2 did not Translate shutdown batch 1 while "
+                    "window 2 did not record shutdown Copy batch 1 while "
                     "batch 0 Submission was blocked"
                 );
             }
         } else {
-            compute_translate_observed =
-                compute_translated.try_acquire_for(250ms);
-            if (compute_translate_observed) {
-                throw std::runtime_error(
-                    "shutdown alias topology admitted batch 1 before "
-                    "batch 0 reached a terminal state"
-                );
-            }
             LOG_INFO(
                 "[TESTCASE][PASS] "
                 "name=BoundedPipelineShutdownCancellationOverlap "
                 "requested_window=2 effective_window=1 "
                 "reason=native_queue_alias graphics_native={} "
-                "compute_native={} admission=blocked",
+                "compute_native={} copy_native={} admission=blocked "
+                "cpu_seam=RHISubmissionPipelinePolicy",
                 topology.graphics.native_queue_id,
-                topology.compute.native_queue_id
+                topology.compute.native_queue_id,
+                topology.copy.native_queue_id
             );
         }
 
@@ -5920,10 +6518,29 @@ void RunBoundedPipelineShutdownCancellation() {
         stop_runtime();
         sync_waiter.join();
 
-        if (!compute_translate_observed &&
-            !compute_translated.try_acquire()) {
+        if (!translation_capture.Seen(
+                0,
+                EVulkanSourceTranslationPhase::Recorded
+            )) {
             throw std::runtime_error(
-                "shutdown batch 1 did not Translate while draining the pipeline"
+                "shutdown Copy batch 1 did not record while draining "
+                "the pipeline"
+            );
+        }
+        const VulkanSourceTranslationEvent& translation_event =
+            translation_capture.Event(
+                0,
+                EVulkanSourceTranslationPhase::Recorded
+            );
+        if (!translation_capture.IsValid() ||
+            translation_event.queue != EQueueType::Copy ||
+            translation_event.native_queue_id !=
+                topology.copy.native_queue_id ||
+            translation_event.thread_role !=
+                ERHIThreadRole::Translate) {
+            throw std::runtime_error(
+                "shutdown Copy batch lost Translate ownership or queue "
+                "identity"
             );
         }
         if (!sync_returned.load(std::memory_order_acquire)) {
@@ -5939,11 +6556,16 @@ void RunBoundedPipelineShutdownCancellation() {
                 "pipeline shutdown did not reject batch 0's exact signal value"
             );
         }
-        if (ResourceCast(compute_done.Get())->HostWait(1) != VK_SUCCESS ||
-            ResourceCast(compute_done.Get())->IsRejected(1) ||
-            ResourceCast(compute_done.Get())->IsFailed()) {
+        if (ResourceCast(copy_done.Get())->HostWait(1) != VK_SUCCESS ||
+            ResourceCast(copy_done.Get())->IsRejected(1) ||
+            ResourceCast(copy_done.Get())->IsFailed()) {
             throw std::runtime_error(
                 "pipeline shutdown did not drain batch 1 successfully"
+            );
+        }
+        if (readback != expected) {
+            throw std::runtime_error(
+                "pipeline shutdown Copy batch readback mismatch"
             );
         }
         if (ordinary_callbacks[0].load(std::memory_order_acquire) != 1 ||
@@ -5966,7 +6588,7 @@ void RunBoundedPipelineShutdownCancellation() {
         if (source_event.batch_sequence == 0 ||
             source_event.source_index != 0 ||
             source_event.original_source_index != 0 ||
-            source_event.queue != EQueueType::Compute ||
+            source_event.queue != EQueueType::Copy ||
             source_event.async_queue_scope != async_queue_scope) {
             throw std::runtime_error(
                 "pipeline shutdown lost drained batch 1 source identity"
@@ -5981,7 +6603,7 @@ void RunBoundedPipelineShutdownCancellation() {
         }
         const VulkanNativeSubmissionEvent& native_event =
             native_capture.Event(0);
-        if (native_event.queue != EQueueType::Compute ||
+        if (native_event.queue != EQueueType::Copy ||
             native_event.thread_role != ERHIThreadRole::Submission ||
             native_event.thread_id == main_thread_id ||
             !native_event.outcome.WasSubmitted()) {
@@ -6017,9 +6639,11 @@ void RunBoundedPipelineShutdownCancellation() {
         "window=2 native_alias={} overlap_assertion={} "
         "batch0_native_submit=0 batch1_native_submit=1 "
         "batch0_signal=rejected batch1_signal=success "
+        "queues=Graphics,Copy copy_translate_owner=Translate "
+        "native_owner=Submission readback=verified "
         "callbacks=exactly_once concurrent_sync=drained owners=stopped",
-        !distinct_native,
-        distinct_native ? "verified" : "blocked"
+        runtime_native_alias,
+        runtime_native_alias ? "blocked" : "verified"
     );
 }
 
