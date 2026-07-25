@@ -689,6 +689,23 @@ void RHIExecutor::SubmitReady(
     ERHIExecSubmitFlags                      _flags,
     RHIPresentRequest*                       _present
 ) {
+    const bool legacy_multi_segment_source =
+        RenderDevice::Get().GetRHIType() != ERHIType::Vulkan &&
+        std::any_of(
+            _submits.begin(),
+            _submits.end(),
+            [](const RHIBackendSubmissionBatchEntry& entry) {
+                return entry.submit.segments.size() > 1;
+            }
+        );
+    if (legacy_multi_segment_source) {
+        ResolveRejectedPresent(_present);
+        FinalizeRejectedSubmissions(
+            std::move(_submits),
+            "legacy backend does not support multi-segment sources"
+        );
+        return;
+    }
 
     // A Present is a batch terminator.  Publish it while holding the same
     // dispatch gate used by Flush/Sync/Shutdown so no later batch can overtake

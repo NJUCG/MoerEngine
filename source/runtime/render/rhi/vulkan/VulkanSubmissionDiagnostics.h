@@ -12,9 +12,16 @@ namespace Moer::Render {
 // diagnostics can distinguish source order from worker completion order.
 struct VulkanSourceSubmissionEvent {
     uint64     batch_sequence{0};
+    // Stable executable-entry index after backend segment materialization.
     uint32     source_index{0};
+    // Original upper source identity remains stable when one source lowers to
+    // several executable segment packets.
+    uint32     original_source_index{0};
+    uint32     source_segment_index{0};
+    uint32     source_segment_count{1};
     EQueueType queue{EQueueType::Ignore};
     uint64     async_queue_scope{0};
+    bool       cross_native_predecessor_wait{false};
 };
 
 using VulkanSourceSubmissionCallback = void (*)(void*, const VulkanSourceSubmissionEvent&) noexcept;
@@ -23,6 +30,20 @@ struct VulkanSourceSubmissionObserver {
     void*                          context{nullptr};
     VulkanSourceSubmissionCallback callback{nullptr};
 };
+
+// Narrow for-testing seam for the real multi-segment completion aggregate.
+// It deliberately exposes only observable callback ordering/counts, not the
+// backend-private aggregate or its synchronization storage.
+struct VulkanMultiSegmentCompletionProbeResult {
+    bool   suffix_retirement_deferred_callbacks{false};
+    bool   prefix_retirement_completed_callbacks{false};
+    bool   repeated_retirement_suppressed{false};
+    uint32 ordinary_callback_count{0};
+    uint32 success_callback_count{0};
+};
+
+[[nodiscard]] RENDER_API VulkanMultiSegmentCompletionProbeResult
+RunVulkanMultiSegmentCompletionProbeForTesting();
 
 // Observer storage is caller-owned and must remain immutable while installed.
 // The callback runs on the Submission owner and must be short, non-blocking,

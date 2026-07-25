@@ -54,9 +54,10 @@ private:
     };
 
     struct BatchExceptionState {
-        // Sources below this cursor have already been terminalized by their
-        // native queue. The current source and every later source remain the
-        // rejection responsibility of the request on an unexpected exception.
+        // Executable entries below this cursor have already been terminalized
+        // by their native queue. A multi-segment upper source may occupy
+        // several entries; its source-level callback lifetime is protected by
+        // a completion aggregate spanning every segment.
         size_t first_unconsumed_source{0};
     };
 
@@ -120,6 +121,7 @@ private:
     bool                       claims_owned{false};
     bool                       hard_failed{false};
     bool                       logged_multi_source_topology{false};
+    bool                       logged_multi_segment_topology{false};
     bool                       logged_async_queue_scope{false};
     bool                                                    logged_parallel_translate_wave{false};
     int32                      hard_failure_result{0};

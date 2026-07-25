@@ -47,39 +47,15 @@ constexpr uint32 kHeavyCopyCount = kHeavyCopiesPerWave * 2;
 
 class TranslateProbeCommand final : public VkCustomDispatchCmd {
 public:
-    explicit TranslateProbeCommand(std::binary_semaphore* _translated) :
-        translated(_translated) {}
+    explicit TranslateProbeCommand(
+        std::binary_semaphore* _translated,
+        EQueueType             _queue = EQueueType::Graphics
+    ) :
+        translated(_translated),
+        queue(_queue) {}
 
     void Execute(const VkDispatchContext&) const override {
         translated->release();
-    }
-
-    EQueueType GetQueueType() const override {
-        return EQueueType::Graphics;
-    }
-
-private:
-    std::span<const ResourceUsage> GetResourceUsages() const override {
-        return {};
-    }
-
-    std::binary_semaphore* translated;
-};
-
-class BlockingTranslateProbeCommand final : public VkCustomDispatchCmd {
-public:
-    BlockingTranslateProbeCommand(
-        EQueueType             _queue,
-        std::binary_semaphore* _entered,
-        std::binary_semaphore* _release
-    ) :
-        queue(_queue),
-        entered(_entered),
-        release(_release) {}
-
-    void Execute(const VkDispatchContext&) const override {
-        entered->release();
-        release->acquire();
     }
 
     EQueueType GetQueueType() const override {
@@ -91,9 +67,55 @@ private:
         return {};
     }
 
+    std::binary_semaphore* translated;
     EQueueType             queue;
-    std::binary_semaphore* entered;
-    std::binary_semaphore* release;
+};
+
+class BlockingTranslateProbeCommand final : public VkCustomDispatchCmd {
+public:
+    BlockingTranslateProbeCommand(
+        EQueueType               _queue,
+        std::binary_semaphore*   _entered,
+        std::binary_semaphore*   _release,
+        std::atomic<bool>*       _finished                      = nullptr,
+        const std::atomic<bool>* _predecessor_finished          = nullptr,
+        std::atomic<bool>*       _observed_predecessor_finished = nullptr
+    ) :
+        queue(_queue),
+        entered(_entered),
+        release(_release),
+        finished(_finished),
+        predecessor_finished(_predecessor_finished),
+        observed_predecessor_finished(_observed_predecessor_finished) {}
+
+    void Execute(const VkDispatchContext&) const override {
+        if (predecessor_finished != nullptr && observed_predecessor_finished != nullptr) {
+            observed_predecessor_finished->store(
+                predecessor_finished->load(std::memory_order_acquire), std::memory_order_release
+            );
+        }
+        entered->release();
+        release->acquire();
+        if (finished != nullptr) {
+            finished->store(true, std::memory_order_release);
+        }
+    }
+
+    EQueueType GetQueueType() const override {
+        return queue;
+    }
+
+private:
+    std::span<const ResourceUsage> GetResourceUsages() const override {
+        return {};
+    }
+
+    EQueueType               queue;
+    std::binary_semaphore*   entered;
+    std::binary_semaphore*   release;
+    std::atomic<bool>*       finished;
+    const std::atomic<bool>* predecessor_finished;
+    std::atomic<bool>*       observed_predecessor_finished;
 };
 
 class ThrowingTranslateProbeCommand final : public VkCustomDispatchCmd {
@@ -419,7 +441,8 @@ void ValidateArguments(int _argc, const char** _argv) {
         const std::string_view argument = _argv[index];
         if (argument != "--parallel" && argument != "--inject-worker-failure" &&
             argument != "--production-gate" && argument != "--production-heavy" &&
-            argument != "--inject-translate-failure") {
+            argument != "--inject-translate-failure" &&
+            argument != "--inject-multi-segment-translate-failure") {
             throw std::invalid_argument("unsupported argument: " + std::string(argument));
         }
     }
@@ -439,6 +462,12 @@ void ValidateArguments(int _argc, const char** _argv) {
         HasArgument(_argc, _argv, "--inject-worker-failure")) {
         throw std::invalid_argument("--inject-translate-failure cannot be combined with "
                                     "--inject-worker-failure");
+    }
+    if (HasArgument(_argc, _argv, "--inject-multi-segment-translate-failure") &&
+        (HasArgument(_argc, _argv, "--inject-worker-failure") ||
+         HasArgument(_argc, _argv, "--inject-translate-failure"))) {
+        throw std::invalid_argument("--inject-multi-segment-translate-failure cannot be combined with "
+                                    "another fault injection");
     }
 }
 
@@ -3235,6 +3264,611 @@ void RunAsyncQueueParallelTranslateSmoke() {
     );
 }
 
+void RunMultiSegmentCompletionAggregateCpuProbe() {
+    const VulkanMultiSegmentCompletionProbeResult result = RunVulkanMultiSegmentCompletionProbeForTesting();
+    if (!result.suffix_retirement_deferred_callbacks || !result.prefix_retirement_completed_callbacks ||
+        !result.repeated_retirement_suppressed || result.ordinary_callback_count != 1 ||
+        result.success_callback_count != 0) {
+        throw std::runtime_error("multi-segment completion aggregate CPU probe violated callback ordering");
+    }
+
+    LOG_INFO("[TESTCASE][PASS] name=MultiSegmentCompletionAggregateCpuProbe "
+             "suffix_first=deferred prefix_second=ordinary1_success0 replay=0");
+}
+
+void RunMultiSegmentSourceExecution() {
+    using namespace std::chrono_literals;
+
+    auto&                  device            = RenderDevice::Get();
+    const RHIQueueTopology topology          = device.GetQueueTopology();
+    constexpr uint64       async_queue_scope = 0x50483135434D554Cull;
+    if (!topology.graphics.available || !topology.compute.available) {
+        LOG_INFO(
+            "[TESTCASE][SKIP] name=MultiSegmentSourceExecution "
+            "reason=queue_unavailable graphics_native={} compute_native={}",
+            topology.graphics.native_queue_id,
+            topology.compute.native_queue_id
+        );
+        return;
+    }
+
+    const bool distinct_native = topology.graphics.native_queue_id != topology.compute.native_queue_id;
+    SourceSubmissionCapture        source_capture(async_queue_scope);
+    ScopedSourceSubmissionObserver source_observer(source_capture);
+    NativeSubmissionCapture        native_capture{};
+    ScopedNativeSubmissionObserver native_observer(native_capture);
+    FenceRef                       source_done = device.CreateFence();
+    std::atomic<uint32>            ordinary_callbacks{0};
+    std::atomic<uint32>            success_callbacks{0};
+    std::binary_semaphore          graphics_entered{0};
+    std::binary_semaphore          compute_entered{0};
+    std::binary_semaphore          release_graphics{0};
+    std::binary_semaphore          release_compute{0};
+    OneShotSemaphoreRelease        release_graphics_guard(release_graphics);
+    OneShotSemaphoreRelease        release_compute_guard(release_compute);
+    std::atomic<bool>              graphics_translate_finished{false};
+    std::atomic<bool>              compute_observed_graphics_finished{false};
+    const uint32                   main_thread_id = Platform::GetCurrentThreadID();
+
+    try {
+        CommandList source(EQueueType::Graphics);
+        source.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+        source.AddCustomCommand(
+            MakeUnique<BlockingTranslateProbeCommand>(
+                EQueueType::Graphics, &graphics_entered, &release_graphics, &graphics_translate_finished
+            ),
+            "MultiSegmentGraphicsTranslateProbe"
+        );
+        source.AddCustomCommand(
+            MakeUnique<BlockingTranslateProbeCommand>(
+                EQueueType::Compute,
+                &compute_entered,
+                &release_compute,
+                nullptr,
+                &graphics_translate_finished,
+                &compute_observed_graphics_finished
+            ),
+            "MultiSegmentComputeTranslateProbe"
+        );
+        source.AddCallback([&] {
+            ordinary_callbacks.fetch_add(1, std::memory_order_relaxed);
+        });
+        source.AddSuccessCallback([&] {
+            success_callbacks.fetch_add(1, std::memory_order_relaxed);
+        });
+
+        CmdSubmit submit = source.Submit();
+        submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
+        submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+        submit.async_queue_scope = async_queue_scope;
+        submit.segments          = {
+            RHISubmitSegment{EQueueType::Graphics, 0, 1},
+            RHISubmitSegment{EQueueType::Compute, 1, 2},
+        };
+        submit.Signal(source_done.Get(), 1);
+
+        Array<RHIBackendSubmissionBatchEntry> batch{};
+        batch.emplace_back(EQueueType::Graphics, std::move(submit));
+        RHIExecutor::Get().Submit(std::move(batch), ERHIExecSubmitFlags::FlushGPU);
+
+        if (!graphics_entered.try_acquire_for(5s)) {
+            throw std::runtime_error("multi-segment Graphics Translate did not enter");
+        }
+        if (distinct_native) {
+            if (!compute_entered.try_acquire_for(5s)) {
+                throw std::runtime_error("distinct-native multi-segment Translate did not enter "
+                                         "Graphics and Compute in one ready wave");
+            }
+        }
+
+        release_graphics_guard.Release();
+        if (!distinct_native && !compute_entered.try_acquire_for(5s)) {
+            throw std::runtime_error("native-alias multi-segment Translate did not advance to "
+                                     "Compute after Graphics release");
+        }
+        const bool compute_saw_graphics_finished =
+            compute_observed_graphics_finished.load(std::memory_order_acquire);
+        if (!distinct_native && !compute_saw_graphics_finished) {
+            throw std::runtime_error(
+                "native-alias Compute Translate entered before Graphics Translate returned"
+            );
+        }
+        release_compute_guard.Release();
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+        if (ResourceCast(source_done.Get())->HostWait(1) != VK_SUCCESS ||
+            ResourceCast(source_done.Get())->IsRejected(1) || ResourceCast(source_done.Get())->IsFailed()) {
+            throw std::runtime_error("multi-segment source signal did not complete successfully");
+        }
+        if (ordinary_callbacks.load(std::memory_order_acquire) != 1 ||
+            success_callbacks.load(std::memory_order_acquire) != 1) {
+            throw std::runtime_error("multi-segment source aggregate callbacks did not retire "
+                                     "exactly once");
+        }
+
+        if (source_capture.Overflowed() || source_capture.Count() != 2) {
+            throw std::runtime_error("multi-segment source observer did not report exactly two "
+                                     "executable segments");
+        }
+        constexpr std::array expected_queues{
+            EQueueType::Graphics,
+            EQueueType::Compute,
+        };
+        const uint64 batch_sequence = source_capture.Event(0).batch_sequence;
+        if (batch_sequence == 0) {
+            throw std::runtime_error("multi-segment source observer reported an invalid batch");
+        }
+        for (size_t index = 0; index < expected_queues.size(); ++index) {
+            const VulkanSourceSubmissionEvent& event = source_capture.Event(index);
+            if (event.batch_sequence != batch_sequence || event.source_index != index ||
+                event.original_source_index != 0 || event.source_segment_index != index ||
+                event.source_segment_count != 2 || event.queue != expected_queues[index] ||
+                event.async_queue_scope != async_queue_scope ||
+                event.cross_native_predecessor_wait != (index == 1 && distinct_native)) {
+                throw std::runtime_error("multi-segment source observer lost stable source or "
+                                         "segment identity");
+            }
+        }
+
+        if (native_capture.Overflowed() || native_capture.Count() != 2) {
+            throw std::runtime_error("multi-segment source did not issue exactly two native submits");
+        }
+        const uint32 submission_thread_id = native_capture.Event(0).thread_id;
+        for (size_t index = 0; index < expected_queues.size(); ++index) {
+            const VulkanNativeSubmissionEvent& event = native_capture.Event(index);
+            if (event.queue != expected_queues[index] || event.thread_role != ERHIThreadRole::Submission ||
+                event.thread_id != submission_thread_id || event.thread_id == main_thread_id ||
+                !event.outcome.WasSubmitted()) {
+                throw std::runtime_error("multi-segment native submission escaped stable "
+                                         "Graphics-to-Compute Submission ownership");
+            }
+        }
+        if ((native_capture.Event(0).native_queue_handle == native_capture.Event(1).native_queue_handle) !=
+            !distinct_native) {
+            throw std::runtime_error("multi-segment native observer disagrees with queue topology");
+        }
+
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        if (source_capture.Count() != 2 || native_capture.Count() != 2 ||
+            ordinary_callbacks.load(std::memory_order_acquire) != 1 ||
+            success_callbacks.load(std::memory_order_acquire) != 1) {
+            throw std::runtime_error("a second Sync replayed multi-segment submission or callbacks");
+        }
+    } catch (...) {
+        const std::exception_ptr failure = std::current_exception();
+        release_graphics_guard.Release();
+        release_compute_guard.Release();
+        try {
+            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        } catch (...) {
+            std::terminate();
+        }
+        std::rethrow_exception(failure);
+    }
+
+    LOG_INFO(
+        "[TESTCASE][PASS] name=MultiSegmentSourceExecution "
+        "source=1 segments=2 queues=Graphics,Compute native_alias={} "
+        "first_ready_lanes={} observed_submit_order=G,C "
+        "source_segments=0:0/2,0:1/2 predecessor_waits={} "
+        "compute_saw_graphics_finished={} "
+        "native_owner=Submission callbacks=exactly_once signal=success replay=0",
+        !distinct_native,
+        distinct_native ? "G,C" : "G",
+        distinct_native ? 1 : 0,
+        compute_observed_graphics_finished.load(std::memory_order_acquire)
+    );
+}
+
+void RunMultiSegmentCopyRoundTrip() {
+    auto&                  device            = RenderDevice::Get();
+    const RHIQueueTopology topology          = device.GetQueueTopology();
+    constexpr uint64       async_queue_scope = 0x50483135434F5059ull;
+    if (!topology.graphics.available || !topology.copy.available) {
+        LOG_INFO(
+            "[TESTCASE][SKIP] name=MultiSegmentCopyRoundTrip "
+            "reason=copy_queue_unavailable graphics_native={} copy_native={}",
+            topology.graphics.native_queue_id,
+            topology.copy.native_queue_id
+        );
+        return;
+    }
+
+    constexpr size_t        element_count = 32;
+    const EBufferUsageFlags usage         = EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
+    BufferRef source     = device.CreateBuffer<uint32>("multi_segment_copy_source", element_count, usage);
+    BufferRef copy_stage = device.CreateBuffer<uint32>("multi_segment_copy_stage", element_count, usage);
+    std::array<uint32, element_count> expected{};
+    std::array<uint32, element_count> readback{};
+    for (uint32 index = 0; index < expected.size(); ++index) {
+        expected[index] = 0x15C00000u + index * 59u + 11u;
+    }
+
+    const bool graphics_copy_alias = topology.graphics.native_queue_id == topology.copy.native_queue_id;
+    SourceSubmissionCapture        source_capture(async_queue_scope);
+    ScopedSourceSubmissionObserver source_observer(source_capture);
+    NativeSubmissionCapture        native_capture{};
+    ScopedNativeSubmissionObserver native_observer(native_capture);
+    FenceRef                       source_done = device.CreateFence();
+    std::atomic<uint32>            ordinary_callbacks{0};
+    std::atomic<uint32>            success_callbacks{0};
+    const uint32                   main_thread_id = Platform::GetCurrentThreadID();
+
+    CommandList source_commands(EQueueType::Graphics);
+    source_commands.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
+    source_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+
+    source_commands.CopyFrom(OwnedBytes(expected), source->GetView(), "MultiSegmentCopyUpload");
+    source_commands.ExportResourcesToQueue(
+        EQueueType::Copy, {}, Array<ExportBuffer>{{source->GetView(), EBufferState::TRANSFER}}
+    );
+
+    source_commands.ImportResourcesFromQueue(
+        EQueueType::Graphics, {}, Array<ImportBuffer>{{source->GetView(), EBufferState::TRANSFER}}
+    );
+    source_commands.CopyFrom(source->GetView(), copy_stage->GetView(), "MultiSegmentCopyNativeCopy");
+    source_commands.ExportResourcesToQueue(
+        EQueueType::Graphics, {}, Array<ExportBuffer>{{copy_stage->GetView(), EBufferState::TRANSFER}}
+    );
+
+    source_commands.ImportResourcesFromQueue(
+        EQueueType::Copy, {}, Array<ImportBuffer>{{copy_stage->GetView(), EBufferState::TRANSFER}}
+    );
+    source_commands.CopyFrom(copy_stage->GetView(), WritableBytes(readback), "MultiSegmentCopyReadback");
+    source_commands.AddCallback([&] {
+        ordinary_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    source_commands.AddSuccessCallback([&] {
+        success_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+
+    CmdSubmit submit = source_commands.Submit();
+    submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
+    submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    submit.async_queue_scope = async_queue_scope;
+    submit.segments          = {
+        RHISubmitSegment{EQueueType::Graphics, 0, 2},
+        RHISubmitSegment{EQueueType::Copy, 2, 5},
+        RHISubmitSegment{EQueueType::Graphics, 5, 7},
+    };
+    submit.Signal(source_done.Get(), 1);
+
+    Array<RHIBackendSubmissionBatchEntry> batch{};
+    batch.emplace_back(EQueueType::Graphics, std::move(submit));
+    RHIExecutor::Get().Submit(std::move(batch), ERHIExecSubmitFlags::FlushGPU);
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    if (readback != expected) {
+        throw std::runtime_error("multi-segment Copy source GPU readback mismatch");
+    }
+    if (ResourceCast(source_done.Get())->HostWait(1) != VK_SUCCESS ||
+        ResourceCast(source_done.Get())->IsRejected(1) || ResourceCast(source_done.Get())->IsFailed()) {
+        throw std::runtime_error("multi-segment Copy source signal did not complete successfully");
+    }
+    if (ordinary_callbacks.load(std::memory_order_acquire) != 1 ||
+        success_callbacks.load(std::memory_order_acquire) != 1) {
+        throw std::runtime_error("multi-segment Copy source callbacks did not retire exactly once");
+    }
+
+    constexpr std::array expected_queues{
+        EQueueType::Graphics,
+        EQueueType::Copy,
+        EQueueType::Graphics,
+    };
+    if (source_capture.Overflowed() || source_capture.Count() != expected_queues.size()) {
+        throw std::runtime_error("multi-segment Copy source observer did not report three segments");
+    }
+    const uint64 batch_sequence = source_capture.Event(0).batch_sequence;
+    if (batch_sequence == 0) {
+        throw std::runtime_error("multi-segment Copy source observer reported an invalid batch");
+    }
+    for (size_t index = 0; index < expected_queues.size(); ++index) {
+        const VulkanSourceSubmissionEvent& event                     = source_capture.Event(index);
+        const bool                         expected_predecessor_wait = index != 0 && !graphics_copy_alias;
+        if (event.batch_sequence != batch_sequence || event.source_index != index ||
+            event.original_source_index != 0 || event.source_segment_index != index ||
+            event.source_segment_count != expected_queues.size() || event.queue != expected_queues[index] ||
+            event.async_queue_scope != async_queue_scope ||
+            event.cross_native_predecessor_wait != expected_predecessor_wait) {
+            throw std::runtime_error(
+                "multi-segment Copy source observer lost stable segment identity or dependency"
+            );
+        }
+    }
+
+    if (native_capture.Overflowed() || native_capture.Count() != expected_queues.size()) {
+        throw std::runtime_error("multi-segment Copy source did not issue three native submits");
+    }
+    const uint32 submission_thread_id = native_capture.Event(0).thread_id;
+    for (size_t index = 0; index < expected_queues.size(); ++index) {
+        const VulkanNativeSubmissionEvent& event = native_capture.Event(index);
+        if (event.queue != expected_queues[index] || event.thread_role != ERHIThreadRole::Submission ||
+            event.thread_id != submission_thread_id || event.thread_id == main_thread_id ||
+            !event.outcome.WasSubmitted()) {
+            throw std::runtime_error(
+                "multi-segment Copy native submits lost stable Submission order or ownership"
+            );
+        }
+    }
+    if ((native_capture.Event(0).native_queue_handle == native_capture.Event(1).native_queue_handle) !=
+            graphics_copy_alias ||
+        native_capture.Event(0).native_queue_handle != native_capture.Event(2).native_queue_handle) {
+        throw std::runtime_error("multi-segment Copy native observer disagrees with queue topology");
+    }
+
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (source_capture.Count() != expected_queues.size() ||
+        native_capture.Count() != expected_queues.size() ||
+        ordinary_callbacks.load(std::memory_order_acquire) != 1 ||
+        success_callbacks.load(std::memory_order_acquire) != 1) {
+        throw std::runtime_error("a second Sync replayed multi-segment Copy work or callbacks");
+    }
+
+    LOG_INFO(
+        "[TESTCASE][PASS] name=MultiSegmentCopyRoundTrip "
+        "source=1 segments=3 queues=Graphics,Copy,Graphics native_alias={} "
+        "observed_submit_order=G,Copy,G source_segments=0:0/3,0:1/3,0:2/3 "
+        "predecessor_waits={} native_owner=Submission callbacks=exactly_once "
+        "signal=success readback=verified replay=0",
+        graphics_copy_alias,
+        graphics_copy_alias ? 0 : 2
+    );
+}
+
+void RunMultiSegmentRecoverableRejection() {
+    auto&                  device            = RenderDevice::Get();
+    const RHIQueueTopology topology          = device.GetQueueTopology();
+    constexpr uint64       async_queue_scope = 0x504831354D52454Aull;
+    if (!topology.graphics.available || !topology.compute.available) {
+        LOG_INFO(
+            "[TESTCASE][SKIP] name=MultiSegmentRecoverableRejection "
+            "reason=queue_unavailable graphics_native={} compute_native={}",
+            topology.graphics.native_queue_id,
+            topology.compute.native_queue_id
+        );
+        return;
+    }
+
+    const bool distinct_native     = topology.graphics.native_queue_id != topology.compute.native_queue_id;
+    FenceRef   rejected_dependency = device.CreateFence();
+    FenceRef   rejected_done       = device.CreateFence();
+    FenceRef   recovered_done      = device.CreateFence();
+    rejected_dependency->Reject(1);
+
+    std::atomic<uint32>            rejected_callbacks{0};
+    std::atomic<uint32>            rejected_success_callbacks{0};
+    std::atomic<uint32>            recovered_callbacks{0};
+    std::atomic<uint32>            recovered_success_callbacks{0};
+    std::binary_semaphore          graphics_translated{0};
+    std::binary_semaphore          compute_translated{0};
+    std::binary_semaphore          recovered_translated{0};
+    NativeSubmissionCapture        native_capture{};
+    ScopedNativeSubmissionObserver native_observer(native_capture);
+    const uint32                   main_thread_id = Platform::GetCurrentThreadID();
+
+    CommandList rejected(EQueueType::Graphics);
+    rejected.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    rejected.AddCustomCommand(
+        MakeUnique<TranslateProbeCommand>(&graphics_translated, EQueueType::Graphics),
+        "MultiSegmentRejectedGraphicsTranslateProbe"
+    );
+    rejected.AddCustomCommand(
+        MakeUnique<TranslateProbeCommand>(&compute_translated, EQueueType::Compute),
+        "MultiSegmentRejectedComputeTranslateProbe"
+    );
+    rejected.AddCallback([&] {
+        rejected_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    rejected.AddSuccessCallback([&] {
+        rejected_success_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+
+    CmdSubmit rejected_submit = rejected.Submit();
+    rejected_submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
+    rejected_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    rejected_submit.async_queue_scope = async_queue_scope;
+    rejected_submit.segments          = {
+        RHISubmitSegment{EQueueType::Graphics, 0, 1},
+        RHISubmitSegment{EQueueType::Compute, 1, 2},
+    };
+    rejected_submit.Wait(rejected_dependency.Get(), 1);
+    rejected_submit.Signal(rejected_done.Get(), 1);
+
+    Array<RHIBackendSubmissionBatchEntry> rejected_batch{};
+    rejected_batch.emplace_back(EQueueType::Graphics, std::move(rejected_submit));
+    RHIExecutor::Get().Submit(std::move(rejected_batch), ERHIExecSubmitFlags::FlushGPU);
+    if (ResourceCast(rejected_done.Get())->HostWait(1) != VK_ERROR_UNKNOWN ||
+        !ResourceCast(rejected_done.Get())->IsRejected(1) || ResourceCast(rejected_done.Get())->IsFailed()) {
+        throw std::runtime_error("multi-segment rejected dependency did not reject the source signal");
+    }
+
+    const bool graphics_was_translated = graphics_translated.try_acquire();
+    const bool compute_was_translated  = compute_translated.try_acquire();
+    if (!graphics_was_translated || compute_was_translated != distinct_native) {
+        throw std::runtime_error("multi-segment recoverable rejection did not preserve "
+                                 "native-lane Translate wave semantics");
+    }
+
+    CommandList recovered(EQueueType::Graphics);
+    recovered.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    recovered.AddCustomCommand(
+        MakeUnique<TranslateProbeCommand>(&recovered_translated, EQueueType::Graphics),
+        "MultiSegmentRejectionRecoveryProbe"
+    );
+    recovered.AddCallback([&] {
+        recovered_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    recovered.AddSuccessCallback([&] {
+        recovered_success_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    CmdSubmit recovered_submit = recovered.Submit();
+    recovered_submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
+    recovered_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    recovered_submit.async_queue_scope = async_queue_scope;
+    recovered_submit.Signal(recovered_done.Get(), 1);
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics, std::move(recovered_submit), ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    if (!recovered_translated.try_acquire() ||
+        ResourceCast(recovered_done.Get())->HostWait(1) != VK_SUCCESS ||
+        ResourceCast(recovered_done.Get())->IsRejected(1) || ResourceCast(recovered_done.Get())->IsFailed()) {
+        throw std::runtime_error("multi-segment dependency rejection latched the runtime");
+    }
+    if (rejected_callbacks.load(std::memory_order_acquire) != 1 ||
+        rejected_success_callbacks.load(std::memory_order_acquire) != 0 ||
+        recovered_callbacks.load(std::memory_order_acquire) != 1 ||
+        recovered_success_callbacks.load(std::memory_order_acquire) != 1) {
+        throw std::runtime_error("multi-segment aggregate callback retirement was not exactly once");
+    }
+    if (native_capture.Overflowed() || native_capture.Count() != 1) {
+        throw std::runtime_error("rejected multi-segment source reached native submit or recovery "
+                                 "did not submit exactly once");
+    }
+    const VulkanNativeSubmissionEvent& recovered_event = native_capture.Event(0);
+    if (recovered_event.queue != EQueueType::Graphics ||
+        recovered_event.thread_role != ERHIThreadRole::Submission ||
+        recovered_event.thread_id == main_thread_id || !recovered_event.outcome.WasSubmitted()) {
+        throw std::runtime_error("multi-segment rejection recovery escaped Submission ownership");
+    }
+
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (native_capture.Count() != 1 || rejected_callbacks.load(std::memory_order_acquire) != 1 ||
+        rejected_success_callbacks.load(std::memory_order_acquire) != 0 ||
+        recovered_callbacks.load(std::memory_order_acquire) != 1 ||
+        recovered_success_callbacks.load(std::memory_order_acquire) != 1) {
+        throw std::runtime_error("a second Sync replayed multi-segment rejection retirement");
+    }
+
+    LOG_INFO(
+        "[TESTCASE][PASS] name=MultiSegmentRecoverableRejection "
+        "source=1 segments=2 dependency=rejected distinct_native={} "
+        "suffix_recorded={} native_rejected=0 "
+        "callbacks=ordinary1_success0 signal=rejected "
+        "native_accepted=1 recovered_callbacks=ordinary1_success1 "
+        "runtime=recovered replay=0",
+        distinct_native,
+        compute_was_translated
+    );
+}
+
+void RunMultiSegmentPrefixSubmitSuffixTranslateFailure() {
+    auto&            device            = RenderDevice::Get();
+    constexpr uint64 async_queue_scope = 0x50483135434D4844ull;
+
+    FenceRef                       source_done = device.CreateFence();
+    FenceRef                       later_done  = device.CreateFence();
+    std::atomic<uint32>            source_callbacks{0};
+    std::atomic<uint32>            source_success_callbacks{0};
+    std::atomic<uint32>            later_callbacks{0};
+    std::atomic<uint32>            later_success_callbacks{0};
+    std::binary_semaphore          prefix_translated{0};
+    SourceSubmissionCapture        source_capture(async_queue_scope);
+    ScopedSourceSubmissionObserver source_observer(source_capture);
+    NativeSubmissionCapture        native_capture{};
+    ScopedNativeSubmissionObserver native_observer(native_capture);
+    const uint32                   main_thread_id = Platform::GetCurrentThreadID();
+
+    CommandList source(EQueueType::Graphics);
+    source.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    source.AddCustomCommand(
+        MakeUnique<TranslateProbeCommand>(&prefix_translated, EQueueType::Graphics),
+        "MultiSegmentHardFailureAcceptedPrefix"
+    );
+    source.AddCustomCommand(
+        MakeUnique<ThrowingTranslateProbeCommand>(true), "MultiSegmentHardFailureThrowingSuffix"
+    );
+    source.AddCallback([&] {
+        source_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    source.AddSuccessCallback([&] {
+        source_success_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+
+    CmdSubmit submit = source.Submit();
+    submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
+    submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    submit.async_queue_scope = async_queue_scope;
+    submit.segments          = {
+        RHISubmitSegment{EQueueType::Graphics, 0, 1},
+        RHISubmitSegment{EQueueType::Graphics, 1, 2},
+    };
+    submit.Signal(source_done.Get(), 1);
+
+    Array<RHIBackendSubmissionBatchEntry> batch{};
+    batch.emplace_back(EQueueType::Graphics, std::move(submit));
+    RHIExecutor::Get().Submit(std::move(batch), ERHIExecSubmitFlags::FlushGPU);
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    if (!prefix_translated.try_acquire()) {
+        throw std::runtime_error("multi-segment hard failure did not Translate the prefix");
+    }
+    if (!ResourceCast(source_done.Get())->IsFailed() || ResourceCast(source_done.Get())->IsRejected(1)) {
+        throw std::runtime_error("multi-segment hard failure did not fail the tail external signal");
+    }
+    if (source_callbacks.load(std::memory_order_acquire) != 1 ||
+        source_success_callbacks.load(std::memory_order_acquire) != 0) {
+        throw std::runtime_error("multi-segment hard failure did not aggregate source callbacks exactly once"
+        );
+    }
+    if (source_capture.Overflowed() || source_capture.Count() != 1) {
+        throw std::runtime_error(
+            "multi-segment hard failure did not publish exactly one accepted prefix source"
+        );
+    }
+    const VulkanSourceSubmissionEvent& source_event = source_capture.Event(0);
+    if (source_event.original_source_index != 0 || source_event.source_segment_index != 0 ||
+        source_event.source_segment_count != 2 || source_event.queue != EQueueType::Graphics) {
+        throw std::runtime_error("multi-segment hard failure lost accepted prefix source identity");
+    }
+    if (native_capture.Overflowed() || native_capture.Count() != 1) {
+        throw std::runtime_error("multi-segment hard failure did not native-submit exactly one prefix");
+    }
+    const VulkanNativeSubmissionEvent& native_event = native_capture.Event(0);
+    if (native_event.queue != EQueueType::Graphics ||
+        native_event.thread_role != ERHIThreadRole::Submission || native_event.thread_id == main_thread_id ||
+        !native_event.outcome.WasSubmitted()) {
+        throw std::runtime_error("multi-segment hard-failure prefix escaped native Submission ownership");
+    }
+
+    CommandList later(EQueueType::Graphics);
+    later.AddCallback([&] {
+        later_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    later.AddSuccessCallback([&] {
+        later_success_callbacks.fetch_add(1, std::memory_order_relaxed);
+    });
+    CmdSubmit later_submit = later.Submit();
+    later_submit.Signal(later_done.Get(), 1);
+    RHIExecutor::Get().Submit(EQueueType::Graphics, std::move(later_submit), ERHIExecSubmitFlags::FlushGPU);
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    if (!ResourceCast(later_done.Get())->IsFailed() || ResourceCast(later_done.Get())->IsRejected(1)) {
+        throw std::runtime_error("multi-segment hard failure did not latch a later batch");
+    }
+    if (later_callbacks.load(std::memory_order_acquire) != 1 ||
+        later_success_callbacks.load(std::memory_order_acquire) != 0) {
+        throw std::runtime_error("multi-segment hard latch did not retire later callbacks exactly once");
+    }
+
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (native_capture.Count() != 1 || source_capture.Count() != 1 ||
+        source_callbacks.load(std::memory_order_acquire) != 1 ||
+        source_success_callbacks.load(std::memory_order_acquire) != 0 ||
+        later_callbacks.load(std::memory_order_acquire) != 1 ||
+        later_success_callbacks.load(std::memory_order_acquire) != 0) {
+        throw std::runtime_error("multi-segment hard failure replayed submission or callback retirement");
+    }
+
+    LOG_INFO("[TESTCASE][PASS] name=MultiSegmentPrefixSubmitSuffixTranslateFailure "
+             "source=1 segments=2 queues=Graphics,Graphics "
+             "prefix_translated=true source_submitted=0:0/2 "
+             "native_accepted_prefix=1 native_owner=Submission "
+             "callbacks=ordinary1_success0 signal=failed "
+             "later_callbacks=ordinary1_success0 hard_latch=later_batch_failed replay=0");
+}
+
 void RunParallelTranslateFailureRetirement() {
     auto&                  device            = RenderDevice::Get();
     const RHIQueueTopology topology          = device.GetQueueTopology();
@@ -4226,6 +4860,8 @@ int main(int argc, const char** argv) {
             HasArgument(argc, argv, "--production-gate") || production_heavy;
         const bool inject_translate_failure =
             HasArgument(argc, argv, "--inject-translate-failure");
+        const bool inject_multi_segment_translate_failure =
+            HasArgument(argc, argv, "--inject-multi-segment-translate-failure");
 
         LogSystem::Init();
         ConfigManager::GetInstance().Init(std::filesystem::current_path());
@@ -4245,9 +4881,18 @@ int main(int argc, const char** argv) {
             .parallel_record_worker_throw_trigger = inject_worker_failure ? 1u : 0u,
         });
         render_device_initialized = true;
+        RunMultiSegmentCompletionAggregateCpuProbe();
 
         if (inject_translate_failure) {
             RunParallelTranslateFailureRetirement();
+            RenderDevice::Dispose();
+            render_device_initialized = false;
+            TaskSystem::ShutDown();
+            task_system_initialized = false;
+            return 0;
+        }
+        if (inject_multi_segment_translate_failure) {
+            RunMultiSegmentPrefixSubmitSuffixTranslateFailure();
             RenderDevice::Dispose();
             render_device_initialized = false;
             TaskSystem::ShutDown();
@@ -4274,6 +4919,9 @@ int main(int argc, const char** argv) {
         RunDirectCopyExecuteRejected();
         RunVulkanStorageUnifiedCopySubmission();
         RunAsyncQueueParallelTranslateSmoke();
+        RunMultiSegmentSourceExecution();
+        RunMultiSegmentCopyRoundTrip();
+        RunMultiSegmentRecoverableRejection();
         RunParallelTranslateRecoverableRejection();
         RunRuntimeRejectCompletionOwnership();
         PrimeGlobalTransientPoolForDispose();

@@ -45,9 +45,21 @@ def _testcase_marker(name: str, text: str) -> tuple[str, dict[str, str]] | None:
     if not matches:
         return None
     marker = matches[0]
-    fields = dict(
-        re.findall(r"(?:^|\s)([A-Za-z0-9_]+)=([^\s]+)", marker.group(0))
+    field_pairs = re.findall(
+        r"(?:^|\s)([A-Za-z0-9_]+)=([^\s]+)", marker.group(0)
     )
+    seen_fields: set[str] = set()
+    duplicate_fields: set[str] = set()
+    for key, _ in field_pairs:
+        if key in seen_fields:
+            duplicate_fields.add(key)
+        seen_fields.add(key)
+    _require(
+        not duplicate_fields,
+        f"{name}: duplicate terminal marker fields: "
+        + ", ".join(sorted(duplicate_fields)),
+    )
+    fields = dict(field_pairs)
     return marker.group("status"), fields
 
 
@@ -171,10 +183,144 @@ def _require_phase15b_copy_contracts(mode: str, text: str) -> None:
     )
 
 
+def _require_phase15c_multi_segment_contracts(mode: str, text: str) -> None:
+    execution = _testcase_marker("MultiSegmentSourceExecution", text)
+    _require(
+        execution is not None,
+        f"{mode}: missing Phase15C multi-segment source execution marker",
+    )
+    recovery = _testcase_marker("MultiSegmentRecoverableRejection", text)
+    _require(
+        recovery is not None,
+        f"{mode}: missing Phase15C multi-segment recoverable rejection marker",
+    )
+    copy_round_trip = _testcase_marker("MultiSegmentCopyRoundTrip", text)
+    _require(
+        copy_round_trip is not None,
+        f"{mode}: missing Phase15C multi-segment Copy round-trip marker",
+    )
+
+    copy_status, copy_fields = copy_round_trip
+    if copy_status == "SKIP":
+        _require(
+            copy_fields.get("reason") == "copy_queue_unavailable"
+            and copy_fields.get("graphics_native") is not None
+            and copy_fields.get("copy_native") is not None,
+            f"{mode}: invalid Phase15C multi-segment Copy SKIP contract",
+        )
+    else:
+        copy_native_alias = copy_fields.get("native_alias")
+        _require(
+            copy_native_alias in {"true", "false"},
+            f"{mode}: Phase15C multi-segment Copy source omitted native alias state",
+        )
+        expected_copy_predecessor_waits = (
+            "0" if copy_native_alias == "true" else "2"
+        )
+        _require(
+            copy_fields.get("source") == "1"
+            and copy_fields.get("segments") == "3"
+            and copy_fields.get("queues") == "Graphics,Copy,Graphics"
+            and copy_fields.get("observed_submit_order") == "G,Copy,G"
+            and copy_fields.get("source_segments") == "0:0/3,0:1/3,0:2/3"
+            and copy_fields.get("predecessor_waits")
+            == expected_copy_predecessor_waits
+            and copy_fields.get("native_owner") == "Submission"
+            and copy_fields.get("callbacks") == "exactly_once"
+            and copy_fields.get("signal") == "success"
+            and copy_fields.get("readback") == "verified"
+            and copy_fields.get("replay") == "0",
+            f"{mode}: incomplete Phase15C multi-segment Copy round-trip contract",
+        )
+
+    execution_status, execution_fields = execution
+    recovery_status, recovery_fields = recovery
+    _require(
+        execution_status == recovery_status,
+        f"{mode}: Phase15C multi-segment execution/recovery status mismatch",
+    )
+    if execution_status == "SKIP":
+        _require(
+            execution_fields.get("reason") == "queue_unavailable"
+            and execution_fields.get("graphics_native") is not None
+            and execution_fields.get("compute_native") is not None
+            and recovery_fields.get("reason") == "queue_unavailable"
+            and recovery_fields.get("graphics_native") is not None
+            and recovery_fields.get("compute_native") is not None,
+            f"{mode}: invalid Phase15C multi-segment SKIP contract",
+        )
+        return
+
+    native_alias = execution_fields.get("native_alias")
+    _require(
+        native_alias in {"true", "false"},
+        f"{mode}: Phase15C multi-segment source omitted native alias state",
+    )
+    expected_first_ready = "G" if native_alias == "true" else "G,C"
+    expected_predecessor_waits = "0" if native_alias == "true" else "1"
+    expected_compute_saw_graphics_finished = (
+        "true" if native_alias == "true" else "false"
+    )
+    _require(
+        execution_fields.get("source") == "1"
+        and execution_fields.get("segments") == "2"
+        and execution_fields.get("queues") == "Graphics,Compute"
+        and execution_fields.get("first_ready_lanes") == expected_first_ready
+        and execution_fields.get("observed_submit_order") == "G,C"
+        and execution_fields.get("source_segments") == "0:0/2,0:1/2"
+        and execution_fields.get("predecessor_waits")
+        == expected_predecessor_waits
+        and execution_fields.get("compute_saw_graphics_finished")
+        == expected_compute_saw_graphics_finished
+        and execution_fields.get("native_owner") == "Submission"
+        and execution_fields.get("callbacks") == "exactly_once"
+        and execution_fields.get("signal") == "success"
+        and execution_fields.get("replay") == "0",
+        f"{mode}: incomplete Phase15C multi-segment source execution contract",
+    )
+
+    distinct_native = recovery_fields.get("distinct_native")
+    _require(
+        recovery_fields.get("source") == "1"
+        and recovery_fields.get("segments") == "2"
+        and recovery_fields.get("dependency") == "rejected"
+        and distinct_native in {"true", "false"}
+        and distinct_native == recovery_fields.get("suffix_recorded")
+        and (distinct_native == "true") == (native_alias == "false")
+        and recovery_fields.get("native_rejected") == "0"
+        and recovery_fields.get("callbacks") == "ordinary1_success0"
+        and recovery_fields.get("signal") == "rejected"
+        and recovery_fields.get("native_accepted") == "1"
+        and recovery_fields.get("recovered_callbacks")
+        == "ordinary1_success1"
+        and recovery_fields.get("runtime") == "recovered"
+        and recovery_fields.get("replay") == "0",
+        f"{mode}: incomplete Phase15C multi-segment recoverable rejection contract",
+    )
+
+
+def _require_phase15c_completion_aggregate_cpu_probe(
+    mode: str, text: str
+) -> None:
+    probe = _testcase_marker("MultiSegmentCompletionAggregateCpuProbe", text)
+    _require(
+        probe is not None and probe[0] == "PASS",
+        f"{mode}: missing multi-segment completion aggregate CPU probe marker",
+    )
+    _, fields = probe
+    _require(
+        fields.get("suffix_first") == "deferred"
+        and fields.get("prefix_second") == "ordinary1_success0"
+        and fields.get("replay") == "0",
+        f"{mode}: incomplete multi-segment completion aggregate CPU probe contract",
+    )
+
+
 def validate_log(mode: str, text: str) -> None:
     _require("[TESTCASE][FAIL]" not in text, f"{mode}: test emitted a FAIL marker")
     _require("VUID-" not in text, f"{mode}: Vulkan validation VUID was emitted")
     _require("Validation Error" not in text, f"{mode}: Vulkan validation error was emitted")
+    _require_phase15c_completion_aggregate_cpu_probe(mode, text)
     if mode == "translate-hard":
         retirement = re.search(
             r"\[TESTCASE\]\[PASS\].*name=ParallelTranslateFailureRetirement"
@@ -200,6 +346,43 @@ def validate_log(mode: str, text: str) -> None:
             )
             is not None,
             "translate-hard: missing clean hard-fault ownership summary",
+        )
+        return
+
+    if mode == "multi-segment-hard":
+        retirement = _testcase_marker(
+            "MultiSegmentPrefixSubmitSuffixTranslateFailure", text
+        )
+        _require(
+            retirement is not None and retirement[0] == "PASS",
+            "multi-segment-hard: missing prefix-submit/suffix-failure PASS marker",
+        )
+        _, retirement_fields = retirement
+        _require(
+            retirement_fields.get("source") == "1"
+            and retirement_fields.get("segments") == "2"
+            and retirement_fields.get("queues") == "Graphics,Graphics"
+            and retirement_fields.get("prefix_translated") == "true"
+            and retirement_fields.get("source_submitted") == "0:0/2"
+            and retirement_fields.get("native_accepted_prefix") == "1"
+            and retirement_fields.get("native_owner") == "Submission"
+            and retirement_fields.get("callbacks") == "ordinary1_success0"
+            and retirement_fields.get("signal") == "failed"
+            and retirement_fields.get("later_callbacks")
+            == "ordinary1_success0"
+            and retirement_fields.get("hard_latch") == "later_batch_failed"
+            and retirement_fields.get("replay") == "0",
+            "multi-segment-hard: incomplete aggregate retirement contract",
+        )
+        _require(
+            re.search(
+                r"\[VulkanFault\]\[Summary\].*first_fault_count=1(?:\s|$)"
+                r".*native_submit_after_fault=0.*native_present_after_fault=0"
+                r".*device_lost=false",
+                text,
+            )
+            is not None,
+            "multi-segment-hard: missing clean hard-fault ownership summary",
         )
         return
 
@@ -249,6 +432,7 @@ def validate_log(mode: str, text: str) -> None:
         f"{mode}: incomplete recoverable Translate retirement contract",
     )
 
+    _require_phase15c_multi_segment_contracts(mode, text)
     _require_phase15b_copy_contracts(mode, text)
 
     expected_fault = "true" if mode == "fallback" else "false"
@@ -369,6 +553,8 @@ def run_case(executable: Path, outdir: Path, mode: str, timeout: float) -> Path:
         arguments.append("--production-heavy")
     if mode == "translate-hard":
         arguments.append("--inject-translate-failure")
+    if mode == "multi-segment-hard":
+        arguments.append("--inject-multi-segment-translate-failure")
 
     completed = subprocess.run(
         [str(executable), *arguments],
@@ -418,6 +604,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "gated",
                 "heavy",
                 "translate-hard",
+                "multi-segment-hard",
             )
         ]
     except (OSError, subprocess.TimeoutExpired, VulkanTestError) as error:

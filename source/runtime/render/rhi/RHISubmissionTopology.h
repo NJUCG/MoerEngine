@@ -317,7 +317,20 @@ inline void AppendUnique(
             RHISubmissionSegmentPlan& last  = result.segments.back();
             first.inherit_source_wait_events = true;
             last.inherit_source_signal_events_and_callbacks = true;
-            last.inherit_source_runtime_payload = true;
+            // Copy translation does not own the source-level runtime payload
+            // (profiling/control state and other non-command metadata). Keep
+            // signals/callbacks on the true tail, but route runtime ownership
+            // to the last retained non-Copy segment. A pure Copy source has no
+            // runtime-payload owner.
+            for (size_t segment_plan_index = result.segments.size();
+                 segment_plan_index > source_plan.segment_plan_begin;
+                 --segment_plan_index) {
+                RHISubmissionSegmentPlan& candidate = result.segments[segment_plan_index - 1];
+                if (candidate.segment.queue != EQueueType::Copy) {
+                    candidate.inherit_source_runtime_payload = true;
+                    break;
+                }
+            }
         }
 
         result.source_plans.emplace_back(std::move(source_plan));

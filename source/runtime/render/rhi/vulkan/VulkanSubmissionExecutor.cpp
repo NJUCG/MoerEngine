@@ -15,6 +15,9 @@
 #include <cassert>
 #include <latch>
 #include <limits>
+#include <memory>
+#include <mutex>
+#include <stdexcept>
 #include <string>
 
 namespace Moer::Render {
@@ -25,8 +28,12 @@ std::atomic<const VulkanSourceSubmissionObserver*> g_source_submission_observer{
 void NotifySourceSubmitted(
     uint64     _batch_sequence,
     uint32     _source_index,
+    uint32     _original_source_index,
+    uint32     _source_segment_index,
+    uint32     _source_segment_count,
     EQueueType _queue,
-    uint64     _async_queue_scope
+    uint64     _async_queue_scope,
+    bool       _cross_native_predecessor_wait
 ) noexcept {
     assert(
         GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
@@ -42,8 +49,12 @@ void NotifySourceSubmitted(
         VulkanSourceSubmissionEvent{
             .batch_sequence    = _batch_sequence,
             .source_index      = _source_index,
+            .original_source_index         = _original_source_index,
+            .source_segment_index          = _source_segment_index,
+            .source_segment_count          = _source_segment_count,
             .queue             = _queue,
             .async_queue_scope = _async_queue_scope,
+            .cross_native_predecessor_wait = _cross_native_predecessor_wait,
         }
     );
 }
@@ -89,6 +100,126 @@ bool IsParallelTranslateCandidate(const RHIBackendSubmissionBatchEntry& _entry) 
            _entry.submit.HasExplicitResourceStateOwnership() && _entry.submit.async_queue_scope != 0;
 }
 
+void InvokeSourceCallbacksNoexcept(
+    Array<std::function<void()>>& _callbacks,
+    std::string_view              _context
+) noexcept {
+    for (std::function<void()>& callback : _callbacks) {
+        if (!callback) {
+            continue;
+        }
+        try {
+            callback();
+        } catch (const std::exception& error) {
+            try {
+                LOG_ERROR("{} callback threw: {}", _context, error.what());
+            } catch (...) {
+            }
+        } catch (...) {
+            try {
+                LOG_ERROR("{} callback threw", _context);
+            } catch (...) {
+            }
+        }
+    }
+    _callbacks.clear();
+}
+
+class VulkanMultiSegmentCompletionState final {
+public:
+    explicit VulkanMultiSegmentCompletionState(Array<FenceRef>&& _segment_outcomes) :
+        segment_outcomes(std::move(_segment_outcomes)),
+        retired(segment_outcomes.size(), uint8{0}),
+        remaining(segment_outcomes.size()) {}
+
+    void AdoptSourceCallbacks(
+        Array<std::function<void()>>&& _callbacks,
+        Array<std::function<void()>>&& _success_callbacks
+    ) noexcept {
+        callbacks         = std::move(_callbacks);
+        success_callbacks = std::move(_success_callbacks);
+    }
+
+    const FenceRef& SegmentOutcome(size_t _segment_index) const noexcept {
+        return segment_outcomes[_segment_index];
+    }
+
+    void Retire(size_t _segment_index) noexcept {
+        bool segment_success = false;
+        if (_segment_index < segment_outcomes.size()) {
+            auto* outcome   = ResourceCast(segment_outcomes[_segment_index].Get());
+            segment_success = outcome != nullptr && outcome->GetValue() >= 1 && !outcome->IsRejected(1) &&
+                              !outcome->IsFailed();
+        }
+
+        Array<std::function<void()>> final_callbacks{};
+        Array<std::function<void()>> final_success_callbacks{};
+        bool                         invoke_success = false;
+        {
+            std::lock_guard lock(mutex);
+            if (_segment_index >= retired.size() || retired[_segment_index] != 0) {
+                return;
+            }
+            retired[_segment_index] = 1;
+            all_success             = all_success && segment_success;
+            assert(remaining != 0);
+            --remaining;
+            if (remaining != 0) {
+                return;
+            }
+            invoke_success          = all_success;
+            final_callbacks         = std::move(callbacks);
+            final_success_callbacks = std::move(success_callbacks);
+        }
+
+        InvokeSourceCallbacksNoexcept(final_callbacks, "[RHIExecutor][Vulkan][MultiSegment] ordinary");
+        if (invoke_success) {
+            InvokeSourceCallbacksNoexcept(
+                final_success_callbacks, "[RHIExecutor][Vulkan][MultiSegment] success"
+            );
+        }
+    }
+
+private:
+    Array<FenceRef>              segment_outcomes{};
+    Array<uint8>                 retired{};
+    size_t                       remaining{0};
+    bool                         all_success{true};
+    std::mutex                   mutex{};
+    Array<std::function<void()>> callbacks{};
+    Array<std::function<void()>> success_callbacks{};
+};
+
+struct VulkanExecutableSourceMetadata {
+    uint32 original_source_index{0};
+    uint32 source_segment_index{0};
+    uint32 source_segment_count{1};
+    bool   cross_native_predecessor_wait{false};
+};
+
+struct VulkanSegmentMaterializationResult {
+    bool                                  changed{false};
+    size_t                                original_source_count{0};
+    size_t                                cross_native_wait_count{0};
+    Array<VulkanExecutableSourceMetadata> sources{};
+};
+
+struct VulkanOriginalSourceMaterialization {
+    bool                                               multi_segment{false};
+    size_t                                             executable_begin{0};
+    size_t                                             executable_count{1};
+    std::shared_ptr<VulkanMultiSegmentCompletionState> completion{};
+};
+
+CmdSubmit MakeEmptySubmit() {
+    return CmdSubmit(
+        Array<UniquePtr<Command>>{},
+        Array<std::function<void()>>{},
+        Array<std::function<void()>>{},
+        TCachedArgArray{}
+    );
+}
+
 struct BatchPreflightResult {
     bool             valid{true};
     std::string_view reason{"none"};
@@ -117,8 +248,7 @@ BatchPreflightResult ValidateBatch(const RHIBackendSubmissionBatch& _batch) {
     if (topology.source_plans.size() != _batch.submits.size()) {
         return RejectPreflight("source/topology count mismatch");
     }
-    if (_batch.present &&
-        (!_batch.present->swapchain || _batch.present->source.texture == nullptr)) {
+    if (_batch.present && (!_batch.present->swapchain || _batch.present->source.texture == nullptr)) {
         return RejectPreflight("invalid Present request");
     }
 
@@ -133,8 +263,7 @@ BatchPreflightResult ValidateBatch(const RHIBackendSubmissionBatch& _batch) {
             return RejectPreflight("invalid source queue", source_index);
         }
         if (source_plan.source_key.op_seq != _batch.sequence ||
-            source_plan.source_key.submit_idx != source_index ||
-            source_plan.root_queue != entry.queue ||
+            source_plan.source_key.submit_idx != source_index || source_plan.root_queue != entry.queue ||
             source_plan.command_count != submit.cmds.size() ||
             source_plan.execution_class != submit.translate_execution_class ||
             source_plan.has_side_effects != submit_has_work) {
@@ -143,66 +272,93 @@ BatchPreflightResult ValidateBatch(const RHIBackendSubmissionBatch& _batch) {
         if (source_plan.segment_plan_begin != expected_segment_begin) {
             return RejectPreflight("non-contiguous source plans", source_index);
         }
-        if (source_plan.segment_plan_count > 1) {
-            return RejectPreflight("multi-segment source is not supported", source_index);
-        }
 
-        const size_t expected_segment_count = submit_has_work ? 1u : 0u;
+        const RHISubmitSegment synthesized_segment{
+            .queue = source_plan.root_queue,
+            .begin = 0,
+            .end   = submit.cmds.size(),
+        };
+        const std::span<const RHISubmitSegment> source_segments =
+            submit.segments.empty() ? std::span<const RHISubmitSegment>(&synthesized_segment, 1) :
+                                      std::span<const RHISubmitSegment>(submit.segments);
+        const size_t expected_segment_count = submit_has_work ? source_segments.size() : 0;
         if (source_plan.segment_plan_count != expected_segment_count) {
             return RejectPreflight("source retention does not match payload", source_index);
         }
 
-        if (source_plan.segment_plan_count == 1) {
-            if (expected_segment_begin >= topology.segments.size()) {
+        const bool multi_segment = expected_segment_count > 1;
+        if (multi_segment && (!submit.HasExplicitResourceStateOwnership() || submit.async_queue_scope == 0)) {
+            return RejectPreflight(
+                "multi-segment source requires explicit state and async scope", source_index
+            );
+        }
+        if (multi_segment && (submit.b_sync || submit.b_delete_resources ||
+                              submit.ProfilingPhase() != ERHIProfilingPhase::Disabled)) {
+            return RejectPreflight("multi-segment source contains unsupported control payload", source_index);
+        }
+
+        std::optional<size_t> runtime_payload_segment{};
+        for (size_t segment_index = expected_segment_count; segment_index > 0; --segment_index) {
+            if (source_segments[segment_index - 1].queue != EQueueType::Copy) {
+                runtime_payload_segment = segment_index - 1;
+                break;
+            }
+        }
+        if (!runtime_payload_segment &&
+            (!submit.cached_args.empty() || !submit.debug_label.empty() || submit.b_sync ||
+             submit.b_delete_resources || submit.ProfilingPhase() != ERHIProfilingPhase::Disabled)) {
+            return RejectPreflight("Copy-only source contains unsupported runtime payload", source_index);
+        }
+
+        for (size_t segment_index = 0; segment_index < expected_segment_count; ++segment_index) {
+            const size_t flat_segment_index = expected_segment_begin + segment_index;
+            if (flat_segment_index >= topology.segments.size()) {
                 return RejectPreflight("source segment is out of range", source_index);
             }
-            const RHISubmissionSegmentPlan& segment_plan =
-                topology.segments[expected_segment_begin];
+            const RHISubmitSegment&         descriptor   = source_segments[segment_index];
+            const RHISubmissionSegmentPlan& segment_plan = topology.segments[flat_segment_index];
             if (segment_plan.key.op_seq != _batch.sequence ||
-                segment_plan.key.submit_idx != expected_segment_begin ||
+                segment_plan.key.submit_idx != flat_segment_index ||
                 segment_plan.source_key != source_plan.source_key ||
-                segment_plan.source_segment_index != 0 ||
-                segment_plan.segment.queue != source_plan.root_queue ||
-                segment_plan.segment.begin != 0 ||
-                segment_plan.segment.end != submit.cmds.size() ||
+                segment_plan.source_segment_index != segment_index ||
+                segment_plan.segment.queue != descriptor.queue ||
+                segment_plan.segment.begin != descriptor.begin ||
+                segment_plan.segment.end != descriptor.end ||
                 segment_plan.execution_class != source_plan.execution_class ||
-                !segment_plan.inherit_source_wait_events ||
-                !segment_plan.inherit_source_signal_events_and_callbacks ||
-                !segment_plan.inherit_source_runtime_payload) {
-                return RejectPreflight("single-segment plan does not match source", source_index);
+                segment_plan.inherit_source_wait_events != (segment_index == 0) ||
+                segment_plan.inherit_source_signal_events_and_callbacks !=
+                    (segment_index + 1 == expected_segment_count) ||
+                segment_plan.inherit_source_runtime_payload !=
+                    (runtime_payload_segment.has_value() && *runtime_payload_segment == segment_index)) {
+                return RejectPreflight("segment plan does not match source", source_index);
             }
             for (const SubmissionKey& dependency : segment_plan.dependencies) {
-                if (dependency.op_seq != _batch.sequence || dependency.submit_idx >= expected_segment_begin) {
+                if (dependency.op_seq != _batch.sequence || dependency.submit_idx >= flat_segment_index) {
                     return RejectPreflight(
                         "source segment has an unknown or non-preceding dependency", source_index
                     );
                 }
             }
 
-            if (!submit.segments.empty()) {
-                if (submit.segments.size() != 1 ||
-                    submit.segments.front().queue != source_plan.root_queue ||
-                    submit.segments.front().begin != 0 ||
-                    submit.segments.front().end != submit.cmds.size()) {
+            if (expected_segment_count == 1 &&
+                (descriptor.queue != source_plan.root_queue || descriptor.begin != 0 ||
+                 descriptor.end != submit.cmds.size())) {
+                return RejectPreflight("single segment does not match root queue", source_index);
+            }
+
+            for (size_t command_index = descriptor.begin; command_index < descriptor.end; ++command_index) {
+                const UniquePtr<Command>& command = submit.cmds[command_index];
+                if (!command) {
+                    return RejectPreflight("null command", source_index, command_index);
+                }
+                if (command->Type() >= Command::EType::Count) {
+                    return RejectPreflight("invalid command type", source_index, command_index);
+                }
+                if (descriptor.queue == EQueueType::Copy && !IsCopyCommand(command->Type())) {
                     return RejectPreflight(
-                        "source segment does not match root queue", source_index
+                        "unsupported command on Copy segment", source_index, command_index
                     );
                 }
-            }
-        }
-
-        for (size_t command_index = 0; command_index < submit.cmds.size(); ++command_index) {
-            const UniquePtr<Command>& command = submit.cmds[command_index];
-            if (!command) {
-                return RejectPreflight("null command", source_index, command_index);
-            }
-            if (command->Type() >= Command::EType::Count) {
-                return RejectPreflight("invalid command type", source_index, command_index);
-            }
-            if (entry.queue == EQueueType::Copy && !IsCopyCommand(command->Type())) {
-                return RejectPreflight(
-                    "unsupported command on Copy queue", source_index, command_index
-                );
             }
         }
 
@@ -217,7 +373,7 @@ BatchPreflightResult ValidateBatch(const RHIBackendSubmissionBatch& _batch) {
             }
         }
 
-        if (entry.queue == EQueueType::Copy) {
+        if (expected_segment_count == 1 && source_segments.front().queue == EQueueType::Copy) {
             if (!submit.cached_args.empty()) {
                 return RejectPreflight("Copy submit contains cached arguments", source_index);
             }
@@ -236,6 +392,231 @@ BatchPreflightResult ValidateBatch(const RHIBackendSubmissionBatch& _batch) {
         return RejectPreflight("unclaimed topology segments");
     }
     return {};
+}
+
+VulkanSegmentMaterializationResult
+MaterializeMultiSegmentBatch(RHIBackendSubmissionBatch& _batch, const RHIQueueTopology& _queue_topology) {
+    VulkanSegmentMaterializationResult result{};
+    result.original_source_count = _batch.submits.size();
+
+    size_t executable_source_count = 0;
+    for (const RHISourceSubmitPlan& source_plan : _batch.topology.source_plans) {
+        result.changed              = result.changed || source_plan.segment_plan_count > 1;
+        const size_t retained_count = source_plan.segment_plan_count > 1 ? source_plan.segment_plan_count : 1;
+        if (retained_count > std::numeric_limits<size_t>::max() - executable_source_count) {
+            throw std::runtime_error("multi-segment materialization source count overflow");
+        }
+        executable_source_count += retained_count;
+    }
+
+    if (executable_source_count > std::numeric_limits<uint32>::max()) {
+        throw std::runtime_error("multi-segment materialization exceeds SubmissionKey capacity");
+    }
+
+    result.sources.reserve(executable_source_count);
+    if (!result.changed) {
+        for (size_t source_index = 0; source_index < _batch.submits.size(); ++source_index) {
+            result.sources.emplace_back(VulkanExecutableSourceMetadata{
+                .original_source_index = static_cast<uint32>(source_index),
+                .source_segment_index  = 0,
+                .source_segment_count  = 1,
+            });
+        }
+        return result;
+    }
+
+    Array<VulkanOriginalSourceMaterialization> source_materializations(_batch.submits.size());
+    Array<RHIBackendSubmissionBatchEntry>      executable_sources{};
+    executable_sources.reserve(executable_source_count);
+
+    for (size_t source_index = 0; source_index < _batch.submits.size(); ++source_index) {
+        RHIBackendSubmissionBatchEntry& source_entry  = _batch.submits[source_index];
+        CmdSubmit&                      source_submit = source_entry.submit;
+        const RHISourceSubmitPlan&      source_plan   = _batch.topology.source_plans[source_index];
+
+        VulkanOriginalSourceMaterialization& materialization = source_materializations[source_index];
+        materialization.multi_segment                        = source_plan.segment_plan_count > 1;
+        materialization.executable_begin                     = executable_sources.size();
+        materialization.executable_count = materialization.multi_segment ? source_plan.segment_plan_count : 1;
+
+        if (!materialization.multi_segment) {
+            executable_sources.emplace_back(source_entry.queue, MakeEmptySubmit());
+            result.sources.emplace_back(VulkanExecutableSourceMetadata{
+                .original_source_index = static_cast<uint32>(source_index),
+                .source_segment_index  = 0,
+                .source_segment_count  = 1,
+            });
+            continue;
+        }
+
+        Array<FenceRef> segment_outcomes{};
+        segment_outcomes.reserve(source_plan.segment_plan_count);
+        for (size_t segment_index = 0; segment_index < source_plan.segment_plan_count; ++segment_index) {
+            FenceRef outcome = RenderDevice::Get().CreateFence();
+            if (!outcome.IsValid()) {
+                throw std::runtime_error("multi-segment materialization failed to create completion fence");
+            }
+            segment_outcomes.emplace_back(std::move(outcome));
+        }
+        materialization.completion =
+            std::make_shared<VulkanMultiSegmentCompletionState>(std::move(segment_outcomes));
+
+        for (size_t segment_index = 0; segment_index < source_plan.segment_plan_count; ++segment_index) {
+            const RHISubmissionSegmentPlan& segment_plan =
+                _batch.topology.segments[source_plan.segment_plan_begin + segment_index];
+            const RHISubmitSegment& descriptor    = segment_plan.segment;
+            const size_t            command_count = descriptor.end - descriptor.begin;
+
+            CmdSubmit segment_submit = MakeEmptySubmit();
+            segment_submit.cmds.reserve(command_count);
+            segment_submit.callbacks.reserve(1);
+            segment_submit.signal_events.reserve(
+                1 + (segment_plan.inherit_source_signal_events_and_callbacks ?
+                         source_submit.signal_events.size() :
+                         0)
+            );
+            segment_submit.wait_events.reserve(
+                (segment_plan.inherit_source_wait_events ? source_submit.wait_events.size() : 0) + 1
+            );
+            segment_submit.segments.reserve(1);
+
+            segment_submit.resource_state_ownership  = source_submit.resource_state_ownership;
+            segment_submit.translate_execution_class = source_submit.translate_execution_class;
+            segment_submit.async_queue_scope         = source_submit.async_queue_scope;
+            segment_submit.debug_label_color         = source_submit.debug_label_color;
+
+            if (descriptor.queue != EQueueType::Copy) {
+                segment_submit.cached_args = source_submit.cached_args;
+            }
+            if (segment_plan.inherit_source_runtime_payload) {
+                segment_submit.debug_label = source_submit.debug_label;
+            }
+
+            segment_submit.segments.emplace_back(RHISubmitSegment{
+                .queue = descriptor.queue,
+                .begin = 0,
+                .end   = command_count,
+            });
+
+            const FenceRef& segment_outcome = materialization.completion->SegmentOutcome(segment_index);
+            segment_submit.signal_events.emplace_back(SignalEvent{
+                .timeline_handle = uint64(segment_outcome.Get()),
+                .value           = 1,
+            });
+            segment_submit.callbacks.emplace_back([completion = materialization.completion, segment_index] {
+                completion->Retire(segment_index);
+            });
+
+            bool cross_native_predecessor_wait = false;
+            if (segment_index != 0) {
+                const RHISubmissionSegmentPlan& predecessor_plan =
+                    _batch.topology.segments[source_plan.segment_plan_begin + segment_index - 1];
+                cross_native_predecessor_wait =
+                    _queue_topology.Resolve(predecessor_plan.segment.queue).native_queue_id !=
+                    _queue_topology.Resolve(descriptor.queue).native_queue_id;
+                if (cross_native_predecessor_wait) {
+                    const FenceRef& predecessor_outcome =
+                        materialization.completion->SegmentOutcome(segment_index - 1);
+                    segment_submit.wait_events.emplace_back(WaitEvent{
+                        .timeline_handle = uint64(predecessor_outcome.Get()),
+                        .value           = 1,
+                    });
+                    ++result.cross_native_wait_count;
+                }
+            }
+
+            executable_sources.emplace_back(descriptor.queue, std::move(segment_submit));
+            result.sources.emplace_back(VulkanExecutableSourceMetadata{
+                .original_source_index         = static_cast<uint32>(source_index),
+                .source_segment_index          = static_cast<uint32>(segment_index),
+                .source_segment_count          = static_cast<uint32>(source_plan.segment_plan_count),
+                .cross_native_predecessor_wait = cross_native_predecessor_wait,
+            });
+        }
+    }
+
+    assert(executable_sources.size() == executable_source_count);
+    assert(result.sources.size() == executable_source_count);
+
+    // Build and validate the flattened immutable topology before moving any
+    // command, callback, or external synchronization ownership out of the
+    // original sources. Every operation after this point is pre-reserved and
+    // noexcept for the owned payload types.
+    Array<RHISourceSubmitDescription> descriptions{};
+    descriptions.reserve(executable_source_count);
+    for (size_t source_index = 0; source_index < _batch.submits.size(); ++source_index) {
+        const RHIBackendSubmissionBatchEntry&      source_entry    = _batch.submits[source_index];
+        const VulkanOriginalSourceMaterialization& materialization = source_materializations[source_index];
+        if (!materialization.multi_segment) {
+            descriptions.emplace_back(RHISourceSubmitDescription{
+                .root_queue      = source_entry.queue,
+                .command_count   = source_entry.submit.cmds.size(),
+                .segments        = source_entry.submit.segments,
+                .execution_class = source_entry.submit.translate_execution_class,
+                .has_side_effects =
+                    SubmitHasSideEffects(source_entry.submit) || !source_entry.submit.cmds.empty(),
+            });
+            continue;
+        }
+
+        for (size_t segment_index = 0; segment_index < materialization.executable_count; ++segment_index) {
+            const RHIBackendSubmissionBatchEntry& executable_entry =
+                executable_sources[materialization.executable_begin + segment_index];
+            descriptions.emplace_back(RHISourceSubmitDescription{
+                .root_queue       = executable_entry.queue,
+                .command_count    = executable_entry.submit.segments.front().end,
+                .segments         = executable_entry.submit.segments,
+                .execution_class  = executable_entry.submit.translate_execution_class,
+                .has_side_effects = true,
+            });
+        }
+    }
+
+    RHISubmissionTopologyPlan executable_topology = BuildRHISubmissionTopology(descriptions, _batch.sequence);
+    if (!executable_topology.IsValid() ||
+        executable_topology.source_plans.size() != executable_sources.size()) {
+        throw std::runtime_error("multi-segment materialization produced an invalid executable topology");
+    }
+
+    for (size_t source_index = 0; source_index < _batch.submits.size(); ++source_index) {
+        RHIBackendSubmissionBatchEntry&      source_entry    = _batch.submits[source_index];
+        VulkanOriginalSourceMaterialization& materialization = source_materializations[source_index];
+        if (!materialization.multi_segment) {
+            executable_sources[materialization.executable_begin].submit = std::move(source_entry.submit);
+            continue;
+        }
+
+        materialization.completion->AdoptSourceCallbacks(
+            std::move(source_entry.submit.callbacks), std::move(source_entry.submit.success_callbacks)
+        );
+
+        const RHISourceSubmitPlan& source_plan = _batch.topology.source_plans[source_index];
+        for (size_t segment_index = 0; segment_index < materialization.executable_count; ++segment_index) {
+            const RHISubmitSegment& descriptor =
+                _batch.topology.segments[source_plan.segment_plan_begin + segment_index].segment;
+            CmdSubmit& executable_submit =
+                executable_sources[materialization.executable_begin + segment_index].submit;
+            for (size_t command_index = descriptor.begin; command_index < descriptor.end; ++command_index) {
+                executable_submit.cmds.emplace_back(std::move(source_entry.submit.cmds[command_index]));
+            }
+        }
+
+        CmdSubmit& first_submit = executable_sources[materialization.executable_begin].submit;
+        for (const WaitEvent& wait : source_entry.submit.wait_events) {
+            first_submit.wait_events.emplace_back(wait);
+        }
+
+        CmdSubmit& last_submit =
+            executable_sources[materialization.executable_begin + materialization.executable_count - 1]
+                .submit;
+        for (const SignalEvent& signal : source_entry.submit.signal_events) {
+            last_submit.signal_events.emplace_back(signal);
+        }
+    }
+
+    _batch.submits  = std::move(executable_sources);
+    _batch.topology = std::move(executable_topology);
+    return result;
 }
 
 const char* TopologyErrorName(ERHISubmissionTopologyError _error) {
@@ -265,6 +646,51 @@ void ResolveRejectedPresent(std::optional<RHIPresentRequest>& _present) {
 }
 
 } // namespace
+
+VulkanMultiSegmentCompletionProbeResult RunVulkanMultiSegmentCompletionProbeForTesting() {
+    Array<FenceRef> segment_outcomes{};
+    segment_outcomes.reserve(2);
+    segment_outcomes.emplace_back(RenderDevice::Get().CreateFence());
+    segment_outcomes.emplace_back(RenderDevice::Get().CreateFence());
+    if (!segment_outcomes[0].IsValid() || !segment_outcomes[1].IsValid()) {
+        throw std::runtime_error("multi-segment completion probe failed to create fences");
+    }
+
+    auto   completion = std::make_shared<VulkanMultiSegmentCompletionState>(std::move(segment_outcomes));
+    uint32 ordinary_callback_count = 0;
+    uint32 success_callback_count  = 0;
+    completion->AdoptSourceCallbacks(
+        Array<std::function<void()>>{[&ordinary_callback_count] {
+            ++ordinary_callback_count;
+        }},
+        Array<std::function<void()>>{[&success_callback_count] {
+            ++success_callback_count;
+        }}
+    );
+
+    VulkanMultiSegmentCompletionProbeResult result{};
+    auto*                                   suffix = ResourceCast(completion->SegmentOutcome(1).Get());
+    auto*                                   prefix = ResourceCast(completion->SegmentOutcome(0).Get());
+    if (suffix == nullptr || prefix == nullptr) {
+        throw std::runtime_error("multi-segment completion probe received non-Vulkan fences");
+    }
+
+    suffix->Fail(VK_ERROR_UNKNOWN);
+    completion->Retire(1);
+    result.suffix_retirement_deferred_callbacks = ordinary_callback_count == 0 && success_callback_count == 0;
+
+    prefix->Notify(1);
+    completion->Retire(0);
+    result.prefix_retirement_completed_callbacks =
+        ordinary_callback_count == 1 && success_callback_count == 0;
+
+    completion->Retire(1);
+    completion->Retire(0);
+    result.repeated_retirement_suppressed = ordinary_callback_count == 1 && success_callback_count == 0;
+    result.ordinary_callback_count        = ordinary_callback_count;
+    result.success_callback_count         = success_callback_count;
+    return result;
+}
 
 bool TryInstallVulkanSourceSubmissionObserver(const VulkanSourceSubmissionObserver* _observer) noexcept {
     if (_observer == nullptr || _observer->callback == nullptr) {
@@ -760,6 +1186,46 @@ void VulkanSubmissionExecutor::ProcessBatch(
         return;
     }
 
+    const RHIQueueTopology                   queue_topology = RenderDevice::Get().GetQueueTopology();
+    const VulkanSegmentMaterializationResult materialization =
+        MaterializeMultiSegmentBatch(_batch, queue_topology);
+    if (materialization.changed) {
+        const BatchPreflightResult executable_preflight = ValidateBatch(_batch);
+        if (!executable_preflight.valid) {
+            LOG_ERROR(
+                "[RHIExecutor][Vulkan][MultiSegment] batch={} "
+                "executable preflight rejected reason={} topology_error={} "
+                "source={} command={}",
+                _batch.sequence,
+                executable_preflight.reason,
+                TopologyErrorName(_batch.topology.error),
+                executable_preflight.source_index,
+                executable_preflight.command_index
+            );
+            hard_failed         = true;
+            hard_failure_result = static_cast<int32>(VK_ERROR_UNKNOWN);
+            RejectBatch(
+                std::move(_batch),
+                static_cast<int32>(VK_ERROR_UNKNOWN),
+                executable_preflight.reason,
+                0,
+                &_exception_state.first_unconsumed_source
+            );
+            return;
+        }
+        if (!logged_multi_segment_topology) {
+            logged_multi_segment_topology = true;
+            LOG_INFO(
+                "[RHIExecutor][Vulkan][MultiSegment] "
+                "original_sources={} executable_segments={} "
+                "cross_native_waits={} completion_aggregate=true",
+                materialization.original_source_count,
+                _batch.submits.size(),
+                materialization.cross_native_wait_count
+            );
+        }
+    }
+
     if (!logged_multi_source_topology && _batch.submits.size() > 1) {
         logged_multi_source_topology = true;
         LOG_INFO(
@@ -817,8 +1283,6 @@ void VulkanSubmissionExecutor::ProcessBatch(
             _exception_state.first_unconsumed_source = _batch.submits.size();
         };
 
-    const RHIQueueTopology queue_topology =
-        RenderDevice::Get().GetQueueTopology();
     auto same_native_queue = [&](EQueueType lhs, EQueueType rhs) {
         return queue_topology.Resolve(lhs).native_queue_id ==
                queue_topology.Resolve(rhs).native_queue_id;
@@ -1260,12 +1724,23 @@ void VulkanSubmissionExecutor::ProcessBatch(
                                                    packet         = &*slot.recorded,
                                                    batch_sequence = _batch.sequence,
                                                    source_index   = static_cast<uint32>(slot.source_index),
+                                                   source_metadata =
+                                                       materialization.sources[slot.source_index],
                                                    queue_type     = slot.queue_type,
                                                    async_scope    = slot.async_queue_scope]() mutable {
                             VulkanRuntimeSubmissionResult result =
                                 queue.SubmitRecordedForRuntime(std::move(*packet));
                             if (result.WasSubmitted()) {
-                                NotifySourceSubmitted(batch_sequence, source_index, queue_type, async_scope);
+                                NotifySourceSubmitted(
+                                    batch_sequence,
+                                    source_index,
+                                    source_metadata.original_source_index,
+                                    source_metadata.source_segment_index,
+                                    source_metadata.source_segment_count,
+                                    queue_type,
+                                    async_scope,
+                                    source_metadata.cross_native_predecessor_wait
+                                );
                             }
                             return result;
                         });
@@ -1370,6 +1845,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                         packet = &*recorded,
                         batch_sequence = _batch.sequence,
                         source_index = static_cast<uint32>(source_index),
+                        source_metadata = materialization.sources[source_index],
                         async_scope
                     ]() mutable {
                         VulkanRuntimeSubmissionResult result =
@@ -1380,8 +1856,12 @@ void VulkanSubmissionExecutor::ProcessBatch(
                             NotifySourceSubmitted(
                                 batch_sequence,
                                 source_index,
+                                source_metadata.original_source_index,
+                                source_metadata.source_segment_index,
+                                source_metadata.source_segment_count,
                                 EQueueType::Copy,
-                                async_scope
+                                async_scope,
+                                source_metadata.cross_native_predecessor_wait
                             );
                         }
                         return result;
@@ -1475,6 +1955,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                         packet = &*recorded,
                         batch_sequence = _batch.sequence,
                         source_index = static_cast<uint32>(source_index),
+                        source_metadata = materialization.sources[source_index],
                         queue_type = entry.queue,
                         async_scope
                     ]() mutable {
@@ -1484,8 +1965,12 @@ void VulkanSubmissionExecutor::ProcessBatch(
                             NotifySourceSubmitted(
                                 batch_sequence,
                                 source_index,
+                                source_metadata.original_source_index,
+                                source_metadata.source_segment_index,
+                                source_metadata.source_segment_count,
                                 queue_type,
-                                async_scope
+                                async_scope,
+                                source_metadata.cross_native_predecessor_wait
                             );
                         }
                         return result;
