@@ -105,9 +105,13 @@ float3 BicubicSampleCatmullRom(Texture2D _tex, SamplerState _spl, float2 _pos,
 }
 
 void Preload(uint2 _shared_id, int2 _gid) {
+  const int2 input_min = int2(params.in_view_origin);
+  const int2 input_max =
+      input_min + max(int2(params.in_view_size), int2(1, 1)) - 1;
+  const int2 sample_pos = clamp(_gid, input_min, input_max);
 #if SAMPLE_COUNT == 1
-  float3 color = PQEncode(unfiltered_rt[_gid.xy].rgb);
-  float2 m = motion[_gid.xy].xy;
+  float3 color = PQEncode(unfiltered_rt[sample_pos].rgb);
+  float2 m = motion[sample_pos].xy;
   float motion_length = dot(m, m);
 #else
 
@@ -116,8 +120,8 @@ void Preload(uint2 _shared_id, int2 _gid) {
   float2 m = float2(0);
 
   [unroll] for (uint i = 0; i < SAMPLE_COUNT; i++) {
-    float3 c = PQEncode(unfiltered_rt.Load(int3(_gid.xy, i)).rgb);
-    float2 mo = motion.Load(int3(_gid.xy, i)).xy;
+    float3 c = PQEncode(unfiltered_rt.Load(int3(sample_pos, i)).rgb);
+    float2 mo = motion.Load(int3(sample_pos, i)).xy;
     float ml = dot(mo, mo);
 
     color += c;
@@ -150,7 +154,10 @@ float2 OutputToInput(int2 _pixel_pos_to_origin) {
   new_id.y = int(floor(linear_idx));
   new_id.x = int(floor(frac(linear_idx) * BUFFER_X));
 
-  int2 group_base = int2(OutputToInput(group_id * int2(GROUP_X, GROUP_Y)) - 1);
+  const int2 group_output_origin =
+      int2(group_id) * int2(GROUP_X, GROUP_Y);
+  const int2 group_base =
+      int2(floor(OutputToInput(group_output_origin))) - int2(1, 1);
 
   if (new_id.y < RENAMED_GROUP_Y) {
     Preload(new_id, group_base + new_id);
@@ -162,8 +169,12 @@ float2 OutputToInput(int2 _pixel_pos_to_origin) {
 
   GroupMemoryBarrierWithGroupSync();
 
-  int2 out_pixel_pos = dtid + int2(params.out_view_origin);
-  float2 in_pos = OutputToInput(dtid);
+  if (any(int2(dtid) >= int2(params.out_view_size))) {
+    return;
+  }
+
+  int2 out_pixel_pos = int2(dtid) + int2(params.out_view_origin);
+  float2 in_pos = OutputToInput(int2(dtid));
   int2 in_pos_int = int2(round(in_pos));
   int2 in_pos_shared = in_pos_int - group_base - 1;
 

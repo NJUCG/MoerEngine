@@ -47,6 +47,10 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
 
 [numthreads(8, 8, 1)] void main(uint2 gtid
                                 : SV_DISPATCHTHREADID) {
+  if (any(gtid >= uint2(params.main_view.rect))) {
+    return;
+  }
+
   float3 composited_color = float3(0, 0, 0);
   float view_z = gbuffer_view_depth[gtid];
 

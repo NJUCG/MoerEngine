@@ -8,52 +8,45 @@
 
 BINDLESS_BINDINGS(1, 2, 3, 4)
 
-static SamplerState g_spl{
-  Filter = MIN_MAG_MIP_LINEAR;
-  AddressU = CLAMP;
-  AddressV = CLAMP;
-  AddressW = CLAMP;
-  ComparisonFunc = NEVER;
-  MipLODBias = 0.0f;
-  MinLOD = 1.0f;
-  MaxLOD = 3000.f;
-};
-
-void GetDimensions(out int2 _dimensions) {
-  if (param.bdls_handle >= 0 && param.use_bindless) {
+void GetDimensions(uint mip_level, out uint2 dimensions) {
+  uint mip_count;
+  if (param.use_bindless != 0) {
     TextureHandle texture = TextureHandle(param.bdls_handle);
     Texture2D texture2d = texture.GetTexture2D();
-    texture2d.GetDimensions(_dimensions.x, _dimensions.y);
+    texture2d.GetDimensions(mip_level, dimensions.x, dimensions.y, mip_count);
   } else {
-    src_tex.GetDimensions(_dimensions.x, _dimensions.y);
+    src_tex.GetDimensions(mip_level, dimensions.x, dimensions.y, mip_count);
   }
+  dimensions = max(dimensions, uint2(1, 1));
 }
 
-float4 SampleTexture(float2 uv, float mip_level) {
-  if (param.bdls_handle >= 0 && param.use_bindless) {
+float4 LoadTexture(int2 coord, uint mip_level) {
+  if (param.use_bindless != 0) {
     TextureHandle texture = TextureHandle(param.bdls_handle);
-    // Texture2D texture2d = texture.GetTexture2D();
-    return texture.SampleLevel(uv, mip_level);
-  } else {
-    int2 dimensions;
-    GetDimensions(dimensions);
-    dimensions >>= int(mip_level);
-    int2 coord = int2(uv * float2(dimensions));
-    if (coord.x < 0 || coord.x >= dimensions.x || coord.y < 0 || coord.y >= dimensions.y) {
-      return float4(0.0f, 0.0f, 0.0f, 1.0f);
-    }
-    return src_tex.Load(int3(int2(coord), int(mip_level)));
-    // return src_tex.SampleLevel(g_spl, uv, mip_level);
+    Texture2D texture2d = texture.GetTexture2D();
+    return texture2d.Load(int3(coord, int(mip_level)));
   }
+  return src_tex.Load(int3(coord, int(mip_level)));
+}
+
+float4 SampleTexture(float2 uv, uint mip_level) {
+  uint2 dimensions;
+  GetDimensions(mip_level, dimensions);
+  int2 coord = int2(uv * float2(dimensions));
+  if (coord.x < 0 || coord.x >= int(dimensions.x) ||
+      coord.y < 0 || coord.y >= int(dimensions.y)) {
+    return float4(0.0f, 0.0f, 0.0f, 1.0f);
+  }
+  return LoadTexture(coord, mip_level);
 }
 
 void main(in float4 pos
           : SV_Position, in float2 uv
           : TEXCOORD0, out float4 target
           : SV_Target) {
-  int2 dimensions;
+  uint2 dimensions;
 
-  GetDimensions(dimensions);
+  GetDimensions(0, dimensions);
   float2 dst_dim = float2(param.dst_dim);
   float2 src_dim = float2(dimensions);
 
@@ -81,6 +74,6 @@ void main(in float4 pos
 
   float2 sample_uv = (pos.xy - rect.xy) / (rect.zw - rect.xy);
 
-  float4 color = SampleTexture(sample_uv, float(param.mip_level));
+  float4 color = SampleTexture(sample_uv, param.mip_level);
   target = color;
 }

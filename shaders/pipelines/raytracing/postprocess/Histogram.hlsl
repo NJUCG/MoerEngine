@@ -28,6 +28,9 @@ groupshared uint s_histogram[HISTOGRAM_BINS];
   if (valid) {
     float3 color = source_tex[pixel_pos].rgb;
     float luminance = STL::Color::Luminance(color);
+    luminance = (isfinite(luminance) && luminance > 1e-6f)
+                    ? luminance
+                    : 1e-6f;
     float biased_log_lum = log2(luminance) * params.log_luminance_scale +
                            params.log_luminance_bias;
     float histogram_bin = saturate(biased_log_lum) * (HISTOGRAM_BINS - 1);

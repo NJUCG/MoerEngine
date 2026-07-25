@@ -28,14 +28,6 @@ ShaderUtils::ShaderUtils(ShaderManager& manager) {
     ));
     generate_mips_pipeline    = std::move(manager.Compute<GenerateMipsPipeline>("core/utils/BuildMips.hlsl"));
 
-    GfxPsoCreateInfo show_texture_pso_info(
-        RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM)}
-    );
-    show_texture_pipeline = std::move(manager.Raster()
-                                          .Vertex("core/utils/FullScreenQuad.hlsl")
-                                          .Pixel("core/utils/ShowTexture.frag.hlsl")
-                                          .Build<ShowTexturePipeline>(std::move(show_texture_pso_info)));
-
     copy_texture_pipeline =
         std::move(manager.Compute<CopyTextureComputePipeline>("core/utils/CopyTexture.cs.hlsl"));
 }
@@ -145,24 +137,6 @@ void ShaderUtils::GenerateMips(CommandList& _cmd_list, std::span<TextureView> _m
         width  = std::max(1u, width >> 5);
         height = std::max(1u, height >> 5);
     }
-}
-
-void ShaderUtils::ShowTexture(
-    CommandList&             _cmd_list,
-    BindlessArrayRef         _bdls,
-    const ShowTextureParams& _param,
-    TextureRef               _src_tex,
-    TextureRef               _dst_texture
-) {
-    _cmd_list.Gfx(show_texture_pipeline, _param, _src_tex->GetView(0, _src_tex->GetNumMips()), _bdls)
-        .Draw(
-            "ShowTexture",
-            Rect2D(0, 0, _dst_texture->GetExtent().x, _dst_texture->GetExtent().y),
-            {},
-            3,
-            {SingleDrawParam(3, 1, 0, 0, 0)},
-            ColorAttachment(_dst_texture)
-        );
 }
 
 void ShaderUtils::SampleTextureCS(

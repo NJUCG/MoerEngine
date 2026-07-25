@@ -17,8 +17,10 @@ float3 ConvertToLDR(float3 hdr_color) {
   }
   float adapted_luminance = asfloat(exposure[0]);
 
-  if (adapted_luminance <= 0.0f) {
-    return params.min_adapted_luminance;
+  if (!(adapted_luminance > 0.0f) || !isfinite(adapted_luminance)) {
+    return float3(params.min_adapted_luminance,
+                  params.min_adapted_luminance,
+                  params.min_adapted_luminance);
   }
   float scaled_luminance =
       src_luminance * params.exposure_scale / adapted_luminance;
@@ -38,9 +40,12 @@ float3 ApplyColorLUT(float3 color) {
   float g = color.g * (size - 1.0f) + 0.5f;
   float b = color.b * (size - 1.0f);
 
-  float2 uv1 = float2((floor(b)) * size + r, g) * params.color_lut_size_inv;
+  float lower_slice = floor(b);
+  float upper_slice = min(lower_slice + 1.0f, size - 1.0f);
+  float2 uv1 =
+      float2(lower_slice * size + r, g) * params.color_lut_size_inv;
   float2 uv2 =
-      float2((ceil(b) + 1.0f) * size + r, g) * params.color_lut_size_inv;
+      float2(upper_slice * size + r, g) * params.color_lut_size_inv;
 
   float3 c1 = color_lut.SampleLevel(color_lut_sampler, uv1, 0).rgb;
   float3 c2 = color_lut.SampleLevel(color_lut_sampler, uv2, 0).rgb;

@@ -3,6 +3,7 @@
 
 // 计算亮度曝光，并将 HDR 光照映射到显示目标。
 
+#include "RaytracingGraphResources.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/ShaderParameters.h"
@@ -71,6 +72,18 @@ public:
         bool  enable_tone_mapping       = true;
     };
 
+    struct PreparedCommand {
+        ToneMappingParams params{};
+        uint3             histogram_dispatch_groups{};
+        bool              reset_exposure = false;
+    };
+
+    struct RecordResources {
+        TextureRef source{};
+        TextureRef target{};
+        TextureRef color_lut{};
+    };
+
 public:
     ToneMappingPass(RenderDevice& device, ShaderManager& manager, CreateInfo info);
     void Process(
@@ -79,30 +92,71 @@ public:
         TextureRef   source_texture,
         TextureRef   target_texture
     );
-    void AdvanceFrame(float _frame_time);
+    bool AddPasses(
+        RenderGraph&                 graph,
+        const RTGraphFrameResources& graph_resources,
+        const RTContext&             rt_ctx,
+        Params                       params,
+        TextureRef                   source_texture,
+        TextureRef                   target_texture
+    );
+    void CommitAcceptedFrame(float elapsed_time, bool enabled);
 
 private:
-    void ComputeExposure(CommandList& _cmd_list);
-    void ComputeHistogram(CommandList& _cmd_list, TextureRef _src_tex);
-    void ResetHistogram(CommandList& _cmd_list);
-    void ResetExposure(CommandList& _cmd_list);
-    void Render(CommandList& _cmd_list, TextureRef _src_tex, TextureRef _target);
+    struct RecordingOwner {
+        BufferRef               constants{};
+        BufferRef               histogram{};
+        BufferRef               exposure{};
+        ToneMappingPassPipeline tone_mapping{};
+        HistogramPipeline       histogram_pipeline{};
+        ExposurePipeline        exposure_pipeline{};
+    };
+
+    PreparedCommand Prepare(
+        Params            params,
+        const TextureRef& source_texture
+    ) const;
+    RecordResources CaptureResources(
+        TextureRef source_texture,
+        TextureRef target_texture
+    ) const;
+    static void RecordConstantsUpload(
+        CommandList&           cmd_list,
+        const RecordingOwner&  owner,
+        const PreparedCommand& command
+    );
+    static void RecordResetHistogram(
+        CommandList&          cmd_list,
+        const RecordingOwner& owner
+    );
+    static void RecordResetExposure(
+        CommandList&          cmd_list,
+        const RecordingOwner& owner
+    );
+    static void RecordHistogram(
+        CommandList&           cmd_list,
+        RecordingOwner&        owner,
+        const PreparedCommand& command,
+        const RecordResources& resources
+    );
+    static void RecordExposure(
+        CommandList&           cmd_list,
+        RecordingOwner&        owner
+    );
+    static void RecordRender(
+        CommandList&           cmd_list,
+        RecordingOwner&        owner,
+        const RecordResources& resources
+    );
 
     float frame_time     = 0;
     uint  frame_idx      = 0;
     uint  color_lut_size = 0;
 
-    BufferRef   tone_mapping_constants;
-    BufferRef   histogram_buffer;
-    BufferRef   exposure_buffer;
-    TextureRef  color_lut;
-    Array<byte> upload_data;
-    bool        tone_mapping_enabled = false;
-
-    ToneMappingPassPipeline tone_mapping_pass_pipeline;
-    HistogramPipeline       histogram_pipeline;
-    ExposurePipeline        exposure_pipeline;
-
+    TextureRef                 color_lut;
+    bool                       initialized          = false;
+    bool                       tone_mapping_enabled = false;
+    SharedPtr<RecordingOwner> recording_owner;
 };
 } // namespace Moer::Render::Raytracing
 #endif

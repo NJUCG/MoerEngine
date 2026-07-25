@@ -23,7 +23,7 @@ struct ShowTextureParams {
     uint2 dst_dim;
     uint  bdls_handle;
     uint  mip_level;
-    bool  use_bindless;
+    uint  use_bindless;
 };
 
 #ifdef __cplusplus

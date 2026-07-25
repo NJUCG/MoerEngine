@@ -48,16 +48,6 @@ public:
     DEFINE_SHADER_ARGS(mips, param);
 };
 
-struct ShowTexturePipeline : public RasterPipeline {
-public:
-    DEFINE_RASTER_PIPELINE_CLASS(ShowTexturePipeline);
-    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_TEX(src_tex);
-    DEFINE_SHADER_CONSTANT_STRUCT(ShowTextureParams, param);
-
-    DEFINE_SHADER_ARGS(param, src_tex, bdls);
-};
-
 class CopyTextureComputePipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(CopyTextureComputePipeline);
@@ -91,10 +81,6 @@ public:
         return generate_mips_pipeline;
     }
 
-    ShowTexturePipeline& GetShowTexturePipeline() {
-        return show_texture_pipeline;
-    }
-
     void GenerateLowDiscrepancySequence(
         CommandList&                   _cmd_list,
         GenLowDiscrepancySequenceParam _param,
@@ -106,14 +92,6 @@ public:
         std::span<TextureView> _integrated_mips
     );
     void GenerateMips(CommandList& _cmd_list, std::span<TextureView> _mips);
-    void ShowTexture(
-        CommandList&             _cmd_list,
-        BindlessArrayRef         _bdls,
-        const ShowTextureParams& _param,
-        TextureRef               _src_tex,
-        TextureRef               _dst_texture
-    );
-
     void SampleTextureCS(CommandList& cmd_list, TextureView input_texture, TextureView output_texture);
 
     [[deprecated("Output format is provided by the output texture")]] void SampleTextureCS(
@@ -129,7 +107,6 @@ private:
     GenLowDiscrepancyPipeline  gen_low_discrepancy_pipeline;
     GenerateMipPdfPipeline     generate_mip_pdf_pipeline;
     GenerateMipsPipeline       generate_mips_pipeline;
-    ShowTexturePipeline        show_texture_pipeline;
     CopyTextureComputePipeline copy_texture_pipeline;
 };
 } // namespace Moer::Render::Raytracing

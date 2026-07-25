@@ -956,6 +956,9 @@ public:
     RaytracingGeometryInfo GetInfo() const {
         return info;
     }
+    virtual Buffer* GetUnderlyingBuffer() const {
+        return nullptr;
+    }
 
 protected:
     RaytracingGeometryInfo info;
@@ -993,6 +996,9 @@ class RaytracingTlas : public RHIResource {
 public:
     RaytracingTlas() : RHIResource(RRT_RAYTRACING_TLAS) {}
     virtual ~RaytracingTlas() = default;
+    virtual Buffer* GetUnderlyingBuffer() const {
+        return nullptr;
+    }
 };
 
 //container for scene TLAS and rt instances

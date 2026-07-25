@@ -908,6 +908,9 @@ struct VulkanAccelerationStructure : public RaytracingTlas {
     VulkanAccelerationStructure(VulkanDevice& _device, VulkanRaytracingScene& _src_scene);
     virtual ~VulkanAccelerationStructure() override;
     void Destroy() override;
+    Buffer* GetUnderlyingBuffer() const override {
+        return underlying_buffer;
+    }
 
     VkAccelerationStructureKHR handle            = VK_NULL_HANDLE;
     VulkanBufferRef            underlying_buffer = nullptr;
@@ -926,7 +929,7 @@ public:
         return acc;
     }
 
-    inline VulkanBuffer* GetUnderlyingBuffer() const {
+    inline VulkanBuffer* GetUnderlyingBuffer() const override {
         return underlying_buffer;
     }
     Array<VkAccelerationStructureGeometryKHR>       build_geometries;

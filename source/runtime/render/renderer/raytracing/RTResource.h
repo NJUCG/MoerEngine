@@ -22,6 +22,16 @@
 
 namespace Moer::Render::Raytracing {
 
+inline constexpr bool IsNrdDenoiserActive(uint denoiser_mode) {
+#if WITH_NRD
+    return denoiser_mode == s_denoiser_mode_reblur ||
+           denoiser_mode == s_denoiser_mode_relax;
+#else
+    (void)denoiser_mode;
+    return false;
+#endif
+}
+
 struct FrameResources {
     TextureRef view_depth;
     TextureRef diffuse_albedo;

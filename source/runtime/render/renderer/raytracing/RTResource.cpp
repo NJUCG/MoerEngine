@@ -285,7 +285,8 @@ void RTContext::FillLowDiscrepancySequence(CommandList& _cmd_list) {
 
 void RTContext::CreateEnvMapResources(TextureWithHandle _env_tex, CommandList& _cmd_list) {
 
-    uint2         extent = _env_tex.tex->GetExtent().xy;
+    env_map = _env_tex.tex;
+    uint2         extent = env_map->GetExtent().xy;
     RenderDevice& device = RenderDevice::Get();
 
     // env_pdf_tex 需要完整的 mip 链（SamplePdfMip 从最高 mip 向下采样），
@@ -304,7 +305,7 @@ void RTContext::CreateEnvMapResources(TextureWithHandle _env_tex, CommandList& _
     for (int i = 0; i < env_pdf_tex->GetNumMips(); ++i) {
         env_pdf_mips.push_back(env_pdf_tex->GetView(i));
     }
-    sd_utils.GenerateMipPdf(_cmd_list, _env_tex.tex, env_pdf_mips);
+    sd_utils.GenerateMipPdf(_cmd_list, env_map, env_pdf_mips);
 
     AllocateAndFreeBdlsIfNeeded(
         bindless_handles.env_pdf,

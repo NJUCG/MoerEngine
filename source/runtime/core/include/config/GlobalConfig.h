@@ -61,6 +61,12 @@ struct CORE_API GlobalConfig {
                 bool render_graph_parallel_recording;
             } raster;
 
+            struct Raytracing {
+                bool render_graph;
+                bool render_graph_debug_dump;
+                bool render_graph_parallel_recording;
+            } raytracing;
+
         } render;
 
         struct Scene {
