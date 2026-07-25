@@ -36,6 +36,7 @@
 #include <limits>
 #include <new>
 #include <sstream>
+#include <stdexcept>
 #include <thread>
 
 namespace Moer::Render::Raytracing {
@@ -85,6 +86,14 @@ bool IsLegacyTlasUpdateEnabled() {
 bool IsLightGridForced() {
     static const bool enabled = []() {
         const char* value = std::getenv("MOER_RT_FORCE_LIGHT_GRID");
+        return value && value[0] != '\0' && std::string_view(value) != "0";
+    }();
+    return enabled;
+}
+
+bool IsRenderGraphRecordingFailureInjected() {
+    static const bool enabled = []() {
+        const char* value = std::getenv("MOER_RT_RDG_RECORDING_FAIL");
         return value && value[0] != '\0' && std::string_view(value) != "0";
     }();
     return enabled;
@@ -224,6 +233,7 @@ struct RaytracingRenderer::RuntimeState {
     bool                         render_graph_debug_dump              = false;
     bool                         render_graph_parallel_recording      = false;
     bool                         render_graph_fallback_latched        = false;
+    bool                         render_graph_recording_failure_latched = false;
     uint8                        gbuffer_initialized_history_mask     = 0;
     bool                         normal_roughness_readable            = false;
     std::array<const Buffer*, 3> lighting_working_set{};
@@ -537,6 +547,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     bool graph_tone_mapping_recorded        = false;
     bool graph_visualize_recorded           = false;
     bool graph_show_texture_recorded         = false;
+    bool graph_recording_failed              = state.render_graph_recording_failure_latched;
     bool linear_gbuffer_recorded            = false;
     bool linear_lighting_recorded           = false;
     bool linear_antialias_recorded           = false;
@@ -926,9 +937,35 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                      selected_debug_texture,
                      state.rt_ctx->frame_rt.ldr_color
                  ));
-            if (!gbuffer_added || !lighting_added || !composition_added ||
-                !antialias_added || !tone_mapping_added || !visualize_added ||
-                !show_texture_added) {
+            const bool graph_passes_added =
+                gbuffer_added && lighting_added && composition_added &&
+                antialias_added && tone_mapping_added && visualize_added &&
+                show_texture_added;
+            if (graph_passes_added && IsRenderGraphRecordingFailureInjected()) {
+                graph.AddRecordPass(
+                    "RT.FaultInjection.RecordingFailure",
+                    [](RenderGraph::PassBuilder& builder) {
+                        builder
+                            .ExecuteOn(
+                                RenderGraph::QueueRole::Graphics,
+                                RenderGraph::PipelineType::Compute
+                            )
+                            .SideEffect();
+                    },
+                    [](CommandList&) {
+                        throw std::runtime_error(
+                            "MOER_RT_RDG_RECORDING_FAIL requested a synthetic "
+                            "managed-record failure"
+                        );
+                    },
+                    RenderGraph::PassExecutionClass::ParallelRecordEligible
+                );
+                LOG_WARNING(
+                    "[RenderGraph][Injection] Raytracing managed-record failure "
+                    "armed by MOER_RT_RDG_RECORDING_FAIL."
+                );
+            }
+            if (!graph_passes_added) {
                 state.render_graph_fallback_latched = true;
                 LOG_ERROR(
                     "[RenderGraph][Fallback] Raytracing primary graph could not "
@@ -952,9 +989,12 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                     }
                 }
 
-                // The caller-owned prefix and managed graph command lists are
-                // distinct submissions. Close every scope before sealing the
-                // prefix; the frame tail will finish the profiling transaction.
+                // The existing single-queue success path intentionally keeps
+                // Prefix as a normal ordered submit. If managed recording later
+                // fails, no dependent renderer pass is recorded or submitted:
+                // the renderer presents its last accepted output until it is
+                // recreated, so the accepted Prefix has no same-frame legacy
+                // consumer that would require a missing visibility bridge.
                 renderer_marker.Close();
                 if (!cmd_list.IsEmpty()) {
                     CmdSubmit prefix_submit =
@@ -978,6 +1018,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                     );
                 }
 
+                bool graph_recording_profiling_started =
+                    split_graph_profiling_frame;
                 const auto configure_recording_source =
                     [&](const RenderGraph::ExecutedPassInfo& pass,
                         RHIRecordingSource&                  source) {
@@ -989,10 +1031,10 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                         source.submit_metadata.debug_label_color =
                             GpuMarkerPalette::Pass();
                         source.submit_metadata.profiling_phase =
-                            split_graph_profiling_frame ?
+                            graph_recording_profiling_started ?
                                 ERHIProfilingPhase::Continue :
                                 ERHIProfilingPhase::Begin;
-                        split_graph_profiling_frame = true;
+                        graph_recording_profiling_started = true;
                     };
                 if (graph.ExecuteRecording(
                         {},
@@ -1001,6 +1043,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                         {},
                         RenderGraph::ActiveRecordingOptions{.enabled = true}
                     )) {
+                    split_graph_profiling_frame =
+                        graph_recording_profiling_started;
                     graph_primary_recorded     = true;
                     graph_composition_recorded = composition_in_graph;
                     graph_antialias_recorded   = antialias_in_graph;
@@ -1010,18 +1054,26 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                     graph_show_texture_recorded =
                         show_texture_in_graph;
                 } else {
+                    // ExecuteRecording joins every producer and fails the
+                    // graph-wide commit gate. Sync only joins the resulting
+                    // rejection cleanup and the already accepted Prefix; it is
+                    // not used as a resource-state substitute.
+                    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+                    graph_recording_failed = true;
                     state.render_graph_fallback_latched = true;
+                    state.render_graph_recording_failure_latched = true;
                     LOG_ERROR(
                         "[RenderGraph][Fallback] Raytracing primary graph "
                         "recording failed before transaction commit: {}. "
-                        "Re-recording its managed passes linearly this frame and "
-                        "using the linear path from the next frame.",
+                        "Preserving the last accepted output and disabling "
+                        "managed renderer passes until this renderer instance "
+                        "is recreated.",
                         graph.GetCompileError()
                     );
                 }
             }
         }
-        if (!graph_primary_recorded) {
+        if (!graph_recording_failed && !graph_primary_recorded) {
             ScopedGpuMarker pass_marker(
                 cmd_list, "Pass: GBuffer", GpuMarkerPalette::Pass()
             );
@@ -1035,7 +1087,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             local_light_sampling =
                 state.lighting_pass->Process(cmd_list, *state.rt_ctx);
             linear_lighting_recorded = true;
-        } else {
+        } else if (graph_primary_recorded) {
             state.g_buffer_pass->RecordLegacyTailBridge(
                 cmd_list,
                 *state.rt_ctx,
@@ -1052,7 +1104,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         feedback.local_light_count = local_light_sampling.local_light_count;
 
 #if WITH_NRD
-        {
+        if (!graph_recording_failed) {
             const bool    b_current_frame = state.rt_ctx->b_current_frame;
             const auto&   frame_rt        = state.rt_ctx->frame_rt;
             nrd::Denoiser denoiser        = nrd::Denoiser::MAX_NUM;
@@ -1105,13 +1157,13 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         }
 #endif
 
-        if (!graph_composition_recorded) {
+        if (!graph_recording_failed && !graph_composition_recorded) {
             ScopedGpuMarker pass_marker(
                 cmd_list, "Pass: Composition", GpuMarkerPalette::Pass()
             );
             state.composition_pass->Process(cmd_list, *state.rt_ctx);
         }
-        if (!graph_antialias_recorded) {
+        if (!graph_recording_failed && !graph_antialias_recorded) {
             ScopedGpuMarker pass_marker(
                 cmd_list, "Pass: Anti Aliasing", GpuMarkerPalette::Pass()
             );
@@ -1124,7 +1176,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             );
             linear_antialias_recorded = true;
         }
-        if (!graph_tone_mapping_recorded) {
+        if (!graph_recording_failed && !graph_tone_mapping_recorded) {
             ScopedGpuMarker pass_marker(
                 cmd_list, "Pass: Tone Mapping", GpuMarkerPalette::Pass()
             );
@@ -1136,7 +1188,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             );
             linear_tone_mapping_recorded = true;
         }
-        if (!graph_visualize_recorded) {
+        if (!graph_recording_failed && !graph_visualize_recorded) {
             ScopedGpuMarker pass_marker(
                 cmd_list, "Pass: Visualize", GpuMarkerPalette::Pass()
             );
@@ -1146,7 +1198,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             linear_visualize_recorded = true;
         }
 
-        if (show_texture_requested && !graph_show_texture_recorded) {
+        if (!graph_recording_failed && show_texture_requested &&
+            !graph_show_texture_recorded) {
             ScopedGpuMarker debug_texture_marker(
                 cmd_list, "Pass: Debug Texture", GpuMarkerPalette::Pass()
             );
@@ -1158,7 +1211,9 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             );
         }
 
-        state.rt_ctx->AdvanceFrame();
+        if (!graph_recording_failed) {
+            state.rt_ctx->AdvanceFrame();
+        }
 
         if (state.b_export) {
             renderer_marker.Close();
@@ -1527,6 +1582,16 @@ void RaytracingRenderer::RecreateFrameResources(uint2 new_extent) {
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED
     );
+
+    if (state.render_graph_recording_failure_latched) {
+        LOG_WARNING(
+            "[RenderGraph][Fallback] Resized raytracing presentation resources "
+            "to {}x{} while preserving the last accepted RT frame resources.",
+            new_extent.x,
+            new_extent.y
+        );
+        return;
+    }
 
     state.rt_ctx->SetResolution(new_extent);
 
