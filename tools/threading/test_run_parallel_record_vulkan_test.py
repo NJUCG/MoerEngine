@@ -85,6 +85,16 @@ def pipeline_line(
             "reason=native_queue_alias graphics_native=7 "
             "compute_native=7 admission=blocked\n"
         )
+    malformed_ordering = ""
+    if window == 2:
+        malformed_ordering = (
+            "[TESTCASE][PASS] "
+            "name=BoundedCrossBatchMalformedPreflightOrdering "
+            "window=2 batches=2 queue=Graphics prefix=committed "
+            "malformed=rejected callback_order=prefix,malformed "
+            "signals=success,rejected native_owner=Submission replay=0 "
+            "malformed_translate=0 runtime=restarted\n"
+        )
     shutdown_cancellation = ""
     if window == 2 and include_shutdown_cancellation:
         shutdown_cancellation = (
@@ -104,6 +114,7 @@ def pipeline_line(
         "queues=Graphics,Compute source_order=G,C "
         "native_owner=Submission signals=success callbacks=exactly_once "
         "replay=0\n"
+        + malformed_ordering
         + recoverable_overlap
         + recoverable_rejection
         + shutdown_overlap
@@ -277,6 +288,48 @@ class VulkanRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(
             runner.VulkanTestError,
             "incomplete bounded cross-batch pipeline contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_window2_requires_malformed_ordering_marker(
+        self,
+    ) -> None:
+        marker = (
+            "[TESTCASE][PASS] "
+            "name=BoundedCrossBatchMalformedPreflightOrdering "
+            "window=2 batches=2 queue=Graphics prefix=committed "
+            "malformed=rejected callback_order=prefix,malformed "
+            "signals=success,rejected native_owner=Submission replay=0 "
+            "malformed_translate=0 runtime=restarted\n"
+        )
+        text = pipeline_line(2, "false", "verified").replace(marker, "")
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "malformed-preflight ordering PASS marker",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_malformed_ordering_requires_prefix_callback_order(
+        self,
+    ) -> None:
+        text = pipeline_line(2, "false", "verified").replace(
+            "callback_order=prefix,malformed",
+            "callback_order=malformed,prefix",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete malformed-preflight ordering contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_malformed_ordering_requires_no_translate(self) -> None:
+        text = pipeline_line(2, "false", "verified").replace(
+            "malformed_translate=0",
+            "malformed_translate=1",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete malformed-preflight ordering contract",
         ):
             runner.validate_log("pipeline-window2", text)
 

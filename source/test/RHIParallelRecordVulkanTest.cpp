@@ -458,6 +458,78 @@ private:
     bool                          installed{false};
 };
 
+class BatchPreflightRejectionCapture final {
+public:
+    static void Observe(
+        void*                                      _context,
+        const VulkanBatchPreflightRejectionEvent& _event
+    ) noexcept {
+        auto& capture =
+            *static_cast<BatchPreflightRejectionCapture*>(_context);
+        capture.batch_sequence.store(
+            _event.batch_sequence, std::memory_order_relaxed
+        );
+        capture.thread_id.store(
+            _event.thread_id, std::memory_order_relaxed
+        );
+        if (_event.thread_role != ERHIThreadRole::Translate) {
+            capture.wrong_owner.store(true, std::memory_order_relaxed);
+        }
+        if (_event.executable_preflight) {
+            capture.executable_preflight.store(
+                true, std::memory_order_relaxed
+            );
+        }
+        if (capture.count.fetch_add(1, std::memory_order_acq_rel) == 0) {
+            capture.entered.release();
+        }
+    }
+
+    std::binary_semaphore entered{0};
+    std::atomic<uint32>   count{0};
+    std::atomic<uint32>   thread_id{0};
+    std::atomic<uint64>   batch_sequence{0};
+    std::atomic<bool>     wrong_owner{false};
+    std::atomic<bool>     executable_preflight{false};
+};
+
+class ScopedBatchPreflightRejectionObserver final {
+public:
+    explicit ScopedBatchPreflightRejectionObserver(
+        BatchPreflightRejectionCapture& _capture
+    ) :
+        observer{
+            .context  = &_capture,
+            .callback = &BatchPreflightRejectionCapture::Observe,
+        } {
+        if (!TryInstallVulkanBatchPreflightRejectionObserver(&observer)) {
+            throw std::runtime_error(
+                "Vulkan batch preflight-rejection observer was already "
+                "installed"
+            );
+        }
+        installed = true;
+    }
+
+    ~ScopedBatchPreflightRejectionObserver() noexcept {
+        if (installed &&
+            !RemoveVulkanBatchPreflightRejectionObserver(&observer)) {
+            std::terminate();
+        }
+    }
+
+    ScopedBatchPreflightRejectionObserver(
+        const ScopedBatchPreflightRejectionObserver&
+    ) = delete;
+    ScopedBatchPreflightRejectionObserver& operator=(
+        const ScopedBatchPreflightRejectionObserver&
+    ) = delete;
+
+private:
+    VulkanBatchPreflightRejectionObserver observer{};
+    bool                                  installed{false};
+};
+
 template<size_t N>
 Array<Moer::byte> OwnedBytes(const std::array<uint32, N>& _values) {
     Array<Moer::byte> bytes(sizeof(uint32) * N);
@@ -5097,6 +5169,301 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
     );
 }
 
+void RunBoundedCrossBatchMalformedPreflightOrdering() {
+    using namespace std::chrono_literals;
+
+    auto&                  device   = RenderDevice::Get();
+    const RHIQueueTopology topology = device.GetQueueTopology();
+    if (!topology.graphics.available) {
+        LOG_INFO(
+            "[TESTCASE][SKIP] "
+            "name=BoundedCrossBatchMalformedPreflightOrdering "
+            "reason=graphics_queue_unavailable"
+        );
+        return;
+    }
+
+    constexpr uint64 async_queue_scope = 0x50483135444D414Cull;
+    const uint32     main_thread_id    = Platform::GetCurrentThreadID();
+
+    SourceSubmissionCapture        source_capture(async_queue_scope);
+    ScopedSourceSubmissionObserver source_observer(source_capture);
+    NativeSubmissionCapture        native_capture{};
+    ScopedNativeSubmissionObserver native_observer(native_capture);
+    DependencyWaitCapture          wait_capture{EQueueType::Graphics};
+    ScopedDependencyWaitObserver   wait_observer(wait_capture);
+    BackendSyncWaitCapture         sync_wait_capture{};
+    ScopedBackendSyncWaitObserver  sync_wait_observer(sync_wait_capture);
+    BatchPreflightRejectionCapture preflight_capture{};
+    ScopedBatchPreflightRejectionObserver preflight_observer(
+        preflight_capture
+    );
+
+    FenceRef dependency     = device.CreateFence();
+    FenceRef prefix_done    = device.CreateFence();
+    FenceRef malformed_done = device.CreateFence();
+
+    std::array<std::atomic<uint32>, 2> ordinary_callbacks{};
+    std::array<std::atomic<uint32>, 2> success_callbacks{};
+    std::binary_semaphore              prefix_translated{0};
+    std::binary_semaphore              malformed_translated{0};
+    std::binary_semaphore              malformed_callback_retired{0};
+    std::mutex                         callback_order_mutex{};
+    std::vector<uint32>                callback_order{};
+    std::atomic<bool>                  sync_returned{false};
+    std::jthread                       sync_waiter{};
+    bool                               dependency_released{false};
+
+    const auto release_dependency = [&] {
+        if (dependency_released) {
+            return;
+        }
+        ResourceCast(dependency.Get())->SignalHost(1);
+        dependency_released = true;
+    };
+    const auto record_callback = [&](size_t _index) {
+        {
+            std::lock_guard lock(callback_order_mutex);
+            callback_order.emplace_back(static_cast<uint32>(_index));
+        }
+        ordinary_callbacks[_index].fetch_add(
+            1, std::memory_order_relaxed
+        );
+        if (_index == 1) {
+            malformed_callback_retired.release();
+        }
+    };
+
+    try {
+        CommandList prefix(EQueueType::Graphics);
+        prefix.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
+        prefix.AddCustomCommand(
+            MakeUnique<TranslateProbeCommand>(
+                &prefix_translated, EQueueType::Graphics
+            ),
+            "PipelineMalformedPrefixTranslateProbe"
+        );
+        prefix.AddCallback([&] { record_callback(0); });
+        prefix.AddSuccessCallback([&] {
+            success_callbacks[0].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        CmdSubmit prefix_submit = prefix.Submit();
+        prefix_submit.SetTranslateExecutionClass(
+            ERHITranslateExecutionClass::Parallel
+        );
+        prefix_submit.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
+        prefix_submit.async_queue_scope = async_queue_scope;
+        prefix_submit.Wait(dependency.Get(), 1)
+            .Signal(prefix_done.Get(), 1);
+
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics,
+            std::move(prefix_submit),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+        if (!wait_capture.entered.try_acquire_for(5s) ||
+            wait_capture.count.load(std::memory_order_acquire) != 1 ||
+            wait_capture.wrong_owner.load(std::memory_order_acquire) ||
+            !prefix_translated.try_acquire() ||
+            source_capture.Count() != 0 ||
+            native_capture.Count() != 0) {
+            throw std::runtime_error(
+                "malformed-ordering prefix did not block on the sole "
+                "Submission owner"
+            );
+        }
+
+        CommandList malformed(EQueueType::Graphics);
+        malformed.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
+        malformed.AddCustomCommand(
+            MakeUnique<TranslateProbeCommand>(
+                &malformed_translated, EQueueType::Graphics
+            ),
+            "PipelineMalformedRejectedTranslateProbe"
+        );
+        malformed.AddCallback([&] { record_callback(1); });
+        malformed.AddSuccessCallback([&] {
+            success_callbacks[1].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        CmdSubmit malformed_submit = malformed.Submit();
+        malformed_submit.SetTranslateExecutionClass(
+            ERHITranslateExecutionClass::Parallel
+        );
+        malformed_submit.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
+        malformed_submit.async_queue_scope = async_queue_scope;
+        malformed_submit.Signal(malformed_done.Get(), 1);
+        malformed_submit.segments = {RHISubmitSegment{
+            .queue = EQueueType::Graphics,
+            .begin = 1,
+            .end   = 0,
+        }};
+
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics,
+            std::move(malformed_submit),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+
+        sync_waiter = std::jthread([&] {
+            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+            sync_returned.store(true, std::memory_order_release);
+        });
+        if (!sync_wait_capture.entered.try_acquire_for(5s) ||
+            sync_wait_capture.count.load(std::memory_order_acquire) != 1 ||
+            sync_returned.load(std::memory_order_acquire)) {
+            throw std::runtime_error(
+                "malformed-ordering Sync was not published behind both "
+                "batches"
+            );
+        }
+        if (!preflight_capture.entered.try_acquire_for(5s) ||
+            preflight_capture.count.load(std::memory_order_acquire) != 1 ||
+            preflight_capture.batch_sequence.load(
+                std::memory_order_acquire
+            ) == 0 ||
+            preflight_capture.thread_id.load(
+                std::memory_order_acquire
+            ) == main_thread_id ||
+            preflight_capture.wrong_owner.load(
+                std::memory_order_acquire
+            ) ||
+            preflight_capture.executable_preflight.load(
+                std::memory_order_acquire
+            )) {
+            throw std::runtime_error(
+                "malformed batch did not reach initial preflight rejection "
+                "on the Translate owner"
+            );
+        }
+
+        if (malformed_callback_retired.try_acquire_for(500ms) ||
+            malformed_translated.try_acquire() ||
+            ordinary_callbacks[0].load(std::memory_order_acquire) != 0 ||
+            ordinary_callbacks[1].load(std::memory_order_acquire) != 0 ||
+            success_callbacks[0].load(std::memory_order_acquire) != 0 ||
+            success_callbacks[1].load(std::memory_order_acquire) != 0 ||
+            source_capture.Count() != 0 ||
+            native_capture.Count() != 0) {
+            throw std::runtime_error(
+                "malformed batch retired before the accepted pipeline "
+                "prefix committed"
+            );
+        }
+
+        release_dependency();
+        sync_waiter.join();
+        if (!sync_returned.load(std::memory_order_acquire)) {
+            throw std::runtime_error(
+                "malformed-ordering Sync did not drain after prefix release"
+            );
+        }
+
+        if (ResourceCast(prefix_done.Get())->HostWait(1) != VK_SUCCESS ||
+            ResourceCast(prefix_done.Get())->IsRejected(1) ||
+            ResourceCast(prefix_done.Get())->IsFailed()) {
+            throw std::runtime_error(
+                "malformed-ordering prefix did not complete successfully"
+            );
+        }
+        if (ResourceCast(malformed_done.Get())->HostWait(1) !=
+                VK_ERROR_UNKNOWN ||
+            !ResourceCast(malformed_done.Get())->IsRejected(1) ||
+            ResourceCast(malformed_done.Get())->IsFailed()) {
+            throw std::runtime_error(
+                "malformed batch did not reject its exact signal value"
+            );
+        }
+        if (ordinary_callbacks[0].load(std::memory_order_acquire) != 1 ||
+            ordinary_callbacks[1].load(std::memory_order_acquire) != 1 ||
+            success_callbacks[0].load(std::memory_order_acquire) != 1 ||
+            success_callbacks[1].load(std::memory_order_acquire) != 0) {
+            throw std::runtime_error(
+                "malformed-ordering callbacks did not retire exactly once"
+            );
+        }
+        {
+            std::lock_guard lock(callback_order_mutex);
+            if (callback_order != std::vector<uint32>{0, 1}) {
+                throw std::runtime_error(
+                    "malformed batch callback retired before its accepted "
+                    "pipeline prefix"
+                );
+            }
+        }
+        if (source_capture.Overflowed() || source_capture.Count() != 1 ||
+            source_capture.Event(0).queue != EQueueType::Graphics ||
+            source_capture.Event(0).async_queue_scope !=
+                async_queue_scope) {
+            throw std::runtime_error(
+                "malformed batch reached source submission or the prefix "
+                "was not observed exactly once"
+            );
+        }
+        if (native_capture.Overflowed() || native_capture.Count() != 1 ||
+            native_capture.Event(0).queue != EQueueType::Graphics ||
+            native_capture.Event(0).thread_role !=
+                ERHIThreadRole::Submission ||
+            native_capture.Event(0).thread_id == main_thread_id ||
+            !native_capture.Event(0).outcome.WasSubmitted()) {
+            throw std::runtime_error(
+                "malformed-ordering prefix escaped stable Submission "
+                "ownership"
+            );
+        }
+
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        if (source_capture.Count() != 1 || native_capture.Count() != 1 ||
+            ordinary_callbacks[0].load(std::memory_order_acquire) != 1 ||
+            ordinary_callbacks[1].load(std::memory_order_acquire) != 1 ||
+            success_callbacks[0].load(std::memory_order_acquire) != 1 ||
+            success_callbacks[1].load(std::memory_order_acquire) != 0 ||
+            malformed_translated.try_acquire()) {
+            throw std::runtime_error(
+                "a second Sync replayed malformed-ordering retirement"
+            );
+        }
+    } catch (...) {
+        const std::exception_ptr failure = std::current_exception();
+        release_dependency();
+        try {
+            if (sync_waiter.joinable()) {
+                sync_waiter.join();
+            } else {
+                RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+            }
+        } catch (...) {
+            std::terminate();
+        }
+        std::rethrow_exception(failure);
+    }
+
+    // Invalid topology intentionally hard-latches this backend instance.
+    // Restart it before the remaining focused window-2 lifecycle contracts.
+    RHIExecutor::ShutDown();
+    RHIExecutor::StartUp(2);
+
+    LOG_INFO(
+        "[TESTCASE][PASS] "
+        "name=BoundedCrossBatchMalformedPreflightOrdering "
+        "window=2 batches=2 queue=Graphics prefix=committed "
+        "malformed=rejected callback_order=prefix,malformed "
+        "signals=success,rejected native_owner=Submission replay=0 "
+        "malformed_translate=0 runtime=restarted"
+    );
+}
+
 void RunBoundedCrossBatchRecoverableRejection() {
     using namespace std::chrono_literals;
 
@@ -5845,6 +6212,7 @@ int main(int argc, const char** argv) {
                 submission_batch_window
             );
             if (pipeline_window2) {
+                RunBoundedCrossBatchMalformedPreflightOrdering();
                 RunBoundedCrossBatchRecoverableRejection();
                 // This stops the RHI runtime and must remain the final focused
                 // lifecycle test before RenderDevice::Dispose().

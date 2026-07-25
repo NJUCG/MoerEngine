@@ -25,6 +25,8 @@ namespace Moer::Render {
 namespace {
 
 std::atomic<const VulkanSourceSubmissionObserver*> g_source_submission_observer{nullptr};
+std::atomic<const VulkanBatchPreflightRejectionObserver*>
+    g_batch_preflight_rejection_observer{nullptr};
 
 void NotifySourceSubmitted(
     uint64     _batch_sequence,
@@ -56,6 +58,32 @@ void NotifySourceSubmitted(
             .queue             = _queue,
             .async_queue_scope = _async_queue_scope,
             .cross_native_predecessor_wait = _cross_native_predecessor_wait,
+        }
+    );
+}
+
+void NotifyBatchPreflightRejected(
+    uint64 _batch_sequence,
+    bool   _executable_preflight
+) noexcept {
+    assert(
+        GetCurrentRHIThreadRole() == ERHIThreadRole::Translate &&
+        "batch preflight diagnostics must run on the Translate owner"
+    );
+    const VulkanBatchPreflightRejectionObserver* observer =
+        g_batch_preflight_rejection_observer.load(
+            std::memory_order_acquire
+        );
+    if (observer == nullptr) {
+        return;
+    }
+    observer->callback(
+        observer->context,
+        VulkanBatchPreflightRejectionEvent{
+            .batch_sequence       = _batch_sequence,
+            .thread_id            = Platform::GetCurrentThreadID(),
+            .thread_role          = GetCurrentRHIThreadRole(),
+            .executable_preflight = _executable_preflight,
         }
     );
 }
@@ -713,6 +741,36 @@ bool RemoveVulkanSourceSubmissionObserver(const VulkanSourceSubmissionObserver* 
     );
 }
 
+bool TryInstallVulkanBatchPreflightRejectionObserver(
+    const VulkanBatchPreflightRejectionObserver* _observer
+) noexcept {
+    if (_observer == nullptr || _observer->callback == nullptr) {
+        return false;
+    }
+    const VulkanBatchPreflightRejectionObserver* expected = nullptr;
+    return g_batch_preflight_rejection_observer.compare_exchange_strong(
+        expected,
+        _observer,
+        std::memory_order_release,
+        std::memory_order_relaxed
+    );
+}
+
+bool RemoveVulkanBatchPreflightRejectionObserver(
+    const VulkanBatchPreflightRejectionObserver* _observer
+) noexcept {
+    if (_observer == nullptr) {
+        return false;
+    }
+    const VulkanBatchPreflightRejectionObserver* expected = _observer;
+    return g_batch_preflight_rejection_observer.compare_exchange_strong(
+        expected,
+        nullptr,
+        std::memory_order_acq_rel,
+        std::memory_order_acquire
+    );
+}
+
 VulkanSubmissionExecutor::VulkanSubmissionExecutor(uint32 _batch_window) :
     batch_window(
         RHISubmissionPipelinePolicy::ClampBatchWindow(_batch_window)
@@ -1062,6 +1120,11 @@ void VulkanSubmissionExecutor::RunExecutor() {
                     }
                 },
                 [&] {
+                    // ProcessBatch may throw before it reaches the ordinary
+                    // pipeline admission/drain decision. Preserve the
+                    // already-admitted stream prefix before publishing any
+                    // rejection markers for this request.
+                    DrainPipelineBatches();
                     LatchHardFailure(
                         StreamPosition{
                             request.batch.sequence,
@@ -1155,6 +1218,10 @@ void VulkanSubmissionExecutor::WaitForPipelineCapacity() {
 }
 
 void VulkanSubmissionExecutor::DrainPipelineBatches() {
+    assert(
+        GetCurrentRHIThreadRole() != ERHIThreadRole::Submission &&
+        "Submission owner must not wait on its own pipeline work"
+    );
     while (!in_flight_batches.empty()) {
         std::shared_ptr<Completion> completion =
             std::move(in_flight_batches.front());
@@ -1544,6 +1611,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
             StreamPosition{_batch.sequence, 0},
             &latched_failure_result
         )) {
+        DrainPipelineBatches();
         RejectBatch(
             std::move(_batch),
             latched_failure_result,
@@ -1565,6 +1633,12 @@ void VulkanSubmissionExecutor::ProcessBatch(
             preflight.source_index,
             preflight.command_index
         );
+        NotifyBatchPreflightRejected(_batch.sequence, false);
+        // Validation runs before the ordinary admission decision so a later
+        // malformed batch can be discovered while an earlier pipeline batch
+        // is still owned by Submission. Commit that accepted prefix before
+        // its queue receives this batch's rejection markers.
+        DrainPipelineBatches();
         LatchHardFailure(
             StreamPosition{_batch.sequence, 0},
             static_cast<int32>(VK_ERROR_UNKNOWN)
@@ -1595,6 +1669,8 @@ void VulkanSubmissionExecutor::ProcessBatch(
                 executable_preflight.source_index,
                 executable_preflight.command_index
             );
+            NotifyBatchPreflightRejected(_batch.sequence, true);
+            DrainPipelineBatches();
             LatchHardFailure(
                 StreamPosition{_batch.sequence, 0},
                 static_cast<int32>(VK_ERROR_UNKNOWN)
@@ -1678,6 +1754,10 @@ void VulkanSubmissionExecutor::ProcessBatch(
             StreamPosition{_batch.sequence, 0},
             &latched_failure_result
         )) {
+        // Windowed admission can leave an already-accepted batch behind the
+        // capacity item just retired above. Its Submission work must publish
+        // terminal markers before this later batch is rejected directly.
+        DrainPipelineBatches();
         RejectBatch(
             std::move(_batch),
             latched_failure_result,
@@ -1690,10 +1770,18 @@ void VulkanSubmissionExecutor::ProcessBatch(
 
     struct PipelineSealGuard final {
         std::shared_ptr<PipelineBatchState> state{};
-        ~PipelineSealGuard() {
-            if (state) {
-                state->Seal();
+
+        void Seal() noexcept {
+            if (!state) {
+                return;
             }
+            std::shared_ptr<PipelineBatchState> sealed_state =
+                std::move(state);
+            sealed_state->Seal();
+        }
+
+        ~PipelineSealGuard() {
+            Seal();
         }
     };
 
@@ -1718,6 +1806,16 @@ void VulkanSubmissionExecutor::ProcessBatch(
         }
     }
 
+    auto seal_and_drain_pipeline = [&]() noexcept {
+        if (!pipeline_state) {
+            return;
+        }
+        // The current state is itself present in in_flight_batches. Seal it
+        // before waiting so an empty or partially handed-off failing batch
+        // can publish its terminal completion instead of self-deadlocking.
+        pipeline_seal.Seal();
+        DrainPipelineBatches();
+    };
     auto reject_remaining = [&](size_t _begin, VkResult _result, std::string_view _reason) {
         if (_result == VK_SUCCESS) {
             _result = VK_ERROR_UNKNOWN;
@@ -1731,6 +1829,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
             pipeline_state->PublishFailure(
                 _begin, static_cast<int32>(_result), false
             );
+            seal_and_drain_pipeline();
         } else {
             ResetStreamScope();
         }
@@ -1758,6 +1857,7 @@ void VulkanSubmissionExecutor::ProcessBatch(
                 pipeline_state->PublishFailure(
                     _begin, static_cast<int32>(_result), true
                 );
+                seal_and_drain_pipeline();
             } else {
                 ResetStreamScope();
             }
@@ -1931,18 +2031,27 @@ void VulkanSubmissionExecutor::ProcessBatch(
             Array<TranslateGroupSlot>* slots{nullptr};
             size_t                     group_end{0};
             size_t*                    first_unconsumed_source{nullptr};
+            VulkanSubmissionExecutor*  owner{nullptr};
+            std::shared_ptr<PipelineBatchState>* pipeline_state{nullptr};
+            PipelineSealGuard*         pipeline_seal{nullptr};
             bool                       armed{true};
 
             TranslateGroupTerminalizer(
                 RHIBackendSubmissionBatch* _batch,
                 Array<TranslateGroupSlot>* _slots,
                 size_t                     _group_end,
-                size_t*                    _first_unconsumed_source
+                size_t*                    _first_unconsumed_source,
+                VulkanSubmissionExecutor*  _owner,
+                std::shared_ptr<PipelineBatchState>* _pipeline_state,
+                PipelineSealGuard*         _pipeline_seal
             ) noexcept :
                 batch(_batch),
                 slots(_slots),
                 group_end(_group_end),
-                first_unconsumed_source(_first_unconsumed_source) {}
+                first_unconsumed_source(_first_unconsumed_source),
+                owner(_owner),
+                pipeline_state(_pipeline_state),
+                pipeline_seal(_pipeline_seal) {}
 
             TranslateGroupTerminalizer(const TranslateGroupTerminalizer&)            = delete;
             TranslateGroupTerminalizer& operator=(const TranslateGroupTerminalizer&) = delete;
@@ -1957,6 +2066,14 @@ void VulkanSubmissionExecutor::ProcessBatch(
                 }
                 if (result == VK_SUCCESS) {
                     result = VK_ERROR_UNKNOWN;
+                }
+                if (pipeline_state != nullptr && *pipeline_state) {
+                    // Direct queue rejection is observable through callbacks
+                    // and signals. Preserve every already-handed-off prefix
+                    // before terminalizing the current group, including this
+                    // guard's exception-unwind path.
+                    pipeline_seal->Seal();
+                    owner->DrainPipelineBatches();
                 }
                 for (TranslateGroupSlot& slot : *slots) {
                     if (slot.terminalized) {
@@ -1984,7 +2101,15 @@ void VulkanSubmissionExecutor::ProcessBatch(
                 }
                 armed = false;
             }
-        } terminalizer{&_batch, &slots, group_end, &_exception_state.first_unconsumed_source};
+        } terminalizer{
+            &_batch,
+            &slots,
+            group_end,
+            &_exception_state.first_unconsumed_source,
+            this,
+            &pipeline_state,
+            &pipeline_seal,
+        };
 
         auto slot_for_key = [&](const SubmissionKey& key) -> TranslateGroupSlot& {
             assert(key.op_seq == _batch.sequence);

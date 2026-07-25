@@ -416,6 +416,29 @@ def _require_bounded_cross_batch_pipeline(mode: str, text: str) -> None:
     if expected_window == "1":
         return
 
+    malformed = _testcase_marker(
+        "BoundedCrossBatchMalformedPreflightOrdering", text
+    )
+    _require(
+        malformed is not None and malformed[0] == "PASS",
+        f"{mode}: missing malformed-preflight ordering PASS marker",
+    )
+    _, malformed_fields = malformed
+    _require(
+        malformed_fields.get("window") == "2"
+        and malformed_fields.get("batches") == "2"
+        and malformed_fields.get("queue") == "Graphics"
+        and malformed_fields.get("prefix") == "committed"
+        and malformed_fields.get("malformed") == "rejected"
+        and malformed_fields.get("callback_order") == "prefix,malformed"
+        and malformed_fields.get("signals") == "success,rejected"
+        and malformed_fields.get("native_owner") == "Submission"
+        and malformed_fields.get("replay") == "0"
+        and malformed_fields.get("malformed_translate") == "0"
+        and malformed_fields.get("runtime") == "restarted",
+        f"{mode}: incomplete malformed-preflight ordering contract",
+    )
+
     rejection = _testcase_marker(
         "BoundedCrossBatchRecoverableRejection", text
     )
