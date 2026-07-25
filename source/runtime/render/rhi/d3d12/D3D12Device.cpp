@@ -526,28 +526,16 @@ PipelineHandle D3D12Device::CreatePipeline(PipelineShaderInfo&& _shaders) {
 }
 
 TextureRef D3D12Device::CreateTexture(
-    std::string_view   _name,
-    ETextureDimension  _dimension,
-    Extent3D           _size,
-    EPixelFormat       _format,
-    ETextureUsageFlags _usage,
-    uint32_t           _mip_cnt,
-    uint               _array_size
+    std::string_view  _name,
+    const TextureInfo& _info
 ) {
-    bool        b_depth = uint(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT & _usage) != 0;
-    TextureInfo info{
-        _dimension,
-        _usage,
-        _format,
-        b_depth ? EClearAttachment::DEPTH_STENCIL : EClearAttachment::COLOR,
-        _size,
-        uint8(_mip_cnt),
-        uint8(_dimension == ETextureDimension::TEX_CUBE ? 6 : _array_size),
-        1
-    }; // TODO ? msaa tex
-    info.aspect_flags = b_depth ? ETextureAspectFlags::DEPTH_SLICE : ETextureAspectFlags::COLOR;
-    info.debug_name   = _name;
-    return TextureRef{MoerNew(D3D12Texture)(this, info)};
+    TextureInfo info = _info;
+    if (!info.debug_name.has_value()) {
+        info.debug_name = std::string(_name);
+    }
+    auto* texture = MoerNew(D3D12Texture)(this, info);
+    texture->SetName(info.debug_name.value());
+    return TextureRef{texture};
 }
 
 BufferRef D3D12Device::CreateBuffer(
@@ -604,6 +592,32 @@ CommandQueue& D3D12Device::GetCommandQueue(EQueueType _type) {
     };
     static DummyCommandQueue queue;
     return queue;
+}
+
+RHIQueueTopology D3D12Device::GetQueueTopology() const {
+    // The current D3D12 backend exposes only its Graphics command queue.
+    // Compute/Copy must remain fail-closed until their native queues and
+    // executor submission paths are implemented.
+    return RHIQueueTopology{
+        .graphics = RHIQueueBinding{
+            .queue = EQueueType::Graphics,
+            .native_queue_id = 0,
+            .family_id = 0,
+            .available = true,
+        },
+        .compute = RHIQueueBinding{
+            .queue = EQueueType::Compute,
+            .native_queue_id = 0,
+            .family_id = 0,
+            .available = false,
+        },
+        .copy = RHIQueueBinding{
+            .queue = EQueueType::Copy,
+            .native_queue_id = 0,
+            .family_id = 0,
+            .available = false,
+        },
+    };
 }
 
 CopyQueue& D3D12Device::GetCopyQueue() {
@@ -1160,6 +1174,11 @@ struct D3D12CommandPreprocessVisitor {
     }
 
     void Visit(const BarrierCmd& _cmd) {
+        if (_cmd.HasExplicitBarriers()) {
+            FATAL(
+                "D3D12 does not yet materialize graph-owned explicit BarrierCmd"
+            );
+        }
         // we not ignore _cmd.IsQueueTransition()
         ASSERT(!_cmd.IsQueueTransition());
 
@@ -1414,7 +1433,11 @@ struct D3D12CommandVisitor {
                 Visit(static_cast<const CopyTextureCmd&>(*_cmd));
                 break;
             case Command::EType::Barrier:
-                break; // no-op
+                FATAL(
+                    "D3D12 copy visitor does not materialize explicit or "
+                    "legacy BarrierCmd"
+                );
+                break;
             case Command::EType::ShaderDispatch:
                 Visit(static_cast<const DispatchCmd&>(*_cmd));
                 break;

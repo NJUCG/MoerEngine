@@ -2791,8 +2791,8 @@ void TestStageTwoDumpDeterminism(TestSuite& suite) {
     const std::string second = BuildStageTwoDump(suite, test_name);
     suite.Check(first == second, test_name, "equivalent Stage 2 plans must have byte-identical dumps");
     suite.Check(
-        Contains(first, "barrier_owner=existing_rhi_vulkan_path") &&
-            Contains(first, "sync_plan=shadow external_endpoints=unbound") &&
+        Contains(first, "barrier_plan=explicit") &&
+            Contains(first, "sync_plan=queue-dag external_endpoints=unbound") &&
             Contains(first, "barriers:\n") && Contains(first, "queue_batches:\n") &&
             Contains(first, "queue_syncs:\n") && Contains(first, "pipeline=compute") &&
             Contains(first, "flags=[execution,memory,transition,queue,ownership"),
@@ -2987,55 +2987,61 @@ void TestUntouchedBoundaryWriteRequiresMemoryDependency(TestSuite& suite) {
     );
 }
 
-[[nodiscard]] std::string BuildCompatibleStateOrderDump(
-    TestSuite& suite,
-    std::string_view test_name,
-    bool reverse
-) {
-    RenderGraph graph("CompatibleStateOrder");
+void TestShaderReadStatesRequireTransition(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "shader resource and sampled states require a transition";
+    RenderGraph graph("DistinctShaderReadStates");
     int         physical = 0;
-    const auto  texture = graph.ImportTexture("Texture", &physical, RenderGraph::TextureDesc{});
+    const auto  texture =
+        graph.ImportTexture("Texture", &physical, RenderGraph::TextureDesc{});
     graph.SetInitialState(
         texture,
         RenderGraph::TextureState::ShaderResource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    graph.AddPass(
-        "Read",
+    const auto storage_read = graph.AddPass(
+        "StorageRead",
         [=](RenderGraph::PassBuilder& builder) {
-            if (reverse) {
-                builder.Read(texture, RenderGraph::TextureState::Sampled);
-                builder.Read(texture, RenderGraph::TextureState::ShaderResource);
-            } else {
-                builder.Read(texture, RenderGraph::TextureState::ShaderResource);
-                builder.Read(texture, RenderGraph::TextureState::Sampled);
-            }
+            builder.Read(texture, RenderGraph::TextureState::ShaderResource);
         },
         [] {}
     );
+    const auto sampled_read = graph.AddPass(
+        "SampledRead",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Read(texture, RenderGraph::TextureState::Sampled);
+        },
+        [] {}
+    );
+    graph.Export(
+        texture,
+        RenderGraph::TextureState::Sampled,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    const auto* barrier =
+        FindBarrier(plan, texture.Untyped(), storage_read, sampled_read);
     suite.Check(
-        !graph.GetCompiledPlan().accesses.empty() &&
-            graph.GetCompiledPlan().accesses.front().state == RenderGraph::ResourceState::Texture(
+        barrier != nullptr && barrier->state_transition &&
+            barrier->before_state == RenderGraph::ResourceState::Texture(
                 RenderGraph::TextureState::ShaderResource
+            ) &&
+            barrier->after_state == RenderGraph::ResourceState::Texture(
+                RenderGraph::TextureState::Sampled
+            ) &&
+            HasEdgeReason(
+                plan,
+                storage_read,
+                sampled_read,
+                RenderGraph::EdgeReasonKind::StateTransition,
+                texture.Untyped()
             ),
         test_name,
-        "compatible shader-read states must canonicalize to one stable state"
-    );
-    const std::string dump = graph.Dump();
-    const auto        compiled_plan_offset = dump.find("compiled_accesses:\n");
-    return compiled_plan_offset == std::string::npos ? dump : dump.substr(compiled_plan_offset);
-}
-
-void TestCompatibleStateCanonicalization(TestSuite& suite) {
-    constexpr std::string_view test_name = "compatible state canonicalization";
-    const auto forward = BuildCompatibleStateOrderDump(suite, test_name, false);
-    const auto reverse = BuildCompatibleStateOrderDump(suite, test_name, true);
-    suite.Check(
-        forward == reverse,
-        test_name,
-        "swapping compatible declarations in one pass must not change the compiled-plan dump"
+        "physically distinct Vulkan shader-read layouts must retain a compiler transition"
     );
 }
 
@@ -3650,7 +3656,7 @@ void TestExternalControlIsAnUnmanagedJoinBoundary(TestSuite& suite) {
             ++published_groups;
             suite.Check(
                 sources.size() == 1 &&
-                    sources.front().completion->Status() ==
+                    sources.front().completion.Status() ==
                         Moer::Render::ERHIRecordingStatus::Pending,
                 test_name,
                 "recording ownership must be published before the producer completes"
@@ -3818,7 +3824,7 @@ void TestParallelRecordingFallsBackWithoutTaskGraph(TestSuite& suite) {
     add_record("Second", second_token, 2);
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-    Moer::Array<Moer::Render::RHIRecordingGateRef> published_gates{};
+    Moer::Array<Moer::Render::RHIRecordingGateView> published_gates{};
     const bool executed = graph.ExecuteRecording(
         {},
         {},
@@ -3839,7 +3845,7 @@ void TestParallelRecordingFallsBackWithoutTaskGraph(TestSuite& suite) {
     suite.Check(
         published_gates.size() == 2 &&
             std::all_of(published_gates.begin(), published_gates.end(), [](const auto& gate) {
-                return gate->Status() == Moer::Render::ERHIRecordingStatus::Succeeded;
+                return gate.Status() == Moer::Render::ERHIRecordingStatus::Succeeded;
             }),
         test_name,
         "serial fallback must still complete every already-published ownership gate"
@@ -3956,9 +3962,9 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
         true,
         [&](Moer::Array<Moer::Render::RHIRecordingSource>&& sources) {
             published_pending = sources.size() == 2 &&
-                                sources[0].completion->Status() ==
+                                sources[0].completion.Status() ==
                                     Moer::Render::ERHIRecordingStatus::Pending &&
-                                sources[1].completion->Status() ==
+                                sources[1].completion.Status() ==
                                     Moer::Render::ERHIRecordingStatus::Pending;
             distinct_command_lists = sources.size() == 2 &&
                                      sources[0].command_list != sources[1].command_list;
@@ -4012,9 +4018,9 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
     );
     suite.Check(
         published.size() == 1 &&
-            published.front()[0].completion->Status() ==
+            published.front()[0].completion.Status() ==
                 Moer::Render::ERHIRecordingStatus::Succeeded &&
-            published.front()[1].completion->Status() ==
+            published.front()[1].completion.Status() ==
                 Moer::Render::ERHIRecordingStatus::Succeeded,
         test_name,
         "every published source gate must reach a successful terminal state"
@@ -4127,7 +4133,7 @@ void TestRecordingPublicationFailureTerminatesGates(TestSuite& suite) {
     );
     suite.Check(
         published.size() == 1 &&
-            published.front().completion->Status() == Moer::Render::ERHIRecordingStatus::Failed,
+            published.front().completion.Status() == Moer::Render::ERHIRecordingStatus::Failed,
         test_name,
         "a published gate must never remain Pending when dispatch is abandoned"
     );
@@ -4208,7 +4214,7 @@ int main() {
     TestBarrierSourcesIgnoreUnrelatedLastRead(suite);
     TestFanInBarrierPlacementCoversEverySourceBatch(suite);
     TestUntouchedBoundaryWriteRequiresMemoryDependency(suite);
-    TestCompatibleStateCanonicalization(suite);
+    TestShaderReadStatesRequireTransition(suite);
     TestReadTransitionWaitsForEveryActiveReader(suite);
     TestUndefinedImportMustBeInitializedBeforeRead(suite);
     TestUnknownExportMakesStatePlanIncomplete(suite);

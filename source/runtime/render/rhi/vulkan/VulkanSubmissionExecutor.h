@@ -19,8 +19,9 @@ namespace Moer::Render {
 
 // Owns the upper RHI submission stream for Vulkan. The translate owner prepares
 // one source at a time, then transfers its move-only packet to the sole native
-// Submission owner. The conservative one-packet window preserves the current
-// failure and queue-ordering semantics while making thread ownership explicit.
+// Submission owner. Native queue submission remains single-owner and serial.
+// Validated non-zero async scopes may overlap GPU execution across distinct
+// native queues using explicit graph wait/signal events.
 class VulkanSubmissionExecutor final : public RHIBackendExecutor {
 public:
     VulkanSubmissionExecutor();
@@ -118,12 +119,20 @@ private:
     bool                       claims_owned{false};
     bool                       hard_failed{false};
     bool                       logged_multi_source_topology{false};
+    bool                       logged_async_queue_scope{false};
     int32                      hard_failure_result{0};
     std::shared_ptr<Completion> stop_completion{};
     StaticArray<bool, static_cast<size_t>(EQueueType::Num)> used_queues{};
     uint64                     last_copy_timeline{0};
-    std::optional<EQueueType>  ordered_tail_queue{};
-    std::optional<WaitEvent>   ordered_gpu_tail{};
+    StaticArray<
+        std::optional<WaitEvent>,
+        static_cast<size_t>(EQueueType::Num)> gpu_frontier{};
+    uint64 active_async_queue_scope{0};
+    StaticArray<
+        std::optional<WaitEvent>,
+        static_cast<size_t>(EQueueType::Num)> async_scope_entry_frontier{};
+    StaticArray<bool, static_cast<size_t>(EQueueType::Num)>
+        async_scope_seen_queues{};
 
     std::mutex                 submission_mutex{};
     std::condition_variable    submission_cv{};

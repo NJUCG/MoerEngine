@@ -34,6 +34,7 @@
 
 #include "VulkanIOService.h"
 #include <algorithm>
+#include <array>
 #include <config.h>
 #include <cstdlib>
 #include <filesystem>
@@ -436,23 +437,37 @@ void VulkanDevice::InitGpu(uint32 _api_version) {
 }
 
 void VulkanDevice::CreateDevice(uint32 _api_version) {
+    const uint32_t graphics_family =
+        m_device_info.queue_family_indices.graphics.value();
+    const uint32_t compute_family =
+        m_device_info.queue_family_indices.compute.value();
+    const bool can_split_same_family_compute =
+        compute_family == graphics_family &&
+        compute_family < m_device_info.queue_family_props.size() &&
+        m_device_info.queue_family_props[compute_family].queueCount >= 2;
+    const uint32_t compute_queue_index =
+        can_split_same_family_compute ? 1u : 0u;
+
     std::set<uint32> unique_family_indices = {
-        m_device_info.queue_family_indices.graphics.value(),
+        graphics_family,
         m_device_info.queue_family_indices.present.value(),
-        m_device_info.queue_family_indices.compute.value(),
+        compute_family,
         m_device_info.queue_family_indices.transfer.value()
     };
 
     // setup queue info
     Moer::Array<VkDeviceQueueCreateInfo> queue_create_infos;
 
-    const float default_queue_priority = 1.0f;
+    const std::array queue_priorities{1.0f, 1.0f};
     for (const auto& queue_family_index : unique_family_indices) {
         VkDeviceQueueCreateInfo queue_create_info{};
         queue_create_info.sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
         queue_create_info.queueFamilyIndex = queue_family_index;
-        queue_create_info.queueCount       = 1;
-        queue_create_info.pQueuePriorities = &default_queue_priority;
+        queue_create_info.queueCount =
+            queue_family_index == compute_family ?
+                compute_queue_index + 1 :
+                1;
+        queue_create_info.pQueuePriorities = queue_priorities.data();
 
         queue_create_infos.push_back(queue_create_info);
     }
@@ -489,10 +504,15 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
     VK_CHECK_RESULT(vkCreateDevice(m_gpu, &device_create_info, nullptr, &m_device));
     volkLoadDevice(m_device);
 
-    vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.graphics.value(), 0, &m_graphics_queue);
+    vkGetDeviceQueue(m_device, graphics_family, 0, &m_graphics_queue);
 
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.present.value(), 0, &m_present_queue);
-    vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.compute.value(), 0, &m_compute_queue);
+    vkGetDeviceQueue(
+        m_device,
+        compute_family,
+        compute_queue_index,
+        &m_compute_queue
+    );
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.transfer.value(), 0, &m_transfer_queue);
     vkGetDeviceQueue(m_device, m_device_info.queue_family_indices.raytracing.value(), 0, &m_raytracing_queue);
 
@@ -529,6 +549,13 @@ void VulkanDevice::CreateDevice(uint32 _api_version) {
         LOG_WARNING(
             "compute and gfx share the same VkQueue handle. "
             "Using shared host synchronization for queue operations."
+        );
+    } else if (compute_family == graphics_family) {
+        LOG_INFO(
+            "compute and gfx use distinct VkQueue handles in family {} "
+            "(graphics_index=0 compute_index={}).",
+            graphics_family,
+            compute_queue_index
         );
     }
 }
@@ -2232,34 +2259,48 @@ CommandQueue& VulkanDevice::GetCommandQueue(EQueueType _type) {
     return *gfx_queue;
 }
 
+RHIQueueTopology VulkanDevice::GetQueueTopology() const {
+    const uint32_t graphics_native_id = 0;
+    const uint32_t compute_native_id =
+        m_compute_queue == m_graphics_queue ? graphics_native_id : 1u;
+    const uint32_t copy_native_id =
+        m_transfer_queue == m_graphics_queue ?
+            graphics_native_id :
+        m_transfer_queue == m_compute_queue ?
+            compute_native_id :
+            compute_native_id + 1;
+
+    return RHIQueueTopology{
+        .graphics = RHIQueueBinding{
+            EQueueType::Graphics,
+            graphics_native_id,
+            m_device_info.queue_family_indices.graphics.value(),
+        },
+        .compute = RHIQueueBinding{
+            EQueueType::Compute,
+            compute_native_id,
+            m_device_info.queue_family_indices.compute.value(),
+        },
+        .copy = RHIQueueBinding{
+            EQueueType::Copy,
+            copy_native_id,
+            m_device_info.queue_family_indices.transfer.value(),
+        },
+    };
+}
+
 CopyQueue& VulkanDevice::GetCopyQueue() {
     return *copy_queue;
 }
 
 TextureRef VulkanDevice::CreateTexture(
-    std::string_view   _name,
-    ETextureDimension  _dimension,
-    Extent3D           _size,
-    EPixelFormat       _format,
-    ETextureUsageFlags _usage,
-    uint32_t           _mip_cnt,
-    uint32_t           _array_size
+    std::string_view  _name,
+    const TextureInfo& _info
 ) {
-
-    bool        b_depth = uint(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT & _usage) != 0;
-    TextureInfo info{
-        _dimension,
-        _usage,
-        _format,
-        b_depth ? EClearAttachment::DEPTH_STENCIL : EClearAttachment::COLOR,
-        _size,
-        uint8(_mip_cnt),
-        uint8((_dimension == ETextureDimension::TEX_CUBE ? 6 : 1) * _array_size),
-        1
-    };
-    info.aspect_flags = b_depth ? ETextureAspectFlags::DEPTH_SLICE : ETextureAspectFlags::COLOR;
-    info.debug_name   = _name;
-
+    TextureInfo info = _info;
+    if (!info.debug_name.has_value()) {
+        info.debug_name = std::string(_name);
+    }
     return TextureRef{MoerNew(VulkanTexture)(info, this)};
 }
 

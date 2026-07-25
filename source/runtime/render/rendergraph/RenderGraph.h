@@ -1,11 +1,13 @@
 #pragma once
 
 #include "RenderAPI.h"
+#include "rendergraph/RenderGraphResourcePool.h"
 #include "rhi/RHIExecutor.h"
 
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -13,16 +15,17 @@
 namespace Moer::Render {
 
 class RenderGraphCompiler;
+class RenderGraphLowering;
 
 /**
  * Typed RDG frontend with an opt-in command-recording schedule.
  *
  * The compiler owns typed resource declarations, subresource-aware hazards,
- * logical resource versions, stable dependency analysis and lifetimes. The
- * RDG does not own physical tracked state or emit barriers in this stage; the
- * existing RHI/Vulkan command path remains responsible. Legacy callbacks stay
- * serial. Explicit record callbacks may be assigned independent CommandLists
- * while preserving stable source order.
+ * logical resource versions, stable dependency analysis and lifetimes. Its
+ * default execution remains backend-tracked for compatibility; the guarded
+ * active path lowers a complete supported state plan into authoritative RHI
+ * barriers. Legacy callbacks stay serial. Explicit record callbacks may be
+ * assigned independent CommandLists while preserving stable source order.
  */
 class RENDER_API RenderGraph {
 public:
@@ -248,13 +251,14 @@ public:
         QueueRole role            = QueueRole::None;
         uint32_t  native_queue_id = 0;
         uint32_t  family_id       = 0;
+        bool      available       = true;
 
         friend bool operator==(const QueueBinding&, const QueueBinding&) = default;
     };
 
     /**
-     * Maps logical roles to actual queues. Tests may provide a fake topology; production currently
-     * uses SingleQueue() until the RHI submission path consumes the compiled plan.
+     * Maps logical roles to actual queues. Tests may provide a fake topology;
+     * active production graphs should snapshot QueueTopology::FromRHI().
      */
     struct QueueTopology {
         QueueBinding graphics{QueueRole::Graphics, 0, 0};
@@ -272,6 +276,9 @@ public:
                 .copy     = QueueBinding{QueueRole::Copy, 2, 2},
             };
         }
+
+        /** Snapshot the initialized RHI's real native queue/family mapping. */
+        [[nodiscard]] RENDER_API static QueueTopology FromRHI();
 
         [[nodiscard]] constexpr QueueBinding Resolve(QueueRole role) const {
             switch (role) {
@@ -392,6 +399,13 @@ public:
         /** State/data availability established by a prior pass. */
         StateTransition,
         QueueOwnership,
+        /**
+         * Two non-overlapping logical transient resources reuse one physical
+         * whole-object allocation. This is an execution dependency, not a CPU
+         * recording dependency: immutable command lists may still be recorded
+         * in parallel and are submitted in compiled order.
+         */
+        TransientAlias,
     };
 
     struct CompiledAccess {
@@ -426,6 +440,8 @@ public:
         uint32_t       first_use     = PassHandle::InvalidIndex;
         uint32_t       last_use      = PassHandle::InvalidIndex;
         uint32_t       version_count = 0;
+        /** Compiler-assigned whole-object transient allocation slot. */
+        uint32_t       transient_slot = PassHandle::InvalidIndex;
         bool           imported      = false;
         bool           exported      = false;
     };
@@ -449,9 +465,9 @@ public:
     };
 
     /**
-     * One canonical synchronization decision for one atomic resource cell. The future backend may
-     * lower a queue_ownership record into paired release/acquire barriers; RDG itself does not emit
-     * physical barriers in this stage.
+     * One canonical synchronization decision for one atomic resource cell.
+     * Lowering materializes queue_ownership as one paired release/acquire;
+     * RDG compilation itself remains backend-neutral.
      */
     struct CompiledBarrierSource {
         PassHandle      pass{};
@@ -485,8 +501,27 @@ public:
         bool             import_boundary = false;
         bool             export_boundary = false;
         bool             source_state_unknown = false;
+        /** Whole-object transient reuse boundary between two logical resources. */
+        bool             transient_alias = false;
         /** Authoritative synchronization frontier whose scopes must be represented by lowering. */
         std::vector<CompiledBarrierSource> sources{};
+    };
+
+    /**
+     * Compiler-selected reuse of one descriptor-exact physical transient slot.
+     *
+     * This models whole RHI-object reuse. It is intentionally distinct from
+     * placed-resource / shared-heap aliasing.
+     */
+    struct CompiledAliasBoundary {
+        uint32_t       transient_slot = PassHandle::InvalidIndex;
+        ResourceHandle predecessor_resource{};
+        ResourceHandle successor_resource{};
+        /** Latest source for compact diagnostics; source_frontier is authoritative. */
+        PassHandle     primary_src_pass{};
+        std::vector<PassHandle> source_frontier{};
+        PassHandle     dst_pass{};
+        uint32_t       barrier_index = PassHandle::InvalidIndex;
     };
 
     struct CompiledQueueSync {
@@ -529,10 +564,11 @@ public:
     };
 
     /**
-     * Immutable compiler output. recording_batches is an executable CPU
-     * ownership schedule. GPU queue/barrier fields remain shadow metadata:
-     * queue_syncs only describe internal pass/batch edges, while external
-     * import/export/present synchronization endpoints are intentionally absent.
+     * Immutable compiler output. recording_batches is the executable CPU
+     * ownership schedule; barriers, queue_batches, and queue_syncs are the
+     * active Graphics/Compute/Copy lowering contract. Queue syncs describe
+     * managed internal pass/batch edges only. External import/export/present
+     * synchronization endpoints remain intentionally absent.
      */
     struct CompiledPlan {
         /** Stable topological order of semantic dependencies. */
@@ -550,6 +586,8 @@ public:
         std::vector<CompiledRecordingBatch> recording_batches{};
         /** Canonical state/memory/ownership decisions, prior to backend-specific lowering. */
         std::vector<CompiledBarrier> barriers{};
+        /** Descriptor-exact, non-overlapping whole-object transient reuse boundaries. */
+        std::vector<CompiledAliasBoundary> alias_boundaries{};
         /** Prospective multi-queue batches and their GPU wait/signal relationships. */
         std::vector<CompiledQueueBatch> queue_batches{};
         std::vector<CompiledQueueSync>  queue_syncs{};
@@ -572,6 +610,7 @@ public:
             dependency_waves.clear();
             recording_batches.clear();
             barriers.clear();
+            alias_boundaries.clear();
             queue_batches.clear();
             queue_syncs.clear();
             pass_barriers.clear();
@@ -678,10 +717,46 @@ public:
     using ExecuteCallback       = std::function<void()>;
     using RecordCallback        = std::function<void(CommandList&)>;
     using PassCompletedCallback = std::function<void(const ExecutedPassInfo&)>;
-    /** May attach submit metadata; CommandList and gate ownership are immutable. */
+    /**
+     * May attach submit metadata; CommandList, producer gate and transaction
+     * gate ownership are immutable. It must not wait on RHI work.
+     */
     using RecordingSourceSetupCallback =
         std::function<void(const ExecutedPassInfo&, RHIRecordingSource&)>;
+    /**
+     * Admission-only callback invoked before the corresponding producers
+     * start. It may move the immutable pending sources into a nonblocking
+     * handoff, but must not mutate/seal their CommandLists, replace or complete
+     * their producer/transaction gates, wait on those gates, or call blocking
+     * RHI lifecycle operations such as Sync. Producer completion is joined by
+     * ExecuteRecording; active lowering releases every published group through
+     * one graph-wide commit gate only after the whole graph succeeds.
+     */
     using RecordingBatchPublisher = std::function<void(Array<RHIRecordingSource>&&)>;
+
+    /**
+     * Opts ExecuteRecording into the authoritative RDG state path.
+     *
+     * Active lowering materializes a fully validated Graphics-only plan into
+     * explicit RHI barriers and allocates descriptor-backed transients from a
+     * Completion-safe pool. Main-thread passes record into the caller-owned
+     * list; independently recorded passes continue to own their own lists and
+     * are mutation-sealed until one graph-wide RHI transaction commits. The
+     * current backend-tracker bridge requires full-buffer ranges, all physical
+     * texture aspects, and an initially empty main-thread list. Active lowering
+     * fails closed when caller-thread and managed-record passes are mixed in
+     * one graph. A physical MainThread graph must be isolated from nonphysical
+     * passes and keep its caller-owned list unsealed until ExecuteRecording
+     * returns (therefore no per-pass completion observer). Leaving enabled
+     * false preserves the legacy backend-tracked path and rejects active
+     * allocation-backed transient declarations.
+     */
+    struct ActiveRecordingOptions {
+        bool         enabled                  = false;
+        CommandList* main_thread_command_list = nullptr;
+        /** Defaults to the global completion-safe pool/allocator. */
+        RenderGraphTransientAllocator* transient_allocator = nullptr;
+    };
 
     explicit RenderGraph(std::string_view name = "RenderGraph");
     RenderGraph(std::string_view name, QueueTopology topology);
@@ -697,13 +772,42 @@ public:
 
     TextureHandle ImportTexture(std::string_view name, const void* physical_identity, TextureDesc desc);
     BufferHandle  ImportBuffer(std::string_view name, const void* physical_identity, BufferDesc desc);
+    /**
+     * Strong physical imports used by active lowering. The graph keeps the
+     * resource alive through compilation, recording and lowered-plan handoff.
+     * The raw-pointer overloads above remain declaration-only compatibility
+     * APIs and are deliberately rejected by active lowering.
+     */
+    TextureHandle ImportTexture(std::string_view name, TextureRef texture, TextureDesc desc);
+    BufferHandle  ImportBuffer(std::string_view name, BufferRef buffer, BufferDesc desc);
     TokenHandle   ImportToken(std::string_view name, const void* physical_identity = nullptr);
 
     /** Legacy transient API. Prefer the typed declarations below for new code. */
     ResourceHandle CreateTransient(std::string_view name, ResourceKind kind);
     TextureHandle  CreateTransientTexture(std::string_view name, TextureDesc desc);
     BufferHandle   CreateTransientBuffer(std::string_view name, BufferDesc desc);
+    /**
+     * Allocation-backed transient declarations. The compiler shape is derived
+     * from the physical descriptor so range validation and pool keys cannot
+     * drift apart.
+     */
+    TextureHandle CreateTransientTexture(
+        std::string_view               name,
+        const RGTransientTextureDesc& allocation_desc
+    );
+    BufferHandle CreateTransientBuffer(
+        std::string_view              name,
+        const RGTransientBufferDesc& allocation_desc
+    );
     TokenHandle    CreateTransientToken(std::string_view name);
+
+    /**
+     * Valid during the declaring pass callback after active allocation.
+     * Retaining a physical ref beyond that callback is an RDG lifetime escape;
+     * declare PassBuilder::Reference wherever the object must remain live.
+     */
+    [[nodiscard]] TextureRef GetPhysicalTexture(TextureHandle resource) const;
+    [[nodiscard]] BufferRef  GetPhysicalBuffer(BufferHandle resource) const;
 
     void Export(ResourceHandle resource);
     void Export(TextureHandle resource) {
@@ -785,7 +889,8 @@ public:
         const PassCompletedCallback&        after_main_thread_pass,
         const RecordingSourceSetupCallback& configure_recording_source = {},
         bool                                parallel_recording_enabled = true,
-        const RecordingBatchPublisher&      publish_recording_batch = {}
+        const RecordingBatchPublisher&      publish_recording_batch = {},
+        const ActiveRecordingOptions&        active_recording = {}
     );
 
     [[nodiscard]] bool IsCompiled() const {
@@ -810,6 +915,8 @@ public:
 
 private:
     friend class RenderGraphCompiler;
+    friend class RenderGraphLowering;
+    friend class RenderGraphTransientAllocator;
 
     struct AccessDeclaration {
         ResourceHandle resource{};
@@ -833,8 +940,12 @@ private:
         std::vector<std::string> aliases{};
         ResourceKind             kind              = ResourceKind::Token;
         const void*              physical_identity = nullptr;
+        TextureRef               physical_texture{};
+        BufferRef                physical_buffer{};
         TextureDesc              texture_desc{};
         BufferDesc               buffer_desc{};
+        std::optional<RGTransientTextureDesc> transient_texture_desc{};
+        std::optional<RGTransientBufferDesc>  transient_buffer_desc{};
         bool                     typed_desc = false;
         bool                     imported   = false;
         bool                     exported   = false;
@@ -890,6 +1001,7 @@ private:
         bool           initial
     );
     bool MarkExported(ResourceHandle resource, bool whole_resource);
+    void ReleaseNonExportedTransientBindings() noexcept;
     void AddDependency(uint32_t pass_index, PassHandle dependency);
     void AddReference(uint32_t pass_index, ResourceHandle resource);
     void MarkSideEffect(uint32_t pass_index);

@@ -10,6 +10,7 @@
 #include "rhi/RHIResourceInitilizer.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
+#include <stdexcept>
 namespace Moer::Render {
 
 void CommandQueue::Test() {
@@ -37,6 +38,78 @@ CommandList::CommandList(EQueueType _queue_type) : queue_type(_queue_type) {
         _queue_type == EQueueType::Graphics || _queue_type == EQueueType::Compute ||
         _queue_type == EQueueType::Copy
     );
+}
+
+CommandList::CommandList(CommandList&& _other) :
+    CommandList(_other.queue_type) {
+    *this = std::move(_other);
+}
+
+CommandList& CommandList::operator=(CommandList&& _other) {
+    if (this == &_other) {
+        return *this;
+    }
+    if (managed_recording_lease_count != 0 ||
+        _other.managed_recording_lease_count != 0) {
+        throw std::logic_error(
+            "CommandList move is forbidden while graph-managed recording is active"
+        );
+    }
+
+    commands                    = std::move(_other.commands);
+    current_barriers            = _other.current_barriers;
+    callbacks                   = std::move(_other.callbacks);
+    success_callbacks           = std::move(_other.success_callbacks);
+    cached_args                 = std::move(_other.cached_args);
+    queue_type                  = _other.queue_type;
+    translate_execution_class   = _other.translate_execution_class;
+    resource_state_ownership    = _other.resource_state_ownership;
+    seal_generation             = _other.seal_generation;
+    scope_stack                 = std::move(_other.scope_stack);
+    timestamp_scope_names       = std::move(_other.timestamp_scope_names);
+
+    _other.current_barriers          = nullptr;
+    _other.translate_execution_class =
+        ERHITranslateExecutionClass::Parallel;
+    _other.resource_state_ownership =
+        ERHIResourceStateOwnership::BackendTracked;
+    _other.seal_generation = 0;
+    return *this;
+}
+
+CommandList::ManagedRecordingLease::~ManagedRecordingLease() {
+    Release();
+}
+
+CommandList::ManagedRecordingLease::ManagedRecordingLease(
+    ManagedRecordingLease&& _other
+) noexcept :
+    command_list(std::exchange(_other.command_list, nullptr)) {}
+
+CommandList::ManagedRecordingLease&
+CommandList::ManagedRecordingLease::operator=(ManagedRecordingLease&& _other) noexcept {
+    if (this != &_other) {
+        Release();
+        command_list = std::exchange(_other.command_list, nullptr);
+    }
+    return *this;
+}
+
+void CommandList::ManagedRecordingLease::Release() noexcept {
+    if (command_list == nullptr) {
+        return;
+    }
+    assert(command_list->managed_recording_lease_count > 0);
+    --command_list->managed_recording_lease_count;
+    command_list = nullptr;
+}
+
+CommandList::ManagedRecordingLease CommandList::AcquireManagedRecordingLease() {
+    if (managed_recording_lease_count != 0) {
+        throw std::logic_error("CommandList already has a managed recording lease");
+    }
+    ++managed_recording_lease_count;
+    return ManagedRecordingLease(*this);
 }
 // void CommandList::ArgSetter::SetBuffer(uint64 _index, BufferView _buffer) {
 //     auto idx          = handle.GetBindingIdx(_index);
@@ -128,6 +201,12 @@ void CommandList::ComputeDispatcher::DispatchIndirect(
 }
 
 CmdSubmit CommandList::Submit() {
+    if (managed_recording_lease_count != 0) {
+        throw std::logic_error(
+            "CommandList::Submit is forbidden while graph-managed recording is active"
+        );
+    }
+    ++seal_generation;
     if (!scope_stack.empty()) {
         assert(scope_stack.empty() && "CommandList::Submit called with unclosed GPU marker scopes");
         // Keep release builds/captures structurally valid even if a caller
@@ -158,15 +237,23 @@ CmdSubmit CommandList::Submit() {
         });
     }
     submit.translate_execution_class = translate_execution_class;
+    submit.resource_state_ownership   = resource_state_ownership;
     commands.clear();
     callbacks.clear();
     success_callbacks.clear();
     timestamp_scope_names.clear();
     translate_execution_class = ERHITranslateExecutionClass::Parallel;
+    resource_state_ownership  = ERHIResourceStateOwnership::BackendTracked;
     return std::move(submit);
 }
 
 Array<std::function<void()>> CommandList::DrainOrdinaryCallbacksForRejection() {
+    if (managed_recording_lease_count != 0) {
+        throw std::logic_error(
+            "CommandList rejection draining is forbidden while graph-managed recording is active"
+        );
+    }
+    ++seal_generation;
     Array<std::function<void()>> cleanup_callbacks = std::move(callbacks);
 
     // This is deliberately not implemented in terms of Submit(). A failed
@@ -184,6 +271,7 @@ Array<std::function<void()>> CommandList::DrainOrdinaryCallbacksForRejection() {
     }
     timestamp_scope_names.clear();
     translate_execution_class = ERHITranslateExecutionClass::Parallel;
+    resource_state_ownership  = ERHIResourceStateOwnership::BackendTracked;
     return cleanup_callbacks;
 }
 
@@ -486,6 +574,123 @@ void CommandList::AddCustomCommand(UniquePtr<Command>&& _cmd, std::string_view _
 }
 
 #pragma endregion
+
+void CommandList::Barriers(
+    std::span<const BarrierCreateInfo> _barriers,
+    EQueueType                         _src_queue,
+    EQueueType                         _dst_queue
+) {
+    if (_barriers.empty()) {
+        throw std::invalid_argument("explicit barrier batch cannot be empty");
+    }
+    if (_src_queue == EQueueType::Ignore || _src_queue == EQueueType::Num ||
+        _src_queue != _dst_queue || _src_queue != queue_type) {
+        throw std::invalid_argument(
+            "explicit barrier command affinity must match its CommandList queue"
+        );
+    }
+
+    const auto is_supported_ownership_queue = [](EQueueType queue) {
+        return queue == EQueueType::Graphics || queue == EQueueType::Compute ||
+               queue == EQueueType::Copy;
+    };
+    for (const BarrierCreateInfo& barrier : _barriers) {
+        const auto& transfer = barrier.queue_transfer;
+        switch (transfer.phase) {
+            case EBarrierQueueTransferPhase::None:
+                if (!((transfer.src_queue == EQueueType::Ignore &&
+                       transfer.dst_queue == EQueueType::Ignore) ||
+                      (transfer.src_queue == queue_type &&
+                       transfer.dst_queue == queue_type))) {
+                    throw std::invalid_argument(
+                        "local explicit barrier endpoints must be ignored or match "
+                        "the CommandList queue"
+                    );
+                }
+                break;
+            case EBarrierQueueTransferPhase::Release:
+            case EBarrierQueueTransferPhase::Acquire:
+                if (!is_supported_ownership_queue(transfer.src_queue) ||
+                    !is_supported_ownership_queue(transfer.dst_queue) ||
+                    transfer.src_queue == transfer.dst_queue) {
+                    throw std::invalid_argument(
+                        "queue ownership barrier requires distinct managed "
+                        "Graphics/Compute/Copy endpoints"
+                    );
+                }
+                if ((transfer.phase == EBarrierQueueTransferPhase::Release &&
+                     queue_type != transfer.src_queue) ||
+                    (transfer.phase == EBarrierQueueTransferPhase::Acquire &&
+                     queue_type != transfer.dst_queue)) {
+                    throw std::invalid_argument(
+                        "queue ownership barrier was recorded on the wrong endpoint"
+                    );
+                }
+                break;
+            default:
+                throw std::invalid_argument(
+                    "explicit barrier carries an unknown queue-transfer phase"
+                );
+        }
+
+        std::visit(
+            [&](const auto& resource) {
+                using TResource = std::decay_t<decltype(resource)>;
+                if constexpr (std::is_same_v<TResource, TextureView>) {
+                    const auto* texture = resource.GetTexture();
+                    const auto aspects =
+                        static_cast<uint32_t>(barrier.texture_aspects);
+                    const auto available_aspects =
+                        texture == nullptr ? 0u :
+                        static_cast<uint32_t>(texture->GetAspectFlags());
+                    if (texture == nullptr || resource.num_mips == 0 ||
+                        resource.num_array == 0 ||
+                        resource.mip_level >= texture->GetNumMips() ||
+                        resource.num_mips >
+                            texture->GetNumMips() - resource.mip_level ||
+                        resource.array_layer >= texture->GetNumArray() ||
+                        resource.num_array >
+                            texture->GetNumArray() - resource.array_layer ||
+                        aspects == 0 || (aspects & ~available_aspects) != 0) {
+                        throw std::invalid_argument(
+                            "explicit texture barrier has an invalid resource, "
+                            "range, or aspect"
+                        );
+                    }
+                } else {
+                    static_assert(std::is_same_v<TResource, BufferView>);
+                    const auto* buffer = resource.GetBuffer();
+                    if (buffer == nullptr || resource.GetByteSize() == 0 ||
+                        resource.GetByteOffset() > buffer->GetByteSize() ||
+                        resource.GetByteSize() >
+                            buffer->GetByteSize() - resource.GetByteOffset() ||
+                        barrier.texture_aspects != ETextureAspectFlags::NONE ||
+                        barrier.src_state.texture_layout !=
+                            ETextureLayout::TEXTURE_LAYOUT_UNDEFINED ||
+                        barrier.dst_state.texture_layout !=
+                            ETextureLayout::TEXTURE_LAYOUT_UNDEFINED) {
+                        throw std::invalid_argument(
+                            "explicit buffer barrier has an invalid resource, "
+                            "range, aspect, or texture layout"
+                        );
+                    }
+                }
+            },
+            barrier.resource
+        );
+    }
+
+    auto barrier_cmd = MakeUnique<BarrierCmd>(
+        static_cast<uint>(_barriers.size()), _src_queue, _dst_queue
+    );
+    for (const BarrierCreateInfo& barrier : _barriers) {
+        barrier_cmd->AddExplicitBarrier(barrier);
+    }
+    commands.push_back(std::move(barrier_cmd));
+    // Recording an authoritative src/dst dependency opts this submit out of
+    // the backend's legacy restore-to-preferred-state epilogue.
+    resource_state_ownership = ERHIResourceStateOwnership::Explicit;
+}
 
 void CommandList::AddCallback(std::function<void()>&& _callback) {
     callbacks.emplace_back(std::move(_callback));

@@ -49,6 +49,26 @@ bool Expect(bool _condition, const char* _message) {
     return false;
 }
 
+class RecordingFenceProbe final : public Fence {
+public:
+    uint64_t GetValue() const override {
+        return 0;
+    }
+
+    void Wait(uint64_t) override {}
+
+    void Reject(uint64_t _value) override {
+        rejected_value.store(_value, std::memory_order_release);
+    }
+
+    [[nodiscard]] uint64_t RejectedValue() const {
+        return rejected_value.load(std::memory_order_acquire);
+    }
+
+private:
+    std::atomic<uint64_t> rejected_value{0};
+};
+
 bool PerSourceGatesPreserveFifo() {
     RHIExecutorRecordingHandoffQueue queue{};
     queue.Start();
@@ -306,6 +326,168 @@ bool FailedRecordingDrainsCleanupExactlyOnce() {
     return okay;
 }
 
+bool FailedCommitRejectsCompletedSources() {
+    RHIExecutor::StartUp();
+
+    std::atomic<int> ordinary_callbacks{0};
+    std::atomic<int> success_callbacks{0};
+    auto command_list = Moer::MakeShared<CommandList>(EQueueType::Graphics);
+    command_list->AddCallback([&ordinary_callbacks] {
+        ordinary_callbacks.fetch_add(1);
+    });
+    command_list->AddSuccessCallback([&success_callbacks] {
+        success_callbacks.fetch_add(1);
+    });
+
+    auto producer_complete = RHIRecordingGate::Create(true);
+    auto graph_commit      = RHIRecordingGate::Create();
+    Moer::Array<RHIRecordingSource> sources{};
+    sources.emplace_back(RHIRecordingSource{
+        .command_list = command_list,
+        .completion   = producer_complete,
+        .commit       = graph_commit,
+    });
+    RHIExecutor::Get().SubmitRecording(
+        std::move(sources),
+        ERHIExecSubmitFlags::None
+    );
+
+    std::atomic<bool> sync_returned{false};
+    std::jthread sync_thread([&] {
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        sync_returned.store(true, std::memory_order_release);
+    });
+    std::this_thread::sleep_for(30ms);
+    bool okay = Expect(
+                    !sync_returned.load(std::memory_order_acquire),
+                    "completed producer bypassed its pending graph commit"
+                ) &&
+                Expect(
+                    ordinary_callbacks.load() == 0 &&
+                        success_callbacks.load() == 0,
+                    "callbacks ran before the graph transaction resolved"
+                );
+
+    graph_commit->Fail();
+    sync_thread.join();
+    okay &= Expect(
+        ordinary_callbacks.load() == 1,
+        "failed graph commit did not run ordinary cleanup exactly once"
+    );
+    okay &= Expect(
+        success_callbacks.load() == 0,
+        "failed graph commit ran a success-only callback"
+    );
+
+    CmdSubmit drained = command_list->Submit();
+    okay &= Expect(
+        drained.cmds.empty() && drained.callbacks.empty() &&
+            drained.success_callbacks.empty() && drained.segments.empty(),
+        "failed graph commit left a submittable source behind"
+    );
+    RHIExecutor::ShutDown();
+    return okay;
+}
+
+bool MetadataFailureRejectsEveryProducerSignal() {
+    RHIExecutor::StartUp();
+
+    auto invalid_source = Moer::MakeShared<CommandList>(EQueueType::Graphics);
+    auto later_source   = Moer::MakeShared<CommandList>(EQueueType::Graphics);
+    FenceRef signal_fence = MoerNew(RecordingFenceProbe)();
+    auto* signal_probe =
+        static_cast<RecordingFenceProbe*>(signal_fence.Get());
+
+    Moer::Array<RHIRecordingSource> sources{};
+    sources.emplace_back(RHIRecordingSource{
+        .command_list = invalid_source,
+        .completion   = RHIRecordingGate::Create(true),
+        .submit_metadata = RHIRecordingSubmitMetadata{
+            .wait_fences = {
+                RHIRecordingFencePoint{.fence = {}, .value = 1},
+            },
+        },
+    });
+    sources.emplace_back(RHIRecordingSource{
+        .command_list = later_source,
+        .completion   = RHIRecordingGate::Create(true),
+        .submit_metadata = RHIRecordingSubmitMetadata{
+            .signal_fences = {
+                RHIRecordingFencePoint{.fence = signal_fence, .value = 7},
+            },
+        },
+    });
+    RHIExecutor::Get().SubmitRecording(
+        std::move(sources),
+        ERHIExecSubmitFlags::None
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    RHIExecutor::ShutDown();
+
+    bool okay = Expect(
+        signal_probe->RejectedValue() == 7,
+        "metadata failure did not reject a later producer signal"
+    );
+
+    RHIExecutor::StartUp();
+    FenceRef failed_gate_fence = MoerNew(RecordingFenceProbe)();
+    auto* failed_gate_probe =
+        static_cast<RecordingFenceProbe*>(failed_gate_fence.Get());
+    auto failed_gate = RHIRecordingGate::Create();
+    Moer::Array<RHIRecordingSource> failed_sources{};
+    failed_sources.emplace_back(RHIRecordingSource{
+        .command_list = Moer::MakeShared<CommandList>(EQueueType::Graphics),
+        .completion   = failed_gate,
+        .submit_metadata = RHIRecordingSubmitMetadata{
+            .signal_fences = {
+                RHIRecordingFencePoint{
+                    .fence = failed_gate_fence,
+                    .value = 11,
+                },
+            },
+        },
+    });
+    RHIExecutor::Get().SubmitRecording(
+        std::move(failed_sources),
+        ERHIExecSubmitFlags::None
+    );
+    failed_gate->Fail();
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    RHIExecutor::ShutDown();
+    okay &= Expect(
+        failed_gate_probe->RejectedValue() == 11,
+        "failed recording gate did not reject its producer signal"
+    );
+
+    RHIExecutor::StartUp();
+    FenceRef cancelled_fence = MoerNew(RecordingFenceProbe)();
+    auto* cancelled_probe =
+        static_cast<RecordingFenceProbe*>(cancelled_fence.Get());
+    Moer::Array<RHIRecordingSource> cancelled_sources{};
+    cancelled_sources.emplace_back(RHIRecordingSource{
+        .command_list = Moer::MakeShared<CommandList>(EQueueType::Graphics),
+        .completion   = RHIRecordingGate::Create(),
+        .submit_metadata = RHIRecordingSubmitMetadata{
+            .signal_fences = {
+                RHIRecordingFencePoint{
+                    .fence = cancelled_fence,
+                    .value = 13,
+                },
+            },
+        },
+    });
+    RHIExecutor::Get().SubmitRecording(
+        std::move(cancelled_sources),
+        ERHIExecSubmitFlags::None
+    );
+    RHIExecutor::ShutDown();
+    okay &= Expect(
+        cancelled_probe->RejectedValue() == 13,
+        "shutdown cancellation did not reject its producer signal"
+    );
+    return okay;
+}
+
 bool BlockingWaitReportsTerminalStatus() {
     auto succeeded_gate = RHIRecordingGate::Create();
     std::atomic<ERHIRecordingStatus> waited_status{ERHIRecordingStatus::Pending};
@@ -531,6 +713,8 @@ int main() {
         !ReadyWorkUsesStableExecutorOwnerAndCannotBeOvertaken() ||
         !FailedGateRejectsOnlyItsGroupAndPreservesFifo() ||
         !FailedRecordingDrainsCleanupExactlyOnce() ||
+        !FailedCommitRejectsCompletedSources() ||
+        !MetadataFailureRejectsEveryProducerSignal() ||
         !BlockingWaitReportsTerminalStatus() ||
         !ShutdownDrainsTerminalSourceBehindPendingHead() ||
         !ShutdownCancelsAnUnsignalledGate() ||

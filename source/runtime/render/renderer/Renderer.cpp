@@ -6,6 +6,7 @@
 #include "config/ConfigManager.h"
 #include "misc/Timer.h"
 #include "renderer/EditorConfig.h"
+#include "rendergraph/RenderGraphResourcePool.h"
 #include "rhi/RHI.h"
 #include "rhi/RHIExecutor.h"
 #include "scene/Scene.h"
@@ -149,6 +150,7 @@ void Renderer::ReleaseResources() {
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
     scene.Reset();
+    RenderGraphResourcePool::Global().Reset();
 }
 
 Renderer::WindowFrameState Renderer::TickWindowContext(uint2 current_resolution) {
@@ -175,6 +177,7 @@ void Renderer::PrepareRenderFrame(const WindowFrameState& window_frame) {
     if (time >= max_frame_in_flight) {
         timeline->Wait(time - max_frame_in_flight);
     }
+    RenderGraphResourcePool::Global().Tick();
 
     const bool recreate_requested =
         main_swapchain_recreate_requested.exchange(false, std::memory_order_acq_rel);

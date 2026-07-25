@@ -274,6 +274,21 @@ struct VkCmdPreprocessor {
         m_funcs(_funcs),
         cached_args(_cached_args),
         current_queue(_current_queue) {}
+
+    bool OverlapsCurrentTextureWrite(
+        const TextureSubresourceKeyT<VulkanTexture>& _candidate
+    ) const {
+        return std::any_of(
+            writed_texture_resources.begin(),
+            writed_texture_resources.end(),
+            [&](const TextureSubresourceKeyT<VulkanTexture>& written) {
+                return TextureSubresourceRangesOverlap(
+                    written, _candidate
+                );
+            }
+        );
+    }
+
     void HandleBindless(BindlessArrayRef _bindless_array, VkPipelineStageFlagBits2 _pipeline_stages) {
         EPassType pass_type = EPassType::Graphics;
         if (_pipeline_stages == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT) {
@@ -301,7 +316,7 @@ struct VkCmdPreprocessor {
                         key.array_layer,
                         key.array_count
                     ) &&
-                    !writed_texture_resources.contains(key)) {
+                    !OverlapsCurrentTextureWrite(key)) {
                     to_read_textures.push_back(key);
                 }
             }
@@ -794,6 +809,149 @@ struct VkCmdPreprocessor {
     }
 
     void Visit(const BarrierCmd* _cmd) {
+        if (_cmd->HasExplicitBarriers()) {
+            if (_cmd->GetSrcQueue() != current_queue ||
+                _cmd->GetDstQueue() != current_queue) {
+                LOG_CRITICAL(
+                    "Explicit BarrierCmd queue affinity mismatch: command={} "
+                    "current={}",
+                    static_cast<uint>(_cmd->GetSrcQueue()),
+                    static_cast<uint>(current_queue)
+                );
+                throw std::logic_error("explicit barrier recorded on the wrong queue");
+            }
+
+            const auto resolve_transfer =
+                [&](const BarrierQueueTransfer& transfer) {
+                    std::pair<uint32_t, uint32_t> families{
+                        VK_QUEUE_FAMILY_IGNORED,
+                        VK_QUEUE_FAMILY_IGNORED,
+                    };
+                    if (transfer.phase == EBarrierQueueTransferPhase::None) {
+                        return families;
+                    }
+                    if (transfer.phase != EBarrierQueueTransferPhase::Release &&
+                        transfer.phase != EBarrierQueueTransferPhase::Acquire) {
+                        throw std::invalid_argument(
+                            "Vulkan ownership barrier carries an unknown phase"
+                        );
+                    }
+                    if ((transfer.src_queue != EQueueType::Graphics &&
+                         transfer.src_queue != EQueueType::Compute &&
+                         transfer.src_queue != EQueueType::Copy) ||
+                        (transfer.dst_queue != EQueueType::Graphics &&
+                         transfer.dst_queue != EQueueType::Compute &&
+                         transfer.dst_queue != EQueueType::Copy) ||
+                        transfer.src_queue == transfer.dst_queue) {
+                        throw std::invalid_argument(
+                            "Vulkan ownership barrier requires distinct managed "
+                            "Graphics/Compute/Copy endpoints"
+                        );
+                    }
+                    const EQueueType expected_queue =
+                        transfer.phase == EBarrierQueueTransferPhase::Release ?
+                            transfer.src_queue :
+                            transfer.dst_queue;
+                    if (current_queue != expected_queue) {
+                        throw std::logic_error(
+                            "Vulkan ownership barrier recorded on the wrong endpoint"
+                        );
+                    }
+                    families.first =
+                        device.GetQueueFamilyIndex(transfer.src_queue);
+                    families.second =
+                        device.GetQueueFamilyIndex(transfer.dst_queue);
+                    if (families.first == VK_QUEUE_FAMILY_IGNORED ||
+                        families.second == VK_QUEUE_FAMILY_IGNORED ||
+                        families.first == families.second) {
+                        throw std::invalid_argument(
+                            "Vulkan ownership barrier requires two distinct queue families"
+                        );
+                    }
+                    return families;
+                };
+
+            for (const ExplicitBufferBarrier& barrier : _cmd->ExplicitBuffers()) {
+                if (barrier.src_state.texture_layout !=
+                        ETextureLayout::TEXTURE_LAYOUT_UNDEFINED ||
+                    barrier.dst_state.texture_layout !=
+                        ETextureLayout::TEXTURE_LAYOUT_UNDEFINED) {
+                    throw std::invalid_argument(
+                        "explicit buffer barrier cannot carry a texture layout"
+                    );
+                }
+                const auto [src_family, dst_family] =
+                    resolve_transfer(barrier.queue_transfer);
+                tracker.EmitExplicitBarrier(
+                    reinterpret_cast<VulkanBuffer*>(barrier.handle),
+                    barrier.offset,
+                    barrier.byte_size,
+                    barrier.queue_transfer.phase,
+                    src_family,
+                    dst_family,
+                    VulkanEnumTranslator::METoVkPipelineStageFlags2(
+                        barrier.src_state.stage
+                    ),
+                    VulkanEnumTranslator::METoVkAccessFlags2(
+                        barrier.src_state.access
+                    ),
+                    VulkanEnumTranslator::METoVkPipelineStageFlags2(
+                        barrier.dst_state.stage
+                    ),
+                    VulkanEnumTranslator::METoVkAccessFlags2(
+                        barrier.dst_state.access
+                    )
+                );
+            }
+            for (const ExplicitTextureBarrier& barrier :
+                 _cmd->ExplicitTextures()) {
+                const VkImageLayout src_layout =
+                    VulkanEnumTranslator::METoVKImageLayout(
+                        barrier.src_state.texture_layout
+                    );
+                const VkImageLayout dst_layout =
+                    VulkanEnumTranslator::METoVKImageLayout(
+                        barrier.dst_state.texture_layout
+                    );
+                if (src_layout == VK_IMAGE_LAYOUT_MAX_ENUM ||
+                    dst_layout == VK_IMAGE_LAYOUT_MAX_ENUM) {
+                    throw std::invalid_argument(
+                        "explicit texture barrier carries an unsupported layout"
+                    );
+                }
+                const auto [src_family, dst_family] =
+                    resolve_transfer(barrier.queue_transfer);
+                tracker.EmitExplicitBarrier(
+                    reinterpret_cast<VulkanTexture*>(barrier.handle),
+                    VulkanEnumTranslator::METoVKImageAspectFlags(
+                        barrier.texture_aspects
+                    ),
+                    barrier.mip_level,
+                    barrier.mip_count,
+                    barrier.array_layer,
+                    barrier.array_count,
+                    barrier.queue_transfer.phase,
+                    src_family,
+                    dst_family,
+                    VulkanEnumTranslator::METoVkPipelineStageFlags2(
+                        barrier.src_state.stage
+                    ),
+                    VulkanEnumTranslator::METoVkAccessFlags2(
+                        barrier.src_state.access
+                    ),
+                    src_layout,
+                    VulkanEnumTranslator::METoVkPipelineStageFlags2(
+                        barrier.dst_state.stage
+                    ),
+                    VulkanEnumTranslator::METoVkAccessFlags2(
+                        barrier.dst_state.access
+                    ),
+                    dst_layout
+                );
+            }
+            return;
+        }
+
         if (!_cmd->IsQueueTransition()) {
 
             for (auto& barrier : _cmd->ReadBuffers()) {
@@ -922,19 +1080,44 @@ struct VkCmdPreprocessor {
     }
 
     void Visit(const QueueTransferCmd* _cmd) {
-        // EQueueType current_queue = this->allocator.
-        EQueueType temp_queue = this->current_queue;
-        if (_cmd->IsImport()) {
-            _cmd->dst_queue = temp_queue;
+        const EQueueType src_queue =
+            _cmd->IsImport() ? _cmd->src_queue : current_queue;
+        const EQueueType dst_queue =
+            _cmd->IsImport() ? current_queue : _cmd->dst_queue;
+        if (src_queue == EQueueType::Ignore || dst_queue == EQueueType::Ignore) {
+            throw std::invalid_argument("queue transfer requires two concrete queues");
+        }
+        const uint src_queue_family = device.GetQueueFamilyIndex(src_queue);
+        const uint dst_queue_family = device.GetQueueFamilyIndex(dst_queue);
+        const uint current_queue_family = device.GetQueueFamilyIndex(current_queue);
+        const uint expected_queue_family =
+            _cmd->IsImport() ? dst_queue_family : src_queue_family;
+        if (current_queue_family != expected_queue_family) {
+            LOG_CRITICAL(
+                "QueueTransferCmd affinity mismatch: import={} src={}({}) "
+                "dst={}({}) current={}({})",
+                _cmd->IsImport(),
+                static_cast<uint>(src_queue),
+                src_queue_family,
+                static_cast<uint>(dst_queue),
+                dst_queue_family,
+                static_cast<uint>(current_queue),
+                current_queue_family
+            );
+            throw std::logic_error(
+                "queue transfer barrier recorded by a non-endpoint queue family"
+            );
+        }
 
+        if (_cmd->IsImport()) {
             for (auto& barrier : _cmd->ImportTextures()) {
                 auto* vk_texture = ResourceCast(barrier.texture.GetTexture());
                 auto  access     = tracker.ReadTexture(vk_texture, barrier.state);
                 tracker.QueueTransferAcquireResource(
                     vk_texture,
-                    device.GetQueueFamilyIndex(_cmd->src_queue),
-                    device.GetQueueFamilyIndex(_cmd->dst_queue),
-                    vk_texture->GetQueuePreferredLayout(_cmd->src_queue),
+                    src_queue_family,
+                    dst_queue_family,
+                    vk_texture->GetQueuePreferredLayout(src_queue),
                     std::get<1>(access),
                     VK_ACCESS_2_NONE,
                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
@@ -946,24 +1129,22 @@ struct VkCmdPreprocessor {
                 auto  access    = tracker.ReadBuffer(vk_buffer, barrier.state);
                 tracker.QueueTransferAcquireResource(
                     vk_buffer,
-                    device.GetQueueFamilyIndex(_cmd->src_queue),
-                    device.GetQueueFamilyIndex(_cmd->dst_queue),
+                    src_queue_family,
+                    dst_queue_family,
                     VK_ACCESS_2_NONE,
                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
                 );
             }
 
         } else {
-            _cmd->src_queue = temp_queue;
-
             for (auto& barrier : _cmd->ExportTextures()) {
                 auto* vk_texture = ResourceCast(barrier.texture.GetTexture());
                 auto  access     = tracker.ReadTexture(vk_texture, barrier.state);
                 tracker.QueueTransferReleaseResource(
                     vk_texture,
-                    device.GetQueueFamilyIndex(_cmd->src_queue),
-                    device.GetQueueFamilyIndex(_cmd->dst_queue),
-                    vk_texture->GetQueuePreferredLayout(_cmd->src_queue),
+                    src_queue_family,
+                    dst_queue_family,
+                    vk_texture->GetQueuePreferredLayout(src_queue),
                     std::get<1>(access)
                 );
             }
@@ -973,8 +1154,8 @@ struct VkCmdPreprocessor {
                 auto  access    = tracker.ReadBuffer(vk_buffer, barrier.state);
                 tracker.QueueTransferReleaseResource(
                     vk_buffer,
-                    device.GetQueueFamilyIndex(_cmd->src_queue),
-                    device.GetQueueFamilyIndex(_cmd->dst_queue)
+                    src_queue_family,
+                    dst_queue_family
                 );
             }
         }
@@ -4327,7 +4508,12 @@ bool VkCommandQueue::TryExecuteParallel(
     auto tracker_owner = GetAllocator();
     auto& tracker       = tracker_owner->GetTracker();
     VkCmdPreprocessor preprocessor(
-        vk_device, tracker, *tracker_owner, _function_table, _submit.cached_args
+        vk_device,
+        tracker,
+        *tracker_owner,
+        _function_table,
+        _submit.cached_args,
+        queue.GetType()
     );
 
     Array<ParallelLayerRuntime> runtime_layers(cmd_lists.size());
@@ -4900,7 +5086,9 @@ bool VkCommandQueue::TryExecuteParallel(
         return true;
     }
 
-    tracker.RestoreState();
+    if (!_submit.HasExplicitResourceStateOwnership()) {
+        tracker.RestoreState();
+    }
     VulkanCmdList& epilogue_cmd = tracker_owner->GetCmdList();
     epilogue_cmd.SetDescriptorPushLease(descriptor_lease.state);
     const VkResult epilogue_begin = begin_primary(epilogue_cmd, active_scopes, true);
@@ -5198,7 +5386,14 @@ void VkCommandQueue::ExecuteNow(
     );
 
     //Visitor for barrier generation
-    VkCmdPreprocessor preprocessor(vk_device, tracker, vk_allocator, function_table, _submit.cached_args);
+    VkCmdPreprocessor preprocessor(
+        vk_device,
+        tracker,
+        vk_allocator,
+        function_table,
+        _submit.cached_args,
+        queue.GetType()
+    );
 
     // LOG_INFO("Reorderer time {}", timer.ElapsedMilliseconds());
     const auto& cmd_lists = reorderer.m_cmd_lists;
@@ -5518,7 +5713,9 @@ void VkCommandQueue::ExecuteNow(
     }
 
     if (has_cmd) {
-        tracker.RestoreState();
+        if (!_submit.HasExplicitResourceStateOwnership()) {
+            tracker.RestoreState();
+        }
         if (record_sample) {
             record_pending_barriers(std::numeric_limits<uint64>::max());
         }
@@ -7574,7 +7771,9 @@ VkCopyQueue::TrackedExecuteResult VkCopyQueue::ExecuteTrackedImpl(
         //     visitor.VisitCmd(cmd.get());
         // }
         //copy
-        vk_tracker.RestoreState();
+        if (!_evt.HasExplicitResourceStateOwnership()) {
+            vk_tracker.RestoreState();
+        }
         vk_tracker.DispatchBarriers(vk_cmd_list);
         vk_cmd_list.EndLabel();
         VK_CHECK_RESULT(vk_cmd_list.End());
@@ -8126,7 +8325,9 @@ void VkCopyQueue::RHIThreadLoop() {
         for (const auto& cmd : submission.cmds) {
             visitor.VisitCmd(cmd.get());
         }
-        vk_tracker.RestoreState();
+        if (!submission.HasExplicitResourceStateOwnership()) {
+            vk_tracker.RestoreState();
+        }
         vk_tracker.DispatchBarriers(vk_cmd_list);
         vk_cmd_list.EndLabel();
         VK_CHECK_RESULT(vk_cmd_list.End());

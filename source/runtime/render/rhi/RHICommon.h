@@ -1006,6 +1006,27 @@ enum class ETextureAspectFlags : uint32_t {
 
 ENUM_BIT_OP_IMPL(ETextureAspectFlags, FLAG)
 
+[[nodiscard]] constexpr ETextureAspectFlags
+GetPixelFormatAspectFlags(EPixelFormat format) noexcept {
+    switch (format) {
+        case PF_D16_UNORM:
+        case PF_X8_D24_UNORM_PACK32:
+        case PF_D32_SFLOAT:
+            return ETextureAspectFlags::DEPTH_SLICE;
+        case PF_S8_UINT:
+            return ETextureAspectFlags::STENCIL_SLICE;
+        case PF_D16_UNORM_S8_UINT:
+        case PF_D24_UNORM_S8_UINT:
+        case PF_D32_SFLOAT_S8_UINT:
+            return ETextureAspectFlags::DEPTH_SLICE |
+                   ETextureAspectFlags::STENCIL_SLICE;
+        case PF_UNDEFINED:
+            return ETextureAspectFlags::NONE;
+        default:
+            return ETextureAspectFlags::COLOR;
+    }
+}
+
 /* various shading rate palette, VSR_{fragment_invocation_count}_{region_size}
  * @fragment_invocation_count means fragment shading invocation per region
  * @region_size means one shading result will be used to color ${regions_size} pixels
@@ -1257,6 +1278,46 @@ enum class EQueueType : uint8 {
     Num,
     Ignore
 };
+
+/**
+ * Backend-neutral physical queue identity. native_queue_id distinguishes
+ * independently ordered native queues; family_id distinguishes explicit
+ * queue-family ownership domains (Vulkan) and may be shared by otherwise
+ * independent queues.
+ */
+struct RHIQueueBinding {
+    EQueueType queue           = EQueueType::Ignore;
+    uint32_t   native_queue_id = 0;
+    uint32_t   family_id       = 0;
+    /** False when the backend does not expose this logical submission role. */
+    bool       available       = true;
+
+    friend bool operator==(const RHIQueueBinding&, const RHIQueueBinding&) = default;
+};
+
+struct RHIQueueTopology {
+    RHIQueueBinding graphics{EQueueType::Graphics, 0, 0};
+    RHIQueueBinding compute{EQueueType::Compute, 0, 0};
+    RHIQueueBinding copy{EQueueType::Copy, 0, 0};
+
+    [[nodiscard]] constexpr RHIQueueBinding Resolve(EQueueType _queue) const {
+        switch (_queue) {
+            case EQueueType::Graphics:
+                return graphics;
+            case EQueueType::Compute:
+                return compute;
+            case EQueueType::Copy:
+                return copy;
+            case EQueueType::Num:
+            case EQueueType::Ignore:
+                return {};
+        }
+        return {};
+    }
+
+    friend bool operator==(const RHIQueueTopology&, const RHIQueueTopology&) = default;
+};
+
 struct ReflectParamInfo {
     ReflectParamInfo() {
         memset(this, 0, sizeof(ReflectParamInfo));

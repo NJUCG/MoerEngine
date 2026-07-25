@@ -112,6 +112,7 @@ public:
     RENDER_API static void          Init(DeviceInitInfo&& _info);
     RENDER_API static void          Dispose();
     RENDER_API static RenderDevice& Get();
+    RENDER_API static bool          IsInitialized();
 
 public:
     template<typename TElement>
@@ -127,6 +128,9 @@ public:
     ) {
         return CreateBuffer(_name, _element_cnt, sizeof(TElement), _usage, _format);
     }
+
+    /** Runtime-stride allocation used by resource pools and typed graph allocators. */
+    RENDER_API BufferRef CreateBuffer(std::string_view _name, const BufferInfo& _info);
 
     RENDER_API BufferRef CreateStagingBuffer(uint64_t _byte_size);
 
@@ -154,6 +158,9 @@ public:
         uint32_t           _mip_cnt    = 1,
         uint32_t           _array_size = 1
     );
+
+    RENDER_API TextureRef
+    CreateTexture(std::string_view _name, const TextureInfo& _info);
 
     RENDER_API TextureRef CreateCubeMap(
         std::string_view   _name,
@@ -197,6 +204,9 @@ public:
     RENDER_API CommandQueue& GetCommandQueue(EQueueType _type);
 
     RENDER_API CopyQueue& GetCopyQueue();
+
+    /** Physical queue/family mapping used by executable render-graph plans. */
+    RENDER_API RHIQueueTopology GetQueueTopology() const;
 
     RENDER_API SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info);
 

@@ -1,6 +1,8 @@
 #include "Core.h"
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
+#include "rendergraph/RenderGraph.h"
+#include "rendergraph/RenderGraphLowering.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIExecutor.h"
@@ -10,6 +12,7 @@
 #include "rhi/vulkan/VulkanRHIResource.h"
 #include "taskgraph/TaskSystem.h"
 
+#include <algorithm>
 #include <atomic>
 #include <array>
 #include <chrono>
@@ -296,6 +299,1965 @@ void RunOrderedReadback(
         _production_gate,
         _production_heavy,
         kIterations
+    );
+}
+
+void RunActiveRdgExplicitBarrierReadback(bool _parallel) {
+    auto& device = RenderDevice::Get();
+    const EBufferUsageFlags usage =
+        EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
+    constexpr uint64_t byte_size = sizeof(uint32) * kElementCount;
+
+    BufferRef source =
+        device.CreateBuffer<uint32>("active_rdg_source", kElementCount, usage);
+    BufferRef destination =
+        device.CreateBuffer<uint32>("active_rdg_destination", kElementCount, usage);
+
+    std::array<uint32, kElementCount> values{};
+    std::array<uint32, kElementCount> readback{};
+    for (uint32 index = 0; index < values.size(); ++index) {
+        values[index] = 0xA1100000u + index * 37u + 11u;
+    }
+
+    RenderGraph graph("ActiveRdgExplicitBarrier");
+    const auto source_handle = graph.ImportBuffer(
+        "Source",
+        source,
+        RenderGraph::BufferDesc{.byte_size = byte_size}
+    );
+    const auto destination_handle = graph.ImportBuffer(
+        "Destination",
+        destination,
+        RenderGraph::BufferDesc{.byte_size = byte_size}
+    );
+    graph.SetInitialState(
+        source_handle,
+        RenderGraph::BufferState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None
+    );
+    graph.SetInitialState(
+        destination_handle,
+        RenderGraph::BufferState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None
+    );
+
+    graph.AddRecordPass(
+        "Upload",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Write(
+                    source_handle,
+                    RenderGraph::BufferState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [source, values](CommandList& commands) {
+            commands.CopyFrom(
+                OwnedBytes(values), source->GetView(), "ActiveRdgUpload"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "Copy",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Read(source_handle, RenderGraph::BufferState::TransferSource)
+                .Write(
+                    destination_handle,
+                    RenderGraph::BufferState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [source, destination](CommandList& commands) {
+            commands.CopyFrom(
+                source->GetView(),
+                destination->GetView(),
+                "ActiveRdgBufferCopy"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "Readback",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Read(
+                    destination_handle,
+                    RenderGraph::BufferState::TransferSource
+                )
+                .SideEffect();
+        },
+        [destination, &readback](CommandList& commands) {
+            commands.CopyFrom(
+                destination->GetView(),
+                WritableBytes(readback),
+                "ActiveRdgReadback"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.Export(
+        source_handle,
+        RenderGraph::BufferState::TransferSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    graph.Export(
+        destination_handle,
+        RenderGraph::BufferState::TransferSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+
+    if (!graph.Compile()) {
+        throw std::runtime_error(
+            "active RDG compile failed: " + graph.GetCompileError()
+        );
+    }
+    if (!graph.ExecuteRecording(
+            {},
+            {},
+            _parallel,
+            {},
+            RenderGraph::ActiveRecordingOptions{.enabled = true}
+        )) {
+        throw std::runtime_error(
+            "active RDG execution failed: " + graph.GetCompileError()
+        );
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    if (readback != values) {
+        throw std::runtime_error(
+            "active RDG explicit barrier readback mismatch"
+        );
+    }
+    LOG_INFO(
+        "[TESTCASE][PASS] name=ActiveRdgExplicitBarrier mode={} "
+        "passes=3 state_owner=rdg readback=verified",
+        _parallel ? "parallel" : "serial"
+    );
+}
+
+void RunActiveRdgAsyncQueueDag(bool _parallel) {
+    auto& device = RenderDevice::Get();
+    const auto topology = RenderGraph::QueueTopology::FromRHI();
+    const bool dedicated_compute =
+        topology.graphics.native_queue_id != topology.compute.native_queue_id;
+    const bool same_queue_family =
+        topology.graphics.family_id == topology.compute.family_id;
+    const bool graphics_compute_available =
+        topology.graphics.available && topology.compute.available;
+    if (dedicated_compute) {
+        RenderGraph stale_topology_graph("ActiveRdgRejectStaleTopology");
+        const auto graphics_done =
+            stale_topology_graph.CreateTransientToken("GraphicsDone");
+        stale_topology_graph.AddRecordPass(
+            "Graphics",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(
+                           RenderGraph::QueueRole::Graphics,
+                           RenderGraph::PipelineType::Copy
+                       )
+                    .Write(graphics_done)
+                    .SideEffect();
+            },
+            [](CommandList&) {},
+            RenderGraph::PassExecutionClass::ParallelRecordEligible
+        );
+        stale_topology_graph.AddRecordPass(
+            "Compute",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(
+                           RenderGraph::QueueRole::Compute,
+                           RenderGraph::PipelineType::Copy
+                       )
+                    .Read(graphics_done)
+                    .SideEffect();
+            },
+            [](CommandList&) {},
+            RenderGraph::PassExecutionClass::ParallelRecordEligible
+        );
+        if (!stale_topology_graph.Compile()) {
+            throw std::runtime_error(
+                "stale-topology rejection graph failed to compile: " +
+                stale_topology_graph.GetCompileError()
+            );
+        }
+        if (stale_topology_graph.ExecuteRecording(
+                {},
+                {},
+                _parallel,
+                {},
+                RenderGraph::ActiveRecordingOptions{.enabled = true}
+            )) {
+            throw std::runtime_error(
+                "active RDG accepted a SingleQueue plan on dedicated queues"
+            );
+        }
+        if (stale_topology_graph.GetCompileError().find(
+                "compiled queue topology does not match"
+            ) == std::string::npos) {
+            throw std::runtime_error(
+                "active RDG stale-topology rejection was not diagnostic"
+            );
+        }
+        LOG_INFO(
+            "[TESTCASE][PASS] name=ActiveRdgRejectStaleTopology "
+            "compiled=single runtime=dedicated execution=rejected"
+        );
+    }
+
+    std::atomic<uint32> caller_callbacks{0};
+    RenderGraph caller_graph(
+        "ActiveRdgRejectCallerThreadMultiQueue", topology
+    );
+    const auto caller_graphics_done =
+        caller_graph.CreateTransientToken("GraphicsDone");
+    caller_graph.AddPass(
+            "Graphics",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(
+                           RenderGraph::QueueRole::Graphics,
+                           RenderGraph::PipelineType::Copy
+                       )
+                    .Write(caller_graphics_done)
+                    .SideEffect();
+            },
+            [&] {
+                caller_callbacks.fetch_add(1, std::memory_order_relaxed);
+            }
+    );
+    caller_graph.AddPass(
+            "Compute",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(
+                           RenderGraph::QueueRole::Compute,
+                           RenderGraph::PipelineType::Copy
+                       )
+                    .Read(caller_graphics_done)
+                    .SideEffect();
+            },
+            [&] {
+                caller_callbacks.fetch_add(1, std::memory_order_relaxed);
+            }
+    );
+    if (!caller_graph.Compile()) {
+        throw std::runtime_error(
+            "caller-thread multi-queue rejection graph failed to compile: " +
+            caller_graph.GetCompileError()
+        );
+    }
+    CommandList caller_commands(EQueueType::Graphics);
+    if (caller_graph.ExecuteRecording(
+            {},
+            {},
+            _parallel,
+            {},
+            RenderGraph::ActiveRecordingOptions{
+                .enabled = true,
+                .main_thread_command_list = &caller_commands,
+            }
+        )) {
+        throw std::runtime_error(
+            "active RDG accepted caller-thread multi-queue endpoints"
+        );
+    }
+    if (caller_callbacks.load(std::memory_order_relaxed) != 0 ||
+        !caller_commands.IsEmpty() ||
+        caller_graph.GetCompileError().find(
+            "managed recording handoff"
+        ) == std::string::npos) {
+        throw std::runtime_error(
+            "caller-thread multi-queue rejection was not immutable and diagnostic"
+        );
+    }
+    LOG_INFO(
+        "[TESTCASE][PASS] name=ActiveRdgRejectCallerThreadMultiQueue "
+        "callbacks=0 command_stream=empty execution=rejected"
+    );
+
+    const EBufferUsageFlags usage =
+        EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
+    constexpr uint64_t byte_size = sizeof(uint32) * kElementCount;
+
+    struct QueueBuffer {
+        BufferRef buffer{};
+        std::array<uint32, kElementCount> values{};
+        std::array<uint32, kElementCount> readback{};
+    };
+    QueueBuffer graphics_root{
+        .buffer = device.CreateBuffer<uint32>(
+            "active_rdg_async_graphics_root", kElementCount, usage
+        ),
+    };
+    QueueBuffer compute_independent{
+        .buffer = device.CreateBuffer<uint32>(
+            "active_rdg_async_compute_independent", kElementCount, usage
+        ),
+    };
+    QueueBuffer graphics_independent{
+        .buffer = device.CreateBuffer<uint32>(
+            "active_rdg_async_graphics_independent", kElementCount, usage
+        ),
+    };
+    QueueBuffer compute_dependent{
+        .buffer = device.CreateBuffer<uint32>(
+            "active_rdg_async_compute_dependent", kElementCount, usage
+        ),
+    };
+    std::array<QueueBuffer*, 4> buffers{
+        &graphics_root,
+        &compute_independent,
+        &graphics_independent,
+        &compute_dependent,
+    };
+    for (uint32 buffer_index = 0; buffer_index < buffers.size(); ++buffer_index) {
+        for (uint32 element = 0; element < kElementCount; ++element) {
+            buffers[buffer_index]->values[element] =
+                0xB1000000u + buffer_index * 0x01000000u + element * 41u + 13u;
+        }
+    }
+
+    {
+        std::binary_semaphore graphics_record_started{0};
+        std::binary_semaphore compute_record_started{0};
+        RenderGraph independent_graph(
+            "ActiveRdgIndependentQueueRoots", topology
+        );
+        const auto graphics_handle = independent_graph.ImportBuffer(
+            "GraphicsIndependent",
+            graphics_independent.buffer,
+            RenderGraph::BufferDesc{.byte_size = byte_size}
+        );
+        const auto compute_handle = independent_graph.ImportBuffer(
+            "ComputeIndependent",
+            compute_independent.buffer,
+            RenderGraph::BufferDesc{.byte_size = byte_size}
+        );
+        for (const auto handle : {graphics_handle, compute_handle}) {
+            independent_graph.SetInitialState(
+                handle,
+                RenderGraph::BufferState::Undefined,
+                RenderGraph::QueueRole::None,
+                RenderGraph::AccessMode::None
+            );
+        }
+        independent_graph.AddRecordPass(
+            "GraphicsRoot",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(
+                           RenderGraph::QueueRole::Graphics,
+                           RenderGraph::PipelineType::Copy
+                       )
+                    .Write(
+                        graphics_handle,
+                        RenderGraph::BufferState::TransferDestination
+                    )
+                    .SideEffect();
+            },
+            [
+                &graphics_independent,
+                &graphics_record_started,
+                &compute_record_started,
+                _parallel
+            ](CommandList& commands) {
+                if (_parallel) {
+                    graphics_record_started.release();
+                    if (!compute_record_started.try_acquire_for(
+                            std::chrono::seconds(2)
+                        )) {
+                        throw std::runtime_error(
+                            "Compute queue root did not record concurrently"
+                        );
+                    }
+                }
+                commands.CopyFrom(
+                    OwnedBytes(graphics_independent.values),
+                    graphics_independent.buffer->GetView(),
+                    "ActiveRdgIndependentGraphicsRoot"
+                );
+            },
+            RenderGraph::PassExecutionClass::ParallelRecordEligible
+        );
+        independent_graph.AddRecordPass(
+            "ComputeRoot",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(
+                           RenderGraph::QueueRole::Compute,
+                           RenderGraph::PipelineType::Copy
+                       )
+                    .Write(
+                        compute_handle,
+                        RenderGraph::BufferState::TransferDestination
+                    )
+                    .SideEffect();
+            },
+            [
+                &compute_independent,
+                &graphics_record_started,
+                &compute_record_started,
+                _parallel
+            ](CommandList& commands) {
+                if (_parallel) {
+                    compute_record_started.release();
+                    if (!graphics_record_started.try_acquire_for(
+                            std::chrono::seconds(2)
+                        )) {
+                        throw std::runtime_error(
+                            "Graphics queue root did not record concurrently"
+                        );
+                    }
+                }
+                commands.CopyFrom(
+                    OwnedBytes(compute_independent.values),
+                    compute_independent.buffer->GetView(),
+                    "ActiveRdgIndependentComputeRoot"
+                );
+            },
+            RenderGraph::PassExecutionClass::ParallelRecordEligible
+        );
+        independent_graph.Export(
+            graphics_handle,
+            RenderGraph::BufferState::TransferDestination,
+            RenderGraph::QueueRole::Graphics,
+            RenderGraph::AccessMode::Write
+        );
+        independent_graph.Export(
+            compute_handle,
+            RenderGraph::BufferState::TransferDestination,
+            RenderGraph::QueueRole::Compute,
+            RenderGraph::AccessMode::Write
+        );
+        if (!independent_graph.Compile() ||
+            std::any_of(
+                independent_graph.GetCompiledPlan().queue_syncs.begin(),
+                independent_graph.GetCompiledPlan().queue_syncs.end(),
+                [](const RenderGraph::CompiledQueueSync& sync) {
+                    return sync.gpu_wait_required;
+                }
+            )) {
+            throw std::runtime_error(
+                "independent queue roots did not compile as a zero-edge DAG: " +
+                independent_graph.GetCompileError()
+            );
+        }
+        if (!independent_graph.ExecuteRecording(
+                {},
+                {},
+                _parallel,
+                {},
+                RenderGraph::ActiveRecordingOptions{.enabled = true}
+            )) {
+            throw std::runtime_error(
+                "independent queue roots failed active execution: " +
+                independent_graph.GetCompileError()
+            );
+        }
+
+        CommandList compute_readback(EQueueType::Compute);
+        compute_readback.CopyFrom(
+            compute_independent.buffer->GetView(),
+            WritableBytes(compute_independent.readback),
+            "ActiveRdgIndependentComputeReadback"
+        );
+        RHIExecutor::Get().Submit(
+            EQueueType::Compute,
+            compute_readback.Submit(),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+        CommandList graphics_readback(EQueueType::Graphics);
+        graphics_readback.CopyFrom(
+            graphics_independent.buffer->GetView(),
+            WritableBytes(graphics_independent.readback),
+            "ActiveRdgIndependentGraphicsReadback"
+        );
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics,
+            graphics_readback.Submit(),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        if (graphics_independent.readback != graphics_independent.values ||
+            compute_independent.readback != compute_independent.values) {
+            throw std::runtime_error(
+                "independent queue root readback mismatch"
+            );
+        }
+        graphics_independent.readback.fill(0);
+        compute_independent.readback.fill(0);
+        LOG_INFO(
+            "[TESTCASE][PASS] name=ActiveRdgIndependentQueueRoots "
+            "logical_syncs={} gpu_syncs=0 distinct_native={} execution={} "
+            "cpu_record_cross_queue={}",
+            independent_graph.GetCompiledPlan().queue_syncs.size(),
+            dedicated_compute,
+            dedicated_compute ? "dependency-led" : "native-serial",
+            _parallel ? "parallel-verified" : "serial"
+        );
+    }
+
+    if (graphics_compute_available && dedicated_compute) {
+        QueueBuffer shared_source{
+            .buffer = device.CreateBuffer<uint32>(
+                "active_rdg_distinct_native_shared_source",
+                kElementCount,
+                usage
+            ),
+        };
+        QueueBuffer shared_destination{
+            .buffer = device.CreateBuffer<uint32>(
+                "active_rdg_distinct_native_shared_destination",
+                kElementCount,
+                usage
+            ),
+        };
+        for (uint32 element = 0; element < kElementCount; ++element) {
+            shared_source.values[element] =
+                0xD3100000u + element * 67u + 19u;
+        }
+        shared_destination.values = shared_source.values;
+
+        RenderGraph physical_graph(
+            "ActiveRdgDistinctNativePhysicalRaw", topology
+        );
+        const auto source_handle = physical_graph.ImportBuffer(
+            "SharedSource",
+            shared_source.buffer,
+            RenderGraph::BufferDesc{.byte_size = byte_size}
+        );
+        const auto destination_handle = physical_graph.ImportBuffer(
+            "SharedDestination",
+            shared_destination.buffer,
+            RenderGraph::BufferDesc{.byte_size = byte_size}
+        );
+        for (const auto handle : {source_handle, destination_handle}) {
+            physical_graph.SetInitialState(
+                handle,
+                RenderGraph::BufferState::Undefined,
+                RenderGraph::QueueRole::None,
+                RenderGraph::AccessMode::None
+            );
+        }
+        const auto graphics_write_pass = physical_graph.AddRecordPass(
+            "GraphicsWriteShared",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(
+                           RenderGraph::QueueRole::Graphics,
+                           RenderGraph::PipelineType::Copy
+                       )
+                    .Write(
+                        source_handle,
+                        RenderGraph::BufferState::TransferDestination
+                    )
+                    .SideEffect();
+            },
+            [&shared_source](CommandList& commands) {
+                commands.CopyFrom(
+                    OwnedBytes(shared_source.values),
+                    shared_source.buffer->GetView(),
+                    "ActiveRdgDistinctNativeGraphicsWrite"
+                );
+            },
+            RenderGraph::PassExecutionClass::ParallelRecordEligible
+        );
+        const auto compute_read_pass = physical_graph.AddRecordPass(
+            "ComputeReadShared",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(
+                           RenderGraph::QueueRole::Compute,
+                           RenderGraph::PipelineType::Copy
+                       )
+                    .Read(
+                        source_handle,
+                        RenderGraph::BufferState::TransferSource
+                    )
+                    .Write(
+                        destination_handle,
+                        RenderGraph::BufferState::TransferDestination
+                    )
+                    .SideEffect();
+            },
+            [&shared_source, &shared_destination](CommandList& commands) {
+                commands.CopyFrom(
+                    shared_source.buffer->GetView(),
+                    shared_destination.buffer->GetView(),
+                    "ActiveRdgDistinctNativeComputeRead"
+                );
+            },
+            RenderGraph::PassExecutionClass::ParallelRecordEligible
+        );
+        physical_graph.Export(
+            source_handle,
+            RenderGraph::BufferState::TransferSource,
+            RenderGraph::QueueRole::Compute,
+            RenderGraph::AccessMode::Read
+        );
+        physical_graph.Export(
+            destination_handle,
+            RenderGraph::BufferState::TransferDestination,
+            RenderGraph::QueueRole::Compute,
+            RenderGraph::AccessMode::Write
+        );
+        if (!physical_graph.Compile() ||
+            !std::any_of(
+                physical_graph.GetCompiledPlan().queue_syncs.begin(),
+                physical_graph.GetCompiledPlan().queue_syncs.end(),
+                [](const RenderGraph::CompiledQueueSync& sync) {
+                    return sync.gpu_wait_required;
+                }
+            )) {
+            throw std::runtime_error(
+                "distinct-native physical RAW did not compile with a GPU sync: " +
+                physical_graph.GetCompileError()
+            );
+        }
+        RenderGraphLowering::LoweredPlan lowered{};
+        std::string                     lowering_error{};
+        if (!RenderGraphLowering::Lower(
+                physical_graph, lowered, lowering_error
+            )) {
+            throw std::runtime_error(
+                "distinct-native physical RAW lowering failed: " +
+                lowering_error
+            );
+        }
+
+        const auto is_source_resource =
+            [source = source_handle.Untyped()](
+                const RenderGraphLowering::LoweredInstruction& instruction
+            ) {
+                return instruction.resource == source;
+            };
+        const auto before_compute = lowered.Before(compute_read_pass);
+        const auto after_graphics = lowered.After(graphics_write_pass);
+        if (same_queue_family) {
+            const auto local_acquire = std::find_if(
+                before_compute.begin(),
+                before_compute.end(),
+                [&](const RenderGraphLowering::LoweredInstruction& instruction) {
+                    return is_source_resource(instruction) &&
+                           instruction.instruction_kind ==
+                               RenderGraphLowering::InstructionKind::Barrier &&
+                           instruction.queue_acquire;
+                }
+            );
+            const bool has_ownership_half = std::any_of(
+                    after_graphics.begin(),
+                    after_graphics.end(),
+                    [](const RenderGraphLowering::LoweredInstruction& instruction) {
+                        return instruction.instruction_kind ==
+                               RenderGraphLowering::InstructionKind::QueueRelease;
+                    }
+                ) ||
+                std::any_of(
+                    before_compute.begin(),
+                    before_compute.end(),
+                    [](const RenderGraphLowering::LoweredInstruction& instruction) {
+                        return instruction.instruction_kind ==
+                               RenderGraphLowering::InstructionKind::QueueAcquire;
+                    }
+                );
+            if (local_acquire == before_compute.end() ||
+                has_ownership_half) {
+                throw std::runtime_error(
+                    "same-family physical RAW did not lower to one "
+                    "destination-local acquire"
+                );
+            }
+        } else {
+            const auto release = std::find_if(
+                after_graphics.begin(),
+                after_graphics.end(),
+                [&](const RenderGraphLowering::LoweredInstruction& instruction) {
+                    return is_source_resource(instruction) &&
+                           instruction.instruction_kind ==
+                               RenderGraphLowering::InstructionKind::QueueRelease;
+                }
+            );
+            const auto acquire = std::find_if(
+                before_compute.begin(),
+                before_compute.end(),
+                [&](const RenderGraphLowering::LoweredInstruction& instruction) {
+                    return is_source_resource(instruction) &&
+                           instruction.instruction_kind ==
+                               RenderGraphLowering::InstructionKind::QueueAcquire;
+                }
+            );
+            if (release == after_graphics.end() ||
+                acquire == before_compute.end() ||
+                release->barrier_index ==
+                    RenderGraphLowering::InvalidBarrierIndex ||
+                release->barrier_index != acquire->barrier_index ||
+                release->transfer_source != topology.graphics ||
+                release->transfer_destination != topology.compute ||
+                acquire->transfer_source != topology.graphics ||
+                acquire->transfer_destination != topology.compute) {
+                throw std::runtime_error(
+                    "distinct-family physical RAW did not lower to a matched "
+                    "Graphics-release/Compute-acquire pair"
+                );
+            }
+            const bool transfer_sync_correlated = std::any_of(
+                lowered.queue_syncs.begin(),
+                lowered.queue_syncs.end(),
+                [&](const RenderGraphLowering::QueueSyncInstruction& sync) {
+                    return sync.signal_queue == topology.graphics &&
+                           sync.wait_queue == topology.compute &&
+                           std::find(
+                               sync.ownership_transfer_barriers.begin(),
+                               sync.ownership_transfer_barriers.end(),
+                               release->barrier_index
+                           ) != sync.ownership_transfer_barriers.end();
+                }
+            );
+            if (!transfer_sync_correlated) {
+                throw std::runtime_error(
+                    "distinct-family physical RAW release/acquire pair is not "
+                    "correlated with its GPU queue sync"
+                );
+            }
+        }
+        if (!physical_graph.ExecuteRecording(
+                {},
+                {},
+                _parallel,
+                {},
+                RenderGraph::ActiveRecordingOptions{.enabled = true}
+            )) {
+            throw std::runtime_error(
+                "distinct-native physical RAW active execution failed: " +
+                physical_graph.GetCompileError()
+            );
+        }
+        CommandList physical_readback(EQueueType::Compute);
+        physical_readback.CopyFrom(
+            shared_destination.buffer->GetView(),
+            WritableBytes(shared_destination.readback),
+            "ActiveRdgDistinctNativePhysicalReadback"
+        );
+        RHIExecutor::Get().Submit(
+            EQueueType::Compute,
+            physical_readback.Submit(),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        if (shared_destination.readback != shared_destination.values) {
+            throw std::runtime_error(
+                "distinct-native physical RAW readback mismatch"
+            );
+        }
+        LOG_INFO(
+            "[TESTCASE][PASS] name=ActiveRdgDistinctNativePhysicalRaw "
+            "producer=Graphics consumer=Compute ownership={} readback=verified",
+            same_queue_family ? "local-acquire" : "release-acquire"
+        );
+    } else {
+        LOG_INFO(
+            "[TESTCASE][SKIP] name=ActiveRdgDistinctNativePhysicalRaw "
+            "reason={} compute_native={} graphics_native={} "
+            "compute_family={} graphics_family={}",
+            graphics_compute_available ? "shared_native_queue" :
+                                         "queue_unavailable",
+            topology.compute.native_queue_id,
+            topology.graphics.native_queue_id,
+            topology.compute.family_id,
+            topology.graphics.family_id
+        );
+    }
+
+    RenderGraph graph("ActiveRdgAsyncQueueDag", topology);
+    const auto graphics_root_handle = graph.ImportBuffer(
+        "GraphicsRoot",
+        graphics_root.buffer,
+        RenderGraph::BufferDesc{.byte_size = byte_size}
+    );
+    const auto compute_independent_handle = graph.ImportBuffer(
+        "ComputeIndependent",
+        compute_independent.buffer,
+        RenderGraph::BufferDesc{.byte_size = byte_size}
+    );
+    const auto graphics_independent_handle = graph.ImportBuffer(
+        "GraphicsIndependent",
+        graphics_independent.buffer,
+        RenderGraph::BufferDesc{.byte_size = byte_size}
+    );
+    const auto compute_dependent_handle = graph.ImportBuffer(
+        "ComputeDependent",
+        compute_dependent.buffer,
+        RenderGraph::BufferDesc{.byte_size = byte_size}
+    );
+    for (const auto handle : {
+             graphics_root_handle,
+             compute_independent_handle,
+             graphics_independent_handle,
+             compute_dependent_handle,
+         }) {
+        graph.SetInitialState(
+            handle,
+            RenderGraph::BufferState::Undefined,
+            RenderGraph::QueueRole::None,
+            RenderGraph::AccessMode::None
+        );
+    }
+    const auto graphics_root_done =
+        graph.CreateTransientToken("GraphicsRootDone");
+
+    graph.AddRecordPass(
+        "GraphicsRoot",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Write(
+                    graphics_root_handle,
+                    RenderGraph::BufferState::TransferDestination
+                )
+                .Write(graphics_root_done)
+                .SideEffect();
+        },
+        [&graphics_root](CommandList& commands) {
+            commands.CopyFrom(
+                OwnedBytes(graphics_root.values),
+                graphics_root.buffer->GetView(),
+                "ActiveRdgAsyncGraphicsRoot"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "ComputeIndependent",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Compute,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Write(
+                    compute_independent_handle,
+                    RenderGraph::BufferState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [&compute_independent](CommandList& commands) {
+            commands.CopyFrom(
+                OwnedBytes(compute_independent.values),
+                compute_independent.buffer->GetView(),
+                "ActiveRdgAsyncComputeIndependent"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "GraphicsIndependent",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Write(
+                    graphics_independent_handle,
+                    RenderGraph::BufferState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [&graphics_independent](CommandList& commands) {
+            commands.CopyFrom(
+                OwnedBytes(graphics_independent.values),
+                graphics_independent.buffer->GetView(),
+                "ActiveRdgAsyncGraphicsIndependent"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "ComputeDependent",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Compute,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Read(graphics_root_done)
+                .Write(
+                    compute_dependent_handle,
+                    RenderGraph::BufferState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [&compute_dependent](CommandList& commands) {
+            commands.CopyFrom(
+                OwnedBytes(compute_dependent.values),
+                compute_dependent.buffer->GetView(),
+                "ActiveRdgAsyncComputeDependent"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+
+    graph.Export(
+        graphics_root_handle,
+        RenderGraph::BufferState::TransferDestination,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Write
+    );
+    graph.Export(
+        compute_independent_handle,
+        RenderGraph::BufferState::TransferDestination,
+        RenderGraph::QueueRole::Compute,
+        RenderGraph::AccessMode::Write
+    );
+    graph.Export(
+        graphics_independent_handle,
+        RenderGraph::BufferState::TransferDestination,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Write
+    );
+    graph.Export(
+        compute_dependent_handle,
+        RenderGraph::BufferState::TransferDestination,
+        RenderGraph::QueueRole::Compute,
+        RenderGraph::AccessMode::Write
+    );
+
+    if (!graph.Compile()) {
+        throw std::runtime_error(
+            "active RDG async queue compile failed: " +
+            graph.GetCompileError()
+        );
+    }
+    const auto& plan = graph.GetCompiledPlan();
+    const bool has_gpu_sync = std::any_of(
+        plan.queue_syncs.begin(),
+        plan.queue_syncs.end(),
+        [](const RenderGraph::CompiledQueueSync& sync) {
+            return sync.gpu_wait_required;
+        }
+    );
+    if (has_gpu_sync != dedicated_compute) {
+        throw std::runtime_error(
+            "active RDG async queue plan disagrees with runtime topology"
+        );
+    }
+    if (!graph.ExecuteRecording(
+            {},
+            {},
+            _parallel,
+            {},
+            RenderGraph::ActiveRecordingOptions{.enabled = true}
+        )) {
+        throw std::runtime_error(
+            "active RDG async queue execution failed: " +
+            graph.GetCompileError()
+        );
+    }
+
+    CommandList compute_readback(EQueueType::Compute);
+    compute_readback.CopyFrom(
+        compute_independent.buffer->GetView(),
+        WritableBytes(compute_independent.readback),
+        "ActiveRdgAsyncComputeIndependentReadback"
+    );
+    compute_readback.CopyFrom(
+        compute_dependent.buffer->GetView(),
+        WritableBytes(compute_dependent.readback),
+        "ActiveRdgAsyncComputeDependentReadback"
+    );
+    RHIExecutor::Get().Submit(
+        EQueueType::Compute,
+        compute_readback.Submit(),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+
+    CommandList graphics_readback(EQueueType::Graphics);
+    graphics_readback.CopyFrom(
+        graphics_root.buffer->GetView(),
+        WritableBytes(graphics_root.readback),
+        "ActiveRdgAsyncGraphicsRootReadback"
+    );
+    graphics_readback.CopyFrom(
+        graphics_independent.buffer->GetView(),
+        WritableBytes(graphics_independent.readback),
+        "ActiveRdgAsyncGraphicsIndependentReadback"
+    );
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        graphics_readback.Submit(),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    for (const QueueBuffer* buffer : buffers) {
+        if (buffer->readback != buffer->values) {
+            throw std::runtime_error(
+                "active RDG async queue readback mismatch"
+            );
+        }
+    }
+    LOG_INFO(
+        "[TESTCASE][PASS] name=ActiveRdgAsyncQueueDag mode={} "
+        "compute_native={} graphics_native={} gpu_sync={} "
+        "submission_owner=serial",
+        _parallel ? "parallel" : "serial",
+        topology.compute.native_queue_id,
+        topology.graphics.native_queue_id,
+        has_gpu_sync
+    );
+}
+
+void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
+    auto&      device   = RenderDevice::Get();
+    const auto topology = RenderGraph::QueueTopology::FromRHI();
+    if (!topology.copy.available ||
+        topology.graphics.native_queue_id == topology.copy.native_queue_id) {
+        LOG_INFO(
+            "[TESTCASE][SKIP] name=ActiveRdgGraphicsCopyRoundTrip "
+            "reason={} graphics_native={} copy_native={} graphics_family={} "
+            "copy_family={}",
+            topology.copy.available ? "shared_native_queue" :
+                                      "copy_queue_unavailable",
+            topology.graphics.native_queue_id,
+            topology.copy.native_queue_id,
+            topology.graphics.family_id,
+            topology.copy.family_id
+        );
+        return;
+    }
+
+    constexpr uint64_t byte_size = sizeof(uint32) * kElementCount;
+    const EBufferUsageFlags usage =
+        EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
+    BufferRef source = device.CreateBuffer<uint32>(
+        "active_rdg_graphics_copy_round_trip_source",
+        kElementCount,
+        usage
+    );
+    BufferRef intermediate = device.CreateBuffer<uint32>(
+        "active_rdg_graphics_copy_round_trip_intermediate",
+        kElementCount,
+        usage
+    );
+    BufferRef destination = device.CreateBuffer<uint32>(
+        "active_rdg_graphics_copy_round_trip_destination",
+        kElementCount,
+        usage
+    );
+    std::array<uint32, kElementCount> expected{};
+    std::array<uint32, kElementCount> readback{};
+    for (uint32 index = 0; index < expected.size(); ++index) {
+        expected[index] = 0xC7400000u + index * 73u + 29u;
+    }
+
+    RenderGraph graph("ActiveRdgGraphicsCopyRoundTrip", topology);
+    const auto source_handle = graph.ImportBuffer(
+        "RoundTripSource",
+        source,
+        RenderGraph::BufferDesc{
+            .byte_size    = byte_size,
+            .sharing_mode =
+                RenderGraph::TextureDesc::SharingMode::Exclusive,
+        }
+    );
+    const auto intermediate_handle = graph.ImportBuffer(
+        "RoundTripIntermediate",
+        intermediate,
+        RenderGraph::BufferDesc{
+            .byte_size    = byte_size,
+            .sharing_mode =
+                RenderGraph::TextureDesc::SharingMode::Exclusive,
+        }
+    );
+    const auto destination_handle = graph.ImportBuffer(
+        "RoundTripDestination",
+        destination,
+        RenderGraph::BufferDesc{
+            .byte_size    = byte_size,
+            .sharing_mode =
+                RenderGraph::TextureDesc::SharingMode::Exclusive,
+        }
+    );
+    for (const auto handle : {
+             source_handle,
+             intermediate_handle,
+             destination_handle,
+         }) {
+        graph.SetInitialState(
+            handle,
+            RenderGraph::BufferState::Undefined,
+            RenderGraph::QueueRole::None,
+            RenderGraph::AccessMode::None
+        );
+    }
+
+    const auto graphics_upload = graph.AddRecordPass(
+        "GraphicsUploadSource",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Write(
+                    source_handle,
+                    RenderGraph::BufferState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [source, expected](CommandList& commands) {
+            commands.CopyFrom(
+                OwnedBytes(expected),
+                source->GetView(),
+                "ActiveRdgGraphicsCopyRoundTripUpload"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    const auto copy_to_intermediate = graph.AddRecordPass(
+        "CopyToIntermediate",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Copy,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Read(
+                    source_handle,
+                    RenderGraph::BufferState::TransferSource
+                )
+                .Write(
+                    intermediate_handle,
+                    RenderGraph::BufferState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [source, intermediate](CommandList& commands) {
+            commands.CopyFrom(
+                source->GetView(),
+                intermediate->GetView(),
+                "ActiveRdgGraphicsCopyRoundTripToCopy"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    const auto graphics_copy_to_destination = graph.AddRecordPass(
+        "GraphicsCopyToDestination",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Read(
+                    intermediate_handle,
+                    RenderGraph::BufferState::TransferSource
+                )
+                .Write(
+                    destination_handle,
+                    RenderGraph::BufferState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [intermediate, destination](CommandList& commands) {
+            commands.CopyFrom(
+                intermediate->GetView(),
+                destination->GetView(),
+                "ActiveRdgGraphicsCopyRoundTripToGraphics"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "GraphicsReadback",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Read(
+                    destination_handle,
+                    RenderGraph::BufferState::TransferSource
+                )
+                .SideEffect();
+        },
+        [destination, &readback](CommandList& commands) {
+            commands.CopyFrom(
+                destination->GetView(),
+                WritableBytes(readback),
+                "ActiveRdgGraphicsCopyRoundTripReadback"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.Export(
+        source_handle,
+        RenderGraph::BufferState::TransferSource,
+        RenderGraph::QueueRole::Copy,
+        RenderGraph::AccessMode::Read
+    );
+    graph.Export(
+        intermediate_handle,
+        RenderGraph::BufferState::TransferSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    graph.Export(
+        destination_handle,
+        RenderGraph::BufferState::TransferSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+
+    if (!graph.Compile()) {
+        throw std::runtime_error(
+            "Graphics-Copy round trip compile failed: " +
+            graph.GetCompileError()
+        );
+    }
+    const size_t gpu_sync_count = std::count_if(
+        graph.GetCompiledPlan().queue_syncs.begin(),
+        graph.GetCompiledPlan().queue_syncs.end(),
+        [](const RenderGraph::CompiledQueueSync& sync) {
+            return sync.gpu_wait_required;
+        }
+    );
+    if (gpu_sync_count != 2) {
+        throw std::runtime_error(
+            "Graphics-Copy round trip did not compile exactly two native "
+            "queue synchronization points"
+        );
+    }
+
+    RenderGraphLowering::LoweredPlan lowered{};
+    std::string                     lowering_error{};
+    if (!RenderGraphLowering::Lower(graph, lowered, lowering_error)) {
+        throw std::runtime_error(
+            "Graphics-Copy round trip lowering failed: " + lowering_error
+        );
+    }
+    const bool same_queue_family =
+        topology.graphics.family_id == topology.copy.family_id;
+    const auto validate_boundary =
+        [&](std::string_view             label,
+            RenderGraph::BufferHandle    resource,
+            RenderGraph::PassHandle      producer,
+            RenderGraph::PassHandle      consumer,
+            RenderGraph::QueueBinding    source_queue,
+            RenderGraph::QueueBinding    destination_queue) {
+            const auto after_producer  = lowered.After(producer);
+            const auto before_consumer = lowered.Before(consumer);
+            const auto matches_resource =
+                [resource = resource.Untyped()](
+                    const RenderGraphLowering::LoweredInstruction& instruction
+                ) {
+                    return instruction.resource == resource;
+                };
+            const auto count_kind =
+                [&](auto instructions,
+                    RenderGraphLowering::InstructionKind kind) {
+                    return std::count_if(
+                        instructions.begin(),
+                        instructions.end(),
+                        [&](const RenderGraphLowering::LoweredInstruction&
+                                instruction) {
+                            return matches_resource(instruction) &&
+                                   instruction.instruction_kind == kind;
+                        }
+                    );
+                };
+
+            if (same_queue_family) {
+                const auto local_acquire = std::find_if(
+                    before_consumer.begin(),
+                    before_consumer.end(),
+                    [&](const RenderGraphLowering::LoweredInstruction&
+                            instruction) {
+                        return matches_resource(instruction) &&
+                               instruction.instruction_kind ==
+                                   RenderGraphLowering::InstructionKind::Barrier &&
+                               instruction.queue_acquire;
+                    }
+                );
+                const size_t local_acquire_count = std::count_if(
+                    before_consumer.begin(),
+                    before_consumer.end(),
+                    [&](const RenderGraphLowering::LoweredInstruction&
+                            instruction) {
+                        return matches_resource(instruction) &&
+                               instruction.instruction_kind ==
+                                   RenderGraphLowering::InstructionKind::Barrier &&
+                               instruction.queue_acquire;
+                    }
+                );
+                if (local_acquire_count != 1 ||
+                    count_kind(
+                        after_producer,
+                        RenderGraphLowering::InstructionKind::QueueRelease
+                    ) != 0 ||
+                    count_kind(
+                        before_consumer,
+                        RenderGraphLowering::InstructionKind::QueueAcquire
+                    ) != 0 ||
+                    local_acquire->source.stages !=
+                        ERHIPipelineStageFlags::PS_NONE ||
+                    local_acquire->source.access !=
+                        ERHIAccessFlags::UNDEFINED) {
+                    throw std::runtime_error(
+                        std::string(label) +
+                        " did not lower to a destination-local acquire"
+                    );
+                }
+                return;
+            }
+
+            const auto release = std::find_if(
+                after_producer.begin(),
+                after_producer.end(),
+                [&](const RenderGraphLowering::LoweredInstruction&
+                        instruction) {
+                    return matches_resource(instruction) &&
+                           instruction.instruction_kind ==
+                               RenderGraphLowering::InstructionKind::
+                                   QueueRelease;
+                }
+            );
+            const auto acquire = std::find_if(
+                before_consumer.begin(),
+                before_consumer.end(),
+                [&](const RenderGraphLowering::LoweredInstruction&
+                        instruction) {
+                    return matches_resource(instruction) &&
+                           instruction.instruction_kind ==
+                               RenderGraphLowering::InstructionKind::
+                                   QueueAcquire;
+                }
+            );
+            if (count_kind(
+                    after_producer,
+                    RenderGraphLowering::InstructionKind::QueueRelease
+                ) != 1 ||
+                count_kind(
+                    before_consumer,
+                    RenderGraphLowering::InstructionKind::QueueAcquire
+                ) != 1 ||
+                release == after_producer.end() ||
+                acquire == before_consumer.end() ||
+                release->barrier_index ==
+                    RenderGraphLowering::InvalidBarrierIndex ||
+                release->barrier_index != acquire->barrier_index ||
+                release->transfer_source != source_queue ||
+                release->transfer_destination != destination_queue ||
+                acquire->transfer_source != source_queue ||
+                acquire->transfer_destination != destination_queue) {
+                throw std::runtime_error(
+                    std::string(label) +
+                    " did not lower to one matched release/acquire pair"
+                );
+            }
+            const size_t correlated_sync_count = std::count_if(
+                lowered.queue_syncs.begin(),
+                lowered.queue_syncs.end(),
+                [&](const RenderGraphLowering::QueueSyncInstruction& sync) {
+                    return sync.signal_queue == source_queue &&
+                           sync.wait_queue == destination_queue &&
+                           std::find(
+                               sync.ownership_transfer_barriers.begin(),
+                               sync.ownership_transfer_barriers.end(),
+                               release->barrier_index
+                           ) != sync.ownership_transfer_barriers.end();
+                    }
+            );
+            if (correlated_sync_count != 1) {
+                throw std::runtime_error(
+                    std::string(label) +
+                    " release/acquire pair is not correlated with its GPU sync"
+                );
+            }
+        };
+    validate_boundary(
+        "Graphics-to-Copy source transfer",
+        source_handle,
+        graphics_upload,
+        copy_to_intermediate,
+        topology.graphics,
+        topology.copy
+    );
+    validate_boundary(
+        "Copy-to-Graphics intermediate transfer",
+        intermediate_handle,
+        copy_to_intermediate,
+        graphics_copy_to_destination,
+        topology.copy,
+        topology.graphics
+    );
+
+    if (!graph.ExecuteRecording(
+            {},
+            {},
+            _parallel,
+            {},
+            RenderGraph::ActiveRecordingOptions{.enabled = true}
+        )) {
+        throw std::runtime_error(
+            "Graphics-Copy round trip active execution failed: " +
+            graph.GetCompileError()
+        );
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (readback != expected) {
+        throw std::runtime_error(
+            "Graphics-Copy round trip readback mismatch"
+        );
+    }
+    LOG_INFO(
+        "[TESTCASE][PASS] name=ActiveRdgGraphicsCopyRoundTrip mode={} "
+        "ownership={} transfers=2 readback=verified",
+        _parallel ? "parallel" : "serial",
+        same_queue_family ? "local-acquire" : "release-acquire"
+    );
+}
+
+void RunActiveRdgTransientAliasReadback(bool _parallel) {
+    constexpr uint64_t byte_size = sizeof(uint32) * kElementCount;
+    const RGTransientBufferDesc transient_desc{
+        .element_count = kElementCount,
+        .stride        = sizeof(uint32),
+        .usage         = EBufferUsageFlags::TRANSFER_SRC |
+                         EBufferUsageFlags::TRANSFER_DST,
+    };
+
+    std::array<uint32, kElementCount> first_values{};
+    std::array<uint32, kElementCount> expected{};
+    std::array<uint32, kElementCount> readback{};
+    for (uint32 index = 0; index < expected.size(); ++index) {
+        first_values[index] = 0xA1200000u + index * 19u;
+        expected[index]     = 0xA1300000u + index * 53u + 7u;
+    }
+
+    RenderGraphResourcePool       pool{};
+    RenderGraphTransientAllocator allocator(pool);
+    RenderGraph graph("ActiveRdgTransientAlias");
+    const auto first =
+        graph.CreateTransientBuffer("AliasFirst", transient_desc);
+    const auto second =
+        graph.CreateTransientBuffer("AliasSecond", transient_desc);
+
+    graph.AddRecordPass(
+        "WriteAliasFirst",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Write(
+                    first,
+                    RenderGraph::BufferState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [&graph, first, first_values](CommandList& commands) {
+            const BufferRef physical = graph.GetPhysicalBuffer(first);
+            if (!physical.IsValid()) {
+                throw std::runtime_error(
+                    "first transient alias has no physical buffer"
+                );
+            }
+            commands.CopyFrom(
+                OwnedBytes(first_values),
+                physical->GetView(),
+                "ActiveRdgAliasFirstUpload"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "WriteAliasSecond",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Write(
+                    second,
+                    RenderGraph::BufferState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [&graph, second, expected](CommandList& commands) {
+            const BufferRef physical = graph.GetPhysicalBuffer(second);
+            if (!physical.IsValid()) {
+                throw std::runtime_error(
+                    "second transient alias has no physical buffer"
+                );
+            }
+            commands.CopyFrom(
+                OwnedBytes(expected),
+                physical->GetView(),
+                "ActiveRdgAliasSecondUpload"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "ReadAliasSecond",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Read(
+                    second,
+                    RenderGraph::BufferState::TransferSource
+                )
+                .SideEffect();
+        },
+        [&graph, second, &readback](CommandList& commands) {
+            const BufferRef physical = graph.GetPhysicalBuffer(second);
+            if (!physical.IsValid()) {
+                throw std::runtime_error(
+                    "transient alias readback has no physical buffer"
+                );
+            }
+            commands.CopyFrom(
+                physical->GetView(),
+                WritableBytes(readback),
+                "ActiveRdgAliasReadback"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+
+    if (!graph.Compile()) {
+        throw std::runtime_error(
+            "active RDG transient alias compile failed: " +
+            graph.GetCompileError()
+        );
+    }
+    const auto& plan = graph.GetCompiledPlan();
+    if (plan.resources[first.resource.index].transient_slot ==
+            RenderGraph::PassHandle::InvalidIndex ||
+        plan.resources[first.resource.index].transient_slot !=
+            plan.resources[second.resource.index].transient_slot ||
+        plan.alias_boundaries.size() != 1) {
+        throw std::runtime_error(
+            "active RDG transient alias compiler plan did not reuse one slot"
+        );
+    }
+    if (transient_desc.ByteSize() != byte_size) {
+        throw std::runtime_error("transient alias descriptor byte size mismatch");
+    }
+    if (!graph.ExecuteRecording(
+            {},
+            {},
+            _parallel,
+            {},
+            RenderGraph::ActiveRecordingOptions{
+                .enabled             = true,
+                .transient_allocator = &allocator,
+            }
+        )) {
+        throw std::runtime_error(
+            "active RDG transient alias execution failed: " +
+            graph.GetCompileError()
+        );
+    }
+    if (pool.BufferCount() != 1) {
+        throw std::runtime_error(
+            "active RDG transient aliases allocated more than one buffer"
+        );
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    if (readback != expected) {
+        throw std::runtime_error(
+            "active RDG transient alias readback mismatch"
+        );
+    }
+    if (pool.AvailableBufferCount() != 1) {
+        throw std::runtime_error(
+            "active RDG transient alias allocation did not retire at Completion"
+        );
+    }
+    LOG_INFO(
+        "[TESTCASE][PASS] name=ActiveRdgTransientAlias mode={} "
+        "passes=3 slots=1 buffers=1 state_owner=rdg readback=verified",
+        _parallel ? "parallel" : "serial"
+    );
+}
+
+void RunActiveRdgTransientTextureAliasReadback(bool _parallel) {
+    constexpr uint32 kWidth      = 4;
+    constexpr uint32 kHeight     = 4;
+    constexpr uint32 kTexelCount = kWidth * kHeight;
+    const RGTransientTextureDesc transient_desc{
+        .dimension    = ETextureDimension::TEX_2D,
+        .extent       = Extent3D(kWidth, kHeight, 1),
+        .format       = PF_R8G8B8A8_UNORM,
+        .usage        = ETextureUsageFlags::TRANSFER_SRC |
+                        ETextureUsageFlags::TRANSFER_DST,
+        .aspect_flags = ETextureAspectFlags::COLOR,
+        .mip_count    = 1,
+        .array_size   = 1,
+    };
+
+    std::array<uint32, kTexelCount> first_values{};
+    std::array<uint32, kTexelCount> expected{};
+    std::array<uint32, kTexelCount> readback{};
+    for (uint32 index = 0; index < kTexelCount; ++index) {
+        first_values[index] = 0xFF102030u + index;
+        expected[index]     = 0xFF405060u + index * 0x00010101u;
+    }
+
+    RenderGraphResourcePool       pool{};
+    RenderGraphTransientAllocator allocator(pool);
+    RenderGraph graph("ActiveRdgTransientTextureAlias");
+    const auto first =
+        graph.CreateTransientTexture("TextureAliasFirst", transient_desc);
+    const auto second =
+        graph.CreateTransientTexture("TextureAliasSecond", transient_desc);
+    graph.AddRecordPass(
+        "WriteTextureAliasFirst",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Write(
+                    first,
+                    RenderGraph::TextureState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [&graph, first, first_values](CommandList& commands) {
+            const TextureRef physical = graph.GetPhysicalTexture(first);
+            if (!physical.IsValid()) {
+                throw std::runtime_error(
+                    "first transient texture alias has no physical texture"
+                );
+            }
+            commands.CopyFrom(
+                OwnedBytes(first_values),
+                physical->GetView(),
+                "ActiveRdgTextureAliasFirstUpload"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "WriteTextureAliasSecond",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Write(
+                    second,
+                    RenderGraph::TextureState::TransferDestination
+                )
+                .SideEffect();
+        },
+        [&graph, second, expected](CommandList& commands) {
+            const TextureRef physical = graph.GetPhysicalTexture(second);
+            if (!physical.IsValid()) {
+                throw std::runtime_error(
+                    "second transient texture alias has no physical texture"
+                );
+            }
+            commands.CopyFrom(
+                OwnedBytes(expected),
+                physical->GetView(),
+                "ActiveRdgTextureAliasSecondUpload"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "ReadTextureAliasSecond",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Read(
+                    second,
+                    RenderGraph::TextureState::TransferSource
+                )
+                .SideEffect();
+        },
+        [&graph, second, &readback](CommandList& commands) {
+            const TextureRef physical = graph.GetPhysicalTexture(second);
+            if (!physical.IsValid()) {
+                throw std::runtime_error(
+                    "transient texture alias readback has no physical texture"
+                );
+            }
+            commands.CopyFrom(
+                physical->GetView(),
+                WritableBytes(readback),
+                "ActiveRdgTextureAliasReadback"
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+
+    if (!graph.Compile()) {
+        throw std::runtime_error(
+            "active RDG transient texture alias compile failed: " +
+            graph.GetCompileError()
+        );
+    }
+    const auto& plan = graph.GetCompiledPlan();
+    if (plan.resources[first.resource.index].transient_slot !=
+            plan.resources[second.resource.index].transient_slot ||
+        plan.alias_boundaries.size() != 1) {
+        throw std::runtime_error(
+            "active RDG transient texture alias did not reuse one slot"
+        );
+    }
+    if (!graph.ExecuteRecording(
+            {},
+            {},
+            _parallel,
+            {},
+            RenderGraph::ActiveRecordingOptions{
+                .enabled             = true,
+                .transient_allocator = &allocator,
+            }
+        )) {
+        throw std::runtime_error(
+            "active RDG transient texture alias execution failed: " +
+            graph.GetCompileError()
+        );
+    }
+    if (pool.TextureCount() != 1) {
+        throw std::runtime_error(
+            "active RDG transient texture aliases allocated more than one texture"
+        );
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (readback != expected) {
+        throw std::runtime_error(
+            "active RDG transient texture alias readback mismatch"
+        );
+    }
+    if (pool.AvailableTextureCount() != 1) {
+        throw std::runtime_error(
+            "active RDG transient texture alias did not retire at Completion"
+        );
+    }
+    LOG_INFO(
+        "[TESTCASE][PASS] name=ActiveRdgTransientTextureAlias mode={} "
+        "passes=3 slots=1 textures=1 state_owner=rdg readback=verified",
+        _parallel ? "parallel" : "serial"
+    );
+}
+
+void RunTransientDepthStencilAspectAllocation() {
+    TextureRef legacy = RenderDevice::Get().CreateTexture(
+        "LegacyDepthStencilDefaultAspect",
+        Extent3D(8, 8, 1),
+        PF_D32_SFLOAT_S8_UINT,
+        ETextureUsageFlags::SAMPLED |
+            ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
+    );
+    if (!legacy.IsValid() ||
+        legacy->GetAspectFlags() != ETextureAspectFlags::DEPTH_SLICE) {
+        throw std::runtime_error(
+            "legacy depth-stencil texture no longer defaults to a depth-only view"
+        );
+    }
+    legacy = {};
+
+    const RGTransientTextureDesc desc{
+        .dimension = ETextureDimension::TEX_2D,
+        .extent    = Extent3D(8, 8, 1),
+        .format    = PF_D32_SFLOAT_S8_UINT,
+        .usage     = ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+        .aspect_flags =
+            ETextureAspectFlags::DEPTH_SLICE |
+            ETextureAspectFlags::STENCIL_SLICE,
+        .mip_count  = 1,
+        .array_size = 1,
+    };
+
+    RenderGraphResourcePool pool{};
+    TextureRef texture =
+        pool.AcquireTexture("TransientDepthStencilAspect", desc);
+    if (!texture.IsValid() || texture->GetAspectFlags() != desc.aspect_flags) {
+        throw std::runtime_error(
+            "transient depth-stencil allocation lost a physical aspect"
+        );
+    }
+    texture = {};
+    if (pool.AvailableTextureCount() != 1) {
+        throw std::runtime_error(
+            "transient depth-stencil allocation did not return to the pool"
+        );
+    }
+    LOG_INFO(
+        "[TESTCASE][PASS] name=TransientDepthStencilAspectAllocation "
+        "format=D32S8 transient=depth,stencil legacy=depth factory=default"
+    );
+}
+
+void RunActiveRdgTextureArraySubrange(bool _parallel) {
+    auto& device = RenderDevice::Get();
+    constexpr uint32 kLayerCount = 4;
+    constexpr uint32 kFirstLayer = 1;
+    constexpr uint32 kTestLayerCount = 2;
+    TextureRef texture = device.CreateTexture(
+        "active_rdg_array_subrange",
+        Extent3D(8, 8, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC,
+        1,
+        kLayerCount
+    );
+
+    RenderGraph graph("ActiveRdgTextureArraySubrange");
+    const auto texture_handle = graph.ImportTexture(
+        "ArrayTexture",
+        texture,
+        RenderGraph::TextureDesc{
+            .mip_count   = 1,
+            .layer_count = kLayerCount,
+            .aspects     = RenderGraph::TextureAspect::Color,
+        }
+    );
+    auto range =
+        RenderGraph::TextureRange::Layers(kFirstLayer, kTestLayerCount);
+    range.aspects = RenderGraph::TextureAspect::Color;
+    graph.SetInitialState(
+        texture_handle,
+        RenderGraph::TextureState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None,
+        range
+    );
+    graph.AddRecordPass(
+        "ClearArrayLayers",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                       RenderGraph::QueueRole::Graphics,
+                       RenderGraph::PipelineType::Copy
+                   )
+                .Write(
+                    texture_handle,
+                    RenderGraph::TextureState::TransferDestination,
+                    range
+                )
+                .SideEffect();
+        },
+        [texture](CommandList& commands) {
+            commands.ClearResource(
+                texture->GetView().Slice(kFirstLayer, kTestLayerCount),
+                float4{0.125f, 0.25f, 0.5f, 1.0f}
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.Export(
+        texture_handle,
+        RenderGraph::TextureState::TransferDestination,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Write,
+        range
+    );
+
+    if (!graph.Compile()) {
+        throw std::runtime_error(
+            "active RDG texture array compile failed: " + graph.GetCompileError()
+        );
+    }
+    if (!graph.ExecuteRecording(
+            {},
+            {},
+            _parallel,
+            {},
+            RenderGraph::ActiveRecordingOptions{.enabled = true}
+        )) {
+        throw std::runtime_error(
+            "active RDG texture array execution failed: " + graph.GetCompileError()
+        );
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    LOG_INFO(
+        "[TESTCASE][PASS] name=ActiveRdgTextureArraySubrange mode={} "
+        "layers={}+{} state_owner=rdg",
+        _parallel ? "parallel" : "serial",
+        kFirstLayer,
+        kTestLayerCount
+    );
+}
+
+void RunExplicitTextureArrayRangeShapeChange(bool _parallel) {
+    auto& device = RenderDevice::Get();
+    constexpr uint32 kLayerCount = 4;
+    constexpr uint32 kFirstLayer = 1;
+    constexpr uint32 kSubsetLayerCount = 2;
+    TextureRef texture = device.CreateTexture(
+        "explicit_array_shape_change",
+        Extent3D(8, 8, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::TRANSFER_DST,
+        1,
+        kLayerCount
+    );
+    const TextureView whole = texture->GetView().Slice(0, kLayerCount);
+    const TextureView subset =
+        texture->GetView().Slice(kFirstLayer, kSubsetLayerCount);
+    const BarrierState undefined = BarrierState::Texture(
+        ERHIPipelineStageFlags::PS_TOP_OF_PIPE,
+        ERHIAccessFlags::UNDEFINED,
+        ETextureLayout::TEXTURE_LAYOUT_UNDEFINED
+    );
+    const BarrierState transfer_destination = BarrierState::Texture(
+        ERHIPipelineStageFlags::PS_TRANSFER,
+        ERHIAccessFlags::TRANSFER_WRITE,
+        ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST
+    );
+
+    CommandList commands(EQueueType::Graphics);
+    commands.Barriers({
+        BarrierCreateInfo::Transition(
+            whole,
+            undefined,
+            transfer_destination,
+            ETextureAspectFlags::COLOR
+        ),
+    });
+    commands.ClearResource(whole, float4{0.125f, 0.25f, 0.5f, 1.0f});
+    commands.Barriers({
+        BarrierCreateInfo::Transition(
+            subset,
+            transfer_destination,
+            transfer_destination,
+            ETextureAspectFlags::COLOR
+        ),
+    });
+    commands.ClearResource(subset, float4{0.75f, 0.5f, 0.25f, 1.0f});
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        commands.Submit(),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    LOG_INFO(
+        "[TESTCASE][PASS] name=ExplicitTextureArrayRangeShapeChange mode={} "
+        "shape=0+{}->{}+{} state_owner=explicit",
+        _parallel ? "parallel" : "serial",
+        kLayerCount,
+        kFirstLayer,
+        kSubsetLayerCount
     );
 }
 
@@ -1184,6 +3146,31 @@ void RunShutdownDependencyCancellation() {
     );
 }
 
+void PrimeGlobalTransientPoolForDispose() {
+    auto& pool = RenderGraphResourcePool::Global();
+    pool.Reset();
+    const RGTransientBufferDesc desc{
+        .element_count = kElementCount,
+        .stride        = sizeof(uint32),
+        .usage         = EBufferUsageFlags::TRANSFER_SRC |
+                         EBufferUsageFlags::TRANSFER_DST,
+    };
+    {
+        BufferRef resource =
+            pool.AcquireBuffer("dispose_transient_pool_probe", desc);
+        if (!resource.IsValid()) {
+            throw std::runtime_error(
+                "global transient pool dispose probe allocation failed"
+            );
+        }
+    }
+    if (pool.BufferCount() != 1 || pool.AvailableBufferCount() != 1) {
+        throw std::runtime_error(
+            "global transient pool dispose probe did not become idle"
+        );
+    }
+}
+
 } // namespace
 
 int main(int argc, const char** argv) {
@@ -1220,17 +3207,36 @@ int main(int argc, const char** argv) {
         RunOrderedReadback(
             parallel, inject_worker_failure, production_gate, production_heavy
         );
+        RunActiveRdgExplicitBarrierReadback(parallel);
+        RunActiveRdgAsyncQueueDag(parallel);
+        RunActiveRdgGraphicsCopyRoundTrip(parallel);
+        RunActiveRdgTransientAliasReadback(parallel);
+        RunActiveRdgTransientTextureAliasReadback(parallel);
+        RunTransientDepthStencilAspectAllocation();
+        RunActiveRdgTextureArraySubrange(parallel);
+        RunExplicitTextureArrayRangeShapeChange(parallel);
         RunUpperTopologyBatch();
         RunPendingSourceTopologyBatch();
         RunContinuousFrameInFlightRetirement();
         RunRecoverableCopyDependencyRejection();
         RunCrossQueueTopologyBatch();
         RunRuntimeRejectCompletionOwnership();
+        PrimeGlobalTransientPoolForDispose();
         // This explicitly stops the runtime and must remain the final test
         // before device disposal.
         RunShutdownDependencyCancellation();
 
         RenderDevice::Dispose();
+        if (RenderGraphResourcePool::Global().BufferCount() != 0 ||
+            RenderGraphResourcePool::Global().TextureCount() != 0) {
+            throw std::runtime_error(
+                "RenderDevice::Dispose did not reset the global transient pool"
+            );
+        }
+        LOG_INFO(
+            "[TESTCASE][PASS] name=TransientPoolDeviceDispose "
+            "shutdown_order=executor,pool,backend cached_resources=0"
+        );
         render_device_initialized = false;
         TaskSystem::ShutDown();
         task_system_initialized = false;
