@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rhi/RHIExecutorBackend.h"
+#include "rhi/RHISubmissionPipelinePolicy.h"
 #include "VulkanQueue.h"
 #include "VulkanSubmissionRequestDispatch.h"
 
@@ -104,8 +105,7 @@ private:
         uint64                       sequence{0};
         Array<PipelineSourceSlot>    slots{};
         std::shared_ptr<Completion>  completion{};
-        std::atomic<size_t>          outstanding_work{0};
-        std::atomic_bool             sealed{false};
+        RHISubmissionPipelinePolicy::PipelineBatchWorkState work_state{};
         std::atomic_bool             completion_signalled{false};
         mutable std::mutex           failure_mutex{};
         PipelineFailure              failure{};

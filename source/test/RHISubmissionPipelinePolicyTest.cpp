@@ -1,8 +1,11 @@
 #include "rhi/RHISubmissionPipelinePolicy.h"
 
+#include <atomic>
+#include <barrier>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <thread>
 
 using namespace Moer::Render;
 
@@ -99,6 +102,119 @@ void UnavailableLogicalQueuesDoNotTriggerAliasFallback() {
     );
 }
 
+void BatchWorkStateSequentialContract() {
+    using RHISubmissionPipelinePolicy::PipelineBatchWorkState;
+
+    PipelineBatchWorkState empty{};
+    Expect(
+        empty.Seal(),
+        "sealing an empty batch did not own its terminal transition"
+    );
+    Expect(
+        !empty.Seal(),
+        "an empty batch published more than one terminal transition"
+    );
+
+    PipelineBatchWorkState seal_first{};
+    seal_first.AddWork();
+    Expect(
+        !seal_first.Seal(),
+        "a sealed batch with outstanding work terminated early"
+    );
+    Expect(
+        seal_first.FinishWork(),
+        "final work retirement did not terminate a sealed batch"
+    );
+
+    PipelineBatchWorkState finish_first{};
+    finish_first.AddWork();
+    Expect(
+        !finish_first.FinishWork(),
+        "an unsealed batch terminated on its final work retirement"
+    );
+    Expect(
+        finish_first.Seal(),
+        "sealing an already-empty batch did not terminate it"
+    );
+
+    PipelineBatchWorkState multiple{};
+    multiple.AddWork();
+    multiple.AddWork();
+    Expect(
+        !multiple.Seal(),
+        "a multi-work batch terminated while work was outstanding"
+    );
+    Expect(
+        !multiple.FinishWork(),
+        "the first multi-work retirement terminated the batch"
+    );
+    Expect(
+        multiple.FinishWork(),
+        "the final multi-work retirement did not terminate the batch"
+    );
+}
+
+void BatchWorkStateSealFinishRaceHasOneTerminalOwner() {
+    using RHISubmissionPipelinePolicy::PipelineBatchWorkState;
+
+    constexpr uint32_t iterations = 20000;
+    std::barrier        phase(3);
+    std::atomic<PipelineBatchWorkState*> active_state{nullptr};
+    std::atomic<uint32_t>                terminal_owners{0};
+
+    std::jthread seal_thread([&] {
+        for (uint32_t iteration = 0; iteration < iterations; ++iteration) {
+            phase.arrive_and_wait();
+            PipelineBatchWorkState* state =
+                active_state.load(std::memory_order_acquire);
+            if ((iteration & 1u) == 0) {
+                std::this_thread::yield();
+            }
+            if (state->Seal()) {
+                terminal_owners.fetch_add(
+                    1, std::memory_order_relaxed
+                );
+            }
+            phase.arrive_and_wait();
+        }
+    });
+    std::jthread finish_thread([&] {
+        for (uint32_t iteration = 0; iteration < iterations; ++iteration) {
+            phase.arrive_and_wait();
+            PipelineBatchWorkState* state =
+                active_state.load(std::memory_order_acquire);
+            if ((iteration & 1u) != 0) {
+                std::this_thread::yield();
+            }
+            if (state->FinishWork()) {
+                terminal_owners.fetch_add(
+                    1, std::memory_order_relaxed
+                );
+            }
+            phase.arrive_and_wait();
+        }
+    });
+
+    uint32_t mismatch_count = 0;
+    for (uint32_t iteration = 0; iteration < iterations; ++iteration) {
+        PipelineBatchWorkState state{};
+        state.AddWork();
+        terminal_owners.store(0, std::memory_order_relaxed);
+        active_state.store(&state, std::memory_order_release);
+        phase.arrive_and_wait();
+        phase.arrive_and_wait();
+        if (terminal_owners.load(std::memory_order_relaxed) != 1) {
+            ++mismatch_count;
+        }
+    }
+    seal_thread.join();
+    finish_thread.join();
+    Expect(
+        mismatch_count == 0,
+        "Seal/FinishWork race lost or duplicated the terminal transition"
+    );
+}
+
 } // namespace
 
 int main() {
@@ -107,6 +223,8 @@ int main() {
         DistinctNativeQueuesPreserveTheClampedWindow();
         GraphicsComputeAliasForcesOneBatchInFlight();
         UnavailableLogicalQueuesDoNotTriggerAliasFallback();
+        BatchWorkStateSequentialContract();
+        BatchWorkStateSealFinishRaceHasOneTerminalOwner();
         std::cout << "RHI submission pipeline policy tests passed\n";
         return 0;
     } catch (const std::exception& error) {

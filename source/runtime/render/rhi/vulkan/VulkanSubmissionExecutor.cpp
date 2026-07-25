@@ -904,14 +904,11 @@ VulkanSubmissionExecutor::PipelineBatchState::PipelineBatchState(
     completion(std::move(_completion)) {}
 
 void VulkanSubmissionExecutor::PipelineBatchState::AddWork() noexcept {
-    outstanding_work.fetch_add(1, std::memory_order_relaxed);
+    work_state.AddWork();
 }
 
 void VulkanSubmissionExecutor::PipelineBatchState::FinishWork() noexcept {
-    const size_t previous =
-        outstanding_work.fetch_sub(1, std::memory_order_acq_rel);
-    assert(previous != 0 && "pipeline batch work count underflow");
-    if (previous != 1 || !sealed.load(std::memory_order_acquire)) {
+    if (!work_state.FinishWork()) {
         return;
     }
     bool expected = false;
@@ -923,8 +920,7 @@ void VulkanSubmissionExecutor::PipelineBatchState::FinishWork() noexcept {
 }
 
 void VulkanSubmissionExecutor::PipelineBatchState::Seal() noexcept {
-    sealed.store(true, std::memory_order_release);
-    if (outstanding_work.load(std::memory_order_acquire) != 0) {
+    if (!work_state.Seal()) {
         return;
     }
     bool expected = false;
