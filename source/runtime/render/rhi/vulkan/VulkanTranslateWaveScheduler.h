@@ -43,9 +43,9 @@ enum class ETranslateWaveNodeState : uint8_t {
 // their CPU prerequisite is complete at that point. Physical-queue ordering is
 // stricter: a node sharing native_queue_id with an earlier node waits for
 // MarkReleased, which represents transfer of that packet lease to Submit or
-// Reject. A non-async node is an exclusive Copy/control boundary; it waits for
-// the complete earlier prefix to be released and blocks the later suffix until
-// it is released.
+// Reject. A non-async node is an exclusive serial/control boundary; it waits
+// for the complete earlier prefix to be released and blocks the later suffix
+// until it is released.
 //
 // NextWave scans the complete stable input and emits every currently-ready
 // native lane. A blocked same-native node therefore cannot hide a later,
@@ -131,7 +131,7 @@ public:
             node.state = ETranslateWaveNodeState::Translating;
             wave.emplace_back(node.key);
 
-            // Copy/control work is ready only after its full earlier prefix
+            // Serial/control work is ready only after its full earlier prefix
             // has released, and it remains an exclusive wave.
             if (!node.async_translate) {
                 break;

@@ -42,7 +42,7 @@ def pipeline_line(
             "name=BoundedCrossBatchSubmissionPipelineOverlap "
             "requested_window=2 effective_window=1 "
             "reason=native_queue_alias graphics_native=7 "
-            "compute_native=7 admission=blocked\n"
+            "compute_native=11 copy_native=7 admission=blocked\n"
         )
     recoverable_rejection = ""
     if window == 2 and include_recoverable_rejection:
@@ -51,11 +51,13 @@ def pipeline_line(
             "name=BoundedCrossBatchRecoverableRejection "
             f"window=2 native_alias={native_alias} "
             f"overlap_assertion={overlap_assertion} batches=2 "
+            "queues=Graphics,Copy "
             "batch0_native_submit=0 "
             "batch0_callbacks=ordinary1_success0 "
             "batch0_signal=rejected batch1_native_submit=1 "
             "batch1_callbacks=ordinary1_success1 "
-            "batch1_signal=success native_owner=Submission replay=0\n"
+            "batch1_signal=success copy_translate_owner=Translate "
+            "native_owner=Submission readback=verified replay=0\n"
         )
     emit_recoverable_overlap_marker = (
         alias_window2
@@ -69,7 +71,8 @@ def pipeline_line(
             "name=BoundedCrossBatchRecoverableRejectionOverlap "
             "requested_window=2 effective_window=1 "
             "reason=native_queue_alias graphics_native=7 "
-            "compute_native=7 admission=blocked\n"
+            "compute_native=11 copy_native=7 admission=blocked "
+            "cpu_seam=RHISubmissionPipelinePolicy\n"
         )
     emit_shutdown_overlap_marker = (
         alias_window2
@@ -83,7 +86,8 @@ def pipeline_line(
             "name=BoundedPipelineShutdownCancellationOverlap "
             "requested_window=2 effective_window=1 "
             "reason=native_queue_alias graphics_native=7 "
-            "compute_native=7 admission=blocked\n"
+            "compute_native=11 copy_native=7 admission=blocked "
+            "cpu_seam=RHISubmissionPipelinePolicy\n"
         )
     malformed_ordering = ""
     if window == 2:
@@ -102,9 +106,12 @@ def pipeline_line(
             "name=BoundedPipelineShutdownCancellation "
             f"window=2 native_alias={native_alias} "
             f"overlap_assertion={overlap_assertion} "
+            "queues=Graphics,Copy "
             "batch0_native_submit=0 batch1_native_submit=1 "
             "batch0_signal=rejected batch1_signal=success "
-            "callbacks=exactly_once concurrent_sync=drained owners=stopped\n"
+            "copy_translate_owner=Translate native_owner=Submission "
+            "readback=verified callbacks=exactly_once "
+            "concurrent_sync=drained owners=stopped\n"
         )
     return (
         overlap
@@ -134,9 +141,12 @@ def pass_line(
         f"mode={mode} worker_fault={fault} production_gate={production_gate} "
         f"production_heavy={production_heavy} iterations=24\n"
         "[TESTCASE][PASS] name=AsyncQueueParallelTranslateSmoke "
-        "sources=3 batch=1 source_order=G,G,C first_ready_lanes=G,C "
-        "observed_submit_order=G,G,C explicit_state=true "
-        "callbacks=exactly_once\n"
+        "graphics_native=0 compute_native=1 copy_native=2 "
+        "sources=4 batch=1 source_order=G,G,C,Copy "
+        "first_ready_lanes=G,C,Copy observed_submit_order=G,G,C,Copy "
+        "copy_translate_owner=Translate native_owner=Submission "
+        "explicit_state=true readback=verified "
+        "callbacks=exactly_once replay=0\n"
         "[TESTCASE][PASS] name=ParallelTranslateRecoverableRejection "
         "distinct_native=true suffix_recorded=true signals=rejected "
         "callbacks=exactly_once runtime=recovered same_scope_reentry=Compute\n"
@@ -239,6 +249,202 @@ class VulkanRunnerTests(unittest.TestCase):
             ),
         )
 
+    def test_pipeline_window1_queue_unavailable_skip_is_accepted(
+        self,
+    ) -> None:
+        text = replace_testcase_marker(
+            pipeline_line(1, "false", "blocked"),
+            "BoundedCrossBatchSubmissionPipeline",
+            "[TESTCASE][SKIP] "
+            "name=BoundedCrossBatchSubmissionPipeline "
+            "window=1 reason=queue_unavailable "
+            "graphics_available=false compute_available=true "
+            "graphics_native=0 compute_native=1",
+        )
+        runner.validate_log("pipeline-window1", text)
+
+    def test_pipeline_window2_compute_unavailable_skip_is_accepted(
+        self,
+    ) -> None:
+        text = replace_testcase_marker(
+            pipeline_line(2, "false", "verified"),
+            "BoundedCrossBatchSubmissionPipeline",
+            "[TESTCASE][SKIP] "
+            "name=BoundedCrossBatchSubmissionPipeline "
+            "window=2 reason=queue_unavailable "
+            "graphics_available=true compute_available=false "
+            "graphics_native=0 compute_native=1",
+        )
+        runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_window2_copy_unavailable_skips_are_accepted(
+        self,
+    ) -> None:
+        text = pipeline_line(2, "false", "verified")
+        text = replace_testcase_marker(
+            text,
+            "BoundedCrossBatchRecoverableRejection",
+            "[TESTCASE][SKIP] "
+            "name=BoundedCrossBatchRecoverableRejection "
+            "window=2 reason=queue_unavailable "
+            "graphics_available=true copy_available=false "
+            "graphics_native=0 copy_native=2",
+        )
+        text = replace_testcase_marker(
+            text,
+            "BoundedPipelineShutdownCancellation",
+            "[TESTCASE][SKIP] "
+            "name=BoundedPipelineShutdownCancellation "
+            "window=2 reason=queue_unavailable "
+            "graphics_available=true copy_available=false "
+            "graphics_native=0 copy_native=2",
+        )
+        runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_window2_graphics_unavailable_skips_are_accepted(
+        self,
+    ) -> None:
+        text = pipeline_line(2, "false", "verified")
+        text = replace_testcase_marker(
+            text,
+            "BoundedCrossBatchSubmissionPipeline",
+            "[TESTCASE][SKIP] "
+            "name=BoundedCrossBatchSubmissionPipeline "
+            "window=2 reason=queue_unavailable "
+            "graphics_available=false compute_available=true "
+            "graphics_native=0 compute_native=1",
+        )
+        text = replace_testcase_marker(
+            text,
+            "BoundedCrossBatchMalformedPreflightOrdering",
+            "[TESTCASE][SKIP] "
+            "name=BoundedCrossBatchMalformedPreflightOrdering "
+            "reason=graphics_queue_unavailable",
+        )
+        text = replace_testcase_marker(
+            text,
+            "BoundedCrossBatchRecoverableRejection",
+            "[TESTCASE][SKIP] "
+            "name=BoundedCrossBatchRecoverableRejection "
+            "window=2 reason=queue_unavailable "
+            "graphics_available=false copy_available=true "
+            "graphics_native=0 copy_native=2",
+        )
+        text = replace_testcase_marker(
+            text,
+            "BoundedPipelineShutdownCancellation",
+            "[TESTCASE][SKIP] "
+            "name=BoundedPipelineShutdownCancellation "
+            "window=2 reason=queue_unavailable "
+            "graphics_available=false copy_available=true "
+            "graphics_native=0 copy_native=2",
+        )
+        runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_recoverable_skip_requires_queue_ids(self) -> None:
+        text = replace_testcase_marker(
+            pipeline_line(2, "false", "verified"),
+            "BoundedCrossBatchRecoverableRejection",
+            "[TESTCASE][SKIP] "
+            "name=BoundedCrossBatchRecoverableRejection "
+            "window=2 reason=queue_unavailable "
+            "graphics_available=true copy_available=false "
+            "graphics_native=0",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "invalid bounded recoverable rejection SKIP contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_pass_rejects_graphics_unavailable_malformed_skip(
+        self,
+    ) -> None:
+        text = replace_testcase_marker(
+            pipeline_line(2, "false", "verified"),
+            "BoundedCrossBatchMalformedPreflightOrdering",
+            "[TESTCASE][SKIP] "
+            "name=BoundedCrossBatchMalformedPreflightOrdering "
+            "reason=graphics_queue_unavailable",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "invalid malformed-preflight ordering SKIP contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_rejects_inconsistent_graphics_copy_availability(
+        self,
+    ) -> None:
+        text = replace_testcase_marker(
+            pipeline_line(2, "false", "verified"),
+            "BoundedCrossBatchRecoverableRejection",
+            "[TESTCASE][SKIP] "
+            "name=BoundedCrossBatchRecoverableRejection "
+            "window=2 reason=queue_unavailable "
+            "graphics_available=true copy_available=false "
+            "graphics_native=0 copy_native=2",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "inconsistent bounded Graphics/Copy availability contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_pass_rejects_graphics_unavailable_copy_skips(
+        self,
+    ) -> None:
+        text = pipeline_line(2, "false", "verified")
+        text = replace_testcase_marker(
+            text,
+            "BoundedCrossBatchRecoverableRejection",
+            "[TESTCASE][SKIP] "
+            "name=BoundedCrossBatchRecoverableRejection "
+            "window=2 reason=queue_unavailable "
+            "graphics_available=false copy_available=true "
+            "graphics_native=0 copy_native=2",
+        )
+        text = replace_testcase_marker(
+            text,
+            "BoundedPipelineShutdownCancellation",
+            "[TESTCASE][SKIP] "
+            "name=BoundedPipelineShutdownCancellation "
+            "window=2 reason=queue_unavailable "
+            "graphics_available=false copy_available=true "
+            "graphics_native=0 copy_native=2",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "inconsistent bounded pipeline Graphics availability contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_graphics_unavailable_rejects_copy_passes(
+        self,
+    ) -> None:
+        text = pipeline_line(2, "false", "verified")
+        text = replace_testcase_marker(
+            text,
+            "BoundedCrossBatchSubmissionPipeline",
+            "[TESTCASE][SKIP] "
+            "name=BoundedCrossBatchSubmissionPipeline "
+            "window=2 reason=queue_unavailable "
+            "graphics_available=false compute_available=true "
+            "graphics_native=0 compute_native=1",
+        )
+        text = replace_testcase_marker(
+            text,
+            "BoundedCrossBatchMalformedPreflightOrdering",
+            "[TESTCASE][SKIP] "
+            "name=BoundedCrossBatchMalformedPreflightOrdering "
+            "reason=graphics_queue_unavailable",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "inconsistent bounded pipeline Graphics availability contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
     def test_pipeline_window2_alias_requires_pipeline_overlap_marker(
         self,
     ) -> None:
@@ -305,7 +511,7 @@ class VulkanRunnerTests(unittest.TestCase):
         text = pipeline_line(2, "false", "verified").replace(marker, "")
         with self.assertRaisesRegex(
             runner.VulkanTestError,
-            "malformed-preflight ordering PASS marker",
+            "malformed-preflight ordering terminal marker",
         ):
             runner.validate_log("pipeline-window2", text)
 
@@ -344,7 +550,7 @@ class VulkanRunnerTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(
             runner.VulkanTestError,
-            "recoverable rejection PASS marker",
+            "recoverable rejection terminal marker",
         ):
             runner.validate_log("pipeline-window2", text)
 
@@ -433,11 +639,39 @@ class VulkanRunnerTests(unittest.TestCase):
             "name=BoundedCrossBatchRecoverableRejectionOverlap "
             "requested_window=2 effective_window=1 "
             "reason=native_queue_alias graphics_native=7 "
-            "compute_native=7 admission=blocked",
+            "compute_native=11 copy_native=7 admission=blocked",
             "name=BoundedCrossBatchRecoverableRejectionOverlap "
             "requested_window=2 effective_window=1 "
             "reason=native_queue_alias graphics_native=8 "
-            "compute_native=8 admission=blocked",
+            "compute_native=11 copy_native=8 admission=blocked",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "invalid bounded recoverable alias fallback contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_recoverable_rejection_requires_copy_contract(
+        self,
+    ) -> None:
+        text = pipeline_line(2, "false", "verified").replace(
+            "copy_translate_owner=Translate",
+            "copy_translate_owner=Submission",
+            1,
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete bounded cross-batch recoverable rejection contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_recoverable_overlap_requires_policy_seam(
+        self,
+    ) -> None:
+        text = pipeline_line(2, "true", "blocked").replace(
+            "cpu_seam=RHISubmissionPipelinePolicy",
+            "cpu_seam=VulkanTranslateWaveScheduler",
+            1,
         )
         with self.assertRaisesRegex(
             runner.VulkanTestError,
@@ -456,7 +690,7 @@ class VulkanRunnerTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(
             runner.VulkanTestError,
-            "shutdown cancellation PASS marker",
+            "shutdown cancellation terminal marker",
         ):
             runner.validate_log("pipeline-window2", text)
 
@@ -517,11 +751,46 @@ class VulkanRunnerTests(unittest.TestCase):
             "name=BoundedPipelineShutdownCancellationOverlap "
             "requested_window=2 effective_window=1 "
             "reason=native_queue_alias graphics_native=7 "
-            "compute_native=7 admission=blocked",
+            "compute_native=11 copy_native=7 admission=blocked",
             "name=BoundedPipelineShutdownCancellationOverlap "
             "requested_window=2 effective_window=1 "
             "reason=native_queue_alias graphics_native=8 "
-            "compute_native=8 admission=blocked",
+            "compute_native=11 copy_native=8 admission=blocked",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "invalid bounded pipeline shutdown alias fallback contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_shutdown_cancellation_requires_copy_readback(
+        self,
+    ) -> None:
+        text = pipeline_line(2, "false", "verified").replace(
+            "readback=verified callbacks=exactly_once",
+            "readback=missing callbacks=exactly_once",
+            1,
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete bounded pipeline shutdown cancellation contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_shutdown_overlap_requires_policy_seam(
+        self,
+    ) -> None:
+        text = pipeline_line(2, "true", "blocked").replace(
+            "name=BoundedPipelineShutdownCancellationOverlap "
+            "requested_window=2 effective_window=1 "
+            "reason=native_queue_alias graphics_native=7 "
+            "compute_native=11 copy_native=7 admission=blocked "
+            "cpu_seam=RHISubmissionPipelinePolicy",
+            "name=BoundedPipelineShutdownCancellationOverlap "
+            "requested_window=2 effective_window=1 "
+            "reason=native_queue_alias graphics_native=7 "
+            "compute_native=11 copy_native=7 admission=blocked "
+            "cpu_seam=VulkanTranslateWaveScheduler",
         )
         with self.assertRaisesRegex(
             runner.VulkanTestError,
@@ -582,7 +851,25 @@ class VulkanRunnerTests(unittest.TestCase):
             "true",
             "blocked",
             include_overlap_marker=True,
-        ).replace("compute_native=7", "compute_native=8", 1)
+        ).replace("copy_native=7", "copy_native=8", 1)
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "invalid bounded cross-batch alias fallback contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_alias_overlap_requires_an_actual_native_alias(
+        self,
+    ) -> None:
+        text = pipeline_line(
+            2,
+            "true",
+            "blocked",
+            include_overlap_marker=True,
+        ).replace(
+            "graphics_native=7 compute_native=11 copy_native=7",
+            "graphics_native=7 compute_native=11 copy_native=13",
+        )
         with self.assertRaisesRegex(
             runner.VulkanTestError,
             "invalid bounded cross-batch alias fallback contract",
@@ -707,13 +994,14 @@ class VulkanRunnerTests(unittest.TestCase):
             runner.validate_log("serial", text)
 
     def test_ready_translate_rejects_unapproved_skip_reason(self) -> None:
-        text = pass_line("serial", "false").replace(
-            "[TESTCASE][PASS] name=AsyncQueueParallelTranslateSmoke "
-            "sources=3 batch=1 source_order=G,G,C first_ready_lanes=G,C "
-            "observed_submit_order=G,G,C explicit_state=true "
-            "callbacks=exactly_once",
+        text = replace_testcase_marker(
+            pass_line("serial", "false"),
+            "AsyncQueueParallelTranslateSmoke",
             "[TESTCASE][SKIP] name=AsyncQueueParallelTranslateSmoke "
-            "reason=test_disabled cpu_seam=VulkanTranslateWaveScheduler",
+            "reason=test_disabled cpu_seam=VulkanTranslateWaveScheduler "
+            "graphics_available=true compute_available=true "
+            "copy_available=true "
+            "graphics_native=0 compute_native=1 copy_native=2",
         )
         with self.assertRaisesRegex(
             runner.VulkanTestError, "invalid ready-native-lane"
@@ -722,7 +1010,57 @@ class VulkanRunnerTests(unittest.TestCase):
 
     def test_ready_translate_requires_observed_submit_order(self) -> None:
         text = pass_line("serial", "false").replace(
-            "observed_submit_order=G,G,C", "observed_submit_order=G,C,G"
+            "observed_submit_order=G,G,C,Copy",
+            "observed_submit_order=G,C,G,Copy",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "incomplete ready-native-lane"
+        ):
+            runner.validate_log("serial", text)
+
+    def test_ready_translate_requires_copy_translate_owner(self) -> None:
+        text = pass_line("serial", "false").replace(
+            "copy_translate_owner=Translate",
+            "copy_translate_owner=Submission",
+            1,
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "incomplete ready-native-lane"
+        ):
+            runner.validate_log("serial", text)
+
+    def test_ready_translate_requires_verified_readback_and_no_replay(
+        self,
+    ) -> None:
+        text = pass_line("serial", "false").replace(
+            "readback=verified callbacks=exactly_once replay=0",
+            "readback=verified callbacks=exactly_once replay=1",
+            1,
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "incomplete ready-native-lane"
+        ):
+            runner.validate_log("serial", text)
+
+    def test_ready_translate_copy_alias_uses_alias_fallback(self) -> None:
+        text = pass_line("serial", "false").replace(
+            "graphics_native=0 compute_native=1 copy_native=2",
+            "graphics_native=0 compute_native=1 copy_native=0",
+            1,
+        ).replace(
+            "first_ready_lanes=G,C,Copy",
+            "first_ready_lanes=alias_fallback",
+            1,
+        )
+        runner.validate_log("serial", text)
+
+    def test_ready_translate_copy_alias_rejects_distinct_lane_claim(
+        self,
+    ) -> None:
+        text = pass_line("serial", "false").replace(
+            "graphics_native=0 compute_native=1 copy_native=2",
+            "graphics_native=0 compute_native=1 copy_native=0",
+            1,
         )
         with self.assertRaisesRegex(
             runner.VulkanTestError, "incomplete ready-native-lane"
@@ -1027,8 +1365,11 @@ class VulkanRunnerTests(unittest.TestCase):
         text = pass_line("serial", "false")
         duplicate = (
             "[TESTCASE][SKIP] name=AsyncQueueParallelTranslateSmoke "
-            "reason=native_queue_alias "
-            "cpu_seam=VulkanTranslateWaveScheduler\n"
+            "reason=graphics_compute_native_alias "
+            "cpu_seam=VulkanTranslateWaveScheduler "
+            "graphics_available=true compute_available=true "
+            "copy_available=true "
+            "graphics_native=0 compute_native=0 copy_native=2\n"
         )
         with self.assertRaisesRegex(
             runner.VulkanTestError, "at most one terminal marker"
@@ -1040,8 +1381,11 @@ class VulkanRunnerTests(unittest.TestCase):
             pass_line("serial", "false"),
             "AsyncQueueParallelTranslateSmoke",
             "[TESTCASE][SKIP] name=AsyncQueueParallelTranslateSmoke "
-            "reason=native_queue_alias cpu_seam=VulkanTranslateWaveScheduler "
-            "graphics_native=0 compute_native=1",
+            "reason=graphics_compute_native_alias "
+            "cpu_seam=VulkanTranslateWaveScheduler "
+            "graphics_available=true compute_available=true "
+            "copy_available=true "
+            "graphics_native=0 compute_native=1 copy_native=2",
         )
         with self.assertRaisesRegex(
             runner.VulkanTestError, "invalid ready-native-lane Translate SKIP"
@@ -1053,8 +1397,44 @@ class VulkanRunnerTests(unittest.TestCase):
             pass_line("serial", "false"),
             "AsyncQueueParallelTranslateSmoke",
             "[TESTCASE][SKIP] name=AsyncQueueParallelTranslateSmoke "
-            "reason=native_queue_alias cpu_seam=VulkanTranslateWaveScheduler "
-            "graphics_native=0 compute_native=0",
+            "reason=graphics_compute_native_alias "
+            "cpu_seam=VulkanTranslateWaveScheduler "
+            "graphics_available=true compute_available=true "
+            "copy_available=true "
+            "graphics_native=0 compute_native=0 copy_native=2",
+        )
+        runner.validate_log("serial", text)
+
+    def test_ready_translate_queue_unavailable_skip_requires_copy_id(
+        self,
+    ) -> None:
+        text = replace_testcase_marker(
+            pass_line("serial", "false"),
+            "AsyncQueueParallelTranslateSmoke",
+            "[TESTCASE][SKIP] name=AsyncQueueParallelTranslateSmoke "
+            "reason=queue_unavailable "
+            "cpu_seam=VulkanTranslateWaveScheduler "
+            "graphics_available=true compute_available=true "
+            "copy_available=false "
+            "graphics_native=0 compute_native=1",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "invalid ready-native-lane Translate SKIP"
+        ):
+            runner.validate_log("serial", text)
+
+    def test_ready_translate_queue_unavailable_skip_is_accepted(
+        self,
+    ) -> None:
+        text = replace_testcase_marker(
+            pass_line("serial", "false"),
+            "AsyncQueueParallelTranslateSmoke",
+            "[TESTCASE][SKIP] name=AsyncQueueParallelTranslateSmoke "
+            "reason=queue_unavailable "
+            "cpu_seam=VulkanTranslateWaveScheduler "
+            "graphics_available=true compute_available=true "
+            "copy_available=false "
+            "graphics_native=0 compute_native=1 copy_native=2",
         )
         runner.validate_log("serial", text)
 
@@ -1109,8 +1489,9 @@ class VulkanRunnerTests(unittest.TestCase):
         text = (
             completion_probe_line()
             + "[TESTCASE][PASS] name=ParallelTranslateFailureRetirement "
-            "distinct_native=true suffix_recorded=true signals=failed "
-            "callbacks=exactly_once hard_latch=later_batch_failed\n"
+            "distinct_native=true suffix_recorded=true suffix_queue=Copy "
+            "native_submit=0 signals=failed callbacks=exactly_once "
+            "hard_latch=later_batch_failed replay=0\n"
             "[VulkanFault][Summary] first_fault_count=1 "
             "native_submit_after_fault=0 native_present_after_fault=0 "
             "device_lost=false\n"
@@ -1121,8 +1502,9 @@ class VulkanRunnerTests(unittest.TestCase):
         text = (
             completion_probe_line()
             + "[TESTCASE][PASS] name=ParallelTranslateFailureRetirement "
-            "distinct_native=true suffix_recorded=true signals=failed "
-            "callbacks=exactly_once hard_latch=later_batch_failed\n"
+            "distinct_native=true suffix_recorded=true suffix_queue=Copy "
+            "native_submit=0 signals=failed callbacks=exactly_once "
+            "hard_latch=later_batch_failed replay=0\n"
             "[VulkanFault][Summary] first_fault_count=1 "
             "native_submit_after_fault=1 native_present_after_fault=0 "
             "device_lost=false\n"
@@ -1136,23 +1518,56 @@ class VulkanRunnerTests(unittest.TestCase):
         text = (
             completion_probe_line()
             + "[TESTCASE][PASS] name=ParallelTranslateFailureRetirement "
-            "distinct_native=false suffix_recorded=false signals=failed "
-            "callbacks=exactly_once hard_latch=later_batch_failed\n"
+            "distinct_native=false suffix_recorded=false suffix_queue=Copy "
+            "native_submit=0 signals=failed callbacks=exactly_once "
+            "hard_latch=later_batch_failed replay=0\n"
             "[VulkanFault][Summary] first_fault_count=1 "
             "native_submit_after_fault=0 native_present_after_fault=0 "
             "device_lost=false\n"
         )
         runner.validate_log("translate-hard", text)
 
+    def test_translate_hard_requires_copy_no_submit_no_replay(self) -> None:
+        base = (
+            completion_probe_line()
+            + "[TESTCASE][PASS] name=ParallelTranslateFailureRetirement "
+            "distinct_native=true suffix_recorded=true suffix_queue=Copy "
+            "native_submit=0 signals=failed callbacks=exactly_once "
+            "hard_latch=later_batch_failed replay=0\n"
+            "[VulkanFault][Summary] first_fault_count=1 "
+            "native_submit_after_fault=0 native_present_after_fault=0 "
+            "device_lost=false\n"
+        )
+        mutations = (
+            ("suffix_queue=Copy", "suffix_queue=Compute"),
+            ("native_submit=0", "native_submit=1"),
+            (
+                "hard_latch=later_batch_failed replay=0",
+                "hard_latch=later_batch_failed replay=1",
+            ),
+        )
+        for original, replacement in mutations:
+            with self.subTest(field=original):
+                with self.assertRaisesRegex(
+                    runner.VulkanTestError,
+                    "incomplete failure-retirement contract",
+                ):
+                    runner.validate_log(
+                        "translate-hard",
+                        base.replace(original, replacement, 1),
+                    )
+
     def test_translate_hard_rejects_duplicate_retirement_markers(self) -> None:
         text = (
             completion_probe_line()
             + "[TESTCASE][PASS] name=ParallelTranslateFailureRetirement "
-            "distinct_native=true suffix_recorded=true signals=failed "
-            "callbacks=exactly_once hard_latch=later_batch_failed\n"
+            "distinct_native=true suffix_recorded=true suffix_queue=Copy "
+            "native_submit=0 signals=failed callbacks=exactly_once "
+            "hard_latch=later_batch_failed replay=0\n"
             "[TESTCASE][PASS] name=ParallelTranslateFailureRetirement "
-            "distinct_native=false suffix_recorded=true signals=failed "
-            "callbacks=exactly_once hard_latch=later_batch_failed\n"
+            "distinct_native=false suffix_recorded=true suffix_queue=Copy "
+            "native_submit=0 signals=failed callbacks=exactly_once "
+            "hard_latch=later_batch_failed replay=0\n"
             "[VulkanFault][Summary] first_fault_count=1 "
             "native_submit_after_fault=0 native_present_after_fault=0 "
             "device_lost=false\n"
@@ -1166,8 +1581,9 @@ class VulkanRunnerTests(unittest.TestCase):
         text = (
             completion_probe_line()
             + "[TESTCASE][PASS] name=ParallelTranslateFailureRetirement "
-            "distinct_native=true suffix_recorded=true signals=failed "
-            "callbacks=exactly_once hard_latch=later_batch_failed\n"
+            "distinct_native=true suffix_recorded=true suffix_queue=Copy "
+            "native_submit=0 signals=failed callbacks=exactly_once "
+            "hard_latch=later_batch_failed replay=0\n"
             "[VulkanFault][Summary] first_fault_count=1 "
             "native_submit_after_fault=0 native_present_after_fault=0 "
             "device_lost=false\n"
@@ -1184,8 +1600,9 @@ class VulkanRunnerTests(unittest.TestCase):
         text = (
             completion_probe_line()
             + "[TESTCASE][PASS] name=ParallelTranslateFailureRetirement "
-            "distinct_native=true suffix_recorded=true signals=failed "
-            "callbacks=exactly_once hard_latch=later_batch_failed\n"
+            "distinct_native=true suffix_recorded=true suffix_queue=Copy "
+            "native_submit=0 signals=failed callbacks=exactly_once "
+            "hard_latch=later_batch_failed replay=0\n"
             "[VulkanFault][Summary] first_fault_count=1 first_fault_count=2 "
             "native_submit_after_fault=0 native_present_after_fault=0 "
             "device_lost=false\n"
@@ -1199,8 +1616,9 @@ class VulkanRunnerTests(unittest.TestCase):
         text = (
             completion_probe_line()
             + "[TESTCASE][PASS] name=ParallelTranslateFailureRetirement "
-            "distinct_native=true suffix_recorded=true signals=failed "
-            "callbacks=exactly_once hard_latch=later_batch_failed\n"
+            "distinct_native=true suffix_recorded=true suffix_queue=Copy "
+            "native_submit=0 signals=failed callbacks=exactly_once "
+            "hard_latch=later_batch_failed replay=0\n"
             "[VulkanFault][Summary] first_fault_count=10 "
             "native_submit_after_fault=0 native_present_after_fault=0 "
             "device_lost=false\n"

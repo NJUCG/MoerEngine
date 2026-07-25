@@ -31,11 +31,34 @@ inline constexpr uint32_t MaxBatchWindow     = 8;
                _topology.compute.native_queue_id;
 }
 
+[[nodiscard]] constexpr bool HasAvailableNativeLaneAlias(
+    const RHIQueueTopology& _topology
+) noexcept {
+    const bool graphics_compute_alias =
+        _topology.graphics.available &&
+        _topology.compute.available &&
+        _topology.graphics.native_queue_id ==
+            _topology.compute.native_queue_id;
+    const bool graphics_copy_alias =
+        _topology.graphics.available &&
+        _topology.copy.available &&
+        _topology.graphics.native_queue_id ==
+            _topology.copy.native_queue_id;
+    const bool compute_copy_alias =
+        _topology.compute.available &&
+        _topology.copy.available &&
+        _topology.compute.native_queue_id ==
+            _topology.copy.native_queue_id;
+    return graphics_compute_alias ||
+           graphics_copy_alias ||
+           compute_copy_alias;
+}
+
 [[nodiscard]] constexpr uint32_t ResolveEffectiveBatchWindow(
     uint32_t                _configured,
     const RHIQueueTopology& _topology
 ) noexcept {
-    return GraphicsComputeShareNativeLane(_topology) ?
+    return HasAvailableNativeLaneAlias(_topology) ?
                MinBatchWindow :
                ClampBatchWindow(_configured);
 }

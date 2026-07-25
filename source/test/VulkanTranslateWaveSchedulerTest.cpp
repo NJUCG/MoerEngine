@@ -68,6 +68,59 @@ void IndependentNativeQueuesShareAStableWave() {
     );
 }
 
+void GraphicsComputeCopyShareTheFirstReadyWave() {
+    const std::array nodes{
+        // Graphics front.
+        TranslateWaveNode{.key = Key(0), .native_queue_id = 40, .async_translate = true},
+        // Graphics tail shares the same physical lane as the front.
+        TranslateWaveNode{.key = Key(1), .native_queue_id = 40, .async_translate = true},
+        // Independent Compute and Copy lanes.
+        TranslateWaveNode{.key = Key(2), .native_queue_id = 41, .async_translate = true},
+        TranslateWaveNode{.key = Key(3), .native_queue_id = 42, .async_translate = true},
+    };
+
+    TranslateWaveScheduler scheduler;
+    Expect(scheduler.Build(nodes), "Graphics/Compute/Copy topology failed to build");
+    ExpectWave(
+        scheduler.NextWave(),
+        {Key(0), Key(2), Key(3)},
+        "first ready wave did not expose Graphics, Compute, and Copy"
+    );
+    Expect(
+        scheduler.MarkTranslated(Key(3)) && scheduler.MarkTranslated(Key(2)) &&
+            scheduler.MarkTranslated(Key(0)),
+        "independent Graphics/Compute/Copy lanes could not translate out of order"
+    );
+    ExpectWave(
+        scheduler.NextWave(),
+        {},
+        "same-native Graphics tail started before its packet predecessor released"
+    );
+    Expect(
+        scheduler.MarkReleased(Key(0)),
+        "Graphics front packet did not release its native lane"
+    );
+    ExpectWave(
+        scheduler.NextWave(),
+        {Key(1)},
+        "Graphics front release did not unlock its same-native tail"
+    );
+    Expect(
+        scheduler.MarkTranslated(Key(1)) &&
+            scheduler.MarkReleased(Key(1)) &&
+            scheduler.MarkReleased(Key(2)) &&
+            scheduler.MarkReleased(Key(3)) &&
+            scheduler.IsComplete(),
+        "Graphics/Compute/Copy packets did not retire exactly once"
+    );
+    Expect(
+        !scheduler.MarkReleased(Key(0)) &&
+            !scheduler.MarkReleased(Key(2)) &&
+            !scheduler.MarkReleased(Key(3)),
+        "Graphics/Compute/Copy packet release was accepted more than once"
+    );
+}
+
 void SameNativeQueueWaitsForReleaseWithoutBlockingAnotherLane() {
     const std::array nodes{
         TranslateWaveNode{.key = Key(0), .native_queue_id = 4, .async_translate = true},
@@ -96,6 +149,90 @@ void SameNativeQueueWaitsForReleaseWithoutBlockingAnotherLane() {
         scheduler.MarkTranslated(Key(1)) && scheduler.MarkReleased(Key(1)) &&
             scheduler.MarkReleased(Key(2)) && scheduler.IsComplete(),
         "held later-lane packet did not preserve ordered-release ownership"
+    );
+}
+
+void GraphicsCopyAliasWaitsForReleaseWithoutBlockingCompute() {
+    const std::array nodes{
+        // Graphics and Copy are distinct logical queues on native lane 50.
+        TranslateWaveNode{.key = Key(0), .native_queue_id = 50, .async_translate = true},
+        TranslateWaveNode{.key = Key(1), .native_queue_id = 50, .async_translate = true},
+        TranslateWaveNode{.key = Key(2), .native_queue_id = 51, .async_translate = true},
+    };
+
+    TranslateWaveScheduler scheduler;
+    Expect(scheduler.Build(nodes), "Graphics/Copy alias topology failed to build");
+    ExpectWave(
+        scheduler.NextWave(),
+        {Key(0), Key(2)},
+        "Graphics/Copy alias hid its independent Compute lane"
+    );
+    Expect(
+        scheduler.MarkTranslated(Key(0)) && scheduler.MarkTranslated(Key(2)),
+        "Graphics/Compute first wave did not finish translation"
+    );
+    ExpectWave(
+        scheduler.NextWave(),
+        {},
+        "Copy entered Translate before its aliased Graphics packet released"
+    );
+    Expect(
+        scheduler.MarkReleased(Key(0)),
+        "Graphics packet did not release its aliased Copy lane"
+    );
+    ExpectWave(
+        scheduler.NextWave(),
+        {Key(1)},
+        "Graphics release did not unlock its aliased Copy successor"
+    );
+    Expect(
+        scheduler.MarkTranslated(Key(1)) &&
+            scheduler.MarkReleased(Key(1)) &&
+            scheduler.MarkReleased(Key(2)) &&
+            scheduler.IsComplete(),
+        "Graphics/Copy alias packets did not retire exactly once"
+    );
+}
+
+void ComputeCopyAliasWaitsForReleaseWithoutBlockingGraphics() {
+    const std::array nodes{
+        // Compute and Copy are distinct logical queues on native lane 60.
+        TranslateWaveNode{.key = Key(0), .native_queue_id = 60, .async_translate = true},
+        TranslateWaveNode{.key = Key(1), .native_queue_id = 60, .async_translate = true},
+        TranslateWaveNode{.key = Key(2), .native_queue_id = 61, .async_translate = true},
+    };
+
+    TranslateWaveScheduler scheduler;
+    Expect(scheduler.Build(nodes), "Compute/Copy alias topology failed to build");
+    ExpectWave(
+        scheduler.NextWave(),
+        {Key(0), Key(2)},
+        "Compute/Copy alias hid its independent Graphics lane"
+    );
+    Expect(
+        scheduler.MarkTranslated(Key(0)) && scheduler.MarkTranslated(Key(2)),
+        "Compute/Graphics first wave did not finish translation"
+    );
+    ExpectWave(
+        scheduler.NextWave(),
+        {},
+        "Copy entered Translate before its aliased Compute packet released"
+    );
+    Expect(
+        scheduler.MarkReleased(Key(0)),
+        "Compute packet did not release its aliased Copy lane"
+    );
+    ExpectWave(
+        scheduler.NextWave(),
+        {Key(1)},
+        "Compute release did not unlock its aliased Copy successor"
+    );
+    Expect(
+        scheduler.MarkTranslated(Key(1)) &&
+            scheduler.MarkReleased(Key(1)) &&
+            scheduler.MarkReleased(Key(2)) &&
+            scheduler.IsComplete(),
+        "Compute/Copy alias packets did not retire exactly once"
     );
 }
 
@@ -240,17 +377,21 @@ void UnknownAndFutureDependenciesFailClosed() {
     );
 }
 
-void CancellationRetainsOnlyOutstandingPacketLeases() {
+void CancellationRetainsOnlyOutstandingGraphicsCopyPacketLeases() {
     const std::array nodes{
+        // Graphics front and Copy tail alias native lane 31.
         TranslateWaveNode{.key = Key(0), .native_queue_id = 31, .async_translate = true},
         TranslateWaveNode{.key = Key(1), .native_queue_id = 31, .async_translate = true},
+        // Compute remains independently ready.
         TranslateWaveNode{.key = Key(2), .native_queue_id = 32, .async_translate = true},
     };
 
     TranslateWaveScheduler scheduler;
-    Expect(scheduler.Build(nodes), "cancellation topology failed to build");
+    Expect(scheduler.Build(nodes), "Graphics/Copy cancellation topology failed to build");
     ExpectWave(
-        scheduler.NextWave(), {Key(0), Key(2)}, "cancellation fixture did not expose every ready native lane"
+        scheduler.NextWave(),
+        {Key(0), Key(2)},
+        "Graphics/Copy cancellation fixture did not expose every ready native lane"
     );
     scheduler.Cancel();
     Expect(scheduler.IsCancelled() && !scheduler.IsComplete(), "cancellation lost an in-flight packet lease");
@@ -284,12 +425,15 @@ void EmptyBuildIsImmediatelyComplete() {
 int main() {
     try {
         IndependentNativeQueuesShareAStableWave();
+        GraphicsComputeCopyShareTheFirstReadyWave();
         SameNativeQueueWaitsForReleaseWithoutBlockingAnotherLane();
+        GraphicsCopyAliasWaitsForReleaseWithoutBlockingCompute();
+        ComputeCopyAliasWaitsForReleaseWithoutBlockingGraphics();
         ExplicitDependencyUnlocksAtTranslated();
         FanInAndFanOutRemainDeterministic();
         NonAsyncNodeIsAnExclusiveReleaseBoundary();
         UnknownAndFutureDependenciesFailClosed();
-        CancellationRetainsOnlyOutstandingPacketLeases();
+        CancellationRetainsOnlyOutstandingGraphicsCopyPacketLeases();
         EmptyBuildIsImmediatelyComplete();
         std::cout << "Vulkan translate-wave scheduler tests passed\n";
         return 0;
