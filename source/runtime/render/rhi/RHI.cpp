@@ -84,7 +84,7 @@ void RenderDevice::Init(DeviceInitInfo&& _info) {
             break;
     }
     Get().rhi_type = _info.rhi_type;
-    RHIExecutor::StartUp();
+    RHIExecutor::StartUp(_info.submission_batch_window);
     Get().impl->PostInit();
 }
 void RenderDevice::Dispose() {

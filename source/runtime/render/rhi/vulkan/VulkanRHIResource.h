@@ -1065,7 +1065,7 @@ public:
     );
     RENDER_API void Fail(VkResult _result);
     RENDER_API bool IsFailed() const;
-    void  SignalHost(uint64_t _value);
+    RENDER_API void SignalHost(uint64_t _value);
     auto& GetFence() {
         return timeline;
     }

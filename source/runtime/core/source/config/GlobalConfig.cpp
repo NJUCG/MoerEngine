@@ -49,6 +49,8 @@ GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_p
     loaded_config.engine.threading.parallel_record_min_work_units_per_job =
         toml_config.at_path("engine.threading.parallel_record_min_work_units_per_job")
             .value_or(uint{64});
+    loaded_config.engine.threading.submission_batch_window =
+        toml_config.at_path("engine.threading.submission_batch_window").value_or(uint{2});
     loaded_config.engine.threading.max_frame_lag =
         toml_config.at_path("engine.threading.max_frame_lag").value_or(uint{0});
 

@@ -41,6 +41,7 @@ struct CORE_API GlobalConfig {
             bool parallel_record_verify  = false;
             bool parallel_record_profile = false;
             uint parallel_record_min_work_units_per_job = 64;
+            uint submission_batch_window = 2;
             uint max_frame_lag           = 0;
         } threading;
 

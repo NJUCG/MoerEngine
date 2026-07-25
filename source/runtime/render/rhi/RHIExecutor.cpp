@@ -5,7 +5,6 @@
 #include "rhi/RHIThreadOwnership.h"
 #include "vulkan/VulkanSubmissionExecutor.h"
 
-#include <algorithm>
 #include <exception>
 #include <optional>
 #include <stdexcept>
@@ -543,10 +542,10 @@ private:
     uint64                    ordered_tail_copy_timeline{0};
 };
 
-std::shared_ptr<RHIBackendExecutor> CreateBackendExecutor() {
+std::shared_ptr<RHIBackendExecutor> CreateBackendExecutor(uint32 _submission_batch_window) {
     switch (RenderDevice::Get().GetRHIType()) {
         case ERHIType::Vulkan:
-            return std::make_shared<VulkanSubmissionExecutor>();
+            return std::make_shared<VulkanSubmissionExecutor>(_submission_batch_window);
         case ERHIType::D3D12:
             LOG_WARNING(
                 "[RHIExecutor] D3D12 uses the legacy queue adapter; upper Vulkan topology is unavailable"
@@ -581,6 +580,10 @@ RHIExecutor& RHIExecutor::Get() {
 }
 
 void RHIExecutor::StartUp() {
+    StartUp(RHISubmissionPipelinePolicy::DefaultBatchWindow);
+}
+
+void RHIExecutor::StartUp(uint32 _submission_batch_window) {
     if (RejectOwnedThreadBlockingCall("StartUp")) {
         return;
     }
@@ -597,13 +600,18 @@ void RHIExecutor::StartUp() {
     assert(executor.pending_submits.empty() && !executor.pending_present.has_value());
     assert(executor.active_sync_calls == 0 && "RHIExecutor sync survived device shutdown");
     executor.next_batch_sequence = 1;
+    executor.submission_batch_window =
+        RHISubmissionPipelinePolicy::ClampBatchWindow(
+            _submission_batch_window
+        );
     executor.recording_handoff.Start();
     executor.lifecycle_state     = ELifecycleState::Running;
 }
 
 std::shared_ptr<RHIBackendExecutor> RHIExecutor::GetBackendExecutorLocked() {
     if (!backend_executor) {
-        std::shared_ptr<RHIBackendExecutor> created = CreateBackendExecutor();
+        std::shared_ptr<RHIBackendExecutor> created =
+            CreateBackendExecutor(submission_batch_window);
         if (!created) {
             throw std::runtime_error("RHI backend factory returned no executor");
         }

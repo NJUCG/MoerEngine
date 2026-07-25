@@ -350,10 +350,194 @@ def _require_phase15c_completion_aggregate_cpu_probe(
     )
 
 
+def _require_bounded_cross_batch_pipeline(mode: str, text: str) -> None:
+    expected_window = {
+        "pipeline-window1": "1",
+        "pipeline-window2": "2",
+    }[mode]
+    pipeline = _testcase_marker(
+        "BoundedCrossBatchSubmissionPipeline", text
+    )
+    _require(
+        pipeline is not None and pipeline[0] == "PASS",
+        f"{mode}: missing bounded cross-batch pipeline PASS marker",
+    )
+    _, fields = pipeline
+    native_alias = fields.get("native_alias")
+    expected_overlap = (
+        "blocked"
+        if expected_window == "1" or native_alias == "true"
+        else "verified"
+    )
+    _require(
+        fields.get("window") == expected_window
+        and native_alias in {"true", "false"}
+        and fields.get("overlap_assertion") == expected_overlap
+        and fields.get("batches") == "2"
+        and fields.get("queues") == "Graphics,Compute"
+        and fields.get("source_order") == "G,C"
+        and fields.get("native_owner") == "Submission"
+        and fields.get("signals") == "success"
+        and fields.get("callbacks") == "exactly_once"
+        and fields.get("replay") == "0",
+        f"{mode}: incomplete bounded cross-batch pipeline contract",
+    )
+
+    overlap = _testcase_marker(
+        "BoundedCrossBatchSubmissionPipelineOverlap", text
+    )
+    require_overlap_marker = (
+        expected_window == "2" and native_alias == "true"
+    )
+    _require(
+        (overlap is not None) == require_overlap_marker,
+        f"{mode}: invalid bounded cross-batch alias overlap marker presence contract",
+    )
+    alias_native_ids: tuple[str, str] | None = None
+    if overlap is not None:
+        overlap_status, overlap_fields = overlap
+        graphics_native = overlap_fields.get("graphics_native")
+        compute_native = overlap_fields.get("compute_native")
+        _require(
+            expected_window == "2"
+            and native_alias == "true"
+            and overlap_status == "PASS"
+            and overlap_fields.get("requested_window") == "2"
+            and overlap_fields.get("effective_window") == "1"
+            and overlap_fields.get("reason") == "native_queue_alias"
+            and graphics_native is not None
+            and compute_native is not None
+            and graphics_native == compute_native
+            and overlap_fields.get("admission") == "blocked",
+            f"{mode}: invalid bounded cross-batch alias fallback contract",
+        )
+        alias_native_ids = (graphics_native, compute_native)
+
+    if expected_window == "1":
+        return
+
+    rejection = _testcase_marker(
+        "BoundedCrossBatchRecoverableRejection", text
+    )
+    _require(
+        rejection is not None and rejection[0] == "PASS",
+        f"{mode}: missing bounded cross-batch recoverable rejection PASS marker",
+    )
+    _, rejection_fields = rejection
+    rejection_native_alias = rejection_fields.get("native_alias")
+    expected_rejection_overlap = (
+        "blocked" if rejection_native_alias == "true" else "verified"
+    )
+    _require(
+        rejection_fields.get("window") == "2"
+        and rejection_native_alias in {"true", "false"}
+        and rejection_native_alias == native_alias
+        and rejection_fields.get("overlap_assertion")
+        == expected_rejection_overlap
+        and rejection_fields.get("batches") == "2"
+        and rejection_fields.get("batch0_native_submit") == "0"
+        and rejection_fields.get("batch0_callbacks")
+        == "ordinary1_success0"
+        and rejection_fields.get("batch0_signal") == "rejected"
+        and rejection_fields.get("batch1_native_submit") == "1"
+        and rejection_fields.get("batch1_callbacks")
+        == "ordinary1_success1"
+        and rejection_fields.get("batch1_signal") == "success"
+        and rejection_fields.get("native_owner") == "Submission"
+        and rejection_fields.get("replay") == "0",
+        f"{mode}: incomplete bounded cross-batch recoverable rejection contract",
+    )
+
+    rejection_overlap = _testcase_marker(
+        "BoundedCrossBatchRecoverableRejectionOverlap", text
+    )
+    _require(
+        (rejection_overlap is not None)
+        == (rejection_native_alias == "true"),
+        f"{mode}: invalid bounded recoverable alias overlap marker presence contract",
+    )
+    if rejection_overlap is not None:
+        rejection_overlap_status, rejection_overlap_fields = rejection_overlap
+        graphics_native = rejection_overlap_fields.get("graphics_native")
+        compute_native = rejection_overlap_fields.get("compute_native")
+        _require(
+            rejection_overlap_status == "PASS"
+            and rejection_overlap_fields.get("requested_window") == "2"
+            and rejection_overlap_fields.get("effective_window") == "1"
+            and rejection_overlap_fields.get("reason")
+            == "native_queue_alias"
+            and graphics_native is not None
+            and compute_native is not None
+            and graphics_native == compute_native
+            and (graphics_native, compute_native) == alias_native_ids
+            and rejection_overlap_fields.get("admission") == "blocked",
+            f"{mode}: invalid bounded recoverable alias fallback contract",
+        )
+
+    shutdown = _testcase_marker(
+        "BoundedPipelineShutdownCancellation", text
+    )
+    _require(
+        shutdown is not None and shutdown[0] == "PASS",
+        f"{mode}: missing bounded pipeline shutdown cancellation PASS marker",
+    )
+    _, shutdown_fields = shutdown
+    shutdown_native_alias = shutdown_fields.get("native_alias")
+    expected_shutdown_overlap = (
+        "blocked" if shutdown_native_alias == "true" else "verified"
+    )
+    _require(
+        shutdown_fields.get("window") == "2"
+        and shutdown_native_alias in {"true", "false"}
+        and shutdown_native_alias == native_alias
+        and shutdown_native_alias == rejection_native_alias
+        and shutdown_fields.get("overlap_assertion")
+        == expected_shutdown_overlap
+        and shutdown_fields.get("batch0_native_submit") == "0"
+        and shutdown_fields.get("batch1_native_submit") == "1"
+        and shutdown_fields.get("batch0_signal") == "rejected"
+        and shutdown_fields.get("batch1_signal") == "success"
+        and shutdown_fields.get("callbacks") == "exactly_once"
+        and shutdown_fields.get("concurrent_sync") == "drained"
+        and shutdown_fields.get("owners") == "stopped",
+        f"{mode}: incomplete bounded pipeline shutdown cancellation contract",
+    )
+
+    shutdown_overlap = _testcase_marker(
+        "BoundedPipelineShutdownCancellationOverlap", text
+    )
+    _require(
+        (shutdown_overlap is not None)
+        == (shutdown_native_alias == "true"),
+        f"{mode}: invalid bounded pipeline shutdown alias marker presence contract",
+    )
+    if shutdown_overlap is None:
+        return
+    shutdown_overlap_status, shutdown_overlap_fields = shutdown_overlap
+    graphics_native = shutdown_overlap_fields.get("graphics_native")
+    compute_native = shutdown_overlap_fields.get("compute_native")
+    _require(
+        shutdown_native_alias == "true"
+        and shutdown_overlap_status == "PASS"
+        and shutdown_overlap_fields.get("requested_window") == "2"
+        and shutdown_overlap_fields.get("effective_window") == "1"
+        and shutdown_overlap_fields.get("reason") == "native_queue_alias"
+        and graphics_native is not None
+        and compute_native is not None
+        and graphics_native == compute_native
+        and (graphics_native, compute_native) == alias_native_ids
+        and shutdown_overlap_fields.get("admission") == "blocked",
+        f"{mode}: invalid bounded pipeline shutdown alias fallback contract",
+    )
+
+
 def validate_log(mode: str, text: str) -> None:
     _require("[TESTCASE][FAIL]" not in text, f"{mode}: test emitted a FAIL marker")
     _require("VUID-" not in text, f"{mode}: Vulkan validation VUID was emitted")
     _require("Validation Error" not in text, f"{mode}: Vulkan validation error was emitted")
+    if mode in ("pipeline-window1", "pipeline-window2"):
+        _require_bounded_cross_batch_pipeline(mode, text)
+        return
     _require_phase15c_completion_aggregate_cpu_probe(mode, text)
     if mode == "translate-hard":
         retirement = _testcase_marker(
@@ -581,6 +765,10 @@ def run_case(executable: Path, outdir: Path, mode: str, timeout: float) -> Path:
         arguments.append("--inject-translate-failure")
     if mode == "multi-segment-hard":
         arguments.append("--inject-multi-segment-translate-failure")
+    if mode == "pipeline-window1":
+        arguments.append("--pipeline-window1")
+    if mode == "pipeline-window2":
+        arguments.append("--pipeline-window2")
 
     completed = subprocess.run(
         [str(executable), *arguments],
@@ -631,6 +819,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "heavy",
                 "translate-hard",
                 "multi-segment-hard",
+                "pipeline-window1",
+                "pipeline-window2",
             )
         ]
     except (OSError, subprocess.TimeoutExpired, VulkanTestError) as error:

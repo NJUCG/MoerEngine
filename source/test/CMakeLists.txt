@@ -124,6 +124,17 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHIThreadOwnershipContract COMMAND $<TARGET_FILE:${test_target}>)
 
+# CPU-only contract for the bounded cross-batch submission policy. It verifies
+# the configured window clamp and the correctness-critical Graphics/Compute
+# native-queue alias fallback without requiring alias-capable Vulkan hardware.
+set(test_target TestRHISubmissionPipelinePolicy)
+add_executable(${test_target} "RHISubmissionPipelinePolicyTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME RHISubmissionPipelinePolicyContract COMMAND $<TARGET_FILE:${test_target}>)
+
 # CPU-only contract for the Vulkan recorder work heuristic. This uses RHI
 # command payloads but does not create a Vulkan instance or device.
 set(test_target TestVulkanParallelRecordWorkEstimator)

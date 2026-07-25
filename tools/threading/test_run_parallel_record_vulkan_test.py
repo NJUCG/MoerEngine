@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 try:
     from . import run_parallel_record_vulkan_test as runner
@@ -12,6 +16,98 @@ def completion_probe_line() -> str:
     return (
         "[TESTCASE][PASS] name=MultiSegmentCompletionAggregateCpuProbe "
         "suffix_first=deferred prefix_second=ordinary1_success0 replay=0\n"
+    )
+
+
+def pipeline_line(
+    window: int,
+    native_alias: str,
+    overlap_assertion: str,
+    include_overlap_marker: bool | None = None,
+    include_recoverable_rejection: bool = True,
+    include_recoverable_overlap_marker: bool | None = None,
+    include_shutdown_cancellation: bool = True,
+    include_shutdown_overlap_marker: bool | None = None,
+) -> str:
+    alias_window2 = window == 2 and native_alias == "true"
+    emit_overlap_marker = (
+        alias_window2
+        if include_overlap_marker is None
+        else include_overlap_marker
+    )
+    overlap = ""
+    if emit_overlap_marker:
+        overlap = (
+            "[TESTCASE][PASS] "
+            "name=BoundedCrossBatchSubmissionPipelineOverlap "
+            "requested_window=2 effective_window=1 "
+            "reason=native_queue_alias graphics_native=7 "
+            "compute_native=7 admission=blocked\n"
+        )
+    recoverable_rejection = ""
+    if window == 2 and include_recoverable_rejection:
+        recoverable_rejection = (
+            "[TESTCASE][PASS] "
+            "name=BoundedCrossBatchRecoverableRejection "
+            f"window=2 native_alias={native_alias} "
+            f"overlap_assertion={overlap_assertion} batches=2 "
+            "batch0_native_submit=0 "
+            "batch0_callbacks=ordinary1_success0 "
+            "batch0_signal=rejected batch1_native_submit=1 "
+            "batch1_callbacks=ordinary1_success1 "
+            "batch1_signal=success native_owner=Submission replay=0\n"
+        )
+    emit_recoverable_overlap_marker = (
+        alias_window2
+        if include_recoverable_overlap_marker is None
+        else include_recoverable_overlap_marker
+    )
+    recoverable_overlap = ""
+    if emit_recoverable_overlap_marker:
+        recoverable_overlap = (
+            "[TESTCASE][PASS] "
+            "name=BoundedCrossBatchRecoverableRejectionOverlap "
+            "requested_window=2 effective_window=1 "
+            "reason=native_queue_alias graphics_native=7 "
+            "compute_native=7 admission=blocked\n"
+        )
+    emit_shutdown_overlap_marker = (
+        alias_window2
+        if include_shutdown_overlap_marker is None
+        else include_shutdown_overlap_marker
+    )
+    shutdown_overlap = ""
+    if emit_shutdown_overlap_marker:
+        shutdown_overlap = (
+            "[TESTCASE][PASS] "
+            "name=BoundedPipelineShutdownCancellationOverlap "
+            "requested_window=2 effective_window=1 "
+            "reason=native_queue_alias graphics_native=7 "
+            "compute_native=7 admission=blocked\n"
+        )
+    shutdown_cancellation = ""
+    if window == 2 and include_shutdown_cancellation:
+        shutdown_cancellation = (
+            "[TESTCASE][PASS] "
+            "name=BoundedPipelineShutdownCancellation "
+            f"window=2 native_alias={native_alias} "
+            f"overlap_assertion={overlap_assertion} "
+            "batch0_native_submit=0 batch1_native_submit=1 "
+            "batch0_signal=rejected batch1_signal=success "
+            "callbacks=exactly_once concurrent_sync=drained owners=stopped\n"
+        )
+    return (
+        overlap
+        + "[TESTCASE][PASS] name=BoundedCrossBatchSubmissionPipeline "
+        f"window={window} native_alias={native_alias} "
+        f"overlap_assertion={overlap_assertion} batches=2 "
+        "queues=Graphics,Compute source_order=G,C "
+        "native_owner=Submission signals=success callbacks=exactly_once "
+        "replay=0\n"
+        + recoverable_overlap
+        + recoverable_rejection
+        + shutdown_overlap
+        + shutdown_cancellation
     )
 
 
@@ -104,6 +200,394 @@ def summary(batch: int, outcome: str = "parallel") -> str:
 
 
 class VulkanRunnerTests(unittest.TestCase):
+    def test_pipeline_window1_contract_is_accepted(self) -> None:
+        runner.validate_log(
+            "pipeline-window1",
+            pipeline_line(1, "false", "blocked"),
+        )
+
+    def test_pipeline_window2_distinct_native_contract_is_accepted(
+        self,
+    ) -> None:
+        runner.validate_log(
+            "pipeline-window2",
+            pipeline_line(2, "false", "verified"),
+        )
+
+    def test_pipeline_window2_alias_fallback_contract_is_accepted(
+        self,
+    ) -> None:
+        runner.validate_log(
+            "pipeline-window2",
+            pipeline_line(
+                2,
+                "true",
+                "blocked",
+                include_overlap_marker=True,
+                include_shutdown_overlap_marker=True,
+            ),
+        )
+
+    def test_pipeline_window2_alias_requires_pipeline_overlap_marker(
+        self,
+    ) -> None:
+        text = pipeline_line(
+            2,
+            "true",
+            "blocked",
+            include_overlap_marker=False,
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "alias overlap marker presence contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_window_requires_common_contract_fields(self) -> None:
+        text = pipeline_line(1, "false", "blocked").replace(
+            "source_order=G,C",
+            "source_order=C,G",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete bounded cross-batch pipeline contract",
+        ):
+            runner.validate_log("pipeline-window1", text)
+
+    def test_pipeline_window1_requires_blocked_overlap(self) -> None:
+        text = pipeline_line(1, "false", "verified")
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete bounded cross-batch pipeline contract",
+        ):
+            runner.validate_log("pipeline-window1", text)
+
+    def test_pipeline_window2_distinct_native_requires_verified_overlap(
+        self,
+    ) -> None:
+        text = pipeline_line(2, "false", "skipped")
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete bounded cross-batch pipeline contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_window2_alias_requires_blocked_overlap(self) -> None:
+        text = pipeline_line(2, "true", "verified")
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete bounded cross-batch pipeline contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_window2_requires_recoverable_rejection_marker(
+        self,
+    ) -> None:
+        text = pipeline_line(
+            2,
+            "false",
+            "verified",
+            include_recoverable_rejection=False,
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "recoverable rejection PASS marker",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_recoverable_rejection_requires_no_rejected_submit(
+        self,
+    ) -> None:
+        text = pipeline_line(2, "false", "verified").replace(
+            "batch0_native_submit=0",
+            "batch0_native_submit=1",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete bounded cross-batch recoverable rejection contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_recoverable_rejection_requires_matching_alias(
+        self,
+    ) -> None:
+        text = pipeline_line(2, "false", "verified").replace(
+            "name=BoundedCrossBatchRecoverableRejection "
+            "window=2 native_alias=false",
+            "name=BoundedCrossBatchRecoverableRejection "
+            "window=2 native_alias=true",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete bounded cross-batch recoverable rejection contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_recoverable_rejection_marker_must_be_unique(
+        self,
+    ) -> None:
+        text = pipeline_line(2, "false", "verified")
+        duplicate = (
+            "[TESTCASE][PASS] "
+            "name=BoundedCrossBatchRecoverableRejection "
+            "window=2 native_alias=false overlap_assertion=verified "
+            "batches=2 batch0_native_submit=0 "
+            "batch0_callbacks=ordinary1_success0 "
+            "batch0_signal=rejected batch1_native_submit=1 "
+            "batch1_callbacks=ordinary1_success1 "
+            "batch1_signal=success native_owner=Submission replay=0\n"
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "expected at most one terminal marker",
+        ):
+            runner.validate_log("pipeline-window2", text + duplicate)
+
+    def test_pipeline_alias_requires_recoverable_overlap_marker(
+        self,
+    ) -> None:
+        text = pipeline_line(
+            2,
+            "true",
+            "blocked",
+            include_recoverable_overlap_marker=False,
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "recoverable alias overlap marker presence contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_recoverable_overlap_marker_rejected_for_distinct_queues(
+        self,
+    ) -> None:
+        text = pipeline_line(
+            2,
+            "false",
+            "verified",
+            include_recoverable_overlap_marker=True,
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "recoverable alias overlap marker presence contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_recoverable_overlap_requires_consistent_queue_ids(
+        self,
+    ) -> None:
+        text = pipeline_line(2, "true", "blocked").replace(
+            "name=BoundedCrossBatchRecoverableRejectionOverlap "
+            "requested_window=2 effective_window=1 "
+            "reason=native_queue_alias graphics_native=7 "
+            "compute_native=7 admission=blocked",
+            "name=BoundedCrossBatchRecoverableRejectionOverlap "
+            "requested_window=2 effective_window=1 "
+            "reason=native_queue_alias graphics_native=8 "
+            "compute_native=8 admission=blocked",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "invalid bounded recoverable alias fallback contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_window2_requires_shutdown_cancellation_marker(
+        self,
+    ) -> None:
+        text = pipeline_line(
+            2,
+            "false",
+            "verified",
+            include_shutdown_cancellation=False,
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "shutdown cancellation PASS marker",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_shutdown_cancellation_requires_stopped_owners(
+        self,
+    ) -> None:
+        text = pipeline_line(2, "false", "verified").replace(
+            "owners=stopped",
+            "owners=running",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete bounded pipeline shutdown cancellation contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_shutdown_cancellation_requires_matching_alias(
+        self,
+    ) -> None:
+        text = pipeline_line(2, "false", "verified").replace(
+            "name=BoundedPipelineShutdownCancellation "
+            "window=2 native_alias=false",
+            "name=BoundedPipelineShutdownCancellation "
+            "window=2 native_alias=true",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete bounded pipeline shutdown cancellation contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_shutdown_cancellation_marker_must_be_unique(
+        self,
+    ) -> None:
+        text = pipeline_line(2, "false", "verified")
+        duplicate = (
+            "[TESTCASE][PASS] name=BoundedPipelineShutdownCancellation "
+            "window=2 native_alias=false overlap_assertion=verified "
+            "batch0_native_submit=0 batch1_native_submit=1 "
+            "batch0_signal=rejected batch1_signal=success "
+            "callbacks=exactly_once concurrent_sync=drained owners=stopped\n"
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "expected at most one terminal marker",
+        ):
+            runner.validate_log("pipeline-window2", text + duplicate)
+
+    def test_pipeline_shutdown_overlap_requires_consistent_queue_ids(
+        self,
+    ) -> None:
+        text = pipeline_line(
+            2,
+            "true",
+            "blocked",
+            include_shutdown_overlap_marker=True,
+        ).replace(
+            "name=BoundedPipelineShutdownCancellationOverlap "
+            "requested_window=2 effective_window=1 "
+            "reason=native_queue_alias graphics_native=7 "
+            "compute_native=7 admission=blocked",
+            "name=BoundedPipelineShutdownCancellationOverlap "
+            "requested_window=2 effective_window=1 "
+            "reason=native_queue_alias graphics_native=8 "
+            "compute_native=8 admission=blocked",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "invalid bounded pipeline shutdown alias fallback contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_alias_requires_shutdown_overlap_marker(
+        self,
+    ) -> None:
+        text = pipeline_line(
+            2,
+            "true",
+            "blocked",
+            include_shutdown_overlap_marker=False,
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "shutdown alias marker presence contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_shutdown_overlap_marker_rejected_for_distinct_queues(
+        self,
+    ) -> None:
+        text = pipeline_line(
+            2,
+            "false",
+            "verified",
+            include_shutdown_overlap_marker=True,
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "shutdown alias marker presence contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_alias_overlap_marker_is_rejected_for_distinct_native_queues(
+        self,
+    ) -> None:
+        text = pipeline_line(
+            2,
+            "false",
+            "verified",
+            include_overlap_marker=True,
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "alias overlap marker presence contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_alias_overlap_requires_matching_native_queue_ids(
+        self,
+    ) -> None:
+        text = pipeline_line(
+            2,
+            "true",
+            "blocked",
+            include_overlap_marker=True,
+        ).replace("compute_native=7", "compute_native=8", 1)
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "invalid bounded cross-batch alias fallback contract",
+        ):
+            runner.validate_log("pipeline-window2", text)
+
+    def test_pipeline_modes_reject_validation_failures(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "Vulkan validation VUID",
+        ):
+            runner.validate_log(
+                "pipeline-window1",
+                "VUID-vkQueueSubmit-test\n"
+                + pipeline_line(1, "false", "blocked"),
+            )
+
+    def test_pipeline_modes_map_to_focused_executable_arguments(self) -> None:
+        cases = (
+            (
+                "pipeline-window1",
+                "--pipeline-window1",
+                pipeline_line(1, "false", "blocked"),
+            ),
+            (
+                "pipeline-window2",
+                "--pipeline-window2",
+                pipeline_line(2, "false", "verified"),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            for mode, expected_argument, output in cases:
+                with self.subTest(mode=mode):
+                    completed = subprocess.CompletedProcess(
+                        args=[],
+                        returncode=0,
+                        stdout=output,
+                        stderr="",
+                    )
+                    with mock.patch.object(
+                        runner.subprocess,
+                        "run",
+                        return_value=completed,
+                    ) as run:
+                        runner.run_case(
+                            Path("TestRHIParallelRecordVulkan.exe"),
+                            Path(temporary_directory),
+                            mode,
+                            30.0,
+                        )
+                    self.assertEqual(
+                        run.call_args.args[0],
+                        [
+                            "TestRHIParallelRecordVulkan.exe",
+                            expected_argument,
+                        ],
+                    )
+
     def test_serial_accepts_only_pass_marker(self) -> None:
         runner.validate_log("serial", pass_line("serial", "false"))
 

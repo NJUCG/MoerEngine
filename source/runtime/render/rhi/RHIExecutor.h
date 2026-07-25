@@ -3,6 +3,7 @@
 #include "RenderAPI.h"
 #include "rhi/RHIExecutorBackend.h"
 #include "rhi/RHIExecutorRecordingHandoff.h"
+#include "rhi/RHISubmissionPipelinePolicy.h"
 
 #include <condition_variable>
 #include <memory>
@@ -50,6 +51,7 @@ class RENDER_API RHIExecutor {
 public:
     static RHIExecutor& Get();
     static void StartUp();
+    static void StartUp(uint32 _submission_batch_window);
 
     void Submit(
         EQueueType             _queue,
@@ -126,6 +128,9 @@ private:
     size_t                                   active_sync_calls{0};
     uint64                                   shutdown_generation{0};
     uint64                                   completed_shutdown_generation{0};
+    uint32                                   submission_batch_window{
+        RHISubmissionPipelinePolicy::DefaultBatchWindow
+    };
     ELifecycleState                          lifecycle_state{ELifecycleState::Stopped};
     RHIExecutorRecordingHandoffQueue         recording_handoff{};
 };
