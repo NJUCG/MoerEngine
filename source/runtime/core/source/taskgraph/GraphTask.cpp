@@ -25,11 +25,15 @@ bool GraphEvent::AddSubsequent(BaseGraphTask* subsequent) {
 bool GraphEvent::IsComplete() const {
     return m_subsequents.IsClosed();
 }
-void BaseGraphTask::QueueTask(EThread::Type currentThread, bool shouldWakeupWorker) {
+void BaseGraphTask::QueueTask(EThread::Type currentThread, bool shouldWakeupWorker) noexcept {
     TaskGraph::GetInterface().QueueTask(this, m_preferd_thread, currentThread, shouldWakeupWorker);
 }
 
-void BaseGraphTask::PrerequestsComplete(EThread::Type currentThread, int32_t finishedCount, bool unlock) {
+void BaseGraphTask::PrerequestsComplete(
+    EThread::Type currentThread,
+    int32_t       finishedCount,
+    bool          unlock
+) noexcept {
     int32_t finished = finishedCount + (unlock ? 1 : 0);
     if (m_prerequests_count.fetch_sub(finished) == finished) {
         QueueTask(currentThread, true);

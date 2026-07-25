@@ -113,8 +113,66 @@ void CoverageAndBoundaryMetadataAreExplicit() {
            "synthesized segment did not cover the complete source submit");
     Expect(synthesized.segments[0].inherit_source_wait_events &&
                synthesized.segments[0].inherit_source_signal_events_and_callbacks &&
-               synthesized.segments[0].inherit_source_runtime_payload,
-           "single segment did not inherit both source boundaries");
+               !synthesized.segments[0].inherit_source_runtime_payload,
+           "pure Copy source unexpectedly inherited runtime payload");
+}
+
+void RuntimePayloadSkipsCopySegments() {
+    constexpr std::array mixed_segments{
+        RHISubmitSegment{EQueueType::Graphics, 0, 1},
+        RHISubmitSegment{EQueueType::Copy, 1, 2},
+        RHISubmitSegment{EQueueType::Graphics, 2, 3},
+    };
+    const std::array mixed_descriptions{
+        Describe(EQueueType::Graphics, 3, mixed_segments),
+    };
+    const RHISubmissionTopologyPlan mixed =
+        BuildRHISubmissionTopology(mixed_descriptions, 9);
+    Expect(mixed.IsValid() && mixed.segments.size() == 3,
+           "mixed Graphics/Copy/Graphics source did not build");
+    Expect(mixed.segments[0].inherit_source_wait_events &&
+               !mixed.segments[0].inherit_source_runtime_payload &&
+               !mixed.segments[1].inherit_source_wait_events &&
+               !mixed.segments[1].inherit_source_runtime_payload &&
+               !mixed.segments[2].inherit_source_wait_events &&
+               mixed.segments[2].inherit_source_signal_events_and_callbacks &&
+               mixed.segments[2].inherit_source_runtime_payload,
+           "mixed source boundary metadata selected the wrong runtime owner");
+
+    constexpr std::array copy_tail_segments{
+        RHISubmitSegment{EQueueType::Graphics, 0, 1},
+        RHISubmitSegment{EQueueType::Copy, 1, 2},
+    };
+    const std::array copy_tail_descriptions{
+        Describe(EQueueType::Graphics, 2, copy_tail_segments),
+    };
+    const RHISubmissionTopologyPlan copy_tail =
+        BuildRHISubmissionTopology(copy_tail_descriptions, 10);
+    Expect(copy_tail.IsValid() && copy_tail.segments.size() == 2,
+           "Graphics/Copy source did not build");
+    Expect(copy_tail.segments[0].inherit_source_wait_events &&
+               copy_tail.segments[0].inherit_source_runtime_payload &&
+               !copy_tail.segments[0].inherit_source_signal_events_and_callbacks &&
+               !copy_tail.segments[1].inherit_source_runtime_payload &&
+               copy_tail.segments[1].inherit_source_signal_events_and_callbacks,
+           "Copy tail incorrectly displaced the non-Copy runtime owner");
+
+    constexpr std::array pure_copy_segments{
+        RHISubmitSegment{EQueueType::Copy, 0, 1},
+        RHISubmitSegment{EQueueType::Copy, 1, 2},
+    };
+    const std::array pure_copy_descriptions{
+        Describe(EQueueType::Copy, 2, pure_copy_segments),
+    };
+    const RHISubmissionTopologyPlan pure_copy =
+        BuildRHISubmissionTopology(pure_copy_descriptions, 11);
+    Expect(pure_copy.IsValid() && pure_copy.segments.size() == 2,
+           "pure Copy source did not build");
+    Expect(pure_copy.segments[0].inherit_source_wait_events &&
+               !pure_copy.segments[0].inherit_source_runtime_payload &&
+               !pure_copy.segments[1].inherit_source_runtime_payload &&
+               pure_copy.segments[1].inherit_source_signal_events_and_callbacks,
+           "pure Copy source unexpectedly selected a runtime owner");
 }
 
 void SerialControlCreatesStableFrontierBarriers() {
@@ -236,6 +294,7 @@ int main() {
     try {
         StableInputOrderAndKeysArePreserved();
         CoverageAndBoundaryMetadataAreExplicit();
+        RuntimePayloadSkipsCopySegments();
         SerialControlCreatesStableFrontierBarriers();
         InvalidRangesAndQueuesFailClosed();
         EmptySubmitsRequireSideEffects();

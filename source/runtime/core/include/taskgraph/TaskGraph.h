@@ -23,12 +23,16 @@ public:
     CORE_API void WaitUntilTaskComplete(const GraphEventRef& task, EThread::Type currentThread);
     CORE_API void WaitUntilTaskComplete(GraphEventRef&& task, EThread::Type currentThread);
     CORE_API void AttachToNameThread(EThread::Type type);
-    virtual void  QueueTask(
-         BaseGraphTask* task,
-         EThread::Type  prefered_thread,
-         EThread::Type  current_thread = EThread::UNKNOWN_THREAD,
-         bool           wake_worker    = true
-     );
+    // Task allocation and construction happen before this publication
+    // boundary and may fail normally. Once QueueTask is entered, ownership
+    // can become visible to a worker, so no exception may escape back to the
+    // producer. A platform wake failure is therefore process-fatal.
+    virtual void QueueTask(
+        BaseGraphTask* task,
+        EThread::Type  prefered_thread,
+        EThread::Type  current_thread = EThread::UNKNOWN_THREAD,
+        bool           wake_worker    = true
+    ) noexcept;
     virtual void           ReturnThread(EThread::Type index);
     virtual BaseGraphTask* DequeueTask(int32_t threadIndex);
     CORE_API virtual void  ProcessThreadUntilIdle(EThread::Type index);
@@ -53,7 +57,7 @@ private:
     int32_t         GetThreadPriorityFromIndex(int32_t threadIndex) {
         return (threadIndex - m_named_thread_count) / m_worker_per_priority;
     }
-    void         WakeUpWorkerThread(int32_t threadIndex, QueueIndex index);
+    void         WakeUpWorkerThread(int32_t threadIndex, QueueIndex index) noexcept;
     WorkerThread m_workers[INT16_MAX];
     int32_t      m_thread_count;
     int32_t      m_named_thread_count;

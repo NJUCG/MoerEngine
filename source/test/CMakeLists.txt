@@ -145,6 +145,17 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME VulkanSubmissionRequestDispatchContract COMMAND $<TARGET_FILE:${test_target}>)
 
+# CPU-only dependency-wave contract for same-batch Vulkan translation.
+# Explicit topology edges unlock at translated, while native-queue aliases and
+# Copy/control boundaries retain packet ownership until released.
+set(test_target TestVulkanTranslateWaveScheduler)
+add_executable(${test_target} "VulkanTranslateWaveSchedulerTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanTranslateWaveSchedulerContract COMMAND $<TARGET_FILE:${test_target}>)
+
 # Compile-time contract for the engine's Volk integration. The source
 # intentionally includes vulkan_core.h before engine Vulkan headers to ensure
 # VK_NO_PROTOTYPES propagates through the same lightweight header interface

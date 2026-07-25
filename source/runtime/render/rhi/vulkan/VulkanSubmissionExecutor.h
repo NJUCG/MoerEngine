@@ -17,11 +17,12 @@
 
 namespace Moer::Render {
 
-// Owns the upper RHI submission stream for Vulkan. The translate owner prepares
-// one source at a time, then transfers its move-only packet to the sole native
-// Submission owner. Native queue submission remains single-owner and serial.
-// Validated non-zero async scopes may overlap GPU execution across distinct
-// native queues using explicit graph wait/signal events.
+// Owns the upper RHI submission stream for Vulkan. The Translate coordinator
+// may dispatch one explicit-RDG source per native queue lane to TaskGraph
+// workers, then transfers every move-only packet in stable source order to the
+// sole native Submission owner. Native queue submission remains single-owner
+// and serial. Validated non-zero async scopes may overlap CPU translation and
+// GPU execution across distinct native queues.
 class VulkanSubmissionExecutor final : public RHIBackendExecutor {
 public:
     VulkanSubmissionExecutor();
@@ -53,9 +54,10 @@ private:
     };
 
     struct BatchExceptionState {
-        // Sources below this cursor have already been terminalized by their
-        // native queue. The current source and every later source remain the
-        // rejection responsibility of the request on an unexpected exception.
+        // Executable entries below this cursor have already been terminalized
+        // by their native queue. A multi-segment upper source may occupy
+        // several entries; its source-level callback lifetime is protected by
+        // a completion aggregate spanning every segment.
         size_t first_unconsumed_source{0};
     };
 
@@ -119,7 +121,9 @@ private:
     bool                       claims_owned{false};
     bool                       hard_failed{false};
     bool                       logged_multi_source_topology{false};
+    bool                       logged_multi_segment_topology{false};
     bool                       logged_async_queue_scope{false};
+    bool                                                    logged_parallel_translate_wave{false};
     int32                      hard_failure_result{0};
     std::shared_ptr<Completion> stop_completion{};
     StaticArray<bool, static_cast<size_t>(EQueueType::Num)> used_queues{};

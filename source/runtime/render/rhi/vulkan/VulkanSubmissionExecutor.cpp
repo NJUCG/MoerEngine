@@ -4,16 +4,60 @@
 #include "platform/Platform.h"
 #include "rhi/RHI.h"
 #include "rhi/RHIThreadOwnership.h"
+#include "taskgraph/TaskGraph.h"
 #include "VulkanDevice.h"
 #include "VulkanQueue.h"
+#include "VulkanSubmissionDiagnostics.h"
+#include "VulkanTranslateWaveScheduler.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
+#include <latch>
 #include <limits>
+#include <memory>
+#include <mutex>
+#include <stdexcept>
 #include <string>
 
 namespace Moer::Render {
 namespace {
+
+std::atomic<const VulkanSourceSubmissionObserver*> g_source_submission_observer{nullptr};
+
+void NotifySourceSubmitted(
+    uint64     _batch_sequence,
+    uint32     _source_index,
+    uint32     _original_source_index,
+    uint32     _source_segment_index,
+    uint32     _source_segment_count,
+    EQueueType _queue,
+    uint64     _async_queue_scope,
+    bool       _cross_native_predecessor_wait
+) noexcept {
+    assert(
+        GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
+        "source submission diagnostics must run on the Submission owner"
+    );
+    const VulkanSourceSubmissionObserver* observer =
+        g_source_submission_observer.load(std::memory_order_acquire);
+    if (observer == nullptr) {
+        return;
+    }
+    observer->callback(
+        observer->context,
+        VulkanSourceSubmissionEvent{
+            .batch_sequence    = _batch_sequence,
+            .source_index      = _source_index,
+            .original_source_index         = _original_source_index,
+            .source_segment_index          = _source_segment_index,
+            .source_segment_count          = _source_segment_count,
+            .queue             = _queue,
+            .async_queue_scope = _async_queue_scope,
+            .cross_native_predecessor_wait = _cross_native_predecessor_wait,
+        }
+    );
+}
 
 GraphEventRef MakeCompletedEvent() {
     GraphEventRef event = GraphEvent::CreateGraphEvent();
@@ -50,6 +94,132 @@ bool IsCopyCommand(Command::EType _type) {
     }
 }
 
+bool IsParallelTranslateCandidate(const RHIBackendSubmissionBatchEntry& _entry) {
+    return (_entry.queue == EQueueType::Graphics || _entry.queue == EQueueType::Compute) &&
+           _entry.submit.translate_execution_class == ERHITranslateExecutionClass::Parallel &&
+           _entry.submit.HasExplicitResourceStateOwnership() && _entry.submit.async_queue_scope != 0;
+}
+
+void InvokeSourceCallbacksNoexcept(
+    Array<std::function<void()>>& _callbacks,
+    std::string_view              _context
+) noexcept {
+    for (std::function<void()>& callback : _callbacks) {
+        if (!callback) {
+            continue;
+        }
+        try {
+            callback();
+        } catch (const std::exception& error) {
+            try {
+                LOG_ERROR("{} callback threw: {}", _context, error.what());
+            } catch (...) {
+            }
+        } catch (...) {
+            try {
+                LOG_ERROR("{} callback threw", _context);
+            } catch (...) {
+            }
+        }
+    }
+    _callbacks.clear();
+}
+
+class VulkanMultiSegmentCompletionState final {
+public:
+    explicit VulkanMultiSegmentCompletionState(Array<FenceRef>&& _segment_outcomes) :
+        segment_outcomes(std::move(_segment_outcomes)),
+        retired(segment_outcomes.size(), uint8{0}),
+        remaining(segment_outcomes.size()) {}
+
+    void AdoptSourceCallbacks(
+        Array<std::function<void()>>&& _callbacks,
+        Array<std::function<void()>>&& _success_callbacks
+    ) noexcept {
+        callbacks         = std::move(_callbacks);
+        success_callbacks = std::move(_success_callbacks);
+    }
+
+    const FenceRef& SegmentOutcome(size_t _segment_index) const noexcept {
+        return segment_outcomes[_segment_index];
+    }
+
+    void Retire(size_t _segment_index) noexcept {
+        bool segment_success = false;
+        if (_segment_index < segment_outcomes.size()) {
+            auto* outcome   = ResourceCast(segment_outcomes[_segment_index].Get());
+            segment_success = outcome != nullptr && outcome->GetValue() >= 1 && !outcome->IsRejected(1) &&
+                              !outcome->IsFailed();
+        }
+
+        Array<std::function<void()>> final_callbacks{};
+        Array<std::function<void()>> final_success_callbacks{};
+        bool                         invoke_success = false;
+        {
+            std::lock_guard lock(mutex);
+            if (_segment_index >= retired.size() || retired[_segment_index] != 0) {
+                return;
+            }
+            retired[_segment_index] = 1;
+            all_success             = all_success && segment_success;
+            assert(remaining != 0);
+            --remaining;
+            if (remaining != 0) {
+                return;
+            }
+            invoke_success          = all_success;
+            final_callbacks         = std::move(callbacks);
+            final_success_callbacks = std::move(success_callbacks);
+        }
+
+        InvokeSourceCallbacksNoexcept(final_callbacks, "[RHIExecutor][Vulkan][MultiSegment] ordinary");
+        if (invoke_success) {
+            InvokeSourceCallbacksNoexcept(
+                final_success_callbacks, "[RHIExecutor][Vulkan][MultiSegment] success"
+            );
+        }
+    }
+
+private:
+    Array<FenceRef>              segment_outcomes{};
+    Array<uint8>                 retired{};
+    size_t                       remaining{0};
+    bool                         all_success{true};
+    std::mutex                   mutex{};
+    Array<std::function<void()>> callbacks{};
+    Array<std::function<void()>> success_callbacks{};
+};
+
+struct VulkanExecutableSourceMetadata {
+    uint32 original_source_index{0};
+    uint32 source_segment_index{0};
+    uint32 source_segment_count{1};
+    bool   cross_native_predecessor_wait{false};
+};
+
+struct VulkanSegmentMaterializationResult {
+    bool                                  changed{false};
+    size_t                                original_source_count{0};
+    size_t                                cross_native_wait_count{0};
+    Array<VulkanExecutableSourceMetadata> sources{};
+};
+
+struct VulkanOriginalSourceMaterialization {
+    bool                                               multi_segment{false};
+    size_t                                             executable_begin{0};
+    size_t                                             executable_count{1};
+    std::shared_ptr<VulkanMultiSegmentCompletionState> completion{};
+};
+
+CmdSubmit MakeEmptySubmit() {
+    return CmdSubmit(
+        Array<UniquePtr<Command>>{},
+        Array<std::function<void()>>{},
+        Array<std::function<void()>>{},
+        TCachedArgArray{}
+    );
+}
+
 struct BatchPreflightResult {
     bool             valid{true};
     std::string_view reason{"none"};
@@ -78,8 +248,7 @@ BatchPreflightResult ValidateBatch(const RHIBackendSubmissionBatch& _batch) {
     if (topology.source_plans.size() != _batch.submits.size()) {
         return RejectPreflight("source/topology count mismatch");
     }
-    if (_batch.present &&
-        (!_batch.present->swapchain || _batch.present->source.texture == nullptr)) {
+    if (_batch.present && (!_batch.present->swapchain || _batch.present->source.texture == nullptr)) {
         return RejectPreflight("invalid Present request");
     }
 
@@ -94,8 +263,7 @@ BatchPreflightResult ValidateBatch(const RHIBackendSubmissionBatch& _batch) {
             return RejectPreflight("invalid source queue", source_index);
         }
         if (source_plan.source_key.op_seq != _batch.sequence ||
-            source_plan.source_key.submit_idx != source_index ||
-            source_plan.root_queue != entry.queue ||
+            source_plan.source_key.submit_idx != source_index || source_plan.root_queue != entry.queue ||
             source_plan.command_count != submit.cmds.size() ||
             source_plan.execution_class != submit.translate_execution_class ||
             source_plan.has_side_effects != submit_has_work) {
@@ -104,59 +272,93 @@ BatchPreflightResult ValidateBatch(const RHIBackendSubmissionBatch& _batch) {
         if (source_plan.segment_plan_begin != expected_segment_begin) {
             return RejectPreflight("non-contiguous source plans", source_index);
         }
-        if (source_plan.segment_plan_count > 1) {
-            return RejectPreflight("multi-segment source is not supported", source_index);
-        }
 
-        const size_t expected_segment_count = submit_has_work ? 1u : 0u;
+        const RHISubmitSegment synthesized_segment{
+            .queue = source_plan.root_queue,
+            .begin = 0,
+            .end   = submit.cmds.size(),
+        };
+        const std::span<const RHISubmitSegment> source_segments =
+            submit.segments.empty() ? std::span<const RHISubmitSegment>(&synthesized_segment, 1) :
+                                      std::span<const RHISubmitSegment>(submit.segments);
+        const size_t expected_segment_count = submit_has_work ? source_segments.size() : 0;
         if (source_plan.segment_plan_count != expected_segment_count) {
             return RejectPreflight("source retention does not match payload", source_index);
         }
 
-        if (source_plan.segment_plan_count == 1) {
-            if (expected_segment_begin >= topology.segments.size()) {
+        const bool multi_segment = expected_segment_count > 1;
+        if (multi_segment && (!submit.HasExplicitResourceStateOwnership() || submit.async_queue_scope == 0)) {
+            return RejectPreflight(
+                "multi-segment source requires explicit state and async scope", source_index
+            );
+        }
+        if (multi_segment && (submit.b_sync || submit.b_delete_resources ||
+                              submit.ProfilingPhase() != ERHIProfilingPhase::Disabled)) {
+            return RejectPreflight("multi-segment source contains unsupported control payload", source_index);
+        }
+
+        std::optional<size_t> runtime_payload_segment{};
+        for (size_t segment_index = expected_segment_count; segment_index > 0; --segment_index) {
+            if (source_segments[segment_index - 1].queue != EQueueType::Copy) {
+                runtime_payload_segment = segment_index - 1;
+                break;
+            }
+        }
+        if (!runtime_payload_segment &&
+            (!submit.cached_args.empty() || !submit.debug_label.empty() || submit.b_sync ||
+             submit.b_delete_resources || submit.ProfilingPhase() != ERHIProfilingPhase::Disabled)) {
+            return RejectPreflight("Copy-only source contains unsupported runtime payload", source_index);
+        }
+
+        for (size_t segment_index = 0; segment_index < expected_segment_count; ++segment_index) {
+            const size_t flat_segment_index = expected_segment_begin + segment_index;
+            if (flat_segment_index >= topology.segments.size()) {
                 return RejectPreflight("source segment is out of range", source_index);
             }
-            const RHISubmissionSegmentPlan& segment_plan =
-                topology.segments[expected_segment_begin];
+            const RHISubmitSegment&         descriptor   = source_segments[segment_index];
+            const RHISubmissionSegmentPlan& segment_plan = topology.segments[flat_segment_index];
             if (segment_plan.key.op_seq != _batch.sequence ||
-                segment_plan.key.submit_idx != expected_segment_begin ||
+                segment_plan.key.submit_idx != flat_segment_index ||
                 segment_plan.source_key != source_plan.source_key ||
-                segment_plan.source_segment_index != 0 ||
-                segment_plan.segment.queue != source_plan.root_queue ||
-                segment_plan.segment.begin != 0 ||
-                segment_plan.segment.end != submit.cmds.size() ||
+                segment_plan.source_segment_index != segment_index ||
+                segment_plan.segment.queue != descriptor.queue ||
+                segment_plan.segment.begin != descriptor.begin ||
+                segment_plan.segment.end != descriptor.end ||
                 segment_plan.execution_class != source_plan.execution_class ||
-                !segment_plan.inherit_source_wait_events ||
-                !segment_plan.inherit_source_signal_events_and_callbacks ||
-                !segment_plan.inherit_source_runtime_payload) {
-                return RejectPreflight("single-segment plan does not match source", source_index);
+                segment_plan.inherit_source_wait_events != (segment_index == 0) ||
+                segment_plan.inherit_source_signal_events_and_callbacks !=
+                    (segment_index + 1 == expected_segment_count) ||
+                segment_plan.inherit_source_runtime_payload !=
+                    (runtime_payload_segment.has_value() && *runtime_payload_segment == segment_index)) {
+                return RejectPreflight("segment plan does not match source", source_index);
             }
-
-            if (!submit.segments.empty()) {
-                if (submit.segments.size() != 1 ||
-                    submit.segments.front().queue != source_plan.root_queue ||
-                    submit.segments.front().begin != 0 ||
-                    submit.segments.front().end != submit.cmds.size()) {
+            for (const SubmissionKey& dependency : segment_plan.dependencies) {
+                if (dependency.op_seq != _batch.sequence || dependency.submit_idx >= flat_segment_index) {
                     return RejectPreflight(
-                        "source segment does not match root queue", source_index
+                        "source segment has an unknown or non-preceding dependency", source_index
                     );
                 }
             }
-        }
 
-        for (size_t command_index = 0; command_index < submit.cmds.size(); ++command_index) {
-            const UniquePtr<Command>& command = submit.cmds[command_index];
-            if (!command) {
-                return RejectPreflight("null command", source_index, command_index);
+            if (expected_segment_count == 1 &&
+                (descriptor.queue != source_plan.root_queue || descriptor.begin != 0 ||
+                 descriptor.end != submit.cmds.size())) {
+                return RejectPreflight("single segment does not match root queue", source_index);
             }
-            if (command->Type() >= Command::EType::Count) {
-                return RejectPreflight("invalid command type", source_index, command_index);
-            }
-            if (entry.queue == EQueueType::Copy && !IsCopyCommand(command->Type())) {
-                return RejectPreflight(
-                    "unsupported command on Copy queue", source_index, command_index
-                );
+
+            for (size_t command_index = descriptor.begin; command_index < descriptor.end; ++command_index) {
+                const UniquePtr<Command>& command = submit.cmds[command_index];
+                if (!command) {
+                    return RejectPreflight("null command", source_index, command_index);
+                }
+                if (command->Type() >= Command::EType::Count) {
+                    return RejectPreflight("invalid command type", source_index, command_index);
+                }
+                if (descriptor.queue == EQueueType::Copy && !IsCopyCommand(command->Type())) {
+                    return RejectPreflight(
+                        "unsupported command on Copy segment", source_index, command_index
+                    );
+                }
             }
         }
 
@@ -171,7 +373,7 @@ BatchPreflightResult ValidateBatch(const RHIBackendSubmissionBatch& _batch) {
             }
         }
 
-        if (entry.queue == EQueueType::Copy) {
+        if (expected_segment_count == 1 && source_segments.front().queue == EQueueType::Copy) {
             if (!submit.cached_args.empty()) {
                 return RejectPreflight("Copy submit contains cached arguments", source_index);
             }
@@ -190,6 +392,231 @@ BatchPreflightResult ValidateBatch(const RHIBackendSubmissionBatch& _batch) {
         return RejectPreflight("unclaimed topology segments");
     }
     return {};
+}
+
+VulkanSegmentMaterializationResult
+MaterializeMultiSegmentBatch(RHIBackendSubmissionBatch& _batch, const RHIQueueTopology& _queue_topology) {
+    VulkanSegmentMaterializationResult result{};
+    result.original_source_count = _batch.submits.size();
+
+    size_t executable_source_count = 0;
+    for (const RHISourceSubmitPlan& source_plan : _batch.topology.source_plans) {
+        result.changed              = result.changed || source_plan.segment_plan_count > 1;
+        const size_t retained_count = source_plan.segment_plan_count > 1 ? source_plan.segment_plan_count : 1;
+        if (retained_count > std::numeric_limits<size_t>::max() - executable_source_count) {
+            throw std::runtime_error("multi-segment materialization source count overflow");
+        }
+        executable_source_count += retained_count;
+    }
+
+    if (executable_source_count > std::numeric_limits<uint32>::max()) {
+        throw std::runtime_error("multi-segment materialization exceeds SubmissionKey capacity");
+    }
+
+    result.sources.reserve(executable_source_count);
+    if (!result.changed) {
+        for (size_t source_index = 0; source_index < _batch.submits.size(); ++source_index) {
+            result.sources.emplace_back(VulkanExecutableSourceMetadata{
+                .original_source_index = static_cast<uint32>(source_index),
+                .source_segment_index  = 0,
+                .source_segment_count  = 1,
+            });
+        }
+        return result;
+    }
+
+    Array<VulkanOriginalSourceMaterialization> source_materializations(_batch.submits.size());
+    Array<RHIBackendSubmissionBatchEntry>      executable_sources{};
+    executable_sources.reserve(executable_source_count);
+
+    for (size_t source_index = 0; source_index < _batch.submits.size(); ++source_index) {
+        RHIBackendSubmissionBatchEntry& source_entry  = _batch.submits[source_index];
+        CmdSubmit&                      source_submit = source_entry.submit;
+        const RHISourceSubmitPlan&      source_plan   = _batch.topology.source_plans[source_index];
+
+        VulkanOriginalSourceMaterialization& materialization = source_materializations[source_index];
+        materialization.multi_segment                        = source_plan.segment_plan_count > 1;
+        materialization.executable_begin                     = executable_sources.size();
+        materialization.executable_count = materialization.multi_segment ? source_plan.segment_plan_count : 1;
+
+        if (!materialization.multi_segment) {
+            executable_sources.emplace_back(source_entry.queue, MakeEmptySubmit());
+            result.sources.emplace_back(VulkanExecutableSourceMetadata{
+                .original_source_index = static_cast<uint32>(source_index),
+                .source_segment_index  = 0,
+                .source_segment_count  = 1,
+            });
+            continue;
+        }
+
+        Array<FenceRef> segment_outcomes{};
+        segment_outcomes.reserve(source_plan.segment_plan_count);
+        for (size_t segment_index = 0; segment_index < source_plan.segment_plan_count; ++segment_index) {
+            FenceRef outcome = RenderDevice::Get().CreateFence();
+            if (!outcome.IsValid()) {
+                throw std::runtime_error("multi-segment materialization failed to create completion fence");
+            }
+            segment_outcomes.emplace_back(std::move(outcome));
+        }
+        materialization.completion =
+            std::make_shared<VulkanMultiSegmentCompletionState>(std::move(segment_outcomes));
+
+        for (size_t segment_index = 0; segment_index < source_plan.segment_plan_count; ++segment_index) {
+            const RHISubmissionSegmentPlan& segment_plan =
+                _batch.topology.segments[source_plan.segment_plan_begin + segment_index];
+            const RHISubmitSegment& descriptor    = segment_plan.segment;
+            const size_t            command_count = descriptor.end - descriptor.begin;
+
+            CmdSubmit segment_submit = MakeEmptySubmit();
+            segment_submit.cmds.reserve(command_count);
+            segment_submit.callbacks.reserve(1);
+            segment_submit.signal_events.reserve(
+                1 + (segment_plan.inherit_source_signal_events_and_callbacks ?
+                         source_submit.signal_events.size() :
+                         0)
+            );
+            segment_submit.wait_events.reserve(
+                (segment_plan.inherit_source_wait_events ? source_submit.wait_events.size() : 0) + 1
+            );
+            segment_submit.segments.reserve(1);
+
+            segment_submit.resource_state_ownership  = source_submit.resource_state_ownership;
+            segment_submit.translate_execution_class = source_submit.translate_execution_class;
+            segment_submit.async_queue_scope         = source_submit.async_queue_scope;
+            segment_submit.debug_label_color         = source_submit.debug_label_color;
+
+            if (descriptor.queue != EQueueType::Copy) {
+                segment_submit.cached_args = source_submit.cached_args;
+            }
+            if (segment_plan.inherit_source_runtime_payload) {
+                segment_submit.debug_label = source_submit.debug_label;
+            }
+
+            segment_submit.segments.emplace_back(RHISubmitSegment{
+                .queue = descriptor.queue,
+                .begin = 0,
+                .end   = command_count,
+            });
+
+            const FenceRef& segment_outcome = materialization.completion->SegmentOutcome(segment_index);
+            segment_submit.signal_events.emplace_back(SignalEvent{
+                .timeline_handle = uint64(segment_outcome.Get()),
+                .value           = 1,
+            });
+            segment_submit.callbacks.emplace_back([completion = materialization.completion, segment_index] {
+                completion->Retire(segment_index);
+            });
+
+            bool cross_native_predecessor_wait = false;
+            if (segment_index != 0) {
+                const RHISubmissionSegmentPlan& predecessor_plan =
+                    _batch.topology.segments[source_plan.segment_plan_begin + segment_index - 1];
+                cross_native_predecessor_wait =
+                    _queue_topology.Resolve(predecessor_plan.segment.queue).native_queue_id !=
+                    _queue_topology.Resolve(descriptor.queue).native_queue_id;
+                if (cross_native_predecessor_wait) {
+                    const FenceRef& predecessor_outcome =
+                        materialization.completion->SegmentOutcome(segment_index - 1);
+                    segment_submit.wait_events.emplace_back(WaitEvent{
+                        .timeline_handle = uint64(predecessor_outcome.Get()),
+                        .value           = 1,
+                    });
+                    ++result.cross_native_wait_count;
+                }
+            }
+
+            executable_sources.emplace_back(descriptor.queue, std::move(segment_submit));
+            result.sources.emplace_back(VulkanExecutableSourceMetadata{
+                .original_source_index         = static_cast<uint32>(source_index),
+                .source_segment_index          = static_cast<uint32>(segment_index),
+                .source_segment_count          = static_cast<uint32>(source_plan.segment_plan_count),
+                .cross_native_predecessor_wait = cross_native_predecessor_wait,
+            });
+        }
+    }
+
+    assert(executable_sources.size() == executable_source_count);
+    assert(result.sources.size() == executable_source_count);
+
+    // Build and validate the flattened immutable topology before moving any
+    // command, callback, or external synchronization ownership out of the
+    // original sources. Every operation after this point is pre-reserved and
+    // noexcept for the owned payload types.
+    Array<RHISourceSubmitDescription> descriptions{};
+    descriptions.reserve(executable_source_count);
+    for (size_t source_index = 0; source_index < _batch.submits.size(); ++source_index) {
+        const RHIBackendSubmissionBatchEntry&      source_entry    = _batch.submits[source_index];
+        const VulkanOriginalSourceMaterialization& materialization = source_materializations[source_index];
+        if (!materialization.multi_segment) {
+            descriptions.emplace_back(RHISourceSubmitDescription{
+                .root_queue      = source_entry.queue,
+                .command_count   = source_entry.submit.cmds.size(),
+                .segments        = source_entry.submit.segments,
+                .execution_class = source_entry.submit.translate_execution_class,
+                .has_side_effects =
+                    SubmitHasSideEffects(source_entry.submit) || !source_entry.submit.cmds.empty(),
+            });
+            continue;
+        }
+
+        for (size_t segment_index = 0; segment_index < materialization.executable_count; ++segment_index) {
+            const RHIBackendSubmissionBatchEntry& executable_entry =
+                executable_sources[materialization.executable_begin + segment_index];
+            descriptions.emplace_back(RHISourceSubmitDescription{
+                .root_queue       = executable_entry.queue,
+                .command_count    = executable_entry.submit.segments.front().end,
+                .segments         = executable_entry.submit.segments,
+                .execution_class  = executable_entry.submit.translate_execution_class,
+                .has_side_effects = true,
+            });
+        }
+    }
+
+    RHISubmissionTopologyPlan executable_topology = BuildRHISubmissionTopology(descriptions, _batch.sequence);
+    if (!executable_topology.IsValid() ||
+        executable_topology.source_plans.size() != executable_sources.size()) {
+        throw std::runtime_error("multi-segment materialization produced an invalid executable topology");
+    }
+
+    for (size_t source_index = 0; source_index < _batch.submits.size(); ++source_index) {
+        RHIBackendSubmissionBatchEntry&      source_entry    = _batch.submits[source_index];
+        VulkanOriginalSourceMaterialization& materialization = source_materializations[source_index];
+        if (!materialization.multi_segment) {
+            executable_sources[materialization.executable_begin].submit = std::move(source_entry.submit);
+            continue;
+        }
+
+        materialization.completion->AdoptSourceCallbacks(
+            std::move(source_entry.submit.callbacks), std::move(source_entry.submit.success_callbacks)
+        );
+
+        const RHISourceSubmitPlan& source_plan = _batch.topology.source_plans[source_index];
+        for (size_t segment_index = 0; segment_index < materialization.executable_count; ++segment_index) {
+            const RHISubmitSegment& descriptor =
+                _batch.topology.segments[source_plan.segment_plan_begin + segment_index].segment;
+            CmdSubmit& executable_submit =
+                executable_sources[materialization.executable_begin + segment_index].submit;
+            for (size_t command_index = descriptor.begin; command_index < descriptor.end; ++command_index) {
+                executable_submit.cmds.emplace_back(std::move(source_entry.submit.cmds[command_index]));
+            }
+        }
+
+        CmdSubmit& first_submit = executable_sources[materialization.executable_begin].submit;
+        for (const WaitEvent& wait : source_entry.submit.wait_events) {
+            first_submit.wait_events.emplace_back(wait);
+        }
+
+        CmdSubmit& last_submit =
+            executable_sources[materialization.executable_begin + materialization.executable_count - 1]
+                .submit;
+        for (const SignalEvent& signal : source_entry.submit.signal_events) {
+            last_submit.signal_events.emplace_back(signal);
+        }
+    }
+
+    _batch.submits  = std::move(executable_sources);
+    _batch.topology = std::move(executable_topology);
+    return result;
 }
 
 const char* TopologyErrorName(ERHISubmissionTopologyError _error) {
@@ -220,6 +647,71 @@ void ResolveRejectedPresent(std::optional<RHIPresentRequest>& _present) {
 
 } // namespace
 
+VulkanMultiSegmentCompletionProbeResult RunVulkanMultiSegmentCompletionProbeForTesting() {
+    Array<FenceRef> segment_outcomes{};
+    segment_outcomes.reserve(2);
+    segment_outcomes.emplace_back(RenderDevice::Get().CreateFence());
+    segment_outcomes.emplace_back(RenderDevice::Get().CreateFence());
+    if (!segment_outcomes[0].IsValid() || !segment_outcomes[1].IsValid()) {
+        throw std::runtime_error("multi-segment completion probe failed to create fences");
+    }
+
+    auto   completion = std::make_shared<VulkanMultiSegmentCompletionState>(std::move(segment_outcomes));
+    uint32 ordinary_callback_count = 0;
+    uint32 success_callback_count  = 0;
+    completion->AdoptSourceCallbacks(
+        Array<std::function<void()>>{[&ordinary_callback_count] {
+            ++ordinary_callback_count;
+        }},
+        Array<std::function<void()>>{[&success_callback_count] {
+            ++success_callback_count;
+        }}
+    );
+
+    VulkanMultiSegmentCompletionProbeResult result{};
+    auto*                                   suffix = ResourceCast(completion->SegmentOutcome(1).Get());
+    auto*                                   prefix = ResourceCast(completion->SegmentOutcome(0).Get());
+    if (suffix == nullptr || prefix == nullptr) {
+        throw std::runtime_error("multi-segment completion probe received non-Vulkan fences");
+    }
+
+    suffix->Fail(VK_ERROR_UNKNOWN);
+    completion->Retire(1);
+    result.suffix_retirement_deferred_callbacks = ordinary_callback_count == 0 && success_callback_count == 0;
+
+    prefix->Notify(1);
+    completion->Retire(0);
+    result.prefix_retirement_completed_callbacks =
+        ordinary_callback_count == 1 && success_callback_count == 0;
+
+    completion->Retire(1);
+    completion->Retire(0);
+    result.repeated_retirement_suppressed = ordinary_callback_count == 1 && success_callback_count == 0;
+    result.ordinary_callback_count        = ordinary_callback_count;
+    result.success_callback_count         = success_callback_count;
+    return result;
+}
+
+bool TryInstallVulkanSourceSubmissionObserver(const VulkanSourceSubmissionObserver* _observer) noexcept {
+    if (_observer == nullptr || _observer->callback == nullptr) {
+        return false;
+    }
+    const VulkanSourceSubmissionObserver* expected = nullptr;
+    return g_source_submission_observer.compare_exchange_strong(
+        expected, _observer, std::memory_order_release, std::memory_order_relaxed
+    );
+}
+
+bool RemoveVulkanSourceSubmissionObserver(const VulkanSourceSubmissionObserver* _observer) noexcept {
+    if (_observer == nullptr) {
+        return false;
+    }
+    const VulkanSourceSubmissionObserver* expected = _observer;
+    return g_source_submission_observer.compare_exchange_strong(
+        expected, nullptr, std::memory_order_acq_rel, std::memory_order_acquire
+    );
+}
+
 VulkanSubmissionExecutor::VulkanSubmissionExecutor() {
     auto& graphics_queue = static_cast<VkCommandQueue&>(
         RenderDevice::Get().GetCommandQueue(EQueueType::Graphics)
@@ -231,6 +723,7 @@ VulkanSubmissionExecutor::VulkanSubmissionExecutor() {
         static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
     bool graphics_claimed = false;
     bool compute_claimed  = false;
+    bool copy_claimed     = false;
     try {
         graphics_claimed = graphics_queue.ClaimRuntimeOwnership();
         if (!graphics_claimed) {
@@ -244,14 +737,20 @@ VulkanSubmissionExecutor::VulkanSubmissionExecutor() {
                 "Vulkan Compute queue ownership conflicts with legacy execution"
             );
         }
-        copy_queue.EnableRuntimeDependencyWaits();
+        copy_claimed = copy_queue.ClaimRuntimeOwnership();
+        if (!copy_claimed) {
+            throw std::runtime_error(
+                "Vulkan Copy queue ownership conflicts with legacy execution"
+            );
+        }
         claims_owned = true;
 
         submission_thread = std::jthread([this] { RunSubmission(); });
         executor_thread   = std::jthread([this] { RunExecutor(); });
         LOG_INFO(
             "[RHIExecutor][Vulkan] ownership runtime started "
-            "Executor=1 Translate=1 Submission=1 window=1"
+            "Executor=1 TranslateCoordinator=1 TranslateWorkers=TaskGraph "
+            "Submission=1 batch_window=1"
         );
     } catch (...) {
         graphics_queue.CancelRuntimeDependencyWaits();
@@ -268,6 +767,9 @@ VulkanSubmissionExecutor::VulkanSubmissionExecutor() {
         }
         if (submission_thread.joinable()) {
             StopSubmissionThread();
+        }
+        if (copy_claimed) {
+            copy_queue.ReleaseRuntimeOwnership();
         }
         if (compute_claimed) {
             compute_queue.ReleaseRuntimeOwnership();
@@ -289,6 +791,9 @@ VulkanSubmissionExecutor::~VulkanSubmissionExecutor() {
         auto& compute_queue = static_cast<VkCommandQueue&>(
             RenderDevice::Get().GetCommandQueue(EQueueType::Compute)
         );
+        auto& copy_queue =
+            static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
+        copy_queue.ReleaseRuntimeOwnership();
         compute_queue.ReleaseRuntimeOwnership();
         graphics_queue.ReleaseRuntimeOwnership();
         claims_owned = false;
@@ -348,6 +853,7 @@ GraphEventRef VulkanSubmissionExecutor::Sync(ERHISyncDepth _depth) {
         });
     }
     cv.notify_one();
+    NotifyVulkanBackendSyncWait();
     completion->Wait();
     return MakeCompletedEvent();
 }
@@ -680,6 +1186,46 @@ void VulkanSubmissionExecutor::ProcessBatch(
         return;
     }
 
+    const RHIQueueTopology                   queue_topology = RenderDevice::Get().GetQueueTopology();
+    const VulkanSegmentMaterializationResult materialization =
+        MaterializeMultiSegmentBatch(_batch, queue_topology);
+    if (materialization.changed) {
+        const BatchPreflightResult executable_preflight = ValidateBatch(_batch);
+        if (!executable_preflight.valid) {
+            LOG_ERROR(
+                "[RHIExecutor][Vulkan][MultiSegment] batch={} "
+                "executable preflight rejected reason={} topology_error={} "
+                "source={} command={}",
+                _batch.sequence,
+                executable_preflight.reason,
+                TopologyErrorName(_batch.topology.error),
+                executable_preflight.source_index,
+                executable_preflight.command_index
+            );
+            hard_failed         = true;
+            hard_failure_result = static_cast<int32>(VK_ERROR_UNKNOWN);
+            RejectBatch(
+                std::move(_batch),
+                static_cast<int32>(VK_ERROR_UNKNOWN),
+                executable_preflight.reason,
+                0,
+                &_exception_state.first_unconsumed_source
+            );
+            return;
+        }
+        if (!logged_multi_segment_topology) {
+            logged_multi_segment_topology = true;
+            LOG_INFO(
+                "[RHIExecutor][Vulkan][MultiSegment] "
+                "original_sources={} executable_segments={} "
+                "cross_native_waits={} completion_aggregate=true",
+                materialization.original_source_count,
+                _batch.submits.size(),
+                materialization.cross_native_wait_count
+            );
+        }
+    }
+
     if (!logged_multi_source_topology && _batch.submits.size() > 1) {
         logged_multi_source_topology = true;
         LOG_INFO(
@@ -696,6 +1242,14 @@ void VulkanSubmissionExecutor::ProcessBatch(
         if (_result == VK_SUCCESS) {
             _result = VK_ERROR_UNKNOWN;
         }
+        // prepare_source may have admitted a later ready native lane before
+        // the stable submission cursor rejects an earlier source. Preserve
+        // gpu_frontier for successfully submitted work, but force the next
+        // batch (even one reusing the same graph scope id) to freeze a fresh
+        // entry frontier and republish its first-lane waits.
+        active_async_queue_scope = 0;
+        async_scope_entry_frontier.fill(std::nullopt);
+        async_scope_seen_queues.fill(false);
         hard_failed         = true;
         hard_failure_result = static_cast<int32>(_result);
         _exception_state.first_unconsumed_source =
@@ -714,6 +1268,9 @@ void VulkanSubmissionExecutor::ProcessBatch(
             if (_result == VK_SUCCESS) {
                 _result = VK_ERROR_UNKNOWN;
             }
+            active_async_queue_scope = 0;
+            async_scope_entry_frontier.fill(std::nullopt);
+            async_scope_seen_queues.fill(false);
             _exception_state.first_unconsumed_source =
                 std::min(_begin, _batch.submits.size());
             RejectBatch(
@@ -726,8 +1283,6 @@ void VulkanSubmissionExecutor::ProcessBatch(
             _exception_state.first_unconsumed_source = _batch.submits.size();
         };
 
-    const RHIQueueTopology queue_topology =
-        RenderDevice::Get().GetQueueTopology();
     auto same_native_queue = [&](EQueueType lhs, EQueueType rhs) {
         return queue_topology.Resolve(lhs).native_queue_id ==
                queue_topology.Resolve(rhs).native_queue_id;
@@ -781,19 +1336,12 @@ void VulkanSubmissionExecutor::ProcessBatch(
             }
             gpu_frontier[static_cast<size_t>(queue)] = completion;
         };
-
-    // Keep every source in the request-owned batch until its queue call has
-    // returned. If reorder, descriptor-lease, allocator, or native recording
-    // setup throws, Run's request barrier can still terminalize the current
-    // source callbacks/signals and every later source. Moving all sources into
-    // a temporary expansion array here would lose those obligations on unwind.
-    for (size_t source_index = 0; source_index < _batch.submits.size(); ++source_index) {
+    auto prepare_source = [&](size_t source_index) {
         RHIBackendSubmissionBatchEntry& entry = _batch.submits[source_index];
         const RHISourceSubmitPlan& source_plan =
             _batch.topology.source_plans[source_index];
         if (source_plan.segment_plan_count == 0) {
-            _exception_state.first_unconsumed_source = source_index + 1;
-            continue;
+            return false;
         }
 
         assert(source_plan.segment_plan_count == 1);
@@ -812,12 +1360,13 @@ void VulkanSubmissionExecutor::ProcessBatch(
             async_scope_entry_frontier.fill(std::nullopt);
             async_scope_seen_queues.fill(false);
             append_frontier_waits(entry.submit, entry.queue, gpu_frontier);
-        } else {
+            return true;
+        }
+
             if (active_async_queue_scope != async_scope) {
                 // A new graph transaction begins after the complete prior
-                // frontier. Each native queue waits that frozen entry
-                // frontier once, while explicit RDG waits order work inside
-                // the scope.
+            // frontier. Each native queue waits that frozen entry frontier
+            // once, while explicit RDG waits order work inside the scope.
                 active_async_queue_scope    = async_scope;
                 async_scope_entry_frontier  = gpu_frontier;
                 async_scope_seen_queues.fill(false);
@@ -837,16 +1386,502 @@ void VulkanSubmissionExecutor::ProcessBatch(
                 );
                 mark_scope_queue_seen(entry.queue);
             }
+        return true;
+    };
+    auto is_parallel_translate_candidate = [&](size_t source_index) {
+        return source_index < _batch.submits.size() &&
+               _batch.topology.source_plans[source_index].segment_plan_count == 1 &&
+               IsParallelTranslateCandidate(_batch.submits[source_index]);
+    };
+    auto process_parallel_translate_group = [&](size_t group_begin, size_t group_end) {
+        using namespace VulkanTranslateWaveDetail;
+
+        assert(group_begin < group_end);
+        assert(group_end <= _batch.submits.size());
+
+        const size_t                group_size = group_end - group_begin;
+        Array<Array<SubmissionKey>> dependency_storage(group_size);
+        Array<TranslateWaveNode>    schedule_nodes{};
+        schedule_nodes.reserve(group_size);
+
+        const size_t first_segment = _batch.topology.source_plans[group_begin].segment_plan_begin;
+        const size_t last_segment  = _batch.topology.source_plans[group_end - 1].segment_plan_begin;
+        for (size_t local_index = 0; local_index < group_size; ++local_index) {
+            const size_t               source_index = group_begin + local_index;
+            const RHISourceSubmitPlan& source_plan  = _batch.topology.source_plans[source_index];
+            assert(source_plan.segment_plan_count == 1);
+            const RHISubmissionSegmentPlan& segment_plan =
+                _batch.topology.segments[source_plan.segment_plan_begin];
+
+            Array<SubmissionKey>& dependencies = dependency_storage[local_index];
+            dependencies.reserve(segment_plan.dependencies.size());
+            for (const SubmissionKey& dependency : segment_plan.dependencies) {
+                // A dependency outside this contiguous explicit-RDG
+                // group belongs to an already terminalized prefix.
+                if (dependency.submit_idx >= first_segment && dependency.submit_idx <= last_segment) {
+                    dependencies.emplace_back(dependency);
         }
+            }
+
+            schedule_nodes.emplace_back(TranslateWaveNode{
+                .key             = segment_plan.key,
+                .native_queue_id = queue_topology.Resolve(_batch.submits[source_index].queue).native_queue_id,
+                .async_translate = true,
+                .dependencies    = dependencies,
+            });
+        }
+
+        TranslateWaveScheduler scheduler{};
+        if (!scheduler.Build(schedule_nodes)) {
+            const size_t error_node = scheduler.GetErrorNodeIndex();
+            LOG_ERROR(
+                "[RHIExecutor][Vulkan][ParallelTranslate] "
+                "schedule rejected batch={} source={} error={} "
+                "dependency={}",
+                _batch.sequence,
+                error_node == TranslateWaveScheduler::NoIndex ? group_begin : group_begin + error_node,
+                static_cast<uint32>(scheduler.GetBuildError()),
+                scheduler.GetErrorDependencyIndex()
+            );
+            reject_remaining(group_begin, VK_ERROR_UNKNOWN, "parallel Translate schedule rejected");
+            return false;
+        }
+
+        struct TranslateGroupSlot {
+            size_t                                                     source_index{0};
+            SubmissionKey                                              key{};
+            VkCommandQueue*                                            queue{nullptr};
+            EQueueType                                                 queue_type{EQueueType::Ignore};
+            uint64                                                     async_queue_scope{0};
+            bool                                                       prepared{false};
+            bool                                                       attempted{false};
+            bool                                                       terminalized{false};
+            std::optional<VkCommandQueue::CurrentVulkanRecordedSubmit> recorded{};
+        };
+
+        Array<TranslateGroupSlot> slots{};
+        slots.reserve(group_size);
+        for (size_t local_index = 0; local_index < group_size; ++local_index) {
+            const size_t                    source_index = group_begin + local_index;
+            const RHISourceSubmitPlan&      source_plan  = _batch.topology.source_plans[source_index];
+            const RHISubmissionSegmentPlan& segment_plan =
+                _batch.topology.segments[source_plan.segment_plan_begin];
+            auto& queue = static_cast<VkCommandQueue&>(
+                RenderDevice::Get().GetCommandQueue(_batch.submits[source_index].queue)
+            );
+            slots.emplace_back(TranslateGroupSlot{
+                .source_index      = source_index,
+                .key               = segment_plan.key,
+                .queue             = &queue,
+                .queue_type        = _batch.submits[source_index].queue,
+                .async_queue_scope = _batch.submits[source_index].submit.async_queue_scope,
+            });
+        }
+
+        // Group-wide terminalization is deliberately declared after the
+        // slots so its destructor runs first. It closes every translated
+        // packet and every untouched raw source before the outer request
+        // exception barrier can reject the later batch suffix.
+        struct TranslateGroupTerminalizer {
+            RHIBackendSubmissionBatch* batch{nullptr};
+            Array<TranslateGroupSlot>* slots{nullptr};
+            size_t                     group_end{0};
+            size_t*                    first_unconsumed_source{nullptr};
+            bool                       armed{true};
+
+            TranslateGroupTerminalizer(
+                RHIBackendSubmissionBatch* _batch,
+                Array<TranslateGroupSlot>* _slots,
+                size_t                     _group_end,
+                size_t*                    _first_unconsumed_source
+            ) noexcept :
+                batch(_batch),
+                slots(_slots),
+                group_end(_group_end),
+                first_unconsumed_source(_first_unconsumed_source) {}
+
+            TranslateGroupTerminalizer(const TranslateGroupTerminalizer&)            = delete;
+            TranslateGroupTerminalizer& operator=(const TranslateGroupTerminalizer&) = delete;
+
+            ~TranslateGroupTerminalizer() noexcept {
+                TerminalizeAll(VK_ERROR_UNKNOWN);
+            }
+
+            void TerminalizeAll(VkResult result) noexcept {
+                if (!armed) {
+                    return;
+                }
+                if (result == VK_SUCCESS) {
+                    result = VK_ERROR_UNKNOWN;
+                }
+                for (TranslateGroupSlot& slot : *slots) {
+                    if (slot.terminalized) {
+                        continue;
+                    }
+                    RHIBackendSubmissionBatchEntry& entry = batch->submits[slot.source_index];
+                    if (slot.recorded) {
+                        slot.queue->RejectRecordedForRuntime(std::move(*slot.recorded), result);
+                    } else if (!slot.attempted) {
+                        slot.queue->RejectForRuntime(std::move(entry.submit), result);
+                    }
+                    // A null result from an attempted Translate already
+                    // owns a rejected Completion retirement.
+                    slot.terminalized = true;
+                }
+                if (first_unconsumed_source != nullptr) {
+                    *first_unconsumed_source = std::max(*first_unconsumed_source, group_end);
+                }
+                armed = false;
+            }
+
+            void Disarm() noexcept {
+                if (first_unconsumed_source != nullptr) {
+                    *first_unconsumed_source = std::max(*first_unconsumed_source, group_end);
+                }
+                armed = false;
+            }
+        } terminalizer{&_batch, &slots, group_end, &_exception_state.first_unconsumed_source};
+
+        auto slot_for_key = [&](const SubmissionKey& key) -> TranslateGroupSlot& {
+            assert(key.op_seq == _batch.sequence);
+            assert(key.submit_idx >= first_segment);
+            const size_t local_index = key.submit_idx - first_segment;
+            assert(local_index < slots.size());
+            assert(slots[local_index].key == key);
+            return slots[local_index];
+        };
+        auto fail_group = [&](size_t           failure_source,
+                              VkResult         failure_result,
+                              bool             recoverable_failure,
+                              std::string_view failure_reason) {
+            if (failure_result == VK_SUCCESS) {
+                failure_result = VK_ERROR_UNKNOWN;
+            }
+            scheduler.Cancel();
+            terminalizer.TerminalizeAll(failure_result);
+            LOG_ERROR(
+                "[RHIExecutor][Vulkan][ParallelTranslate] "
+                "batch={} failure_source={} reason={} result={} "
+                "recoverable={}",
+                _batch.sequence,
+                failure_source,
+                failure_reason,
+                static_cast<int32>(failure_result),
+                recoverable_failure
+            );
+            if (recoverable_failure) {
+                reject_remaining_recoverable(group_end, failure_result, failure_reason);
+            } else {
+                reject_remaining(group_end, failure_result, failure_reason);
+            }
+            return false;
+        };
+
+        size_t next_release_local = 0;
+        for (;;) {
+            std::vector<SubmissionKey> wave = scheduler.NextWave();
+            if (wave.empty()) {
+                if (scheduler.IsComplete()) {
+                    assert(next_release_local == slots.size());
+                    terminalizer.Disarm();
+                    return true;
+                }
+                return fail_group(
+                    group_begin + next_release_local,
+                    VK_ERROR_UNKNOWN,
+                    false,
+                    "parallel Translate schedule stalled"
+                );
+            }
+
+            Array<TranslateGroupSlot*> wave_slots{};
+            wave_slots.reserve(wave.size());
+            for (const SubmissionKey& key : wave) {
+                TranslateGroupSlot& slot = slot_for_key(key);
+                assert(!slot.prepared);
+                if (!prepare_source(slot.source_index)) {
+                    return fail_group(
+                        slot.source_index,
+                        VK_ERROR_UNKNOWN,
+                        false,
+                        "parallel Translate source lost its segment"
+                    );
+                }
+                slot.prepared = true;
+                wave_slots.emplace_back(&slot);
+            }
+
+            bool dispatch_failed = false;
+            if (wave_slots.size() > 1 && TaskGraph::IsInitialized()) {
+                // LambdaTask::Dispatch can allocate before it queues a
+                // task. Once it reaches TaskGraph::QueueTask, the engine's
+                // lock-free path does not throw. A latch therefore gives
+                // us a non-allocating, noexcept join: on a dispatch
+                // exception, count down the current/unstarted suffix and
+                // still wait for every already-queued worker.
+                std::latch completed(static_cast<std::ptrdiff_t>(wave_slots.size()));
+                size_t     dispatched_count = 0;
+                for (; dispatched_count < wave_slots.size(); ++dispatched_count) {
+                    TranslateGroupSlot* slot = wave_slots[dispatched_count];
+                    try {
+                        RHIBackendSubmissionBatchEntry* entry = &_batch.submits[slot->source_index];
+                        (void)LambdaTask::Dispatch(
+                            [slot, entry, &completed] {
+                                RHIThreadRoleScope translate_worker(ERHIThreadRole::Translate);
+                                slot->attempted = true;
+                                slot->recorded  = slot->queue->TranslateForRuntime(std::move(entry->submit));
+                                completed.count_down();
+                            },
+                            EThread::AnyThread_NormalPri
+                        );
+                    } catch (...) {
+                        dispatch_failed = true;
+                        completed.count_down(static_cast<std::ptrdiff_t>(wave_slots.size() - dispatched_count)
+                        );
+                        break;
+                    }
+                }
+                completed.wait();
+            } else {
+                for (TranslateGroupSlot* slot : wave_slots) {
+                    RHIBackendSubmissionBatchEntry& entry = _batch.submits[slot->source_index];
+                    slot->attempted                       = true;
+                    slot->recorded = slot->queue->TranslateForRuntime(std::move(entry.submit));
+                }
+            }
+
+            std::optional<size_t> translation_failure_source{};
+            VkResult              translation_failure_result = VK_ERROR_UNKNOWN;
+            std::string_view      translation_failure_reason{"parallel Translate task dispatch failure"};
+            for (TranslateGroupSlot* slot : wave_slots) {
+                if (!slot->attempted) {
+                    if (!translation_failure_source) {
+                        translation_failure_source = slot->source_index;
+                        translation_failure_reason = "parallel Translate task dispatch failure";
+                    }
+                    continue;
+                }
+
+                used_queues[static_cast<size_t>(_batch.submits[slot->source_index].queue)] = true;
+                if (!scheduler.MarkTranslated(slot->key) && !translation_failure_source) {
+                    translation_failure_source = slot->source_index;
+                    translation_failure_reason = "parallel Translate scheduler state failure";
+                }
+                if (!slot->recorded) {
+                    // TranslateForRuntime already committed the rejected
+                    // Completion marker for this source.
+                    slot->terminalized = true;
+                    if (!translation_failure_source) {
+                        translation_failure_source = slot->source_index;
+                        translation_failure_result = slot->queue->vk_device.IsFaulted() ?
+                                                         slot->queue->vk_device.GetFirstFaultResult() :
+                                                         VK_ERROR_UNKNOWN;
+                        translation_failure_reason = "parallel command translation failure";
+                    }
+                }
+            }
+
+            if (dispatch_failed || translation_failure_source) {
+                return fail_group(
+                    translation_failure_source.value_or(group_begin + next_release_local),
+                    translation_failure_result,
+                    false,
+                    translation_failure_reason
+                );
+            }
+
+            if (!logged_parallel_translate_wave && wave_slots.size() > 1) {
+                logged_parallel_translate_wave = true;
+                LOG_INFO(
+                    "[RHIExecutor][Vulkan][ParallelTranslate] "
+                    "mode=ready-native-lanes workers=TaskGraph "
+                    "native_lanes={} ordered_submit_owner=serial "
+                    "batch_window=1",
+                    wave_slots.size()
+                );
+            }
+
+            // Translation readiness is a native-lane ready set, while
+            // submission remains a distinct stable cursor. A later
+            // independent lane may already hold a recorded packet here;
+            // it is released only after every earlier source is ready.
+            while (next_release_local < slots.size()) {
+                TranslateGroupSlot& slot  = slots[next_release_local];
+                const auto          state = scheduler.GetState(slot.key);
+                if (!state || *state != ETranslateWaveNodeState::Translated) {
+                    break;
+                }
+                assert(slot.recorded);
+                assert(!slot.terminalized);
+
+                RHIBackendSubmissionBatchEntry& entry = _batch.submits[slot.source_index];
+                VkCommandQueue&                 queue = *slot.queue;
+
+                VulkanRuntimeSubmissionResult submit_result{};
+                try {
+                    submit_result =
+                        ExecuteOnSubmissionThread([&queue,
+                                                   packet         = &*slot.recorded,
+                                                   batch_sequence = _batch.sequence,
+                                                   source_index   = static_cast<uint32>(slot.source_index),
+                                                   source_metadata =
+                                                       materialization.sources[slot.source_index],
+                                                   queue_type     = slot.queue_type,
+                                                   async_scope    = slot.async_queue_scope]() mutable {
+                            VulkanRuntimeSubmissionResult result =
+                                queue.SubmitRecordedForRuntime(std::move(*packet));
+                            if (result.WasSubmitted()) {
+                                NotifySourceSubmitted(
+                                    batch_sequence,
+                                    source_index,
+                                    source_metadata.original_source_index,
+                                    source_metadata.source_segment_index,
+                                    source_metadata.source_segment_count,
+                                    queue_type,
+                                    async_scope,
+                                    source_metadata.cross_native_predecessor_wait
+                                );
+                            }
+                            return result;
+                        });
+                } catch (...) {
+                    ReportRequestFailure(
+                        ERequestKind::Submit,
+                        VulkanSubmissionDetail::EWorkerRequestFailurePhase::Process,
+                        std::current_exception()
+                    );
+                    queue.RejectRecordedForRuntime(std::move(*slot.recorded), VK_ERROR_UNKNOWN);
+                    submit_result.outcome = {EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN};
+                }
+                slot.terminalized                        = true;
+                _exception_state.first_unconsumed_source = slot.source_index + 1;
+                if (!scheduler.MarkReleased(slot.key)) {
+                    return fail_group(
+                        slot.source_index,
+                        VK_ERROR_UNKNOWN,
+                        false,
+                        "parallel Translate scheduler release failure"
+                    );
+                }
+                ++next_release_local;
+
+                if (submit_result.WasSubmitted()) {
+                    assert(submit_result.completion.has_value());
+                    update_frontier(entry.queue, *submit_result.completion, false);
+                    continue;
+                }
+
+                const VkResult         failure_result      = submit_result.outcome.result == VK_SUCCESS ?
+                                                                 VK_ERROR_UNKNOWN :
+                                                                 submit_result.outcome.result;
+                const bool             recoverable_failure = submit_result.IsRecoverableRejection();
+                const std::string_view failure_reason =
+                    recoverable_failure ? "parallel command submission dependency rejection" :
+                                          "parallel command submission hard failure";
+                return fail_group(slot.source_index, failure_result, recoverable_failure, failure_reason);
+            }
+        }
+    };
+
+    // Keep every source in the request-owned batch until its queue call has
+    // returned. If reorder, descriptor-lease, allocator, or native recording
+    // setup throws, Run's request barrier can still terminalize the current
+    // source callbacks/signals and every later source. Moving all sources into
+    // a temporary expansion array here would lose those obligations on unwind.
+    for (size_t source_index = 0; source_index < _batch.submits.size(); ++source_index) {
+        if (is_parallel_translate_candidate(source_index)) {
+            const uint64 async_scope = _batch.submits[source_index].submit.async_queue_scope;
+            size_t       group_end   = source_index + 1;
+            while (group_end < _batch.submits.size() && is_parallel_translate_candidate(group_end) &&
+                   _batch.submits[group_end].submit.async_queue_scope == async_scope) {
+                ++group_end;
+            }
+            if (group_end - source_index > 1) {
+                if (!process_parallel_translate_group(source_index, group_end)) {
+                    return;
+                }
+                source_index = group_end - 1;
+                continue;
+            }
+        }
+
+        RHIBackendSubmissionBatchEntry& entry = _batch.submits[source_index];
+        if (!prepare_source(source_index)) {
+            _exception_state.first_unconsumed_source = source_index + 1;
+            continue;
+        }
+
+        const uint64 async_scope = entry.submit.async_queue_scope;
         if (entry.queue == EQueueType::Copy) {
             auto& copy_queue = static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
-            const VulkanRuntimeSubmissionResult submit_result =
-                ExecuteOnSubmissionThread(
-                    [&copy_queue, submit = &entry.submit]() mutable {
-                        return copy_queue.ExecuteForRuntime(std::move(*submit));
+            std::optional<VkCopyQueue::CurrentVulkanCopyRecordedSubmit>
+                recorded =
+                    copy_queue.TranslateForRuntime(std::move(entry.submit));
+            used_queues[static_cast<size_t>(EQueueType::Copy)] = true;
+            if (!recorded) {
+                _exception_state.first_unconsumed_source =
+                    source_index + 1;
+                const VkResult result = copy_queue.device.IsFaulted() ?
+                                            copy_queue.device.GetFirstFaultResult() :
+                                            VK_ERROR_UNKNOWN;
+                LOG_ERROR(
+                    "[RHIExecutor][Vulkan] batch={} Copy translation failed result={}",
+                    _batch.sequence,
+                    static_cast<int32>(result)
+                );
+                reject_remaining(
+                    source_index + 1,
+                    result,
+                    "Copy translation failure"
+                );
+                return;
+            }
+
+            VulkanRuntimeSubmissionResult submit_result{};
+            try {
+                submit_result = ExecuteOnSubmissionThread(
+                    [
+                        &copy_queue,
+                        packet = &*recorded,
+                        batch_sequence = _batch.sequence,
+                        source_index = static_cast<uint32>(source_index),
+                        source_metadata = materialization.sources[source_index],
+                        async_scope
+                    ]() mutable {
+                        VulkanRuntimeSubmissionResult result =
+                            copy_queue.SubmitRecordedForRuntime(
+                                std::move(*packet)
+                            );
+                        if (result.WasSubmitted()) {
+                            NotifySourceSubmitted(
+                                batch_sequence,
+                                source_index,
+                                source_metadata.original_source_index,
+                                source_metadata.source_segment_index,
+                                source_metadata.source_segment_count,
+                                EQueueType::Copy,
+                                async_scope,
+                                source_metadata.cross_native_predecessor_wait
+                            );
+                        }
+                        return result;
                     }
                 );
-            // ExecuteForRuntime has now either submitted or terminalized this
+            } catch (...) {
+                ReportRequestFailure(
+                    ERequestKind::Submit,
+                    VulkanSubmissionDetail::EWorkerRequestFailurePhase::Process,
+                    std::current_exception()
+                );
+                copy_queue.RejectRecordedForRuntime(
+                    std::move(*recorded), VK_ERROR_UNKNOWN
+                );
+                submit_result.outcome = {
+                    EVulkanOperationStatus::Rejected,
+                    VK_ERROR_UNKNOWN
+                };
+            }
+            // SubmitRecordedForRuntime has now either submitted or terminalized this
             // source. Never reject it again if later bookkeeping/logging throws.
             _exception_state.first_unconsumed_source = source_index + 1;
             if (submit_result.WasSubmitted()) {
@@ -859,13 +1894,11 @@ void VulkanSubmissionExecutor::ProcessBatch(
                     *submit_result.completion,
                     async_scope == 0
                 );
-                used_queues[static_cast<size_t>(EQueueType::Copy)] = true;
             } else if (submit_result.IsRecoverableRejection()) {
                 // A failed prerequisite did not reach vkQueueSubmit. Drain the
                 // current source on Completion, reject the rest of this
                 // topology batch, and keep the runtime available for a later
                 // independent batch.
-                used_queues[static_cast<size_t>(EQueueType::Copy)] = true;
                 reject_remaining_recoverable(
                     source_index + 1,
                     submit_result.outcome.result,
@@ -882,7 +1915,6 @@ void VulkanSubmissionExecutor::ProcessBatch(
                 // A failed native Copy submit still publishes a CPU retirement
                 // marker. ProcessSync always enters Copy Sync, whose independent
                 // retirement serial drains it without reading Copy-owner state.
-                used_queues[static_cast<size_t>(EQueueType::Copy)] = true;
                 reject_remaining(
                     source_index + 1,
                     submit_result.outcome.result,
@@ -918,8 +1950,30 @@ void VulkanSubmissionExecutor::ProcessBatch(
             VulkanRuntimeSubmissionResult submit_result{};
             try {
                 submit_result = ExecuteOnSubmissionThread(
-                    [&queue, packet = &*recorded]() mutable {
-                        return queue.SubmitRecordedForRuntime(std::move(*packet));
+                    [
+                        &queue,
+                        packet = &*recorded,
+                        batch_sequence = _batch.sequence,
+                        source_index = static_cast<uint32>(source_index),
+                        source_metadata = materialization.sources[source_index],
+                        queue_type = entry.queue,
+                        async_scope
+                    ]() mutable {
+                        VulkanRuntimeSubmissionResult result =
+                            queue.SubmitRecordedForRuntime(std::move(*packet));
+                        if (result.WasSubmitted()) {
+                            NotifySourceSubmitted(
+                                batch_sequence,
+                                source_index,
+                                source_metadata.original_source_index,
+                                source_metadata.source_segment_index,
+                                source_metadata.source_segment_count,
+                                queue_type,
+                                async_scope,
+                                source_metadata.cross_native_predecessor_wait
+                            );
+                        }
+                        return result;
                     }
                 );
             } catch (...) {

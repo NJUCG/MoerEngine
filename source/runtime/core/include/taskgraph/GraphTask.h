@@ -30,11 +30,12 @@ public:
     void SetPriority(ThreadPriority priority) {
         m_preferd_thread = EThread::SetPriority(m_preferd_thread, priority << EThread::PRIORITY_SHEFT);
     }
-    void QueueTask(EThread::Type currentThread, bool shouldWakeWorker);
+    void QueueTask(EThread::Type currentThread, bool shouldWakeWorker) noexcept;
 
-    CORE_API void PrerequestsComplete(EThread::Type currentThread, int32_t finishedCount, bool unlock = true);
+    CORE_API void
+    PrerequestsComplete(EThread::Type currentThread, int32_t finishedCount, bool unlock = true) noexcept;
 
-    bool ConditionalQueueTask(EThread::Type currentThread, bool shouldWakeWorker) {
+    bool ConditionalQueueTask(EThread::Type currentThread, bool shouldWakeWorker) noexcept {
         if (m_prerequests_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
             QueueTask(currentThread, shouldWakeWorker);
             return true;
