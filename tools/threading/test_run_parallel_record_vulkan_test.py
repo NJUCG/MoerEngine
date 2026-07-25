@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import unittest
 
-import run_parallel_record_vulkan_test as runner
+try:
+    from . import run_parallel_record_vulkan_test as runner
+except ImportError:
+    import run_parallel_record_vulkan_test as runner
 
 
 def completion_probe_line() -> str:
@@ -495,6 +498,29 @@ class VulkanRunnerTests(unittest.TestCase):
         ):
             runner.validate_log("serial", text + duplicate)
 
+    def test_ready_translate_alias_skip_requires_matching_native_queues(self) -> None:
+        text = replace_testcase_marker(
+            pass_line("serial", "false"),
+            "AsyncQueueParallelTranslateSmoke",
+            "[TESTCASE][SKIP] name=AsyncQueueParallelTranslateSmoke "
+            "reason=native_queue_alias cpu_seam=VulkanTranslateWaveScheduler "
+            "graphics_native=0 compute_native=1",
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "invalid ready-native-lane Translate SKIP"
+        ):
+            runner.validate_log("serial", text)
+
+    def test_ready_translate_alias_skip_accepts_matching_native_queues(self) -> None:
+        text = replace_testcase_marker(
+            pass_line("serial", "false"),
+            "AsyncQueueParallelTranslateSmoke",
+            "[TESTCASE][SKIP] name=AsyncQueueParallelTranslateSmoke "
+            "reason=native_queue_alias cpu_seam=VulkanTranslateWaveScheduler "
+            "graphics_native=0 compute_native=0",
+        )
+        runner.validate_log("serial", text)
+
     def test_parallel_requires_wave_island_wave_and_concurrency(self) -> None:
         text = wave(1, 0) + island(1) + wave(1, 1) + summary(1) + pass_line("parallel", "false")
         runner.validate_log("parallel", text)
@@ -581,6 +607,57 @@ class VulkanRunnerTests(unittest.TestCase):
         )
         runner.validate_log("translate-hard", text)
 
+    def test_translate_hard_rejects_duplicate_retirement_markers(self) -> None:
+        text = (
+            completion_probe_line()
+            + "[TESTCASE][PASS] name=ParallelTranslateFailureRetirement "
+            "distinct_native=true suffix_recorded=true signals=failed "
+            "callbacks=exactly_once hard_latch=later_batch_failed\n"
+            "[TESTCASE][PASS] name=ParallelTranslateFailureRetirement "
+            "distinct_native=false suffix_recorded=true signals=failed "
+            "callbacks=exactly_once hard_latch=later_batch_failed\n"
+            "[VulkanFault][Summary] first_fault_count=1 "
+            "native_submit_after_fault=0 native_present_after_fault=0 "
+            "device_lost=false\n"
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "at most one terminal marker"
+        ):
+            runner.validate_log("translate-hard", text)
+
+    def test_translate_hard_rejects_conflicting_fault_summaries(self) -> None:
+        text = (
+            completion_probe_line()
+            + "[TESTCASE][PASS] name=ParallelTranslateFailureRetirement "
+            "distinct_native=true suffix_recorded=true signals=failed "
+            "callbacks=exactly_once hard_latch=later_batch_failed\n"
+            "[VulkanFault][Summary] first_fault_count=1 "
+            "native_submit_after_fault=0 native_present_after_fault=0 "
+            "device_lost=false\n"
+            "[VulkanFault][Summary] first_fault_count=2 "
+            "native_submit_after_fault=7 native_present_after_fault=0 "
+            "device_lost=true\n"
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "expected exactly one marker"
+        ):
+            runner.validate_log("translate-hard", text)
+
+    def test_translate_hard_rejects_duplicate_fault_summary_fields(self) -> None:
+        text = (
+            completion_probe_line()
+            + "[TESTCASE][PASS] name=ParallelTranslateFailureRetirement "
+            "distinct_native=true suffix_recorded=true signals=failed "
+            "callbacks=exactly_once hard_latch=later_batch_failed\n"
+            "[VulkanFault][Summary] first_fault_count=1 first_fault_count=2 "
+            "native_submit_after_fault=0 native_present_after_fault=0 "
+            "device_lost=false\n"
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "duplicate fields"
+        ):
+            runner.validate_log("translate-hard", text)
+
     def test_translate_hard_rejects_multi_digit_fault_count_prefix(self) -> None:
         text = (
             completion_probe_line()
@@ -650,6 +727,29 @@ class VulkanRunnerTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(
             runner.VulkanTestError, "aggregate retirement contract"
+        ):
+            runner.validate_log("multi-segment-hard", text)
+
+    def test_multi_segment_hard_rejects_duplicate_fault_summaries(self) -> None:
+        text = (
+            completion_probe_line()
+            + "[TESTCASE][PASS] "
+            "name=MultiSegmentPrefixSubmitSuffixTranslateFailure "
+            "source=1 segments=2 queues=Graphics,Graphics "
+            "prefix_translated=true source_submitted=0:0/2 "
+            "native_accepted_prefix=1 native_owner=Submission "
+            "callbacks=ordinary1_success0 signal=failed "
+            "later_callbacks=ordinary1_success0 "
+            "hard_latch=later_batch_failed replay=0\n"
+            "[VulkanFault][Summary] first_fault_count=1 "
+            "native_submit_after_fault=0 native_present_after_fault=0 "
+            "device_lost=false\n"
+            "[VulkanFault][Summary] first_fault_count=1 "
+            "native_submit_after_fault=3 native_present_after_fault=0 "
+            "device_lost=false\n"
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "expected exactly one marker"
         ):
             runner.validate_log("multi-segment-hard", text)
 

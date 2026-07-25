@@ -63,6 +63,40 @@ def _testcase_marker(name: str, text: str) -> tuple[str, dict[str, str]] | None:
     return marker.group("status"), fields
 
 
+def _vulkan_fault_summary(text: str) -> dict[str, str]:
+    matches = list(re.finditer(r"\[VulkanFault\]\[Summary\][^\r\n]*", text))
+    _require(
+        len(matches) == 1,
+        f"VulkanFault Summary: expected exactly one marker, got {len(matches)}",
+    )
+    field_pairs = re.findall(
+        r"(?:^|\s)([A-Za-z0-9_]+)=([^\s]+)", matches[0].group(0)
+    )
+    seen_fields: set[str] = set()
+    duplicate_fields: set[str] = set()
+    for key, _ in field_pairs:
+        if key in seen_fields:
+            duplicate_fields.add(key)
+        seen_fields.add(key)
+    _require(
+        not duplicate_fields,
+        "VulkanFault Summary: duplicate fields: "
+        + ", ".join(sorted(duplicate_fields)),
+    )
+    return dict(field_pairs)
+
+
+def _require_clean_hard_fault_summary(mode: str, text: str) -> None:
+    fields = _vulkan_fault_summary(text)
+    _require(
+        fields.get("first_fault_count") == "1"
+        and fields.get("native_submit_after_fault") == "0"
+        and fields.get("native_present_after_fault") == "0"
+        and fields.get("device_lost") == "false",
+        f"{mode}: incomplete clean hard-fault ownership summary",
+    )
+
+
 def _require_phase15b_copy_contracts(mode: str, text: str) -> None:
     round_trip = _testcase_marker("ActiveRdgGraphicsCopyRoundTrip", text)
     _require(
@@ -322,31 +356,24 @@ def validate_log(mode: str, text: str) -> None:
     _require("Validation Error" not in text, f"{mode}: Vulkan validation error was emitted")
     _require_phase15c_completion_aggregate_cpu_probe(mode, text)
     if mode == "translate-hard":
-        retirement = re.search(
-            r"\[TESTCASE\]\[PASS\].*name=ParallelTranslateFailureRetirement"
-            r".*distinct_native=(?P<distinct>true|false)"
-            r".*suffix_recorded=(?P<suffix>true|false).*signals=failed"
-            r".*callbacks=exactly_once.*hard_latch=later_batch_failed",
-            text,
+        retirement = _testcase_marker(
+            "ParallelTranslateFailureRetirement", text
         )
         _require(
-            retirement is not None,
+            retirement is not None and retirement[0] == "PASS",
             "translate-hard: missing failure-retirement PASS marker",
         )
+        _, retirement_fields = retirement
         _require(
-            retirement.group("distinct") == retirement.group("suffix"),
-            "translate-hard: suffix recording disagrees with native queue topology",
+            retirement_fields.get("distinct_native")
+            == retirement_fields.get("suffix_recorded")
+            and retirement_fields.get("distinct_native") in {"true", "false"}
+            and retirement_fields.get("signals") == "failed"
+            and retirement_fields.get("callbacks") == "exactly_once"
+            and retirement_fields.get("hard_latch") == "later_batch_failed",
+            "translate-hard: incomplete failure-retirement contract",
         )
-        _require(
-            re.search(
-                r"\[VulkanFault\]\[Summary\].*first_fault_count=1(?:\s|$)"
-                r".*native_submit_after_fault=0.*native_present_after_fault=0"
-                r".*device_lost=false",
-                text,
-            )
-            is not None,
-            "translate-hard: missing clean hard-fault ownership summary",
-        )
+        _require_clean_hard_fault_summary(mode, text)
         return
 
     if mode == "multi-segment-hard":
@@ -374,16 +401,7 @@ def validate_log(mode: str, text: str) -> None:
             and retirement_fields.get("replay") == "0",
             "multi-segment-hard: incomplete aggregate retirement contract",
         )
-        _require(
-            re.search(
-                r"\[VulkanFault\]\[Summary\].*first_fault_count=1(?:\s|$)"
-                r".*native_submit_after_fault=0.*native_present_after_fault=0"
-                r".*device_lost=false",
-                text,
-            )
-            is not None,
-            "multi-segment-hard: missing clean hard-fault ownership summary",
-        )
+        _require_clean_hard_fault_summary(mode, text)
         return
 
     ready_marker = _testcase_marker("AsyncQueueParallelTranslateSmoke", text)
@@ -404,11 +422,19 @@ def validate_log(mode: str, text: str) -> None:
             f"{mode}: incomplete ready-native-lane Translate PASS contract",
         )
     else:
+        graphics_native = ready_fields.get("graphics_native")
+        compute_native = ready_fields.get("compute_native")
         _require(
             ready_fields.get("reason")
             in {"queue_unavailable", "native_queue_alias"}
             and ready_fields.get("cpu_seam")
-            == "VulkanTranslateWaveScheduler",
+            == "VulkanTranslateWaveScheduler"
+            and graphics_native is not None
+            and compute_native is not None
+            and (
+                ready_fields.get("reason") != "native_queue_alias"
+                or graphics_native == compute_native
+            ),
             f"{mode}: invalid ready-native-lane Translate SKIP contract",
         )
 
