@@ -138,6 +138,57 @@ void CompleteSources(Moer::Array<RHIRecordingSource>& sources) {
     sources.clear();
 }
 
+void TestTextureAspectDescriptorValidation(TestSuite& suite) {
+    constexpr std::string_view test =
+        "transient texture aspects match the physical format";
+    auto depth_stencil = kTextureDesc;
+    depth_stencil.format = PF_D32_SFLOAT_S8_UINT;
+    depth_stencil.usage  = ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT;
+    depth_stencil.aspect_flags =
+        ETextureAspectFlags::DEPTH_SLICE |
+        ETextureAspectFlags::STENCIL_SLICE;
+    suite.Check(
+        depth_stencil.IsValid(),
+        test,
+        "a complete depth-stencil descriptor was rejected"
+    );
+
+    auto depth_only_view = depth_stencil;
+    depth_only_view.aspect_flags = ETextureAspectFlags::DEPTH_SLICE;
+    suite.Check(
+        depth_only_view.IsValid(),
+        test,
+        "a depth-only view of a depth-stencil format was rejected"
+    );
+
+    auto stencil = kTextureDesc;
+    stencil.format       = PF_S8_UINT;
+    stencil.usage        = ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT;
+    stencil.aspect_flags = ETextureAspectFlags::STENCIL_SLICE;
+    suite.Check(
+        stencil.IsValid(),
+        test,
+        "a stencil-only descriptor was rejected"
+    );
+
+    auto stencil_on_depth = depth_stencil;
+    stencil_on_depth.format       = PF_D32_SFLOAT;
+    stencil_on_depth.aspect_flags = ETextureAspectFlags::STENCIL_SLICE;
+    suite.Check(
+        !stencil_on_depth.IsValid(),
+        test,
+        "a stencil aspect was accepted for a depth-only format"
+    );
+
+    auto color_as_depth = kTextureDesc;
+    color_as_depth.aspect_flags = ETextureAspectFlags::DEPTH_SLICE;
+    suite.Check(
+        !color_as_depth.IsValid(),
+        test,
+        "a color format was accepted with a depth aspect"
+    );
+}
+
 void RejectSources(Moer::Array<RHIRecordingSource>& sources) {
     for (auto& source : sources) {
         auto callbacks =
@@ -1218,6 +1269,7 @@ void TestTransientExecutionContractsAndRollback(TestSuite& suite) {
 
 int main() {
     TestSuite suite{};
+    TestTextureAspectDescriptorValidation(suite);
     TestPoolReuseAndIdleRetirement(suite);
     TestActiveTransientLifetimeIsCompletionOwned(suite);
     TestRejectedProducerRetiresThroughOrdinaryCallbacks(suite);

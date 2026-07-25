@@ -1776,7 +1776,7 @@ public:
         EPixelFormat      _format
     ) = 0;
 
-    virtual TextureRef CreateTexture(
+    TextureRef CreateTexture(
         std::string_view   _name,
         ETextureDimension  _dimension,
         Extent3D           _size,
@@ -1784,7 +1784,29 @@ public:
         ETextureUsageFlags _usage,
         uint32_t           _mip_cnt    = 1,
         uint               _array_size = 1
-    ) = 0;
+    ) {
+        const bool b_depth =
+            uint(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT & _usage) != 0;
+        TextureInfo info{
+            _dimension,
+            _usage,
+            _format,
+            b_depth ? EClearAttachment::DEPTH_STENCIL :
+                      EClearAttachment::COLOR,
+            _size,
+            uint8(_mip_cnt),
+            uint8((_dimension == ETextureDimension::TEX_CUBE ? 6 : 1) * _array_size),
+            1
+        };
+        info.aspect_flags =
+            b_depth ? ETextureAspectFlags::DEPTH_SLICE :
+                      ETextureAspectFlags::COLOR;
+        info.debug_name = std::string(_name);
+        return CreateTexture(_name, info);
+    }
+
+    virtual TextureRef
+    CreateTexture(std::string_view _name, const TextureInfo& _info) = 0;
 
     DepthBufferRef CreateDepthBuffer(
         std::string_view   _name,

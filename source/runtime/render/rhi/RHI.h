@@ -159,6 +159,9 @@ public:
         uint32_t           _array_size = 1
     );
 
+    RENDER_API TextureRef
+    CreateTexture(std::string_view _name, const TextureInfo& _info);
+
     RENDER_API TextureRef CreateCubeMap(
         std::string_view   _name,
         Extent2D           _size,

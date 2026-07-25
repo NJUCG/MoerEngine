@@ -1006,6 +1006,27 @@ enum class ETextureAspectFlags : uint32_t {
 
 ENUM_BIT_OP_IMPL(ETextureAspectFlags, FLAG)
 
+[[nodiscard]] constexpr ETextureAspectFlags
+GetPixelFormatAspectFlags(EPixelFormat format) noexcept {
+    switch (format) {
+        case PF_D16_UNORM:
+        case PF_X8_D24_UNORM_PACK32:
+        case PF_D32_SFLOAT:
+            return ETextureAspectFlags::DEPTH_SLICE;
+        case PF_S8_UINT:
+            return ETextureAspectFlags::STENCIL_SLICE;
+        case PF_D16_UNORM_S8_UINT:
+        case PF_D24_UNORM_S8_UINT:
+        case PF_D32_SFLOAT_S8_UINT:
+            return ETextureAspectFlags::DEPTH_SLICE |
+                   ETextureAspectFlags::STENCIL_SLICE;
+        case PF_UNDEFINED:
+            return ETextureAspectFlags::NONE;
+        default:
+            return ETextureAspectFlags::COLOR;
+    }
+}
+
 /* various shading rate palette, VSR_{fragment_invocation_count}_{region_size}
  * @fragment_invocation_count means fragment shading invocation per region
  * @region_size means one shading result will be used to color ${regions_size} pixels

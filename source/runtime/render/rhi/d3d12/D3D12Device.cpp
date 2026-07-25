@@ -526,28 +526,16 @@ PipelineHandle D3D12Device::CreatePipeline(PipelineShaderInfo&& _shaders) {
 }
 
 TextureRef D3D12Device::CreateTexture(
-    std::string_view   _name,
-    ETextureDimension  _dimension,
-    Extent3D           _size,
-    EPixelFormat       _format,
-    ETextureUsageFlags _usage,
-    uint32_t           _mip_cnt,
-    uint               _array_size
+    std::string_view  _name,
+    const TextureInfo& _info
 ) {
-    bool        b_depth = uint(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT & _usage) != 0;
-    TextureInfo info{
-        _dimension,
-        _usage,
-        _format,
-        b_depth ? EClearAttachment::DEPTH_STENCIL : EClearAttachment::COLOR,
-        _size,
-        uint8(_mip_cnt),
-        uint8(_dimension == ETextureDimension::TEX_CUBE ? 6 : _array_size),
-        1
-    }; // TODO ? msaa tex
-    info.aspect_flags = b_depth ? ETextureAspectFlags::DEPTH_SLICE : ETextureAspectFlags::COLOR;
-    info.debug_name   = _name;
-    return TextureRef{MoerNew(D3D12Texture)(this, info)};
+    TextureInfo info = _info;
+    if (!info.debug_name.has_value()) {
+        info.debug_name = std::string(_name);
+    }
+    auto* texture = MoerNew(D3D12Texture)(this, info);
+    texture->SetName(info.debug_name.value());
+    return TextureRef{texture};
 }
 
 BufferRef D3D12Device::CreateBuffer(

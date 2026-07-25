@@ -1099,15 +1099,8 @@ public:
     PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) override;
     PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders) override;
 
-    TextureRef CreateTexture(
-        std::string_view   _name,
-        ETextureDimension  _dimension,
-        Extent3D           _size,
-        EPixelFormat       _format,
-        ETextureUsageFlags _usage,
-        uint32_t           _mip_cnt,
-        uint               _array_size
-    ) override;
+    TextureRef
+    CreateTexture(std::string_view _name, const TextureInfo& _info) override;
 
     BufferRef CreateBuffer(
         std::string_view  _name,

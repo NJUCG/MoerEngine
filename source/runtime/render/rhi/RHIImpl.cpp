@@ -60,6 +60,11 @@ TextureRef RenderDevice::CreateTexture(
     return impl->CreateTexture(_name, dim, _size, _format, _usage, _mip_cnt, _array_size);
 }
 
+TextureRef
+RenderDevice::CreateTexture(std::string_view _name, const TextureInfo& _info) {
+    return impl->CreateTexture(_name, _info);
+}
+
 TextureRef RenderDevice::CreateCubeMap(
     std::string_view   _name,
     Extent2D           _size,

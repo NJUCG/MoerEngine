@@ -2059,6 +2059,54 @@ void RunActiveRdgTransientTextureAliasReadback(bool _parallel) {
     );
 }
 
+void RunTransientDepthStencilAspectAllocation() {
+    TextureRef legacy = RenderDevice::Get().CreateTexture(
+        "LegacyDepthStencilDefaultAspect",
+        Extent3D(8, 8, 1),
+        PF_D32_SFLOAT_S8_UINT,
+        ETextureUsageFlags::SAMPLED |
+            ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
+    );
+    if (!legacy.IsValid() ||
+        legacy->GetAspectFlags() != ETextureAspectFlags::DEPTH_SLICE) {
+        throw std::runtime_error(
+            "legacy depth-stencil texture no longer defaults to a depth-only view"
+        );
+    }
+    legacy = {};
+
+    const RGTransientTextureDesc desc{
+        .dimension = ETextureDimension::TEX_2D,
+        .extent    = Extent3D(8, 8, 1),
+        .format    = PF_D32_SFLOAT_S8_UINT,
+        .usage     = ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+        .aspect_flags =
+            ETextureAspectFlags::DEPTH_SLICE |
+            ETextureAspectFlags::STENCIL_SLICE,
+        .mip_count  = 1,
+        .array_size = 1,
+    };
+
+    RenderGraphResourcePool pool{};
+    TextureRef texture =
+        pool.AcquireTexture("TransientDepthStencilAspect", desc);
+    if (!texture.IsValid() || texture->GetAspectFlags() != desc.aspect_flags) {
+        throw std::runtime_error(
+            "transient depth-stencil allocation lost a physical aspect"
+        );
+    }
+    texture = {};
+    if (pool.AvailableTextureCount() != 1) {
+        throw std::runtime_error(
+            "transient depth-stencil allocation did not return to the pool"
+        );
+    }
+    LOG_INFO(
+        "[TESTCASE][PASS] name=TransientDepthStencilAspectAllocation "
+        "format=D32S8 transient=depth,stencil legacy=depth factory=default"
+    );
+}
+
 void RunActiveRdgTextureArraySubrange(bool _parallel) {
     auto& device = RenderDevice::Get();
     constexpr uint32 kLayerCount = 4;
@@ -3164,6 +3212,7 @@ int main(int argc, const char** argv) {
         RunActiveRdgGraphicsCopyRoundTrip(parallel);
         RunActiveRdgTransientAliasReadback(parallel);
         RunActiveRdgTransientTextureAliasReadback(parallel);
+        RunTransientDepthStencilAspectAllocation();
         RunActiveRdgTextureArraySubrange(parallel);
         RunExplicitTextureArrayRangeShapeChange(parallel);
         RunUpperTopologyBatch();

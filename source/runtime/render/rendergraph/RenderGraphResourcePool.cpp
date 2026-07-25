@@ -20,34 +20,38 @@ TextureRef CreateTexture(
     std::string_view               name,
     const RGTransientTextureDesc& desc
 ) {
-    auto& device = RenderDevice::Get();
     switch (desc.dimension) {
         case ETextureDimension::TEX_2D:
         case ETextureDimension::TEX_2D_ARRAY:
         case ETextureDimension::TEX_3D:
-            return device.CreateTexture(
-                name,
-                desc.extent,
-                desc.format,
-                desc.usage,
-                desc.mip_count,
-                desc.array_size
-            );
         case ETextureDimension::TEX_CUBE:
-            return device.CreateCubeMap(
-                name,
-                Extent2D(desc.extent.x, desc.extent.y),
-                desc.format,
-                desc.usage,
-                desc.mip_count
-            );
+            break;
         case ETextureDimension::TEX_CUBE_ARRAY:
         case ETextureDimension::NumBits:
             throw std::invalid_argument(
                 "the current RHI factory cannot allocate transient cube arrays"
             );
     }
-    throw std::invalid_argument("unsupported transient texture dimension");
+
+    const bool depth_or_stencil = HasAny(
+        desc.aspect_flags,
+        ETextureAspectFlags::DEPTH_SLICE |
+            ETextureAspectFlags::STENCIL_SLICE
+    );
+    TextureInfo info{
+        desc.dimension,
+        desc.usage,
+        desc.format,
+        depth_or_stencil ? EClearAttachment::DEPTH_STENCIL :
+                           EClearAttachment::COLOR,
+        desc.extent,
+        static_cast<uint8_t>(desc.mip_count),
+        static_cast<uint8_t>(desc.PhysicalLayerCount()),
+        1
+    };
+    info.aspect_flags = desc.aspect_flags;
+    info.debug_name   = std::string(name);
+    return RenderDevice::Get().CreateTexture(name, info);
 }
 
 BufferRef CreateBuffer(
@@ -140,6 +144,11 @@ bool RGTransientTextureDesc::IsValid() const {
     );
     const bool color = HasAny(aspect_flags, ETextureAspectFlags::COLOR);
     if (depth_or_stencil && color) {
+        return false;
+    }
+    const uint32_t format_aspects =
+        static_cast<uint32_t>(GetPixelFormatAspectFlags(format));
+    if ((aspect_mask & format_aspects) != aspect_mask) {
         return false;
     }
 
