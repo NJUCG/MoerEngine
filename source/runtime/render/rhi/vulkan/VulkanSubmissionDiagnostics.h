@@ -276,6 +276,38 @@ RemoveVulkanBackendSyncWaitObserver(
     const VulkanBackendSyncWaitObserver* _observer
 ) noexcept;
 
+struct VulkanQueueLocalSyncWaitEvent {
+    EQueueType     queue{EQueueType::Ignore};
+    uint32         thread_id{0};
+    ERHIThreadRole thread_role{ERHIThreadRole::Unknown};
+    uint64         target_retirement_serial{0};
+    uint32         completion_group_count{0};
+};
+
+using VulkanQueueLocalSyncWaitCallback =
+    void (*)(
+        void*,
+        const VulkanQueueLocalSyncWaitEvent&
+    ) noexcept;
+
+struct VulkanQueueLocalSyncWaitObserver {
+    void*                            context{nullptr};
+    VulkanQueueLocalSyncWaitCallback callback{nullptr};
+};
+
+// Fires inside queue-local CompleteAll after it snapshots the target
+// retirement serial and every associated batch Completion group, immediately
+// before it waits. The callback runs while the queue event mutex is held and
+// therefore must be non-blocking, noexcept, and must not re-enter RHI.
+[[nodiscard]] RENDER_API bool
+TryInstallVulkanQueueLocalSyncWaitObserver(
+    const VulkanQueueLocalSyncWaitObserver* _observer
+) noexcept;
+[[nodiscard]] RENDER_API bool
+RemoveVulkanQueueLocalSyncWaitObserver(
+    const VulkanQueueLocalSyncWaitObserver* _observer
+) noexcept;
+
 using VulkanScriptedQueryPreparationCallback =
     VkResult (*)(void*, EQueueType, uint64, uint32) noexcept;
 

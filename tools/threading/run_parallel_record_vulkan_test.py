@@ -830,10 +830,116 @@ def _require_phase15f_present_boundary(mode: str, text: str) -> None:
     )
 
 
+def _require_timestamp_query_success_batch(text: str) -> None:
+    marker = _testcase_marker(
+        "TimestampQuerySuccessfulBatchPublication", text
+    )
+    _require(
+        marker is not None and marker[0] == "PASS",
+        "timestamp-query-success-batch: missing successful batch PASS marker",
+    )
+    _, fields = marker
+    batch_sequence = fields.get("batch_sequence")
+    _require(
+        fields.get("sources") == "2"
+        and fields.get("queues") == "Graphics,Graphics"
+        and batch_sequence is not None
+        and batch_sequence.isdigit()
+        and int(batch_sequence) > 0
+        and fields.get("signals")
+        == "terminal_before_query_callbacks"
+        and fields.get("queries")
+        == "batch_published_before_notify"
+        and fields.get("cross_future_wait") == "ready"
+        and fields.get("owner") == "Completion"
+        and fields.get("query_callbacks") == "exactly_once"
+        and fields.get("ordinary_callbacks") == "exactly_once"
+        and fields.get("success_callbacks") == "exactly_once"
+        and fields.get("native_submit") == "2"
+        and fields.get("native_owner") == "Submission"
+        and fields.get("replay") == "0",
+        "timestamp-query-success-batch: incomplete batch publication contract",
+    )
+
+    cross_queue = _testcase_marker(
+        "TimestampQueryCrossQueueBatchPublication", text
+    )
+    _require(
+        cross_queue is not None,
+        "timestamp-query-success-batch: missing cross-queue batch marker",
+    )
+    cross_status, cross_fields = cross_queue
+    if cross_status == "SKIP":
+        _require(
+            cross_fields.get("reason") == "queue_unavailable",
+            "timestamp-query-success-batch: invalid cross-queue skip",
+        )
+    else:
+        _require(
+            cross_status == "PASS"
+            and cross_fields.get("sources") == "2"
+            and cross_fields.get("queues") == "Graphics,Compute"
+            and cross_fields.get("native_alias") in {"true", "false"}
+            and cross_fields.get("queries")
+            == "batch_published_before_notify"
+            and cross_fields.get("cross_future_wait") == "ready"
+            and cross_fields.get("owner") == "Completion"
+            and cross_fields.get("queue_local_sync")
+            == "blocked_until_group_settled"
+            and cross_fields.get("callbacks") == "exactly_once"
+            and cross_fields.get("replay") == "0",
+            "timestamp-query-success-batch: incomplete cross-queue settlement contract",
+        )
+
+    mixed_topology = _testcase_marker(
+        "TimestampQueryMixedMultiSegmentCallbackTiers", text
+    )
+    _require(
+        mixed_topology is not None and mixed_topology[0] == "PASS",
+        "timestamp-query-success-batch: missing mixed-topology PASS marker",
+    )
+    _, mixed_fields = mixed_topology
+    _require(
+        mixed_fields.get("original_sources") == "2"
+        and mixed_fields.get("executable_sources") == "3"
+        and mixed_fields.get("source0_segments") == "2"
+        and mixed_fields.get("source1_query") == "true"
+        and mixed_fields.get("order") == "Query,AllOrdinary,AllSuccess"
+        and mixed_fields.get("owner") == "Completion"
+        and mixed_fields.get("callbacks") == "exactly_once"
+        and mixed_fields.get("replay") == "0",
+        "timestamp-query-success-batch: incomplete mixed-topology callback-tier contract",
+    )
+
+    copy_only = _testcase_marker(
+        "TimestampQueryCopyOnlyPayloadArrival", text
+    )
+    _require(
+        copy_only is not None and copy_only[0] == "PASS",
+        "timestamp-query-success-batch: missing Copy query-only PASS marker",
+    )
+    _, copy_fields = copy_only
+    _require(
+        copy_fields.get("sources") == "2"
+        and copy_fields.get("queues") == "Graphics,Copy"
+        and copy_fields.get("copy_payload") == "query_only"
+        and copy_fields.get("copy_query") == "Error"
+        and copy_fields.get("group_arrival") == "verified"
+        and copy_fields.get("owner") == "Completion"
+        and copy_fields.get("callbacks") == "exactly_once"
+        and copy_fields.get("native_submit") == "2"
+        and copy_fields.get("replay") == "0",
+        "timestamp-query-success-batch: incomplete Copy query-only arrival contract",
+    )
+
+
 def validate_log(mode: str, text: str) -> None:
     _require("[TESTCASE][FAIL]" not in text, f"{mode}: test emitted a FAIL marker")
     _require("VUID-" not in text, f"{mode}: Vulkan validation VUID was emitted")
     _require("Validation Error" not in text, f"{mode}: Vulkan validation error was emitted")
+    if mode == "timestamp-query-success-batch":
+        _require_timestamp_query_success_batch(text)
+        return
     if mode == "rt-export-rejection":
         _require_rt_export_rejection(text)
         return
@@ -1127,6 +1233,8 @@ def run_case(executable: Path, outdir: Path, mode: str, timeout: float) -> Path:
         arguments.append("--present-hard")
     if mode == "rt-export-rejection":
         arguments.append("--rt-export-rejection")
+    if mode == "timestamp-query-success-batch":
+        arguments.append("--timestamp-query-success-batch")
 
     completed = subprocess.run(
         [str(executable), *arguments],
@@ -1182,6 +1290,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "present-boundary",
                 "present-hard",
                 "rt-export-rejection",
+                "timestamp-query-success-batch",
             )
         ]
     except (OSError, subprocess.TimeoutExpired, VulkanTestError) as error:

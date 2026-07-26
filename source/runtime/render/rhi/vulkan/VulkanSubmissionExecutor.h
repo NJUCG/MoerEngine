@@ -49,6 +49,8 @@ private:
         bool                    done{false};
     };
 
+    struct BatchRejectionPublication;
+
     using ERequestKind = VulkanSubmissionDetail::EWorkerRequestKind;
 
     struct Request {
@@ -64,6 +66,8 @@ private:
         // several entries; its source-level callback lifetime is protected by
         // a completion aggregate spanning every segment.
         size_t first_unconsumed_source{0};
+        std::shared_ptr<BatchRejectionPublication>
+            rejection_publication{};
     };
 
     struct SubmissionWork {
@@ -85,6 +89,7 @@ private:
         Array<RejectionSignalHandle> signals{};
         Array<QueryToken>            query_tokens{};
         QueryPublishBatch            query_batch{};
+        VulkanBatchCompletionTicket  completion_ticket{};
         bool                         terminalized{false};
     };
 
@@ -103,6 +108,9 @@ private:
             bool             _recoverable,
             std::string_view _reason
         ) noexcept;
+        [[nodiscard]] VulkanBatchCompletionTicket CompletionTicket(
+            size_t _source_index
+        ) const noexcept;
 
         Array<RejectionSourceSnapshot> sources{};
         std::mutex                     mutex{};
@@ -200,7 +208,8 @@ private:
     ) noexcept;
     [[nodiscard]] RecordedSourcePacket TranslateSourceForRuntime(
         EQueueType _queue,
-        CmdSubmit&& _submit
+        CmdSubmit&& _submit,
+        VulkanBatchCompletionTicket _completion_ticket = {}
     ) noexcept;
     [[nodiscard]] VulkanRuntimeSubmissionResult SubmitRecordedSourceForRuntime(
         EQueueType                            _queue,
@@ -221,7 +230,8 @@ private:
         EQueueType _queue,
         CmdSubmit&& _submit,
         VkResult    _result,
-        bool        _recoverable
+        bool        _recoverable,
+        VulkanBatchCompletionTicket _completion_ticket = {}
     ) noexcept;
     [[nodiscard]] static bool HasRecordedSourcePacket(
         const RecordedSourcePacket& _packet
@@ -256,7 +266,9 @@ private:
         std::string_view            _reason,
         bool                        _recoverable,
         size_t                      _first_source = 0,
-        size_t*                     _next_unconsumed_source = nullptr
+        size_t*                     _next_unconsumed_source = nullptr,
+        std::shared_ptr<BatchRejectionPublication>
+            _rejection_publication = {}
     );
     void CompleteRequest(const std::shared_ptr<Completion>& _completion);
     void ReportRequestFailure(

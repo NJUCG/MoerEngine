@@ -181,6 +181,40 @@ def rt_export_rejection_line() -> str:
     )
 
 
+def timestamp_query_success_batch_line() -> str:
+    return (
+        "[TESTCASE][PASS] "
+        "name=TimestampQuerySuccessfulBatchPublication "
+        "sources=2 queues=Graphics,Graphics batch_sequence=7 "
+        "signals=terminal_before_query_callbacks "
+        "queries=batch_published_before_notify "
+        "cross_future_wait=ready owner=Completion "
+        "query_callbacks=exactly_once "
+        "ordinary_callbacks=exactly_once "
+        "success_callbacks=exactly_once "
+        "native_submit=2 native_owner=Submission replay=0\n"
+        "[TESTCASE][PASS] "
+        "name=TimestampQueryCrossQueueBatchPublication "
+        "sources=2 queues=Graphics,Compute native_alias=false "
+        "queries=batch_published_before_notify "
+        "cross_future_wait=ready owner=Completion "
+        "queue_local_sync=blocked_until_group_settled "
+        "callbacks=exactly_once replay=0\n"
+        "[TESTCASE][PASS] "
+        "name=TimestampQueryMixedMultiSegmentCallbackTiers "
+        "original_sources=2 executable_sources=3 "
+        "source0_segments=2 source1_query=true "
+        "order=Query,AllOrdinary,AllSuccess "
+        "owner=Completion callbacks=exactly_once replay=0\n"
+        "[TESTCASE][PASS] "
+        "name=TimestampQueryCopyOnlyPayloadArrival "
+        "sources=2 queues=Graphics,Copy "
+        "copy_payload=query_only copy_query=Error "
+        "group_arrival=verified owner=Completion "
+        "callbacks=exactly_once native_submit=2 replay=0\n"
+    )
+
+
 def pass_line(
     mode: str,
     fault: str,
@@ -966,6 +1000,11 @@ class VulkanRunnerTests(unittest.TestCase):
                 "--rt-export-rejection",
                 rt_export_rejection_line(),
             ),
+            (
+                "timestamp-query-success-batch",
+                "--timestamp-query-success-batch",
+                timestamp_query_success_batch_line(),
+            ),
         )
         with tempfile.TemporaryDirectory() as temporary_directory:
             for mode, expected_argument, output in cases:
@@ -994,6 +1033,59 @@ class VulkanRunnerTests(unittest.TestCase):
                             expected_argument,
                         ],
                     )
+
+    def test_timestamp_query_success_batch_contract_is_accepted(
+        self,
+    ) -> None:
+        runner.validate_log(
+            "timestamp-query-success-batch",
+            timestamp_query_success_batch_line(),
+        )
+
+    def test_timestamp_query_success_batch_rejects_partial_publication(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete batch publication contract",
+        ):
+            runner.validate_log(
+                "timestamp-query-success-batch",
+                timestamp_query_success_batch_line().replace(
+                    "queries=batch_published_before_notify",
+                    "queries=per_packet_notify",
+                ),
+            )
+
+    def test_timestamp_query_success_batch_rejects_early_queue_sync(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete cross-queue settlement contract",
+        ):
+            runner.validate_log(
+                "timestamp-query-success-batch",
+                timestamp_query_success_batch_line().replace(
+                    "queue_local_sync=blocked_until_group_settled",
+                    "queue_local_sync=returned_before_group_settled",
+                ),
+            )
+
+    def test_timestamp_query_success_batch_rejects_mixed_tier_inversion(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete mixed-topology callback-tier contract",
+        ):
+            runner.validate_log(
+                "timestamp-query-success-batch",
+                timestamp_query_success_batch_line().replace(
+                    "order=Query,AllOrdinary,AllSuccess",
+                    "order=Query,SuccessInsideOrdinary",
+                ),
+            )
 
     def test_rt_export_rejection_contract_is_accepted(self) -> None:
         runner.validate_log(

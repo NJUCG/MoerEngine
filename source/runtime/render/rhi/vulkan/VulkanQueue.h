@@ -18,6 +18,8 @@
 #include <chrono>
 #include <condition_variable>
 #include <functional>
+#include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string_view>
@@ -254,6 +256,57 @@ struct VulkanDeferredReleaseBatch {
     Array<RHIResource*> resources;
 };
 
+// A runtime backend batch may retire through several logical Completion
+// owners. Query/Fence waiters used by an earlier source callback must not
+// block the only owner capable of publishing a later source. Every
+// executable source therefore publishes its terminal state independently,
+// then arrives here without waiting. The last Completion owner releases all
+// user notifications in stable source order.
+class VulkanBatchCompletionGroup final {
+public:
+    struct Participant {
+        Array<QueryToken>                query_tokens;
+        QueryPublishBatch                query_batch{};
+        Array<std::function<void()>>     callbacks;
+        Array<std::function<void()>>     success_callbacks;
+        Array<RHIResource*>              deferred_releases;
+        VulkanDevice*                    device{nullptr};
+        bool                             gpu_success{false};
+        bool                             release_safe{false};
+    };
+
+    explicit VulkanBatchCompletionGroup(size_t _participant_count);
+
+    VulkanBatchCompletionGroup(const VulkanBatchCompletionGroup&) = delete;
+    VulkanBatchCompletionGroup& operator=(const VulkanBatchCompletionGroup&) = delete;
+
+    void Arrive(size_t _participant_index, Participant&& _participant) noexcept;
+    void WaitUntilSettled();
+
+private:
+    std::mutex                         mutex{};
+    std::condition_variable            settled_cv{};
+    Array<std::optional<Participant>> participants{};
+    size_t                             remaining{0};
+    bool                               released{false};
+    bool                               settled{false};
+};
+
+struct VulkanBatchCompletionTicket {
+    std::shared_ptr<VulkanBatchCompletionGroup> group{};
+    size_t participant_index{std::numeric_limits<size_t>::max()};
+
+    [[nodiscard]] bool Valid() const noexcept {
+        return group != nullptr &&
+               participant_index != std::numeric_limits<size_t>::max();
+    }
+};
+
+struct VulkanBatchCompletionSettlement {
+    uint64                                    retirement_serial{0};
+    std::weak_ptr<VulkanBatchCompletionGroup> group{};
+};
+
 // Runtime-recorded submissions cross the Submission -> Completion boundary as
 // one move-only ownership packet.  Keeping the command payload, allocator
 // retirement, descriptor lease, callbacks, signals, and deferred releases in
@@ -268,7 +321,8 @@ struct VulkanSubmitCompletionBatch {
         CmdSubmit&&                              _submit,
         VulkanAllocatorBatch&&                   _allocators,
         std::optional<VulkanDescriptorPushLease>&& _descriptor_lease,
-        Array<RHIResource*>&&                    _deferred_releases
+        Array<RHIResource*>&&                    _deferred_releases,
+        VulkanBatchCompletionTicket              _batch_completion = {}
     ) noexcept :
         outcome(_outcome),
         context(_context),
@@ -277,7 +331,8 @@ struct VulkanSubmitCompletionBatch {
         submit(std::move(_submit)),
         allocators(std::move(_allocators)),
         descriptor_lease(std::move(_descriptor_lease)),
-        deferred_releases(std::move(_deferred_releases)) {}
+        deferred_releases(std::move(_deferred_releases)),
+        batch_completion(std::move(_batch_completion)) {}
 
     VulkanSubmitCompletionBatch(
         VulkanOperationResult      _outcome,
@@ -287,7 +342,8 @@ struct VulkanSubmitCompletionBatch {
         CmdSubmit&&                _submit,
         VulkanAllocatorBatch&&     _allocators,
         VulkanDescriptorPushLease&& _descriptor_lease,
-        Array<RHIResource*>&&      _deferred_releases
+        Array<RHIResource*>&&      _deferred_releases,
+        VulkanBatchCompletionTicket _batch_completion = {}
     ) noexcept :
         outcome(_outcome),
         context(_context),
@@ -296,7 +352,8 @@ struct VulkanSubmitCompletionBatch {
         submit(std::move(_submit)),
         allocators(std::move(_allocators)),
         descriptor_lease(std::move(_descriptor_lease)),
-        deferred_releases(std::move(_deferred_releases)) {}
+        deferred_releases(std::move(_deferred_releases)),
+        batch_completion(std::move(_batch_completion)) {}
 
     VulkanSubmitCompletionBatch(const VulkanSubmitCompletionBatch&) = delete;
     VulkanSubmitCompletionBatch& operator=(const VulkanSubmitCompletionBatch&) = delete;
@@ -311,6 +368,7 @@ struct VulkanSubmitCompletionBatch {
     VulkanAllocatorBatch                     allocators;
     std::optional<VulkanDescriptorPushLease> descriptor_lease;
     Array<RHIResource*>                      deferred_releases;
+    VulkanBatchCompletionTicket              batch_completion{};
 };
 
 enum class EVulkanPresentorRetirementState : uint8_t {
@@ -691,6 +749,7 @@ private:
         VulkanAllocatorBatch                    allocators;
         std::optional<VulkanDescriptorPushLease> descriptor_lease;
         Array<RHIResource*>                     deferred_releases;
+        VulkanBatchCompletionTicket             batch_completion{};
         CurrentVulkanRecordedSubmitProfile      profile;
         RHITransferableOwnershipGate::Lease     execution_lease{};
         VulkanOperationResult                   retirement_outcome{
@@ -733,7 +792,8 @@ private:
     void RejectForRuntime(
         CmdSubmit&& _submit,
         VkResult    _result,
-        bool        _recoverable
+        bool        _recoverable,
+        VulkanBatchCompletionTicket _batch_completion = {}
     ) noexcept;
     [[nodiscard]] bool ClaimRuntimeOwnership();
     void ReleaseRuntimeOwnership() noexcept;
@@ -818,6 +878,7 @@ private:
     std::atomic<uint64>                                cpu_settled_frame = 0;
     uint64                                             retirement_enqueued_serial{0};
     std::atomic<uint64>                                retirement_settled_serial{0};
+    Array<VulkanBatchCompletionSettlement>             batch_completion_settlements{};
     VulkanFence*                                       timeline = nullptr;
     std::mutex                                         event_mutex;
     bool                                               completion_worker_running{false};
@@ -983,7 +1044,8 @@ private:
     void RejectForRuntime(
         CmdSubmit&& _submit,
         VkResult    _result,
-        bool        _recoverable
+        bool        _recoverable,
+        VulkanBatchCompletionTicket _batch_completion = {}
     ) noexcept;
     void EnableRuntimeDependencyWaits() noexcept;
     void CancelRuntimeDependencyWaits() noexcept;
@@ -1011,6 +1073,7 @@ private:
         VulkanOperationContext              context{};
         uint64                              logical_timeline{0};
         VulkanAllocatorBatch                allocators{};
+        VulkanBatchCompletionTicket         batch_completion{};
         RHITransferableOwnershipGate::Lease execution_lease{};
         VulkanOperationResult               retirement_outcome{
             EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN
@@ -1054,6 +1117,7 @@ private:
     std::atomic<uint64>     cpu_settled_frame = 0;
     uint64                  retirement_enqueued_serial{0};
     std::atomic<uint64>     retirement_settled_serial{0};
+    Array<VulkanBatchCompletionSettlement> batch_completion_settlements{};
     VulkanFenceRef          timeline       = nullptr;
     std::mutex              event_mutex;
     std::atomic_bool        enabled{false};
