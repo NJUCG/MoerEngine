@@ -66,6 +66,20 @@ struct RHIBackendSubmissionBatch {
     Array<RHIBackendSubmissionBatchEntry>    submits{};
     std::optional<RHIPresentRequest>          present{};
     RHISubmissionTopologyPlan                 topology{};
+
+    RHIBackendSubmissionBatch() = default;
+    RHIBackendSubmissionBatch(
+        RHIBackendSubmissionBatch&&
+    ) noexcept = default;
+    RHIBackendSubmissionBatch& operator=(
+        RHIBackendSubmissionBatch&&
+    ) noexcept = default;
+    RHIBackendSubmissionBatch(
+        const RHIBackendSubmissionBatch&
+    ) = delete;
+    RHIBackendSubmissionBatch& operator=(
+        const RHIBackendSubmissionBatch&
+    ) = delete;
 };
 
 class RHIBackendExecutor {

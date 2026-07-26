@@ -117,7 +117,7 @@ public:
                 {NRD_ID(RELAX_SPECULAR), nrd::Denoiser::RELAX_SPECULAR},
                 // SIGMA
                 {NRD_ID(SIGMA_SHADOW_TRANSLUCENCY), nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY},
-                {NRD_ID(SIGMA_SHADOW), nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY},
+                {NRD_ID(SIGMA_SHADOW), nrd::Denoiser::SIGMA_SHADOW},
                 // REFERENCE
                 // {NRD_ID(REFERENCE), nrd::Denoiser::REFERENCE},
             };
@@ -153,24 +153,18 @@ public:
 #undef NRD_ID
     }
 
-    void Begin() override {
-        // Must be called once on a frame start
-        nrd.integration.NewFrame();
-    }
+    void Denoise(
+        CommandList&     _cmd_list,
+        PreparedFrameRef _frame,
+        std::string_view _name
+    ) override;
 
-    void Denoise(CommandList& _cmd_list, const nrd::Denoiser _denoiser, std::string_view _name) override;
-
-    void Reinitialize(uint16 _frame_width, uint16 _frame_height) override {
-        nrd.frame_width  = _frame_width;
-        nrd.frame_height = _frame_height;
-        nrd.integration.RecreateResources(_frame_width, _frame_height);
-
-        SetDefaultCommonSettings(_frame_width, _frame_height);
-
-        LOG_INFO("[NRD]: NRD Texture Resources recreated.");
-    }
-
-    void SetInput(EResourceSlot _index, TextureRef _texture) override {
+private:
+    void SetInput(
+        nrd::UserPool&     _user_pool,
+        EResourceSlot      _index,
+        const TextureRef&  _texture
+    ) {
         assert(_index < EResourceSlot::OUT_DIFFUSE && "Invalid resource slot index");
         auto* vk_tex = ResourceCast(_texture);
 
@@ -184,7 +178,7 @@ public:
                 tex_barrier_desc.after.access = nri::AccessBits::SHADER_RESOURCE;
                 tex_barrier_desc.after.layout = nri::Layout::SHADER_RESOURCE;
             }
-            nrd::Integration_SetResource(nrd.user_pool, ResourceSlot(_index), &tex_barrier_desc);
+            nrd::Integration_SetResource(_user_pool, ResourceSlot(_index), &tex_barrier_desc);
         } else {
             auto& tex_barrier_desc = tex_barrier_desc_map[desc_key];
             // Wrap required textures (better do it only once on initialization)
@@ -206,7 +200,14 @@ public:
             // Useful information:
             //    SRV = nri::AccessBits::SHADER_RESOURCE, nri::TextureLayout::SHADER_RESOURCE
             //    UAV = nri::AccessBits::SHADER_RESOURCE_STORAGE, nri::TextureLayout::GENERAL
-            nrd.nri.rhi.CreateTextureVK(*nrd.nri.device, tex_desc, (nri::Texture*&)tex_barrier_desc.texture);
+            CHECK_ASSERT(
+                nrd.nri.rhi.CreateTextureVK(
+                    *nrd.nri.device,
+                    tex_desc,
+                    (nri::Texture*&)tex_barrier_desc.texture
+                ) == nri::Result::SUCCESS,
+                "Failed to wrap an NRD input texture"
+            );
             tex_barrier_desc.before.access = nri::AccessBits::SHADER_RESOURCE;
             tex_barrier_desc.before.layout = nri::Layout::SHADER_RESOURCE;
             tex_barrier_desc.before.stages = nri::StageBits::COMPUTE_SHADER;
@@ -218,28 +219,15 @@ public:
             tex_barrier_desc.layerOffset   = 0;
             tex_barrier_desc.layerNum      = vk_tex->GetNumArray();
             tex_barrier_desc.planes        = nri::PlaneBits::COLOR;
-            nrd::Integration_SetResource(nrd.user_pool, ResourceSlot(_index), &tex_barrier_desc);
-        }
-
-        // Resource usage
-        if (resource_usages_indices[uint8(_index)] == 0) {
-            VulkanShaderResourceState pipeline_flags{};
-            pipeline_flags.desc_type     = VDT_SAMPLED_IMAGE;
-            pipeline_flags.b_sampled     = 1;
-            pipeline_flags.resource_type = SRT_SRV;
-
-            ParamInfoFlags read_flag = {pipeline_flags(), VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT};
-
-            resource_usages.emplace_back(_texture, read_flag);
-            resource_usages_indices[uint8(_index)] = resource_usages.size();
-        } else {
-            // Update resource usage
-            auto& usage    = resource_usages[resource_usages_indices[uint8(_index)] - 1];
-            usage.resource = _texture;
+            nrd::Integration_SetResource(_user_pool, ResourceSlot(_index), &tex_barrier_desc);
         }
     }
 
-    void SetOutput(EResourceSlot _index, TextureRef _texture) override {
+    void SetOutput(
+        nrd::UserPool&     _user_pool,
+        EResourceSlot      _index,
+        const TextureRef&  _texture
+    ) {
         assert(_index >= EResourceSlot::OUT_DIFFUSE && "Output resource index is invalid");
         auto* vk_tex = ResourceCast(_texture);
 
@@ -248,7 +236,7 @@ public:
         auto desc_key = uint64(vk_tex->GetHandle());
         if (tex_barrier_desc_map.contains(desc_key)) {
             auto& tex_barrier_desc = tex_barrier_desc_map[desc_key];
-            nrd::Integration_SetResource(nrd.user_pool, ResourceSlot(_index), &tex_barrier_desc);
+            nrd::Integration_SetResource(_user_pool, ResourceSlot(_index), &tex_barrier_desc);
         } else {
             auto& tex_barrier_desc = tex_barrier_desc_map[desc_key];
             // Wrap required textures (better do it only once on initialization)
@@ -270,7 +258,14 @@ public:
             // Useful information:
             //    SRV = nri::AccessBits::SHADER_RESOURCE, nri::TextureLayout::SHADER_RESOURCE
             //    UAV = nri::AccessBits::SHADER_RESOURCE_STORAGE, nri::TextureLayout::GENERAL
-            nrd.nri.rhi.CreateTextureVK(*nrd.nri.device, tex_desc, (nri::Texture*&)tex_barrier_desc.texture);
+            CHECK_ASSERT(
+                nrd.nri.rhi.CreateTextureVK(
+                    *nrd.nri.device,
+                    tex_desc,
+                    (nri::Texture*&)tex_barrier_desc.texture
+                ) == nri::Result::SUCCESS,
+                "Failed to wrap an NRD output texture"
+            );
             tex_barrier_desc.before.access = nri::AccessBits::SHADER_RESOURCE_STORAGE;
             tex_barrier_desc.before.layout = nri::Layout::SHADER_RESOURCE_STORAGE;
             tex_barrier_desc.before.stages = nri::StageBits::COMPUTE_SHADER;
@@ -282,31 +277,11 @@ public:
             tex_barrier_desc.layerOffset   = 0;
             tex_barrier_desc.layerNum      = vk_tex->GetNumArray();
             tex_barrier_desc.planes        = nri::PlaneBits::COLOR;
-            nrd::Integration_SetResource(nrd.user_pool, ResourceSlot(_index), &tex_barrier_desc);
-        }
-
-        // Resource usage
-        if (resource_usages_indices[uint8(_index)] == 0) {
-            VulkanShaderResourceState pipeline_flags{};
-            pipeline_flags.desc_type     = VDT_STORAGE_IMAGE;
-            pipeline_flags.b_sampled     = 1;
-            pipeline_flags.resource_type = SRT_UAV;
-
-            ParamInfoFlags write_flag = {pipeline_flags(), VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT};
-
-            resource_usages.emplace_back(_texture, write_flag);
-            resource_usages_indices[uint8(_index)] = resource_usages.size();
-        } else {
-            // Update resource usage
-            auto& usage    = resource_usages[resource_usages_indices[uint8(_index)] - 1];
-            usage.resource = _texture;
+            nrd::Integration_SetResource(_user_pool, ResourceSlot(_index), &tex_barrier_desc);
         }
     };
 
 private:
-    Array<CustomDispatchCmd::ResourceUsage>            resource_usages;
-    StaticArray<uint8, uint8(EResourceSlot::SLOT_NUM)> resource_usages_indices = {};
-
     constexpr nrd::ResourceType ResourceSlot(const EResourceSlot _index) {
         switch (_index) {
             case EResourceSlot::MOTION_VECTOR:
@@ -337,85 +312,263 @@ private:
     }
 };
 
-UniquePtr<NRDInterface>
+SharedPtr<NRDInterface>
 VkNRDPlugin::CreateInterface(uint8 _max_frame_in_flight, uint16 _frame_width, uint16 _frame_height) {
-
-    return MakeUnique<VkNRDInterface>(m_device, _max_frame_in_flight, _frame_width, _frame_height);
+    return MakeShared<VkNRDInterface>(
+        m_device,
+        _max_frame_in_flight,
+        _frame_width,
+        _frame_height
+    );
 }
 
-UniquePtr<NRDInterface> VkNRDPlugin::RecreateInterface(
-    UniquePtr<NRDInterface> _interface,
+SharedPtr<NRDInterface> VkNRDPlugin::RecreateInterface(
+    SharedPtr<NRDInterface> _interface,
     uint16                  _frame_width,
     uint16                  _frame_height
 ) {
-
-    auto* vk_interface = static_cast<VkNRDInterface*>(_interface.get());
-
-    vk_interface->Reinitialize(_frame_width, _frame_height);
-
-    return std::move(_interface);
+    const uint8 max_frame_in_flight =
+        _interface ? _interface->GetMaxFrameInFlight() : 0;
+    // A published custom command owns the previous shared interface until
+    // completion. Resize therefore creates a new backend generation instead
+    // of mutating Integration/resources that may still be translating.
+    return CreateInterface(
+        max_frame_in_flight,
+        _frame_width,
+        _frame_height
+    );
 }
 
 class VkNrdDenoiseCmd final : public VkCustomDispatchCmd {
 private:
     std::span<const ResourceUsage> GetResourceUsages() const override {
-        return nrd_interface.resource_usages;
+        return resource_usages;
     }
 
 private:
-    VkNRDInterface& nrd_interface;
-    nrd::Denoiser   denoiser;
+    SharedPtr<VkNRDInterface>        nrd_interface;
+    NRDInterface::PreparedFrameRef   frame;
+    Array<ResourceUsage>             resource_usages{};
 
 public:
-    VkNrdDenoiseCmd(VkNRDInterface& _nrd, const nrd::Denoiser _denoiser) :
-        nrd_interface(_nrd),
-        denoiser(_denoiser) {}
+    VkNrdDenoiseCmd(
+        SharedPtr<VkNRDInterface>      _nrd,
+        NRDInterface::PreparedFrameRef _frame
+    ) :
+        nrd_interface(std::move(_nrd)),
+        frame(std::move(_frame)) {
+        for (uint8 index = 0;
+             index < NRDInterface::resource_slot_count;
+             ++index) {
+            const auto slot =
+                static_cast<NRDInterface::EResourceSlot>(index);
+            const TextureRef& texture = frame->GetResource(slot);
+            if (!texture) {
+                continue;
+            }
+
+            VulkanShaderResourceState pipeline_flags{};
+            pipeline_flags.b_sampled = 1;
+            if (slot < NRDInterface::EResourceSlot::OUT_DIFFUSE) {
+                pipeline_flags.desc_type     = VDT_SAMPLED_IMAGE;
+                pipeline_flags.resource_type = SRT_SRV;
+            } else {
+                pipeline_flags.desc_type     = VDT_STORAGE_IMAGE;
+                pipeline_flags.resource_type = SRT_UAV;
+            }
+            resource_usages.emplace_back(
+                texture,
+                ParamInfoFlags{
+                    pipeline_flags(),
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                }
+            );
+        }
+    }
 
     EQueueType GetQueueType() const override {
         return EQueueType::Graphics;
     }
 
     void Execute(const VkDispatchContext& _context) const override {
-        auto& nrd_integration = nrd_interface.nrd.integration;
-        auto& nri             = nrd_interface.nrd.nri;
+        auto& nrd_integration = nrd_interface->nrd.integration;
+        auto& nri             = nrd_interface->nrd.nri;
+        nrd::UserPool user_pool{};
+
+        nrd_integration.NewFrame();
+        CHECK_ASSERT(
+            nrd_integration.SetCommonSettings(frame->GetCommonSettings()),
+            "Failed to apply immutable NRD common settings"
+        );
+        for (uint8 index = 0;
+             index < uint8(NRDInterface::EResourceSlot::OUT_DIFFUSE);
+             ++index) {
+            const auto slot =
+                static_cast<NRDInterface::EResourceSlot>(index);
+            const TextureRef& texture = frame->GetResource(slot);
+            if (texture) {
+                nrd_interface->SetInput(user_pool, slot, texture);
+            }
+        }
+        for (uint8 index =
+                 uint8(NRDInterface::EResourceSlot::OUT_DIFFUSE);
+             index < NRDInterface::resource_slot_count;
+             ++index) {
+            const auto slot =
+                static_cast<NRDInterface::EResourceSlot>(index);
+            const TextureRef& texture = frame->GetResource(slot);
+            if (texture) {
+                nrd_interface->SetOutput(user_pool, slot, texture);
+            }
+        }
         //=======================================================================================================
         // RENDER - DENOISE
         //=======================================================================================================
         // Wrap a command buffer
-        if (nrd_interface.cmd_lists_on_use.contains(uint64(_context.cmd_list))) {
-            nri.cmd_list = nrd_interface.cmd_lists_on_use[uint64(_context.cmd_list)];
+        if (nrd_interface->cmd_lists_on_use.contains(uint64(_context.cmd_list))) {
+            nri.cmd_list =
+                nrd_interface->cmd_lists_on_use[uint64(_context.cmd_list)];
         } else {
             nri::CommandBufferVKDesc cmd_buffer_desc = {};
             cmd_buffer_desc.commandQueueType         = nri::CommandQueueType::GRAPHICS;
             cmd_buffer_desc.vkCommandBuffer          = _context.cmd_list;
-            nri.rhi.CreateCommandBufferVK(*nri.device, cmd_buffer_desc, nri.cmd_list);
-            nrd_interface.cmd_lists_on_use[uint64(_context.cmd_list)] = nri.cmd_list;
+            CHECK_ASSERT(
+                nri.rhi.CreateCommandBufferVK(
+                    *nri.device, cmd_buffer_desc, nri.cmd_list
+                ) == nri::Result::SUCCESS,
+                "Failed to wrap the Vulkan command buffer for NRD"
+            );
+            nrd_interface->cmd_lists_on_use[uint64(_context.cmd_list)] =
+                nri.cmd_list;
         }
 
+        const nrd::Denoiser denoiser = frame->GetDenoiser();
         const nrd::Identifier denoiser_id = nrd::Identifier(denoiser);
-        nrd_integration.Denoise(&denoiser_id, 1, *nri.cmd_list, nrd_interface.nrd.user_pool);
+        nrd_integration.Denoise(
+            &denoiser_id,
+            1,
+            *nri.cmd_list,
+            user_pool
+        );
 
-        // The motion vector has been trasitioned to GENERAL layout by NRD REBLUR Denoisers, so we need to flush the state
-        auto mv_usage_slot =
-            nrd_interface.resource_usages_indices[uint8(NRDInterface::EResourceSlot::MOTION_VECTOR)];
-        if (denoiser < nrd::Denoiser::RELAX_DIFFUSE && mv_usage_slot) {
-            auto* mv = ResourceCast(
-                std::get<TextureView>(nrd_interface.resource_usages[mv_usage_slot - 1].resource).GetTexture()
+        // Old UserPool-based NRD leaves REBLUR motion in GENERAL. Restore the
+        // graph-declared Sampled state with a real native barrier; changing
+        // only VkTracker would make the next explicit RDG barrier name the
+        // wrong oldLayout.
+        if (IsReblurDenoiser(denoiser)) {
+            const TextureRef& motion = frame->GetResource(
+                NRDInterface::EResourceSlot::MOTION_VECTOR
             );
-            auto* vk_tracker = (VkTracker*)_context.user_data;
-            vk_tracker->FlushSrcState(
-                mv,
-                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-                VK_IMAGE_LAYOUT_GENERAL,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
-            );
+            auto* vk_motion = ResourceCast(motion);
+            VkImageMemoryBarrier2 restore_motion{
+                VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2
+            };
+            restore_motion.srcStageMask =
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            restore_motion.srcAccessMask =
+                VK_ACCESS_2_SHADER_READ_BIT |
+                VK_ACCESS_2_SHADER_WRITE_BIT;
+            restore_motion.dstStageMask =
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            restore_motion.dstAccessMask =
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+            restore_motion.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            restore_motion.newLayout =
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            restore_motion.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            restore_motion.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            restore_motion.image = vk_motion->GetHandle();
+            restore_motion.subresourceRange = VkImageSubresourceRange{
+                .aspectMask =
+                    VulkanEnumTranslator::METoVKImageAspectFlags(
+                        vk_motion->GetAspectFlags()
+                    ),
+                .baseMipLevel   = 0,
+                .levelCount     = vk_motion->GetNumMips(),
+                .baseArrayLayer = 0,
+                .layerCount     = vk_motion->GetNumArray(),
+            };
+            const VkDependencyInfo dependency{
+                .sType                   =
+                    VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                .pNext                   = nullptr,
+                .dependencyFlags         = 0,
+                .memoryBarrierCount      = 0,
+                .pMemoryBarriers         = nullptr,
+                .bufferMemoryBarrierCount = 0,
+                .pBufferMemoryBarriers   = nullptr,
+                .imageMemoryBarrierCount = 1,
+                .pImageMemoryBarriers    = &restore_motion,
+            };
+            vkCmdPipelineBarrier2(_context.cmd_list, &dependency);
+        }
+
+        auto* vk_tracker = static_cast<VkTracker*>(_context.user_data);
+        for (uint8 index = 0;
+             index < NRDInterface::resource_slot_count;
+             ++index) {
+            const auto slot =
+                static_cast<NRDInterface::EResourceSlot>(index);
+            const TextureRef& texture = frame->GetResource(slot);
+            if (!texture) {
+                continue;
+            }
+            auto* vk_texture = ResourceCast(texture);
+            if (slot < NRDInterface::EResourceSlot::OUT_DIFFUSE) {
+                vk_tracker->FlushSrcState(
+                    vk_texture,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                );
+            } else {
+                vk_tracker->FlushSrcState(
+                    vk_texture,
+                    static_cast<VkAccessFlagBits2>(
+                        VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
+                    ),
+                    VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                );
+            }
         }
         // IMPORTANT: NRD integration binds own descriptor pool, don't forget to re-bind back your pool (heap)
     }
 };
 
-void VkNRDInterface::Denoise(CommandList& _cmd_list, const nrd::Denoiser _denoiser, std::string_view _name) {
-    _cmd_list.AddCustomCommand(MakeUnique<VkNrdDenoiseCmd>(*this, _denoiser), _name);
+void VkNRDInterface::Denoise(
+    CommandList&     _cmd_list,
+    PreparedFrameRef _frame,
+    std::string_view _name
+) {
+    if (!_frame || !_frame->IsValid()) {
+        throw std::invalid_argument(
+            "NRD denoise requires a valid immutable prepared frame"
+        );
+    }
+    if (!OwnsPreparedFrame(_frame)) {
+        throw std::invalid_argument(
+            "NRD denoise prepared frame belongs to another interface generation"
+        );
+    }
+    // The external NRD/NRI integration owns mutable descriptor and native
+    // command-buffer wrapper caches. Make SerialControl a backend invariant
+    // for every caller, including the linear warm-up path; the graph policy is
+    // retained as a declarative compiler contract.
+    _cmd_list.SetTranslateExecutionClass(
+        ERHITranslateExecutionClass::SerialControl
+    );
+    auto owner = std::static_pointer_cast<VkNRDInterface>(
+        shared_from_this()
+    );
+    _cmd_list.AddCustomCommand(
+        MakeUnique<VkNrdDenoiseCmd>(
+            std::move(owner),
+            std::move(_frame)
+        ),
+        _name
+    );
 }
 
 } // namespace Moer::Render::Ext

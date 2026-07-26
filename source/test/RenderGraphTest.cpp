@@ -1,4 +1,5 @@
 #include "rendergraph/RenderGraph.h"
+#include "rhi/plugin/NrdPlugin.h"
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/TaskSystem.h"
 
@@ -3544,7 +3545,10 @@ void TestRecordingBatchPlanAndClassification(TestSuite& suite) {
     );
     suite.Check(
         Contains(graph.Dump(), "recording_batches:\n") &&
-            Contains(graph.Dump(), "cpu=parallel-record workload=8 wave=0"),
+            Contains(
+                graph.Dump(),
+                "cpu=parallel-record translate=parallel workload=8 wave=0"
+            ),
         test_name,
         "the deterministic dump must expose the executable CPU recording schedule"
     );
@@ -3674,6 +3678,131 @@ void TestExternalControlIsAnUnmanagedJoinBoundary(TestSuite& suite) {
         published_groups == 1 && managed_observers == 1,
         test_name,
         "only owned record batches are published and only managed main-thread passes are observed"
+    );
+}
+
+void TestSerialControlTranslationIsADeclaredRecordingPolicy(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "serial-control translation recording policy";
+    RenderGraph graph("SerialControlTranslation");
+    bool        recorded  = false;
+    bool        published = false;
+
+    graph.AddRecordPass(
+        "NRDIsland",
+        [](RenderGraph::PassBuilder& builder) {
+            builder
+                .ExecuteOn(
+                    RenderGraph::QueueRole::Graphics,
+                    RenderGraph::PipelineType::Compute
+                )
+                .SideEffect()
+                .SerialRecord()
+                .TranslateSerialControl();
+        },
+        [&](Moer::Render::CommandList&) { recorded = true; },
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    suite.Check(
+        plan.recording_batches.size() == 1 &&
+            plan.recording_batches.front().execution ==
+                RenderGraph::PassExecutionClass::SerialRecord &&
+            plan.recording_batches.front().translate_execution_class ==
+                Moer::Render::ERHITranslateExecutionClass::SerialControl &&
+            Contains(graph.Dump(), "translate=serial-control"),
+        test_name,
+        "the compiler and dump must retain the declared translation frontier"
+    );
+
+    const bool executed = graph.ExecuteRecording(
+        {},
+        {},
+        false,
+        [&](Moer::Array<Moer::Render::RHIRecordingSource>&& sources) {
+            published = sources.size() == 1 &&
+                        sources.front()
+                                .submit_metadata.translate_execution_class ==
+                            Moer::Render::ERHITranslateExecutionClass::
+                                SerialControl;
+        }
+    );
+    suite.Check(
+        executed && recorded && published,
+        test_name,
+        "the graph handoff must publish SerialControl metadata without "
+        "mutating the producer CommandList"
+    );
+
+    RenderGraph weakened("SerialControlCannotBeWeakened");
+    weakened.AddRecordPass(
+        "NRDIsland",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect().SerialRecord().TranslateSerialControl();
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    suite.Check(weakened.Compile(), test_name, weakened.GetCompileError());
+    bool weakened_published = false;
+    const bool weakened_executed = weakened.ExecuteRecording(
+        {},
+        [](const RenderGraph::ExecutedPassInfo&,
+           Moer::Render::RHIRecordingSource& source) {
+            source.submit_metadata.translate_execution_class.reset();
+        },
+        false,
+        [&](Moer::Array<Moer::Render::RHIRecordingSource>&&) {
+            weakened_published = true;
+        }
+    );
+    suite.Check(
+        !weakened_executed && !weakened_published &&
+            Contains(
+                weakened.GetCompileError(),
+                "weakened the declared SerialControl"
+            ),
+        test_name,
+        "source configuration must not weaken a graph-declared translation "
+        "frontier"
+    );
+
+    RenderGraph publisher_attempt("SerialControlPublisherFloor");
+    publisher_attempt.AddRecordPass(
+        "NRDIsland",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect().SerialRecord().TranslateSerialControl();
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    suite.Check(
+        publisher_attempt.Compile(),
+        test_name,
+        publisher_attempt.GetCompileError()
+    );
+    bool command_list_kept_floor = false;
+    const bool publisher_attempt_executed =
+        publisher_attempt.ExecuteRecording(
+            {},
+            {},
+            false,
+            [&](Moer::Array<Moer::Render::RHIRecordingSource>&& sources) {
+                sources.front()
+                    .submit_metadata.translate_execution_class.reset();
+                command_list_kept_floor =
+                    sources.front()
+                        .command_list->GetTranslateExecutionClass() ==
+                    Moer::Render::ERHITranslateExecutionClass::SerialControl;
+            }
+        );
+    suite.Check(
+        publisher_attempt_executed && command_list_kept_floor,
+        test_name,
+        "the CommandList must retain the graph-declared SerialControl floor "
+        "even if a custom publisher drops optional metadata"
     );
 }
 
@@ -4525,6 +4654,236 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
     );
 }
 
+void TestNrdSerialControlIslandContract(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "NRD immutable serial-control island";
+    RenderGraph graph("NrdIslandContract");
+    int motion_identity = 0;
+    int normal_identity = 0;
+    int depth_identity = 0;
+    int diffuse_identity = 0;
+    int specular_identity = 0;
+    int denoised_diffuse_identity = 0;
+    int denoised_specular_identity = 0;
+    const RenderGraph::TextureDesc desc{
+        .mip_count   = 1,
+        .layer_count = 1,
+        .aspects     = RenderGraph::TextureAspect::Color,
+    };
+    const auto motion =
+        graph.ImportTexture("Motion", &motion_identity, desc);
+    const auto normal =
+        graph.ImportTexture("NormalRoughness", &normal_identity, desc);
+    const auto depth =
+        graph.ImportTexture("ViewDepth", &depth_identity, desc);
+    const auto diffuse =
+        graph.ImportTexture("DiffuseLighting", &diffuse_identity, desc);
+    const auto specular =
+        graph.ImportTexture("SpecularLighting", &specular_identity, desc);
+    const auto denoised_diffuse = graph.ImportTexture(
+        "DenoisedDiffuse",
+        &denoised_diffuse_identity,
+        desc
+    );
+    const auto denoised_specular = graph.ImportTexture(
+        "DenoisedSpecular",
+        &denoised_specular_identity,
+        desc
+    );
+    const auto setup_ready = graph.CreateTransientToken("FrameSetupReady");
+    const auto nrd_ready   = graph.CreateTransientToken("NrdReady");
+
+    for (const auto texture : {
+             motion,
+             normal,
+             depth,
+             diffuse,
+             specular,
+             denoised_diffuse,
+             denoised_specular,
+         }) {
+        graph.SetInitialState(
+            texture,
+            RenderGraph::TextureState::Sampled,
+            RenderGraph::QueueRole::Graphics,
+            RenderGraph::AccessMode::Read
+        );
+    }
+
+    graph.AddRecordPass(
+        "FrameSetup",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Write(setup_ready).SideEffect().SerialRecord();
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    const auto lighting = graph.AddRecordPass(
+        "Lighting",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder
+                .Read(setup_ready)
+                .Write(
+                    diffuse,
+                    RenderGraph::TextureState::UnorderedAccess
+                )
+                .Write(
+                    specular,
+                    RenderGraph::TextureState::UnorderedAccess
+                );
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    const auto nrd = graph.AddRecordPass(
+        "NRD",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder
+                .Read(setup_ready)
+                .Read(motion, RenderGraph::TextureState::Sampled)
+                .Read(normal, RenderGraph::TextureState::Sampled)
+                .Read(depth, RenderGraph::TextureState::Sampled)
+                .Read(diffuse, RenderGraph::TextureState::Sampled)
+                .Read(specular, RenderGraph::TextureState::Sampled)
+                .ReadWrite(
+                    denoised_diffuse,
+                    RenderGraph::TextureState::UnorderedAccess
+                )
+                .ReadWrite(
+                    denoised_specular,
+                    RenderGraph::TextureState::UnorderedAccess
+                )
+                .Write(nrd_ready)
+                .SideEffect()
+                .SerialRecord()
+                .TranslateSerialControl();
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    const auto composition = graph.AddRecordPass(
+        "Composition",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder
+                .Read(nrd_ready)
+                .Read(
+                    denoised_diffuse,
+                    RenderGraph::TextureState::Sampled
+                )
+                .Read(
+                    denoised_specular,
+                    RenderGraph::TextureState::Sampled
+                );
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.Export(
+        denoised_diffuse,
+        RenderGraph::TextureState::Sampled,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    graph.Export(
+        denoised_specular,
+        RenderGraph::TextureState::Sampled,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            lighting,
+            nrd,
+            RenderGraph::EdgeReasonKind::ReadAfterWrite,
+            diffuse.Untyped()
+        ) &&
+            HasEdgeReason(
+                plan,
+                lighting,
+                nrd,
+                RenderGraph::EdgeReasonKind::ReadAfterWrite,
+                specular.Untyped()
+            ),
+        test_name,
+        "Lighting outputs must be RAW predecessors of NRD"
+    );
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            nrd,
+            composition,
+            RenderGraph::EdgeReasonKind::ReadAfterWrite,
+            denoised_diffuse.Untyped()
+        ) &&
+            HasEdgeReason(
+                plan,
+                nrd,
+                composition,
+                RenderGraph::EdgeReasonKind::ReadAfterWrite,
+                nrd_ready.Untyped()
+            ),
+        test_name,
+        "NRD outputs and ready token must order Composition"
+    );
+    const auto* denoised_barrier = FindBarrier(
+        plan,
+        denoised_diffuse.Untyped(),
+        nrd,
+        composition
+    );
+    suite.Check(
+        denoised_barrier != nullptr &&
+            denoised_barrier->before_state ==
+                RenderGraph::ResourceState::Texture(
+                    RenderGraph::TextureState::UnorderedAccess
+                ) &&
+            denoised_barrier->after_state ==
+                RenderGraph::ResourceState::Texture(
+                    RenderGraph::TextureState::Sampled
+                ),
+        test_name,
+        "NRD storage outputs must normalize to Sampled before Composition"
+    );
+    suite.Check(
+        plan.recording_batches[nrd.index].execution ==
+                RenderGraph::PassExecutionClass::SerialRecord &&
+            plan.recording_batches[nrd.index].translate_execution_class ==
+                Moer::Render::ERHITranslateExecutionClass::SerialControl,
+        test_name,
+        "only the NRD island must carry the explicit translation frontier"
+    );
+}
+
+void TestNrdDenoiserFamiliesAreExplicit(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "NRD denoiser family classification";
+    using Moer::Render::Ext::IsReblurDenoiser;
+    using Moer::Render::Ext::IsRelaxDenoiser;
+
+    suite.Check(
+        IsReblurDenoiser(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR) &&
+            IsReblurDenoiser(nrd::Denoiser::REBLUR_DIFFUSE) &&
+            IsReblurDenoiser(nrd::Denoiser::REBLUR_SPECULAR) &&
+            !IsReblurDenoiser(nrd::Denoiser::RELAX_DIFFUSE_SPECULAR) &&
+            !IsReblurDenoiser(nrd::Denoiser::MAX_NUM),
+        test_name,
+        "ReBLUR classification must not depend on enum ordering"
+    );
+    suite.Check(
+        IsRelaxDenoiser(nrd::Denoiser::RELAX_DIFFUSE_SPECULAR) &&
+            IsRelaxDenoiser(nrd::Denoiser::RELAX_DIFFUSE) &&
+            IsRelaxDenoiser(nrd::Denoiser::RELAX_SPECULAR) &&
+            !IsRelaxDenoiser(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR) &&
+            !IsRelaxDenoiser(nrd::Denoiser::MAX_NUM),
+        test_name,
+        "RELAX classification must not depend on enum ordering"
+    );
+}
+
 } // namespace
 
 int main() {
@@ -4580,6 +4939,7 @@ int main() {
     TestRecordingBatchPlanAndClassification(suite);
     TestRecordingCallbackClassMismatchFails(suite);
     TestExternalControlIsAnUnmanagedJoinBoundary(suite);
+    TestSerialControlTranslationIsADeclaredRecordingPolicy(suite);
     TestCpuPrepareReferencesIdentityWithoutGpuAccess(suite);
     TestCpuPrepareRejectsGpuAccess(suite);
     TestCpuPrepareIsExcludedFromGpuQueuePlan(suite);
@@ -4588,6 +4948,8 @@ int main() {
     TestCpuRecordingDependenciesSplitParallelGroups(suite);
     TestRecordingPublicationFailureTerminatesGates(suite);
     TestFrameSetupTokenAndTlasBoundaryContract(suite);
+    TestNrdSerialControlIslandContract(suite);
+    TestNrdDenoiserFamiliesAreExplicit(suite);
 
     if (suite.FailureCount() != 0) {
         std::cerr << "TestRenderGraph: " << suite.FailureCount() << " failure(s)\n";

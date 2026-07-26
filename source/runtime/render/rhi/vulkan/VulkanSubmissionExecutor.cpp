@@ -1141,16 +1141,24 @@ VulkanSubmissionExecutor::PipelineBatchState::ReadFailure() const noexcept {
 }
 
 void VulkanSubmissionExecutor::Enqueue(RHIBackendSubmissionBatch&& _batch) {
+    static_assert(
+        std::is_nothrow_move_assignable_v<RHIBackendSubmissionBatch>,
+        "backend FIFO publication requires a nonthrowing batch handoff"
+    );
     bool rejected = false;
     {
         std::lock_guard lock(mutex);
         if (!accepting) {
             rejected = true;
         } else {
-            requests.emplace_back(Request{
-                .kind       = ERequestKind::Submit,
-                .batch      = std::move(_batch),
-            });
+            // Allocate the deque slot before moving the batch. If allocation
+            // throws, RHIExecutor still owns an intact batch and can reject
+            // every signal/receipt. The subsequent assignment is statically
+            // required to be nonthrowing.
+            requests.emplace_back();
+            Request& request = requests.back();
+            request.kind     = ERequestKind::Submit;
+            request.batch    = std::move(_batch);
         }
     }
     if (rejected) {

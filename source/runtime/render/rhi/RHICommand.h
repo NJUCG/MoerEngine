@@ -425,7 +425,7 @@ struct CmdSubmit {
         Array<std::function<void(void)>>&& _callbacks,
         Array<std::function<void(void)>>&& _success_callbacks,
         TCachedArgArray&&                  _cached_args
-    ) :
+    ) noexcept :
         cmds(std::move(_cmds)),
         callbacks(std::move(_callbacks)),
         success_callbacks(std::move(_success_callbacks)),
@@ -1539,6 +1539,13 @@ public:
 
     RENDER_API void AddCallback(std::function<void()>&& _callback);
     RENDER_API void AddSuccessCallback(std::function<void()>&& _callback);
+    /**
+     * Attaches a native-submission acceptance marker to this CommandList.
+     * Unlike CmdSubmit::Signal(), this form is available to independently
+     * recorded graph sources before the graph seals their immutable submit.
+     */
+    RENDER_API void Signal(Fence* _fence, uint64 _signal_value);
+    RENDER_API void Signal(const FenceRef& _fence, uint64 _signal_value);
 
     RENDER_API ArrayArgReference RegisterArgs(ArrayArguments&& _args);
 
@@ -1659,6 +1666,7 @@ private:
     Command*                     current_barriers{nullptr};
     Array<std::function<void()>> callbacks;
     Array<std::function<void()>> success_callbacks;
+    Array<SignalEvent>            signal_events;
     TCachedArgArray              cached_args;
     EQueueType                   queue_type{EQueueType::Graphics};
     ERHITranslateExecutionClass  translate_execution_class{

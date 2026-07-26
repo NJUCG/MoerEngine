@@ -20,6 +20,7 @@
 #include "Configs.h"
 #include "GBufferPass.h"
 #include "LightingPass.h"
+#include "NrdDenoisePass.h"
 #include "PreprocessLightPass.h"
 #include "RaytracingFrameSetupPass.h"
 #include "RTResource.h"
@@ -176,6 +177,19 @@ void TickAndLogProfiling(const RaytracingFrameFeedback& feedback) {
            << " LocalLights=" << feedback.local_light_count;
     LOG_INFO("{}", stream.str());
 }
+
+#if WITH_NRD
+nrd::Denoiser ResolveNrdDenoiser(int denoiser_mode) {
+    switch (denoiser_mode) {
+        case s_denoiser_mode_reblur:
+            return nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR;
+        case s_denoiser_mode_relax:
+            return nrd::Denoiser::RELAX_DIFFUSE_SPECULAR;
+        default:
+            return nrd::Denoiser::MAX_NUM;
+    }
+}
+#endif
 
 void RecordGpuSceneReadBoundary(
     CommandList&         cmd_list,
@@ -349,9 +363,12 @@ struct RaytracingRenderer::RuntimeState {
     UniquePtr<AntialiasPass>  antialias_pass;
 
 #if WITH_NRD
-    uint64                       nrd_time   = 0ull;
-    Ext::NRDPlugin*              nrd_plugin = nullptr;
-    UniquePtr<Ext::NRDInterface> nrd_interface;
+    uint64                        nrd_time       = 0ull;
+    int                           nrd_mode       = -1;
+    bool                          nrd_was_active = false;
+    bool                          nrd_outputs_initialized = false;
+    Ext::NRDPlugin*               nrd_plugin     = nullptr;
+    SharedPtr<Ext::NRDInterface>  nrd_interface;
 #endif
 
     VisualizeConfig visualize_config{};
@@ -626,6 +643,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     bool  frame_setup_graph_recorded      = false;
     bool  frame_setup_linear_recorded     = false;
     bool  graph_primary_recorded          = false;
+    bool  graph_nrd_recorded              = false;
     bool  graph_composition_recorded      = false;
     bool  graph_antialias_recorded        = false;
     bool  graph_tone_mapping_recorded     = false;
@@ -644,6 +662,10 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     LightingPass::LocalLightSamplingDecision         local_light_sampling{};
     std::optional<PrepareLightPass::PreparedCommand> prepared_lights{};
     std::optional<RaytracingFrameSetupPass::PreparedCommand> prepared_frame_setup{};
+#if WITH_NRD
+    std::optional<NrdDenoisePass::PreparedCommand>           prepared_nrd{};
+    uint64                                                   nrd_graph_submission_value_count = 0;
+#endif
     TextureRef                                       selected_debug_texture{};
     bool                                             show_texture_requested = false;
     ShowTextureParams                                show_texture_params{};
@@ -679,6 +701,30 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         const bool nrd_active_this_frame = IsNrdDenoiserActive(ui_config.denoiser_cfg.denoiser_type);
         const SceneUpdateResult scene_update =
             ExecuteSceneUpdates(frame_packet.scene_updates);
+#if WITH_NRD
+        const int nrd_mode_this_frame =
+            ui_config.denoiser_cfg.denoiser_type;
+        if (nrd_active_this_frame) {
+            if (!state.nrd_was_active ||
+                state.nrd_mode != nrd_mode_this_frame) {
+                state.nrd_interface->ResetAcceptedHistory();
+                state.nrd_time = 0;
+                if (!state.nrd_outputs_initialized) {
+                    LOG_INFO(
+                        "[NRD] Warming denoised output state on the linear "
+                        "path before managed graph activation."
+                    );
+                }
+            }
+            state.nrd_was_active = true;
+            state.nrd_mode       = nrd_mode_this_frame;
+        } else if (state.nrd_was_active) {
+            state.nrd_interface->ResetAcceptedHistory();
+            state.nrd_time       = 0;
+            state.nrd_mode       = -1;
+            state.nrd_was_active = false;
+        }
+#endif
         // Scene updates publish and drain a deterministic SRV/Sampled boundary
         // before returning. FrameSetup captures those refreshed identities and
         // normalizes only the external ASWrite TLAS inside the managed graph,
@@ -914,28 +960,48 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 scene_update.tlas_built
             ));
         }
+#if WITH_NRD
+        if (!graph_recording_failed && nrd_active_this_frame) {
+            auto command = NrdDenoisePass::Prepare(
+                state.nrd_interface,
+                static_cast<uint32>(state.nrd_time),
+                Vector2ui(resolution.x, resolution.y),
+                state.antialias_pass->GetPixelOffset(),
+                Transpose(camera.GetViewMatrix()),
+                Transpose(camera.GetProjectionMatrix()),
+                ResolveNrdDenoiser(
+                    ui_config.denoiser_cfg.denoiser_type
+                ),
+                *state.rt_ctx
+            );
+            if (command.IsValid()) {
+                prepared_nrd.emplace(std::move(command));
+            }
+        }
+#endif
 
         const bool unified_graph_eligible =
             prepared_frame_setup && state.render_graph_enabled &&
             !state.render_graph_fallback_latched &&
             state.gbuffer_initialized_history_mask == uint8(0b11) &&
             state.lighting_initialized_reservoir_mask == uint8(0b111) &&
-            (nrd_active_this_frame || state.antialias_pass->IsHistoryReadyForGraph()) &&
+            state.antialias_pass->IsHistoryReadyForGraph() &&
+#if WITH_NRD
+            (!nrd_active_this_frame ||
+             (prepared_nrd.has_value() &&
+              state.nrd_outputs_initialized)) &&
+#endif
             !render_graph_boundary_frame;
 
         if (unified_graph_eligible) {
-            RenderGraph graph(
-                nrd_active_this_frame ?
-                    "Raytracing.PreDenoise" :
-                    "Raytracing.Frame"
-            );
+            RenderGraph graph("Raytracing.Frame");
             RTGraphFrameSetupResources setup_resources{};
             const bool setup_passes_added = state.frame_setup_pass->AddPasses(
                 graph,
                 *prepared_frame_setup,
                 setup_resources
             );
-            const RTGraphFrameResources graph_resources =
+            RTGraphFrameResources graph_resources =
                 setup_passes_added ?
                     RegisterRTGraphFrameResources(
                         graph,
@@ -963,13 +1029,30 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                                                              true,
                                                              local_light_sampling
                                                          );
-            const bool composition_in_graph = !nrd_active_this_frame;
+            bool nrd_added = true;
+#if WITH_NRD
+            if (nrd_active_this_frame) {
+                nrd_added =
+                    lighting_added && prepared_nrd &&
+                    NrdDenoisePass::AddPasses(
+                        graph,
+                        graph_resources,
+                        *prepared_nrd,
+                        state.nrd_outputs_initialized
+                    );
+            }
+#endif
+            const bool composition_in_graph = true;
             const bool composition_added =
-                !composition_in_graph ||
-                (lighting_added && state.composition_pass->AddPasses(graph, graph_resources, *state.rt_ctx));
-            const bool antialias_in_graph = composition_in_graph;
+                lighting_added && nrd_added &&
+                state.composition_pass->AddPasses(
+                    graph,
+                    graph_resources,
+                    *state.rt_ctx
+                );
+            const bool antialias_in_graph = true;
             const bool antialias_added =
-                !antialias_in_graph || (composition_added && state.antialias_pass->AddPasses(
+                composition_added && state.antialias_pass->AddPasses(
                                                                  graph,
                                                                  graph_resources,
                                                                  *state.rt_ctx,
@@ -977,24 +1060,26 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                                                                  state.b_feedback_valid,
                                                                  state.rt_ctx->frame_rt.hdr_color,
                                                                  state.rt_ctx->frame_rt.resolved_color
-                                                             ));
-            const bool tone_mapping_in_graph = antialias_in_graph;
+                                                             );
+            const bool tone_mapping_in_graph = true;
             const bool tone_mapping_added =
-                !tone_mapping_in_graph || (antialias_added && state.tone_mapping_pass->AddPasses(
+                antialias_added && state.tone_mapping_pass->AddPasses(
                                                                   graph,
                                                                   graph_resources,
                                                                   *state.rt_ctx,
                                                                   tone_params,
                                                                   state.rt_ctx->frame_rt.resolved_color,
                                                                   state.rt_ctx->frame_rt.ldr_color
-                                                              ));
-            const bool visualize_in_graph = tone_mapping_in_graph;
+                                                              );
+            const bool visualize_in_graph = true;
             const bool visualize_added =
-                !visualize_in_graph ||
-                (tone_mapping_added && state.visualize_pass->AddPasses(
-                                           graph, graph_resources, *state.rt_ctx, state.visualize_config
-                                       ));
-            const bool                 show_texture_in_graph = visualize_in_graph && show_texture_requested;
+                tone_mapping_added && state.visualize_pass->AddPasses(
+                    graph,
+                    graph_resources,
+                    *state.rt_ctx,
+                    state.visualize_config
+                );
+            const bool show_texture_in_graph = show_texture_requested;
             RenderGraph::TextureHandle selected_graph_texture{};
             if (show_texture_in_graph) {
                 selected_graph_texture =
@@ -1011,15 +1096,20 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                                                                   graph_resources.frame_setup.ready
                                                               ));
             const bool graph_passes_added = prepare_lights_added && gbuffer_added && lighting_added &&
-                                            composition_added && antialias_added && tone_mapping_added &&
+                                            nrd_added && composition_added && antialias_added &&
+                                            tone_mapping_added &&
                                             visualize_added && show_texture_added;
             if (graph_passes_added && IsRenderGraphRecordingFailureInjected()) {
+                const RenderGraph::PassHandle fault_dependency =
+                    graph_resources.nrd_pass.IsValid() ?
+                        graph_resources.nrd_pass :
+                        setup_resources.finalize;
                 graph.AddRecordPass(
                     "RT.FaultInjection.RecordingFailure",
-                    [finalize = setup_resources.finalize](RenderGraph::PassBuilder& builder) {
+                    [fault_dependency](RenderGraph::PassBuilder& builder) {
                         builder
                             .ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
-                            .DependsOn(finalize)
+                            .DependsOn(fault_dependency)
                             .SideEffect();
                     },
                     [](CommandList&) {
@@ -1036,7 +1126,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 ensure_renderer_marker();
                 LOG_ERROR("[RenderGraph][Fallback] Raytracing unified graph could not "
                           "import a required FrameSetup/PrepareLights/GBuffer/Lighting/"
-                          "Composition/AntiAlias/"
+                          "NRD/Composition/AntiAlias/"
                           "ToneMapping/Visualize/ShowTexture resource. Using the linear "
                           "path for this renderer instance.");
             } else if (!graph.Compile()) {
@@ -1085,6 +1175,18 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                                                                           ERHIProfilingPhase::Continue :
                                                                           ERHIProfilingPhase::Begin;
                     graph_recording_profiling_started        = true;
+#if WITH_NRD
+                    if (nrd_active_this_frame && prepared_nrd) {
+                        source.submit_metadata.signal_fences.emplace_back(
+                            RHIRecordingFencePoint{
+                                .fence =
+                                    prepared_nrd->graph_submission_fence,
+                                .value =
+                                    ++nrd_graph_submission_value_count,
+                            }
+                        );
+                    }
+#endif
                 };
                 if (graph.ExecuteRecording(
                         {},
@@ -1096,6 +1198,10 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                     split_graph_profiling_frame = graph_recording_profiling_started;
                     frame_setup_graph_recorded  = true;
                     graph_primary_recorded      = true;
+#if WITH_NRD
+                    graph_nrd_recorded          =
+                        nrd_active_this_frame && nrd_added;
+#endif
                     graph_composition_recorded  = composition_in_graph;
                     graph_antialias_recorded    = antialias_in_graph;
                     graph_tone_mapping_recorded = tone_mapping_in_graph;
@@ -1168,55 +1274,22 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         feedback.local_light_count                     = local_light_sampling.local_light_count;
 
 #if WITH_NRD
-        if (!graph_recording_failed) {
-            const bool    b_current_frame = state.rt_ctx->b_current_frame;
-            const auto&   frame_rt        = state.rt_ctx->frame_rt;
-            nrd::Denoiser denoiser        = nrd::Denoiser::MAX_NUM;
-            switch (ui_config.denoiser_cfg.denoiser_type) {
-                case s_denoiser_mode_reblur:
-                    denoiser = nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR;
-                    break;
-                case s_denoiser_mode_relax:
-                    denoiser = nrd::Denoiser::RELAX_DIFFUSE_SPECULAR;
-                    break;
-            }
-
-            if (denoiser != nrd::Denoiser::MAX_NUM) {
+        if (!graph_recording_failed && nrd_active_this_frame) {
+            if (graph_nrd_recorded) {
+                nrd_recorded = true;
+            } else if (prepared_nrd) {
                 ScopedGpuMarker denoiser_marker(
                     cmd_list, "Pass: Radiance Denoising", GpuMarkerPalette::Pass()
                 );
-                state.nrd_interface->Begin();
-                state.nrd_interface->UpdateCommonSettings(
-                    state.nrd_time++,
-                    Vector2ui(resolution.x, resolution.y),
-                    state.antialias_pass->GetPixelOffset(),
-                    Transpose(camera.GetViewMatrix()),
-                    Transpose(camera.GetProjectionMatrix())
-                );
-                state.nrd_interface->SetInput(
-                    Ext::NRDInterface::EResourceSlot::MOTION_VECTOR, state.rt_ctx->frame_rt.motion
-                );
-                state.nrd_interface->SetInput(
-                    Ext::NRDInterface::EResourceSlot::NORMAL_ROUGHNESS, frame_rt.normal_roughness
-                );
-                state.nrd_interface->SetInput(
-                    Ext::NRDInterface::EResourceSlot::VIEW_Z,
-                    b_current_frame ? frame_rt.view_depth : frame_rt.prev_view_depth
-                );
-                state.nrd_interface->SetInput(
-                    Ext::NRDInterface::EResourceSlot::IN_DIFFUSE, frame_rt.diffuse_lighting
-                );
-                state.nrd_interface->SetInput(
-                    Ext::NRDInterface::EResourceSlot::IN_SPECULAR, frame_rt.specular_lighting
-                );
-                state.nrd_interface->SetOutput(
-                    Ext::NRDInterface::EResourceSlot::OUT_DIFFUSE, frame_rt.denoised_diffuse_lighting
-                );
-                state.nrd_interface->SetOutput(
-                    Ext::NRDInterface::EResourceSlot::OUT_SPECULAR, frame_rt.denoised_specular_lighting
-                );
-                state.nrd_interface->Denoise(cmd_list, denoiser, "Radiance Denoising");
+                NrdDenoisePass::Process(cmd_list, *prepared_nrd);
                 nrd_recorded = true;
+            } else {
+                graph_recording_failed              = true;
+                state.render_graph_fallback_latched = true;
+                LOG_ERROR(
+                    "[NRD] Failed to prepare an immutable denoise frame. "
+                    "Preserving the last accepted output."
+                );
             }
         }
 #endif
@@ -1366,8 +1439,41 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         ERHIExecSubmitFlags::FlushGPU,
         present_request ? &*present_request : nullptr
     );
+    bool frame_native_accepted = true;
+#if WITH_NRD
+    if (nrd_recorded && prepared_nrd) {
+        frame_native_accepted =
+            NrdDenoisePass::CommitAcceptedSubmission(
+                *prepared_nrd,
+                timeline,
+                time,
+                nrd_graph_submission_value_count
+            );
+        if (frame_native_accepted) {
+            ++state.nrd_time;
+            state.nrd_outputs_initialized = true;
+        } else {
+            // NRD NewFrame/Denoise may already have translated before a later
+            // graph source or the final tail was rejected. Renderer temporal
+            // state must not pretend that partial frame was accepted; force
+            // the next linear frame to CLEAR_AND_RESTART.
+            prepared_nrd->interface->ResetAcceptedHistory();
+            state.nrd_time                = 0;
+            state.nrd_outputs_initialized = false;
+            state.render_graph_fallback_latched          = true;
+            state.render_graph_recording_failure_latched = true;
+            LOG_CRITICAL(
+                "[NRD] Native submission rejected the NRD source or final "
+                "frame tail, or the immutable temporal snapshot could not "
+                "commit; disabling managed RT passes for this renderer "
+                "instance without advancing NRD history."
+            );
+        }
+    }
+#endif
     const bool frame_setup_accepted =
-        frame_setup_graph_recorded || frame_setup_linear_recorded;
+        frame_native_accepted &&
+        (frame_setup_graph_recorded || frame_setup_linear_recorded);
     if (frame_setup_accepted && prepared_frame_setup) {
         state.frame_setup_pass->CommitAccepted(*prepared_frame_setup);
         if (prepared_frame_setup->BuildsTlas()) {
@@ -1377,22 +1483,26 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             ++state.renderer_tlas_skip_count;
         }
     }
-    if (prepared_lights && (linear_lighting_recorded || graph_primary_recorded)) {
+    if (frame_native_accepted && prepared_lights &&
+        (linear_lighting_recorded || graph_primary_recorded)) {
         state.prepare_light_pass->CommitAcceptedFrame(*state.rt_ctx, std::move(*prepared_lights));
     }
-    if (linear_antialias_recorded || graph_antialias_recorded) {
+    if (frame_native_accepted &&
+        (linear_antialias_recorded || graph_antialias_recorded)) {
         state.antialias_pass->CommitAcceptedFrame();
         state.b_feedback_valid = true;
     }
-    if (linear_tone_mapping_recorded || graph_tone_mapping_recorded) {
+    if (frame_native_accepted &&
+        (linear_tone_mapping_recorded || graph_tone_mapping_recorded)) {
         state.tone_mapping_pass->CommitAcceptedFrame(
             tone_mapping_elapsed_for_commit, tone_mapping_enabled_for_commit
         );
     }
-    if (linear_gbuffer_recorded || graph_primary_recorded) {
+    if (frame_native_accepted &&
+        (linear_gbuffer_recorded || graph_primary_recorded)) {
         state.gbuffer_initialized_history_mask |= gbuffer_history_bit;
     }
-    if (linear_lighting_recorded) {
+    if (frame_native_accepted && linear_lighting_recorded) {
         const uint8 previous_reservoir_mask = state.lighting_initialized_reservoir_mask;
         const auto& buffer_indices          = state.rt_ctx->is_ctx.GetReSTIRDIBufferIndices();
         for (const uint reservoir_slice : {
@@ -1411,10 +1521,13 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                      "both GBuffer history pings are initialized.");
         }
     }
-    if (graph_primary_recorded) {
-        state.normal_roughness_readable = true;
-    } else if (linear_gbuffer_recorded) {
-        state.normal_roughness_readable = nrd_recorded || linear_visualize_recorded;
+    if (frame_native_accepted) {
+        if (graph_primary_recorded) {
+            state.normal_roughness_readable = true;
+        } else if (linear_gbuffer_recorded) {
+            state.normal_roughness_readable =
+                nrd_recorded || linear_visualize_recorded;
+        }
     }
     if (frame_setup_accepted) {
         state.rt_ctx->AdvanceFrame();
@@ -1428,7 +1541,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         state.rt_scene->AdvanceFrame();
         std::swap(state.current_tlas_revision, state.previous_tlas_revision);
     }
-    if (!skip_present) {
+    if (!skip_present && frame_native_accepted) {
         PresentUiDrawFrame(frame_packet.ui_draw_frame, ui_execution_thread);
     }
 
@@ -1573,6 +1686,12 @@ bool RaytracingRenderer::RefreshSceneRuntimeRefs() {
         state.lighting_initialized_reservoir_mask = 0;
         state.normal_roughness_readable           = false;
         state.frame_setup_pass->ResetAcceptedResources();
+#if WITH_NRD
+        if (state.nrd_interface) {
+            state.nrd_interface->ResetAcceptedHistory();
+            state.nrd_time = 0;
+        }
+#endif
         LOG_INFO(
             "[RenderGraph][Raytracing] RT scene identity changed; resetting "
             "FrameSetup acceptance and temporal graph warmup."
@@ -1655,6 +1774,10 @@ void RaytracingRenderer::RecreateFrameResources(uint2 new_extent) {
 #if WITH_NRD
     state.nrd_interface =
         state.nrd_plugin->RecreateInterface(std::move(state.nrd_interface), new_extent.x, new_extent.y);
+    state.nrd_time       = 0;
+    state.nrd_mode       = -1;
+    state.nrd_was_active = false;
+    state.nrd_outputs_initialized = false;
 #endif
 
     state.antialias_pass_info.motion              = state.rt_ctx->frame_rt.motion;

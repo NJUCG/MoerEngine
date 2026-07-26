@@ -298,6 +298,14 @@ bool RenderGraphCompiler::NormalizeDeclarations() {
                 "record pass '" + pass.name + "' must use SerialRecord or ParallelRecordEligible"
             );
         }
+        if (has_execute &&
+            pass.translate_execution_class !=
+                ERHITranslateExecutionClass::Parallel) {
+            return Fail(
+                "caller-thread pass '" + pass.name +
+                "' cannot declare a backend translation policy"
+            );
+        }
         if (pass.workload == 0) {
             return Fail("pass '" + pass.name + "' has zero recording workload");
         }
@@ -1697,6 +1705,8 @@ void RenderGraphCompiler::BuildRecordingBatches() {
             .queue           = graph.queue_topology.Resolve(pass.domain.queue),
             .passes          = {pass_handle},
             .execution       = pass.execution_class,
+            .translate_execution_class =
+                pass.translate_execution_class,
             .workload        = pass.workload,
             .dependency_wave = pass_to_wave[pass_handle.index],
         });

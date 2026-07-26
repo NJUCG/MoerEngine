@@ -28,6 +28,8 @@ struct RTGraphFrameResources {
     RenderGraph::TextureHandle normal_roughness{};
     RenderGraph::TextureHandle diffuse_lighting{};
     RenderGraph::TextureHandle specular_lighting{};
+    RenderGraph::TextureHandle denoised_diffuse_lighting{};
+    RenderGraph::TextureHandle denoised_specular_lighting{};
     RenderGraph::TextureHandle hdr_color{};
     RenderGraph::TextureHandle resolved_color{};
     RenderGraph::TextureHandle ldr_color{};
@@ -35,6 +37,8 @@ struct RTGraphFrameResources {
     RenderGraph::TextureHandle feedback_color_ping{};
     RenderGraph::TextureHandle feedback_color_pong{};
     RenderGraph::TextureHandle env_map{};
+    RenderGraph::TokenHandle   nrd_ready{};
+    RenderGraph::PassHandle    nrd_pass{};
 
     RenderGraph::TextureHandle current_view_depth{};
     RenderGraph::TextureHandle current_diffuse_albedo{};
@@ -120,6 +124,16 @@ inline RTGraphFrameResources RegisterRTGraphFrameResources(
             ImportRTGraphTexture(graph, "RT.diffuse_lighting", frame.diffuse_lighting),
         .specular_lighting =
             ImportRTGraphTexture(graph, "RT.specular_lighting", frame.specular_lighting),
+        .denoised_diffuse_lighting = ImportRTGraphTexture(
+            graph,
+            "RT.denoised_diffuse_lighting",
+            frame.denoised_diffuse_lighting
+        ),
+        .denoised_specular_lighting = ImportRTGraphTexture(
+            graph,
+            "RT.denoised_specular_lighting",
+            frame.denoised_specular_lighting
+        ),
         .hdr_color =
             ImportRTGraphTexture(graph, "RT.hdr_color", frame.hdr_color),
         .resolved_color =

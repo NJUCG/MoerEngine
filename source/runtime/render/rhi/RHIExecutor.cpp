@@ -232,6 +232,36 @@ void ReportBackendCreationFailure(
     }
 }
 
+void ReportBackendPublicationFailure(
+    std::string_view          _operation,
+    const std::exception_ptr& _failure
+) noexcept {
+    try {
+        if (_failure) {
+            std::rethrow_exception(_failure);
+        }
+    } catch (const std::exception& exception) {
+        try {
+            LOG_ERROR(
+                "[RHIExecutor] backend publication failed during {}: {}",
+                _operation,
+                exception.what()
+            );
+        } catch (...) {
+        }
+        return;
+    } catch (...) {
+    }
+
+    try {
+        LOG_ERROR(
+            "[RHIExecutor] backend publication failed during {}",
+            _operation
+        );
+    } catch (...) {
+    }
+}
+
 void FinalizeCancelledRecordingSources(
     Array<RHIRecordingSource>&& _sources,
     std::string_view             _reason
@@ -417,6 +447,36 @@ public:
             ordered_copy_timeline = ordered_tail_copy_timeline;
         }
 
+        const RHIQueueTopology queue_topology =
+            RenderDevice::Get().GetQueueTopology();
+        for (const RHIBackendSubmissionBatchEntry& entry : _batch.submits) {
+            if (SubmitHasWork(entry.submit) &&
+                !queue_topology.Resolve(entry.queue).available) {
+                throw std::runtime_error(
+                    "legacy RHI backend received work for an unavailable queue"
+                );
+            }
+        }
+        if (_batch.present.has_value() &&
+            !queue_topology.graphics.available) {
+            throw std::runtime_error(
+                "legacy RHI backend cannot Present without a graphics queue"
+            );
+        }
+
+        // Enqueue's exception contract leaves only the unaccepted suffix in
+        // `_batch`. Publish the accepted prefix tail even if a later queue
+        // operation throws, so subsequent D3D12 batches cannot overtake work
+        // which already crossed a native queue boundary.
+        ScopeExit publish_ordered_tail([&]() noexcept {
+            try {
+                std::lock_guard lock(state_mutex);
+                ordered_tail_queue         = last_queue;
+                ordered_tail_copy_timeline = ordered_copy_timeline;
+            } catch (...) {
+            }
+        });
+
         for (RHIBackendSubmissionBatchEntry& entry : _batch.submits) {
             if (!SubmitHasWork(entry.submit)) {
                 continue;
@@ -441,14 +501,15 @@ public:
                 case EQueueType::Ignore:
                 case EQueueType::Num:
                 default:
-                    LOG_ERROR(
-                        "[RHIExecutor] batch {} rejected invalid queue {}",
-                        _batch.sequence,
-                        static_cast<uint32>(entry.queue)
+                    throw std::runtime_error(
+                        "legacy RHI backend received an invalid queue"
                     );
-                    assert(false && "RHI backend batch contains an invalid queue");
-                    continue;
             }
+            // Queue::Execute has either accepted the native work and retained
+            // its callbacks, or thrown while leaving this submit available to
+            // the outer rejection finalizer. Clear only after a successful
+            // return so a later entry failure cannot re-reject this prefix.
+            ResetAcceptedSubmit(entry.submit);
             {
                 std::lock_guard lock(state_mutex);
                 used_queues[static_cast<size_t>(entry.queue)] = true;
@@ -467,17 +528,12 @@ public:
                     present.source,
                     std::move(present.receipt)
                 );
+            _batch.present.reset();
             last_queue             = EQueueType::Graphics;
             ordered_copy_timeline = 0;
             std::lock_guard lock(state_mutex);
             used_queues[static_cast<size_t>(EQueueType::Graphics)] = true;
             present_seen = true;
-        }
-
-        {
-            std::lock_guard lock(state_mutex);
-            ordered_tail_queue         = last_queue;
-            ordered_tail_copy_timeline = ordered_copy_timeline;
         }
     }
 
@@ -515,6 +571,27 @@ public:
     }
 
 private:
+    static void ResetAcceptedSubmit(CmdSubmit& _submit) noexcept {
+        _submit.cmds.clear();
+        _submit.callbacks.clear();
+        _submit.success_callbacks.clear();
+        _submit.cached_args.clear();
+        _submit.segments.clear();
+        _submit.wait_events.clear();
+        _submit.signal_events.clear();
+        _submit.b_sync             = false;
+        _submit.b_tick_profiling   = false;
+        _submit.profiling_phase    = ERHIProfilingPhase::Disabled;
+        _submit.b_delete_resources = false;
+        _submit.resource_state_ownership =
+            ERHIResourceStateOwnership::BackendTracked;
+        _submit.translate_execution_class =
+            ERHITranslateExecutionClass::Parallel;
+        _submit.async_queue_scope = 0;
+        _submit.debug_label.clear();
+        _submit.debug_label_color = GpuMarkerPalette::Frame();
+    }
+
     static void WaitForQueue(EQueueType _queue, uint64 _copy_timeline) {
         switch (_queue) {
             case EQueueType::Graphics:
@@ -570,6 +647,25 @@ RHISubmissionTopologyPlan BuildBatchTopology(const RHIBackendSubmissionBatch& _b
         });
     }
     return BuildRHISubmissionTopology(descriptions, _batch.sequence);
+}
+
+std::exception_ptr TryPublishBackendBatch(
+    const std::shared_ptr<RHIBackendExecutor>& _backend,
+    RHIBackendSubmissionBatch&                 _batch,
+    RHIBackendSubmissionBatch&                 _failed_batch
+) noexcept {
+    try {
+        _batch.topology = BuildBatchTopology(_batch);
+        _backend->Enqueue(std::move(_batch));
+        return {};
+    } catch (...) {
+        // Backend Enqueue implementations must preserve the not-yet-consumed
+        // suffix in the rvalue object on failure. Finalizing that suffix is
+        // what terminalizes every signal waiter instead of silently dropping
+        // a moved CmdSubmit behind the asynchronous handoff.
+        _failed_batch = std::move(_batch);
+        return std::current_exception();
+    }
 }
 
 } // namespace
@@ -738,6 +834,7 @@ void RHIExecutor::SubmitReady(
         RHIBackendSubmissionBatch          failed_batch{};
         std::shared_ptr<RHIBackendExecutor> backend{};
         std::exception_ptr                  backend_creation_failure{};
+        std::exception_ptr                  backend_publication_failure{};
         bool                                rejected = false;
         {
             std::lock_guard dispatch_lock(dispatch_mutex);
@@ -766,9 +863,13 @@ void RHIExecutor::SubmitReady(
                 }
             }
             if (!rejected && !backend_creation_failure) {
-                batch.topology = BuildBatchTopology(batch);
-                backend->Enqueue(std::move(batch));
-                if (HasRHIExecSubmitFlag(_flags, ERHIExecSubmitFlags::FlushGPU)) {
+                backend_publication_failure = TryPublishBackendBatch(
+                    backend,
+                    batch,
+                    failed_batch
+                );
+                if (!backend_publication_failure &&
+                    HasRHIExecSubmitFlag(_flags, ERHIExecSubmitFlags::FlushGPU)) {
                     backend->Flush(ERHIFlushDepth::SubmitGPU);
                 }
             }
@@ -777,6 +878,17 @@ void RHIExecutor::SubmitReady(
             ReportBackendCreationFailure("Present", backend_creation_failure);
             FinalizeRejectedBackendBatch(
                 std::move(failed_batch), "backend creation failed while publishing Present"
+            );
+            return;
+        }
+        if (backend_publication_failure) {
+            ReportBackendPublicationFailure(
+                "Present",
+                backend_publication_failure
+            );
+            FinalizeRejectedBackendBatch(
+                std::move(failed_batch),
+                "backend publication failed while publishing Present"
             );
             return;
         }
@@ -974,7 +1086,18 @@ void RHIExecutor::SubmitRecording(
                         submit.SetProfilingPhase(*metadata.profiling_phase);
                     }
                     if (metadata.translate_execution_class) {
-                        submit.SetTranslateExecutionClass(*metadata.translate_execution_class);
+                        // SerialControl is a scheduling floor. Graph-declared
+                        // sources also carry it on the CommandList, so a
+                        // publisher may add a stronger metadata policy but
+                        // cannot weaken the immutable source frontier.
+                        if (submit.translate_execution_class !=
+                                ERHITranslateExecutionClass::SerialControl ||
+                            *metadata.translate_execution_class ==
+                                ERHITranslateExecutionClass::SerialControl) {
+                            submit.SetTranslateExecutionClass(
+                                *metadata.translate_execution_class
+                            );
+                        }
                     }
                     submit.async_queue_scope = metadata.async_queue_scope;
 
@@ -1072,6 +1195,7 @@ void RHIExecutor::FlushReady(ERHIFlushDepth _depth) {
     RHIBackendSubmissionBatch          failed_batch{};
     std::shared_ptr<RHIBackendExecutor> backend;
     std::exception_ptr                  backend_creation_failure{};
+    std::exception_ptr                  backend_publication_failure{};
     {
         std::lock_guard dispatch_lock(dispatch_mutex);
         {
@@ -1095,10 +1219,13 @@ void RHIExecutor::FlushReady(ERHIFlushDepth _depth) {
         }
         if (!backend_creation_failure) {
             if (BatchHasWork(batch)) {
-                batch.topology = BuildBatchTopology(batch);
-                backend->Enqueue(std::move(batch));
+                backend_publication_failure = TryPublishBackendBatch(
+                    backend,
+                    batch,
+                    failed_batch
+                );
             }
-            if (backend) {
+            if (!backend_publication_failure && backend) {
                 backend->Flush(_depth);
             }
         }
@@ -1107,6 +1234,17 @@ void RHIExecutor::FlushReady(ERHIFlushDepth _depth) {
         ReportBackendCreationFailure("Flush", backend_creation_failure);
         FinalizeRejectedBackendBatch(
             std::move(failed_batch), "backend creation failed while flushing"
+        );
+        return;
+    }
+    if (backend_publication_failure) {
+        ReportBackendPublicationFailure(
+            "Flush",
+            backend_publication_failure
+        );
+        FinalizeRejectedBackendBatch(
+            std::move(failed_batch),
+            "backend publication failed while flushing"
         );
     }
 }
@@ -1139,6 +1277,7 @@ void RHIExecutor::SyncReady(ERHISyncDepth _depth) {
     std::shared_ptr<RHIBackendExecutor> backend{};
     RHIBackendSubmissionBatch           failed_batch{};
     std::exception_ptr                   backend_creation_failure{};
+    std::exception_ptr                   backend_publication_failure{};
     bool                                sync_registered = false;
     auto finish_sync_call = [this, &sync_registered, &backend] {
         // A zero active-sync count is the shutdown handoff point. Release this
@@ -1185,10 +1324,13 @@ void RHIExecutor::SyncReady(ERHISyncDepth _depth) {
         }
         if (!backend_creation_failure) {
             if (BatchHasWork(batch)) {
-                batch.topology = BuildBatchTopology(batch);
-                backend->Enqueue(std::move(batch));
+                backend_publication_failure = TryPublishBackendBatch(
+                    backend,
+                    batch,
+                    failed_batch
+                );
             }
-            if (backend) {
+            if (!backend_publication_failure && backend) {
                 backend->Flush(ERHIFlushDepth::SubmitGPU);
             }
         }
@@ -1198,6 +1340,17 @@ void RHIExecutor::SyncReady(ERHISyncDepth _depth) {
         ReportBackendCreationFailure("Sync", backend_creation_failure);
         FinalizeRejectedBackendBatch(
             std::move(failed_batch), "backend creation failed while synchronizing"
+        );
+        return;
+    }
+    if (backend_publication_failure) {
+        ReportBackendPublicationFailure(
+            "Sync",
+            backend_publication_failure
+        );
+        FinalizeRejectedBackendBatch(
+            std::move(failed_batch),
+            "backend publication failed while synchronizing"
         );
         return;
     }
@@ -1274,6 +1427,7 @@ void RHIExecutor::ShutDown() {
     RHIBackendSubmissionBatch           batch{};
     RHIBackendSubmissionBatch           failed_batch{};
     std::exception_ptr                   backend_creation_failure{};
+    std::exception_ptr                   backend_publication_failure{};
     {
         std::lock_guard dispatch_lock(executor.dispatch_mutex);
         {
@@ -1293,10 +1447,14 @@ void RHIExecutor::ShutDown() {
             backend = std::move(executor.backend_executor);
         }
         if (!backend_creation_failure && BatchHasWork(batch) && backend) {
-            batch.topology = BuildBatchTopology(batch);
-            backend->Enqueue(std::move(batch));
+            backend_publication_failure = TryPublishBackendBatch(
+                backend,
+                batch,
+                failed_batch
+            );
         }
-        if (!backend_creation_failure && backend) {
+        if (!backend_creation_failure && !backend_publication_failure &&
+            backend) {
             backend->Flush(ERHIFlushDepth::SubmitGPU);
         }
     }
@@ -1305,6 +1463,15 @@ void RHIExecutor::ShutDown() {
         ReportBackendCreationFailure("ShutDown", backend_creation_failure);
         FinalizeRejectedBackendBatch(
             std::move(failed_batch), "backend creation failed during shutdown"
+        );
+    } else if (backend_publication_failure) {
+        ReportBackendPublicationFailure(
+            "ShutDown",
+            backend_publication_failure
+        );
+        FinalizeRejectedBackendBatch(
+            std::move(failed_batch),
+            "backend publication failed during shutdown"
         );
     }
 

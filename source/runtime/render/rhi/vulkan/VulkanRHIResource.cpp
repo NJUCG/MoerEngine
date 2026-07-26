@@ -4061,10 +4061,18 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         }
     }
 
-    void VulkanFence::Reject(uint64_t _value) {
+    void VulkanFence::Reject(uint64_t _value) noexcept {
         {
             std::unique_lock<std::mutex> lock(cv_m);
-            rejected_values.emplace(_value);
+            try {
+                rejected_values.emplace(_value);
+            } catch (...) {
+                // A rejected value must always become terminal. If the exact
+                // value set cannot grow, conservatively fail the whole fence
+                // rather than leaving submission waiters blocked forever.
+                failed         = true;
+                failure_result = VK_ERROR_OUT_OF_HOST_MEMORY;
+            }
         }
         cv.notify_all();
     }

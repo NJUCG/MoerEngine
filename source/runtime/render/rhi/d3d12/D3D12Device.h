@@ -21,6 +21,7 @@
 #include <D3D12MemAlloc.h>
 #include <dxgi1_6.h>
 #include <dxgidebug.h>
+#include <list>
 #include <optional>
 
 template<typename T>
@@ -453,8 +454,8 @@ public:
         uint32_t                   _max_descriptors_per_execution
     );
 
-    void BeginPushDescriptors();
-    void EndPushDescriptors();
+    [[nodiscard]] uint BeginPushDescriptors();
+    void               EndPushDescriptors(uint _chunk_index);
 
     DescriptorIndex Allocate(uint count = 1); // now should only be called by device...
 };
@@ -594,8 +595,12 @@ private:
     ComPtr<ID3D12Fence> fence;
     HANDLE              event;
     std::atomic<uint64> current_value = 0;
+    std::atomic<uint64> submitted_value = 0;
+    mutable std::mutex   submission_mutex;
+    std::condition_variable submission_cv;
     mutable std::mutex   rejection_mutex;
     UnorderedSet<uint64> rejected_values;
+    bool                 reject_all_values{false};
 
 public:
     D3D12Fence(D3D12Device* _device);
@@ -607,10 +612,17 @@ public:
     }
     uint64_t GetValue() const override; // by default, get latest value, not cached 'current_value'
     void     Wait(uint64_t _value) override;
-    void     Reject(uint64_t _value) override;
+    void     MarkSubmitted(uint64_t _value) override;
+    [[nodiscard]] bool WaitSubmitted(
+        uint64_t               _value,
+        const std::atomic_bool* _continue_waiting = nullptr,
+        EQueueType              _waiting_queue = EQueueType::Ignore,
+        uint32                  _dependency_count = 0
+    ) override;
+    void     Reject(uint64_t _value) noexcept override;
 
     bool IsFenceComplete(uint64 _value);
-    bool IsRejected(uint64 _value) const;
+    bool IsRejected(uint64 _value) const override;
     void WaitOnHost(uint64 _value);
     void SignalOnHost(uint64 _value);
 };
@@ -906,6 +918,8 @@ private:
     D3D12MultiBuddyAllocatorAutoFree upload_allocator;
     D3D12MultiBuddyAllocatorAutoFree readback_allocator;
     D3D12FastConstantAllocator       constant_allocator;
+    uint                            csu_descriptor_chunk{0};
+    uint                            sampler_descriptor_chunk{0};
 
     // in terms of each buffer may need different state, this can't use manual sub-allocation from a big buffer
     // rather we prefer sub-allocation from a heap, which simply rely on D3D12MA
@@ -941,6 +955,11 @@ public:
 
 public:
     void Reset();
+    void AdoptDescriptorChunks(
+        uint _csu_descriptor_chunk,
+        uint _sampler_descriptor_chunk
+    ) noexcept;
+    void ReleaseDescriptorChunks() noexcept;
     void AddOnComplete(std::function<void()>&& _func) {
         on_complete_callbacks.push_back(std::move(_func));
     }
@@ -998,7 +1017,8 @@ private:
             timeline(_other.timeline),
             wake_thread(_other.wake_thread) {}
     };
-    DEQueue<QueueEvent>         event_queue;
+    using EventList = std::list<QueueEvent, m_defualt_allocator<QueueEvent>>;
+    EventList                   event_queue;
     std::mutex                  mtx;
     std::condition_variable_any cv;
 

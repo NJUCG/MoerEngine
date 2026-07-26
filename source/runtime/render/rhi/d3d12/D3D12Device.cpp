@@ -17,6 +17,7 @@
 #include <optional>
 #include <platform/Platform.h>
 #include <shared_mutex>
+#include <stdexcept>
 #include <variant>
 
 namespace Moer::Render {
@@ -1052,11 +1053,10 @@ void D3D12GraphicsCommandQueue::ExecuteThread(std::stop_token _st) {
             evt->event.Match(
                 [&fence_value, this](UniquePtr<D3D12CommandResourceAllocator>& allocator) {
                     queue_fence.WaitOnHost(fence_value);
+                    allocator->ReleaseDescriptorChunks();
                     allocator->OnComplete(); // callbacks,
                     allocator->Reset();
                     ready_allocators.Push(allocator.release());
-                    GetDevice()->GetCsuHeapGpuDyn()->EndPushDescriptors();
-                    GetDevice()->GetSamplerHeapGpuDyn()->EndPushDescriptors();
                     //LOG_INFO("visit event: allocator, {}", fence_value);
                     AtomicMaximum(
                         last_completed_fence_value, fence_value
@@ -1510,49 +1510,104 @@ void D3D12GraphicsCommandQueue::Wait(WaitEvent _event) {
 }
 
 WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
-    const bool rejected_dependency = std::any_of(
+    struct SignalFailureGuard {
+        CmdSubmit* submit{nullptr};
+        bool       armed{true};
+
+        void Disarm() noexcept {
+            armed = false;
+        }
+
+        ~SignalFailureGuard() noexcept {
+            if (!armed || submit == nullptr) {
+                return;
+            }
+            // Conservative fail-closed semantics: if translation, descriptor
+            // setup, command-list close, Execute or any queue Signal throws,
+            // no external waiter may treat this partially published source as
+            // an accepted history transaction.
+            for (const SignalEvent& event : submit->signal_events) {
+                auto* fence =
+                    reinterpret_cast<D3D12Fence*>(event.timeline_handle);
+                if (fence == nullptr) {
+                    continue;
+                }
+                try {
+                    fence->Reject(event.value);
+                } catch (...) {
+                }
+            }
+        }
+    } signal_failure_guard{&_submit};
+
+    // D3D12 must never publish a native queue wait for a value whose producer
+    // has not already crossed its own native submission boundary. A later
+    // host-side Reject cannot release an ID3D12CommandQueue::Wait and would
+    // permanently wedge the queue. Use WaitSubmitted with a false continuation
+    // token as a non-blocking exact-value query and fail closed for both
+    // pending and rejected dependencies.
+    const std::atomic_bool do_not_wait{false};
+    const uint32 dependency_count =
+        static_cast<uint32>(_submit.wait_events.size());
+    const bool unaccepted_dependency = std::any_of(
         _submit.wait_events.begin(),
         _submit.wait_events.end(),
-        [](const WaitEvent& _event) {
-            const auto* fence =
-                reinterpret_cast<const D3D12Fence*>(_event.timeline_handle);
-            return fence == nullptr || fence->IsRejected(_event.value);
+        [&do_not_wait, dependency_count](const WaitEvent& _event) {
+            auto* fence =
+                reinterpret_cast<D3D12Fence*>(_event.timeline_handle);
+            return fence == nullptr ||
+                   !fence->WaitSubmitted(
+                       _event.value,
+                       &do_not_wait,
+                       EQueueType::Graphics,
+                       dependency_count
+                   );
         }
     );
-    if (rejected_dependency) {
-        // A rejected producer is terminal, but not successfully complete.
-        // Propagate that state instead of inserting a native queue wait which
-        // can never resolve and would wedge every later D3D12 submission.
-        for (const SignalEvent& event : _submit.signal_events) {
-            auto* fence = reinterpret_cast<D3D12Fence*>(event.timeline_handle);
-            if (fence != nullptr) {
-                fence->Reject(event.value);
-            }
-        }
-        for (std::function<void()>& callback : _submit.callbacks) {
-            if (!callback) {
-                continue;
-            }
-            try {
-                callback();
-            } catch (const std::exception& exception) {
-                LOG_ERROR(
-                    "[RHIExecutor][D3D12] rejected-submit callback threw: {}",
-                    exception.what()
-                );
-            } catch (...) {
-                LOG_ERROR("[RHIExecutor][D3D12] rejected-submit callback threw");
-            }
-        }
-        _submit.success_callbacks.clear();
-        return WaitEvent{
-            uint64(&queue_fence),
-            last_submitted_fence_value.load(std::memory_order_acquire)
-        };
+    if (unaccepted_dependency) {
+        // A pending or rejected producer is not successfully submit-complete.
+        // Abort the backend batch instead of running ordinary callbacks here:
+        // Execute is called while RHIExecutor holds its publication gate, and
+        // a callback may legally re-enter Submit/Flush/Sync. The outer
+        // exception path terminalizes signals and invokes cleanup only after
+        // that gate has been released.
+        signal_failure_guard.Disarm();
+        throw std::runtime_error(
+            "D3D12 submission depends on a rejected fence value"
+        );
     }
 
     auto allocator = RequestCommandResourceAllocator();
     auto cmd_list  = allocator->GetCommandList();
+    struct DescriptorPushFailureGuard {
+        D3D12GpuDescriptorAllocator* csu{nullptr};
+        D3D12GpuDescriptorAllocator* sampler{nullptr};
+        uint                         csu_chunk{0};
+        uint                         sampler_chunk{0};
+
+        void Disarm() noexcept {
+            csu_chunk     = 0;
+            sampler_chunk = 0;
+        }
+
+        ~DescriptorPushFailureGuard() noexcept {
+            if (sampler_chunk != 0 && sampler != nullptr) {
+                try {
+                    sampler->EndPushDescriptors(sampler_chunk);
+                } catch (...) {
+                }
+            }
+            if (csu_chunk != 0 && csu != nullptr) {
+                try {
+                    csu->EndPushDescriptors(csu_chunk);
+                } catch (...) {
+                }
+            }
+        }
+    } descriptor_push_guard{
+        device->GetCsuHeapGpuDyn(),
+        device->GetSamplerHeapGpuDyn()
+    };
 
     //FunctionTable function_table{
     //    .is_resource_write       = &IsBufferTextureWrite,
@@ -1566,6 +1621,14 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
     //const auto& cmd_lists = reorderer.m_cmd_lists;
 
     cmd_list->Begin();
+    descriptor_push_guard.csu_chunk =
+        descriptor_push_guard.csu->BeginPushDescriptors();
+    descriptor_push_guard.sampler_chunk =
+        descriptor_push_guard.sampler->BeginPushDescriptors();
+    allocator->AdoptDescriptorChunks(
+        descriptor_push_guard.csu_chunk,
+        descriptor_push_guard.sampler_chunk
+    );
     if (!_submit.cmds.empty()) {
         D3D12CommandVisitor           cmd_visitor(*allocator);
         D3D12CommandPreprocessVisitor preprocess_visitor(*allocator);
@@ -1576,8 +1639,6 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
             device->GetCsuHeapGpuDyn()->Native(), device->GetSamplerHeapGpuDyn()->Native()
         };
         cmd_list->Native()->SetDescriptorHeaps(2, heaps);
-        device->GetCsuHeapGpuDyn()->BeginPushDescriptors();
-        device->GetSamplerHeapGpuDyn()->BeginPushDescriptors();
 
         for (const auto& cmd : _submit.cmds) { // todo reorder
             preprocess_visitor.VisitCmd(cmd.get());
@@ -1601,40 +1662,82 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
         LOG_INFO("on complete {}", next_fence_value);
     });
 
+    // Build the complete retirement packet before crossing the native submit
+    // boundary. Ordinary callbacks are copied so the original submit remains
+    // intact if preparation or a native queue call fails; success callbacks
+    // join the accepted completion packet but remain skipped on rejection.
+    Array<std::function<void()>> completion_callbacks{};
+    completion_callbacks.reserve(
+        _submit.callbacks.size() + _submit.success_callbacks.size()
+    );
+    for (const std::function<void()>& callback : _submit.callbacks) {
+        completion_callbacks.emplace_back(callback);
+    }
+    for (const std::function<void()>& callback : _submit.success_callbacks) {
+        completion_callbacks.emplace_back(callback);
+    }
+
+    EventList retirement_events{};
+    retirement_events.emplace_back(
+        std::move(allocator), next_fence_value, true
+    );
+    for (const SignalEvent& event : _submit.signal_events) {
+        retirement_events.emplace_back(event, next_fence_value, false);
+    }
+    if (!completion_callbacks.empty()) {
+        retirement_events.emplace_back(
+            std::move(completion_callbacks), next_fence_value, true
+        );
+    }
+
+    // Acquire the retirement queue lock before native submission. Once every
+    // native Signal succeeds, list::splice and the remaining state updates are
+    // allocation-free, so Execute cannot leak a post-native exception back to
+    // the outer batch rejection path.
+    std::unique_lock retirement_lock(mtx);
     for (auto&& e : _submit.wait_events) {
-        queue->Wait(reinterpret_cast<D3D12Fence*>(e.timeline_handle)->Native(), e.value);
+        DX_CHECK_HRESULT(
+            queue->Wait(
+                reinterpret_cast<D3D12Fence*>(e.timeline_handle)->Native(),
+                e.value
+            )
+        );
     }
-    {
-        ID3D12CommandList* ppCommandLists[]{cmd_list->Native()};
-        queue->ExecuteCommandLists(1, ppCommandLists);
-    }
-    queue->Signal(queue_fence.Native(), next_fence_value);
-    for (auto&& e : _submit.signal_events) {
-        queue->Signal(reinterpret_cast<D3D12Fence*>(e.timeline_handle)->Native(), e.value);
-    }
-
-    // TODO our event queue
-    {
-        std::unique_lock lck(mtx);
-
-        // to reset allocator
-        event_queue.emplace_back(std::move(allocator), next_fence_value, true);
-
-        if (!_submit.callbacks.empty() || !_submit.signal_events.empty()) {
-
-            // signal fence after execute
-            for (auto&& e : _submit.signal_events) {
-                event_queue.emplace_back(std::move(e), next_fence_value, false);
-            }
-
-            // call backs after execute
-            if (!_submit.callbacks.empty()) {
-                event_queue.emplace_back(std::move(_submit.callbacks), next_fence_value, true);
-            }
+    bool native_commands_published = false;
+    try {
+        {
+            ID3D12CommandList* ppCommandLists[]{cmd_list->Native()};
+            queue->ExecuteCommandLists(1, ppCommandLists);
+            native_commands_published = true;
         }
-        cv.notify_one();
+        DX_CHECK_HRESULT(queue->Signal(queue_fence.Native(), next_fence_value));
+        queue_fence.MarkSubmitted(next_fence_value);
+        for (auto&& e : _submit.signal_events) {
+            auto* fence = reinterpret_cast<D3D12Fence*>(e.timeline_handle);
+            DX_CHECK_HRESULT(queue->Signal(fence->Native(), e.value));
+            fence->MarkSubmitted(e.value);
+        }
+    } catch (...) {
+        if (native_commands_published) {
+            // The command list may already reference allocator/callback-owned
+            // resources, but a failed completion Signal leaves no safe CPU
+            // retirement point. Never unwind those owners into the generic
+            // rejection finalizer; fail-stop is the only safe legacy-D3D12
+            // policy until device-loss quarantine is implemented.
+            std::terminate();
+        }
+        throw;
     }
+    signal_failure_guard.Disarm();
+    descriptor_push_guard.Disarm();
+
+    event_queue.splice(event_queue.end(), retirement_events);
+    _submit.callbacks.clear();
+    _submit.success_callbacks.clear();
+    _submit.signal_events.clear();
     pending_fence_values.Enqueue(next_fence_value);
+    retirement_lock.unlock();
+    cv.notify_one();
 
     return WaitEvent(uint64(&queue_fence), next_fence_value);
 }
@@ -1685,17 +1788,48 @@ void D3D12Fence::Wait(uint64_t _value) {
     WaitOnHost(_value);
 }
 
-void D3D12Fence::Reject(uint64_t _value) {
+void D3D12Fence::MarkSubmitted(uint64_t _value) {
+    AtomicMaximum(submitted_value, _value);
+    submission_cv.notify_all();
+}
+
+bool D3D12Fence::WaitSubmitted(
+    uint64_t               _value,
+    const std::atomic_bool* _continue_waiting,
+    EQueueType,
+    uint32
+) {
+    std::unique_lock lock(submission_mutex);
+    while (submitted_value.load(std::memory_order_acquire) < _value &&
+           !IsRejected(_value) &&
+           (_continue_waiting == nullptr ||
+            _continue_waiting->load(std::memory_order_acquire))) {
+        submission_cv.wait_for(lock, std::chrono::milliseconds(50));
+    }
+    return submitted_value.load(std::memory_order_acquire) >= _value &&
+           !IsRejected(_value);
+}
+
+void D3D12Fence::Reject(uint64_t _value) noexcept {
     {
         std::lock_guard lock(rejection_mutex);
-        rejected_values.emplace(_value);
+        if (!reject_all_values) {
+            try {
+                rejected_values.emplace(_value);
+            } catch (...) {
+                // Preserve terminal failure under OOM instead of leaving an
+                // acceptance waiter blocked on an exact value forever.
+                reject_all_values = true;
+            }
+        }
     }
     SetEvent(event);
+    submission_cv.notify_all();
 }
 
 bool D3D12Fence::IsRejected(uint64 _value) const {
     std::lock_guard lock(rejection_mutex);
-    return rejected_values.contains(_value);
+    return reject_all_values || rejected_values.contains(_value);
 }
 
 bool D3D12Fence::IsFenceComplete(uint64 _value) {
@@ -1748,6 +1882,7 @@ D3D12CommandResourceAllocator::D3D12CommandResourceAllocator(D3D12GraphicsComman
 }
 
 void D3D12CommandResourceAllocator::Reset() {
+    ASSERT(csu_descriptor_chunk == 0 && sampler_descriptor_chunk == 0);
     cmd_allocator->Reset();
     on_complete_callbacks.clear();
     default_buffer_allocator.Reset();
@@ -1758,6 +1893,31 @@ void D3D12CommandResourceAllocator::Reset() {
         buffer->Native()->Unmap(0, nullptr);
     }
     large_buffers.clear();
+}
+
+void D3D12CommandResourceAllocator::AdoptDescriptorChunks(
+    uint _csu_descriptor_chunk,
+    uint _sampler_descriptor_chunk
+) noexcept {
+    ASSERT(csu_descriptor_chunk == 0 && sampler_descriptor_chunk == 0);
+    ASSERT(_csu_descriptor_chunk != 0 && _sampler_descriptor_chunk != 0);
+    csu_descriptor_chunk     = _csu_descriptor_chunk;
+    sampler_descriptor_chunk = _sampler_descriptor_chunk;
+}
+
+void D3D12CommandResourceAllocator::ReleaseDescriptorChunks() noexcept {
+    if (sampler_descriptor_chunk != 0) {
+        device->GetSamplerHeapGpuDyn()->EndPushDescriptors(
+            sampler_descriptor_chunk
+        );
+        sampler_descriptor_chunk = 0;
+    }
+    if (csu_descriptor_chunk != 0) {
+        device->GetCsuHeapGpuDyn()->EndPushDescriptors(
+            csu_descriptor_chunk
+        );
+        csu_descriptor_chunk = 0;
+    }
 }
 
 static UniquePtr<D3D12Buffer>
@@ -3042,7 +3202,7 @@ D3D12GpuDescriptorAllocator::D3D12GpuDescriptorAllocator(
     max_descriptors_per_execution(std::min(_max_descriptors_per_execution, GetNumTotalDescriptors() / 3)),
     num_descriptor_chunk(GetNumTotalDescriptors() / max_descriptors_per_execution) {}
 
-void D3D12GpuDescriptorAllocator::BeginPushDescriptors() {
+uint D3D12GpuDescriptorAllocator::BeginPushDescriptors() {
     uint idx = ready_chunk_indices.Pop(); // return 0, if empty. so our valid indices start from 1.
     if (idx) {
         current_chunk_index  = idx;
@@ -3052,10 +3212,12 @@ void D3D12GpuDescriptorAllocator::BeginPushDescriptors() {
         current_chunk_index  = ++num_used_chunks;
         current_chunk_offset = 0;
     }
+    return current_chunk_index;
 }
 
-void D3D12GpuDescriptorAllocator::EndPushDescriptors() {
-    ready_chunk_indices.Push(current_chunk_index);
+void D3D12GpuDescriptorAllocator::EndPushDescriptors(uint _chunk_index) {
+    ASSERT(_chunk_index != 0 && _chunk_index <= num_descriptor_chunk);
+    ready_chunk_indices.Push(_chunk_index);
 }
 
 DescriptorIndex D3D12GpuDescriptorAllocator::Allocate(uint count) {

@@ -60,6 +60,7 @@ CommandList& CommandList::operator=(CommandList&& _other) {
     current_barriers            = _other.current_barriers;
     callbacks                   = std::move(_other.callbacks);
     success_callbacks           = std::move(_other.success_callbacks);
+    signal_events               = std::move(_other.signal_events);
     cached_args                 = std::move(_other.cached_args);
     queue_type                  = _other.queue_type;
     translate_execution_class   = _other.translate_execution_class;
@@ -219,28 +220,35 @@ CmdSubmit CommandList::Submit() {
             scope_stack.pop();
         }
     }
+    const bool has_submit_side_effects =
+        !callbacks.empty() || !success_callbacks.empty() ||
+        !signal_events.empty();
+    Array<RHISubmitSegment> submit_segments{};
+    if (!commands.empty() || has_submit_side_effects) {
+        // Allocate the segment before transferring signal/callback ownership.
+        // If allocation fails, the CommandList remains intact and can still
+        // be retried or terminally drained by the recording owner.
+        submit_segments.emplace_back(RHISubmitSegment{
+            .queue = queue_type,
+            .begin = 0,
+            .end   = commands.size(),
+        });
+    }
+
     CmdSubmit submit(
         std::move(commands),
         std::move(callbacks),
         std::move(success_callbacks),
         std::move(cached_args)
     );
-    const bool has_submit_side_effects =
-        !submit.callbacks.empty() || !submit.success_callbacks.empty() ||
-        !submit.wait_events.empty() || !submit.signal_events.empty() ||
-        submit.b_delete_resources;
-    if (!submit.cmds.empty() || has_submit_side_effects) {
-        submit.segments.emplace_back(RHISubmitSegment{
-            .queue = queue_type,
-            .begin = 0,
-            .end   = submit.cmds.size(),
-        });
-    }
+    submit.signal_events = std::move(signal_events);
+    submit.segments      = std::move(submit_segments);
     submit.translate_execution_class = translate_execution_class;
     submit.resource_state_ownership   = resource_state_ownership;
     commands.clear();
     callbacks.clear();
     success_callbacks.clear();
+    signal_events.clear();
     timestamp_scope_names.clear();
     translate_execution_class = ERHITranslateExecutionClass::Parallel;
     resource_state_ownership  = ERHIResourceStateOwnership::BackendTracked;
@@ -256,6 +264,13 @@ Array<std::function<void()>> CommandList::DrainOrdinaryCallbacksForRejection() {
     ++seal_generation;
     Array<std::function<void()>> cleanup_callbacks = std::move(callbacks);
 
+    for (const SignalEvent& signal : signal_events) {
+        auto* fence = reinterpret_cast<Fence*>(signal.timeline_handle);
+        if (fence != nullptr) {
+            fence->Reject(signal.value);
+        }
+    }
+
     // This is deliberately not implemented in terms of Submit(). A failed
     // producer may leave a partially-built barrier or an unmatched marker;
     // neither is executable, and Submit() correctly asserts on that shape in
@@ -264,6 +279,7 @@ Array<std::function<void()>> CommandList::DrainOrdinaryCallbacksForRejection() {
     commands.clear();
     callbacks.clear();
     success_callbacks.clear();
+    signal_events.clear();
     cached_args.clear();
     current_barriers = nullptr;
     while (!scope_stack.empty()) {
@@ -276,7 +292,9 @@ Array<std::function<void()>> CommandList::DrainOrdinaryCallbacksForRejection() {
 }
 
 bool CommandList::IsEmpty() const {
-    return commands.empty() && callbacks.empty() && success_callbacks.empty() && cached_args.empty();
+    return commands.empty() && callbacks.empty() &&
+           success_callbacks.empty() && signal_events.empty() &&
+           cached_args.empty();
 }
 
 void CommandList::CopyFrom(BufferView _src, BufferView _dst, std::string_view _name) {
@@ -714,6 +732,32 @@ void CommandList::AddCallback(std::function<void()>&& _callback) {
 
 void CommandList::AddSuccessCallback(std::function<void()>&& _callback) {
     success_callbacks.emplace_back(std::move(_callback));
+}
+
+void CommandList::Signal(Fence* _fence, uint64 _signal_value) {
+    if (_fence == nullptr || _signal_value == 0) {
+        throw std::invalid_argument(
+            "CommandList::Signal requires a valid fence and non-zero value"
+        );
+    }
+    signal_events.emplace_back(uint64(_fence), _signal_value);
+}
+
+void CommandList::Signal(const FenceRef& _fence, uint64 _signal_value) {
+    if (!_fence.IsValid() || _signal_value == 0) {
+        throw std::invalid_argument(
+            "CommandList::Signal requires a valid fence and non-zero value"
+        );
+    }
+
+    // SignalEvent is a backend-facing raw identity. Prepare every allocation
+    // before publishing either half of the pair so an allocation failure can
+    // never leave a raw fence without its strong-reference keepalive.
+    std::function<void()> keepalive = [fence = _fence] {};
+    callbacks.reserve(callbacks.size() + 1);
+    signal_events.reserve(signal_events.size() + 1);
+    callbacks.emplace_back(std::move(keepalive));
+    signal_events.emplace_back(uint64(_fence.Get()), _signal_value);
 }
 
 void CommandList::BeginBarriers(
