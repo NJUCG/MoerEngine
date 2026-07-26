@@ -98,7 +98,6 @@ public:
         RenderGraph&                 graph,
         const RTGraphFrameResources& graph_resources,
         const RTContext&             rt_ctx,
-        bool                         tlas_built_this_frame,
         bool                         normal_roughness_readable
     );
 

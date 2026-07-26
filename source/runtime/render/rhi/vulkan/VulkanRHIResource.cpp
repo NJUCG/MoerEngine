@@ -3686,8 +3686,13 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         VulkanRaytracingGeometry* geometry = ResourceCast(_geometry.Get());
         assert(geometry && "Invalid geometry");
         auto iter = related_geometries.find(uint64(geometry));
-        if(iter != related_geometries.end()){
-            iter->second++;
+        if (iter == related_geometries.end()) {
+            return;
+        }
+        if (iter->second > 1) {
+            --iter->second;
+        } else {
+            related_geometries.erase(iter);
         }
 
     }
@@ -3710,6 +3715,12 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
 
         related_geometries.clear();
         temp_update_instances.clear();
+        if (instances.empty()) {
+            temp_update_instance_ids.clear();
+            temp_modified_instance_ids.clear();
+            prev_modified_instance_ids.clear();
+            return {};
+        }
 
                 //update gpu buffer
         bool b_full_refit = false;
@@ -3769,13 +3780,22 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                 uint indice = &idx - &temp_update_instance_ids[0];
                 std::memcpy(temp_update_instances.data() + indice * sizeof(VkAccelerationStructureInstanceKHR), &vk_instance, sizeof(VkAccelerationStructureInstanceKHR));
 
-                auto pair = related_geometries.try_emplace(uint64(geometry), 1);
-                if(!pair.second){
-                    related_geometries[uint64(geometry)]++;
-                }
             }
         }
 
+        Array<RaytracingGeometryRef> geometry_refs;
+        geometry_refs.reserve(instances.size());
+        for (const RaytracingInstance& instance : instances) {
+            if (!instance.geom) {
+                continue;
+            }
+            auto pair = related_geometries.try_emplace(uint64(instance.geom), 1);
+            if (pair.second) {
+                geometry_refs.emplace_back(instance.geom);
+            } else {
+                ++pair.first->second;
+            }
+        }
 
         //maybe we should calculate relative blas here
         // Array<uint> instance_ids_to_update = temp_update_instance_ids;
@@ -3783,10 +3803,11 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         // RefitTLASAndScratchBuffer();
         auto cmd = MakeUnique<UpdateRaytracingSceneCmd>(
             std::move(related_geometries),
-            uint64(this),
-            uint64(instance_buffer.Get()),
-            uint64(scratch_buffer.Get()),
-            uint64(tlas.Get()),
+            RaytracingSceneRef(this),
+            BufferRef(instance_buffer.Get()),
+            BufferRef(scratch_buffer.Get()),
+            RaytracingTlasRef(tlas.Get()),
+            std::move(geometry_refs),
             std::move(temp_update_instance_ids),
             std::move(temp_update_instances),
             vk_instances.size(),

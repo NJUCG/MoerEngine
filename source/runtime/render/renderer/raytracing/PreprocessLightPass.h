@@ -114,7 +114,11 @@ public:
     void Process(class CommandList& cmd_list, const PreparedCommand& command);
     void RecordLightingInputTransitions(CommandList& cmd_list, const PreparedCommand& command);
     void RecordAcceptedBoundary(CommandList& cmd_list, const PreparedCommand& command);
-    bool AddPasses(RenderGraph& graph, const PreparedCommand& command);
+    bool AddPasses(
+        RenderGraph&             graph,
+        const PreparedCommand&   command,
+        RenderGraph::TokenHandle frame_setup_ready
+    );
     void CommitAcceptedFrame(RTContext& rt_ctx, PreparedCommand&& command) noexcept;
 
 private:

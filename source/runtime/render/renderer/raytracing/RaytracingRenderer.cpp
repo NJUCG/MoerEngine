@@ -21,6 +21,7 @@
 #include "GBufferPass.h"
 #include "LightingPass.h"
 #include "PreprocessLightPass.h"
+#include "RaytracingFrameSetupPass.h"
 #include "RTResource.h"
 #include "ShaderUtils.h"
 #include "ShowTexturePass.h"
@@ -245,6 +246,7 @@ struct RaytracingRenderer::RuntimeState {
     std::filesystem::path exported_file_path;
 
     UniquePtr<PrepareLightPass> prepare_light_pass;
+    UniquePtr<RaytracingFrameSetupPass> frame_setup_pass;
     UniquePtr<GBufferPass>      g_buffer_pass;
     UniquePtr<LightingPass>     lighting_pass;
     UniquePtr<CompositionPass>  composition_pass;
@@ -281,6 +283,7 @@ struct RaytracingRenderer::RuntimeState {
         )),
         exported_file_path(ConfigManager::GetInstance().GetWorkspacePath() / "saved"),
         prepare_light_pass(MakeUnique<PrepareLightPass>(renderer.manager, renderer.bindless_array)),
+        frame_setup_pass(MakeUnique<RaytracingFrameSetupPass>()),
         g_buffer_pass(MakeUnique<GBufferPass>(renderer.device, renderer.manager, renderer.bindless_array)),
         lighting_pass(MakeUnique<LightingPass>(renderer.manager, renderer.bindless_array)),
         composition_pass(
@@ -530,6 +533,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     PrepareRenderFrame(frame_packet.window);
     bool  skip_present                    = false;
     bool  split_graph_profiling_frame     = false;
+    bool  frame_setup_graph_recorded      = false;
+    bool  frame_setup_linear_recorded     = false;
     bool  graph_primary_recorded          = false;
     bool  graph_composition_recorded      = false;
     bool  graph_antialias_recorded        = false;
@@ -548,6 +553,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     bool  tone_mapping_enabled_for_commit = false;
     LightingPass::LocalLightSamplingDecision         local_light_sampling{};
     std::optional<PrepareLightPass::PreparedCommand> prepared_lights{};
+    std::optional<RaytracingFrameSetupPass::PreparedCommand> prepared_frame_setup{};
+    SharedPtr<const RaytracingFrameSetupPass::AcceptedSnapshot> accepted_frame_setup{};
     TextureRef                                       selected_debug_texture{};
     bool                                             show_texture_requested = false;
     ShowTextureParams                                show_texture_params{};
@@ -580,7 +587,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                                                  frame_packet.window.state == EWindowState::SizeChanged ||
                                                  ui_config.export_cfg.b_export;
         const bool nrd_active_this_frame = IsNrdDenoiserActive(ui_config.denoiser_cfg.denoiser_type);
-        const bool scene_tlas_updated    = ExecuteSceneUpdates(frame_packet.scene_updates);
+        const SceneUpdateResult scene_update =
+            ExecuteSceneUpdates(frame_packet.scene_updates);
 
         if (state.first_load) {
             state.first_load    = false;
@@ -654,29 +662,6 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         Camera& camera = frame_packet.scene_updates.main_camera;
         state.rt_ctx->FillLowDiscrepancySequence(cmd_list);
         state.b_export = ui_config.export_cfg.b_export;
-
-        bool tlas_built_this_frame = scene_tlas_updated;
-        if (state.rt_scene) {
-            const bool needs_tlas_build =
-                IsLegacyTlasUpdateEnabled() || state.current_tlas_revision != state.rt_instance_revision;
-            if (needs_tlas_build) {
-                ScopedGpuMarker tlas_marker(
-                    cmd_list, "Pass: Scene Acceleration Structure", GpuMarkerPalette::Pass()
-                );
-                for (size_t i = 0; i < state.rt_scene->GetInstanceCount(); i++) {
-                    auto& instance = state.rt_scene->GetInstance(i);
-                    state.rt_scene->MarkModified(instance.instance_id);
-                }
-                cmd_list.PushScopeWithTimeScope("RTScene RendererTLAS");
-                cmd_list.UpdateRaytracingScene(state.rt_scene);
-                cmd_list.PopScopeWithTimeScope();
-                state.current_tlas_revision = state.rt_instance_revision;
-                ++state.renderer_tlas_build_count;
-                tlas_built_this_frame = true;
-            } else {
-                ++state.renderer_tlas_skip_count;
-            }
-        }
 
         ToneMappingPass::Params tone_params{};
         AntialiasPass::Params   aa_params{};
@@ -801,20 +786,162 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         prepared_lights.emplace(
             state.prepare_light_pass->Prepare(*state.rt_ctx, scene_snapshot, state.rt_instance_revision)
         );
-        cmd_list.UpdateBindlessArray(bindless_array);
-        if (state.render_graph_enabled && !state.render_graph_fallback_latched &&
-            !prepared_lights->ReadsSceneGeometry() && state.gbuffer_initialized_history_mask == uint8(0b11) &&
+        if (!graph_recording_failed && state.rt_scene) {
+            const bool needs_tlas_build =
+                IsLegacyTlasUpdateEnabled() ||
+                state.current_tlas_revision != state.rt_instance_revision;
+            prepared_frame_setup.emplace(state.frame_setup_pass->Prepare(
+                *state.rt_ctx,
+                state.rt_scene,
+                bindless_array,
+                state.rt_instance_revision,
+                needs_tlas_build,
+                scene_update.gpu_resources_updated,
+                scene_update.tlas_built
+            ));
+        }
+
+        const bool frame_setup_graph_eligible =
+            prepared_frame_setup && state.render_graph_enabled &&
+            !state.render_graph_fallback_latched && !render_graph_boundary_frame;
+        if (frame_setup_graph_eligible) {
+            RenderGraph setup_graph("Raytracing.FrameSetup");
+            const bool setup_passes_added =
+                state.frame_setup_pass->AddPasses(setup_graph, *prepared_frame_setup);
+            if (!setup_passes_added) {
+                state.render_graph_fallback_latched = true;
+                LOG_ERROR(
+                    "[RenderGraph][Fallback] Raytracing FrameSetup could not import "
+                    "Bindless/scene/TLAS resources. Using the linear path for this "
+                    "renderer instance."
+                );
+            } else if (!setup_graph.Compile()) {
+                state.render_graph_fallback_latched = true;
+                LOG_ERROR(
+                    "[RenderGraph][Fallback] Raytracing FrameSetup compile failed "
+                    "before execution: {}. Using the linear path for this renderer "
+                    "instance.",
+                    setup_graph.GetCompileError()
+                );
+            } else {
+                if (state.render_graph_debug_dump) {
+                    std::string dump = setup_graph.Dump();
+                    if (state.logged_render_graph_dumps.emplace(dump).second) {
+                        LOG_INFO("[RenderGraph][Raytracing][DebugDump]\n{}", dump);
+                    }
+                }
+
+                // FrameSetup and the primary graph are independent accepted
+                // transactions. Publishing the caller-owned prefix first and
+                // then both graph source sets on Graphics preserves the real
+                // cross-graph dependency through Executor handoff/FIFO.
+                renderer_marker.Close();
+                if (!cmd_list.IsEmpty()) {
+                    CmdSubmit prefix_submit = cmd_list.Submit().DebugLabel(
+                        std::format(
+                            "Raytracing Frame {}/FrameSetup Prefix",
+                            frame_packet.frame_id
+                        ),
+                        GpuMarkerPalette::Renderer()
+                    );
+                    prefix_submit.SetProfilingPhase(
+                        split_graph_profiling_frame ?
+                            ERHIProfilingPhase::Continue :
+                            ERHIProfilingPhase::Begin
+                    );
+                    split_graph_profiling_frame = true;
+                    RHIExecutor::Get().Submit(
+                        EQueueType::Graphics,
+                        std::move(prefix_submit),
+                        ERHIExecSubmitFlags::None
+                    );
+                }
+
+                bool setup_profiling_started = split_graph_profiling_frame;
+                const auto configure_setup_source =
+                    [&](const RenderGraph::ExecutedPassInfo& pass,
+                        RHIRecordingSource&                  source) {
+                        source.submit_metadata.debug_label = std::format(
+                            "Raytracing Frame {}/{}",
+                            frame_packet.frame_id,
+                            pass.name
+                        );
+                        source.submit_metadata.debug_label_color =
+                            GpuMarkerPalette::Pass();
+                        source.submit_metadata.profiling_phase =
+                            setup_profiling_started ?
+                                ERHIProfilingPhase::Continue :
+                                ERHIProfilingPhase::Begin;
+                        setup_profiling_started = true;
+                    };
+                if (setup_graph.ExecuteRecording(
+                        {},
+                        configure_setup_source,
+                        false,
+                        {},
+                        RenderGraph::ActiveRecordingOptions{.enabled = true}
+                    )) {
+                    split_graph_profiling_frame = setup_profiling_started;
+                    frame_setup_graph_recorded  = true;
+                    auto snapshot =
+                        state.frame_setup_pass->CommitAccepted(*prepared_frame_setup);
+                    accepted_frame_setup =
+                        MakeShared<RaytracingFrameSetupPass::AcceptedSnapshot>(
+                            std::move(snapshot)
+                        );
+                    if (prepared_frame_setup->BuildsTlas()) {
+                        state.current_tlas_revision = state.rt_instance_revision;
+                        ++state.renderer_tlas_build_count;
+                    } else {
+                        ++state.renderer_tlas_skip_count;
+                    }
+                } else {
+                    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+                    graph_recording_failed                       = true;
+                    state.render_graph_fallback_latched          = true;
+                    state.render_graph_recording_failure_latched = true;
+                    LOG_ERROR(
+                        "[RenderGraph][Fallback] Raytracing FrameSetup recording "
+                        "failed before transaction commit: {}. Preserving the last "
+                        "accepted output and disabling managed renderer passes until "
+                        "this renderer instance is recreated.",
+                        setup_graph.GetCompileError()
+                    );
+                }
+            }
+        }
+        if (!graph_recording_failed && prepared_frame_setup &&
+            !frame_setup_graph_recorded) {
+            frame_setup_linear_recorded =
+                state.frame_setup_pass->ProcessLinear(cmd_list, *prepared_frame_setup);
+            if (!frame_setup_linear_recorded) {
+                graph_recording_failed              = true;
+                state.render_graph_fallback_latched = true;
+                LOG_ERROR(
+                    "[RenderGraph][Fallback] Raytracing linear FrameSetup has no "
+                    "valid TLAS destination. Preserving the last accepted output."
+                );
+            }
+        }
+
+        if (frame_setup_graph_recorded && accepted_frame_setup &&
+            state.render_graph_enabled && !state.render_graph_fallback_latched &&
+            state.gbuffer_initialized_history_mask == uint8(0b11) &&
             state.lighting_initialized_reservoir_mask == uint8(0b111) &&
             (nrd_active_this_frame || state.antialias_pass->IsHistoryReadyForGraph()) &&
             !render_graph_boundary_frame) {
             RenderGraph graph(nrd_active_this_frame ? "Raytracing.PreDenoise" : "Raytracing.FrameCore");
-            const RTGraphFrameResources graph_resources = RegisterRTGraphFrameResources(graph, *state.rt_ctx);
-            const bool prepare_lights_added = state.prepare_light_pass->AddPasses(graph, *prepared_lights);
+            const RTGraphFrameResources graph_resources =
+                RegisterRTGraphFrameResources(graph, *state.rt_ctx, accepted_frame_setup);
+            const bool prepare_lights_added = state.prepare_light_pass->AddPasses(
+                graph,
+                *prepared_lights,
+                graph_resources.frame_setup.ready
+            );
             const bool gbuffer_added        = prepare_lights_added && state.g_buffer_pass->AddPasses(
                                                                    graph,
                                                                    graph_resources,
                                                                    *state.rt_ctx,
-                                                                   tlas_built_this_frame,
                                                                    state.normal_roughness_readable
                                                                );
             const bool lighting_added = gbuffer_added && state.lighting_pass->AddPasses(
@@ -869,7 +996,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                                                                   graph_resources.ldr_color,
                                                                   show_texture_params,
                                                                   selected_debug_texture,
-                                                                  state.rt_ctx->frame_rt.ldr_color
+                                                                  state.rt_ctx->frame_rt.ldr_color,
+                                                                  graph_resources.frame_setup.ready
                                                               ));
             const bool graph_passes_added = prepare_lights_added && gbuffer_added && lighting_added &&
                                             composition_added && antialias_added && tone_mapping_added &&
@@ -1168,11 +1296,6 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         IsCurrentlyRenderThread() ? EUiDrawExecutionThread::Render : EUiDrawExecutionThread::Game;
     RenderUiDrawFrame(cmd_list, state.output->GetView(), frame_packet.ui_draw_frame, ui_execution_thread);
 
-    if (state.rt_scene) {
-        state.rt_scene->AdvanceFrame();
-        std::swap(state.current_tlas_revision, state.previous_tlas_revision);
-    }
-
     time++;
     CmdSubmit frame_submit =
         cmd_list.Submit()
@@ -1220,6 +1343,25 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         ERHIExecSubmitFlags::FlushGPU,
         present_request ? &*present_request : nullptr
     );
+    if (frame_setup_linear_recorded && prepared_frame_setup) {
+        (void)state.frame_setup_pass->CommitAccepted(*prepared_frame_setup);
+        if (prepared_frame_setup->BuildsTlas()) {
+            state.current_tlas_revision = state.rt_instance_revision;
+            ++state.renderer_tlas_build_count;
+        } else {
+            ++state.renderer_tlas_skip_count;
+        }
+    }
+    if ((frame_setup_graph_recorded || frame_setup_linear_recorded) &&
+        state.rt_scene) {
+        // RaytracingScene is a ping-pong builder: the TLAS consumed by this
+        // accepted frame becomes GetPrevTlas(), while GetTlas() rotates to the
+        // slot that may need rebuilding next frame. Mirror that slot rotation
+        // in the revision pair instead of treating the names as immutable
+        // temporal roles.
+        state.rt_scene->AdvanceFrame();
+        std::swap(state.current_tlas_revision, state.previous_tlas_revision);
+    }
     if (prepared_lights && (linear_lighting_recorded || graph_primary_recorded)) {
         state.prepare_light_pass->CommitAcceptedFrame(*state.rt_ctx, std::move(*prepared_lights));
     }
@@ -1400,10 +1542,13 @@ void RaytracingRenderer::RefreshSceneRuntimeRefs() {
         state.b_feedback_valid       = false;
         state.current_tlas_revision  = RuntimeState::invalid_tlas_revision;
         state.previous_tlas_revision = RuntimeState::invalid_tlas_revision;
+        state.frame_setup_pass->ResetAcceptedResources();
     }
 }
 
-bool RaytracingRenderer::ExecuteSceneUpdates(SceneUpdateBatch& batch) {
+RaytracingRenderer::SceneUpdateResult RaytracingRenderer::ExecuteSceneUpdates(
+    SceneUpdateBatch& batch
+) {
     auto& state            = *runtime_state;
     bool  updated          = false;
     bool  rt_scene_updated = false;
@@ -1435,7 +1580,10 @@ bool RaytracingRenderer::ExecuteSceneUpdates(SceneUpdateBatch& batch) {
     if (rt_scene_updated && state.rt_scene) {
         state.current_tlas_revision = state.rt_instance_revision;
     }
-    return rt_scene_updated;
+    return SceneUpdateResult{
+        .gpu_resources_updated = updated,
+        .tlas_built             = rt_scene_updated
+    };
 }
 
 void RaytracingRenderer::RecreateFrameResources(uint2 new_extent) {

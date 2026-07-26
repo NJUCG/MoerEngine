@@ -277,6 +277,9 @@ bool LightingPass::AddPasses(
         return tlas && tlas->GetUnderlyingBuffer() != nullptr;
     };
     if (!has_backing_buffer(resources.tlas) || !has_backing_buffer(resources.prev_tlas) ||
+        !graph_resources.frame_setup.ready.IsValid() ||
+        !graph_resources.frame_setup.current_tlas.IsValid() ||
+        !graph_resources.frame_setup.previous_tlas.IsValid() ||
         !resources.constants_buf || !resources.light_reservoir_buf || !resources.ris_buf ||
         !resources.ris_light_data_buf || !resources.neighbor_offset_buf || !resources.light_mapping_buf ||
         !resources.light_data_buf || !resources.primitive_to_light_buf || !resources.diffuse_lighting ||
@@ -289,13 +292,8 @@ bool LightingPass::AddPasses(
     }
 
     const auto      constants = ImportRTGraphBuffer(graph, "RT.Lighting.constants", resources.constants_buf);
-    const BufferRef tlas_buffer(resources.tlas->GetUnderlyingBuffer());
-    const auto      tlas                = ImportRTGraphBuffer(graph, "RT.Lighting.tlas", tlas_buffer);
-    RenderGraph::BufferHandle prev_tlas = tlas;
-    if (resources.prev_tlas.Get() != resources.tlas.Get()) {
-        const BufferRef prev_tlas_buffer(resources.prev_tlas->GetUnderlyingBuffer());
-        prev_tlas = ImportRTGraphBuffer(graph, "RT.Lighting.prev_tlas", prev_tlas_buffer);
-    }
+    const auto      tlas      = graph_resources.frame_setup.current_tlas;
+    const auto      prev_tlas = graph_resources.frame_setup.previous_tlas;
     const auto light_reservoir =
         ImportRTGraphBuffer(graph, "RT.Lighting.light_reservoir", resources.light_reservoir_buf);
     const auto ris = ImportRTGraphBuffer(graph, "RT.Lighting.ris", resources.ris_buf);
@@ -326,14 +324,6 @@ bool LightingPass::AddPasses(
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    if (prev_tlas != tlas) {
-        graph.SetInitialState(
-            prev_tlas,
-            RenderGraph::BufferState::AccelerationStructureRead,
-            RenderGraph::QueueRole::Graphics,
-            RenderGraph::AccessMode::Read
-        );
-    }
     for (const auto texture : {
              graph_resources.previous_view_depth,
              graph_resources.previous_diffuse_albedo,
@@ -429,6 +419,7 @@ bool LightingPass::AddPasses(
                     .Read(constants, RenderGraph::BufferState::ShaderResource)
                     .Read(tlas, RenderGraph::BufferState::AccelerationStructureRead)
                     .Read(prev_tlas, RenderGraph::BufferState::AccelerationStructureRead)
+                    .Read(graph_resources.frame_setup.ready)
                     .ReadWrite(light_reservoir, RenderGraph::BufferState::UnorderedAccess)
                     .ReadWrite(ris, RenderGraph::BufferState::UnorderedAccess)
                     .ReadWrite(ris_light_data, RenderGraph::BufferState::UnorderedAccess)
@@ -511,14 +502,6 @@ bool LightingPass::AddPasses(
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    if (prev_tlas != tlas) {
-        graph.Export(
-            prev_tlas,
-            RenderGraph::BufferState::AccelerationStructureRead,
-            RenderGraph::QueueRole::Graphics,
-            RenderGraph::AccessMode::Read
-        );
-    }
     for (const auto buffer : {
              light_reservoir,
              ris,

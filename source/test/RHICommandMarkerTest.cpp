@@ -21,6 +21,71 @@ void Expect(bool condition, std::string_view message) {
     }
 }
 
+class RetainedTestBuffer final : public Buffer {
+public:
+    RetainedTestBuffer() :
+        Buffer(BufferInfo{4096, 1, EBufferUsageFlags::ACCELERATION_STRUCTURE}) {}
+
+    void SetName(const std::string_view) override {}
+};
+
+class RetainedTestTlas final : public RaytracingTlas {
+public:
+    explicit RetainedTestTlas(BufferRef buffer) : buffer(std::move(buffer)) {}
+
+    Buffer* GetUnderlyingBuffer() const override {
+        return buffer.Get();
+    }
+
+private:
+    BufferRef buffer;
+};
+
+class RetainedTestGeometry final : public RaytracingGeometry {
+public:
+    explicit RetainedTestGeometry(BufferRef buffer) :
+        RaytracingGeometry(RaytracingGeometryInfo{}),
+        buffer(std::move(buffer)) {}
+
+    Buffer* GetUnderlyingBuffer() const override {
+        return buffer.Get();
+    }
+
+private:
+    BufferRef buffer;
+};
+
+class RetainedTestScene final : public RaytracingScene {
+public:
+    RetainedTestScene(RaytracingTlasRef current, RaytracingTlasRef previous) :
+        current(std::move(current)),
+        previous(std::move(previous)) {}
+
+    RaytracingInstance& AddInstance() override {
+        throw std::logic_error("RetainedTestScene::AddInstance is not used");
+    }
+    void FreeInstance(uint) override {}
+    void MarkModified(uint) override {}
+    UniquePtr<Command> UpdateScene() override {
+        return {};
+    }
+    void AdvanceFrame() override {
+        std::swap(current, previous);
+    }
+    void RegisterGeometry(RaytracingGeometryRef) override {}
+    void UnregisterGeometry(RaytracingGeometryRef) override {}
+    RaytracingTlasRef GetTlas() const override {
+        return current;
+    }
+    RaytracingTlasRef GetPrevTlas() const override {
+        return previous;
+    }
+
+private:
+    RaytracingTlasRef current;
+    RaytracingTlasRef previous;
+};
+
 const ScopeCmd& ScopeAt(const CmdSubmit& submit, size_t index) {
     Expect(index < submit.cmds.size(), "scope command index is out of range");
     Expect(submit.cmds[index]->Type() == Command::EType::Scope, "expected a ScopeCmd");
@@ -153,6 +218,103 @@ void PointAndCsmMarkerNamesAreCompleteAndDisjoint() {
     }
 }
 
+void PreparedRaytracingUpdatesAreNullSafeAndOneShot() {
+    CommandList cmd_list;
+    cmd_list.UpdateRaytracingScene(RaytracingSceneRef{});
+    Expect(cmd_list.IsEmpty(), "a null ray tracing scene emitted a command");
+
+    auto prepared = MakeUnique<UpdateRaytracingSceneCmd>(
+        UnorderedMap<uint64, uint32>{},
+        RaytracingSceneRef{},
+        BufferRef{},
+        BufferRef{},
+        RaytracingTlasRef{},
+        Array<RaytracingGeometryRef>{},
+        Array<uint>{},
+        Array<byte>{},
+        0,
+        false
+    );
+    cmd_list.UpdateRaytracingScene(std::move(prepared));
+    Expect(!prepared, "prepared TLAS command ownership was not consumed");
+
+    CmdSubmit submit = cmd_list.Submit();
+    Expect(submit.cmds.size() == 1, "prepared TLAS command was not emitted exactly once");
+    Expect(
+        submit.cmds.front()->Type() == Command::EType::BuildTLAS,
+        "prepared TLAS command changed command type"
+    );
+}
+
+void PreparedRaytracingUpdatesRetainEveryNativeInput() {
+    BufferRef instance_buffer(MoerNew(RetainedTestBuffer)());
+    BufferRef scratch_buffer(MoerNew(RetainedTestBuffer)());
+    BufferRef tlas_buffer(MoerNew(RetainedTestBuffer)());
+    BufferRef previous_tlas_buffer(MoerNew(RetainedTestBuffer)());
+    BufferRef geometry_buffer(MoerNew(RetainedTestBuffer)());
+    RaytracingTlasRef tlas(MoerNew(RetainedTestTlas)(tlas_buffer));
+    RaytracingTlasRef previous_tlas(
+        MoerNew(RetainedTestTlas)(previous_tlas_buffer)
+    );
+    RaytracingGeometryRef geometry(
+        MoerNew(RetainedTestGeometry)(geometry_buffer)
+    );
+    RaytracingSceneRef scene(
+        MoerNew(RetainedTestScene)(tlas, previous_tlas)
+    );
+
+    const RaytracingScene*    scene_identity    = scene.Get();
+    const Buffer*             instance_identity = instance_buffer.Get();
+    const Buffer*             scratch_identity  = scratch_buffer.Get();
+    const RaytracingTlas*     tlas_identity     = tlas.Get();
+    const RaytracingGeometry* geometry_identity = geometry.Get();
+
+    auto prepared = MakeUnique<UpdateRaytracingSceneCmd>(
+        UnorderedMap<uint64, uint32>{{uint64(geometry.Get()), 1}},
+        scene,
+        instance_buffer,
+        scratch_buffer,
+        tlas,
+        Array<RaytracingGeometryRef>{geometry},
+        Array<uint>{0},
+        Array<byte>{},
+        1,
+        false
+    );
+    CommandList cmd_list;
+    cmd_list.UpdateRaytracingScene(std::move(prepared));
+
+    scene           = {};
+    instance_buffer = {};
+    scratch_buffer  = {};
+    tlas            = {};
+    previous_tlas   = {};
+    geometry        = {};
+    tlas_buffer     = {};
+    previous_tlas_buffer = {};
+    geometry_buffer = {};
+
+    CmdSubmit submit = cmd_list.Submit();
+    Expect(submit.cmds.size() == 1, "retained TLAS command was not emitted");
+    const auto* update =
+        static_cast<const UpdateRaytracingSceneCmd*>(submit.cmds.front().get());
+    Expect(update->Scene().Get() == scene_identity, "prepared update dropped its scene owner");
+    Expect(
+        update->InstanceBuffer().Get() == instance_identity,
+        "prepared update dropped its instance buffer owner"
+    );
+    Expect(
+        update->ScratchBuffer().Get() == scratch_identity,
+        "prepared update dropped its scratch buffer owner"
+    );
+    Expect(update->Tlas().Get() == tlas_identity, "prepared update dropped its TLAS owner");
+    Expect(
+        update->GeometryRefs().size() == 1 &&
+            update->GeometryRefs().front().Get() == geometry_identity,
+        "prepared update dropped a related geometry owner"
+    );
+}
+
 } // namespace
 
 int main() {
@@ -160,6 +322,8 @@ int main() {
         MarkerScopesAreBalancedColoredAndImmobile();
         ProfilingPhasesPreserveOneLogicalFrame();
         PointAndCsmMarkerNamesAreCompleteAndDisjoint();
+        PreparedRaytracingUpdatesAreNullSafeAndOneShot();
+        PreparedRaytracingUpdatesRetainEveryNativeInput();
         std::cout << "RHI command marker tests passed\n";
         return 0;
     } catch (const std::exception& error) {

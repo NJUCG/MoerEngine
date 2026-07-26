@@ -1524,6 +1524,7 @@ public:
     RENDER_API void BuildAccelerationStructures(Array<AccelerationStructureBuildParam>&& _params);
 
     RENDER_API void UpdateRaytracingScene(RaytracingSceneRef _scene);
+    RENDER_API void UpdateRaytracingScene(UniquePtr<Command>&& _prepared_update);
 
 #pragma endregion
 

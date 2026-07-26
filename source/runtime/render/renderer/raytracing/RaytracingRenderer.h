@@ -46,6 +46,10 @@ public:
 
 private:
     struct RuntimeState;
+    struct SceneUpdateResult {
+        bool gpu_resources_updated = false;
+        bool tlas_built             = false;
+    };
 
     RuntimeAssets&          runtime_assets;
     UniquePtr<RuntimeState> runtime_state;
@@ -60,7 +64,7 @@ private:
 
     void EnsureDebugUiRegistered(const EngineHooks& hooks);
     void RefreshSceneRuntimeRefs();
-    bool ExecuteSceneUpdates(SceneUpdateBatch& batch);
+    SceneUpdateResult ExecuteSceneUpdates(SceneUpdateBatch& batch);
     void RecreateFrameResources(uint2 new_extent);
 
     void DumpTextureToFile(

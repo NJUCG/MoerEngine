@@ -4167,6 +4167,208 @@ void TestRecordingPublicationFailureTerminatesGates(TestSuite& suite) {
     );
 }
 
+void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
+    constexpr std::string_view test_name = "frame setup token and TLAS boundary";
+    RenderGraph                graph("FrameSetupContract");
+    int                        bindless_identity = 0;
+    int                        tlas_identity     = 0;
+    int                        instance_identity = 0;
+    const auto bindless = graph.ImportToken("Bindless", &bindless_identity);
+    const auto tlas = graph.ImportBuffer(
+        "CurrentTLAS",
+        &tlas_identity,
+        RenderGraph::BufferDesc{.byte_size = 4096}
+    );
+    const auto instances = graph.ImportBuffer(
+        "TLASInstances",
+        &instance_identity,
+        RenderGraph::BufferDesc{.byte_size = 4096}
+    );
+    graph.SetInitialState(
+        tlas,
+        RenderGraph::BufferState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None
+    );
+    graph.SetInitialState(
+        instances,
+        RenderGraph::BufferState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None
+    );
+
+    const auto update = graph.AddRecordPass(
+        "UpdateBindless",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Write(bindless).SideEffect();
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    const auto normalize = graph.AddRecordPass(
+        "NormalizeScene",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Read(bindless).SideEffect();
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    const auto build = graph.AddRecordPass(
+        "BuildTLAS",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.DependsOn(normalize)
+                .Read(bindless)
+                .Write(
+                    instances,
+                    RenderGraph::BufferState::UnorderedAccess
+                )
+                .Write(
+                    tlas,
+                    RenderGraph::BufferState::AccelerationStructureWrite
+                );
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    graph.Export(
+        tlas,
+        RenderGraph::BufferState::AccelerationStructureRead,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    graph.Export(
+        instances,
+        RenderGraph::BufferState::AccelerationStructureBuildInput,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            update,
+            normalize,
+            RenderGraph::EdgeReasonKind::ReadAfterWrite,
+            bindless.Untyped()
+        ),
+        test_name,
+        "bindless update must be a RAW predecessor of scene normalization"
+    );
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            normalize,
+            build,
+            RenderGraph::EdgeReasonKind::Explicit
+        ),
+        test_name,
+        "BuildTLAS must retain the explicit normalization dependency"
+    );
+    const auto* import_barrier =
+        FindBarrier(plan, tlas.Untyped(), {}, build);
+    const auto* export_barrier =
+        FindBarrier(plan, tlas.Untyped(), build, {});
+    suite.Check(
+        import_barrier != nullptr && import_barrier->state_transition &&
+            import_barrier->after_state ==
+                RenderGraph::ResourceState::Buffer(
+                    RenderGraph::BufferState::AccelerationStructureWrite
+                ),
+        test_name,
+        "BuildTLAS must acquire an AS-write destination from the import boundary"
+    );
+    suite.Check(
+        export_barrier != nullptr && export_barrier->state_transition &&
+            export_barrier->after_state ==
+                RenderGraph::ResourceState::Buffer(
+                    RenderGraph::BufferState::AccelerationStructureRead
+                ),
+        test_name,
+        "FrameSetup must export TLAS as an AS-readable consumer boundary"
+    );
+    const auto* instance_import_barrier =
+        FindBarrier(plan, instances.Untyped(), {}, build);
+    suite.Check(
+        instance_import_barrier != nullptr &&
+            instance_import_barrier->state_transition &&
+            instance_import_barrier->after_state ==
+                RenderGraph::ResourceState::Buffer(
+                    RenderGraph::BufferState::UnorderedAccess
+                ),
+        test_name,
+        "a fresh TLAS instance payload must be a write-only producer"
+    );
+
+    RenderGraph next_graph("PrimaryContract");
+    const auto  next_bindless =
+        next_graph.ImportToken("Bindless", &bindless_identity);
+    suite.Check(
+        next_bindless.Untyped().owner_id != bindless.Untyped().owner_id,
+        test_name,
+        "same physical token identity in another graph must remain a distinct transaction"
+    );
+
+    RenderGraph external_graph("ExternalTLASNormalizeContract");
+    int         external_tlas_identity = 0;
+    const auto  external_tlas = external_graph.ImportBuffer(
+        "ExternallyBuiltTLAS",
+        &external_tlas_identity,
+        RenderGraph::BufferDesc{.byte_size = 4096}
+    );
+    external_graph.SetInitialState(
+        external_tlas,
+        RenderGraph::BufferState::AccelerationStructureWrite,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Write
+    );
+    const auto external_normalize = external_graph.AddRecordPass(
+        "NormalizeExternalTLAS",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder
+                .Read(
+                    external_tlas,
+                    RenderGraph::BufferState::AccelerationStructureRead
+                )
+                .SideEffect();
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    external_graph.Export(
+        external_tlas,
+        RenderGraph::BufferState::AccelerationStructureRead,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    suite.Check(
+        external_graph.Compile(),
+        test_name,
+        external_graph.GetCompileError()
+    );
+    const auto* external_import_barrier = FindBarrier(
+        external_graph.GetCompiledPlan(),
+        external_tlas.Untyped(),
+        {},
+        external_normalize
+    );
+    suite.Check(
+        external_import_barrier != nullptr &&
+            external_import_barrier->state_transition &&
+            external_import_barrier->before_state ==
+                RenderGraph::ResourceState::Buffer(
+                    RenderGraph::BufferState::AccelerationStructureWrite
+                ) &&
+            external_import_barrier->after_state ==
+                RenderGraph::ResourceState::Buffer(
+                    RenderGraph::BufferState::AccelerationStructureRead
+                ),
+        test_name,
+        "an externally built TLAS must normalize AS-write to AS-read"
+    );
+}
+
 } // namespace
 
 int main() {
@@ -4229,6 +4431,7 @@ int main() {
     TestParallelRecordingDispatchAndJoin(suite);
     TestCpuRecordingDependenciesSplitParallelGroups(suite);
     TestRecordingPublicationFailureTerminatesGates(suite);
+    TestFrameSetupTokenAndTlasBoundaryContract(suite);
 
     if (suite.FailureCount() != 0) {
         std::cerr << "TestRenderGraph: " << suite.FailureCount() << " failure(s)\n";

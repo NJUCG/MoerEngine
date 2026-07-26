@@ -544,12 +544,17 @@ void PrepareLightPass::RecordAcceptedBoundary(CommandList& cmd_list, const Prepa
     );
 }
 
-bool PrepareLightPass::AddPasses(RenderGraph& graph, const PreparedCommand& command) {
+bool PrepareLightPass::AddPasses(
+    RenderGraph&             graph,
+    const PreparedCommand&   command,
+    RenderGraph::TokenHandle frame_setup_ready
+) {
     const auto payload = command.record;
     if (!payload || !payload->resources.primitive_to_light_buf || !payload->resources.task_buf ||
         !payload->resources.prim_light_buf || !payload->resources.light_mapping_buf ||
         !payload->resources.light_data_buf || !payload->resources.local_light_pdf_tex ||
-        !payload->resources.bindless_array || !payload->resources.shader_utils) {
+        !payload->resources.bindless_array || !payload->resources.shader_utils ||
+        !frame_setup_ready.IsValid()) {
         return false;
     }
     if (payload->reads_scene_geometry &&
@@ -572,9 +577,6 @@ bool PrepareLightPass::AddPasses(RenderGraph& graph, const PreparedCommand& comm
     const auto local_light_pdf = ImportRTGraphTexture(
         graph, "RT.PrepareLights.local_light_pdf", payload->resources.local_light_pdf_tex
     );
-    const auto bindless =
-        graph.ImportToken("RT.PrepareLights.bindless", payload->resources.bindless_array.Get());
-
     RenderGraph::BufferHandle         primitive_buf{};
     RenderGraph::BufferHandle         instance_buf{};
     RenderGraph::BufferHandle         material_buf{};
@@ -673,7 +675,8 @@ bool PrepareLightPass::AddPasses(RenderGraph& graph, const PreparedCommand& comm
     graph.AddRecordPass(
         "RT.PrepareLights.UploadInputs",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+                .Read(frame_setup_ready);
             if (!payload->primitive_to_light.empty()) {
                 builder.Write(primitive_to_light, RenderGraph::BufferState::TransferDestination);
             }
@@ -695,6 +698,7 @@ bool PrepareLightPass::AddPasses(RenderGraph& graph, const PreparedCommand& comm
         "RT.PrepareLights.ClearOutputs",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+                .Read(frame_setup_ready)
                 .Write(light_mapping, RenderGraph::BufferState::TransferDestination)
                 .Write(local_light_pdf, RenderGraph::TextureState::TransferDestination);
             if (payload->reset_light_history) {
@@ -713,6 +717,7 @@ bool PrepareLightPass::AddPasses(RenderGraph& graph, const PreparedCommand& comm
             "RT.PrepareLights.Dispatch",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+                    .Read(frame_setup_ready)
                     .Read(tasks, RenderGraph::BufferState::ShaderResource)
                     .ReadWrite(light_data, RenderGraph::BufferState::UnorderedAccess)
                     .ReadWrite(light_mapping, RenderGraph::BufferState::UnorderedAccess)
@@ -729,8 +734,7 @@ bool PrepareLightPass::AddPasses(RenderGraph& graph, const PreparedCommand& comm
                         .Read(instance_buf, RenderGraph::BufferState::ShaderResource)
                         .Read(material_buf, RenderGraph::BufferState::ShaderResource)
                         .Read(position_buf, RenderGraph::BufferState::ShaderResource)
-                        .Read(index_buf, RenderGraph::BufferState::ShaderResource)
-                        .Read(bindless);
+                        .Read(index_buf, RenderGraph::BufferState::ShaderResource);
                     if (texcoord0_buf.IsValid()) {
                         builder.Read(texcoord0_buf, RenderGraph::BufferState::ShaderResource);
                     }
@@ -753,8 +757,9 @@ bool PrepareLightPass::AddPasses(RenderGraph& graph, const PreparedCommand& comm
         graph.AddRecordPass(
             std::format("RT.PrepareLights.GenerateMips.{}", dispatch.source_mip),
             [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
-                    .Read(
+                    builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+                        .Read(frame_setup_ready)
+                        .Read(
                         local_light_pdf,
                         RenderGraph::TextureState::UnorderedAccess,
                         RenderGraph::TextureRange::Mips(dispatch.source_mip, 1)

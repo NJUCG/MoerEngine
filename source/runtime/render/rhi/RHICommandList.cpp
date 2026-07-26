@@ -554,7 +554,23 @@ void CommandList::BuildAccelerationStructures(Array<AccelerationStructureBuildPa
 }
 
 void CommandList::UpdateRaytracingScene(RaytracingSceneRef _scene) {
-    commands.emplace_back(_scene->UpdateScene());
+    if (!_scene) {
+        return;
+    }
+    UniquePtr<Command> command = _scene->UpdateScene();
+    if (command) {
+        commands.emplace_back(std::move(command));
+    }
+}
+
+void CommandList::UpdateRaytracingScene(UniquePtr<Command>&& _prepared_update) {
+    assert(
+        _prepared_update && _prepared_update->Type() == Command::EType::BuildTLAS &&
+        "Prepared ray tracing scene update must be a BuildTLAS command"
+    );
+    if (_prepared_update && _prepared_update->Type() == Command::EType::BuildTLAS) {
+        commands.emplace_back(std::move(_prepared_update));
+    }
 }
 
 #pragma endregion

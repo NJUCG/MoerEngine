@@ -147,6 +147,7 @@ bool CompositionPass::AddPasses(
         !resources.diffuse_lighting || !resources.specular_lighting ||
         !resources.denoised_diffuse_lighting ||
         !resources.denoised_specular_lighting || !resources.bindless_array ||
+        !graph_resources.frame_setup.ready.IsValid() ||
         (command.constants.enable_env_map != 0 &&
          (!resources.env_map || !graph_resources.env_map.IsValid()))) {
         return false;
@@ -199,6 +200,7 @@ bool CompositionPass::AddPasses(
                     RenderGraph::PipelineType::Compute
                 )
                 .Read(constants, RenderGraph::BufferState::ShaderResource)
+                .Read(graph_resources.frame_setup.ready)
                 .Write(
                     graph_resources.hdr_color,
                     RenderGraph::TextureState::UnorderedAccess

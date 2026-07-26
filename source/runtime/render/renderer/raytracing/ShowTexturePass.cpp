@@ -117,12 +117,14 @@ bool ShowTexturePass::AddPass(
     RenderGraph::TextureHandle target_handle,
     ShowTextureParams          params,
     const TextureRef&          source,
-    const TextureRef&          target
+    const TextureRef&          target,
+    RenderGraph::TokenHandle   frame_setup_ready
 ) {
     const auto owner = recording_owner;
     if (!owner || !owner->bindless_array ||
         !CanRecordShowTexture(source, target) ||
-        !source_handle.IsValid() || !target_handle.IsValid()) {
+        !source_handle.IsValid() || !target_handle.IsValid() ||
+        !frame_setup_ready.IsValid()) {
         return false;
     }
 
@@ -145,6 +147,7 @@ bool ShowTexturePass::AddPass(
                     RenderGraph::QueueRole::Graphics,
                     RenderGraph::PipelineType::Graphics
                 )
+                .Read(frame_setup_ready)
                 .Read(source_handle, RenderGraph::TextureState::Sampled)
                 .Write(target_handle, RenderGraph::TextureState::RenderTarget);
         },
