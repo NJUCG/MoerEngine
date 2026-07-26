@@ -1,19 +1,12 @@
 #pragma once
 
 #include "RTResource.h"
-#include "RaytracingFrameSetupPass.h"
+#include "RaytracingGraphTypes.h"
 #include "rendergraph/RenderGraph.h"
 
 #include <cassert>
 
 namespace Moer::Render::Raytracing {
-
-struct RTGraphFrameSetupResources {
-    RenderGraph::TokenHandle  ready{};
-    RenderGraph::BufferHandle current_tlas{};
-    RenderGraph::BufferHandle previous_tlas{};
-    RenderGraph::PassHandle   accepted_producer{};
-};
 
 struct RTGraphFrameResources {
     bool current_frame{};
@@ -101,9 +94,9 @@ inline RenderGraph::BufferHandle ImportRTGraphBuffer(
 }
 
 inline RTGraphFrameResources RegisterRTGraphFrameResources(
-    RenderGraph&                                                        graph,
-    const RTContext&                                                    rt_ctx,
-    SharedPtr<const RaytracingFrameSetupPass::AcceptedSnapshot> accepted_setup
+    RenderGraph&                       graph,
+    const RTContext&                   rt_ctx,
+    const RTGraphFrameSetupResources& frame_setup
 ) {
     const FrameResources& frame = rt_ctx.frame_rt;
     RTGraphFrameResources resources{
@@ -168,83 +161,7 @@ inline RTGraphFrameResources RegisterRTGraphFrameResources(
         resources.current_frame ? resources.prev_specular_roughness :
                                   resources.specular_roughness;
     resources.previous_normal = resources.current_frame ? resources.prev_normal : resources.normal;
-
-    if (!accepted_setup || !accepted_setup->IsValid()) {
-        return resources;
-    }
-
-    resources.frame_setup.current_tlas = ImportRTGraphBuffer(
-        graph,
-        "RT.FrameSetup.accepted_current_tlas",
-        accepted_setup->current_tlas_buffer
-    );
-    resources.frame_setup.previous_tlas = resources.frame_setup.current_tlas;
-    if (accepted_setup->previous_tlas_buffer.Get() !=
-        accepted_setup->current_tlas_buffer.Get()) {
-        resources.frame_setup.previous_tlas = ImportRTGraphBuffer(
-            graph,
-            "RT.FrameSetup.accepted_previous_tlas",
-            accepted_setup->previous_tlas_buffer
-        );
-    }
-    graph.SetInitialState(
-        resources.frame_setup.current_tlas,
-        RenderGraph::BufferState::AccelerationStructureRead,
-        RenderGraph::QueueRole::Graphics,
-        RenderGraph::AccessMode::Read
-    );
-    if (resources.frame_setup.previous_tlas != resources.frame_setup.current_tlas) {
-        graph.SetInitialState(
-            resources.frame_setup.previous_tlas,
-            RenderGraph::BufferState::AccelerationStructureRead,
-            RenderGraph::QueueRole::Graphics,
-            RenderGraph::AccessMode::Read
-        );
-    }
-
-    resources.frame_setup.ready =
-        graph.CreateTransientToken("RT.FrameSetup.accepted");
-    resources.frame_setup.accepted_producer = graph.AddRecordPass(
-        "RT.FrameSetup.AcceptedProducer",
-        [setup = resources.frame_setup](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(
-                       RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Compute
-                   )
-                .Read(
-                    setup.current_tlas,
-                    RenderGraph::BufferState::AccelerationStructureRead
-                )
-                .Read(
-                    setup.previous_tlas,
-                    RenderGraph::BufferState::AccelerationStructureRead
-                )
-                .Write(setup.ready)
-                .SideEffect();
-        },
-        [accepted_setup = std::move(accepted_setup)](CommandList&) {
-            // The no-op producer turns the independently accepted FrameSetup
-            // transaction into a primary-graph dependency root while keeping
-            // its scene/TLAS owners alive through managed recording.
-            (void)accepted_setup;
-        },
-        RenderGraph::PassExecutionClass::SerialRecord
-    );
-    graph.Export(
-        resources.frame_setup.current_tlas,
-        RenderGraph::BufferState::AccelerationStructureRead,
-        RenderGraph::QueueRole::Graphics,
-        RenderGraph::AccessMode::Read
-    );
-    if (resources.frame_setup.previous_tlas != resources.frame_setup.current_tlas) {
-        graph.Export(
-            resources.frame_setup.previous_tlas,
-            RenderGraph::BufferState::AccelerationStructureRead,
-            RenderGraph::QueueRole::Graphics,
-            RenderGraph::AccessMode::Read
-        );
-    }
-    graph.Export(resources.frame_setup.ready);
+    resources.frame_setup = frame_setup;
     return resources;
 }
 

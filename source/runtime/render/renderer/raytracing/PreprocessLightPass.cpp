@@ -81,13 +81,6 @@ static_assert(RoundUpCapacity(129, 128) == 256);
 static_assert(RoundUpCapacity(1023, 1024) == 1024);
 static_assert(RoundUpCapacity(1025, 1024) == 2048);
 
-RenderGraph::TextureState PreferredReadState(const TextureRef& texture) {
-    const auto usage = texture->GetUsage();
-    const bool supports_uav =
-        (usage & ETextureUsageFlags::UNORDERED_ACCESS) == ETextureUsageFlags::UNORDERED_ACCESS;
-    return supports_uav ? RenderGraph::TextureState::ShaderResource : RenderGraph::TextureState::Sampled;
-}
-
 void RequireBufferCapacity(const BufferRef& buffer, size_t required_elements, std::string_view name) {
     if (!buffer || buffer->GetNumElement() < required_elements) {
         throw std::runtime_error(std::format(
@@ -545,24 +538,59 @@ void PrepareLightPass::RecordAcceptedBoundary(CommandList& cmd_list, const Prepa
 }
 
 bool PrepareLightPass::AddPasses(
-    RenderGraph&             graph,
-    const PreparedCommand&   command,
-    RenderGraph::TokenHandle frame_setup_ready
+    RenderGraph&                       graph,
+    const PreparedCommand&             command,
+    const RTGraphFrameSetupResources& frame_setup
 ) {
     const auto payload = command.record;
     if (!payload || !payload->resources.primitive_to_light_buf || !payload->resources.task_buf ||
         !payload->resources.prim_light_buf || !payload->resources.light_mapping_buf ||
         !payload->resources.light_data_buf || !payload->resources.local_light_pdf_tex ||
         !payload->resources.bindless_array || !payload->resources.shader_utils ||
-        !frame_setup_ready.IsValid()) {
+        !frame_setup.IsValid()) {
         return false;
     }
     if (payload->reads_scene_geometry &&
         (!payload->resources.primitive_buf || !payload->resources.instance_buf ||
          !payload->resources.material_buf || !payload->resources.position_buf ||
-         !payload->resources.index_buf)) {
+         !payload->resources.index_buf ||
+         frame_setup.scene.primitive_resource.Get() !=
+             payload->resources.primitive_buf.Get() ||
+         frame_setup.scene.instance_resource.Get() !=
+             payload->resources.instance_buf.Get() ||
+         frame_setup.scene.material_resource.Get() !=
+             payload->resources.material_buf.Get() ||
+         frame_setup.scene.position_resource.Get() !=
+             payload->resources.position_buf.Get() ||
+         frame_setup.scene.index_resource.Get() !=
+             payload->resources.index_buf.Get() ||
+         !frame_setup.scene.primitive.IsValid() ||
+         !frame_setup.scene.instance.IsValid() ||
+         !frame_setup.scene.material.IsValid() ||
+         !frame_setup.scene.position.IsValid() ||
+         !frame_setup.scene.index.IsValid() ||
+         (payload->resources.texcoord0_buf &&
+          (!frame_setup.scene.texcoord0.IsValid() ||
+           frame_setup.scene.texcoord0_resource.Get() !=
+               payload->resources.texcoord0_buf.Get())) ||
+         frame_setup.scene.material_textures.size() !=
+             payload->resources.material_textures.size() ||
+         frame_setup.scene.material_texture_resources.size() !=
+             payload->resources.material_textures.size())) {
         return false;
     }
+    if (payload->reads_scene_geometry) {
+        for (size_t index = 0;
+             index < payload->resources.material_textures.size();
+             ++index) {
+            if (frame_setup.scene.material_texture_resources[index].Get() !=
+                    payload->resources.material_textures[index].Get() ||
+                !frame_setup.scene.material_textures[index].IsValid()) {
+                return false;
+            }
+        }
+    }
+    const RenderGraph::TokenHandle frame_setup_ready = frame_setup.ready;
 
     const auto primitive_to_light = ImportRTGraphBuffer(
         graph, "RT.PrepareLights.primitive_to_light", payload->resources.primitive_to_light_buf
@@ -585,29 +613,15 @@ bool PrepareLightPass::AddPasses(
     RenderGraph::BufferHandle         texcoord0_buf{};
     Array<RenderGraph::TextureHandle> material_textures;
     if (payload->reads_scene_geometry) {
-        primitive_buf =
-            ImportRTGraphBuffer(graph, "RT.PrepareLights.scene_primitives", payload->resources.primitive_buf);
-        instance_buf =
-            ImportRTGraphBuffer(graph, "RT.PrepareLights.scene_instances", payload->resources.instance_buf);
-        material_buf =
-            ImportRTGraphBuffer(graph, "RT.PrepareLights.scene_materials", payload->resources.material_buf);
-        position_buf =
-            ImportRTGraphBuffer(graph, "RT.PrepareLights.scene_positions", payload->resources.position_buf);
-        index_buf =
-            ImportRTGraphBuffer(graph, "RT.PrepareLights.scene_indices", payload->resources.index_buf);
+        primitive_buf = frame_setup.scene.primitive;
+        instance_buf  = frame_setup.scene.instance;
+        material_buf  = frame_setup.scene.material;
+        position_buf  = frame_setup.scene.position;
+        index_buf     = frame_setup.scene.index;
         if (payload->resources.texcoord0_buf) {
-            texcoord0_buf = ImportRTGraphBuffer(
-                graph, "RT.PrepareLights.scene_texcoords", payload->resources.texcoord0_buf
-            );
+            texcoord0_buf = frame_setup.scene.texcoord0;
         }
-        material_textures.reserve(payload->resources.material_textures.size());
-        for (size_t index = 0; index < payload->resources.material_textures.size(); ++index) {
-            material_textures.emplace_back(ImportRTGraphTexture(
-                graph,
-                std::format("RT.PrepareLights.material_texture.{}", index),
-                payload->resources.material_textures[index]
-            ));
-        }
+        material_textures = frame_setup.scene.material_textures;
     }
 
     const auto initial_persistent_buffer = [&](RenderGraph::BufferHandle buffer, bool initialized) {
@@ -631,46 +645,6 @@ bool PrepareLightPass::AddPasses(
                                                RenderGraph::QueueRole::None,
         payload->local_light_pdf_initialized ? RenderGraph::AccessMode::Read : RenderGraph::AccessMode::None
     );
-
-    const auto initial_scene_buffer = [&](RenderGraph::BufferHandle buffer) {
-        graph.SetInitialState(
-            buffer,
-            RenderGraph::BufferState::ShaderResource,
-            RenderGraph::QueueRole::Graphics,
-            RenderGraph::AccessMode::Read
-        );
-        graph.Export(
-            buffer,
-            RenderGraph::BufferState::ShaderResource,
-            RenderGraph::QueueRole::Graphics,
-            RenderGraph::AccessMode::Read
-        );
-    };
-    if (payload->reads_scene_geometry) {
-        for (const auto buffer : {
-                 primitive_buf,
-                 instance_buf,
-                 material_buf,
-                 position_buf,
-                 index_buf,
-             }) {
-            initial_scene_buffer(buffer);
-        }
-        if (texcoord0_buf.IsValid()) {
-            initial_scene_buffer(texcoord0_buf);
-        }
-        for (size_t index = 0; index < material_textures.size(); ++index) {
-            const RenderGraph::TextureHandle texture = material_textures[index];
-            const RenderGraph::TextureState  read_state =
-                PreferredReadState(payload->resources.material_textures[index]);
-            graph.SetInitialState(
-                texture, read_state, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read
-            );
-            graph.Export(
-                texture, read_state, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read
-            );
-        }
-    }
 
     graph.AddRecordPass(
         "RT.PrepareLights.UploadInputs",

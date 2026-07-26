@@ -2,6 +2,7 @@
 #define MOER_PREPARE_LIGHTS_PASS_H
 
 #include "RTResource.h"
+#include "RaytracingGraphTypes.h"
 #include "RaytracingSceneFrameSnapshot.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
@@ -115,9 +116,9 @@ public:
     void RecordLightingInputTransitions(CommandList& cmd_list, const PreparedCommand& command);
     void RecordAcceptedBoundary(CommandList& cmd_list, const PreparedCommand& command);
     bool AddPasses(
-        RenderGraph&             graph,
-        const PreparedCommand&   command,
-        RenderGraph::TokenHandle frame_setup_ready
+        RenderGraph&                       graph,
+        const PreparedCommand&             command,
+        const RTGraphFrameSetupResources& frame_setup
     );
     void CommitAcceptedFrame(RTContext& rt_ctx, PreparedCommand&& command) noexcept;
 

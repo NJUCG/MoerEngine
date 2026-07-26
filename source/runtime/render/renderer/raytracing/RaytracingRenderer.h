@@ -49,6 +49,7 @@ private:
     struct SceneUpdateResult {
         bool gpu_resources_updated = false;
         bool tlas_built             = false;
+        bool rt_scene_replaced      = false;
     };
 
     RuntimeAssets&          runtime_assets;
@@ -63,7 +64,7 @@ private:
     bool                                   export_request_in_flight        = false;
 
     void EnsureDebugUiRegistered(const EngineHooks& hooks);
-    void RefreshSceneRuntimeRefs();
+    bool RefreshSceneRuntimeRefs();
     SceneUpdateResult ExecuteSceneUpdates(SceneUpdateBatch& batch);
     void RecreateFrameResources(uint2 new_extent);
 

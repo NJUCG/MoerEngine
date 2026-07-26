@@ -4173,9 +4173,16 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
     int                        bindless_identity = 0;
     int                        tlas_identity     = 0;
     int                        instance_identity = 0;
+    int                        scene_identity    = 0;
     const auto bindless = graph.ImportToken("Bindless", &bindless_identity);
+    const auto ready    = graph.CreateTransientToken("FrameSetupReady");
     const auto tlas = graph.ImportBuffer(
         "CurrentTLAS",
+        &tlas_identity,
+        RenderGraph::BufferDesc{.byte_size = 4096}
+    );
+    const auto previous_tlas = graph.ImportBuffer(
+        "PreviousTLAS",
         &tlas_identity,
         RenderGraph::BufferDesc{.byte_size = 4096}
     );
@@ -4183,6 +4190,16 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
         "TLASInstances",
         &instance_identity,
         RenderGraph::BufferDesc{.byte_size = 4096}
+    );
+    const auto scene = graph.ImportBuffer(
+        "SceneInstances",
+        &scene_identity,
+        RenderGraph::BufferDesc{.byte_size = 4096}
+    );
+    suite.Check(
+        previous_tlas == tlas,
+        test_name,
+        "current/previous TLAS aliases must reuse one graph-local handle"
     );
     graph.SetInitialState(
         tlas,
@@ -4196,6 +4213,12 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
+    graph.SetInitialState(
+        scene,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
 
     const auto update = graph.AddRecordPass(
         "UpdateBindless",
@@ -4208,7 +4231,10 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
     const auto normalize = graph.AddRecordPass(
         "NormalizeScene",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(bindless).SideEffect();
+            builder
+                .Read(bindless)
+                .Read(scene, RenderGraph::BufferState::ShaderResource)
+                .SideEffect();
         },
         [](Moer::Render::CommandList&) {},
         RenderGraph::PassExecutionClass::SerialRecord
@@ -4229,6 +4255,38 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
         },
         [](Moer::Render::CommandList&) {},
         RenderGraph::PassExecutionClass::SerialRecord
+    );
+    const auto finalize = graph.AddRecordPass(
+        "FinalizeFrameSetup",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.DependsOn(normalize)
+                .DependsOn(build)
+                .Read(bindless)
+                .Read(
+                    tlas,
+                    RenderGraph::BufferState::AccelerationStructureRead
+                )
+                .Write(ready)
+                .SideEffect();
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    const auto prepare_lights = graph.AddRecordPass(
+        "PrepareLights",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder
+                .Read(ready)
+                .Read(bindless)
+                .Read(
+                    previous_tlas,
+                    RenderGraph::BufferState::AccelerationStructureRead
+                )
+                .Read(scene, RenderGraph::BufferState::ShaderResource)
+                .SideEffect();
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
     graph.Export(
         tlas,
@@ -4266,10 +4324,32 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
         test_name,
         "BuildTLAS must retain the explicit normalization dependency"
     );
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            build,
+            finalize,
+            RenderGraph::EdgeReasonKind::ReadAfterWrite,
+            tlas.Untyped()
+        ),
+        test_name,
+        "FinalizeFrameSetup must normalize the built TLAS through a RAW edge"
+    );
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            finalize,
+            prepare_lights,
+            RenderGraph::EdgeReasonKind::ReadAfterWrite,
+            ready.Untyped()
+        ),
+        test_name,
+        "PrepareLights must consume the same-transaction FrameSetup ready token"
+    );
     const auto* import_barrier =
         FindBarrier(plan, tlas.Untyped(), {}, build);
-    const auto* export_barrier =
-        FindBarrier(plan, tlas.Untyped(), build, {});
+    const auto* consumer_barrier =
+        FindBarrier(plan, tlas.Untyped(), build, finalize);
     suite.Check(
         import_barrier != nullptr && import_barrier->state_transition &&
             import_barrier->after_state ==
@@ -4280,13 +4360,13 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
         "BuildTLAS must acquire an AS-write destination from the import boundary"
     );
     suite.Check(
-        export_barrier != nullptr && export_barrier->state_transition &&
-            export_barrier->after_state ==
+        consumer_barrier != nullptr && consumer_barrier->state_transition &&
+            consumer_barrier->after_state ==
                 RenderGraph::ResourceState::Buffer(
                     RenderGraph::BufferState::AccelerationStructureRead
                 ),
         test_name,
-        "FrameSetup must export TLAS as an AS-readable consumer boundary"
+        "FinalizeFrameSetup must establish the AS-readable consumer boundary"
     );
     const auto* instance_import_barrier =
         FindBarrier(plan, instances.Untyped(), {}, build);
@@ -4308,6 +4388,82 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
         next_bindless.Untyped().owner_id != bindless.Untyped().owner_id,
         test_name,
         "same physical token identity in another graph must remain a distinct transaction"
+    );
+
+    RenderGraph scene_update_graph("ExternalSceneReadBoundaryContract");
+    int         updated_scene_identity = 0;
+    int         stable_scene_identity  = 0;
+    const auto  updated_scene = scene_update_graph.ImportBuffer(
+        "UpdatedScene",
+        &updated_scene_identity,
+        RenderGraph::BufferDesc{.byte_size = 4096}
+    );
+    const auto stable_scene = scene_update_graph.ImportBuffer(
+        "StableScene",
+        &stable_scene_identity,
+        RenderGraph::BufferDesc{.byte_size = 4096}
+    );
+    scene_update_graph.SetInitialState(
+        updated_scene,
+        RenderGraph::BufferState::TransferDestination,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Write
+    );
+    scene_update_graph.SetInitialState(
+        stable_scene,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    const auto scene_read_boundary = scene_update_graph.AddRecordPass(
+        "PublishSceneReads",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder
+                .Read(updated_scene, RenderGraph::BufferState::ShaderResource)
+                .Read(stable_scene, RenderGraph::BufferState::ShaderResource)
+                .SideEffect();
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    suite.Check(
+        scene_update_graph.Compile(),
+        test_name,
+        scene_update_graph.GetCompileError()
+    );
+    const auto* updated_scene_barrier = FindBarrier(
+        scene_update_graph.GetCompiledPlan(),
+        updated_scene.Untyped(),
+        {},
+        scene_read_boundary
+    );
+    suite.Check(
+        updated_scene_barrier != nullptr &&
+            updated_scene_barrier->state_transition &&
+            updated_scene_barrier->memory_dependency &&
+            updated_scene_barrier->before_state ==
+                RenderGraph::ResourceState::Buffer(
+                    RenderGraph::BufferState::TransferDestination
+                ) &&
+            updated_scene_barrier->after_state ==
+                RenderGraph::ResourceState::Buffer(
+                    RenderGraph::BufferState::ShaderResource
+                ),
+        test_name,
+        "an uploaded scene buffer must publish transfer-write to shader-read"
+    );
+    const auto* stable_scene_boundary = FindBarrier(
+        scene_update_graph.GetCompiledPlan(),
+        stable_scene.Untyped(),
+        {},
+        scene_read_boundary
+    );
+    suite.Check(
+        stable_scene_boundary == nullptr ||
+            (!stable_scene_boundary->state_transition &&
+             !stable_scene_boundary->memory_dependency),
+        test_name,
+        "an untouched shader-readable scene buffer must not invent a write boundary"
     );
 
     RenderGraph external_graph("ExternalTLASNormalizeContract");

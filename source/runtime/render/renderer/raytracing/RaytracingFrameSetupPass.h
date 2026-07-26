@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RTResource.h"
+#include "RaytracingGraphTypes.h"
 #include "misc/STL.h"
 #include "rendergraph/RenderGraph.h"
 #include "rhi/RHICommand.h"
@@ -12,22 +13,6 @@ namespace Moer::Render::Raytracing {
 
 class RaytracingFrameSetupPass {
 public:
-    struct AcceptedSnapshot {
-        BindlessArrayRef   bindless_array{};
-        RaytracingSceneRef scene{};
-        RaytracingTlasRef  current_tlas{};
-        RaytracingTlasRef  previous_tlas{};
-        BufferRef          current_tlas_buffer{};
-        BufferRef          previous_tlas_buffer{};
-        uint64             tlas_revision = 0;
-        bool               tlas_built    = false;
-
-        [[nodiscard]] bool IsValid() const {
-            return bindless_array && scene && current_tlas && previous_tlas &&
-                   current_tlas_buffer && previous_tlas_buffer;
-        }
-    };
-
     struct RecordPayload {
         BindlessArrayRef   bindless_array{};
         RaytracingSceneRef scene{};
@@ -40,8 +25,7 @@ public:
 
         Array<RaytracingGeometryRef> geometries;
         Array<BufferRef>             geometry_buffers;
-        Array<BufferRef>             scene_buffers;
-        Array<TextureRef>            scene_textures;
+        RaytracingBindlessResources  scene_resources{};
 
         UniquePtr<Command> build_tlas_command{};
         std::atomic_bool   build_tlas_recorded{false};
@@ -49,7 +33,7 @@ public:
         uint64 target_revision      = 0;
         bool   build_tlas           = false;
         bool   full_instance_upload = false;
-        bool   scene_inputs_updated = false;
+        bool   scene_resources_refreshed = false;
         bool   external_tlas_built  = false;
     };
 
@@ -72,15 +56,19 @@ public:
         BindlessArrayRef    bindless_array,
         uint64              target_revision,
         bool                build_tlas,
-        bool                scene_inputs_updated,
+        bool                scene_resources_refreshed,
         bool                external_tlas_built
     );
 
-    bool AddPasses(RenderGraph& graph, const PreparedCommand& command) const;
+    bool AddPasses(
+        RenderGraph&                graph,
+        const PreparedCommand&      command,
+        RTGraphFrameSetupResources& graph_resources
+    ) const;
     bool ProcessLinear(CommandList& cmd_list, const PreparedCommand& command) const;
 
-    [[nodiscard]] AcceptedSnapshot CommitAccepted(const PreparedCommand& command) noexcept;
-    void                           ResetAcceptedResources() noexcept;
+    void CommitAccepted(const PreparedCommand& command) noexcept;
+    void ResetAcceptedResources() noexcept;
 
 private:
     UnorderedSet<const Buffer*> accepted_tlas_buffers;
