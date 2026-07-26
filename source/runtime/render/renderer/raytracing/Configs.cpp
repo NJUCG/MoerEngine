@@ -80,21 +80,33 @@ void ImportanceSamplingContext::UpdateReSTIRDIBufferIndices() {
     di_current_frame_output_reservoir        = di_buffer_indices.shading_input_buff_idx;
 }
 
+DI::LightBufferParams ImportanceSamplingContext::BuildLightBufferParams(
+    uint frame_offset,
+    uint num_finite_lights,
+    uint num_infinite_primitive_lights,
+    uint num_environment_lights
+) {
+    DI::LightBufferParams params{};
+    params.local_light_region.first_light_idx = frame_offset;
+    params.local_light_region.light_cnt       = num_finite_lights;
+    params.infinite_light_region.first_light_idx =
+        params.local_light_region.first_light_idx + params.local_light_region.light_cnt;
+    params.infinite_light_region.light_cnt = num_infinite_primitive_lights;
+    params.env_light.light_idx =
+        params.infinite_light_region.first_light_idx + params.infinite_light_region.light_cnt;
+    params.env_light.light_cnt = num_environment_lights;
+    return params;
+}
+
 void ImportanceSamplingContext::SetLightBufferParams(
     uint _frame_offset,
     uint _local_light_region_light_cnt,
     uint _infinite_light_region_light_cnt,
     uint _env_light_light_cnt
 ) {
-    light_buffer_params.local_light_region.first_light_idx = _frame_offset;
-    light_buffer_params.local_light_region.light_cnt       = _local_light_region_light_cnt;
-    light_buffer_params.infinite_light_region.first_light_idx =
-        light_buffer_params.local_light_region.light_cnt +
-        light_buffer_params.local_light_region.first_light_idx;
-    light_buffer_params.infinite_light_region.light_cnt = _infinite_light_region_light_cnt;
-    light_buffer_params.env_light.light_idx = light_buffer_params.infinite_light_region.first_light_idx +
-                                              light_buffer_params.infinite_light_region.light_cnt;
-    light_buffer_params.env_light.light_cnt = _env_light_light_cnt;
+    CommitAcceptedLightBufferParams(BuildLightBufferParams(
+        _frame_offset, _local_light_region_light_cnt, _infinite_light_region_light_cnt, _env_light_light_cnt
+    ));
 }
 
 void ImportanceSamplingContext::AdvanceFrameIdx(uint _frame_idx) {

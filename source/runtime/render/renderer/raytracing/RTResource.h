@@ -24,8 +24,7 @@ namespace Moer::Render::Raytracing {
 
 inline constexpr bool IsNrdDenoiserActive(uint denoiser_mode) {
 #if WITH_NRD
-    return denoiser_mode == s_denoiser_mode_reblur ||
-           denoiser_mode == s_denoiser_mode_relax;
+    return denoiser_mode == s_denoiser_mode_reblur || denoiser_mode == s_denoiser_mode_relax;
 #else
     (void)denoiser_mode;
     return false;
@@ -71,6 +70,22 @@ struct DefaultResources {
     TextureRef white_tex;
 };
 
+struct RaytracingBindlessResources {
+    BufferRef light_buf;
+    BufferRef material_buf;
+    BufferRef primitive_buf;
+    BufferRef instance_buf;
+    BufferRef position_buf;
+    BufferRef packed_normal_buf;
+    BufferRef packed_tangent_buf;
+    BufferRef texcoord0_buf;
+    BufferRef index_buf;
+    BufferRef rt_instance_buf;
+    BufferRef rt_primitive_table_buf;
+
+    Array<TextureRef> material_textures;
+};
+
 struct RTContext {
 
     struct Config {
@@ -114,6 +129,10 @@ public:
 
     const RaytracingBindlessHandles& GetBindlessHandles() const {
         return bindless_handles;
+    }
+
+    const RaytracingBindlessResources& GetBindlessResources() const {
+        return bindless_resources;
     }
 
     void LoadDefaultResources(RuntimeAssets& _rt_res);
@@ -177,8 +196,9 @@ public:
     bool               b_current_frame = true;
 
 private:
-    RaytracingBindlessHandles bindless_handles{};
-    BindlessArrayRef          bdls;
+    RaytracingBindlessHandles   bindless_handles{};
+    RaytracingBindlessResources bindless_resources{};
+    BindlessArrayRef            bdls;
 };
 } // namespace Moer::Render::Raytracing
 

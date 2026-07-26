@@ -58,6 +58,26 @@ void RTContext::SetBindlessHandles(const GpuScene::Res& gpu_scene_res) {
     // RT 专用（mesh-level BLAS 方案）
     bindless_handles.rt_instance_buf_hdl        = gpu_scene_res.rt_instance_buf.hdl;
     bindless_handles.rt_primitive_table_buf_hdl = gpu_scene_res.rt_primitive_table_buf.hdl;
+
+    bindless_resources.light_buf              = gpu_scene_res.light_buf.buf;
+    bindless_resources.material_buf           = gpu_scene_res.material_buf.buf;
+    bindless_resources.primitive_buf          = gpu_scene_res.primitive_buf.buf;
+    bindless_resources.instance_buf           = gpu_scene_res.instance_buf.buf;
+    bindless_resources.position_buf           = gpu_scene_res.position_buf.buf;
+    bindless_resources.packed_normal_buf      = gpu_scene_res.packed_normal_buf.buf;
+    bindless_resources.packed_tangent_buf     = gpu_scene_res.packed_tangent_buf.buf;
+    bindless_resources.texcoord0_buf          = gpu_scene_res.texcoord0_buf.buf;
+    bindless_resources.index_buf              = gpu_scene_res.index_buf.buf;
+    bindless_resources.rt_instance_buf        = gpu_scene_res.rt_instance_buf.buf;
+    bindless_resources.rt_primitive_table_buf = gpu_scene_res.rt_primitive_table_buf.buf;
+
+    bindless_resources.material_textures.clear();
+    bindless_resources.material_textures.reserve(gpu_scene_res.texture_array.size());
+    for (const TextureWithHandle& texture : gpu_scene_res.texture_array) {
+        if (texture.tex) {
+            bindless_resources.material_textures.emplace_back(texture.tex);
+        }
+    }
 }
 
 void RTContext::FillFrameResources(uint2 _resolution) {
@@ -285,7 +305,7 @@ void RTContext::FillLowDiscrepancySequence(CommandList& _cmd_list) {
 
 void RTContext::CreateEnvMapResources(TextureWithHandle _env_tex, CommandList& _cmd_list) {
 
-    env_map = _env_tex.tex;
+    env_map              = _env_tex.tex;
     uint2         extent = env_map->GetExtent().xy;
     RenderDevice& device = RenderDevice::Get();
 
@@ -325,7 +345,7 @@ void RTContext::CreateBuffersIfNeeded(
 ) {
 
     RenderDevice& device   = RenderDevice::Get();
-    uint          task_num = _num_emissive_meshes + _num_prim_lights;
+    uint          task_num = Max(1u, _num_emissive_meshes + _num_prim_lights);
 
     if (!task_buf || task_num > task_buf->GetNumElement()) {
         task_buf = device.CreateBuffer<PrepareLightsTask>(
@@ -337,12 +357,11 @@ void RTContext::CreateBuffersIfNeeded(
     max_emissive_meshes    = _num_emissive_meshes;
     max_emissive_triangles = _num_emissive_triangles;
 
-    uint max_local_lights  = max_emissive_triangles + max_prim_lights;
+    uint max_local_lights  = Max(1u, max_emissive_triangles + max_prim_lights);
     uint light_buf_element = max_local_lights * 2;
-    // light_buf_element 必须大于 0（即使没有光源，也需要至少 1 个元素用于双缓冲）
-    assert(light_buf_element > 0 && "light_buf_element must be greater than 0");
 
-    if (!light_mapping_buf || light_buf_element > light_data_buf->GetNumElement()) {
+    if (!light_mapping_buf || !light_data_buf || light_buf_element > light_mapping_buf->GetNumElement() ||
+        light_buf_element > light_data_buf->GetNumElement()) {
         light_mapping_buf = device.CreateBuffer<uint>(
             "Raytracing::light_mapping_buf", light_buf_element, EBufferUsageFlags::UNORDERED_ACCESS
         );
@@ -362,12 +381,10 @@ void RTContext::CreateBuffersIfNeeded(
         );
     }
 
-    // 创建 primitive_to_light buffer（primitive_id -> light_offset 映射）
-    // _max_primitives 必须大于 0（场景必须至少有一个 primitive）
-    assert(_max_primitives > 0 && "_max_primitives must be greater than 0");
-    if (!primitive_to_light_buf || _max_primitives > primitive_to_light_buf->GetNumElement()) {
+    const uint primitive_capacity = Max(1u, _max_primitives);
+    if (!primitive_to_light_buf || primitive_capacity > primitive_to_light_buf->GetNumElement()) {
         primitive_to_light_buf = device.CreateBuffer<uint>(
-            "Raytracing::primitive_to_light_buf", _max_primitives, EBufferUsageFlags::UNORDERED_ACCESS
+            "Raytracing::primitive_to_light_buf", primitive_capacity, EBufferUsageFlags::UNORDERED_ACCESS
         );
         AllocateAndFreeBdlsIfNeeded(bindless_handles.primitive_to_light, primitive_to_light_buf->GetView());
     }

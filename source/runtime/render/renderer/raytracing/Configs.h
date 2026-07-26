@@ -217,6 +217,17 @@ struct ImportanceSamplingContext {
         return light_buffer_params;
     }
 
+    static DI::LightBufferParams BuildLightBufferParams(
+        uint frame_offset,
+        uint num_finite_lights,
+        uint num_infinite_primitive_lights,
+        uint num_environment_lights
+    );
+
+    void CommitAcceptedLightBufferParams(const DI::LightBufferParams& params) noexcept {
+        light_buffer_params = params;
+    }
+
     void SetChangeableGridConfig(const GridChangeableConfig& _config) {
         grid_changeable_config                      = _config;
         grid_params.common_params.cell_size         = _config.cell_size;
@@ -240,9 +251,8 @@ struct ImportanceSamplingContext {
         di_initial_sample_params = _params;
     }
 
-    [[deprecated("Use SetReSTIRDIInitialSampleParams instead")]] void SetReSTIRDIIInitialSampleParams(
-        const DI::ReSTIRDIInitialSampleParams& _params
-    ) {
+    [[deprecated("Use SetReSTIRDIInitialSampleParams instead")]] void
+    SetReSTIRDIIInitialSampleParams(const DI::ReSTIRDIInitialSampleParams& _params) {
         SetReSTIRDIInitialSampleParams(_params);
     }
 
@@ -274,7 +284,8 @@ struct ImportanceSamplingContext {
         return grid_changeable_config;
     }
 
-    [[deprecated("Use GetGridChangeableConfig instead")]] GridChangeableConfig GetGridChangableConfig() const {
+    [[deprecated("Use GetGridChangeableConfig instead")]] GridChangeableConfig
+    GetGridChangableConfig() const {
         return GetGridChangeableConfig();
     }
 

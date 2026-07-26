@@ -64,10 +64,8 @@ using UtilsSampleTexturePipelineCS [[deprecated("Use CopyTextureComputePipeline 
 class ShaderUtils {
 public:
     explicit ShaderUtils(ShaderManager& manager);
-    [[deprecated("RenderDevice is no longer required; use ShaderUtils(ShaderManager&) instead")]] ShaderUtils(
-        RenderDevice& device,
-        ShaderManager& manager
-    );
+    [[deprecated("RenderDevice is no longer required; use ShaderUtils(ShaderManager&) instead"
+    )]] ShaderUtils(RenderDevice& device, ShaderManager& manager);
 
     GenLowDiscrepancyPipeline& GetGenLowDiscrepancyPipeline() {
         return gen_low_discrepancy_pipeline;
@@ -91,6 +89,7 @@ public:
         const TextureView&     _env_map,
         std::span<TextureView> _integrated_mips
     );
+    void GenerateMipsChunk(CommandList& cmd_list, std::span<TextureView> mips);
     void GenerateMips(CommandList& _cmd_list, std::span<TextureView> _mips);
     void SampleTextureCS(CommandList& cmd_list, TextureView input_texture, TextureView output_texture);
 

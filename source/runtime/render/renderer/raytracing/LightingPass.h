@@ -97,11 +97,11 @@ public:
         uint configured_mode           = s_di_local_light_sample_mode_uniform;
         uint effective_mode            = s_di_local_light_sample_mode_uniform;
         bool adaptive_fallback_applied = false;
-        uint local_light_count          = 0;
+        uint local_light_count         = 0;
     };
 
     struct PreparedCommand {
-        ResampleConstants           constants{};
+        ResampleConstants          constants{};
         LocalLightSamplingDecision sampling_decision{};
         bool                       record_presample_light = false;
         bool                       record_presample_env   = false;
@@ -140,11 +140,14 @@ public:
 
     LightingPass(class ShaderManager& manager, BindlessArrayRef bindless_array);
 
-    LocalLightSamplingDecision Process(CommandList& cmd_list, RTContext& rt_ctx);
+    LocalLightSamplingDecision
+         Process(CommandList& cmd_list, RTContext& rt_ctx, const DI::LightBufferParams& light_buffer_params);
     bool AddPasses(
         RenderGraph&                 graph,
         const RTGraphFrameResources& graph_resources,
         const RTContext&             rt_ctx,
+        const DI::LightBufferParams& light_buffer_params,
+        bool                         prepare_lights_in_graph,
         LocalLightSamplingDecision&  sampling_decision
     );
 
@@ -159,13 +162,13 @@ private:
         ShadeSample
     };
 
-    PreparedCommand Prepare(const RTContext& rt_ctx) const;
+    PreparedCommand Prepare(const RTContext& rt_ctx, const DI::LightBufferParams& light_buffer_params) const;
     RecordResources CaptureResources(const RTContext& rt_ctx) const;
-    void RecordConstantsUpload(
-        CommandList&           cmd_list,
-        const PreparedCommand& command,
-        const RecordResources& resources
-    ) const;
+    void            RecordConstantsUpload(
+                   CommandList&           cmd_list,
+                   const PreparedCommand& command,
+                   const RecordResources& resources
+               ) const;
     void RecordDispatch(
         CommandList&           cmd_list,
         const PreparedCommand& command,
