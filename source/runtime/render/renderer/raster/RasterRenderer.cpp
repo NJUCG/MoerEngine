@@ -637,7 +637,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             RenderGraph::TokenHandle   tonemapping_state;
             RenderGraph::TextureHandle tonemapping_output;
             RenderGraph::TextureHandle selected_framebuffer;
-            RenderGraph::TextureHandle ui_framebuffer;
             RenderGraph::TextureHandle window_framebuffer;
             RenderGraph::TextureHandle output;
             RenderGraph::BufferHandle  scene_lights;
@@ -1060,7 +1059,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                             .Write(graph_resources.window_framebuffer);
                     } else {
                         builder.Read(graph_resources.selected_framebuffer)
-                            .Read(graph_resources.ui_framebuffer)
                             .Write(graph_resources.output);
                     }
                     builder.SideEffect();
@@ -1076,7 +1074,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                             ui_frame.scene_color_resolution,
                             window_framebuffer_view,
                             selected_framebuffer_view,
-                            raster_context.textures.ui_frame_buffer.tex,
                             raster_context.textures.output.tex
                         );
                     } else {
@@ -1093,7 +1090,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                             ),
                             TextureView(raster_context.textures.output.tex),
                             processing_image.tex,
-                            {},
                             raster_context.textures.output.tex
                         );
                     }
@@ -1241,8 +1237,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     );
                 }
             }
-            graph_resources.ui_framebuffer =
-                import_texture("ui_framebuffer", raster_context.textures.ui_frame_buffer.tex);
             if (ui_writes_external_window) {
                 graph_resources.window_framebuffer = import_physical_texture(
                     "window_framebuffer", window_framebuffer_view.GetTexture()

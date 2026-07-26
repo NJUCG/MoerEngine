@@ -62,27 +62,6 @@ void Editor::Run(const ExtraHooks& extra_hooks) {
                 [this]() {
                     return m_editor_ui->NeedsReload();
                 },
-            .on_ui_combine_pass =
-                [this](
-                    UiCombinePass* ui_combine_pass,
-                    CommandList&   cmd_list,
-                    TextureView    input_color_texture,
-                    TextureView    input_ui_texture,
-                    TextureView    default_output_texture
-                ) {
-                    const auto window_frame_buffer = m_editor_ui->GetWindowFrameBuffer();
-                    return ui_combine_pass->Process(
-                        cmd_list,
-                        m_editor_ui->IsSeparateWindow(),
-                        m_editor_ui->GetConfig()->GetResolution(),
-                        m_editor_ui->GetSceneColorPos(),
-                        m_editor_ui->GetSceneColorResolution(),
-                        window_frame_buffer ? window_frame_buffer->GetView() : TextureView(),
-                        input_color_texture,
-                        input_ui_texture,
-                        default_output_texture
-                    );
-                },
             .on_capture_ui_composition =
                 [this]() {
                     return UiCompositionFrameData{

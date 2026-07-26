@@ -10,6 +10,7 @@
 #include "rhi/RHIExecutor.h"
 #include "rhi/RHIResource.h"
 #include "rhi/plugin/NrdPlugin.h"
+#include "renderer/common/UiFrameGraphPass.h"
 #include "scene/GpuScene.h"
 #include "shader/ShaderResourceManager.h"
 #include "window/WindowContext.h"
@@ -321,7 +322,6 @@ struct RaytracingRenderer::RuntimeState {
     UnorderedMap<std::string, TextureWithHandle> material_textures;
 
     TextureRef output;
-    TextureRef ui_frame_buffer;
 
     Timer timer;
 
@@ -380,13 +380,9 @@ struct RaytracingRenderer::RuntimeState {
         output(renderer.device.CreateTexture(
             Extent2D(renderer.resolution.x, renderer.resolution.y),
             renderer.swapchain->format,
-            ETextureUsageFlags::COLOR_ATTACHMENT
-        )),
-        ui_frame_buffer(renderer.device.CreateTexture(
-            "ui_frame_buffer",
-            Extent2D(renderer.resolution.x, renderer.resolution.y),
-            PF_R8G8B8A8_SRGB,
-            ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED
+            ETextureUsageFlags::COLOR_ATTACHMENT |
+                ETextureUsageFlags::TRANSFER_SRC |
+                ETextureUsageFlags::TRANSFER_DST
         )),
         exported_file_path(ConfigManager::GetInstance().GetWorkspacePath() / "saved"),
         prepare_light_pass(MakeUnique<PrepareLightPass>(renderer.manager, renderer.bindless_array)),
@@ -627,6 +623,15 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
 
     auto& state     = *runtime_state;
     auto& ui_config = frame_packet.config;
+    const auto ui_execution_thread =
+        IsCurrentlyRenderThread() ?
+            EUiDrawExecutionThread::Render :
+            EUiDrawExecutionThread::Game;
+    const auto prepared_ui = UiFrameGraphPass::Prepare(
+        std::move(frame_packet.ui_composition),
+        std::move(frame_packet.ui_draw_frame),
+        ui_execution_thread
+    );
 
     if (frame_packet.frame_id == 0) {
         const uint32_t frame_thread_id = IsCurrentlyRenderThread() ? GetRenderThreadId() : GetGameThreadId();
@@ -649,12 +654,14 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     bool  graph_tone_mapping_recorded     = false;
     bool  graph_visualize_recorded        = false;
     bool  graph_show_texture_recorded     = false;
+    bool  graph_ui_recorded               = false;
     bool  graph_recording_failed          = state.render_graph_recording_failure_latched;
     bool  linear_gbuffer_recorded         = false;
     bool  linear_lighting_recorded        = false;
     bool  linear_antialias_recorded       = false;
     bool  linear_tone_mapping_recorded    = false;
     bool  linear_visualize_recorded       = false;
+    bool  linear_ui_recorded              = false;
     bool  nrd_recorded                    = false;
     uint8 gbuffer_history_bit             = 0;
     float tone_mapping_elapsed_for_commit = 0.f;
@@ -669,6 +676,10 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     TextureRef                                       selected_debug_texture{};
     bool                                             show_texture_requested = false;
     ShowTextureParams                                show_texture_params{};
+    FenceRef                                         graph_submission_fence{};
+    FenceRef                                         ui_graph_submission_fence{};
+    uint64                                           graph_submission_value_count = 0;
+    UiFrameGraphPass::GraphPasses                    ui_graph_passes{};
 
     switch (frame_packet.window.state) {
         case EWindowState::Hiding:
@@ -1093,17 +1104,36 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                                                                   show_texture_params,
                                                                   selected_debug_texture,
                                                                   state.rt_ctx->frame_rt.ldr_color,
-                                                                  graph_resources.frame_setup.ready
+                                                                  graph_resources.frame_setup.ready,
+                                                                  graph_resources.presentation_ready
                                                               ));
+            const TextureRef graph_final_color =
+                frame_packet.debug_input.show_final_texture ?
+                    state.rt_ctx->frame_rt.ldr_color :
+                    state.rt_ctx->frame_rt.debug_color;
+            const RenderGraph::TextureHandle graph_final_color_handle =
+                frame_packet.debug_input.show_final_texture ?
+                    graph_resources.ldr_color :
+                    graph_resources.debug_color;
+            const bool ui_added =
+                show_texture_added &&
+                UiFrameGraphPass::AddPasses(
+                    graph,
+                    *ui_combine_pass,
+                    prepared_ui,
+                    graph_final_color_handle,
+                    graph_final_color,
+                    state.output,
+                    graph_resources.presentation_ready,
+                    ui_graph_passes
+                );
             const bool graph_passes_added = prepare_lights_added && gbuffer_added && lighting_added &&
                                             nrd_added && composition_added && antialias_added &&
                                             tone_mapping_added &&
-                                            visualize_added && show_texture_added;
+                                            visualize_added && show_texture_added && ui_added;
             if (graph_passes_added && IsRenderGraphRecordingFailureInjected()) {
                 const RenderGraph::PassHandle fault_dependency =
-                    graph_resources.nrd_pass.IsValid() ?
-                        graph_resources.nrd_pass :
-                        setup_resources.finalize;
+                    ui_graph_passes.draw;
                 graph.AddRecordPass(
                     "RT.FaultInjection.RecordingFailure",
                     [fault_dependency](RenderGraph::PassBuilder& builder) {
@@ -1127,7 +1157,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 LOG_ERROR("[RenderGraph][Fallback] Raytracing unified graph could not "
                           "import a required FrameSetup/PrepareLights/GBuffer/Lighting/"
                           "NRD/Composition/AntiAlias/"
-                          "ToneMapping/Visualize/ShowTexture resource. Using the linear "
+                          "ToneMapping/Visualize/ShowTexture/UI resource. Using the linear "
                           "path for this renderer instance.");
             } else if (!graph.Compile()) {
                 state.render_graph_fallback_latched = true;
@@ -1166,6 +1196,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 }
 
                 bool       graph_recording_profiling_started = split_graph_profiling_frame;
+                graph_submission_fence    = device.CreateFence();
+                ui_graph_submission_fence = device.CreateFence();
                 const auto configure_recording_source        = [&](const RenderGraph::ExecutedPassInfo& pass,
                                                             RHIRecordingSource&                  source) {
                     source.submit_metadata.debug_label =
@@ -1175,6 +1207,20 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                                                                           ERHIProfilingPhase::Continue :
                                                                           ERHIProfilingPhase::Begin;
                     graph_recording_profiling_started        = true;
+                    source.submit_metadata.signal_fences.emplace_back(
+                        RHIRecordingFencePoint{
+                            .fence = graph_submission_fence,
+                            .value = ++graph_submission_value_count,
+                        }
+                    );
+                    if (pass.handle == ui_graph_passes.draw) {
+                        source.submit_metadata.signal_fences.emplace_back(
+                            RHIRecordingFencePoint{
+                                .fence = ui_graph_submission_fence,
+                                .value = 1,
+                            }
+                        );
+                    }
 #if WITH_NRD
                     if (nrd_active_this_frame && prepared_nrd) {
                         source.submit_metadata.signal_fences.emplace_back(
@@ -1207,6 +1253,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                     graph_tone_mapping_recorded = tone_mapping_in_graph;
                     graph_visualize_recorded    = visualize_in_graph;
                     graph_show_texture_recorded = show_texture_in_graph;
+                    graph_ui_recorded           = ui_added;
                 } else {
                     // ExecuteRecording joins every producer and fails the
                     // graph-wide commit gate. Sync only joins the resulting
@@ -1216,6 +1263,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                     graph_recording_failed                       = true;
                     state.render_graph_fallback_latched          = true;
                     state.render_graph_recording_failure_latched = true;
+                    prepared_ui->Abandon();
                     LOG_ERROR(
                         "[RenderGraph][Fallback] Raytracing unified graph "
                         "recording failed before transaction commit: {}. "
@@ -1258,7 +1306,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             );
             state.prepare_light_pass->RecordAcceptedBoundary(cmd_list, *prepared_lights);
             linear_lighting_recorded = true;
-        } else if (graph_primary_recorded) {
+        } else if (graph_primary_recorded && !graph_ui_recorded) {
             state.g_buffer_pass->RecordLegacyTailBridge(
                 cmd_list,
                 *state.rt_ctx,
@@ -1359,38 +1407,46 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                                        state.rt_ctx->frame_rt.ldr_color :
                                        state.rt_ctx->frame_rt.debug_color;
 
-    if (frame_packet.ui_composition.enabled) {
-        const auto& ui_frame = frame_packet.ui_composition;
-        const auto  window_frame_buffer =
-            ui_frame.window_frame_buffer ? ui_frame.window_frame_buffer->GetView() : TextureView();
-        ui_combine_pass->Process(
-            cmd_list,
-            ui_frame.separate_window,
-            ui_frame.output_resolution,
-            ui_frame.scene_color_position,
-            ui_frame.scene_color_resolution,
-            window_frame_buffer,
-            final_color,
-            state.ui_frame_buffer,
-            state.output
-        );
-    } else {
-        ui_combine_pass->Process(
-            cmd_list,
-            true,
-            resolution,
-            float2(0.f, 0.f),
-            float2(static_cast<float>(resolution.x), static_cast<float>(resolution.y)),
-            TextureView(state.output),
-            state.rt_ctx->frame_rt.ldr_color,
-            {},
-            state.output
-        );
+    if (!graph_ui_recorded &&
+        prepared_ui->GetRecordingState() ==
+            UiFrameGraphPass::ERecordingState::Prepared) {
+        try {
+            linear_ui_recorded = UiFrameGraphPass::ProcessLinear(
+                cmd_list,
+                *ui_combine_pass,
+                prepared_ui,
+                final_color,
+                state.output
+            );
+        } catch (const std::exception& exception) {
+            // UI recording is part of the frame transaction. Discard every
+            // caller-owned command already recorded into this tail rather
+            // than submitting a partially composed/potentially replayed
+            // packet.
+            static_cast<void>(cmd_list.Submit());
+            prepared_ui->Abandon();
+            graph_recording_failed                       = true;
+            state.render_graph_fallback_latched          = true;
+            state.render_graph_recording_failure_latched = true;
+            LOG_CRITICAL(
+                "[RenderGraph][UI] Linear copied-frame recording failed: {}. "
+                "Discarding the frame tail and preserving the last accepted "
+                "presentation.",
+                exception.what()
+            );
+        } catch (...) {
+            static_cast<void>(cmd_list.Submit());
+            prepared_ui->Abandon();
+            graph_recording_failed                       = true;
+            state.render_graph_fallback_latched          = true;
+            state.render_graph_recording_failure_latched = true;
+            LOG_CRITICAL(
+                "[RenderGraph][UI] Linear copied-frame recording failed. "
+                "Discarding the frame tail and preserving the last accepted "
+                "presentation."
+            );
+        }
     }
-
-    const auto ui_execution_thread =
-        IsCurrentlyRenderThread() ? EUiDrawExecutionThread::Render : EUiDrawExecutionThread::Game;
-    RenderUiDrawFrame(cmd_list, state.output->GetView(), frame_packet.ui_draw_frame, ui_execution_thread);
 
     time++;
     CmdSubmit frame_submit =
@@ -1414,7 +1470,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 output_view.extent.y,
                 swapchain->size.x,
                 swapchain->size.y,
-                frame_packet.ui_draw_frame.platform_viewports.size()
+                prepared_ui->GetDrawFrame().platform_viewports.size()
             );
         }
         if (output_view.extent.x == swapchain->size.x && output_view.extent.y == swapchain->size.y) {
@@ -1439,17 +1495,60 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         ERHIExecSubmitFlags::FlushGPU,
         present_request ? &*present_request : nullptr
     );
-    bool frame_native_accepted = true;
+    // Accepted renderer state follows native queue publication, not CPU
+    // recording completion. The final tail proves the ordered suffix was
+    // accepted; the per-source graph fence prevents an accepted tail from
+    // hiding a rejected managed source.
+    bool frame_native_accepted = timeline->WaitSubmitted(time);
+    if (graph_submission_fence) {
+        for (uint64 value = 1; value <= graph_submission_value_count; ++value) {
+            const bool source_accepted =
+                graph_submission_fence->WaitSubmitted(value);
+            frame_native_accepted =
+                source_accepted && frame_native_accepted;
+        }
+    }
+
+    bool ui_source_accepted = false;
+    if (graph_ui_recorded && ui_graph_submission_fence) {
+        ui_source_accepted =
+            ui_graph_submission_fence->WaitSubmitted(1);
+    } else if (linear_ui_recorded) {
+        // Linear UI work lives in the final tail itself.
+        ui_source_accepted = timeline->WaitSubmitted(time);
+    }
+    bool ui_recording_committed = false;
+    if (prepared_ui->GetRecordingState() ==
+        UiFrameGraphPass::ERecordingState::Recorded) {
+        if (ui_source_accepted) {
+            ui_recording_committed =
+                prepared_ui->CommitAcceptedSource();
+        } else {
+            prepared_ui->RejectSource();
+        }
+    } else if (prepared_ui->GetRecordingState() ==
+                   UiFrameGraphPass::ERecordingState::SourceAccepted ||
+               prepared_ui->GetRecordingState() ==
+                   UiFrameGraphPass::ERecordingState::FrameAccepted) {
+        ui_recording_committed = true;
+    } else {
+        prepared_ui->RejectSource();
+    }
+    frame_native_accepted =
+        frame_native_accepted && ui_recording_committed;
 #if WITH_NRD
     if (nrd_recorded && prepared_nrd) {
-        frame_native_accepted =
+        const bool nrd_submission_accepted =
+            frame_native_accepted &&
             NrdDenoisePass::CommitAcceptedSubmission(
                 *prepared_nrd,
                 timeline,
                 time,
                 nrd_graph_submission_value_count
             );
-        if (frame_native_accepted) {
+        frame_native_accepted =
+            frame_native_accepted && nrd_submission_accepted;
+        if (nrd_submission_accepted) {
             ++state.nrd_time;
             state.nrd_outputs_initialized = true;
         } else {
@@ -1471,6 +1570,20 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         }
     }
 #endif
+    if (frame_native_accepted) {
+        frame_native_accepted =
+            prepared_ui->CommitAcceptedFrame();
+    }
+    if (!frame_native_accepted) {
+        state.render_graph_fallback_latched          = true;
+        state.render_graph_recording_failure_latched = true;
+        LOG_CRITICAL(
+            "[RenderGraph][Raytracing] Native submission rejected the final "
+            "tail, a managed graph source, or the copied UI source. "
+            "Preserving accepted renderer history and disabling managed "
+            "recording for this renderer instance."
+        );
+    }
     const bool frame_setup_accepted =
         frame_native_accepted &&
         (frame_setup_graph_recorded || frame_setup_linear_recorded);
@@ -1541,8 +1654,11 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         state.rt_scene->AdvanceFrame();
         std::swap(state.current_tlas_revision, state.previous_tlas_revision);
     }
-    if (!skip_present && frame_native_accepted) {
-        PresentUiDrawFrame(frame_packet.ui_draw_frame, ui_execution_thread);
+    if (!skip_present && frame_native_accepted && prepared_ui->CanPresent()) {
+        PresentUiDrawFrame(
+            prepared_ui->GetDrawFrame(),
+            ui_execution_thread
+        );
     }
 
     feedback.profiler_data             = gfx_queue.GetProfilerEntry();
@@ -1746,13 +1862,9 @@ void RaytracingRenderer::RecreateFrameResources(uint2 new_extent) {
         "output",
         Extent2D(new_extent.x, new_extent.y),
         swapchain->format,
-        ETextureUsageFlags::COLOR_ATTACHMENT
-    );
-    state.ui_frame_buffer = device.CreateTexture(
-        "ui_frame_buffer",
-        Extent2D(new_extent.x, new_extent.y),
-        PF_R8G8B8A8_SRGB,
-        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED
+        ETextureUsageFlags::COLOR_ATTACHMENT |
+            ETextureUsageFlags::TRANSFER_SRC |
+            ETextureUsageFlags::TRANSFER_DST
     );
 
     if (state.render_graph_recording_failure_latched) {

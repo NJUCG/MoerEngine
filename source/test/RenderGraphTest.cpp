@@ -1,4 +1,5 @@
 #include "rendergraph/RenderGraph.h"
+#include "renderer/common/UiFrameGraphPass.h"
 #include "rhi/plugin/NrdPlugin.h"
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/TaskSystem.h"
@@ -15,6 +16,62 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+
+namespace Moer::Render {
+
+class UiFrameGraphPassTestAccess {
+public:
+    [[nodiscard]] static bool
+    BeginRecording(const UiFrameGraphPass::PreparedFrame& frame) {
+        return frame.BeginRecording();
+    }
+
+    static void FinishRecording(
+        const UiFrameGraphPass::PreparedFrame& frame
+    ) {
+        frame.FinishRecording();
+    }
+
+    [[nodiscard]] static bool AddPassesWithComposeRecorder(
+        RenderGraph&                          graph,
+        std::function<void(CommandList&)>     compose_recorder,
+        const UiFrameGraphPass::PreparedFrameRef& frame,
+        RenderGraph::TextureHandle            scene_color_handle,
+        const TextureRef&                     scene_color,
+        const TextureRef&                     main_output,
+        RenderGraph::TokenHandle              presentation_ready,
+        UiFrameGraphPass::GraphPasses&        passes
+    ) {
+        return UiFrameGraphPass::AddPassesWithComposeRecorder(
+            graph,
+            std::move(compose_recorder),
+            frame,
+            scene_color_handle,
+            scene_color,
+            main_output,
+            presentation_ready,
+            passes
+        );
+    }
+
+    [[nodiscard]] static bool ProcessLinearWithComposeRecorder(
+        CommandList&                              cmd_list,
+        std::function<void(CommandList&)>         compose_recorder,
+        const UiFrameGraphPass::PreparedFrameRef& frame,
+        const TextureRef&                         scene_color,
+        const TextureRef&                         main_output
+    ) {
+        return UiFrameGraphPass::ProcessLinearWithComposeRecorder(
+            cmd_list,
+            std::move(compose_recorder),
+            frame,
+            scene_color,
+            main_output
+        );
+    }
+};
+
+} // namespace Moer::Render
 
 namespace {
 
@@ -3681,6 +3738,609 @@ void TestExternalControlIsAnUnmanagedJoinBoundary(TestSuite& suite) {
     );
 }
 
+class FakeUiViewportResources final :
+    public Moer::Render::UiViewportRenderResources {
+public:
+    explicit FakeUiViewportResources(uint64_t pending_slot) :
+        pending_slot(pending_slot) {}
+
+    [[nodiscard]] uint64_t
+    GetPendingRecordingSlot() const noexcept override {
+        return pending_slot;
+    }
+
+    [[nodiscard]] bool
+    IsPendingRecordingSlot(uint64_t slot) const noexcept override {
+        return slot == pending_slot;
+    }
+
+    void CommitRecordingSlot(uint64_t slot) noexcept override {
+        if (slot == pending_slot) {
+            ++pending_slot;
+            ++commit_count;
+        }
+    }
+
+    [[nodiscard]] uint64_t PendingSlot() const {
+        return pending_slot;
+    }
+
+    [[nodiscard]] uint32_t CommitCount() const {
+        return commit_count;
+    }
+
+    void SetPendingSlot(uint64_t slot) {
+        pending_slot = slot;
+    }
+
+private:
+    uint64_t pending_slot = 0;
+    uint32_t commit_count = 0;
+};
+
+class FakeUiDrawBackend final : public Moer::Render::UiDrawFrameBackend {
+public:
+    void RenderGUI(
+        Moer::Render::CommandList&,
+        const Moer::Render::TextureView&,
+        const Moer::Render::UiDrawFramePacket&,
+        Moer::Render::EUiDrawExecutionThread execution_thread
+    ) override {
+        ++render_count;
+        last_execution_thread = execution_thread;
+    }
+
+    void PresentWindows(
+        const Moer::Render::UiDrawFramePacket&,
+        Moer::Render::EUiDrawExecutionThread
+    ) override {
+        ++present_count;
+    }
+
+    uint32_t render_count = 0;
+    uint32_t present_count = 0;
+    Moer::Render::EUiDrawExecutionThread last_execution_thread{
+        Moer::Render::EUiDrawExecutionThread::Game
+    };
+};
+
+class FakeUiTexture final : public Moer::Render::Texture {
+public:
+    explicit FakeUiTexture(
+        std::string_view    name,
+        ETextureUsageFlags usage =
+            ETextureUsageFlags::SAMPLED |
+            ETextureUsageFlags::COLOR_ATTACHMENT |
+            ETextureUsageFlags::TRANSFER_SRC |
+            ETextureUsageFlags::TRANSFER_DST,
+        ETextureAspectFlags aspects = ETextureAspectFlags::COLOR
+    ) :
+        Texture(MakeInfo(usage, aspects)) {
+        SetName(name);
+    }
+
+    Moer::uint GetMipByteSize(Moer::uint) const override {
+        return 4;
+    }
+
+    void SetName(std::string_view name) override {
+        debug_name = std::string(name);
+    }
+
+private:
+    static Moer::Render::TextureInfo MakeInfo(
+        ETextureUsageFlags  usage,
+        ETextureAspectFlags aspects
+    ) {
+        using namespace Moer::Render;
+        TextureInfo info{};
+        info.usage        = usage;
+        info.extent       = {64, 64};
+        info.num_mips     = 1;
+        info.array_size   = 1;
+        info.format       = PF_R8G8B8A8_UNORM;
+        info.aspect_flags = aspects;
+        return info;
+    }
+};
+
+Moer::Render::UiDrawFramePacket MakeUiDrawPacket(
+    const Moer::SharedPtr<FakeUiViewportResources>& resources,
+    const Moer::SharedPtr<FakeUiDrawBackend>&       backend,
+    bool                                             duplicate_resource
+) {
+    Moer::Render::UiDrawFramePacket packet{};
+    packet.backend = backend;
+    packet.main_viewport.render_resources = resources;
+    packet.main_viewport.commands.emplace_back();
+    if (duplicate_resource) {
+        Moer::Render::UiViewportDrawPacket platform{};
+        platform.render_resources = resources;
+        platform.commands.emplace_back();
+        packet.platform_viewports.emplace_back(std::move(platform));
+    }
+    return packet;
+}
+
+void TestUiPreparedFrameLifecycleIsOneShot(TestSuite& suite) {
+    using namespace Moer::Render;
+    constexpr std::string_view test_name =
+        "UI prepared frame one-shot lifecycle";
+
+    auto resources = Moer::MakeShared<FakeUiViewportResources>(17);
+    auto backend   = Moer::MakeShared<FakeUiDrawBackend>();
+    std::weak_ptr<FakeUiViewportResources> resource_owner = resources;
+    std::weak_ptr<FakeUiDrawBackend>        backend_owner  = backend;
+    auto accepted = UiFrameGraphPass::Prepare(
+        {},
+        MakeUiDrawPacket(resources, backend, true),
+        EUiDrawExecutionThread::Render
+    );
+    resources.reset();
+    backend.reset();
+
+    suite.Check(
+        !resource_owner.expired() && !backend_owner.expired(),
+        test_name,
+        "prepared frame did not retain copied UI backend/resources"
+    );
+    suite.Check(
+        accepted->GetDrawFrame().main_viewport.recording_slot == 17 &&
+            accepted->GetDrawFrame().platform_viewports.front().recording_slot ==
+                17,
+        test_name,
+        "Prepare did not freeze the pending upload-ring slot"
+    );
+    auto accepted_resources = resource_owner.lock();
+    suite.Check(
+        accepted_resources && accepted_resources->PendingSlot() == 17 &&
+            accepted_resources->CommitCount() == 0,
+        test_name,
+        "Prepare advanced the upload-ring before native acceptance"
+    );
+    suite.Check(
+        UiFrameGraphPassTestAccess::BeginRecording(*accepted),
+        test_name,
+        "first recording claim failed"
+    );
+    suite.Check(
+        !UiFrameGraphPassTestAccess::BeginRecording(*accepted),
+        test_name,
+        "a second recording claim replayed the copied packet"
+    );
+    UiFrameGraphPassTestAccess::FinishRecording(*accepted);
+    suite.Check(
+        accepted->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::Recorded &&
+            !accepted->CanPresent() &&
+            accepted_resources->CommitCount() == 0,
+        test_name,
+        "recording completion prematurely committed or presented the UI frame"
+    );
+    suite.Check(
+        accepted->CommitAcceptedSource() &&
+            accepted->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::SourceAccepted &&
+            !accepted->CanPresent() &&
+            accepted_resources->PendingSlot() == 18 &&
+            accepted_resources->CommitCount() == 1,
+        test_name,
+        "native UI-source acceptance did not retire exactly one shared slot"
+    );
+    suite.Check(
+        accepted->CommitAcceptedSource() &&
+            accepted_resources->CommitCount() == 1,
+        test_name,
+        "repeated source acceptance advanced the upload ring twice"
+    );
+    accepted->RejectSource();
+    accepted->Abandon();
+    suite.Check(
+        accepted->GetRecordingState() ==
+            UiFrameGraphPass::ERecordingState::SourceAccepted,
+        test_name,
+        "a late reject/abandon reversed an accepted source"
+    );
+    suite.Check(
+        accepted->CommitAcceptedFrame() && accepted->CanPresent() &&
+            accepted->CommitAcceptedFrame(),
+        test_name,
+        "whole-frame acceptance was not idempotent"
+    );
+    accepted->RejectSource();
+    accepted->Abandon();
+    suite.Check(
+        accepted->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::FrameAccepted &&
+            accepted->CanPresent() &&
+            accepted_resources->CommitCount() == 1,
+        test_name,
+        "an accepted frame was downgraded or recommitted"
+    );
+
+    auto failed_resources = Moer::MakeShared<FakeUiViewportResources>(41);
+    auto failed_backend   = Moer::MakeShared<FakeUiDrawBackend>();
+    auto failed = UiFrameGraphPass::Prepare(
+        {},
+        MakeUiDrawPacket(failed_resources, failed_backend, false),
+        EUiDrawExecutionThread::Render
+    );
+    suite.Check(
+        UiFrameGraphPassTestAccess::BeginRecording(*failed),
+        test_name,
+        "failure-path recording claim failed"
+    );
+    failed->Abandon();
+    UiFrameGraphPassTestAccess::FinishRecording(*failed);
+    suite.Check(
+        failed->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::Failed &&
+            !failed->CanPresent() &&
+            failed_resources->PendingSlot() == 41 &&
+            failed_resources->CommitCount() == 0 &&
+            !failed->CommitAcceptedSource() &&
+            !UiFrameGraphPassTestAccess::BeginRecording(*failed),
+        test_name,
+        "failed recording remained replayable or retired an unaccepted slot"
+    );
+
+    auto stale_resources = Moer::MakeShared<FakeUiViewportResources>(73);
+    auto stale_backend   = Moer::MakeShared<FakeUiDrawBackend>();
+    auto stale = UiFrameGraphPass::Prepare(
+        {},
+        MakeUiDrawPacket(stale_resources, stale_backend, false),
+        EUiDrawExecutionThread::Render
+    );
+    suite.Check(
+        UiFrameGraphPassTestAccess::BeginRecording(*stale),
+        test_name,
+        "stale-slot recording claim failed"
+    );
+    UiFrameGraphPassTestAccess::FinishRecording(*stale);
+    stale_resources->SetPendingSlot(74);
+    suite.Check(
+        !stale->CommitAcceptedSource() &&
+            stale->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::Failed &&
+            stale_resources->CommitCount() == 0 &&
+            !stale->CommitAcceptedFrame(),
+        test_name,
+        "a stale upload-ring token was committed or made presentable"
+    );
+}
+
+void TestUiFrameGraphTailContract(TestSuite& suite) {
+    using namespace Moer::Render;
+    constexpr std::string_view test_name =
+        "UI frame graph presentation tail";
+
+    TextureRef scene_color(MoerNew(FakeUiTexture)("SceneColor"));
+    TextureRef main_output(MoerNew(FakeUiTexture)("MainOutput"));
+    TextureRef window_output(MoerNew(FakeUiTexture)("SceneWindow"));
+    TextureRef platform_output(MoerNew(FakeUiTexture)("PlatformOutput"));
+
+    auto shared_slots = Moer::MakeShared<FakeUiViewportResources>(5);
+    auto platform_slots = Moer::MakeShared<FakeUiViewportResources>(9);
+    auto backend = Moer::MakeShared<FakeUiDrawBackend>();
+    UiDrawFramePacket draw_frame{};
+    draw_frame.backend = backend;
+    draw_frame.main_viewport.render_resources = shared_slots;
+    draw_frame.main_viewport.commands.emplace_back();
+
+    const auto append_platform = [&](TextureRef framebuffer,
+                                     Moer::SharedPtr<FakeUiViewportResources> slots) {
+        UiViewportDrawPacket viewport{};
+        viewport.framebuffer      = std::move(framebuffer);
+        viewport.render_resources = std::move(slots);
+        viewport.commands.emplace_back();
+        draw_frame.platform_viewports.emplace_back(std::move(viewport));
+    };
+    append_platform(main_output, shared_slots);
+    append_platform(window_output, shared_slots);
+    append_platform(platform_output, platform_slots);
+
+    UiCompositionFrameData composition{
+        .enabled                 = true,
+        .separate_window         = true,
+        .output_resolution       = Moer::uint2(64, 64),
+        .scene_color_position    = Moer::float2(0.f, 0.f),
+        .scene_color_resolution  = Moer::float2(64.f, 64.f),
+        .window_frame_buffer     = window_output,
+    };
+    auto prepared = UiFrameGraphPass::Prepare(
+        std::move(composition),
+        std::move(draw_frame),
+        EUiDrawExecutionThread::Render
+    );
+
+    RenderGraph graph("UiFrameGraphTailContract");
+    const auto scene = graph.ImportTexture(
+        "SceneColor",
+        scene_color,
+        RenderGraph::TextureDesc{
+            .mip_count   = 1,
+            .layer_count = 1,
+            .aspects     = RenderGraph::TextureAspect::Color,
+        }
+    );
+    graph.SetInitialState(
+        scene,
+        RenderGraph::TextureState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None
+    );
+    const auto presentation_ready =
+        graph.CreateTransientToken("PresentationReady");
+    const auto producer = graph.AddRecordPass(
+        "ShowTexture",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder
+                .ExecuteOn(
+                    RenderGraph::QueueRole::Graphics,
+                    RenderGraph::PipelineType::Graphics
+                )
+                .Write(scene, RenderGraph::TextureState::RenderTarget)
+                .Write(presentation_ready)
+                .SideEffect()
+                .ParallelRecord();
+        },
+        [](CommandList&) {},
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+
+    UiFrameGraphPass::GraphPasses ui_passes{};
+    const bool added = UiFrameGraphPassTestAccess::AddPassesWithComposeRecorder(
+        graph,
+        [](CommandList&) {},
+        prepared,
+        scene,
+        scene_color,
+        main_output,
+        presentation_ready,
+        ui_passes
+    );
+    suite.Check(added && ui_passes.IsValid(), test_name, "UI tail was not declared");
+    suite.Check(
+        ui_passes.presentation_targets.size() == 3 &&
+            ui_passes.main_output == ui_passes.presentation_targets.front(),
+        test_name,
+        "physical presentation aliases were not deduplicated"
+    );
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    if (!graph.IsCompiled()) {
+        return;
+    }
+
+    const auto& plan = graph.GetCompiledPlan();
+    suite.Check(
+        plan.state_plan_complete,
+        test_name,
+        "UI tail left an incomplete explicit resource-state plan"
+    );
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            producer,
+            ui_passes.clear,
+            RenderGraph::EdgeReasonKind::ReadAfterWrite,
+            presentation_ready.Untyped()
+        ) &&
+            HasEdgeReason(
+                plan,
+                ui_passes.clear,
+                ui_passes.compose,
+                RenderGraph::EdgeReasonKind::Explicit
+            ) &&
+            HasEdgeReason(
+                plan,
+                ui_passes.compose,
+                ui_passes.draw,
+                RenderGraph::EdgeReasonKind::Explicit
+            ),
+        test_name,
+        "ShowTexture -> Clear -> Compose -> Draw ordering was not explicit"
+    );
+
+    const auto& clear_batch =
+        plan.recording_batches[ui_passes.clear.index];
+    const auto& compose_batch =
+        plan.recording_batches[ui_passes.compose.index];
+    const auto& draw_batch =
+        plan.recording_batches[ui_passes.draw.index];
+    suite.Check(
+        clear_batch.execution == RenderGraph::PassExecutionClass::SerialRecord &&
+            compose_batch.execution ==
+                RenderGraph::PassExecutionClass::SerialRecord &&
+            draw_batch.execution ==
+                RenderGraph::PassExecutionClass::SerialRecord &&
+            clear_batch.translate_execution_class ==
+                ERHITranslateExecutionClass::Parallel &&
+            compose_batch.translate_execution_class ==
+                ERHITranslateExecutionClass::Parallel &&
+            draw_batch.translate_execution_class ==
+                ERHITranslateExecutionClass::SerialControl,
+        test_name,
+        "UI recording/translation ownership classes changed"
+    );
+
+    bool access_contract_valid = true;
+    bool export_contract_valid = true;
+    for (const auto target : ui_passes.presentation_targets) {
+        const auto* clear_access =
+            FindAccess(plan, ui_passes.clear, target.Untyped());
+        const auto* draw_access =
+            FindAccess(plan, ui_passes.draw, target.Untyped());
+        const auto* export_barrier =
+            FindBarrier(plan, target.Untyped(), ui_passes.draw, {});
+        access_contract_valid =
+            access_contract_valid && clear_access && draw_access &&
+            clear_access->mode == RenderGraph::AccessMode::Write &&
+            clear_access->state ==
+                RenderGraph::ResourceState::Texture(
+                    RenderGraph::TextureState::TransferDestination
+                ) &&
+            clear_access->domain.queue == RenderGraph::QueueRole::Graphics &&
+            clear_access->domain.pipeline ==
+                RenderGraph::PipelineType::Copy &&
+            draw_access->mode == RenderGraph::AccessMode::ReadWrite &&
+            draw_access->state ==
+                RenderGraph::ResourceState::Texture(
+                    RenderGraph::TextureState::RenderTarget
+                ) &&
+            draw_access->domain.queue == RenderGraph::QueueRole::Graphics &&
+            draw_access->domain.pipeline ==
+                RenderGraph::PipelineType::Graphics;
+        export_contract_valid =
+            export_contract_valid && export_barrier &&
+            export_barrier->export_boundary &&
+            export_barrier->after_state ==
+                RenderGraph::ResourceState::Texture(
+                    RenderGraph::TextureState::TransferSource
+                ) &&
+            export_barrier->after_access == RenderGraph::AccessMode::Read;
+    }
+    const auto* compose_access = FindAccess(
+        plan,
+        ui_passes.compose,
+        ui_passes.presentation_targets[1].Untyped()
+    );
+    suite.Check(
+        access_contract_valid && compose_access &&
+            compose_access->mode == RenderGraph::AccessMode::Write &&
+            compose_access->state ==
+                RenderGraph::ResourceState::Texture(
+                    RenderGraph::TextureState::RenderTarget
+                ) &&
+            compose_access->domain.queue ==
+                RenderGraph::QueueRole::Graphics &&
+            compose_access->domain.pipeline ==
+                RenderGraph::PipelineType::Graphics,
+        test_name,
+        "UI Clear/Compose/Draw access declarations changed"
+    );
+    suite.Check(
+        export_contract_valid,
+        test_name,
+        "a presentation target was not exported as Graphics TransferSource/Read"
+    );
+    const std::string dump = graph.Dump();
+    suite.Check(
+        Contains(dump, "UI.ClearTargets") &&
+            Contains(dump, "UI.Compose") &&
+            Contains(dump, "UI.DrawCopiedFrame") &&
+            Contains(dump, "translate=serial-control") &&
+            !Contains(dump, "texture:present") &&
+            !Contains(dump, "ui_framebuffer") &&
+            !Contains(dump, "gui_color"),
+        test_name,
+        "UI tail dump lost nodes/frontier or regained legacy fake dependencies"
+    );
+
+    bool draw_source_kept_serial_control = false;
+    const bool executed = graph.ExecuteRecording(
+        {},
+        [&](const RenderGraph::ExecutedPassInfo& pass,
+            RHIRecordingSource& source) {
+            if (pass.handle == ui_passes.draw) {
+                draw_source_kept_serial_control =
+                    source.command_list->GetTranslateExecutionClass() ==
+                        ERHITranslateExecutionClass::SerialControl &&
+                    source.submit_metadata.translate_execution_class ==
+                        ERHITranslateExecutionClass::SerialControl;
+            }
+        },
+        false,
+        [](Moer::Array<RHIRecordingSource>&&) {}
+    );
+    suite.Check(
+        executed && draw_source_kept_serial_control &&
+            backend->render_count == 1 &&
+            backend->last_execution_thread ==
+                EUiDrawExecutionThread::Render &&
+            prepared->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::Recorded &&
+            shared_slots->CommitCount() == 0 &&
+            platform_slots->CommitCount() == 0,
+        test_name,
+        "UI tail did not record once with immutable ownership"
+    );
+}
+
+void TestUiFrameGraphRejectsInvalidPhysicalContracts(TestSuite& suite) {
+    using namespace Moer::Render;
+    constexpr std::string_view test_name =
+        "UI frame graph physical contract rejection";
+
+    TextureRef scene_color(MoerNew(FakeUiTexture)("SceneColor"));
+    TextureRef other_scene(MoerNew(FakeUiTexture)("OtherScene"));
+    TextureRef invalid_output(MoerNew(FakeUiTexture)(
+        "InvalidOutput",
+        ETextureUsageFlags::SAMPLED |
+            ETextureUsageFlags::COLOR_ATTACHMENT
+    ));
+
+    auto slots   = Moer::MakeShared<FakeUiViewportResources>(23);
+    auto backend = Moer::MakeShared<FakeUiDrawBackend>();
+    auto prepared = UiFrameGraphPass::Prepare(
+        {},
+        MakeUiDrawPacket(slots, backend, false),
+        EUiDrawExecutionThread::Render
+    );
+
+    RenderGraph graph("UiFrameGraphInvalidPhysicalContracts");
+    const auto mismatched_scene_handle = graph.ImportTexture(
+        "OtherScene",
+        other_scene,
+        RenderGraph::TextureDesc{
+            .mip_count   = 1,
+            .layer_count = 1,
+            .aspects     = RenderGraph::TextureAspect::Color,
+        }
+    );
+    const auto presentation_ready =
+        graph.CreateTransientToken("PresentationReady");
+    UiFrameGraphPass::GraphPasses ui_passes{};
+    suite.Check(
+        !UiFrameGraphPassTestAccess::AddPassesWithComposeRecorder(
+            graph,
+            [](CommandList&) {},
+            prepared,
+            mismatched_scene_handle,
+            scene_color,
+            invalid_output,
+            presentation_ready,
+            ui_passes
+        ) &&
+            !ui_passes.IsValid() &&
+            prepared->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::Prepared,
+        test_name,
+        "graph declaration accepted mismatched scene identity or invalid "
+        "presentation usage"
+    );
+
+    CommandList linear_commands{};
+    const bool linear_recorded =
+        UiFrameGraphPassTestAccess::ProcessLinearWithComposeRecorder(
+            linear_commands,
+            [](CommandList&) {},
+            prepared,
+            scene_color,
+            invalid_output
+        );
+    const CmdSubmit rejected_submit = linear_commands.Submit();
+    suite.Check(
+        !linear_recorded && rejected_submit.cmds.empty() &&
+            backend->render_count == 0 && slots->CommitCount() == 0 &&
+            slots->PendingSlot() == 23 &&
+            prepared->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::Prepared,
+        test_name,
+        "linear fallback bypassed UI target validation or claimed the copied "
+        "packet"
+    );
+}
+
 void TestSerialControlTranslationIsADeclaredRecordingPolicy(TestSuite& suite) {
     constexpr std::string_view test_name =
         "serial-control translation recording policy";
@@ -4890,6 +5550,9 @@ int main() {
     TestSuite suite;
     TestStableSerialCallbackOrder(suite);
     TestPassCompletionObserverRunsAfterEachCallback(suite);
+    TestUiPreparedFrameLifecycleIsOneShot(suite);
+    TestUiFrameGraphTailContract(suite);
+    TestUiFrameGraphRejectsInvalidPhysicalContracts(suite);
     TestImportedAliasIdentityAndDump(suite);
     TestHazardsAndDeterministicDump(suite);
     TestTransientReadBeforeProducerFailsWithoutCallbacks(suite);

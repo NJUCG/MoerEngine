@@ -1326,9 +1326,19 @@ public:
         std::string_view _name = Command::typenames[(uint)Command::EType::UploadBuffer]
     );
     RENDER_API void CopyFrom(
+        std::span<const byte> _data,
+        BufferView            _dst,
+        std::string_view      _name = Command::typenames[(uint)Command::EType::UploadBuffer]
+    );
+    RENDER_API void CopyFrom(
         std::span<byte>  _data,
         TextureView      _dst,
         std::string_view _name = Command::typenames[(uint)Command::EType::UploadTexture]
+    );
+    RENDER_API void CopyFrom(
+        std::span<const byte> _data,
+        TextureView           _dst,
+        std::string_view      _name = Command::typenames[(uint)Command::EType::UploadTexture]
     );
     RENDER_API void CopyFrom(
         Array<byte>&&    _data,

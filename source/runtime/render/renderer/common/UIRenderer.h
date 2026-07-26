@@ -7,14 +7,35 @@
 #include "misc/STL.h"
 #include "rhi/RHI.h"
 #include <cstdint>
+#include <limits>
 #include <type_traits>
 
 namespace Moer::Render {
 class UiDrawFrameBackend;
 
+struct UiCompositionFrameData {
+    bool       enabled         = false;
+    bool       separate_window = false;
+    uint2      output_resolution{};
+    float2     scene_color_position{};
+    float2     scene_color_resolution{};
+    TextureRef window_frame_buffer{};
+};
+
 class RENDER_API UiViewportRenderResources {
 public:
     virtual ~UiViewportRenderResources() = default;
+
+    /**
+     * UI upload-ring selection is speculative until the command source is
+     * accepted by the native queue. The renderer records one frame at a time,
+     * so a read-only token can be frozen in the copied packet and committed
+     * only after Fence::WaitSubmitted succeeds.
+     */
+    [[nodiscard]] virtual uint64_t GetPendingRecordingSlot() const noexcept = 0;
+    [[nodiscard]] virtual bool
+    IsPendingRecordingSlot(uint64_t slot) const noexcept = 0;
+    virtual void CommitRecordingSlot(uint64_t slot) noexcept = 0;
 };
 
 enum class EUiDrawExecutionThread : uint8_t {
@@ -40,9 +61,13 @@ struct UiDrawCommand {
 };
 
 struct UiViewportDrawPacket {
+    static constexpr uint64_t InvalidRecordingSlot =
+        std::numeric_limits<uint64_t>::max();
+
     float2 display_position{};
     float2 display_size{};
     float2 framebuffer_scale{1.f, 1.f};
+    uint64_t recording_slot = InvalidRecordingSlot;
 
     Array<UiDrawVertex>  vertices;
     Array<UiDrawIndex>   indices;
@@ -76,7 +101,7 @@ public:
     virtual void RenderGUI(
         CommandList&           _cmd_list,
         const TextureView&     _main_framebuffer,
-        UiDrawFramePacket&     _frame,
+        const UiDrawFramePacket& _frame,
         EUiDrawExecutionThread _execution_thread
     ) = 0;
     virtual void
@@ -86,7 +111,7 @@ public:
 RENDER_API void RenderUiDrawFrame(
     CommandList&           _cmd_list,
     const TextureView&     _main_framebuffer,
-    UiDrawFramePacket&     _frame,
+    const UiDrawFramePacket& _frame,
     EUiDrawExecutionThread _execution_thread
 );
 RENDER_API void PresentUiDrawFrame(const UiDrawFramePacket& _frame, EUiDrawExecutionThread _execution_thread);

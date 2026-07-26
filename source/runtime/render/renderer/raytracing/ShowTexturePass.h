@@ -47,7 +47,8 @@ public:
         ShowTextureParams          params,
         const TextureRef&          source,
         const TextureRef&          target,
-        RenderGraph::TokenHandle   frame_setup_ready
+        RenderGraph::TokenHandle   frame_setup_ready,
+        RenderGraph::TokenHandle   presentation_ready
     );
 
 private:

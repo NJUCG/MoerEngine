@@ -72,7 +72,7 @@ TextureRef UIRenderer::GetWindowFrameBuffer(void* _window) {
 void RenderUiDrawFrame(
     CommandList&           _cmd_list,
     const TextureView&     _main_framebuffer,
-    UiDrawFramePacket&     _frame,
+    const UiDrawFramePacket& _frame,
     EUiDrawExecutionThread _execution_thread
 ) {
     if (_frame.backend) {

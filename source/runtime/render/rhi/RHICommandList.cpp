@@ -356,6 +356,14 @@ void CommandList::CopyFrom(BufferView _src, TextureView _dst, std::string_view _
 }
 
 void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, std::string_view _name) {
+    CopyFrom(std::span<const byte>(_data.data(), _data.size()), _texture, _name);
+}
+
+void CommandList::CopyFrom(
+    std::span<const byte> _data,
+    TextureView           _texture,
+    std::string_view      _name
+) {
     uint3 extent = uint3(
         std::max(uint(_texture.extent.x) >> _texture.mip_level, 1u),
         std::max(uint(_texture.extent.y) >> _texture.mip_level, 1u),
@@ -377,6 +385,14 @@ void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, std::str
 }
 
 void CommandList::CopyFrom(std::span<byte> _data, BufferView _buffer, std::string_view _name) {
+    CopyFrom(std::span<const byte>(_data.data(), _data.size()), _buffer, _name);
+}
+
+void CommandList::CopyFrom(
+    std::span<const byte> _data,
+    BufferView            _buffer,
+    std::string_view      _name
+) {
     if (_data.size() == 0) {
         return;
     }

@@ -50,8 +50,11 @@ namespace Moer::Render::Raster {
           .IndivisualMips()                                                                                     \
           .SamplerConfig(SF_LINEAR, SAM_CLAMP_TO_EDGE))                                                         \
     X(TexHandle, tonemapping_output, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_UNORM).Usage(E_SAMPLED_COLOR))    \
-    X(TexHandle, ui_frame_buffer, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_UNORM).Usage(E_SAMPLED_COLOR))       \
-    X(TexHandle, output, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_SRGB).Usage(E_SAMPLED_COLOR))                 \
+    X(TexHandle,                                                                                                \
+      output,                                                                                                   \
+      Tex2DTag,                                                                                                 \
+      TexConfig::Default(PF_R8G8B8A8_SRGB)                                                                      \
+          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST))        \
     X(DepthBufferWithHandle,                                                                                    \
       depth_linear_sampler,                                                                                     \
       TexDepthTag,                                                                                              \

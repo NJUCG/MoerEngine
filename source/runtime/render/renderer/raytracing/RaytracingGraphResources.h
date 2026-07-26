@@ -37,6 +37,7 @@ struct RTGraphFrameResources {
     RenderGraph::TextureHandle feedback_color_ping{};
     RenderGraph::TextureHandle feedback_color_pong{};
     RenderGraph::TextureHandle env_map{};
+    RenderGraph::TokenHandle   presentation_ready{};
     RenderGraph::TokenHandle   nrd_ready{};
     RenderGraph::PassHandle    nrd_pass{};
 
@@ -157,6 +158,8 @@ inline RTGraphFrameResources RegisterRTGraphFrameResources(
         resources.env_map =
             ImportRTGraphTexture(graph, "RT.env_map", rt_ctx.env_map);
     }
+    resources.presentation_ready =
+        graph.CreateTransientToken("RT.presentation_ready");
 
     resources.current_view_depth = resources.current_frame ? resources.view_depth :
                                                              resources.prev_view_depth;

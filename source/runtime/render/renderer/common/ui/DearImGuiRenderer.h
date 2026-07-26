@@ -29,7 +29,7 @@ public:
     void RenderGUI(
         CommandList&           _cmd_list,
         const TextureView&     _main_framebuffer,
-        UiDrawFramePacket&     _frame,
+        const UiDrawFramePacket& _frame,
         EUiDrawExecutionThread _execution_thread
     ) override;
     void PresentWindows(const UiDrawFramePacket& _frame, EUiDrawExecutionThread _execution_thread) override;

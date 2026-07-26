@@ -2,6 +2,7 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHIImpl.h"
 
+#include <algorithm>
 #include <iostream>
 #include <set>
 #include <stdexcept>
@@ -181,6 +182,60 @@ void ProfilingPhasesPreserveOneLogicalFrame() {
     );
 }
 
+void ConstSpanUploadsOwnImmutableSnapshots() {
+    BufferRef target_buffer(MoerNew(RetainedTestBuffer)());
+    const Array<byte> expected{
+        byte{0x11},
+        byte{0x22},
+        byte{0x7f},
+        byte{0xa5},
+        byte{0x00},
+        byte{0xff},
+    };
+
+    const auto validate_snapshot = [&](const CmdSubmit& submit) {
+        Expect(
+            submit.cmds.size() == 1,
+            "const-span upload did not emit exactly one command"
+        );
+        Expect(
+            submit.cmds.front()->Type() == Command::EType::UploadBuffer,
+            "const-span upload changed command type"
+        );
+        const auto& upload =
+            *static_cast<const UploadBufferCmd*>(submit.cmds.front().get());
+        const auto data = upload.Data();
+        Expect(
+            data.size() == expected.size() &&
+                std::equal(data.begin(), data.end(), expected.begin()),
+            "const-span upload did not retain an immutable byte snapshot"
+        );
+        Expect(
+            upload.Handle() == reinterpret_cast<uint64>(target_buffer.Get()),
+            "const-span upload changed its destination buffer"
+        );
+        Expect(upload.Offset() == 128, "const-span upload changed its destination offset");
+    };
+
+    const auto record_snapshot = [&]() {
+        CommandList cmd_list;
+        Array<byte> source = expected;
+        cmd_list.CopyFrom(
+            std::span<const byte>(source.data(), source.size()),
+            target_buffer->GetView(128, source.size()),
+            "ConstSpanUploadSnapshot"
+        );
+
+        CmdSubmit submit = cmd_list.Submit();
+        std::fill(source.begin(), source.end(), byte{0xee});
+        validate_snapshot(submit);
+        return submit;
+    };
+
+    CmdSubmit retained_submit = record_snapshot();
+    validate_snapshot(retained_submit);
+}
+
 void PointAndCsmMarkerNamesAreCompleteAndDisjoint() {
     std::set<std::string_view> point_faces;
     std::set<std::string_view> point_culling;
@@ -321,6 +376,7 @@ int main() {
     try {
         MarkerScopesAreBalancedColoredAndImmobile();
         ProfilingPhasesPreserveOneLogicalFrame();
+        ConstSpanUploadsOwnImmutableSnapshots();
         PointAndCsmMarkerNamesAreCompleteAndDisjoint();
         PreparedRaytracingUpdatesAreNullSafeAndOneShot();
         PreparedRaytracingUpdatesRetainEveryNativeInput();
