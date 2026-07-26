@@ -90,6 +90,9 @@ public:
         EQueueType     _queue_type
     );
     ~VkNativeQueryPool();
+    VkNativeQueryPool(const VkNativeQueryPool&)            = delete;
+    VkNativeQueryPool& operator=(const VkNativeQueryPool&) = delete;
+
     VkQueryPool GetHandle() const {
         return query_pool;
     }
@@ -105,11 +108,17 @@ public:
     VulkanDevice& GetDevice() const {
         return device;
     }
+    // The owning allocator may grow an idle pool before command-buffer
+    // recording starts. Existing pools are never replaced while they are
+    // referenced by submitted work.
+    void EnsureCapacity(uint32 _required_count);
 
 private:
+    [[nodiscard]] VkQueryPool CreatePool(uint32 _query_count);
+
     VulkanDevice& device;
     VkQueryPool   query_pool{VK_NULL_HANDLE};
-    uint32        count;
+    uint32        count{0};
     VkQueryType   type;
     EQueueType    queue_type{EQueueType::Ignore};
 };
@@ -140,6 +149,7 @@ public:
     // the native command-buffer owner and already travels in the atomic
     // Submission -> Completion packet, so query state never needs a global
     // active-recording map or lock.
+    void EnsureTimestampQueryCapacity(size_t _required_count);
     void RecordTimestampQuery(VulkanCmdList& _cmd_list, const QueryCmd& _cmd);
     // GPU completion is a two-stage transaction. Prepare performs native
     // readback and fault classification without publishing user callbacks.
@@ -245,6 +255,9 @@ private:
     uint32                      next_timestamp_query{0};
     uint32                      timestamp_valid_bits{0};
     double                      timestamp_period_ns{0.0};
-    VkNativeQueryPool timestamp_pool;
+    // Most allocators never record an explicit Query command. Lazily creating
+    // this pool avoids adding a native driver object to every ordinary,
+    // parallel-worker, fallback, and Copy allocator.
+    std::optional<VkNativeQueryPool> timestamp_pool;
 };
 } // namespace Moer::Render

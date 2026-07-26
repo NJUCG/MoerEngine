@@ -57,6 +57,7 @@ struct QueryFuture::SharedState {
 struct QueryCancellationState {
     mutable std::mutex mutex{};
     bool               cancelled{false};
+    bool               sealed{false};
     std::string        reason{};
     Array<QueryToken>  tokens{};
     std::uint64_t      notification_owner{0};
@@ -415,11 +416,11 @@ bool QueryCancellationView::IsCancelled() const noexcept {
 
 bool QueryCancellationView::Cancel(std::string_view _reason) const noexcept {
     const QueryPublishBatch batch = QueryBackendAccess::BeginPublishBatch();
-    if (!PublishCancellation(_reason, batch)) {
-        return false;
-    }
-    NotifyCancellation(batch);
-    return true;
+    // Opaque shutdown may call Cancel from a thread that does not own the
+    // mutable producer. Publish Error immediately so waiters cannot hang, but
+    // leave callback notification with the CommandList generation's eventual
+    // submission/destruction/rejection owner.
+    return PublishCancellation(_reason, batch);
 }
 
 bool QueryCancellationView::PublishCancellation(
@@ -438,7 +439,7 @@ bool QueryCancellationView::PublishCancellation(
 
     {
         std::scoped_lock lock(state_->mutex);
-        if (state_->cancelled) {
+        if (state_->cancelled || state_->sealed) {
             return false;
         }
         state_->cancelled = true;
@@ -501,8 +502,13 @@ QueryPublishBatch QueryCancellationView::TakePublishedCancellationBatch(
     std::uint64_t notification_owner = 0;
     {
         std::scoped_lock lock(state_->mutex);
+        state_->sealed = true;
         notification_owner = state_->notification_owner;
         if (notification_owner == 0) {
+            // CmdSubmit already owns the canonical token array. Do not let a
+            // stale cancellation view retain a second copy after ownership
+            // has crossed the recording boundary.
+            state_->tokens.clear();
             return {};
         }
         state_->notification_owner = 0;

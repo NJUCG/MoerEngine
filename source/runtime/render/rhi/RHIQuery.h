@@ -229,8 +229,10 @@ public:
 struct QueryCancellationState;
 class CommandList;
 
-// Copyable shutdown handle for one immutable CommandList generation. Views
-// remain valid after the originating CommandList submits, drains, or moves.
+// Copyable shutdown handle for one CommandList generation. Views remain valid
+// for identity/diagnostics after the originating list submits or drains, but
+// Cancel can win only while that generation is still owned by a mutable
+// producer.
 class RENDER_API QueryCancellationView {
 public:
     QueryCancellationView() = default;
@@ -238,13 +240,19 @@ public:
     [[nodiscard]] bool Valid() const noexcept;
     [[nodiscard]] bool IsCancelled() const noexcept;
 
-    // Returns true only for the thread that performs the one-shot transition.
-    // All registered tokens become Error before this function returns.
+    // Returns true only for the thread that performs the one-shot transition;
+    // stale views return false once Submit has sealed the generation.
+    // All registered tokens become Error before this function returns, but
+    // user callbacks remain deferred until the owning CommandList reaches a
+    // submission/destruction/rejection boundary. This makes the view safe for
+    // opaque-producer shutdown without releasing client code on the arbitrary
+    // cancellation thread.
     bool Cancel(std::string_view _reason = "query generation was cancelled") const noexcept;
 
     // Cross-source rejection uses the same two-phase transaction as native
     // completion: publish every cancellation first, then release callbacks for
-    // every source. The convenience Cancel() performs both phases locally.
+    // every source. These transaction calls are internal ownership seams;
+    // Cancel() deliberately performs only the publish phase.
     bool PublishCancellation(
         std::string_view _reason,
         QueryPublishBatch _batch
@@ -259,7 +267,8 @@ public:
     void NotifyPublishedCancellation() const noexcept;
 
 private:
-    // Transfers a deferred cancellation transaction into an immutable submit.
+    // Seals this generation and transfers a deferred cancellation transaction
+    // into an immutable submit.
     // A valid result owns every token registered with this generation; the
     // caller must retain that token set and use the returned batch when it
     // eventually releases terminal callbacks.

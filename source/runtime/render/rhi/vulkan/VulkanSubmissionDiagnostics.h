@@ -276,6 +276,32 @@ RemoveVulkanBackendSyncWaitObserver(
     const VulkanBackendSyncWaitObserver* _observer
 ) noexcept;
 
+using VulkanScriptedQueryPreparationCallback =
+    VkResult (*)(void*, EQueueType, uint64, uint32) noexcept;
+
+struct VulkanScriptedQueryPreparationOverrideForTesting {
+    void*                                    context{nullptr};
+    VulkanScriptedQueryPreparationCallback  callback{nullptr};
+};
+
+// Narrow deterministic seam for a recoverable timestamp-pool preparation
+// rejection. The callback runs on the Translate owner while queue execution is
+// serialized, after the logical timeline is reserved but before command-buffer
+// recording or native query-pool allocation. VK_SUCCESS continues through the
+// production path; a non-device-loss error rejects this source without latching
+// the Vulkan device.
+//
+// Override storage and context are caller-owned and immutable while installed.
+// Quiesce the RHI runtime before removal and destroy them only after removal.
+[[nodiscard]] RENDER_API bool
+TryInstallVulkanScriptedQueryPreparationOverrideForTesting(
+    const VulkanScriptedQueryPreparationOverrideForTesting* _override
+) noexcept;
+[[nodiscard]] RENDER_API bool
+RemoveVulkanScriptedQueryPreparationOverrideForTesting(
+    const VulkanScriptedQueryPreparationOverrideForTesting* _override
+) noexcept;
+
 struct VulkanScriptedPresentResult {
     VulkanOperationResult outcome{
         EVulkanOperationStatus::Retry,

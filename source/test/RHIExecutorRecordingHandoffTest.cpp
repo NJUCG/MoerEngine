@@ -267,6 +267,111 @@ bool FrontendQueryRejectionTerminalizesBeforeOrdinaryCallbacks() {
                result.has_value() && result->status == QueryStatus::Error &&
                    !result->error_reason.empty(),
                "frontend rejection left the timestamp query non-terminal"
+            );
+}
+
+bool FrontendPresentRejectionPublishesBatchBeforeReceipt() {
+    PresentReceiptRef receipt = std::make_shared<PresentReceipt>();
+    std::atomic<bool> signal_observed_pending_receipt{false};
+    std::atomic<bool> query_observed_terminal_batch_and_receipt{false};
+    std::atomic<bool> ordinary_observed_query_notification{false};
+    std::atomic<int>  query_callbacks{0};
+    std::atomic<int>  ordinary_callbacks{0};
+    std::atomic<int>  success_callbacks{0};
+
+    RecordingFenceProbe signal(
+        std::shared_ptr<std::atomic_bool>{},
+        [&] {
+            const PresentReceiptResult result =
+                receipt->WaitForSubmission(0ms);
+            signal_observed_pending_receipt.store(
+                !result.resolved,
+                std::memory_order_release
+            );
+        }
+    );
+
+    CommandList commands(EQueueType::Graphics);
+    commands.Signal(&signal, 13);
+    commands.AddCallback([&] {
+        const PresentReceiptResult present_result =
+            receipt->WaitForSubmission(0ms);
+        ordinary_observed_query_notification.store(
+            present_result.resolved && !present_result.submitted &&
+                signal.IsRejected(13) &&
+                query_callbacks.load(std::memory_order_acquire) == 1,
+            std::memory_order_release
+        );
+        ordinary_callbacks.fetch_add(1, std::memory_order_release);
+    });
+    commands.AddSuccessCallback([&] {
+        success_callbacks.fetch_add(1, std::memory_order_release);
+    });
+
+    QueryToken token =
+        commands.BeginTimestampQuery("FrontendRejectedPresentTimestamp");
+    QueryFuture future = token.GetFuture();
+    commands.EndTimestampQuery(token);
+    future.Then([&](const QueryResult& _result) {
+        const PresentReceiptResult present_result =
+            receipt->WaitForSubmission(0ms);
+        query_observed_terminal_batch_and_receipt.store(
+            _result.status == QueryStatus::Error && signal.IsRejected(13) &&
+                present_result.resolved && !present_result.submitted,
+            std::memory_order_release
+        );
+        query_callbacks.fetch_add(1, std::memory_order_release);
+    });
+
+    // The invalid Present request is rejected synchronously, without requiring
+    // a RenderDevice. Its receipt must remain Pending while sibling Signals
+    // are rejected, then resolve after Query state publication and before any
+    // Query or ordinary callback notification.
+    RHIPresentRequest present{};
+    present.receipt = receipt;
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        commands.Submit(),
+        ERHIExecSubmitFlags::None,
+        &present
+    );
+
+    const PresentReceiptResult present_result =
+        receipt->WaitForSubmission(100ms);
+    const std::optional<QueryResult> query_result = future.TryGet();
+    return Expect(
+               signal_observed_pending_receipt.load(
+                   std::memory_order_acquire
+               ),
+               "frontend Present receipt resolved before a sibling signal became terminal"
+           ) &&
+           Expect(
+               present_result.resolved && !present_result.submitted &&
+                   receipt->ResolutionAttemptCount() == 1,
+               "frontend Present rejection did not resolve its receipt exactly once"
+           ) &&
+           Expect(
+               query_result.has_value() &&
+                   query_result->status == QueryStatus::Error,
+               "frontend Present rejection left a sibling Query Pending"
+           ) &&
+           Expect(
+               query_callbacks.load(std::memory_order_acquire) == 1 &&
+                   query_observed_terminal_batch_and_receipt.load(
+                       std::memory_order_acquire
+                   ),
+               "Query callback ran before the rejected batch and Present receipt were terminal"
+           ) &&
+           Expect(
+               ordinary_callbacks.load(std::memory_order_acquire) == 1 &&
+                   ordinary_observed_query_notification.load(
+                       std::memory_order_acquire
+                   ),
+               "ordinary callback ran before Query notification or Present rejection"
+           ) &&
+           Expect(
+               success_callbacks.load(std::memory_order_acquire) == 0,
+               "frontend Present rejection invoked a success-only callback"
            );
 }
 
@@ -384,8 +489,12 @@ bool DirectCommandListGroupPreflightRejectsEverySource() {
     std::array<std::atomic<int>, 3> ordinary_callbacks{};
     std::array<std::atomic<int>, 3> success_callbacks{};
     std::array<std::atomic<bool>, 3> query_observed_error{};
+    std::array<std::atomic<bool>, 3> query_observed_present_rejection{};
     std::array<std::atomic<bool>, 3> ordinary_observed_own_query{};
     std::atomic<bool> first_query_observed_last_terminal{false};
+    PresentReceiptRef receipt = std::make_shared<PresentReceipt>();
+    RHIPresentRequest present{};
+    present.receipt = receipt;
 
     for (size_t index = 0; index < command_lists.size(); ++index) {
         command_lists[index].Signal(&signals[index], 40 + index);
@@ -422,6 +531,12 @@ bool DirectCommandListGroupPreflightRejectsEverySource() {
                 _result.status == QueryStatus::Error,
                 std::memory_order_release
             );
+            const PresentReceiptResult present_result =
+                receipt->WaitForSubmission(0ms);
+            query_observed_present_rejection[index].store(
+                present_result.resolved && !present_result.submitted,
+                std::memory_order_release
+            );
             query_callbacks[index].fetch_add(
                 1, std::memory_order_release
             );
@@ -433,7 +548,7 @@ bool DirectCommandListGroupPreflightRejectsEverySource() {
         RHIExecutor::Get().Submit(
             std::move(command_lists),
             ERHIExecSubmitFlags::None,
-            nullptr
+            &present
         );
     } catch (...) {
         threw = true;
@@ -461,6 +576,12 @@ bool DirectCommandListGroupPreflightRejectsEverySource() {
             "direct CommandList group preflight did not notify a Query callback exactly once"
         );
         okay &= Expect(
+            query_observed_present_rejection[index].load(
+                std::memory_order_acquire
+            ),
+            "direct CommandList group Query callback ran before Present rejection"
+        );
+        okay &= Expect(
             ordinary_callbacks[index].load(std::memory_order_acquire) == 1 &&
                 ordinary_observed_own_query[index].load(
                     std::memory_order_acquire
@@ -479,6 +600,13 @@ bool DirectCommandListGroupPreflightRejectsEverySource() {
     okay &= Expect(
         first_query_observed_last_terminal.load(std::memory_order_acquire),
         "direct CommandList group preflight allowed an earlier Query callback to observe a later Future Pending"
+    );
+    const PresentReceiptResult present_result =
+        receipt->WaitForSubmission(100ms);
+    okay &= Expect(
+        present_result.resolved && !present_result.submitted &&
+            receipt->ResolutionAttemptCount() == 1,
+        "direct CommandList group preflight did not reject Present exactly once"
     );
 
     // Keep the regression bounded and release raw fence ownership even when
@@ -1608,6 +1736,7 @@ bool ShutdownDrainsAcceptedReadyWork() {
 int main() {
     if (!CommandListSignalTracksNativeAcceptanceAndRejection() ||
         !FrontendQueryRejectionTerminalizesBeforeOrdinaryCallbacks() ||
+        !FrontendPresentRejectionPublishesBatchBeforeReceipt() ||
         !DeferredOpaqueCancellationTicketSurvivesSubmit() ||
         !DirectCommandListGroupPreflightRejectsEverySource() ||
         !DirectCommandListGroupMaterializationFailureRejectsPrefixAndSuffix() ||

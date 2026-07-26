@@ -348,20 +348,37 @@ void BulkErrorPathsPublishEveryPeerBeforeNotification() {
         }
     });
 
+    std::atomic_bool cancellation_won{false};
+    std::thread cancellation_thread([&] {
+        cancellation_won.store(
+            cancellation.Cancel("test cancellation"),
+            std::memory_order_release
+        );
+    });
+    cancellation_thread.join();
     Expect(
-        cancellation.Cancel("test cancellation"),
+        cancellation_won.load(std::memory_order_acquire),
         "QueryCancellationView did not win its cancellation transition"
     );
     Expect(
-        cancel_first_observed_second_error.load(std::memory_order_acquire),
-        "cancellation callback could not observe its peer as terminal"
+        cancel_first.GetFuture().Status() == QueryStatus::Error &&
+            cancel_second.GetFuture().Status() == QueryStatus::Error,
+        "cancellation did not publish every token before returning"
     );
     Expect(
-        cancellation_callback_count.load(std::memory_order_relaxed) == 2,
-        "bulk cancellation did not notify both callbacks exactly once"
+        cancellation_callback_count.load(std::memory_order_relaxed) == 0,
+        "opaque cancellation released callbacks on the cancellation thread"
     );
 
     auto cleanup = cancellation_list.DrainOrdinaryCallbacksForRejection();
+    Expect(
+        cancel_first_observed_second_error.load(std::memory_order_acquire),
+        "deferred cancellation callback could not observe its peer as terminal"
+    );
+    Expect(
+        cancellation_callback_count.load(std::memory_order_relaxed) == 2,
+        "ownership-boundary cancellation did not notify both callbacks exactly once"
+    );
     for (auto& callback : cleanup) {
         callback();
     }
@@ -950,6 +967,33 @@ void MoveAndSubmitRetainIdentityAndLifetime() {
 }
 
 void CancellationViewIsStableAndGenerationScoped() {
+    CommandList sealed_list(EQueueType::Graphics);
+    QueryCancellationView sealed_view =
+        sealed_list.GetQueryCancellationView();
+    QueryToken sealed_token =
+        sealed_list.BeginTimestampQuery("SealedGenerationTimestamp");
+    sealed_list.EndTimestampQuery(sealed_token);
+    QueryFuture sealed_future = sealed_token.GetFuture();
+    CmdSubmit sealed_submit = sealed_list.Submit();
+    Expect(
+        !sealed_view.Cancel("late stale-view cancellation"),
+        "a stale cancellation view mutated a submitted generation"
+    );
+    Expect(
+        sealed_future.Status() == QueryStatus::Pending,
+        "stale cancellation changed the submitted query result"
+    );
+    Expect(
+        QueryBackendAccess::ResolveTimestamp(
+            sealed_submit.query_tokens.front(), TestTimestampResult()
+        ),
+        "submitted generation could not resolve after stale cancellation lost"
+    );
+    Expect(
+        sealed_future.Get().status == QueryStatus::Ready,
+        "submitted generation lost its Ready result after stale cancellation"
+    );
+
     CommandList           list(EQueueType::Graphics);
     QueryCancellationView first_generation = list.GetQueryCancellationView();
     Expect(first_generation.Valid(), "CommandList exposed an invalid cancellation view");

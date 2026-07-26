@@ -108,6 +108,11 @@ private:
         std::mutex                     mutex{};
     };
 
+    struct RuntimePreCompletionPublication {
+        std::shared_ptr<BatchRejectionPublication> rejection_publication{};
+        size_t                                     reject_from{0};
+    };
+
     using RecordedSourcePacket = std::variant<
         std::monostate,
         VkCommandQueue::CurrentVulkanRecordedSubmit,
@@ -198,18 +203,25 @@ private:
         CmdSubmit&& _submit
     ) noexcept;
     [[nodiscard]] VulkanRuntimeSubmissionResult SubmitRecordedSourceForRuntime(
-        EQueueType            _queue,
-        RecordedSourcePacket&& _packet
+        EQueueType                            _queue,
+        RecordedSourcePacket&&                _packet,
+        const VulkanRuntimePreCompletionHook* _pre_completion = nullptr
+    ) noexcept;
+    static void PublishRuntimeFailureBeforeCompletion(
+        void*                                _context,
+        const VulkanRuntimeSubmissionResult& _result
     ) noexcept;
     void RejectRecordedSourceForRuntime(
         EQueueType             _queue,
         RecordedSourcePacket&& _packet,
-        VkResult               _result
+        VkResult               _result,
+        bool                   _recoverable
     ) noexcept;
     void RejectSourceForRuntime(
         EQueueType _queue,
         CmdSubmit&& _submit,
-        VkResult    _result
+        VkResult    _result,
+        bool        _recoverable
     ) noexcept;
     [[nodiscard]] static bool HasRecordedSourcePacket(
         const RecordedSourcePacket& _packet
@@ -242,6 +254,7 @@ private:
         RHIBackendSubmissionBatch&& _batch,
         int32                       _result,
         std::string_view            _reason,
+        bool                        _recoverable,
         size_t                      _first_source = 0,
         size_t*                     _next_unconsumed_source = nullptr
     );

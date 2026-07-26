@@ -232,6 +232,14 @@ struct VulkanRuntimeSubmissionResult {
     }
 };
 
+using VulkanRuntimePreCompletionCallback =
+    void (*)(void*, const VulkanRuntimeSubmissionResult&) noexcept;
+
+struct VulkanRuntimePreCompletionHook {
+    void*                                context{nullptr};
+    VulkanRuntimePreCompletionCallback  callback{nullptr};
+};
+
 struct VulkanCallbackBatch {
     Array<std::function<void()>> callbacks;
     bool                         success_only{false};
@@ -667,7 +675,7 @@ private:
             CmdSubmit&&                   _submit,
             const VulkanOperationContext& _context,
             uint64                        _timeline
-        ) :
+        ) noexcept :
             submit(std::move(_submit)), context(_context), timeline(_timeline) {}
 
         CurrentVulkanRecordedSubmit(const CurrentVulkanRecordedSubmit&) = delete;
@@ -708,18 +716,25 @@ private:
     );
     CurrentVulkanSubmitResult SubmitRecorded(
         CurrentVulkanRecordedSubmit& _recorded,
-        const std::atomic_bool*       _continue_waiting = nullptr
+        const std::atomic_bool*       _continue_waiting = nullptr,
+        bool                          _defer_completion = false
     );
     std::optional<CurrentVulkanRecordedSubmit>
         TranslateForRuntime(CmdSubmit&& _submit) noexcept;
     VulkanRuntimeSubmissionResult SubmitRecordedForRuntime(
-        CurrentVulkanRecordedSubmit _recorded
+        CurrentVulkanRecordedSubmit             _recorded,
+        const VulkanRuntimePreCompletionHook*   _pre_completion = nullptr
     ) noexcept;
     void RejectRecordedForRuntime(
         CurrentVulkanRecordedSubmit&& _recorded,
-        VkResult                       _result
+        VkResult                       _result,
+        bool                           _recoverable
     ) noexcept;
-    void RejectForRuntime(CmdSubmit&& _submit, VkResult _result) noexcept;
+    void RejectForRuntime(
+        CmdSubmit&& _submit,
+        VkResult    _result,
+        bool        _recoverable
+    ) noexcept;
     [[nodiscard]] bool ClaimRuntimeOwnership();
     void ReleaseRuntimeOwnership() noexcept;
     void CancelRuntimeDependencyWaits() noexcept;
@@ -965,12 +980,18 @@ private:
     void RHIThreadLoop();
 
 private:
-    void RejectForRuntime(CmdSubmit&& _submit, VkResult _result) noexcept;
+    void RejectForRuntime(
+        CmdSubmit&& _submit,
+        VkResult    _result,
+        bool        _recoverable
+    ) noexcept;
     void EnableRuntimeDependencyWaits() noexcept;
     void CancelRuntimeDependencyWaits() noexcept;
 
     struct CurrentVulkanCopyRecordedSubmit {
-        explicit CurrentVulkanCopyRecordedSubmit(CmdSubmit&& _submit) :
+        explicit CurrentVulkanCopyRecordedSubmit(
+            CmdSubmit&& _submit
+        ) noexcept :
             submit(std::move(_submit)) {}
 
         CurrentVulkanCopyRecordedSubmit(
@@ -1002,11 +1023,13 @@ private:
     std::optional<CurrentVulkanCopyRecordedSubmit>
         TranslateForRuntime(CmdSubmit&& _submit) noexcept;
     VulkanRuntimeSubmissionResult SubmitRecordedForRuntime(
-        CurrentVulkanCopyRecordedSubmit _recorded
+        CurrentVulkanCopyRecordedSubmit         _recorded,
+        const VulkanRuntimePreCompletionHook*   _pre_completion = nullptr
     ) noexcept;
     void RejectRecordedForRuntime(
         CurrentVulkanCopyRecordedSubmit&& _recorded,
-        VkResult                           _result
+        VkResult                           _result,
+        bool                               _recoverable
     ) noexcept;
     [[nodiscard]] bool ClaimRuntimeOwnership();
     void ReleaseRuntimeOwnership() noexcept;

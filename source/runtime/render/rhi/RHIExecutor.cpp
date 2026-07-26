@@ -91,7 +91,8 @@ void ResolveRejectedPresent(RHIPresentRequest* _present) noexcept {
 // user code only after all executor locks have been released.
 void FinalizeRejectedSubmissions(
     Array<RHIBackendSubmissionBatchEntry>&& _submits,
-    std::string_view                         _reason
+    std::string_view                         _reason,
+    RHIPresentRequest*                       _present = nullptr
 ) noexcept {
     size_t callback_count       = 0;
     size_t success_callback_cnt = 0;
@@ -134,6 +135,13 @@ void FinalizeRejectedSubmissions(
                 query_batch;
         entry.submit.PublishPendingQueryErrors(_reason, entry_batch);
     }
+
+    // A Present receipt is a public observation boundary for the complete
+    // frontend batch. Publish every sibling Signal and Query terminal state
+    // before waking its waiter, but resolve it before Query/ordinary callback
+    // notification so user code can safely wait for the receipt.
+    ResolveRejectedPresent(_present);
+
     for (RHIBackendSubmissionBatchEntry& entry : _submits) {
         entry.submit.NotifyPendingQueries(
             entry.submit.query_publish_batch.Valid() ?
@@ -214,6 +222,11 @@ void FinalizeRejectedCommandListGroup(
         entry.submit.PublishPendingQueryErrors(_reason, entry_batch);
     }
 
+    // Query state publication is distinct from callback notification. Resolve
+    // Present only after the complete group is terminal, then release Query
+    // callbacks so they may synchronously observe or wait for that receipt.
+    ResolveRejectedPresent(_present);
+
     if (captured_every_generation) {
         for (const size_t source_index : _materialized_source_indices) {
             if (source_index >= _query_cancellations.size()) {
@@ -236,9 +249,6 @@ void FinalizeRejectedCommandListGroup(
         );
     }
 
-    // Present resolution and ordinary callbacks are user-code boundaries.
-    // Enter them only after every signal and Query in the group is terminal.
-    ResolveRejectedPresent(_present);
     FinalizeRejectedSubmissions(std::move(_submits), _reason);
 
     size_t cleanup_callback_count = 0;
@@ -400,8 +410,9 @@ void FinalizeRejectedBackendBatch(
 ) noexcept {
     RHIPresentRequest* present =
         _batch.present.has_value() ? &*_batch.present : nullptr;
-    ResolveRejectedPresent(present);
-    FinalizeRejectedSubmissions(std::move(_batch.submits), _reason);
+    FinalizeRejectedSubmissions(
+        std::move(_batch.submits), _reason, present
+    );
 }
 
 void ReportBackendCreationFailure(
@@ -975,10 +986,10 @@ void RHIExecutor::Submit(
         }
     );
     if (!present_valid || !queues_valid) {
-        ResolveRejectedPresent(_present);
         FinalizeRejectedSubmissions(
             std::move(_submits),
-            present_valid ? "invalid queue" : "invalid Present request"
+            present_valid ? "invalid queue" : "invalid Present request",
+            _present
         );
         return;
     }
@@ -997,10 +1008,10 @@ void RHIExecutor::Submit(
                                              &*payload->present :
                                              nullptr;
             if (_result != ERHIRecordingHandoffResult::Consume) {
-                ResolveRejectedPresent(present);
                 FinalizeRejectedSubmissions(
                     std::move(payload->submits),
-                    "recording handoff is stopped"
+                    "recording handoff is stopped",
+                    present
                 );
                 return;
             }
@@ -1024,10 +1035,10 @@ void RHIExecutor::SubmitReady(
             }
         );
     if (legacy_multi_segment_source) {
-        ResolveRejectedPresent(_present);
         FinalizeRejectedSubmissions(
             std::move(_submits),
-            "legacy backend does not support multi-segment sources"
+            "legacy backend does not support multi-segment sources",
+            _present
         );
         return;
     }
@@ -1043,10 +1054,10 @@ void RHIExecutor::SubmitReady(
             reject_before_dispatch = lifecycle_state != ELifecycleState::Running;
         }
         if (reject_before_dispatch) {
-            ResolveRejectedPresent(_present);
             FinalizeRejectedSubmissions(
                 std::move(_submits),
-                "executor is stopping or stopped"
+                "executor is stopping or stopped",
+                _present
             );
             return;
         }
@@ -1114,10 +1125,10 @@ void RHIExecutor::SubmitReady(
             return;
         }
         if (rejected) {
-            ResolveRejectedPresent(_present);
             FinalizeRejectedSubmissions(
                 std::move(_submits),
-                "executor stopped while publishing Present"
+                "executor stopped while publishing Present",
+                _present
             );
         }
         return;

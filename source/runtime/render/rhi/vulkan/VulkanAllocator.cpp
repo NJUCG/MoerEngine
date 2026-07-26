@@ -140,14 +140,26 @@ VkNativeQueryPool::VkNativeQueryPool(
     EQueueType     _queue_type
 ) :
     device(_device),
-    count(_query_count),
     type(_type),
     queue_type(_queue_type) {
+    query_pool = CreatePool(_query_count);
+    count      = _query_count;
+}
+
+VkQueryPool VkNativeQueryPool::CreatePool(uint32 _query_count) {
+    if (_query_count == 0) {
+        throw std::invalid_argument(
+            "Vulkan query-pool creation requires at least one slot"
+        );
+    }
+
     VkQueryPoolCreateInfo create_info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
-    create_info.queryType  = _type;
+    create_info.queryType  = type;
     create_info.queryCount = _query_count;
-    const VkResult result =
-        vkCreateQueryPool(device.GetDevice(), &create_info, nullptr, &query_pool);
+    VkQueryPool new_pool = VK_NULL_HANDLE;
+    const VkResult result = vkCreateQueryPool(
+        device.GetDevice(), &create_info, nullptr, &new_pool
+    );
     if (result != VK_SUCCESS) {
         device.TryLatchFirstFault(
             VulkanOperationContext{
@@ -161,6 +173,7 @@ VkNativeQueryPool::VkNativeQueryPool(
             std::string(VulkanResultName(result))
         );
     }
+    return new_pool;
 }
 
 VkNativeQueryPool::~VkNativeQueryPool() {
@@ -175,16 +188,58 @@ VkResult VkNativeQueryPool::GetResults(
     uint32             _query_count,
     VkQueryResultFlags _flags
 ) {
+    if (_query_count == 0) {
+        return VK_SUCCESS;
+    }
+    if (_first_query > count || _query_count > count - _first_query) {
+        throw std::out_of_range(
+            "Vulkan query result range exceeds the native pool"
+        );
+    }
+
+    const size_t values_per_query =
+        (_flags & VK_QUERY_RESULT_WITH_AVAILABILITY_BIT) != 0 ? 2u : 1u;
+    if (_query_count > _data.size() / values_per_query) {
+        throw std::invalid_argument(
+            "Vulkan query result span is too small for the requested flags"
+        );
+    }
+    const VkDeviceSize stride =
+        sizeof(uint64) * static_cast<VkDeviceSize>(values_per_query);
     return vkGetQueryPoolResults(
         device.GetDevice(),
         query_pool,
         _first_query,
         _query_count,
-        _data.size(),
+        _data.size_bytes(),
         _data.data(),
-        sizeof(uint64),
+        stride,
         VK_QUERY_RESULT_64_BIT | _flags
     );
+}
+
+void VkNativeQueryPool::EnsureCapacity(uint32 _required_count) {
+    if (_required_count <= count) {
+        return;
+    }
+
+    uint32 grown_count = std::max(count, uint32{1});
+    while (grown_count < _required_count) {
+        if (grown_count > std::numeric_limits<uint32>::max() / 2) {
+            grown_count = _required_count;
+            break;
+        }
+        grown_count *= 2;
+    }
+
+    // Allocate first so a failed growth preserves the old idle pool. The
+    // owning VulkanAllocator calls this only before beginning native record.
+    VkQueryPool replacement = CreatePool(grown_count);
+    if (query_pool != VK_NULL_HANDLE) {
+        vkDestroyQueryPool(device.GetDevice(), query_pool, nullptr);
+    }
+    query_pool = replacement;
+    count      = grown_count;
 }
 
 #pragma endregion
@@ -198,8 +253,7 @@ VulkanAllocator::VulkanAllocator(VulkanDevice* _device, EQueueType _type) :
     scratch_allocator(_device, &allocator),
     shader_buffer_allocator(_device, &allocator),
     timestamp_valid_bits(_device->GetTimestampValidBits(_type)),
-    timestamp_period_ns(_device->GetCoreProperties().core_1_0.limits.timestampPeriod),
-    timestamp_pool(*_device, VK_QUERY_TYPE_TIMESTAMP, 1000, _type) {}
+    timestamp_period_ns(_device->GetCoreProperties().core_1_0.limits.timestampPeriod) {}
 
 VulkanAllocator::~VulkanAllocator() {
     upload_allocator.Dispose();
@@ -262,8 +316,47 @@ VulkanAllocator::FindTimestampQueryRecord(uint64 _token_id) noexcept {
     return iter == timestamp_query_records.end() ? nullptr : &*iter;
 }
 
+void VulkanAllocator::EnsureTimestampQueryCapacity(size_t _required_count) {
+    if (_required_count == 0) {
+        return;
+    }
+    if (next_timestamp_query != 0 || !timestamp_query_records.empty()) {
+        throw std::logic_error(
+            "Vulkan timestamp query pool can grow only before recording"
+        );
+    }
+    if (timestamp_valid_bits == 0) {
+        throw std::runtime_error(
+            "Vulkan queue family does not support timestamp queries"
+        );
+    }
+    if (_required_count > std::numeric_limits<uint32>::max()) {
+        throw std::length_error(
+            "Vulkan timestamp query slot count exceeds uint32 capacity"
+        );
+    }
+
+    const uint32 required_count = static_cast<uint32>(_required_count);
+    // Reserve every CPU-side record before native recording begins. A Query
+    // begin writes commands immediately; allowing emplace_back to allocate
+    // afterwards could turn an otherwise legal packet into a partial native
+    // recording that cannot be replayed safely.
+    timestamp_query_records.reserve(_required_count);
+    if (!timestamp_pool) {
+        timestamp_pool.emplace(
+            *m_device,
+            VK_QUERY_TYPE_TIMESTAMP,
+            required_count,
+            queue_type
+        );
+        return;
+    }
+    timestamp_pool->EnsureCapacity(required_count);
+}
+
 uint32 VulkanAllocator::AllocateTimestampQuerySlot() {
-    if (next_timestamp_query >= timestamp_pool.GetCount()) {
+    if (!timestamp_pool ||
+        next_timestamp_query >= timestamp_pool->GetCount()) {
         throw std::runtime_error(
             "Vulkan timestamp query pool exhausted for one recorded command buffer"
         );
@@ -291,9 +384,9 @@ void VulkanAllocator::RecordTimestampQuery(
             throw std::runtime_error("duplicate Vulkan timestamp query begin");
         }
         const uint32 slot = AllocateTimestampQuerySlot();
-        _cmd_list.ResetQueryPool(timestamp_pool, slot, 1);
+        _cmd_list.ResetQueryPool(*timestamp_pool, slot, 1);
         _cmd_list.WriteTimeStamp(
-            timestamp_pool, slot, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT
+            *timestamp_pool, slot, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT
         );
         timestamp_query_records.emplace_back(TimestampQueryRecord{
             .token      = token,
@@ -313,9 +406,9 @@ void VulkanAllocator::RecordTimestampQuery(
         throw std::runtime_error("duplicate Vulkan timestamp query end");
     }
     const uint32 slot = AllocateTimestampQuerySlot();
-    _cmd_list.ResetQueryPool(timestamp_pool, slot, 1);
+    _cmd_list.ResetQueryPool(*timestamp_pool, slot, 1);
     _cmd_list.WriteTimeStamp(
-        timestamp_pool, slot, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT
+        *timestamp_pool, slot, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT
     );
     record->end_slot = slot;
 }
@@ -337,9 +430,12 @@ VkResult VulkanAllocator::PrepareTimestampQueriesAfterGpuCompletion(
 
     auto resolve_slot = [&](uint32 _slot, uint64& _value) noexcept {
         NativeTimestampResult native_result{};
+        if (!timestamp_pool) {
+            return VK_ERROR_UNKNOWN;
+        }
         const VkResult result = vkGetQueryPoolResults(
             m_device->GetDevice(),
-            timestamp_pool.GetHandle(),
+            timestamp_pool->GetHandle(),
             _slot,
             1,
             sizeof(native_result),
