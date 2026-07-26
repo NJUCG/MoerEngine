@@ -710,12 +710,109 @@ def _require_bounded_cross_batch_pipeline(mode: str, text: str) -> None:
     )
 
 
+def _require_phase15f_present_boundary(mode: str, text: str) -> None:
+    if mode == "present-boundary":
+        serial_control = _testcase_marker(
+            "SerialControlPipelineBoundary", text
+        )
+        _require(
+            serial_control is not None and serial_control[0] == "PASS",
+            f"{mode}: missing SerialControlPipelineBoundary PASS marker",
+        )
+        _, serial_fields = serial_control
+        _require(
+            serial_fields.get("order")
+            == "Prefix,SerialControl,Later"
+            and serial_fields.get("owner") == "Submission"
+            and serial_fields.get("later_translate") == "blocked"
+            and serial_fields.get("readback") == "verified"
+            and serial_fields.get("signals") == "success"
+            and serial_fields.get("boundary_events") == "2"
+            and serial_fields.get("native_submits") == "3"
+            and serial_fields.get("replay") == "0",
+            f"{mode}: incomplete SerialControl pipeline-boundary contract",
+        )
+        shutdown = _testcase_marker(
+            "QueuedPresentShutdownBoundary", text
+        )
+        _require(
+            shutdown is not None and shutdown[0] == "PASS",
+            f"{mode}: missing QueuedPresentShutdownBoundary PASS marker",
+        )
+        _, shutdown_fields = shutdown
+        _require(
+            shutdown_fields.get("outcome") == "Retry"
+            and shutdown_fields.get("prefix") == "rejected"
+            and shutdown_fields.get("receipt_attempts") == "1"
+            and shutdown_fields.get("submitted") == "false"
+            and shutdown_fields.get("recreate") == "false"
+            and shutdown_fields.get("owner") == "Submission"
+            and shutdown_fields.get("native_submit") == "0"
+            and shutdown_fields.get("owners") == "stopped"
+            and shutdown_fields.get("replay") == "0",
+            f"{mode}: incomplete queued Present shutdown contract",
+        )
+
+    marker_name = (
+        "PresentPipelineBoundary"
+        if mode == "present-boundary"
+        else "PresentHardFailureBoundary"
+    )
+    marker = _testcase_marker(marker_name, text)
+    _require(
+        marker is not None and marker[0] == "PASS",
+        f"{mode}: missing {marker_name} PASS marker",
+    )
+    _, fields = marker
+    if mode == "present-boundary":
+        _require(
+            fields.get("outcome") == "Recreate"
+            and fields.get("order")
+            == "Prefix,Bridge?,Present,Later"
+            and fields.get("owner") == "Submission"
+            and fields.get("receipt_attempts") == "1"
+            and fields.get("submitted") == "false"
+            and fields.get("recreate") == "true"
+            and fields.get("completion") == "drained"
+            and fields.get("later_batch") == "success"
+            and fields.get("present_only") == "verified"
+            and fields.get("bridge") in {"required", "elided"}
+            and fields.get("graphics_native") is not None
+            and fields.get("prefix_native") is not None
+            and fields.get("readback") == "verified"
+            and (
+                fields.get("bridge") == "required"
+                or fields.get("graphics_native")
+                == fields.get("prefix_native")
+            )
+            and fields.get("replay") == "0",
+            f"{mode}: incomplete Present pipeline-boundary contract",
+        )
+        return
+
+    _require(
+        fields.get("outcome") == "Rejected"
+        and fields.get("owner") == "Submission"
+        and fields.get("receipt_attempts") == "1"
+        and fields.get("submitted") == "false"
+        and fields.get("recreate") == "false"
+        and fields.get("later_batch") == "rejected"
+        and fields.get("native_after_present") == "0"
+        and fields.get("hard_latch") == "verified"
+        and fields.get("replay") == "0",
+        f"{mode}: incomplete hard Present boundary contract",
+    )
+
+
 def validate_log(mode: str, text: str) -> None:
     _require("[TESTCASE][FAIL]" not in text, f"{mode}: test emitted a FAIL marker")
     _require("VUID-" not in text, f"{mode}: Vulkan validation VUID was emitted")
     _require("Validation Error" not in text, f"{mode}: Vulkan validation error was emitted")
     if mode in ("pipeline-window1", "pipeline-window2"):
         _require_bounded_cross_batch_pipeline(mode, text)
+        return
+    if mode in ("present-boundary", "present-hard"):
+        _require_phase15f_present_boundary(mode, text)
         return
     _require_phase15c_completion_aggregate_cpu_probe(mode, text)
     if mode == "translate-hard":
@@ -995,6 +1092,10 @@ def run_case(executable: Path, outdir: Path, mode: str, timeout: float) -> Path:
         arguments.append("--pipeline-window1")
     if mode == "pipeline-window2":
         arguments.append("--pipeline-window2")
+    if mode == "present-boundary":
+        arguments.append("--present-boundary")
+    if mode == "present-hard":
+        arguments.append("--present-hard")
 
     completed = subprocess.run(
         [str(executable), *arguments],
@@ -1047,6 +1148,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "multi-segment-hard",
                 "pipeline-window1",
                 "pipeline-window2",
+                "present-boundary",
+                "present-hard",
             )
         ]
     except (OSError, subprocess.TimeoutExpired, VulkanTestError) as error:

@@ -1751,6 +1751,7 @@ public:
     void Resolve(bool _submitted, bool _recreate_swapchain = false) {
         {
             std::unique_lock<std::mutex> lock(mutex);
+            ++resolution_attempts;
             if (resolved) {
                 return;
             }
@@ -1772,11 +1773,17 @@ public:
         return result;
     }
 
+    [[nodiscard]] uint32 ResolutionAttemptCount() const noexcept {
+        std::unique_lock<std::mutex> lock(mutex);
+        return resolution_attempts;
+    }
+
 private:
-    std::mutex               mutex;
+    mutable std::mutex       mutex;
     std::condition_variable  cv;
     PresentReceiptResult     result{};
     bool                     resolved{false};
+    uint32                   resolution_attempts{0};
 };
 
 using PresentReceiptRef = SharedPtr<PresentReceipt>;

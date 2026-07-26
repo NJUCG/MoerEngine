@@ -202,6 +202,17 @@ private:
     bool                   armed{true};
 };
 
+class HeadlessScriptedSwapchain final : public Swapchain {
+public:
+    HeadlessScriptedSwapchain() {
+        format = PF_R8G8B8A8_UNORM;
+        size   = Extent2D(4, 4);
+    }
+
+    void Recreate(const SwapchainCreateInfo&) override {}
+    void Sync() override {}
+};
+
 class SourceSubmissionCapture final {
 public:
     explicit SourceSubmissionCapture(uint64 _async_queue_scope) : async_queue_scope(_async_queue_scope) {}
@@ -490,6 +501,156 @@ private:
     bool                           installed{false};
 };
 
+class SubmissionBoundaryCapture final {
+public:
+    static void Observe(
+        void*                              _context,
+        const VulkanSubmissionBoundaryEvent& _event
+    ) noexcept {
+        auto& capture =
+            *static_cast<SubmissionBoundaryCapture*>(_context);
+        const size_t index =
+            capture.count.load(std::memory_order_relaxed);
+        if (index >= capture.events.size()) {
+            capture.overflow.store(true, std::memory_order_release);
+            return;
+        }
+        capture.events[index] = _event;
+        capture.count.store(index + 1, std::memory_order_release);
+        if (_event.thread_role != ERHIThreadRole::Submission) {
+            capture.wrong_owner.store(true, std::memory_order_release);
+        }
+    }
+
+    [[nodiscard]] size_t Count() const noexcept {
+        return count.load(std::memory_order_acquire);
+    }
+
+    [[nodiscard]] const VulkanSubmissionBoundaryEvent& Event(
+        size_t _index
+    ) const noexcept {
+        return events[_index];
+    }
+
+    [[nodiscard]] bool IsValid() const noexcept {
+        return !overflow.load(std::memory_order_acquire) &&
+               !wrong_owner.load(std::memory_order_acquire);
+    }
+
+private:
+    std::array<VulkanSubmissionBoundaryEvent, 32> events{};
+    std::atomic<size_t>                         count{0};
+    std::atomic<bool>                           overflow{false};
+    std::atomic<bool>                           wrong_owner{false};
+};
+
+class ScopedSubmissionBoundaryObserver final {
+public:
+    explicit ScopedSubmissionBoundaryObserver(
+        SubmissionBoundaryCapture& _capture
+    ) :
+        observer{
+            .context  = &_capture,
+            .callback = &SubmissionBoundaryCapture::Observe,
+        } {
+        if (!TryInstallVulkanSubmissionBoundaryObserver(&observer)) {
+            throw std::runtime_error(
+                "Vulkan submission-boundary observer was already installed"
+            );
+        }
+        installed = true;
+    }
+
+    ~ScopedSubmissionBoundaryObserver() noexcept {
+        if (installed &&
+            !RemoveVulkanSubmissionBoundaryObserver(&observer)) {
+            std::terminate();
+        }
+    }
+
+    ScopedSubmissionBoundaryObserver(
+        const ScopedSubmissionBoundaryObserver&
+    ) = delete;
+    ScopedSubmissionBoundaryObserver& operator=(
+        const ScopedSubmissionBoundaryObserver&
+    ) = delete;
+
+private:
+    VulkanSubmissionBoundaryObserver observer{};
+    bool                             installed{false};
+};
+
+class ScriptedPresentCapture final {
+public:
+    explicit ScriptedPresentCapture(
+        VulkanScriptedPresentResult _result
+    ) :
+        result(_result) {}
+
+    static VulkanScriptedPresentResult Observe(
+        void*  _context,
+        uint64 _timeline
+    ) noexcept {
+        auto& capture =
+            *static_cast<ScriptedPresentCapture*>(_context);
+        capture.timeline.store(_timeline, std::memory_order_relaxed);
+        capture.thread_id.store(
+            Platform::GetCurrentThreadID(), std::memory_order_relaxed
+        );
+        if (GetCurrentRHIThreadRole() != ERHIThreadRole::Submission) {
+            capture.wrong_owner.store(true, std::memory_order_relaxed);
+        }
+        capture.count.fetch_add(1, std::memory_order_acq_rel);
+        return capture.result;
+    }
+
+    VulkanScriptedPresentResult result{};
+    std::atomic<uint32>         count{0};
+    std::atomic<uint64>         timeline{0};
+    std::atomic<uint32>         thread_id{0};
+    std::atomic<bool>           wrong_owner{false};
+};
+
+class ScopedScriptedPresentOverride final {
+public:
+    explicit ScopedScriptedPresentOverride(
+        ScriptedPresentCapture& _capture
+    ) :
+        scripted_override{
+            .context  = &_capture,
+            .callback = &ScriptedPresentCapture::Observe,
+        } {
+        if (!TryInstallVulkanScriptedPresentOverrideForTesting(
+                &scripted_override
+            )) {
+            throw std::runtime_error(
+                "Vulkan scripted Present override was already installed"
+            );
+        }
+        installed = true;
+    }
+
+    ~ScopedScriptedPresentOverride() noexcept {
+        if (installed &&
+            !RemoveVulkanScriptedPresentOverrideForTesting(
+                &scripted_override
+            )) {
+            std::terminate();
+        }
+    }
+
+    ScopedScriptedPresentOverride(
+        const ScopedScriptedPresentOverride&
+    ) = delete;
+    ScopedScriptedPresentOverride& operator=(
+        const ScopedScriptedPresentOverride&
+    ) = delete;
+
+private:
+    VulkanScriptedPresentOverrideForTesting scripted_override{};
+    bool                                    installed{false};
+};
+
 class DependencyWaitCapture final {
 public:
     explicit DependencyWaitCapture(EQueueType _queue) :
@@ -714,7 +875,9 @@ void ValidateArguments(int _argc, const char** _argv) {
             argument != "--inject-translate-failure" &&
             argument != "--inject-multi-segment-translate-failure" &&
             argument != "--pipeline-window1" &&
-            argument != "--pipeline-window2") {
+            argument != "--pipeline-window2" &&
+            argument != "--present-boundary" &&
+            argument != "--present-hard") {
             throw std::invalid_argument("unsupported argument: " + std::string(argument));
         }
     }
@@ -722,6 +885,12 @@ void ValidateArguments(int _argc, const char** _argv) {
         HasArgument(_argc, _argv, "--pipeline-window2")) {
         throw std::invalid_argument(
             "--pipeline-window1 and --pipeline-window2 are mutually exclusive"
+        );
+    }
+    if (HasArgument(_argc, _argv, "--present-boundary") &&
+        HasArgument(_argc, _argv, "--present-hard")) {
+        throw std::invalid_argument(
+            "--present-boundary and --present-hard are mutually exclusive"
         );
     }
     if (HasArgument(_argc, _argv, "--inject-worker-failure") &&
@@ -6760,6 +6929,1206 @@ void RunShutdownDependencyCancellation() {
     );
 }
 
+void RunSerialControlPipelineBoundary() {
+    using namespace std::chrono_literals;
+
+    auto& device = RenderDevice::Get();
+    constexpr uint64 async_queue_scope =
+        0x5048313546534552ull;
+    const uint32 main_thread_id =
+        Platform::GetCurrentThreadID();
+
+    SourceSubmissionCapture source_capture(async_queue_scope);
+    ScopedSourceSubmissionObserver source_observer(source_capture);
+    SubmissionBoundaryCapture boundary_capture{};
+    ScopedSubmissionBoundaryObserver boundary_observer(
+        boundary_capture
+    );
+    NativeSubmissionCapture        native_capture{};
+    ScopedNativeSubmissionObserver native_observer(native_capture);
+    DependencyWaitCapture          wait_capture{EQueueType::Graphics};
+    ScopedDependencyWaitObserver   wait_observer(wait_capture);
+
+    constexpr size_t element_count = 16;
+    constexpr std::array<uint32, element_count> expected{
+        0x15F10001u,
+        0x15F10002u,
+        0x15F10003u,
+        0x15F10004u,
+        0x15F10005u,
+        0x15F10006u,
+        0x15F10007u,
+        0x15F10008u,
+        0x15F10009u,
+        0x15F1000Au,
+        0x15F1000Bu,
+        0x15F1000Cu,
+        0x15F1000Du,
+        0x15F1000Eu,
+        0x15F1000Fu,
+        0x15F10010u,
+    };
+    std::array<uint32, element_count> readback{};
+    const EBufferUsageFlags usage =
+        EBufferUsageFlags::TRANSFER_SRC |
+        EBufferUsageFlags::TRANSFER_DST;
+    BufferRef source = device.CreateBuffer<uint32>(
+        "phase15f_serial_control_source",
+        element_count,
+        usage
+    );
+    BufferRef destination = device.CreateBuffer<uint32>(
+        "phase15f_serial_control_destination",
+        element_count,
+        usage
+    );
+    if (!source.IsValid() || !destination.IsValid()) {
+        throw std::runtime_error(
+            "Phase15F SerialControl resources were not created"
+        );
+    }
+
+    FenceRef dependency  = device.CreateFence();
+    FenceRef prefix_done = device.CreateFence();
+    FenceRef control_done = device.CreateFence();
+    FenceRef later_done  = device.CreateFence();
+    std::array<std::atomic<uint32>, 3> ordinary_callbacks{};
+    std::array<std::atomic<uint32>, 3> success_callbacks{};
+    std::binary_semaphore later_translated{0};
+    bool dependency_released = false;
+
+    const auto release_dependency = [&] {
+        if (dependency_released) {
+            return;
+        }
+        ResourceCast(dependency.Get())->SignalHost(1);
+        dependency_released = true;
+    };
+
+    try {
+        CommandList prefix(EQueueType::Graphics);
+        prefix.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
+        prefix.CopyFrom(
+            OwnedBytes(expected),
+            source->GetView(),
+            "SerialControlBoundaryBlockedPrefix"
+        );
+        prefix.AddCallback([&] {
+            ordinary_callbacks[0].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        prefix.AddSuccessCallback([&] {
+            success_callbacks[0].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        CmdSubmit prefix_submit = prefix.Submit();
+        prefix_submit.SetTranslateExecutionClass(
+            ERHITranslateExecutionClass::Parallel
+        );
+        prefix_submit.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
+        prefix_submit.async_queue_scope = async_queue_scope;
+        prefix_submit.Wait(dependency.Get(), 1)
+            .Signal(prefix_done.Get(), 1);
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics,
+            std::move(prefix_submit),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+
+        if (!wait_capture.entered.try_acquire_for(5s) ||
+            wait_capture.count.load(std::memory_order_acquire) != 1 ||
+            wait_capture.wrong_owner.load(std::memory_order_acquire) ||
+            source_capture.Count() != 0 ||
+            boundary_capture.Count() != 0 ||
+            native_capture.Count() != 0) {
+            throw std::runtime_error(
+                "SerialControl prefix did not block on the sole "
+                "Submission owner"
+            );
+        }
+
+        CommandList control(EQueueType::Graphics);
+        control.SetTranslateExecutionClass(
+            ERHITranslateExecutionClass::SerialControl
+        );
+        control.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
+        control.CopyFrom(
+            source->GetView(),
+            destination->GetView(),
+            "SerialControlBoundaryCopy"
+        );
+        control.AddCallback([&] {
+            ordinary_callbacks[1].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        control.AddSuccessCallback([&] {
+            success_callbacks[1].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        CmdSubmit control_submit = control.Submit();
+        control_submit.Signal(control_done.Get(), 1);
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics,
+            std::move(control_submit),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+
+        CommandList later(EQueueType::Graphics);
+        later.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
+        later.CopyFrom(
+            destination->GetView(),
+            WritableBytes(readback),
+            "SerialControlBoundaryLaterReadback"
+        );
+        later.AddCustomCommand(
+            MakeUnique<TranslateProbeCommand>(
+                &later_translated,
+                EQueueType::Graphics
+            ),
+            "SerialControlBoundaryLaterParallelSource"
+        );
+        later.AddCallback([&] {
+            ordinary_callbacks[2].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        later.AddSuccessCallback([&] {
+            success_callbacks[2].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        CmdSubmit later_submit = later.Submit();
+        later_submit.SetTranslateExecutionClass(
+            ERHITranslateExecutionClass::Parallel
+        );
+        later_submit.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
+        later_submit.async_queue_scope = async_queue_scope;
+        later_submit.Signal(later_done.Get(), 1);
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics,
+            std::move(later_submit),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+
+        bool callback_advanced = false;
+        for (size_t index = 0; index < ordinary_callbacks.size(); ++index) {
+            callback_advanced =
+                callback_advanced ||
+                ordinary_callbacks[index].load(
+                    std::memory_order_acquire
+                ) != 0 ||
+                success_callbacks[index].load(
+                    std::memory_order_acquire
+                ) != 0;
+        }
+        if (later_translated.try_acquire_for(250ms) ||
+            callback_advanced ||
+            source_capture.Count() != 0 ||
+            boundary_capture.Count() != 0 ||
+            native_capture.Count() != 0) {
+            throw std::runtime_error(
+                "SerialControl or a later source overtook the blocked "
+                "pipeline prefix"
+            );
+        }
+
+        release_dependency();
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+        if (!later_translated.try_acquire() ||
+            readback != expected) {
+            throw std::runtime_error(
+                "SerialControl did not preserve prefix/control/later "
+                "GPU ordering"
+            );
+        }
+        if (ResourceCast(prefix_done.Get())->HostWait(1) != VK_SUCCESS ||
+            ResourceCast(control_done.Get())->HostWait(1) != VK_SUCCESS ||
+            ResourceCast(later_done.Get())->HostWait(1) != VK_SUCCESS) {
+            throw std::runtime_error(
+                "SerialControl boundary signals did not succeed"
+            );
+        }
+        for (size_t index = 0; index < ordinary_callbacks.size(); ++index) {
+            if (ordinary_callbacks[index].load(
+                    std::memory_order_acquire
+                ) != 1 ||
+                success_callbacks[index].load(
+                    std::memory_order_acquire
+                ) != 1) {
+                throw std::runtime_error(
+                    "SerialControl boundary callbacks were not retired "
+                    "exactly once"
+                );
+            }
+        }
+
+        if (source_capture.Overflowed() ||
+            source_capture.Count() != 2) {
+            throw std::runtime_error(
+                "SerialControl boundary lost a parallel source submission"
+            );
+        }
+        const VulkanSourceSubmissionEvent& prefix_source =
+            source_capture.Event(0);
+        const VulkanSourceSubmissionEvent& later_source =
+            source_capture.Event(1);
+        if (prefix_source.batch_sequence == 0 ||
+            later_source.batch_sequence !=
+                prefix_source.batch_sequence + 2 ||
+            prefix_source.source_index != 0 ||
+            later_source.source_index != 0 ||
+            prefix_source.queue != EQueueType::Graphics ||
+            later_source.queue != EQueueType::Graphics) {
+            throw std::runtime_error(
+                "SerialControl did not remain between its prefix and "
+                "later source"
+            );
+        }
+
+        if (native_capture.Overflowed() ||
+            native_capture.Count() != 3) {
+            throw std::runtime_error(
+                "SerialControl boundary emitted the wrong native "
+                "submission count"
+            );
+        }
+        const uint32 submission_thread_id =
+            native_capture.Event(0).thread_id;
+        for (size_t index = 0; index < native_capture.Count(); ++index) {
+            const VulkanNativeSubmissionEvent& event =
+                native_capture.Event(index);
+            if (event.queue != EQueueType::Graphics ||
+                event.thread_role != ERHIThreadRole::Submission ||
+                event.thread_id != submission_thread_id ||
+                event.thread_id == main_thread_id ||
+                !event.outcome.WasSubmitted()) {
+                throw std::runtime_error(
+                    "SerialControl native submission order or owner changed"
+                );
+            }
+        }
+
+        if (!boundary_capture.IsValid() ||
+            boundary_capture.Count() != 2) {
+            throw std::runtime_error(
+                "SerialControl emitted the wrong boundary event count"
+            );
+        }
+        const VulkanSubmissionBoundaryEvent& dispatch =
+            boundary_capture.Event(0);
+        const VulkanSubmissionBoundaryEvent& terminal =
+            boundary_capture.Event(1);
+        const uint64 control_batch_sequence =
+            prefix_source.batch_sequence + 1;
+        if (dispatch.batch_sequence != control_batch_sequence ||
+            terminal.batch_sequence != control_batch_sequence ||
+            dispatch.operation_index != 0 ||
+            terminal.operation_index != 0 ||
+            dispatch.kind !=
+                EVulkanSubmissionBoundaryKind::SerialControl ||
+            terminal.kind !=
+                EVulkanSubmissionBoundaryKind::SerialControl ||
+            dispatch.queue != EQueueType::Graphics ||
+            terminal.queue != EQueueType::Graphics ||
+            dispatch.phase !=
+                EVulkanSubmissionBoundaryPhase::Dispatch ||
+            terminal.phase !=
+                EVulkanSubmissionBoundaryPhase::Terminal ||
+            dispatch.outcome_valid ||
+            !terminal.outcome_valid ||
+            !terminal.gpu_submitted ||
+            !terminal.outcome.Succeeded() ||
+            dispatch.dependency_wait_count != 0 ||
+            terminal.dependency_wait_count != 0 ||
+            dispatch.present_receipt_resolution_attempts != 0 ||
+            terminal.present_receipt_resolution_attempts != 0 ||
+            dispatch.thread_id != submission_thread_id ||
+            terminal.thread_id != submission_thread_id) {
+            throw std::runtime_error(
+                "SerialControl boundary identity, outcome, or owner changed"
+            );
+        }
+
+        const size_t sources_before_second_sync =
+            source_capture.Count();
+        const size_t boundaries_before_second_sync =
+            boundary_capture.Count();
+        const size_t native_before_second_sync =
+            native_capture.Count();
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        bool callback_replayed = false;
+        for (size_t index = 0; index < ordinary_callbacks.size(); ++index) {
+            callback_replayed =
+                callback_replayed ||
+                ordinary_callbacks[index].load(
+                    std::memory_order_acquire
+                ) != 1 ||
+                success_callbacks[index].load(
+                    std::memory_order_acquire
+                ) != 1;
+        }
+        if (source_capture.Count() != sources_before_second_sync ||
+            boundary_capture.Count() !=
+                boundaries_before_second_sync ||
+            native_capture.Count() != native_before_second_sync ||
+            callback_replayed) {
+            throw std::runtime_error(
+                "a second RHI Sync replayed SerialControl boundary work"
+            );
+        }
+
+        LOG_INFO(
+            "[TESTCASE][PASS] name=SerialControlPipelineBoundary "
+            "order=Prefix,SerialControl,Later owner=Submission "
+            "later_translate=blocked readback=verified signals=success "
+            "boundary_events=2 native_submits=3 replay=0"
+        );
+    } catch (...) {
+        release_dependency();
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        throw;
+    }
+}
+
+void RunPresentPipelineBoundary() {
+    using namespace std::chrono_literals;
+
+    auto&                  device   = RenderDevice::Get();
+    const RHIQueueTopology topology = device.GetQueueTopology();
+    const EQueueType prefix_queue =
+        topology.copy.available ?
+            EQueueType::Copy :
+            EQueueType::Graphics;
+    const uint32 prefix_native =
+        prefix_queue == EQueueType::Copy ?
+            topology.copy.native_queue_id :
+            topology.graphics.native_queue_id;
+    const bool bridge_required =
+        prefix_queue != EQueueType::Graphics;
+    const uint32 bridge_dependency_wait_count =
+        bridge_required &&
+                prefix_native != topology.graphics.native_queue_id ?
+            1u :
+            0u;
+    constexpr uint64 async_queue_scope =
+        0x5048313546524545ull;
+    const uint32 main_thread_id =
+        Platform::GetCurrentThreadID();
+
+    SourceSubmissionCapture source_capture(async_queue_scope);
+    ScopedSourceSubmissionObserver source_observer(source_capture);
+    SubmissionBoundaryCapture boundary_capture{};
+    ScopedSubmissionBoundaryObserver boundary_observer(
+        boundary_capture
+    );
+    NativeSubmissionCapture        native_capture{};
+    ScopedNativeSubmissionObserver native_observer(native_capture);
+    DependencyWaitCapture          wait_capture{prefix_queue};
+    ScopedDependencyWaitObserver   wait_observer(wait_capture);
+    ScriptedPresentCapture scripted_capture(
+        VulkanScriptedPresentResult{
+            .outcome = {
+                EVulkanOperationStatus::Recreate,
+                VK_ERROR_OUT_OF_DATE_KHR,
+            },
+        }
+    );
+    ScopedScriptedPresentOverride scripted_override(
+        scripted_capture
+    );
+
+    TextureRef present_source = device.CreateTexture(
+        "phase15f_present_source",
+        Extent3D(4, 4, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::TRANSFER_SRC |
+            ETextureUsageFlags::TRANSFER_DST
+    );
+    SwapchainRef scripted_swapchain{
+        MoerNew(HeadlessScriptedSwapchain)()
+    };
+    BufferRef transfer_buffer = device.CreateBuffer<uint32>(
+        "phase15f_present_bridge_buffer",
+        4,
+        EBufferUsageFlags::TRANSFER_SRC |
+            EBufferUsageFlags::TRANSFER_DST
+    );
+    if (!present_source.IsValid() || !scripted_swapchain.IsValid() ||
+        !transfer_buffer.IsValid()) {
+        throw std::runtime_error(
+            "Phase15F Present boundary resources were not created"
+        );
+    }
+
+    constexpr std::array<uint32, 4> expected{
+        0x15F00001u,
+        0x15F00002u,
+        0x15F00003u,
+        0x15F00004u,
+    };
+    std::array<uint32, expected.size()> readback{};
+    FenceRef dependency = device.CreateFence();
+    FenceRef prefix_done = device.CreateFence();
+    FenceRef later_done  = device.CreateFence();
+    std::array<std::atomic<uint32>, 2> ordinary_callbacks{};
+    std::array<std::atomic<uint32>, 2> success_callbacks{};
+    std::binary_semaphore later_translated{0};
+    bool dependency_released = false;
+
+    const auto release_dependency = [&] {
+        if (dependency_released) {
+            return;
+        }
+        ResourceCast(dependency.Get())->SignalHost(1);
+        dependency_released = true;
+    };
+
+    try {
+        CommandList prefix(prefix_queue);
+        prefix.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
+        prefix.CopyFrom(
+            OwnedBytes(expected),
+            transfer_buffer->GetView(),
+            "PresentBoundaryBlockedPrefix"
+        );
+        prefix.AddCallback([&] {
+            ordinary_callbacks[0].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        prefix.AddSuccessCallback([&] {
+            success_callbacks[0].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        CmdSubmit prefix_submit = prefix.Submit();
+        prefix_submit.SetTranslateExecutionClass(
+            ERHITranslateExecutionClass::Parallel
+        );
+        prefix_submit.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
+        prefix_submit.async_queue_scope = async_queue_scope;
+        prefix_submit.Wait(dependency.Get(), 1)
+            .Signal(prefix_done.Get(), 1);
+        RHIExecutor::Get().Submit(
+            prefix_queue,
+            std::move(prefix_submit),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+
+        if (!wait_capture.entered.try_acquire_for(5s) ||
+            wait_capture.count.load(std::memory_order_acquire) != 1 ||
+            wait_capture.wrong_owner.load(std::memory_order_acquire) ||
+            source_capture.Count() != 0 ||
+            boundary_capture.Count() != 0 ||
+            scripted_capture.count.load(std::memory_order_acquire) != 0 ||
+            native_capture.Count() != 0) {
+            throw std::runtime_error(
+                "Present boundary prefix did not block on the sole "
+                "Submission owner"
+            );
+        }
+
+        PresentReceiptRef receipt = MakeShared<PresentReceipt>();
+        RHIExecutor::Get().Present(
+            RHIPresentRequest(
+                scripted_swapchain,
+                present_source->GetView(),
+                receipt
+            ),
+            true
+        );
+
+        CommandList later(EQueueType::Graphics);
+        later.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
+        later.CopyFrom(
+            transfer_buffer->GetView(),
+            WritableBytes(readback),
+            "PresentBoundaryLaterReadback"
+        );
+        later.AddCustomCommand(
+            MakeUnique<TranslateProbeCommand>(
+                &later_translated,
+                EQueueType::Graphics
+            ),
+            "PresentBoundaryLaterParallelSource"
+        );
+        later.AddCallback([&] {
+            ordinary_callbacks[1].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        later.AddSuccessCallback([&] {
+            success_callbacks[1].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        CmdSubmit later_submit = later.Submit();
+        later_submit.SetTranslateExecutionClass(
+            ERHITranslateExecutionClass::Parallel
+        );
+        later_submit.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
+        later_submit.async_queue_scope = async_queue_scope;
+        later_submit.Signal(later_done.Get(), 1);
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics,
+            std::move(later_submit),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+
+        if (later_translated.try_acquire_for(250ms) ||
+            scripted_capture.count.load(std::memory_order_acquire) != 0 ||
+            source_capture.Count() != 0 ||
+            boundary_capture.Count() != 0 ||
+            native_capture.Count() != 0) {
+            throw std::runtime_error(
+                "Present or a later source overtook the blocked "
+                "pipeline prefix"
+            );
+        }
+
+        release_dependency();
+        const PresentReceiptResult receipt_result =
+            receipt->WaitForSubmission(5s);
+        if (!receipt_result.resolved ||
+            receipt_result.submitted ||
+            !receipt_result.recreate_swapchain) {
+            throw std::runtime_error(
+                "scripted Recreate Present resolved the wrong receipt state"
+            );
+        }
+        RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+
+        if (!later_translated.try_acquire() ||
+            receipt->ResolutionAttemptCount() != 1 ||
+            scripted_capture.count.load(std::memory_order_acquire) != 1 ||
+            scripted_capture.timeline.load(std::memory_order_acquire) == 0 ||
+            scripted_capture.wrong_owner.load(std::memory_order_acquire) ||
+            readback != expected) {
+            throw std::runtime_error(
+                "scripted Present did not preserve bridge ordering, "
+                "readback, or exactly-once receipt ownership"
+            );
+        }
+        for (size_t index = 0; index < ordinary_callbacks.size(); ++index) {
+            if (ordinary_callbacks[index].load(
+                    std::memory_order_acquire
+                ) != 1 ||
+                success_callbacks[index].load(
+                    std::memory_order_acquire
+                ) != 1) {
+                throw std::runtime_error(
+                    "Present boundary source callbacks were not retired "
+                    "exactly once"
+                );
+            }
+        }
+        if (ResourceCast(prefix_done.Get())->HostWait(1) != VK_SUCCESS ||
+            ResourceCast(later_done.Get())->HostWait(1) != VK_SUCCESS) {
+            throw std::runtime_error(
+                "Present boundary source signals did not succeed"
+            );
+        }
+        if (source_capture.Overflowed() ||
+            source_capture.Count() != 2) {
+            throw std::runtime_error(
+                "Present boundary lost a source submission"
+            );
+        }
+        const VulkanSourceSubmissionEvent& prefix_source =
+            source_capture.Event(0);
+        const VulkanSourceSubmissionEvent& later_source =
+            source_capture.Event(1);
+        if (prefix_source.batch_sequence == 0 ||
+            later_source.batch_sequence !=
+                prefix_source.batch_sequence + 2 ||
+            prefix_source.source_index != 0 ||
+            later_source.source_index != 0 ||
+            prefix_source.queue != prefix_queue ||
+            later_source.queue != EQueueType::Graphics) {
+            throw std::runtime_error(
+                "Present did not remain between its prefix and later source"
+            );
+        }
+
+        const size_t expected_native_count =
+            bridge_required ? 3 : 2;
+        if (native_capture.Overflowed() ||
+            native_capture.Count() != expected_native_count) {
+            throw std::runtime_error(
+                "scripted Present emitted or lost a native submission"
+            );
+        }
+        const std::array<EQueueType, 3> expected_native_queues{
+            prefix_queue,
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+        };
+        const uint32 submission_thread_id =
+            native_capture.Event(0).thread_id;
+        for (size_t index = 0; index < expected_native_count; ++index) {
+            const size_t queue_index =
+                !bridge_required && index == 1 ? 2 : index;
+            const VulkanNativeSubmissionEvent& event =
+                native_capture.Event(index);
+            if (event.queue != expected_native_queues[queue_index] ||
+                event.thread_role != ERHIThreadRole::Submission ||
+                event.thread_id != submission_thread_id ||
+                event.thread_id == main_thread_id ||
+                !event.outcome.WasSubmitted()) {
+                throw std::runtime_error(
+                    "Present boundary native submission order or owner changed"
+                );
+            }
+        }
+
+        const size_t first_present_event_count =
+            bridge_required ? 4 : 2;
+        if (!boundary_capture.IsValid() ||
+            boundary_capture.Count() !=
+                first_present_event_count) {
+            throw std::runtime_error(
+                "Present boundary emitted the wrong boundary event count"
+            );
+        }
+        const auto expect_pair =
+            [&](size_t index,
+                uint64 batch_sequence,
+                uint32 operation_index,
+                EVulkanSubmissionBoundaryKind kind,
+                uint32 dependency_wait_count) {
+                const VulkanSubmissionBoundaryEvent& dispatch =
+                    boundary_capture.Event(index);
+                const VulkanSubmissionBoundaryEvent& terminal =
+                    boundary_capture.Event(index + 1);
+                if (dispatch.batch_sequence != batch_sequence ||
+                    terminal.batch_sequence != batch_sequence ||
+                    dispatch.operation_index != operation_index ||
+                    terminal.operation_index != operation_index ||
+                    dispatch.kind != kind || terminal.kind != kind ||
+                    dispatch.queue != EQueueType::Graphics ||
+                    terminal.queue != EQueueType::Graphics ||
+                    dispatch.phase !=
+                        EVulkanSubmissionBoundaryPhase::Dispatch ||
+                    terminal.phase !=
+                        EVulkanSubmissionBoundaryPhase::Terminal ||
+                    dispatch.outcome_valid ||
+                    !terminal.outcome_valid ||
+                    dispatch.dependency_wait_count !=
+                        dependency_wait_count ||
+                    terminal.dependency_wait_count !=
+                        dependency_wait_count ||
+                    dispatch.thread_id != submission_thread_id ||
+                    terminal.thread_id != submission_thread_id) {
+                    throw std::runtime_error(
+                        "submission-boundary identity or owner changed"
+                    );
+                }
+            };
+
+        size_t boundary_cursor = 0;
+        const uint64 present_batch_sequence =
+            prefix_source.batch_sequence + 1;
+        if (bridge_required) {
+            expect_pair(
+                boundary_cursor,
+                present_batch_sequence,
+                0,
+                EVulkanSubmissionBoundaryKind::PresentBridge,
+                bridge_dependency_wait_count
+            );
+            const VulkanSubmissionBoundaryEvent& bridge_terminal =
+                boundary_capture.Event(boundary_cursor + 1);
+            if (!bridge_terminal.gpu_submitted ||
+                !bridge_terminal.outcome.Succeeded()) {
+                throw std::runtime_error(
+                    "Present bridge did not submit its cross-queue wait"
+                );
+            }
+            boundary_cursor += 2;
+        }
+        expect_pair(
+            boundary_cursor,
+            present_batch_sequence,
+            1,
+            EVulkanSubmissionBoundaryKind::Present,
+            0
+        );
+        const VulkanSubmissionBoundaryEvent& present_terminal =
+            boundary_capture.Event(boundary_cursor + 1);
+        if (present_terminal.outcome.status !=
+                EVulkanOperationStatus::Recreate ||
+            present_terminal.gpu_submitted ||
+            present_terminal.recoverable_rejection ||
+            present_terminal.present_receipt_resolution_attempts != 1) {
+            throw std::runtime_error(
+                "Present terminal diagnostics lost Recreate state"
+            );
+        }
+
+        PresentReceiptRef present_only_receipt =
+            MakeShared<PresentReceipt>();
+        RHIExecutor::Get().Present(
+            RHIPresentRequest(
+                scripted_swapchain,
+                present_source->GetView(),
+                present_only_receipt
+            ),
+            true
+        );
+        const PresentReceiptResult present_only_result =
+            present_only_receipt->WaitForSubmission(5s);
+        if (!present_only_result.resolved ||
+            present_only_result.submitted ||
+            !present_only_result.recreate_swapchain) {
+            throw std::runtime_error(
+                "Present-only batch resolved the wrong receipt state"
+            );
+        }
+        RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+        if (present_only_receipt->ResolutionAttemptCount() != 1 ||
+            scripted_capture.count.load(std::memory_order_acquire) != 2 ||
+            boundary_capture.Count() !=
+                first_present_event_count + 2 ||
+            native_capture.Count() != expected_native_count) {
+            throw std::runtime_error(
+                "Present-only batch emitted an unexpected bridge, "
+                "native submit, or receipt replay"
+            );
+        }
+        expect_pair(
+            first_present_event_count,
+            present_batch_sequence + 2,
+            1,
+            EVulkanSubmissionBoundaryKind::Present,
+            0
+        );
+
+        const size_t boundaries_before_second_sync =
+            boundary_capture.Count();
+        const size_t native_before_second_sync =
+            native_capture.Count();
+        RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+        if (boundary_capture.Count() !=
+                boundaries_before_second_sync ||
+            native_capture.Count() != native_before_second_sync ||
+            scripted_capture.count.load(std::memory_order_acquire) != 2) {
+            throw std::runtime_error(
+                "a second Present Sync replayed boundary work"
+            );
+        }
+
+        LOG_INFO(
+            "[TESTCASE][PASS] name=PresentPipelineBoundary "
+            "outcome=Recreate order=Prefix,Bridge?,Present,Later "
+            "owner=Submission receipt_attempts=1 submitted=false "
+            "recreate=true completion=drained later_batch=success "
+            "present_only=verified bridge={} graphics_native={} "
+            "prefix_native={} readback=verified replay=0",
+            bridge_required ? "required" : "elided",
+            topology.graphics.native_queue_id,
+            prefix_native
+        );
+    } catch (...) {
+        release_dependency();
+        RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+        throw;
+    }
+}
+
+void RunQueuedPresentShutdownBoundary() {
+    using namespace std::chrono_literals;
+
+    auto& device = RenderDevice::Get();
+    constexpr uint64 async_queue_scope =
+        0x5048313546534844ull;
+    const uint32 main_thread_id =
+        Platform::GetCurrentThreadID();
+
+    SourceSubmissionCapture source_capture(async_queue_scope);
+    ScopedSourceSubmissionObserver source_observer(source_capture);
+    SubmissionBoundaryCapture boundary_capture{};
+    ScopedSubmissionBoundaryObserver boundary_observer(
+        boundary_capture
+    );
+    NativeSubmissionCapture        native_capture{};
+    ScopedNativeSubmissionObserver native_observer(native_capture);
+    DependencyWaitCapture          wait_capture{EQueueType::Graphics};
+    ScopedDependencyWaitObserver   wait_observer(wait_capture);
+    ScriptedPresentCapture scripted_capture(
+        VulkanScriptedPresentResult{
+            .outcome = {
+                EVulkanOperationStatus::Retry,
+                VK_NOT_READY,
+            },
+        }
+    );
+    ScopedScriptedPresentOverride scripted_override(
+        scripted_capture
+    );
+
+    TextureRef present_source = device.CreateTexture(
+        "phase15f_shutdown_present_source",
+        Extent3D(4, 4, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::TRANSFER_SRC |
+            ETextureUsageFlags::TRANSFER_DST
+    );
+    SwapchainRef scripted_swapchain{
+        MoerNew(HeadlessScriptedSwapchain)()
+    };
+    if (!present_source.IsValid() || !scripted_swapchain.IsValid()) {
+        throw std::runtime_error(
+            "Phase15F shutdown Present resources were not created"
+        );
+    }
+
+    FenceRef dependency = device.CreateFence();
+    FenceRef prefix_done = device.CreateFence();
+    PresentReceiptRef receipt = MakeShared<PresentReceipt>();
+    std::atomic<uint32> ordinary_callbacks{0};
+    std::atomic<uint32> success_callbacks{0};
+    bool runtime_stopped = false;
+
+    const auto stop_runtime = [&] {
+        if (runtime_stopped) {
+            return;
+        }
+        RHIExecutor::ShutDown();
+        runtime_stopped = true;
+    };
+
+    try {
+        CommandList prefix(EQueueType::Graphics);
+        prefix.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
+        prefix.AddCallback([&] {
+            ordinary_callbacks.fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        prefix.AddSuccessCallback([&] {
+            success_callbacks.fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        CmdSubmit prefix_submit = prefix.Submit();
+        prefix_submit.SetTranslateExecutionClass(
+            ERHITranslateExecutionClass::Parallel
+        );
+        prefix_submit.SetResourceStateOwnership(
+            ERHIResourceStateOwnership::Explicit
+        );
+        prefix_submit.async_queue_scope = async_queue_scope;
+        prefix_submit.Wait(dependency.Get(), 1)
+            .Signal(prefix_done.Get(), 1);
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics,
+            std::move(prefix_submit),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+
+        if (!wait_capture.entered.try_acquire_for(5s) ||
+            wait_capture.count.load(std::memory_order_acquire) != 1 ||
+            wait_capture.wrong_owner.load(std::memory_order_acquire) ||
+            source_capture.Count() != 0 ||
+            boundary_capture.Count() != 0 ||
+            native_capture.Count() != 0) {
+            throw std::runtime_error(
+                "shutdown Present prefix did not block on the sole "
+                "Submission owner"
+            );
+        }
+
+        RHIExecutor::Get().Present(
+            RHIPresentRequest(
+                scripted_swapchain,
+                present_source->GetView(),
+                receipt
+            ),
+            true
+        );
+        if (receipt->WaitForSubmission(250ms).resolved ||
+            scripted_capture.count.load(std::memory_order_acquire) != 0 ||
+            boundary_capture.Count() != 0 ||
+            native_capture.Count() != 0) {
+            throw std::runtime_error(
+                "queued Present overtook the shutdown-blocked prefix"
+            );
+        }
+
+        stop_runtime();
+
+        const PresentReceiptResult result =
+            receipt->WaitForSubmission(5s);
+        if (!result.resolved ||
+            result.submitted ||
+            result.recreate_swapchain ||
+            receipt->ResolutionAttemptCount() != 1) {
+            throw std::runtime_error(
+                "shutdown Retry Present resolved the wrong receipt state"
+            );
+        }
+        if (ResourceCast(prefix_done.Get())->HostWait(1) !=
+                VK_ERROR_UNKNOWN ||
+            !ResourceCast(prefix_done.Get())->IsRejected(1) ||
+            ResourceCast(prefix_done.Get())->IsFailed() ||
+            ordinary_callbacks.load(std::memory_order_acquire) != 1 ||
+            success_callbacks.load(std::memory_order_acquire) != 0 ||
+            source_capture.Count() != 0 ||
+            native_capture.Count() != 0) {
+            throw std::runtime_error(
+                "shutdown did not reject the blocked prefix and retire "
+                "the queued Present without native work"
+            );
+        }
+        if (scripted_capture.count.load(
+                std::memory_order_acquire
+            ) != 1 ||
+            scripted_capture.wrong_owner.load(
+                std::memory_order_acquire
+            ) ||
+            scripted_capture.thread_id.load(
+                std::memory_order_acquire
+            ) == main_thread_id) {
+            throw std::runtime_error(
+                "shutdown Retry Present escaped the Submission owner"
+            );
+        }
+
+        if (!boundary_capture.IsValid() ||
+            boundary_capture.Count() != 2) {
+            throw std::runtime_error(
+                "shutdown Retry Present emitted the wrong boundary events"
+            );
+        }
+        const VulkanSubmissionBoundaryEvent& dispatch =
+            boundary_capture.Event(0);
+        const VulkanSubmissionBoundaryEvent& terminal =
+            boundary_capture.Event(1);
+        if (dispatch.batch_sequence == 0 ||
+            terminal.batch_sequence != dispatch.batch_sequence ||
+            dispatch.operation_index != 1 ||
+            terminal.operation_index != 1 ||
+            dispatch.kind !=
+                EVulkanSubmissionBoundaryKind::Present ||
+            terminal.kind !=
+                EVulkanSubmissionBoundaryKind::Present ||
+            dispatch.phase !=
+                EVulkanSubmissionBoundaryPhase::Dispatch ||
+            terminal.phase !=
+                EVulkanSubmissionBoundaryPhase::Terminal ||
+            dispatch.outcome_valid ||
+            !terminal.outcome_valid ||
+            terminal.outcome.status !=
+                EVulkanOperationStatus::Retry ||
+            terminal.gpu_submitted ||
+            terminal.recoverable_rejection ||
+            terminal.present_receipt_resolution_attempts != 1 ||
+            dispatch.thread_id != terminal.thread_id ||
+            dispatch.thread_id != scripted_capture.thread_id.load(
+                std::memory_order_acquire
+            )) {
+            throw std::runtime_error(
+                "shutdown Retry Present lost identity, outcome, or owner"
+            );
+        }
+
+        LOG_INFO(
+            "[TESTCASE][PASS] name=QueuedPresentShutdownBoundary "
+            "outcome=Retry prefix=rejected receipt_attempts=1 "
+            "submitted=false recreate=false owner=Submission "
+            "native_submit=0 owners=stopped replay=0"
+        );
+    } catch (...) {
+        const std::exception_ptr failure =
+            std::current_exception();
+        stop_runtime();
+        std::rethrow_exception(failure);
+    }
+}
+
+void RunPresentHardFailureBoundary() {
+    using namespace std::chrono_literals;
+
+    auto& device = RenderDevice::Get();
+    const uint32 main_thread_id =
+        Platform::GetCurrentThreadID();
+    TextureRef present_source = device.CreateTexture(
+        "phase15f_present_hard_source",
+        Extent3D(4, 4, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::TRANSFER_SRC |
+            ETextureUsageFlags::TRANSFER_DST
+    );
+    SwapchainRef scripted_swapchain{
+        MoerNew(HeadlessScriptedSwapchain)()
+    };
+    if (!present_source.IsValid() || !scripted_swapchain.IsValid()) {
+        throw std::runtime_error(
+            "Phase15F hard Present resources were not created"
+        );
+    }
+
+    SubmissionBoundaryCapture boundary_capture{};
+    ScopedSubmissionBoundaryObserver boundary_observer(
+        boundary_capture
+    );
+    NativeSubmissionCapture        native_capture{};
+    ScopedNativeSubmissionObserver native_observer(native_capture);
+    ScriptedPresentCapture scripted_capture(
+        VulkanScriptedPresentResult{
+            .outcome = {
+                EVulkanOperationStatus::Rejected,
+                VK_ERROR_DEVICE_LOST,
+            },
+        }
+    );
+    ScopedScriptedPresentOverride scripted_override(
+        scripted_capture
+    );
+
+    PresentReceiptRef receipt = MakeShared<PresentReceipt>();
+    FenceRef later_done = device.CreateFence();
+    std::atomic<uint32> ordinary_callbacks{0};
+    std::atomic<uint32> success_callbacks{0};
+
+    try {
+        RHIExecutor::Get().Present(
+            RHIPresentRequest(
+                scripted_swapchain,
+                present_source->GetView(),
+                receipt
+            ),
+            true
+        );
+        const PresentReceiptResult receipt_result =
+            receipt->WaitForSubmission(5s);
+        if (!receipt_result.resolved || receipt_result.submitted ||
+            receipt_result.recreate_swapchain ||
+            receipt->ResolutionAttemptCount() != 1) {
+            throw std::runtime_error(
+                "hard Present resolved the wrong receipt state"
+            );
+        }
+
+        CommandList later(EQueueType::Graphics);
+        later.AddCallback([&] {
+            ordinary_callbacks.fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        later.AddSuccessCallback([&] {
+            success_callbacks.fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        CmdSubmit later_submit = later.Submit();
+        later_submit.Signal(later_done.Get(), 1);
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics,
+            std::move(later_submit),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+        RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+
+        if (scripted_capture.count.load(
+                std::memory_order_acquire
+            ) != 1 ||
+            scripted_capture.wrong_owner.load(
+                std::memory_order_acquire
+            ) ||
+            boundary_capture.Count() != 2 ||
+            !boundary_capture.IsValid() ||
+            native_capture.Count() != 0 ||
+            ordinary_callbacks.load(std::memory_order_acquire) != 1 ||
+            success_callbacks.load(std::memory_order_acquire) != 0 ||
+            !ResourceCast(later_done.Get())->IsFailed()) {
+            throw std::runtime_error(
+                "hard Present did not latch, reject, and retire exactly once"
+            );
+        }
+        const VulkanSubmissionBoundaryEvent& dispatch =
+            boundary_capture.Event(0);
+        const VulkanSubmissionBoundaryEvent& terminal =
+            boundary_capture.Event(1);
+        if (dispatch.kind !=
+                EVulkanSubmissionBoundaryKind::Present ||
+            terminal.kind !=
+                EVulkanSubmissionBoundaryKind::Present ||
+            dispatch.phase !=
+                EVulkanSubmissionBoundaryPhase::Dispatch ||
+            terminal.phase !=
+                EVulkanSubmissionBoundaryPhase::Terminal ||
+            dispatch.outcome_valid ||
+            !terminal.outcome_valid ||
+            dispatch.operation_index != 1 ||
+            terminal.operation_index != 1 ||
+            dispatch.thread_role != ERHIThreadRole::Submission ||
+            terminal.thread_role != ERHIThreadRole::Submission ||
+            dispatch.thread_id != terminal.thread_id ||
+            dispatch.thread_id != scripted_capture.thread_id.load(
+                std::memory_order_acquire
+            ) ||
+            dispatch.thread_id == main_thread_id ||
+            terminal.outcome.status !=
+                EVulkanOperationStatus::Rejected ||
+            terminal.outcome.result != VK_ERROR_DEVICE_LOST ||
+            terminal.gpu_submitted ||
+            terminal.recoverable_rejection ||
+            terminal.present_receipt_resolution_attempts != 1) {
+            throw std::runtime_error(
+                "hard Present boundary diagnostics were incomplete"
+            );
+        }
+
+        RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+        if (scripted_capture.count.load(
+                std::memory_order_acquire
+            ) != 1 ||
+            boundary_capture.Count() != 2 ||
+            native_capture.Count() != 0 ||
+            ordinary_callbacks.load(std::memory_order_acquire) != 1 ||
+            success_callbacks.load(std::memory_order_acquire) != 0) {
+            throw std::runtime_error(
+                "a second Sync replayed hard Present work"
+            );
+        }
+
+        LOG_INFO(
+            "[TESTCASE][PASS] name=PresentHardFailureBoundary "
+            "outcome=Rejected owner=Submission receipt_attempts=1 "
+            "submitted=false recreate=false later_batch=rejected "
+            "native_after_present=0 hard_latch=verified replay=0"
+        );
+    } catch (...) {
+        RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+        throw;
+    }
+}
 void PrimeGlobalTransientPoolForDispose() {
     auto& pool = RenderGraphResourcePool::Global();
     pool.Reset();
@@ -6808,6 +8177,12 @@ int main(int argc, const char** argv) {
             HasArgument(argc, argv, "--pipeline-window2");
         const bool pipeline_window_mode =
             pipeline_window1 || pipeline_window2;
+        const bool present_boundary =
+            HasArgument(argc, argv, "--present-boundary");
+        const bool present_hard =
+            HasArgument(argc, argv, "--present-hard");
+        const bool present_mode =
+            present_boundary || present_hard;
         const uint32 submission_batch_window =
             pipeline_window1 ? 1u : 2u;
 
@@ -6822,14 +8197,33 @@ int main(int argc, const char** argv) {
             .rhi_api_version  = "1.3",
             .rhi_thread       = true,
             .rhi_bypass       = false,
-            .parallel_recording = parallel || pipeline_window_mode,
+            .parallel_recording =
+                parallel || pipeline_window_mode || present_mode,
             .parallel_record_workers = 4,
-            .parallel_record_verify = parallel || pipeline_window_mode,
+            .parallel_record_verify =
+                parallel || pipeline_window_mode || present_mode,
             .parallel_record_min_work_units_per_job = production_gate ? 64u : 1u,
             .submission_batch_window = submission_batch_window,
             .parallel_record_worker_throw_trigger = inject_worker_failure ? 1u : 0u,
         });
         render_device_initialized = true;
+
+        if (present_mode) {
+            if (present_boundary) {
+                RunSerialControlPipelineBoundary();
+                RunPresentPipelineBoundary();
+                // This is the terminal focused lifecycle test: it stops and
+                // joins the RHI runtime before returning.
+                RunQueuedPresentShutdownBoundary();
+            } else {
+                RunPresentHardFailureBoundary();
+            }
+            RenderDevice::Dispose();
+            render_device_initialized = false;
+            TaskSystem::ShutDown();
+            task_system_initialized = false;
+            return 0;
+        }
 
         if (pipeline_window_mode) {
             RunBoundedCrossBatchSubmissionPipeline(

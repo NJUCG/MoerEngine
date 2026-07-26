@@ -29,6 +29,83 @@ std::atomic<const VulkanSourceTranslationObserver*>
     g_source_translation_observer{nullptr};
 std::atomic<const VulkanBatchPreflightRejectionObserver*>
     g_batch_preflight_rejection_observer{nullptr};
+std::atomic<const VulkanSubmissionBoundaryObserver*>
+    g_submission_boundary_observer{nullptr};
+
+struct SubmissionBoundaryIdentity {
+    uint64                       batch_sequence{0};
+    uint32                       operation_index{0};
+    EQueueType                   queue{EQueueType::Ignore};
+    EVulkanSubmissionBoundaryKind kind{
+        EVulkanSubmissionBoundaryKind::SerialControl
+    };
+    uint32                       dependency_wait_count{0};
+};
+
+void NotifySubmissionBoundary(
+    const SubmissionBoundaryIdentity&    _identity,
+    EVulkanSubmissionBoundaryPhase       _phase,
+    const VulkanRuntimeSubmissionResult* _result = nullptr,
+    uint32 _present_receipt_resolution_attempts = 0
+) noexcept {
+    assert(
+        GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
+        "submission boundary diagnostics must run on the Submission owner"
+    );
+    const VulkanSubmissionBoundaryObserver* observer =
+        g_submission_boundary_observer.load(std::memory_order_acquire);
+    if (observer == nullptr) {
+        return;
+    }
+    observer->callback(
+        observer->context,
+        VulkanSubmissionBoundaryEvent{
+            .batch_sequence       = _identity.batch_sequence,
+            .operation_index      = _identity.operation_index,
+            .queue                 = _identity.queue,
+            .kind                  = _identity.kind,
+            .phase                 = _phase,
+            .dependency_wait_count =
+                _identity.dependency_wait_count,
+            .thread_id             = Platform::GetCurrentThreadID(),
+            .thread_role           = GetCurrentRHIThreadRole(),
+            .outcome               =
+                _result != nullptr ?
+                    _result->outcome :
+                    VulkanOperationResult{},
+            .outcome_valid         = _result != nullptr,
+            .gpu_submitted =
+                _result != nullptr && _result->WasSubmitted(),
+            .recoverable_rejection =
+                _result != nullptr &&
+                _result->IsRecoverableRejection(),
+            .present_receipt_resolution_attempts =
+                _present_receipt_resolution_attempts,
+        }
+    );
+}
+
+template<typename SubmitCallable>
+VulkanRuntimeSubmissionResult ExecuteObservedSubmissionBoundary(
+    const SubmissionBoundaryIdentity& _identity,
+    SubmitCallable&&                 _submit,
+    const PresentReceiptRef&         _present_receipt = {}
+) noexcept {
+    NotifySubmissionBoundary(
+        _identity,
+        EVulkanSubmissionBoundaryPhase::Dispatch
+    );
+    VulkanRuntimeSubmissionResult result = _submit();
+    NotifySubmissionBoundary(
+        _identity,
+        EVulkanSubmissionBoundaryPhase::Terminal,
+        &result,
+        _present_receipt ?
+            _present_receipt->ResolutionAttemptCount() :
+            0
+    );
+    return result;
+}
 
 void NotifySourceSubmitted(
     uint64     _batch_sequence,
@@ -169,6 +246,13 @@ bool IsParallelTranslateCandidate(const RHIBackendSubmissionBatchEntry& _entry) 
     return IsNativeQueue(_entry.queue) &&
            _entry.submit.translate_execution_class == ERHITranslateExecutionClass::Parallel &&
            _entry.submit.HasExplicitResourceStateOwnership() && _entry.submit.async_queue_scope != 0;
+}
+
+bool IsSerialControlSource(
+    ERHITranslateExecutionClass _execution_class
+) noexcept {
+    return _execution_class ==
+           ERHITranslateExecutionClass::SerialControl;
 }
 
 void InvokeSourceCallbacksNoexcept(
@@ -780,6 +864,36 @@ bool RemoveVulkanSourceSubmissionObserver(const VulkanSourceSubmissionObserver* 
     const VulkanSourceSubmissionObserver* expected = _observer;
     return g_source_submission_observer.compare_exchange_strong(
         expected, nullptr, std::memory_order_acq_rel, std::memory_order_acquire
+    );
+}
+
+bool TryInstallVulkanSubmissionBoundaryObserver(
+    const VulkanSubmissionBoundaryObserver* _observer
+) noexcept {
+    if (_observer == nullptr || _observer->callback == nullptr) {
+        return false;
+    }
+    const VulkanSubmissionBoundaryObserver* expected = nullptr;
+    return g_submission_boundary_observer.compare_exchange_strong(
+        expected,
+        _observer,
+        std::memory_order_release,
+        std::memory_order_relaxed
+    );
+}
+
+bool RemoveVulkanSubmissionBoundaryObserver(
+    const VulkanSubmissionBoundaryObserver* _observer
+) noexcept {
+    if (_observer == nullptr) {
+        return false;
+    }
+    const VulkanSubmissionBoundaryObserver* expected = _observer;
+    return g_submission_boundary_observer.compare_exchange_strong(
+        expected,
+        nullptr,
+        std::memory_order_acq_rel,
+        std::memory_order_acquire
     );
 }
 
@@ -2227,6 +2341,20 @@ void VulkanSubmissionExecutor::ProcessBatch(
                 append_unique_wait(submit, *frontier[index]);
             }
         };
+    auto has_foreign_same_native_frontier =
+        [&](EQueueType target_queue, const auto& frontier) {
+            for (size_t index = 0; index < frontier.size(); ++index) {
+                if (!frontier[index].has_value()) {
+                    continue;
+                }
+                const auto source_queue = static_cast<EQueueType>(index);
+                if (source_queue != target_queue &&
+                    same_native_queue(source_queue, target_queue)) {
+                    return true;
+                }
+            }
+            return false;
+        };
     auto update_frontier =
         [&](EQueueType queue, WaitEvent completion, bool collapse) {
             UpdateStreamFrontier(queue, completion, collapse);
@@ -2835,6 +2963,10 @@ void VulkanSubmissionExecutor::ProcessBatch(
         }
 
         const uint64 async_scope = entry.submit.async_queue_scope;
+        const bool serial_control =
+            IsSerialControlSource(
+                entry.submit.translate_execution_class
+            );
         if (entry.queue == EQueueType::Copy) {
             auto& copy_queue = static_cast<VkCopyQueue&>(RenderDevice::Get().GetCopyQueue());
             std::optional<VkCopyQueue::CurrentVulkanCopyRecordedSubmit>
@@ -2869,12 +3001,28 @@ void VulkanSubmissionExecutor::ProcessBatch(
                         batch_sequence = _batch.sequence,
                         source_index = static_cast<uint32>(source_index),
                         source_metadata = materialization.sources[source_index],
-                        async_scope
+                        async_scope,
+                        serial_control
                     ]() mutable {
-                        VulkanRuntimeSubmissionResult result =
-                            copy_queue.SubmitRecordedForRuntime(
+                        auto submit = [&copy_queue, packet]() mutable {
+                            return copy_queue.SubmitRecordedForRuntime(
                                 std::move(*packet)
                             );
+                        };
+                        VulkanRuntimeSubmissionResult result =
+                            serial_control ?
+                                ExecuteObservedSubmissionBoundary(
+                                    SubmissionBoundaryIdentity{
+                                        .batch_sequence = batch_sequence,
+                                        .operation_index = source_index,
+                                        .queue = EQueueType::Copy,
+                                        .kind =
+                                            EVulkanSubmissionBoundaryKind::
+                                                SerialControl,
+                                    },
+                                    submit
+                                ) :
+                                submit();
                         if (result.WasSubmitted()) {
                             NotifySourceSubmitted(
                                 batch_sequence,
@@ -2980,10 +3128,28 @@ void VulkanSubmissionExecutor::ProcessBatch(
                         source_index = static_cast<uint32>(source_index),
                         source_metadata = materialization.sources[source_index],
                         queue_type = entry.queue,
-                        async_scope
+                        async_scope,
+                        serial_control
                     ]() mutable {
+                        auto submit = [&queue, packet]() mutable {
+                            return queue.SubmitRecordedForRuntime(
+                                std::move(*packet)
+                            );
+                        };
                         VulkanRuntimeSubmissionResult result =
-                            queue.SubmitRecordedForRuntime(std::move(*packet));
+                            serial_control ?
+                                ExecuteObservedSubmissionBoundary(
+                                    SubmissionBoundaryIdentity{
+                                        .batch_sequence = batch_sequence,
+                                        .operation_index = source_index,
+                                        .queue = queue_type,
+                                        .kind =
+                                            EVulkanSubmissionBoundaryKind::
+                                                SerialControl,
+                                    },
+                                    submit
+                                ) :
+                                submit();
                         if (result.WasSubmitted()) {
                             NotifySourceSubmitted(
                                 batch_sequence,
@@ -3059,7 +3225,18 @@ void VulkanSubmissionExecutor::ProcessBatch(
         );
         CmdSubmit bridge = CommandList(EQueueType::Graphics).Submit();
         append_frontier_waits(bridge, EQueueType::Graphics, gpu_frontier);
-        if (!bridge.wait_events.empty()) {
+        // A foreign logical queue sharing Graphics' native queue needs no GPU
+        // semaphore wait, but it has an independent Completion owner. Emit an
+        // empty Graphics marker so no-GPU-tail Retry/Recreate retirement stays
+        // behind that predecessor instead of retiring resources immediately.
+        const bool alias_completion_marker =
+            has_foreign_same_native_frontier(
+                EQueueType::Graphics,
+                gpu_frontier
+            );
+        if (!bridge.wait_events.empty() || alias_completion_marker) {
+            const uint32 bridge_dependency_wait_count =
+                static_cast<uint32>(bridge.wait_events.size());
             std::optional<VkCommandQueue::CurrentVulkanRecordedSubmit> recorded =
                 graphics_queue.TranslateForRuntime(std::move(bridge));
             used_queues[static_cast<size_t>(EQueueType::Graphics)] = true;
@@ -3075,9 +3252,30 @@ void VulkanSubmissionExecutor::ProcessBatch(
             VulkanRuntimeSubmissionResult bridge_result{};
             try {
                 bridge_result = ExecuteOnSubmissionThread(
-                    [&graphics_queue, packet = &*recorded]() mutable {
-                        return graphics_queue.SubmitRecordedForRuntime(
-                            std::move(*packet)
+                    [
+                        &graphics_queue,
+                        packet = &*recorded,
+                        batch_sequence = _batch.sequence,
+                        operation_index =
+                            static_cast<uint32>(_batch.submits.size()),
+                        bridge_dependency_wait_count
+                    ]() mutable {
+                        return ExecuteObservedSubmissionBoundary(
+                            SubmissionBoundaryIdentity{
+                                .batch_sequence  = batch_sequence,
+                                .operation_index = operation_index,
+                                .queue            = EQueueType::Graphics,
+                                .kind =
+                                    EVulkanSubmissionBoundaryKind::
+                                        PresentBridge,
+                                .dependency_wait_count =
+                                    bridge_dependency_wait_count,
+                            },
+                            [&graphics_queue, packet]() mutable {
+                                return graphics_queue.SubmitRecordedForRuntime(
+                                    std::move(*packet)
+                                );
+                            }
                         );
                     }
                 );
@@ -3123,13 +3321,33 @@ void VulkanSubmissionExecutor::ProcessBatch(
             used_queues[static_cast<size_t>(EQueueType::Graphics)] = true;
         }
         const VulkanRuntimeSubmissionResult present_result = ExecuteOnSubmissionThread(
-            [&graphics_queue, present = &present]() mutable {
-                return graphics_queue.PresentForRuntime(
-                    std::move(present->swapchain),
-                    present->source,
-                    // Keep the request's receipt copy until the Submission
-                    // owner returns so the exception barrier can resolve it.
-                    present->receipt
+            [
+                &graphics_queue,
+                present = &present,
+                batch_sequence = _batch.sequence,
+                operation_index =
+                    static_cast<uint32>(_batch.submits.size() + 1)
+            ]() mutable {
+                const PresentReceiptRef receipt = present->receipt;
+                return ExecuteObservedSubmissionBoundary(
+                    SubmissionBoundaryIdentity{
+                        .batch_sequence  = batch_sequence,
+                        .operation_index = operation_index,
+                        .queue            = EQueueType::Graphics,
+                        .kind =
+                            EVulkanSubmissionBoundaryKind::Present,
+                    },
+                    [&graphics_queue, present]() mutable {
+                        return graphics_queue.PresentForRuntime(
+                            std::move(present->swapchain),
+                            present->source,
+                            // Keep the request's receipt copy until the
+                            // Submission owner returns so the exception
+                            // barrier can resolve it.
+                            present->receipt
+                        );
+                    },
+                    receipt
                 );
             }
         );
