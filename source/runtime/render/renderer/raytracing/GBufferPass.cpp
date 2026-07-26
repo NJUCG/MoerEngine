@@ -226,20 +226,19 @@ bool GBufferPass::AddPasses(
     RenderGraph&                 graph,
     const RTGraphFrameResources& graph_resources,
     const RTContext&             rt_ctx,
-    bool                         tlas_built_this_frame,
     bool                         normal_roughness_readable
 ) {
     const PreparedCommand command   = Prepare(rt_ctx);
     const RecordResources resources = CaptureResources(rt_ctx);
-    if (!resources.tlas || resources.tlas->GetUnderlyingBuffer() == nullptr) {
+    if (!resources.tlas || resources.tlas->GetUnderlyingBuffer() == nullptr ||
+        !graph_resources.frame_setup.ready.IsValid() ||
+        !graph_resources.frame_setup.current_tlas.IsValid()) {
         return false;
     }
 
-    const BufferRef tlas_buffer(resources.tlas->GetUnderlyingBuffer());
     const auto constants =
         ImportRTGraphBuffer(graph, "RT.GBuffer.constants", gbuffer_constants);
-    const auto tlas =
-        ImportRTGraphBuffer(graph, "RT.GBuffer.tlas", tlas_buffer);
+    const auto tlas = graph_resources.frame_setup.current_tlas;
 
     const auto initial_texture =
         [&](RenderGraph::TextureHandle texture,
@@ -305,17 +304,6 @@ bool GBufferPass::AddPasses(
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    graph.SetInitialState(
-        tlas,
-        tlas_built_this_frame ?
-            RenderGraph::BufferState::AccelerationStructureWrite :
-            RenderGraph::BufferState::AccelerationStructureRead,
-        RenderGraph::QueueRole::Graphics,
-        tlas_built_this_frame ?
-            RenderGraph::AccessMode::Write :
-            RenderGraph::AccessMode::Read
-    );
-
     graph.AddRecordPass(
         "RT.GBuffer.UploadConstants",
         [=](RenderGraph::PassBuilder& builder) {
@@ -345,6 +333,7 @@ bool GBufferPass::AddPasses(
                    )
                 .Read(constants, RenderGraph::BufferState::ShaderResource)
                 .Read(tlas, RenderGraph::BufferState::AccelerationStructureRead)
+                .Read(graph_resources.frame_setup.ready)
                 .Write(
                     graph_resources.current_view_depth,
                     RenderGraph::TextureState::UnorderedAccess
@@ -460,12 +449,6 @@ bool GBufferPass::AddPasses(
     graph.Export(
         constants,
         RenderGraph::BufferState::ShaderResource,
-        RenderGraph::QueueRole::Graphics,
-        RenderGraph::AccessMode::Read
-    );
-    graph.Export(
-        tlas,
-        RenderGraph::BufferState::AccelerationStructureRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );

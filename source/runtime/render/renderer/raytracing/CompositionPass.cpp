@@ -140,6 +140,12 @@ bool CompositionPass::AddPasses(
     const PreparedCommand command   = Prepare(rt_ctx);
     const RecordResources resources = CaptureResources(rt_ctx);
     const auto            owner     = recording_owner;
+    const bool nrd_active =
+#if WITH_NRD
+        IsNrdDenoiserActive(rt_ctx.config.denoiser_mode);
+#else
+        false;
+#endif
     if (!owner || !owner->constants || !resources.hdr_color ||
         !resources.motion || !resources.view_depth ||
         !resources.diffuse_albedo || !resources.specular_roughness ||
@@ -147,6 +153,11 @@ bool CompositionPass::AddPasses(
         !resources.diffuse_lighting || !resources.specular_lighting ||
         !resources.denoised_diffuse_lighting ||
         !resources.denoised_specular_lighting || !resources.bindless_array ||
+        !graph_resources.frame_setup.ready.IsValid() ||
+        (nrd_active &&
+         (!graph_resources.denoised_diffuse_lighting.IsValid() ||
+          !graph_resources.denoised_specular_lighting.IsValid() ||
+          !graph_resources.nrd_ready.IsValid())) ||
         (command.constants.enable_env_map != 0 &&
          (!resources.env_map || !graph_resources.env_map.IsValid()))) {
         return false;
@@ -199,6 +210,7 @@ bool CompositionPass::AddPasses(
                     RenderGraph::PipelineType::Compute
                 )
                 .Read(constants, RenderGraph::BufferState::ShaderResource)
+                .Read(graph_resources.frame_setup.ready)
                 .Write(
                     graph_resources.hdr_color,
                     RenderGraph::TextureState::UnorderedAccess
@@ -235,6 +247,18 @@ bool CompositionPass::AddPasses(
                     graph_resources.specular_lighting,
                     RenderGraph::TextureState::Sampled
                 );
+            if (nrd_active) {
+                builder
+                    .Read(
+                        graph_resources.denoised_diffuse_lighting,
+                        RenderGraph::TextureState::Sampled
+                    )
+                    .Read(
+                        graph_resources.denoised_specular_lighting,
+                        RenderGraph::TextureState::Sampled
+                    )
+                    .Read(graph_resources.nrd_ready);
+            }
             if (graph_resources.env_map.IsValid()) {
                 builder.Read(
                     graph_resources.env_map,

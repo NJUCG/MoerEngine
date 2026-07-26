@@ -425,7 +425,7 @@ struct CmdSubmit {
         Array<std::function<void(void)>>&& _callbacks,
         Array<std::function<void(void)>>&& _success_callbacks,
         TCachedArgArray&&                  _cached_args
-    ) :
+    ) noexcept :
         cmds(std::move(_cmds)),
         callbacks(std::move(_callbacks)),
         success_callbacks(std::move(_success_callbacks)),
@@ -1326,9 +1326,19 @@ public:
         std::string_view _name = Command::typenames[(uint)Command::EType::UploadBuffer]
     );
     RENDER_API void CopyFrom(
+        std::span<const byte> _data,
+        BufferView            _dst,
+        std::string_view      _name = Command::typenames[(uint)Command::EType::UploadBuffer]
+    );
+    RENDER_API void CopyFrom(
         std::span<byte>  _data,
         TextureView      _dst,
         std::string_view _name = Command::typenames[(uint)Command::EType::UploadTexture]
+    );
+    RENDER_API void CopyFrom(
+        std::span<const byte> _data,
+        TextureView           _dst,
+        std::string_view      _name = Command::typenames[(uint)Command::EType::UploadTexture]
     );
     RENDER_API void CopyFrom(
         Array<byte>&&    _data,
@@ -1524,6 +1534,7 @@ public:
     RENDER_API void BuildAccelerationStructures(Array<AccelerationStructureBuildParam>&& _params);
 
     RENDER_API void UpdateRaytracingScene(RaytracingSceneRef _scene);
+    RENDER_API void UpdateRaytracingScene(UniquePtr<Command>&& _prepared_update);
 
 #pragma endregion
 
@@ -1538,6 +1549,13 @@ public:
 
     RENDER_API void AddCallback(std::function<void()>&& _callback);
     RENDER_API void AddSuccessCallback(std::function<void()>&& _callback);
+    /**
+     * Attaches a native-submission acceptance marker to this CommandList.
+     * Unlike CmdSubmit::Signal(), this form is available to independently
+     * recorded graph sources before the graph seals their immutable submit.
+     */
+    RENDER_API void Signal(Fence* _fence, uint64 _signal_value);
+    RENDER_API void Signal(const FenceRef& _fence, uint64 _signal_value);
 
     RENDER_API ArrayArgReference RegisterArgs(ArrayArguments&& _args);
 
@@ -1658,6 +1676,7 @@ private:
     Command*                     current_barriers{nullptr};
     Array<std::function<void()>> callbacks;
     Array<std::function<void()>> success_callbacks;
+    Array<SignalEvent>            signal_events;
     TCachedArgArray              cached_args;
     EQueueType                   queue_type{EQueueType::Graphics};
     ERHITranslateExecutionClass  translate_execution_class{
@@ -1751,6 +1770,7 @@ public:
     void Resolve(bool _submitted, bool _recreate_swapchain = false) {
         {
             std::unique_lock<std::mutex> lock(mutex);
+            ++resolution_attempts;
             if (resolved) {
                 return;
             }
@@ -1772,11 +1792,17 @@ public:
         return result;
     }
 
+    [[nodiscard]] uint32 ResolutionAttemptCount() const noexcept {
+        std::unique_lock<std::mutex> lock(mutex);
+        return resolution_attempts;
+    }
+
 private:
-    std::mutex               mutex;
+    mutable std::mutex       mutex;
     std::condition_variable  cv;
     PresentReceiptResult     result{};
     bool                     resolved{false};
+    uint32                   resolution_attempts{0};
 };
 
 using PresentReceiptRef = SharedPtr<PresentReceipt>;

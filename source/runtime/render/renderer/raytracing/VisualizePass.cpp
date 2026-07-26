@@ -136,7 +136,8 @@ bool VisualizePass::AddPasses(
         !graph_resources.current_specular_roughness.IsValid() ||
         !graph_resources.motion.IsValid() ||
         !graph_resources.normal_roughness.IsValid() ||
-        !graph_resources.debug_color.IsValid()) {
+        !graph_resources.debug_color.IsValid() ||
+        !graph_resources.presentation_ready.IsValid()) {
         return false;
     }
 
@@ -266,7 +267,8 @@ bool VisualizePass::AddPasses(
                 .Write(
                     graph_resources.debug_color,
                     RenderGraph::TextureState::UnorderedAccess
-                );
+                )
+                .Write(graph_resources.presentation_ready);
         },
         [owner, command, resources](CommandList& cmd_list) {
             ScopedGpuMarker marker(

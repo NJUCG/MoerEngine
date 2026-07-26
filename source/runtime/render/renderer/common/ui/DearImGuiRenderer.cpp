@@ -46,7 +46,7 @@ struct ImGuiData;
 
 void InitializeGuiPlatformInterface();
 void RenderGuiDrawPacket(
-    UiViewportDrawPacket& _draw_packet,
+    const UiViewportDrawPacket& _draw_packet,
     const TextureView&    _framebuffer,
     CommandList&          _cmd_list,
     ImGuiData&            _backend_data,
@@ -112,6 +112,21 @@ struct GuiViewportRenderResources final : UiViewportRenderResources {
     uint64_t frame_index = 0;
 
     explicit GuiViewportRenderResources(uint32_t _frame_in_flight) : render_buffers(_frame_in_flight) {}
+
+    uint64_t GetPendingRecordingSlot() const noexcept override {
+        return frame_index;
+    }
+
+    bool IsPendingRecordingSlot(uint64_t slot) const noexcept override {
+        return slot == frame_index;
+    }
+
+    void CommitRecordingSlot(uint64_t slot) noexcept override {
+        assert(slot == frame_index);
+        if (slot == frame_index) {
+            ++frame_index;
+        }
+    }
 };
 
 struct GuiViewportData {
@@ -516,7 +531,7 @@ UiDrawFramePacket ImGuiRenderBackend::CaptureDrawFrame() {
 void ImGuiRenderBackend::RenderGUI(
     CommandList&           _cmd_list,
     const TextureView&     _main_framebuffer,
-    UiDrawFramePacket&     _frame,
+    const UiDrawFramePacket& _frame,
     EUiDrawExecutionThread _execution_thread
 ) {
     assert(
@@ -533,7 +548,7 @@ void ImGuiRenderBackend::RenderGUI(
         RenderGuiDrawPacket(_frame.main_viewport, _main_framebuffer, _cmd_list, render_data, *this);
     }
     for (size_t viewport_index = 0; viewport_index < _frame.platform_viewports.size(); ++viewport_index) {
-        auto& viewport = _frame.platform_viewports[viewport_index];
+        const auto& viewport = _frame.platform_viewports[viewport_index];
         if (viewport.framebuffer && !viewport.commands.empty()) {
             ScopedGpuMarker viewport_marker(
                 _cmd_list,
@@ -674,27 +689,27 @@ static GuiPipeline::Constant CreateGuiProjection(const UiViewportDrawPacket& _dr
 
 static void UploadGuiDrawData(
     CommandList&                    _cmd_list,
-    UiViewportDrawPacket&           _draw_packet,
+    const UiViewportDrawPacket&     _draw_packet,
     Array<ImGuiDrawArgument>&       _arguments,
     const GuiFrameRenderBuffers&    _render_buffers
 ) {
     _cmd_list.CopyFrom(
-        std::span<Moer::byte>(
-            reinterpret_cast<Moer::byte*>(_draw_packet.vertices.data()),
+        std::span<const Moer::byte>(
+            reinterpret_cast<const Moer::byte*>(_draw_packet.vertices.data()),
             _draw_packet.vertices.size() * sizeof(UiDrawVertex)
         ),
         _render_buffers.vertex_buffer->GetView()
     );
     _cmd_list.CopyFrom(
-        std::span<Moer::byte>(
-            reinterpret_cast<Moer::byte*>(_draw_packet.indices.data()),
+        std::span<const Moer::byte>(
+            reinterpret_cast<const Moer::byte*>(_draw_packet.indices.data()),
             _draw_packet.indices.size() * sizeof(UiDrawIndex)
         ),
         _render_buffers.index_buffer->GetView()
     );
     _cmd_list.CopyFrom(
-        std::span<Moer::byte>(
-            reinterpret_cast<Moer::byte*>(_arguments.data()),
+        std::span<const Moer::byte>(
+            reinterpret_cast<const Moer::byte*>(_arguments.data()),
             _arguments.size() * sizeof(ImGuiDrawArgument)
         ),
         _render_buffers.argument_buffer->GetView()
@@ -702,7 +717,7 @@ static void UploadGuiDrawData(
 }
 
 void RenderGuiDrawPacket(
-    UiViewportDrawPacket& _draw_packet,
+    const UiViewportDrawPacket& _draw_packet,
     const TextureView&    _framebuffer,
     CommandList&          _cmd_list,
     ImGuiData&            _backend_data,
@@ -734,10 +749,16 @@ void RenderGuiDrawPacket(
         return;
     }
 
+    if (_draw_packet.recording_slot == UiViewportDrawPacket::InvalidRecordingSlot ||
+        !render_resources->IsPendingRecordingSlot(_draw_packet.recording_slot)) {
+        throw std::logic_error(
+            "copied UI draw packet does not own the current upload-ring slot"
+        );
+    }
     GuiFrameRenderBuffers& render_buffers =
-        render_resources
-            ->render_buffers[render_resources->frame_index % render_resources->render_buffers.size()];
-    render_resources->frame_index++;
+        render_resources->render_buffers[
+            _draw_packet.recording_slot % render_resources->render_buffers.size()
+        ];
 
     auto&        device        = _render_backend.device;
     const uint32 vertex_count  = static_cast<uint32>(_draw_packet.vertices.size());
@@ -767,10 +788,6 @@ void RenderGuiDrawPacket(
             ColorAttachment(_framebuffer.GetTexture(), EAttachmentAction::AC_LOAD_STORE)
         );
 
-    // CopyFrom 的源数据要持续到命令执行结束，因此通过空回调延长这些数组的生命周期。
-    _cmd_list.AddCallback([vertices(std::move(_draw_packet.vertices)),
-                           indices(std::move(_draw_packet.indices)),
-                           arguments(std::move(arguments))]() {});
 }
 
 void GuiCreateWindow(ImGuiViewport* _viewport);
@@ -838,7 +855,10 @@ void CreateOrResizeViewportResources(
     _resources->framebuffer = _device.CreateTexture(
         Extent2D(_extent.x, _extent.y),
         PF_R8G8B8A8_SRGB,
-        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED
+        ETextureUsageFlags::COLOR_ATTACHMENT |
+            ETextureUsageFlags::SAMPLED |
+            ETextureUsageFlags::TRANSFER_SRC |
+            ETextureUsageFlags::TRANSFER_DST
     );
     _resources->framebuffer->SetName(std::format("ImGui Window {}", _viewport_index));
 
@@ -1018,6 +1038,8 @@ void GuiRenderWindow(ImGuiViewport* _viewport, void* _cmd_list) {
 
     ImGuiData& backend_data = *GetImGuiBackendData();
     auto       draw_packet  = CaptureViewportDrawPacket(_viewport->DrawData, viewport_data);
+    draw_packet.recording_slot =
+        draw_packet.render_resources->GetPendingRecordingSlot();
     RenderGuiDrawPacket(
         draw_packet,
         viewport_data->render_resources->framebuffer->GetView(),
@@ -1025,6 +1047,13 @@ void GuiRenderWindow(ImGuiViewport* _viewport, void* _cmd_list) {
         backend_data,
         *backend_data.render_backend
     );
+    if (draw_packet.render_resources->IsPendingRecordingSlot(
+            draw_packet.recording_slot
+        )) {
+        draw_packet.render_resources->CommitRecordingSlot(
+            draw_packet.recording_slot
+        );
+    }
 }
 
 void GuiSwapBuffers(ImGuiViewport* _viewport, void*) {

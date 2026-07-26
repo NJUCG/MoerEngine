@@ -1,4 +1,6 @@
 #include "rendergraph/RenderGraph.h"
+#include "renderer/common/UiFrameGraphPass.h"
+#include "rhi/plugin/NrdPlugin.h"
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/TaskSystem.h"
 
@@ -14,6 +16,62 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+
+namespace Moer::Render {
+
+class UiFrameGraphPassTestAccess {
+public:
+    [[nodiscard]] static bool
+    BeginRecording(const UiFrameGraphPass::PreparedFrame& frame) {
+        return frame.BeginRecording();
+    }
+
+    static void FinishRecording(
+        const UiFrameGraphPass::PreparedFrame& frame
+    ) {
+        frame.FinishRecording();
+    }
+
+    [[nodiscard]] static bool AddPassesWithComposeRecorder(
+        RenderGraph&                          graph,
+        std::function<void(CommandList&)>     compose_recorder,
+        const UiFrameGraphPass::PreparedFrameRef& frame,
+        RenderGraph::TextureHandle            scene_color_handle,
+        const TextureRef&                     scene_color,
+        const TextureRef&                     main_output,
+        RenderGraph::TokenHandle              presentation_ready,
+        UiFrameGraphPass::GraphPasses&        passes
+    ) {
+        return UiFrameGraphPass::AddPassesWithComposeRecorder(
+            graph,
+            std::move(compose_recorder),
+            frame,
+            scene_color_handle,
+            scene_color,
+            main_output,
+            presentation_ready,
+            passes
+        );
+    }
+
+    [[nodiscard]] static bool ProcessLinearWithComposeRecorder(
+        CommandList&                              cmd_list,
+        std::function<void(CommandList&)>         compose_recorder,
+        const UiFrameGraphPass::PreparedFrameRef& frame,
+        const TextureRef&                         scene_color,
+        const TextureRef&                         main_output
+    ) {
+        return UiFrameGraphPass::ProcessLinearWithComposeRecorder(
+            cmd_list,
+            std::move(compose_recorder),
+            frame,
+            scene_color,
+            main_output
+        );
+    }
+};
+
+} // namespace Moer::Render
 
 namespace {
 
@@ -3544,7 +3602,10 @@ void TestRecordingBatchPlanAndClassification(TestSuite& suite) {
     );
     suite.Check(
         Contains(graph.Dump(), "recording_batches:\n") &&
-            Contains(graph.Dump(), "cpu=parallel-record workload=8 wave=0"),
+            Contains(
+                graph.Dump(),
+                "cpu=parallel-record translate=parallel workload=8 wave=0"
+            ),
         test_name,
         "the deterministic dump must expose the executable CPU recording schedule"
     );
@@ -3674,6 +3735,832 @@ void TestExternalControlIsAnUnmanagedJoinBoundary(TestSuite& suite) {
         published_groups == 1 && managed_observers == 1,
         test_name,
         "only owned record batches are published and only managed main-thread passes are observed"
+    );
+}
+
+class FakeUiViewportResources final :
+    public Moer::Render::UiViewportRenderResources {
+public:
+    explicit FakeUiViewportResources(uint64_t pending_slot) :
+        pending_slot(pending_slot) {}
+
+    [[nodiscard]] uint64_t
+    GetPendingRecordingSlot() const noexcept override {
+        return pending_slot;
+    }
+
+    [[nodiscard]] bool
+    IsPendingRecordingSlot(uint64_t slot) const noexcept override {
+        return slot == pending_slot;
+    }
+
+    void CommitRecordingSlot(uint64_t slot) noexcept override {
+        if (slot == pending_slot) {
+            ++pending_slot;
+            ++commit_count;
+        }
+    }
+
+    [[nodiscard]] uint64_t PendingSlot() const {
+        return pending_slot;
+    }
+
+    [[nodiscard]] uint32_t CommitCount() const {
+        return commit_count;
+    }
+
+    void SetPendingSlot(uint64_t slot) {
+        pending_slot = slot;
+    }
+
+private:
+    uint64_t pending_slot = 0;
+    uint32_t commit_count = 0;
+};
+
+class FakeUiDrawBackend final : public Moer::Render::UiDrawFrameBackend {
+public:
+    void RenderGUI(
+        Moer::Render::CommandList&,
+        const Moer::Render::TextureView&,
+        const Moer::Render::UiDrawFramePacket& frame,
+        Moer::Render::EUiDrawExecutionThread execution_thread
+    ) override {
+        ++render_count;
+        last_execution_thread = execution_thread;
+        const auto validate = [](const Moer::Render::UiViewportDrawPacket& viewport) {
+            return viewport.commands.empty() ||
+                   (viewport.recording_slot !=
+                        Moer::Render::UiViewportDrawPacket::
+                            InvalidRecordingSlot &&
+                    viewport.render_resources &&
+                    viewport.render_resources->IsPendingRecordingSlot(
+                        viewport.recording_slot
+                    ));
+        };
+        saw_valid_recording_slots =
+            saw_valid_recording_slots && validate(frame.main_viewport);
+        for (const auto& viewport : frame.platform_viewports) {
+            saw_valid_recording_slots =
+                saw_valid_recording_slots && validate(viewport);
+        }
+    }
+
+    void PresentWindows(
+        const Moer::Render::UiDrawFramePacket&,
+        Moer::Render::EUiDrawExecutionThread
+    ) override {
+        ++present_count;
+    }
+
+    uint32_t render_count = 0;
+    uint32_t present_count = 0;
+    bool saw_valid_recording_slots = true;
+    Moer::Render::EUiDrawExecutionThread last_execution_thread{
+        Moer::Render::EUiDrawExecutionThread::Game
+    };
+};
+
+class FakeUiTexture final : public Moer::Render::Texture {
+public:
+    explicit FakeUiTexture(
+        std::string_view    name,
+        ETextureUsageFlags usage =
+            ETextureUsageFlags::SAMPLED |
+            ETextureUsageFlags::COLOR_ATTACHMENT |
+            ETextureUsageFlags::TRANSFER_SRC |
+            ETextureUsageFlags::TRANSFER_DST,
+        ETextureAspectFlags aspects = ETextureAspectFlags::COLOR
+    ) :
+        Texture(MakeInfo(usage, aspects)) {
+        SetName(name);
+    }
+
+    Moer::uint GetMipByteSize(Moer::uint) const override {
+        return 4;
+    }
+
+    void SetName(std::string_view name) override {
+        debug_name = std::string(name);
+    }
+
+private:
+    static Moer::Render::TextureInfo MakeInfo(
+        ETextureUsageFlags  usage,
+        ETextureAspectFlags aspects
+    ) {
+        using namespace Moer::Render;
+        TextureInfo info{};
+        info.usage        = usage;
+        info.extent       = {64, 64};
+        info.num_mips     = 1;
+        info.array_size   = 1;
+        info.format       = PF_R8G8B8A8_UNORM;
+        info.aspect_flags = aspects;
+        return info;
+    }
+};
+
+Moer::Render::UiDrawFramePacket MakeUiDrawPacket(
+    const Moer::SharedPtr<FakeUiViewportResources>& resources,
+    const Moer::SharedPtr<FakeUiDrawBackend>&       backend,
+    bool                                             duplicate_resource
+) {
+    Moer::Render::UiDrawFramePacket packet{};
+    packet.backend = backend;
+    packet.main_viewport.render_resources = resources;
+    packet.main_viewport.commands.emplace_back();
+    if (duplicate_resource) {
+        Moer::Render::UiViewportDrawPacket platform{};
+        platform.render_resources = resources;
+        platform.commands.emplace_back();
+        packet.platform_viewports.emplace_back(std::move(platform));
+    }
+    return packet;
+}
+
+void TestRasterStyleUiSlotClaimTracksNativeAcceptance(TestSuite& suite) {
+    using namespace Moer::Render;
+    constexpr std::string_view test_name =
+        "Raster copied UI slot native acceptance";
+
+    auto rejected_resources =
+        Moer::MakeShared<FakeUiViewportResources>(11);
+    auto rejected_backend = Moer::MakeShared<FakeUiDrawBackend>();
+    auto rejected_frame =
+        MakeUiDrawPacket(rejected_resources, rejected_backend, true);
+    UiDrawFrameSlotClaim rejected_claim(rejected_frame);
+    CommandList         rejected_commands;
+    suite.Check(
+        rejected_claim.IsReadyForRecording() &&
+            rejected_frame.main_viewport.recording_slot == 11 &&
+            rejected_frame.platform_viewports.front().recording_slot == 11,
+        test_name,
+        "Raster-style copied frame did not freeze a shared pending slot"
+    );
+    RenderUiDrawFrame(
+        rejected_commands,
+        {},
+        rejected_frame,
+        EUiDrawExecutionThread::Game
+    );
+    suite.Check(
+        rejected_backend->render_count == 1 &&
+            rejected_backend->saw_valid_recording_slots,
+        test_name,
+        "non-empty Raster UI reached the backend without a valid slot claim"
+    );
+    rejected_claim.Reject();
+    rejected_claim.Reject();
+    suite.Check(
+        rejected_claim.GetState() ==
+                UiDrawFrameSlotClaim::EState::Rejected &&
+            !rejected_claim.CommitAccepted() &&
+            rejected_resources->PendingSlot() == 11 &&
+            rejected_resources->CommitCount() == 0,
+        test_name,
+        "native rejection advanced or resurrected the copied-frame slot"
+    );
+
+    auto accepted_resources =
+        Moer::MakeShared<FakeUiViewportResources>(23);
+    auto accepted_backend = Moer::MakeShared<FakeUiDrawBackend>();
+    auto accepted_frame =
+        MakeUiDrawPacket(accepted_resources, accepted_backend, true);
+    UiDrawFrameSlotClaim accepted_claim(accepted_frame);
+    CommandList         accepted_commands;
+    RenderUiDrawFrame(
+        accepted_commands,
+        {},
+        accepted_frame,
+        EUiDrawExecutionThread::Game
+    );
+    suite.Check(
+        accepted_backend->render_count == 1 &&
+            accepted_backend->saw_valid_recording_slots &&
+            accepted_resources->PendingSlot() == 23 &&
+            accepted_resources->CommitCount() == 0,
+        test_name,
+        "recording advanced the Raster UI upload ring before native acceptance"
+    );
+    suite.Check(
+        accepted_claim.CommitAccepted() &&
+            accepted_claim.CommitAccepted(),
+        test_name,
+        "native acceptance was not idempotent"
+    );
+    accepted_claim.Reject();
+    suite.Check(
+        accepted_claim.GetState() ==
+                UiDrawFrameSlotClaim::EState::Accepted &&
+            accepted_resources->PendingSlot() == 24 &&
+            accepted_resources->CommitCount() == 1,
+        test_name,
+        "shared Raster UI slot was not committed exactly once"
+    );
+}
+
+void TestUiPreparedFrameLifecycleIsOneShot(TestSuite& suite) {
+    using namespace Moer::Render;
+    constexpr std::string_view test_name =
+        "UI prepared frame one-shot lifecycle";
+
+    auto resources = Moer::MakeShared<FakeUiViewportResources>(17);
+    auto backend   = Moer::MakeShared<FakeUiDrawBackend>();
+    std::weak_ptr<FakeUiViewportResources> resource_owner = resources;
+    std::weak_ptr<FakeUiDrawBackend>        backend_owner  = backend;
+    auto accepted = UiFrameGraphPass::Prepare(
+        {},
+        MakeUiDrawPacket(resources, backend, true),
+        EUiDrawExecutionThread::Render
+    );
+    resources.reset();
+    backend.reset();
+
+    suite.Check(
+        !resource_owner.expired() && !backend_owner.expired(),
+        test_name,
+        "prepared frame did not retain copied UI backend/resources"
+    );
+    suite.Check(
+        accepted->GetDrawFrame().main_viewport.recording_slot == 17 &&
+            accepted->GetDrawFrame().platform_viewports.front().recording_slot ==
+                17,
+        test_name,
+        "Prepare did not freeze the pending upload-ring slot"
+    );
+    auto accepted_resources = resource_owner.lock();
+    suite.Check(
+        accepted_resources && accepted_resources->PendingSlot() == 17 &&
+            accepted_resources->CommitCount() == 0,
+        test_name,
+        "Prepare advanced the upload-ring before native acceptance"
+    );
+    suite.Check(
+        UiFrameGraphPassTestAccess::BeginRecording(*accepted),
+        test_name,
+        "first recording claim failed"
+    );
+    suite.Check(
+        !UiFrameGraphPassTestAccess::BeginRecording(*accepted),
+        test_name,
+        "a second recording claim replayed the copied packet"
+    );
+    UiFrameGraphPassTestAccess::FinishRecording(*accepted);
+    suite.Check(
+        accepted->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::Recorded &&
+            !accepted->CanPresent() &&
+            accepted_resources->CommitCount() == 0,
+        test_name,
+        "recording completion prematurely committed or presented the UI frame"
+    );
+    suite.Check(
+        accepted->CommitAcceptedSource() &&
+            accepted->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::SourceAccepted &&
+            !accepted->CanPresent() &&
+            accepted_resources->PendingSlot() == 18 &&
+            accepted_resources->CommitCount() == 1,
+        test_name,
+        "native UI-source acceptance did not retire exactly one shared slot"
+    );
+    suite.Check(
+        accepted->CommitAcceptedSource() &&
+            accepted_resources->CommitCount() == 1,
+        test_name,
+        "repeated source acceptance advanced the upload ring twice"
+    );
+    accepted->RejectSource();
+    accepted->Abandon();
+    suite.Check(
+        accepted->GetRecordingState() ==
+            UiFrameGraphPass::ERecordingState::SourceAccepted,
+        test_name,
+        "a late reject/abandon reversed an accepted source"
+    );
+    suite.Check(
+        accepted->CommitAcceptedFrame() && accepted->CanPresent() &&
+            accepted->CommitAcceptedFrame(),
+        test_name,
+        "whole-frame acceptance was not idempotent"
+    );
+    accepted->RejectSource();
+    accepted->Abandon();
+    suite.Check(
+        accepted->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::FrameAccepted &&
+            accepted->CanPresent() &&
+            accepted_resources->CommitCount() == 1,
+        test_name,
+        "an accepted frame was downgraded or recommitted"
+    );
+
+    auto failed_resources = Moer::MakeShared<FakeUiViewportResources>(41);
+    auto failed_backend   = Moer::MakeShared<FakeUiDrawBackend>();
+    auto failed = UiFrameGraphPass::Prepare(
+        {},
+        MakeUiDrawPacket(failed_resources, failed_backend, false),
+        EUiDrawExecutionThread::Render
+    );
+    suite.Check(
+        UiFrameGraphPassTestAccess::BeginRecording(*failed),
+        test_name,
+        "failure-path recording claim failed"
+    );
+    failed->Abandon();
+    UiFrameGraphPassTestAccess::FinishRecording(*failed);
+    suite.Check(
+        failed->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::Failed &&
+            !failed->CanPresent() &&
+            failed_resources->PendingSlot() == 41 &&
+            failed_resources->CommitCount() == 0 &&
+            !failed->CommitAcceptedSource() &&
+            !UiFrameGraphPassTestAccess::BeginRecording(*failed),
+        test_name,
+        "failed recording remained replayable or retired an unaccepted slot"
+    );
+
+    auto stale_resources = Moer::MakeShared<FakeUiViewportResources>(73);
+    auto stale_backend   = Moer::MakeShared<FakeUiDrawBackend>();
+    auto stale = UiFrameGraphPass::Prepare(
+        {},
+        MakeUiDrawPacket(stale_resources, stale_backend, false),
+        EUiDrawExecutionThread::Render
+    );
+    suite.Check(
+        UiFrameGraphPassTestAccess::BeginRecording(*stale),
+        test_name,
+        "stale-slot recording claim failed"
+    );
+    UiFrameGraphPassTestAccess::FinishRecording(*stale);
+    stale_resources->SetPendingSlot(74);
+    suite.Check(
+        !stale->CommitAcceptedSource() &&
+            stale->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::Failed &&
+            stale_resources->CommitCount() == 0 &&
+            !stale->CommitAcceptedFrame(),
+        test_name,
+        "a stale upload-ring token was committed or made presentable"
+    );
+}
+
+void TestUiFrameGraphTailContract(TestSuite& suite) {
+    using namespace Moer::Render;
+    constexpr std::string_view test_name =
+        "UI frame graph presentation tail";
+
+    TextureRef scene_color(MoerNew(FakeUiTexture)("SceneColor"));
+    TextureRef main_output(MoerNew(FakeUiTexture)("MainOutput"));
+    TextureRef window_output(MoerNew(FakeUiTexture)("SceneWindow"));
+    TextureRef platform_output(MoerNew(FakeUiTexture)("PlatformOutput"));
+
+    auto shared_slots = Moer::MakeShared<FakeUiViewportResources>(5);
+    auto platform_slots = Moer::MakeShared<FakeUiViewportResources>(9);
+    auto backend = Moer::MakeShared<FakeUiDrawBackend>();
+    UiDrawFramePacket draw_frame{};
+    draw_frame.backend = backend;
+    draw_frame.main_viewport.render_resources = shared_slots;
+    draw_frame.main_viewport.commands.emplace_back();
+
+    const auto append_platform = [&](TextureRef framebuffer,
+                                     Moer::SharedPtr<FakeUiViewportResources> slots) {
+        UiViewportDrawPacket viewport{};
+        viewport.framebuffer      = std::move(framebuffer);
+        viewport.render_resources = std::move(slots);
+        viewport.commands.emplace_back();
+        draw_frame.platform_viewports.emplace_back(std::move(viewport));
+    };
+    append_platform(main_output, shared_slots);
+    append_platform(window_output, shared_slots);
+    append_platform(platform_output, platform_slots);
+
+    UiCompositionFrameData composition{
+        .enabled                 = true,
+        .separate_window         = true,
+        .output_resolution       = Moer::uint2(64, 64),
+        .scene_color_position    = Moer::float2(0.f, 0.f),
+        .scene_color_resolution  = Moer::float2(64.f, 64.f),
+        .window_frame_buffer     = window_output,
+    };
+    auto prepared = UiFrameGraphPass::Prepare(
+        std::move(composition),
+        std::move(draw_frame),
+        EUiDrawExecutionThread::Render
+    );
+
+    RenderGraph graph("UiFrameGraphTailContract");
+    const auto scene = graph.ImportTexture(
+        "SceneColor",
+        scene_color,
+        RenderGraph::TextureDesc{
+            .mip_count   = 1,
+            .layer_count = 1,
+            .aspects     = RenderGraph::TextureAspect::Color,
+        }
+    );
+    graph.SetInitialState(
+        scene,
+        RenderGraph::TextureState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None
+    );
+    const auto presentation_ready =
+        graph.CreateTransientToken("PresentationReady");
+    const auto producer = graph.AddRecordPass(
+        "ShowTexture",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder
+                .ExecuteOn(
+                    RenderGraph::QueueRole::Graphics,
+                    RenderGraph::PipelineType::Graphics
+                )
+                .Write(scene, RenderGraph::TextureState::RenderTarget)
+                .Write(presentation_ready)
+                .SideEffect()
+                .ParallelRecord();
+        },
+        [](CommandList&) {},
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+
+    UiFrameGraphPass::GraphPasses ui_passes{};
+    const bool added = UiFrameGraphPassTestAccess::AddPassesWithComposeRecorder(
+        graph,
+        [](CommandList&) {},
+        prepared,
+        scene,
+        scene_color,
+        main_output,
+        presentation_ready,
+        ui_passes
+    );
+    suite.Check(added && ui_passes.IsValid(), test_name, "UI tail was not declared");
+    suite.Check(
+        ui_passes.presentation_targets.size() == 3 &&
+            ui_passes.main_output == ui_passes.presentation_targets.front(),
+        test_name,
+        "physical presentation aliases were not deduplicated"
+    );
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    if (!graph.IsCompiled()) {
+        return;
+    }
+
+    const auto& plan = graph.GetCompiledPlan();
+    suite.Check(
+        plan.state_plan_complete,
+        test_name,
+        "UI tail left an incomplete explicit resource-state plan"
+    );
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            producer,
+            ui_passes.clear,
+            RenderGraph::EdgeReasonKind::ReadAfterWrite,
+            presentation_ready.Untyped()
+        ) &&
+            HasEdgeReason(
+                plan,
+                ui_passes.clear,
+                ui_passes.compose,
+                RenderGraph::EdgeReasonKind::Explicit
+            ) &&
+            HasEdgeReason(
+                plan,
+                ui_passes.compose,
+                ui_passes.draw,
+                RenderGraph::EdgeReasonKind::Explicit
+            ),
+        test_name,
+        "ShowTexture -> Clear -> Compose -> Draw ordering was not explicit"
+    );
+
+    const auto& clear_batch =
+        plan.recording_batches[ui_passes.clear.index];
+    const auto& compose_batch =
+        plan.recording_batches[ui_passes.compose.index];
+    const auto& draw_batch =
+        plan.recording_batches[ui_passes.draw.index];
+    suite.Check(
+        clear_batch.execution == RenderGraph::PassExecutionClass::SerialRecord &&
+            compose_batch.execution ==
+                RenderGraph::PassExecutionClass::SerialRecord &&
+            draw_batch.execution ==
+                RenderGraph::PassExecutionClass::SerialRecord &&
+            clear_batch.translate_execution_class ==
+                ERHITranslateExecutionClass::Parallel &&
+            compose_batch.translate_execution_class ==
+                ERHITranslateExecutionClass::Parallel &&
+            draw_batch.translate_execution_class ==
+                ERHITranslateExecutionClass::SerialControl,
+        test_name,
+        "UI recording/translation ownership classes changed"
+    );
+
+    bool access_contract_valid = true;
+    bool export_contract_valid = true;
+    for (const auto target : ui_passes.presentation_targets) {
+        const auto* clear_access =
+            FindAccess(plan, ui_passes.clear, target.Untyped());
+        const auto* draw_access =
+            FindAccess(plan, ui_passes.draw, target.Untyped());
+        const auto* export_barrier =
+            FindBarrier(plan, target.Untyped(), ui_passes.draw, {});
+        access_contract_valid =
+            access_contract_valid && clear_access && draw_access &&
+            clear_access->mode == RenderGraph::AccessMode::Write &&
+            clear_access->state ==
+                RenderGraph::ResourceState::Texture(
+                    RenderGraph::TextureState::TransferDestination
+                ) &&
+            clear_access->domain.queue == RenderGraph::QueueRole::Graphics &&
+            clear_access->domain.pipeline ==
+                RenderGraph::PipelineType::Copy &&
+            draw_access->mode == RenderGraph::AccessMode::ReadWrite &&
+            draw_access->state ==
+                RenderGraph::ResourceState::Texture(
+                    RenderGraph::TextureState::RenderTarget
+                ) &&
+            draw_access->domain.queue == RenderGraph::QueueRole::Graphics &&
+            draw_access->domain.pipeline ==
+                RenderGraph::PipelineType::Graphics;
+        export_contract_valid =
+            export_contract_valid && export_barrier &&
+            export_barrier->export_boundary &&
+            export_barrier->after_state ==
+                RenderGraph::ResourceState::Texture(
+                    RenderGraph::TextureState::TransferSource
+                ) &&
+            export_barrier->after_access == RenderGraph::AccessMode::Read;
+    }
+    const auto* compose_access = FindAccess(
+        plan,
+        ui_passes.compose,
+        ui_passes.presentation_targets[1].Untyped()
+    );
+    suite.Check(
+        access_contract_valid && compose_access &&
+            compose_access->mode == RenderGraph::AccessMode::Write &&
+            compose_access->state ==
+                RenderGraph::ResourceState::Texture(
+                    RenderGraph::TextureState::RenderTarget
+                ) &&
+            compose_access->domain.queue ==
+                RenderGraph::QueueRole::Graphics &&
+            compose_access->domain.pipeline ==
+                RenderGraph::PipelineType::Graphics,
+        test_name,
+        "UI Clear/Compose/Draw access declarations changed"
+    );
+    suite.Check(
+        export_contract_valid,
+        test_name,
+        "a presentation target was not exported as Graphics TransferSource/Read"
+    );
+    const std::string dump = graph.Dump();
+    suite.Check(
+        Contains(dump, "UI.ClearTargets") &&
+            Contains(dump, "UI.Compose") &&
+            Contains(dump, "UI.DrawCopiedFrame") &&
+            Contains(dump, "translate=serial-control") &&
+            !Contains(dump, "texture:present") &&
+            !Contains(dump, "ui_framebuffer") &&
+            !Contains(dump, "gui_color"),
+        test_name,
+        "UI tail dump lost nodes/frontier or regained legacy fake dependencies"
+    );
+
+    bool draw_source_kept_serial_control = false;
+    const bool executed = graph.ExecuteRecording(
+        {},
+        [&](const RenderGraph::ExecutedPassInfo& pass,
+            RHIRecordingSource& source) {
+            if (pass.handle == ui_passes.draw) {
+                draw_source_kept_serial_control =
+                    source.command_list->GetTranslateExecutionClass() ==
+                        ERHITranslateExecutionClass::SerialControl &&
+                    source.submit_metadata.translate_execution_class ==
+                        ERHITranslateExecutionClass::SerialControl;
+            }
+        },
+        false,
+        [](Moer::Array<RHIRecordingSource>&&) {}
+    );
+    suite.Check(
+        executed && draw_source_kept_serial_control &&
+            backend->render_count == 1 &&
+            backend->last_execution_thread ==
+                EUiDrawExecutionThread::Render &&
+            prepared->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::Recorded &&
+            shared_slots->CommitCount() == 0 &&
+            platform_slots->CommitCount() == 0,
+        test_name,
+        "UI tail did not record once with immutable ownership"
+    );
+}
+
+void TestUiFrameGraphRejectsInvalidPhysicalContracts(TestSuite& suite) {
+    using namespace Moer::Render;
+    constexpr std::string_view test_name =
+        "UI frame graph physical contract rejection";
+
+    TextureRef scene_color(MoerNew(FakeUiTexture)("SceneColor"));
+    TextureRef other_scene(MoerNew(FakeUiTexture)("OtherScene"));
+    TextureRef invalid_output(MoerNew(FakeUiTexture)(
+        "InvalidOutput",
+        ETextureUsageFlags::SAMPLED |
+            ETextureUsageFlags::COLOR_ATTACHMENT
+    ));
+
+    auto slots   = Moer::MakeShared<FakeUiViewportResources>(23);
+    auto backend = Moer::MakeShared<FakeUiDrawBackend>();
+    auto prepared = UiFrameGraphPass::Prepare(
+        {},
+        MakeUiDrawPacket(slots, backend, false),
+        EUiDrawExecutionThread::Render
+    );
+
+    RenderGraph graph("UiFrameGraphInvalidPhysicalContracts");
+    const auto mismatched_scene_handle = graph.ImportTexture(
+        "OtherScene",
+        other_scene,
+        RenderGraph::TextureDesc{
+            .mip_count   = 1,
+            .layer_count = 1,
+            .aspects     = RenderGraph::TextureAspect::Color,
+        }
+    );
+    const auto presentation_ready =
+        graph.CreateTransientToken("PresentationReady");
+    UiFrameGraphPass::GraphPasses ui_passes{};
+    suite.Check(
+        !UiFrameGraphPassTestAccess::AddPassesWithComposeRecorder(
+            graph,
+            [](CommandList&) {},
+            prepared,
+            mismatched_scene_handle,
+            scene_color,
+            invalid_output,
+            presentation_ready,
+            ui_passes
+        ) &&
+            !ui_passes.IsValid() &&
+            prepared->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::Prepared,
+        test_name,
+        "graph declaration accepted mismatched scene identity or invalid "
+        "presentation usage"
+    );
+
+    CommandList linear_commands{};
+    const bool linear_recorded =
+        UiFrameGraphPassTestAccess::ProcessLinearWithComposeRecorder(
+            linear_commands,
+            [](CommandList&) {},
+            prepared,
+            scene_color,
+            invalid_output
+        );
+    const CmdSubmit rejected_submit = linear_commands.Submit();
+    suite.Check(
+        !linear_recorded && rejected_submit.cmds.empty() &&
+            backend->render_count == 0 && slots->CommitCount() == 0 &&
+            slots->PendingSlot() == 23 &&
+            prepared->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::Prepared,
+        test_name,
+        "linear fallback bypassed UI target validation or claimed the copied "
+        "packet"
+    );
+}
+
+void TestSerialControlTranslationIsADeclaredRecordingPolicy(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "serial-control translation recording policy";
+    RenderGraph graph("SerialControlTranslation");
+    bool        recorded  = false;
+    bool        published = false;
+
+    graph.AddRecordPass(
+        "NRDIsland",
+        [](RenderGraph::PassBuilder& builder) {
+            builder
+                .ExecuteOn(
+                    RenderGraph::QueueRole::Graphics,
+                    RenderGraph::PipelineType::Compute
+                )
+                .SideEffect()
+                .SerialRecord()
+                .TranslateSerialControl();
+        },
+        [&](Moer::Render::CommandList&) { recorded = true; },
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    suite.Check(
+        plan.recording_batches.size() == 1 &&
+            plan.recording_batches.front().execution ==
+                RenderGraph::PassExecutionClass::SerialRecord &&
+            plan.recording_batches.front().translate_execution_class ==
+                Moer::Render::ERHITranslateExecutionClass::SerialControl &&
+            Contains(graph.Dump(), "translate=serial-control"),
+        test_name,
+        "the compiler and dump must retain the declared translation frontier"
+    );
+
+    const bool executed = graph.ExecuteRecording(
+        {},
+        {},
+        false,
+        [&](Moer::Array<Moer::Render::RHIRecordingSource>&& sources) {
+            published = sources.size() == 1 &&
+                        sources.front()
+                                .submit_metadata.translate_execution_class ==
+                            Moer::Render::ERHITranslateExecutionClass::
+                                SerialControl;
+        }
+    );
+    suite.Check(
+        executed && recorded && published,
+        test_name,
+        "the graph handoff must publish SerialControl metadata without "
+        "mutating the producer CommandList"
+    );
+
+    RenderGraph weakened("SerialControlCannotBeWeakened");
+    weakened.AddRecordPass(
+        "NRDIsland",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect().SerialRecord().TranslateSerialControl();
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    suite.Check(weakened.Compile(), test_name, weakened.GetCompileError());
+    bool weakened_published = false;
+    const bool weakened_executed = weakened.ExecuteRecording(
+        {},
+        [](const RenderGraph::ExecutedPassInfo&,
+           Moer::Render::RHIRecordingSource& source) {
+            source.submit_metadata.translate_execution_class.reset();
+        },
+        false,
+        [&](Moer::Array<Moer::Render::RHIRecordingSource>&&) {
+            weakened_published = true;
+        }
+    );
+    suite.Check(
+        !weakened_executed && !weakened_published &&
+            Contains(
+                weakened.GetCompileError(),
+                "weakened the declared SerialControl"
+            ),
+        test_name,
+        "source configuration must not weaken a graph-declared translation "
+        "frontier"
+    );
+
+    RenderGraph publisher_attempt("SerialControlPublisherFloor");
+    publisher_attempt.AddRecordPass(
+        "NRDIsland",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect().SerialRecord().TranslateSerialControl();
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    suite.Check(
+        publisher_attempt.Compile(),
+        test_name,
+        publisher_attempt.GetCompileError()
+    );
+    bool command_list_kept_floor = false;
+    const bool publisher_attempt_executed =
+        publisher_attempt.ExecuteRecording(
+            {},
+            {},
+            false,
+            [&](Moer::Array<Moer::Render::RHIRecordingSource>&& sources) {
+                sources.front()
+                    .submit_metadata.translate_execution_class.reset();
+                command_list_kept_floor =
+                    sources.front()
+                        .command_list->GetTranslateExecutionClass() ==
+                    Moer::Render::ERHITranslateExecutionClass::SerialControl;
+            }
+        );
+    suite.Check(
+        publisher_attempt_executed && command_list_kept_floor,
+        test_name,
+        "the CommandList must retain the graph-declared SerialControl floor "
+        "even if a custom publisher drops optional metadata"
     );
 }
 
@@ -4167,12 +5054,604 @@ void TestRecordingPublicationFailureTerminatesGates(TestSuite& suite) {
     );
 }
 
+void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
+    constexpr std::string_view test_name = "frame setup token and TLAS boundary";
+    RenderGraph                graph("FrameSetupContract");
+    int                        bindless_identity = 0;
+    int                        tlas_identity     = 0;
+    int                        instance_identity = 0;
+    int                        scene_identity    = 0;
+    const auto bindless = graph.ImportToken("Bindless", &bindless_identity);
+    const auto ready    = graph.CreateTransientToken("FrameSetupReady");
+    const auto tlas = graph.ImportBuffer(
+        "CurrentTLAS",
+        &tlas_identity,
+        RenderGraph::BufferDesc{.byte_size = 4096}
+    );
+    const auto previous_tlas = graph.ImportBuffer(
+        "PreviousTLAS",
+        &tlas_identity,
+        RenderGraph::BufferDesc{.byte_size = 4096}
+    );
+    const auto instances = graph.ImportBuffer(
+        "TLASInstances",
+        &instance_identity,
+        RenderGraph::BufferDesc{.byte_size = 4096}
+    );
+    const auto scene = graph.ImportBuffer(
+        "SceneInstances",
+        &scene_identity,
+        RenderGraph::BufferDesc{.byte_size = 4096}
+    );
+    suite.Check(
+        previous_tlas == tlas,
+        test_name,
+        "current/previous TLAS aliases must reuse one graph-local handle"
+    );
+    graph.SetInitialState(
+        tlas,
+        RenderGraph::BufferState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None
+    );
+    graph.SetInitialState(
+        instances,
+        RenderGraph::BufferState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None
+    );
+    graph.SetInitialState(
+        scene,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+
+    const auto update = graph.AddRecordPass(
+        "UpdateBindless",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Write(bindless).SideEffect();
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    const auto normalize = graph.AddRecordPass(
+        "NormalizeScene",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder
+                .Read(bindless)
+                .Read(scene, RenderGraph::BufferState::ShaderResource)
+                .SideEffect();
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    const auto build = graph.AddRecordPass(
+        "BuildTLAS",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.DependsOn(normalize)
+                .Read(bindless)
+                .Write(
+                    instances,
+                    RenderGraph::BufferState::UnorderedAccess
+                )
+                .Write(
+                    tlas,
+                    RenderGraph::BufferState::AccelerationStructureWrite
+                );
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    const auto finalize = graph.AddRecordPass(
+        "FinalizeFrameSetup",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.DependsOn(normalize)
+                .DependsOn(build)
+                .Read(bindless)
+                .Read(
+                    tlas,
+                    RenderGraph::BufferState::AccelerationStructureRead
+                )
+                .Write(ready)
+                .SideEffect();
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    const auto prepare_lights = graph.AddRecordPass(
+        "PrepareLights",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder
+                .Read(ready)
+                .Read(bindless)
+                .Read(
+                    previous_tlas,
+                    RenderGraph::BufferState::AccelerationStructureRead
+                )
+                .Read(scene, RenderGraph::BufferState::ShaderResource)
+                .SideEffect();
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.Export(
+        tlas,
+        RenderGraph::BufferState::AccelerationStructureRead,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    graph.Export(
+        instances,
+        RenderGraph::BufferState::AccelerationStructureBuildInput,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            update,
+            normalize,
+            RenderGraph::EdgeReasonKind::ReadAfterWrite,
+            bindless.Untyped()
+        ),
+        test_name,
+        "bindless update must be a RAW predecessor of scene normalization"
+    );
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            normalize,
+            build,
+            RenderGraph::EdgeReasonKind::Explicit
+        ),
+        test_name,
+        "BuildTLAS must retain the explicit normalization dependency"
+    );
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            build,
+            finalize,
+            RenderGraph::EdgeReasonKind::ReadAfterWrite,
+            tlas.Untyped()
+        ),
+        test_name,
+        "FinalizeFrameSetup must normalize the built TLAS through a RAW edge"
+    );
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            finalize,
+            prepare_lights,
+            RenderGraph::EdgeReasonKind::ReadAfterWrite,
+            ready.Untyped()
+        ),
+        test_name,
+        "PrepareLights must consume the same-transaction FrameSetup ready token"
+    );
+    const auto* import_barrier =
+        FindBarrier(plan, tlas.Untyped(), {}, build);
+    const auto* consumer_barrier =
+        FindBarrier(plan, tlas.Untyped(), build, finalize);
+    suite.Check(
+        import_barrier != nullptr && import_barrier->state_transition &&
+            import_barrier->after_state ==
+                RenderGraph::ResourceState::Buffer(
+                    RenderGraph::BufferState::AccelerationStructureWrite
+                ),
+        test_name,
+        "BuildTLAS must acquire an AS-write destination from the import boundary"
+    );
+    suite.Check(
+        consumer_barrier != nullptr && consumer_barrier->state_transition &&
+            consumer_barrier->after_state ==
+                RenderGraph::ResourceState::Buffer(
+                    RenderGraph::BufferState::AccelerationStructureRead
+                ),
+        test_name,
+        "FinalizeFrameSetup must establish the AS-readable consumer boundary"
+    );
+    const auto* instance_import_barrier =
+        FindBarrier(plan, instances.Untyped(), {}, build);
+    suite.Check(
+        instance_import_barrier != nullptr &&
+            instance_import_barrier->state_transition &&
+            instance_import_barrier->after_state ==
+                RenderGraph::ResourceState::Buffer(
+                    RenderGraph::BufferState::UnorderedAccess
+                ),
+        test_name,
+        "a fresh TLAS instance payload must be a write-only producer"
+    );
+
+    RenderGraph next_graph("PrimaryContract");
+    const auto  next_bindless =
+        next_graph.ImportToken("Bindless", &bindless_identity);
+    suite.Check(
+        next_bindless.Untyped().owner_id != bindless.Untyped().owner_id,
+        test_name,
+        "same physical token identity in another graph must remain a distinct transaction"
+    );
+
+    RenderGraph scene_update_graph("ExternalSceneReadBoundaryContract");
+    int         updated_scene_identity = 0;
+    int         stable_scene_identity  = 0;
+    const auto  updated_scene = scene_update_graph.ImportBuffer(
+        "UpdatedScene",
+        &updated_scene_identity,
+        RenderGraph::BufferDesc{.byte_size = 4096}
+    );
+    const auto stable_scene = scene_update_graph.ImportBuffer(
+        "StableScene",
+        &stable_scene_identity,
+        RenderGraph::BufferDesc{.byte_size = 4096}
+    );
+    scene_update_graph.SetInitialState(
+        updated_scene,
+        RenderGraph::BufferState::TransferDestination,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Write
+    );
+    scene_update_graph.SetInitialState(
+        stable_scene,
+        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    const auto scene_read_boundary = scene_update_graph.AddRecordPass(
+        "PublishSceneReads",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder
+                .Read(updated_scene, RenderGraph::BufferState::ShaderResource)
+                .Read(stable_scene, RenderGraph::BufferState::ShaderResource)
+                .SideEffect();
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    suite.Check(
+        scene_update_graph.Compile(),
+        test_name,
+        scene_update_graph.GetCompileError()
+    );
+    const auto* updated_scene_barrier = FindBarrier(
+        scene_update_graph.GetCompiledPlan(),
+        updated_scene.Untyped(),
+        {},
+        scene_read_boundary
+    );
+    suite.Check(
+        updated_scene_barrier != nullptr &&
+            updated_scene_barrier->state_transition &&
+            updated_scene_barrier->memory_dependency &&
+            updated_scene_barrier->before_state ==
+                RenderGraph::ResourceState::Buffer(
+                    RenderGraph::BufferState::TransferDestination
+                ) &&
+            updated_scene_barrier->after_state ==
+                RenderGraph::ResourceState::Buffer(
+                    RenderGraph::BufferState::ShaderResource
+                ),
+        test_name,
+        "an uploaded scene buffer must publish transfer-write to shader-read"
+    );
+    const auto* stable_scene_boundary = FindBarrier(
+        scene_update_graph.GetCompiledPlan(),
+        stable_scene.Untyped(),
+        {},
+        scene_read_boundary
+    );
+    suite.Check(
+        stable_scene_boundary == nullptr ||
+            (!stable_scene_boundary->state_transition &&
+             !stable_scene_boundary->memory_dependency),
+        test_name,
+        "an untouched shader-readable scene buffer must not invent a write boundary"
+    );
+
+    RenderGraph external_graph("ExternalTLASNormalizeContract");
+    int         external_tlas_identity = 0;
+    const auto  external_tlas = external_graph.ImportBuffer(
+        "ExternallyBuiltTLAS",
+        &external_tlas_identity,
+        RenderGraph::BufferDesc{.byte_size = 4096}
+    );
+    external_graph.SetInitialState(
+        external_tlas,
+        RenderGraph::BufferState::AccelerationStructureWrite,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Write
+    );
+    const auto external_normalize = external_graph.AddRecordPass(
+        "NormalizeExternalTLAS",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder
+                .Read(
+                    external_tlas,
+                    RenderGraph::BufferState::AccelerationStructureRead
+                )
+                .SideEffect();
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    external_graph.Export(
+        external_tlas,
+        RenderGraph::BufferState::AccelerationStructureRead,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    suite.Check(
+        external_graph.Compile(),
+        test_name,
+        external_graph.GetCompileError()
+    );
+    const auto* external_import_barrier = FindBarrier(
+        external_graph.GetCompiledPlan(),
+        external_tlas.Untyped(),
+        {},
+        external_normalize
+    );
+    suite.Check(
+        external_import_barrier != nullptr &&
+            external_import_barrier->state_transition &&
+            external_import_barrier->before_state ==
+                RenderGraph::ResourceState::Buffer(
+                    RenderGraph::BufferState::AccelerationStructureWrite
+                ) &&
+            external_import_barrier->after_state ==
+                RenderGraph::ResourceState::Buffer(
+                    RenderGraph::BufferState::AccelerationStructureRead
+                ),
+        test_name,
+        "an externally built TLAS must normalize AS-write to AS-read"
+    );
+}
+
+void TestNrdSerialControlIslandContract(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "NRD immutable serial-control island";
+    RenderGraph graph("NrdIslandContract");
+    int motion_identity = 0;
+    int normal_identity = 0;
+    int depth_identity = 0;
+    int diffuse_identity = 0;
+    int specular_identity = 0;
+    int denoised_diffuse_identity = 0;
+    int denoised_specular_identity = 0;
+    const RenderGraph::TextureDesc desc{
+        .mip_count   = 1,
+        .layer_count = 1,
+        .aspects     = RenderGraph::TextureAspect::Color,
+    };
+    const auto motion =
+        graph.ImportTexture("Motion", &motion_identity, desc);
+    const auto normal =
+        graph.ImportTexture("NormalRoughness", &normal_identity, desc);
+    const auto depth =
+        graph.ImportTexture("ViewDepth", &depth_identity, desc);
+    const auto diffuse =
+        graph.ImportTexture("DiffuseLighting", &diffuse_identity, desc);
+    const auto specular =
+        graph.ImportTexture("SpecularLighting", &specular_identity, desc);
+    const auto denoised_diffuse = graph.ImportTexture(
+        "DenoisedDiffuse",
+        &denoised_diffuse_identity,
+        desc
+    );
+    const auto denoised_specular = graph.ImportTexture(
+        "DenoisedSpecular",
+        &denoised_specular_identity,
+        desc
+    );
+    const auto setup_ready = graph.CreateTransientToken("FrameSetupReady");
+    const auto nrd_ready   = graph.CreateTransientToken("NrdReady");
+
+    for (const auto texture : {
+             motion,
+             normal,
+             depth,
+             diffuse,
+             specular,
+             denoised_diffuse,
+             denoised_specular,
+         }) {
+        graph.SetInitialState(
+            texture,
+            RenderGraph::TextureState::Sampled,
+            RenderGraph::QueueRole::Graphics,
+            RenderGraph::AccessMode::Read
+        );
+    }
+
+    graph.AddRecordPass(
+        "FrameSetup",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Write(setup_ready).SideEffect().SerialRecord();
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    const auto lighting = graph.AddRecordPass(
+        "Lighting",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder
+                .Read(setup_ready)
+                .Write(
+                    diffuse,
+                    RenderGraph::TextureState::UnorderedAccess
+                )
+                .Write(
+                    specular,
+                    RenderGraph::TextureState::UnorderedAccess
+                );
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    const auto nrd = graph.AddRecordPass(
+        "NRD",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder
+                .Read(setup_ready)
+                .Read(motion, RenderGraph::TextureState::Sampled)
+                .Read(normal, RenderGraph::TextureState::Sampled)
+                .Read(depth, RenderGraph::TextureState::Sampled)
+                .Read(diffuse, RenderGraph::TextureState::Sampled)
+                .Read(specular, RenderGraph::TextureState::Sampled)
+                .ReadWrite(
+                    denoised_diffuse,
+                    RenderGraph::TextureState::UnorderedAccess
+                )
+                .ReadWrite(
+                    denoised_specular,
+                    RenderGraph::TextureState::UnorderedAccess
+                )
+                .Write(nrd_ready)
+                .SideEffect()
+                .SerialRecord()
+                .TranslateSerialControl();
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::SerialRecord
+    );
+    const auto composition = graph.AddRecordPass(
+        "Composition",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder
+                .Read(nrd_ready)
+                .Read(
+                    denoised_diffuse,
+                    RenderGraph::TextureState::Sampled
+                )
+                .Read(
+                    denoised_specular,
+                    RenderGraph::TextureState::Sampled
+                );
+        },
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.Export(
+        denoised_diffuse,
+        RenderGraph::TextureState::Sampled,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    graph.Export(
+        denoised_specular,
+        RenderGraph::TextureState::Sampled,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            lighting,
+            nrd,
+            RenderGraph::EdgeReasonKind::ReadAfterWrite,
+            diffuse.Untyped()
+        ) &&
+            HasEdgeReason(
+                plan,
+                lighting,
+                nrd,
+                RenderGraph::EdgeReasonKind::ReadAfterWrite,
+                specular.Untyped()
+            ),
+        test_name,
+        "Lighting outputs must be RAW predecessors of NRD"
+    );
+    suite.Check(
+        HasEdgeReason(
+            plan,
+            nrd,
+            composition,
+            RenderGraph::EdgeReasonKind::ReadAfterWrite,
+            denoised_diffuse.Untyped()
+        ) &&
+            HasEdgeReason(
+                plan,
+                nrd,
+                composition,
+                RenderGraph::EdgeReasonKind::ReadAfterWrite,
+                nrd_ready.Untyped()
+            ),
+        test_name,
+        "NRD outputs and ready token must order Composition"
+    );
+    const auto* denoised_barrier = FindBarrier(
+        plan,
+        denoised_diffuse.Untyped(),
+        nrd,
+        composition
+    );
+    suite.Check(
+        denoised_barrier != nullptr &&
+            denoised_barrier->before_state ==
+                RenderGraph::ResourceState::Texture(
+                    RenderGraph::TextureState::UnorderedAccess
+                ) &&
+            denoised_barrier->after_state ==
+                RenderGraph::ResourceState::Texture(
+                    RenderGraph::TextureState::Sampled
+                ),
+        test_name,
+        "NRD storage outputs must normalize to Sampled before Composition"
+    );
+    suite.Check(
+        plan.recording_batches[nrd.index].execution ==
+                RenderGraph::PassExecutionClass::SerialRecord &&
+            plan.recording_batches[nrd.index].translate_execution_class ==
+                Moer::Render::ERHITranslateExecutionClass::SerialControl,
+        test_name,
+        "only the NRD island must carry the explicit translation frontier"
+    );
+}
+
+void TestNrdDenoiserFamiliesAreExplicit(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "NRD denoiser family classification";
+    using Moer::Render::Ext::IsReblurDenoiser;
+    using Moer::Render::Ext::IsRelaxDenoiser;
+
+    suite.Check(
+        IsReblurDenoiser(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR) &&
+            IsReblurDenoiser(nrd::Denoiser::REBLUR_DIFFUSE) &&
+            IsReblurDenoiser(nrd::Denoiser::REBLUR_SPECULAR) &&
+            !IsReblurDenoiser(nrd::Denoiser::RELAX_DIFFUSE_SPECULAR) &&
+            !IsReblurDenoiser(nrd::Denoiser::MAX_NUM),
+        test_name,
+        "ReBLUR classification must not depend on enum ordering"
+    );
+    suite.Check(
+        IsRelaxDenoiser(nrd::Denoiser::RELAX_DIFFUSE_SPECULAR) &&
+            IsRelaxDenoiser(nrd::Denoiser::RELAX_DIFFUSE) &&
+            IsRelaxDenoiser(nrd::Denoiser::RELAX_SPECULAR) &&
+            !IsRelaxDenoiser(nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR) &&
+            !IsRelaxDenoiser(nrd::Denoiser::MAX_NUM),
+        test_name,
+        "RELAX classification must not depend on enum ordering"
+    );
+}
+
 } // namespace
 
 int main() {
     TestSuite suite;
     TestStableSerialCallbackOrder(suite);
     TestPassCompletionObserverRunsAfterEachCallback(suite);
+    TestRasterStyleUiSlotClaimTracksNativeAcceptance(suite);
+    TestUiPreparedFrameLifecycleIsOneShot(suite);
+    TestUiFrameGraphTailContract(suite);
+    TestUiFrameGraphRejectsInvalidPhysicalContracts(suite);
     TestImportedAliasIdentityAndDump(suite);
     TestHazardsAndDeterministicDump(suite);
     TestTransientReadBeforeProducerFailsWithoutCallbacks(suite);
@@ -4222,6 +5701,7 @@ int main() {
     TestRecordingBatchPlanAndClassification(suite);
     TestRecordingCallbackClassMismatchFails(suite);
     TestExternalControlIsAnUnmanagedJoinBoundary(suite);
+    TestSerialControlTranslationIsADeclaredRecordingPolicy(suite);
     TestCpuPrepareReferencesIdentityWithoutGpuAccess(suite);
     TestCpuPrepareRejectsGpuAccess(suite);
     TestCpuPrepareIsExcludedFromGpuQueuePlan(suite);
@@ -4229,6 +5709,9 @@ int main() {
     TestParallelRecordingDispatchAndJoin(suite);
     TestCpuRecordingDependenciesSplitParallelGroups(suite);
     TestRecordingPublicationFailureTerminatesGates(suite);
+    TestFrameSetupTokenAndTlasBoundaryContract(suite);
+    TestNrdSerialControlIslandContract(suite);
+    TestNrdDenoiserFamiliesAreExplicit(suite);
 
     if (suite.FailureCount() != 0) {
         std::cerr << "TestRenderGraph: " << suite.FailureCount() << " failure(s)\n";

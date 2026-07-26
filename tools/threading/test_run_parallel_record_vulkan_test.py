@@ -129,6 +129,58 @@ def pipeline_line(
     )
 
 
+def serial_control_boundary_line() -> str:
+    return (
+        "[TESTCASE][PASS] name=SerialControlPipelineBoundary "
+        "order=Prefix,SerialControl,Later owner=Submission "
+        "later_translate=blocked readback=verified signals=success "
+        "boundary_events=2 native_submits=3 replay=0\n"
+    )
+
+
+def queued_present_shutdown_line() -> str:
+    return (
+        "[TESTCASE][PASS] name=QueuedPresentShutdownBoundary "
+        "outcome=Retry prefix=rejected receipt_attempts=1 "
+        "submitted=false recreate=false owner=Submission "
+        "native_submit=0 owners=stopped replay=0\n"
+    )
+
+
+def present_boundary_line(bridge: str = "required") -> str:
+    prefix_native = "2" if bridge == "required" else "0"
+    return (
+        serial_control_boundary_line()
+        + "[TESTCASE][PASS] name=PresentPipelineBoundary "
+        "outcome=Recreate order=Prefix,Bridge?,Present,Later "
+        "owner=Submission receipt_attempts=1 submitted=false "
+        "recreate=true completion=drained later_batch=success "
+        f"present_only=verified bridge={bridge} graphics_native=0 "
+        f"prefix_native={prefix_native} readback=verified replay=0\n"
+        + queued_present_shutdown_line()
+    )
+
+
+def present_hard_line() -> str:
+    return (
+        "[TESTCASE][PASS] name=PresentHardFailureBoundary "
+        "outcome=Rejected owner=Submission receipt_attempts=1 "
+        "submitted=false recreate=false later_batch=rejected "
+        "native_after_present=0 hard_latch=verified replay=0\n"
+    )
+
+
+def rt_export_rejection_line() -> str:
+    return (
+        "[TESTCASE][PASS] name=RaytracingExportAcceptanceRejection "
+        "attempt1=prefix_rejected attempt1_tail=dependency_rejected "
+        "attempt1_latch=false request_pending=true "
+        "readback_retry=frame_accepted recovery_consumed=true encoder=once "
+        "decision_table=verified native_rejected=0 callbacks=exactly_once "
+        "keepalive=terminal replay=0\n"
+    )
+
+
 def pass_line(
     mode: str,
     fault: str,
@@ -899,6 +951,21 @@ class VulkanRunnerTests(unittest.TestCase):
                 "--pipeline-window2",
                 pipeline_line(2, "false", "verified"),
             ),
+            (
+                "present-boundary",
+                "--present-boundary",
+                present_boundary_line(),
+            ),
+            (
+                "present-hard",
+                "--present-hard",
+                present_hard_line(),
+            ),
+            (
+                "rt-export-rejection",
+                "--rt-export-rejection",
+                rt_export_rejection_line(),
+            ),
         )
         with tempfile.TemporaryDirectory() as temporary_directory:
             for mode, expected_argument, output in cases:
@@ -927,6 +994,152 @@ class VulkanRunnerTests(unittest.TestCase):
                             expected_argument,
                         ],
                     )
+
+    def test_rt_export_rejection_contract_is_accepted(self) -> None:
+        runner.validate_log(
+            "rt-export-rejection",
+            rt_export_rejection_line(),
+        )
+
+    def test_rt_export_rejection_rejects_retry_latch(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete export transaction contract",
+        ):
+            runner.validate_log(
+                "rt-export-rejection",
+                rt_export_rejection_line().replace(
+                    "attempt1_latch=false", "attempt1_latch=true"
+                ),
+            )
+
+    def test_rt_export_rejection_requires_readback_recovery(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete export transaction contract",
+        ):
+            runner.validate_log(
+                "rt-export-rejection",
+                rt_export_rejection_line().replace(
+                    "readback_retry=frame_accepted",
+                    "readback_retry=frame_rejected",
+                ),
+            )
+
+    def test_present_boundary_contract_is_accepted(self) -> None:
+        runner.validate_log(
+            "present-boundary", present_boundary_line()
+        )
+        runner.validate_log(
+            "present-boundary", present_boundary_line("elided")
+        )
+
+    def test_present_boundary_requires_serial_control_gate(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "SerialControlPipelineBoundary",
+        ):
+            runner.validate_log(
+                "present-boundary",
+                present_boundary_line().replace(
+                    serial_control_boundary_line(), ""
+                ),
+            )
+
+    def test_serial_control_boundary_requires_blocked_later_translate(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "SerialControl pipeline-boundary contract",
+        ):
+            runner.validate_log(
+                "present-boundary",
+                present_boundary_line().replace(
+                    "later_translate=blocked",
+                    "later_translate=overtook",
+                ),
+            )
+
+    def test_present_boundary_requires_shutdown_gate(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "QueuedPresentShutdownBoundary",
+        ):
+            runner.validate_log(
+                "present-boundary",
+                present_boundary_line().replace(
+                    queued_present_shutdown_line(), ""
+                ),
+            )
+
+    def test_queued_present_shutdown_requires_retry(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "queued Present shutdown contract",
+        ):
+            runner.validate_log(
+                "present-boundary",
+                present_boundary_line().replace(
+                    "outcome=Retry prefix=rejected",
+                    "outcome=Recreate prefix=rejected",
+                ),
+            )
+
+    def test_present_boundary_requires_exactly_one_receipt_attempt(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "Present pipeline-boundary contract",
+        ):
+            runner.validate_log(
+                "present-boundary",
+                present_boundary_line().replace(
+                    "owner=Submission receipt_attempts=1 submitted=false",
+                    "owner=Submission receipt_attempts=2 submitted=false",
+                ),
+            )
+
+    def test_present_boundary_bridge_matches_native_identity(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "Present pipeline-boundary contract",
+        ):
+            runner.validate_log(
+                "present-boundary",
+                present_boundary_line("elided").replace(
+                    "prefix_native=0", "prefix_native=2"
+                ),
+            )
+
+    def test_present_boundary_accepts_alias_completion_marker(
+        self,
+    ) -> None:
+        runner.validate_log(
+            "present-boundary",
+            present_boundary_line("required").replace(
+                "prefix_native=2", "prefix_native=0"
+            ),
+        )
+
+    def test_present_hard_contract_is_accepted(self) -> None:
+        runner.validate_log("present-hard", present_hard_line())
+
+    def test_present_hard_rejects_native_work_after_boundary(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "hard Present boundary contract",
+        ):
+            runner.validate_log(
+                "present-hard",
+                present_hard_line().replace(
+                    "native_after_present=0",
+                    "native_after_present=1",
+                ),
+            )
 
     def test_serial_accepts_only_pass_marker(self) -> None:
         runner.validate_log("serial", pass_line("serial", "false"))

@@ -125,6 +125,16 @@ const char* ToString(RenderGraph::PassExecutionClass execution) {
     return "unknown";
 }
 
+const char* ToString(ERHITranslateExecutionClass execution) {
+    switch (execution) {
+        case ERHITranslateExecutionClass::Parallel:
+            return "parallel";
+        case ERHITranslateExecutionClass::SerialControl:
+            return "serial-control";
+    }
+    return "unknown";
+}
+
 const char* ToString(RenderGraph::TextureState state) {
     switch (state) {
         case RenderGraph::TextureState::Automatic:
@@ -738,6 +748,14 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::ParallelRecord(uint32_t work
     return *this;
 }
 
+RenderGraph::PassBuilder& RenderGraph::PassBuilder::TranslateSerialControl() {
+    graph.SetPassTranslateExecutionClass(
+        pass_index,
+        ERHITranslateExecutionClass::SerialControl
+    );
+    return *this;
+}
+
 RenderGraph::ResourceHandle
 RenderGraph::Import(std::string_view resource_name, ResourceKind kind, const void* physical_identity) {
     return ImportInternal(resource_name, kind, physical_identity, nullptr, nullptr);
@@ -1270,6 +1288,8 @@ bool RenderGraph::Execute(const PassCompletedCallback& after_pass) {
                 .domain      = pass.domain,
                 .side_effect = pass.side_effect,
                 .execution_class = pass.execution_class,
+                .translate_execution_class =
+                    pass.translate_execution_class,
             });
         }
     }
@@ -1594,6 +1614,9 @@ bool RenderGraph::ExecuteRecording(
         RecordCallback      record{};
         SharedPtr<CommandList> command_list{};
         RHIRecordingGateRef completion{};
+        ERHITranslateExecutionClass translate_execution_class{
+            ERHITranslateExecutionClass::Parallel
+        };
         std::vector<BarrierCreateInfo>                    before{};
         std::vector<BarrierCreateInfo>                    after{};
         std::vector<RenderGraphLowering::PhysicalBinding> keepalive{};
@@ -1801,6 +1824,8 @@ bool RenderGraph::ExecuteRecording(
             .domain          = pass.domain,
             .side_effect     = pass.side_effect,
             .execution_class = pass.execution_class,
+            .translate_execution_class =
+                pass.translate_execution_class,
         };
     };
 
@@ -2025,7 +2050,12 @@ bool RenderGraph::ExecuteRecording(
                 .record       = pass.record,
                 .command_list = MakeShared<CommandList>(queue),
                 .completion   = RHIRecordingGate::Create(),
+                .translate_execution_class =
+                    batch.translate_execution_class,
             };
+            job.command_list->SetTranslateExecutionClass(
+                job.translate_execution_class
+            );
             if (active_recording.enabled) {
                 const auto& pass_state = active_pass_states[handle.index];
                 job.before             = pass_state.before;
@@ -2037,6 +2067,11 @@ bool RenderGraph::ExecuteRecording(
                 .completion   = job.completion,
                 .commit       = active_recording_commit,
             };
+            if (batch.translate_execution_class !=
+                ERHITranslateExecutionClass::Parallel) {
+                source.submit_metadata.translate_execution_class =
+                    batch.translate_execution_class;
+            }
             if (active_recording.enabled) {
                 const auto& pass_state = active_pass_states[handle.index];
                 source.submit_metadata.wait_fences =
@@ -2093,6 +2128,16 @@ bool RenderGraph::ExecuteRecording(
                                     pass.name + "'";
                     return false;
                 }
+                if (batch.translate_execution_class ==
+                        ERHITranslateExecutionClass::SerialControl &&
+                    source.submit_metadata.translate_execution_class !=
+                        ERHITranslateExecutionClass::SerialControl) {
+                    compile_error =
+                        "recording source configuration weakened the declared "
+                        "SerialControl translation policy for pass '" +
+                        pass.name + "'";
+                    return false;
+                }
                 if (job.completion->Status() != ERHIRecordingStatus::Pending) {
                     compile_error =
                         "recording source configuration completed the producer gate for pass '" +
@@ -2111,7 +2156,7 @@ bool RenderGraph::ExecuteRecording(
                 if (!source.command_list->IsEmpty() ||
                     source.command_list->HasExplicitResourceStateOwnership() ||
                     source.command_list->GetTranslateExecutionClass() !=
-                        ERHITranslateExecutionClass::Parallel) {
+                        batch.translate_execution_class) {
                     compile_error =
                         "recording source configuration may only change submit metadata "
                         "for pass '" +
@@ -2200,7 +2245,7 @@ bool RenderGraph::ExecuteRecording(
                     );
                 }
                 if (job.command_list->GetTranslateExecutionClass() !=
-                    ERHITranslateExecutionClass::Parallel) {
+                    job.translate_execution_class) {
                     throw std::logic_error(
                         "record callback changed its managed translation class"
                     );
@@ -2263,7 +2308,7 @@ bool RenderGraph::ExecuteRecording(
                 !job.command_list->IsEmpty() ||
                 job.command_list->HasExplicitResourceStateOwnership() ||
                 job.command_list->GetTranslateExecutionClass() !=
-                    ERHITranslateExecutionClass::Parallel ||
+                    job.translate_execution_class ||
                 (active_recording_commit &&
                  active_recording_commit->Status() !=
                      ERHIRecordingStatus::Pending)) {
@@ -2404,6 +2449,7 @@ std::string RenderGraph::Dump() const {
                << " queue=" << ToString(pass.domain.queue)
                << " pipeline=" << ToString(pass.domain.pipeline)
                << " cpu=" << ToString(pass.execution_class)
+               << " translate=" << ToString(pass.translate_execution_class)
                << " workload=" << pass.workload
                << " side_effect=" << (pass.side_effect ? "true" : "false") << " accesses=[";
         for (uint32_t access_index = 0; access_index < pass.accesses.size(); ++access_index) {
@@ -2730,7 +2776,9 @@ std::string RenderGraph::Dump() const {
     for (const auto& batch : compiled_plan.recording_batches) {
         stream << "  [" << batch.id << "] queue=" << ToString(batch.queue.role)
                << "/native" << batch.queue.native_queue_id << "/family" << batch.queue.family_id
-               << " cpu=" << ToString(batch.execution) << " workload=" << batch.workload
+               << " cpu=" << ToString(batch.execution)
+               << " translate=" << ToString(batch.translate_execution_class)
+               << " workload=" << batch.workload
                << " wave=";
         if (batch.dependency_wave == PassHandle::InvalidIndex) {
             stream << "none";
@@ -2921,6 +2969,30 @@ void RenderGraph::SetPassExecutionClass(
     }
     passes[pass_index].execution_class = execution_class;
     passes[pass_index].workload        = workload;
+}
+
+void RenderGraph::SetPassTranslateExecutionClass(
+    uint32_t                    pass_index,
+    ERHITranslateExecutionClass execution_class
+) {
+    if (!InvalidateCompile()) {
+        return;
+    }
+    if (pass_index >= passes.size()) {
+        declaration_errors.emplace_back(
+            "translation-class declaration has invalid pass index"
+        );
+        return;
+    }
+    if (execution_class != ERHITranslateExecutionClass::Parallel &&
+        execution_class != ERHITranslateExecutionClass::SerialControl) {
+        declaration_errors.emplace_back(
+            "pass '" + passes[pass_index].name +
+            "' has an invalid translation execution class"
+        );
+        return;
+    }
+    passes[pass_index].translate_execution_class = execution_class;
 }
 
 bool RenderGraph::InvalidateCompile() {

@@ -41,6 +41,8 @@ std::atomic<const VulkanSubmissionDependencyWaitObserver*>
     g_submission_dependency_wait_observer{nullptr};
 std::atomic<const VulkanBackendSyncWaitObserver*>
     g_backend_sync_wait_observer{nullptr};
+std::atomic<const VulkanScriptedPresentOverrideForTesting*>
+    g_scripted_present_override{nullptr};
 
 void NotifyNativeSubmission(
     EQueueType                   _queue,
@@ -128,6 +130,36 @@ bool RemoveVulkanNativeSubmissionObserver(
     }
     const VulkanNativeSubmissionObserver* expected = _observer;
     return g_native_submission_observer.compare_exchange_strong(
+        expected,
+        nullptr,
+        std::memory_order_acq_rel,
+        std::memory_order_acquire
+    );
+}
+
+bool TryInstallVulkanScriptedPresentOverrideForTesting(
+    const VulkanScriptedPresentOverrideForTesting* _override
+) noexcept {
+    if (_override == nullptr || _override->callback == nullptr) {
+        return false;
+    }
+    const VulkanScriptedPresentOverrideForTesting* expected = nullptr;
+    return g_scripted_present_override.compare_exchange_strong(
+        expected,
+        _override,
+        std::memory_order_release,
+        std::memory_order_relaxed
+    );
+}
+
+bool RemoveVulkanScriptedPresentOverrideForTesting(
+    const VulkanScriptedPresentOverrideForTesting* _override
+) noexcept {
+    if (_override == nullptr) {
+        return false;
+    }
+    const VulkanScriptedPresentOverrideForTesting* expected = _override;
+    return g_scripted_present_override.compare_exchange_strong(
         expected,
         nullptr,
         std::memory_order_acq_rel,
@@ -4242,6 +4274,66 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
         std::unique_lock<std::mutex> execution_lock(exec_mtx);
         const uint64 current_timeline =
             last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
+        const VulkanScriptedPresentOverrideForTesting* scripted_override =
+            g_scripted_present_override.load(std::memory_order_acquire);
+        if (scripted_override != nullptr) {
+            VulkanScriptedPresentResult scripted =
+                scripted_override->callback(
+                    scripted_override->context,
+                    current_timeline
+                );
+            switch (scripted.outcome.status) {
+                case EVulkanOperationStatus::Retry:
+                case EVulkanOperationStatus::Recreate:
+                    break;
+                case EVulkanOperationStatus::Rejected:
+                    vk_device.RecordRejectedPresent();
+                    break;
+                case EVulkanOperationStatus::Faulted:
+                case EVulkanOperationStatus::Success:
+                default:
+                    // A headless test hook must never claim native success or
+                    // mutate VulkanDevice fault state.
+                    scripted.outcome.status =
+                        EVulkanOperationStatus::Rejected;
+                    if (scripted.outcome.result == VK_SUCCESS) {
+                        scripted.outcome.result = VK_ERROR_UNKNOWN;
+                    }
+                    vk_device.RecordRejectedPresent();
+                    break;
+            }
+
+            const VulkanOperationContext context{
+                .operation   = EVulkanFaultOperation::PresentSubmit,
+                .queue_type  = queue.GetType(),
+                .queue       = queue.GetHandle(),
+                .timeline    = current_timeline,
+                .work_serial = current_timeline,
+            };
+            Array<RHIResource*> deferred_releases = TakeDeferredReleases();
+            CommitPresentCompletion(
+                scripted.outcome,
+                context,
+                false,
+                EVulkanPresentorRetirementState::Unused,
+                {},
+                std::move(_swapchain),
+                std::move(source_texture),
+                std::move(deferred_releases),
+                current_timeline
+            );
+            ResolvePresentReceiptNoexcept(
+                _receipt,
+                false,
+                scripted.outcome.status ==
+                    EVulkanOperationStatus::Recreate
+            );
+            return {
+                .outcome               = scripted.outcome,
+                .completion            = std::nullopt,
+                .recoverable_rejection = false,
+            };
+        }
         return PresentNow(
             std::move(_swapchain),
             std::move(source_texture),

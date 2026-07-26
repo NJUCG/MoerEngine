@@ -460,6 +460,9 @@ public:
         QueueBinding            queue{};
         std::vector<PassHandle> passes{};
         PassExecutionClass      execution = PassExecutionClass::SerialRecord;
+        ERHITranslateExecutionClass translate_execution_class{
+            ERHITranslateExecutionClass::Parallel
+        };
         uint32_t                workload = 1;
         uint32_t                dependency_wave = PassHandle::InvalidIndex;
     };
@@ -695,6 +698,13 @@ public:
         PassBuilder& ExternalControl();
         PassBuilder& SerialRecord(uint32_t workload = 1);
         PassBuilder& ParallelRecord(uint32_t workload = 1);
+        /**
+         * Makes backend translation of this recorded source a stable CPU
+         * frontier. The callback still owns an ordinary graph CommandList;
+         * this policy is for external mutable integrations that must not
+         * translate concurrently with earlier or later sources.
+         */
+        PassBuilder& TranslateSerialControl();
 
     private:
         PassBuilder(RenderGraph& graph, uint32_t pass_index) : graph(graph), pass_index(pass_index) {}
@@ -711,6 +721,9 @@ public:
         ExecutionDomain domain{};
         bool             side_effect{false};
         PassExecutionClass execution_class = PassExecutionClass::MainThread;
+        ERHITranslateExecutionClass translate_execution_class{
+            ERHITranslateExecutionClass::Parallel
+        };
     };
 
     using SetupCallback         = std::function<void(PassBuilder&)>;
@@ -966,6 +979,9 @@ private:
         ExecutionDomain               domain{};
         bool                           side_effect = false;
         PassExecutionClass             execution_class = PassExecutionClass::MainThread;
+        ERHITranslateExecutionClass     translate_execution_class{
+            ERHITranslateExecutionClass::Parallel
+        };
         uint32_t                       workload = 1;
     };
 
@@ -1010,6 +1026,10 @@ private:
         uint32_t           pass_index,
         PassExecutionClass execution_class,
         uint32_t           workload
+    );
+    void SetPassTranslateExecutionClass(
+        uint32_t                    pass_index,
+        ERHITranslateExecutionClass execution_class
     );
     bool InvalidateCompile();
     bool FailCompile(std::string message);

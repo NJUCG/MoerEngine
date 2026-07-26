@@ -20,24 +20,12 @@
 
 namespace Moer::Render {
 
-struct UiCompositionFrameData {
-    bool       enabled         = false;
-    bool       separate_window = false;
-    uint2      output_resolution{};
-    float2     scene_color_position{};
-    float2     scene_color_resolution{};
-    TextureRef window_frame_buffer{};
-};
-
 struct EngineHooks {
     // Common
     std::function<void(Scene&)> on_tick_scripting;
     std::function<void(Scene&)> on_tick_test;
     std::function<void(Scene&)> on_tick_ui;
     std::function<bool()>       should_reload;
-
-    std::function<TextureRef(UiCombinePass*, CommandList&, TextureView, TextureView, TextureView)>
-        on_ui_combine_pass;
 
     std::function<UiCompositionFrameData()> on_capture_ui_composition;
     std::function<UiDrawFramePacket()>      on_capture_ui_draw_frame;

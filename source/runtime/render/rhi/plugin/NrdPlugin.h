@@ -21,10 +21,12 @@
 // 2
 #include <Extensions/NRIHelper.h>
 // 3
-#include <Extensions/NRIWrapperVK.h>
+#include <Extensions/NRIRayTracing.h>
 // 4
-#include <NRD.h>
+#include <Extensions/NRIWrapperVK.h>
 // 5
+#include <NRD.h>
+// 6
 #include <NRDIntegration.h>
 
 #else
@@ -85,19 +87,36 @@ typedef uint32_t Identifier;
 
 namespace Moer::Render::Ext {
 
-class NRDInterface {
+[[nodiscard]] inline constexpr bool
+IsReblurDenoiser(nrd::Denoiser denoiser) {
+    switch (denoiser) {
+        case nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR:
+        case nrd::Denoiser::REBLUR_DIFFUSE:
+        case nrd::Denoiser::REBLUR_SPECULAR:
+            return true;
+        default:
+            return false;
+    }
+}
+
+[[nodiscard]] inline constexpr bool
+IsRelaxDenoiser(nrd::Denoiser denoiser) {
+    switch (denoiser) {
+        case nrd::Denoiser::RELAX_DIFFUSE_SPECULAR:
+        case nrd::Denoiser::RELAX_DIFFUSE:
+        case nrd::Denoiser::RELAX_SPECULAR:
+            return true;
+        default:
+            return false;
+    }
+}
+
+class NRDInterface : public std::enable_shared_from_this<NRDInterface> {
 public:
     NRDInterface() = default;
 
     virtual ~NRDInterface();
 
-    virtual void Begin() = 0;
-
-    virtual void Denoise(CommandList& _cmd_list, const nrd::Denoiser _denoiser, std::string_view _name) = 0;
-
-    virtual void Reinitialize(uint16 _frame_width, uint16 _frame_height) = 0;
-
-public:
     enum struct EResourceSlot : uint8 {
         // Reblur/Relax
         MOTION_VECTOR,
@@ -121,22 +140,94 @@ public:
         SLOT_NUM
     };
 
-public:
-    virtual void SetInput(EResourceSlot _index, TextureRef _texture)  = 0;
-    virtual void SetOutput(EResourceSlot _index, TextureRef _texture) = 0;
+    static constexpr uint8 resource_slot_count =
+        uint8(EResourceSlot::SLOT_NUM);
 
-    RENDER_API void UpdateCommonSettings(
-        uint32            _frame_index,
-        const Vector2ui&  _size,
-        const Vector2f&   _jitter,
-        const Matrix4x4f& _view,
-        const Matrix4x4f& _proj
-    );
-    RENDER_API void SetCommonSettings(const nrd::CommonSettings& _settings);
-    RENDER_API void SetDenoiserSettings(const nrd::Denoiser _type, const nrd::ReblurSettings& _settings);
-    RENDER_API void SetDenoiserSettings(const nrd::Denoiser _type, const nrd::RelaxSettings& _settings);
+    struct FrameDesc {
+        uint32            frame_index = 0;
+        Vector2ui         size{};
+        Vector2f          jitter{};
+        Matrix4x4f        view{};
+        Matrix4x4f        projection{};
+        nrd::Denoiser     denoiser = nrd::Denoiser::MAX_NUM;
+        StaticArray<TextureRef, resource_slot_count> resources{};
+
+        FrameDesc& Set(EResourceSlot slot, TextureRef texture) {
+            resources[uint8(slot)] = std::move(texture);
+            return *this;
+        }
+    };
+
+    /**
+     * Immutable renderer-to-RHI transaction payload. It freezes every native
+     * resource and temporal setting before graph recording; backend commands
+     * may never consult the live interface for per-frame bindings.
+     */
+    class PreparedFrame {
+    public:
+        [[nodiscard]] bool IsValid() const;
+        [[nodiscard]] uint64 GetBaseRevision() const {
+            return base_revision;
+        }
+        [[nodiscard]] nrd::Denoiser GetDenoiser() const {
+            return denoiser;
+        }
+        [[nodiscard]] const nrd::CommonSettings& GetCommonSettings() const {
+            return common_settings;
+        }
+        [[nodiscard]] const TextureRef& GetResource(EResourceSlot slot) const {
+            return resources[uint8(slot)];
+        }
+        [[nodiscard]] const StaticArray<TextureRef, resource_slot_count>&
+        GetResources() const {
+            return resources;
+        }
+
+    private:
+        uint64            base_revision = 0;
+        nrd::Denoiser     denoiser = nrd::Denoiser::MAX_NUM;
+        nrd::CommonSettings common_settings{};
+        StaticArray<TextureRef, resource_slot_count> resources{};
+        SharedPtr<uint8> generation_token{};
+
+        friend class NRDInterface;
+    };
+
+    using PreparedFrameRef = SharedPtr<const PreparedFrame>;
+
+    /**
+     * Pure preparation: no NRD/NRI call and no accepted-history mutation.
+     */
+    [[nodiscard]] RENDER_API PreparedFrameRef
+    PrepareFrame(FrameDesc _desc) const;
+
+    /**
+     * Advances only renderer-side accepted history. Call once after the whole
+     * frame graph and final submit have been accepted.
+     */
+    RENDER_API bool CommitFrame(const PreparedFrameRef& _frame);
+    RENDER_API void ResetAcceptedHistory();
+    [[nodiscard]] uint8 GetMaxFrameInFlight() const {
+        return nrd.max_frame_in_flight;
+    }
+
+    /**
+     * Records one immutable custom command. NewFrame, settings, resource
+     * binding and NRD dispatch are delayed until native translation.
+     */
+    virtual void Denoise(
+        CommandList&            _cmd_list,
+        PreparedFrameRef        _frame,
+        std::string_view        _name
+    ) = 0;
 
 protected:
+    [[nodiscard]] bool OwnsPreparedFrame(
+        const PreparedFrameRef& frame
+    ) const {
+        return frame &&
+               frame->generation_token.get() == generation_token.get();
+    }
     void SetDefaultDenoiserSettings(const nrd::Identifier _denoiser_id);
     void SetDefaultCommonSettings(uint16 _frame_width, uint16 _frame_height);
 
@@ -160,8 +251,6 @@ protected:
         NRIEntry nri = {};
 
         nrd::Integration integration = {};
-
-        nrd::UserPool user_pool = {};
     };
 
     NRDEntry nrd = {};
@@ -170,6 +259,11 @@ protected:
         {};
 
     UnorderedMap<uint64, nri::CommandBuffer*> cmd_lists_on_use = {};
+
+    uint64        accepted_revision      = 0;
+    bool          accepted_history_valid = false;
+    nrd::Denoiser accepted_denoiser      = nrd::Denoiser::MAX_NUM;
+    SharedPtr<uint8> generation_token = MakeShared<uint8>(0);
 };
 
 class NRDPlugin : public RuntimePlugin {
@@ -177,11 +271,11 @@ public:
     ~NRDPlugin()                        = default;
     static constexpr std::string_view name = "NRDPlugin";
 
-    virtual UniquePtr<NRDInterface>
+    virtual SharedPtr<NRDInterface>
     CreateInterface(uint8 _max_frame_in_flight = 0, uint16 _frame_width = 0, uint16 _frame_height = 0) = 0;
 
-    virtual UniquePtr<NRDInterface> RecreateInterface(
-        UniquePtr<NRDInterface> _interface,
+    virtual SharedPtr<NRDInterface> RecreateInterface(
+        SharedPtr<NRDInterface> _interface,
         uint16                  _frame_width  = 0,
         uint16                  _frame_height = 0
     ) = 0;

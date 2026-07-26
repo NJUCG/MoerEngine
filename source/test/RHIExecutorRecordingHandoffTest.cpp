@@ -51,14 +51,43 @@ bool Expect(bool _condition, const char* _message) {
 
 class RecordingFenceProbe final : public Fence {
 public:
+    explicit RecordingFenceProbe(
+        std::shared_ptr<std::atomic_bool> _destroyed = {}
+    ) :
+        destroyed(std::move(_destroyed)) {}
+
+    ~RecordingFenceProbe() override {
+        if (destroyed) {
+            destroyed->store(true, std::memory_order_release);
+        }
+    }
+
     uint64_t GetValue() const override {
         return 0;
     }
 
     void Wait(uint64_t) override {}
 
-    void Reject(uint64_t _value) override {
+    void MarkSubmitted(uint64_t _value) override {
+        submitted_value.store(_value, std::memory_order_release);
+    }
+
+    bool WaitSubmitted(
+        uint64_t               _value,
+        const std::atomic_bool* = nullptr,
+        EQueueType              = EQueueType::Ignore,
+        Moer::uint32            = 0
+    ) override {
+        return submitted_value.load(std::memory_order_acquire) >= _value &&
+               !IsRejected(_value);
+    }
+
+    void Reject(uint64_t _value) noexcept override {
         rejected_value.store(_value, std::memory_order_release);
+    }
+
+    bool IsRejected(uint64_t _value) const override {
+        return rejected_value.load(std::memory_order_acquire) == _value;
     }
 
     [[nodiscard]] uint64_t RejectedValue() const {
@@ -66,8 +95,107 @@ public:
     }
 
 private:
+    std::shared_ptr<std::atomic_bool> destroyed{};
+    std::atomic<uint64_t> submitted_value{0};
     std::atomic<uint64_t> rejected_value{0};
 };
+
+bool CommandListSignalTracksNativeAcceptanceAndRejection() {
+    RecordingFenceProbe accepted{};
+    CommandList         accepted_commands(EQueueType::Graphics);
+    accepted_commands.Signal(&accepted, 3);
+    if (!Expect(
+            !accepted_commands.IsEmpty(),
+            "a CommandList signal was not treated as submit work"
+        )) {
+        return false;
+    }
+    CmdSubmit accepted_submit = accepted_commands.Submit();
+    if (!Expect(
+            accepted_submit.signal_events.size() == 1 &&
+                accepted_submit.signal_events.front().value == 3,
+            "CommandList::Submit dropped its native-acceptance signal"
+        )) {
+        return false;
+    }
+    accepted.MarkSubmitted(3);
+    if (!Expect(
+            accepted.WaitSubmitted(3),
+            "accepted signal did not publish native-submission state"
+        )) {
+        return false;
+    }
+
+    auto owned_destroyed = std::make_shared<std::atomic_bool>(false);
+    FenceRef owned_fence{
+        MoerNew(RecordingFenceProbe)(owned_destroyed)
+    };
+    auto* owned_probe =
+        static_cast<RecordingFenceProbe*>(owned_fence.Get());
+    CommandList owned_commands(EQueueType::Graphics);
+    owned_commands.Signal(owned_fence, 5);
+    owned_fence = {};
+    if (!Expect(
+            !owned_destroyed->load(std::memory_order_acquire),
+            "CommandList::Signal(FenceRef) dropped its owner before sealing"
+        )) {
+        return false;
+    }
+    CmdSubmit owned_submit = owned_commands.Submit();
+    if (!Expect(
+            !owned_destroyed->load(std::memory_order_acquire) &&
+                owned_submit.callbacks.size() == 1,
+            "sealed signal did not retain its FenceRef through completion"
+        )) {
+        return false;
+    }
+    owned_probe->MarkSubmitted(5);
+    for (auto& callback : owned_submit.callbacks) {
+        callback();
+    }
+    owned_submit.callbacks.clear();
+    if (!Expect(
+            owned_destroyed->load(std::memory_order_acquire),
+            "signal FenceRef survived after its completion callback retired"
+        )) {
+        return false;
+    }
+
+    RecordingFenceProbe rejected{};
+    CommandList         rejected_commands(EQueueType::Graphics);
+    rejected_commands.Signal(&rejected, 7);
+    (void)rejected_commands.DrainOrdinaryCallbacksForRejection();
+    bool okay = Expect(
+                    rejected.IsRejected(7),
+                    "rejected graph source did not terminalize its signal"
+                ) &&
+                Expect(
+                    !rejected.WaitSubmitted(7),
+                    "rejected signal was reported as natively submitted"
+                ) &&
+                Expect(
+                    rejected_commands.IsEmpty(),
+                    "rejected graph source retained its signal"
+                );
+
+    RecordingFenceProbe frontend_rejected{};
+    CommandList         sealed_commands(EQueueType::Graphics);
+    sealed_commands.Signal(&frontend_rejected, 9);
+    RHIExecutor::Get().Submit(
+        EQueueType::Ignore,
+        sealed_commands.Submit(),
+        ERHIExecSubmitFlags::None
+    );
+    okay &= Expect(
+        frontend_rejected.IsRejected(9),
+        "frontend rejection did not terminalize a sealed signal"
+    );
+    okay &= Expect(
+        !frontend_rejected.WaitSubmitted(9),
+        "frontend-rejected signal was reported as natively submitted"
+    );
+    return okay;
+}
 
 bool PerSourceGatesPreserveFifo() {
     RHIExecutorRecordingHandoffQueue queue{};
@@ -709,7 +837,8 @@ bool ShutdownDrainsAcceptedReadyWork() {
 } // namespace
 
 int main() {
-    if (!PerSourceGatesPreserveFifo() ||
+    if (!CommandListSignalTracksNativeAcceptanceAndRejection() ||
+        !PerSourceGatesPreserveFifo() ||
         !ReadyWorkUsesStableExecutorOwnerAndCannotBeOvertaken() ||
         !FailedGateRejectsOnlyItsGroupAndPreservesFifo() ||
         !FailedRecordingDrainsCleanupExactlyOnce() ||

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RTResource.h"
+#include "RaytracingGraphTypes.h"
 #include "rendergraph/RenderGraph.h"
 
 #include <cassert>
@@ -9,6 +10,8 @@ namespace Moer::Render::Raytracing {
 
 struct RTGraphFrameResources {
     bool current_frame{};
+
+    RTGraphFrameSetupResources frame_setup{};
 
     RenderGraph::TextureHandle view_depth{};
     RenderGraph::TextureHandle diffuse_albedo{};
@@ -25,6 +28,8 @@ struct RTGraphFrameResources {
     RenderGraph::TextureHandle normal_roughness{};
     RenderGraph::TextureHandle diffuse_lighting{};
     RenderGraph::TextureHandle specular_lighting{};
+    RenderGraph::TextureHandle denoised_diffuse_lighting{};
+    RenderGraph::TextureHandle denoised_specular_lighting{};
     RenderGraph::TextureHandle hdr_color{};
     RenderGraph::TextureHandle resolved_color{};
     RenderGraph::TextureHandle ldr_color{};
@@ -32,6 +37,9 @@ struct RTGraphFrameResources {
     RenderGraph::TextureHandle feedback_color_ping{};
     RenderGraph::TextureHandle feedback_color_pong{};
     RenderGraph::TextureHandle env_map{};
+    RenderGraph::TokenHandle   presentation_ready{};
+    RenderGraph::TokenHandle   nrd_ready{};
+    RenderGraph::PassHandle    nrd_pass{};
 
     RenderGraph::TextureHandle current_view_depth{};
     RenderGraph::TextureHandle current_diffuse_albedo{};
@@ -91,8 +99,9 @@ inline RenderGraph::BufferHandle ImportRTGraphBuffer(
 }
 
 inline RTGraphFrameResources RegisterRTGraphFrameResources(
-    RenderGraph&     graph,
-    const RTContext& rt_ctx
+    RenderGraph&                       graph,
+    const RTContext&                   rt_ctx,
+    const RTGraphFrameSetupResources& frame_setup
 ) {
     const FrameResources& frame = rt_ctx.frame_rt;
     RTGraphFrameResources resources{
@@ -116,6 +125,16 @@ inline RTGraphFrameResources RegisterRTGraphFrameResources(
             ImportRTGraphTexture(graph, "RT.diffuse_lighting", frame.diffuse_lighting),
         .specular_lighting =
             ImportRTGraphTexture(graph, "RT.specular_lighting", frame.specular_lighting),
+        .denoised_diffuse_lighting = ImportRTGraphTexture(
+            graph,
+            "RT.denoised_diffuse_lighting",
+            frame.denoised_diffuse_lighting
+        ),
+        .denoised_specular_lighting = ImportRTGraphTexture(
+            graph,
+            "RT.denoised_specular_lighting",
+            frame.denoised_specular_lighting
+        ),
         .hdr_color =
             ImportRTGraphTexture(graph, "RT.hdr_color", frame.hdr_color),
         .resolved_color =
@@ -139,6 +158,8 @@ inline RTGraphFrameResources RegisterRTGraphFrameResources(
         resources.env_map =
             ImportRTGraphTexture(graph, "RT.env_map", rt_ctx.env_map);
     }
+    resources.presentation_ready =
+        graph.CreateTransientToken("RT.presentation_ready");
 
     resources.current_view_depth = resources.current_frame ? resources.view_depth :
                                                              resources.prev_view_depth;
@@ -157,6 +178,7 @@ inline RTGraphFrameResources RegisterRTGraphFrameResources(
         resources.current_frame ? resources.prev_specular_roughness :
                                   resources.specular_roughness;
     resources.previous_normal = resources.current_frame ? resources.prev_normal : resources.normal;
+    resources.frame_setup = frame_setup;
     return resources;
 }
 

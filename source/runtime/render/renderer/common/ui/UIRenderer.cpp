@@ -5,6 +5,100 @@
 #include "rhi/RHI.h"
 
 namespace Moer::Render {
+UiDrawFrameSlotClaim::UiDrawFrameSlotClaim(UiDrawFramePacket& frame) {
+    slots.reserve(frame.platform_viewports.size() + 1);
+    Freeze(frame.main_viewport);
+    for (UiViewportDrawPacket& viewport : frame.platform_viewports) {
+        Freeze(viewport);
+    }
+}
+
+void UiDrawFrameSlotClaim::Freeze(UiViewportDrawPacket& viewport) {
+    if (viewport.commands.empty()) {
+        return;
+    }
+    if (!viewport.render_resources) {
+        structurally_valid = false;
+        return;
+    }
+
+    const uint64_t pending_slot =
+        viewport.render_resources->GetPendingRecordingSlot();
+    viewport.recording_slot = pending_slot;
+
+    for (const Slot& slot : slots) {
+        if (slot.resources.get() != viewport.render_resources.get()) {
+            continue;
+        }
+        if (slot.value != pending_slot) {
+            structurally_valid = false;
+        }
+        return;
+    }
+    slots.emplace_back(Slot{
+        .resources = viewport.render_resources,
+        .value     = pending_slot,
+    });
+}
+
+bool UiDrawFrameSlotClaim::ValidatePendingSlots() const noexcept {
+    if (!structurally_valid) {
+        return false;
+    }
+    for (const Slot& slot : slots) {
+        if (!slot.resources ||
+            !slot.resources->IsPendingRecordingSlot(slot.value)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool UiDrawFrameSlotClaim::IsReadyForRecording() const noexcept {
+    return GetState() == EState::Pending && ValidatePendingSlots();
+}
+
+bool UiDrawFrameSlotClaim::CommitAccepted() const noexcept {
+    EState current = GetState();
+    if (current == EState::Accepted) {
+        return true;
+    }
+    if (current != EState::Pending || !ValidatePendingSlots()) {
+        EState expected = EState::Pending;
+        state.compare_exchange_strong(
+            expected,
+            EState::Rejected,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire
+        );
+        return false;
+    }
+
+    EState expected = EState::Pending;
+    if (!state.compare_exchange_strong(
+            expected,
+            EState::Accepted,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire
+        )) {
+        return expected == EState::Accepted;
+    }
+    for (const Slot& slot : slots) {
+        slot.resources->CommitRecordingSlot(slot.value);
+    }
+    return true;
+}
+
+void UiDrawFrameSlotClaim::Reject() const noexcept {
+    EState expected = EState::Pending;
+    state.compare_exchange_strong(
+        expected,
+        EState::Rejected,
+        std::memory_order_acq_rel,
+        std::memory_order_acquire
+    );
+}
+
 struct UIRenderer::Impl {
     explicit Impl(RenderDevice& _device) : backend(MakeShared<ImGuiRenderBackend>(_device)) {}
 
@@ -72,7 +166,7 @@ TextureRef UIRenderer::GetWindowFrameBuffer(void* _window) {
 void RenderUiDrawFrame(
     CommandList&           _cmd_list,
     const TextureView&     _main_framebuffer,
-    UiDrawFramePacket&     _frame,
+    const UiDrawFramePacket& _frame,
     EUiDrawExecutionThread _execution_thread
 ) {
     if (_frame.backend) {

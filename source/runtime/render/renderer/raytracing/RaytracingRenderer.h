@@ -8,6 +8,7 @@
 #include <optional>
 
 namespace Moer::Render::Raytracing {
+class ExportSubmissionTransaction;
 struct FrameResources;
 }
 
@@ -46,6 +47,11 @@ public:
 
 private:
     struct RuntimeState;
+    struct SceneUpdateResult {
+        bool gpu_resources_updated = false;
+        bool tlas_built             = false;
+        bool rt_scene_replaced      = false;
+    };
 
     RuntimeAssets&          runtime_assets;
     UniquePtr<RuntimeState> runtime_state;
@@ -59,17 +65,18 @@ private:
     bool                                   export_request_in_flight        = false;
 
     void EnsureDebugUiRegistered(const EngineHooks& hooks);
-    void RefreshSceneRuntimeRefs();
-    bool ExecuteSceneUpdates(SceneUpdateBatch& batch);
+    bool RefreshSceneRuntimeRefs();
+    SceneUpdateResult ExecuteSceneUpdates(SceneUpdateBatch& batch);
     void RecreateFrameResources(uint2 new_extent);
 
-    void DumpTextureToFile(
+    [[nodiscard]] bool DumpTextureToFile(
         const ExportConfig&    _config,
         FrameResources&        _frame_rt,
         RenderDevice&          _device,
         CommandQueue&          _gfx_queue,
         std::filesystem::path& _exported_file_path,
-        std::string_view       _suffix
+        std::string_view       _suffix,
+        ExportSubmissionTransaction& _export_submission
     );
 };
 

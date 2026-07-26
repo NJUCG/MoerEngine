@@ -1,6 +1,7 @@
 #include "RaytracingRenderer.h"
 
 #include "RTResource.h"
+#include "RaytracingExportSubmission.h"
 #include "rhi/RHIExecutor.h"
 #include "taskgraph/TaskGraph.h"
 
@@ -20,13 +21,14 @@ union FloatBits {
 
 } // namespace
 
-void RaytracingRenderer::DumpTextureToFile(
+bool RaytracingRenderer::DumpTextureToFile(
     const ExportConfig&    config,
     FrameResources&        frame_resources,
     RenderDevice&          device,
     CommandQueue&          gfx_queue,
     std::filesystem::path& exported_file_path,
-    std::string_view       suffix
+    std::string_view       suffix,
+    ExportSubmissionTransaction& export_submission
 ) {
     (void)gfx_queue;
     CommandList command_list{};
@@ -80,15 +82,22 @@ void RaytracingRenderer::DumpTextureToFile(
     }
 
     if (size == 0) {
-        return;
+        return false;
     }
 
+    export_submission.BeginReadback(device.CreateFence());
+    CmdSubmit readback_submit =
+        command_list.Submit().TickProfiling();
+    export_submission.AttachReadbackSignal(readback_submit);
     RHIExecutor::Get().Submit(
         EQueueType::Graphics,
-        command_list.Submit().TickProfiling(),
+        std::move(readback_submit),
         ERHIExecSubmitFlags::FlushGPU
     );
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (!export_submission.ResolveReadbackAcceptance()) {
+        return false;
+    }
 
     if (hdr) {
         assert(
@@ -101,62 +110,64 @@ void RaytracingRenderer::DumpTextureToFile(
         );
     }
 
-    LambdaTask::Create([=,
-                        data(std::move(copy_back_data)),
-                        dequantize_byte_to_srgb(std::move(dequantize_byte_to_srgb)),
-                        dequantize_half(std::move(dequantize_half))]() mutable {
-        auto copy_back_data = std::move(data);
-        if (hdr) {
-            constexpr uint range_count = 8;
-            const uint     range       = copy_back_data.size() / range_count;
-            Array<float4>  copy_back_data_f4(copy_back_data.size() / 8);
-            ParallelFor(range_count, [&](uint index) {
-                const size_t start = range * index;
-                const size_t end   = range * (index + 1);
-                for (size_t i = start; i < copy_back_data.size() && i < end; i += 8) {
-                    float4* output = &copy_back_data_f4[i / 8];
-                    short*  input  = reinterpret_cast<short*>(&copy_back_data[i]);
-                    output->x      = dequantize_half(input[0]);
-                    output->y      = dequantize_half(input[1]);
-                    output->z      = dequantize_half(input[2]);
-                    output->w      = dequantize_half(input[3]);
-                }
-            });
-            stbi_write_hdr(
-                (exported_file_path / file_name).generic_string().data(),
-                resolution.x,
-                resolution.y,
-                4,
-                reinterpret_cast<float*>(copy_back_data_f4.data())
-            );
-        } else {
-            constexpr uint range_count = 8;
-            const uint     range       = copy_back_data.size() / range_count;
-            ParallelFor(range_count, [&](uint index) {
-                const size_t start = range * index;
-                const size_t end   = range * (index + 1);
-                for (size_t i = start; i < copy_back_data.size() && i < end; i += 4) {
-                    copy_back_data[i] =
-                        static_cast<Moer::byte>(dequantize_byte_to_srgb(ubyte(copy_back_data[i])));
-                    copy_back_data[i + 1] =
-                        static_cast<Moer::byte>(dequantize_byte_to_srgb(ubyte(copy_back_data[i + 1])));
-                    copy_back_data[i + 2] =
-                        static_cast<Moer::byte>(dequantize_byte_to_srgb(ubyte(copy_back_data[i + 2])));
-                    copy_back_data[i + 3] =
-                        static_cast<Moer::byte>(dequantize_byte_to_srgb(ubyte(copy_back_data[i + 3])));
-                }
-            });
-            stbi_write_png(
-                (exported_file_path / file_name).generic_string().data(),
-                resolution.x,
-                resolution.y,
-                4,
-                copy_back_data.data(),
-                4 * resolution.x
-            );
-        }
-        std::atomic_thread_fence(std::memory_order_seq_cst);
-    }).Dispatch();
+    return export_submission.DispatchEncoder([&] {
+        LambdaTask::Create([=,
+                            data(std::move(copy_back_data)),
+                            dequantize_byte_to_srgb(std::move(dequantize_byte_to_srgb)),
+                            dequantize_half(std::move(dequantize_half))]() mutable {
+            auto copy_back_data = std::move(data);
+            if (hdr) {
+                constexpr uint range_count = 8;
+                const uint     range       = copy_back_data.size() / range_count;
+                Array<float4>  copy_back_data_f4(copy_back_data.size() / 8);
+                ParallelFor(range_count, [&](uint index) {
+                    const size_t start = range * index;
+                    const size_t end   = range * (index + 1);
+                    for (size_t i = start; i < copy_back_data.size() && i < end; i += 8) {
+                        float4* output = &copy_back_data_f4[i / 8];
+                        short*  input  = reinterpret_cast<short*>(&copy_back_data[i]);
+                        output->x      = dequantize_half(input[0]);
+                        output->y      = dequantize_half(input[1]);
+                        output->z      = dequantize_half(input[2]);
+                        output->w      = dequantize_half(input[3]);
+                    }
+                });
+                stbi_write_hdr(
+                    (exported_file_path / file_name).generic_string().data(),
+                    resolution.x,
+                    resolution.y,
+                    4,
+                    reinterpret_cast<float*>(copy_back_data_f4.data())
+                );
+            } else {
+                constexpr uint range_count = 8;
+                const uint     range       = copy_back_data.size() / range_count;
+                ParallelFor(range_count, [&](uint index) {
+                    const size_t start = range * index;
+                    const size_t end   = range * (index + 1);
+                    for (size_t i = start; i < copy_back_data.size() && i < end; i += 4) {
+                        copy_back_data[i] =
+                            static_cast<Moer::byte>(dequantize_byte_to_srgb(ubyte(copy_back_data[i])));
+                        copy_back_data[i + 1] =
+                            static_cast<Moer::byte>(dequantize_byte_to_srgb(ubyte(copy_back_data[i + 1])));
+                        copy_back_data[i + 2] =
+                            static_cast<Moer::byte>(dequantize_byte_to_srgb(ubyte(copy_back_data[i + 2])));
+                        copy_back_data[i + 3] =
+                            static_cast<Moer::byte>(dequantize_byte_to_srgb(ubyte(copy_back_data[i + 3])));
+                    }
+                });
+                stbi_write_png(
+                    (exported_file_path / file_name).generic_string().data(),
+                    resolution.x,
+                    resolution.y,
+                    4,
+                    copy_back_data.data(),
+                    4 * resolution.x
+                );
+            }
+            std::atomic_thread_fence(std::memory_order_seq_cst);
+        }).Dispatch();
+    });
 }
 
 } // namespace Moer::Render::Raytracing

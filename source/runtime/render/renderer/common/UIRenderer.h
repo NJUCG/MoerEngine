@@ -6,15 +6,37 @@
 #include "RenderAPI.h"
 #include "misc/STL.h"
 #include "rhi/RHI.h"
+#include <atomic>
 #include <cstdint>
+#include <limits>
 #include <type_traits>
 
 namespace Moer::Render {
 class UiDrawFrameBackend;
 
+struct UiCompositionFrameData {
+    bool       enabled         = false;
+    bool       separate_window = false;
+    uint2      output_resolution{};
+    float2     scene_color_position{};
+    float2     scene_color_resolution{};
+    TextureRef window_frame_buffer{};
+};
+
 class RENDER_API UiViewportRenderResources {
 public:
     virtual ~UiViewportRenderResources() = default;
+
+    /**
+     * UI upload-ring selection is speculative until the command source is
+     * accepted by the native queue. The renderer records one frame at a time,
+     * so a read-only token can be frozen in the copied packet and committed
+     * only after Fence::WaitSubmitted succeeds.
+     */
+    [[nodiscard]] virtual uint64_t GetPendingRecordingSlot() const noexcept = 0;
+    [[nodiscard]] virtual bool
+    IsPendingRecordingSlot(uint64_t slot) const noexcept = 0;
+    virtual void CommitRecordingSlot(uint64_t slot) noexcept = 0;
 };
 
 enum class EUiDrawExecutionThread : uint8_t {
@@ -40,9 +62,13 @@ struct UiDrawCommand {
 };
 
 struct UiViewportDrawPacket {
+    static constexpr uint64_t InvalidRecordingSlot =
+        std::numeric_limits<uint64_t>::max();
+
     float2 display_position{};
     float2 display_size{};
     float2 framebuffer_scale{1.f, 1.f};
+    uint64_t recording_slot = InvalidRecordingSlot;
 
     Array<UiDrawVertex>  vertices;
     Array<UiDrawIndex>   indices;
@@ -69,6 +95,51 @@ struct UiDrawFramePacket {
 static_assert(std::is_move_constructible_v<UiDrawFramePacket>);
 static_assert(!std::is_copy_constructible_v<UiDrawFramePacket>);
 
+/**
+ * Freezes the speculative upload-ring slots used by one copied UI frame.
+ *
+ * Recording alone does not retire a slot. The owner must publish exactly one
+ * terminal result after the command source crosses (or fails to cross) the
+ * native queue boundary. Duplicate viewport references to the same backend
+ * resource share one slot and are committed once.
+ */
+class RENDER_API UiDrawFrameSlotClaim final {
+public:
+    enum class EState : uint8_t {
+        Pending,
+        Accepted,
+        Rejected,
+    };
+
+    explicit UiDrawFrameSlotClaim(UiDrawFramePacket& frame);
+
+    UiDrawFrameSlotClaim(const UiDrawFrameSlotClaim&)            = delete;
+    UiDrawFrameSlotClaim& operator=(const UiDrawFrameSlotClaim&) = delete;
+    UiDrawFrameSlotClaim(UiDrawFrameSlotClaim&&)                 = delete;
+    UiDrawFrameSlotClaim& operator=(UiDrawFrameSlotClaim&&)      = delete;
+
+    [[nodiscard]] bool IsReadyForRecording() const noexcept;
+    [[nodiscard]] bool CommitAccepted() const noexcept;
+    void Reject() const noexcept;
+
+    [[nodiscard]] EState GetState() const noexcept {
+        return state.load(std::memory_order_acquire);
+    }
+
+private:
+    struct Slot {
+        SharedPtr<UiViewportRenderResources> resources;
+        uint64_t                             value = 0;
+    };
+
+    void Freeze(UiViewportDrawPacket& viewport);
+    [[nodiscard]] bool ValidatePendingSlots() const noexcept;
+
+    Array<Slot>        slots{};
+    bool               structurally_valid = true;
+    mutable std::atomic<EState> state{EState::Pending};
+};
+
 class RENDER_API UiDrawFrameBackend {
 public:
     virtual ~UiDrawFrameBackend() = default;
@@ -76,7 +147,7 @@ public:
     virtual void RenderGUI(
         CommandList&           _cmd_list,
         const TextureView&     _main_framebuffer,
-        UiDrawFramePacket&     _frame,
+        const UiDrawFramePacket& _frame,
         EUiDrawExecutionThread _execution_thread
     ) = 0;
     virtual void
@@ -86,7 +157,7 @@ public:
 RENDER_API void RenderUiDrawFrame(
     CommandList&           _cmd_list,
     const TextureView&     _main_framebuffer,
-    UiDrawFramePacket&     _frame,
+    const UiDrawFramePacket& _frame,
     EUiDrawExecutionThread _execution_thread
 );
 RENDER_API void PresentUiDrawFrame(const UiDrawFramePacket& _frame, EUiDrawExecutionThread _execution_thread);

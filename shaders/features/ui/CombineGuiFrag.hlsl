@@ -4,7 +4,6 @@ struct PSInput {
 };
 
 [[vk::binding(0, 0)]] Texture2D<float4> scene_color : register(t0);
-[[vk::binding(1, 0)]] Texture2D<float4> gui_color : register(t1);
 [[vk::binding(0, 1)]] SamplerState linear_sampler : register(s0);
 
 struct SceneRect {
@@ -16,10 +15,6 @@ struct SceneRect {
 
 float4 main(PSInput input) : SV_TARGET {
   if (any(input.uv < scene_rect.min_xy) || any(input.uv > scene_rect.max_xy)) {
-    // #if VULKAN
-    //     input.uv.y = 1.0 - input.uv.y;
-    // #endif
-    // return gui_color.Sample(linear_sampler, input.uv);
     return float4(0.0, 0.0, 0.0, 0.0);
   }
   float2 scene_uv =

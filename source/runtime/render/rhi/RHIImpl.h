@@ -1576,10 +1576,11 @@ private:
 public:
     UpdateRaytracingSceneCmd(
         UnorderedMap<uint64, uint32>&& _related_geoms,
-        uint64                         _scene_handle,
-        uint64                         _instance_buffer_handle,
-        uint64                         _scratch_buffer_handle,
-        uint64                         _tlas_handle,
+        RaytracingSceneRef             _scene,
+        BufferRef                      _instance_buffer,
+        BufferRef                      _scratch_buffer,
+        RaytracingTlasRef              _tlas,
+        Array<RaytracingGeometryRef>&&  _geometry_refs,
         Array<uint>&&                  _instances_to_update,
         Array<byte>&&                  _instance_data,
         uint                           _instance_cnt,
@@ -1587,10 +1588,11 @@ public:
         std::string_view               _name = typenames[uint(EType::BuildTLAS)]
     ) :
         related_geometries(std::move(_related_geoms)),
-        scene_handle(_scene_handle),
-        instance_buffer_handle(_instance_buffer_handle),
-        scratch_buffer_handle(_scratch_buffer_handle),
-        tlas_handle(_tlas_handle),
+        scene(std::move(_scene)),
+        instance_buffer(std::move(_instance_buffer)),
+        scratch_buffer(std::move(_scratch_buffer)),
+        tlas(std::move(_tlas)),
+        geometry_refs(std::move(_geometry_refs)),
 
         instance_to_update_ids(std::move(_instances_to_update)),
         instance_data(std::move(_instance_data)),
@@ -1617,17 +1619,17 @@ public:
     }
 
     auto SceneHandle() const {
-        return scene_handle;
+        return uint64(scene.Get());
     }
 
     uint64 InstanceBufferHandle() const {
-        return instance_buffer_handle;
+        return uint64(instance_buffer.Get());
     }
     uint64 ScratchBufferHandle() const {
-        return scratch_buffer_handle;
+        return uint64(scratch_buffer.Get());
     }
     uint64 TlasHandle() const {
-        return tlas_handle;
+        return uint64(tlas.Get());
     }
 
     uint32 InstanceCount() const {
@@ -1638,18 +1640,39 @@ public:
         return related_geometries.find(_handle) != related_geometries.end();
     }
 
+    const auto& RelatedGeometries() const {
+        return related_geometries;
+    }
+
+    const RaytracingSceneRef& Scene() const {
+        return scene;
+    }
+    const BufferRef& InstanceBuffer() const {
+        return instance_buffer;
+    }
+    const BufferRef& ScratchBuffer() const {
+        return scratch_buffer;
+    }
+    const RaytracingTlasRef& Tlas() const {
+        return tlas;
+    }
+    const Array<RaytracingGeometryRef>& GeometryRefs() const {
+        return geometry_refs;
+    }
+
     bool ForceUpdate() const {
         return b_full_refit;
     }
 
 private:
-    uint64      scene_handle;
     Array<uint> instance_to_update_ids;
     Array<byte> instance_data;
 
-    uint64 instance_buffer_handle;
-    uint64 scratch_buffer_handle;
-    uint64 tlas_handle;
+    RaytracingSceneRef            scene;
+    BufferRef                     instance_buffer;
+    BufferRef                     scratch_buffer;
+    RaytracingTlasRef             tlas;
+    Array<RaytracingGeometryRef> geometry_refs;
 
     uint                       modifiable_instance_cnt = 0;
     bool                       b_full_refit            = false;

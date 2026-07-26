@@ -20,11 +20,10 @@ public:
 
     DEFINE_RASTER_PIPELINE_CLASS(CombineUIPipeline);
     DEFINE_SHADER_TEX(scene_color);
-    DEFINE_SHADER_TEX(gui_color);
     DEFINE_SHADER_SAMPLER(linear_sampler);
     DEFINE_SHADER_CONSTANT_STRUCT(Param, scene_rect);
 
-    DEFINE_SHADER_ARGS(scene_color, gui_color, linear_sampler, scene_rect);
+    DEFINE_SHADER_ARGS(scene_color, linear_sampler, scene_rect);
 };
 
 class SampleTexturePipeline : public RasterPipeline {
@@ -70,7 +69,6 @@ public:
         float2       scene_color_resolution,
         TextureView  input_window_frame_buffer,
         TextureView  input_color_texture,
-        TextureView  input_ui_texture,
         TextureView  default_output_texture
     ) {
         ScopedGpuMarker ui_composition_marker(
@@ -116,7 +114,6 @@ public:
             .Gfx(
                 combine_ui_pipelines[default_output_texture.format],
                 input_color_texture,
-                input_ui_texture,
                 Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE),
                 CombineUIPipeline::Param{scene_rect_min, scene_rect_max}
             )

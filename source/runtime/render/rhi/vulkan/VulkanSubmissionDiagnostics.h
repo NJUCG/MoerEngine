@@ -31,6 +31,64 @@ struct VulkanSourceSubmissionObserver {
     VulkanSourceSubmissionCallback callback{nullptr};
 };
 
+enum class EVulkanSubmissionBoundaryKind : uint8_t {
+    SerialControl = 0,
+    PresentBridge,
+    Present,
+};
+
+enum class EVulkanSubmissionBoundaryPhase : uint8_t {
+    Dispatch = 0,
+    Terminal,
+};
+
+// Read-only observation of the stable Vulkan Submission cursor. Source
+// operations use their executable source index. PresentBridge reserves the
+// slot immediately after the source suffix and Present uses the following
+// slot even when no bridge is needed, so operation identity does not depend
+// on runtime queue aliasing or frontier state.
+struct VulkanSubmissionBoundaryEvent {
+    uint64                        batch_sequence{0};
+    uint32                        operation_index{0};
+    EQueueType                    queue{EQueueType::Ignore};
+    EVulkanSubmissionBoundaryKind kind{
+        EVulkanSubmissionBoundaryKind::SerialControl
+    };
+    EVulkanSubmissionBoundaryPhase phase{
+        EVulkanSubmissionBoundaryPhase::Dispatch
+    };
+    uint32                        dependency_wait_count{0};
+    uint32                        thread_id{0};
+    ERHIThreadRole                thread_role{ERHIThreadRole::Unknown};
+    VulkanOperationResult         outcome{};
+    bool                          outcome_valid{false};
+    bool                          gpu_submitted{false};
+    bool                          recoverable_rejection{false};
+    uint32                        present_receipt_resolution_attempts{0};
+};
+
+using VulkanSubmissionBoundaryCallback =
+    void (*)(void*, const VulkanSubmissionBoundaryEvent&) noexcept;
+
+struct VulkanSubmissionBoundaryObserver {
+    void*                            context{nullptr};
+    VulkanSubmissionBoundaryCallback callback{nullptr};
+};
+
+// Callback storage is caller-owned and immutable while installed. Callbacks
+// run on the sole Submission owner immediately before an ordered queue
+// operation and again after it reaches a terminal runtime result. They must be
+// short, non-blocking, noexcept, and must not re-enter RHI. Quiesce observed
+// work before removal; removal does not wait for an already-loaded callback.
+[[nodiscard]] RENDER_API bool
+TryInstallVulkanSubmissionBoundaryObserver(
+    const VulkanSubmissionBoundaryObserver* _observer
+) noexcept;
+[[nodiscard]] RENDER_API bool
+RemoveVulkanSubmissionBoundaryObserver(
+    const VulkanSubmissionBoundaryObserver* _observer
+) noexcept;
+
 enum class EVulkanSourceTranslationPhase : uint8_t {
     Begin = 0,
     Recorded,
@@ -216,6 +274,43 @@ TryInstallVulkanBackendSyncWaitObserver(
 [[nodiscard]] RENDER_API bool
 RemoveVulkanBackendSyncWaitObserver(
     const VulkanBackendSyncWaitObserver* _observer
+) noexcept;
+
+struct VulkanScriptedPresentResult {
+    VulkanOperationResult outcome{
+        EVulkanOperationStatus::Retry,
+        VK_NOT_READY,
+    };
+};
+
+using VulkanScriptedPresentCallback =
+    VulkanScriptedPresentResult (*)(void*, uint64) noexcept;
+
+struct VulkanScriptedPresentOverrideForTesting {
+    void*                           context{nullptr};
+    VulkanScriptedPresentCallback  callback{nullptr};
+};
+
+// Narrow deterministic test seam for no-GPU-tail Present outcomes. The
+// callback runs on the Submission owner while the queue execution mutex and
+// runtime execution lease are held. It must be short, non-blocking, noexcept,
+// and must not re-enter RHI. It is queried only after the real owner has
+// serialized execution and reserved the logical Present timeline. Success is
+// deliberately forbidden: tests may script Retry, Recreate, or Rejected,
+// while the production path remains the only route that can report a native
+// Present success or device fault.
+//
+// Override storage and context are caller-owned and immutable while installed.
+// Quiesce with Sync(Present) or shutdown before removal and destroy the
+// override/context only after removal. Removal does not wait for a callback
+// which has already loaded the pointer.
+[[nodiscard]] RENDER_API bool
+TryInstallVulkanScriptedPresentOverrideForTesting(
+    const VulkanScriptedPresentOverrideForTesting* _override
+) noexcept;
+[[nodiscard]] RENDER_API bool
+RemoveVulkanScriptedPresentOverrideForTesting(
+    const VulkanScriptedPresentOverrideForTesting* _override
 ) noexcept;
 
 // Backend-internal notification points shared across Vulkan translation,

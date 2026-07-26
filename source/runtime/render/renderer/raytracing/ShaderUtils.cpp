@@ -18,6 +18,16 @@ constexpr uint DivCeil(uint value, uint divisor) {
     return (value + divisor - 1) / divisor;
 }
 
+constexpr uint MipExtent(uint base_extent, uint mip_level) {
+    return std::max(1u, base_extent >> std::min(mip_level, 31u));
+}
+
+static_assert(MipExtent(4096, 0) == 4096);
+static_assert(MipExtent(4096, 5) == 128);
+static_assert(MipExtent(4096, 10) == 4);
+static_assert(MipExtent(4096, 12) == 1);
+static_assert(MipExtent(1, 13) == 1);
+
 } // namespace
 
 ShaderUtils::ShaderUtils(ShaderManager& manager) {
@@ -41,7 +51,7 @@ void ShaderUtils::GenerateLowDiscrepancySequence(
 ) {
     assert(_param.num_dimensions == 2);
     assert(_param.num_samples * _param.num_dimensions <= _output.GetByteSize());
-    Array<int8> data(_param.num_samples * 2);
+    Array<int8>   data(_param.num_samples * 2);
     constexpr int radius_scale = 250;
     const float   phi2         = 1.0f / 1.3247179572447f;
     uint32_t      num          = 0;
@@ -94,6 +104,23 @@ void ShaderUtils::GenerateMipPdf(
         width  = std::max(1u, width >> 5);
         height = std::max(1u, height >> 5);
     }
+}
+
+void ShaderUtils::GenerateMipsChunk(CommandList& cmd_list, std::span<TextureView> mips) {
+    if (mips.size() < 2) {
+        return;
+    }
+
+    assert(mips.size() <= 6);
+    const TextureView& source_mip = mips.front();
+    const uint         width      = MipExtent(source_mip.extent.x, source_mip.mip_level);
+    const uint         height     = MipExtent(source_mip.extent.y, source_mip.mip_level);
+    BuildMipsParam     param{};
+    param.num_mip_levels = static_cast<uint>(mips.size());
+    param.src_mip_level  = 0;
+    param.src_size       = uint2(width, height);
+    cmd_list.Compute(generate_mips_pipeline, mips, param)
+        .Dispatch(uint3(DivCeil(width, 32), DivCeil(height, 32), 1), "GenerateMips");
 }
 
 void ShaderUtils::GenerateMips(CommandList& _cmd_list, std::span<TextureView> _mips) {

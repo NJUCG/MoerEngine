@@ -1033,12 +1033,25 @@ public:
     virtual uint64_t GetValue() const      = 0;
     virtual void     Wait(uint64_t _value) = 0;
 
+    // Native-submission acceptance is intentionally distinct from GPU
+    // completion. A renderer history transaction may advance as soon as its
+    // signal-owning submit has reached the native queue, but must not advance
+    // merely because the frontend handoff accepted the CmdSubmit.
+    virtual void MarkSubmitted(uint64_t _value) = 0;
+    [[nodiscard]] virtual bool WaitSubmitted(
+        uint64_t               _value,
+        const std::atomic_bool* _continue_waiting = nullptr,
+        EQueueType              _waiting_queue = EQueueType::Ignore,
+        uint32                  _dependency_count = 0
+    ) = 0;
+    [[nodiscard]] virtual bool IsRejected(uint64_t _value) const = 0;
+
     // Terminalize a timeline value which can no longer be published because
     // its owning submission was rejected before reaching a GPU queue. This is
     // deliberately distinct from host-signalling the value: treating rejected
     // producer work as successfully complete could let dependent GPU work read
     // resources which were never written.
-    virtual void Reject(uint64_t _value) = 0;
+    virtual void Reject(uint64_t _value) noexcept = 0;
 };
 
 struct BackBufferInfo {

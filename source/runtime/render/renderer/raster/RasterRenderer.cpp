@@ -637,7 +637,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             RenderGraph::TokenHandle   tonemapping_state;
             RenderGraph::TextureHandle tonemapping_output;
             RenderGraph::TextureHandle selected_framebuffer;
-            RenderGraph::TextureHandle ui_framebuffer;
             RenderGraph::TextureHandle window_framebuffer;
             RenderGraph::TextureHandle output;
             RenderGraph::BufferHandle  scene_lights;
@@ -1060,7 +1059,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                             .Write(graph_resources.window_framebuffer);
                     } else {
                         builder.Read(graph_resources.selected_framebuffer)
-                            .Read(graph_resources.ui_framebuffer)
                             .Write(graph_resources.output);
                     }
                     builder.SideEffect();
@@ -1076,7 +1074,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                             ui_frame.scene_color_resolution,
                             window_framebuffer_view,
                             selected_framebuffer_view,
-                            raster_context.textures.ui_frame_buffer.tex,
                             raster_context.textures.output.tex
                         );
                     } else {
@@ -1093,7 +1090,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                             ),
                             TextureView(raster_context.textures.output.tex),
                             processing_image.tex,
-                            {},
                             raster_context.textures.output.tex
                         );
                     }
@@ -1241,8 +1237,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     );
                 }
             }
-            graph_resources.ui_framebuffer =
-                import_texture("ui_framebuffer", raster_context.textures.ui_frame_buffer.tex);
             if (ui_writes_external_window) {
                 graph_resources.window_framebuffer = import_physical_texture(
                     "window_framebuffer", window_framebuffer_view.GetTexture()
@@ -1425,9 +1419,23 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
     const auto ui_execution_thread =
         IsRenderThreadInitialized() ? EUiDrawExecutionThread::Render : EUiDrawExecutionThread::Game;
-    RenderUiDrawFrame(
-        cmd_list, default_output_texture->GetView(), frame_packet.ui_draw_frame, ui_execution_thread
-    );
+    UiDrawFrameSlotClaim ui_slot_claim(frame_packet.ui_draw_frame);
+    const bool ui_recording_claimed =
+        ui_slot_claim.IsReadyForRecording();
+    if (ui_recording_claimed) {
+        RenderUiDrawFrame(
+            cmd_list,
+            default_output_texture->GetView(),
+            frame_packet.ui_draw_frame,
+            ui_execution_thread
+        );
+    } else {
+        ui_slot_claim.Reject();
+        LOG_CRITICAL(
+            "[Threading][UI] Raster copied-frame upload slots could not be "
+            "claimed; preserving the slots and skipping this UI frame."
+        );
+    }
 
     raster_context.probe_volume.TrackFrameSubmission(cmd_list, time);
     time++;
@@ -1483,7 +1491,21 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         present_request ? &*present_request : nullptr
     );
 
-    if (!skip_present) {
+    const bool frame_native_accepted = timeline->WaitSubmitted(time);
+    bool       ui_source_accepted    = false;
+    if (frame_native_accepted && ui_recording_claimed) {
+        ui_source_accepted = ui_slot_claim.CommitAccepted();
+    } else {
+        ui_slot_claim.Reject();
+    }
+    if (!ui_source_accepted) {
+        LOG_CRITICAL(
+            "[Threading][UI] Raster frame submission rejected the copied UI "
+            "source; preserving its upload-ring slots."
+        );
+    }
+
+    if (!skip_present && frame_native_accepted && ui_source_accepted) {
         PresentUiDrawFrame(frame_packet.ui_draw_frame, ui_execution_thread);
     }
 

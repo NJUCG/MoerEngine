@@ -1046,19 +1046,19 @@ public:
     uint64 GetDeviceValue() const;
 
     void Wait(uint64_t _value) override;
-    void Reject(uint64_t _value) override;
+    void Reject(uint64_t _value) noexcept override;
     // can be called on any thread to block current thread
     void Sync(uint64);
     // can be called on any thread to signal fence
     void  Notify(uint64);
-    void  MarkSubmitted(uint64_t _value);
+    void  MarkSubmitted(uint64_t _value) override;
     RENDER_API bool WaitSubmitted(
         uint64_t               _value,
         const std::atomic_bool* _continue_waiting = nullptr,
         EQueueType              _waiting_queue = EQueueType::Ignore,
         uint32                  _dependency_count = 0
-    );
-    RENDER_API bool IsRejected(uint64_t _value) const;
+    ) override;
+    RENDER_API bool IsRejected(uint64_t _value) const override;
     RENDER_API VkResult HostWait(
         uint64_t                      _value,
         const VulkanOperationContext& _context = VulkanOperationContext{}

@@ -12,14 +12,14 @@ public:
     VkNRDPlugin(VulkanDevice* _device) : VulkanDeviceObject(_device) {}
     ~VkNRDPlugin() = default;
 
-    UniquePtr<NRDInterface> CreateInterface(
+    SharedPtr<NRDInterface> CreateInterface(
         uint8  _max_frame_in_flight = 0,
         uint16 _frame_width         = 0,
         uint16 _frame_height        = 0
     ) override;
 
-    UniquePtr<NRDInterface> RecreateInterface(
-        UniquePtr<NRDInterface> _interface,
+    SharedPtr<NRDInterface> RecreateInterface(
+        SharedPtr<NRDInterface> _interface,
         uint16                  _frame_width  = 0,
         uint16                  _frame_height = 0
     ) override;
