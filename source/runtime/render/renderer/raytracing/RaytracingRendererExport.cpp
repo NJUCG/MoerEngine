@@ -1,6 +1,7 @@
 #include "RaytracingRenderer.h"
 
 #include "RTResource.h"
+#include "RaytracingExportSubmission.h"
 #include "rhi/RHIExecutor.h"
 #include "taskgraph/TaskGraph.h"
 
@@ -20,7 +21,7 @@ union FloatBits {
 
 } // namespace
 
-void RaytracingRenderer::DumpTextureToFile(
+bool RaytracingRenderer::DumpTextureToFile(
     const ExportConfig&    config,
     FrameResources&        frame_resources,
     RenderDevice&          device,
@@ -80,15 +81,22 @@ void RaytracingRenderer::DumpTextureToFile(
     }
 
     if (size == 0) {
-        return;
+        return false;
     }
 
+    ExportSubmissionTransaction readback_submission(device.CreateFence());
+    CmdSubmit                    readback_submit =
+        command_list.Submit().TickProfiling();
+    readback_submission.AttachSignal(readback_submit);
     RHIExecutor::Get().Submit(
         EQueueType::Graphics,
-        command_list.Submit().TickProfiling(),
+        std::move(readback_submit),
         ERHIExecSubmitFlags::FlushGPU
     );
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (!readback_submission.SourceAccepted()) {
+        return false;
+    }
 
     if (hdr) {
         assert(
@@ -157,6 +165,7 @@ void RaytracingRenderer::DumpTextureToFile(
         }
         std::atomic_thread_fence(std::memory_order_seq_cst);
     }).Dispatch();
+    return true;
 }
 
 } // namespace Moer::Render::Raytracing

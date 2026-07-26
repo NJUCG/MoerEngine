@@ -68,7 +68,7 @@ private:
     SceneUpdateResult ExecuteSceneUpdates(SceneUpdateBatch& batch);
     void RecreateFrameResources(uint2 new_extent);
 
-    void DumpTextureToFile(
+    [[nodiscard]] bool DumpTextureToFile(
         const ExportConfig&    _config,
         FrameResources&        _frame_rt,
         RenderDevice&          _device,

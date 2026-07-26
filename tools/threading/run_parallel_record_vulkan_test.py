@@ -354,6 +354,33 @@ def _require_phase15c_completion_aggregate_cpu_probe(
     )
 
 
+def _require_rt_export_rejection(text: str) -> None:
+    marker = _testcase_marker(
+        "RaytracingExportAcceptanceRejection", text
+    )
+    _require(
+        marker is not None and marker[0] == "PASS",
+        "rt-export-rejection: missing export rejection PASS marker",
+    )
+    _, fields = marker
+    _require(
+        fields.get("source") == "rejected"
+        and fields.get("tail") == "dependency_rejected"
+        and fields.get("readback") == "skipped"
+        and fields.get("encoder") == "skipped"
+        and fields.get("export_consumed") == "false"
+        and fields.get("temporal") == "0"
+        and fields.get("history") == "0"
+        and fields.get("tlas") == "0"
+        and fields.get("native_rejected") == "0"
+        and fields.get("callbacks") == "exactly_once"
+        and fields.get("keepalive") == "terminal"
+        and fields.get("recovery") == "accepted"
+        and fields.get("replay") == "0",
+        "rt-export-rejection: incomplete export transaction contract",
+    )
+
+
 def _require_bounded_cross_batch_pipeline(mode: str, text: str) -> None:
     expected_window = {
         "pipeline-window1": "1",
@@ -808,6 +835,9 @@ def validate_log(mode: str, text: str) -> None:
     _require("[TESTCASE][FAIL]" not in text, f"{mode}: test emitted a FAIL marker")
     _require("VUID-" not in text, f"{mode}: Vulkan validation VUID was emitted")
     _require("Validation Error" not in text, f"{mode}: Vulkan validation error was emitted")
+    if mode == "rt-export-rejection":
+        _require_rt_export_rejection(text)
+        return
     if mode in ("pipeline-window1", "pipeline-window2"):
         _require_bounded_cross_batch_pipeline(mode, text)
         return
@@ -1096,6 +1126,8 @@ def run_case(executable: Path, outdir: Path, mode: str, timeout: float) -> Path:
         arguments.append("--present-boundary")
     if mode == "present-hard":
         arguments.append("--present-hard")
+    if mode == "rt-export-rejection":
+        arguments.append("--rt-export-rejection")
 
     completed = subprocess.run(
         [str(executable), *arguments],
@@ -1150,6 +1182,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "pipeline-window2",
                 "present-boundary",
                 "present-hard",
+                "rt-export-rejection",
             )
         ]
     except (OSError, subprocess.TimeoutExpired, VulkanTestError) as error:

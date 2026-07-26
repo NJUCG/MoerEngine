@@ -170,6 +170,16 @@ def present_hard_line() -> str:
     )
 
 
+def rt_export_rejection_line() -> str:
+    return (
+        "[TESTCASE][PASS] name=RaytracingExportAcceptanceRejection "
+        "source=rejected tail=dependency_rejected readback=skipped "
+        "encoder=skipped export_consumed=false temporal=0 history=0 "
+        "tlas=0 native_rejected=0 callbacks=exactly_once "
+        "keepalive=terminal recovery=accepted replay=0\n"
+    )
+
+
 def pass_line(
     mode: str,
     fault: str,
@@ -950,6 +960,11 @@ class VulkanRunnerTests(unittest.TestCase):
                 "--present-hard",
                 present_hard_line(),
             ),
+            (
+                "rt-export-rejection",
+                "--rt-export-rejection",
+                rt_export_rejection_line(),
+            ),
         )
         with tempfile.TemporaryDirectory() as temporary_directory:
             for mode, expected_argument, output in cases:
@@ -978,6 +993,22 @@ class VulkanRunnerTests(unittest.TestCase):
                             expected_argument,
                         ],
                     )
+
+    def test_rt_export_rejection_contract_is_accepted(self) -> None:
+        runner.validate_log(
+            "rt-export-rejection",
+            rt_export_rejection_line(),
+        )
+
+    def test_rt_export_rejection_rejects_state_commit(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete export transaction contract",
+        ):
+            runner.validate_log(
+                "rt-export-rejection",
+                rt_export_rejection_line().replace("tlas=0", "tlas=1"),
+            )
 
     def test_present_boundary_contract_is_accepted(self) -> None:
         runner.validate_log(

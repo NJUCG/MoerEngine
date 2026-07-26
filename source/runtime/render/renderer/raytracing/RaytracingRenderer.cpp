@@ -23,6 +23,7 @@
 #include "LightingPass.h"
 #include "NrdDenoisePass.h"
 #include "PreprocessLightPass.h"
+#include "RaytracingExportSubmission.h"
 #include "RaytracingFrameSetupPass.h"
 #include "RTResource.h"
 #include "ShaderUtils.h"
@@ -678,6 +679,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     ShowTextureParams                                show_texture_params{};
     FenceRef                                         graph_submission_fence{};
     FenceRef                                         ui_graph_submission_fence{};
+    ExportSubmissionTransaction                      export_submission{};
     uint64                                           graph_submission_value_count = 0;
     UiFrameGraphPass::GraphPasses                    ui_graph_passes{};
 
@@ -1379,27 +1381,49 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
 
         if (state.b_export) {
             close_renderer_marker();
-            RHIExecutor::Get().Submit(
-                EQueueType::Graphics,
+            export_submission.Reset(device.CreateFence());
+            CmdSubmit export_submit =
                 cmd_list.Submit()
                     .DebugLabel(
                         std::format("Raytracing Export Frame {}", frame_packet.frame_id),
                         GpuMarkerPalette::Frame()
                     )
-                    .TickProfiling(),
+                    .TickProfiling();
+            export_submission.AttachSignal(export_submit);
+            RHIExecutor::Get().Submit(
+                EQueueType::Graphics,
+                std::move(export_submit),
                 ERHIExecSubmitFlags::FlushGPU
             );
             RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-            DumpTextureToFile(
-                ui_config.export_cfg,
-                state.rt_ctx->frame_rt,
-                device,
-                gfx_queue,
-                state.exported_file_path,
-                std::to_string(time)
-            );
-            state.b_export           = false;
-            feedback.export_consumed = true;
+            if (export_submission.SourceAccepted()) {
+                const bool readback_accepted = DumpTextureToFile(
+                    ui_config.export_cfg,
+                    state.rt_ctx->frame_rt,
+                    device,
+                    gfx_queue,
+                    state.exported_file_path,
+                    std::to_string(time)
+                );
+                if (readback_accepted) {
+                    state.b_export           = false;
+                    feedback.export_consumed = true;
+                } else {
+                    LOG_CRITICAL(
+                        "[Raytracing][Export] Texture readback was not "
+                        "accepted for frame {}. Skipping encode and retaining "
+                        "the export request for retry.",
+                        frame_packet.frame_id
+                    );
+                }
+            } else {
+                LOG_CRITICAL(
+                    "[Raytracing][Export] Native submission rejected export "
+                    "frame {}. Skipping readback and retaining the export "
+                    "request for retry.",
+                    frame_packet.frame_id
+                );
+            }
         }
     }
 
@@ -1454,6 +1478,12 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             .DebugLabel(std::format("Raytracing Frame {}", frame_packet.frame_id), GpuMarkerPalette::Frame())
             .Signal(timeline, time)
             .DeleteResources();
+    if (export_submission.IsActive()) {
+        // The final UI/present tail belongs to the same frame transaction as
+        // the separately submitted export prefix. A rejected prefix must not
+        // publish or present an otherwise accepted stale tail.
+        export_submission.AttachDependentWait(frame_submit);
+    }
     if (split_graph_profiling_frame) {
         frame_submit.SetProfilingPhase(ERHIProfilingPhase::End);
     } else {
@@ -1497,9 +1527,11 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     );
     // Accepted renderer state follows native queue publication, not CPU
     // recording completion. The final tail proves the ordered suffix was
-    // accepted; the per-source graph fence prevents an accepted tail from
-    // hiding a rejected managed source.
+    // accepted; the export and per-source graph fences prevent an accepted
+    // tail from hiding a rejected separately submitted source.
     bool frame_native_accepted = timeline->WaitSubmitted(time);
+    frame_native_accepted =
+        export_submission.FoldAcceptance(frame_native_accepted);
     if (graph_submission_fence) {
         for (uint64 value = 1; value <= graph_submission_value_count; ++value) {
             const bool source_accepted =
@@ -1579,7 +1611,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         state.render_graph_recording_failure_latched = true;
         LOG_CRITICAL(
             "[RenderGraph][Raytracing] Native submission rejected the final "
-            "tail, a managed graph source, or the copied UI source. "
+            "tail, export source, managed graph source, or copied UI source. "
             "Preserving accepted renderer history and disabling managed "
             "recording for this renderer instance."
         );
