@@ -25,6 +25,8 @@ enum class EVulkanFaultOperation : uint8_t {
     PresentFenceWait,
     PresentFenceReset,
     CommandPoolReset,
+    QueryPoolCreate,
+    QueryPoolResults,
     SwapchainCreate,
     SwapchainGetImages,
     SwapchainSemaphoreCreate,
@@ -96,6 +98,10 @@ struct VulkanFaultRecord {
             return "PresentFenceReset";
         case EVulkanFaultOperation::CommandPoolReset:
             return "CommandPoolReset";
+        case EVulkanFaultOperation::QueryPoolCreate:
+            return "QueryPoolCreate";
+        case EVulkanFaultOperation::QueryPoolResults:
+            return "QueryPoolResults";
         case EVulkanFaultOperation::SwapchainCreate:
             return "SwapchainCreate";
         case EVulkanFaultOperation::SwapchainGetImages:

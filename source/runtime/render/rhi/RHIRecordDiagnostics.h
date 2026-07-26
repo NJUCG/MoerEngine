@@ -122,6 +122,8 @@ constexpr CommandRecordTraits GetCommandRecordTraits(Command::EType _type) {
         case Type::ClearResource:
             return {"ClearResource", Capability::ParallelPrimarySafe, true,
                     Constraint::GlobalResourceState};
+        case Type::Query:
+            return {"Query", Capability::SerialOnly, false, Constraint::ProfilerOrScope};
         case Type::Scope:
             return {"Scope", Capability::SerialOnly, false, Constraint::ProfilerOrScope};
         case Type::Custom:

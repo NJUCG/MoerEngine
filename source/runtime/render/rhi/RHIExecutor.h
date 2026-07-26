@@ -45,6 +45,10 @@ struct RHIRecordingSource {
     RHIRecordingGateView         completion{};
     RHIRecordingGateView         commit{};
     RHIRecordingSubmitMetadata   submit_metadata{};
+    // Stable, thread-safe cancellation seam for the CommandList generation
+    // being recorded. Shutdown may cancel pending query futures through this
+    // view without reading or destroying a producer-owned command stream.
+    QueryCancellationView        query_cancellation{};
 };
 
 class RENDER_API RHIExecutor {

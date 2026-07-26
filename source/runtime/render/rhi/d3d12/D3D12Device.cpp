@@ -4,6 +4,7 @@
 
 #include "log/LogSystem.h"
 #include "rhi/RHIResourceInitilizer.h"
+#include "rhi/RHIThreadOwnership.h"
 
 #include "Core.h"
 #include "shader/ShaderResourceManager.h"
@@ -1024,6 +1025,7 @@ Allocation D3D12GpuGlobalAllocator::AllocateTextureHeap(
 }
 
 void D3D12GraphicsCommandQueue::ExecuteThread(std::stop_token _st) {
+    RHIThreadRoleScope completion_owner(ERHIThreadRole::Completion);
     do {
         {
             std::unique_lock lck(mtx);
@@ -1296,6 +1298,11 @@ struct D3D12CommandPreprocessVisitor {
             case Command::EType::ShaderDispatch:
                 Visit(static_cast<const DispatchCmd&>(*_cmd));
                 break;
+            case Command::EType::Query:
+                // Timestamp queries are rejected once at Execute entry. The
+                // command remains an explicit no-op here so unrelated work in
+                // the same submit can still be translated.
+                break;
 
             default:
                 FATAL("not implemented cmdtype {}", Command::typenames[uint(_cmd->Type())]);
@@ -1440,6 +1447,11 @@ struct D3D12CommandVisitor {
                 break;
             case Command::EType::ShaderDispatch:
                 Visit(static_cast<const DispatchCmd&>(*_cmd));
+                break;
+            case Command::EType::Query:
+                // Timestamp queries are rejected once at Execute entry. The
+                // command remains an explicit no-op here so unrelated work in
+                // the same submit can still be recorded and submitted.
                 break;
                 //CopyBackTexture,
                 //BuildAccel,
@@ -1663,9 +1675,33 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
     });
 
     // Build the complete retirement packet before crossing the native submit
-    // boundary. Ordinary callbacks are copied so the original submit remains
-    // intact if preparation or a native queue call fails; success callbacks
-    // join the accepted completion packet but remain skipped on rejection.
+    // boundary. Query capability failure is published by the Completion owner
+    // after the GPU fence and submit signals, but before ordinary callbacks.
+    // This keeps user Query callbacks outside RHIExecutor's publication gate
+    // and preserves the same terminal ordering as native query backends.
+    Array<QueryToken> query_tokens = _submit.query_tokens;
+    Array<std::function<void()>> query_completion_callbacks{};
+    if (!query_tokens.empty()) {
+        const QueryPublishBatch query_batch =
+            _submit.query_publish_batch.Valid() ?
+                _submit.query_publish_batch :
+                QueryBackendAccess::BeginPublishBatch();
+        _submit.query_publish_batch = query_batch;
+        QueryBackendAccess::PublishErrorsIfPending(
+            query_tokens,
+            "D3D12 timestamp queries are unsupported",
+            query_batch
+        );
+        query_completion_callbacks.emplace_back(
+            [tokens = std::move(query_tokens), query_batch] {
+                QueryBackendAccess::NotifyTerminals(tokens, query_batch);
+            }
+        );
+    }
+
+    // Ordinary callbacks are copied so the original submit remains intact if
+    // preparation or a native queue call fails; success callbacks join the
+    // accepted completion packet but remain skipped on rejection.
     Array<std::function<void()>> completion_callbacks{};
     completion_callbacks.reserve(
         _submit.callbacks.size() + _submit.success_callbacks.size()
@@ -1683,6 +1719,13 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
     );
     for (const SignalEvent& event : _submit.signal_events) {
         retirement_events.emplace_back(event, next_fence_value, false);
+    }
+    if (!query_completion_callbacks.empty()) {
+        retirement_events.emplace_back(
+            std::move(query_completion_callbacks),
+            next_fence_value,
+            true
+        );
     }
     if (!completion_callbacks.empty()) {
         retirement_events.emplace_back(
@@ -1734,6 +1777,8 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
     event_queue.splice(event_queue.end(), retirement_events);
     _submit.callbacks.clear();
     _submit.success_callbacks.clear();
+    _submit.query_tokens.clear();
+    _submit.query_publish_batch = {};
     _submit.signal_events.clear();
     pending_fence_values.Enqueue(next_fence_value);
     retirement_lock.unlock();

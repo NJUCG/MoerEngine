@@ -1493,6 +1493,15 @@ public:
         layer_offset = m_cmd_lists.size();
     }
 
+    void VisitCmd(const QueryCmd* _cmd) {
+        const uint64 query_layer = m_cmd_lists.size();
+        AddCmd(_cmd, query_layer);
+        // Timestamp boundaries are observable ordering points. Isolating both
+        // boundaries prevents resource-independent work from moving outside
+        // the measured interval, and keeps the pair in source order.
+        layer_offset = m_cmd_lists.size();
+    }
+
     void VisitCmd(const CustomCmd* _cmd) {
         switch (_cmd->CustomId()) {
             case CustomCmd::CustomCmdId::CUSTOM_RASTER:
@@ -1585,6 +1594,9 @@ public:
                 break;
             case Command::EType::ClearResource:
                 VisitCmd(static_cast<const ClearResourceCmd*>(_cmd));
+                break;
+            case Command::EType::Query:
+                VisitCmd(static_cast<const QueryCmd*>(_cmd));
                 break;
             case Command::EType::Scope:
                 VisitCmd(static_cast<const ScopeCmd*>(_cmd));

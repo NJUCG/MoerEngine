@@ -10,8 +10,37 @@
 #include "rhi/RHIResourceInitilizer.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
+#include <atomic>
 #include <stdexcept>
 namespace Moer::Render {
+namespace {
+
+std::atomic<uint64> g_query_token_id{1};
+std::atomic<uint64> g_query_owner_id{1};
+
+uint64 NextNonZeroId(std::atomic<uint64>& _counter) noexcept {
+    uint64 id = _counter.fetch_add(1, std::memory_order_relaxed);
+    while (id == 0) {
+        id = _counter.fetch_add(1, std::memory_order_relaxed);
+    }
+    return id;
+}
+
+void InvokeCallbacksNoexcept(Array<std::function<void()>>& _callbacks) noexcept {
+    for (auto& callback : _callbacks) {
+        if (!callback) {
+            continue;
+        }
+        try {
+            callback();
+        } catch (...) {
+            // An invalid query shape is already terminal. Cleanup callbacks
+            // must not replace the structural error reported by Submit().
+        }
+    }
+}
+
+} // namespace
 
 void CommandQueue::Test() {
     ShaderManager manager = ShaderManager::Get();
@@ -33,11 +62,18 @@ void CommandQueue::Test() {
 
 CommandList::CommandList() : CommandList(EQueueType::Graphics) {}
 
-CommandList::CommandList(EQueueType _queue_type) : queue_type(_queue_type) {
+CommandList::CommandList(EQueueType _queue_type) :
+    queue_type(_queue_type),
+    query_owner_id(NextNonZeroId(g_query_owner_id)) {
     assert(
         _queue_type == EQueueType::Graphics || _queue_type == EQueueType::Compute ||
         _queue_type == EQueueType::Copy
     );
+}
+
+CommandList::~CommandList() {
+    RejectPendingSignals();
+    RejectPendingQueries("query command list was destroyed before submission");
 }
 
 CommandList::CommandList(CommandList&& _other) :
@@ -56,10 +92,32 @@ CommandList& CommandList::operator=(CommandList&& _other) {
         );
     }
 
+    // Allocate the replacement generation before changing either list. Once
+    // ownership starts moving, every remaining operation below is noexcept.
+    QueryCancellationDomain moved_from_query_domain{};
+    RejectPendingSignals();
+    QueryCancellationView replaced_query_cancellation =
+        query_cancellation_domain.GetView();
+    Array<QueryToken> replaced_query_tokens = std::move(query_tokens);
+    const QueryPublishBatch replaced_query_batch =
+        QueryBackendAccess::BeginPublishBatch();
+    const bool replaced_cancellation_published =
+        replaced_query_cancellation.PublishCancellation(
+            "query command list was replaced before submission",
+            replaced_query_batch
+        );
+    QueryBackendAccess::PublishErrorsIfPending(
+        replaced_query_tokens,
+        "query command list was replaced before submission",
+        replaced_query_batch
+    );
     commands                    = std::move(_other.commands);
     current_barriers            = _other.current_barriers;
     callbacks                   = std::move(_other.callbacks);
     success_callbacks           = std::move(_other.success_callbacks);
+    query_tokens                = std::move(_other.query_tokens);
+    active_query_stack          = std::move(_other.active_query_stack);
+    query_cancellation_domain   = std::move(_other.query_cancellation_domain);
     signal_events               = std::move(_other.signal_events);
     cached_args                 = std::move(_other.cached_args);
     queue_type                  = _other.queue_type;
@@ -68,13 +126,32 @@ CommandList& CommandList::operator=(CommandList&& _other) {
     seal_generation             = _other.seal_generation;
     scope_stack                 = std::move(_other.scope_stack);
     timestamp_scope_names       = std::move(_other.timestamp_scope_names);
+    query_owner_id              = _other.query_owner_id;
 
     _other.current_barriers          = nullptr;
     _other.translate_execution_class =
         ERHITranslateExecutionClass::Parallel;
     _other.resource_state_ownership =
         ERHIResourceStateOwnership::BackendTracked;
-    _other.seal_generation = 0;
+    _other.seal_generation   = 0;
+    _other.query_owner_id    = NextNonZeroId(g_query_owner_id);
+    _other.query_cancellation_domain = std::move(moved_from_query_domain);
+    _other.query_tokens.clear();
+    _other.active_query_stack.clear();
+    _other.signal_events.clear();
+
+    // Install the complete incoming generation before releasing user Query
+    // callbacks so re-entrant recording cannot be overwritten by this move.
+    if (replaced_cancellation_published) {
+        replaced_query_cancellation.NotifyCancellation(
+            replaced_query_batch
+        );
+    } else {
+        replaced_query_cancellation.NotifyPublishedCancellation();
+    }
+    QueryBackendAccess::NotifyTerminals(
+        replaced_query_tokens, replaced_query_batch
+    );
     return *this;
 }
 
@@ -207,6 +284,20 @@ CmdSubmit CommandList::Submit() {
             "CommandList::Submit is forbidden while graph-managed recording is active"
         );
     }
+    if (!active_query_stack.empty()) {
+        Array<std::function<void()>> cleanup_callbacks =
+            DrainOrdinaryCallbacksForRejection();
+        InvokeCallbacksNoexcept(cleanup_callbacks);
+        throw std::logic_error(
+            "CommandList::Submit rejected an unclosed timestamp query"
+        );
+    }
+    // Construct the next recording generation before transferring callbacks,
+    // signals, and query ownership into CmdSubmit. Allocation failure therefore
+    // leaves the current generation intact and terminalizable.
+    QueryCancellationDomain next_query_domain{};
+    QueryCancellationView submitted_query_cancellation =
+        query_cancellation_domain.GetView();
     ++seal_generation;
     if (!scope_stack.empty()) {
         assert(scope_stack.empty() && "CommandList::Submit called with unclosed GPU marker scopes");
@@ -241,13 +332,31 @@ CmdSubmit CommandList::Submit() {
         std::move(success_callbacks),
         std::move(cached_args)
     );
+    submit.query_tokens = std::move(query_tokens);
     submit.signal_events = std::move(signal_events);
     submit.segments      = std::move(submit_segments);
     submit.translate_execution_class = translate_execution_class;
     submit.resource_state_ownership   = resource_state_ownership;
+    // Opaque shutdown publishes Query Error while deliberately retaining the
+    // callback ticket until the producer reaches an ownership boundary. If
+    // that boundary is Submit(), transfer the complete cancellation token set
+    // and its original ticket into CmdSubmit instead of losing the owner when
+    // this CommandList rotates to its next recording generation.
+    Array<QueryToken> deferred_cancellation_tokens{};
+    const QueryPublishBatch deferred_cancellation_batch =
+        submitted_query_cancellation.TakePublishedCancellationBatch(
+            deferred_cancellation_tokens
+        );
+    if (deferred_cancellation_batch.Valid()) {
+        submit.query_tokens.swap(deferred_cancellation_tokens);
+        submit.query_publish_batch = deferred_cancellation_batch;
+    }
     commands.clear();
     callbacks.clear();
     success_callbacks.clear();
+    query_tokens.clear();
+    active_query_stack.clear();
+    query_cancellation_domain = std::move(next_query_domain);
     signal_events.clear();
     timestamp_scope_names.clear();
     translate_execution_class = ERHITranslateExecutionClass::Parallel;
@@ -261,15 +370,27 @@ Array<std::function<void()>> CommandList::DrainOrdinaryCallbacksForRejection() {
             "CommandList rejection draining is forbidden while graph-managed recording is active"
         );
     }
+    // Do not move cleanup callbacks out until the replacement generation is
+    // guaranteed to exist; rejection must retain its no-throw ownership tail.
+    QueryCancellationDomain next_query_domain{};
     ++seal_generation;
+    RejectPendingSignals();
+    QueryCancellationView rejected_query_cancellation =
+        query_cancellation_domain.GetView();
+    Array<QueryToken> rejected_query_tokens = std::move(query_tokens);
+    const QueryPublishBatch rejected_query_batch =
+        QueryBackendAccess::BeginPublishBatch();
+    const bool rejected_cancellation_published =
+        rejected_query_cancellation.PublishCancellation(
+            "query command list was rejected before completion",
+            rejected_query_batch
+        );
+    QueryBackendAccess::PublishErrorsIfPending(
+        rejected_query_tokens,
+        "query command list was rejected before completion",
+        rejected_query_batch
+    );
     Array<std::function<void()>> cleanup_callbacks = std::move(callbacks);
-
-    for (const SignalEvent& signal : signal_events) {
-        auto* fence = reinterpret_cast<Fence*>(signal.timeline_handle);
-        if (fence != nullptr) {
-            fence->Reject(signal.value);
-        }
-    }
 
     // This is deliberately not implemented in terms of Submit(). A failed
     // producer may leave a partially-built barrier or an unmatched marker;
@@ -279,6 +400,9 @@ Array<std::function<void()>> CommandList::DrainOrdinaryCallbacksForRejection() {
     commands.clear();
     callbacks.clear();
     success_callbacks.clear();
+    query_tokens.clear();
+    active_query_stack.clear();
+    query_cancellation_domain = std::move(next_query_domain);
     signal_events.clear();
     cached_args.clear();
     current_barriers = nullptr;
@@ -288,13 +412,27 @@ Array<std::function<void()>> CommandList::DrainOrdinaryCallbacksForRejection() {
     timestamp_scope_names.clear();
     translate_execution_class = ERHITranslateExecutionClass::Parallel;
     resource_state_ownership  = ERHIResourceStateOwnership::BackendTracked;
+
+    // The fresh generation is fully installed before Query callbacks can
+    // re-enter this CommandList and append new work.
+    if (rejected_cancellation_published) {
+        rejected_query_cancellation.NotifyCancellation(
+            rejected_query_batch
+        );
+    } else {
+        rejected_query_cancellation.NotifyPublishedCancellation();
+    }
+    QueryBackendAccess::NotifyTerminals(
+        rejected_query_tokens, rejected_query_batch
+    );
     return cleanup_callbacks;
 }
 
 bool CommandList::IsEmpty() const {
     return commands.empty() && callbacks.empty() &&
            success_callbacks.empty() && signal_events.empty() &&
-           cached_args.empty();
+           cached_args.empty() && query_tokens.empty() &&
+           active_query_stack.empty();
 }
 
 void CommandList::CopyFrom(BufferView _src, BufferView _dst, std::string_view _name) {
@@ -748,6 +886,140 @@ void CommandList::AddCallback(std::function<void()>&& _callback) {
 
 void CommandList::AddSuccessCallback(std::function<void()>&& _callback) {
     success_callbacks.emplace_back(std::move(_callback));
+}
+
+QueryToken CommandList::BeginTimestampQuery(std::string_view _name) {
+    QueryToken token(
+        NextNonZeroId(g_query_token_id),
+        QueryKind::Timestamp,
+        query_owner_id,
+        _name
+    );
+    query_cancellation_domain.Register(token);
+
+    // Phase 17A does not translate timestamp queries on the Copy queue. Return
+    // a terminal token without manufacturing an untranslatable command.
+    if (queue_type == EQueueType::Copy) {
+        QueryBackendAccess::ResolveErrorIfPending(
+            token,
+            "timestamp queries are unsupported on Copy queues"
+        );
+        return token;
+    }
+
+    auto command = MakeUnique<QueryCmd>(
+        token,
+        QueryCmd::EOp::BeginTimestamp,
+        queue_type,
+        token.Name()
+    );
+    std::function<void()> rejection_fallback = [token] {
+        QueryBackendAccess::ResolveErrorIfPending(
+            token,
+            "timestamp query submission did not reach GPU completion"
+        );
+    };
+
+    commands.reserve(commands.size() + 1);
+    callbacks.reserve(callbacks.size() + 1);
+    query_tokens.reserve(query_tokens.size() + 1);
+    active_query_stack.reserve(active_query_stack.size() + 1);
+
+    const size_t command_count  = commands.size();
+    const size_t callback_count = callbacks.size();
+    const size_t query_count    = query_tokens.size();
+    const size_t stack_depth    = active_query_stack.size();
+    try {
+        commands.emplace_back(std::move(command));
+        callbacks.emplace_back(std::move(rejection_fallback));
+        query_tokens.emplace_back(token);
+        active_query_stack.emplace_back(token);
+    } catch (...) {
+        commands.resize(command_count);
+        callbacks.resize(callback_count);
+        query_tokens.resize(query_count);
+        active_query_stack.resize(stack_depth);
+        QueryBackendAccess::ResolveErrorIfPending(
+            token,
+            "timestamp query recording failed before Begin was published"
+        );
+        throw;
+    }
+    return token;
+}
+
+void CommandList::EndTimestampQuery(const QueryToken& _token) {
+    if (!_token.Valid()) {
+        throw std::invalid_argument(
+            "EndTimestampQuery requires a valid QueryToken"
+        );
+    }
+    if (_token.OwnerId() != query_owner_id) {
+        throw std::invalid_argument(
+            "EndTimestampQuery token belongs to another CommandList"
+        );
+    }
+    if (_token.Kind() != QueryKind::Timestamp) {
+        throw std::invalid_argument(
+            "EndTimestampQuery token has the wrong query kind"
+        );
+    }
+    if (queue_type == EQueueType::Copy) {
+        // BeginTimestampQuery on Copy intentionally records no Begin command.
+        if (_token.GetFuture().Status() == QueryStatus::Error) {
+            return;
+        }
+        throw std::logic_error(
+            "Copy queue timestamp token has no terminal capability result"
+        );
+    }
+    if (active_query_stack.empty()) {
+        throw std::logic_error(
+            "EndTimestampQuery has no matching open query"
+        );
+    }
+    if (active_query_stack.back().Id() != _token.Id()) {
+        throw std::logic_error(
+            "EndTimestampQuery violates strict LIFO query pairing"
+        );
+    }
+
+    auto command = MakeUnique<QueryCmd>(
+        _token,
+        QueryCmd::EOp::EndTimestamp,
+        queue_type,
+        _token.Name()
+    );
+    commands.emplace_back(std::move(command));
+    active_query_stack.pop_back();
+}
+
+void CommandList::RejectPendingQueries(std::string_view _reason) noexcept {
+    const QueryPublishBatch batch = QueryBackendAccess::BeginPublishBatch();
+    QueryCancellationView cancellation =
+        query_cancellation_domain.GetView();
+    Array<QueryToken> tokens = std::move(query_tokens);
+    const bool cancellation_published =
+        cancellation.PublishCancellation(_reason, batch);
+    QueryBackendAccess::PublishErrorsIfPending(
+        tokens, _reason, batch
+    );
+    if (cancellation_published) {
+        cancellation.NotifyCancellation(batch);
+    } else {
+        cancellation.NotifyPublishedCancellation();
+    }
+    QueryBackendAccess::NotifyTerminals(tokens, batch);
+}
+
+void CommandList::RejectPendingSignals() noexcept {
+    for (const SignalEvent& signal : signal_events) {
+        auto* fence = reinterpret_cast<Fence*>(signal.timeline_handle);
+        if (fence != nullptr) {
+            fence->Reject(signal.value);
+        }
+    }
+    signal_events.clear();
 }
 
 void CommandList::Signal(Fence* _fence, uint64 _signal_value) {

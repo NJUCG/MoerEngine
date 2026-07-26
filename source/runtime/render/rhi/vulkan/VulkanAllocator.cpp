@@ -4,6 +4,12 @@
 #include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
 #include "VulkanResourceTracker.h"
+#include "rhi/RHIImpl.h"
+
+#include <algorithm>
+#include <limits>
+#include <stdexcept>
+
 namespace Moer::Render {
 
 namespace {
@@ -127,27 +133,49 @@ bool VulkanPresentor::CompleteSuccess() noexcept {
 
 #pragma region[ Query Pool ]
 
-VkNativeQueryPool::VkNativeQueryPool(VulkanDevice& _device, VkQueryType _type, uint32 _query_count) :
+VkNativeQueryPool::VkNativeQueryPool(
+    VulkanDevice& _device,
+    VkQueryType    _type,
+    uint32         _query_count,
+    EQueueType     _queue_type
+) :
     device(_device),
+    count(_query_count),
     type(_type),
-    count(_query_count) {
+    queue_type(_queue_type) {
     VkQueryPoolCreateInfo create_info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
     create_info.queryType  = _type;
     create_info.queryCount = _query_count;
-    vkCreateQueryPool(device.GetDevice(), &create_info, nullptr, &query_pool);
+    const VkResult result =
+        vkCreateQueryPool(device.GetDevice(), &create_info, nullptr, &query_pool);
+    if (result != VK_SUCCESS) {
+        device.TryLatchFirstFault(
+            VulkanOperationContext{
+                .operation  = EVulkanFaultOperation::QueryPoolCreate,
+                .queue_type = queue_type,
+            },
+            result
+        );
+        throw std::runtime_error(
+            "Vulkan query-pool creation failed: " +
+            std::string(VulkanResultName(result))
+        );
+    }
 }
 
 VkNativeQueryPool::~VkNativeQueryPool() {
-    vkDestroyQueryPool(device.GetDevice(), query_pool, nullptr);
+    if (query_pool != VK_NULL_HANDLE) {
+        vkDestroyQueryPool(device.GetDevice(), query_pool, nullptr);
+    }
 }
 
-void VkNativeQueryPool::GetResults(
+VkResult VkNativeQueryPool::GetResults(
     std::span<uint64>  _data,
     uint32             _first_query,
     uint32             _query_count,
     VkQueryResultFlags _flags
 ) {
-    vkGetQueryPoolResults(
+    return vkGetQueryPoolResults(
         device.GetDevice(),
         query_pool,
         _first_query,
@@ -169,7 +197,9 @@ VulkanAllocator::VulkanAllocator(VulkanDevice* _device, EQueueType _type) :
     readback_allocator(&allocator, small_block_size, 1.5),
     scratch_allocator(_device, &allocator),
     shader_buffer_allocator(_device, &allocator),
-    timestamp_pool(*_device, VK_QUERY_TYPE_TIMESTAMP, 1000) {}
+    timestamp_valid_bits(_device->GetTimestampValidBits(_type)),
+    timestamp_period_ns(_device->GetCoreProperties().core_1_0.limits.timestampPeriod),
+    timestamp_pool(*_device, VK_QUERY_TYPE_TIMESTAMP, 1000, _type) {}
 
 VulkanAllocator::~VulkanAllocator() {
     upload_allocator.Dispose();
@@ -220,10 +250,278 @@ void VulkanAllocator::ResetBufferAlloc() {
     shader_buffer_allocator.Reset();
 }
 
-bool VulkanAllocator::CompleteSuccess() noexcept {
+VulkanAllocator::TimestampQueryRecord*
+VulkanAllocator::FindTimestampQueryRecord(uint64 _token_id) noexcept {
+    const auto iter = std::find_if(
+        timestamp_query_records.begin(),
+        timestamp_query_records.end(),
+        [_token_id](const TimestampQueryRecord& _record) {
+            return _record.token.Id() == _token_id;
+        }
+    );
+    return iter == timestamp_query_records.end() ? nullptr : &*iter;
+}
+
+uint32 VulkanAllocator::AllocateTimestampQuerySlot() {
+    if (next_timestamp_query >= timestamp_pool.GetCount()) {
+        throw std::runtime_error(
+            "Vulkan timestamp query pool exhausted for one recorded command buffer"
+        );
+    }
+    return next_timestamp_query++;
+}
+
+void VulkanAllocator::RecordTimestampQuery(
+    VulkanCmdList& _cmd_list,
+    const QueryCmd& _cmd
+) {
+    const QueryToken& token = _cmd.Token();
+    if (!token.Valid() || token.Kind() != QueryKind::Timestamp) {
+        throw std::runtime_error("invalid Vulkan timestamp query token");
+    }
+    if (timestamp_valid_bits == 0) {
+        throw std::runtime_error(
+            "Vulkan queue family does not support timestamp queries"
+        );
+    }
+
+    constexpr uint32 invalid_slot = std::numeric_limits<uint32>::max();
+    if (_cmd.IsBegin()) {
+        if (FindTimestampQueryRecord(token.Id()) != nullptr) {
+            throw std::runtime_error("duplicate Vulkan timestamp query begin");
+        }
+        const uint32 slot = AllocateTimestampQuerySlot();
+        _cmd_list.ResetQueryPool(timestamp_pool, slot, 1);
+        _cmd_list.WriteTimeStamp(
+            timestamp_pool, slot, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT
+        );
+        timestamp_query_records.emplace_back(TimestampQueryRecord{
+            .token      = token,
+            .begin_slot = slot,
+            .end_slot   = invalid_slot,
+        });
+        return;
+    }
+
+    TimestampQueryRecord* record = FindTimestampQueryRecord(token.Id());
+    if (record == nullptr || record->begin_slot == invalid_slot) {
+        throw std::runtime_error(
+            "Vulkan timestamp query end has no matching begin"
+        );
+    }
+    if (record->end_slot != invalid_slot) {
+        throw std::runtime_error("duplicate Vulkan timestamp query end");
+    }
+    const uint32 slot = AllocateTimestampQuerySlot();
+    _cmd_list.ResetQueryPool(timestamp_pool, slot, 1);
+    _cmd_list.WriteTimeStamp(
+        timestamp_pool, slot, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT
+    );
+    record->end_slot = slot;
+}
+
+VkResult VulkanAllocator::PrepareTimestampQueriesAfterGpuCompletion(
+    const VulkanOperationContext& _context
+) noexcept {
+    constexpr uint32 invalid_slot = std::numeric_limits<uint32>::max();
+    const uint32 valid_bits = std::min(timestamp_valid_bits, uint32{64});
+    const uint64 valid_mask =
+        valid_bits == 64 ? std::numeric_limits<uint64>::max() :
+        valid_bits == 0  ? 0 :
+                           (uint64{1} << valid_bits) - 1;
+
+    struct NativeTimestampResult {
+        uint64 value{0};
+        uint64 available{0};
+    };
+
+    auto resolve_slot = [&](uint32 _slot, uint64& _value) noexcept {
+        NativeTimestampResult native_result{};
+        const VkResult result = vkGetQueryPoolResults(
+            m_device->GetDevice(),
+            timestamp_pool.GetHandle(),
+            _slot,
+            1,
+            sizeof(native_result),
+            &native_result,
+            sizeof(native_result),
+            VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT
+        );
+        if (result == VK_SUCCESS) {
+            if (native_result.available == 0) {
+                return VK_NOT_READY;
+            }
+            _value = native_result.value & valid_mask;
+            return VK_SUCCESS;
+        }
+        if (result != VK_NOT_READY) {
+            VulkanOperationContext query_context = _context;
+            query_context.operation = EVulkanFaultOperation::QueryPoolResults;
+            if (query_context.queue_type == EQueueType::Ignore) {
+                query_context.queue_type = queue_type;
+            }
+            m_device->TryLatchFirstFault(query_context, result);
+        }
+        return result;
+    };
+
+    for (TimestampQueryRecord& record : timestamp_query_records) {
+        record.prepared_state =
+            TimestampQueryRecord::EPreparedState::Unprepared;
+        record.prepared_result = {};
+
+        if (valid_bits == 0 || record.begin_slot == invalid_slot ||
+            record.end_slot == invalid_slot) {
+            record.prepared_state =
+                valid_bits == 0 ?
+                    TimestampQueryRecord::EPreparedState::InvalidValidBits :
+                    TimestampQueryRecord::EPreparedState::Incomplete;
+            continue;
+        }
+
+        uint64 begin_tick = 0;
+        uint64 end_tick   = 0;
+        const VkResult begin_result =
+            resolve_slot(record.begin_slot, begin_tick);
+        if (begin_result != VK_SUCCESS) {
+            record.prepared_state =
+                begin_result == VK_NOT_READY ?
+                    TimestampQueryRecord::EPreparedState::Unavailable :
+                    TimestampQueryRecord::EPreparedState::NativeFault;
+            if (begin_result != VK_NOT_READY) {
+                return begin_result;
+            }
+            continue;
+        }
+
+        const VkResult end_result =
+            resolve_slot(record.end_slot, end_tick);
+        if (end_result != VK_SUCCESS) {
+            record.prepared_state =
+                end_result == VK_NOT_READY ?
+                    TimestampQueryRecord::EPreparedState::Unavailable :
+                    TimestampQueryRecord::EPreparedState::NativeFault;
+            if (end_result != VK_NOT_READY) {
+                return end_result;
+            }
+            continue;
+        }
+
+        const uint64 delta_tick = (end_tick - begin_tick) & valid_mask;
+        record.prepared_result = TimestampQueryResult{
+            .begin_tick     = begin_tick,
+            .end_tick       = end_tick,
+            .valid_bits     = valid_bits,
+            .tick_period_ns = timestamp_period_ns,
+            .duration_ns    = static_cast<double>(delta_tick) *
+                           timestamp_period_ns,
+        };
+        record.prepared_state =
+            TimestampQueryRecord::EPreparedState::Ready;
+    }
+    return VK_SUCCESS;
+}
+
+void VulkanAllocator::PublishTimestampQueriesAfterGpuCompletion(
+    QueryPublishBatch _batch,
+    bool              _gpu_success,
+    std::string_view  _failure_reason
+) noexcept {
+    for (const TimestampQueryRecord& record : timestamp_query_records) {
+        if (!_gpu_success) {
+            QueryBackendAccess::PublishErrorIfPending(
+                record.token,
+                _failure_reason.empty() ?
+                    "Vulkan submission did not reach successful GPU completion" :
+                    _failure_reason,
+                _batch
+            );
+            continue;
+        }
+
+        switch (record.prepared_state) {
+            case TimestampQueryRecord::EPreparedState::Ready:
+                QueryBackendAccess::PublishTimestamp(
+                    record.token, record.prepared_result, _batch
+                );
+                break;
+            case TimestampQueryRecord::EPreparedState::InvalidValidBits:
+                QueryBackendAccess::PublishErrorIfPending(
+                    record.token,
+                    "Vulkan queue family has timestampValidBits == 0",
+                    _batch
+                );
+                break;
+            case TimestampQueryRecord::EPreparedState::Incomplete:
+                QueryBackendAccess::PublishErrorIfPending(
+                    record.token,
+                    "Vulkan timestamp query pair is incomplete",
+                    _batch
+                );
+                break;
+            case TimestampQueryRecord::EPreparedState::Unavailable:
+                QueryBackendAccess::PublishErrorIfPending(
+                    record.token,
+                    "Vulkan timestamp query result is unavailable",
+                    _batch
+                );
+                break;
+            case TimestampQueryRecord::EPreparedState::NativeFault:
+                QueryBackendAccess::PublishErrorIfPending(
+                    record.token,
+                    "Vulkan timestamp query result readback faulted",
+                    _batch
+                );
+                break;
+            case TimestampQueryRecord::EPreparedState::Unprepared:
+            default:
+                QueryBackendAccess::PublishErrorIfPending(
+                    record.token,
+                    "Vulkan timestamp query was not prepared for completion",
+                    _batch
+                );
+                break;
+        }
+    }
+}
+
+void VulkanAllocator::NotifyTimestampQueriesAfterGpuCompletion(
+    QueryPublishBatch _batch
+) noexcept {
+    for (const TimestampQueryRecord& record : timestamp_query_records) {
+        QueryBackendAccess::NotifyTerminal(record.token, _batch);
+    }
+}
+
+bool VulkanAllocator::CompleteSuccessCallbacks() noexcept {
     return InvokeAllocatorCompletionCallbacksNoexcept(
         on_complete, "allocator"
     );
+}
+
+void VulkanAllocator::ClearTimestampQueries() noexcept {
+    timestamp_query_records.clear();
+    next_timestamp_query = 0;
+}
+
+bool VulkanAllocator::CompleteSuccess() noexcept {
+    VulkanOperationContext context{
+        .operation  = EVulkanFaultOperation::QueryPoolResults,
+        .queue_type = queue_type,
+    };
+    const VkResult prepare_result =
+        PrepareTimestampQueriesAfterGpuCompletion(context);
+    const bool callbacks_succeeded =
+        prepare_result == VK_SUCCESS && CompleteSuccessCallbacks();
+    const QueryPublishBatch query_batch =
+        QueryBackendAccess::BeginPublishBatch();
+    PublishTimestampQueriesAfterGpuCompletion(
+        query_batch,
+        prepare_result == VK_SUCCESS,
+        "Vulkan timestamp query result preparation failed"
+    );
+    NotifyTimestampQueriesAfterGpuCompletion(query_batch);
+    return prepare_result == VK_SUCCESS && callbacks_succeeded;
 }
 
 bool VulkanAllocator::Reset() {
@@ -231,6 +529,7 @@ bool VulkanAllocator::Reset() {
         return false;
     }
     ResetBufferAlloc();
+    ClearTimestampQueries();
     return true;
 }
 

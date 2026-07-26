@@ -76,6 +76,38 @@ private:
         bool   recoverable{false};
     };
 
+    struct RejectionSignalHandle {
+        FenceRef fence{};
+        uint64   value{0};
+    };
+
+    struct RejectionSourceSnapshot {
+        Array<RejectionSignalHandle> signals{};
+        Array<QueryToken>            query_tokens{};
+        QueryPublishBatch            query_batch{};
+        bool                         terminalized{false};
+    };
+
+    // Immutable, strongly-owned terminal handles captured before any source
+    // leaves the request-owned batch. Pipeline workers can therefore publish a
+    // failed suffix immediately even when its later raw CmdSubmits have not yet
+    // entered Translate.
+    struct BatchRejectionPublication {
+        explicit BatchRejectionPublication(
+            RHIBackendSubmissionBatch& _batch
+        );
+
+        void PublishSuffix(
+            size_t           _reject_from,
+            int32            _result,
+            bool             _recoverable,
+            std::string_view _reason
+        ) noexcept;
+
+        Array<RejectionSourceSnapshot> sources{};
+        std::mutex                     mutex{};
+    };
+
     using RecordedSourcePacket = std::variant<
         std::monostate,
         VkCommandQueue::CurrentVulkanRecordedSubmit,
@@ -95,7 +127,9 @@ private:
         explicit PipelineBatchState(
             uint64                      _sequence,
             size_t                      _source_count,
-            std::shared_ptr<Completion> _completion
+            std::shared_ptr<Completion> _completion,
+            std::shared_ptr<BatchRejectionPublication>
+                _rejection_publication
         );
 
         void AddWork() noexcept;
@@ -115,6 +149,8 @@ private:
         std::atomic_bool             completion_signalled{false};
         mutable std::mutex           failure_mutex{};
         PipelineFailure              failure{};
+        std::shared_ptr<BatchRejectionPublication>
+            rejection_publication{};
     };
 
     struct StreamPosition {

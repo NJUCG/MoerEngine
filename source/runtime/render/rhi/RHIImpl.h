@@ -1680,6 +1680,53 @@ private:
     UnorderedMap<uint64, uint> related_geometries;
 };
 
+// Backend-neutral timestamp query boundary. The token is copied into both
+// boundaries so every translated command buffer retains the same completion
+// identity independently of CommandList/CmdSubmit movement.
+struct QueryCmd : public Command {
+public:
+    enum class EOp : uint8_t {
+        BeginTimestamp = 0,
+        EndTimestamp   = 1,
+    };
+
+    QueryCmd(
+        QueryToken       _token,
+        EOp              _op,
+        EQueueType       _queue_type,
+        std::string_view _name = typenames[uint(EType::Query)]
+    ) :
+        Command(EType::Query, _name),
+        token(std::move(_token)),
+        op(_op),
+        queue_type(_queue_type) {}
+
+    EQueueType GetQueueType() const override {
+        return queue_type;
+    }
+
+    const QueryToken& Token() const noexcept {
+        return token;
+    }
+
+    EOp Op() const noexcept {
+        return op;
+    }
+
+    bool IsBegin() const noexcept {
+        return op == EOp::BeginTimestamp;
+    }
+
+    bool IsEnd() const noexcept {
+        return op == EOp::EndTimestamp;
+    }
+
+private:
+    QueryToken token{};
+    EOp        op{EOp::BeginTimestamp};
+    EQueueType queue_type{EQueueType::Graphics};
+};
+
 //command for push/pop debug scope
 struct ScopeCmd : public Command {
 public:

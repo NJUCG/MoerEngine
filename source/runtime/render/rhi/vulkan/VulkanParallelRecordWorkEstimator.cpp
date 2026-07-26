@@ -134,6 +134,11 @@ uint32 EstimateWorkUnits(
             // Marker pair plus one copy/clear call. Bytes and extents are GPU work.
             work_units = 3;
             break;
+        case Command::EType::Query:
+            // Query commands are serial ordering islands, but keeping their
+            // estimate explicit makes diagnostics total and stable.
+            work_units = 1;
+            break;
         default:
             // Serial-only commands never reach a worker, but diagnostics stay total.
             work_units = 1;
