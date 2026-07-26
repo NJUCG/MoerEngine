@@ -134,6 +134,36 @@ void SerialIslandBreaksSingletonRecordingWaves() {
            "profitable wave was not retained");
 }
 
+void QueryCommandsRemainSerialAndBreakRecordingWaves() {
+    const std::vector<Type> first{Type::SetDrawState};
+    const std::vector<Type> query{Type::Query};
+    const std::vector<Type> third{Type::ClearResource};
+    const std::vector<ParallelRecordLayerDescription> layers{
+        Describe(first), Describe(query), Describe(third)
+    };
+
+    const ParallelRecordPlan plan = BuildParallelRecordPlan(layers, 4, 1);
+    Expect(
+        plan.fallback_reason == ParallelRecordFallbackReason::InsufficientConcurrency,
+        "query command did not split otherwise parallel singleton waves"
+    );
+    Expect(
+        plan.jobs.empty() && plan.layers.empty(),
+        "query-separated singleton waves published parallel work"
+    );
+
+    const std::vector<Type> query_only{Type::Query, Type::Query};
+    const std::vector<ParallelRecordLayerDescription> query_layers{
+        Describe(query_only)
+    };
+    const ParallelRecordPlan query_plan =
+        BuildParallelRecordPlan(query_layers, 4, 1);
+    Expect(
+        query_plan.fallback_reason == ParallelRecordFallbackReason::NoEligibleLayer,
+        "query-only layer was considered parallel-record eligible"
+    );
+}
+
 void InvalidInputsFailClosedWithoutPublishingJobs() {
     const std::vector<Type> eligible{Type::TextureToTexture, Type::TextureToTexture};
     const std::vector<ParallelRecordLayerDescription> layers{Describe(eligible)};
@@ -375,6 +405,7 @@ int main() {
         RuntimeConstraintForcesAnOtherwiseEligibleLayerSerial();
         OrderedSingletonLayersFormAParallelRecordingWave();
         SerialIslandBreaksSingletonRecordingWaves();
+        QueryCommandsRemainSerialAndBreakRecordingWaves();
         InvalidInputsFailClosedWithoutPublishingJobs();
         StableMergeOrderReconstructsOriginalLayerOrder();
         WorkGranularityGateAmortizesWorkerAndPrimaryOverhead();

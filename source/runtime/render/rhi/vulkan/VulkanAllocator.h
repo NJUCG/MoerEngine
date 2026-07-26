@@ -6,8 +6,13 @@
 #include "VulkanRHIResource.h"
 #include "VulkanResourceTracker.h"
 #include "rhi/RHICommon.h"
+#include "rhi/RHIQuery.h"
+
+#include <limits>
 
 namespace Moer::Render {
+
+struct QueryCmd;
 
 class VulkanCmdAllocator : public VulkanDeviceObject {
 private:
@@ -78,25 +83,44 @@ protected:
 
 class VkNativeQueryPool {
 public:
-    VkNativeQueryPool(VulkanDevice& _device, VkQueryType _type, uint32 _count);
+    VkNativeQueryPool(
+        VulkanDevice& _device,
+        VkQueryType    _type,
+        uint32         _count,
+        EQueueType     _queue_type
+    );
     ~VkNativeQueryPool();
+    VkNativeQueryPool(const VkNativeQueryPool&)            = delete;
+    VkNativeQueryPool& operator=(const VkNativeQueryPool&) = delete;
+
     VkQueryPool GetHandle() const {
         return query_pool;
     }
     uint32 GetCount() const {
         return count;
     }
-    void
-    GetResults(std::span<uint64> _results, uint32 _first_query, uint32 _query_cnt, VkQueryResultFlags _flags);
+    [[nodiscard]] VkResult GetResults(
+        std::span<uint64>  _results,
+        uint32             _first_query,
+        uint32             _query_count,
+        VkQueryResultFlags _flags
+    );
     VulkanDevice& GetDevice() const {
         return device;
     }
+    // The owning allocator may grow an idle pool before command-buffer
+    // recording starts. Existing pools are never replaced while they are
+    // referenced by submitted work.
+    void EnsureCapacity(uint32 _required_count);
 
 private:
+    [[nodiscard]] VkQueryPool CreatePool(uint32 _query_count);
+
     VulkanDevice& device;
-    VkQueryPool   query_pool;
-    uint32        count;
+    VkQueryPool   query_pool{VK_NULL_HANDLE};
+    uint32        count{0};
     VkQueryType   type;
+    EQueueType    queue_type{EQueueType::Ignore};
 };
 
 class VulkanPresentor : public VulkanAllocatorBase {
@@ -120,6 +144,33 @@ public:
     BufferView AllocateShaderBuffer(uint64 _size);
 
     void ResetBufferAlloc();
+
+    // Timestamp slots and their tokens are allocator-local. The allocator is
+    // the native command-buffer owner and already travels in the atomic
+    // Submission -> Completion packet, so query state never needs a global
+    // active-recording map or lock.
+    void EnsureTimestampQueryCapacity(size_t _required_count);
+    void RecordTimestampQuery(VulkanCmdList& _cmd_list, const QueryCmd& _cmd);
+    // GPU completion is a two-stage transaction. Prepare performs native
+    // readback and fault classification without publishing user callbacks.
+    // The queue Completion owner later terminalizes submit signals, invokes
+    // allocator retirement callbacks, publishes every query in the batch, and
+    // only then releases Query callbacks.
+    [[nodiscard]] VkResult PrepareTimestampQueriesAfterGpuCompletion(
+        const VulkanOperationContext& _context
+    ) noexcept;
+    void PublishTimestampQueriesAfterGpuCompletion(
+        QueryPublishBatch _batch,
+        bool              _gpu_success,
+        std::string_view  _failure_reason
+    ) noexcept;
+    void NotifyTimestampQueriesAfterGpuCompletion(
+        QueryPublishBatch _batch
+    ) noexcept;
+    bool CompleteSuccessCallbacks() noexcept;
+    [[nodiscard]] bool HasTimestampQueries() const noexcept {
+        return !timestamp_query_records.empty();
+    }
 
     bool CompleteSuccess() noexcept override;
     bool Reset() override;
@@ -179,6 +230,34 @@ private:
     ScratchAllocator      scratch_allocator;
     ShaderBufferAllocator shader_buffer_allocator;
 
-    VkNativeQueryPool timestamp_pool;
+    struct TimestampQueryRecord {
+        enum class EPreparedState : uint8 {
+            Unprepared,
+            Ready,
+            InvalidValidBits,
+            Incomplete,
+            Unavailable,
+            NativeFault,
+        };
+
+        QueryToken token{};
+        uint32     begin_slot{std::numeric_limits<uint32>::max()};
+        uint32     end_slot{std::numeric_limits<uint32>::max()};
+        EPreparedState       prepared_state{EPreparedState::Unprepared};
+        TimestampQueryResult prepared_result{};
+    };
+
+    TimestampQueryRecord* FindTimestampQueryRecord(uint64 _token_id) noexcept;
+    uint32                AllocateTimestampQuerySlot();
+    void                  ClearTimestampQueries() noexcept;
+
+    Array<TimestampQueryRecord> timestamp_query_records;
+    uint32                      next_timestamp_query{0};
+    uint32                      timestamp_valid_bits{0};
+    double                      timestamp_period_ns{0.0};
+    // Most allocators never record an explicit Query command. Lazily creating
+    // this pool avoids adding a native driver object to every ordinary,
+    // parallel-worker, fallback, and Copy allocator.
+    std::optional<VkNativeQueryPool> timestamp_pool;
 };
 } // namespace Moer::Render

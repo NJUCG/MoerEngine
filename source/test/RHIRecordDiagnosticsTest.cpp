@@ -100,6 +100,18 @@ void CapabilityTableIsExplicitAndFailClosed() {
     Expect(serial_count > 0, "capability table has no serial fallback entries");
     Expect(candidate_count == 4, "unexpected Phase 9.0 candidate command count");
     Expect(safe_count == expected_parallel_safe.size(), "unexpected parallel-safe command count");
+    const CommandRecordTraits query_traits =
+        GetCommandRecordTraits(Command::EType::Query);
+    Expect(query_traits.stable_name == "Query", "query command has no stable trait entry");
+    Expect(
+        query_traits.capability == RecordCapability::SerialOnly &&
+            !query_traits.measurement_candidate,
+        "query command was exposed to parallel primary recording"
+    );
+    Expect(
+        query_traits.constraints == RecordConstraint::ProfilerOrScope,
+        "query command does not carry the profiler/query-state constraint"
+    );
     Expect(
         GetCommandRecordTraits(Command::EType::Count).capability == RecordCapability::SerialOnly,
         "invalid command type did not fail closed"
@@ -124,6 +136,8 @@ void ParallelReplayContractExcludesSideEffects() {
            "payload-mutating upload was marked replay safe");
     Expect(!IsParallelRecordReplaySafe(Command::EType::Scope),
            "profiler scope was marked replay safe");
+    Expect(!IsParallelRecordReplaySafe(Command::EType::Query),
+           "timestamp query was marked replay safe");
     Expect(!IsParallelRecordReplaySafe(Command::EType::Custom),
            "host callback command was marked replay safe");
 }

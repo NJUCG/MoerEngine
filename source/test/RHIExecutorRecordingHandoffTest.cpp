@@ -1,12 +1,15 @@
 #include "rhi/RHIExecutor.h"
 #include "rhi/RHIThreadOwnership.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -51,10 +54,14 @@ bool Expect(bool _condition, const char* _message) {
 
 class RecordingFenceProbe final : public Fence {
 public:
+    RecordingFenceProbe() = default;
+
     explicit RecordingFenceProbe(
-        std::shared_ptr<std::atomic_bool> _destroyed = {}
+        std::shared_ptr<std::atomic_bool> _destroyed,
+        std::function<void()>             _on_reject = {}
     ) :
-        destroyed(std::move(_destroyed)) {}
+        destroyed(std::move(_destroyed)),
+        on_reject(std::move(_on_reject)) {}
 
     ~RecordingFenceProbe() override {
         if (destroyed) {
@@ -84,6 +91,12 @@ public:
 
     void Reject(uint64_t _value) noexcept override {
         rejected_value.store(_value, std::memory_order_release);
+        if (on_reject) {
+            try {
+                on_reject();
+            } catch (...) {
+            }
+        }
     }
 
     bool IsRejected(uint64_t _value) const override {
@@ -96,6 +109,7 @@ public:
 
 private:
     std::shared_ptr<std::atomic_bool> destroyed{};
+    std::function<void()>             on_reject{};
     std::atomic<uint64_t> submitted_value{0};
     std::atomic<uint64_t> rejected_value{0};
 };
@@ -153,6 +167,10 @@ bool CommandListSignalTracksNativeAcceptanceAndRejection() {
     for (auto& callback : owned_submit.callbacks) {
         callback();
     }
+    // Native completion consumes signal ownership before releasing the
+    // keepalive callback. Mirror that ordering so CmdSubmit's fail-closed
+    // destructor cannot revisit an already-retired raw fence pointer.
+    owned_submit.signal_events.clear();
     owned_submit.callbacks.clear();
     if (!Expect(
             owned_destroyed->load(std::memory_order_acquire),
@@ -193,6 +211,765 @@ bool CommandListSignalTracksNativeAcceptanceAndRejection() {
     okay &= Expect(
         !frontend_rejected.WaitSubmitted(9),
         "frontend-rejected signal was reported as natively submitted"
+    );
+    return okay;
+}
+
+bool FrontendQueryRejectionTerminalizesBeforeOrdinaryCallbacks() {
+    CommandList commands(EQueueType::Graphics);
+    QueryFuture future{};
+
+    std::atomic<int>  ordinary_callbacks{0};
+    std::atomic<int>  success_callbacks{0};
+    std::atomic<bool> ordinary_callback_observed_error{false};
+
+    // Register this before BeginTimestampQuery so it also precedes the query's
+    // own rejection fallback in CmdSubmit::callbacks. Frontend rejection must
+    // terminalize every query before invoking either callback.
+    commands.AddCallback([&] {
+        const std::optional<QueryResult> result = future.TryGet();
+        ordinary_callback_observed_error.store(
+            result.has_value() && result->status == QueryStatus::Error &&
+                !result->error_reason.empty(),
+            std::memory_order_release
+        );
+        ordinary_callbacks.fetch_add(1, std::memory_order_release);
+    });
+    commands.AddSuccessCallback([&] {
+        success_callbacks.fetch_add(1, std::memory_order_release);
+    });
+
+    QueryToken token =
+        commands.BeginTimestampQuery("FrontendRejectedTimestamp");
+    future = token.GetFuture();
+    commands.EndTimestampQuery(token);
+
+    RHIExecutor::Get().Submit(
+        EQueueType::Ignore,
+        commands.Submit(),
+        ERHIExecSubmitFlags::None
+    );
+
+    const std::optional<QueryResult> result = future.TryGet();
+    return Expect(
+               ordinary_callbacks.load(std::memory_order_acquire) == 1,
+               "frontend rejection did not invoke the ordinary callback exactly once"
+           ) &&
+           Expect(
+               ordinary_callback_observed_error.load(std::memory_order_acquire),
+               "ordinary callback ran before the rejected query became Error"
+           ) &&
+           Expect(
+               success_callbacks.load(std::memory_order_acquire) == 0,
+               "frontend rejection invoked a success-only callback"
+           ) &&
+           Expect(
+               result.has_value() && result->status == QueryStatus::Error &&
+                   !result->error_reason.empty(),
+               "frontend rejection left the timestamp query non-terminal"
+            );
+}
+
+bool FrontendPresentRejectionPublishesBatchBeforeReceipt() {
+    PresentReceiptRef receipt = std::make_shared<PresentReceipt>();
+    std::atomic<bool> signal_observed_pending_receipt{false};
+    std::atomic<bool> query_observed_terminal_batch_and_receipt{false};
+    std::atomic<bool> ordinary_observed_query_notification{false};
+    std::atomic<int>  query_callbacks{0};
+    std::atomic<int>  ordinary_callbacks{0};
+    std::atomic<int>  success_callbacks{0};
+
+    RecordingFenceProbe signal(
+        std::shared_ptr<std::atomic_bool>{},
+        [&] {
+            const PresentReceiptResult result =
+                receipt->WaitForSubmission(0ms);
+            signal_observed_pending_receipt.store(
+                !result.resolved,
+                std::memory_order_release
+            );
+        }
+    );
+
+    CommandList commands(EQueueType::Graphics);
+    commands.Signal(&signal, 13);
+    commands.AddCallback([&] {
+        const PresentReceiptResult present_result =
+            receipt->WaitForSubmission(0ms);
+        ordinary_observed_query_notification.store(
+            present_result.resolved && !present_result.submitted &&
+                signal.IsRejected(13) &&
+                query_callbacks.load(std::memory_order_acquire) == 1,
+            std::memory_order_release
+        );
+        ordinary_callbacks.fetch_add(1, std::memory_order_release);
+    });
+    commands.AddSuccessCallback([&] {
+        success_callbacks.fetch_add(1, std::memory_order_release);
+    });
+
+    QueryToken token =
+        commands.BeginTimestampQuery("FrontendRejectedPresentTimestamp");
+    QueryFuture future = token.GetFuture();
+    commands.EndTimestampQuery(token);
+    future.Then([&](const QueryResult& _result) {
+        const PresentReceiptResult present_result =
+            receipt->WaitForSubmission(0ms);
+        query_observed_terminal_batch_and_receipt.store(
+            _result.status == QueryStatus::Error && signal.IsRejected(13) &&
+                present_result.resolved && !present_result.submitted,
+            std::memory_order_release
+        );
+        query_callbacks.fetch_add(1, std::memory_order_release);
+    });
+
+    // The invalid Present request is rejected synchronously, without requiring
+    // a RenderDevice. Its receipt must remain Pending while sibling Signals
+    // are rejected, then resolve after Query state publication and before any
+    // Query or ordinary callback notification.
+    RHIPresentRequest present{};
+    present.receipt = receipt;
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        commands.Submit(),
+        ERHIExecSubmitFlags::None,
+        &present
+    );
+
+    const PresentReceiptResult present_result =
+        receipt->WaitForSubmission(100ms);
+    const std::optional<QueryResult> query_result = future.TryGet();
+    return Expect(
+               signal_observed_pending_receipt.load(
+                   std::memory_order_acquire
+               ),
+               "frontend Present receipt resolved before a sibling signal became terminal"
+           ) &&
+           Expect(
+               present_result.resolved && !present_result.submitted &&
+                   receipt->ResolutionAttemptCount() == 1,
+               "frontend Present rejection did not resolve its receipt exactly once"
+           ) &&
+           Expect(
+               query_result.has_value() &&
+                   query_result->status == QueryStatus::Error,
+               "frontend Present rejection left a sibling Query Pending"
+           ) &&
+           Expect(
+               query_callbacks.load(std::memory_order_acquire) == 1 &&
+                   query_observed_terminal_batch_and_receipt.load(
+                       std::memory_order_acquire
+                   ),
+               "Query callback ran before the rejected batch and Present receipt were terminal"
+           ) &&
+           Expect(
+               ordinary_callbacks.load(std::memory_order_acquire) == 1 &&
+                   ordinary_observed_query_notification.load(
+                       std::memory_order_acquire
+                   ),
+               "ordinary callback ran before Query notification or Present rejection"
+           ) &&
+           Expect(
+               success_callbacks.load(std::memory_order_acquire) == 0,
+               "frontend Present rejection invoked a success-only callback"
+           );
+}
+
+bool DeferredOpaqueCancellationTicketSurvivesSubmit() {
+    RecordingFenceProbe signal{};
+    CommandList         commands(EQueueType::Graphics);
+    std::atomic<int>    query_callbacks{0};
+    std::atomic<int>    ordinary_callbacks{0};
+    std::atomic<int>    success_callbacks{0};
+    std::atomic<bool>   query_observed_signal_rejection{false};
+    std::atomic<bool>   ordinary_observed_query_notification{false};
+
+    commands.Signal(&signal, 17);
+    commands.AddCallback([&] {
+        ordinary_observed_query_notification.store(
+            signal.IsRejected(17) &&
+                query_callbacks.load(std::memory_order_acquire) == 1,
+            std::memory_order_release
+        );
+        ordinary_callbacks.fetch_add(1, std::memory_order_release);
+    });
+    commands.AddSuccessCallback([&] {
+        success_callbacks.fetch_add(1, std::memory_order_release);
+    });
+    QueryToken token =
+        commands.BeginTimestampQuery("DeferredCancellationSubmit");
+    commands.EndTimestampQuery(token);
+    QueryFuture future = token.GetFuture();
+
+    QueryCancellationView cancellation =
+        commands.GetQueryCancellationView();
+    const QueryPublishBatch cancellation_batch =
+        QueryBackendAccess::BeginPublishBatch();
+    const bool cancellation_published =
+        cancellation.PublishCancellation(
+            "opaque source cancelled during shutdown",
+            cancellation_batch
+        );
+    future.Then([&](const QueryResult& _result) {
+        query_observed_signal_rejection.store(
+            _result.status == QueryStatus::Error &&
+                signal.IsRejected(17) &&
+                ordinary_callbacks.load(std::memory_order_acquire) == 0,
+            std::memory_order_release
+        );
+        query_callbacks.fetch_add(1, std::memory_order_release);
+    });
+
+    const bool callback_was_deferred =
+        query_callbacks.load(std::memory_order_acquire) == 0;
+    CmdSubmit submit = commands.Submit();
+    const bool ticket_transferred =
+        submit.query_publish_batch.Valid() &&
+        submit.query_tokens.size() == 1;
+    const bool callback_still_deferred =
+        query_callbacks.load(std::memory_order_acquire) == 0;
+
+    // Invalid-queue rejection is synchronous and exercises the ordinary
+    // frontend terminalization path without constructing a native backend.
+    RHIExecutor::Get().Submit(
+        EQueueType::Ignore,
+        std::move(submit),
+        ERHIExecSubmitFlags::None
+    );
+    cancellation.NotifyPublishedCancellation();
+
+    const std::optional<QueryResult> result = future.TryGet();
+    return Expect(
+               cancellation_published,
+               "opaque cancellation did not publish its Query Error"
+           ) &&
+           Expect(
+               callback_was_deferred && callback_still_deferred,
+               "opaque cancellation released its callback before signal ownership transferred"
+           ) &&
+           Expect(
+               ticket_transferred,
+               "CommandList::Submit dropped the deferred cancellation ticket or tokens"
+           ) &&
+           Expect(
+               query_callbacks.load(std::memory_order_acquire) == 1,
+               "deferred Query callback was not released exactly once"
+           ) &&
+           Expect(
+               query_observed_signal_rejection.load(std::memory_order_acquire),
+               "deferred Query callback ran before its submitted signal was rejected"
+           ) &&
+           Expect(
+               ordinary_callbacks.load(std::memory_order_acquire) == 1 &&
+                   ordinary_observed_query_notification.load(
+                       std::memory_order_acquire
+                   ),
+               "ordinary callback did not run exactly once after Query notification"
+           ) &&
+           Expect(
+               success_callbacks.load(std::memory_order_acquire) == 0,
+               "rejection invoked a success-only callback"
+           ) &&
+           Expect(
+               result.has_value() && result->status == QueryStatus::Error,
+               "deferred cancellation result did not remain Error"
+           );
+}
+
+bool DirectCommandListGroupPreflightRejectsEverySource() {
+    std::array<RecordingFenceProbe, 3> signals{};
+    Moer::Array<CommandList>           command_lists{};
+    command_lists.reserve(3);
+    for (size_t index = 0; index < 3; ++index) {
+        command_lists.emplace_back(EQueueType::Graphics);
+    }
+
+    std::array<QueryFuture, 3> futures{};
+    std::array<std::atomic<int>, 3> query_callbacks{};
+    std::array<std::atomic<int>, 3> ordinary_callbacks{};
+    std::array<std::atomic<int>, 3> success_callbacks{};
+    std::array<std::atomic<bool>, 3> query_observed_error{};
+    std::array<std::atomic<bool>, 3> query_observed_present_rejection{};
+    std::array<std::atomic<bool>, 3> ordinary_observed_own_query{};
+    std::atomic<bool> first_query_observed_last_terminal{false};
+    PresentReceiptRef receipt = std::make_shared<PresentReceipt>();
+    RHIPresentRequest present{};
+    present.receipt = receipt;
+
+    for (size_t index = 0; index < command_lists.size(); ++index) {
+        command_lists[index].Signal(&signals[index], 40 + index);
+        command_lists[index].AddCallback([&, index] {
+            ordinary_observed_own_query[index].store(
+                query_callbacks[index].load(std::memory_order_acquire) == 1,
+                std::memory_order_release
+            );
+            ordinary_callbacks[index].fetch_add(
+                1, std::memory_order_release
+            );
+        });
+        command_lists[index].AddSuccessCallback([&, index] {
+            success_callbacks[index].fetch_add(
+                1, std::memory_order_release
+            );
+        });
+        QueryToken token = command_lists[index].BeginTimestampQuery(
+            "DirectSubmitPreflightTimestamp"
+        );
+        futures[index] = token.GetFuture();
+        if (index != 1) {
+            command_lists[index].EndTimestampQuery(token);
+        }
+        futures[index].Then([&, index](const QueryResult& _result) {
+            if (index == 0) {
+                first_query_observed_last_terminal.store(
+                    futures[2].WaitFor(100ms) &&
+                        futures[2].Status() == QueryStatus::Error,
+                    std::memory_order_release
+                );
+            }
+            query_observed_error[index].store(
+                _result.status == QueryStatus::Error,
+                std::memory_order_release
+            );
+            const PresentReceiptResult present_result =
+                receipt->WaitForSubmission(0ms);
+            query_observed_present_rejection[index].store(
+                present_result.resolved && !present_result.submitted,
+                std::memory_order_release
+            );
+            query_callbacks[index].fetch_add(
+                1, std::memory_order_release
+            );
+        });
+    }
+
+    bool threw = false;
+    try {
+        RHIExecutor::Get().Submit(
+            std::move(command_lists),
+            ERHIExecSubmitFlags::None,
+            &present
+        );
+    } catch (...) {
+        threw = true;
+    }
+
+    bool okay = Expect(
+        !threw,
+        "direct CommandList group preflight propagated an open-query failure"
+    );
+    for (size_t index = 0; index < command_lists.size(); ++index) {
+        okay &= Expect(
+            signals[index].IsRejected(40 + index),
+            "direct CommandList group preflight left a signal Pending"
+        );
+        okay &= Expect(
+            futures[index].WaitFor(100ms) &&
+                futures[index].Status() == QueryStatus::Error,
+            "direct CommandList group preflight left a QueryFuture Pending"
+        );
+        okay &= Expect(
+            query_callbacks[index].load(std::memory_order_acquire) == 1 &&
+                query_observed_error[index].load(
+                    std::memory_order_acquire
+                ),
+            "direct CommandList group preflight did not notify a Query callback exactly once"
+        );
+        okay &= Expect(
+            query_observed_present_rejection[index].load(
+                std::memory_order_acquire
+            ),
+            "direct CommandList group Query callback ran before Present rejection"
+        );
+        okay &= Expect(
+            ordinary_callbacks[index].load(std::memory_order_acquire) == 1 &&
+                ordinary_observed_own_query[index].load(
+                    std::memory_order_acquire
+                ),
+            "direct CommandList group preflight did not run ordinary cleanup after its Query callback"
+        );
+        okay &= Expect(
+            success_callbacks[index].load(std::memory_order_acquire) == 0,
+            "direct CommandList group preflight invoked a success-only callback"
+        );
+        okay &= Expect(
+            command_lists[index].IsEmpty(),
+            "direct CommandList group preflight left a source undrained"
+        );
+    }
+    okay &= Expect(
+        first_query_observed_last_terminal.load(std::memory_order_acquire),
+        "direct CommandList group preflight allowed an earlier Query callback to observe a later Future Pending"
+    );
+    const PresentReceiptResult present_result =
+        receipt->WaitForSubmission(100ms);
+    okay &= Expect(
+        present_result.resolved && !present_result.submitted &&
+            receipt->ResolutionAttemptCount() == 1,
+        "direct CommandList group preflight did not reject Present exactly once"
+    );
+
+    // Keep the regression bounded and release raw fence ownership even when
+    // running against an older implementation that propagates the exception.
+    for (CommandList& command_list : command_lists) {
+        if (!command_list.IsEmpty()) {
+            auto callbacks =
+                command_list.DrainOrdinaryCallbacksForRejection();
+            for (auto& callback : callbacks) {
+                if (callback) {
+                    callback();
+                }
+            }
+        }
+    }
+    return okay;
+}
+
+bool DirectCommandListGroupMaterializationFailureRejectsPrefixAndSuffix() {
+    std::optional<CommandList::ManagedRecordingLease> blocking_lease{};
+    RecordingFenceProbe prefix_signal(
+        {},
+        [&blocking_lease] {
+            blocking_lease.reset();
+        }
+    );
+    RecordingFenceProbe middle_signal{};
+    RecordingFenceProbe suffix_signal{};
+    const std::array<RecordingFenceProbe*, 3> signals{
+        &prefix_signal,
+        &middle_signal,
+        &suffix_signal,
+    };
+
+    Moer::Array<CommandList> command_lists{};
+    command_lists.reserve(3);
+    for (size_t index = 0; index < 3; ++index) {
+        command_lists.emplace_back(EQueueType::Graphics);
+    }
+
+    std::array<QueryFuture, 3> futures{};
+    std::array<std::atomic<int>, 3> query_callbacks{};
+    std::array<std::atomic<int>, 3> ordinary_callbacks{};
+    std::array<std::atomic<int>, 3> success_callbacks{};
+    std::array<std::atomic<bool>, 3> ordinary_observed_own_query{};
+    std::atomic<bool> prefix_observed_suffix_terminal{false};
+    std::atomic<int>  reentrant_callbacks{0};
+
+    for (size_t index = 0; index < command_lists.size(); ++index) {
+        command_lists[index].Signal(signals[index], 50 + index);
+        command_lists[index].AddCallback([&, index] {
+            ordinary_observed_own_query[index].store(
+                query_callbacks[index].load(std::memory_order_acquire) == 1,
+                std::memory_order_release
+            );
+            ordinary_callbacks[index].fetch_add(
+                1, std::memory_order_release
+            );
+        });
+        command_lists[index].AddSuccessCallback([&, index] {
+            success_callbacks[index].fetch_add(
+                1, std::memory_order_release
+            );
+        });
+        QueryToken token = command_lists[index].BeginTimestampQuery(
+            "DirectSubmitMaterializationTimestamp"
+        );
+        command_lists[index].EndTimestampQuery(token);
+        futures[index] = token.GetFuture();
+        futures[index].Then([&, index](const QueryResult& _result) {
+            if (index == 0) {
+                prefix_observed_suffix_terminal.store(
+                    futures[2].WaitFor(100ms) &&
+                        futures[2].Status() == QueryStatus::Error,
+                    std::memory_order_release
+                );
+                // Source zero has already sealed. Re-entrant work belongs to
+                // its fresh generation and must survive rejection of the old
+                // materialized prefix.
+                command_lists[0].AddCallback([&reentrant_callbacks] {
+                    reentrant_callbacks.fetch_add(
+                        1, std::memory_order_release
+                    );
+                });
+            }
+            if (_result.status == QueryStatus::Error) {
+                query_callbacks[index].fetch_add(
+                    1, std::memory_order_release
+                );
+            }
+        });
+    }
+
+    blocking_lease.emplace(
+        command_lists[1].AcquireManagedRecordingLease()
+    );
+    bool threw = false;
+    try {
+        RHIExecutor::Get().Submit(
+            std::move(command_lists),
+            ERHIExecSubmitFlags::None,
+            nullptr
+        );
+    } catch (...) {
+        threw = true;
+    }
+
+    bool okay = Expect(
+                    !threw,
+                    "direct CommandList group propagated a mid-materialization failure"
+                ) &&
+                Expect(
+                    !blocking_lease.has_value(),
+                    "materialization-failure trigger did not release its managed lease"
+                );
+    for (size_t index = 0; index < command_lists.size(); ++index) {
+        okay &= Expect(
+            signals[index]->IsRejected(50 + index),
+            "direct CommandList materialization failure left a signal Pending"
+        );
+        okay &= Expect(
+            futures[index].WaitFor(100ms) &&
+                futures[index].Status() == QueryStatus::Error,
+            "direct CommandList materialization failure left a QueryFuture Pending"
+        );
+        okay &= Expect(
+            query_callbacks[index].load(std::memory_order_acquire) == 1,
+            "direct CommandList materialization failure did not notify a Query callback exactly once"
+        );
+        okay &= Expect(
+            ordinary_callbacks[index].load(std::memory_order_acquire) == 1 &&
+                ordinary_observed_own_query[index].load(
+                    std::memory_order_acquire
+                ),
+            "direct CommandList materialization failure did not run ordinary cleanup exactly once after Query notification"
+        );
+        okay &= Expect(
+            success_callbacks[index].load(std::memory_order_acquire) == 0,
+            "direct CommandList materialization failure invoked a success-only callback"
+        );
+    }
+    okay &= Expect(
+        prefix_observed_suffix_terminal.load(std::memory_order_acquire),
+        "materialized-prefix Query callback observed a suffix Future Pending"
+    );
+    okay &= Expect(
+        reentrant_callbacks.load(std::memory_order_acquire) == 0,
+        "group rejection consumed work re-entered into the prefix's fresh generation"
+    );
+    okay &= Expect(
+        command_lists[1].IsEmpty() && command_lists[2].IsEmpty(),
+        "direct CommandList materialization failure left an unmaterialized suffix undrained"
+    );
+
+    CmdSubmit reentrant_submit = command_lists[0].Submit();
+    okay &= Expect(
+        reentrant_submit.callbacks.size() == 1,
+        "materialized-prefix fresh generation did not retain re-entrant work"
+    );
+    for (auto& callback : reentrant_submit.callbacks) {
+        if (callback) {
+            callback();
+        }
+    }
+    reentrant_submit.callbacks.clear();
+    okay &= Expect(
+        reentrant_callbacks.load(std::memory_order_acquire) == 1,
+        "preserved re-entrant callback did not execute exactly once"
+    );
+    return okay;
+}
+
+bool RecordingPreflightFailureTerminalizesEveryQueryGeneration() {
+    RHIExecutor::StartUp();
+
+    auto first_list  = Moer::MakeShared<CommandList>(EQueueType::Graphics);
+    auto middle_list = Moer::MakeShared<CommandList>(EQueueType::Graphics);
+    auto last_list   = Moer::MakeShared<CommandList>(EQueueType::Graphics);
+
+    QueryToken first_query =
+        first_list->BeginTimestampQuery("PreflightFirstTimestamp");
+    QueryFuture first_future = first_query.GetFuture();
+    first_list->EndTimestampQuery(first_query);
+
+    QueryToken middle_query =
+        middle_list->BeginTimestampQuery("PreflightUnclosedTimestamp");
+    QueryFuture middle_future = middle_query.GetFuture();
+
+    QueryToken last_query =
+        last_list->BeginTimestampQuery("PreflightLastTimestamp");
+    QueryFuture last_future = last_query.GetFuture();
+    last_list->EndTimestampQuery(last_query);
+
+    std::array<std::atomic<int>, 3> query_callbacks{};
+    std::array<std::atomic<int>, 3> ordinary_callbacks{};
+    std::array<std::atomic<int>, 3> success_callbacks{};
+    std::array<std::atomic<bool>, 3> query_callbacks_observed_error{};
+    std::atomic<bool> first_query_observed_last_terminal{false};
+
+    first_future.Then([&](const QueryResult& _result) {
+        first_query_observed_last_terminal.store(
+            last_future.WaitFor(100ms) &&
+                last_future.Status() == QueryStatus::Error,
+            std::memory_order_release
+        );
+        query_callbacks_observed_error[0].store(
+            _result.status == QueryStatus::Error,
+            std::memory_order_release
+        );
+        query_callbacks[0].fetch_add(1, std::memory_order_release);
+    });
+    middle_future.Then([&](const QueryResult& _result) {
+        query_callbacks_observed_error[1].store(
+            _result.status == QueryStatus::Error,
+            std::memory_order_release
+        );
+        query_callbacks[1].fetch_add(1, std::memory_order_release);
+    });
+    last_future.Then([&](const QueryResult& _result) {
+        query_callbacks_observed_error[2].store(
+            _result.status == QueryStatus::Error,
+            std::memory_order_release
+        );
+        query_callbacks[2].fetch_add(1, std::memory_order_release);
+    });
+
+    const std::array<Moer::SharedPtr<CommandList>, 3> command_lists{
+        first_list,
+        middle_list,
+        last_list,
+    };
+    for (size_t index = 0; index < command_lists.size(); ++index) {
+        command_lists[index]->AddCallback([&, index] {
+            ordinary_callbacks[index].fetch_add(1, std::memory_order_release);
+        });
+        command_lists[index]->AddSuccessCallback([&, index] {
+            success_callbacks[index].fetch_add(1, std::memory_order_release);
+        });
+    }
+
+    Moer::Array<RHIRecordingSource> sources{};
+    for (const Moer::SharedPtr<CommandList>& command_list : command_lists) {
+        sources.emplace_back(RHIRecordingSource{
+            .command_list = command_list,
+            .completion   = RHIRecordingGate::Create(true),
+        });
+    }
+    RHIExecutor::Get().SubmitRecording(
+        std::move(sources),
+        ERHIExecSubmitFlags::None
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    const std::array<QueryFuture, 3> futures{
+        first_future,
+        middle_future,
+        last_future,
+    };
+    bool okay = true;
+    for (size_t index = 0; index < futures.size(); ++index) {
+        okay &= Expect(
+            futures[index].WaitFor(100ms) &&
+                futures[index].Status() == QueryStatus::Error,
+            "recording preflight failure left a QueryFuture non-terminal"
+        );
+        okay &= Expect(
+            query_callbacks[index].load(std::memory_order_acquire) == 1 &&
+                query_callbacks_observed_error[index].load(
+                    std::memory_order_acquire
+                ),
+            "recording preflight failure did not invoke a query callback exactly once with Error"
+        );
+        okay &= Expect(
+            ordinary_callbacks[index].load(std::memory_order_acquire) == 1,
+            "recording preflight failure did not drain an ordinary callback exactly once"
+        );
+        okay &= Expect(
+            success_callbacks[index].load(std::memory_order_acquire) == 0,
+            "recording preflight failure invoked a success-only callback"
+        );
+        okay &= Expect(
+            command_lists[index]->IsEmpty(),
+            "recording preflight failure left a CommandList generation undrained"
+        );
+    }
+    okay &= Expect(
+        first_query_observed_last_terminal.load(std::memory_order_acquire),
+        "an earlier query callback observed a later source query still Pending"
+    );
+
+    RHIExecutor::ShutDown();
+    return okay;
+}
+
+bool SubmitRecordingRefreshesAStaleQueryCancellationView() {
+    RHIExecutor::StartUp();
+
+    auto command_list =
+        Moer::MakeShared<CommandList>(EQueueType::Graphics);
+    QueryCancellationView stale_cancellation =
+        command_list->GetQueryCancellationView();
+    {
+        // Even an empty Submit rotates the CommandList cancellation domain.
+        // The caller intentionally publishes the still-valid prior view below.
+        CmdSubmit prior_generation = command_list->Submit();
+    }
+
+    QueryToken current_query =
+        command_list->BeginTimestampQuery("CurrentGenerationTimestamp");
+    QueryFuture current_future = current_query.GetFuture();
+    command_list->EndTimestampQuery(current_query);
+
+    std::atomic<int> current_query_callbacks{0};
+    std::atomic<bool> current_callback_observed_error{false};
+    current_future.Then([&](const QueryResult& _result) {
+        current_callback_observed_error.store(
+            _result.status == QueryStatus::Error,
+            std::memory_order_release
+        );
+        current_query_callbacks.fetch_add(1, std::memory_order_release);
+    });
+
+    auto pending_gate = RHIRecordingGate::Create();
+    Moer::Array<RHIRecordingSource> sources{};
+    sources.emplace_back(RHIRecordingSource{
+        .command_list       = command_list,
+        .completion         = pending_gate,
+        .query_cancellation = stale_cancellation,
+    });
+    RHIExecutor::Get().SubmitRecording(
+        std::move(sources),
+        ERHIExecSubmitFlags::None
+    );
+
+    // The pending producer remains opaque during shutdown. Only the refreshed
+    // cancellation view can publish Error for its current query generation.
+    RHIExecutor::ShutDown();
+
+    bool okay = Expect(
+                    stale_cancellation.Valid() &&
+                        !stale_cancellation.IsCancelled(),
+                    "SubmitRecording cancelled the caller's stale generation"
+                ) &&
+                Expect(
+                    current_future.WaitFor(100ms) &&
+                        current_future.Status() == QueryStatus::Error,
+                    "shutdown left the current query generation Pending when a stale view was supplied"
+                ) &&
+                Expect(
+                    current_query_callbacks.load(std::memory_order_acquire) == 0,
+                    "opaque shutdown released a current-generation query callback too early"
+                );
+
+    pending_gate->Signal();
+    (void)command_list->DrainOrdinaryCallbacksForRejection();
+    okay &= Expect(
+        current_query_callbacks.load(std::memory_order_acquire) == 1 &&
+            current_callback_observed_error.load(std::memory_order_acquire),
+        "current-generation query callback was not released exactly once after producer ownership became safe"
+    );
+    okay &= Expect(
+        command_list->IsEmpty(),
+        "stale cancellation-view shutdown left the current CommandList generation undrained"
     );
     return okay;
 }
@@ -662,6 +1439,10 @@ bool ShutdownDrainsTerminalSourceBehindPendingHead() {
     std::atomic<int> success_callbacks{0};
     auto pending_list  = Moer::MakeShared<CommandList>(EQueueType::Graphics);
     auto terminal_list = Moer::MakeShared<CommandList>(EQueueType::Graphics);
+    QueryToken pending_query =
+        pending_list->BeginTimestampQuery("OpaqueShutdownQuery");
+    pending_list->EndTimestampQuery(pending_query);
+    QueryFuture pending_query_future = pending_query.GetFuture();
     terminal_list->AddCallback([&ordinary_callbacks] {
         ordinary_callbacks.fetch_add(1);
     });
@@ -706,10 +1487,126 @@ bool ShutdownDrainsTerminalSourceBehindPendingHead() {
         Expect(
             pending_gate->Status() == ERHIRecordingStatus::Pending,
             "shutdown changed the producer-owned pending gate"
+        ) &&
+        Expect(
+            pending_query_future.IsReady() &&
+                pending_query_future.Status() == QueryStatus::Error,
+            "shutdown left an opaque recording query Pending"
         );
 
     pending_gate->Signal();
     return okay;
+}
+
+bool ShutdownUsesOneTerminalSnapshotForSignalAndQueryNotification() {
+    RHIExecutor::StartUp();
+
+    auto promoted_gate =
+        RHIRecordingGate::Create();
+    RecordingFenceProbe promoted_signal{};
+    auto promoted_list =
+        Moer::MakeShared<CommandList>(EQueueType::Graphics);
+    promoted_list->Signal(&promoted_signal, 31);
+
+    std::atomic<int>  query_callbacks{0};
+    std::atomic<int>  ordinary_callbacks{0};
+    std::atomic<int>  success_callbacks{0};
+    std::atomic<bool> query_observed_signal_rejection{false};
+    std::atomic<bool> ordinary_observed_query_notification{false};
+    QueryToken promoted_query =
+        promoted_list->BeginTimestampQuery("PromotedDuringCancellation");
+    promoted_list->EndTimestampQuery(promoted_query);
+    QueryFuture promoted_future = promoted_query.GetFuture();
+    promoted_future.Then([&](const QueryResult& _result) {
+        query_observed_signal_rejection.store(
+            _result.status == QueryStatus::Error &&
+                promoted_signal.IsRejected(31),
+            std::memory_order_release
+        );
+        query_callbacks.fetch_add(1, std::memory_order_release);
+    });
+    promoted_list->AddCallback([&] {
+        ordinary_observed_query_notification.store(
+            promoted_signal.IsRejected(31) &&
+                query_callbacks.load(std::memory_order_acquire) == 1,
+            std::memory_order_release
+        );
+        ordinary_callbacks.fetch_add(1, std::memory_order_release);
+    });
+    promoted_list->AddSuccessCallback([&] {
+        success_callbacks.fetch_add(1, std::memory_order_release);
+    });
+
+    // The first source is Pending when cancellation classification starts.
+    // Rejecting the later terminal source promotes it synchronously after that
+    // first observation but before Query notification. A second status read
+    // would release the promoted callback without rejecting its signal.
+    RecordingFenceProbe promotion_trigger(
+        {},
+        [promoted_gate] {
+            promoted_gate->Signal();
+        }
+    );
+    auto terminal_list =
+        Moer::MakeShared<CommandList>(EQueueType::Graphics);
+    terminal_list->Signal(&promotion_trigger, 32);
+
+    Moer::Array<RHIRecordingSource> sources{};
+    sources.emplace_back(RHIRecordingSource{
+        .command_list = promoted_list,
+        .completion   = promoted_gate,
+    });
+    sources.emplace_back(RHIRecordingSource{
+        .command_list = terminal_list,
+        .completion   = RHIRecordingGate::Create(true),
+    });
+    RHIExecutor::Get().SubmitRecording(
+        std::move(sources),
+        ERHIExecSubmitFlags::None
+    );
+    RHIExecutor::ShutDown();
+
+    CmdSubmit drained_promoted = promoted_list->Submit();
+    const std::optional<QueryResult> result =
+        promoted_future.TryGet();
+    return Expect(
+               promoted_gate->Status() == ERHIRecordingStatus::Succeeded,
+               "test did not promote the Pending source during cancellation"
+           ) &&
+           Expect(
+               promoted_signal.IsRejected(31),
+               "newly-terminal source signal was not rejected by its drain owner"
+           ) &&
+           Expect(
+               query_callbacks.load(std::memory_order_acquire) == 1 &&
+                   query_observed_signal_rejection.load(
+                       std::memory_order_acquire
+                   ),
+               "newly-terminal Query callback ran before signal rejection or not exactly once"
+           ) &&
+           Expect(
+               ordinary_callbacks.load(std::memory_order_acquire) == 1 &&
+                   ordinary_observed_query_notification.load(
+                       std::memory_order_acquire
+                   ),
+               "newly-terminal ordinary cleanup did not run once after Query notification"
+           ) &&
+           Expect(
+               success_callbacks.load(std::memory_order_acquire) == 0,
+               "shutdown cancellation invoked a success-only callback"
+           ) &&
+           Expect(
+               result.has_value() && result->status == QueryStatus::Error,
+               "newly-terminal Query did not preserve its cancellation Error"
+           ) &&
+           Expect(
+               drained_promoted.cmds.empty() &&
+                   drained_promoted.callbacks.empty() &&
+                   drained_promoted.success_callbacks.empty() &&
+                   drained_promoted.query_tokens.empty() &&
+                   drained_promoted.segments.empty(),
+               "newly-terminal source was not destructively drained"
+           );
 }
 
 bool ShutdownCancelsAnUnsignalledGate() {
@@ -838,6 +1735,13 @@ bool ShutdownDrainsAcceptedReadyWork() {
 
 int main() {
     if (!CommandListSignalTracksNativeAcceptanceAndRejection() ||
+        !FrontendQueryRejectionTerminalizesBeforeOrdinaryCallbacks() ||
+        !FrontendPresentRejectionPublishesBatchBeforeReceipt() ||
+        !DeferredOpaqueCancellationTicketSurvivesSubmit() ||
+        !DirectCommandListGroupPreflightRejectsEverySource() ||
+        !DirectCommandListGroupMaterializationFailureRejectsPrefixAndSuffix() ||
+        !RecordingPreflightFailureTerminalizesEveryQueryGeneration() ||
+        !SubmitRecordingRefreshesAStaleQueryCancellationView() ||
         !PerSourceGatesPreserveFifo() ||
         !ReadyWorkUsesStableExecutorOwnerAndCannotBeOvertaken() ||
         !FailedGateRejectsOnlyItsGroupAndPreservesFifo() ||
@@ -846,6 +1750,7 @@ int main() {
         !MetadataFailureRejectsEveryProducerSignal() ||
         !BlockingWaitReportsTerminalStatus() ||
         !ShutdownDrainsTerminalSourceBehindPendingHead() ||
+        !ShutdownUsesOneTerminalSnapshotForSignalAndQueryNotification() ||
         !ShutdownCancelsAnUnsignalledGate() ||
         !ShutdownDrainsAcceptedReadyWork()) {
         return EXIT_FAILURE;

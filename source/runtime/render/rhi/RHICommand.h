@@ -9,6 +9,7 @@
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "rhi/RHICommon.h"
+#include "rhi/RHIQuery.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHISubmissionTopology.h"
 #include "shader/ShaderPipeline.h"
@@ -99,6 +100,7 @@ public:
         MultiDraw,
         UpdateBindlessArray,
         ClearResource,
+        Query,
         Scope,
         Custom,
         Count
@@ -109,8 +111,8 @@ public:
         "TextureToBuffer", "UploadTexture",       "TextureToTexture", "CopyBackTexture",
         "ShaderDispatch",  "BuildAccel",          "BuildTLAS",      "TraceRay",
         "Barrier",         "QueueTransfer",       "SetDrawState",   "SetGeometryPassDrawState",
-        "MultiDraw",       "UpdateBindlessArray", "ClearResource",  "Scope",
-        "Custom"
+        "MultiDraw",       "UpdateBindlessArray", "ClearResource",  "Query",
+        "Scope",           "Custom"
     };
 
 private:
@@ -280,6 +282,10 @@ struct CmdSubmit {
     Array<UniquePtr<Command>>        cmds;
     Array<std::function<void(void)>> callbacks;
     Array<std::function<void(void)>> success_callbacks;
+    Array<QueryToken>                query_tokens;
+    // Optional owner ticket when a whole backend batch publishes Query
+    // terminal states before per-submit Completion packets are enqueued.
+    QueryPublishBatch                query_publish_batch{};
     TCachedArgArray                  cached_args;
     Array<RHISubmitSegment>          segments;
 
@@ -386,6 +392,8 @@ struct CmdSubmit {
         cmds               = std::move(_other.cmds);
         callbacks          = std::move(_other.callbacks);
         success_callbacks  = std::move(_other.success_callbacks);
+        query_tokens        = std::move(_other.query_tokens);
+        query_publish_batch = _other.query_publish_batch;
         wait_events        = std::move(_other.wait_events);
         signal_events      = std::move(_other.signal_events);
         cached_args        = std::move(_other.cached_args);
@@ -399,12 +407,31 @@ struct CmdSubmit {
         async_queue_scope  = _other.async_queue_scope;
         debug_label        = std::move(_other.debug_label);
         debug_label_color  = _other.debug_label_color;
+        _other.query_tokens.clear();
+        _other.query_publish_batch = {};
+        _other.signal_events.clear();
     }
 
     CmdSubmit& operator=(CmdSubmit&& _other) noexcept {
+        if (this == &_other) {
+            return *this;
+        }
+        RejectPendingSignals();
+        Array<QueryToken> replaced_query_tokens = std::move(query_tokens);
+        const QueryPublishBatch replaced_query_batch =
+            query_publish_batch.Valid() ?
+                query_publish_batch :
+                QueryBackendAccess::BeginPublishBatch();
+        QueryBackendAccess::PublishErrorsIfPending(
+            replaced_query_tokens,
+            "query submit was replaced before completion",
+            replaced_query_batch
+        );
         cmds               = std::move(_other.cmds);
         callbacks          = std::move(_other.callbacks);
         success_callbacks  = std::move(_other.success_callbacks);
+        query_tokens        = std::move(_other.query_tokens);
+        query_publish_batch = _other.query_publish_batch;
         wait_events        = std::move(_other.wait_events);
         signal_events      = std::move(_other.signal_events);
         cached_args        = std::move(_other.cached_args);
@@ -418,7 +445,58 @@ struct CmdSubmit {
         async_queue_scope  = _other.async_queue_scope;
         debug_label        = std::move(_other.debug_label);
         debug_label_color  = _other.debug_label_color;
+        _other.query_tokens.clear();
+        _other.query_publish_batch = {};
+        _other.signal_events.clear();
+
+        // The replacement is fully installed before user Query callbacks can
+        // re-enter this object. No outer write may overwrite re-entrant state.
+        QueryBackendAccess::NotifyTerminals(
+            replaced_query_tokens, replaced_query_batch
+        );
         return *this;
+    }
+
+    ~CmdSubmit() {
+        RejectPendingSignals();
+        RejectPendingQueries("query submit was destroyed before completion");
+    }
+
+    void RejectPendingSignals() noexcept {
+        for (const SignalEvent& signal : signal_events) {
+            auto* fence = reinterpret_cast<Fence*>(signal.timeline_handle);
+            if (fence != nullptr) {
+                fence->Reject(signal.value);
+            }
+        }
+        signal_events.clear();
+    }
+
+    void PublishPendingQueryErrors(
+        std::string_view  _reason,
+        QueryPublishBatch _batch
+    ) noexcept {
+        const QueryPublishBatch effective_batch =
+            query_publish_batch.Valid() ? query_publish_batch : _batch;
+        query_publish_batch = effective_batch;
+        QueryBackendAccess::PublishErrorsIfPending(
+            query_tokens, _reason, effective_batch
+        );
+    }
+
+    void NotifyPendingQueries(QueryPublishBatch _batch) noexcept {
+        Array<QueryToken> tokens = std::move(query_tokens);
+        query_publish_batch = {};
+        QueryBackendAccess::NotifyTerminals(tokens, _batch);
+    }
+
+    void RejectPendingQueries(std::string_view _reason) noexcept {
+        const QueryPublishBatch batch =
+            query_publish_batch.Valid() ?
+                query_publish_batch :
+                QueryBackendAccess::BeginPublishBatch();
+        PublishPendingQueryErrors(_reason, batch);
+        NotifyPendingQueries(batch);
     }
     CmdSubmit(
         Array<UniquePtr<Command>>&&        _cmds,
@@ -1247,6 +1325,7 @@ public:
 public:
     RENDER_API CommandList();
     RENDER_API explicit CommandList(EQueueType _queue_type);
+    RENDER_API ~CommandList();
     class Impl;
 
     template<is_shader_pipeline TGfxPso, typename... TArgs>
@@ -1378,6 +1457,12 @@ public:
         float4           _color = GpuMarkerPalette::Scope()
     );
     RENDER_API void PopScopeWithTimeScope();
+
+    // Phase 17A deliberately exposes timestamp queries only. QueryKind keeps
+    // the Occlusion value reserved so the ABI can grow without conflating the
+    // two result payloads.
+    RENDER_API QueryToken BeginTimestampQuery(std::string_view _name = "TimestampQuery");
+    RENDER_API void EndTimestampQuery(const QueryToken& _token);
 
     template<typename T, typename... Args>
     struct CountType;
@@ -1557,6 +1642,10 @@ public:
     RENDER_API void Signal(Fence* _fence, uint64 _signal_value);
     RENDER_API void Signal(const FenceRef& _fence, uint64 _signal_value);
 
+    // Rejection-only seam for a terminal recording owner. It must never be
+    // called while a producer can still mutate this CommandList.
+    RENDER_API void RejectPendingSignals() noexcept;
+
     RENDER_API ArrayArgReference RegisterArgs(ArrayArguments&& _args);
 
     // Terminal rejection-only ownership path. The producer must have stopped
@@ -1576,6 +1665,14 @@ public:
 
     [[nodiscard]] uint64 GetSealGeneration() const noexcept {
         return seal_generation;
+    }
+
+    [[nodiscard]] QueryCancellationView GetQueryCancellationView() const noexcept {
+        return query_cancellation_domain.GetView();
+    }
+
+    [[nodiscard]] bool HasOpenTimestampQueries() const noexcept {
+        return !active_query_stack.empty();
     }
 
     EQueueType GetQueueType() const noexcept {
@@ -1667,6 +1764,8 @@ private:
     RENDER_API void InnerWriteTexture(TextureView _texture, ETextureState _state, EPassType _pass);
     RENDER_API void EndBarriers();
 
+    RENDER_API void RejectPendingQueries(std::string_view _reason) noexcept;
+
 #pragma region[ raytracing ]
     RENDER_API void TraceRays(PipelineHandle _pipeline, ArrayArguments&& _args, uint3 _extent);
     RENDER_API void TraceRayIndirect(PipelineHandle _pipeline, BufferView _buffer);
@@ -1676,6 +1775,9 @@ private:
     Command*                     current_barriers{nullptr};
     Array<std::function<void()>> callbacks;
     Array<std::function<void()>> success_callbacks;
+    Array<QueryToken>             query_tokens;
+    Array<QueryToken>             active_query_stack;
+    QueryCancellationDomain       query_cancellation_domain;
     Array<SignalEvent>            signal_events;
     TCachedArgArray              cached_args;
     EQueueType                   queue_type{EQueueType::Graphics};
@@ -1690,6 +1792,7 @@ private:
     // silently split or discard a graph-owned command stream.
     uint64 seal_generation{0};
     uint32 managed_recording_lease_count{0};
+    uint64 query_owner_id{0};
     struct ScopeState {
         std::string name;
         float4      color;

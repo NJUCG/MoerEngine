@@ -49,6 +49,8 @@ private:
         bool                    done{false};
     };
 
+    struct BatchRejectionPublication;
+
     using ERequestKind = VulkanSubmissionDetail::EWorkerRequestKind;
 
     struct Request {
@@ -64,6 +66,8 @@ private:
         // several entries; its source-level callback lifetime is protected by
         // a completion aggregate spanning every segment.
         size_t first_unconsumed_source{0};
+        std::shared_ptr<BatchRejectionPublication>
+            rejection_publication{};
     };
 
     struct SubmissionWork {
@@ -74,6 +78,47 @@ private:
         size_t reject_from{std::numeric_limits<size_t>::max()};
         int32  result{0};
         bool   recoverable{false};
+    };
+
+    struct RejectionSignalHandle {
+        FenceRef fence{};
+        uint64   value{0};
+    };
+
+    struct RejectionSourceSnapshot {
+        Array<RejectionSignalHandle> signals{};
+        Array<QueryToken>            query_tokens{};
+        QueryPublishBatch            query_batch{};
+        VulkanBatchCompletionTicket  completion_ticket{};
+        bool                         terminalized{false};
+    };
+
+    // Immutable, strongly-owned terminal handles captured before any source
+    // leaves the request-owned batch. Pipeline workers can therefore publish a
+    // failed suffix immediately even when its later raw CmdSubmits have not yet
+    // entered Translate.
+    struct BatchRejectionPublication {
+        explicit BatchRejectionPublication(
+            RHIBackendSubmissionBatch& _batch
+        );
+
+        void PublishSuffix(
+            size_t           _reject_from,
+            int32            _result,
+            bool             _recoverable,
+            std::string_view _reason
+        ) noexcept;
+        [[nodiscard]] VulkanBatchCompletionTicket CompletionTicket(
+            size_t _source_index
+        ) const noexcept;
+
+        Array<RejectionSourceSnapshot> sources{};
+        std::mutex                     mutex{};
+    };
+
+    struct RuntimePreCompletionPublication {
+        std::shared_ptr<BatchRejectionPublication> rejection_publication{};
+        size_t                                     reject_from{0};
     };
 
     using RecordedSourcePacket = std::variant<
@@ -95,7 +140,9 @@ private:
         explicit PipelineBatchState(
             uint64                      _sequence,
             size_t                      _source_count,
-            std::shared_ptr<Completion> _completion
+            std::shared_ptr<Completion> _completion,
+            std::shared_ptr<BatchRejectionPublication>
+                _rejection_publication
         );
 
         void AddWork() noexcept;
@@ -115,6 +162,8 @@ private:
         std::atomic_bool             completion_signalled{false};
         mutable std::mutex           failure_mutex{};
         PipelineFailure              failure{};
+        std::shared_ptr<BatchRejectionPublication>
+            rejection_publication{};
     };
 
     struct StreamPosition {
@@ -159,21 +208,30 @@ private:
     ) noexcept;
     [[nodiscard]] RecordedSourcePacket TranslateSourceForRuntime(
         EQueueType _queue,
-        CmdSubmit&& _submit
+        CmdSubmit&& _submit,
+        VulkanBatchCompletionTicket _completion_ticket = {}
     ) noexcept;
     [[nodiscard]] VulkanRuntimeSubmissionResult SubmitRecordedSourceForRuntime(
-        EQueueType            _queue,
-        RecordedSourcePacket&& _packet
+        EQueueType                            _queue,
+        RecordedSourcePacket&&                _packet,
+        const VulkanRuntimePreCompletionHook* _pre_completion = nullptr
+    ) noexcept;
+    static void PublishRuntimeFailureBeforeCompletion(
+        void*                                _context,
+        const VulkanRuntimeSubmissionResult& _result
     ) noexcept;
     void RejectRecordedSourceForRuntime(
         EQueueType             _queue,
         RecordedSourcePacket&& _packet,
-        VkResult               _result
+        VkResult               _result,
+        bool                   _recoverable
     ) noexcept;
     void RejectSourceForRuntime(
         EQueueType _queue,
         CmdSubmit&& _submit,
-        VkResult    _result
+        VkResult    _result,
+        bool        _recoverable,
+        VulkanBatchCompletionTicket _completion_ticket = {}
     ) noexcept;
     [[nodiscard]] static bool HasRecordedSourcePacket(
         const RecordedSourcePacket& _packet
@@ -206,8 +264,11 @@ private:
         RHIBackendSubmissionBatch&& _batch,
         int32                       _result,
         std::string_view            _reason,
+        bool                        _recoverable,
         size_t                      _first_source = 0,
-        size_t*                     _next_unconsumed_source = nullptr
+        size_t*                     _next_unconsumed_source = nullptr,
+        std::shared_ptr<BatchRejectionPublication>
+            _rejection_publication = {}
     );
     void CompleteRequest(const std::shared_ptr<Completion>& _completion);
     void ReportRequestFailure(

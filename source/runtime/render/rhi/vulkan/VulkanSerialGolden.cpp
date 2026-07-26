@@ -782,6 +782,13 @@ struct VulkanSerialGoldenTrace::Impl {
                 }
                 break;
             }
+            case Command::EType::Query: {
+                const auto& command = *static_cast<const QueryCmd*>(_command);
+                hash.Add(static_cast<uint64_t>(command.Token().Kind()));
+                hash.Add(static_cast<uint64_t>(command.Op()));
+                hash.AddString(command.Token().Name());
+                break;
+            }
             case Command::EType::Scope: {
                 const auto& command = *static_cast<const ScopeCmd*>(_command);
                 hash.Add(command.IsPush() ? 1u : 0u);
