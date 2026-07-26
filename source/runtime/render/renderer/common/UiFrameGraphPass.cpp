@@ -133,14 +133,6 @@ bool CollectValidatedPresentationTargets(
            );
 }
 
-void FreezeRecordingSlot(UiViewportDrawPacket& viewport) {
-    if (!viewport.render_resources || viewport.commands.empty()) {
-        return;
-    }
-    viewport.recording_slot =
-        viewport.render_resources->GetPendingRecordingSlot();
-}
-
 TextureRef ResolveComposeTarget(
     const UiFrameGraphPass::PreparedFrame& frame,
     const TextureRef&                      main_output
@@ -162,12 +154,8 @@ UiFrameGraphPass::PreparedFrame::PreparedFrame(
 ) :
     composition(std::move(_composition)),
     draw_frame(std::move(_draw_frame)),
-    execution_thread(_execution_thread) {
-    FreezeRecordingSlot(draw_frame.main_viewport);
-    for (auto& viewport : draw_frame.platform_viewports) {
-        FreezeRecordingSlot(viewport);
-    }
-}
+    slot_claim(draw_frame),
+    execution_thread(_execution_thread) {}
 
 bool UiFrameGraphPass::PreparedFrame::BeginRecording() const noexcept {
     ERecordingState expected = ERecordingState::Prepared;
@@ -195,57 +183,14 @@ void UiFrameGraphPass::PreparedFrame::FinishRecording() const noexcept {
     }
 }
 
-bool UiFrameGraphPass::PreparedFrame::ValidatePendingSlots() const noexcept {
-    const auto validate = [](const UiViewportDrawPacket& viewport) {
-        return viewport.recording_slot ==
-                   UiViewportDrawPacket::InvalidRecordingSlot ||
-               (viewport.render_resources &&
-                viewport.render_resources->IsPendingRecordingSlot(
-                    viewport.recording_slot
-                ));
-    };
-    if (!validate(draw_frame.main_viewport)) {
-        return false;
-    }
-    for (const auto& viewport : draw_frame.platform_viewports) {
-        if (!validate(viewport)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-void UiFrameGraphPass::PreparedFrame::CommitPendingSlots() const noexcept {
-    Array<UiViewportRenderResources*> committed_resources{};
-    committed_resources.reserve(draw_frame.platform_viewports.size() + 1);
-    const auto commit = [&committed_resources](const UiViewportDrawPacket& viewport) {
-        if (viewport.recording_slot !=
-            UiViewportDrawPacket::InvalidRecordingSlot) {
-            auto* resources = viewport.render_resources.get();
-            for (const auto* committed : committed_resources) {
-                if (committed == resources) {
-                    return;
-                }
-            }
-            committed_resources.emplace_back(resources);
-            viewport.render_resources->CommitRecordingSlot(
-                viewport.recording_slot
-            );
-        }
-    };
-    commit(draw_frame.main_viewport);
-    for (const auto& viewport : draw_frame.platform_viewports) {
-        commit(viewport);
-    }
-}
-
 bool UiFrameGraphPass::PreparedFrame::CommitAcceptedSource() const noexcept {
     const ERecordingState current = GetRecordingState();
     if (current == ERecordingState::SourceAccepted ||
         current == ERecordingState::FrameAccepted) {
         return true;
     }
-    if (current != ERecordingState::Recorded || !ValidatePendingSlots()) {
+    if (current != ERecordingState::Recorded ||
+        !slot_claim.IsReadyForRecording()) {
         ERecordingState expected = ERecordingState::Recorded;
         recording_state.compare_exchange_strong(
             expected,
@@ -253,20 +198,31 @@ bool UiFrameGraphPass::PreparedFrame::CommitAcceptedSource() const noexcept {
             std::memory_order_release,
             std::memory_order_acquire
         );
+        slot_claim.Reject();
         return false;
     }
 
     ERecordingState expected = ERecordingState::Recorded;
     if (!recording_state.compare_exchange_strong(
-        expected,
-        ERecordingState::SourceAccepted,
-        std::memory_order_release,
-        std::memory_order_acquire
-    )) {
+            expected,
+            ERecordingState::SourceAccepted,
+            std::memory_order_release,
+            std::memory_order_acquire
+        )) {
         return false;
     }
-    CommitPendingSlots();
-    return true;
+    if (slot_claim.CommitAccepted()) {
+        return true;
+    }
+
+    expected = ERecordingState::SourceAccepted;
+    recording_state.compare_exchange_strong(
+        expected,
+        ERecordingState::Failed,
+        std::memory_order_release,
+        std::memory_order_acquire
+    );
+    return false;
 }
 
 bool UiFrameGraphPass::PreparedFrame::CommitAcceptedFrame() const noexcept {
@@ -293,8 +249,12 @@ void UiFrameGraphPass::PreparedFrame::RejectSource() const noexcept {
                 std::memory_order_release,
                 std::memory_order_acquire
             )) {
+            slot_claim.Reject();
             return;
         }
+    }
+    if (current == ERecordingState::Failed) {
+        slot_claim.Reject();
     }
 }
 

@@ -68,11 +68,10 @@ public:
         [[nodiscard]] bool BeginRecording() const noexcept;
         [[nodiscard]] bool IsRecording() const noexcept;
         void FinishRecording() const noexcept;
-        [[nodiscard]] bool ValidatePendingSlots() const noexcept;
-        void CommitPendingSlots() const noexcept;
 
         UiCompositionFrameData composition{};
         UiDrawFramePacket      draw_frame{};
+        UiDrawFrameSlotClaim   slot_claim;
         EUiDrawExecutionThread execution_thread{EUiDrawExecutionThread::Game};
         mutable std::atomic<ERecordingState> recording_state{ERecordingState::Prepared};
 

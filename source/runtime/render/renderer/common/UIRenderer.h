@@ -6,6 +6,7 @@
 #include "RenderAPI.h"
 #include "misc/STL.h"
 #include "rhi/RHI.h"
+#include <atomic>
 #include <cstdint>
 #include <limits>
 #include <type_traits>
@@ -93,6 +94,51 @@ struct UiDrawFramePacket {
 
 static_assert(std::is_move_constructible_v<UiDrawFramePacket>);
 static_assert(!std::is_copy_constructible_v<UiDrawFramePacket>);
+
+/**
+ * Freezes the speculative upload-ring slots used by one copied UI frame.
+ *
+ * Recording alone does not retire a slot. The owner must publish exactly one
+ * terminal result after the command source crosses (or fails to cross) the
+ * native queue boundary. Duplicate viewport references to the same backend
+ * resource share one slot and are committed once.
+ */
+class RENDER_API UiDrawFrameSlotClaim final {
+public:
+    enum class EState : uint8_t {
+        Pending,
+        Accepted,
+        Rejected,
+    };
+
+    explicit UiDrawFrameSlotClaim(UiDrawFramePacket& frame);
+
+    UiDrawFrameSlotClaim(const UiDrawFrameSlotClaim&)            = delete;
+    UiDrawFrameSlotClaim& operator=(const UiDrawFrameSlotClaim&) = delete;
+    UiDrawFrameSlotClaim(UiDrawFrameSlotClaim&&)                 = delete;
+    UiDrawFrameSlotClaim& operator=(UiDrawFrameSlotClaim&&)      = delete;
+
+    [[nodiscard]] bool IsReadyForRecording() const noexcept;
+    [[nodiscard]] bool CommitAccepted() const noexcept;
+    void Reject() const noexcept;
+
+    [[nodiscard]] EState GetState() const noexcept {
+        return state.load(std::memory_order_acquire);
+    }
+
+private:
+    struct Slot {
+        SharedPtr<UiViewportRenderResources> resources;
+        uint64_t                             value = 0;
+    };
+
+    void Freeze(UiViewportDrawPacket& viewport);
+    [[nodiscard]] bool ValidatePendingSlots() const noexcept;
+
+    Array<Slot>        slots{};
+    bool               structurally_valid = true;
+    mutable std::atomic<EState> state{EState::Pending};
+};
 
 class RENDER_API UiDrawFrameBackend {
 public:

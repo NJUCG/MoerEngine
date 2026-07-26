@@ -3783,11 +3783,27 @@ public:
     void RenderGUI(
         Moer::Render::CommandList&,
         const Moer::Render::TextureView&,
-        const Moer::Render::UiDrawFramePacket&,
+        const Moer::Render::UiDrawFramePacket& frame,
         Moer::Render::EUiDrawExecutionThread execution_thread
     ) override {
         ++render_count;
         last_execution_thread = execution_thread;
+        const auto validate = [](const Moer::Render::UiViewportDrawPacket& viewport) {
+            return viewport.commands.empty() ||
+                   (viewport.recording_slot !=
+                        Moer::Render::UiViewportDrawPacket::
+                            InvalidRecordingSlot &&
+                    viewport.render_resources &&
+                    viewport.render_resources->IsPendingRecordingSlot(
+                        viewport.recording_slot
+                    ));
+        };
+        saw_valid_recording_slots =
+            saw_valid_recording_slots && validate(frame.main_viewport);
+        for (const auto& viewport : frame.platform_viewports) {
+            saw_valid_recording_slots =
+                saw_valid_recording_slots && validate(viewport);
+        }
     }
 
     void PresentWindows(
@@ -3799,6 +3815,7 @@ public:
 
     uint32_t render_count = 0;
     uint32_t present_count = 0;
+    bool saw_valid_recording_slots = true;
     Moer::Render::EUiDrawExecutionThread last_execution_thread{
         Moer::Render::EUiDrawExecutionThread::Game
     };
@@ -3860,6 +3877,87 @@ Moer::Render::UiDrawFramePacket MakeUiDrawPacket(
         packet.platform_viewports.emplace_back(std::move(platform));
     }
     return packet;
+}
+
+void TestRasterStyleUiSlotClaimTracksNativeAcceptance(TestSuite& suite) {
+    using namespace Moer::Render;
+    constexpr std::string_view test_name =
+        "Raster copied UI slot native acceptance";
+
+    auto rejected_resources =
+        Moer::MakeShared<FakeUiViewportResources>(11);
+    auto rejected_backend = Moer::MakeShared<FakeUiDrawBackend>();
+    auto rejected_frame =
+        MakeUiDrawPacket(rejected_resources, rejected_backend, true);
+    UiDrawFrameSlotClaim rejected_claim(rejected_frame);
+    CommandList         rejected_commands;
+    suite.Check(
+        rejected_claim.IsReadyForRecording() &&
+            rejected_frame.main_viewport.recording_slot == 11 &&
+            rejected_frame.platform_viewports.front().recording_slot == 11,
+        test_name,
+        "Raster-style copied frame did not freeze a shared pending slot"
+    );
+    RenderUiDrawFrame(
+        rejected_commands,
+        {},
+        rejected_frame,
+        EUiDrawExecutionThread::Game
+    );
+    suite.Check(
+        rejected_backend->render_count == 1 &&
+            rejected_backend->saw_valid_recording_slots,
+        test_name,
+        "non-empty Raster UI reached the backend without a valid slot claim"
+    );
+    rejected_claim.Reject();
+    rejected_claim.Reject();
+    suite.Check(
+        rejected_claim.GetState() ==
+                UiDrawFrameSlotClaim::EState::Rejected &&
+            !rejected_claim.CommitAccepted() &&
+            rejected_resources->PendingSlot() == 11 &&
+            rejected_resources->CommitCount() == 0,
+        test_name,
+        "native rejection advanced or resurrected the copied-frame slot"
+    );
+
+    auto accepted_resources =
+        Moer::MakeShared<FakeUiViewportResources>(23);
+    auto accepted_backend = Moer::MakeShared<FakeUiDrawBackend>();
+    auto accepted_frame =
+        MakeUiDrawPacket(accepted_resources, accepted_backend, true);
+    UiDrawFrameSlotClaim accepted_claim(accepted_frame);
+    CommandList         accepted_commands;
+    RenderUiDrawFrame(
+        accepted_commands,
+        {},
+        accepted_frame,
+        EUiDrawExecutionThread::Game
+    );
+    suite.Check(
+        accepted_backend->render_count == 1 &&
+            accepted_backend->saw_valid_recording_slots &&
+            accepted_resources->PendingSlot() == 23 &&
+            accepted_resources->CommitCount() == 0,
+        test_name,
+        "recording advanced the Raster UI upload ring before native acceptance"
+    );
+    suite.Check(
+        accepted_claim.CommitAccepted() &&
+            accepted_claim.CommitAccepted(),
+        test_name,
+        "native acceptance was not idempotent"
+    );
+    accepted_claim.Reject();
+    suite.Check(
+        accepted_claim.GetState() ==
+                UiDrawFrameSlotClaim::EState::Accepted &&
+            accepted_resources->PendingSlot() == 24 &&
+            accepted_resources->CommitCount() == 1,
+        test_name,
+        "shared Raster UI slot was not committed exactly once"
+    );
 }
 
 void TestUiPreparedFrameLifecycleIsOneShot(TestSuite& suite) {
@@ -5550,6 +5648,7 @@ int main() {
     TestSuite suite;
     TestStableSerialCallbackOrder(suite);
     TestPassCompletionObserverRunsAfterEachCallback(suite);
+    TestRasterStyleUiSlotClaimTracksNativeAcceptance(suite);
     TestUiPreparedFrameLifecycleIsOneShot(suite);
     TestUiFrameGraphTailContract(suite);
     TestUiFrameGraphRejectsInvalidPhysicalContracts(suite);
