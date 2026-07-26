@@ -39,6 +39,7 @@
 
 using namespace Moer;
 using namespace Moer::Render;
+using Moer::Render::Raytracing::EExportSubmissionOutcome;
 using Moer::Render::Raytracing::ExportSubmissionTransaction;
 
 namespace {
@@ -4918,36 +4919,132 @@ void RunRaytracingExportAcceptanceRejection() {
 
     auto& device = RenderDevice::Get();
 
-    FenceRef rejected_dependency = device.CreateFence();
-    ExportSubmissionTransaction export_submission(device.CreateFence());
-    FenceRef frame_tail_receipt = device.CreateFence();
+    using Outcome = EExportSubmissionOutcome;
+
+    const auto source_failed = ExportSubmissionTransaction::ResolveFrameDecision(
+        true,
+        Outcome::Failed,
+        Outcome::NotSubmitted,
+        Outcome::Accepted,
+        false,
+        true,
+        false
+    );
+    const auto tail_independently_rejected =
+        ExportSubmissionTransaction::ResolveFrameDecision(
+            true,
+            Outcome::Accepted,
+            Outcome::Accepted,
+            Outcome::Rejected,
+            true,
+            true,
+            false
+        );
+    const auto prefix_tail_rejected_with_independent_failure =
+        ExportSubmissionTransaction::ResolveFrameDecision(
+            true,
+            Outcome::Rejected,
+            Outcome::NotSubmitted,
+            Outcome::Rejected,
+            false,
+            true,
+            true
+        );
+    const auto prefix_rejected_tail_accepted =
+        ExportSubmissionTransaction::ResolveFrameDecision(
+            true,
+            Outcome::Rejected,
+            Outcome::NotSubmitted,
+            Outcome::Accepted,
+            false,
+            true,
+            false
+        );
+    const auto readback_hard_failed =
+        ExportSubmissionTransaction::ResolveFrameDecision(
+            true,
+            Outcome::Accepted,
+            Outcome::Failed,
+            Outcome::Accepted,
+            false,
+            true,
+            false
+        );
+    if (source_failed.frame_accepted ||
+        source_failed.retryable_frame_rejection ||
+        !source_failed.retry_requested || !source_failed.latch_renderer ||
+        tail_independently_rejected.frame_accepted ||
+        tail_independently_rejected.retry_requested ||
+        tail_independently_rejected.retryable_frame_rejection ||
+        !tail_independently_rejected.export_consumed ||
+        !tail_independently_rejected.latch_renderer ||
+        prefix_tail_rejected_with_independent_failure.frame_accepted ||
+        prefix_tail_rejected_with_independent_failure.retryable_frame_rejection ||
+        !prefix_tail_rejected_with_independent_failure.retry_requested ||
+        !prefix_tail_rejected_with_independent_failure.independent_source_failed ||
+        !prefix_tail_rejected_with_independent_failure.latch_renderer ||
+        prefix_rejected_tail_accepted.frame_accepted ||
+        prefix_rejected_tail_accepted.retryable_frame_rejection ||
+        !prefix_rejected_tail_accepted.retry_requested ||
+        !prefix_rejected_tail_accepted.latch_renderer ||
+        readback_hard_failed.frame_accepted ||
+        readback_hard_failed.export_consumed ||
+        !readback_hard_failed.retry_requested ||
+        !readback_hard_failed.independent_source_failed ||
+        readback_hard_failed.retryable_frame_rejection ||
+        !readback_hard_failed.latch_renderer) {
+        throw std::runtime_error(
+            "raytracing export production decision table misclassified a "
+            "failed source/readback, independent tail, or inconsistent "
+            "prefix/tail"
+        );
+    }
+
+    FenceRef rejected_prefix_dependency   = device.CreateFence();
+    FenceRef rejected_readback_dependency = device.CreateFence();
+    rejected_prefix_dependency->Reject(1);
+    rejected_readback_dependency->Reject(1);
+
+    ExportSubmissionTransaction attempt1_submission(device.CreateFence());
+    ExportSubmissionTransaction readback_retry_submission(device.CreateFence());
     ExportSubmissionTransaction recovery_submission(device.CreateFence());
-    rejected_dependency->Reject(1);
+    FenceRef attempt1_tail_receipt       = device.CreateFence();
+    FenceRef readback_retry_tail_receipt = device.CreateFence();
+    FenceRef recovery_tail_receipt       = device.CreateFence();
 
     const EBufferUsageFlags usage =
         EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
-    BufferRef export_source_buffer = device.CreateBuffer<uint32>(
-        "rt_export_rejected_source", 4, usage
+    BufferRef attempt1_source_buffer = device.CreateBuffer<uint32>(
+        "rt_export_attempt1_source", 4, usage
     );
-    BufferRef frame_tail_target = device.CreateBuffer<uint32>(
-        "rt_export_rejected_tail", 4, usage
+    BufferRef attempt1_tail_target = device.CreateBuffer<uint32>(
+        "rt_export_attempt1_tail", 4, usage
     );
-    BufferRef recovery_target = device.CreateBuffer<uint32>(
-        "rt_export_rejection_recovery", 4, usage
+    BufferRef readback_retry_source = device.CreateBuffer<uint32>(
+        "rt_export_readback_retry_source", 4, usage
+    );
+    BufferRef readback_retry_tail_target = device.CreateBuffer<uint32>(
+        "rt_export_readback_retry_tail", 4, usage
+    );
+    BufferRef recovery_source = device.CreateBuffer<uint32>(
+        "rt_export_recovery_source", 4, usage
+    );
+    BufferRef recovery_tail_target = device.CreateBuffer<uint32>(
+        "rt_export_recovery_tail", 4, usage
     );
 
     std::atomic<uint32> blocker_callbacks{0};
-    std::atomic<uint32> export_callbacks{0};
-    std::atomic<uint32> export_success_callbacks{0};
-    std::atomic<uint32> frame_tail_callbacks{0};
-    std::atomic<uint32> frame_tail_success_callbacks{0};
-    std::atomic<uint32> recovery_callbacks{0};
-    std::atomic<uint32> recovery_success_callbacks{0};
+    std::array<std::atomic<uint32>, 2> attempt1_callbacks{};
+    std::array<std::atomic<uint32>, 2> attempt1_success_callbacks{};
+    std::array<std::atomic<uint32>, 3> readback_retry_callbacks{};
+    std::array<std::atomic<uint32>, 3> readback_retry_success_callbacks{};
+    std::array<std::atomic<uint32>, 3> recovery_callbacks{};
+    std::array<std::atomic<uint32>, 3> recovery_success_callbacks{};
     std::atomic<uint32> encoder_dispatches{0};
-    std::atomic<uint32> temporal_commits{0};
-    std::atomic<uint32> history_commits{0};
-    std::atomic<uint32> tlas_commits{0};
-    bool                export_consumed = false;
+    const std::array<uint32, 4> readback_retry_expected{41, 43, 47, 53};
+    const std::array<uint32, 4> recovery_expected{59, 61, 67, 71};
+    std::array<uint32, 4>       rejected_readback{};
+    std::array<uint32, 4>       recovered_readback{};
     std::binary_semaphore blocker_entered{0};
     std::binary_semaphore release_blocker{0};
     OneShotSemaphoreRelease release_guard(release_blocker);
@@ -4976,87 +5073,81 @@ void RunRaytracingExportAcceptanceRejection() {
     ScopedNativeSubmissionObserver native_observer(native_capture);
 
     try {
-        CommandList export_source(EQueueType::Graphics);
-        export_source.CopyFrom(
+        CommandList attempt1_source(EQueueType::Graphics);
+        attempt1_source.CopyFrom(
             OwnedBytes(std::array<uint32, 4>{11, 13, 17, 19}),
-            export_source_buffer->GetView(),
-            "RaytracingExportRejectedSource"
+            attempt1_source_buffer->GetView(),
+            "RaytracingExportAttempt1Source"
         );
-        export_source.AddCallback([&] {
-            export_callbacks.fetch_add(1, std::memory_order_relaxed);
+        attempt1_source.AddCallback([&] {
+            attempt1_callbacks[0].fetch_add(1, std::memory_order_relaxed);
         });
-        export_source.AddSuccessCallback([&] {
-            export_success_callbacks.fetch_add(1, std::memory_order_relaxed);
-        });
-        CmdSubmit export_submit = export_source.Submit();
-        export_submit.Wait(rejected_dependency.Get(), 1);
-        export_submission.AttachSignal(export_submit);
-        RHIExecutor::Get().Submit(
-            EQueueType::Graphics,
-            std::move(export_submit),
-            ERHIExecSubmitFlags::FlushGPU
-        );
-
-        CommandList frame_tail(EQueueType::Graphics);
-        frame_tail.CopyFrom(
-            OwnedBytes(std::array<uint32, 4>{23, 29, 31, 37}),
-            frame_tail_target->GetView(),
-            "RaytracingExportDependentTail"
-        );
-        frame_tail.AddCallback([&] {
-            frame_tail_callbacks.fetch_add(1, std::memory_order_relaxed);
-        });
-        frame_tail.AddSuccessCallback([&] {
-            frame_tail_success_callbacks.fetch_add(
+        attempt1_source.AddSuccessCallback([&] {
+            attempt1_success_callbacks[0].fetch_add(
                 1, std::memory_order_relaxed
             );
         });
-        CmdSubmit frame_tail_submit = frame_tail.Submit();
-        export_submission.AttachDependentWait(frame_tail_submit);
-        frame_tail_submit.Signal(frame_tail_receipt.Get(), 1);
+        CmdSubmit attempt1_source_submit = attempt1_source.Submit();
+        attempt1_source_submit.Wait(rejected_prefix_dependency.Get(), 1);
+        attempt1_submission.AttachSignal(attempt1_source_submit);
         RHIExecutor::Get().Submit(
             EQueueType::Graphics,
-            std::move(frame_tail_submit),
+            std::move(attempt1_source_submit),
             ERHIExecSubmitFlags::FlushGPU
         );
 
-        const bool tail_accepted =
-            frame_tail_receipt->WaitSubmitted(1);
-        const bool export_accepted =
-            export_submission.SourceAccepted();
-        const bool frame_native_accepted =
-            export_submission.FoldAcceptance(tail_accepted);
-        if (export_accepted) {
-            encoder_dispatches.fetch_add(1, std::memory_order_relaxed);
-            export_consumed = true;
-        }
-        if (frame_native_accepted) {
-            temporal_commits.fetch_add(1, std::memory_order_relaxed);
-            history_commits.fetch_add(1, std::memory_order_relaxed);
-            tlas_commits.fetch_add(1, std::memory_order_relaxed);
-        }
+        CommandList attempt1_tail(EQueueType::Graphics);
+        attempt1_tail.CopyFrom(
+            OwnedBytes(std::array<uint32, 4>{23, 29, 31, 37}),
+            attempt1_tail_target->GetView(),
+            "RaytracingExportAttempt1DependentTail"
+        );
+        attempt1_tail.AddCallback([&] {
+            attempt1_callbacks[1].fetch_add(1, std::memory_order_relaxed);
+        });
+        attempt1_tail.AddSuccessCallback([&] {
+            attempt1_success_callbacks[1].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        CmdSubmit attempt1_tail_submit = attempt1_tail.Submit();
+        attempt1_submission.AttachDependentWait(attempt1_tail_submit);
+        attempt1_tail_submit.Signal(attempt1_tail_receipt.Get(), 1);
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics,
+            std::move(attempt1_tail_submit),
+            ERHIExecSubmitFlags::FlushGPU
+        );
 
-        if (frame_native_accepted || export_consumed ||
-            encoder_dispatches.load(std::memory_order_acquire) != 0 ||
-            !ResourceCast(export_submission.GetReceiptFence())
-                 ->IsRejected(export_submission.GetReceiptValue()) ||
-            !ResourceCast(frame_tail_receipt.Get())->IsRejected(1)) {
+        const Outcome attempt1_tail_outcome =
+            ExportSubmissionTransaction::ResolveReceiptOutcome(
+                attempt1_tail_receipt.Get(), 1
+            );
+        const auto attempt1_decision =
+            attempt1_submission.ClassifyFrameAcceptance(
+                attempt1_tail_outcome,
+                false,
+                false
+            );
+        if (attempt1_decision.source_outcome != Outcome::Rejected ||
+            attempt1_decision.tail_outcome != Outcome::Rejected ||
+            attempt1_decision.frame_accepted ||
+            attempt1_decision.export_consumed ||
+            !attempt1_decision.retry_requested ||
+            !attempt1_decision.retryable_frame_rejection ||
+            attempt1_decision.latch_renderer ||
+            attempt1_decision.readback_attempted ||
+            !ResourceCast(attempt1_submission.GetReceiptFence())
+                 ->IsRejected(attempt1_submission.GetReceiptValue()) ||
+            !ResourceCast(attempt1_tail_receipt.Get())->IsRejected(1)) {
             throw std::runtime_error(
-                "rejected raytracing export source did not reject the whole "
-                "frame transaction"
+                "production export decision did not keep the rejected prefix "
+                "and dependent tail retryable"
             );
         }
-        if (temporal_commits.load(std::memory_order_acquire) != 0 ||
-            history_commits.load(std::memory_order_acquire) != 0 ||
-            tlas_commits.load(std::memory_order_acquire) != 0) {
-            throw std::runtime_error(
-                "rejected raytracing export transaction advanced accepted "
-                "renderer state"
-            );
-        }
-        if (export_callbacks.load(std::memory_order_acquire) != 0 ||
-            frame_tail_callbacks.load(std::memory_order_acquire) != 0 ||
-            export_submission.GetReceiptFence()->GetRefCount() < 3) {
+        if (attempt1_callbacks[0].load(std::memory_order_acquire) != 0 ||
+            attempt1_callbacks[1].load(std::memory_order_acquire) != 0 ||
+            attempt1_submission.GetReceiptFence()->GetRefCount() < 3) {
             throw std::runtime_error(
                 "raytracing export receipt keepalive retired before terminal "
                 "Completion callbacks"
@@ -5072,11 +5163,11 @@ void RunRaytracingExportAcceptanceRejection() {
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
         if (blocker_callbacks.load(std::memory_order_acquire) != 1 ||
-            export_callbacks.load(std::memory_order_acquire) != 1 ||
-            export_success_callbacks.load(std::memory_order_acquire) != 0 ||
-            frame_tail_callbacks.load(std::memory_order_acquire) != 1 ||
-            frame_tail_success_callbacks.load(std::memory_order_acquire) != 0 ||
-            export_submission.GetReceiptFence()->GetRefCount() != 1) {
+            attempt1_callbacks[0].load(std::memory_order_acquire) != 1 ||
+            attempt1_callbacks[1].load(std::memory_order_acquire) != 1 ||
+            attempt1_success_callbacks[0].load(std::memory_order_acquire) != 0 ||
+            attempt1_success_callbacks[1].load(std::memory_order_acquire) != 0 ||
+            attempt1_submission.GetReceiptFence()->GetRefCount() != 1) {
             throw std::runtime_error(
                 "raytracing export rejection did not retire callbacks and "
                 "keepalives exactly once"
@@ -5084,61 +5175,357 @@ void RunRaytracingExportAcceptanceRejection() {
         }
 
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-        if (export_callbacks.load(std::memory_order_acquire) != 1 ||
-            frame_tail_callbacks.load(std::memory_order_acquire) != 1 ||
-            export_submission.GetReceiptFence()->GetRefCount() != 1 ||
-            encoder_dispatches.load(std::memory_order_acquire) != 0 ||
-            export_consumed ||
-            temporal_commits.load(std::memory_order_acquire) != 0 ||
-            history_commits.load(std::memory_order_acquire) != 0 ||
-            tlas_commits.load(std::memory_order_acquire) != 0 ||
+        if (attempt1_callbacks[0].load(std::memory_order_acquire) != 1 ||
+            attempt1_callbacks[1].load(std::memory_order_acquire) != 1 ||
+            attempt1_submission.GetReceiptFence()->GetRefCount() != 1 ||
             native_capture.Count() != 0) {
             throw std::runtime_error(
                 "a second Sync replayed rejected raytracing export work"
             );
         }
 
-        CommandList recovery(EQueueType::Graphics);
-        recovery.CopyFrom(
-            OwnedBytes(std::array<uint32, 4>{41, 43, 47, 53}),
-            recovery_target->GetView(),
-            "RaytracingExportRejectionRecovery"
+        CommandList readback_retry_prefix(EQueueType::Graphics);
+        readback_retry_prefix.CopyFrom(
+            OwnedBytes(readback_retry_expected),
+            readback_retry_source->GetView(),
+            "RaytracingExportReadbackRetryPrefix"
         );
-        recovery.AddCallback([&] {
-            recovery_callbacks.fetch_add(1, std::memory_order_relaxed);
-        });
-        recovery.AddSuccessCallback([&] {
-            recovery_success_callbacks.fetch_add(
+        readback_retry_prefix.AddCallback([&] {
+            readback_retry_callbacks[0].fetch_add(
                 1, std::memory_order_relaxed
             );
         });
-        CmdSubmit recovery_submit = recovery.Submit();
-        recovery_submission.AttachSignal(recovery_submit);
+        readback_retry_prefix.AddSuccessCallback([&] {
+            readback_retry_success_callbacks[0].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        CmdSubmit readback_retry_prefix_submit =
+            readback_retry_prefix.Submit();
+        readback_retry_submission.AttachSignal(
+            readback_retry_prefix_submit
+        );
         RHIExecutor::Get().Submit(
             EQueueType::Graphics,
-            std::move(recovery_submit),
+            std::move(readback_retry_prefix_submit),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        if (readback_retry_submission.SourceOutcome() != Outcome::Accepted) {
+            throw std::runtime_error(
+                "raytracing readback-retry prefix was not accepted"
+            );
+        }
+
+        readback_retry_submission.BeginReadback(device.CreateFence());
+        CommandList rejected_readback_commands(EQueueType::Graphics);
+        rejected_readback_commands.CopyFrom(
+            readback_retry_source->GetView(),
+            WritableBytes(rejected_readback),
+            "RaytracingExportRejectedReadback"
+        );
+        rejected_readback_commands.AddCallback([&] {
+            readback_retry_callbacks[1].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        rejected_readback_commands.AddSuccessCallback([&] {
+            readback_retry_success_callbacks[1].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        CmdSubmit rejected_readback_submit =
+            rejected_readback_commands.Submit();
+        rejected_readback_submit.Wait(
+            rejected_readback_dependency.Get(), 1
+        );
+        readback_retry_submission.AttachReadbackSignal(
+            rejected_readback_submit
+        );
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics,
+            std::move(rejected_readback_submit),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        if (readback_retry_submission.ResolveReadbackAcceptance() ||
+            readback_retry_submission.ReadbackOutcome() != Outcome::Rejected ||
+            readback_retry_submission.DispatchEncoder([&] {
+                encoder_dispatches.fetch_add(
+                    1, std::memory_order_relaxed
+                );
+            })) {
+            throw std::runtime_error(
+                "rejected production readback dispatched the export encoder"
+            );
+        }
+
+        CommandList readback_retry_tail(EQueueType::Graphics);
+        readback_retry_tail.CopyFrom(
+            OwnedBytes(std::array<uint32, 4>{73, 79, 83, 89}),
+            readback_retry_tail_target->GetView(),
+            "RaytracingExportReadbackRetryTail"
+        );
+        readback_retry_tail.AddCallback([&] {
+            readback_retry_callbacks[2].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        readback_retry_tail.AddSuccessCallback([&] {
+            readback_retry_success_callbacks[2].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        CmdSubmit readback_retry_tail_submit =
+            readback_retry_tail.Submit();
+        readback_retry_submission.AttachDependentWait(
+            readback_retry_tail_submit
+        );
+        readback_retry_tail_submit.Signal(
+            readback_retry_tail_receipt.Get(), 1
+        );
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics,
+            std::move(readback_retry_tail_submit),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        const Outcome readback_retry_tail_outcome =
+            ExportSubmissionTransaction::ResolveReceiptOutcome(
+                readback_retry_tail_receipt.Get(), 1
+            );
+        const auto readback_retry_decision =
+            readback_retry_submission.ClassifyFrameAcceptance(
+                readback_retry_tail_outcome,
+                true,
+                false
+            );
+        if (!readback_retry_decision.frame_accepted ||
+            readback_retry_decision.export_consumed ||
+            !readback_retry_decision.retry_requested ||
+            readback_retry_decision.retryable_frame_rejection ||
+            readback_retry_decision.latch_renderer ||
+            !readback_retry_decision.readback_attempted ||
+            readback_retry_decision.readback_accepted ||
+            readback_retry_decision.encoder_dispatched ||
+            encoder_dispatches.load(std::memory_order_acquire) != 0 ||
+            std::any_of(
+                rejected_readback.begin(),
+                rejected_readback.end(),
+                [](uint32 value) { return value != 0; }
+            )) {
+            throw std::runtime_error(
+                "production readback rejection did not preserve an accepted "
+                "frame and pending export request"
+            );
+        }
+        for (size_t index = 0; index < readback_retry_callbacks.size();
+             ++index) {
+            const uint32 expected_success = index == 1 ? 0u : 1u;
+            if (readback_retry_callbacks[index].load(
+                    std::memory_order_acquire
+                ) != 1 ||
+                readback_retry_success_callbacks[index].load(
+                    std::memory_order_acquire
+                ) != expected_success) {
+                throw std::runtime_error(
+                    "raytracing readback-retry callbacks retired incorrectly"
+                );
+            }
+        }
+        if (readback_retry_submission.GetReceiptFence()->GetRefCount() != 1 ||
+            readback_retry_submission.GetReadbackReceiptFence()->GetRefCount() !=
+                1 ||
+            native_capture.Overflowed() || native_capture.Count() != 2 ||
+            !native_capture.Event(0).outcome.WasSubmitted() ||
+            !native_capture.Event(1).outcome.WasSubmitted()) {
+            throw std::runtime_error(
+                "raytracing readback rejection reached native submit or "
+                "retained a terminal receipt"
+            );
+        }
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        for (size_t index = 0; index < readback_retry_callbacks.size();
+             ++index) {
+            const uint32 expected_success = index == 1 ? 0u : 1u;
+            if (readback_retry_callbacks[index].load(
+                    std::memory_order_acquire
+                ) != 1 ||
+                readback_retry_success_callbacks[index].load(
+                    std::memory_order_acquire
+                ) != expected_success) {
+                throw std::runtime_error(
+                    "a second Sync replayed raytracing readback-retry work"
+                );
+            }
+        }
+        if (native_capture.Count() != 2) {
+            throw std::runtime_error(
+                "a second Sync replayed raytracing readback-retry native work"
+            );
+        }
+
+        CommandList recovery_prefix(EQueueType::Graphics);
+        recovery_prefix.CopyFrom(
+            OwnedBytes(recovery_expected),
+            recovery_source->GetView(),
+            "RaytracingExportRecoveryPrefix"
+        );
+        recovery_prefix.AddCallback([&] {
+            recovery_callbacks[0].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        recovery_prefix.AddSuccessCallback([&] {
+            recovery_success_callbacks[0].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        CmdSubmit recovery_prefix_submit = recovery_prefix.Submit();
+        recovery_submission.AttachSignal(recovery_prefix_submit);
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics,
+            std::move(recovery_prefix_submit),
             ERHIExecSubmitFlags::FlushGPU
         );
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
-        if (!recovery_submission.SourceAccepted() ||
-            ResourceCast(recovery_submission.GetReceiptFence())
-                ->IsRejected(recovery_submission.GetReceiptValue()) ||
-            recovery_callbacks.load(std::memory_order_acquire) != 1 ||
-            recovery_success_callbacks.load(std::memory_order_acquire) != 1 ||
-            native_capture.Overflowed() || native_capture.Count() != 1 ||
-            !native_capture.Event(0).outcome.WasSubmitted()) {
+        recovery_submission.BeginReadback(device.CreateFence());
+        CommandList recovery_readback_commands(EQueueType::Graphics);
+        recovery_readback_commands.CopyFrom(
+            recovery_source->GetView(),
+            WritableBytes(recovered_readback),
+            "RaytracingExportRecoveryReadback"
+        );
+        recovery_readback_commands.AddCallback([&] {
+            recovery_callbacks[1].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        recovery_readback_commands.AddSuccessCallback([&] {
+            recovery_success_callbacks[1].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        CmdSubmit recovery_readback_submit =
+            recovery_readback_commands.Submit();
+        recovery_submission.AttachReadbackSignal(
+            recovery_readback_submit
+        );
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics,
+            std::move(recovery_readback_submit),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        if (!recovery_submission.DispatchEncoder([&] {
+                encoder_dispatches.fetch_add(
+                    1, std::memory_order_relaxed
+                );
+            }) ||
+            recovery_submission.DispatchEncoder([&] {
+                encoder_dispatches.fetch_add(
+                    100, std::memory_order_relaxed
+                );
+            })) {
             throw std::runtime_error(
-                "raytracing export dependency rejection poisoned recovery"
+                "accepted production readback did not dispatch the encoder "
+                "exactly once"
             );
         }
 
+        CommandList recovery_tail(EQueueType::Graphics);
+        recovery_tail.CopyFrom(
+            OwnedBytes(std::array<uint32, 4>{97, 101, 103, 107}),
+            recovery_tail_target->GetView(),
+            "RaytracingExportRecoveryTail"
+        );
+        recovery_tail.AddCallback([&] {
+            recovery_callbacks[2].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        recovery_tail.AddSuccessCallback([&] {
+            recovery_success_callbacks[2].fetch_add(
+                1, std::memory_order_relaxed
+            );
+        });
+        CmdSubmit recovery_tail_submit = recovery_tail.Submit();
+        recovery_submission.AttachDependentWait(recovery_tail_submit);
+        recovery_tail_submit.Signal(recovery_tail_receipt.Get(), 1);
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics,
+            std::move(recovery_tail_submit),
+            ERHIExecSubmitFlags::FlushGPU
+        );
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-        if (recovery_callbacks.load(std::memory_order_acquire) != 1 ||
-            recovery_success_callbacks.load(std::memory_order_acquire) != 1 ||
-            native_capture.Count() != 1) {
+        const Outcome recovery_tail_outcome =
+            ExportSubmissionTransaction::ResolveReceiptOutcome(
+                recovery_tail_receipt.Get(), 1
+            );
+        const auto recovery_decision =
+            recovery_submission.ClassifyFrameAcceptance(
+                recovery_tail_outcome,
+                true,
+                false
+            );
+        if (!recovery_decision.frame_accepted ||
+            !recovery_decision.export_consumed ||
+            recovery_decision.retry_requested ||
+            recovery_decision.retryable_frame_rejection ||
+            recovery_decision.latch_renderer ||
+            !recovery_decision.readback_attempted ||
+            !recovery_decision.readback_accepted ||
+            !recovery_decision.encoder_dispatched ||
+            encoder_dispatches.load(std::memory_order_acquire) != 1 ||
+            recovered_readback != recovery_expected) {
             throw std::runtime_error(
-                "a second Sync replayed raytracing export recovery"
+                "accepted raytracing export recovery did not consume the "
+                "request exactly once"
+            );
+        }
+        for (size_t index = 0; index < recovery_callbacks.size(); ++index) {
+            if (recovery_callbacks[index].load(std::memory_order_acquire) != 1 ||
+                recovery_success_callbacks[index].load(
+                    std::memory_order_acquire
+                ) != 1) {
+                throw std::runtime_error(
+                    "accepted raytracing export recovery callbacks retired "
+                    "incorrectly"
+                );
+            }
+        }
+        if (recovery_submission.GetReceiptFence()->GetRefCount() != 1 ||
+            recovery_submission.GetReadbackReceiptFence()->GetRefCount() != 1 ||
+            native_capture.Overflowed() || native_capture.Count() != 5) {
+            throw std::runtime_error(
+                "accepted raytracing export recovery had unexpected native "
+                "submissions or receipt lifetime"
+            );
+        }
+        for (size_t index = 0; index < native_capture.Count(); ++index) {
+            if (!native_capture.Event(index).outcome.WasSubmitted()) {
+                throw std::runtime_error(
+                    "raytracing export test observed a rejected native submit"
+                );
+            }
+        }
+
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        for (size_t index = 0; index < recovery_callbacks.size(); ++index) {
+            if (recovery_callbacks[index].load(std::memory_order_acquire) != 1 ||
+                recovery_success_callbacks[index].load(
+                    std::memory_order_acquire
+                ) != 1) {
+                throw std::runtime_error(
+                    "a second Sync replayed accepted raytracing export recovery"
+                );
+            }
+        }
+        if (native_capture.Count() != 5 ||
+            encoder_dispatches.load(std::memory_order_acquire) != 1) {
+            throw std::runtime_error(
+                "a second Sync replayed raytracing export recovery work"
             );
         }
     } catch (...) {
@@ -5149,10 +5536,11 @@ void RunRaytracingExportAcceptanceRejection() {
 
     LOG_INFO(
         "[TESTCASE][PASS] name=RaytracingExportAcceptanceRejection "
-        "source=rejected tail=dependency_rejected readback=skipped "
-        "encoder=skipped export_consumed=false "
-        "temporal=0 history=0 tlas=0 native_rejected=0 "
-        "callbacks=exactly_once keepalive=terminal recovery=accepted replay=0"
+        "attempt1=prefix_rejected attempt1_tail=dependency_rejected "
+        "attempt1_latch=false request_pending=true "
+        "readback_retry=frame_accepted recovery_consumed=true encoder=once "
+        "decision_table=verified native_rejected=0 callbacks=exactly_once "
+        "keepalive=terminal replay=0"
     );
 }
 

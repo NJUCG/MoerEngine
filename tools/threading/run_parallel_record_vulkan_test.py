@@ -364,18 +364,17 @@ def _require_rt_export_rejection(text: str) -> None:
     )
     _, fields = marker
     _require(
-        fields.get("source") == "rejected"
-        and fields.get("tail") == "dependency_rejected"
-        and fields.get("readback") == "skipped"
-        and fields.get("encoder") == "skipped"
-        and fields.get("export_consumed") == "false"
-        and fields.get("temporal") == "0"
-        and fields.get("history") == "0"
-        and fields.get("tlas") == "0"
+        fields.get("attempt1") == "prefix_rejected"
+        and fields.get("attempt1_tail") == "dependency_rejected"
+        and fields.get("attempt1_latch") == "false"
+        and fields.get("request_pending") == "true"
+        and fields.get("readback_retry") == "frame_accepted"
+        and fields.get("recovery_consumed") == "true"
+        and fields.get("encoder") == "once"
+        and fields.get("decision_table") == "verified"
         and fields.get("native_rejected") == "0"
         and fields.get("callbacks") == "exactly_once"
         and fields.get("keepalive") == "terminal"
-        and fields.get("recovery") == "accepted"
         and fields.get("replay") == "0",
         "rt-export-rejection: incomplete export transaction contract",
     )

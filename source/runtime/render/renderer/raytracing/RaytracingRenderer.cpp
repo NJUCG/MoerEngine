@@ -1396,31 +1396,53 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 ERHIExecSubmitFlags::FlushGPU
             );
             RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-            if (export_submission.SourceAccepted()) {
+            const auto export_source_outcome =
+                export_submission.SourceOutcome();
+            if (export_source_outcome ==
+                EExportSubmissionOutcome::Accepted) {
                 const bool readback_accepted = DumpTextureToFile(
                     ui_config.export_cfg,
                     state.rt_ctx->frame_rt,
                     device,
                     gfx_queue,
                     state.exported_file_path,
-                    std::to_string(time)
+                    std::to_string(time),
+                    export_submission
                 );
-                if (readback_accepted) {
-                    state.b_export           = false;
-                    feedback.export_consumed = true;
-                } else {
-                    LOG_CRITICAL(
-                        "[Raytracing][Export] Texture readback was not "
-                        "accepted for frame {}. Skipping encode and retaining "
-                        "the export request for retry.",
-                        frame_packet.frame_id
-                    );
+                if (!readback_accepted) {
+                    if (export_submission.ReadbackOutcome() ==
+                        EExportSubmissionOutcome::Failed) {
+                        LOG_CRITICAL(
+                            "[Raytracing][Export] Texture readback failed "
+                            "without an explicit recoverable rejection for "
+                            "frame {}. Skipping encode; the frame failure "
+                            "policy will latch the renderer.",
+                            frame_packet.frame_id
+                        );
+                    } else {
+                        LOG_WARNING(
+                            "[Raytracing][Export] Texture readback was rejected "
+                            "or could not be scheduled for frame {}. Skipping "
+                            "encode and retaining the export request for retry.",
+                            frame_packet.frame_id
+                        );
+                    }
                 }
-            } else {
+            } else if (
+                export_source_outcome ==
+                EExportSubmissionOutcome::Rejected
+            ) {
                 LOG_CRITICAL(
                     "[Raytracing][Export] Native submission rejected export "
                     "frame {}. Skipping readback and retaining the export "
                     "request for retry.",
+                    frame_packet.frame_id
+                );
+            } else {
+                LOG_CRITICAL(
+                    "[Raytracing][Export] Export frame {} failed without an "
+                    "explicit recoverable rejection. Skipping readback; the "
+                    "frame failure policy will latch the renderer.",
                     frame_packet.frame_id
                 );
             }
@@ -1529,13 +1551,30 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     // recording completion. The final tail proves the ordered suffix was
     // accepted; the export and per-source graph fences prevent an accepted
     // tail from hiding a rejected separately submitted source.
-    bool frame_native_accepted = timeline->WaitSubmitted(time);
+    const EExportSubmissionOutcome tail_submission_outcome =
+        ExportSubmissionTransaction::ResolveReceiptOutcome(
+            timeline.Get(),
+            time
+        );
+    bool frame_native_accepted =
+        tail_submission_outcome ==
+        EExportSubmissionOutcome::Accepted;
+    bool independent_submission_source_failed =
+        state.render_graph_recording_failure_latched;
     frame_native_accepted =
         export_submission.FoldAcceptance(frame_native_accepted);
+    if (export_submission.ReadbackOutcome() ==
+        EExportSubmissionOutcome::Failed) {
+        independent_submission_source_failed = true;
+        frame_native_accepted                 = false;
+    }
     if (graph_submission_fence) {
         for (uint64 value = 1; value <= graph_submission_value_count; ++value) {
             const bool source_accepted =
                 graph_submission_fence->WaitSubmitted(value);
+            independent_submission_source_failed =
+                independent_submission_source_failed ||
+                !source_accepted;
             frame_native_accepted =
                 source_accepted && frame_native_accepted;
         }
@@ -1545,9 +1584,14 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     if (graph_ui_recorded && ui_graph_submission_fence) {
         ui_source_accepted =
             ui_graph_submission_fence->WaitSubmitted(1);
+        independent_submission_source_failed =
+            independent_submission_source_failed ||
+            !ui_source_accepted;
     } else if (linear_ui_recorded) {
         // Linear UI work lives in the final tail itself.
-        ui_source_accepted = timeline->WaitSubmitted(time);
+        ui_source_accepted =
+            tail_submission_outcome ==
+            EExportSubmissionOutcome::Accepted;
     }
     bool ui_recording_committed = false;
     if (prepared_ui->GetRecordingState() ==
@@ -1555,6 +1599,9 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         if (ui_source_accepted) {
             ui_recording_committed =
                 prepared_ui->CommitAcceptedSource();
+            independent_submission_source_failed =
+                independent_submission_source_failed ||
+                !ui_recording_committed;
         } else {
             prepared_ui->RejectSource();
         }
@@ -1564,20 +1611,27 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                    UiFrameGraphPass::ERecordingState::FrameAccepted) {
         ui_recording_committed = true;
     } else {
+        independent_submission_source_failed = true;
         prepared_ui->RejectSource();
     }
     frame_native_accepted =
         frame_native_accepted && ui_recording_committed;
 #if WITH_NRD
     if (nrd_recorded && prepared_nrd) {
+        const bool upstream_sources_accepted =
+            frame_native_accepted;
         const bool nrd_submission_accepted =
-            frame_native_accepted &&
+            upstream_sources_accepted &&
             NrdDenoisePass::CommitAcceptedSubmission(
                 *prepared_nrd,
                 timeline,
                 time,
                 nrd_graph_submission_value_count
             );
+        if (upstream_sources_accepted &&
+            !nrd_submission_accepted) {
+            independent_submission_source_failed = true;
+        }
         frame_native_accepted =
             frame_native_accepted && nrd_submission_accepted;
         if (nrd_submission_accepted) {
@@ -1591,30 +1645,62 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             prepared_nrd->interface->ResetAcceptedHistory();
             state.nrd_time                = 0;
             state.nrd_outputs_initialized = false;
-            state.render_graph_fallback_latched          = true;
-            state.render_graph_recording_failure_latched = true;
-            LOG_CRITICAL(
-                "[NRD] Native submission rejected the NRD source or final "
-                "frame tail, or the immutable temporal snapshot could not "
-                "commit; disabling managed RT passes for this renderer "
-                "instance without advancing NRD history."
-            );
+            if (upstream_sources_accepted) {
+                LOG_CRITICAL(
+                    "[NRD] Native submission rejected the NRD source or the "
+                    "immutable temporal snapshot could not commit. Resetting "
+                    "NRD history; the independent frame failure will latch "
+                    "managed RT recording."
+                );
+            } else {
+                LOG_WARNING(
+                    "[NRD] Upstream export/frame submission was rejected. "
+                    "Resetting NRD history without independently latching the "
+                    "renderer."
+                );
+            }
         }
     }
 #endif
     if (frame_native_accepted) {
-        frame_native_accepted =
+        const bool ui_frame_committed =
             prepared_ui->CommitAcceptedFrame();
+        independent_submission_source_failed =
+            independent_submission_source_failed ||
+            !ui_frame_committed;
+        frame_native_accepted =
+            frame_native_accepted && ui_frame_committed;
+    }
+    const ExportFrameSubmissionDecision export_frame_decision =
+        export_submission.ClassifyFrameAcceptance(
+            tail_submission_outcome,
+            frame_native_accepted,
+            independent_submission_source_failed
+        );
+    frame_native_accepted = export_frame_decision.frame_accepted;
+    feedback.export_consumed =
+        export_frame_decision.export_consumed;
+    if (feedback.export_consumed) {
+        state.b_export = false;
     }
     if (!frame_native_accepted) {
-        state.render_graph_fallback_latched          = true;
-        state.render_graph_recording_failure_latched = true;
-        LOG_CRITICAL(
-            "[RenderGraph][Raytracing] Native submission rejected the final "
-            "tail, export source, managed graph source, or copied UI source. "
-            "Preserving accepted renderer history and disabling managed "
-            "recording for this renderer instance."
-        );
+        if (export_frame_decision.latch_renderer) {
+            state.render_graph_fallback_latched          = true;
+            state.render_graph_recording_failure_latched = true;
+            LOG_CRITICAL(
+                "[RenderGraph][Raytracing] Native submission rejected the "
+                "final tail, a managed graph/UI/NRD source, or failed without "
+                "an explicit recoverable outcome. Preserving accepted "
+                "renderer history and disabling managed recording for this "
+                "renderer instance."
+            );
+        } else {
+            LOG_WARNING(
+                "[Raytracing][Export] Export prefix and its dependent tail "
+                "were recoverably rejected. Preserving renderer history and "
+                "the export request without latching managed recording."
+            );
+        }
     }
     const bool frame_setup_accepted =
         frame_native_accepted &&

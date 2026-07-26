@@ -8,6 +8,7 @@
 #include <optional>
 
 namespace Moer::Render::Raytracing {
+class ExportSubmissionTransaction;
 struct FrameResources;
 }
 
@@ -74,7 +75,8 @@ private:
         RenderDevice&          _device,
         CommandQueue&          _gfx_queue,
         std::filesystem::path& _exported_file_path,
-        std::string_view       _suffix
+        std::string_view       _suffix,
+        ExportSubmissionTransaction& _export_submission
     );
 };
 

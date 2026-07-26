@@ -173,10 +173,11 @@ def present_hard_line() -> str:
 def rt_export_rejection_line() -> str:
     return (
         "[TESTCASE][PASS] name=RaytracingExportAcceptanceRejection "
-        "source=rejected tail=dependency_rejected readback=skipped "
-        "encoder=skipped export_consumed=false temporal=0 history=0 "
-        "tlas=0 native_rejected=0 callbacks=exactly_once "
-        "keepalive=terminal recovery=accepted replay=0\n"
+        "attempt1=prefix_rejected attempt1_tail=dependency_rejected "
+        "attempt1_latch=false request_pending=true "
+        "readback_retry=frame_accepted recovery_consumed=true encoder=once "
+        "decision_table=verified native_rejected=0 callbacks=exactly_once "
+        "keepalive=terminal replay=0\n"
     )
 
 
@@ -1000,14 +1001,29 @@ class VulkanRunnerTests(unittest.TestCase):
             rt_export_rejection_line(),
         )
 
-    def test_rt_export_rejection_rejects_state_commit(self) -> None:
+    def test_rt_export_rejection_rejects_retry_latch(self) -> None:
         with self.assertRaisesRegex(
             runner.VulkanTestError,
             "incomplete export transaction contract",
         ):
             runner.validate_log(
                 "rt-export-rejection",
-                rt_export_rejection_line().replace("tlas=0", "tlas=1"),
+                rt_export_rejection_line().replace(
+                    "attempt1_latch=false", "attempt1_latch=true"
+                ),
+            )
+
+    def test_rt_export_rejection_requires_readback_recovery(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete export transaction contract",
+        ):
+            runner.validate_log(
+                "rt-export-rejection",
+                rt_export_rejection_line().replace(
+                    "readback_retry=frame_accepted",
+                    "readback_retry=frame_rejected",
+                ),
             )
 
     def test_present_boundary_contract_is_accepted(self) -> None:
