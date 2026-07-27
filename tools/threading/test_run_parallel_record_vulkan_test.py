@@ -198,6 +198,7 @@ def occlusion_query_line() -> str:
     return (
         "[TESTCASE][PASS] name=OcclusionQueryCompletionOwnership "
         "queue=Graphics status=Ready samples=0 visible=false "
+        "count_precise=true "
         "availability=explicit pool=allocator_local bulk_pairs=48 "
         "growth=verified reuse=verified "
         "recording=serial_island "
@@ -1129,6 +1130,31 @@ class VulkanRunnerTests(unittest.TestCase):
                 occlusion_query_line().replace(
                     "bulk_pairs=48 growth=verified",
                     "bulk_pairs=1 growth=unverified",
+                ),
+            )
+
+    def test_occlusion_query_requires_precision_capability(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete native query contract",
+        ):
+            runner.validate_log(
+                "occlusion-query",
+                occlusion_query_line().replace(
+                    "count_precise=true ",
+                    "",
+                ),
+            )
+
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete native query contract",
+        ):
+            runner.validate_log(
+                "occlusion-query",
+                occlusion_query_line().replace(
+                    "count_precise=true",
+                    "count_precise=unknown",
                 ),
             )
 

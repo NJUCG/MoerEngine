@@ -36,8 +36,11 @@ struct TimestampQueryResult {
 };
 
 struct OcclusionQueryResult {
-    std::uint64_t sample_count{0};
-    bool          visible{false};
+    // Exact only when the backend requested a precise native query. A
+    // visibility-only backend leaves this empty instead of exposing an
+    // implementation-defined nonzero value as a real sample count.
+    std::optional<std::uint64_t> sample_count{};
+    bool                         visible{false};
 };
 
 struct QueryResult {

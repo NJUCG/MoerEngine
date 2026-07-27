@@ -271,6 +271,7 @@ private:
         QueryToken token{};
         uint32     slot{std::numeric_limits<uint32>::max()};
         bool       ended{false};
+        bool       precise{false};
         EPreparedState       prepared_state{EPreparedState::Unprepared};
         OcclusionQueryResult prepared_result{};
     };

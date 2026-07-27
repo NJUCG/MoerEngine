@@ -573,11 +573,21 @@ void VulkanAllocator::RecordOcclusionQuery(
             throw std::runtime_error("duplicate Vulkan occlusion query begin");
         }
         const uint32 slot = AllocateOcclusionQuerySlot();
+        // VulkanDevice enables the complete supported core feature set at
+        // device creation. Preserve visibility-only support on devices
+        // without occlusionQueryPrecise, but do not expose their
+        // implementation-defined nonzero value as an exact sample count.
+        const bool precise =
+            m_device->GetCoreFeatures().core_1_0.occlusionQueryPrecise ==
+            VK_TRUE;
+        const VkQueryControlFlags flags =
+            precise ? VK_QUERY_CONTROL_PRECISE_BIT : 0;
         _cmd_list.ResetQueryPool(*occlusion_pool, slot, 1);
-        _cmd_list.BeginQuery(*occlusion_pool, slot, 0);
+        _cmd_list.BeginQuery(*occlusion_pool, slot, flags);
         occlusion_query_records.emplace_back(OcclusionQueryRecord{
-            .token = token,
-            .slot  = slot,
+            .token   = token,
+            .slot    = slot,
+            .precise = precise,
         });
         return;
     }
@@ -758,7 +768,11 @@ VkResult VulkanAllocator::PrepareOcclusionQueriesAfterGpuCompletion(
         }
 
         record.prepared_result = OcclusionQueryResult{
-            .sample_count = native_result.sample_count,
+            .sample_count = record.precise ?
+                                std::optional<uint64>{
+                                    native_result.sample_count
+                                } :
+                                std::nullopt,
             .visible      = native_result.sample_count != 0,
         };
         record.prepared_state =

@@ -102,6 +102,13 @@ OcclusionQueryResult TestOcclusionResult(
     };
 }
 
+OcclusionQueryResult TestVisibilityOnlyOcclusionResult(bool _visible) {
+    return OcclusionQueryResult{
+        .sample_count = std::nullopt,
+        .visible      = _visible,
+    };
+}
+
 void OcclusionPayloadAndBatchResolutionAreTyped() {
     CommandList single_list(EQueueType::Graphics);
     QueryToken  single = single_list.BeginOcclusionQuery("SingleOcclusion");
@@ -137,6 +144,27 @@ void OcclusionPayloadAndBatchResolutionAreTyped() {
         single_payload != nullptr && single_payload->sample_count == 91 &&
             single_payload->visible,
         "occlusion result has the wrong typed payload"
+    );
+
+    CommandList visibility_list(EQueueType::Graphics);
+    QueryToken visibility =
+        visibility_list.BeginOcclusionQuery("VisibilityOnlyOcclusion");
+    visibility_list.EndOcclusionQuery(visibility);
+    CmdSubmit visibility_submit = visibility_list.Submit();
+    Expect(
+        QueryBackendAccess::ResolveOcclusion(
+            visibility, TestVisibilityOnlyOcclusionResult(true)
+        ),
+        "visibility-only occlusion resolution did not become terminal"
+    );
+    const QueryResult visibility_result = visibility.GetFuture().Get();
+    const auto* visibility_payload =
+        std::get_if<OcclusionQueryResult>(&visibility_result.payload);
+    Expect(
+        visibility_payload != nullptr &&
+            !visibility_payload->sample_count.has_value() &&
+            visibility_payload->visible,
+        "visibility-only occlusion result exposed an inexact sample count"
     );
 
     CommandList timestamp_list(EQueueType::Graphics);

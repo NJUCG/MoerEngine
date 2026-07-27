@@ -971,6 +971,7 @@ def _require_occlusion_query(text: str) -> None:
         and fields.get("status") == "Ready"
         and fields.get("samples") == "0"
         and fields.get("visible") == "false"
+        and fields.get("count_precise") in {"true", "false"}
         and fields.get("availability") == "explicit"
         and fields.get("pool") == "allocator_local"
         and fields.get("bulk_pairs") == "48"

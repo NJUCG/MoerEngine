@@ -29,6 +29,7 @@
 #include <filesystem>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <semaphore>
 #include <span>
 #include <stdexcept>
@@ -48,6 +49,19 @@ constexpr size_t kElementCount = 64;
 constexpr uint32 kIterations   = 24;
 constexpr uint32 kHeavyCopiesPerWave = 48;
 constexpr uint32 kHeavyCopyCount = kHeavyCopiesPerWave * 2;
+
+bool IsExpectedZeroOcclusionResult(
+    const OcclusionQueryResult* _result,
+    bool                        _precise
+) {
+    if (_result == nullptr || _result->visible) {
+        return false;
+    }
+    return _precise ?
+               _result->sample_count ==
+                   std::optional<std::uint64_t>{0} :
+               !_result->sample_count.has_value();
+}
 
 class TranslateProbeCommand final : public VkCustomDispatchCmd {
 public:
@@ -11618,6 +11632,12 @@ void RunTimestampQueryCompletionOwnership() {
 
 void RunOcclusionQueryCompletionOwnership() {
     auto& device = RenderDevice::Get();
+    const auto* vulkan_device =
+        static_cast<const VulkanDevice*>(device.GetImpl());
+    const bool precise_sample_count =
+        vulkan_device != nullptr &&
+        vulkan_device->GetCoreFeatures().core_1_0.occlusionQueryPrecise ==
+            VK_TRUE;
     const EBufferUsageFlags usage =
         EBufferUsageFlags::TRANSFER_SRC |
         EBufferUsageFlags::TRANSFER_DST;
@@ -11681,9 +11701,9 @@ void RunOcclusionQueryCompletionOwnership() {
                 ERHIThreadRole::Completion ||
             _result.status != QueryStatus::Ready ||
             _result.kind != QueryKind::Occlusion ||
-            occlusion == nullptr ||
-            occlusion->sample_count != 0 ||
-            occlusion->visible ||
+            !IsExpectedZeroOcclusionResult(
+                occlusion, precise_sample_count
+            ) ||
             gpu_completion.Status() !=
                 GpuCompletionStatus::Ready ||
             callback_stage.load(std::memory_order_acquire) != 1) {
@@ -11749,9 +11769,9 @@ void RunOcclusionQueryCompletionOwnership() {
         std::get_if<OcclusionQueryResult>(&result.payload);
     if (result.status != QueryStatus::Ready ||
         result.kind != QueryKind::Occlusion ||
-        occlusion == nullptr ||
-        occlusion->sample_count != 0 ||
-        occlusion->visible ||
+        !IsExpectedZeroOcclusionResult(
+            occlusion, precise_sample_count
+        ) ||
         completion_result.status !=
             GpuCompletionStatus::Ready ||
         callback_count.load(std::memory_order_acquire) != 1 ||
@@ -11791,9 +11811,9 @@ void RunOcclusionQueryCompletionOwnership() {
                         ERHIThreadRole::Completion ||
                     _result.status != QueryStatus::Ready ||
                     _result.kind != QueryKind::Occlusion ||
-                    bulk_occlusion == nullptr ||
-                    bulk_occlusion->sample_count != 0 ||
-                    bulk_occlusion->visible) {
+                    !IsExpectedZeroOcclusionResult(
+                        bulk_occlusion, precise_sample_count
+                    )) {
                     bulk_callback_errors.fetch_add(
                         1, std::memory_order_relaxed
                     );
@@ -11820,9 +11840,9 @@ void RunOcclusionQueryCompletionOwnership() {
             );
         if (bulk_result.status != QueryStatus::Ready ||
             bulk_result.kind != QueryKind::Occlusion ||
-            bulk_occlusion == nullptr ||
-            bulk_occlusion->sample_count != 0 ||
-            bulk_occlusion->visible ||
+            !IsExpectedZeroOcclusionResult(
+                bulk_occlusion, precise_sample_count
+            ) ||
             bulk_callback_counts[index].load(
                 std::memory_order_acquire
             ) != 1) {
@@ -11853,9 +11873,9 @@ void RunOcclusionQueryCompletionOwnership() {
                 ERHIThreadRole::Completion ||
             _result.status != QueryStatus::Ready ||
             _result.kind != QueryKind::Occlusion ||
-            reused_occlusion == nullptr ||
-            reused_occlusion->sample_count != 0 ||
-            reused_occlusion->visible) {
+            !IsExpectedZeroOcclusionResult(
+                reused_occlusion, precise_sample_count
+            )) {
             callback_errors.fetch_add(
                 1, std::memory_order_relaxed
             );
@@ -11879,9 +11899,9 @@ void RunOcclusionQueryCompletionOwnership() {
         );
     if (reused_result.status != QueryStatus::Ready ||
         reused_result.kind != QueryKind::Occlusion ||
-        reused_occlusion == nullptr ||
-        reused_occlusion->sample_count != 0 ||
-        reused_occlusion->visible ||
+        !IsExpectedZeroOcclusionResult(
+            reused_occlusion, precise_sample_count
+        ) ||
         reused_callback_count.load(
             std::memory_order_acquire
         ) != 1 ||
@@ -11894,13 +11914,15 @@ void RunOcclusionQueryCompletionOwnership() {
     LOG_INFO(
         "[TESTCASE][PASS] name=OcclusionQueryCompletionOwnership "
         "queue=Graphics status=Ready samples={} visible={} "
+        "count_precise={} "
         "availability=explicit pool=allocator_local bulk_pairs={} "
         "growth=verified reuse=verified "
         "recording=serial_island "
         "order=signal->completion->query->ordinary "
         "callbacks=exactly_once readback=verified replay=0",
-        occlusion->sample_count,
+        occlusion->sample_count.value_or(0),
         occlusion->visible,
+        precise_sample_count,
         bulk_pair_count
     );
 }
