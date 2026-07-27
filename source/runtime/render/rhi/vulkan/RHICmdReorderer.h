@@ -1520,11 +1520,26 @@ public:
     void VisitCmd(const CustomDispatchCmd* _cmd) {
         m_arg_write_resources.clear();
         m_arg_read_resources.clear();
+        temp_writed_resources.clear();
         layer_offset = m_cmd_lists.size(); // make sure the custom dispatch command is in a separate scope
-        auto func    = [&](const TArg& _arg, ParamInfoFlags _flag) {
+        Array<BindlessArrayRef> bindless_arrays{};
+        UnorderedSet<BindlessArray*> seen_bindless{};
+        auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
+            if (std::holds_alternative<BindlessArrayRef>(_arg)) {
+                const BindlessArrayRef& bindless =
+                    std::get<BindlessArrayRef>(_arg);
+                if (bindless &&
+                    seen_bindless.emplace(bindless.Get()).second) {
+                    bindless_arrays.emplace_back(bindless);
+                }
+                return;
+            }
             VisitArgs(_arg, _flag.state_flags);
         };
         _cmd->IterateArgs(func);
+        for (const BindlessArrayRef& bindless : bindless_arrays) {
+            VisitBindlessArg(bindless, temp_writed_resources);
+        }
 
         // A side-effect-only custom dispatch may intentionally expose no
         // resource usages. Keep it in the isolated custom-command scope
@@ -1535,6 +1550,10 @@ public:
         }
         for (const auto& read_res : m_arg_read_resources) {
             RecordRead(std::get<1>(read_res), std::get<0>(read_res), m_dispatch_layer);
+        }
+        if (!bindless_arrays.empty()) {
+            m_max_bdls_layer =
+                std::max(m_max_bdls_layer, m_dispatch_layer);
         }
         AddCmd(_cmd, m_dispatch_layer);
         layer_offset = m_cmd_lists.size();

@@ -88,6 +88,39 @@ public:
     }
 };
 
+class BindlessPresentationAccessProbeCommand final
+    : public VkCustomDispatchCmd {
+public:
+    explicit BindlessPresentationAccessProbeCommand(
+        BindlessArrayRef _bindless,
+        EQueueType       _queue = EQueueType::Graphics
+    ) :
+        queue(_queue) {
+        usages.emplace_back(
+            std::move(_bindless),
+            ParamInfoFlags{
+                .state_flags    = 0,
+                .pipeline_flags = 0,
+            }
+        );
+    }
+
+    void Execute(const VkDispatchContext&) const override {}
+
+    EQueueType GetQueueType() const override {
+        return queue;
+    }
+
+private:
+    std::span<const ResourceUsage>
+    GetResourceUsages() const override {
+        return usages;
+    }
+
+    Array<ResourceUsage> usages{};
+    EQueueType           queue{EQueueType::Graphics};
+};
+
 class PipelineTranslateProbeCommand final : public VkCustomDispatchCmd {
 public:
     PipelineTranslateProbeCommand(
@@ -8580,6 +8613,895 @@ void RunPresentSourceContractRejection() {
             return submit;
         };
 
+    const auto create_bindless_present_source =
+        [&](std::string_view _name) {
+            return device.CreateTexture(
+                _name,
+                Extent3D(4, 4, 1),
+                PF_R8G8B8A8_UNORM,
+                present_source_usage |
+                    ETextureUsageFlags::SAMPLED
+            );
+        };
+    TextureRef bindless_access_then_add =
+        create_bindless_present_source(
+            "present_bindless_access_then_add"
+        );
+    TextureRef bindless_add_then_access =
+        create_bindless_present_source(
+            "present_bindless_add_then_access"
+        );
+    TextureRef bindless_duplicate =
+        create_bindless_present_source(
+            "present_bindless_duplicate"
+        );
+    TextureRef bindless_rejected_add =
+        create_bindless_present_source(
+            "present_bindless_rejected_add"
+        );
+    TextureRef bindless_rejected_free =
+        create_bindless_present_source(
+            "present_bindless_rejected_free"
+        );
+    TextureRef bindless_future_allocation =
+        create_bindless_present_source(
+            "present_bindless_future_allocation"
+        );
+    TextureRef bindless_segment_access_add =
+        create_bindless_present_source(
+            "present_bindless_segment_access_add"
+        );
+    TextureRef bindless_segment_add_access =
+        create_bindless_present_source(
+            "present_bindless_segment_add_access"
+        );
+    TextureRef bindless_accepted_add_prefix =
+        create_bindless_present_source(
+            "present_bindless_accepted_add_prefix"
+        );
+    TextureRef bindless_accepted_free_prefix =
+        create_bindless_present_source(
+            "present_bindless_accepted_free_prefix"
+        );
+    TextureRef bindless_cross_queue =
+        create_bindless_present_source(
+            "present_bindless_cross_queue"
+        );
+    TextureRef bindless_parallel_record =
+        create_bindless_present_source(
+            "present_bindless_parallel_record"
+        );
+    BindlessArrayRef bindless =
+        device.CreateBindlessArray(32);
+    BindlessArrayRef future_bindless =
+        device.CreateBindlessArray(8);
+    if (!bindless_access_then_add ||
+        !bindless_add_then_access ||
+        !bindless_duplicate ||
+        !bindless_rejected_add ||
+        !bindless_rejected_free ||
+        !bindless_future_allocation ||
+        !bindless_segment_access_add ||
+        !bindless_segment_add_access ||
+        !bindless_accepted_add_prefix ||
+        !bindless_accepted_free_prefix ||
+        !bindless_cross_queue ||
+        !bindless_parallel_record ||
+        !bindless ||
+        !future_bindless) {
+        throw std::runtime_error(
+            "bindless Present contract resources were not created"
+        );
+    }
+
+    const Sampler bindless_sampler(
+        SF_LINEAR, SAM_CLAMP_TO_EDGE
+    );
+    const auto add_bindless_access =
+        [&](CommandList&          _commands,
+            const BindlessArrayRef& _bindless,
+            std::string_view      _name,
+            EQueueType _queue = EQueueType::Graphics) {
+            _commands.AddCustomCommand(
+                MakeUnique<
+                    BindlessPresentationAccessProbeCommand>(
+                    _bindless, _queue
+                ),
+                _name
+            );
+        };
+    const auto submit_accepted_commands =
+        [&](CommandList& _commands, std::string_view _name) {
+            FenceRef accepted = device.CreateFence();
+            if (!accepted) {
+                throw std::runtime_error(
+                    "failed to create bindless Present acceptance fence"
+                );
+            }
+            CmdSubmit submit = _commands.Submit();
+            submit.Signal(accepted.Get(), 1);
+            RHIExecutor::Get().Submit(
+                _commands.GetQueueType(),
+                std::move(submit),
+                ERHIExecSubmitFlags::FlushGPU
+            );
+            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+            auto* vk_accepted = ResourceCast(accepted.Get());
+            if (!vk_accepted->WaitSubmitted(1) ||
+                vk_accepted->IsRejected(1) ||
+                vk_accepted->IsFailed()) {
+                throw std::runtime_error(
+                    std::string(_name) +
+                    " did not reach native submission"
+                );
+            }
+        };
+    const auto submit_dependency_rejected_commands =
+        [&](CommandList& _commands, std::string_view _name) {
+            FenceRef dependency = device.CreateFence();
+            FenceRef rejected   = device.CreateFence();
+            if (!dependency || !rejected) {
+                throw std::runtime_error(
+                    "failed to create bindless Present rejection fences"
+                );
+            }
+            dependency->Reject(1);
+            CmdSubmit submit = _commands.Submit();
+            submit.Wait(dependency.Get(), 1);
+            submit.Signal(rejected.Get(), 1);
+            RHIExecutor::Get().Submit(
+                _commands.GetQueueType(),
+                std::move(submit),
+                ERHIExecSubmitFlags::FlushGPU
+            );
+            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+            auto* vk_rejected = ResourceCast(rejected.Get());
+            if (!vk_rejected->IsRejected(1) ||
+                vk_rejected->IsFailed()) {
+                throw std::runtime_error(
+                    std::string(_name) +
+                    " was not recoverably rejected"
+                );
+            }
+        };
+    const auto publish_bindless_source =
+        [&](const TextureRef& _texture,
+            std::string_view  _name) {
+            FenceRef accepted = device.CreateFence();
+            if (!accepted) {
+                throw std::runtime_error(
+                    "failed to create bindless publication fence"
+                );
+            }
+            RHIExecutor::Get().Submit(
+                EQueueType::Graphics,
+                make_backend_tracked_publication(
+                    _texture, accepted, 1
+                ),
+                ERHIExecSubmitFlags::FlushGPU
+            );
+            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+            if (!ResourceCast(accepted.Get())->WaitSubmitted(1) ||
+                !ResourceCast(_texture.Get())
+                     ->IsPresentationSourceReady()) {
+                throw std::runtime_error(
+                    std::string(_name) +
+                    " failed to publish Present readiness"
+                );
+            }
+        };
+    const auto require_bindless_ready =
+        [&](const TextureRef& _texture,
+            bool              _expected,
+            std::string_view  _case_name) {
+            const bool ready =
+                ResourceCast(_texture.Get())
+                    ->IsPresentationSourceReady();
+            if (ready != _expected) {
+                throw std::runtime_error(
+                    std::string(_case_name) +
+                    (_expected ?
+                         " unexpectedly lost Present readiness" :
+                         " left stale Present readiness")
+                );
+            }
+        };
+
+    // Access -> Add: the access sees the accepted entry membership, not the
+    // frontend allocation created later in this same command source.
+    publish_bindless_source(
+        bindless_access_then_add, "bindless Access->Add"
+    );
+    CommandList access_then_add(EQueueType::Graphics);
+    add_bindless_access(
+        access_then_add,
+        bindless,
+        "BindlessPresentAccessThenAdd"
+    );
+    const uint access_then_add_slot =
+        bindless->AllocateTexture(
+            bindless_access_then_add->GetView(),
+            bindless_sampler
+        );
+    access_then_add.UpdateBindlessArray(bindless);
+    submit_accepted_commands(
+        access_then_add, "bindless Access->Add"
+    );
+    require_bindless_ready(
+        bindless_access_then_add,
+        true,
+        "bindless Access->Add"
+    );
+
+    // Access -> Free still observes the old accepted slot before the update.
+    CommandList access_then_free(EQueueType::Graphics);
+    add_bindless_access(
+        access_then_free,
+        bindless,
+        "BindlessPresentAccessThenFree"
+    );
+    bindless->UnbindTexture(access_then_add_slot);
+    access_then_free.UpdateBindlessArray(bindless);
+    submit_accepted_commands(
+        access_then_free, "bindless Access->Free"
+    );
+    require_bindless_ready(
+        bindless_access_then_add,
+        false,
+        "bindless Access->Free"
+    );
+
+    // Add -> Access sees the new descriptor membership from the preceding
+    // update command in the same source.
+    publish_bindless_source(
+        bindless_add_then_access, "bindless Add->Access"
+    );
+    const uint add_then_access_slot =
+        bindless->AllocateTexture(
+            bindless_add_then_access->GetView(),
+            bindless_sampler
+        );
+    CommandList add_then_access(EQueueType::Graphics);
+    add_then_access.UpdateBindlessArray(bindless);
+    add_bindless_access(
+        add_then_access,
+        bindless,
+        "BindlessPresentAddThenAccess"
+    );
+    submit_accepted_commands(
+        add_then_access, "bindless Add->Access"
+    );
+    require_bindless_ready(
+        bindless_add_then_access,
+        false,
+        "bindless Add->Access"
+    );
+
+    // Free -> Access no longer sees the removed accepted slot.
+    publish_bindless_source(
+        bindless_add_then_access, "bindless Free->Access"
+    );
+    bindless->UnbindTexture(add_then_access_slot);
+    CommandList free_then_access(EQueueType::Graphics);
+    free_then_access.UpdateBindlessArray(bindless);
+    add_bindless_access(
+        free_then_access,
+        bindless,
+        "BindlessPresentFreeThenAccess"
+    );
+    submit_accepted_commands(
+        free_then_access, "bindless Free->Access"
+    );
+    require_bindless_ready(
+        bindless_add_then_access,
+        true,
+        "bindless Free->Access"
+    );
+
+    // Two descriptor slots can reference one texture. Removing one slot must
+    // retain membership; removing the final slot must close it.
+    const uint duplicate_slot_a =
+        bindless->AllocateTexture(
+            bindless_duplicate->GetView(), bindless_sampler
+        );
+    const uint duplicate_slot_b =
+        bindless->AllocateTexture(
+            bindless_duplicate->GetView(), bindless_sampler
+        );
+    CommandList add_duplicate(EQueueType::Graphics);
+    add_duplicate.UpdateBindlessArray(bindless);
+    submit_accepted_commands(
+        add_duplicate, "bindless duplicate add"
+    );
+    publish_bindless_source(
+        bindless_duplicate, "bindless duplicate first free"
+    );
+    bindless->UnbindTexture(duplicate_slot_a);
+    CommandList free_one_duplicate(EQueueType::Graphics);
+    free_one_duplicate.UpdateBindlessArray(bindless);
+    add_bindless_access(
+        free_one_duplicate,
+        bindless,
+        "BindlessPresentFreeOneDuplicate"
+    );
+    submit_accepted_commands(
+        free_one_duplicate, "bindless duplicate first free"
+    );
+    require_bindless_ready(
+        bindless_duplicate,
+        false,
+        "bindless duplicate first free"
+    );
+    publish_bindless_source(
+        bindless_duplicate, "bindless duplicate final free"
+    );
+    bindless->UnbindTexture(duplicate_slot_b);
+    CommandList free_last_duplicate(EQueueType::Graphics);
+    free_last_duplicate.UpdateBindlessArray(bindless);
+    add_bindless_access(
+        free_last_duplicate,
+        bindless,
+        "BindlessPresentFreeLastDuplicate"
+    );
+    submit_accepted_commands(
+        free_last_duplicate, "bindless duplicate final free"
+    );
+    require_bindless_ready(
+        bindless_duplicate,
+        true,
+        "bindless duplicate final free"
+    );
+
+    // A rejected add never enters accepted descriptor membership.
+    publish_bindless_source(
+        bindless_rejected_add, "bindless rejected add"
+    );
+    (void)bindless->AllocateTexture(
+        bindless_rejected_add->GetView(), bindless_sampler
+    );
+    CommandList rejected_add(EQueueType::Graphics);
+    rejected_add.UpdateBindlessArray(bindless);
+    submit_dependency_rejected_commands(
+        rejected_add, "bindless rejected add"
+    );
+    CommandList access_after_rejected_add(
+        EQueueType::Graphics
+    );
+    add_bindless_access(
+        access_after_rejected_add,
+        bindless,
+        "BindlessPresentAccessAfterRejectedAdd"
+    );
+    submit_accepted_commands(
+        access_after_rejected_add,
+        "bindless access after rejected add"
+    );
+    require_bindless_ready(
+        bindless_rejected_add,
+        true,
+        "bindless access after rejected add"
+    );
+
+    // Conversely, a rejected free preserves the last accepted membership.
+    const uint rejected_free_slot =
+        bindless->AllocateTexture(
+            bindless_rejected_free->GetView(),
+            bindless_sampler
+        );
+    CommandList accepted_before_rejected_free(
+        EQueueType::Graphics
+    );
+    accepted_before_rejected_free.UpdateBindlessArray(bindless);
+    submit_accepted_commands(
+        accepted_before_rejected_free,
+        "bindless accepted add before rejected free"
+    );
+    publish_bindless_source(
+        bindless_rejected_free, "bindless rejected free"
+    );
+    bindless->UnbindTexture(rejected_free_slot);
+    CommandList rejected_free(EQueueType::Graphics);
+    rejected_free.UpdateBindlessArray(bindless);
+    submit_dependency_rejected_commands(
+        rejected_free, "bindless rejected free"
+    );
+    CommandList access_after_rejected_free(
+        EQueueType::Graphics
+    );
+    add_bindless_access(
+        access_after_rejected_free,
+        bindless,
+        "BindlessPresentAccessAfterRejectedFree"
+    );
+    submit_accepted_commands(
+        access_after_rejected_free,
+        "bindless access after rejected free"
+    );
+    require_bindless_ready(
+        bindless_rejected_free,
+        false,
+        "bindless access after rejected free"
+    );
+
+    // Seal S0 before a later frontend allocation. Even if Allocate happens
+    // before S0 reaches Translate, S0 must read accepted (empty) membership.
+    publish_bindless_source(
+        bindless_future_allocation,
+        "bindless future allocation"
+    );
+    CommandList future_access_commands(EQueueType::Graphics);
+    add_bindless_access(
+        future_access_commands,
+        future_bindless,
+        "BindlessPresentFutureAllocationAccess"
+    );
+    CmdSubmit sealed_future_access =
+        future_access_commands.Submit();
+    (void)future_bindless->AllocateTexture(
+        bindless_future_allocation->GetView(),
+        bindless_sampler
+    );
+    CommandList rejected_future_update(
+        EQueueType::Graphics
+    );
+    rejected_future_update.UpdateBindlessArray(
+        future_bindless
+    );
+    FenceRef future_access_done = device.CreateFence();
+    sealed_future_access.Signal(
+        future_access_done.Get(), 1
+    );
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        std::move(sealed_future_access),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (!ResourceCast(future_access_done.Get())
+             ->WaitSubmitted(1)) {
+        throw std::runtime_error(
+            "sealed bindless access was not submitted"
+        );
+    }
+    require_bindless_ready(
+        bindless_future_allocation,
+        true,
+        "sealed bindless access with a future allocation"
+    );
+    submit_dependency_rejected_commands(
+        rejected_future_update,
+        "future bindless update"
+    );
+    CommandList access_after_rejected_future(
+        EQueueType::Graphics
+    );
+    add_bindless_access(
+        access_after_rejected_future,
+        future_bindless,
+        "BindlessPresentAccessAfterRejectedFutureUpdate"
+    );
+    submit_accepted_commands(
+        access_after_rejected_future,
+        "access after rejected future bindless update"
+    );
+    require_bindless_ready(
+        bindless_future_allocation,
+        true,
+        "access after rejected future bindless update"
+    );
+
+    constexpr uint64 bindless_segment_scope =
+        0x5042494e444c4553ull;
+    publish_bindless_source(
+        bindless_segment_access_add,
+        "segmented bindless Access->Add"
+    );
+    CommandList segmented_access_add(EQueueType::Graphics);
+    segmented_access_add.SetResourceStateOwnership(
+        ERHIResourceStateOwnership::Explicit
+    );
+    add_bindless_access(
+        segmented_access_add,
+        bindless,
+        "SegmentedBindlessAccess"
+    );
+    (void)bindless->AllocateTexture(
+        bindless_segment_access_add->GetView(),
+        bindless_sampler
+    );
+    segmented_access_add.UpdateBindlessArray(bindless);
+    CmdSubmit segmented_access_add_submit =
+        segmented_access_add.Submit();
+    segmented_access_add_submit.async_queue_scope =
+        bindless_segment_scope;
+    segmented_access_add_submit.segments = {
+        RHISubmitSegment{EQueueType::Graphics, 0, 1},
+        RHISubmitSegment{EQueueType::Graphics, 1, 2},
+    };
+    FenceRef segmented_access_add_done =
+        device.CreateFence();
+    segmented_access_add_submit.Signal(
+        segmented_access_add_done.Get(), 1
+    );
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        std::move(segmented_access_add_submit),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (!ResourceCast(segmented_access_add_done.Get())
+             ->WaitSubmitted(1)) {
+        throw std::runtime_error(
+            "segmented bindless Access->Add was not submitted"
+        );
+    }
+    require_bindless_ready(
+        bindless_segment_access_add,
+        true,
+        "segmented bindless Access->Add"
+    );
+
+    publish_bindless_source(
+        bindless_segment_add_access,
+        "segmented bindless Add->Access"
+    );
+    (void)bindless->AllocateTexture(
+        bindless_segment_add_access->GetView(),
+        bindless_sampler
+    );
+    CommandList segmented_add_access(EQueueType::Graphics);
+    segmented_add_access.SetResourceStateOwnership(
+        ERHIResourceStateOwnership::Explicit
+    );
+    segmented_add_access.UpdateBindlessArray(bindless);
+    add_bindless_access(
+        segmented_add_access,
+        bindless,
+        "SegmentedBindlessAccessAfterAdd"
+    );
+    CmdSubmit segmented_add_access_submit =
+        segmented_add_access.Submit();
+    segmented_add_access_submit.async_queue_scope =
+        bindless_segment_scope + 1;
+    segmented_add_access_submit.segments = {
+        RHISubmitSegment{EQueueType::Graphics, 0, 1},
+        RHISubmitSegment{EQueueType::Graphics, 1, 2},
+    };
+    FenceRef segmented_add_access_done =
+        device.CreateFence();
+    segmented_add_access_submit.Signal(
+        segmented_add_access_done.Get(), 1
+    );
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        std::move(segmented_add_access_submit),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (!ResourceCast(segmented_add_access_done.Get())
+             ->WaitSubmitted(1)) {
+        throw std::runtime_error(
+            "segmented bindless Add->Access was not submitted"
+        );
+    }
+    require_bindless_ready(
+        bindless_segment_add_access,
+        false,
+        "segmented bindless Add->Access"
+    );
+
+    // A materialized accepted membership prefix survives an opaque rejected
+    // suffix and is visible to the next independently accepted source.
+    publish_bindless_source(
+        bindless_accepted_add_prefix,
+        "bindless accepted add prefix"
+    );
+    (void)bindless->AllocateTexture(
+        bindless_accepted_add_prefix->GetView(),
+        bindless_sampler
+    );
+    CommandList accepted_add_prefix(EQueueType::Graphics);
+    accepted_add_prefix.SetResourceStateOwnership(
+        ERHIResourceStateOwnership::Explicit
+    );
+    accepted_add_prefix.UpdateBindlessArray(bindless);
+    accepted_add_prefix.AddCustomCommand(
+        MakeUnique<OpaquePresentationStateProbeCommand>(),
+        "RejectedAfterAcceptedBindlessAdd"
+    );
+    CmdSubmit accepted_add_prefix_submit =
+        accepted_add_prefix.Submit();
+    accepted_add_prefix_submit.async_queue_scope =
+        bindless_segment_scope + 2;
+    accepted_add_prefix_submit.segments = {
+        RHISubmitSegment{EQueueType::Graphics, 0, 1},
+        RHISubmitSegment{EQueueType::Graphics, 1, 2},
+    };
+    FenceRef accepted_add_prefix_done =
+        device.CreateFence();
+    accepted_add_prefix_submit.Signal(
+        accepted_add_prefix_done.Get(), 1
+    );
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        std::move(accepted_add_prefix_submit),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (!ResourceCast(accepted_add_prefix_done.Get())
+             ->IsRejected(1) ||
+        ResourceCast(accepted_add_prefix_done.Get())
+            ->IsFailed()) {
+        throw std::runtime_error(
+            "bindless accepted add prefix suffix was not "
+            "recoverably rejected"
+        );
+    }
+    CommandList access_after_add_prefix(
+        EQueueType::Graphics
+    );
+    add_bindless_access(
+        access_after_add_prefix,
+        bindless,
+        "BindlessPresentAccessAfterAcceptedAddPrefix"
+    );
+    submit_accepted_commands(
+        access_after_add_prefix,
+        "access after accepted bindless add prefix"
+    );
+    require_bindless_ready(
+        bindless_accepted_add_prefix,
+        false,
+        "access after accepted bindless add prefix"
+    );
+
+    const uint accepted_free_prefix_slot =
+        bindless->AllocateTexture(
+            bindless_accepted_free_prefix->GetView(),
+            bindless_sampler
+        );
+    CommandList add_before_free_prefix(
+        EQueueType::Graphics
+    );
+    add_before_free_prefix.UpdateBindlessArray(bindless);
+    submit_accepted_commands(
+        add_before_free_prefix,
+        "add before accepted bindless free prefix"
+    );
+    publish_bindless_source(
+        bindless_accepted_free_prefix,
+        "bindless accepted free prefix"
+    );
+    bindless->UnbindTexture(accepted_free_prefix_slot);
+    CommandList accepted_free_prefix(
+        EQueueType::Graphics
+    );
+    accepted_free_prefix.SetResourceStateOwnership(
+        ERHIResourceStateOwnership::Explicit
+    );
+    accepted_free_prefix.UpdateBindlessArray(bindless);
+    accepted_free_prefix.AddCustomCommand(
+        MakeUnique<OpaquePresentationStateProbeCommand>(),
+        "RejectedAfterAcceptedBindlessFree"
+    );
+    CmdSubmit accepted_free_prefix_submit =
+        accepted_free_prefix.Submit();
+    accepted_free_prefix_submit.async_queue_scope =
+        bindless_segment_scope + 3;
+    accepted_free_prefix_submit.segments = {
+        RHISubmitSegment{EQueueType::Graphics, 0, 1},
+        RHISubmitSegment{EQueueType::Graphics, 1, 2},
+    };
+    FenceRef accepted_free_prefix_done =
+        device.CreateFence();
+    accepted_free_prefix_submit.Signal(
+        accepted_free_prefix_done.Get(), 1
+    );
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        std::move(accepted_free_prefix_submit),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (!ResourceCast(accepted_free_prefix_done.Get())
+             ->IsRejected(1) ||
+        ResourceCast(accepted_free_prefix_done.Get())
+            ->IsFailed()) {
+        throw std::runtime_error(
+            "bindless accepted free prefix suffix was not "
+            "recoverably rejected"
+        );
+    }
+    CommandList access_after_free_prefix(
+        EQueueType::Graphics
+    );
+    add_bindless_access(
+        access_after_free_prefix,
+        bindless,
+        "BindlessPresentAccessAfterAcceptedFreePrefix"
+    );
+    submit_accepted_commands(
+        access_after_free_prefix,
+        "access after accepted bindless free prefix"
+    );
+    require_bindless_ready(
+        bindless_accepted_free_prefix,
+        true,
+        "access after accepted bindless free prefix"
+    );
+
+    if (device.GetQueueTopology().compute.available) {
+        (void)bindless->AllocateTexture(
+            bindless_cross_queue->GetView(),
+            bindless_sampler
+        );
+        CommandList cross_queue_add(EQueueType::Graphics);
+        cross_queue_add.UpdateBindlessArray(bindless);
+        submit_accepted_commands(
+            cross_queue_add,
+            "Graphics bindless add before Compute access"
+        );
+        publish_bindless_source(
+            bindless_cross_queue,
+            "Graphics bindless add before Compute access"
+        );
+        CommandList compute_access(EQueueType::Compute);
+        add_bindless_access(
+            compute_access,
+            bindless,
+            "BindlessPresentComputeAccess",
+            EQueueType::Compute
+        );
+        submit_accepted_commands(
+            compute_access,
+            "Compute bindless access after Graphics add"
+        );
+        require_bindless_ready(
+            bindless_cross_queue,
+            false,
+            "Compute bindless access after Graphics add"
+        );
+    }
+
+    // Carry the source-order program through an actually parallel inner
+    // recorder, not just the serial fallback. Four independent copies form a
+    // worker-eligible layer while the bindless update/access remain ordered
+    // serial islands in the same immutable source.
+    constexpr uint64 bindless_parallel_scope =
+        bindless_segment_scope + 4;
+    constexpr size_t bindless_parallel_copy_count = 4;
+    const EBufferUsageFlags bindless_parallel_buffer_usage =
+        EBufferUsageFlags::TRANSFER_SRC |
+        EBufferUsageFlags::TRANSFER_DST;
+    std::array<BufferRef, bindless_parallel_copy_count>
+        bindless_parallel_sources{};
+    std::array<BufferRef, bindless_parallel_copy_count>
+        bindless_parallel_destinations{};
+    for (size_t index = 0;
+         index < bindless_parallel_copy_count;
+         ++index) {
+        bindless_parallel_sources[index] =
+            device.CreateBuffer<uint32>(
+                "bindless_parallel_source_" +
+                    std::to_string(index),
+                kElementCount,
+                bindless_parallel_buffer_usage
+            );
+        bindless_parallel_destinations[index] =
+            device.CreateBuffer<uint32>(
+                "bindless_parallel_destination_" +
+                    std::to_string(index),
+                kElementCount,
+                bindless_parallel_buffer_usage
+            );
+        if (!bindless_parallel_sources[index] ||
+            !bindless_parallel_destinations[index]) {
+            throw std::runtime_error(
+                "failed to create bindless parallel-record buffers"
+            );
+        }
+    }
+
+    publish_bindless_source(
+        bindless_parallel_record,
+        "parallel-record bindless Add->Access"
+    );
+    (void)bindless->AllocateTexture(
+        bindless_parallel_record->GetView(),
+        bindless_sampler
+    );
+    CommandList parallel_bindless_access(EQueueType::Graphics);
+    parallel_bindless_access.UpdateBindlessArray(bindless);
+    add_bindless_access(
+        parallel_bindless_access,
+        bindless,
+        "BindlessPresentParallelRecordAccess"
+    );
+    for (size_t index = 0;
+         index < bindless_parallel_copy_count;
+         ++index) {
+        parallel_bindless_access.CopyFrom(
+            bindless_parallel_sources[index]->GetView(),
+            bindless_parallel_destinations[index]->GetView(),
+            "BindlessParallelRecordCopy"
+        );
+    }
+    FenceRef parallel_bindless_done = device.CreateFence();
+    CmdSubmit parallel_bindless_submit =
+        parallel_bindless_access.Submit();
+    parallel_bindless_submit.SetTranslateExecutionClass(
+        ERHITranslateExecutionClass::Parallel
+    );
+    parallel_bindless_submit.SetResourceStateOwnership(
+        ERHIResourceStateOwnership::Explicit
+    );
+    parallel_bindless_submit.async_queue_scope =
+        bindless_parallel_scope;
+    parallel_bindless_submit.Signal(
+        parallel_bindless_done.Get(), 1
+    );
+    SourceTranslationCapture parallel_bindless_capture(
+        bindless_parallel_scope,
+        EQueueType::Graphics
+    );
+    {
+        ScopedSourceTranslationObserver translation_observer(
+            parallel_bindless_capture
+        );
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics,
+            std::move(parallel_bindless_submit),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    }
+    auto* vk_parallel_bindless_done =
+        ResourceCast(parallel_bindless_done.Get());
+    if (!vk_parallel_bindless_done->WaitSubmitted(1) ||
+        vk_parallel_bindless_done->IsRejected(1) ||
+        vk_parallel_bindless_done->IsFailed()) {
+        throw std::runtime_error(
+            "parallel bindless source did not reach native submission"
+        );
+    }
+    if (!parallel_bindless_capture.IsValid() ||
+        !parallel_bindless_capture.Seen(
+            0,
+            EVulkanSourceTranslationPhase::Recorded
+        )) {
+        throw std::runtime_error(
+            "parallel bindless source translation was not observed"
+        );
+    }
+    const VulkanSourceTranslationEvent&
+        parallel_bindless_translation =
+            parallel_bindless_capture.Event(
+                0,
+                EVulkanSourceTranslationPhase::Recorded
+            );
+    if (parallel_bindless_translation.async_queue_scope !=
+        bindless_parallel_scope) {
+        throw std::runtime_error(
+            "parallel bindless translation lost its async queue scope"
+        );
+    }
+    if (!parallel_bindless_translation
+             .parallel_record_requested ||
+        !parallel_bindless_translation
+             .parallel_record_planned ||
+        !parallel_bindless_translation
+             .parallel_record_effective) {
+        throw std::runtime_error(
+            "bindless source-order program did not traverse the "
+            "effective parallel recorder"
+        );
+    }
+    require_bindless_ready(
+        bindless_parallel_record,
+        false,
+        "parallel-record bindless Add->Access"
+    );
+
     FenceRef backend_tracked_done = device.CreateFence();
     PresentReceiptRef backend_tracked_receipt =
         MakeShared<PresentReceipt>();
@@ -9288,9 +10210,13 @@ void RunPresentSourceContractRejection() {
         "marker_then_segmented_state_change=true "
         "accepted_prefix_rejected_suffix=true copy_commit={} "
         "wrong_queue_clear=true rejected_export_clear=true "
+        "bindless_source_order=true bindless_refcount=true "
+        "bindless_rejected_update=true bindless_segments=true "
+        "bindless_cross_queue={} bindless_parallel_record=true "
         "valid_override=4 owner=Submission",
         rejected_count,
-        copy_commit_verified ? "verified" : "skipped"
+        copy_commit_verified ? "verified" : "skipped",
+        topology.compute.available ? "verified" : "skipped"
     );
 }
 

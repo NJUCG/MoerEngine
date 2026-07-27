@@ -1817,7 +1817,10 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
     buffer_slot_claim_tokens(_max_size, 0),
     handles(_max_size),
     texture_view_infos(_max_size),
-    texture_offset_in_buffer(GetBindlessTextureDescriptorOffset(*_device)) {
+    texture_offset_in_buffer(GetBindlessTextureDescriptorOffset(*_device)),
+    accepted_presentation_source_membership(
+        std::make_shared<const PresentationSourceMembership>()
+    ) {
         const uint storage_buffer_descriptor_size =
             g_heap.GetDescriptorSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
         const uint sampled_image_descriptor_size =
@@ -2602,29 +2605,24 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         return resource_allocation_counts.find(_resource) != resource_allocation_counts.end();
     }
 
-    Array<TextureRef>
-    VulkanBindlessArray::SnapshotPresentationSourceTextures() {
-        std::unique_lock<std::mutex> lock(mtx);
-        Array<TextureRef> textures{};
-        textures.reserve(resource_allocation_counts.size());
-        for (const auto& [handle, allocation] :
-             resource_allocation_counts) {
-            (void)handle;
-            RHIResource* resource = allocation.resource.Get();
-            if (resource == nullptr ||
-                resource->GetResourceType() != RRT_TEXTURE) {
-                continue;
-            }
-            auto* texture =
-                static_cast<::Moer::Render::Texture*>(resource);
-            if ((texture->GetUsage() &
-                 ETextureUsageFlags::PRESENTATION_SOURCE) !=
-                ETextureUsageFlags::PRESENTATION_SOURCE) {
-                continue;
-            }
-            textures.emplace_back(texture);
-        }
-        return textures;
+    VulkanBindlessArray::PresentationSourceMembershipSnapshot
+    VulkanBindlessArray::SnapshotAcceptedPresentationSourceMembership(
+    ) const noexcept {
+        return std::atomic_load_explicit(
+            &accepted_presentation_source_membership,
+            std::memory_order_acquire
+        );
+    }
+
+    void VulkanBindlessArray::PublishAcceptedPresentationSourceMembership(
+        PresentationSourceMembershipSnapshot _membership
+    ) noexcept {
+        assert(_membership);
+        std::atomic_store_explicit(
+            &accepted_presentation_source_membership,
+            std::move(_membership),
+            std::memory_order_release
+        );
     }
 
     bool VulkanBindlessArray::IsTextureViewAllocated(

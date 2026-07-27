@@ -110,6 +110,9 @@ struct VulkanSourceTranslationEvent {
     uint64                        async_queue_scope{0};
     uint32                        thread_id{0};
     ERHIThreadRole                thread_role{ERHIThreadRole::Unknown};
+    bool                          parallel_record_requested{false};
+    bool                          parallel_record_planned{false};
+    bool                          parallel_record_effective{false};
     EVulkanSourceTranslationPhase phase{
         EVulkanSourceTranslationPhase::Begin
     };

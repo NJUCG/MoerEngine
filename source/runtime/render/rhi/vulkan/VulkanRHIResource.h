@@ -20,6 +20,7 @@
 #include "VulkanTypeDefs.h"
 #include <atomic>
 #include <cstddef>
+#include <memory>
 #include <mutex>
 
 // #include <vk_mem_alloc.h>
@@ -830,10 +831,28 @@ public:
         uint8  _array_layer,
         uint8  _array_count
     ) const;
-    // Returns a stable intrusive-reference snapshot while holding the
-    // bindless allocation lock. Presentation-state collection uses it before
-    // translation so opaque bindless accesses cannot leave stale readiness.
-    Array<TextureRef> SnapshotPresentationSourceTextures();
+    struct PresentationSourceMembershipRecord {
+        TextureRef texture{};
+        uint32     count{0};
+    };
+    struct PresentationSourceMembership {
+        UnorderedMap<uint, TextureRef> slots{};
+        UnorderedMap<
+            ::Moer::Render::Texture*,
+            PresentationSourceMembershipRecord>
+            textures{};
+    };
+    using PresentationSourceMembershipSnapshot =
+        std::shared_ptr<const PresentationSourceMembership>;
+
+    // Descriptor membership becomes visible only after the packet which
+    // updates it reaches vkQueueSubmit. CPU allocation state belongs to a
+    // different timeline and cannot classify an older immutable submit.
+    [[nodiscard]] PresentationSourceMembershipSnapshot
+        SnapshotAcceptedPresentationSourceMembership() const noexcept;
+    void PublishAcceptedPresentationSourceMembership(
+        PresentationSourceMembershipSnapshot _membership
+    ) noexcept;
     void DeAllocateResource(uint64 _handle);
     void FinalizeUpdateCommand(
         const Array<BindlessArray::UpdateCmd>& _updates,
@@ -912,6 +931,8 @@ protected:
         uint32                    count{0};
     };
     UnorderedMap<uint64, ResourceAllocationRecord> resource_allocation_counts;
+    PresentationSourceMembershipSnapshot
+        accepted_presentation_source_membership;
     UnorderedMap<
         uint64,
         UnorderedMap<

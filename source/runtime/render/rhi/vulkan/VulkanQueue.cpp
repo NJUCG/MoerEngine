@@ -4103,45 +4103,28 @@ static void MarkSubmissionAccepted(
            _barrier.array_cnt == _texture.GetNumArray();
 }
 
-using VulkanPresentationSourceSnapshotCache =
-    UnorderedMap<VulkanBindlessArray*, Array<TextureRef>>;
-
-template<typename TVisitor>
+template<typename TTextureVisitor, typename TBindlessVisitor>
 static void VisitPresentationTextureArgument(
-    const TArg&                            _argument,
-    VulkanPresentationSourceSnapshotCache& _snapshot_cache,
-    TVisitor&&                             _visitor
+    const TArg&        _argument,
+    TTextureVisitor&   _texture_visitor,
+    TBindlessVisitor&  _bindless_visitor
 ) {
     std::visit(
         [&](const auto& _resource) {
             using TResource = std::decay_t<decltype(_resource)>;
             if constexpr (std::is_same_v<TResource, TextureView>) {
-                _visitor(_resource.GetTexture());
+                _texture_visitor(_resource.GetTexture());
             } else if constexpr (
                 std::is_same_v<TResource, TextureViewArray>
             ) {
                 for (const TextureView& view : _resource) {
-                    _visitor(view.GetTexture());
+                    _texture_visitor(view.GetTexture());
                 }
             } else if constexpr (
                 std::is_same_v<TResource, BindlessArrayRef>
             ) {
                 if (_resource) {
-                    auto* bindless =
-                        static_cast<VulkanBindlessArray*>(
-                            _resource.Get()
-                        );
-                    auto [snapshot_it, inserted] =
-                        _snapshot_cache.try_emplace(bindless);
-                    if (inserted) {
-                        snapshot_it->second =
-                            bindless
-                                ->SnapshotPresentationSourceTextures();
-                    }
-                    for (const TextureRef& texture :
-                         snapshot_it->second) {
-                        _visitor(texture.Get());
-                    }
+                    _bindless_visitor(_resource);
                 }
             }
         },
@@ -4149,33 +4132,45 @@ static void VisitPresentationTextureArgument(
     );
 }
 
-template<typename TVisitor>
+template<typename TTextureVisitor, typename TBindlessVisitor>
 static void VisitPresentationTextureArguments(
-    const ArrayArguments&                   _arguments,
-    VulkanPresentationSourceSnapshotCache&  _snapshot_cache,
-    TVisitor&&                              _visitor
+    const ArrayArguments& _arguments,
+    TTextureVisitor&      _texture_visitor,
+    TBindlessVisitor&     _bindless_visitor
 ) {
     for (const TArg& argument : _arguments.args) {
         VisitPresentationTextureArgument(
             argument,
-            _snapshot_cache,
-            std::forward<TVisitor>(_visitor)
+            _texture_visitor,
+            _bindless_visitor
         );
     }
 }
 
-template<typename TVisitor>
+template<typename TTextureVisitor, typename TBindlessVisitor>
 static void VisitPresentationTextureArguments(
-    const TShaderArgArray&                  _arguments,
-    const TCachedArgArray&                  _cached_arguments,
-    VulkanPresentationSourceSnapshotCache& _snapshot_cache,
-    TVisitor&&                              _visitor
+    const ArrayArguments& _arguments,
+    const TCachedArgArray&,
+    TTextureVisitor&      _texture_visitor,
+    TBindlessVisitor&     _bindless_visitor
+) {
+    VisitPresentationTextureArguments(
+        _arguments, _texture_visitor, _bindless_visitor
+    );
+}
+
+template<typename TTextureVisitor, typename TBindlessVisitor>
+static void VisitPresentationTextureArguments(
+    const TShaderArgArray& _arguments,
+    const TCachedArgArray& _cached_arguments,
+    TTextureVisitor&       _texture_visitor,
+    TBindlessVisitor&      _bindless_visitor
 ) {
     if (std::holds_alternative<ArrayArguments>(_arguments)) {
         VisitPresentationTextureArguments(
             std::get<ArrayArguments>(_arguments),
-            _snapshot_cache,
-            std::forward<TVisitor>(_visitor)
+            _texture_visitor,
+            _bindless_visitor
         );
         return;
     }
@@ -4185,64 +4180,80 @@ static void VisitPresentationTextureArguments(
         if (index < _cached_arguments.size()) {
             VisitPresentationTextureArguments(
                 _cached_arguments[index],
-                _snapshot_cache,
-                std::forward<TVisitor>(_visitor)
+                _texture_visitor,
+                _bindless_visitor
             );
         }
     }
 }
 
-// Freeze one last-reference-wins delta from source command order before
-// CmdReorderer or parallel translation can change execution topology. Every
-// declared use closes a previous export; only an exact terminal Graphics
-// publication re-opens the external Present contract.
-static Array<VulkanPresentationSourceStateDelta>
-BuildPresentationSourceStateDelta(
+// Freeze source command order before CmdReorderer or parallel translation can
+// change execution topology. Direct texture uses become concrete events;
+// bindless uses remain symbolic until Submission can observe the last
+// natively accepted descriptor membership.
+static VulkanPresentationSourceStateProgram
+BuildPresentationSourceStateProgram(
     const CmdSubmit& _submit,
     EQueueType       _queue
 ) {
-    Array<VulkanPresentationSourceStateDelta> delta{};
-    delta.reserve(_submit.cmds.size());
-    VulkanPresentationSourceSnapshotCache bindless_snapshot_cache{};
+    VulkanPresentationSourceStateProgram program{};
+    program.events.reserve(_submit.cmds.size());
 
     const auto record_texture =
         [&](Texture* _texture, bool _ready) {
             if (!IsPresentationSourceTexture(_texture)) {
                 return;
             }
-            auto existing = std::find_if(
-                delta.begin(),
-                delta.end(),
-                [_texture](
-                    const VulkanPresentationSourceStateDelta& _entry
-                ) {
-                    return _entry.texture.Get() == _texture;
-                }
-            );
-            if (existing != delta.end()) {
-                existing->ready = _ready;
-                return;
-            }
-            delta.emplace_back(
-                VulkanPresentationSourceStateDelta{
+            program.events.emplace_back(
+                VulkanPresentationSourceStateEvent{
+                    .type =
+                        EVulkanPresentationSourceStateEventType::
+                            TextureState,
                     .texture = TextureRef(_texture),
                     .ready   = _ready,
                 }
             );
+        };
+    const auto record_bindless =
+        [&](const BindlessArrayRef& _array) {
+            if (!_array) {
+                return;
+            }
+            program.events.emplace_back(
+                VulkanPresentationSourceStateEvent{
+                    .type =
+                        EVulkanPresentationSourceStateEventType::
+                            BindlessAccess,
+                    .bindless_array = _array,
+                }
+            );
+            program.has_bindless_state = true;
         };
     const auto record_view =
         [&](const TextureView& _view) {
             record_texture(_view.GetTexture(), false);
         };
     const auto record_shader_arguments =
-        [&](const auto& _arguments) {
+        [&](const auto& _arguments,
+            UnorderedSet<BindlessArray*>& _seen_bindless) {
+            auto record_unique_bindless =
+                [&](const BindlessArrayRef& _array) {
+                    if (_array &&
+                        _seen_bindless.emplace(
+                            _array.Get()
+                        ).second) {
+                        record_bindless(_array);
+                    }
+                };
+            auto record_direct_texture =
+                [&](Texture* _texture) {
+                    record_texture(_texture, false);
+                };
             VisitPresentationTextureArguments(
                 _arguments,
                 _submit.cached_args,
-                bindless_snapshot_cache,
-                [&](Texture* _texture) {
-                    record_texture(_texture, false);
-                }
+                record_direct_texture,
+                record_unique_bindless
             );
         };
     const auto record_render_pass =
@@ -4363,24 +4374,19 @@ BuildPresentationSourceStateDelta(
             case Command::EType::ShaderDispatch: {
                 const auto& dispatch =
                     *static_cast<const DispatchCmd*>(command);
-                VisitPresentationTextureArguments(
+                UnorderedSet<BindlessArray*> seen_bindless{};
+                record_shader_arguments(
                     dispatch.Args(_submit.cached_args),
-                    bindless_snapshot_cache,
-                    [&](Texture* _texture) {
-                        record_texture(_texture, false);
-                    }
+                    seen_bindless
                 );
                 break;
             }
             case Command::EType::TraceRay: {
                 const auto& trace =
                     *static_cast<const TraceRayCmd*>(command);
-                VisitPresentationTextureArguments(
-                    trace.Args(),
-                    bindless_snapshot_cache,
-                    [&](Texture* _texture) {
-                        record_texture(_texture, false);
-                    }
+                UnorderedSet<BindlessArray*> seen_bindless{};
+                record_shader_arguments(
+                    trace.Args(), seen_bindless
                 );
                 break;
             }
@@ -4428,12 +4434,9 @@ BuildPresentationSourceStateDelta(
             case Command::EType::SetDrawState: {
                 const auto& draw =
                     *static_cast<const SetDrawStateCmd*>(command);
-                VisitPresentationTextureArguments(
-                    draw.Args(),
-                    bindless_snapshot_cache,
-                    [&](Texture* _texture) {
-                        record_texture(_texture, false);
-                    }
+                UnorderedSet<BindlessArray*> seen_bindless{};
+                record_shader_arguments(
+                    draw.Args(), seen_bindless
                 );
                 record_render_pass(draw.RenderPassInfo());
                 break;
@@ -4441,9 +4444,12 @@ BuildPresentationSourceStateDelta(
             case Command::EType::MultiDraw: {
                 const auto& draw =
                     *static_cast<const MultiDrawCmd*>(command);
+                UnorderedSet<BindlessArray*> seen_bindless{};
                 for (const DrawBatchElement& element :
                      draw.draw_batch.draw_cmds) {
-                    record_shader_arguments(element.args);
+                    record_shader_arguments(
+                        element.args, seen_bindless
+                    );
                 }
                 record_render_pass(draw.RenderPassInfo());
                 break;
@@ -4461,16 +4467,28 @@ BuildPresentationSourceStateDelta(
                     *static_cast<const CustomCmd*>(command);
                 if (custom.CustomId() ==
                     CustomCmd::CustomCmdId::CUSTOM_DISPATCH) {
+                    UnorderedSet<BindlessArray*> seen_bindless{};
+                    auto record_unique_bindless =
+                        [&](const BindlessArrayRef& _array) {
+                            if (_array &&
+                                seen_bindless.emplace(
+                                    _array.Get()
+                                ).second) {
+                                record_bindless(_array);
+                            }
+                        };
+                    auto record_custom_texture =
+                        [&](Texture* _texture) {
+                            record_texture(_texture, false);
+                        };
                     static_cast<const CustomDispatchCmd&>(
                         custom
                     ).IterateArgs(
                         [&](const TArg& argument, ParamInfoFlags) {
                             VisitPresentationTextureArgument(
                                 argument,
-                                bindless_snapshot_cache,
-                                [&](Texture* _texture) {
-                                    record_texture(_texture, false);
-                                }
+                                record_custom_texture,
+                                record_unique_bindless
                             );
                         }
                     );
@@ -4488,12 +4506,62 @@ BuildPresentationSourceStateDelta(
                 }
                 break;
             }
+            case Command::EType::UpdateBindlessArray: {
+                const auto& update_command =
+                    *static_cast<const UpdateBindlessArrayCmd*>(
+                        command
+                    );
+                BindlessArrayRef bindless_array(
+                    update_command.Handle()
+                );
+                if (!bindless_array) {
+                    throw std::logic_error(
+                        "bindless update has no array"
+                    );
+                }
+                for (const BindlessArray::UpdateCmd& update :
+                     update_command.UpdateCommands()) {
+                    std::visit(
+                        [&](const auto& _update) {
+                            using TUpdate =
+                                std::decay_t<decltype(_update)>;
+                            if constexpr (
+                                std::is_same_v<
+                                    TUpdate,
+                                    BindlessArray::
+                                        TextureUpdateInfo>) {
+                                if (!IsPresentationSourceTexture(
+                                        _update.texture.Get()
+                                    )) {
+                                    return;
+                                }
+                                program.events.emplace_back(
+                                    VulkanPresentationSourceStateEvent{
+                                        .type =
+                                            EVulkanPresentationSourceStateEventType::
+                                                BindlessTextureMembership,
+                                        .texture = _update.texture,
+                                        .bindless_array =
+                                            bindless_array,
+                                        .bindless_slot =
+                                            _update.array_idx,
+                                        .membership_delta =
+                                            _update.free ? -1 : 1,
+                                    }
+                                );
+                                program.has_bindless_state = true;
+                            }
+                        },
+                        update
+                    );
+                }
+                break;
+            }
             case Command::EType::UploadBuffer:
             case Command::EType::CopyBackBuffer:
             case Command::EType::BufferToBuffer:
             case Command::EType::BuildAccel:
             case Command::EType::BuildTLAS:
-            case Command::EType::UpdateBindlessArray:
             case Command::EType::Query:
             case Command::EType::Scope:
                 break;
@@ -4504,7 +4572,246 @@ BuildPresentationSourceStateDelta(
                 );
         }
     }
-    return delta;
+    return program;
+}
+
+struct VulkanPresentationSourceMembershipCommit {
+    BindlessArrayRef bindless_array{};
+    VulkanBindlessArray::PresentationSourceMembershipSnapshot
+        membership{};
+};
+
+struct VulkanPresentationSourceStateTransaction {
+    Array<VulkanPresentationSourceStateDelta>       delta{};
+    Array<VulkanPresentationSourceMembershipCommit> membership_commits{};
+    std::unique_lock<std::mutex>                     submission_lock{};
+};
+
+static std::mutex& PresentationSourceBindlessSubmissionMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+static VulkanPresentationSourceStateTransaction
+EvaluatePresentationSourceStateProgram(
+    const VulkanPresentationSourceStateProgram& _program
+) {
+    using Membership =
+        VulkanBindlessArray::PresentationSourceMembership;
+    struct WorkingMembership {
+        BindlessArrayRef            bindless_array{};
+        std::shared_ptr<Membership> membership{};
+    };
+
+    VulkanPresentationSourceStateTransaction transaction{};
+    transaction.delta.reserve(_program.events.size());
+    if (_program.has_bindless_state) {
+        // The runtime has one Submission owner, but standalone queue use can
+        // still enter this path directly. Keep snapshot -> vkQueueSubmit ->
+        // accepted publication one global transaction in both modes.
+        transaction.submission_lock =
+            std::unique_lock<std::mutex>(
+                PresentationSourceBindlessSubmissionMutex()
+            );
+    }
+
+    Array<WorkingMembership> working_memberships{};
+    UnorderedMap<VulkanBindlessArray*, size_t>
+        working_membership_indices{};
+
+    const auto& get_working_membership =
+        [&](const BindlessArrayRef& _array) -> WorkingMembership& {
+            if (!_array) {
+                throw std::logic_error(
+                    "presentation-state program references a null "
+                    "bindless array"
+                );
+            }
+            auto* bindless =
+                static_cast<VulkanBindlessArray*>(_array.Get());
+            const auto existing =
+                working_membership_indices.find(bindless);
+            if (existing != working_membership_indices.end()) {
+                return working_memberships[existing->second];
+            }
+
+            const auto accepted =
+                bindless
+                    ->SnapshotAcceptedPresentationSourceMembership();
+            if (!accepted) {
+                throw std::logic_error(
+                    "bindless array has no accepted presentation "
+                    "membership state"
+                );
+            }
+            const size_t index = working_memberships.size();
+            working_memberships.emplace_back(
+                WorkingMembership{
+                    .bindless_array = _array,
+                    .membership =
+                        std::make_shared<Membership>(*accepted),
+                }
+            );
+            working_membership_indices.emplace(bindless, index);
+            return working_memberships.back();
+        };
+
+    const auto record_texture =
+        [&](const TextureRef& _texture, bool _ready) {
+            if (!_texture ||
+                !IsPresentationSourceTexture(_texture.Get())) {
+                return;
+            }
+            auto existing = std::find_if(
+                transaction.delta.begin(),
+                transaction.delta.end(),
+                [&](const VulkanPresentationSourceStateDelta& _entry) {
+                    return _entry.texture.Get() == _texture.Get();
+                }
+            );
+            if (existing != transaction.delta.end()) {
+                existing->ready = _ready;
+                return;
+            }
+            transaction.delta.emplace_back(
+                VulkanPresentationSourceStateDelta{
+                    .texture = _texture,
+                    .ready   = _ready,
+                }
+            );
+        };
+
+    for (const VulkanPresentationSourceStateEvent& event :
+         _program.events) {
+        switch (event.type) {
+            case EVulkanPresentationSourceStateEventType::
+                TextureState:
+                record_texture(event.texture, event.ready);
+                break;
+            case EVulkanPresentationSourceStateEventType::
+                BindlessAccess: {
+                const WorkingMembership& working =
+                    get_working_membership(event.bindless_array);
+                for (const auto& [texture, record] :
+                     working.membership->textures) {
+                    (void)texture;
+                    if (record.count != 0) {
+                        record_texture(record.texture, false);
+                    }
+                }
+                break;
+            }
+            case EVulkanPresentationSourceStateEventType::
+                BindlessTextureMembership: {
+                if (!event.texture ||
+                    !IsPresentationSourceTexture(
+                        event.texture.Get()
+                    ) ||
+                    event.bindless_slot == 0 ||
+                    (event.membership_delta != 1 &&
+                     event.membership_delta != -1)) {
+                    throw std::logic_error(
+                        "invalid bindless presentation membership "
+                        "mutation"
+                    );
+                }
+                WorkingMembership& working =
+                    get_working_membership(event.bindless_array);
+                auto& membership = *working.membership;
+                const auto decrement_texture =
+                    [&](const TextureRef& _texture) {
+                        const auto texture =
+                            membership.textures.find(
+                                _texture.Get()
+                            );
+                        if (texture ==
+                                membership.textures.end() ||
+                            texture->second.count == 0) {
+                            throw std::logic_error(
+                                "bindless presentation membership "
+                                "slot/count mismatch"
+                            );
+                        }
+                        if (--texture->second.count == 0) {
+                            membership.textures.erase(texture);
+                        }
+                    };
+                const auto increment_texture =
+                    [&](const TextureRef& _texture) {
+                        auto [texture, inserted] =
+                            membership.textures.try_emplace(
+                                _texture.Get(),
+                                VulkanBindlessArray::
+                                    PresentationSourceMembershipRecord{
+                                        .texture = _texture,
+                                        .count   = 0,
+                                    }
+                            );
+                        (void)inserted;
+                        if (texture->second.count ==
+                            std::numeric_limits<uint32>::max()) {
+                            throw std::logic_error(
+                                "bindless presentation membership "
+                                "count overflow"
+                            );
+                        }
+                        ++texture->second.count;
+                    };
+                auto slot = membership.slots.find(
+                    event.bindless_slot
+                );
+                if (event.membership_delta > 0) {
+                    if (slot != membership.slots.end()) {
+                        if (slot->second.Get() ==
+                            event.texture.Get()) {
+                            break;
+                        }
+                        decrement_texture(slot->second);
+                        slot->second = event.texture;
+                    } else {
+                        membership.slots.emplace(
+                            event.bindless_slot,
+                            event.texture
+                        );
+                    }
+                    increment_texture(event.texture);
+                    break;
+                }
+                // Clearing a slot which was never natively published is an
+                // accepted idempotent descriptor update. This can occur when
+                // a pending add is canceled/rejected before its later free.
+                if (slot == membership.slots.end()) {
+                    break;
+                }
+                if (slot->second.Get() != event.texture.Get()) {
+                    throw std::logic_error(
+                        "bindless presentation free targets a "
+                        "different accepted slot resource"
+                    );
+                }
+                decrement_texture(slot->second);
+                membership.slots.erase(slot);
+                break;
+            }
+        }
+    }
+
+    transaction.membership_commits.reserve(
+        working_memberships.size()
+    );
+    for (WorkingMembership& working : working_memberships) {
+        transaction.membership_commits.emplace_back(
+            VulkanPresentationSourceMembershipCommit{
+                .bindless_array =
+                    std::move(working.bindless_array),
+                .membership =
+                    std::shared_ptr<const Membership>(
+                        std::move(working.membership)
+                    ),
+            }
+        );
+    }
+    return transaction;
 }
 
 static void CommitAcceptedPresentationSourceStateDelta(
@@ -4518,6 +4825,29 @@ static void CommitAcceptedPresentationSourceStateDelta(
         static_cast<VulkanTexture*>(entry.texture.Get())
             ->PublishPresentationSourceReady(entry.ready);
     }
+}
+
+static void CommitAcceptedPresentationSourceStateTransaction(
+    VulkanPresentationSourceStateTransaction& _transaction
+) noexcept {
+    assert(
+        _transaction.membership_commits.empty() ||
+        _transaction.submission_lock.owns_lock()
+    );
+    for (VulkanPresentationSourceMembershipCommit& commit :
+         _transaction.membership_commits) {
+        if (!commit.bindless_array || !commit.membership) {
+            continue;
+        }
+        static_cast<VulkanBindlessArray*>(
+            commit.bindless_array.Get()
+        )->PublishAcceptedPresentationSourceMembership(
+            std::move(commit.membership)
+        );
+    }
+    CommitAcceptedPresentationSourceStateDelta(
+        _transaction.delta
+    );
 }
 
 static bool IsRecoverableUnsubmittedSignal(
@@ -5376,45 +5706,119 @@ VkCommandQueue::SubmitRecorded(
         _recorded.native_submit_resolved = true;
         _recorded.retirement_outcome     = submit_outcome;
     } else {
-        queue.Signal(timeline, _recorded.timeline, end_tag);
-        for (auto& event : _recorded.submit.wait_events) {
-            queue.Wait(
-                reinterpret_cast<VulkanFence*>(event.timeline_handle),
-                event.value,
-                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+        std::optional<VulkanPresentationSourceStateTransaction>
+            presentation_transaction{};
+        const auto reject_presentation_transaction =
+            [&](const VulkanOperationResult& _outcome,
+                std::string_view             _reason) {
+                try {
+                    LOG_ERROR(
+                        "[RHIExecutor][Vulkan] rejected before native "
+                        "submit: timeline={} reason={} VkResult={}",
+                        _recorded.timeline,
+                        _reason,
+                        static_cast<int32>(_outcome.result)
+                    );
+                } catch (...) {
+                }
+                vk_device.RecordRejectedSubmit();
+                submit_outcome = _outcome;
+                _recorded.recoverable_rejection =
+                    _outcome.status ==
+                        EVulkanOperationStatus::Rejected &&
+                    !vk_device.IsFaulted() &&
+                    _outcome.result != VK_ERROR_DEVICE_LOST;
+                _recorded.native_submit_resolved = true;
+                _recorded.retirement_outcome     = _outcome;
+            };
+        try {
+            presentation_transaction.emplace(
+                EvaluatePresentationSourceStateProgram(
+                    _recorded.presentation_source_program
+                )
+            );
+        } catch (const std::logic_error& error) {
+            reject_presentation_transaction(
+                VulkanOperationResult{
+                    EVulkanOperationStatus::Rejected,
+                    VK_ERROR_FEATURE_NOT_PRESENT
+                },
+                error.what()
+            );
+        } catch (const std::bad_alloc& error) {
+            reject_presentation_transaction(
+                VulkanOperationResult{
+                    EVulkanOperationStatus::Rejected,
+                    VK_ERROR_OUT_OF_HOST_MEMORY
+                },
+                error.what()
+            );
+        } catch (const std::exception& error) {
+            reject_presentation_transaction(
+                VulkanOperationResult{
+                    EVulkanOperationStatus::Faulted,
+                    VK_ERROR_UNKNOWN
+                },
+                error.what()
+            );
+        } catch (...) {
+            reject_presentation_transaction(
+                VulkanOperationResult{
+                    EVulkanOperationStatus::Faulted,
+                    VK_ERROR_UNKNOWN
+                },
+                "presentation-state transaction evaluation failed"
             );
         }
-        for (auto& event : _recorded.submit.signal_events) {
-            queue.Signal(
-                reinterpret_cast<VulkanFence*>(event.timeline_handle), event.value, end_tag
-            );
-        }
-        submit_outcome = _recorded.has_commands ?
-                             queue.Submit(
-                                 std::span<VulkanCmdList* const>(
-                                     _recorded.ordered_cmd_lists.data(),
-                                     _recorded.ordered_cmd_lists.size()
-                                 ),
-                                 _recorded.context
-                             ) :
-                             queue.SubmitEmpty(_recorded.context);
-        _recorded.native_submit_resolved = true;
-        // Persist the native result before any signal-fence bookkeeping can
-        // throw. Once vkQueueSubmit2 has accepted the packet, every later
-        // exception must still retire it as GPU-submitted.
-        _recorded.retirement_outcome = submit_outcome;
-        if (submit_outcome.WasSubmitted()) {
-            // Publish accepted resource state before waking any host waiter.
-            // Raster uses WaitSubmitted() to gate platform-window presents;
-            // exposing the timeline first would let that thread observe an
-            // accepted source while its presentation readiness was still
-            // stale.
-            CommitAcceptedPresentationSourceStateDelta(
-                _recorded.presentation_source_delta
-            );
-            MarkSubmissionAccepted(
-                timeline, _recorded.timeline, _recorded.submit.signal_events
-            );
+
+        if (!_recorded.native_submit_resolved) {
+            queue.Signal(timeline, _recorded.timeline, end_tag);
+            for (auto& event : _recorded.submit.wait_events) {
+                queue.Wait(
+                    reinterpret_cast<VulkanFence*>(
+                        event.timeline_handle
+                    ),
+                    event.value,
+                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+                );
+            }
+            for (auto& event : _recorded.submit.signal_events) {
+                queue.Signal(
+                    reinterpret_cast<VulkanFence*>(
+                        event.timeline_handle
+                    ),
+                    event.value,
+                    end_tag
+                );
+            }
+            submit_outcome = _recorded.has_commands ?
+                                 queue.Submit(
+                                     std::span<VulkanCmdList* const>(
+                                         _recorded.ordered_cmd_lists.data(),
+                                         _recorded.ordered_cmd_lists.size()
+                                     ),
+                                     _recorded.context
+                                 ) :
+                                 queue.SubmitEmpty(
+                                     _recorded.context
+                                 );
+            _recorded.native_submit_resolved = true;
+            // Persist the native result before any signal-fence bookkeeping
+            // can throw. Once vkQueueSubmit2 accepts the packet, every later
+            // exception must still retire it as GPU-submitted.
+            _recorded.retirement_outcome = submit_outcome;
+            if (submit_outcome.WasSubmitted()) {
+                // Descriptor membership and texture readiness publish as one
+                // accepted transaction before any host fence is observable.
+                CommitAcceptedPresentationSourceStateTransaction(
+                    *presentation_transaction
+                );
+                MarkSubmissionAccepted(
+                    timeline,
+                    _recorded.timeline,
+                    _recorded.submit.signal_events
+                );
+            }
         }
     }
     const double profile_submit_cpu_ms = _recorded.profile.enabled ?
@@ -5535,8 +5939,8 @@ bool VkCommandQueue::TryExecuteParallel(
     const CmdReorderer&            _reorderer,
     double                         _reorder_time,
     std::chrono::steady_clock::time_point _profile_started,
-    Array<VulkanPresentationSourceStateDelta>&
-                                  _presentation_source_delta,
+    VulkanPresentationSourceStateProgram&
+                                  _presentation_source_program,
     std::optional<CurrentVulkanRecordedSubmit>* _out_recorded
 ) {
     const ERHIProfilingPhase profiling_phase = _submit.ProfilingPhase();
@@ -6449,8 +6853,8 @@ bool VkCommandQueue::TryExecuteParallel(
     CurrentVulkanRecordedSubmit recorded_submit{
         std::move(_submit), _context, _timeline
     };
-    recorded_submit.presentation_source_delta =
-        std::move(_presentation_source_delta);
+    recorded_submit.presentation_source_program =
+        std::move(_presentation_source_program);
     recorded_submit.has_commands      = true;
     recorded_submit.ordered_cmd_lists = std::move(ordered_cmd_lists);
     recorded_submit.allocators = VulkanAllocatorBatch{
@@ -6458,23 +6862,23 @@ bool VkCommandQueue::TryExecuteParallel(
     };
     recorded_submit.descriptor_lease.emplace(std::move(descriptor_lease));
     recorded_submit.deferred_releases = std::move(deferred_releases);
+    recorded_submit.profile.sample = {
+        .requested       = true,
+        .planned         = true,
+        .effective       = parallel_recorded,
+        .worker_fallback = !parallel_recorded,
+        .record_wall_ms  = profile_record_wall_ms,
+        .reorder_ms      = _reorder_time,
+        .preprocess_ms   = preprocess_time,
+        .worker_join_ms  = worker_join_time,
+        .layers          = static_cast<uint32>(runtime_layers.size()),
+        .jobs            = static_cast<uint32>(total_job_count),
+        .work_units      = parallel_work_units,
+        .max_active      = max_active_jobs.load(std::memory_order_relaxed),
+    };
     if (parallel_record_profile) {
         recorded_submit.profile.enabled         = true;
         recorded_submit.profile.execute_started = _profile_started;
-        recorded_submit.profile.sample = {
-            .requested       = true,
-            .planned         = true,
-            .effective       = parallel_recorded,
-            .worker_fallback = !parallel_recorded,
-            .record_wall_ms  = profile_record_wall_ms,
-            .reorder_ms      = _reorder_time,
-            .preprocess_ms   = preprocess_time,
-            .worker_join_ms  = worker_join_time,
-            .layers          = static_cast<uint32>(runtime_layers.size()),
-            .jobs            = static_cast<uint32>(total_job_count),
-            .work_units      = parallel_work_units,
-            .max_active      = max_active_jobs.load(std::memory_order_relaxed),
-        };
     }
     const uint32 recorded_cmd_list_count =
         static_cast<uint32>(recorded_submit.ordered_cmd_lists.size());
@@ -6663,11 +7067,11 @@ void VkCommandQueue::ExecuteNow(
             }
         };
 
-    Array<VulkanPresentationSourceStateDelta>
-        presentation_source_delta{};
+    VulkanPresentationSourceStateProgram
+        presentation_source_program{};
     try {
-        presentation_source_delta =
-            BuildPresentationSourceStateDelta(
+        presentation_source_program =
+            BuildPresentationSourceStateProgram(
                 _submit, queue.GetType()
             );
     } catch (const std::logic_error& error) {
@@ -6765,7 +7169,7 @@ void VkCommandQueue::ExecuteNow(
             reorderer,
             reorder_time,
             parallel_profile_started,
-            presentation_source_delta,
+            presentation_source_program,
             _out_recorded
         )) {
         if (_out_terminalized != nullptr && _out_recorded != nullptr &&
@@ -7341,30 +7745,30 @@ void VkCommandQueue::ExecuteNow(
     CurrentVulkanRecordedSubmit recorded_submit{
         std::move(_submit), context, _timeline
     };
-    recorded_submit.presentation_source_delta =
-        std::move(presentation_source_delta);
+    recorded_submit.presentation_source_program =
+        std::move(presentation_source_program);
     recorded_submit.has_commands = has_cmd;
     recorded_submit.ordered_cmd_lists =
         std::move(serial_cmd_lists);
     recorded_submit.allocators = std::move(serial_allocators);
     recorded_submit.descriptor_lease  = std::move(descriptor_lease);
     recorded_submit.deferred_releases = std::move(deferred_releases);
+    recorded_submit.profile.sample = {
+        .requested       = parallel_record_requested,
+        .planned         = false,
+        .effective       = false,
+        .worker_fallback = false,
+        .record_wall_ms  = profile_record_wall_ms,
+        .reorder_ms      = reorder_time,
+        .preprocess_ms   = preprocess_time,
+        .worker_join_ms  = 0.0,
+        .layers          = serial_layer_count,
+        .jobs            = 0,
+        .max_active      = 0,
+    };
     if (parallel_record_profile) {
         recorded_submit.profile.enabled         = true;
         recorded_submit.profile.execute_started = parallel_profile_started;
-        recorded_submit.profile.sample = {
-            .requested       = parallel_record_requested,
-            .planned         = false,
-            .effective       = false,
-            .worker_fallback = false,
-            .record_wall_ms  = profile_record_wall_ms,
-            .reorder_ms      = reorder_time,
-            .preprocess_ms   = preprocess_time,
-            .worker_join_ms  = 0.0,
-            .layers          = serial_layer_count,
-            .jobs            = 0,
-            .max_active      = 0,
-        };
     }
     CurrentVulkanSubmitResult submit_result{};
     if (_out_recorded != nullptr) {
@@ -9236,8 +9640,8 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
     try {
         recorded.emplace(std::move(_evt));
         recorded->execution_lease = std::move(execution_lease);
-        recorded->presentation_source_delta =
-            BuildPresentationSourceStateDelta(
+        recorded->presentation_source_program =
+            BuildPresentationSourceStateProgram(
                 recorded->submit, EQueueType::Copy
             );
 
@@ -9283,7 +9687,9 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
             .is_resource_write       = &IsBufferTextureWrite,
             .is_resource_read        = &IsBufferTextureRead,
             .is_texture_sampled      = &IsTextureSampled,
-            .is_resource_in_bindless = &IsResourceInBindlessArray
+            .is_resource_in_bindless = &IsResourceInBindlessArray,
+            .lock_bdls_array         = &LockBindlessArray,
+            .unlock_bdls_array       = &UnlockBindlessArray
         };
         CmdReorderer reorderer{
             function_table, recorded->submit.cached_args
@@ -9415,50 +9821,124 @@ VulkanRuntimeSubmissionResult VkCopyQueue::SubmitRecordedForRuntime(
                     !device.IsFaulted();
                 _recorded.native_submit_resolved = true;
             } else {
-                queue.Signal(
-                    timeline,
-                    _recorded.logical_timeline,
-                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
-                );
-                for (auto& event : _recorded.submit.wait_events) {
-                    queue.Wait(
-                        reinterpret_cast<VulkanFence*>(
-                            event.timeline_handle
-                        ),
-                        event.value
+                std::optional<
+                    VulkanPresentationSourceStateTransaction>
+                    presentation_transaction{};
+                const auto reject_presentation_transaction =
+                    [&](const VulkanOperationResult& _outcome,
+                        std::string_view             _reason) {
+                        try {
+                            LOG_ERROR(
+                                "[RHIExecutor][Vulkan] Copy rejected "
+                                "before native submit: timeline={} "
+                                "reason={} VkResult={}",
+                                _recorded.logical_timeline,
+                                _reason,
+                                static_cast<int32>(_outcome.result)
+                            );
+                        } catch (...) {
+                        }
+                        device.RecordRejectedSubmit();
+                        _recorded.retirement_outcome = _outcome;
+                        _recorded.recoverable_rejection =
+                            _outcome.status ==
+                                EVulkanOperationStatus::Rejected &&
+                            !device.IsFaulted() &&
+                            _outcome.result !=
+                                VK_ERROR_DEVICE_LOST;
+                        _recorded.native_submit_resolved = true;
+                    };
+                try {
+                    presentation_transaction.emplace(
+                        EvaluatePresentationSourceStateProgram(
+                            _recorded.presentation_source_program
+                        )
                     );
-                }
-                for (auto& event : _recorded.submit.signal_events) {
-                    queue.Signal(
-                        reinterpret_cast<VulkanFence*>(
-                            event.timeline_handle
-                        ),
-                        event.value,
-                        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+                } catch (const std::logic_error& error) {
+                    reject_presentation_transaction(
+                        VulkanOperationResult{
+                            EVulkanOperationStatus::Rejected,
+                            VK_ERROR_FEATURE_NOT_PRESENT
+                        },
+                        error.what()
+                    );
+                } catch (const std::bad_alloc& error) {
+                    reject_presentation_transaction(
+                        VulkanOperationResult{
+                            EVulkanOperationStatus::Rejected,
+                            VK_ERROR_OUT_OF_HOST_MEMORY
+                        },
+                        error.what()
+                    );
+                } catch (const std::exception& error) {
+                    reject_presentation_transaction(
+                        VulkanOperationResult{
+                            EVulkanOperationStatus::Faulted,
+                            VK_ERROR_UNKNOWN
+                        },
+                        error.what()
+                    );
+                } catch (...) {
+                    reject_presentation_transaction(
+                        VulkanOperationResult{
+                            EVulkanOperationStatus::Faulted,
+                            VK_ERROR_UNKNOWN
+                        },
+                        "presentation-state transaction evaluation "
+                        "failed"
                     );
                 }
 
-                assert(
-                    _recorded.allocators.submitted.size() == 1 &&
-                    "Copy Translate must publish exactly one command allocator"
-                );
-                auto& vk_allocator =
-                    *_recorded.allocators.submitted.front();
-                _recorded.retirement_outcome =
-                    queue.Submit(
-                        vk_allocator.GetCmdList(),
-                        _recorded.context
-                    );
-                _recorded.native_submit_resolved = true;
-                if (_recorded.retirement_outcome.WasSubmitted()) {
-                    CommitAcceptedPresentationSourceStateDelta(
-                        _recorded.presentation_source_delta
-                    );
-                    MarkSubmissionAccepted(
-                        timeline.Get(),
+                if (!_recorded.native_submit_resolved) {
+                    queue.Signal(
+                        timeline,
                         _recorded.logical_timeline,
-                        _recorded.submit.signal_events
+                        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
                     );
+                    for (auto& event :
+                         _recorded.submit.wait_events) {
+                        queue.Wait(
+                            reinterpret_cast<VulkanFence*>(
+                                event.timeline_handle
+                            ),
+                            event.value
+                        );
+                    }
+                    for (auto& event :
+                         _recorded.submit.signal_events) {
+                        queue.Signal(
+                            reinterpret_cast<VulkanFence*>(
+                                event.timeline_handle
+                            ),
+                            event.value,
+                            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+                        );
+                    }
+
+                    assert(
+                        _recorded.allocators.submitted.size() ==
+                                1 &&
+                        "Copy Translate must publish exactly one "
+                        "command allocator"
+                    );
+                    auto& vk_allocator =
+                        *_recorded.allocators.submitted.front();
+                    _recorded.retirement_outcome =
+                        queue.Submit(
+                            vk_allocator.GetCmdList(),
+                            _recorded.context
+                        );
+                    _recorded.native_submit_resolved = true;
+                    if (_recorded.retirement_outcome.WasSubmitted()) {
+                        CommitAcceptedPresentationSourceStateTransaction(
+                            *presentation_transaction
+                        );
+                        MarkSubmissionAccepted(
+                            timeline.Get(),
+                            _recorded.logical_timeline,
+                            _recorded.submit.signal_events
+                        );
+                    }
                 }
             }
         } catch (const std::exception& error) {
