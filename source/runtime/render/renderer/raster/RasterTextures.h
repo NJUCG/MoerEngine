@@ -54,7 +54,8 @@ namespace Moer::Render::Raster {
       output,                                                                                                   \
       Tex2DTag,                                                                                                 \
       TexConfig::Default(PF_R8G8B8A8_SRGB)                                                                      \
-          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST))        \
+          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST)         \
+          .OutputSize())                                                                                        \
     X(DepthBufferWithHandle,                                                                                    \
       depth_linear_sampler,                                                                                     \
       TexDepthTag,                                                                                              \
@@ -160,20 +161,32 @@ struct RasterTextures {
         return cfg;
     }
 
-    void CreateFrameBuffers(RenderDevice& device, const uint2& size) {
+    void CreateFrameBuffers(
+        RenderDevice& device,
+        const uint2&  scene_size,
+        const uint2&  output_size,
+        bool          create_scene_resources = true,
+        bool          create_output_resources = true
+    ) {
         // Full-resolution textures
-#define X(TYPE, NAME, TEXTYPE, CONFIG)                                                  \
-    {                                                                                   \
-        TexConfig cfg = (CONFIG);                                                       \
-        AssetTool::CreateRasterResource<TEXTYPE>(this->NAME, device, #NAME, size, cfg); \
+#define X(TYPE, NAME, TEXTYPE, CONFIG)                                                        \
+    {                                                                                         \
+        TexConfig cfg = (CONFIG);                                                             \
+        const bool create_resource =                                                          \
+            cfg.b_output_size ? create_output_resources : create_scene_resources;             \
+        if (create_resource) {                                                                 \
+            const uint2& texture_size = cfg.b_output_size ? output_size : scene_size;          \
+            AssetTool::CreateRasterResource<TEXTYPE>(this->NAME, device, #NAME, texture_size, cfg); \
+        }                                                                                     \
     }
         RASTER_TEXTURES_TABLE
         RASTER_TEXTURES_TABLE_DOWNSAMPLED
 #undef X
 
         // Half-resolution variants
-        {
-            uint2 half_size = uint2(std::max(1u, size.x / 2), std::max(1u, size.y / 2));
+        if (create_scene_resources) {
+            uint2 half_size =
+                uint2(std::max(1u, scene_size.x / 2), std::max(1u, scene_size.y / 2));
 #define X(TYPE, NAME, TEXTYPE, CONFIG)                                                                    \
     {                                                                                                     \
         TexConfig cfg = (CONFIG);                                                                         \
@@ -183,11 +196,13 @@ struct RasterTextures {
 #undef X
         }
 
-        {
-            TexConfig hiz_cfg = CreateHiZConfig(size);
-            AssetTool::CreateRasterResource<Tex2DTag>(hiz_current, device, "hiz_current", size, hiz_cfg, false);
+        if (create_scene_resources) {
+            TexConfig hiz_cfg = CreateHiZConfig(scene_size);
             AssetTool::CreateRasterResource<Tex2DTag>(
-                hiz_previous, device, "hiz_previous", size, hiz_cfg, false
+                hiz_current, device, "hiz_current", scene_size, hiz_cfg, false
+            );
+            AssetTool::CreateRasterResource<Tex2DTag>(
+                hiz_previous, device, "hiz_previous", scene_size, hiz_cfg, false
             );
         }
     }
@@ -205,15 +220,28 @@ struct RasterTextures {
 #undef X
     }
 
-    void AllocateFrameBuffers(CommandList& cmd_list, BindlessArrayRef& bindless_array) {
+    void AllocateFrameBuffers(
+        CommandList&       cmd_list,
+        BindlessArrayRef&   bindless_array,
+        bool                allocate_scene_resources = true,
+        bool                allocate_output_resources = true
+    ) {
         // Full-resolution textures
-#define X(TYPE, NAME, TEXTYPE, CONFIG) \
-    AssetTool::AllocateRasterResourceHandle(bindless_array, NAME, (CONFIG));
+#define X(TYPE, NAME, TEXTYPE, CONFIG)                                                       \
+    {                                                                                        \
+        TexConfig cfg = (CONFIG);                                                            \
+        const bool allocate_resource =                                                       \
+            cfg.b_output_size ? allocate_output_resources : allocate_scene_resources;        \
+        if (allocate_resource && (!cfg.is_asset || NAME.hdl == 0u)) {                        \
+            AssetTool::AllocateRasterResourceHandle(bindless_array, NAME, cfg);              \
+        }                                                                                    \
+    }
         RASTER_TEXTURES_TABLE
         RASTER_TEXTURES_TABLE_DOWNSAMPLED
 #undef X
 
         // Half-resolution variants (LINEAR sampler for bilinear upsampling)
+        if (allocate_scene_resources) {
 #define X(TYPE, NAME, TEXTYPE, CONFIG)                                                         \
     {                                                                                          \
         TexConfig half_cfg;                                                                    \
@@ -222,8 +250,9 @@ struct RasterTextures {
     }
         RASTER_TEXTURES_TABLE_DOWNSAMPLED
 #undef X
+        }
 
-        {
+        if (allocate_scene_resources) {
             TexConfig hiz_cfg = CreateHiZConfig(hiz_current.GetSize());
             AssetTool::AllocateRasterResourceHandle(bindless_array, hiz_current, hiz_cfg);
             AssetTool::AllocateRasterResourceHandle(bindless_array, hiz_previous, hiz_cfg);
@@ -232,26 +261,37 @@ struct RasterTextures {
         cmd_list.UpdateBindlessArray(bindless_array);
     }
 
-    void FreeFrameBuffers(BindlessArrayRef& bindless_array, bool is_free_external_assets) {
-#define X(TYPE, NAME, TEXTYPE, CONFIG)                                 \
-    {                                                                  \
-        TexConfig cfg = (CONFIG);                                      \
-        if (!cfg.is_asset || is_free_external_assets) {                \
-            AssetTool::FreeRasterResourceHandle(bindless_array, NAME); \
-        }                                                              \
+    void FreeFrameBuffers(
+        BindlessArrayRef& bindless_array,
+        bool              is_free_external_assets,
+        bool              free_scene_resources = true,
+        bool              free_output_resources = true
+    ) {
+#define X(TYPE, NAME, TEXTYPE, CONFIG)                                      \
+    {                                                                       \
+        TexConfig cfg = (CONFIG);                                           \
+        const bool free_resource =                                          \
+            cfg.b_output_size ? free_output_resources : free_scene_resources; \
+        if (free_resource && (!cfg.is_asset || is_free_external_assets)) {   \
+            AssetTool::FreeRasterResourceHandle(bindless_array, NAME);      \
+        }                                                                   \
     }
         RASTER_TEXTURES_TABLE
         RASTER_TEXTURES_TABLE_DOWNSAMPLED
 #undef X
 
         // Half-resolution variants
+        if (free_scene_resources) {
 #define X(TYPE, NAME, TEXTYPE, CONFIG) \
     AssetTool::FreeRasterResourceHandle(bindless_array, NAME##_half);
         RASTER_TEXTURES_TABLE_DOWNSAMPLED
 #undef X
+        }
 
-        AssetTool::FreeRasterResourceHandle(bindless_array, hiz_current);
-        AssetTool::FreeRasterResourceHandle(bindless_array, hiz_previous);
+        if (free_scene_resources) {
+            AssetTool::FreeRasterResourceHandle(bindless_array, hiz_current);
+            AssetTool::FreeRasterResourceHandle(bindless_array, hiz_previous);
+        }
     }
 
     Array<TextureView> GetDisplayableFrameBuffersView() {

@@ -194,9 +194,23 @@ public:
         // Other resources initialization
         aa_texture_34[0] = &tex.aa_texture_3;
         aa_texture_34[1] = &tex.aa_texture_4;
-        frame_parity     = 0;
+        ResetHistory();
 
         LoadSmaaResources(context);
+    }
+
+    void ResetHistory() {
+        frame_parity          = 0;
+        history_valid         = false;
+        current_view_proj     = Matrix4x4f::Identity();
+        previous_view_proj    = Matrix4x4f::Identity();
+        current_inv_view_proj = Matrix4x4f::Identity();
+    }
+
+    [[nodiscard]] uint8 NextSmaaT2xPhase() const noexcept {
+        return history_valid ?
+                   static_cast<uint8>(frame_parity ^ 1u) :
+                   0u;
     }
 
     void LoadSmaaResources(RasterContext& context) {
@@ -238,15 +252,26 @@ public:
         RasterContext&      context,
         const RasterConfig& ui_config,
         const Camera&       camera,
-        TextureWithHandle   input_image
+        TextureWithHandle   input_image,
+        uint8               smaa_t2x_phase
     ) {
+        if (ui_config.aa_mode != EAaMode::SMAA_T2X && history_valid) {
+            ResetHistory();
+        }
+
         if (ui_config.aa_mode == EAaMode::NONE || ui_config.aa_mode == EAaMode::FXAA_SIMPLIFIED ||
             ui_config.aa_mode == EAaMode::FXAA_QUALITY) {
             return ProcessFxaa(context, ui_config, camera, input_image);
         }
 
         if (ui_config.aa_mode == EAaMode::SMAA_1X || ui_config.aa_mode == EAaMode::SMAA_T2X) {
-            return ProcessSmaa(context, ui_config, camera, input_image);
+            return ProcessSmaa(
+                context,
+                ui_config,
+                camera,
+                input_image,
+                smaa_t2x_phase
+            );
         }
 
         assert(false && "Invalid antialiasing mode");
@@ -291,7 +316,8 @@ public:
         RasterContext&      context,
         const RasterConfig& ui_config,
         const Camera&       camera,
-        TextureWithHandle   input_image
+        TextureWithHandle   input_image,
+        uint8               smaa_t2x_phase
     ) {
         // TODO: optimize the following code
         //           以下是我会写出这段代码的原因：
@@ -316,15 +342,17 @@ public:
             // return sampler_idx;
         };
 
-        static Matrix4x4f current_view_proj     = Matrix4x4f::Identity();
-        static Matrix4x4f previous_view_proj    = Matrix4x4f::Identity();
-        static Matrix4x4f current_inv_view_proj = Matrix4x4f::Identity();
-
-        previous_view_proj    = current_view_proj;
+        const bool uses_temporal_history =
+            ui_config.aa_mode == EAaMode::SMAA_T2X;
+        const bool had_valid_history =
+            uses_temporal_history && history_valid;
+        previous_view_proj =
+            had_valid_history ? current_view_proj : camera.GetViewProjectionMatrix();
         current_view_proj     = camera.GetViewProjectionMatrix();
         current_inv_view_proj = camera.GetViewProjectionMatrixInv();
-
-        frame_parity ^= 1;
+        frame_parity = uses_temporal_history ? smaa_t2x_phase : 0u;
+        assert(frame_parity < aa_texture_34.size());
+        history_valid = uses_temporal_history;
 
         auto smaa_shared_param = [&]() {
             SmaaSharedPipelineBindlessParam param;
@@ -337,7 +365,10 @@ public:
             param.edges_tex          = context.textures.aa_texture_1.hdl;
             param.blend_tex          = context.textures.aa_texture_2.hdl;
             param.current_color_tex  = aa_texture_34[frame_parity]->hdl;
-            param.previous_color_tex = aa_texture_34[frame_parity ^ 1]->hdl;
+            param.previous_color_tex =
+                aa_texture_34[
+                    had_valid_history ? static_cast<uint8>(frame_parity ^ 1u) : frame_parity
+                ]->hdl;
             param.frame_index        = frame_parity;
             param.point_sampler      = GetSamplerIdx(Sampler(SF_NEAREST, SAM_CLAMP_TO_EDGE));
             param.linear_sampler     = GetSamplerIdx(Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
@@ -409,6 +440,10 @@ private:
     // smaa resources
     StaticArray<TextureWithHandle*, 2> aa_texture_34;
     uint8                              frame_parity = 0;
+    bool                               history_valid = false;
+    Matrix4x4f                         current_view_proj = Matrix4x4f::Identity();
+    Matrix4x4f                         previous_view_proj = Matrix4x4f::Identity();
+    Matrix4x4f                         current_inv_view_proj = Matrix4x4f::Identity();
 
     TextureWithHandle smaa_area_tex;
     TextureWithHandle smaa_search_tex;

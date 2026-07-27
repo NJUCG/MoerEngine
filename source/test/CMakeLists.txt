@@ -50,6 +50,14 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RenderGraphResourcePoolContract COMMAND $<TARGET_FILE:${test_target}>)
 
+set(test_target TestSceneRenderExtent)
+add_executable(${test_target} "SceneRenderExtentTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME SceneRenderExtentContract COMMAND $<TARGET_FILE:${test_target}>)
+
 set(test_target TestRHICmdReorderer)
 add_executable(${test_target} "RHICmdReordererTest.cpp")
 target_link_libraries(${test_target}

@@ -121,9 +121,53 @@ bool VulkanAllocatorBase::ResetAbandoned() {
 
 // VulkanPresentor
 VulkanPresentor::VulkanPresentor(VulkanDevice* _device, EQueueType _type) :
-    VulkanAllocatorBase(_device, _type) {}
+    VulkanAllocatorBase(_device, _type) {
+    VkSemaphoreCreateInfo semaphore_info{
+        VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO
+    };
+    const VkResult result = vkCreateSemaphore(
+        m_device->GetDevice(),
+        &semaphore_info,
+        VK_NULL_HANDLE,
+        &image_ready_semaphore
+    );
+    if (result != VK_SUCCESS) {
+        image_ready_semaphore = VK_NULL_HANDLE;
+        m_device->TryLatchFirstFault(
+            VulkanOperationContext{
+                .operation  = EVulkanFaultOperation::SwapchainSemaphoreCreate,
+                .queue_type = _type,
+            },
+            result
+        );
+        throw std::runtime_error(
+            "failed to create Vulkan presentor image-ready semaphore"
+        );
+    }
+    try {
+        m_device->SetResourceName(
+            uint64(image_ready_semaphore),
+            VK_OBJECT_TYPE_SEMAPHORE,
+            "PresentorImageReadySemaphore_" +
+                std::to_string(reinterpret_cast<uintptr_t>(this))
+        );
+    } catch (...) {
+        vkDestroySemaphore(
+            m_device->GetDevice(), image_ready_semaphore, VK_NULL_HANDLE
+        );
+        image_ready_semaphore = VK_NULL_HANDLE;
+        throw;
+    }
+}
 
-VulkanPresentor::~VulkanPresentor() {}
+VulkanPresentor::~VulkanPresentor() {
+    if (image_ready_semaphore != VK_NULL_HANDLE) {
+        vkDestroySemaphore(
+            m_device->GetDevice(), image_ready_semaphore, VK_NULL_HANDLE
+        );
+        image_ready_semaphore = VK_NULL_HANDLE;
+    }
+}
 
 bool VulkanPresentor::CompleteSuccess() noexcept {
     return InvokeAllocatorCompletionCallbacksNoexcept(

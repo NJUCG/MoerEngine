@@ -50,9 +50,11 @@ public:
     ~VkSwapchain();
     void Recreate(const SwapchainCreateInfo& _info) override;
     void CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate = false);
-    AcquireResult                       AquireNextImage(uint64 _timeout = UINT64_MAX);
+    AcquireResult AquireNextImage(
+        VkSemaphore _ready_semaphore,
+        uint64      _timeout = UINT64_MAX
+    );
     TextureView                         GetSwapchainImage(uint _index);
-    VkSemaphore                         GetImageReadyFence(uint _index);
     VkSemaphore                         GetRenderFinishedFence(uint _image_index);
     VulkanOperationResult Present(
         VkQueue _queue,
@@ -70,7 +72,6 @@ public:
     }
     VkSurfaceFormatKHR fmt;
 
-    Array<VkSemaphore>          image_ready_fences;
     Array<VkSemaphore>          render_finished_fences;
     Array<class VulkanTexture*> swapchain_textures;
     Array<TextureView>          swapchain_views;

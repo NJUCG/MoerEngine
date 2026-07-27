@@ -48,7 +48,8 @@ float get_motion_history_scale(float2 motion_vector_uv) {
 }
 
 void get_reprojected_ao(float2 uv, float curr_ao, out float out_history_ao, out float out_history_weight) {
-    out_history_ao = curr_ao;
+    out_history_ao     = curr_ao;
+    out_history_weight = param.history_ratio;
 
     float2 motion_vector_ndc =
         TextureHandle(param.motion_vector_tex).Sample2D<float2>(uv).rg; // value in [-1, 1] (NDC Space)

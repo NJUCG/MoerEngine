@@ -50,8 +50,12 @@ public:
 
     float frame_time;
 
-    uint2 GetResolution() {
-        return uint2(resolution.x, resolution.y);
+    uint2 GetResolution() const {
+        return scene_resolution;
+    }
+
+    uint2 GetOutputResolution() const {
+        return output_resolution;
     }
 
     // MARK: Hold ownership
@@ -173,7 +177,8 @@ private:
         });
     }
 
-    uint2 resolution;
+    uint2 scene_resolution;
+    uint2 output_resolution;
 
 public:
     // Constructor
@@ -184,7 +189,7 @@ public:
         BindlessArrayRef bdls,
         CommandList&     cmd_list,
         RenderScene&     render_scene,
-        uint2            resolution
+        uint2            initial_resolution
     ) :
         device(device),
         manager(manager),
@@ -192,7 +197,8 @@ public:
         bdls(bdls),
         cmd_list(cmd_list),
         render_scene(render_scene),
-        resolution(resolution) {
+        scene_resolution(initial_resolution),
+        output_resolution(initial_resolution) {
 
         // textures
         textures = RasterTextures{};
@@ -204,10 +210,6 @@ public:
 
     void Update(float delta_time) {
         frame_time = delta_time;
-    }
-
-    void SetResolution(uint2 new_resolution) {
-        resolution = new_resolution;
     }
 
     void BeginSceneFrame(const SceneUpdateBatch& updates) {
@@ -237,10 +239,28 @@ public:
 
     // MARK: Frame Buffers
 
-    void CreateFrameBuffers() {
-        textures.CreateFrameBuffers(device, resolution);
-        hiz_data.previous_valid = false;
-        hiz_data.mip_count      = textures.hiz_current.tex ? textures.hiz_current.tex->GetNumMips() : 0;
+    void CreateFrameBuffers(
+        uint2 new_scene_resolution,
+        uint2 new_output_resolution,
+        bool  create_scene_resources = true,
+        bool  create_output_resources = true
+    ) {
+        textures.CreateFrameBuffers(
+            device,
+            new_scene_resolution,
+            new_output_resolution,
+            create_scene_resources,
+            create_output_resources
+        );
+        if (create_scene_resources) {
+            scene_resolution       = new_scene_resolution;
+            hiz_data.previous_valid = false;
+            hiz_data.mip_count =
+                textures.hiz_current.tex ? textures.hiz_current.tex->GetNumMips() : 0;
+        }
+        if (create_output_resources) {
+            output_resolution = new_output_resolution;
+        }
     }
 
     //功能：加载外部纹理并在这一步Create它们的buffer
@@ -248,14 +268,27 @@ public:
         textures.LoadAndUploadAssets(device, cmd_list);
     }
 
-    void AllocateFrameBuffers() {
-        textures.AllocateFrameBuffers(cmd_list, bdls);
+    void AllocateFrameBuffers(
+        bool allocate_scene_resources = true,
+        bool allocate_output_resources = true
+    ) {
+        textures.AllocateFrameBuffers(
+            cmd_list, bdls, allocate_scene_resources, allocate_output_resources
+        );
     }
 
-    void FreeFrameBuffers(bool is_free_external_assets) {
-        textures.FreeFrameBuffers(bdls, is_free_external_assets);
-        hiz_data.previous_valid = false;
-        hiz_data.mip_count      = 0;
+    void FreeFrameBuffers(
+        bool is_free_external_assets,
+        bool free_scene_resources = true,
+        bool free_output_resources = true
+    ) {
+        textures.FreeFrameBuffers(
+            bdls, is_free_external_assets, free_scene_resources, free_output_resources
+        );
+        if (free_scene_resources) {
+            hiz_data.previous_valid = false;
+            hiz_data.mip_count      = 0;
+        }
     }
 
     void InvalidateHiZHistory() {

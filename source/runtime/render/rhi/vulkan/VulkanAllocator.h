@@ -128,7 +128,14 @@ public:
     VulkanPresentor(VulkanDevice* _device, EQueueType _queue_type);
     virtual ~VulkanPresentor();
 
+    [[nodiscard]] VkSemaphore GetImageReadySemaphore() const noexcept {
+        return image_ready_semaphore;
+    }
+
     bool CompleteSuccess() noexcept override;
+
+private:
+    VkSemaphore image_ready_semaphore{VK_NULL_HANDLE};
 };
 
 class VulkanAllocator : public VulkanAllocatorBase {
