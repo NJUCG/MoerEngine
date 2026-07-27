@@ -1092,15 +1092,28 @@ public:
             }
         }
 
-        // D3D12 intentionally exposes timestamp Query as unsupported.
+        // D3D12 intentionally exposes GPU Query as unsupported. Preserve the
+        // requested kind in the terminal diagnostic so an occlusion caller is
+        // never reported as a timestamp capability failure.
         const QueryPublishBatch query_batch =
             QueryBackendAccess::BeginPublishBatch();
         for (RHIBackendSubmissionBatchEntry& entry : _batch.submits) {
             if (!entry.submit.query_tokens.empty()) {
-                entry.submit.PublishPendingQueryErrors(
-                    "D3D12 timestamp queries are unsupported",
-                    query_batch
-                );
+                const QueryPublishBatch effective_batch =
+                    entry.submit.query_publish_batch.Valid() ?
+                        entry.submit.query_publish_batch :
+                        query_batch;
+                entry.submit.query_publish_batch = effective_batch;
+                for (const QueryToken& token :
+                     entry.submit.query_tokens) {
+                    QueryBackendAccess::PublishErrorIfPending(
+                        token,
+                        token.Kind() == QueryKind::Occlusion ?
+                            "D3D12 occlusion queries are unsupported" :
+                            "D3D12 timestamp queries are unsupported",
+                        effective_batch
+                    );
+                }
             }
         }
 
@@ -1756,7 +1769,7 @@ void RHIExecutor::Submit(
         _command_lists.end(),
         [](const CommandList& command_list) {
             return IsSubmissionQueue(command_list.GetQueueType()) &&
-                   !command_list.HasOpenTimestampQueries();
+                   !command_list.HasOpenQueries();
         }
     );
     if (!group_valid) {
@@ -1769,7 +1782,7 @@ void RHIExecutor::Submit(
             materialized_source_indices,
             std::move(submits),
             _present,
-            "CommandList group contains an invalid queue or open timestamp query"
+            "CommandList group contains an invalid queue or open query"
         );
         return;
     }
@@ -1993,9 +2006,9 @@ void RHIExecutor::SubmitRecording(
                             "recorded source changed to an invalid queue"
                         );
                     }
-                    if (source.command_list->HasOpenTimestampQueries()) {
+                    if (source.command_list->HasOpenQueries()) {
                         throw std::logic_error(
-                            "recorded source contains an unclosed timestamp query"
+                            "recorded source contains an unclosed query"
                         );
                     }
                 }

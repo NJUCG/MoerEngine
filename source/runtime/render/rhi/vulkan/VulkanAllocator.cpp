@@ -360,6 +360,26 @@ VulkanAllocator::FindTimestampQueryRecord(uint64 _token_id) noexcept {
     return iter == timestamp_query_records.end() ? nullptr : &*iter;
 }
 
+VulkanAllocator::OcclusionQueryRecord*
+VulkanAllocator::FindOcclusionQueryRecord(uint64 _token_id) noexcept {
+    const auto iter = std::find_if(
+        occlusion_query_records.begin(),
+        occlusion_query_records.end(),
+        [_token_id](const OcclusionQueryRecord& _record) {
+            return _record.token.Id() == _token_id;
+        }
+    );
+    return iter == occlusion_query_records.end() ? nullptr : &*iter;
+}
+
+void VulkanAllocator::EnsureQueryCapacity(
+    size_t _timestamp_slot_count,
+    size_t _occlusion_pair_count
+) {
+    EnsureTimestampQueryCapacity(_timestamp_slot_count);
+    EnsureOcclusionQueryCapacity(_occlusion_pair_count);
+}
+
 void VulkanAllocator::EnsureTimestampQueryCapacity(size_t _required_count) {
     if (_required_count == 0) {
         return;
@@ -398,6 +418,40 @@ void VulkanAllocator::EnsureTimestampQueryCapacity(size_t _required_count) {
     timestamp_pool->EnsureCapacity(required_count);
 }
 
+void VulkanAllocator::EnsureOcclusionQueryCapacity(size_t _required_count) {
+    if (_required_count == 0) {
+        return;
+    }
+    if (queue_type != EQueueType::Graphics) {
+        throw std::runtime_error(
+            "Vulkan occlusion queries require a Graphics allocator"
+        );
+    }
+    if (next_occlusion_query != 0 || !occlusion_query_records.empty()) {
+        throw std::logic_error(
+            "Vulkan occlusion query pool can grow only before recording"
+        );
+    }
+    if (_required_count > std::numeric_limits<uint32>::max()) {
+        throw std::length_error(
+            "Vulkan occlusion query pair count exceeds uint32 capacity"
+        );
+    }
+
+    const uint32 required_count = static_cast<uint32>(_required_count);
+    occlusion_query_records.reserve(_required_count);
+    if (!occlusion_pool) {
+        occlusion_pool.emplace(
+            *m_device,
+            VK_QUERY_TYPE_OCCLUSION,
+            required_count,
+            queue_type
+        );
+        return;
+    }
+    occlusion_pool->EnsureCapacity(required_count);
+}
+
 uint32 VulkanAllocator::AllocateTimestampQuerySlot() {
     if (!timestamp_pool ||
         next_timestamp_query >= timestamp_pool->GetCount()) {
@@ -406,6 +460,47 @@ uint32 VulkanAllocator::AllocateTimestampQuerySlot() {
         );
     }
     return next_timestamp_query++;
+}
+
+uint32 VulkanAllocator::AllocateOcclusionQuerySlot() {
+    if (!occlusion_pool ||
+        next_occlusion_query >= occlusion_pool->GetCount()) {
+        throw std::runtime_error(
+            "Vulkan occlusion query pool exhausted for one recorded command buffer"
+        );
+    }
+    return next_occlusion_query++;
+}
+
+void VulkanAllocator::RecordQuery(
+    VulkanCmdList& _cmd_list,
+    const QueryCmd& _cmd
+) {
+    const QueryToken& token = _cmd.Token();
+    if (!token.Valid()) {
+        throw std::runtime_error("invalid Vulkan query token");
+    }
+
+    switch (token.Kind()) {
+        case QueryKind::Timestamp:
+            if (!_cmd.IsTimestamp()) {
+                throw std::runtime_error(
+                    "Vulkan timestamp query token has an occlusion operation"
+                );
+            }
+            RecordTimestampQuery(_cmd_list, _cmd);
+            return;
+        case QueryKind::Occlusion:
+            if (!_cmd.IsOcclusion()) {
+                throw std::runtime_error(
+                    "Vulkan occlusion query token has a timestamp operation"
+                );
+            }
+            RecordOcclusionQuery(_cmd_list, _cmd);
+            return;
+        default:
+            throw std::runtime_error("unsupported Vulkan query kind");
+    }
 }
 
 void VulkanAllocator::RecordTimestampQuery(
@@ -455,6 +550,50 @@ void VulkanAllocator::RecordTimestampQuery(
         *timestamp_pool, slot, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT
     );
     record->end_slot = slot;
+}
+
+void VulkanAllocator::RecordOcclusionQuery(
+    VulkanCmdList& _cmd_list,
+    const QueryCmd& _cmd
+) {
+    const QueryToken& token = _cmd.Token();
+    if (!token.Valid() || token.Kind() != QueryKind::Occlusion) {
+        throw std::runtime_error("invalid Vulkan occlusion query token");
+    }
+    if (queue_type != EQueueType::Graphics ||
+        _cmd.GetQueueType() != EQueueType::Graphics) {
+        throw std::runtime_error(
+            "Vulkan occlusion queries require the Graphics queue"
+        );
+    }
+
+    constexpr uint32 invalid_slot = std::numeric_limits<uint32>::max();
+    if (_cmd.IsBegin()) {
+        if (FindOcclusionQueryRecord(token.Id()) != nullptr) {
+            throw std::runtime_error("duplicate Vulkan occlusion query begin");
+        }
+        const uint32 slot = AllocateOcclusionQuerySlot();
+        _cmd_list.ResetQueryPool(*occlusion_pool, slot, 1);
+        _cmd_list.BeginQuery(*occlusion_pool, slot, 0);
+        occlusion_query_records.emplace_back(OcclusionQueryRecord{
+            .token = token,
+            .slot  = slot,
+        });
+        return;
+    }
+
+    OcclusionQueryRecord* record =
+        FindOcclusionQueryRecord(token.Id());
+    if (record == nullptr || record->slot == invalid_slot) {
+        throw std::runtime_error(
+            "Vulkan occlusion query end has no matching begin"
+        );
+    }
+    if (record->ended) {
+        throw std::runtime_error("duplicate Vulkan occlusion query end");
+    }
+    _cmd_list.EndQuery(*occlusion_pool, record->slot);
+    record->ended = true;
 }
 
 VkResult VulkanAllocator::PrepareTimestampQueriesAfterGpuCompletion(
@@ -562,6 +701,83 @@ VkResult VulkanAllocator::PrepareTimestampQueriesAfterGpuCompletion(
     return VK_SUCCESS;
 }
 
+VkResult VulkanAllocator::PrepareOcclusionQueriesAfterGpuCompletion(
+    const VulkanOperationContext& _context
+) noexcept {
+    constexpr uint32 invalid_slot = std::numeric_limits<uint32>::max();
+
+    struct NativeOcclusionResult {
+        uint64 sample_count{0};
+        uint64 available{0};
+    };
+
+    for (OcclusionQueryRecord& record : occlusion_query_records) {
+        record.prepared_state =
+            OcclusionQueryRecord::EPreparedState::Unprepared;
+        record.prepared_result = {};
+
+        if (record.slot == invalid_slot || !record.ended) {
+            record.prepared_state =
+                OcclusionQueryRecord::EPreparedState::Incomplete;
+            continue;
+        }
+
+        NativeOcclusionResult native_result{};
+        if (!occlusion_pool) {
+            record.prepared_state =
+                OcclusionQueryRecord::EPreparedState::NativeFault;
+            return VK_ERROR_UNKNOWN;
+        }
+        const VkResult result = vkGetQueryPoolResults(
+            m_device->GetDevice(),
+            occlusion_pool->GetHandle(),
+            record.slot,
+            1,
+            sizeof(native_result),
+            &native_result,
+            sizeof(native_result),
+            VK_QUERY_RESULT_64_BIT |
+                VK_QUERY_RESULT_WITH_AVAILABILITY_BIT
+        );
+        if (result == VK_NOT_READY ||
+            (result == VK_SUCCESS && native_result.available == 0)) {
+            record.prepared_state =
+                OcclusionQueryRecord::EPreparedState::Unavailable;
+            continue;
+        }
+        if (result != VK_SUCCESS) {
+            record.prepared_state =
+                OcclusionQueryRecord::EPreparedState::NativeFault;
+            VulkanOperationContext query_context = _context;
+            query_context.operation = EVulkanFaultOperation::QueryPoolResults;
+            if (query_context.queue_type == EQueueType::Ignore) {
+                query_context.queue_type = queue_type;
+            }
+            m_device->TryLatchFirstFault(query_context, result);
+            return result;
+        }
+
+        record.prepared_result = OcclusionQueryResult{
+            .sample_count = native_result.sample_count,
+            .visible      = native_result.sample_count != 0,
+        };
+        record.prepared_state =
+            OcclusionQueryRecord::EPreparedState::Ready;
+    }
+    return VK_SUCCESS;
+}
+
+VkResult VulkanAllocator::PrepareQueriesAfterGpuCompletion(
+    const VulkanOperationContext& _context
+) noexcept {
+    const VkResult timestamp_result =
+        PrepareTimestampQueriesAfterGpuCompletion(_context);
+    if (timestamp_result != VK_SUCCESS) {
+        return timestamp_result;
+    }
+    return PrepareOcclusionQueriesAfterGpuCompletion(_context);
+}
+
 void VulkanAllocator::PublishTimestampQueriesAfterGpuCompletion(
     QueryPublishBatch _batch,
     bool              _gpu_success,
@@ -625,6 +841,77 @@ void VulkanAllocator::PublishTimestampQueriesAfterGpuCompletion(
     }
 }
 
+void VulkanAllocator::PublishOcclusionQueriesAfterGpuCompletion(
+    QueryPublishBatch _batch,
+    bool              _gpu_success,
+    std::string_view  _failure_reason
+) noexcept {
+    for (const OcclusionQueryRecord& record : occlusion_query_records) {
+        if (!_gpu_success) {
+            QueryBackendAccess::PublishErrorIfPending(
+                record.token,
+                _failure_reason.empty() ?
+                    "Vulkan submission did not reach successful GPU completion" :
+                    _failure_reason,
+                _batch
+            );
+            continue;
+        }
+
+        switch (record.prepared_state) {
+            case OcclusionQueryRecord::EPreparedState::Ready:
+                QueryBackendAccess::PublishOcclusion(
+                    record.token, record.prepared_result, _batch
+                );
+                break;
+            case OcclusionQueryRecord::EPreparedState::Incomplete:
+                QueryBackendAccess::PublishErrorIfPending(
+                    record.token,
+                    "Vulkan occlusion query pair is incomplete",
+                    _batch
+                );
+                break;
+            case OcclusionQueryRecord::EPreparedState::Unavailable:
+                QueryBackendAccess::PublishErrorIfPending(
+                    record.token,
+                    "Vulkan occlusion query result is unavailable",
+                    _batch
+                );
+                break;
+            case OcclusionQueryRecord::EPreparedState::NativeFault:
+                QueryBackendAccess::PublishErrorIfPending(
+                    record.token,
+                    "Vulkan occlusion query result readback faulted",
+                    _batch
+                );
+                break;
+            case OcclusionQueryRecord::EPreparedState::Unprepared:
+            default:
+                QueryBackendAccess::PublishErrorIfPending(
+                    record.token,
+                    "Vulkan occlusion query was not prepared for completion",
+                    _batch
+                );
+                break;
+        }
+    }
+}
+
+void VulkanAllocator::PublishQueriesAfterGpuCompletion(
+    QueryPublishBatch _batch,
+    bool              _gpu_success,
+    std::string_view  _failure_reason
+) noexcept {
+    // Publish every token in the allocator before releasing any callback.
+    // A callback may synchronously inspect another query from this packet.
+    PublishTimestampQueriesAfterGpuCompletion(
+        _batch, _gpu_success, _failure_reason
+    );
+    PublishOcclusionQueriesAfterGpuCompletion(
+        _batch, _gpu_success, _failure_reason
+    );
+}
+
 void VulkanAllocator::NotifyTimestampQueriesAfterGpuCompletion(
     QueryPublishBatch _batch
 ) noexcept {
@@ -633,15 +920,32 @@ void VulkanAllocator::NotifyTimestampQueriesAfterGpuCompletion(
     }
 }
 
+void VulkanAllocator::NotifyOcclusionQueriesAfterGpuCompletion(
+    QueryPublishBatch _batch
+) noexcept {
+    for (const OcclusionQueryRecord& record : occlusion_query_records) {
+        QueryBackendAccess::NotifyTerminal(record.token, _batch);
+    }
+}
+
+void VulkanAllocator::NotifyQueriesAfterGpuCompletion(
+    QueryPublishBatch _batch
+) noexcept {
+    NotifyTimestampQueriesAfterGpuCompletion(_batch);
+    NotifyOcclusionQueriesAfterGpuCompletion(_batch);
+}
+
 bool VulkanAllocator::CompleteSuccessCallbacks() noexcept {
     return InvokeAllocatorCompletionCallbacksNoexcept(
         on_complete, "allocator"
     );
 }
 
-void VulkanAllocator::ClearTimestampQueries() noexcept {
+void VulkanAllocator::ClearQueries() noexcept {
     timestamp_query_records.clear();
+    occlusion_query_records.clear();
     next_timestamp_query = 0;
+    next_occlusion_query = 0;
 }
 
 bool VulkanAllocator::CompleteSuccess() noexcept {
@@ -650,17 +954,17 @@ bool VulkanAllocator::CompleteSuccess() noexcept {
         .queue_type = queue_type,
     };
     const VkResult prepare_result =
-        PrepareTimestampQueriesAfterGpuCompletion(context);
+        PrepareQueriesAfterGpuCompletion(context);
     const bool callbacks_succeeded =
         prepare_result == VK_SUCCESS && CompleteSuccessCallbacks();
     const QueryPublishBatch query_batch =
         QueryBackendAccess::BeginPublishBatch();
-    PublishTimestampQueriesAfterGpuCompletion(
+    PublishQueriesAfterGpuCompletion(
         query_batch,
         prepare_result == VK_SUCCESS,
-        "Vulkan timestamp query result preparation failed"
+        "Vulkan query result preparation failed"
     );
-    NotifyTimestampQueriesAfterGpuCompletion(query_batch);
+    NotifyQueriesAfterGpuCompletion(query_batch);
     return prepare_result == VK_SUCCESS && callbacks_succeeded;
 }
 
@@ -669,7 +973,7 @@ bool VulkanAllocator::Reset() {
         return false;
     }
     ResetBufferAlloc();
-    ClearTimestampQueries();
+    ClearQueries();
     return true;
 }
 

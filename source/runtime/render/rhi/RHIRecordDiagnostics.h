@@ -713,6 +713,8 @@ enum class SerialQueryEvent : uint8_t {
     End,
     Timestamp,
     Reset,
+    OcclusionBegin,
+    OcclusionEnd,
 };
 
 class SerialQuerySectionBuilder {

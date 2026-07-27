@@ -193,6 +193,18 @@ def readback_future_line() -> str:
     )
 
 
+def occlusion_query_line() -> str:
+    return (
+        "[TESTCASE][PASS] name=OcclusionQueryCompletionOwnership "
+        "queue=Graphics status=Ready samples=0 visible=false "
+        "availability=explicit pool=allocator_local bulk_pairs=48 "
+        "growth=verified reuse=verified "
+        "recording=serial_island "
+        "order=signal->completion->query->ordinary "
+        "callbacks=exactly_once readback=verified replay=0\n"
+    )
+
+
 def timestamp_query_success_batch_line() -> str:
     return (
         "[TESTCASE][PASS] "
@@ -1018,6 +1030,11 @@ class VulkanRunnerTests(unittest.TestCase):
                 readback_future_line(),
             ),
             (
+                "occlusion-query",
+                "--occlusion-query",
+                occlusion_query_line(),
+            ),
+            (
                 "timestamp-query-success-batch",
                 "--timestamp-query-success-batch",
                 timestamp_query_success_batch_line(),
@@ -1080,6 +1097,49 @@ class VulkanRunnerTests(unittest.TestCase):
                 "readback-future",
                 "VUID-VkImageMemoryBarrier2-oldLayout-01197\n"
                 + readback_future_line(),
+            )
+
+    def test_occlusion_query_contract_is_accepted(self) -> None:
+        runner.validate_log(
+            "occlusion-query",
+            occlusion_query_line(),
+        )
+
+    def test_occlusion_query_requires_serial_island(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete native query contract",
+        ):
+            runner.validate_log(
+                "occlusion-query",
+                occlusion_query_line().replace(
+                    "recording=serial_island",
+                    "recording=parallel_wave",
+                ),
+            )
+
+    def test_occlusion_query_requires_bulk_growth(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete native query contract",
+        ):
+            runner.validate_log(
+                "occlusion-query",
+                occlusion_query_line().replace(
+                    "bulk_pairs=48 growth=verified",
+                    "bulk_pairs=1 growth=unverified",
+                ),
+            )
+
+    def test_occlusion_query_rejects_validation_vuid(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "Vulkan validation VUID",
+        ):
+            runner.validate_log(
+                "occlusion-query",
+                "VUID-vkCmdBeginQuery-None-00807\n"
+                + occlusion_query_line(),
             )
 
     def test_timestamp_query_success_batch_contract_is_accepted(

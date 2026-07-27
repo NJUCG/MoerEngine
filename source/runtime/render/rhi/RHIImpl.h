@@ -1747,14 +1747,16 @@ private:
     UnorderedMap<uint64, uint> related_geometries;
 };
 
-// Backend-neutral timestamp query boundary. The token is copied into both
-// boundaries so every translated command buffer retains the same completion
-// identity independently of CommandList/CmdSubmit movement.
+// Backend-neutral query boundary. The token is copied into both boundaries so
+// every translated command buffer retains the same completion identity
+// independently of CommandList/CmdSubmit movement.
 struct QueryCmd : public Command {
 public:
     enum class EOp : uint8_t {
         BeginTimestamp = 0,
         EndTimestamp   = 1,
+        BeginOcclusion = 2,
+        EndOcclusion   = 3,
     };
 
     QueryCmd(
@@ -1781,11 +1783,19 @@ public:
     }
 
     bool IsBegin() const noexcept {
-        return op == EOp::BeginTimestamp;
+        return op == EOp::BeginTimestamp || op == EOp::BeginOcclusion;
     }
 
     bool IsEnd() const noexcept {
-        return op == EOp::EndTimestamp;
+        return op == EOp::EndTimestamp || op == EOp::EndOcclusion;
+    }
+
+    bool IsTimestamp() const noexcept {
+        return op == EOp::BeginTimestamp || op == EOp::EndTimestamp;
+    }
+
+    bool IsOcclusion() const noexcept {
+        return op == EOp::BeginOcclusion || op == EOp::EndOcclusion;
     }
 
 private:

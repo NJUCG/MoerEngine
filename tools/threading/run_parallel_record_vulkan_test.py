@@ -957,12 +957,41 @@ def _require_owning_readback_future(text: str) -> None:
     )
 
 
+def _require_occlusion_query(text: str) -> None:
+    marker = _testcase_marker("OcclusionQueryCompletionOwnership", text)
+    _require(
+        marker is not None and marker[0] == "PASS",
+        "occlusion-query: missing occlusion query PASS marker",
+    )
+    _, fields = marker
+    _require(
+        fields.get("queue") == "Graphics"
+        and fields.get("status") == "Ready"
+        and fields.get("samples") == "0"
+        and fields.get("visible") == "false"
+        and fields.get("availability") == "explicit"
+        and fields.get("pool") == "allocator_local"
+        and fields.get("bulk_pairs") == "48"
+        and fields.get("growth") == "verified"
+        and fields.get("reuse") == "verified"
+        and fields.get("recording") == "serial_island"
+        and fields.get("order") == "signal->completion->query->ordinary"
+        and fields.get("callbacks") == "exactly_once"
+        and fields.get("readback") == "verified"
+        and fields.get("replay") == "0",
+        "occlusion-query: incomplete native query contract",
+    )
+
+
 def validate_log(mode: str, text: str) -> None:
     _require("[TESTCASE][FAIL]" not in text, f"{mode}: test emitted a FAIL marker")
     _require("VUID-" not in text, f"{mode}: Vulkan validation VUID was emitted")
     _require("Validation Error" not in text, f"{mode}: Vulkan validation error was emitted")
     if mode == "readback-future":
         _require_owning_readback_future(text)
+        return
+    if mode == "occlusion-query":
+        _require_occlusion_query(text)
         return
     if mode == "timestamp-query-success-batch":
         _require_timestamp_query_success_batch(text)
@@ -1262,6 +1291,8 @@ def run_case(executable: Path, outdir: Path, mode: str, timeout: float) -> Path:
         arguments.append("--rt-export-rejection")
     if mode == "readback-future":
         arguments.append("--readback-future")
+    if mode == "occlusion-query":
+        arguments.append("--occlusion-query")
     if mode == "timestamp-query-success-batch":
         arguments.append("--timestamp-query-success-batch")
 
@@ -1320,6 +1351,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "present-hard",
                 "rt-export-rejection",
                 "readback-future",
+                "occlusion-query",
                 "timestamp-query-success-batch",
             )
         ]
