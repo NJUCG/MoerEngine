@@ -14,6 +14,14 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 
 [[vk::push_constant]] ConstantBuffer<Moer::GeometryPassBindlessParam> param;
 
+float SampleMaterialAlpha(Moer::GMaterial mat, float2 uv_in_map) {
+    const int albedo_map_hdl = int(mat.albedo_map_hdl);
+    if (albedo_map_hdl > 0) {
+        return TextureHandle(albedo_map_hdl).Sample2D<float4>(uv_in_map).a * mat.albedo_factor.a;
+    }
+    return mat.albedo_factor.a;
+}
+
 void DiscardByAlphaTest(uint material_id, float2 uv_in_map) {
     if (param.enable_alpha_test == 0) {
         return;
@@ -25,13 +33,13 @@ void DiscardByAlphaTest(uint material_id, float2 uv_in_map) {
 
     // 是否需要discard该像素（AlphaMode为BLEND或MASK时，需要进行discard）
     if (mat.alpha_mode == Moer::EAlphaMode::Mask) {
-        float alpha = TextureHandle(mat.albedo_map_hdl).Sample2D<float4>(uv_in_map).a * mat.albedo_factor.a;
+        float alpha = SampleMaterialAlpha(mat, uv_in_map);
         // printf("MASK: alpha: %f, cutoff: %f, albedo_map.a: %f, base_color.a: %f\n", alpha, mat.alpha_cutoff, TextureHandle(mat.albedo_map).Sample2D<float4>(uv_in_map).a, mat.base_color_factor.a);
         if (alpha < mat.alpha_cutoff) {
             discard;
         }
     } else if (mat.alpha_mode == Moer::EAlphaMode::Blend) {
-        float alpha = TextureHandle(mat.albedo_map_hdl).Sample2D<float4>(uv_in_map).a * mat.albedo_factor.a;
+        float alpha = SampleMaterialAlpha(mat, uv_in_map);
         // printf("BLEND: alpha: %f; albedo_map.a: %f; base_color.a: %f\n", alpha, TextureHandle(mat.albedo_map).Sample2D<float4>(uv_in_map).a, mat.base_color_factor.a);
         if (alpha < param.alpha_test_blend_pixel_cutoff) {
             discard;
@@ -79,7 +87,7 @@ PsOutput main(VsOutput input) : SV_TARGET {
     // Debug 可视化模式（debug_visualization_mode: 0=off, 1=Cluster ID, 2=frac(UV), 3=顶点法线）
     if (param.debug_visualization_mode > 0) {
         PsOutput output;
-        output.metal_rough_ao = float4(0.0, 0.5, 1.0, 0.0);
+        output.metal_rough_ao = float4(0.0, 0.5, 1.0, 1.0);
 
         if (param.debug_visualization_mode == 1) {
             output.base_color = float4(ClusterIdToColor(input.primitive_id), 1.0);
@@ -102,13 +110,13 @@ PsOutput main(VsOutput input) : SV_TARGET {
         mat.albedo_map_hdl,
         input.texcoord0,
         mat.albedo_factor.xyz,
-        MISSING_TEXTURE_COLOR
+        float3(1.0, 1.0, 1.0)
     );
     float2 metallic_roughness = SampleTextureAndApplyFactor(
         mat.metallic_roughness_map_hdl,
         input.texcoord0,
         float2(mat.metallic_factor, mat.roughness_factor),
-        float2(mat.metallic_factor, mat.roughness_factor)
+        float2(1.0, 1.0)
     );
     float material_ao = SampleTextureAndApplyFactor(mat.ao_map_hdl, input.texcoord0, 1.0, 1.0);
     float3 shading_normal = GetNormalFromNormalMap(
@@ -119,9 +127,9 @@ PsOutput main(VsOutput input) : SV_TARGET {
     );
 
     PsOutput output;
-    output.base_color = float4(base_color, 0.0);
+    output.base_color = float4(base_color, 1.0);
     output.normal = float4(Raster::PackNormal(shading_normal), 1.0);
-    output.metal_rough_ao = float4(metallic_roughness, material_ao, 0.0);
+    output.metal_rough_ao = float4(metallic_roughness.x, metallic_roughness.y, material_ao, 1.0);
 
     return output;
 }

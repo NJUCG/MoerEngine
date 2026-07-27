@@ -294,8 +294,8 @@ SurfacePixelOutput SurfacePS(SurfaceDomainOutput input) {
     }
 
     SurfacePixelOutput output;
-    output.base_color = float4(surface_color, 0.0);
+    output.base_color = float4(surface_color, 1.0);
     output.normal = float4(Raster::PackNormal(normal), 1.0);
-    output.metal_rough_ao = float4(0.0, surface_data.color_low_roughness.w, 1.0, 0.0);
+    output.metal_rough_ao = float4(0.0, surface_data.color_low_roughness.w, 1.0, 1.0);
     return output;
 }
