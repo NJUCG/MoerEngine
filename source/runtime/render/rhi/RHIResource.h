@@ -505,6 +505,13 @@ public:
     RENDER_API BufferView GetView(uint64 _byte_offset = 0, uint64 _byte_size = UINT64_MAX);
     RENDER_API BufferView GetView(EPixelFormat _fmt, uint64 _byte_offset = 0, uint64 _byte_size = UINT64_MAX);
     virtual RENDER_API void SetName(const std::string_view _name) = 0;
+    // Owning readback requires both payload materialization and a backend
+    // completion path capable of publishing Ready. Backends must opt in
+    // explicitly so CommandList never returns a Future that is guaranteed to
+    // fail after recording.
+    [[nodiscard]] virtual bool SupportsOwningReadback() const noexcept {
+        return false;
+    }
 
 protected:
     /**
@@ -692,6 +699,9 @@ public:
     RENDER_API TextureView  GetView(uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
     RENDER_API TextureView  GetView(EPixelFormat _format, uint8 _mip_idx = 0u, uint8 _mip_num = 1u);
     virtual RENDER_API void SetName(const std::string_view _name) = 0;
+    [[nodiscard]] virtual bool SupportsOwningReadback() const noexcept {
+        return false;
+    }
 
 protected:
     std::optional<std::string> debug_name;

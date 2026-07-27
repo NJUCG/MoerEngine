@@ -608,6 +608,9 @@ public:
     virtual ~VulkanBuffer();
     virtual void Destroy() override;
     void         SetName(const std::string_view _name) override;
+    [[nodiscard]] bool SupportsOwningReadback() const noexcept override {
+        return true;
+    }
 
     VulkanBuffer(std::string_view _name, const BufferInfo& _info, VulkanDevice& _device);
     VulkanBuffer(
@@ -709,6 +712,9 @@ public:
     }
 
     uint        GetMipByteSize(uint _mip_idx) const override;
+    [[nodiscard]] bool SupportsOwningReadback() const noexcept override {
+        return true;
+    }
     VkImageView GetView(
         uint _mip_level  = 0,
         uint _mip_cnt    = 1,

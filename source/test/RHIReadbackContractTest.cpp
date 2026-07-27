@@ -25,6 +25,24 @@ using namespace Moer::Render;
 using namespace std::chrono_literals;
 using Moer::byte;
 
+class ReadbackTestBuffer final : public Buffer {
+public:
+    explicit ReadbackTestBuffer(bool _supports_owning_readback) :
+        Buffer(BufferInfo{
+            64, 1, EBufferUsageFlags::TRANSFER_SRC
+        }),
+        supports_owning_readback_(_supports_owning_readback) {}
+
+    void SetName(const std::string_view) override {}
+
+    [[nodiscard]] bool SupportsOwningReadback() const noexcept override {
+        return supports_owning_readback_;
+    }
+
+private:
+    bool supports_owning_readback_{false};
+};
+
 void Expect(bool _condition, std::string_view _message) {
     if (!_condition) {
         throw std::runtime_error(std::string(_message));
@@ -127,8 +145,9 @@ BufferView FakeBufferView(
     std::uint64_t _byte_offset = 0,
     std::uint64_t _byte_size = 16
 ) {
+    static ReadbackTestBuffer supported_buffer{true};
     return BufferView(
-        reinterpret_cast<Buffer*>(std::uintptr_t{1}),
+        &supported_buffer,
         _byte_offset,
         _byte_size,
         1
@@ -609,6 +628,25 @@ void CommandOwnershipAndDestructionAreTerminal() {
     );
 }
 
+void UnsupportedBackendFailsBeforeRecording() {
+    ReadbackTestBuffer unsupported_buffer{false};
+    CommandList        list(EQueueType::Copy);
+    const ReadbackFuture future = list.Readback(
+        BufferView(&unsupported_buffer, 0, 16, 1),
+        "UnsupportedOwningReadback"
+    );
+    Expect(
+        !future.Valid(),
+        "unsupported backend returned a valid readback Future"
+    );
+    CmdSubmit submit = list.Submit();
+    Expect(
+        submit.cmds.empty() &&
+            submit.gpu_completion_tokens.empty(),
+        "unsupported backend recorded readback ownership"
+    );
+}
+
 } // namespace
 
 int main() {
@@ -626,6 +664,7 @@ int main() {
         CallbacksAreExactlyOnceAndExceptionContained();
         OwnerThreadsCannotBlockOnPendingReadback();
         CommandOwnershipAndDestructionAreTerminal();
+        UnsupportedBackendFailsBeforeRecording();
     } catch (const std::exception& exception) {
         std::cerr
             << "RHIReadbackContract: "

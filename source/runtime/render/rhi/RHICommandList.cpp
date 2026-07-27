@@ -901,7 +901,8 @@ ReadbackFuture CommandList::Readback(
     BufferView       _src,
     std::string_view _name
 ) {
-    if (_src.GetBuffer() == nullptr || _src.GetByteSize() == 0) {
+    if (_src.GetBuffer() == nullptr || _src.GetByteSize() == 0 ||
+        !_src.GetBuffer()->SupportsOwningReadback()) {
         return {};
     }
 
@@ -940,6 +941,7 @@ ReadbackFuture CommandList::Readback(
         _src.num_mips != 1 || _src.num_array != 1 ||
         _src.mip_level >= texture->GetNumMips() ||
         _src.array_layer >= texture->GetNumArray() ||
+        !texture->SupportsOwningReadback() ||
         !IsOwningTextureReadbackSupported(_src)) {
         return {};
     }

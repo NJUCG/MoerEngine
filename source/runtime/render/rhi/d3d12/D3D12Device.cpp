@@ -1335,55 +1335,29 @@ struct D3D12CommandVisitor {
     }
 
     void Visit(const CopyBackBufferCmd& _cmd) {
+        if (_cmd.HasOwningReadback()) {
+            // CommandList rejects this before recording because D3D12 does
+            // not yet have a successful GpuCompletionFuture retirement path.
+            // Keep the visitor fail-closed for manually constructed commands.
+            throw std::runtime_error(
+                "D3D12 owning buffer readback is unsupported"
+            );
+        }
         auto tmp_buffer = allocator.AllocateReadbackBuffer(_cmd.ByteSize(), 256); // ? not sure alignment
         D3D12Buffer* src_buffer = reinterpret_cast<D3D12Buffer*>(_cmd.Handle());
         cmd_list.CopyBuffer(
             src_buffer, tmp_buffer.buffer, _cmd.ByteSize(), _cmd.Offset(), tmp_buffer.byte_offset
         );
-        if (_cmd.HasOwningReadback()) {
-            const ReadbackToken readback = _cmd.OwningReadback();
-            const uint64 logical_size = _cmd.ByteSize();
-            allocator.AddOnComplete(
-                [tmp_buffer, &cmd_list(cmd_list), readback, logical_size] {
-                    struct WriterContext {
-                        D3D12CommandList*       command_list{};
-                        D3D12StagingBufferView staging{};
-                        uint64                 byte_size{};
-                    } context{&cmd_list, tmp_buffer, logical_size};
-                    (void)ReadbackBackendAccess::MaterializePayload(
-                        readback,
-                        &context,
-                        [](void* _context, std::span<byte> _destination) {
-                            auto* writer =
-                                static_cast<WriterContext*>(_context);
-                            if (writer == nullptr ||
-                                _destination.size_bytes() !=
-                                    writer->byte_size) {
-                                throw std::runtime_error(
-                                    "D3D12 buffer readback payload size mismatch"
-                                );
-                            }
-                            writer->command_list->CopyData(
-                                _destination.data(),
-                                writer->staging,
-                                writer->byte_size
-                            );
-                        }
-                    );
-                }
-            );
-        } else {
-            allocator.AddOnComplete(
-                [tmp_buffer,
-                 &cmd_list(cmd_list),
-                 destination(_cmd.Data()),
-                 logical_size = _cmd.ByteSize()] {
-                    cmd_list.CopyData(
-                        destination, tmp_buffer, logical_size
-                    );
-                }
-            );
-        }
+        allocator.AddOnComplete(
+            [tmp_buffer,
+             &cmd_list(cmd_list),
+             destination(_cmd.Data()),
+             logical_size = _cmd.ByteSize()] {
+                cmd_list.CopyData(
+                    destination, tmp_buffer, logical_size
+                );
+            }
+        );
     }
 
     void Visit(const CopyBufferCmd& _cmd) {
