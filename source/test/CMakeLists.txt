@@ -97,6 +97,7 @@ target_link_libraries(${test_target}
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHIGpuCompletionContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(RHIGpuCompletionContract PROPERTIES TIMEOUT 60)
 
 set(test_target TestExternalCpuJoin)
 add_executable(${test_target} "ExternalCpuJoinTest.cpp")
@@ -137,6 +138,10 @@ target_link_libraries(${test_target}
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHIExecutorRecordingHandoffContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(
+    RHIExecutorRecordingHandoffContract
+    PROPERTIES TIMEOUT 60
+)
 
 # CPU-only ownership contract for the Executor -> Translate -> Submission ->
 # Completion pipeline and the move-only queue lease crossing Translate/Submit.

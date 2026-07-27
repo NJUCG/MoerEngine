@@ -268,7 +268,11 @@ private:
         std::function<void()> keepalive = [fence = _receipt] {};
         _submit.callbacks.reserve(_submit.callbacks.size() + 1);
         _submit.signal_events.reserve(_submit.signal_events.size() + 1);
+        _submit.signal_rejection_keepalives.reserve(
+            _submit.signal_rejection_keepalives.size() + 1
+        );
         _submit.callbacks.emplace_back(std::move(keepalive));
+        _submit.signal_rejection_keepalives.emplace_back(_receipt);
         _submit.Signal(_receipt.Get(), _value);
     }
 

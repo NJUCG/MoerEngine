@@ -5,14 +5,26 @@
 #include "rhi/RHIThreadOwnership.h"
 #include "vulkan/VulkanSubmissionExecutor.h"
 
+#include <atomic>
 #include <exception>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 namespace Moer::Render {
 namespace {
+
+std::atomic<
+    const RHIDirectCommandListMaterializationOverrideForTesting*>
+    g_direct_command_list_materialization_override{nullptr};
+std::mutex g_direct_command_list_materialization_override_mutex{};
+std::condition_variable
+    g_direct_command_list_materialization_override_cv{};
+size_t g_direct_command_list_materialization_active_callbacks{0};
+bool g_direct_command_list_materialization_override_retiring{false};
 
 bool RejectOwnedThreadBlockingCall(std::string_view _operation) {
     if (IsRHIBlockingCallAllowedOnCurrentThread()) {
@@ -47,6 +59,43 @@ private:
     F callback;
 };
 
+void InvokeDirectCommandListMaterializationOverrideForTesting(
+    size_t _source_index
+) {
+    const auto* override =
+        g_direct_command_list_materialization_override.load(
+            std::memory_order_acquire
+        );
+    if (override == nullptr) {
+        return;
+    }
+    {
+        std::lock_guard lock(
+            g_direct_command_list_materialization_override_mutex
+        );
+        if (g_direct_command_list_materialization_override_retiring ||
+            g_direct_command_list_materialization_override.load(
+                std::memory_order_relaxed
+            ) != override) {
+            return;
+        }
+        ++g_direct_command_list_materialization_active_callbacks;
+    }
+    ScopeExit release_reader([&]() noexcept {
+        std::lock_guard lock(
+            g_direct_command_list_materialization_override_mutex
+        );
+        assert(
+            g_direct_command_list_materialization_active_callbacks != 0
+        );
+        --g_direct_command_list_materialization_active_callbacks;
+        if (g_direct_command_list_materialization_active_callbacks == 0) {
+            g_direct_command_list_materialization_override_cv.notify_all();
+        }
+    });
+    override->before_source(override->context, _source_index);
+}
+
 GraphEventRef MakeCompletedBackendEvent() {
     GraphEventRef event = GraphEvent::CreateGraphEvent();
     event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
@@ -66,6 +115,35 @@ bool SubmitHasWork(const CmdSubmit& _submit) {
 bool IsSubmissionQueue(EQueueType _queue) {
     return _queue == EQueueType::Graphics || _queue == EQueueType::Compute ||
            _queue == EQueueType::Copy;
+}
+
+struct PreparedCommandListRejection {
+    std::optional<CmdSubmit> payload{};
+};
+
+void InvokeCleanupCallbacks(
+    Array<std::function<void()>>& _callbacks,
+    std::string_view              _context
+) noexcept {
+    for (std::function<void()>& callback : _callbacks) {
+        if (!callback) {
+            continue;
+        }
+        try {
+            callback();
+        } catch (const std::exception& exception) {
+            try {
+                LOG_ERROR("{} cleanup callback threw: {}", _context, exception.what());
+            } catch (...) {
+            }
+        } catch (...) {
+            try {
+                LOG_ERROR("{} cleanup callback threw", _context);
+            } catch (...) {
+            }
+        }
+    }
+    _callbacks.clear();
 }
 
 bool BatchHasWork(const RHIBackendSubmissionBatch& _batch) {
@@ -118,14 +196,9 @@ void FinalizeRejectedSubmissions(
     } catch (...) {
     }
 
-    // A rejected producer must publish a terminal failure before ordinary
-    // callbacks run. Otherwise a later submission can wait forever for a
-    // timeline value which this frontend path silently discarded.
-    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
-        entry.submit.RejectPendingSignals();
-    }
-
-    // Terminalize every query in the rejected batch before invoking any user
+    // Terminalize every host observation in the rejected batch before
+    // invoking Fence::Reject or any user callback. A Fence rejection hook may
+    // synchronously wait on a Future from this batch.
     // callback. A callback from an earlier submit is allowed to inspect or
     // wait on a query from a later submit without depending on callback order.
     const GpuCompletionPublishBatch completion_batch =
@@ -139,7 +212,6 @@ void FinalizeRejectedSubmissions(
             _reason, entry_batch
         );
     }
-
     const QueryPublishBatch query_batch =
         QueryBackendAccess::BeginPublishBatch();
     for (RHIBackendSubmissionBatchEntry& entry : _submits) {
@@ -148,6 +220,13 @@ void FinalizeRejectedSubmissions(
                 entry.submit.query_publish_batch :
                 query_batch;
         entry.submit.PublishPendingQueryErrors(_reason, entry_batch);
+    }
+
+    // Publication wakes Wait/Get but deliberately does not release callbacks.
+    // Signals must be terminal before callback notification, while publication
+    // first prevents a synchronous Fence::Reject hook from self-deadlocking.
+    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
+        entry.submit.RejectPendingSignals();
     }
 
     // A Present receipt is a public observation boundary for the complete
@@ -205,36 +284,46 @@ void FinalizeRejectedCommandListGroup(
     const Array<GpuCompletionCancellationView>&
                                                 _completion_cancellations,
     const Array<QueryCancellationView>&         _query_cancellations,
+    Array<CommandList::RecordingRejectionPreparation>&
+                                                _rejection_preparations,
+    Array<PreparedCommandListRejection>&         _prepared,
     const Array<size_t>&                        _materialized_source_indices,
     Array<RHIBackendSubmissionBatchEntry>&&     _submits,
     RHIPresentRequest*                          _present,
     std::string_view                            _reason
 ) noexcept {
-    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
-        entry.submit.RejectPendingSignals();
-    }
-    for (CommandList& command_list : _command_lists) {
-        command_list.RejectPendingSignals();
+    assert(
+        _completion_cancellations.size() == _command_lists.size() &&
+        _query_cancellations.size() == _command_lists.size() &&
+        _rejection_preparations.size() == _command_lists.size() &&
+        _prepared.size() == _command_lists.size()
+    );
+    size_t materialized_cursor = 0;
+    for (size_t source_index = 0;
+         source_index < _command_lists.size(); ++source_index) {
+        if (materialized_cursor < _materialized_source_indices.size() &&
+            _materialized_source_indices[materialized_cursor] ==
+                source_index) {
+            ++materialized_cursor;
+            continue;
+        }
+        _prepared[source_index].payload.emplace(
+            _command_lists[source_index].
+                PrepareRecordingRejectionDrain(
+                    std::move(
+                        _rejection_preparations[source_index]
+                    )
+                )
+        );
     }
 
-    const bool captured_every_completion_generation =
-        _completion_cancellations.size() ==
-        _command_lists.size();
     const GpuCompletionPublishBatch completion_batch =
         GpuCompletionBackendAccess::BeginPublishBatch();
-    if (captured_every_completion_generation) {
-        for (const GpuCompletionCancellationView& cancellation :
-             _completion_cancellations) {
-            (void)cancellation.PublishCancellation(
-                _reason, completion_batch
-            );
-        }
-    } else {
-        assert(_submits.empty());
-        for (CommandList& command_list : _command_lists) {
-            (void)command_list.GetGpuCompletionCancellationView().
-                PublishCancellation(_reason, completion_batch);
-        }
+    for (const GpuCompletionCancellationView& cancellation :
+         _completion_cancellations) {
+        (void)cancellation.PublishCancellation(
+            _reason, completion_batch
+        );
     }
     for (RHIBackendSubmissionBatchEntry& entry : _submits) {
         const GpuCompletionPublishBatch entry_batch =
@@ -245,26 +334,19 @@ void FinalizeRejectedCommandListGroup(
             _reason, entry_batch
         );
     }
-
-    const bool captured_every_query_generation =
-        _query_cancellations.size() == _command_lists.size();
-    const QueryPublishBatch query_batch =
-        QueryBackendAccess::BeginPublishBatch();
-    if (captured_every_query_generation) {
-        for (const QueryCancellationView& cancellation :
-             _query_cancellations) {
-            (void)cancellation.PublishCancellation(_reason, query_batch);
-        }
-    } else {
-        // Capture can fail only before materialization starts. This fallback
-        // therefore addresses each still-current CommandList generation
-        // without cancelling a fresh post-Submit generation.
-        assert(_submits.empty());
-        for (CommandList& command_list : _command_lists) {
-            (void)command_list.GetQueryCancellationView().PublishCancellation(
-                _reason, query_batch
+    for (PreparedCommandListRejection& source : _prepared) {
+        if (source.payload) {
+            source.payload->PublishPendingGpuCompletionErrors(
+                _reason, completion_batch
             );
         }
+    }
+
+    const QueryPublishBatch query_batch =
+        QueryBackendAccess::BeginPublishBatch();
+    for (const QueryCancellationView& cancellation :
+         _query_cancellations) {
+        (void)cancellation.PublishCancellation(_reason, query_batch);
     }
     for (RHIBackendSubmissionBatchEntry& entry : _submits) {
         const QueryPublishBatch entry_batch =
@@ -273,24 +355,34 @@ void FinalizeRejectedCommandListGroup(
                 query_batch;
         entry.submit.PublishPendingQueryErrors(_reason, entry_batch);
     }
+    for (PreparedCommandListRejection& source : _prepared) {
+        if (source.payload) {
+            source.payload->PublishPendingQueryErrors(
+                _reason, query_batch
+            );
+        }
+    }
+
+    // Every sibling host state is terminal before synchronous Fence rejection.
+    // Callback tickets remain retained until the notification phase below.
+    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
+        entry.submit.RejectPendingSignals();
+    }
+    for (PreparedCommandListRejection& source : _prepared) {
+        if (source.payload) {
+            source.payload->RejectPendingSignals();
+        }
+    }
 
     // Query state publication is distinct from callback notification. Resolve
     // Present only after the complete group is terminal, then release Query
     // callbacks so they may synchronously observe or wait for that receipt.
     ResolveRejectedPresent(_present);
 
-    if (captured_every_completion_generation) {
-        for (const size_t source_index :
-             _materialized_source_indices) {
-            if (source_index >=
-                _completion_cancellations.size()) {
-                continue;
-            }
-            const GpuCompletionCancellationView& cancellation =
-                _completion_cancellations[source_index];
-            cancellation.NotifyCancellation(completion_batch);
-            cancellation.NotifyPublishedCancellation();
-        }
+    for (const GpuCompletionCancellationView& cancellation :
+         _completion_cancellations) {
+        cancellation.NotifyCancellation(completion_batch);
+        cancellation.NotifyPublishedCancellation();
     }
     for (RHIBackendSubmissionBatchEntry& entry : _submits) {
         entry.submit.NotifyPendingGpuCompletions(
@@ -299,20 +391,18 @@ void FinalizeRejectedCommandListGroup(
                 completion_batch
         );
     }
-
-    if (captured_every_query_generation) {
-        for (const size_t source_index : _materialized_source_indices) {
-            if (source_index >= _query_cancellations.size()) {
-                continue;
-            }
-            const QueryCancellationView& cancellation =
-                _query_cancellations[source_index];
-            cancellation.NotifyCancellation(query_batch);
-            // A generation may already carry an opaque-shutdown ticket owned
-            // by another batch. Signals are terminal now, so release that
-            // original owner as well.
-            cancellation.NotifyPublishedCancellation();
+    for (PreparedCommandListRejection& source : _prepared) {
+        if (source.payload) {
+            source.payload->NotifyPendingGpuCompletions(
+                completion_batch
+            );
         }
+    }
+
+    for (const QueryCancellationView& cancellation :
+         _query_cancellations) {
+        cancellation.NotifyCancellation(query_batch);
+        cancellation.NotifyPublishedCancellation();
     }
     for (RHIBackendSubmissionBatchEntry& entry : _submits) {
         entry.submit.NotifyPendingQueries(
@@ -321,66 +411,25 @@ void FinalizeRejectedCommandListGroup(
                 query_batch
         );
     }
+    for (PreparedCommandListRejection& source : _prepared) {
+        if (source.payload) {
+            source.payload->NotifyPendingQueries(query_batch);
+        }
+    }
 
     FinalizeRejectedSubmissions(std::move(_submits), _reason);
 
     size_t cleanup_callback_count = 0;
-    size_t materialized_cursor    = 0;
-    for (size_t source_index = 0; source_index < _command_lists.size();
-         ++source_index) {
-        if (materialized_cursor < _materialized_source_indices.size() &&
-            _materialized_source_indices[materialized_cursor] ==
-                source_index) {
-            ++materialized_cursor;
-            // Submit() already installed a fresh recording generation.
-            // Query callbacks may have re-entered it above; never drain that
-            // new work as part of rejecting the sealed prior generation.
+    for (PreparedCommandListRejection& source : _prepared) {
+        if (!source.payload) {
             continue;
         }
-        CommandList& command_list = _command_lists[source_index];
-        try {
-            Array<std::function<void()>> callbacks =
-                command_list.DrainOrdinaryCallbacksForRejection();
-            cleanup_callback_count += callbacks.size();
-            for (std::function<void()>& callback : callbacks) {
-                if (!callback) {
-                    continue;
-                }
-                try {
-                    callback();
-                } catch (const std::exception& exception) {
-                    try {
-                        LOG_ERROR(
-                            "[RHIExecutor] rejected CommandList-group cleanup callback threw: {}",
-                            exception.what()
-                        );
-                    } catch (...) {
-                    }
-                } catch (...) {
-                    try {
-                        LOG_ERROR(
-                            "[RHIExecutor] rejected CommandList-group cleanup callback threw"
-                        );
-                    } catch (...) {
-                    }
-                }
-            }
-        } catch (const std::exception& exception) {
-            try {
-                LOG_ERROR(
-                    "[RHIExecutor] failed to drain rejected CommandList group: {}",
-                    exception.what()
-                );
-            } catch (...) {
-            }
-        } catch (...) {
-            try {
-                LOG_ERROR(
-                    "[RHIExecutor] failed to drain rejected CommandList group"
-                );
-            } catch (...) {
-            }
-        }
+        cleanup_callback_count += source.payload->callbacks.size();
+        InvokeCleanupCallbacks(
+            source.payload->callbacks,
+            "[RHIExecutor] rejected CommandList group"
+        );
+        source.payload->success_callbacks.clear();
     }
     try {
         LOG_ERROR(
@@ -395,16 +444,37 @@ void FinalizeRejectedCommandListGroup(
 }
 
 void RejectRecordingSignalMetadata(
-    const Array<RHIRecordingSource>& _sources
+    const Array<RHIRecordingSource>& _sources,
+    std::span<const uint8>           _owned_snapshot = {},
+    std::span<const size_t>          _transferred_signal_prefixes = {}
 ) noexcept {
     // Metadata is prepared source-by-source and preparation can allocate.
     // If any step throws, the entire immutable recording transaction is
-    // rejected, including producer values not yet copied into CmdSubmit.
-    // Fence rejection is idempotent, so already-materialized values may be
-    // terminalized again by FinalizeRejectedSubmissions below.
-    for (const RHIRecordingSource& source : _sources) {
-        for (const RHIRecordingFencePoint& point :
-             source.submit_metadata.signal_fences) {
+    // rejected, including producer values not yet transferred into CmdSubmit.
+    // A per-source committed prefix records points now owned by an immutable
+    // submit, so this fallback never invokes Fence::Reject twice and the
+    // published metadata itself remains immutable.
+    for (size_t source_index = 0;
+         source_index < _sources.size(); ++source_index) {
+        if (!_owned_snapshot.empty() &&
+            (source_index >= _owned_snapshot.size() ||
+             _owned_snapshot[source_index] != uint8{1})) {
+            continue;
+        }
+        const RHIRecordingSource& source = _sources[source_index];
+        const size_t transferred_prefix =
+            !_transferred_signal_prefixes.empty() &&
+                source_index < _transferred_signal_prefixes.size() ?
+                std::min(
+                    _transferred_signal_prefixes[source_index],
+                    source.submit_metadata.signal_fences.size()
+                ) :
+                0;
+        for (size_t signal_index = transferred_prefix;
+             signal_index < source.submit_metadata.signal_fences.size();
+             ++signal_index) {
+            const RHIRecordingFencePoint& point =
+                source.submit_metadata.signal_fences[signal_index];
             if (!point.fence.IsValid() || point.value == 0) {
                 continue;
             }
@@ -416,9 +486,25 @@ void RejectRecordingSignalMetadata(
     }
 }
 
-bool RecordingSourceIsTerminal(const RHIRecordingSource& _source) noexcept {
-    return _source.completion &&
-           _source.completion.Status() != ERHIRecordingStatus::Pending;
+bool RecordingSourceIsTerminal(
+    const RHIRecordingSource& _source
+) noexcept {
+    if (!_source.completion ||
+        _source.completion.Status() ==
+            ERHIRecordingStatus::Pending) {
+        return false;
+    }
+    if (_source.commit &&
+        _source.commit.Status() ==
+            ERHIRecordingStatus::Pending) {
+        return false;
+    }
+    // The recording and optional commit gates are the synchronization handoff
+    // for the producer-owned, non-atomic lease counter. Never inspect it while
+    // either gate remains Pending: RenderGraph releases the lease immediately
+    // before signaling its transaction gate.
+    return !_source.command_list ||
+           !_source.command_list->HasManagedRecordingLease();
 }
 
 // Future cancellation is one transaction across the complete recording group.
@@ -428,41 +514,49 @@ bool RecordingSourceIsTerminal(const RHIRecordingSource& _source) noexcept {
 // but defer callback notification until their CommandList is safely owned.
 void TerminalizeRecordingSourceQueries(
     Array<RHIRecordingSource>& _sources,
-    std::string_view            _reason
+    std::string_view            _reason,
+    std::span<const uint8>      _terminal_snapshot = {},
+    std::span<PreparedCommandListRejection> _prepared = {}
 ) noexcept {
     // Status must be sampled exactly once. A producer may cross Pending ->
     // terminal after this snapshot; treating that source as terminal only in
     // the notification pass could run its Query callbacks before its still
     // opaque CommandList signals have been rejected.
-    Array<uint8> terminal_snapshot{};
-    try {
-        terminal_snapshot.resize(_sources.size(), uint8{0});
-    } catch (...) {
-        // Allocation failure is fail-closed: publish every Query Error below,
-        // but defer all callbacks until the owning CommandList is drained or
-        // submitted and can establish signal-before-query ordering.
-        terminal_snapshot.clear();
+    Array<uint8> local_terminal_snapshot{};
+    if (_terminal_snapshot.size() != _sources.size()) {
+        try {
+            local_terminal_snapshot.resize(
+                _sources.size(), uint8{0}
+            );
+            for (size_t source_index = 0;
+                 source_index < _sources.size(); ++source_index) {
+                local_terminal_snapshot[source_index] =
+                    RecordingSourceIsTerminal(
+                        _sources[source_index]
+                    ) ? uint8{1} : uint8{0};
+            }
+            _terminal_snapshot = local_terminal_snapshot;
+        } catch (...) {
+            // Allocation failure is fail-closed: publish every Error below,
+            // but release no callback until a later ownership boundary.
+            _terminal_snapshot = {};
+        }
     }
     const bool snapshot_available =
-        terminal_snapshot.size() == _sources.size();
-
-    for (size_t source_index = 0; source_index < _sources.size();
-         ++source_index) {
-        RHIRecordingSource& source = _sources[source_index];
-        const bool terminal = RecordingSourceIsTerminal(source);
-        if (snapshot_available) {
-            terminal_snapshot[source_index] = terminal ? uint8{1} : uint8{0};
-        }
-        if (terminal && source.command_list) {
-            source.command_list->RejectPendingSignals();
-        }
-    }
+        _terminal_snapshot.size() == _sources.size();
 
     const GpuCompletionPublishBatch completion_batch =
         GpuCompletionBackendAccess::BeginPublishBatch();
     for (RHIRecordingSource& source : _sources) {
         (void)source.gpu_completion_cancellation.
             PublishCancellation(_reason, completion_batch);
+    }
+    for (PreparedCommandListRejection& source : _prepared) {
+        if (source.payload) {
+            source.payload->PublishPendingGpuCompletionErrors(
+                _reason, completion_batch
+            );
+        }
     }
 
     const QueryPublishBatch query_batch =
@@ -472,17 +566,47 @@ void TerminalizeRecordingSourceQueries(
             _reason, query_batch
         );
     }
+    for (PreparedCommandListRejection& source : _prepared) {
+        if (source.payload) {
+            source.payload->PublishPendingQueryErrors(
+                _reason, query_batch
+            );
+        }
+    }
     if (snapshot_available) {
         for (size_t source_index = 0; source_index < _sources.size();
              ++source_index) {
-            if (terminal_snapshot[source_index] != 0) {
+            if (_terminal_snapshot[source_index] != 0) {
                 _sources[source_index].
                     gpu_completion_cancellation.NotifyCancellation(
                         completion_batch
                     );
-                _sources[source_index].query_cancellation.NotifyCancellation(
-                    query_batch
+                _sources[source_index].
+                    gpu_completion_cancellation.
+                        NotifyPublishedCancellation();
+            }
+        }
+        for (PreparedCommandListRejection& source : _prepared) {
+            if (source.payload) {
+                source.payload->NotifyPendingGpuCompletions(
+                    completion_batch
                 );
+            }
+        }
+        for (size_t source_index = 0; source_index < _sources.size();
+             ++source_index) {
+            if (_terminal_snapshot[source_index] == 0) {
+                continue;
+            }
+            _sources[source_index].query_cancellation.NotifyCancellation(
+                query_batch
+            );
+            _sources[source_index].query_cancellation.
+                NotifyPublishedCancellation();
+        }
+        for (PreparedCommandListRejection& source : _prepared) {
+            if (source.payload) {
+                source.payload->NotifyPendingQueries(query_batch);
             }
         }
     }
@@ -561,78 +685,132 @@ void ReportBackendPublicationFailure(
 
 void FinalizeCancelledRecordingSources(
     Array<RHIRecordingSource>&& _sources,
-    std::string_view             _reason
-) {
-    RejectRecordingSignalMetadata(_sources);
-    TerminalizeRecordingSourceQueries(_sources, _reason);
+    std::string_view             _reason,
+    Array<CommandList::RecordingRejectionPreparation>&
+                                 _rejection_preparations,
+    Array<PreparedCommandListRejection>& _prepared,
+    Array<uint8>&               _terminal_snapshot
+) noexcept {
     // A source protected by an incomplete recording gate must remain opaque:
     // even reading IsEmpty(), let alone draining callbacks, races its producer.
     // A terminal gate, however, is the ownership handoff point and its ordinary
     // callbacks still own CPU/resource cleanup even when shutdown cancels the
     // FIFO before the source can be materialized. Success-only callbacks must
     // never run because no GPU submission was published.
+    assert(
+        _rejection_preparations.size() == _sources.size() &&
+        _prepared.size() == _sources.size() &&
+        _terminal_snapshot.size() == _sources.size()
+    );
+    std::fill(
+        _terminal_snapshot.begin(),
+        _terminal_snapshot.end(),
+        uint8{0}
+    );
     size_t terminal_source_count = 0;
-    size_t opaque_source_count   = 0;
     size_t cleanup_callback_count = 0;
-    for (RHIRecordingSource& source : _sources) {
-        const bool terminal =
-            source.completion &&
-            source.completion.Status() != ERHIRecordingStatus::Pending;
-        if (!terminal) {
-            ++opaque_source_count;
-            continue;
-        }
-
-        ++terminal_source_count;
-        if (!source.command_list) {
-            continue;
-        }
-        try {
-            auto source_callbacks =
-                source.command_list->DrainOrdinaryCallbacksForRejection();
-            cleanup_callback_count += source_callbacks.size();
-            for (std::function<void()>& callback : source_callbacks) {
-                if (!callback) {
-                    continue;
-                }
-                try {
-                    callback();
-                } catch (const std::exception& exception) {
-                    LOG_ERROR(
-                        "[RHIExecutor] cancelled-recording cleanup callback threw: {}",
-                        exception.what()
-                    );
-                } catch (...) {
-                    LOG_ERROR("[RHIExecutor] cancelled-recording cleanup callback threw");
-                }
+    // Publish host Errors for the complete group before invoking any
+    // Fence::Reject hook. The all-zero snapshot intentionally releases no
+    // callback: ownership-complete sources are discovered and detached by the
+    // fixed-point loop below, while opaque sources remain callback-deferred.
+    TerminalizeRecordingSourceQueries(
+        _sources, _reason, _terminal_snapshot, _prepared
+    );
+    const auto prepare_newly_terminal_sources = [&]() {
+        bool prepared_any = false;
+        for (size_t source_index = 0;
+             source_index < _sources.size(); ++source_index) {
+            if (_terminal_snapshot[source_index] != 0) {
+                continue;
             }
-        } catch (const std::exception& exception) {
-            LOG_ERROR(
-                "[RHIExecutor] failed to drain cancelled recording source cleanup: {}",
-                exception.what()
+            RHIRecordingSource& source = _sources[source_index];
+            if (!RecordingSourceIsTerminal(source)) {
+                continue;
+            }
+
+            _terminal_snapshot[source_index] = uint8{1};
+            ++terminal_source_count;
+            prepared_any = true;
+            if (!source.command_list) {
+                continue;
+            }
+            _prepared[source_index].payload.emplace(
+                source.command_list->
+                    PrepareRecordingRejectionDrain(
+                        std::move(
+                            _rejection_preparations[source_index]
+                        )
+                    )
             );
-        } catch (...) {
-            LOG_ERROR("[RHIExecutor] failed to drain cancelled recording source cleanup");
+            cleanup_callback_count +=
+                _prepared[source_index].payload->callbacks.size();
+        }
+        return prepared_any;
+    };
+
+    // Sanitize every ownership-complete frontier before its metadata or
+    // payload Fence rejection. A rejection hook may synchronously complete
+    // another producer/commit gate; the next iteration detaches that newly
+    // owned generation before touching any of its re-entrant observers.
+    while (prepare_newly_terminal_sources()) {
+        RejectRecordingSignalMetadata(
+            _sources, _terminal_snapshot
+        );
+        for (size_t source_index = 0;
+             source_index < _prepared.size(); ++source_index) {
+            if (_terminal_snapshot[source_index] != uint8{1}) {
+                continue;
+            }
+            if (_prepared[source_index].payload) {
+                _prepared[source_index].payload->
+                    RejectPendingSignals();
+            }
+            _terminal_snapshot[source_index] = uint8{2};
         }
     }
 
-    LOG_WARNING(
-        "[RHIExecutor] rejected {} recording source(s): {}; "
-        "terminal_sources={} opaque_sources={} cleanup_callbacks={}",
-        _sources.size(),
-        _reason,
-        terminal_source_count,
-        opaque_source_count,
-        cleanup_callback_count
+    // Sources still absent from the fixed point remain opaque and receive
+    // Error publication without callback release.
+    const size_t opaque_source_count =
+        _sources.size() - terminal_source_count;
+    TerminalizeRecordingSourceQueries(
+        _sources, _reason, _terminal_snapshot, _prepared
     );
-    _sources.clear();
+    for (PreparedCommandListRejection& source : _prepared) {
+        if (!source.payload) {
+            continue;
+        }
+        InvokeCleanupCallbacks(
+            source.payload->callbacks,
+            "[RHIExecutor] cancelled recording"
+        );
+        source.payload->success_callbacks.clear();
+    }
+
+    try {
+        LOG_WARNING(
+            "[RHIExecutor] rejected {} recording source(s): {}; "
+            "terminal_sources={} opaque_sources={} cleanup_callbacks={}",
+            _sources.size(),
+            _reason,
+            terminal_source_count,
+            opaque_source_count,
+            cleanup_callback_count
+        );
+    } catch (...) {
+    }
 }
 
 void FinalizeFailedRecordingSources(
     Array<RHIRecordingSource>&& _sources,
-    std::string_view             _reason
-) {
-    RejectRecordingSignalMetadata(_sources);
+    std::string_view             _reason,
+    Array<CommandList::RecordingRejectionPreparation>&
+                                 _rejection_preparations,
+    Array<PreparedCommandListRejection>& _prepared,
+    Array<uint8>&               _terminal_snapshot,
+    Array<RHIBackendSubmissionBatchEntry> _materialized_submits = {},
+    std::span<const size_t> _metadata_signal_transfer_prefixes = {}
+) noexcept {
     // Reject is emitted only after every producer gate is terminal. This is
     // the ownership point at which failed/partial CommandLists are immutable
     // and may be destructively drained for their ordinary cleanup callbacks.
@@ -642,63 +820,194 @@ void FinalizeFailedRecordingSources(
         _sources.begin(),
         _sources.end(),
         [](const RHIRecordingSource& _source) {
-            return _source.completion &&
-                   _source.completion.Status() != ERHIRecordingStatus::Pending;
+            return RecordingSourceIsTerminal(_source);
         }
     );
     if (!all_terminal) {
-        LOG_ERROR(
-            "[RHIExecutor] failed recording group resolved before every producer became terminal"
-        );
+        try {
+            LOG_ERROR(
+                "[RHIExecutor] failed recording group resolved before every producer became terminal"
+            );
+        } catch (...) {
+        }
+        // Materialization is entered only after the handoff queue observes
+        // every prerequisite terminal. Keep this invariant explicit: an
+        // immutable prefix combined with an opaque producer cannot be safely
+        // notified as one transaction.
+        assert(_materialized_submits.empty());
         FinalizeCancelledRecordingSources(
             std::move(_sources),
-            "failed recording group still has a mutable producer"
+            "failed recording group still has a mutable producer",
+            _rejection_preparations,
+            _prepared,
+            _terminal_snapshot
         );
+        if (!_materialized_submits.empty()) {
+            FinalizeRejectedSubmissions(
+                std::move(_materialized_submits),
+                "failed recording group still has a mutable producer"
+            );
+        }
         return;
     }
-    TerminalizeRecordingSourceQueries(_sources, _reason);
 
     const size_t source_count = _sources.size();
+    assert(
+        _rejection_preparations.size() == _sources.size() &&
+        _prepared.size() == _sources.size() &&
+        _terminal_snapshot.size() == _sources.size()
+    );
     size_t       cleanup_callback_count = 0;
-    for (RHIRecordingSource& source : _sources) {
+    for (size_t source_index = 0; source_index < _sources.size();
+         ++source_index) {
+        RHIRecordingSource& source = _sources[source_index];
         if (!source.command_list) {
             continue;
         }
-        try {
-            auto source_callbacks =
-                source.command_list->DrainOrdinaryCallbacksForRejection();
-            cleanup_callback_count += source_callbacks.size();
-            for (std::function<void()>& callback : source_callbacks) {
-                if (!callback) {
-                    continue;
-                }
-                try {
-                    callback();
-                } catch (const std::exception& exception) {
-                    LOG_ERROR(
-                        "[RHIExecutor] rejected-recording cleanup callback threw: {}",
-                        exception.what()
-                    );
-                } catch (...) {
-                    LOG_ERROR("[RHIExecutor] rejected-recording cleanup callback threw");
-                }
-            }
-        } catch (const std::exception& exception) {
-            LOG_ERROR(
-                "[RHIExecutor] failed to drain rejected recording source cleanup: {}",
-                exception.what()
+        _prepared[source_index].payload.emplace(
+            source.command_list->
+                PrepareRecordingRejectionDrain(
+                    std::move(
+                        _rejection_preparations[source_index]
+                    )
+                )
+        );
+        cleanup_callback_count +=
+            _prepared[source_index].payload->callbacks.size();
+    }
+
+    // Publish every source-owned and already-materialized Future before
+    // notifying any one of them. A callback from either half may therefore
+    // synchronously wait on every sibling without depending on callback order.
+    const GpuCompletionPublishBatch completion_batch =
+        GpuCompletionBackendAccess::BeginPublishBatch();
+    for (RHIRecordingSource& source : _sources) {
+        (void)source.gpu_completion_cancellation.PublishCancellation(
+            _reason, completion_batch
+        );
+    }
+    for (RHIBackendSubmissionBatchEntry& entry : _materialized_submits) {
+        const GpuCompletionPublishBatch entry_batch =
+            entry.submit.gpu_completion_publish_batch.Valid() ?
+                entry.submit.gpu_completion_publish_batch :
+                completion_batch;
+        entry.submit.PublishPendingGpuCompletionErrors(
+            _reason, entry_batch
+        );
+    }
+    for (PreparedCommandListRejection& source : _prepared) {
+        if (source.payload) {
+            source.payload->PublishPendingGpuCompletionErrors(
+                _reason, completion_batch
             );
-        } catch (...) {
-            LOG_ERROR("[RHIExecutor] failed to drain rejected recording source cleanup");
         }
     }
-    _sources.clear();
-    LOG_ERROR(
-        "[RHIExecutor] rejected {} completed recording source(s): {}; cleanup_callbacks={}",
-        source_count,
-        _reason,
-        cleanup_callback_count
+
+    const QueryPublishBatch query_batch =
+        QueryBackendAccess::BeginPublishBatch();
+    for (RHIRecordingSource& source : _sources) {
+        (void)source.query_cancellation.PublishCancellation(
+            _reason, query_batch
+        );
+    }
+    for (RHIBackendSubmissionBatchEntry& entry : _materialized_submits) {
+        const QueryPublishBatch entry_batch =
+            entry.submit.query_publish_batch.Valid() ?
+                entry.submit.query_publish_batch :
+                query_batch;
+        entry.submit.PublishPendingQueryErrors(_reason, entry_batch);
+    }
+    for (PreparedCommandListRejection& source : _prepared) {
+        if (source.payload) {
+            source.payload->PublishPendingQueryErrors(
+                _reason, query_batch
+            );
+        }
+    }
+
+    // Batch phase B: every sibling has installed a fresh generation and every
+    // host observation is terminal before synchronous Fence rejection. A
+    // prefix may already be an immutable CmdSubmit; its signals remain owned
+    // here and must be rejected before callback notification.
+    RejectRecordingSignalMetadata(
+        _sources, {}, _metadata_signal_transfer_prefixes
     );
+    for (RHIBackendSubmissionBatchEntry& entry : _materialized_submits) {
+        entry.submit.RejectPendingSignals();
+    }
+    for (PreparedCommandListRejection& source : _prepared) {
+        if (source.payload) {
+            source.payload->RejectPendingSignals();
+        }
+    }
+
+    for (RHIRecordingSource& source : _sources) {
+        source.gpu_completion_cancellation.NotifyCancellation(
+            completion_batch
+        );
+        source.gpu_completion_cancellation.
+            NotifyPublishedCancellation();
+    }
+    for (RHIBackendSubmissionBatchEntry& entry : _materialized_submits) {
+        entry.submit.NotifyPendingGpuCompletions(
+            entry.submit.gpu_completion_publish_batch.Valid() ?
+                entry.submit.gpu_completion_publish_batch :
+                completion_batch
+        );
+    }
+    for (PreparedCommandListRejection& source : _prepared) {
+        if (source.payload) {
+            source.payload->NotifyPendingGpuCompletions(
+                completion_batch
+            );
+        }
+    }
+    for (RHIRecordingSource& source : _sources) {
+        source.query_cancellation.NotifyCancellation(query_batch);
+        source.query_cancellation.NotifyPublishedCancellation();
+    }
+    for (RHIBackendSubmissionBatchEntry& entry : _materialized_submits) {
+        entry.submit.NotifyPendingQueries(
+            entry.submit.query_publish_batch.Valid() ?
+                entry.submit.query_publish_batch :
+                query_batch
+        );
+    }
+    for (PreparedCommandListRejection& source : _prepared) {
+        if (source.payload) {
+            source.payload->NotifyPendingQueries(query_batch);
+        }
+    }
+
+    for (RHIBackendSubmissionBatchEntry& entry : _materialized_submits) {
+        cleanup_callback_count += entry.submit.callbacks.size();
+        InvokeCleanupCallbacks(
+            entry.submit.callbacks,
+            "[RHIExecutor] rejected materialized recording"
+        );
+        entry.submit.success_callbacks.clear();
+    }
+    for (PreparedCommandListRejection& source : _prepared) {
+        if (!source.payload) {
+            continue;
+        }
+        InvokeCleanupCallbacks(
+            source.payload->callbacks,
+            "[RHIExecutor] rejected recording"
+        );
+        source.payload->success_callbacks.clear();
+    }
+    try {
+        LOG_ERROR(
+            "[RHIExecutor] rejected {} completed recording source(s): {}; "
+            "materialized_submits={} cleanup_callbacks={}",
+            source_count,
+            _reason,
+            _materialized_submits.size(),
+            cleanup_callback_count
+        );
+    } catch (...) {
+    }
 }
 
 struct ReadySubmissionPayload {
@@ -709,6 +1018,11 @@ struct ReadySubmissionPayload {
 
 struct RecordingSubmissionPayload {
     Array<RHIRecordingSource> sources{};
+    Array<CommandList::RecordingRejectionPreparation>
+                              rejection_preparations{};
+    Array<PreparedCommandListRejection>
+                              prepared_rejections{};
+    Array<uint8>              terminal_snapshot{};
     ERHIExecSubmitFlags       flags{ERHIExecSubmitFlags::FlushGPU};
 };
 
@@ -1000,6 +1314,57 @@ std::exception_ptr TryPublishBackendBatch(
 
 } // namespace
 
+bool TryInstallRHIDirectCommandListMaterializationOverrideForTesting(
+    const RHIDirectCommandListMaterializationOverrideForTesting* _override
+) noexcept {
+    if (_override == nullptr || _override->before_source == nullptr) {
+        return false;
+    }
+    std::lock_guard lock(
+        g_direct_command_list_materialization_override_mutex
+    );
+    if (g_direct_command_list_materialization_override_retiring ||
+        g_direct_command_list_materialization_override.load(
+            std::memory_order_relaxed
+        ) != nullptr) {
+        return false;
+    }
+    g_direct_command_list_materialization_override.store(
+        _override, std::memory_order_release
+    );
+    return true;
+}
+
+bool RemoveRHIDirectCommandListMaterializationOverrideForTesting(
+    const RHIDirectCommandListMaterializationOverrideForTesting* _override
+) noexcept {
+    if (_override == nullptr) {
+        return false;
+    }
+    std::unique_lock lock(
+        g_direct_command_list_materialization_override_mutex
+    );
+    if (g_direct_command_list_materialization_override_retiring ||
+        g_direct_command_list_materialization_override.load(
+            std::memory_order_relaxed
+        ) != _override) {
+        return false;
+    }
+    g_direct_command_list_materialization_override_retiring = true;
+    g_direct_command_list_materialization_override.store(
+        nullptr, std::memory_order_release
+    );
+    g_direct_command_list_materialization_override_cv.wait(
+        lock,
+        [] {
+            return g_direct_command_list_materialization_active_callbacks ==
+                   0;
+        }
+    );
+    g_direct_command_list_materialization_override_retiring = false;
+    return true;
+}
+
 RHIExecutor& RHIExecutor::Get() {
     static RHIExecutor executor;
     return executor;
@@ -1099,23 +1464,41 @@ void RHIExecutor::Submit(
         payload->present.emplace(std::move(*_present));
     }
 
-    recording_handoff.RouteReady(RHIExecutorRecordingHandoffWork{
-        .prerequisites = {},
-        .resolve = [this, payload](ERHIRecordingHandoffResult _result) mutable {
-            RHIPresentRequest* present = payload->present.has_value() ?
-                                             &*payload->present :
-                                             nullptr;
-            if (_result != ERHIRecordingHandoffResult::Consume) {
-                FinalizeRejectedSubmissions(
+    try {
+        recording_handoff.RouteReady(RHIExecutorRecordingHandoffWork{
+            .prerequisites = {},
+            .resolve = [this, payload](
+                           ERHIRecordingHandoffResult _result
+                       ) mutable {
+                RHIPresentRequest* present =
+                    payload->present.has_value() ?
+                        &*payload->present :
+                        nullptr;
+                if (_result != ERHIRecordingHandoffResult::Consume) {
+                    FinalizeRejectedSubmissions(
+                        std::move(payload->submits),
+                        "recording handoff is stopped",
+                        present
+                    );
+                    return;
+                }
+                SubmitReady(
                     std::move(payload->submits),
-                    "recording handoff is stopped",
+                    payload->flags,
                     present
                 );
-                return;
-            }
-            SubmitReady(std::move(payload->submits), payload->flags, present);
-        },
-    });
+            },
+        });
+    } catch (...) {
+        RHIPresentRequest* present = payload->present.has_value() ?
+                                         &*payload->present :
+                                         nullptr;
+        FinalizeRejectedSubmissions(
+            std::move(payload->submits),
+            "ready handoff queue admission failed",
+            present
+        );
+    }
 }
 
 void RHIExecutor::SubmitReady(
@@ -1146,6 +1529,14 @@ void RHIExecutor::SubmitReady(
     // it.  `_flags` controls the backend flush depth, not whether the sealed
     // batch becomes visible to the backend FIFO.
     if (_present != nullptr) {
+        static_assert(
+            std::is_nothrow_move_constructible_v<
+                RHIBackendSubmissionBatchEntry
+            >
+        );
+        static_assert(
+            std::is_nothrow_move_constructible_v<RHIPresentRequest>
+        );
         bool reject_before_dispatch = false;
         {
             std::lock_guard lock(submit_mutex);
@@ -1165,6 +1556,7 @@ void RHIExecutor::SubmitReady(
         std::shared_ptr<RHIBackendExecutor> backend{};
         std::exception_ptr                  backend_creation_failure{};
         std::exception_ptr                  backend_publication_failure{};
+        std::exception_ptr                  staging_failure{};
         bool                                rejected = false;
         {
             std::lock_guard dispatch_lock(dispatch_mutex);
@@ -1173,26 +1565,36 @@ void RHIExecutor::SubmitReady(
                 rejected = lifecycle_state != ELifecycleState::Running ||
                            pending_present.has_value();
                 if (!rejected) {
-                    pending_submits.reserve(pending_submits.size() + _submits.size());
-                    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
-                        pending_submits.emplace_back(std::move(entry));
-                    }
-                    pending_present.emplace(std::move(*_present));
                     try {
-                        // Construct the backend before detaching the accepted
-                        // payload from executor ownership. If construction
-                        // fails, move that payload into an explicit rejection
-                        // batch instead of letting a resolver exception destroy
-                        // callbacks and the Present receipt silently.
-                        backend = GetBackendExecutorLocked();
-                        batch   = TakePendingBatchLocked();
+                        pending_submits.reserve(
+                            pending_submits.size() + _submits.size()
+                        );
                     } catch (...) {
-                        backend_creation_failure = std::current_exception();
-                        failed_batch             = TakePendingBatchLocked();
+                        staging_failure = std::current_exception();
+                    }
+                    if (!staging_failure) {
+                        for (RHIBackendSubmissionBatchEntry& entry :
+                             _submits) {
+                            pending_submits.emplace_back(
+                                std::move(entry)
+                            );
+                        }
+                        pending_present.emplace(std::move(*_present));
+                        try {
+                            // Construct the backend before detaching the
+                            // accepted payload from executor ownership.
+                            backend = GetBackendExecutorLocked();
+                            batch   = TakePendingBatchLocked();
+                        } catch (...) {
+                            backend_creation_failure =
+                                std::current_exception();
+                            failed_batch = TakePendingBatchLocked();
+                        }
                     }
                 }
             }
-            if (!rejected && !backend_creation_failure) {
+            if (!rejected && !staging_failure &&
+                !backend_creation_failure) {
                 backend_publication_failure = TryPublishBackendBatch(
                     backend,
                     batch,
@@ -1203,6 +1605,17 @@ void RHIExecutor::SubmitReady(
                     backend->Flush(ERHIFlushDepth::SubmitGPU);
                 }
             }
+        }
+        if (staging_failure) {
+            ReportBackendCreationFailure(
+                "Present staging", staging_failure
+            );
+            FinalizeRejectedSubmissions(
+                std::move(_submits),
+                "allocation failed while staging Present",
+                _present
+            );
+            return;
         }
         if (backend_creation_failure) {
             ReportBackendCreationFailure("Present", backend_creation_failure);
@@ -1232,17 +1645,36 @@ void RHIExecutor::SubmitReady(
         return;
     }
 
-    bool rejected = false;
+    bool               rejected = false;
+    std::exception_ptr staging_failure{};
     {
         std::lock_guard lock(submit_mutex);
         rejected = lifecycle_state != ELifecycleState::Running ||
                    pending_present.has_value();
         if (!rejected) {
-            pending_submits.reserve(pending_submits.size() + _submits.size());
-            for (RHIBackendSubmissionBatchEntry& entry : _submits) {
-                pending_submits.emplace_back(std::move(entry));
+            try {
+                pending_submits.reserve(
+                    pending_submits.size() + _submits.size()
+                );
+            } catch (...) {
+                staging_failure = std::current_exception();
+            }
+            if (!staging_failure) {
+                for (RHIBackendSubmissionBatchEntry& entry : _submits) {
+                    pending_submits.emplace_back(std::move(entry));
+                }
             }
         }
+    }
+    if (staging_failure) {
+        ReportBackendCreationFailure(
+            "submission staging", staging_failure
+        );
+        FinalizeRejectedSubmissions(
+            std::move(_submits),
+            "allocation failed while staging submission"
+        );
+        return;
     }
     if (rejected) {
         FinalizeRejectedSubmissions(
@@ -1261,15 +1693,37 @@ void RHIExecutor::Submit(
     ERHIExecSubmitFlags  _flags,
     RHIPresentRequest*   _present
 ) {
+    // A managed recording lease is an exclusive mutable-owner capability.
+    // There is no cooperative cancellation handoff in this direct value-owned
+    // API, so rejection cannot safely inspect, drain, or notify that
+    // generation. Fail before capturing views or mutating any sibling; the
+    // caller may release the lease and retry the intact transaction.
+    if (std::any_of(
+            _command_lists.begin(),
+            _command_lists.end(),
+            [](const CommandList& command_list) {
+                return command_list.HasManagedRecordingLease();
+            }
+        )) {
+        throw std::logic_error(
+            "RHIExecutor::Submit cannot consume a CommandList group while a managed recording lease is active"
+        );
+    }
+
     Array<RHIBackendSubmissionBatchEntry> submits{};
     Array<GpuCompletionCancellationView> completion_cancellations{};
     Array<QueryCancellationView> query_cancellations{};
+    Array<CommandList::RecordingRejectionPreparation>
+        rejection_preparations{};
+    Array<PreparedCommandListRejection> prepared_rejections{};
     Array<size_t> materialized_source_indices{};
     try {
         submits.reserve(_command_lists.size());
         completion_cancellations.reserve(_command_lists.size());
         query_cancellations.reserve(_command_lists.size());
         materialized_source_indices.reserve(_command_lists.size());
+        rejection_preparations.resize(_command_lists.size());
+        prepared_rejections.resize(_command_lists.size());
         for (CommandList& command_list : _command_lists) {
             completion_cancellations.emplace_back(
                 command_list.GetGpuCompletionCancellationView()
@@ -1286,31 +1740,15 @@ void RHIExecutor::Submit(
             );
         } catch (...) {
         }
-        FinalizeRejectedCommandListGroup(
-            _command_lists,
-            completion_cancellations,
-            query_cancellations,
-            materialized_source_indices,
-            std::move(submits),
-            _present,
-            "CommandList group preparation failed"
-        );
-        return;
+        // No CommandList has been touched yet. Propagate the allocation
+        // failure with the complete caller-owned transaction intact.
+        throw;
     } catch (...) {
         try {
             LOG_ERROR("[RHIExecutor] failed to prepare CommandList group");
         } catch (...) {
         }
-        FinalizeRejectedCommandListGroup(
-            _command_lists,
-            completion_cancellations,
-            query_cancellations,
-            materialized_source_indices,
-            std::move(submits),
-            _present,
-            "CommandList group preparation failed"
-        );
-        return;
+        throw;
     }
 
     const bool group_valid = std::all_of(
@@ -1326,6 +1764,8 @@ void RHIExecutor::Submit(
             _command_lists,
             completion_cancellations,
             query_cancellations,
+            rejection_preparations,
+            prepared_rejections,
             materialized_source_indices,
             std::move(submits),
             _present,
@@ -1342,6 +1782,9 @@ void RHIExecutor::Submit(
             if (command_list.IsEmpty()) {
                 continue;
             }
+            InvokeDirectCommandListMaterializationOverrideForTesting(
+                source_index
+            );
             const EQueueType queue = command_list.GetQueueType();
             submits.emplace_back(queue, command_list.Submit());
             materialized_source_indices.emplace_back(source_index);
@@ -1358,6 +1801,8 @@ void RHIExecutor::Submit(
             _command_lists,
             completion_cancellations,
             query_cancellations,
+            rejection_preparations,
+            prepared_rejections,
             materialized_source_indices,
             std::move(submits),
             _present,
@@ -1373,6 +1818,8 @@ void RHIExecutor::Submit(
             _command_lists,
             completion_cancellations,
             query_cancellations,
+            rejection_preparations,
+            prepared_rejections,
             materialized_source_indices,
             std::move(submits),
             _present,
@@ -1444,6 +1891,14 @@ void RHIExecutor::SubmitRecording(
         return;
     }
 
+    Array<CommandList::RecordingRejectionPreparation>
+        rejection_preparations{};
+    Array<PreparedCommandListRejection> prepared_rejections{};
+    Array<uint8> terminal_snapshot{};
+    rejection_preparations.resize(_sources.size());
+    prepared_rejections.resize(_sources.size());
+    terminal_snapshot.resize(_sources.size(), uint8{0});
+
     const bool sources_valid = std::all_of(
         _sources.begin(),
         _sources.end(),
@@ -1455,18 +1910,17 @@ void RHIExecutor::SubmitRecording(
     if (!sources_valid) {
         FinalizeCancelledRecordingSources(
             std::move(_sources),
-            "missing completion gate or invalid queue"
+            "missing completion gate or invalid queue",
+            rejection_preparations,
+            prepared_rejections,
+            terminal_snapshot
         );
         return;
     }
 
-    auto payload     = std::make_shared<RecordingSubmissionPayload>();
-    payload->sources = std::move(_sources);
-    payload->flags   = _flags;
-
     std::vector<RHIRecordingGateRef> prerequisites{};
-    prerequisites.reserve(payload->sources.size() * 2);
-    for (const RHIRecordingSource& source : payload->sources) {
+    prerequisites.reserve(_sources.size() * 2);
+    for (const RHIRecordingSource& source : _sources) {
         prerequisites.emplace_back(source.completion.gate);
         if (source.commit &&
             std::find(
@@ -1478,29 +1932,55 @@ void RHIExecutor::SubmitRecording(
         }
     }
 
-    recording_handoff.EnqueueRecording(RHIExecutorRecordingHandoffWork{
-        .prerequisites = std::move(prerequisites),
-        .resolve = [this, payload](ERHIRecordingHandoffResult _result) mutable {
+    auto payload     = std::make_shared<RecordingSubmissionPayload>();
+    payload->sources = std::move(_sources);
+    payload->rejection_preparations =
+        std::move(rejection_preparations);
+    payload->prepared_rejections =
+        std::move(prepared_rejections);
+    payload->terminal_snapshot =
+        std::move(terminal_snapshot);
+    payload->flags   = _flags;
+
+    try {
+        recording_handoff.EnqueueRecording(
+            RHIExecutorRecordingHandoffWork{
+                .prerequisites = std::move(prerequisites),
+                .resolve = [this, payload](
+                               ERHIRecordingHandoffResult _result
+                           ) mutable {
             if (_result == ERHIRecordingHandoffResult::Cancel) {
                 FinalizeCancelledRecordingSources(
                     std::move(payload->sources),
-                    "completion gate cancelled during shutdown"
+                    "completion gate cancelled during shutdown",
+                    payload->rejection_preparations,
+                    payload->prepared_rejections,
+                    payload->terminal_snapshot
                 );
                 return;
             }
             if (_result == ERHIRecordingHandoffResult::Reject) {
                 FinalizeFailedRecordingSources(
                     std::move(payload->sources),
-                    "recording completion gate failed"
+                    "recording completion gate failed",
+                    payload->rejection_preparations,
+                    payload->prepared_rejections,
+                    payload->terminal_snapshot
                 );
                 return;
             }
 
             Array<RHIBackendSubmissionBatchEntry> submits{};
             Array<size_t> materialized_source_indices{};
-            submits.reserve(payload->sources.size());
-            materialized_source_indices.reserve(payload->sources.size());
+            Array<size_t> metadata_signal_transfer_prefixes{};
             try {
+                submits.reserve(payload->sources.size());
+                materialized_source_indices.reserve(
+                    payload->sources.size()
+                );
+                metadata_signal_transfer_prefixes.resize(
+                    payload->sources.size(), size_t{0}
+                );
                 // Validate the entire immutable group before transferring the
                 // first source. An unclosed query must not run rejection
                 // callbacks while a later source in the transaction is still
@@ -1571,6 +2051,21 @@ void RHIExecutor::SubmitRecording(
                         metadata.wait_fences.size() +
                         metadata.signal_fences.size()
                     );
+                    submit.wait_events.reserve(
+                        submit.wait_events.size() +
+                        metadata.wait_fences.size()
+                    );
+                    submit.signal_events.reserve(
+                        submit.signal_events.size() +
+                        metadata.signal_fences.size()
+                    );
+                    submit.signal_rejection_keepalives.reserve(
+                        submit.signal_rejection_keepalives.size() +
+                        metadata.signal_fences.size()
+                    );
+                    submit.callbacks.reserve(
+                        submit.callbacks.size() + 1
+                    );
                     for (const RHIRecordingFencePoint& point :
                          metadata.wait_fences) {
                         if (!point.fence.IsValid() || point.value == 0) {
@@ -1590,10 +2085,16 @@ void RHIExecutor::SubmitRecording(
                                 "recording signal fence point is invalid"
                             );
                         }
+                        submit.signal_rejection_keepalives.emplace_back(
+                            point.fence
+                        );
+                        sync_keepalive->emplace_back(point.fence);
                         submit.signal_events.emplace_back(
                             uint64(point.fence.Get()), point.value
                         );
-                        sync_keepalive->emplace_back(point.fence);
+                        ++metadata_signal_transfer_prefixes[
+                            materialized_source_indices[submit_index]
+                        ];
                     }
                     if (!sync_keepalive->empty()) {
                         // CmdSubmit callbacks are retained by the native
@@ -1602,52 +2103,54 @@ void RHIExecutor::SubmitRecording(
                     }
                 }
             } catch (const std::exception& exception) {
-                LOG_ERROR(
-                    "[RHIExecutor] failed to materialize recording sources: {}",
-                    exception.what()
-                );
-                RejectRecordingSignalMetadata(payload->sources);
-                for (RHIBackendSubmissionBatchEntry& entry : submits) {
-                    entry.submit.RejectPendingSignals();
-                }
-                TerminalizeRecordingSourceQueries(
-                    payload->sources,
-                    "recording source finalization failed"
-                );
-                FinalizeRejectedSubmissions(
-                    std::move(submits),
-                    "recording source finalization failed"
-                );
                 FinalizeFailedRecordingSources(
                     std::move(payload->sources),
-                    "recording source finalization failed"
+                    "recording source finalization failed",
+                    payload->rejection_preparations,
+                    payload->prepared_rejections,
+                    payload->terminal_snapshot,
+                    std::move(submits),
+                    metadata_signal_transfer_prefixes
                 );
+                try {
+                    LOG_ERROR(
+                        "[RHIExecutor] failed to materialize recording sources: {}",
+                        exception.what()
+                    );
+                } catch (...) {
+                }
                 return;
             } catch (...) {
-                LOG_ERROR("[RHIExecutor] failed to materialize recording sources");
-                RejectRecordingSignalMetadata(payload->sources);
-                for (RHIBackendSubmissionBatchEntry& entry : submits) {
-                    entry.submit.RejectPendingSignals();
-                }
-                TerminalizeRecordingSourceQueries(
-                    payload->sources,
-                    "recording source finalization failed"
-                );
-                FinalizeRejectedSubmissions(
-                    std::move(submits),
-                    "recording source finalization failed"
-                );
                 FinalizeFailedRecordingSources(
                     std::move(payload->sources),
-                    "recording source finalization failed"
+                    "recording source finalization failed",
+                    payload->rejection_preparations,
+                    payload->prepared_rejections,
+                    payload->terminal_snapshot,
+                    std::move(submits),
+                    metadata_signal_transfer_prefixes
                 );
+                try {
+                    LOG_ERROR(
+                        "[RHIExecutor] failed to materialize recording sources"
+                    );
+                } catch (...) {
+                }
                 return;
             }
 
             payload->sources.clear();
             SubmitReady(std::move(submits), payload->flags, nullptr);
-        },
-    });
+                },
+            }
+        );
+    } catch (...) {
+        // Work construction/queue admission is still part of preparation.
+        // No producer generation has been inspected or sealed, so restore the
+        // exact source transaction to the caller and propagate the failure.
+        _sources = std::move(payload->sources);
+        throw;
+    }
 }
 
 void RHIExecutor::Present(RHIPresentRequest&& _present, bool _flush) {

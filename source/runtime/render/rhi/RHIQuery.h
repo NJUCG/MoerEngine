@@ -55,7 +55,8 @@ class QueryToken;
 
 // Copyable handle to a single terminal query result. Resolution is one-shot:
 // Pending may transition to Ready or Error exactly once and never changes
-// afterwards.
+// afterwards. A terminal result is not a recording-ownership handoff: opaque
+// shutdown may publish Error while a producer or commit gate remains Pending.
 class RENDER_API QueryFuture {
     struct SharedState;
 
@@ -246,7 +247,9 @@ public:
     // user callbacks remain deferred until the owning CommandList reaches a
     // submission/destruction/rejection boundary. This makes the view safe for
     // opaque-producer shutdown without releasing client code on the arbitrary
-    // cancellation thread.
+    // cancellation thread. Error publication does not complete the recording
+    // gate or transfer CommandList ownership; the producer/graph remains the
+    // sole mutable owner until every producer and commit gate is terminal.
     bool Cancel(std::string_view _reason = "query generation was cancelled") const noexcept;
 
     // Cross-source rejection uses the same two-phase transaction as native

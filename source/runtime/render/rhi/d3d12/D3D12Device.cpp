@@ -1534,11 +1534,33 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
             if (!armed || submit == nullptr) {
                 return;
             }
+            const std::string_view rejection_reason =
+                "D3D12 submission was rejected before GPU completion";
+            const GpuCompletionPublishBatch completion_batch =
+                submit->gpu_completion_publish_batch.Valid() ?
+                    submit->gpu_completion_publish_batch :
+                    GpuCompletionBackendAccess::BeginPublishBatch();
+            submit->PublishPendingGpuCompletionErrors(
+                rejection_reason, completion_batch
+            );
+            const QueryPublishBatch query_batch =
+                submit->query_publish_batch.Valid() ?
+                    submit->query_publish_batch :
+                    QueryBackendAccess::BeginPublishBatch();
+            submit->PublishPendingQueryErrors(
+                rejection_reason, query_batch
+            );
+            Array<SignalEvent> rejected_signals =
+                std::move(submit->signal_events);
+            Array<FenceRef> rejected_signal_keepalives =
+                std::move(submit->signal_rejection_keepalives);
+            submit->signal_events.clear();
+            submit->signal_rejection_keepalives.clear();
             // Conservative fail-closed semantics: if translation, descriptor
             // setup, command-list close, Execute or any queue Signal throws,
             // no external waiter may treat this partially published source as
             // an accepted history transaction.
-            for (const SignalEvent& event : submit->signal_events) {
+            for (const SignalEvent& event : rejected_signals) {
                 auto* fence =
                     reinterpret_cast<D3D12Fence*>(event.timeline_handle);
                 if (fence == nullptr) {
@@ -1549,6 +1571,7 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
                 } catch (...) {
                 }
             }
+            (void)rejected_signal_keepalives;
         }
     } signal_failure_guard{&_submit};
 
@@ -1814,6 +1837,7 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
     _submit.query_tokens.clear();
     _submit.query_publish_batch = {};
     _submit.signal_events.clear();
+    _submit.signal_rejection_keepalives.clear();
     pending_fence_values.Enqueue(next_fence_value);
     retirement_lock.unlock();
     cv.notify_one();
