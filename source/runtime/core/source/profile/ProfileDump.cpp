@@ -40,6 +40,39 @@ namespace {
 
 using namespace std::chrono_literals;
 
+std::atomic<std::uint64_t> g_temp_path_nonce{1};
+
+[[nodiscard]] std::uint64_t CurrentProcessIdValue() noexcept {
+#if PLATFORM_WINDOWS
+    return static_cast<std::uint64_t>(::GetCurrentProcessId());
+#else
+    return static_cast<std::uint64_t>(::getpid());
+#endif
+}
+
+[[nodiscard]] std::filesystem::path MakeSessionTempPath(const std::filesystem::path& _output_path) {
+    const auto clock_tick =
+        static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+    const std::uint64_t nonce = g_temp_path_nonce.fetch_add(1, std::memory_order_relaxed);
+
+    auto combine = [](std::uint64_t _seed, std::uint64_t _value) noexcept {
+        return _seed ^ (_value + 0x9e3779b97f4a7c15ULL + (_seed << 6U) + (_seed >> 2U));
+    };
+    std::uint64_t token = combine(CurrentProcessIdValue(), clock_tick);
+    token               = combine(token, nonce);
+    token ^= token >> 30U;
+    token *= 0xbf58476d1ce4e5b9ULL;
+    token ^= token >> 27U;
+    token *= 0x94d049bb133111ebULL;
+    token ^= token >> 31U;
+
+    char token_text[17]{};
+    static_cast<void>(
+        std::snprintf(token_text, sizeof(token_text), "%016llx", static_cast<unsigned long long>(token))
+    );
+    return _output_path.parent_path() / (std::string(".moer-profile-") + token_text + ".inprogress");
+}
+
 struct PendingRecord {
     std::uint64_t       schema_hash{0};
     std::uint64_t       sequence{0};
@@ -728,8 +761,20 @@ void RenameFinalChecked(Hub& _hub) {
     if (_hub.config.replace_existing) {
         flags |= MOVEFILE_REPLACE_EXISTING;
     }
-    if (!::MoveFileExW(_hub.temp_path.c_str(), _hub.config.output_path.c_str(), flags)) {
-        throw WriterFailure{RuntimeFault::RenameFinal};
+
+    constexpr std::uint32_t max_attempts = 8;
+    for (std::uint32_t attempt = 0; attempt < max_attempts; ++attempt) {
+        if (::MoveFileExW(_hub.temp_path.c_str(), _hub.config.output_path.c_str(), flags)) {
+            return;
+        }
+        const DWORD error = ::GetLastError();
+        const bool  transient =
+            error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION || error == ERROR_ACCESS_DENIED;
+        if (!transient || attempt + 1 == max_attempts) {
+            throw WriterFailure{RuntimeFault::RenameFinal};
+        }
+        const auto backoff = std::chrono::milliseconds(1U << std::min<std::uint32_t>(attempt, 5U));
+        std::this_thread::sleep_for(backoff);
     }
 #else
     if (_hub.config.replace_existing) {
@@ -1087,34 +1132,23 @@ StartResult Start(const RuntimeConfig& _config) noexcept {
         if (ShouldInject(Testing::FaultPoint::StartAllocation)) {
             throw std::bad_alloc{};
         }
-        RuntimeConfig         prepared_config = _config;
-        std::filesystem::path temp_path       = prepared_config.output_path;
-        temp_path += ".inprogress";
-        auto initial_schemas      = std::make_shared<const SchemaMap>();
-        auto session_admission    = std::make_shared<Admission>();
-        session_admission->config = prepared_config;
+        RuntimeConfig         prepared_config   = _config;
+        std::filesystem::path temp_path         = MakeSessionTempPath(prepared_config.output_path);
+        auto                  initial_schemas   = std::make_shared<const SchemaMap>();
+        auto                  session_admission = std::make_shared<Admission>();
+        session_admission->config               = prepared_config;
 
         std::error_code error;
         const bool      final_exists = std::filesystem::exists(prepared_config.output_path, error);
         if (error) {
             return StartResult::FileOpenFailed;
         }
-        const bool temp_exists = std::filesystem::exists(temp_path, error);
-        if (error) {
-            return StartResult::FileOpenFailed;
-        }
-        if (!prepared_config.replace_existing && (final_exists || temp_exists)) {
+        if (!prepared_config.replace_existing && final_exists) {
             return StartResult::OutputExists;
         }
-        // A stale/incomplete temp capture may be discarded for an explicit
-        // replacement. Keep the previous valid final until the new writer has
-        // closed successfully and can atomically publish over it.
-        if (prepared_config.replace_existing && temp_exists) {
-            std::filesystem::remove(temp_path, error);
-            if (error) {
-                return StartResult::FileOpenFailed;
-            }
-        }
+        // Every session exclusively creates and owns a unique temp path.
+        // Replacement applies only to the final output and must never unlink
+        // another process's live or forensic in-progress capture.
 
         {
             std::lock_guard lock(hub.mutex);
@@ -1600,6 +1634,23 @@ bool WaitForWriterPaused(std::uint32_t _timeout_ms) noexcept {
         return hub.test_hooks.writer_paused ||
                hub.state.load(std::memory_order_acquire) == RuntimeState::Faulted;
     }) && hub.test_hooks.writer_paused;
+}
+
+bool CreateActiveTempCollision(const std::uint8_t* _bytes, std::size_t _byte_count) noexcept {
+    Hub&            hub = GetHub();
+    std::lock_guard lock(hub.mutex);
+    if (hub.state.load(std::memory_order_acquire) != RuntimeState::Starting ||
+        !hub.test_hooks.pause_before_temp_open || !hub.test_hooks.writer_paused || hub.temp_path.empty() ||
+        (!_bytes && _byte_count != 0)) {
+        return false;
+    }
+
+    std::FILE* stream = OpenTempFileExclusive(hub.temp_path);
+    if (!stream) {
+        return false;
+    }
+    const bool wrote = _byte_count == 0 || std::fwrite(_bytes, 1, _byte_count, stream) == _byte_count;
+    return std::fclose(stream) == 0 && wrote;
 }
 
 void ResumeWriter() noexcept {

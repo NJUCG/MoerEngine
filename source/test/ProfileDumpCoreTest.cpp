@@ -32,23 +32,59 @@ class ScopedOutput {
 public:
     explicit ScopedOutput(std::string_view _stem) {
         static std::atomic<std::uint64_t> next_id{0};
-        const auto                        now =
-            static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
-        path = std::filesystem::temp_directory_path() /
-               (std::string(_stem) + "-" + std::to_string(now) + "-" +
-                std::to_string(next_id.fetch_add(1, std::memory_order_relaxed)) + ".mpds");
+        for (std::uint32_t attempt = 0; attempt < 64; ++attempt) {
+            const auto now =
+                static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+            const std::filesystem::path candidate =
+                std::filesystem::temp_directory_path() /
+                (std::string(_stem) + "-" + std::to_string(now) + "-" +
+                 std::to_string(next_id.fetch_add(1, std::memory_order_relaxed)));
+            std::error_code error;
+            if (std::filesystem::create_directory(candidate, error)) {
+                directory = candidate;
+                path      = directory / "capture.mpds";
+                return;
+            }
+            if (error && error != std::errc::file_exists) {
+                throw std::runtime_error("profile dump fixture directory could not be created");
+            }
+        }
+        throw std::runtime_error("profile dump fixture could not reserve a unique directory");
     }
 
     ~ScopedOutput() {
+        // Assertions can unwind while the singleton runtime is active. Reap
+        // its writer before removing the fixture-owned directory so cleanup
+        // never unlinks a live capture.
+        static_cast<void>(Shutdown());
         std::error_code error;
-        std::filesystem::remove(path, error);
-        std::filesystem::remove(InProgressPath(), error);
+        std::filesystem::remove_all(directory, error);
+    }
+
+    [[nodiscard]] std::vector<std::filesystem::path> InProgressPaths() const {
+        std::vector<std::filesystem::path>        candidates;
+        std::error_code                           error;
+        const std::string                         suffix = ".inprogress";
+        std::filesystem::directory_iterator       iterator(directory, error);
+        const std::filesystem::directory_iterator end;
+        while (!error && iterator != end) {
+            const std::string filename = iterator->path().filename().string();
+            if (filename.ends_with(suffix)) {
+                candidates.push_back(iterator->path());
+            }
+            iterator.increment(error);
+        }
+        std::ranges::sort(candidates);
+        return candidates;
     }
 
     [[nodiscard]] std::filesystem::path InProgressPath() const {
-        return std::filesystem::path(path.string() + ".inprogress");
+        const std::vector<std::filesystem::path> candidates = InProgressPaths();
+        Expect(candidates.size() == 1, "expected exactly one in-progress output");
+        return candidates.front();
     }
 
+    std::filesystem::path directory;
     std::filesystem::path path;
 };
 
@@ -498,6 +534,35 @@ private:
     bool active{true};
 };
 
+class FlushWaitersOnExit {
+public:
+    FlushWaitersOnExit(std::atomic<bool>& _release, std::vector<std::jthread>& _waiters) noexcept :
+        release(_release),
+        waiters(_waiters) {}
+
+    FlushWaitersOnExit(const FlushWaitersOnExit&)            = delete;
+    FlushWaitersOnExit& operator=(const FlushWaitersOnExit&) = delete;
+
+    ~FlushWaitersOnExit() {
+        Drain();
+    }
+
+    void Drain() noexcept {
+        if (!active) {
+            return;
+        }
+        release.store(true, std::memory_order_release);
+        Testing::ResumeWriter();
+        waiters.clear();
+        active = false;
+    }
+
+private:
+    std::atomic<bool>&         release;
+    std::vector<std::jthread>& waiters;
+    bool                       active{true};
+};
+
 void TestRuntimeLifecycleAndRestart() {
     Expect(Shutdown() == ShutdownResult::AlreadyStopped, "runtime did not begin in the stopped state");
 
@@ -534,9 +599,7 @@ void TestRuntimeLifecycleAndRestart() {
     Expect(Shutdown() == ShutdownResult::Completed, "runtime shutdown did not complete");
     Expect(GetRuntimeState() == RuntimeState::Stopped, "shutdown runtime is not stopped");
     Expect(std::filesystem::exists(first_output.path), "shutdown did not publish final output");
-    Expect(
-        !std::filesystem::exists(first_output.InProgressPath()), "shutdown left the in-progress file behind"
-    );
+    Expect(first_output.InProgressPaths().empty(), "shutdown left the in-progress file behind");
 
     const ParsedDump first_dump = ParseDump(first_output.path, first_config.codec_limits);
     Expect(first_dump.packet_types.front() == PacketType::SessionBegin, "session begin is not first");
@@ -606,7 +669,7 @@ void TestStartAllocationFailureIsContained() {
     );
     Expect(GetRuntimeState() == RuntimeState::Stopped, "start allocation failure changed runtime state");
     Expect(
-        !std::filesystem::exists(output.path) && !std::filesystem::exists(output.InProgressPath()),
+        !std::filesystem::exists(output.path) && output.InProgressPaths().empty(),
         "start allocation failure left an output artifact"
     );
     Expect(
@@ -641,15 +704,10 @@ void TestExclusiveTempCreateRace() {
         0x4c,
         0x21,
     };
-    {
-        std::ofstream stream(output.InProgressPath(), std::ios::binary | std::ios::trunc);
-        Expect(stream.is_open(), "competing temp fixture could not be opened");
-        stream.write(
-            reinterpret_cast<const char*>(competing_bytes.data()),
-            static_cast<std::streamsize>(competing_bytes.size())
-        );
-        Expect(stream.good(), "competing temp fixture could not be written");
-    }
+    Expect(
+        Testing::CreateActiveTempCollision(competing_bytes.data(), competing_bytes.size()),
+        "competing temp fixture could not be created"
+    );
 
     resume_guard.Resume();
     starter.join();
@@ -665,6 +723,135 @@ void TestExclusiveTempCreateRace() {
         "exclusive temp collision did not restore the stopped lifecycle"
     );
     Testing::ClearHooks();
+}
+
+void TestReplacementPreservesForeignTemp() {
+    Testing::ClearHooks();
+    ScopedOutput  output("moer-profile-replacement-foreign-temp");
+    RuntimeConfig config    = MakeRuntimeConfig(output);
+    config.replace_existing = true;
+
+    // Recreate the exact fixed path used by the old implementation. A
+    // replacement start must treat it as another session's live/forensic
+    // artifact instead of unlinking it.
+    std::filesystem::path foreign_temp = output.path;
+    foreign_temp += ".inprogress";
+    const std::array<std::uint8_t, 7> foreign_bytes = {
+        0x46,
+        0x4f,
+        0x52,
+        0x45,
+        0x49,
+        0x47,
+        0x4e,
+    };
+    {
+        std::ofstream stream(foreign_temp, std::ios::binary | std::ios::trunc);
+        Expect(stream.is_open(), "foreign temp fixture could not be opened");
+        stream.write(
+            reinterpret_cast<const char*>(foreign_bytes.data()),
+            static_cast<std::streamsize>(foreign_bytes.size())
+        );
+        Expect(stream.good(), "foreign temp fixture could not be written");
+    }
+
+    Expect(Start(config) == StartResult::Started, "replacement runtime failed to start");
+    Expect(
+        output.InProgressPaths().size() == 2,
+        "replacement runtime did not keep its temp separate from the foreign temp"
+    );
+    Expect(
+        ReadBinaryFile(foreign_temp) == std::vector<std::uint8_t>(foreign_bytes.begin(), foreign_bytes.end()),
+        "replacement startup modified the foreign temp"
+    );
+    Expect(Shutdown() == ShutdownResult::Completed, "replacement runtime did not shut down cleanly");
+    const std::vector<std::filesystem::path> remaining = output.InProgressPaths();
+    Expect(
+        remaining.size() == 1 && remaining.front() == foreign_temp,
+        "replacement finalization removed or retained the wrong temp"
+    );
+    Expect(
+        ReadBinaryFile(foreign_temp) == std::vector<std::uint8_t>(foreign_bytes.begin(), foreign_bytes.end()),
+        "replacement finalization modified the foreign temp"
+    );
+}
+
+void TestFinalPublicationRaces() {
+    Testing::ClearHooks();
+    const std::array<std::uint8_t, 8> competing_final = {
+        0x45,
+        0x58,
+        0x54,
+        0x45,
+        0x52,
+        0x4e,
+        0x41,
+        0x4c,
+    };
+
+    {
+        ScopedOutput        output("moer-profile-final-no-replace-race");
+        const RuntimeConfig config = MakeRuntimeConfig(output);
+        Expect(Start(config) == StartResult::Started, "no-replace race runtime failed to start");
+        const std::filesystem::path session_temp = output.InProgressPath();
+        {
+            std::ofstream stream(output.path, std::ios::binary | std::ios::trunc);
+            Expect(stream.is_open(), "competing final fixture could not be opened");
+            stream.write(
+                reinterpret_cast<const char*>(competing_final.data()),
+                static_cast<std::streamsize>(competing_final.size())
+            );
+            Expect(stream.good(), "competing final fixture could not be written");
+        }
+
+        Expect(
+            Shutdown() == ShutdownResult::Faulted,
+            "no-replace publication overwrote a final created after Start"
+        );
+        const RuntimeStats stats = GetRuntimeStats();
+        Expect(stats.last_fault == RuntimeFault::RenameFinal, "final-name race fault identity changed");
+        Expect(
+            ReadBinaryFile(output.path) ==
+                std::vector<std::uint8_t>(competing_final.begin(), competing_final.end()),
+            "no-replace publication modified the competing final"
+        );
+        Expect(
+            std::filesystem::exists(session_temp),
+            "no-replace publication race removed the forensic session temp"
+        );
+        Expect(
+            Shutdown() == ShutdownResult::AlreadyStopped,
+            "no-replace publication race did not restore the stopped lifecycle"
+        );
+    }
+
+    {
+        ScopedOutput  output("moer-profile-final-replace-race");
+        RuntimeConfig config    = MakeRuntimeConfig(output);
+        config.replace_existing = true;
+        Expect(Start(config) == StartResult::Started, "replace race runtime failed to start");
+        {
+            std::ofstream stream(output.path, std::ios::binary | std::ios::trunc);
+            Expect(stream.is_open(), "replace race final fixture could not be opened");
+            stream.write(
+                reinterpret_cast<const char*>(competing_final.data()),
+                static_cast<std::streamsize>(competing_final.size())
+            );
+            Expect(stream.good(), "replace race final fixture could not be written");
+        }
+
+        Expect(
+            Shutdown() == ShutdownResult::Completed,
+            "replacement publication did not atomically replace the competing final"
+        );
+        Expect(output.InProgressPaths().empty(), "replacement publication retained its session temp");
+        const ParsedDump dump = ParseDump(output.path, config.codec_limits);
+        Expect(
+            dump.packet_types.front() == PacketType::SessionBegin &&
+                dump.packet_types.back() == PacketType::SessionEnd,
+            "replacement publication exposed an incomplete capture"
+        );
+    }
 }
 
 void TestMultithreadedProducers() {
@@ -746,6 +933,7 @@ void TestMultithreadedProducers() {
 
 void TestBoundedQueueDropNewest() {
     Testing::ClearHooks();
+    ScopedOutput output("moer-profile-bounded");
     Expect(
         Testing::ConfigureWriterPauseAfterStart(true),
         "writer pause hook could not be configured while stopped"
@@ -774,7 +962,6 @@ void TestBoundedQueueDropNewest() {
     const std::size_t record_bytes = encoded_record.size();
     Expect(record_bytes > 0, "bounded queue test produced an empty record");
 
-    ScopedOutput  output("moer-profile-bounded");
     RuntimeConfig config       = MakeRuntimeConfig(output);
     config.max_record_bytes    = record_bytes * 2;
     config.tls_publish_records = 1;
@@ -878,13 +1065,13 @@ void TestBoundedQueueDropNewest() {
 
 void TestConcurrentFlushWaiters() {
     Testing::ClearHooks();
+    ScopedOutput output("moer-profile-concurrent-flush");
     Expect(
         Testing::ConfigureWriterPauseAfterStart(true),
         "flush waiter pause hook could not be configured while stopped"
     );
     ResumeWriterOnExit resume_guard;
 
-    ScopedOutput  output("moer-profile-concurrent-flush");
     RuntimeConfig config       = MakeRuntimeConfig(output);
     config.tls_publish_records = 1;
     Expect(Start(config) == StartResult::Started, "flush waiter runtime failed to start");
@@ -909,6 +1096,7 @@ void TestConcurrentFlushWaiters() {
     std::atomic<bool>         release{false};
     std::vector<std::jthread> waiters;
     waiters.reserve(waiter_count);
+    FlushWaitersOnExit waiters_guard(release, waiters);
     for (std::size_t index = 0; index < waiter_count; ++index) {
         waiters.emplace_back([&, index] {
             ready.fetch_add(1, std::memory_order_release);
@@ -928,8 +1116,8 @@ void TestConcurrentFlushWaiters() {
         std::this_thread::yield();
     }
 
+    waiters_guard.Drain();
     resume_guard.Resume();
-    waiters.clear();
     for (FlushResult result : results) {
         Expect(
             result == FlushResult::Completed || result == FlushResult::NothingPending,
@@ -1101,6 +1289,8 @@ int main() {
         TestRuntimeLifecycleAndRestart();
         TestStartAllocationFailureIsContained();
         TestExclusiveTempCreateRace();
+        TestReplacementPreservesForeignTemp();
+        TestFinalPublicationRaces();
         TestMultithreadedProducers();
         TestBoundedQueueDropNewest();
         TestConcurrentFlushWaiters();
