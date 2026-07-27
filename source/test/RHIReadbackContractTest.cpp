@@ -2,6 +2,7 @@
 #include "rhi/RHIImpl.h"
 #include "rhi/RHIReadback.h"
 #include "rhi/RHIThreadOwnership.h"
+#include "renderer/raster/CullingReadbackState.h"
 
 #include <algorithm>
 #include <array>
@@ -9,8 +10,10 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <semaphore>
 #include <stdexcept>
 #include <string>
@@ -647,6 +650,223 @@ void UnsupportedBackendFailsBeforeRecording() {
     );
 }
 
+GpuCullingCounterData TestLegacyCounters(std::uint32_t _seed) {
+    return GpuCullingCounterData{
+        .draw_count                   = _seed + 1,
+        .visible_instance_count       = _seed + 2,
+        .total_instances_before       = _seed + 3,
+        .total_instances_after        = _seed + 4,
+        .visible_draws                = _seed + 5,
+        .total_draws                  = _seed + 6,
+        .frustum_culled_instances     = _seed + 7,
+        .occlusion_culled_instances   = _seed + 8,
+        .lod_culled_instances         = _seed + 9,
+    };
+}
+
+bool LegacyCountersEqual(
+    const GpuCullingCounterData& _lhs,
+    const GpuCullingCounterData& _rhs
+) {
+    return _lhs.draw_count == _rhs.draw_count &&
+           _lhs.visible_instance_count ==
+               _rhs.visible_instance_count &&
+           _lhs.total_instances_before ==
+               _rhs.total_instances_before &&
+           _lhs.total_instances_after ==
+               _rhs.total_instances_after &&
+           _lhs.visible_draws == _rhs.visible_draws &&
+           _lhs.total_draws == _rhs.total_draws &&
+           _lhs.frustum_culled_instances ==
+               _rhs.frustum_culled_instances &&
+           _lhs.occlusion_culled_instances ==
+               _rhs.occlusion_culled_instances &&
+           _lhs.lod_culled_instances ==
+               _rhs.lod_culled_instances;
+}
+
+BufferView LegacyCounterBufferView(ReadbackTestBuffer& _buffer) {
+    return BufferView(
+        &_buffer, 0, sizeof(GpuCullingCounterData), 1
+    );
+}
+
+void LegacyFallbackPublishesReadyAfterPayload() {
+    using namespace Moer::Render::Raster::Detail;
+
+    ReadbackTestBuffer unsupported_buffer{false};
+    CommandList        list(EQueueType::Copy);
+    auto state = QueueLegacyCounterReadback(
+        list,
+        LegacyCounterBufferView(unsupported_buffer),
+        "LegacyFallbackSuccess"
+    );
+    CmdSubmit submit = list.Submit();
+
+    Expect(
+        submit.cmds.size() == 1 &&
+            submit.cmds.front()->Type() ==
+                Command::EType::CopyBackBuffer &&
+            submit.success_callbacks.size() == 1,
+        "legacy fallback did not record one raw readback and success lease"
+    );
+    const auto& command = *static_cast<const CopyBackBufferCmd*>(
+        submit.cmds.front().get()
+    );
+    Expect(
+        !command.HasOwningReadback() &&
+            command.ByteSize() ==
+                sizeof(GpuCullingCounterData) &&
+            command.Data() == &state->counters,
+        "legacy fallback did not bind its leased raw destination"
+    );
+
+    // D3D12 copies callbacks into a retirement packet before clearing the
+    // accepted CmdSubmit. Keeping the copied lease must not publish Error.
+    auto retirement_callbacks = submit.success_callbacks;
+    submit.success_callbacks.clear();
+    Expect(
+        state->GetStatus() ==
+            LegacyCounterReadbackStatus::Pending,
+        "copying the accepted success callback prematurely rejected the lease"
+    );
+
+    const GpuCullingCounterData expected =
+        TestLegacyCounters(100);
+    std::thread completion_thread(
+        [destination = command.Data(),
+         expected,
+         callbacks = std::move(retirement_callbacks)]() mutable {
+            std::memcpy(
+                destination, &expected, sizeof(expected)
+            );
+            for (auto& callback : callbacks) {
+                callback();
+            }
+            callbacks.clear();
+        }
+    );
+    completion_thread.join();
+
+    Expect(
+        state->GetStatus() ==
+                LegacyCounterReadbackStatus::Ready &&
+            LegacyCountersEqual(state->counters, expected),
+        "legacy fallback exposed Ready before payload publication or lost data"
+    );
+}
+
+void LegacyFallbackRejectionAndAbandonAreTerminal() {
+    using namespace Moer::Render::Raster::Detail;
+
+    ReadbackTestBuffer unsupported_buffer{false};
+    {
+        CommandList list(EQueueType::Copy);
+        auto state = QueueLegacyCounterReadback(
+            list,
+            LegacyCounterBufferView(unsupported_buffer),
+            "LegacyFallbackRejected"
+        );
+        const auto cleanup =
+            list.DrainOrdinaryCallbacksForRejection();
+        Expect(
+            cleanup.empty() &&
+                state->GetStatus() ==
+                    LegacyCounterReadbackStatus::Error,
+            "recording rejection left the legacy fallback Pending"
+        );
+    }
+
+    std::shared_ptr<LegacyCounterReadbackState>
+        abandoned_submit_state{};
+    {
+        CommandList list(EQueueType::Copy);
+        abandoned_submit_state = QueueLegacyCounterReadback(
+            list,
+            LegacyCounterBufferView(unsupported_buffer),
+            "LegacyFallbackAbandonedSubmit"
+        );
+        [[maybe_unused]] CmdSubmit abandoned = list.Submit();
+    }
+    Expect(
+        abandoned_submit_state->GetStatus() ==
+            LegacyCounterReadbackStatus::Error,
+        "abandoned CmdSubmit left the legacy fallback Pending"
+    );
+
+    std::shared_ptr<LegacyCounterReadbackState>
+        destroyed_list_state{};
+    {
+        CommandList list(EQueueType::Copy);
+        destroyed_list_state = QueueLegacyCounterReadback(
+            list,
+            LegacyCounterBufferView(unsupported_buffer),
+            "LegacyFallbackDestroyedList"
+        );
+    }
+    Expect(
+        destroyed_list_state->GetStatus() ==
+            LegacyCounterReadbackStatus::Error,
+        "CommandList destruction left the legacy fallback Pending"
+    );
+}
+
+void LegacyFallbackLeaseOutlivesConsumer() {
+    using namespace Moer::Render::Raster::Detail;
+
+    ReadbackTestBuffer unsupported_buffer{false};
+    CommandList        list(EQueueType::Copy);
+    auto consumer_state = QueueLegacyCounterReadback(
+        list,
+        LegacyCounterBufferView(unsupported_buffer),
+        "LegacyFallbackConsumerDestruction"
+    );
+    std::weak_ptr<LegacyCounterReadbackState> weak_state =
+        consumer_state;
+    CmdSubmit submit = list.Submit();
+    const auto& command = *static_cast<const CopyBackBufferCmd*>(
+        submit.cmds.front().get()
+    );
+    void* destination = command.Data();
+    auto retirement_callbacks =
+        std::move(submit.success_callbacks);
+    submit.success_callbacks.clear();
+    submit.cmds.clear();
+
+    // Simulate CullingPass destruction while the accepted native submission
+    // still owns the raw-destination success lease.
+    consumer_state.reset();
+    Expect(
+        !weak_state.expired(),
+        "consumer destruction released an in-flight raw destination"
+    );
+
+    const GpuCullingCounterData expected =
+        TestLegacyCounters(200);
+    std::memcpy(destination, &expected, sizeof(expected));
+    Expect(
+        retirement_callbacks.size() == 1,
+        "consumer destruction test lost its retirement callback"
+    );
+    retirement_callbacks.front()();
+    auto observed_state = weak_state.lock();
+    Expect(
+        observed_state != nullptr &&
+            observed_state->GetStatus() ==
+                LegacyCounterReadbackStatus::Ready &&
+            LegacyCountersEqual(
+                observed_state->counters, expected
+            ),
+        "in-flight lease did not preserve payload publication after consumer destruction"
+    );
+    observed_state.reset();
+    retirement_callbacks.clear();
+    Expect(
+        weak_state.expired(),
+        "retired legacy destination lease leaked after its final callback owner"
+    );
+}
+
 } // namespace
 
 int main() {
@@ -665,6 +885,9 @@ int main() {
         OwnerThreadsCannotBlockOnPendingReadback();
         CommandOwnershipAndDestructionAreTerminal();
         UnsupportedBackendFailsBeforeRecording();
+        LegacyFallbackPublishesReadyAfterPayload();
+        LegacyFallbackRejectionAndAbandonAreTerminal();
+        LegacyFallbackLeaseOutlivesConsumer();
     } catch (const std::exception& exception) {
         std::cerr
             << "RHIReadbackContract: "

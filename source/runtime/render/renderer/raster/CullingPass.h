@@ -18,10 +18,12 @@
 #include "shaderheaders/shared/scene/SharedSceneStruct.h"
 
 #include "RasterConfig.h"
+#include "CullingReadbackState.h"
 #include "RasterResource.h"
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 
 namespace Moer::Render::Raster {
 
@@ -274,34 +276,65 @@ private:
     }
 
     void ConsumeCounterReadback() {
-        if (!m_counter_readback.Valid()) {
-            return;
+        if (m_counter_readback.Valid()) {
+            const std::optional<ReadbackResult> result =
+                m_counter_readback.TryGet();
+            if (!result.has_value()) {
+                return;
+            }
+            if (result->status == ReadbackStatus::Ready) {
+                const std::optional<GpuCullingCounterData> counters =
+                    result->ReadValue<GpuCullingCounterData>();
+                if (counters.has_value()) {
+                    m_readback_counters = *counters;
+                }
+            }
+            m_counter_readback = {};
         }
 
-        const std::optional<ReadbackResult> result =
-            m_counter_readback.TryGet();
-        if (!result.has_value()) {
+        if (!m_legacy_counter_readback) {
             return;
         }
-        if (result->status == ReadbackStatus::Ready) {
-            const std::optional<GpuCullingCounterData> counters =
-                result->ReadValue<GpuCullingCounterData>();
-            if (counters.has_value()) {
-                m_readback_counters = *counters;
-            }
+        const Detail::LegacyCounterReadbackStatus legacy_status =
+            m_legacy_counter_readback->GetStatus();
+        if (legacy_status ==
+            Detail::LegacyCounterReadbackStatus::Pending) {
+            return;
         }
-        m_counter_readback = {};
+        if (legacy_status ==
+            Detail::LegacyCounterReadbackStatus::Ready) {
+            m_readback_counters =
+                m_legacy_counter_readback->counters;
+        }
+        m_legacy_counter_readback.reset();
     }
 
     void QueueCounterReadback(
         CommandList& _command_list,
         BufferView   _counter_buffer
     ) {
-        if (!m_counter_readback.Valid()) {
+        if (m_counter_readback.Valid() ||
+            m_legacy_counter_readback) {
+            return;
+        }
+
+        Buffer* source = _counter_buffer.GetBuffer();
+        if (source == nullptr) {
+            return;
+        }
+        if (source->SupportsOwningReadback()) {
             m_counter_readback = _command_list.Readback(
                 _counter_buffer, "RasterGpuCullingCounters"
             );
+            return;
         }
+
+        m_legacy_counter_readback =
+            Detail::QueueLegacyCounterReadback(
+                _command_list,
+                _counter_buffer,
+                "RasterGpuCullingCountersLegacy"
+            );
     }
 
     // Dispatches the culling compute pass and prepares its outputs for indirect drawing.
@@ -403,6 +436,8 @@ private:
     BufferRef                m_cluster_group_dummy_buf;
     GpuCullingCounterData    m_readback_counters{};
     ReadbackFuture           m_counter_readback{};
+    std::shared_ptr<Detail::LegacyCounterReadbackState>
+        m_legacy_counter_readback{};
 };
 
 } // namespace Moer::Render::Raster

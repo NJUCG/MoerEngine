@@ -13783,8 +13783,28 @@ void RunOwningReadbackFuture() {
         buffer_element_count,
         buffer_usage
     );
+    BufferRef texture_copy_buffer = device.CreateBuffer<uint32>(
+        "owning_readback_texture_copy_buffer",
+        (texture_width >> texture_mip) *
+            (texture_height >> texture_mip),
+        buffer_usage
+    );
+    BufferRef sibling_copy_buffer = device.CreateBuffer<uint32>(
+        "owning_readback_sibling_copy_buffer",
+        texture_width * texture_height,
+        buffer_usage
+    );
     TextureRef texture = device.CreateTexture(
         "owning_readback_texture",
+        Extent3D(texture_width, texture_height, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::TRANSFER_SRC |
+            ETextureUsageFlags::TRANSFER_DST,
+        2,
+        2
+    );
+    TextureRef layer_copy_texture = device.CreateTexture(
+        "owning_readback_layer_copy_texture",
         Extent3D(texture_width, texture_height, 1),
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::TRANSFER_SRC |
@@ -13871,6 +13891,12 @@ void RunOwningReadbackFuture() {
         texture_values[index] =
             0xFF000000u | (index * 0x00070311u);
     }
+    std::array<uint32, texture_width * texture_height>
+        sibling_values{};
+    for (uint32 index = 0; index < sibling_values.size(); ++index) {
+        sibling_values[index] =
+            0x19B10000u + index * 53u + 9u;
+    }
 
     TextureView texture_view =
         texture->GetView(texture_mip, 1).Slice(texture_layer, 1);
@@ -13878,10 +13904,128 @@ void RunOwningReadbackFuture() {
     texture_upload_view.extent = uint3(
         texture_mip_width, texture_mip_height, 1
     );
+    TextureView layer_copy_view =
+        layer_copy_texture->GetView(texture_mip, 1).Slice(
+            texture_layer, 1
+        );
+    layer_copy_view.extent = uint3(
+        texture_mip_width, texture_mip_height, 1
+    );
+    TextureView sibling_view =
+        layer_copy_texture->GetView(0, 1).Slice(0, 1);
+    sibling_view.extent = uint3(
+        texture_width, texture_height, 1
+    );
     BufferView buffer_view = buffer->GetView(
         readback_first_element * sizeof(uint32),
         readback_element_count * sizeof(uint32)
     );
+
+    // Keep the nonzero-layer texture-to-buffer copy in its own submission.
+    // A later texture readback must not be able to repair a missing transition
+    // for the copied layer and accidentally make this regression pass.
+    CommandList layer_copy_commands(EQueueType::Copy);
+    layer_copy_commands.CopyFrom(
+        OwnedBytes(texture_values),
+        layer_copy_view,
+        "OwningReadbackTextureLayerUpload"
+    );
+    layer_copy_commands.CopyFrom(
+        layer_copy_view,
+        texture_copy_buffer->GetView(),
+        "OwningReadbackTextureLayerCopy"
+    );
+    RHIExecutor::Get().Submit(
+        EQueueType::Copy,
+        layer_copy_commands.Submit(),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+
+    CommandList layer_copy_readback_commands(EQueueType::Copy);
+    ReadbackFuture texture_copy_future =
+        layer_copy_readback_commands.Readback(
+            texture_copy_buffer->GetView(),
+            "OwningReadbackTextureLayerCopyBuffer"
+        );
+    if (!texture_copy_future.Valid() ||
+        texture_copy_future.ExpectedByteSize() !=
+            texture_values.size() * sizeof(uint32)) {
+        throw std::runtime_error(
+            "nonzero-layer texture copy did not create a valid readback"
+        );
+    }
+    RHIExecutor::Get().Submit(
+        EQueueType::Copy,
+        layer_copy_readback_commands.Submit(),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    const ReadbackResult texture_copy_result =
+        texture_copy_future.Get();
+    const auto readback_texture_copy_values =
+        texture_copy_result.CopyAs<uint32>();
+    const Array<uint32> expected_texture_values(
+        texture_values.begin(), texture_values.end()
+    );
+    if (texture_copy_result.status != ReadbackStatus::Ready ||
+        !readback_texture_copy_values.has_value() ||
+        *readback_texture_copy_values != expected_texture_values) {
+        throw std::runtime_error(
+            "isolated nonzero-layer texture-to-buffer readback mismatch"
+        );
+    }
+
+    // The first partial restore publishes a whole-image preferred-state
+    // promise. Exercise an untouched sibling in the next submission so that
+    // the promise is valid only if the first restore initialized its
+    // complementary subresources as well.
+    CommandList sibling_commands(EQueueType::Copy);
+    sibling_commands.CopyFrom(
+        OwnedBytes(sibling_values),
+        sibling_view,
+        "OwningReadbackSiblingUpload"
+    );
+    sibling_commands.CopyFrom(
+        sibling_view,
+        sibling_copy_buffer->GetView(),
+        "OwningReadbackSiblingCopy"
+    );
+    RHIExecutor::Get().Submit(
+        EQueueType::Copy,
+        sibling_commands.Submit(),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+
+    CommandList sibling_readback_commands(EQueueType::Copy);
+    ReadbackFuture sibling_future =
+        sibling_readback_commands.Readback(
+            sibling_copy_buffer->GetView(),
+            "OwningReadbackSiblingCopyBuffer"
+        );
+    if (!sibling_future.Valid() ||
+        sibling_future.ExpectedByteSize() !=
+            sibling_values.size() * sizeof(uint32)) {
+        throw std::runtime_error(
+            "sibling subresource copy did not create a valid readback"
+        );
+    }
+    RHIExecutor::Get().Submit(
+        EQueueType::Copy,
+        sibling_readback_commands.Submit(),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    const ReadbackResult sibling_result = sibling_future.Get();
+    const auto readback_sibling_values =
+        sibling_result.CopyAs<uint32>();
+    const Array<uint32> expected_sibling_values(
+        sibling_values.begin(), sibling_values.end()
+    );
+    if (sibling_result.status != ReadbackStatus::Ready ||
+        !readback_sibling_values.has_value() ||
+        *readback_sibling_values != expected_sibling_values) {
+        throw std::runtime_error(
+            "next-submit sibling subresource readback mismatch"
+        );
+    }
 
     CommandList commands(EQueueType::Copy);
     commands.CopyFrom(
@@ -13971,9 +14115,6 @@ void RunOwningReadbackFuture() {
             "owning buffer subrange readback mismatch"
         );
     }
-    const Array<uint32> expected_texture_values(
-        texture_values.begin(), texture_values.end()
-    );
     if (*readback_texture_values != expected_texture_values) {
         throw std::runtime_error(
             "owning mip/layer texture readback mismatch"
@@ -13996,11 +14137,16 @@ void RunOwningReadbackFuture() {
     LOG_INFO(
         "[TESTCASE][PASS] name=OwningReadbackFuture "
         "queue=Copy buffer=subrange texture=mip1,layer1 "
-        "bytes={},{} callbacks=exactly_once siblings=terminal "
+        "layer_copy=isolated_nonzero_layer "
+        "sibling=next_submit_mip0_layer0 "
+        "state_restore=whole_image bytes={},{},{},{} "
+        "callbacks=exactly_once siblings=terminal "
         "native_staging=completion-owned host_snapshot=future-owned "
         "unsupported=compressed,msaa,partial",
         buffer_result.ByteSize(),
-        texture_result.ByteSize()
+        texture_result.ByteSize(),
+        texture_copy_result.ByteSize(),
+        sibling_result.ByteSize()
     );
 }
 

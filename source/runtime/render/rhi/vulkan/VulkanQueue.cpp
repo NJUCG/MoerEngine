@@ -1201,7 +1201,10 @@ struct VkCmdPreprocessor {
             VK_ACCESS_2_TRANSFER_READ_BIT,
             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            _cmd->MipLevel()
+            _cmd->MipLevel(),
+            1, // mip_count
+            _cmd->ArrayLayer(),
+            1  // array_count
         );
         tracker.RecordState(vk_dst_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
     }
