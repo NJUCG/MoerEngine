@@ -8430,7 +8430,8 @@ void RunPresentSourceContractRejection() {
         true
     );
 
-    uint32 rejected_count = 0;
+    uint32 rejected_count       = 0;
+    bool   copy_commit_verified = false;
     const auto expect_rejected =
         [&](
             TextureView       _source,
@@ -9105,6 +9106,11 @@ void RunPresentSourceContractRejection() {
     }
 
     if (topology.copy.available) {
+        // White-box seed isolates the Copy SubmitRecorded commit point from
+        // queue-family transfer ownership. The accepted explicit barrier is
+        // real queue work; if Copy omits its accepted delta commit, the seed
+        // remains observable here. Cross-queue ownership is covered by the
+        // dedicated explicit multi-queue fixtures.
         auto* vk_copy_commit_source =
             ResourceCast(copy_commit_source.Get());
         vk_copy_commit_source->PublishPresentationSourceReady(true);
@@ -9127,6 +9133,7 @@ void RunPresentSourceContractRejection() {
             "source invalidated by an accepted Copy queue packet",
             scripted_swapchain
         );
+        copy_commit_verified = true;
     }
 
     submit_source_state(
@@ -9279,10 +9286,11 @@ void RunPresentSourceContractRejection() {
         "marker_then_clear=true accepted_mutation_clear=true "
         "rejected_mutation_preserves=true accepted_copy_mutation=true "
         "marker_then_segmented_state_change=true "
-        "accepted_prefix_rejected_suffix=true copy_commit=true "
+        "accepted_prefix_rejected_suffix=true copy_commit={} "
         "wrong_queue_clear=true rejected_export_clear=true "
         "valid_override=4 owner=Submission",
-        rejected_count
+        rejected_count,
+        copy_commit_verified ? "verified" : "skipped"
     );
 }
 

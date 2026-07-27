@@ -6677,8 +6677,8 @@ void VkCommandQueue::ExecuteNow(
     } catch (...) {
         reject_before_native_record(
             VulkanOperationResult{
-                EVulkanOperationStatus::Rejected,
-                VK_ERROR_OUT_OF_HOST_MEMORY
+                EVulkanOperationStatus::Faulted,
+                VK_ERROR_UNKNOWN
             },
             "presentation-state delta construction failed"
         );
