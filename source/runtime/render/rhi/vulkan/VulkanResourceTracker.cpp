@@ -23,6 +23,41 @@ uint64_t BarrierNativeHandleKey(T _handle) {
         return static_cast<uint64_t>(_handle);
     }
 }
+
+[[noreturn]] void RejectLegacyResourceState(const char* _message) {
+    throw std::invalid_argument(_message);
+}
+
+void ValidateLegacyPassType(EPassType _type) {
+    switch (_type) {
+        case EPassType::Graphics:
+        case EPassType::Compute:
+        case EPassType::Raytracing:
+        case EPassType::Copy:
+            return;
+        default:
+            RejectLegacyResourceState("Unknown legacy pass type");
+    }
+}
+
+VkPipelineStageFlags2 LegacyShaderStagesForPass(EPassType _type) {
+    switch (_type) {
+        case EPassType::Graphics:
+            return VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                   VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        case EPassType::Compute:
+            return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        case EPassType::Raytracing:
+            return VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+        case EPassType::Copy:
+            RejectLegacyResourceState(
+                "Copy pass cannot use a shader resource state"
+            );
+        default:
+            RejectLegacyResourceState("Unknown legacy pass type");
+    }
+}
+
 } // namespace
 /**
      * @brief 
@@ -49,319 +84,198 @@ uint64_t BarrierNativeHandleKey(T _handle) {
      * @param _usage 
      * @return std::tuple<VkAccessFlags2, VkPipelineStageFlags2> 
      */
-auto VkTracker::ReadBuffer(VulkanBuffer* _buffer, EBufferState _state, EPassType _type)
+auto VkTracker::ResolveBufferState(
+    EBufferState _state,
+    EPassType    _type,
+    bool         _is_write
+)
     -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2> {
-    static constexpr VkAccessFlags2 buffer_access_rules[] = {
-        //GFX PASS ACCESS
-        VK_ACCESS_2_NONE,
-        VK_ACCESS_2_TRANSFER_READ_BIT,
-        VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT,
-        VK_ACCESS_2_INDEX_READ_BIT,
-        VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
-        //COMPUTE PASS ACCESS
-        VK_ACCESS_2_NONE,
-        VK_ACCESS_2_TRANSFER_READ_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
-        //RAYTRACING PASS ACCESS
-        VK_ACCESS_2_NONE,
-        VK_ACCESS_2_TRANSFER_READ_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT
-    };
-
-    static constexpr VkPipelineStageFlags2 stage_rules[] = {
-        //GFX PASS STAGES
-        VK_PIPELINE_STAGE_2_NONE,
-        VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT,
-        VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT,
-        VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
-        VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-        VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-        //COMPUTE PASS STAGES
-        VK_PIPELINE_STAGE_2_NONE,
-        VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        //RAYTRACING PASS STAGES
-        VK_PIPELINE_STAGE_2_NONE,
-        VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR
-    };
-
-    uint buffer_index = static_cast<uint32>(_state) + static_cast<uint32>(_type) * uint(EBufferState::Num);
-    return {buffer_access_rules[buffer_index], stage_rules[buffer_index]};
-}
-
-auto VkTracker::WriteBuffer(VulkanBuffer* _buffer, EBufferState _state, EPassType _type)
-    -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2> {
-    static constexpr VkAccessFlags2 buffer_access_rules[] = {
-        //GFX PASS ACCESS
-        VK_ACCESS_2_NONE,
-        VK_ACCESS_2_TRANSFER_WRITE_BIT,
-        VK_ACCESS_2_NONE,
-        VK_ACCESS_2_NONE,
-        VK_ACCESS_2_NONE,
-        VK_ACCESS_2_NONE,
-        VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
-        //COMPUTE PASS ACCESS
-        VK_ACCESS_2_NONE,
-        VK_ACCESS_2_TRANSFER_WRITE_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
-        //RAYTRACING PASS ACCESS
-        VK_ACCESS_2_NONE,
-        VK_ACCESS_2_TRANSFER_WRITE_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT
-    };
-
-    static constexpr VkPipelineStageFlags2 stage_rules[] = {
-        //GFX PASS STAGES
-        VK_PIPELINE_STAGE_2_NONE,
-        VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        VK_ACCESS_2_NONE,
-        VK_ACCESS_2_NONE,
-        VK_ACCESS_2_NONE,
-        VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-        VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-        //COMPUTE PASS STAGES
-        VK_PIPELINE_STAGE_2_NONE,
-        VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        //RAYTRACING PASS STAGES
-        VK_PIPELINE_STAGE_2_NONE,
-        VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-        VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR
-    };
-
-    uint buffer_index = static_cast<uint32>(_state) + static_cast<uint32>(_type) * uint(EBufferState::Num);
-
-    return {buffer_access_rules[buffer_index], stage_rules[buffer_index]};
-}
-static constexpr VkPipelineStageFlags2 tex_read_stage_rules[] = {
-    //GFX PASS STAGES
-    VK_PIPELINE_STAGE_2_NONE,
-    VK_PIPELINE_STAGE_2_COPY_BIT,
-    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-    VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
-    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-    //COMPUTE PASS STAGES
-    VK_PIPELINE_STAGE_2_NONE,
-    VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-};
-
-static constexpr VkPipelineStageFlagBits2 tex_write_stage_rules[] = {
-    //GFX PASS STAGES
-    VK_PIPELINE_STAGE_2_NONE,
-    VK_PIPELINE_STAGE_2_COPY_BIT,
-    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-    VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
-    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-    //COMPUTE PASS STAGES
-    VK_PIPELINE_STAGE_2_NONE,
-    VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-};
-
-static constexpr VkImageLayout tex_read_layout_rules[] = {
-    //GFX PASS LAYOUTS
-    VK_IMAGE_LAYOUT_UNDEFINED,
-    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-    VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    //COMPUTE PASS LAYOUTS
-    VK_IMAGE_LAYOUT_UNDEFINED,
-    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    VK_IMAGE_LAYOUT_GENERAL,
-    VK_IMAGE_LAYOUT_GENERAL,
-    VK_IMAGE_LAYOUT_GENERAL,
-    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    //RAYTRACING PASS LAYOUTS
-    VK_IMAGE_LAYOUT_UNDEFINED,
-    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    VK_IMAGE_LAYOUT_GENERAL,
-    VK_IMAGE_LAYOUT_GENERAL,
-    VK_IMAGE_LAYOUT_GENERAL,
-    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-};
-
-static constexpr VkImageLayout depth_read_layout_rules[] = {
-    //GFX PASS LAYOUTS
-    VK_IMAGE_LAYOUT_UNDEFINED,
-    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-    VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-    VK_IMAGE_LAYOUT_GENERAL,
-    VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-    VK_IMAGE_LAYOUT_GENERAL,
-    VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-    //COMPUTE PASS LAYOUTS
-    VK_IMAGE_LAYOUT_UNDEFINED,
-    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-    VK_IMAGE_LAYOUT_GENERAL,
-    VK_IMAGE_LAYOUT_GENERAL,
-    VK_IMAGE_LAYOUT_GENERAL,
-    VK_IMAGE_LAYOUT_GENERAL,
-    VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-    //RAYTRACING PASS LAYOUTS
-    VK_IMAGE_LAYOUT_UNDEFINED,
-    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-    VK_IMAGE_LAYOUT_GENERAL,
-    VK_IMAGE_LAYOUT_GENERAL,
-    VK_IMAGE_LAYOUT_GENERAL,
-    VK_IMAGE_LAYOUT_GENERAL,
-    VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
-};
-
-static constexpr VkAccessFlags2 tex_read_access_rules[] = {
-    //GFX PASS ACCESS
-    VK_ACCESS_2_NONE,
-    VK_ACCESS_2_TRANSFER_READ_BIT,
-    VK_ACCESS_2_SHADER_READ_BIT,
-    VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT,
-    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
-    VK_ACCESS_2_SHADER_READ_BIT,
-    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-    //COMPUTE PASS ACCESS
-    VK_ACCESS_2_NONE,
-    VK_ACCESS_2_TRANSFER_READ_BIT,
-    VK_ACCESS_2_SHADER_READ_BIT,
-    VK_ACCESS_2_SHADER_READ_BIT,
-    VK_ACCESS_2_SHADER_READ_BIT,
-    VK_ACCESS_2_SHADER_READ_BIT,
-    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-    //RAYTRACING PASS ACCESS
-    VK_ACCESS_2_NONE,
-    VK_ACCESS_2_TRANSFER_READ_BIT,
-    VK_ACCESS_2_SHADER_READ_BIT,
-    VK_ACCESS_2_SHADER_READ_BIT,
-    VK_ACCESS_2_SHADER_READ_BIT,
-    VK_ACCESS_2_SHADER_READ_BIT,
-    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT
-
-};
-auto VkTracker::ReadTexture(VulkanTexture* _texture, ETextureState _state, EPassType _type)
-    -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2> {
-
-    // static constexpr VkAccessFlags2 gfx_rules[] = {
-    //     VK_ACCESS_2_NONE,
-    //     VK_ACCESS_2_TRANSFER_READ_BIT,
-    //     VK_ACCESS_2_SHADER_READ_BIT,
-    //     VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT,
-    //     VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
-    //     VK_ACCESS_2_SHADER_READ_BIT,
-    //     VK_ACCESS_2_SHADER_SAMPLED_READ_BIT};
-
-    // static constexpr VkImageLayout gfx_layout_rules[] = {
-    //     VK_IMAGE_LAYOUT_UNDEFINED,
-    //     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-    //     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    //     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-    //     VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-    //     VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL,
-    //     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-
-    // static constexpr VkImageLayout depth_layout_rules[] = {
-    //     VK_IMAGE_LAYOUT_UNDEFINED,
-    //     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-    //     VK_IMAGE_LAYOUT_GENERAL,
-    //     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-    //     VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-    //     VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL,
-    //     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-
-    auto index      = static_cast<uint32>(_state);
-    auto pass_index = static_cast<uint32>(_state) + uint32(ETextureState::Num) * uint32(_type);
-    if (uint(_texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) != 0u) {
-        return {
-            tex_read_access_rules[pass_index],
-            depth_read_layout_rules[pass_index],
-            tex_read_stage_rules[pass_index]
-        };
+    ValidateLegacyPassType(_type);
+    switch (_state) {
+        case EBufferState::UNDEFINED:
+            return {VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_NONE};
+        case EBufferState::TRANSFER:
+            return {
+                _is_write ? VK_ACCESS_2_TRANSFER_WRITE_BIT :
+                            VK_ACCESS_2_TRANSFER_READ_BIT,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT
+            };
+        case EBufferState::VERTEX:
+            if (_is_write || _type != EPassType::Graphics) {
+                RejectLegacyResourceState(
+                    "Vertex buffers are read-only graphics resources"
+                );
+            }
+            return {
+                VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT,
+                VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT
+            };
+        case EBufferState::INDEX:
+            if (_is_write || _type != EPassType::Graphics) {
+                RejectLegacyResourceState(
+                    "Index buffers are read-only graphics resources"
+                );
+            }
+            return {
+                VK_ACCESS_2_INDEX_READ_BIT,
+                VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT
+            };
+        case EBufferState::INDIRECT:
+            if (_is_write || _type == EPassType::Copy) {
+                RejectLegacyResourceState(
+                    "Indirect buffers are read-only non-copy resources"
+                );
+            }
+            return {
+                VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
+                VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT
+            };
+        case EBufferState::SHADER_RESOURCE:
+            if (_is_write || _type == EPassType::Copy) {
+                RejectLegacyResourceState(
+                    "Shader-resource buffers are read-only non-copy resources"
+                );
+            }
+            return {
+                VK_ACCESS_2_SHADER_READ_BIT,
+                LegacyShaderStagesForPass(_type)
+            };
+        case EBufferState::UNORDERED_ACCESS:
+            if (_type == EPassType::Copy) {
+                RejectLegacyResourceState(
+                    "Copy pass cannot use an unordered-access buffer state"
+                );
+            }
+            return {
+                VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+                LegacyShaderStagesForPass(_type)
+            };
+        case EBufferState::Num:
+        default:
+            RejectLegacyResourceState("Unknown legacy buffer state");
     }
-
-    return {
-        tex_read_access_rules[pass_index], tex_read_layout_rules[pass_index], tex_read_stage_rules[pass_index]
-    };
 }
 
-auto VkTracker::WriteTexture(VulkanTexture* _texture, ETextureState _state, EPassType _type)
+auto VkTracker::ReadBuffer(
+    VulkanBuffer* _buffer,
+    EBufferState  _state,
+    EPassType     _type
+)
+    -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2> {
+    (void)_buffer;
+    return ResolveBufferState(_state, _type, false);
+}
+auto VkTracker::WriteBuffer(
+    VulkanBuffer* _buffer,
+    EBufferState  _state,
+    EPassType     _type
+)
+    -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2> {
+    (void)_buffer;
+    return ResolveBufferState(_state, _type, true);
+}
+
+auto VkTracker::ResolveTextureState(
+    ETextureState _state,
+    EPassType     _type,
+    bool          _is_write,
+    bool          _is_depth
+)
     -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2> {
-    static constexpr VkAccessFlags2 gfx_rules[] = {
-        VK_ACCESS_2_NONE,
-        VK_ACCESS_2_TRANSFER_WRITE_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
-        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-        VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-        VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
-        VK_ACCESS_2_NONE
-    };
+    ValidateLegacyPassType(_type);
+    switch (_state) {
+        case ETextureState::UNDEFINED:
+            return {
+                VK_ACCESS_2_NONE,
+                VK_IMAGE_LAYOUT_UNDEFINED,
+                VK_PIPELINE_STAGE_2_NONE
+            };
+        case ETextureState::TRANSFER:
+            return {
+                _is_write ? VK_ACCESS_2_TRANSFER_WRITE_BIT :
+                            VK_ACCESS_2_TRANSFER_READ_BIT,
+                _is_write ? VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL :
+                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT
+            };
+        case ETextureState::SHADER_RESOURCE:
+        case ETextureState::SAMPLE:
+            if (_is_write || _type == EPassType::Copy) {
+                RejectLegacyResourceState(
+                    "Shader-resource textures are read-only non-copy resources"
+                );
+            }
+            return {
+                _state == ETextureState::SAMPLE ?
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT :
+                    VK_ACCESS_2_SHADER_READ_BIT,
+                _is_depth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL :
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                LegacyShaderStagesForPass(_type)
+            };
+        case ETextureState::RENDER_TARGET:
+            if (_type != EPassType::Graphics) {
+                RejectLegacyResourceState(
+                    "Render targets are graphics attachments"
+                );
+            }
+            return {
+                _is_write ? VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT :
+                            VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT
+            };
+        case ETextureState::DEPTH_STENCIL:
+            if (_type != EPassType::Graphics) {
+                RejectLegacyResourceState(
+                    "Depth-stencil textures are graphics attachments"
+                );
+            }
+            return {
+                _is_write ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT :
+                            VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                _is_write ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL :
+                            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                    VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT
+            };
+        case ETextureState::UNORDERED_ACCESS:
+            if (_type == EPassType::Copy) {
+                RejectLegacyResourceState(
+                    "Copy pass cannot use an unordered-access texture state"
+                );
+            }
+            return {
+                VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+                VK_IMAGE_LAYOUT_GENERAL,
+                LegacyShaderStagesForPass(_type)
+            };
+        case ETextureState::Num:
+        default:
+            RejectLegacyResourceState("Unknown legacy texture state");
+    }
+}
 
-    static constexpr VkImageLayout layout_rules[] = {
-        VK_IMAGE_LAYOUT_UNDEFINED,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        VK_IMAGE_LAYOUT_GENERAL,
-        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-        VK_IMAGE_LAYOUT_GENERAL,
-        VK_IMAGE_LAYOUT_UNDEFINED
-    }; // Invalid
+auto VkTracker::ReadTexture(
+    VulkanTexture* _texture,
+    ETextureState  _state,
+    EPassType      _type
+)
+    -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2> {
+    const bool is_depth =
+        uint(_texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) != 0u;
+    return ResolveTextureState(_state, _type, false, is_depth);
+}
 
-    auto index      = static_cast<uint32>(_state);
-    auto pass_index = static_cast<uint32>(_state) + uint32(ETextureState::Num) * uint32(_type);
-    return {gfx_rules[index], layout_rules[index], tex_write_stage_rules[pass_index]};
+auto VkTracker::WriteTexture(
+    VulkanTexture* _texture,
+    ETextureState  _state,
+    EPassType      _type
+)
+    -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2> {
+    const bool is_depth =
+        uint(_texture->GetAspectFlags() & ETextureAspectFlags::DEPTH_SLICE) != 0u;
+    return ResolveTextureState(_state, _type, true, is_depth);
 }
 
 static bool IsWriteState(VkImageLayout _layout, VkAccessFlags2 _access) {

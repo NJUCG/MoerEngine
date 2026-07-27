@@ -283,6 +283,23 @@ public:
     auto WriteTexture(VulkanTexture*, ETextureState, EPassType _type = EPassType::Graphics)
         -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>;
 
+    // Pure legacy-state resolvers keep backend validation testable without a
+    // Vulkan device. Copy is valid only for TRANSFER/UNDEFINED; shader and
+    // attachment state/pass mismatches are rejected instead of indexing past
+    // a lookup table.
+    RENDER_API static auto ResolveBufferState(
+        EBufferState _state,
+        EPassType    _type,
+        bool         _is_write
+    )
+        -> std::tuple<VkAccessFlags2, VkPipelineStageFlags2>;
+    RENDER_API static auto ResolveTextureState(
+        ETextureState _state,
+        EPassType     _type,
+        bool          _is_write,
+        bool          _is_depth
+    ) -> std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2>;
+
     void EmplaceWriteBLAS(uint64 _blas_buf);
     bool ContainsWriteBLAS(uint64 _blas_buf);
 
