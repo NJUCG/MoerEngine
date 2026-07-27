@@ -360,22 +360,34 @@ void PublicationWakesWaitersBeforeDeferredCallbacks() {
         submit.gpu_completion_tokens.front();
 
     std::atomic_bool callback_called{false};
+    std::atomic_bool waiter_started{false};
     std::atomic_bool waiter_finished{false};
+    std::atomic_bool waiter_satisfied{false};
     future.Then([&](const GpuCompletionResult&) {
         callback_called.store(true, std::memory_order_release);
     });
     std::thread waiter([&] {
-        future.Wait();
+        waiter_started.store(true, std::memory_order_release);
+        waiter_satisfied.store(
+            future.WaitFor(5s), std::memory_order_release
+        );
         waiter_finished.store(true, std::memory_order_release);
     });
 
+    const auto start_deadline =
+        std::chrono::steady_clock::now() + 500ms;
+    while (!waiter_started.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < start_deadline) {
+        std::this_thread::yield();
+    }
+    // Give the waiter an opportunity to enter the condition-variable wait;
+    // its own timeout keeps the later join bounded even if wake-up regresses.
+    std::this_thread::sleep_for(10ms);
     const GpuCompletionPublishBatch batch =
         GpuCompletionBackendAccess::BeginPublishBatch();
-    Expect(
-        GpuCompletionBackendAccess::PublishReady(token, batch),
-        "deferred publication could not publish Ready"
-    );
-    const auto deadline = std::chrono::steady_clock::now() + 500ms;
+    const bool published =
+        GpuCompletionBackendAccess::PublishReady(token, batch);
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
     while (!waiter_finished.load(std::memory_order_acquire) &&
            std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(1ms);
@@ -387,7 +399,13 @@ void PublicationWakesWaitersBeforeDeferredCallbacks() {
     GpuCompletionBackendAccess::NotifyTerminal(token, batch);
     waiter.join();
     Expect(
-        waiter_woke_before_notification,
+        waiter_started.load(std::memory_order_acquire),
+        "completion waiter thread did not start"
+    );
+    Expect(published, "deferred publication could not publish Ready");
+    Expect(
+        waiter_woke_before_notification &&
+            waiter_satisfied.load(std::memory_order_acquire),
         "publication did not wake a waiter"
     );
     Expect(

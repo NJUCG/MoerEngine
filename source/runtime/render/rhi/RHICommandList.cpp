@@ -41,6 +41,23 @@ void InvokeCallbacksNoexcept(Array<std::function<void()>>& _callbacks) noexcept 
     }
 }
 
+void RejectDetachedSignalsNoexcept(
+    Array<SignalEvent>& _signals
+) noexcept {
+    for (const SignalEvent& signal : _signals) {
+        auto* fence = reinterpret_cast<Fence*>(
+            signal.timeline_handle
+        );
+        if (fence != nullptr) {
+            try {
+                fence->Reject(signal.value);
+            } catch (...) {
+            }
+        }
+    }
+    _signals.clear();
+}
+
 } // namespace
 
 void CommandQueue::Test() {
@@ -73,52 +90,72 @@ CommandList::CommandList(EQueueType _queue_type) :
 }
 
 CommandList::~CommandList() {
-    RejectPendingSignals();
     GpuCompletionCancellationView completion_cancellation =
         gpu_completion_cancellation_domain.GetView();
-    Array<GpuCompletionToken> completion_tokens =
-        std::move(gpu_completion_tokens);
+    QueryCancellationView query_cancellation =
+        query_cancellation_domain.GetView();
     const GpuCompletionPublishBatch completion_batch =
         GpuCompletionBackendAccess::BeginPublishBatch();
+    const QueryPublishBatch query_batch =
+        QueryBackendAccess::BeginPublishBatch();
+
+    CmdSubmit rejected(
+        std::move(commands),
+        std::move(callbacks),
+        std::move(success_callbacks),
+        std::move(cached_args)
+    );
+    rejected.gpu_completion_tokens =
+        std::move(gpu_completion_tokens);
+    rejected.query_tokens = std::move(query_tokens);
+    rejected.signal_events = std::move(signal_events);
+    rejected.signal_rejection_keepalives =
+        std::move(signal_rejection_keepalives);
+    Array<QueryToken> rejected_active_queries =
+        std::move(active_query_stack);
+    while (!scope_stack.empty()) {
+        scope_stack.pop();
+    }
+    timestamp_scope_names.clear();
+
+    // No externally observable rejection may run while the dying object still
+    // exposes an extractable command generation.
+    current_barriers = nullptr;
+
     const bool completion_cancellation_published =
         completion_cancellation.PublishCancellation(
             "GPU completion command list was destroyed before submission",
             completion_batch
         );
-    GpuCompletionBackendAccess::PublishErrorsIfPending(
-        completion_tokens,
+    rejected.PublishPendingGpuCompletionErrors(
         "GPU completion command list was destroyed before submission",
         completion_batch
     );
-    const QueryPublishBatch query_batch =
-        QueryBackendAccess::BeginPublishBatch();
-    QueryCancellationView cancellation =
-        query_cancellation_domain.GetView();
-    Array<QueryToken> query_tokens = std::move(this->query_tokens);
     const bool cancellation_published =
-        cancellation.PublishCancellation(
+        query_cancellation.PublishCancellation(
             "query command list was destroyed before submission",
             query_batch
         );
-    QueryBackendAccess::PublishErrorsIfPending(
-        query_tokens,
+    rejected.PublishPendingQueryErrors(
         "query command list was destroyed before submission",
         query_batch
     );
-    GpuCompletionBackendAccess::NotifyTerminals(
-        completion_tokens, completion_batch
-    );
+    // Publication wakes Wait/Get but does not release callbacks. A
+    // Fence::Reject hook may synchronously wait on either host observation.
+    rejected.RejectPendingSignals();
     if (completion_cancellation_published) {
         completion_cancellation.NotifyCancellation(completion_batch);
     } else {
         completion_cancellation.NotifyPublishedCancellation();
     }
+    rejected.NotifyPendingGpuCompletions(completion_batch);
     if (cancellation_published) {
-        cancellation.NotifyCancellation(query_batch);
+        query_cancellation.NotifyCancellation(query_batch);
     } else {
-        cancellation.NotifyPublishedCancellation();
+        query_cancellation.NotifyPublishedCancellation();
     }
-    QueryBackendAccess::NotifyTerminals(query_tokens, query_batch);
+    rejected.NotifyPendingQueries(query_batch);
+    (void)rejected_active_queries;
 }
 
 CommandList::CommandList(CommandList&& _other) :
@@ -141,38 +178,38 @@ CommandList& CommandList::operator=(CommandList&& _other) {
     // ownership starts moving, every remaining operation below is noexcept.
     GpuCompletionCancellationDomain moved_from_completion_domain{};
     QueryCancellationDomain         moved_from_query_domain{};
-    RejectPendingSignals();
     GpuCompletionCancellationView replaced_completion_cancellation =
         gpu_completion_cancellation_domain.GetView();
-    Array<GpuCompletionToken> replaced_completion_tokens =
-        std::move(gpu_completion_tokens);
     const GpuCompletionPublishBatch replaced_completion_batch =
         GpuCompletionBackendAccess::BeginPublishBatch();
-    const bool replaced_completion_cancellation_published =
-        replaced_completion_cancellation.PublishCancellation(
-            "GPU completion command list was replaced before submission",
-            replaced_completion_batch
-        );
-    GpuCompletionBackendAccess::PublishErrorsIfPending(
-        replaced_completion_tokens,
-        "GPU completion command list was replaced before submission",
-        replaced_completion_batch
-    );
     QueryCancellationView replaced_query_cancellation =
         query_cancellation_domain.GetView();
-    Array<QueryToken> replaced_query_tokens = std::move(query_tokens);
     const QueryPublishBatch replaced_query_batch =
         QueryBackendAccess::BeginPublishBatch();
-    const bool replaced_cancellation_published =
-        replaced_query_cancellation.PublishCancellation(
-            "query command list was replaced before submission",
-            replaced_query_batch
-        );
-    QueryBackendAccess::PublishErrorsIfPending(
-        replaced_query_tokens,
-        "query command list was replaced before submission",
-        replaced_query_batch
+
+    CmdSubmit replaced(
+        std::move(commands),
+        std::move(callbacks),
+        std::move(success_callbacks),
+        std::move(cached_args)
     );
+    replaced.gpu_completion_tokens =
+        std::move(gpu_completion_tokens);
+    replaced.query_tokens = std::move(query_tokens);
+    replaced.signal_events = std::move(signal_events);
+    replaced.signal_rejection_keepalives =
+        std::move(signal_rejection_keepalives);
+    replaced.translate_execution_class =
+        translate_execution_class;
+    replaced.resource_state_ownership =
+        resource_state_ownership;
+    Array<QueryToken> replaced_active_queries =
+        std::move(active_query_stack);
+    while (!scope_stack.empty()) {
+        scope_stack.pop();
+    }
+    timestamp_scope_names.clear();
+
     commands                    = std::move(_other.commands);
     current_barriers            = _other.current_barriers;
     callbacks                   = std::move(_other.callbacks);
@@ -185,13 +222,19 @@ CommandList& CommandList::operator=(CommandList&& _other) {
     active_query_stack          = std::move(_other.active_query_stack);
     query_cancellation_domain   = std::move(_other.query_cancellation_domain);
     signal_events               = std::move(_other.signal_events);
+    signal_rejection_keepalives =
+        std::move(_other.signal_rejection_keepalives);
     cached_args                 = std::move(_other.cached_args);
     queue_type                  = _other.queue_type;
     translate_execution_class   = _other.translate_execution_class;
     resource_state_ownership    = _other.resource_state_ownership;
     seal_generation             = _other.seal_generation;
-    scope_stack                 = std::move(_other.scope_stack);
-    timestamp_scope_names       = std::move(_other.timestamp_scope_names);
+    static_assert(noexcept(scope_stack.swap(_other.scope_stack)));
+    static_assert(
+        noexcept(timestamp_scope_names.swap(_other.timestamp_scope_names))
+    );
+    scope_stack.swap(_other.scope_stack);
+    timestamp_scope_names.swap(_other.timestamp_scope_names);
     query_owner_id              = _other.query_owner_id;
 
     _other.current_barriers          = nullptr;
@@ -208,12 +251,38 @@ CommandList& CommandList::operator=(CommandList&& _other) {
     _other.query_tokens.clear();
     _other.active_query_stack.clear();
     _other.signal_events.clear();
+    _other.signal_rejection_keepalives.clear();
+    _other.commands.clear();
+    _other.callbacks.clear();
+    _other.success_callbacks.clear();
+    _other.cached_args.clear();
+    while (!_other.scope_stack.empty()) {
+        _other.scope_stack.pop();
+    }
+    _other.timestamp_scope_names.clear();
 
-    // Install the complete incoming generation before releasing user Query
-    // callbacks so re-entrant recording cannot be overwritten by this move.
-    GpuCompletionBackendAccess::NotifyTerminals(
-        replaced_completion_tokens, replaced_completion_batch
+    // Install the complete incoming generation before rejecting a Fence,
+    // publishing a terminal Future (which wakes Wait/Get), or releasing a
+    // callback. Re-entrant recording therefore targets only the replacement.
+    const bool replaced_completion_cancellation_published =
+        replaced_completion_cancellation.PublishCancellation(
+            "GPU completion command list was replaced before submission",
+            replaced_completion_batch
+        );
+    replaced.PublishPendingGpuCompletionErrors(
+        "GPU completion command list was replaced before submission",
+        replaced_completion_batch
     );
+    const bool replaced_cancellation_published =
+        replaced_query_cancellation.PublishCancellation(
+            "query command list was replaced before submission",
+            replaced_query_batch
+        );
+    replaced.PublishPendingQueryErrors(
+        "query command list was replaced before submission",
+        replaced_query_batch
+    );
+    replaced.RejectPendingSignals();
     if (replaced_completion_cancellation_published) {
         replaced_completion_cancellation.NotifyCancellation(
             replaced_completion_batch
@@ -222,6 +291,9 @@ CommandList& CommandList::operator=(CommandList&& _other) {
         replaced_completion_cancellation.
             NotifyPublishedCancellation();
     }
+    replaced.NotifyPendingGpuCompletions(
+        replaced_completion_batch
+    );
     if (replaced_cancellation_published) {
         replaced_query_cancellation.NotifyCancellation(
             replaced_query_batch
@@ -229,9 +301,8 @@ CommandList& CommandList::operator=(CommandList&& _other) {
     } else {
         replaced_query_cancellation.NotifyPublishedCancellation();
     }
-    QueryBackendAccess::NotifyTerminals(
-        replaced_query_tokens, replaced_query_batch
-    );
+    replaced.NotifyPendingQueries(replaced_query_batch);
+    (void)replaced_active_queries;
     return *this;
 }
 
@@ -418,6 +489,8 @@ CmdSubmit CommandList::Submit() {
     submit.gpu_completion_tokens = std::move(gpu_completion_tokens);
     submit.query_tokens = std::move(query_tokens);
     submit.signal_events = std::move(signal_events);
+    submit.signal_rejection_keepalives =
+        std::move(signal_rejection_keepalives);
     submit.segments      = std::move(submit_segments);
     submit.translate_execution_class = translate_execution_class;
     submit.resource_state_ownership   = resource_state_ownership;
@@ -460,6 +533,7 @@ CmdSubmit CommandList::Submit() {
         std::move(next_completion_domain);
     query_cancellation_domain = std::move(next_query_domain);
     signal_events.clear();
+    signal_rejection_keepalives.clear();
     timestamp_scope_names.clear();
     translate_execution_class = ERHITranslateExecutionClass::Parallel;
     resource_state_ownership  = ERHIResourceStateOwnership::BackendTracked;
@@ -467,21 +541,12 @@ CmdSubmit CommandList::Submit() {
 }
 
 Array<std::function<void()>> CommandList::DrainOrdinaryCallbacksForRejection() {
-    if (managed_recording_lease_count != 0) {
-        throw std::logic_error(
-            "CommandList rejection draining is forbidden while graph-managed recording is active"
-        );
-    }
-    // Do not move cleanup callbacks out until the replacement generation is
-    // guaranteed to exist; rejection must retain its no-throw ownership tail.
-    GpuCompletionCancellationDomain next_completion_domain{};
-    QueryCancellationDomain         next_query_domain{};
-    ++seal_generation;
-    RejectPendingSignals();
     GpuCompletionCancellationView rejected_completion_cancellation =
         gpu_completion_cancellation_domain.GetView();
-    Array<GpuCompletionToken> rejected_completion_tokens =
-        std::move(gpu_completion_tokens);
+    QueryCancellationView rejected_query_cancellation =
+        query_cancellation_domain.GetView();
+    CmdSubmit rejected = PrepareRecordingRejectionDrain();
+
     const GpuCompletionPublishBatch rejected_completion_batch =
         GpuCompletionBackendAccess::BeginPublishBatch();
     const bool rejected_completion_cancellation_published =
@@ -489,14 +554,10 @@ Array<std::function<void()>> CommandList::DrainOrdinaryCallbacksForRejection() {
             "GPU completion command list was rejected before completion",
             rejected_completion_batch
         );
-    GpuCompletionBackendAccess::PublishErrorsIfPending(
-        rejected_completion_tokens,
+    rejected.PublishPendingGpuCompletionErrors(
         "GPU completion command list was rejected before completion",
         rejected_completion_batch
     );
-    QueryCancellationView rejected_query_cancellation =
-        query_cancellation_domain.GetView();
-    Array<QueryToken> rejected_query_tokens = std::move(query_tokens);
     const QueryPublishBatch rejected_query_batch =
         QueryBackendAccess::BeginPublishBatch();
     const bool rejected_cancellation_published =
@@ -504,42 +565,15 @@ Array<std::function<void()>> CommandList::DrainOrdinaryCallbacksForRejection() {
             "query command list was rejected before completion",
             rejected_query_batch
         );
-    QueryBackendAccess::PublishErrorsIfPending(
-        rejected_query_tokens,
+    rejected.PublishPendingQueryErrors(
         "query command list was rejected before completion",
         rejected_query_batch
     );
-    Array<std::function<void()>> cleanup_callbacks = std::move(callbacks);
+    // Publication wakes Wait/Get but does not release callbacks. Publish the
+    // complete host batch first so Fence::Reject may safely wait on it, then
+    // terminalize signals before any callback notification.
+    rejected.RejectPendingSignals();
 
-    // This is deliberately not implemented in terms of Submit(). A failed
-    // producer may leave a partially-built barrier or an unmatched marker;
-    // neither is executable, and Submit() correctly asserts on that shape in
-    // Debug builds. Destroying the command payload releases its strong refs
-    // without manufacturing end-marker commands or submission segments.
-    commands.clear();
-    callbacks.clear();
-    success_callbacks.clear();
-    gpu_completion_tokens.clear();
-    query_tokens.clear();
-    active_query_stack.clear();
-    gpu_completion_cancellation_domain =
-        std::move(next_completion_domain);
-    query_cancellation_domain = std::move(next_query_domain);
-    signal_events.clear();
-    cached_args.clear();
-    current_barriers = nullptr;
-    while (!scope_stack.empty()) {
-        scope_stack.pop();
-    }
-    timestamp_scope_names.clear();
-    translate_execution_class = ERHITranslateExecutionClass::Parallel;
-    resource_state_ownership  = ERHIResourceStateOwnership::BackendTracked;
-
-    // The fresh generation is fully installed before Query callbacks can
-    // re-enter this CommandList and append new work.
-    GpuCompletionBackendAccess::NotifyTerminals(
-        rejected_completion_tokens, rejected_completion_batch
-    );
     if (rejected_completion_cancellation_published) {
         rejected_completion_cancellation.NotifyCancellation(
             rejected_completion_batch
@@ -548,6 +582,9 @@ Array<std::function<void()>> CommandList::DrainOrdinaryCallbacksForRejection() {
         rejected_completion_cancellation.
             NotifyPublishedCancellation();
     }
+    rejected.NotifyPendingGpuCompletions(
+        rejected_completion_batch
+    );
     if (rejected_cancellation_published) {
         rejected_query_cancellation.NotifyCancellation(
             rejected_query_batch
@@ -555,16 +592,89 @@ Array<std::function<void()>> CommandList::DrainOrdinaryCallbacksForRejection() {
     } else {
         rejected_query_cancellation.NotifyPublishedCancellation();
     }
-    QueryBackendAccess::NotifyTerminals(
-        rejected_query_tokens, rejected_query_batch
-    );
+    rejected.NotifyPendingQueries(rejected_query_batch);
+
+    Array<std::function<void()>> cleanup_callbacks =
+        std::move(rejected.callbacks);
+    rejected.success_callbacks.clear();
     return cleanup_callbacks;
+}
+
+CmdSubmit CommandList::PrepareRecordingRejectionDrain() {
+    if (managed_recording_lease_count != 0) {
+        throw std::logic_error(
+            "CommandList rejection draining is forbidden while graph-managed recording is active"
+        );
+    }
+    return PrepareRecordingRejectionDrain(
+        RecordingRejectionPreparation{}
+    );
+}
+
+CmdSubmit CommandList::PrepareRecordingRejectionDrain(
+    RecordingRejectionPreparation&& _preparation
+) noexcept {
+    // Batch owners verify this for every sibling before entering the
+    // allocation-free commit phase.
+    assert(managed_recording_lease_count == 0);
+    ++seal_generation;
+    CmdSubmit rejected(
+        std::move(commands),
+        std::move(callbacks),
+        std::move(success_callbacks),
+        std::move(cached_args)
+    );
+    rejected.gpu_completion_tokens =
+        std::move(gpu_completion_tokens);
+    rejected.query_tokens = std::move(query_tokens);
+    rejected.signal_events = std::move(signal_events);
+    rejected.signal_rejection_keepalives =
+        std::move(signal_rejection_keepalives);
+    rejected.translate_execution_class =
+        translate_execution_class;
+    rejected.resource_state_ownership =
+        resource_state_ownership;
+
+    // These containers can also own shared state or strings whose final
+    // release may execute arbitrary destructors. Move them away before the
+    // live object installs its replacement generation; their local lifetime
+    // ends only after that installation is complete.
+    Array<QueryToken> rejected_active_queries =
+        std::move(active_query_stack);
+
+    // Every potentially re-entrant owner now lives in rejected or a passive
+    // local. Mutating the moved-from containers below cannot destroy old
+    // payload.
+    commands.clear();
+    callbacks.clear();
+    success_callbacks.clear();
+    gpu_completion_tokens.clear();
+    query_tokens.clear();
+    active_query_stack.clear();
+    gpu_completion_cancellation_domain =
+        std::move(_preparation.completion_domain);
+    query_cancellation_domain =
+        std::move(_preparation.query_domain);
+    signal_events.clear();
+    signal_rejection_keepalives.clear();
+    cached_args.clear();
+    current_barriers = nullptr;
+    while (!scope_stack.empty()) {
+        scope_stack.pop();
+    }
+    timestamp_scope_names.clear();
+    translate_execution_class =
+        ERHITranslateExecutionClass::Parallel;
+    resource_state_ownership =
+        ERHIResourceStateOwnership::BackendTracked;
+    (void)rejected_active_queries;
+    return rejected;
 }
 
 bool CommandList::IsEmpty() const {
     return commands.empty() && callbacks.empty() &&
            success_callbacks.empty() && gpu_completion_tokens.empty() &&
-           signal_events.empty() &&
+           signal_events.empty() && signal_rejection_keepalives.empty() &&
            cached_args.empty() && query_tokens.empty() &&
            active_query_stack.empty();
 }
@@ -1183,13 +1293,13 @@ void CommandList::RejectPendingGpuCompletions(
 }
 
 void CommandList::RejectPendingSignals() noexcept {
-    for (const SignalEvent& signal : signal_events) {
-        auto* fence = reinterpret_cast<Fence*>(signal.timeline_handle);
-        if (fence != nullptr) {
-            fence->Reject(signal.value);
-        }
-    }
+    Array<SignalEvent> rejected_signals = std::move(signal_events);
+    Array<FenceRef> rejected_signal_keepalives =
+        std::move(signal_rejection_keepalives);
     signal_events.clear();
+    signal_rejection_keepalives.clear();
+    RejectDetachedSignalsNoexcept(rejected_signals);
+    (void)rejected_signal_keepalives;
 }
 
 void CommandList::Signal(Fence* _fence, uint64 _signal_value) {
@@ -1214,7 +1324,11 @@ void CommandList::Signal(const FenceRef& _fence, uint64 _signal_value) {
     std::function<void()> keepalive = [fence = _fence] {};
     callbacks.reserve(callbacks.size() + 1);
     signal_events.reserve(signal_events.size() + 1);
+    signal_rejection_keepalives.reserve(
+        signal_rejection_keepalives.size() + 1
+    );
     callbacks.emplace_back(std::move(keepalive));
+    signal_rejection_keepalives.emplace_back(_fence);
     signal_events.emplace_back(uint64(_fence.Get()), _signal_value);
 }
 

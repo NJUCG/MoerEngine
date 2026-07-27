@@ -407,6 +407,20 @@ struct VulkanOriginalSourceMaterialization {
     std::shared_ptr<VulkanMultiSegmentCompletionState> completion{};
 };
 
+class VulkanMaterializationProbeCommand final : public Command {
+public:
+    explicit VulkanMaterializationProbeCommand(EQueueType _queue) :
+        Command(EType::Custom, "VulkanMaterializationProbe"),
+        queue(_queue) {}
+
+    EQueueType GetQueueType() const override {
+        return queue;
+    }
+
+private:
+    EQueueType queue{EQueueType::Graphics};
+};
+
 CmdSubmit MakeEmptySubmit() {
     return CmdSubmit(
         Array<UniquePtr<Command>>{},
@@ -679,6 +693,11 @@ MaterializeMultiSegmentBatch(RHIBackendSubmissionBatch& _batch, const RHIQueueTo
                          source_submit.signal_events.size() :
                          0)
             );
+            segment_submit.signal_rejection_keepalives.reserve(
+                1 + (segment_plan.inherit_source_signal_events_and_callbacks ?
+                         source_submit.signal_rejection_keepalives.size() :
+                         0)
+            );
             segment_submit.wait_events.reserve(
                 (segment_plan.inherit_source_wait_events ? source_submit.wait_events.size() : 0) + 1
             );
@@ -707,6 +726,9 @@ MaterializeMultiSegmentBatch(RHIBackendSubmissionBatch& _batch, const RHIQueueTo
                 .timeline_handle = uint64(segment_outcome.Get()),
                 .value           = 1,
             });
+            segment_submit.signal_rejection_keepalives.emplace_back(
+                segment_outcome
+            );
             segment_submit.callbacks.emplace_back([completion = materialization.completion, segment_index] {
                 completion->RetireOrdinary(segment_index);
             });
@@ -826,10 +848,17 @@ MaterializeMultiSegmentBatch(RHIBackendSubmissionBatch& _batch, const RHIQueueTo
         for (const SignalEvent& signal : source_entry.submit.signal_events) {
             last_submit.signal_events.emplace_back(signal);
         }
+        for (FenceRef& keepalive :
+             source_entry.submit.signal_rejection_keepalives) {
+            last_submit.signal_rejection_keepalives.emplace_back(
+                std::move(keepalive)
+            );
+        }
         // Signal ownership has moved to the last executable segment. Leaving
         // the original handles live would make CmdSubmit::~CmdSubmit reject
         // values that have already been accepted by the native queue.
         source_entry.submit.signal_events.clear();
+        source_entry.submit.signal_rejection_keepalives.clear();
     }
 
     _batch.submits  = std::move(executable_sources);
@@ -908,6 +937,109 @@ VulkanMultiSegmentCompletionProbeResult RunVulkanMultiSegmentCompletionProbeForT
     result.repeated_retirement_suppressed = ordinary_callback_count == 1 && success_callback_count == 0;
     result.ordinary_callback_count        = ordinary_callback_count;
     result.success_callback_count         = success_callback_count;
+
+    CmdSubmit source_submit = MakeEmptySubmit();
+    source_submit.cmds.emplace_back(
+        MakeUnique<VulkanMaterializationProbeCommand>(
+            EQueueType::Graphics
+        )
+    );
+    source_submit.cmds.emplace_back(
+        MakeUnique<VulkanMaterializationProbeCommand>(
+            EQueueType::Compute
+        )
+    );
+    source_submit.segments = {
+        RHISubmitSegment{EQueueType::Graphics, 0, 1},
+        RHISubmitSegment{EQueueType::Compute, 1, 2},
+    };
+    source_submit.resource_state_ownership =
+        ERHIResourceStateOwnership::Explicit;
+    source_submit.async_queue_scope = 0x50483139414B4545ull;
+
+    FenceRef source_signal = RenderDevice::Get().CreateFence();
+    if (!source_signal.IsValid()) {
+        throw std::runtime_error(
+            "multi-segment materialization probe failed to create source fence"
+        );
+    }
+    auto* source_fence = ResourceCast(source_signal.Get());
+    source_submit.signal_events.emplace_back(SignalEvent{
+        .timeline_handle = uint64(source_signal.Get()),
+        .value           = 7,
+    });
+    source_submit.signal_rejection_keepalives.emplace_back(
+        source_signal
+    );
+
+    RHIBackendSubmissionBatch batch{};
+    batch.sequence = 0x504831394D41544Cull;
+    const RHISourceSubmitDescription description{
+        .root_queue      = EQueueType::Graphics,
+        .command_count   = source_submit.cmds.size(),
+        .segments        = source_submit.segments,
+        .execution_class = source_submit.translate_execution_class,
+        .has_side_effects = true,
+    };
+    batch.topology = BuildRHISubmissionTopology(
+        std::span<const RHISourceSubmitDescription>(
+            &description, 1
+        ),
+        batch.sequence
+    );
+    if (!batch.topology.IsValid()) {
+        throw std::runtime_error(
+            "multi-segment materialization probe built an invalid topology"
+        );
+    }
+    batch.submits.emplace_back(
+        EQueueType::Graphics, std::move(source_submit)
+    );
+
+    const VulkanSegmentMaterializationResult materialization =
+        MaterializeMultiSegmentBatch(
+            batch, RenderDevice::Get().GetQueueTopology()
+        );
+    if (!materialization.changed || batch.submits.size() != 2) {
+        throw std::runtime_error(
+            "multi-segment materialization probe did not split its source"
+        );
+    }
+
+    const CmdSubmit& prefix_submit = batch.submits[0].submit;
+    const CmdSubmit& suffix_submit = batch.submits[1].submit;
+    result.materialized_prefix_signal_count =
+        static_cast<uint32>(prefix_submit.signal_events.size());
+    result.materialized_prefix_keepalive_count =
+        static_cast<uint32>(
+            prefix_submit.signal_rejection_keepalives.size()
+        );
+    result.materialized_suffix_signal_count =
+        static_cast<uint32>(suffix_submit.signal_events.size());
+    result.materialized_suffix_keepalive_count =
+        static_cast<uint32>(
+            suffix_submit.signal_rejection_keepalives.size()
+        );
+    result.materialized_signal_identity_matches =
+        prefix_submit.signal_events.size() == 1 &&
+        prefix_submit.signal_rejection_keepalives.size() == 1 &&
+        prefix_submit.signal_events.front().timeline_handle ==
+            uint64(
+                prefix_submit.signal_rejection_keepalives.front().Get()
+            ) &&
+        suffix_submit.signal_events.size() == 2 &&
+        suffix_submit.signal_rejection_keepalives.size() == 2 &&
+        suffix_submit.signal_events.front().timeline_handle ==
+            uint64(
+                suffix_submit.signal_rejection_keepalives.front().Get()
+            ) &&
+        suffix_submit.signal_events.back().timeline_handle ==
+            uint64(source_signal.Get()) &&
+        suffix_submit.signal_rejection_keepalives.back().Get() ==
+            source_signal.Get();
+    result.source_signal_remained_unrejected =
+        source_fence != nullptr && !source_fence->IsRejected(7) &&
+        !source_fence->IsFailed();
     return result;
 }
 
@@ -1253,21 +1385,56 @@ void VulkanSubmissionExecutor::BatchRejectionPublication::PublishSuffix(
     bool             _recoverable,
     std::string_view _reason
 ) noexcept {
-    std::lock_guard lock(mutex);
     const size_t begin = std::min(_reject_from, sources.size());
     const VkResult result =
         _result == static_cast<int32>(VK_SUCCESS) ?
             VK_ERROR_UNKNOWN :
             static_cast<VkResult>(_result);
 
-    // Every signal in the suffix is terminal before any Query state is
-    // published. User Query callbacks remain deferred to their queue
-    // Completion packets, but Wait/Get can already observe the whole suffix.
+    const std::string_view reason =
+        _reason.empty() ?
+            "Vulkan submission suffix was rejected before GPU completion" :
+            _reason;
+
+    uint64 publication_epoch = 0;
+    std::lock_guard lock(mutex);
+    publication_epoch = next_publication_epoch++;
+    if (publication_epoch == 0) {
+        publication_epoch = next_publication_epoch++;
+    }
     for (size_t source_index = begin;
          source_index < sources.size();
          ++source_index) {
         RejectionSourceSnapshot& source = sources[source_index];
         if (source.terminalized) {
+            continue;
+        }
+        if (source.gpu_completion_batch.Valid()) {
+            GpuCompletionBackendAccess::PublishErrorsIfPending(
+                source.gpu_completion_tokens,
+                reason,
+                source.gpu_completion_batch
+            );
+        }
+        if (source.query_batch.Valid()) {
+            QueryBackendAccess::PublishErrorsIfPending(
+                source.query_tokens, reason, source.query_batch
+            );
+        }
+        source.publication_epoch = publication_epoch;
+        source.terminalized      = true;
+    }
+
+    // All matching host observations are terminal before external Fence code.
+    // Fence::Reject/Fail may synchronously re-enter this publication object;
+    // the recursive mutex lets that call observe the already-claimed sources
+    // while keeping concurrent publishers behind the complete signal phase.
+    // The epoch prevents the nested call from replaying any Fence operation.
+    for (size_t source_index = begin;
+         source_index < sources.size();
+         ++source_index) {
+        RejectionSourceSnapshot& source = sources[source_index];
+        if (source.publication_epoch != publication_epoch) {
             continue;
         }
         for (const RejectionSignalHandle& signal : source.signals) {
@@ -1289,44 +1456,6 @@ void VulkanSubmissionExecutor::BatchRejectionPublication::PublishSuffix(
                 fence->Reject(signal.value);
             }
         }
-    }
-
-    const std::string_view reason =
-        _reason.empty() ?
-            "Vulkan submission suffix was rejected before GPU completion" :
-            _reason;
-    for (size_t source_index = begin;
-         source_index < sources.size();
-         ++source_index) {
-        RejectionSourceSnapshot& source = sources[source_index];
-        if (source.terminalized) {
-            continue;
-        }
-        if (source.gpu_completion_batch.Valid()) {
-            GpuCompletionBackendAccess::PublishErrorsIfPending(
-                source.gpu_completion_tokens,
-                reason,
-                source.gpu_completion_batch
-            );
-        }
-    }
-    for (size_t source_index = begin;
-         source_index < sources.size();
-         ++source_index) {
-        RejectionSourceSnapshot& source = sources[source_index];
-        if (source.terminalized) {
-            continue;
-        }
-        if (source.query_batch.Valid()) {
-            QueryBackendAccess::PublishErrorsIfPending(
-                source.query_tokens, reason, source.query_batch
-            );
-        }
-    }
-    for (size_t source_index = begin;
-         source_index < sources.size();
-         ++source_index) {
-        sources[source_index].terminalized = true;
     }
 }
 
@@ -2387,34 +2516,6 @@ void VulkanSubmissionExecutor::RejectBatch(
             VK_ERROR_UNKNOWN :
             static_cast<VkResult>(_result);
 
-    // Terminal publication is atomic at the runtime-batch frontier: every
-    // signal and Query reaches its final classification before the first
-    // per-queue Completion packet can release callbacks.
-    for (size_t source_index = first_source;
-         source_index < _batch.submits.size();
-         ++source_index) {
-        CmdSubmit& submit = _batch.submits[source_index].submit;
-        if (_recoverable) {
-            submit.RejectPendingSignals();
-            continue;
-        }
-        for (const SignalEvent& signal : submit.signal_events) {
-            auto* fence =
-                reinterpret_cast<VulkanFence*>(signal.timeline_handle);
-            if (fence == nullptr) {
-                continue;
-            }
-            try {
-                fence->Fail(result);
-            } catch (...) {
-                fence->Reject(signal.value);
-            }
-        }
-        // Queue rejection must not add an exact-value rejection after a hard
-        // failure has already been published for the whole fence.
-        submit.signal_events.clear();
-    }
-
     const GpuCompletionPublishBatch completion_batch =
         GpuCompletionBackendAccess::BeginPublishBatch();
     for (size_t source_index = first_source;
@@ -2447,8 +2548,40 @@ void VulkanSubmissionExecutor::RejectBatch(
         submit.PublishPendingQueryErrors(_reason, source_query_batch);
     }
 
+    // Terminal publication is atomic at the runtime-batch frontier. Publish
+    // every host-visible state first so synchronous Fence rejection observers
+    // cannot block before their matching Future/Query becomes terminal.
+    for (size_t source_index = first_source;
+         source_index < _batch.submits.size();
+         ++source_index) {
+        CmdSubmit& submit = _batch.submits[source_index].submit;
+        if (_recoverable) {
+            submit.RejectPendingSignals();
+            continue;
+        }
+        Array<SignalEvent> rejected_signals =
+            std::move(submit.signal_events);
+        Array<FenceRef> rejected_signal_keepalives =
+            std::move(submit.signal_rejection_keepalives);
+        submit.signal_events.clear();
+        submit.signal_rejection_keepalives.clear();
+        for (const SignalEvent& signal : rejected_signals) {
+            auto* fence =
+                reinterpret_cast<VulkanFence*>(signal.timeline_handle);
+            if (fence == nullptr) {
+                continue;
+            }
+            try {
+                fence->Fail(result);
+            } catch (...) {
+                fence->Reject(signal.value);
+            }
+        }
+        (void)rejected_signal_keepalives;
+    }
+
     // A Present receipt is also user-visible batch state. Resolve it only
-    // after every submit signal and Query in the rejected suffix is terminal,
+    // after every host state and signal in the rejected suffix is terminal,
     // so a receipt waiter cannot observe a partially published batch.
     ResolveRejectedPresent(_batch.present);
 

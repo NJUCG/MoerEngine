@@ -294,6 +294,10 @@ struct CmdSubmit {
 
     Array<WaitEvent>   wait_events;
     Array<SignalEvent> signal_events;
+    // SignalEvent is backend-facing raw identity. CommandList::Signal(FenceRef)
+    // mirrors its strong owners here so rejection can detach the complete
+    // lifetime set before Fence::Reject executes re-entrant user code.
+    Array<FenceRef>    signal_rejection_keepalives;
     bool               b_sync{false}; //force sync queue timeline
     // Kept as a compatibility bit for code which treats profiling as a submit
     // capability.  profiling_phase is authoritative for split frames.
@@ -404,6 +408,8 @@ struct CmdSubmit {
         query_publish_batch = _other.query_publish_batch;
         wait_events        = std::move(_other.wait_events);
         signal_events      = std::move(_other.signal_events);
+        signal_rejection_keepalives =
+            std::move(_other.signal_rejection_keepalives);
         cached_args        = std::move(_other.cached_args);
         segments           = std::move(_other.segments);
         b_sync             = _other.b_sync;
@@ -420,34 +426,42 @@ struct CmdSubmit {
         _other.query_tokens.clear();
         _other.query_publish_batch = {};
         _other.signal_events.clear();
+        _other.signal_rejection_keepalives.clear();
     }
 
     CmdSubmit& operator=(CmdSubmit&& _other) noexcept {
         if (this == &_other) {
             return *this;
         }
-        RejectPendingSignals();
-        Array<GpuCompletionToken> replaced_completion_tokens =
+        CmdSubmit replaced(
+            std::move(cmds),
+            std::move(callbacks),
+            std::move(success_callbacks),
+            std::move(cached_args)
+        );
+        replaced.gpu_completion_tokens =
             std::move(gpu_completion_tokens);
-        const GpuCompletionPublishBatch replaced_completion_batch =
-            gpu_completion_publish_batch.Valid() ?
-                gpu_completion_publish_batch :
-                GpuCompletionBackendAccess::BeginPublishBatch();
-        GpuCompletionBackendAccess::PublishErrorsIfPending(
-            replaced_completion_tokens,
-            "GPU completion submit was replaced before completion",
-            replaced_completion_batch
-        );
-        Array<QueryToken> replaced_query_tokens = std::move(query_tokens);
-        const QueryPublishBatch replaced_query_batch =
-            query_publish_batch.Valid() ?
-                query_publish_batch :
-                QueryBackendAccess::BeginPublishBatch();
-        QueryBackendAccess::PublishErrorsIfPending(
-            replaced_query_tokens,
-            "query submit was replaced before completion",
-            replaced_query_batch
-        );
+        replaced.gpu_completion_publish_batch =
+            gpu_completion_publish_batch;
+        replaced.query_tokens = std::move(query_tokens);
+        replaced.query_publish_batch = query_publish_batch;
+        replaced.segments = std::move(segments);
+        replaced.wait_events = std::move(wait_events);
+        replaced.signal_events = std::move(signal_events);
+        replaced.signal_rejection_keepalives =
+            std::move(signal_rejection_keepalives);
+        replaced.b_sync = b_sync;
+        replaced.b_tick_profiling = b_tick_profiling;
+        replaced.profiling_phase = profiling_phase;
+        replaced.b_delete_resources = b_delete_resources;
+        replaced.resource_state_ownership =
+            resource_state_ownership;
+        replaced.translate_execution_class =
+            translate_execution_class;
+        replaced.async_queue_scope = async_queue_scope;
+        replaced.debug_label = std::move(debug_label);
+        replaced.debug_label_color = debug_label_color;
+
         cmds               = std::move(_other.cmds);
         callbacks          = std::move(_other.callbacks);
         success_callbacks  = std::move(_other.success_callbacks);
@@ -460,6 +474,8 @@ struct CmdSubmit {
         query_publish_batch = _other.query_publish_batch;
         wait_events        = std::move(_other.wait_events);
         signal_events      = std::move(_other.signal_events);
+        signal_rejection_keepalives =
+            std::move(_other.signal_rejection_keepalives);
         cached_args        = std::move(_other.cached_args);
         segments           = std::move(_other.segments);
         b_sync             = _other.b_sync;
@@ -476,48 +492,138 @@ struct CmdSubmit {
         _other.query_tokens.clear();
         _other.query_publish_batch = {};
         _other.signal_events.clear();
+        _other.signal_rejection_keepalives.clear();
+        _other.cmds.clear();
+        _other.callbacks.clear();
+        _other.success_callbacks.clear();
+        _other.cached_args.clear();
+        _other.segments.clear();
+        _other.wait_events.clear();
+        _other.debug_label.clear();
 
-        // The replacement is fully installed before user Query callbacks can
-        // re-enter this object. No outer write may overwrite re-entrant state.
-        GpuCompletionBackendAccess::NotifyTerminals(
-            replaced_completion_tokens, replaced_completion_batch
+        // The replacement is fully installed before any Fence rejection,
+        // waiter wake-up, or callback can re-enter this object.
+        const GpuCompletionPublishBatch replaced_completion_batch =
+            replaced.gpu_completion_publish_batch.Valid() ?
+                replaced.gpu_completion_publish_batch :
+                GpuCompletionBackendAccess::BeginPublishBatch();
+        replaced.PublishPendingGpuCompletionErrors(
+            "GPU completion submit was replaced before completion",
+            replaced_completion_batch
         );
-        QueryBackendAccess::NotifyTerminals(
-            replaced_query_tokens, replaced_query_batch
+        const QueryPublishBatch replaced_query_batch =
+            replaced.query_publish_batch.Valid() ?
+                replaced.query_publish_batch :
+                QueryBackendAccess::BeginPublishBatch();
+        replaced.PublishPendingQueryErrors(
+            "query submit was replaced before completion",
+            replaced_query_batch
         );
+        // Publication wakes Wait/Get but does not release callbacks. Publish
+        // first so a synchronous Fence::Reject hook can safely wait on either
+        // host observation; reject every signal before callback notification.
+        replaced.RejectPendingSignals();
+        replaced.NotifyPendingGpuCompletions(
+            replaced_completion_batch
+        );
+        replaced.NotifyPendingQueries(replaced_query_batch);
         return *this;
     }
 
     ~CmdSubmit() {
-        RejectPendingSignals();
+        Array<UniquePtr<Command>> rejected_cmds =
+            std::move(cmds);
+        Array<std::function<void(void)>> rejected_callbacks =
+            std::move(callbacks);
+        Array<std::function<void(void)>> rejected_success_callbacks =
+            std::move(success_callbacks);
+        Array<GpuCompletionToken> rejected_completion_tokens =
+            std::move(gpu_completion_tokens);
         const GpuCompletionPublishBatch completion_batch =
             gpu_completion_publish_batch.Valid() ?
                 gpu_completion_publish_batch :
                 GpuCompletionBackendAccess::BeginPublishBatch();
+        Array<QueryToken> rejected_query_tokens =
+            std::move(query_tokens);
         const QueryPublishBatch query_batch =
             query_publish_batch.Valid() ?
                 query_publish_batch :
                 QueryBackendAccess::BeginPublishBatch();
-        PublishPendingGpuCompletionErrors(
+        TCachedArgArray rejected_cached_args =
+            std::move(cached_args);
+        Array<RHISubmitSegment> rejected_segments =
+            std::move(segments);
+        Array<WaitEvent> rejected_wait_events =
+            std::move(wait_events);
+        Array<SignalEvent> rejected_signals =
+            std::move(signal_events);
+        Array<FenceRef> rejected_signal_keepalives =
+            std::move(signal_rejection_keepalives);
+        std::string rejected_debug_label =
+            std::move(debug_label);
+
+        // A synchronous Fence/Future observer may re-enter while this
+        // destructor is still active. Detach every rejected payload first so
+        // it cannot be extracted or revisited.
+        gpu_completion_publish_batch = {};
+        query_publish_batch = {};
+        b_sync = false;
+        b_tick_profiling = false;
+        profiling_phase = ERHIProfilingPhase::Disabled;
+        b_delete_resources = false;
+        resource_state_ownership =
+            ERHIResourceStateOwnership::BackendTracked;
+        translate_execution_class =
+            ERHITranslateExecutionClass::Parallel;
+        async_queue_scope = 0;
+
+        GpuCompletionBackendAccess::PublishErrorsIfPending(
+            rejected_completion_tokens,
             "GPU completion submit was destroyed before completion",
             completion_batch
         );
-        PublishPendingQueryErrors(
+        QueryBackendAccess::PublishErrorsIfPending(
+            rejected_query_tokens,
             "query submit was destroyed before completion",
             query_batch
         );
-        NotifyPendingGpuCompletions(completion_batch);
-        NotifyPendingQueries(query_batch);
+        for (const SignalEvent& signal : rejected_signals) {
+            auto* fence =
+                reinterpret_cast<Fence*>(signal.timeline_handle);
+            if (fence != nullptr) {
+                fence->Reject(signal.value);
+            }
+        }
+        GpuCompletionBackendAccess::NotifyTerminals(
+            rejected_completion_tokens, completion_batch
+        );
+        QueryBackendAccess::NotifyTerminals(
+            rejected_query_tokens, query_batch
+        );
+        (void)rejected_cmds;
+        (void)rejected_callbacks;
+        (void)rejected_success_callbacks;
+        (void)rejected_cached_args;
+        (void)rejected_segments;
+        (void)rejected_wait_events;
+        (void)rejected_signal_keepalives;
+        (void)rejected_debug_label;
     }
 
     void RejectPendingSignals() noexcept {
-        for (const SignalEvent& signal : signal_events) {
+        Array<SignalEvent> rejected_signals =
+            std::move(signal_events);
+        Array<FenceRef> rejected_signal_keepalives =
+            std::move(signal_rejection_keepalives);
+        signal_events.clear();
+        signal_rejection_keepalives.clear();
+        for (const SignalEvent& signal : rejected_signals) {
             auto* fence = reinterpret_cast<Fence*>(signal.timeline_handle);
             if (fence != nullptr) {
                 fence->Reject(signal.value);
             }
         }
-        signal_events.clear();
+        (void)rejected_signal_keepalives;
     }
 
     void PublishPendingGpuCompletionOutcome(
@@ -873,6 +979,14 @@ public:
             command_list(&_command_list) {}
 
         CommandList* command_list{nullptr};
+    };
+
+    // Allocation-only first half of a rejection transaction. Batch owners
+    // construct one for every sibling before mutating any CommandList, so an
+    // allocation failure leaves the complete transaction untouched.
+    struct RecordingRejectionPreparation {
+        GpuCompletionCancellationDomain completion_domain{};
+        QueryCancellationDomain         query_domain{};
     };
 
     CommandList(const CommandList&)            = delete;
@@ -1769,11 +1883,26 @@ public:
     // cleanup. Unlike Submit(), this never creates a GPU-submittable payload.
     RENDER_API Array<std::function<void()>> DrainOrdinaryCallbacksForRejection();
 
+    // Transaction-wide rejection first phase. It detaches signals and cleanup
+    // callbacks, destroys the rejected GPU payload, and installs a fresh
+    // generation without running externally re-entrant code. RHIExecutor
+    // publishes and notifies only after every sibling crosses this boundary.
+    [[nodiscard]] RENDER_API CmdSubmit
+    PrepareRecordingRejectionDrain();
+    [[nodiscard]] RENDER_API CmdSubmit
+    PrepareRecordingRejectionDrain(
+        RecordingRejectionPreparation&& _preparation
+    ) noexcept;
+
     RENDER_API CmdSubmit Submit();
 
     // CommandList must remain at a stable address for the lifetime of the
     // returned lease.
     RENDER_API ManagedRecordingLease AcquireManagedRecordingLease();
+
+    [[nodiscard]] bool HasManagedRecordingLease() const noexcept {
+        return managed_recording_lease_count != 0;
+    }
 
     RENDER_API bool IsEmpty() const;
 
@@ -1824,6 +1953,7 @@ private:
     friend DrawDispatcher;
     friend ComputeDispatcher;
     friend class CommandQueue;
+
     RENDER_API void SetRenderCmds(
         PipelineHandle&  _handle,
         ArrayArguments&& _args,
@@ -1914,6 +2044,7 @@ private:
     Array<QueryToken>             active_query_stack;
     QueryCancellationDomain       query_cancellation_domain;
     Array<SignalEvent>            signal_events;
+    Array<FenceRef>               signal_rejection_keepalives;
     TCachedArgArray              cached_args;
     EQueueType                   queue_type{EQueueType::Graphics};
     ERHITranslateExecutionClass  translate_execution_class{

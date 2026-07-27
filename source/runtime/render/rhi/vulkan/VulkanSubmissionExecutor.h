@@ -93,6 +93,7 @@ private:
         QueryPublishBatch            query_batch{};
         VulkanBatchCompletionTicket  completion_ticket{};
         bool                         terminalized{false};
+        uint64                       publication_epoch{0};
     };
 
     // Immutable, strongly-owned terminal handles captured before any source
@@ -115,7 +116,8 @@ private:
         ) const noexcept;
 
         Array<RejectionSourceSnapshot> sources{};
-        std::mutex                     mutex{};
+        std::recursive_mutex           mutex{};
+        uint64                         next_publication_epoch{1};
     };
 
     struct RuntimePreCompletionPublication {

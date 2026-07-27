@@ -4394,12 +4394,19 @@ void RunMultiSegmentCompletionAggregateCpuProbe() {
     const VulkanMultiSegmentCompletionProbeResult result = RunVulkanMultiSegmentCompletionProbeForTesting();
     if (!result.suffix_retirement_deferred_callbacks || !result.prefix_retirement_completed_callbacks ||
         !result.repeated_retirement_suppressed || result.ordinary_callback_count != 1 ||
-        result.success_callback_count != 0) {
+        result.success_callback_count != 0 ||
+        result.materialized_prefix_signal_count != 1 ||
+        result.materialized_prefix_keepalive_count != 1 ||
+        result.materialized_suffix_signal_count != 2 ||
+        result.materialized_suffix_keepalive_count != 2 ||
+        !result.materialized_signal_identity_matches ||
+        !result.source_signal_remained_unrejected) {
         throw std::runtime_error("multi-segment completion aggregate CPU probe violated callback ordering");
     }
 
     LOG_INFO("[TESTCASE][PASS] name=MultiSegmentCompletionAggregateCpuProbe "
-             "suffix_first=deferred prefix_second=ordinary1_success0 replay=0");
+             "suffix_first=deferred prefix_second=ordinary1_success0 "
+             "signals=1,2 keepalives=1,2 identities=owned replay=0");
 }
 
 void RunMultiSegmentSourceExecution() {
@@ -5547,6 +5554,14 @@ void RunRaytracingExportAcceptanceRejection() {
         CmdSubmit attempt1_source_submit = attempt1_source.Submit();
         attempt1_source_submit.Wait(rejected_prefix_dependency.Get(), 1);
         attempt1_submission.AttachSignal(attempt1_source_submit);
+        if (attempt1_source_submit.signal_rejection_keepalives.size() != 1 ||
+            attempt1_source_submit.signal_rejection_keepalives.front().Get() !=
+                attempt1_submission.GetReceiptFence()) {
+            throw std::runtime_error(
+                "raytracing export receipt signal did not install an "
+                "explicit rejection keepalive"
+            );
+        }
         RHIExecutor::Get().Submit(
             EQueueType::Graphics,
             std::move(attempt1_source_submit),

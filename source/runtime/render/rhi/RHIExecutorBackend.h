@@ -4,6 +4,7 @@
 #include "taskgraph/GraphTask.h"
 
 #include <optional>
+#include <utility>
 
 namespace Moer::Render {
 
@@ -36,6 +37,31 @@ struct RHIPresentRequest {
     PresentReceiptRef receipt{};
 
     RHIPresentRequest() = default;
+    RHIPresentRequest(const RHIPresentRequest&) = default;
+    RHIPresentRequest& operator=(
+        const RHIPresentRequest&
+    ) = default;
+
+    RHIPresentRequest(RHIPresentRequest&& _other) noexcept :
+        source(_other.source) {
+        swapchain.Swap(_other.swapchain);
+        source_texture.Swap(_other.source_texture);
+        receipt.swap(_other.receipt);
+        _other.source = {};
+    }
+
+    RHIPresentRequest& operator=(
+        RHIPresentRequest&& _other
+    ) noexcept {
+        if (this == &_other) {
+            return *this;
+        }
+        swapchain.Swap(_other.swapchain);
+        source_texture.Swap(_other.source_texture);
+        receipt.swap(_other.receipt);
+        std::swap(source, _other.source);
+        return *this;
+    }
 
     RHIPresentRequest(
         SwapchainRef      _swapchain,

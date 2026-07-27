@@ -21,6 +21,9 @@ struct RHIRecordingSubmitMetadata {
     float4                                     debug_label_color{GpuMarkerPalette::Pass()};
     std::optional<ERHIProfilingPhase>          profiling_phase{};
     std::optional<ERHITranslateExecutionClass> translate_execution_class{};
+    // Shutdown leaves this metadata untouched while either the producer or
+    // optional commit gate is Pending. Those fences remain with the opaque
+    // graph owner until the complete ownership boundary becomes terminal.
     Array<RHIRecordingFencePoint>              wait_fences{};
     Array<RHIRecordingFencePoint>              signal_fences{};
     /**
@@ -48,10 +51,38 @@ struct RHIRecordingSource {
     // Stable, thread-safe cancellation seam for the CommandList generation
     // being recorded. Shutdown may cancel pending host futures through these
     // views without reading or destroying a producer-owned command stream.
+    // Publishing Error only bounds host waiters: it neither completes the
+    // completion/commit gates nor transfers CommandList ownership. An opaque
+    // producer must still stop mutation and Signal()/Fail() its gate.
     GpuCompletionCancellationView
                                 gpu_completion_cancellation{};
     QueryCancellationView        query_cancellation{};
 };
+
+using RHIDirectCommandListMaterializationCallbackForTesting =
+    void (*)(void*, size_t);
+
+struct RHIDirectCommandListMaterializationOverrideForTesting {
+    void* context{nullptr};
+    RHIDirectCommandListMaterializationCallbackForTesting
+        before_source{nullptr};
+};
+
+// Narrow deterministic seam for exercising the mixed direct-submit rollback:
+// the callback runs immediately before a non-empty CommandList is sealed. It
+// may throw to emulate CommandList::Submit allocation failure, but must not
+// re-enter RHI or remove its own override. Storage is caller-owned and
+// immutable while installed. Successful removal waits for every callback that
+// already acquired the override, so the caller may then destroy both override
+// and context safely.
+[[nodiscard]] RENDER_API bool
+TryInstallRHIDirectCommandListMaterializationOverrideForTesting(
+    const RHIDirectCommandListMaterializationOverrideForTesting* _override
+) noexcept;
+[[nodiscard]] RENDER_API bool
+RemoveRHIDirectCommandListMaterializationOverrideForTesting(
+    const RHIDirectCommandListMaterializationOverrideForTesting* _override
+) noexcept;
 
 class RENDER_API RHIExecutor {
 public:

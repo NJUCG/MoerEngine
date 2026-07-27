@@ -33,6 +33,10 @@ class GpuCompletionToken;
 // Copyable host observation handle for one logical GPU submission. It does
 // not expose a backend fence: native synchronization remains owned by the
 // Submission/Completion pipeline. Pending transitions to Ready or Error once.
+// A terminal status is an observation result, not a recording-ownership
+// handoff. Opaque shutdown may publish Error while a producer or commit gate
+// is still Pending; only all ownership gates becoming terminal permits its
+// CommandList to be inspected.
 class RENDER_API GpuCompletionFuture {
     struct SharedState;
 
@@ -203,7 +207,9 @@ class CommandList;
 
 // Thread-safe shutdown view for one mutable CommandList generation. Cancel
 // publishes Error immediately so Wait/Get are bounded, while callback release
-// stays deferred until the producer reaches a safe ownership boundary.
+// stays deferred until the producer reaches a safe ownership boundary. It
+// neither completes producer/commit gates nor seals/transfers its CommandList;
+// their owners must still stop mutation and Signal()/Fail() those gates.
 class RENDER_API GpuCompletionCancellationView {
 public:
     GpuCompletionCancellationView() = default;

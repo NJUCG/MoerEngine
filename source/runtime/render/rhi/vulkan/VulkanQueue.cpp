@@ -4945,11 +4945,6 @@ static void TerminalizeRejectedSubmit(
     }
 
     _device.RecordRejectedSubmit();
-    TerminalizeUnsubmittedSignals(
-        _device,
-        _submit.signal_events,
-        VulkanOperationResult{EVulkanOperationStatus::Rejected, _result}
-    );
     FinalizeRejectedBindlessUpdates(_submit);
     const GpuCompletionPublishBatch completion_batch =
         _submit.gpu_completion_publish_batch.Valid() ?
@@ -4963,6 +4958,17 @@ static void TerminalizeRejectedSubmit(
         _context, completion_batch
     );
     _submit.PublishPendingQueryErrors(_context, query_batch);
+    Array<SignalEvent> rejected_signals =
+        std::move(_submit.signal_events);
+    Array<FenceRef> rejected_signal_keepalives =
+        std::move(_submit.signal_rejection_keepalives);
+    _submit.signal_events.clear();
+    _submit.signal_rejection_keepalives.clear();
+    TerminalizeUnsubmittedSignals(
+        _device,
+        rejected_signals,
+        VulkanOperationResult{EVulkanOperationStatus::Rejected, _result}
+    );
     _submit.NotifyPendingGpuCompletions(completion_batch);
     _submit.NotifyPendingQueries(query_batch);
 
@@ -4976,10 +4982,10 @@ static void TerminalizeRejectedSubmit(
     _submit.cached_args.clear();
     _submit.segments.clear();
     _submit.wait_events.clear();
-    _submit.signal_events.clear();
     _submit.debug_label.clear();
 
     InvokeCallbacksNoexcept(callbacks, _context);
+    (void)rejected_signal_keepalives;
 }
 
 VkCommandQueue::VkCommandQueue(
@@ -5458,19 +5464,30 @@ void VkCommandQueue::RejectForRuntime(
     vk_device.RecordRejectedSubmit();
 
     try {
-        TerminalizeUnsubmittedSignals(
-            vk_device,
-            _submit.signal_events,
-            outcome
+        const std::string_view rejection_reason =
+            "Vulkan runtime rejected the submit before GPU completion";
+        const GpuCompletionPublishBatch completion_batch =
+            _submit.gpu_completion_publish_batch.Valid() ?
+                _submit.gpu_completion_publish_batch :
+                GpuCompletionBackendAccess::BeginPublishBatch();
+        _submit.PublishPendingGpuCompletionErrors(
+            rejection_reason, completion_batch
         );
-        // Rejection is now externally observable. Completion must not retain
-        // and dereference the raw fence pointers after a waiter releases its
-        // last FenceRef.
-        _submit.signal_events.clear();
         PublishUnsubmittedQueryErrors(
             _submit,
             nullptr,
-            "Vulkan runtime rejected the submit before GPU completion"
+            rejection_reason
+        );
+        Array<SignalEvent> rejected_signals =
+            std::move(_submit.signal_events);
+        Array<FenceRef> rejected_signal_keepalives =
+            std::move(_submit.signal_rejection_keepalives);
+        _submit.signal_events.clear();
+        _submit.signal_rejection_keepalives.clear();
+        TerminalizeUnsubmittedSignals(
+            vk_device,
+            rejected_signals,
+            outcome
         );
         std::unique_lock<std::mutex> lock(event_mutex);
         const uint64 retirement_serial = retirement_enqueued_serial + 1;
@@ -5512,6 +5529,7 @@ void VkCommandQueue::RejectForRuntime(
             );
         }
         retirement_enqueued_serial = retirement_serial;
+        (void)rejected_signal_keepalives;
     } catch (...) {
         // Continuing would destroy callbacks/signals outside Completion and
         // violate the ownership contract. Allocation failure is therefore
@@ -5879,26 +5897,40 @@ void VkCommandQueue::CommitRuntimeSubmitCompletion(
     assert(!_recorded.completion_committed);
     try {
         if (!_outcome.WasSubmitted()) {
+            _recorded.allocators.abandoned.reserve(
+                _recorded.allocators.abandoned.size() +
+                _recorded.allocators.submitted.size()
+            );
+            const std::string_view rejection_reason =
+                "Vulkan submission was rejected before GPU completion";
+            const GpuCompletionPublishBatch completion_batch =
+                _recorded.submit.gpu_completion_publish_batch.Valid() ?
+                    _recorded.submit.gpu_completion_publish_batch :
+                    GpuCompletionBackendAccess::BeginPublishBatch();
+            _recorded.submit.PublishPendingGpuCompletionErrors(
+                rejection_reason, completion_batch
+            );
+            PublishUnsubmittedQueryErrors(
+                _recorded.submit,
+                &_recorded.allocators,
+                rejection_reason
+            );
             TerminalizeUnsubmittedSignal(
                 vk_device,
                 timeline,
                 _recorded.timeline,
                 _outcome
             );
-            TerminalizeUnsubmittedSignals(
-                vk_device, _recorded.submit.signal_events, _outcome
-            );
-            // Exact signal rejection is published by Submission. Do not
-            // retain raw external fence pointers in the Completion packet.
+            Array<SignalEvent> rejected_signals =
+                std::move(_recorded.submit.signal_events);
+            Array<FenceRef> rejected_signal_keepalives =
+                std::move(
+                    _recorded.submit.signal_rejection_keepalives
+                );
             _recorded.submit.signal_events.clear();
-            PublishUnsubmittedQueryErrors(
-                _recorded.submit,
-                &_recorded.allocators,
-                "Vulkan submission was rejected before GPU completion"
-            );
-            _recorded.allocators.abandoned.reserve(
-                _recorded.allocators.abandoned.size() +
-                _recorded.allocators.submitted.size()
+            _recorded.submit.signal_rejection_keepalives.clear();
+            TerminalizeUnsubmittedSignals(
+                vk_device, rejected_signals, _outcome
             );
             for (auto& allocator : _recorded.allocators.submitted) {
                 _recorded.allocators.abandoned.emplace_back(
@@ -5906,6 +5938,7 @@ void VkCommandQueue::CommitRuntimeSubmitCompletion(
                 );
             }
             _recorded.allocators.submitted.clear();
+            (void)rejected_signal_keepalives;
         }
 
         std::unique_lock<std::mutex> lock(event_mutex);
@@ -10094,6 +10127,24 @@ void VkCopyQueue::CommitRuntimeSubmitCompletion(
     assert(!_recorded.completion_committed);
     try {
         if (!_outcome.WasSubmitted()) {
+            _recorded.allocators.abandoned.reserve(
+                _recorded.allocators.abandoned.size() +
+                _recorded.allocators.submitted.size()
+            );
+            const std::string_view rejection_reason =
+                "Vulkan Copy submission was rejected before GPU completion";
+            const GpuCompletionPublishBatch completion_batch =
+                _recorded.submit.gpu_completion_publish_batch.Valid() ?
+                    _recorded.submit.gpu_completion_publish_batch :
+                    GpuCompletionBackendAccess::BeginPublishBatch();
+            _recorded.submit.PublishPendingGpuCompletionErrors(
+                rejection_reason, completion_batch
+            );
+            PublishUnsubmittedQueryErrors(
+                _recorded.submit,
+                &_recorded.allocators,
+                rejection_reason
+            );
             if (_recorded.logical_timeline != 0) {
                 TerminalizeUnsubmittedSignal(
                     device,
@@ -10102,20 +10153,16 @@ void VkCopyQueue::CommitRuntimeSubmitCompletion(
                     _outcome
                 );
             }
-            TerminalizeUnsubmittedSignals(
-                device, _recorded.submit.signal_events, _outcome
-            );
-            // Exact signal rejection is published by Submission. Do not
-            // retain raw external fence pointers in the Completion packet.
+            Array<SignalEvent> rejected_signals =
+                std::move(_recorded.submit.signal_events);
+            Array<FenceRef> rejected_signal_keepalives =
+                std::move(
+                    _recorded.submit.signal_rejection_keepalives
+                );
             _recorded.submit.signal_events.clear();
-            PublishUnsubmittedQueryErrors(
-                _recorded.submit,
-                &_recorded.allocators,
-                "Vulkan Copy submission was rejected before GPU completion"
-            );
-            _recorded.allocators.abandoned.reserve(
-                _recorded.allocators.abandoned.size() +
-                _recorded.allocators.submitted.size()
+            _recorded.submit.signal_rejection_keepalives.clear();
+            TerminalizeUnsubmittedSignals(
+                device, rejected_signals, _outcome
             );
             for (auto& allocator : _recorded.allocators.submitted) {
                 _recorded.allocators.abandoned.emplace_back(
@@ -10123,6 +10170,7 @@ void VkCopyQueue::CommitRuntimeSubmitCompletion(
                 );
             }
             _recorded.allocators.submitted.clear();
+            (void)rejected_signal_keepalives;
         }
         std::unique_lock<std::mutex> lock(event_mutex);
         const uint64 retirement_serial = retirement_enqueued_serial + 1;

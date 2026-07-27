@@ -1,15 +1,18 @@
 #include "rhi/RHIExecutor.h"
 #include "rhi/RHIThreadOwnership.h"
+#include "renderer/raytracing/RaytracingExportSubmission.h"
 
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -50,6 +53,28 @@ bool Expect(bool _condition, const char* _message) {
     }
     std::cerr << "RHIExecutorRecordingHandoffContract: " << _message << '\n';
     return false;
+}
+
+bool HasNoRejectedGenerationPayload(const CmdSubmit& _submit) {
+    return _submit.cmds.empty() && _submit.callbacks.empty() &&
+           _submit.success_callbacks.empty() &&
+           _submit.gpu_completion_tokens.empty() &&
+           !_submit.gpu_completion_publish_batch.Valid() &&
+           _submit.query_tokens.empty() &&
+           !_submit.query_publish_batch.Valid() &&
+           _submit.cached_args.empty() &&
+           _submit.segments.empty() && _submit.wait_events.empty() &&
+           _submit.signal_events.empty() &&
+           _submit.signal_rejection_keepalives.empty() &&
+           !_submit.b_sync &&
+           !_submit.b_tick_profiling &&
+           _submit.profiling_phase == ERHIProfilingPhase::Disabled &&
+           !_submit.b_delete_resources &&
+           _submit.resource_state_ownership ==
+               ERHIResourceStateOwnership::BackendTracked &&
+           _submit.translate_execution_class ==
+               ERHITranslateExecutionClass::Parallel &&
+           _submit.async_queue_scope == 0 && _submit.debug_label.empty();
 }
 
 class RecordingFenceProbe final : public Fence {
@@ -114,6 +139,94 @@ private:
     std::atomic<uint64_t> rejected_value{0};
 };
 
+struct DirectMaterializationFaultContext {
+    size_t              fail_source{1};
+    std::atomic<size_t> visited_sources{0};
+};
+
+void InjectDirectMaterializationFailure(
+    void*  _context,
+    size_t _source_index
+) {
+    auto& context =
+        *static_cast<DirectMaterializationFaultContext*>(_context);
+    context.visited_sources.fetch_add(1, std::memory_order_release);
+    if (_source_index == context.fail_source) {
+        throw std::runtime_error(
+            "injected direct CommandList materialization failure"
+        );
+    }
+}
+
+struct BlockingDirectMaterializationContext {
+    std::mutex              mutex{};
+    std::condition_variable cv{};
+    bool                    entered{false};
+    bool                    release{false};
+};
+
+void BlockDirectMaterializationUntilReleased(
+    void*  _context,
+    size_t
+) {
+    auto& context =
+        *static_cast<BlockingDirectMaterializationContext*>(_context);
+    std::unique_lock lock(context.mutex);
+    context.entered = true;
+    context.cv.notify_all();
+    context.cv.wait(lock, [&] { return context.release; });
+    throw std::runtime_error(
+        "injected blocking direct materialization failure"
+    );
+}
+
+class ReentrantDestructorCommand final : public Command {
+public:
+    explicit ReentrantDestructorCommand(
+        std::function<void()> _on_destroy,
+        EQueueType            _queue = EQueueType::Graphics
+    ) :
+        Command(EType::Custom),
+        on_destroy(std::move(_on_destroy)),
+        queue(_queue) {}
+
+    ~ReentrantDestructorCommand() override {
+        if (!on_destroy) {
+            return;
+        }
+        try {
+            on_destroy();
+        } catch (...) {
+        }
+    }
+
+    EQueueType GetQueueType() const override {
+        return queue;
+    }
+
+private:
+    std::function<void()> on_destroy{};
+    EQueueType            queue{EQueueType::Graphics};
+};
+
+struct FinalReleaseHook {
+    std::function<void()> callback{};
+    std::atomic_bool*     threw{nullptr};
+
+    ~FinalReleaseHook() noexcept {
+        if (!callback) {
+            return;
+        }
+        try {
+            callback();
+        } catch (...) {
+            if (threw != nullptr) {
+                threw->store(true, std::memory_order_release);
+            }
+        }
+    }
+};
+
 bool CommandListSignalTracksNativeAcceptanceAndRejection() {
     RecordingFenceProbe accepted{};
     CommandList         accepted_commands(EQueueType::Graphics);
@@ -172,6 +285,7 @@ bool CommandListSignalTracksNativeAcceptanceAndRejection() {
     // destructor cannot revisit an already-retired raw fence pointer.
     owned_submit.signal_events.clear();
     owned_submit.callbacks.clear();
+    owned_submit.signal_rejection_keepalives.clear();
     if (!Expect(
             owned_destroyed->load(std::memory_order_acquire),
             "signal FenceRef survived after its completion callback retired"
@@ -213,6 +327,568 @@ bool CommandListSignalTracksNativeAcceptanceAndRejection() {
         "frontend-rejected signal was reported as natively submitted"
     );
     return okay;
+}
+
+bool CommandListFenceReentryCannotExtractRejectedGeneration() {
+    CommandList command_list(EQueueType::Graphics);
+    std::atomic<int>  signal_callbacks{0};
+    std::atomic<int>  ordinary_callbacks{0};
+    std::atomic<int>  success_callbacks{0};
+    std::atomic<bool> reentrant_submit_threw{false};
+    std::atomic<bool> rejected_payload_escaped{false};
+
+    RecordingFenceProbe signal(
+        {},
+        [&] {
+            signal_callbacks.fetch_add(1, std::memory_order_release);
+            try {
+                CmdSubmit reentrant = command_list.Submit();
+                rejected_payload_escaped.store(
+                    !HasNoRejectedGenerationPayload(reentrant),
+                    std::memory_order_release
+                );
+
+                // Keep the regression bounded even when run against an older
+                // implementation that exposes the rejected signal/callbacks.
+                // Their presence is recorded above; do not let destruction
+                // recursively reject the same raw Fence.
+                reentrant.cmds.clear();
+                reentrant.callbacks.clear();
+                reentrant.success_callbacks.clear();
+                reentrant.gpu_completion_tokens.clear();
+                reentrant.query_tokens.clear();
+                reentrant.cached_args.clear();
+                reentrant.segments.clear();
+                reentrant.wait_events.clear();
+                reentrant.signal_events.clear();
+            } catch (...) {
+                reentrant_submit_threw.store(
+                    true, std::memory_order_release
+                );
+            }
+        }
+    );
+
+    command_list.Signal(&signal, 19);
+    command_list.AddCallback([&] {
+        ordinary_callbacks.fetch_add(1, std::memory_order_release);
+    });
+    command_list.AddSuccessCallback([&] {
+        success_callbacks.fetch_add(1, std::memory_order_release);
+    });
+
+    Moer::Array<std::function<void()>> cleanup =
+        command_list.DrainOrdinaryCallbacksForRejection();
+    for (std::function<void()>& callback : cleanup) {
+        if (callback) {
+            callback();
+        }
+    }
+
+    return Expect(
+               signal_callbacks.load(std::memory_order_acquire) == 1 &&
+                   signal.IsRejected(19),
+               "CommandList rejection did not invoke its Fence observer exactly once"
+           ) &&
+           Expect(
+               !reentrant_submit_threw.load(std::memory_order_acquire),
+               "Fence rejection could not re-enter Submit on the replacement generation"
+           ) &&
+           Expect(
+               !rejected_payload_escaped.load(std::memory_order_acquire),
+               "Fence rejection re-entry extracted the rejected generation"
+           ) &&
+           Expect(
+               ordinary_callbacks.load(std::memory_order_acquire) == 1,
+               "Fence rejection did not return ordinary cleanup exactly once"
+           ) &&
+           Expect(
+               success_callbacks.load(std::memory_order_acquire) == 0,
+               "Fence rejection invoked a success-only callback"
+           ) &&
+           Expect(
+               command_list.IsEmpty(),
+               "Fence rejection left payload in the replacement generation"
+           );
+}
+
+bool FenceRejectionObservesPublishedHostsAndRetainsOwnedSignals() {
+    CommandList wait_list(EQueueType::Graphics);
+    const GpuCompletionFuture completion =
+        wait_list.TrackGpuCompletion("FenceRejectWaitCompletion");
+    QueryToken query =
+        wait_list.BeginTimestampQuery("FenceRejectWaitQuery");
+    wait_list.EndTimestampQuery(query);
+    const QueryFuture query_future = query.GetFuture();
+    std::atomic_bool completion_wait_satisfied{false};
+    std::atomic_bool query_wait_satisfied{false};
+    RecordingFenceProbe waiting_signal(
+        {},
+        [&] {
+            completion_wait_satisfied.store(
+                completion.WaitFor(100ms),
+                std::memory_order_release
+            );
+            query_wait_satisfied.store(
+                query_future.WaitFor(100ms),
+                std::memory_order_release
+            );
+        }
+    );
+    wait_list.Signal(&waiting_signal, 29);
+    auto cleanup = wait_list.DrainOrdinaryCallbacksForRejection();
+    cleanup.clear();
+
+    CommandList lifetime_list(EQueueType::Graphics);
+    auto first_destroyed =
+        std::make_shared<std::atomic_bool>(false);
+    auto second_destroyed =
+        std::make_shared<std::atomic_bool>(false);
+    std::atomic_int first_rejections{0};
+    std::atomic_int second_rejections{0};
+    FenceRef first{
+        MoerNew(RecordingFenceProbe)(
+            first_destroyed,
+            [&] {
+                first_rejections.fetch_add(
+                    1, std::memory_order_release
+                );
+                CmdSubmit reentrant = lifetime_list.Submit();
+                // Destroy the original callback-based keepalives while the
+                // outer rejection loop still has a second raw Fence pointer.
+                reentrant.callbacks.clear();
+                reentrant.signal_rejection_keepalives.clear();
+            }
+        )
+    };
+    FenceRef second{
+        MoerNew(RecordingFenceProbe)(
+            second_destroyed,
+            [&] {
+                second_rejections.fetch_add(
+                    1, std::memory_order_release
+                );
+            }
+        )
+    };
+    lifetime_list.Signal(first, 31);
+    lifetime_list.Signal(second, 32);
+    first = {};
+    second = {};
+    lifetime_list.RejectPendingSignals();
+
+    return Expect(
+               completion_wait_satisfied.load(
+                   std::memory_order_acquire
+               ) &&
+                   query_wait_satisfied.load(
+                       std::memory_order_acquire
+                   ),
+               "Fence::Reject observed Pending host state"
+           ) &&
+           Expect(
+               first_rejections.load(std::memory_order_acquire) == 1 &&
+                   second_rejections.load(
+                       std::memory_order_acquire
+                   ) == 1,
+               "re-entrant signal rejection skipped an owned Fence"
+           ) &&
+           Expect(
+               first_destroyed->load(std::memory_order_acquire) &&
+                   second_destroyed->load(std::memory_order_acquire),
+               "rejection keepalive outlived the rejected signal batch"
+           );
+}
+
+bool ExportReceiptSignalsOwnDedicatedRejectionKeepalives() {
+    using Moer::Render::Raytracing::ExportSubmissionTransaction;
+
+    auto run_case = [](bool _readback, uint64_t _value) {
+        auto destroyed =
+            std::make_shared<std::atomic_bool>(false);
+        auto rejected_value =
+            std::make_shared<std::atomic<uint64_t>>(0);
+        FenceRef receipt{
+            MoerNew(RecordingFenceProbe)(
+                destroyed,
+                [rejected_value, _value] {
+                    rejected_value->store(
+                        _value, std::memory_order_release
+                    );
+                }
+            )
+        };
+        Fence* const receipt_identity = receipt.Get();
+
+        CommandList commands(EQueueType::Graphics);
+        CmdSubmit   submit = commands.Submit();
+        FenceRef    source_receipt{};
+        {
+            if (_readback) {
+                source_receipt = FenceRef{
+                    MoerNew(RecordingFenceProbe)()
+                };
+                ExportSubmissionTransaction transaction(
+                    source_receipt, _value + 1
+                );
+                transaction.BeginReadback(receipt, _value);
+                transaction.AttachReadbackSignal(submit);
+            } else {
+                ExportSubmissionTransaction transaction(
+                    receipt, _value
+                );
+                transaction.AttachSignal(submit);
+            }
+
+            if (!Expect(
+                        submit.signal_events.size() == 1 &&
+                        submit.signal_events.front().timeline_handle ==
+                            reinterpret_cast<std::uintptr_t>(
+                                receipt_identity
+                            ) &&
+                        submit.signal_events.front().value == _value &&
+                        submit.signal_rejection_keepalives.size() == 1 &&
+                        submit.signal_rejection_keepalives.front().Get() ==
+                            receipt_identity,
+                    _readback ?
+                        "readback receipt signal did not install its dedicated rejection keepalive" :
+                        "export receipt signal did not install its dedicated rejection keepalive"
+                )) {
+                // Keep a failed structural assertion bounded when run against
+                // an older implementation that owns the receipt only through
+                // the ordinary callback tier.
+                submit.signal_events.clear();
+                submit.callbacks.clear();
+                submit.signal_rejection_keepalives.clear();
+                return false;
+            }
+        }
+
+        receipt       = {};
+        source_receipt = {};
+        // Simulate re-entrant code destroying the historical callback-based
+        // keeper while RejectPendingSignals is still responsible for the raw
+        // backend identity.
+        submit.callbacks.clear();
+        if (!Expect(
+                !destroyed->load(std::memory_order_acquire),
+                _readback ?
+                    "readback receipt died before rejection terminalization" :
+                    "export receipt died before rejection terminalization"
+            )) {
+            submit.signal_events.clear();
+            submit.signal_rejection_keepalives.clear();
+            return false;
+        }
+
+        submit.RejectPendingSignals();
+        return Expect(
+                   rejected_value->load(std::memory_order_acquire) ==
+                       _value,
+                   _readback ?
+                       "readback receipt was not rejected at its exact value" :
+                       "export receipt was not rejected at its exact value"
+               ) &&
+               Expect(
+                   destroyed->load(std::memory_order_acquire),
+                   _readback ?
+                       "readback receipt keepalive outlived its rejected signal" :
+                       "export receipt keepalive outlived its rejected signal"
+               );
+    };
+
+    return run_case(false, 41) && run_case(true, 43);
+}
+
+bool CommandDestructorReentryTargetsOnlyFreshGeneration() {
+    CommandList command_list(EQueueType::Graphics);
+    RecordingFenceProbe signal{};
+    std::atomic<int> command_destructors{0};
+    std::atomic<int> completion_callbacks{0};
+    std::atomic<int> query_callbacks{0};
+    std::atomic<int> ordinary_callbacks{0};
+    std::atomic<int> success_callbacks{0};
+    std::atomic<int> fresh_callbacks{0};
+    std::atomic<bool> destructor_observed_terminal_batch{false};
+
+    command_list.Signal(&signal, 23);
+    const GpuCompletionFuture completion =
+        command_list.TrackGpuCompletion(
+            "CommandDestructorRejectedCompletion"
+        );
+    QueryToken query = command_list.BeginTimestampQuery(
+        "CommandDestructorRejectedQuery"
+    );
+    command_list.EndTimestampQuery(query);
+    const QueryFuture query_future = query.GetFuture();
+    completion.Then([&](const GpuCompletionResult&) {
+        completion_callbacks.fetch_add(1, std::memory_order_release);
+    });
+    query_future.Then([&](const QueryResult&) {
+        query_callbacks.fetch_add(1, std::memory_order_release);
+    });
+    command_list.AddCallback([&] {
+        ordinary_callbacks.fetch_add(1, std::memory_order_release);
+    });
+    command_list.AddSuccessCallback([&] {
+        success_callbacks.fetch_add(1, std::memory_order_release);
+    });
+    command_list.AddCustomCommand(
+        Moer::MakeUnique<ReentrantDestructorCommand>([&] {
+            command_destructors.fetch_add(
+                1, std::memory_order_release
+            );
+            destructor_observed_terminal_batch.store(
+                signal.IsRejected(23) &&
+                    completion.Status() ==
+                        GpuCompletionStatus::Error &&
+                    query_future.Status() == QueryStatus::Error &&
+                    completion_callbacks.load(
+                        std::memory_order_acquire
+                    ) == 1 &&
+                    query_callbacks.load(
+                        std::memory_order_acquire
+                    ) == 1,
+                std::memory_order_release
+            );
+            command_list.AddCallback([&] {
+                fresh_callbacks.fetch_add(
+                    1, std::memory_order_release
+                );
+            });
+        }),
+        "RejectedDestructorReentry"
+    );
+
+    Moer::Array<std::function<void()>> cleanup =
+        command_list.DrainOrdinaryCallbacksForRejection();
+    for (std::function<void()>& callback : cleanup) {
+        if (callback) {
+            callback();
+        }
+    }
+    CmdSubmit fresh = command_list.Submit();
+    const bool fresh_generation_isolated =
+        fresh.cmds.empty() && fresh.callbacks.size() == 1 &&
+        fresh.success_callbacks.empty() &&
+        fresh.gpu_completion_tokens.empty() &&
+        fresh.query_tokens.empty() && fresh.signal_events.empty();
+    for (std::function<void()>& callback : fresh.callbacks) {
+        if (callback) {
+            callback();
+        }
+    }
+    fresh.callbacks.clear();
+
+    return Expect(
+               command_destructors.load(std::memory_order_acquire) == 1,
+               "rejected custom Command was not destroyed exactly once"
+           ) &&
+           Expect(
+               destructor_observed_terminal_batch.load(
+                   std::memory_order_acquire
+               ),
+               "custom Command destructor ran before the rejected terminal batch was fully notified"
+           ) &&
+           Expect(
+               ordinary_callbacks.load(std::memory_order_acquire) == 1 &&
+                   success_callbacks.load(std::memory_order_acquire) == 0,
+               "custom Command rejection violated ordinary/success callback semantics"
+           ) &&
+           Expect(
+               fresh_generation_isolated &&
+                   fresh_callbacks.load(std::memory_order_acquire) == 1,
+               "custom Command destructor re-entry was lost or mixed with the rejected generation"
+           );
+}
+
+bool CmdSubmitCallbackCaptureDestructorSeesCompleteReplacement() {
+    RecordingFenceProbe incoming_signal{};
+    std::optional<CmdSubmit> observed{};
+    std::atomic_bool hook_threw{false};
+    std::atomic<int> hook_calls{0};
+
+    CommandList empty_destination(EQueueType::Graphics);
+    CmdSubmit destination = empty_destination.Submit();
+    auto hook = std::make_shared<FinalReleaseHook>();
+    hook->threw = &hook_threw;
+    hook->callback = [&] {
+        hook_calls.fetch_add(1, std::memory_order_release);
+        observed.emplace(std::move(destination));
+    };
+    destination.callbacks.emplace_back([hook] {});
+    hook.reset();
+
+    CommandList incoming_commands(EQueueType::Graphics);
+    incoming_commands.AddCustomCommand(
+        Moer::MakeUnique<ReentrantDestructorCommand>(
+            std::function<void()>{}
+        ),
+        "CmdSubmitReplacementIncoming"
+    );
+    incoming_commands.AddCallback([] {});
+    incoming_commands.AddSuccessCallback([] {});
+    const GpuCompletionFuture completion =
+        incoming_commands.TrackGpuCompletion(
+            "CmdSubmitReplacementCompletion"
+        );
+    QueryToken query = incoming_commands.BeginTimestampQuery(
+        "CmdSubmitReplacementQuery"
+    );
+    incoming_commands.EndTimestampQuery(query);
+    const QueryFuture query_future = query.GetFuture();
+    incoming_commands.Signal(&incoming_signal, 29);
+    CmdSubmit incoming = incoming_commands.Submit();
+    incoming.b_sync = true;
+    incoming.b_delete_resources = true;
+    incoming.SetProfilingPhase(ERHIProfilingPhase::Begin);
+    incoming.SetResourceStateOwnership(
+        ERHIResourceStateOwnership::Explicit
+    );
+    incoming.SetTranslateExecutionClass(
+        ERHITranslateExecutionClass::SerialControl
+    );
+    incoming.async_queue_scope = 0xA5;
+    incoming.DebugLabel("CmdSubmitReplacementLabel");
+    const size_t expected_commands = incoming.cmds.size();
+    const size_t expected_callbacks = incoming.callbacks.size();
+    const size_t expected_success_callbacks =
+        incoming.success_callbacks.size();
+    const size_t expected_completion_tokens =
+        incoming.gpu_completion_tokens.size();
+    const size_t expected_query_tokens =
+        incoming.query_tokens.size();
+    const size_t expected_signals = incoming.signal_events.size();
+
+    destination = std::move(incoming);
+
+    const bool saw_complete_incoming =
+        observed.has_value() &&
+        observed->cmds.size() == expected_commands &&
+        observed->callbacks.size() == expected_callbacks &&
+        observed->success_callbacks.size() ==
+            expected_success_callbacks &&
+        observed->gpu_completion_tokens.size() ==
+            expected_completion_tokens &&
+        observed->query_tokens.size() == expected_query_tokens &&
+        observed->signal_events.size() == expected_signals &&
+        observed->signal_events.front().value == 29 &&
+        observed->b_sync && observed->b_delete_resources &&
+        observed->ProfilingPhase() == ERHIProfilingPhase::Begin &&
+        observed->resource_state_ownership ==
+            ERHIResourceStateOwnership::Explicit &&
+        observed->translate_execution_class ==
+            ERHITranslateExecutionClass::SerialControl &&
+        observed->async_queue_scope == 0xA5 &&
+        observed->debug_label == "CmdSubmitReplacementLabel";
+    const bool destination_payload_was_consumed =
+        destination.cmds.empty() && destination.callbacks.empty() &&
+        destination.success_callbacks.empty() &&
+        destination.gpu_completion_tokens.empty() &&
+        !destination.gpu_completion_publish_batch.Valid() &&
+        destination.query_tokens.empty() &&
+        !destination.query_publish_batch.Valid() &&
+        destination.cached_args.empty() &&
+        destination.segments.empty() &&
+        destination.wait_events.empty() &&
+        destination.signal_events.empty() &&
+        destination.debug_label.empty();
+
+    observed.reset();
+    return Expect(
+               !hook_threw.load(std::memory_order_acquire) &&
+                   hook_calls.load(std::memory_order_acquire) == 1,
+               "CmdSubmit callback capture destructor did not re-enter exactly once"
+           ) &&
+           Expect(
+               saw_complete_incoming &&
+                   destination_payload_was_consumed,
+               "CmdSubmit replacement exposed a partially installed incoming payload"
+           ) &&
+           Expect(
+               incoming_signal.IsRejected(29) &&
+                   completion.Status() ==
+                       GpuCompletionStatus::Error &&
+                   query_future.Status() == QueryStatus::Error,
+               "observed replacement payload did not terminalize on destruction"
+           );
+}
+
+bool CommandListCallbackCaptureDestructorSeesCompleteReplacement() {
+    RecordingFenceProbe incoming_signal{};
+    std::optional<CmdSubmit> observed{};
+    std::atomic_bool hook_threw{false};
+    std::atomic<int> hook_calls{0};
+
+    CommandList destination(EQueueType::Graphics);
+    auto hook = std::make_shared<FinalReleaseHook>();
+    hook->threw = &hook_threw;
+    hook->callback = [&] {
+        hook_calls.fetch_add(1, std::memory_order_release);
+        observed.emplace(destination.Submit());
+    };
+    destination.AddCallback([hook] {});
+    hook.reset();
+
+    CommandList incoming(EQueueType::Graphics);
+    incoming.AddCustomCommand(
+        Moer::MakeUnique<ReentrantDestructorCommand>(
+            std::function<void()>{}
+        ),
+        "CommandListReplacementIncoming"
+    );
+    incoming.AddCallback([] {});
+    incoming.AddSuccessCallback([] {});
+    const GpuCompletionFuture completion =
+        incoming.TrackGpuCompletion(
+            "CommandListReplacementCompletion"
+        );
+    QueryToken query = incoming.BeginTimestampQuery(
+        "CommandListReplacementQuery"
+    );
+    incoming.EndTimestampQuery(query);
+    const QueryFuture query_future = query.GetFuture();
+    incoming.Signal(&incoming_signal, 31);
+    incoming.SetResourceStateOwnership(
+        ERHIResourceStateOwnership::Explicit
+    );
+    incoming.SetTranslateExecutionClass(
+        ERHITranslateExecutionClass::SerialControl
+    );
+
+    destination = std::move(incoming);
+
+    const bool saw_complete_incoming =
+        observed.has_value() && observed->cmds.size() == 3 &&
+        observed->callbacks.size() == 2 &&
+        observed->success_callbacks.size() == 1 &&
+        observed->gpu_completion_tokens.size() == 1 &&
+        observed->query_tokens.size() == 1 &&
+        observed->signal_events.size() == 1 &&
+        observed->signal_events.front().value == 31 &&
+        observed->resource_state_ownership ==
+            ERHIResourceStateOwnership::Explicit &&
+        observed->translate_execution_class ==
+            ERHITranslateExecutionClass::SerialControl;
+    const bool destination_was_consumed = destination.IsEmpty();
+
+    observed.reset();
+    return Expect(
+               !hook_threw.load(std::memory_order_acquire) &&
+                   hook_calls.load(std::memory_order_acquire) == 1,
+               "CommandList callback capture destructor did not re-enter exactly once"
+           ) &&
+           Expect(
+               saw_complete_incoming && destination_was_consumed,
+               "CommandList replacement exposed a mixed or partial generation"
+           ) &&
+           Expect(
+               incoming_signal.IsRejected(31) &&
+                   completion.Status() ==
+                       GpuCompletionStatus::Error &&
+                   query_future.Status() == QueryStatus::Error,
+               "observed CommandList replacement did not terminalize on destruction"
+           );
 }
 
 bool FrontendQueryRejectionTerminalizesBeforeOrdinaryCallbacks() {
@@ -593,6 +1269,8 @@ bool DirectCommandListGroupPreflightRejectsEverySource() {
     std::array<std::atomic<bool>, 3> query_observed_present_rejection{};
     std::array<std::atomic<bool>, 3> ordinary_observed_own_query{};
     std::atomic<bool> first_query_observed_last_terminal{false};
+    std::optional<CmdSubmit> suffix_reentrant_submit{};
+    std::atomic<bool> suffix_reentrant_submit_threw{false};
     PresentReceiptRef receipt = std::make_shared<PresentReceipt>();
     RHIPresentRequest present{};
     present.receipt = receipt;
@@ -627,6 +1305,15 @@ bool DirectCommandListGroupPreflightRejectsEverySource() {
                         futures[2].Status() == QueryStatus::Error,
                     std::memory_order_release
                 );
+                try {
+                    suffix_reentrant_submit.emplace(
+                        command_lists[2].Submit()
+                    );
+                } catch (...) {
+                    suffix_reentrant_submit_threw.store(
+                        true, std::memory_order_release
+                    );
+                }
             }
             query_observed_error[index].store(
                 _result.status == QueryStatus::Error,
@@ -702,6 +1389,17 @@ bool DirectCommandListGroupPreflightRejectsEverySource() {
         first_query_observed_last_terminal.load(std::memory_order_acquire),
         "direct CommandList group preflight allowed an earlier Query callback to observe a later Future Pending"
     );
+    okay &= Expect(
+        !suffix_reentrant_submit_threw.load(std::memory_order_acquire) &&
+            suffix_reentrant_submit.has_value(),
+        "direct CommandList preflight callback could not re-enter the suffix"
+    );
+    if (suffix_reentrant_submit.has_value()) {
+        okay &= Expect(
+            HasNoRejectedGenerationPayload(*suffix_reentrant_submit),
+            "direct CommandList preflight callback extracted the rejected suffix generation"
+        );
+    }
     const PresentReceiptResult present_result =
         receipt->WaitForSubmission(100ms);
     okay &= Expect(
@@ -726,22 +1424,8 @@ bool DirectCommandListGroupPreflightRejectsEverySource() {
     return okay;
 }
 
-bool DirectCommandListGroupMaterializationFailureRejectsPrefixAndSuffix() {
-    std::optional<CommandList::ManagedRecordingLease> blocking_lease{};
-    RecordingFenceProbe prefix_signal(
-        {},
-        [&blocking_lease] {
-            blocking_lease.reset();
-        }
-    );
-    RecordingFenceProbe middle_signal{};
-    RecordingFenceProbe suffix_signal{};
-    const std::array<RecordingFenceProbe*, 3> signals{
-        &prefix_signal,
-        &middle_signal,
-        &suffix_signal,
-    };
-
+bool DirectCommandListGroupActiveLeaseFailsWithoutMutation() {
+    std::array<RecordingFenceProbe, 3> signals{};
     Moer::Array<CommandList> command_lists{};
     command_lists.reserve(3);
     for (size_t index = 0; index < 3; ++index) {
@@ -752,15 +1436,221 @@ bool DirectCommandListGroupMaterializationFailureRejectsPrefixAndSuffix() {
     std::array<std::atomic<int>, 3> query_callbacks{};
     std::array<std::atomic<int>, 3> ordinary_callbacks{};
     std::array<std::atomic<int>, 3> success_callbacks{};
-    std::array<std::atomic<bool>, 3> ordinary_observed_own_query{};
-    std::atomic<bool> prefix_observed_suffix_terminal{false};
-    std::atomic<int>  reentrant_callbacks{0};
-
     for (size_t index = 0; index < command_lists.size(); ++index) {
-        command_lists[index].Signal(signals[index], 50 + index);
+        command_lists[index].Signal(&signals[index], 50 + index);
         command_lists[index].AddCallback([&, index] {
-            ordinary_observed_own_query[index].store(
-                query_callbacks[index].load(std::memory_order_acquire) == 1,
+            ordinary_callbacks[index].fetch_add(
+                1, std::memory_order_release
+            );
+        });
+        command_lists[index].AddSuccessCallback([&, index] {
+            success_callbacks[index].fetch_add(
+                1, std::memory_order_release
+            );
+        });
+        QueryToken token = command_lists[index].BeginTimestampQuery(
+            "DirectSubmitActiveLeaseTimestamp"
+        );
+        command_lists[index].EndTimestampQuery(token);
+        futures[index] = token.GetFuture();
+        futures[index].Then([&, index](const QueryResult&) {
+            query_callbacks[index].fetch_add(
+                1, std::memory_order_release
+            );
+        });
+    }
+
+    PresentReceiptRef receipt = std::make_shared<PresentReceipt>();
+    RHIPresentRequest present{};
+    present.receipt = receipt;
+    auto blocking_lease =
+        command_lists[1].AcquireManagedRecordingLease();
+    bool threw_logic_error = false;
+    try {
+        RHIExecutor::Get().Submit(
+            std::move(command_lists),
+            ERHIExecSubmitFlags::None,
+            &present
+        );
+    } catch (const std::logic_error&) {
+        threw_logic_error = true;
+    } catch (...) {
+    }
+
+    bool okay = Expect(
+        threw_logic_error,
+        "direct CommandList group accepted an active managed recording lease"
+    );
+    for (size_t index = 0; index < command_lists.size(); ++index) {
+        okay &= Expect(
+            !signals[index].IsRejected(50 + index) &&
+                futures[index].Status() == QueryStatus::Pending &&
+                query_callbacks[index].load(std::memory_order_acquire) == 0 &&
+                ordinary_callbacks[index].load(std::memory_order_acquire) == 0 &&
+                success_callbacks[index].load(std::memory_order_acquire) == 0 &&
+                !command_lists[index].IsEmpty(),
+            "active-lease preflight mutated or notified the intact transaction"
+        );
+    }
+    okay &= Expect(
+        !receipt->WaitForSubmission(0ms).resolved,
+        "active-lease preflight resolved Present for an unconsumed transaction"
+    );
+
+    blocking_lease.Release();
+    for (CommandList& command_list : command_lists) {
+        auto callbacks =
+            command_list.DrainOrdinaryCallbacksForRejection();
+        for (auto& callback : callbacks) {
+            if (callback) {
+                callback();
+            }
+        }
+    }
+    for (size_t index = 0; index < command_lists.size(); ++index) {
+        okay &= Expect(
+            signals[index].IsRejected(50 + index) &&
+                futures[index].WaitFor(100ms) &&
+                futures[index].Status() == QueryStatus::Error &&
+                query_callbacks[index].load(std::memory_order_acquire) == 1 &&
+                ordinary_callbacks[index].load(std::memory_order_acquire) == 1 &&
+                success_callbacks[index].load(std::memory_order_acquire) == 0,
+            "caller-owned cleanup did not terminalize the intact active-lease transaction"
+        );
+    }
+    (void)receipt->Resolve(false);
+    return okay;
+}
+
+bool DirectCommandListGroupPartialMaterializationFailureIsAtomic() {
+    constexpr size_t SourceCount = 2;
+    Moer::Array<CommandList> command_lists{};
+    command_lists.reserve(SourceCount);
+    for (size_t index = 0; index < SourceCount; ++index) {
+        command_lists.emplace_back(EQueueType::Graphics);
+    }
+
+    std::array<FenceRef, SourceCount> signals{};
+    std::array<RecordingFenceProbe*, SourceCount> signal_probes{};
+    std::array<std::atomic<int>, SourceCount> signal_rejections{};
+    std::array<GpuCompletionFuture, SourceCount> completion_futures{};
+    std::array<QueryFuture, SourceCount> query_futures{};
+    std::array<std::atomic<int>, SourceCount> completion_callbacks{};
+    std::array<std::atomic<int>, SourceCount> query_callbacks{};
+    std::array<std::atomic<int>, SourceCount> ordinary_callbacks{};
+    std::array<std::atomic<int>, SourceCount> success_callbacks{};
+    std::array<std::atomic<bool>, SourceCount>
+        signal_observed_host_publication{};
+    std::array<std::atomic<bool>, SourceCount>
+        ordinary_observed_notifications{};
+    std::atomic<bool> first_completion_observed_atomic_group{false};
+    std::array<std::optional<CmdSubmit>, SourceCount> reentrant_submits{};
+    std::atomic<bool> reentrant_submit_threw{false};
+
+    for (size_t index = 0; index < SourceCount; ++index) {
+        signals[index] = MoerNew(RecordingFenceProbe)(
+            std::shared_ptr<std::atomic_bool>{},
+            [&, index] {
+                bool host_published_without_notification = true;
+                for (size_t sibling = 0;
+                     sibling < SourceCount;
+                     ++sibling) {
+                    host_published_without_notification &=
+                        completion_futures[sibling].Status() ==
+                            GpuCompletionStatus::Error &&
+                        query_futures[sibling].Status() ==
+                            QueryStatus::Error &&
+                        completion_callbacks[sibling].load(
+                            std::memory_order_acquire
+                        ) == 0 &&
+                        query_callbacks[sibling].load(
+                            std::memory_order_acquire
+                        ) == 0 &&
+                        ordinary_callbacks[sibling].load(
+                            std::memory_order_acquire
+                        ) == 0;
+                }
+                signal_observed_host_publication[index].store(
+                    host_published_without_notification,
+                    std::memory_order_release
+                );
+                signal_rejections[index].fetch_add(
+                    1, std::memory_order_release
+                );
+                if (index != 0) {
+                    return;
+                }
+                for (size_t source_index = 0;
+                     source_index < SourceCount;
+                     ++source_index) {
+                    try {
+                        reentrant_submits[source_index].emplace(
+                            command_lists[source_index].Submit()
+                        );
+                    } catch (...) {
+                        reentrant_submit_threw.store(
+                            true, std::memory_order_release
+                        );
+                    }
+                }
+            }
+        );
+        signal_probes[index] =
+            static_cast<RecordingFenceProbe*>(signals[index].Get());
+        command_lists[index].Signal(signals[index], 70 + index);
+
+        completion_futures[index] =
+            command_lists[index].TrackGpuCompletion(
+                "DirectPartialMaterializationCompletion"
+            );
+        completion_futures[index].Then(
+            [&, index](const GpuCompletionResult& _result) {
+                if (_result.status == GpuCompletionStatus::Error) {
+                    completion_callbacks[index].fetch_add(
+                        1, std::memory_order_release
+                    );
+                }
+                if (index != 0) {
+                    return;
+                }
+                const bool group_terminal =
+                    completion_futures[1].WaitFor(0ms) &&
+                    completion_futures[1].Status() ==
+                        GpuCompletionStatus::Error &&
+                    query_futures[0].WaitFor(0ms) &&
+                    query_futures[1].WaitFor(0ms) &&
+                    query_futures[0].Status() == QueryStatus::Error &&
+                    query_futures[1].Status() == QueryStatus::Error &&
+                    signal_probes[0]->IsRejected(70) &&
+                    signal_probes[1]->IsRejected(71);
+                first_completion_observed_atomic_group.store(
+                    group_terminal, std::memory_order_release
+                );
+            }
+        );
+
+        QueryToken query = command_lists[index].BeginTimestampQuery(
+            "DirectPartialMaterializationQuery"
+        );
+        command_lists[index].EndTimestampQuery(query);
+        query_futures[index] = query.GetFuture();
+        query_futures[index].Then(
+            [&, index](const QueryResult& _result) {
+                if (_result.status == QueryStatus::Error) {
+                    query_callbacks[index].fetch_add(
+                        1, std::memory_order_release
+                    );
+                }
+            }
+        );
+        command_lists[index].AddCallback([&, index] {
+            ordinary_observed_notifications[index].store(
+                completion_callbacks[index].load(
+                    std::memory_order_acquire
+                ) == 1 &&
+                    query_callbacks[index].load(
+                        std::memory_order_acquire
+                    ) == 1,
                 std::memory_order_release
             );
             ordinary_callbacks[index].fetch_add(
@@ -772,110 +1662,197 @@ bool DirectCommandListGroupMaterializationFailureRejectsPrefixAndSuffix() {
                 1, std::memory_order_release
             );
         });
-        QueryToken token = command_lists[index].BeginTimestampQuery(
-            "DirectSubmitMaterializationTimestamp"
-        );
-        command_lists[index].EndTimestampQuery(token);
-        futures[index] = token.GetFuture();
-        futures[index].Then([&, index](const QueryResult& _result) {
-            if (index == 0) {
-                prefix_observed_suffix_terminal.store(
-                    futures[2].WaitFor(100ms) &&
-                        futures[2].Status() == QueryStatus::Error,
-                    std::memory_order_release
-                );
-                // Source zero has already sealed. Re-entrant work belongs to
-                // its fresh generation and must survive rejection of the old
-                // materialized prefix.
-                command_lists[0].AddCallback([&reentrant_callbacks] {
-                    reentrant_callbacks.fetch_add(
-                        1, std::memory_order_release
-                    );
-                });
-            }
-            if (_result.status == QueryStatus::Error) {
-                query_callbacks[index].fetch_add(
-                    1, std::memory_order_release
-                );
-            }
-        });
     }
 
-    blocking_lease.emplace(
-        command_lists[1].AcquireManagedRecordingLease()
-    );
-    bool threw = false;
+    PresentReceiptRef receipt = std::make_shared<PresentReceipt>();
+    RHIPresentRequest present{};
+    present.receipt = receipt;
+    DirectMaterializationFaultContext fault_context{};
+    const RHIDirectCommandListMaterializationOverrideForTesting
+        materialization_override{
+            .context       = &fault_context,
+            .before_source = &InjectDirectMaterializationFailure,
+        };
+    if (!Expect(
+            TryInstallRHIDirectCommandListMaterializationOverrideForTesting(
+                &materialization_override
+            ),
+            "could not install direct materialization failure override"
+        )) {
+        return false;
+    }
+
+    bool submit_threw = false;
     try {
         RHIExecutor::Get().Submit(
             std::move(command_lists),
             ERHIExecSubmitFlags::None,
-            nullptr
+            &present
         );
     } catch (...) {
-        threw = true;
+        submit_threw = true;
     }
+    const bool override_removed =
+        RemoveRHIDirectCommandListMaterializationOverrideForTesting(
+            &materialization_override
+        );
 
-    bool okay = Expect(
-                    !threw,
-                    "direct CommandList group propagated a mid-materialization failure"
-                ) &&
-                Expect(
-                    !blocking_lease.has_value(),
-                    "materialization-failure trigger did not release its managed lease"
-                );
-    for (size_t index = 0; index < command_lists.size(); ++index) {
+    bool okay =
+        Expect(
+            !submit_threw && override_removed &&
+                fault_context.visited_sources.load(
+                    std::memory_order_acquire
+                ) == SourceCount,
+            "partial materialization fault did not traverse the intended mixed prefix/suffix path"
+        ) &&
+        Expect(
+            first_completion_observed_atomic_group.load(
+                std::memory_order_acquire
+            ),
+            "partial materialization callback observed a non-terminal sibling or signal"
+        ) &&
+        Expect(
+            !reentrant_submit_threw.load(std::memory_order_acquire),
+            "partial materialization callback could not re-enter a fresh generation"
+        );
+    for (size_t index = 0; index < SourceCount; ++index) {
         okay &= Expect(
-            signals[index]->IsRejected(50 + index),
-            "direct CommandList materialization failure left a signal Pending"
+            completion_futures[index].WaitFor(100ms) &&
+                completion_futures[index].Status() ==
+                    GpuCompletionStatus::Error &&
+                query_futures[index].WaitFor(100ms) &&
+                query_futures[index].Status() == QueryStatus::Error,
+            "partial materialization left a host Future Pending"
         );
         okay &= Expect(
-            futures[index].WaitFor(100ms) &&
-                futures[index].Status() == QueryStatus::Error,
-            "direct CommandList materialization failure left a QueryFuture Pending"
-        );
-        okay &= Expect(
-            query_callbacks[index].load(std::memory_order_acquire) == 1,
-            "direct CommandList materialization failure did not notify a Query callback exactly once"
-        );
-        okay &= Expect(
-            ordinary_callbacks[index].load(std::memory_order_acquire) == 1 &&
-                ordinary_observed_own_query[index].load(
+            signal_probes[index]->IsRejected(70 + index) &&
+                signal_rejections[index].load(
+                    std::memory_order_acquire
+                ) == 1 &&
+                signal_observed_host_publication[index].load(
                     std::memory_order_acquire
                 ),
-            "direct CommandList materialization failure did not run ordinary cleanup exactly once after Query notification"
+            "partial materialization did not publish hosts before rejecting a signal exactly once"
         );
         okay &= Expect(
-            success_callbacks[index].load(std::memory_order_acquire) == 0,
-            "direct CommandList materialization failure invoked a success-only callback"
+            completion_callbacks[index].load(
+                std::memory_order_acquire
+            ) == 1 &&
+                query_callbacks[index].load(
+                    std::memory_order_acquire
+                ) == 1 &&
+                ordinary_callbacks[index].load(
+                    std::memory_order_acquire
+                ) == 1 &&
+                ordinary_observed_notifications[index].load(
+                    std::memory_order_acquire
+                ),
+            "partial materialization did not release callbacks once in terminal order"
+        );
+        okay &= Expect(
+            success_callbacks[index].load(
+                std::memory_order_acquire
+            ) == 0,
+            "partial materialization invoked a success-only callback"
+        );
+        okay &= Expect(
+            reentrant_submits[index].has_value() &&
+                HasNoRejectedGenerationPayload(
+                    *reentrant_submits[index]
+                ) &&
+                command_lists[index].IsEmpty(),
+            "partial materialization exposed or restored a rejected generation"
         );
     }
+    const PresentReceiptResult present_result =
+        receipt->WaitForSubmission(100ms);
     okay &= Expect(
-        prefix_observed_suffix_terminal.load(std::memory_order_acquire),
-        "materialized-prefix Query callback observed a suffix Future Pending"
+        present_result.resolved && !present_result.submitted &&
+            receipt->ResolutionAttemptCount() == 1,
+        "partial materialization did not reject Present exactly once"
     );
-    okay &= Expect(
-        reentrant_callbacks.load(std::memory_order_acquire) == 0,
-        "group rejection consumed work re-entered into the prefix's fresh generation"
-    );
-    okay &= Expect(
-        command_lists[1].IsEmpty() && command_lists[2].IsEmpty(),
-        "direct CommandList materialization failure left an unmaterialized suffix undrained"
-    );
+    return okay;
+}
 
-    CmdSubmit reentrant_submit = command_lists[0].Submit();
-    okay &= Expect(
-        reentrant_submit.callbacks.size() == 1,
-        "materialized-prefix fresh generation did not retain re-entrant work"
-    );
-    for (auto& callback : reentrant_submit.callbacks) {
-        if (callback) {
-            callback();
+bool DirectMaterializationOverrideRemovalWaitsForReaders() {
+    BlockingDirectMaterializationContext context{};
+    const RHIDirectCommandListMaterializationOverrideForTesting
+        materialization_override{
+            .context       = &context,
+            .before_source = &BlockDirectMaterializationUntilReleased,
+        };
+    if (!Expect(
+            TryInstallRHIDirectCommandListMaterializationOverrideForTesting(
+                &materialization_override
+            ),
+            "could not install blocking materialization override"
+        )) {
+        return false;
+    }
+
+    RecordingFenceProbe signal{};
+    Moer::Array<CommandList> command_lists{};
+    command_lists.emplace_back(EQueueType::Graphics);
+    command_lists.front().Signal(&signal, 79);
+    std::atomic<bool> submit_returned{false};
+    std::atomic<bool> submit_threw{false};
+    std::jthread submit_thread([&] {
+        try {
+            RHIExecutor::Get().Submit(
+                std::move(command_lists),
+                ERHIExecSubmitFlags::None
+            );
+        } catch (...) {
+            submit_threw.store(true, std::memory_order_release);
+        }
+        submit_returned.store(true, std::memory_order_release);
+    });
+
+    {
+        std::unique_lock lock(context.mutex);
+        if (!context.cv.wait_for(
+                lock, 2s, [&] { return context.entered; }
+            )) {
+            context.release = true;
+            context.cv.notify_all();
+            submit_thread.join();
+            (void)RemoveRHIDirectCommandListMaterializationOverrideForTesting(
+                &materialization_override
+            );
+            return Expect(
+                false,
+                "blocking materialization override was not acquired"
+            );
         }
     }
-    reentrant_submit.callbacks.clear();
+
+    std::atomic<bool> release_issued{false};
+    std::jthread release_thread([&] {
+        std::this_thread::sleep_for(30ms);
+        {
+            std::lock_guard lock(context.mutex);
+            context.release = true;
+            release_issued.store(true, std::memory_order_release);
+        }
+        context.cv.notify_all();
+    });
+    const bool remove_succeeded =
+        RemoveRHIDirectCommandListMaterializationOverrideForTesting(
+            &materialization_override
+        );
+    bool okay = Expect(
+        remove_succeeded &&
+            release_issued.load(std::memory_order_acquire),
+        "override removal returned before its active reader released caller storage"
+    );
+    submit_thread.join();
+    release_thread.join();
+
     okay &= Expect(
-        reentrant_callbacks.load(std::memory_order_acquire) == 1,
-        "preserved re-entrant callback did not execute exactly once"
+        submit_returned.load(std::memory_order_acquire) &&
+            !submit_threw.load(std::memory_order_acquire) &&
+            signal.IsRejected(79),
+        "blocking materialization failure did not finish its rejected transaction"
     );
     return okay;
 }
@@ -1021,6 +1998,8 @@ bool RecordingPreflightFailureTerminalizesEveryCompletionGeneration() {
     std::array<std::atomic<int>, 3> completion_callbacks{};
     std::array<std::atomic<int>, 3> ordinary_callbacks{};
     std::array<std::atomic<int>, 3> success_callbacks{};
+    std::optional<CmdSubmit> completion_reentrant_submit{};
+    std::atomic<bool> completion_reentrant_submit_threw{false};
     for (size_t index = 0; index < command_lists.size(); ++index) {
         completion_futures[index] =
             command_lists[index]->TrackGpuCompletion(
@@ -1047,6 +2026,16 @@ bool RecordingPreflightFailureTerminalizesEveryCompletionGeneration() {
         });
     }
 
+    RecordingFenceProbe last_signal{};
+    last_list->Signal(&last_signal, 61);
+    QueryToken last_payload_query =
+        last_list->BeginTimestampQuery(
+            "CompletionPreflightSiblingPayload"
+        );
+    const QueryFuture last_payload_future =
+        last_payload_query.GetFuture();
+    last_list->EndTimestampQuery(last_payload_query);
+
     std::atomic<bool> first_observed_last_terminal{false};
     completion_futures[0].Then(
         [&](const GpuCompletionResult& _result) {
@@ -1057,6 +2046,19 @@ bool RecordingPreflightFailureTerminalizesEveryCompletionGeneration() {
                         GpuCompletionStatus::Error,
                 std::memory_order_release
             );
+            try {
+                // Publication and notification are externally re-entrant.
+                // Even though the last source has not reached Submit(), its
+                // rejected generation must already be detached before the
+                // first source's completion callback can inspect it.
+                completion_reentrant_submit.emplace(
+                    last_list->Submit()
+                );
+            } catch (...) {
+                completion_reentrant_submit_threw.store(
+                    true, std::memory_order_release
+                );
+            }
         }
     );
 
@@ -1116,6 +2118,30 @@ bool RecordingPreflightFailureTerminalizesEveryCompletionGeneration() {
     okay &= Expect(
         first_observed_last_terminal.load(std::memory_order_acquire),
         "an earlier completion callback observed a later source Pending"
+    );
+    okay &= Expect(
+        !completion_reentrant_submit_threw.load(
+            std::memory_order_acquire
+        ) &&
+            completion_reentrant_submit.has_value(),
+        "completion callback could not re-enter an unmaterialized sibling"
+    );
+    if (completion_reentrant_submit.has_value()) {
+        okay &= Expect(
+            HasNoRejectedGenerationPayload(
+                *completion_reentrant_submit
+            ),
+            "completion callback extracted a rejected sibling payload"
+        );
+    }
+    okay &= Expect(
+        last_signal.IsRejected(61),
+        "completion preflight failure left its sibling signal Pending"
+    );
+    okay &= Expect(
+        last_payload_future.WaitFor(100ms) &&
+            last_payload_future.Status() == QueryStatus::Error,
+        "completion preflight failure left its sibling Query token Pending"
     );
     okay &= Expect(
         trigger_future.WaitFor(100ms) &&
@@ -1590,22 +2616,205 @@ bool FailedCommitRejectsCompletedSources() {
     return okay;
 }
 
+bool ShutdownPreservesACompletedSourceUntilCommitHandoff() {
+    RHIExecutor::StartUp();
+
+    RecordingFenceProbe list_signal{};
+    FenceRef metadata_signal = MoerNew(RecordingFenceProbe)();
+    auto* metadata_probe =
+        static_cast<RecordingFenceProbe*>(metadata_signal.Get());
+    auto command_list =
+        Moer::MakeShared<CommandList>(EQueueType::Graphics);
+    command_list->Signal(&list_signal, 37);
+    const GpuCompletionFuture completion =
+        command_list->TrackGpuCompletion(
+            "CommitOpaqueShutdownCompletion"
+        );
+    QueryToken query = command_list->BeginTimestampQuery(
+        "CommitOpaqueShutdownQuery"
+    );
+    command_list->EndTimestampQuery(query);
+    const QueryFuture query_future = query.GetFuture();
+
+    std::atomic<int> completion_callbacks{0};
+    std::atomic<int> query_callbacks{0};
+    std::atomic<int> ordinary_callbacks{0};
+    std::atomic<int> success_callbacks{0};
+    completion.Then([&](const GpuCompletionResult&) {
+        completion_callbacks.fetch_add(
+            1, std::memory_order_release
+        );
+    });
+    query_future.Then([&](const QueryResult&) {
+        query_callbacks.fetch_add(1, std::memory_order_release);
+    });
+    command_list->AddCallback([&] {
+        ordinary_callbacks.fetch_add(1, std::memory_order_release);
+    });
+    command_list->AddSuccessCallback([&] {
+        success_callbacks.fetch_add(1, std::memory_order_release);
+    });
+
+    auto producer_complete = RHIRecordingGate::Create(true);
+    auto graph_commit = RHIRecordingGate::Create();
+    Moer::Array<RHIRecordingSource> sources{};
+    sources.emplace_back(RHIRecordingSource{
+        .command_list = command_list,
+        .completion   = producer_complete,
+        .commit       = graph_commit,
+        .submit_metadata = RHIRecordingSubmitMetadata{
+            .signal_fences = {
+                RHIRecordingFencePoint{
+                    .fence = metadata_signal,
+                    .value = 41,
+                },
+            },
+        },
+    });
+    RHIExecutor::Get().SubmitRecording(
+        std::move(sources),
+        ERHIExecSubmitFlags::None
+    );
+    RHIExecutor::ShutDown();
+
+    bool okay =
+        Expect(
+            graph_commit->Status() == ERHIRecordingStatus::Pending,
+            "shutdown changed a graph-owned Pending commit gate"
+        ) &&
+        Expect(
+            !command_list->IsEmpty() &&
+                !list_signal.IsRejected(37) &&
+                metadata_probe->RejectedValue() == 0,
+            "shutdown drained or rejected a source before commit handoff"
+        ) &&
+        Expect(
+            completion.Status() == GpuCompletionStatus::Error &&
+                query_future.Status() == QueryStatus::Error &&
+                completion_callbacks.load(
+                    std::memory_order_acquire
+                ) == 0 &&
+                query_callbacks.load(std::memory_order_acquire) == 0,
+            "opaque cancellation did not defer Future callbacks behind commit ownership"
+        ) &&
+        Expect(
+            ordinary_callbacks.load(std::memory_order_acquire) == 0 &&
+                success_callbacks.load(std::memory_order_acquire) == 0,
+            "shutdown released callbacks before commit ownership transferred"
+        );
+
+    graph_commit->Fail();
+    Moer::Array<std::function<void()>> cleanup =
+        command_list->DrainOrdinaryCallbacksForRejection();
+    for (std::function<void()>& callback : cleanup) {
+        if (callback) {
+            callback();
+        }
+    }
+    okay &= Expect(
+        list_signal.IsRejected(37) &&
+            completion_callbacks.load(
+                std::memory_order_acquire
+            ) == 1 &&
+            query_callbacks.load(std::memory_order_acquire) == 1 &&
+            ordinary_callbacks.load(std::memory_order_acquire) == 1 &&
+            success_callbacks.load(std::memory_order_acquire) == 0 &&
+            command_list->IsEmpty(),
+        "commit owner could not terminally drain the deferred cancellation"
+    );
+    return okay;
+}
+
 bool MetadataFailureRejectsEveryProducerSignal() {
     RHIExecutor::StartUp();
 
-    auto invalid_source = Moer::MakeShared<CommandList>(EQueueType::Graphics);
-    auto later_source   = Moer::MakeShared<CommandList>(EQueueType::Graphics);
-    FenceRef signal_fence = MoerNew(RecordingFenceProbe)();
-    auto* signal_probe =
-        static_cast<RecordingFenceProbe*>(signal_fence.Get());
+    auto transferred_source =
+        Moer::MakeShared<CommandList>(EQueueType::Graphics);
+    auto later_source =
+        Moer::MakeShared<CommandList>(EQueueType::Graphics);
+    std::array<GpuCompletionFuture, 2> completion_futures{
+        transferred_source->TrackGpuCompletion(
+            "MetadataTransferredCompletion"
+        ),
+        later_source->TrackGpuCompletion("MetadataFallbackCompletion"),
+    };
+    std::array<QueryFuture, 2> query_futures{};
+    {
+        QueryToken query = transferred_source->BeginTimestampQuery(
+            "MetadataTransferredQuery"
+        );
+        transferred_source->EndTimestampQuery(query);
+        query_futures[0] = query.GetFuture();
+    }
+    {
+        QueryToken query = later_source->BeginTimestampQuery(
+            "MetadataFallbackQuery"
+        );
+        later_source->EndTimestampQuery(query);
+        query_futures[1] = query.GetFuture();
+    }
+
+    std::array<std::atomic<int>, 2> signal_rejections{};
+    std::array<std::atomic<bool>, 2> signal_observed_host_terminal{};
+    std::optional<CmdSubmit> metadata_reentrant_submit{};
+    std::atomic<bool> metadata_reentrant_submit_threw{false};
+    const auto all_hosts_terminal = [&] {
+        return completion_futures[0].Status() ==
+                   GpuCompletionStatus::Error &&
+               completion_futures[1].Status() ==
+                   GpuCompletionStatus::Error &&
+               query_futures[0].Status() == QueryStatus::Error &&
+               query_futures[1].Status() == QueryStatus::Error;
+    };
+    FenceRef transferred_signal = MoerNew(RecordingFenceProbe)(
+        std::shared_ptr<std::atomic_bool>{},
+        [&] {
+            signal_observed_host_terminal[0].store(
+                all_hosts_terminal(), std::memory_order_release
+            );
+            signal_rejections[0].fetch_add(
+                1, std::memory_order_release
+            );
+            try {
+                metadata_reentrant_submit.emplace(
+                    transferred_source->Submit()
+                );
+            } catch (...) {
+                metadata_reentrant_submit_threw.store(
+                    true, std::memory_order_release
+                );
+            }
+        }
+    );
+    auto* transferred_probe =
+        static_cast<RecordingFenceProbe*>(transferred_signal.Get());
+    FenceRef fallback_signal = MoerNew(RecordingFenceProbe)(
+        std::shared_ptr<std::atomic_bool>{},
+        [&] {
+            signal_observed_host_terminal[1].store(
+                all_hosts_terminal(), std::memory_order_release
+            );
+            signal_rejections[1].fetch_add(
+                1, std::memory_order_release
+            );
+        }
+    );
+    auto* fallback_probe =
+        static_cast<RecordingFenceProbe*>(fallback_signal.Get());
 
     Moer::Array<RHIRecordingSource> sources{};
     sources.emplace_back(RHIRecordingSource{
-        .command_list = invalid_source,
+        .command_list = transferred_source,
         .completion   = RHIRecordingGate::Create(true),
         .submit_metadata = RHIRecordingSubmitMetadata{
-            .wait_fences = {
-                RHIRecordingFencePoint{.fence = {}, .value = 1},
+            .signal_fences = {
+                RHIRecordingFencePoint{
+                    .fence = transferred_signal,
+                    .value = 5,
+                },
+                // The first point has already transferred into CmdSubmit when
+                // this deterministic validation failure is reached.
+                RHIRecordingFencePoint{.fence = {}, .value = 6},
             },
         },
     });
@@ -1614,7 +2823,10 @@ bool MetadataFailureRejectsEveryProducerSignal() {
         .completion   = RHIRecordingGate::Create(true),
         .submit_metadata = RHIRecordingSubmitMetadata{
             .signal_fences = {
-                RHIRecordingFencePoint{.fence = signal_fence, .value = 7},
+                RHIRecordingFencePoint{
+                    .fence = fallback_signal,
+                    .value = 7,
+                },
             },
         },
     });
@@ -1625,10 +2837,40 @@ bool MetadataFailureRejectsEveryProducerSignal() {
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     RHIExecutor::ShutDown();
 
-    bool okay = Expect(
-        signal_probe->RejectedValue() == 7,
-        "metadata failure did not reject a later producer signal"
-    );
+    bool okay =
+        Expect(
+            transferred_probe->RejectedValue() == 5 &&
+                signal_rejections[0].load(
+                    std::memory_order_acquire
+                ) == 1,
+            "metadata failure rejected a transferred producer signal more than once"
+        ) &&
+        Expect(
+            fallback_probe->RejectedValue() == 7 &&
+                signal_rejections[1].load(
+                    std::memory_order_acquire
+                ) == 1,
+            "metadata failure did not reject an untouched producer signal exactly once"
+        ) &&
+        Expect(
+            signal_observed_host_terminal[0].load(
+                std::memory_order_acquire
+            ) &&
+                signal_observed_host_terminal[1].load(
+                    std::memory_order_acquire
+                ),
+            "metadata rejection ran before every host Future was terminal"
+        ) &&
+        Expect(
+            !metadata_reentrant_submit_threw.load(
+                std::memory_order_acquire
+            ) &&
+                metadata_reentrant_submit.has_value() &&
+                HasNoRejectedGenerationPayload(
+                    *metadata_reentrant_submit
+                ),
+            "metadata rejection re-entry extracted the rejected generation"
+        );
 
     RHIExecutor::StartUp();
     FenceRef failed_gate_fence = MoerNew(RecordingFenceProbe)();
@@ -1683,8 +2925,8 @@ bool MetadataFailureRejectsEveryProducerSignal() {
     );
     RHIExecutor::ShutDown();
     okay &= Expect(
-        cancelled_probe->RejectedValue() == 13,
-        "shutdown cancellation did not reject its producer signal"
+        cancelled_probe->RejectedValue() == 0,
+        "shutdown cancellation touched metadata owned by an opaque producer"
     );
     return okay;
 }
@@ -2031,12 +3273,20 @@ bool ShutdownDrainsAcceptedReadyWork() {
 
 int main() {
     if (!CommandListSignalTracksNativeAcceptanceAndRejection() ||
+        !CommandListFenceReentryCannotExtractRejectedGeneration() ||
+        !FenceRejectionObservesPublishedHostsAndRetainsOwnedSignals() ||
+        !ExportReceiptSignalsOwnDedicatedRejectionKeepalives() ||
+        !CommandDestructorReentryTargetsOnlyFreshGeneration() ||
+        !CmdSubmitCallbackCaptureDestructorSeesCompleteReplacement() ||
+        !CommandListCallbackCaptureDestructorSeesCompleteReplacement() ||
         !FrontendQueryRejectionTerminalizesBeforeOrdinaryCallbacks() ||
         !FrontendCompletionRejectionIsOneTerminalTransaction() ||
         !FrontendPresentRejectionPublishesBatchBeforeReceipt() ||
         !DeferredOpaqueCancellationTicketSurvivesSubmit() ||
         !DirectCommandListGroupPreflightRejectsEverySource() ||
-        !DirectCommandListGroupMaterializationFailureRejectsPrefixAndSuffix() ||
+        !DirectCommandListGroupActiveLeaseFailsWithoutMutation() ||
+        !DirectCommandListGroupPartialMaterializationFailureIsAtomic() ||
+        !DirectMaterializationOverrideRemovalWaitsForReaders() ||
         !RecordingPreflightFailureTerminalizesEveryQueryGeneration() ||
         !RecordingPreflightFailureTerminalizesEveryCompletionGeneration() ||
         !SubmitRecordingRefreshesAStaleQueryCancellationView() ||
@@ -2046,6 +3296,7 @@ int main() {
         !FailedGateRejectsOnlyItsGroupAndPreservesFifo() ||
         !FailedRecordingDrainsCleanupExactlyOnce() ||
         !FailedCommitRejectsCompletedSources() ||
+        !ShutdownPreservesACompletedSourceUntilCommitHandoff() ||
         !MetadataFailureRejectsEveryProducerSignal() ||
         !BlockingWaitReportsTerminalStatus() ||
         !ShutdownDrainsTerminalSourceBehindPendingHead() ||
