@@ -140,8 +140,12 @@ public:
 
     LightingPass(class ShaderManager& manager, BindlessArrayRef bindless_array);
 
-    LocalLightSamplingDecision
-         Process(CommandList& cmd_list, RTContext& rt_ctx, const DI::LightBufferParams& light_buffer_params);
+    LocalLightSamplingDecision Process(
+        CommandList&                 cmd_list,
+        RTContext&                   rt_ctx,
+        const DI::LightBufferParams& light_buffer_params,
+        bool                         temporal_history_valid
+    );
     bool AddPasses(
         RenderGraph&                 graph,
         const RTGraphFrameResources& graph_resources,
