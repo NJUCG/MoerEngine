@@ -5,6 +5,7 @@
 #include <array>
 #include <iostream>
 #include <stdexcept>
+#include <utility>
 
 using namespace Moer;
 using namespace Moer::Render;
@@ -74,6 +75,236 @@ FunctionTable MakeFunctionTable() {
         .lock_bdls_array         = &NoopBindlessLock,
         .unlock_bdls_array       = &NoopBindlessLock,
     };
+}
+
+template<typename TCallable>
+void ExpectInvalidArgument(TCallable&& _callable, const char* _message) {
+    try {
+        std::forward<TCallable>(_callable)();
+    } catch (const std::invalid_argument&) {
+        return;
+    }
+    throw std::runtime_error(_message);
+}
+
+void LegacyVulkanStateMappingIsStageCompatible() {
+    const auto compute_srv = VkTracker::ResolveTextureState(
+        ETextureState::SHADER_RESOURCE,
+        EPassType::Compute,
+        false,
+        false
+    );
+    Expect(
+        std::get<0>(compute_srv) == VK_ACCESS_2_SHADER_READ_BIT &&
+            std::get<1>(compute_srv) ==
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
+            std::get<2>(compute_srv) ==
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        "compute SRV texture mapping is not shader-stage compatible"
+    );
+
+    const auto raytracing_sampled = VkTracker::ResolveTextureState(
+        ETextureState::SAMPLE,
+        EPassType::Raytracing,
+        false,
+        false
+    );
+    Expect(
+        std::get<0>(raytracing_sampled) ==
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT &&
+            std::get<2>(raytracing_sampled) ==
+                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+        "raytracing sampled texture mapping lost its shader stage"
+    );
+
+    const auto graphics_srv = VkTracker::ResolveTextureState(
+        ETextureState::SHADER_RESOURCE,
+        EPassType::Graphics,
+        false,
+        false
+    );
+    Expect(
+        std::get<2>(graphics_srv) ==
+            (VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT),
+        "graphics SRV texture mapping must cover vertex and fragment shaders"
+    );
+
+    const auto graphics_render_target_read =
+        VkTracker::ResolveTextureState(
+            ETextureState::RENDER_TARGET,
+            EPassType::Graphics,
+            false,
+            false
+        );
+    Expect(
+        std::get<0>(graphics_render_target_read) ==
+                VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT &&
+            std::get<1>(graphics_render_target_read) ==
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL &&
+            std::get<2>(graphics_render_target_read) ==
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+        "graphics render-target read mapping lost queue-transfer compatibility"
+    );
+
+    const auto copy_src = VkTracker::ResolveTextureState(
+        ETextureState::TRANSFER,
+        EPassType::Copy,
+        false,
+        false
+    );
+    const auto copy_dst = VkTracker::ResolveTextureState(
+        ETextureState::TRANSFER,
+        EPassType::Copy,
+        true,
+        false
+    );
+    Expect(
+        std::get<0>(copy_src) == VK_ACCESS_2_TRANSFER_READ_BIT &&
+            std::get<1>(copy_src) == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL &&
+            std::get<2>(copy_src) == VK_PIPELINE_STAGE_2_TRANSFER_BIT &&
+            std::get<0>(copy_dst) == VK_ACCESS_2_TRANSFER_WRITE_BIT &&
+            std::get<1>(copy_dst) == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
+            std::get<2>(copy_dst) == VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        "copy texture mapping is not transfer-stage compatible"
+    );
+
+    const auto depth_read = VkTracker::ResolveTextureState(
+        ETextureState::DEPTH_STENCIL,
+        EPassType::Graphics,
+        false,
+        true
+    );
+    Expect(
+        std::get<0>(depth_read) ==
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT &&
+            std::get<1>(depth_read) ==
+                VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL &&
+            std::get<2>(depth_read) ==
+                (VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                 VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT),
+        "depth read mapping is not attachment-stage compatible"
+    );
+
+    const auto compute_uav = VkTracker::ResolveTextureState(
+        ETextureState::UNORDERED_ACCESS,
+        EPassType::Compute,
+        true,
+        false
+    );
+    Expect(
+        std::get<0>(compute_uav) ==
+                (VK_ACCESS_2_SHADER_READ_BIT |
+                 VK_ACCESS_2_SHADER_WRITE_BIT) &&
+            std::get<1>(compute_uav) == VK_IMAGE_LAYOUT_GENERAL &&
+            std::get<2>(compute_uav) ==
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        "compute UAV texture mapping is not shader-stage compatible"
+    );
+
+    const auto copy_buffer_src = VkTracker::ResolveBufferState(
+        EBufferState::TRANSFER,
+        EPassType::Copy,
+        false
+    );
+    const auto raytracing_buffer_srv = VkTracker::ResolveBufferState(
+        EBufferState::SHADER_RESOURCE,
+        EPassType::Raytracing,
+        false
+    );
+    const auto graphics_buffer_srv = VkTracker::ResolveBufferState(
+        EBufferState::SHADER_RESOURCE,
+        EPassType::Graphics,
+        false
+    );
+    Expect(
+        std::get<0>(copy_buffer_src) == VK_ACCESS_2_TRANSFER_READ_BIT &&
+            std::get<1>(copy_buffer_src) ==
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT &&
+            std::get<0>(raytracing_buffer_srv) ==
+                VK_ACCESS_2_SHADER_READ_BIT &&
+            std::get<1>(raytracing_buffer_srv) ==
+                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR &&
+            std::get<1>(graphics_buffer_srv) ==
+                (VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT),
+        "legacy buffer mapping lost copy or raytracing stage semantics"
+    );
+
+    ExpectInvalidArgument(
+        [] {
+            (void)VkTracker::ResolveTextureState(
+                ETextureState::SHADER_RESOURCE,
+                EPassType::Copy,
+                false,
+                false
+            );
+        },
+        "copy pass accepted a shader-resource texture"
+    );
+    ExpectInvalidArgument(
+        [] {
+            (void)VkTracker::ResolveTextureState(
+                ETextureState::RENDER_TARGET,
+                EPassType::Compute,
+                true,
+                false
+            );
+        },
+        "compute pass accepted a render-target attachment"
+    );
+    ExpectInvalidArgument(
+        [] {
+            (void)VkTracker::ResolveTextureState(
+                ETextureState::SAMPLE,
+                EPassType::Graphics,
+                true,
+                false
+            );
+        },
+        "write path accepted a sampled texture"
+    );
+    ExpectInvalidArgument(
+        [] {
+            (void)VkTracker::ResolveBufferState(
+                EBufferState::SHADER_RESOURCE,
+                EPassType::Copy,
+                false
+            );
+        },
+        "copy pass accepted a shader-resource buffer"
+    );
+    ExpectInvalidArgument(
+        [] {
+            (void)VkTracker::ResolveBufferState(
+                EBufferState::VERTEX,
+                EPassType::Graphics,
+                true
+            );
+        },
+        "write path accepted a vertex buffer"
+    );
+    ExpectInvalidArgument(
+        [] {
+            (void)VkTracker::ResolveTextureState(
+                ETextureState::TRANSFER,
+                static_cast<EPassType>(99),
+                false,
+                false
+            );
+        },
+        "texture mapping accepted an unknown pass type"
+    );
+    ExpectInvalidArgument(
+        [] {
+            (void)VkTracker::ResolveBufferState(
+                static_cast<EBufferState>(99),
+                EPassType::Graphics,
+                false
+            );
+        },
+        "buffer mapping accepted an unknown state"
+    );
 }
 
 int64 FindCommandLayer(
@@ -631,6 +862,7 @@ void ReleaseSentinelOverlapUsesExactBufferAndTextureRanges() {
 
 int main() {
     try {
+        LegacyVulkanStateMappingIsStageCompatible();
         LocalExplicitPayloadAndOwnershipArePreserved();
         ReleaseAndAcquirePayloadsPreserveEndpointAffinity();
         InvalidQueueTransferEndpointsFailWithoutMutation();
