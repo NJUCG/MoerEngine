@@ -11,6 +11,7 @@
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
 #include <atomic>
+#include <limits>
 #include <stdexcept>
 namespace Moer::Render {
 namespace {
@@ -18,6 +19,7 @@ namespace {
 std::atomic<uint64> g_query_token_id{1};
 std::atomic<uint64> g_query_owner_id{1};
 std::atomic<uint64> g_gpu_completion_token_id{1};
+std::atomic<uint64> g_readback_token_id{1};
 
 uint64 NextNonZeroId(std::atomic<uint64>& _counter) noexcept {
     uint64 id = _counter.fetch_add(1, std::memory_order_relaxed);
@@ -25,6 +27,77 @@ uint64 NextNonZeroId(std::atomic<uint64>& _counter) noexcept {
         id = _counter.fetch_add(1, std::memory_order_relaxed);
     }
     return id;
+}
+
+uint3 FullTextureMipExtent(
+    const Texture& _texture,
+    uint           _mip_level
+) noexcept {
+    const uint3 base_extent = _texture.GetExtent();
+    const auto mip_dimension = [_mip_level](uint _dimension) noexcept {
+        if (_mip_level >= std::numeric_limits<uint>::digits) {
+            return 1u;
+        }
+        return std::max(_dimension >> _mip_level, 1u);
+    };
+    return uint3(
+        mip_dimension(uint(base_extent.x)),
+        mip_dimension(uint(base_extent.y)),
+        mip_dimension(uint(base_extent.z))
+    );
+}
+
+uint3 TextureCopyExtent(const TextureView& _view) noexcept {
+    const Texture* texture = _view.GetTexture();
+    if (texture == nullptr) {
+        return _view.extent;
+    }
+    const uint3 base_extent = texture->GetExtent();
+    if (_view.extent.x != base_extent.x ||
+        _view.extent.y != base_extent.y ||
+        _view.extent.z != base_extent.z) {
+        // IO and explicit region callers already describe the selected mip
+        // or partial region. Do not apply the mip shift a second time.
+        return _view.extent;
+    }
+    return FullTextureMipExtent(*texture, _view.mip_level);
+}
+
+bool IsOwningTextureReadbackSupported(
+    const TextureView& _view
+) noexcept {
+    const Texture* texture = _view.GetTexture();
+    if (texture == nullptr) {
+        return false;
+    }
+
+    // GetMipByteSize is currently a texel-stride calculation. Keep the
+    // owning contract honest by accepting only the contiguous,
+    // single-plane color range until block-compressed and multi-plane
+    // packing is represented explicitly by the RHI.
+    const uint format = static_cast<uint>(texture->GetFormat());
+    const bool contiguous_single_plane_color =
+        format >= static_cast<uint>(PF_R4G4_UNORM_PACK8) &&
+        format <= static_cast<uint>(PF_E5B9G9R9_UFLOAT_PACK32);
+    const ETextureUsageFlags required_usage =
+        ETextureUsageFlags::TRANSFER_SRC;
+    const uint3 base_extent = texture->GetExtent();
+    const uint3 mip_extent =
+        FullTextureMipExtent(*texture, _view.mip_level);
+    const bool full_subresource_extent =
+        (_view.extent.x == base_extent.x &&
+         _view.extent.y == base_extent.y &&
+         _view.extent.z == base_extent.z) ||
+        (_view.extent.x == mip_extent.x &&
+         _view.extent.y == mip_extent.y &&
+         _view.extent.z == mip_extent.z);
+    return contiguous_single_plane_color &&
+           _view.format == texture->GetFormat() &&
+           texture->GetAspectFlags() == ETextureAspectFlags::COLOR &&
+           texture->GetNumSamples() == 1 &&
+           (texture->GetUsage() & required_usage) == required_usage &&
+           _view.offset.x == 0 && _view.offset.y == 0 &&
+           _view.offset.z == 0 && full_subresource_extent;
 }
 
 void InvokeCallbacksNoexcept(Array<std::function<void()>>& _callbacks) noexcept {
@@ -714,7 +787,7 @@ void CommandList::CopyFrom(TextureView _src, BufferView _dst, std::string_view _
             reinterpret_cast<uint64>(_dst.GetBuffer()),
             _src.offset,
             _dst.byte_offset,
-            _src.extent,
+            TextureCopyExtent(_src),
             _src.mip_level,
             _src.array_layer,
             _name
@@ -729,7 +802,7 @@ void CommandList::CopyFrom(BufferView _src, TextureView _dst, std::string_view _
             reinterpret_cast<uint64>(_dst.texture),
             _src.byte_offset,
             _dst.offset,
-            _dst.extent,
+            TextureCopyExtent(_dst),
             _dst.mip_level,
             _dst.array_layer,
             _name
@@ -815,12 +888,94 @@ void CommandList::CopyFrom(TextureView _src, std::span<byte> _data, std::string_
         MakeUnique<CopyBackTextureCmd>(
             reinterpret_cast<uint64>(_src.texture),
             _src.mip_level,
+            _src.array_layer,
             _src.offset,
-            _src.extent,
+            TextureCopyExtent(_src),
             std::span<byte>(_data.data(), mip_size),
             _name
         )
     );
+}
+
+ReadbackFuture CommandList::Readback(
+    BufferView       _src,
+    std::string_view _name
+) {
+    if (_src.GetBuffer() == nullptr || _src.GetByteSize() == 0) {
+        return {};
+    }
+
+    GpuCompletionToken completion_token(
+        NextNonZeroId(g_gpu_completion_token_id), _name
+    );
+    GpuCompletionFuture completion = completion_token.GetFuture();
+    ReadbackToken token = ReadbackBackendAccess::Create(
+        NextNonZeroId(g_readback_token_id),
+        static_cast<std::size_t>(_src.GetByteSize()),
+        _name,
+        std::move(completion)
+    );
+    ReadbackFuture future = token.GetFuture();
+    UniquePtr<Command> command = MakeUnique<CopyBackBufferCmd>(
+        reinterpret_cast<uint64>(_src.GetBuffer()),
+        _src.GetByteOffset(),
+        _src.GetByteSize(),
+        std::move(token),
+        _name
+    );
+    commands.reserve(commands.size() + 1);
+    gpu_completion_tokens.reserve(gpu_completion_tokens.size() + 1);
+    gpu_completion_cancellation_domain.Register(completion_token);
+    gpu_completion_tokens.emplace_back(std::move(completion_token));
+    commands.emplace_back(std::move(command));
+    return future;
+}
+
+ReadbackFuture CommandList::Readback(
+    TextureView      _src,
+    std::string_view _name
+) {
+    const Texture* texture = _src.GetTexture();
+    if (texture == nullptr ||
+        _src.num_mips != 1 || _src.num_array != 1 ||
+        _src.mip_level >= texture->GetNumMips() ||
+        _src.array_layer >= texture->GetNumArray() ||
+        !IsOwningTextureReadbackSupported(_src)) {
+        return {};
+    }
+
+    const uint64 byte_size =
+        texture->GetMipByteSize(_src.mip_level);
+    if (byte_size == 0) {
+        return {};
+    }
+
+    GpuCompletionToken completion_token(
+        NextNonZeroId(g_gpu_completion_token_id), _name
+    );
+    GpuCompletionFuture completion = completion_token.GetFuture();
+    ReadbackToken token = ReadbackBackendAccess::Create(
+        NextNonZeroId(g_readback_token_id),
+        static_cast<std::size_t>(byte_size),
+        _name,
+        std::move(completion)
+    );
+    ReadbackFuture future = token.GetFuture();
+    UniquePtr<Command> command = MakeUnique<CopyBackTextureCmd>(
+        reinterpret_cast<uint64>(_src.texture),
+        _src.mip_level,
+        _src.array_layer,
+        _src.offset,
+        TextureCopyExtent(_src),
+        std::move(token),
+        _name
+    );
+    commands.reserve(commands.size() + 1);
+    gpu_completion_tokens.reserve(gpu_completion_tokens.size() + 1);
+    gpu_completion_cancellation_domain.Register(completion_token);
+    gpu_completion_tokens.emplace_back(std::move(completion_token));
+    commands.emplace_back(std::move(command));
+    return future;
 }
 
 void CommandList::CopyFrom(Array<byte>&& _data, BufferView _dst, std::string_view _name) {
@@ -849,7 +1004,7 @@ void CommandList::CopyFrom(Array<byte>&& _data, TextureView _dst, std::string_vi
             _dst.mip_level,
             _dst.array_layer,
             _dst.offset,
-            _dst.extent,
+            TextureCopyExtent(_dst),
             std::move(_data),
             _name
         )

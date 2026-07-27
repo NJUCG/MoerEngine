@@ -11,6 +11,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHICompletion.h"
 #include "rhi/RHIQuery.h"
+#include "rhi/RHIReadback.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHISubmissionTopology.h"
 #include "shader/ShaderPipeline.h"
@@ -1658,6 +1659,18 @@ public:
     RENDER_API void CopyFrom(
         TextureView      _src,
         std::span<byte>  _data,
+        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
+    );
+
+    // Owning host readback. The returned Future does not expose native
+    // synchronization or mapped staging memory; Ready means the GPU copy has
+    // retired and an immutable CPU byte snapshot has been materialized.
+    [[nodiscard]] RENDER_API ReadbackFuture Readback(
+        BufferView       _src,
+        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
+    );
+    [[nodiscard]] RENDER_API ReadbackFuture Readback(
+        TextureView      _src,
         std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
     );
 

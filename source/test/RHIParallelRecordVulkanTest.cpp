@@ -1254,6 +1254,7 @@ void ValidateArguments(int _argc, const char** _argv) {
             argument != "--present-boundary" &&
             argument != "--present-hard" &&
             argument != "--rt-export-rejection" &&
+            argument != "--readback-future" &&
             argument != "--timestamp-query" &&
             argument != "--timestamp-query-success-batch" &&
             argument != "--timestamp-query-mid-failure" &&
@@ -5507,8 +5508,6 @@ void RunRaytracingExportAcceptanceRejection() {
     std::atomic<uint32> encoder_dispatches{0};
     const std::array<uint32, 4> readback_retry_expected{41, 43, 47, 53};
     const std::array<uint32, 4> recovery_expected{59, 61, 67, 71};
-    std::array<uint32, 4>       rejected_readback{};
-    std::array<uint32, 4>       recovered_readback{};
     std::binary_semaphore blocker_entered{0};
     std::binary_semaphore release_blocker{0};
     OneShotSemaphoreRelease release_guard(release_blocker);
@@ -5691,9 +5690,9 @@ void RunRaytracingExportAcceptanceRejection() {
 
         readback_retry_submission.BeginReadback(device.CreateFence());
         CommandList rejected_readback_commands(EQueueType::Graphics);
-        rejected_readback_commands.CopyFrom(
+        ReadbackFuture rejected_readback =
+            rejected_readback_commands.Readback(
             readback_retry_source->GetView(),
-            WritableBytes(rejected_readback),
             "RaytracingExportRejectedReadback"
         );
         rejected_readback_commands.AddCallback([&] {
@@ -5720,8 +5719,12 @@ void RunRaytracingExportAcceptanceRejection() {
             ERHIExecSubmitFlags::FlushGPU
         );
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        const ReadbackResult rejected_readback_result =
+            rejected_readback.Get();
         if (readback_retry_submission.ResolveReadbackAcceptance() ||
             readback_retry_submission.ReadbackOutcome() != Outcome::Rejected ||
+            rejected_readback_result.status != ReadbackStatus::Error ||
+            !rejected_readback_result.Bytes().empty() ||
             readback_retry_submission.DispatchEncoder([&] {
                 encoder_dispatches.fetch_add(
                     1, std::memory_order_relaxed
@@ -5780,12 +5783,7 @@ void RunRaytracingExportAcceptanceRejection() {
             !readback_retry_decision.readback_attempted ||
             readback_retry_decision.readback_accepted ||
             readback_retry_decision.encoder_dispatched ||
-            encoder_dispatches.load(std::memory_order_acquire) != 0 ||
-            std::any_of(
-                rejected_readback.begin(),
-                rejected_readback.end(),
-                [](uint32 value) { return value != 0; }
-            )) {
+            encoder_dispatches.load(std::memory_order_acquire) != 0) {
             throw std::runtime_error(
                 "production readback rejection did not preserve an accepted "
                 "frame and pending export request"
@@ -5864,9 +5862,9 @@ void RunRaytracingExportAcceptanceRejection() {
 
         recovery_submission.BeginReadback(device.CreateFence());
         CommandList recovery_readback_commands(EQueueType::Graphics);
-        recovery_readback_commands.CopyFrom(
+        ReadbackFuture recovered_readback =
+            recovery_readback_commands.Readback(
             recovery_source->GetView(),
-            WritableBytes(recovered_readback),
             "RaytracingExportRecoveryReadback"
         );
         recovery_readback_commands.AddCallback([&] {
@@ -5890,7 +5888,14 @@ void RunRaytracingExportAcceptanceRejection() {
             ERHIExecSubmitFlags::FlushGPU
         );
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-        if (!recovery_submission.DispatchEncoder([&] {
+        const ReadbackResult recovered_readback_result =
+            recovered_readback.Get();
+        const auto recovered_values =
+            recovered_readback_result.CopyAs<uint32>();
+        if (recovered_readback_result.status !=
+                ReadbackStatus::Ready ||
+            !recovered_values.has_value() ||
+            !recovery_submission.DispatchEncoder([&] {
                 encoder_dispatches.fetch_add(
                     1, std::memory_order_relaxed
                 );
@@ -5950,7 +5955,11 @@ void RunRaytracingExportAcceptanceRejection() {
             !recovery_decision.readback_accepted ||
             !recovery_decision.encoder_dispatched ||
             encoder_dispatches.load(std::memory_order_acquire) != 1 ||
-            recovered_readback != recovery_expected) {
+            *recovered_values !=
+                Array<uint32>(
+                    recovery_expected.begin(),
+                    recovery_expected.end()
+                )) {
             throw std::runtime_error(
                 "accepted raytracing export recovery did not consume the "
                 "request exactly once"
@@ -6013,6 +6022,119 @@ void RunRaytracingExportAcceptanceRejection() {
         "readback_retry=frame_accepted recovery_consumed=true encoder=once "
         "decision_table=verified native_rejected=0 callbacks=exactly_once "
         "keepalive=terminal replay=0"
+    );
+}
+
+void RunRaytracingAcceptedReadbackMaterializationFailure() {
+    auto& device = RenderDevice::Get();
+    using Outcome = EExportSubmissionOutcome;
+
+    const EBufferUsageFlags usage =
+        EBufferUsageFlags::TRANSFER_SRC |
+        EBufferUsageFlags::TRANSFER_DST;
+    BufferRef source = device.CreateBuffer<uint32>(
+        "rt_export_materialization_failure_source", 4, usage
+    );
+    ExportSubmissionTransaction submission(device.CreateFence());
+
+    CommandList source_commands(EQueueType::Graphics);
+    source_commands.CopyFrom(
+        OwnedBytes(std::array<uint32, 4>{109, 113, 127, 131}),
+        source->GetView(),
+        "RaytracingExportMaterializationFailureSource"
+    );
+    CmdSubmit source_submit = source_commands.Submit();
+    submission.AttachSignal(source_submit);
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        std::move(source_submit),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    if (submission.SourceOutcome() != Outcome::Accepted) {
+        throw std::runtime_error(
+            "materialization-failure source was not accepted"
+        );
+    }
+
+    submission.BeginReadback(device.CreateFence());
+    CommandList readback_commands(EQueueType::Graphics);
+    ReadbackFuture readback = readback_commands.Readback(
+        source->GetView(),
+        "RaytracingExportInjectedMaterializationFailure"
+    );
+    CmdSubmit readback_submit = readback_commands.Submit();
+    if (readback_submit.cmds.size() != 1 ||
+        readback_submit.cmds.front()->Type() !=
+            Command::EType::CopyBackBuffer) {
+        throw std::runtime_error(
+            "materialization-failure readback command was not recorded"
+        );
+    }
+    const ReadbackToken backend_token =
+        static_cast<const CopyBackBufferCmd&>(
+            *readback_submit.cmds.front()
+        ).OwningReadback();
+    if (ReadbackBackendAccess::MaterializePayload(
+            backend_token,
+            nullptr,
+            [](void*, std::span<Moer::byte>) {
+                throw std::runtime_error(
+                    "injected accepted readback materialization failure"
+                );
+            }
+        )) {
+        throw std::runtime_error(
+            "throwing readback writer unexpectedly materialized a payload"
+        );
+    }
+
+    submission.AttachReadbackSignal(readback_submit);
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        std::move(readback_submit),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    if (!submission.ResolveReadbackAcceptance()) {
+        throw std::runtime_error(
+            "materialization-failure readback was not natively accepted"
+        );
+    }
+
+    const ReadbackResult result = readback.Get();
+    if (result.status != ReadbackStatus::Error ||
+        result.error_reason.empty() || !result.Bytes().empty()) {
+        throw std::runtime_error(
+            "accepted materialization failure did not resolve Error"
+        );
+    }
+    submission.MarkAcceptedReadbackFailed();
+    if (submission.ReadbackOutcome() != Outcome::Failed ||
+        submission.DispatchEncoder([] {})) {
+        throw std::runtime_error(
+            "accepted materialization failure dispatched the encoder"
+        );
+    }
+
+    const auto decision = submission.ClassifyFrameAcceptance(
+        Outcome::Accepted, true, false
+    );
+    if (decision.frame_accepted || decision.export_consumed ||
+        !decision.retry_requested ||
+        !decision.independent_source_failed ||
+        !decision.latch_renderer ||
+        !decision.readback_attempted ||
+        decision.readback_accepted ||
+        decision.encoder_dispatched) {
+        throw std::runtime_error(
+            "accepted materialization failure did not latch frame policy"
+        );
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    LOG_INFO(
+        "[TESTCASE][PASS] "
+        "name=RaytracingAcceptedReadbackMaterializationFailure "
+        "native=accepted payload=error encoder=0 latch=true"
     );
 }
 
@@ -13643,6 +13765,245 @@ void RunTimestampQuerySerialRecordFailure() {
     );
 }
 
+void RunOwningReadbackFuture() {
+    auto& device = RenderDevice::Get();
+    constexpr size_t buffer_element_count = 16;
+    constexpr size_t readback_first_element = 4;
+    constexpr size_t readback_element_count = 8;
+    constexpr uint32 texture_width = 8;
+    constexpr uint32 texture_height = 8;
+    constexpr uint32 texture_mip = 1;
+    constexpr uint32 texture_layer = 1;
+
+    const EBufferUsageFlags buffer_usage =
+        EBufferUsageFlags::TRANSFER_SRC |
+        EBufferUsageFlags::TRANSFER_DST;
+    BufferRef buffer = device.CreateBuffer<uint32>(
+        "owning_readback_buffer",
+        buffer_element_count,
+        buffer_usage
+    );
+    TextureRef texture = device.CreateTexture(
+        "owning_readback_texture",
+        Extent3D(texture_width, texture_height, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::TRANSFER_SRC |
+            ETextureUsageFlags::TRANSFER_DST,
+        2,
+        2
+    );
+    TextureRef compressed_texture = device.CreateTexture(
+        "owning_readback_unsupported_bc1",
+        Extent3D(texture_width, texture_height, 1),
+        PF_BC1_RGBA_UNORM_BLOCK,
+        ETextureUsageFlags::TRANSFER_SRC |
+            ETextureUsageFlags::TRANSFER_DST
+    );
+    const TextureInfo msaa_info(
+        ETextureDimension::TEX_2D,
+        ETextureUsageFlags::TRANSFER_SRC |
+            ETextureUsageFlags::TRANSFER_DST,
+        PF_R8G8B8A8_UNORM,
+        EClearAttachment::COLOR,
+        Extent3D(texture_width, texture_height, 1),
+        1,
+        1,
+        4
+    );
+    TextureRef msaa_texture = device.CreateTexture(
+        "owning_readback_unsupported_msaa", msaa_info
+    );
+
+    TextureView offset_view = texture->GetView(0, 1).Slice(0, 1);
+    offset_view.offset.x = 1;
+    TextureView partial_view = texture->GetView(0, 1).Slice(0, 1);
+    partial_view.extent.x = texture_width / 2;
+    TextureView invalid_mip_view =
+        texture->GetView(0, 1).Slice(0, 1);
+    invalid_mip_view.mip_level = 255;
+    CommandList unsupported_commands(EQueueType::Copy);
+    const ReadbackFuture compressed_readback =
+        unsupported_commands.Readback(
+            compressed_texture->GetView(0, 1).Slice(0, 1),
+            "OwningReadbackRejectCompressed"
+        );
+    const ReadbackFuture msaa_readback =
+        unsupported_commands.Readback(
+            msaa_texture->GetView(0, 1).Slice(0, 1),
+            "OwningReadbackRejectMsaa"
+        );
+    const ReadbackFuture offset_readback =
+        unsupported_commands.Readback(
+            offset_view, "OwningReadbackRejectOffset"
+        );
+    const ReadbackFuture partial_readback =
+        unsupported_commands.Readback(
+            partial_view, "OwningReadbackRejectPartial"
+        );
+    const ReadbackFuture invalid_mip_readback =
+        unsupported_commands.Readback(
+            invalid_mip_view, "OwningReadbackRejectInvalidMip"
+        );
+    CmdSubmit unsupported_submit = unsupported_commands.Submit();
+    if (compressed_readback.Valid() || msaa_readback.Valid() ||
+        offset_readback.Valid() || partial_readback.Valid() ||
+        invalid_mip_readback.Valid() ||
+        !unsupported_submit.cmds.empty() ||
+        !unsupported_submit.gpu_completion_tokens.empty()) {
+        throw std::runtime_error(
+            "owning texture readback admitted an unsupported compressed, "
+            "multisampled, or partial subresource"
+        );
+    }
+
+    std::array<uint32, buffer_element_count> buffer_values{};
+    for (uint32 index = 0; index < buffer_values.size(); ++index) {
+        buffer_values[index] =
+            0x19B00000u + index * 37u + 5u;
+    }
+    constexpr size_t texture_mip_width =
+        texture_width >> texture_mip;
+    constexpr size_t texture_mip_height =
+        texture_height >> texture_mip;
+    std::array<uint32, texture_mip_width * texture_mip_height>
+        texture_values{};
+    for (uint32 index = 0; index < texture_values.size(); ++index) {
+        texture_values[index] =
+            0xFF000000u | (index * 0x00070311u);
+    }
+
+    TextureView texture_view =
+        texture->GetView(texture_mip, 1).Slice(texture_layer, 1);
+    TextureView texture_upload_view = texture_view;
+    texture_upload_view.extent = uint3(
+        texture_mip_width, texture_mip_height, 1
+    );
+    BufferView buffer_view = buffer->GetView(
+        readback_first_element * sizeof(uint32),
+        readback_element_count * sizeof(uint32)
+    );
+
+    CommandList commands(EQueueType::Copy);
+    commands.CopyFrom(
+        OwnedBytes(buffer_values),
+        buffer->GetView(),
+        "OwningReadbackBufferUpload"
+    );
+    commands.CopyFrom(
+        OwnedBytes(texture_values),
+        texture_upload_view,
+        "OwningReadbackTextureUpload"
+    );
+    ReadbackFuture buffer_future = commands.Readback(
+        buffer_view, "OwningReadbackBuffer"
+    );
+    ReadbackFuture texture_future = commands.Readback(
+        texture_view, "OwningReadbackTexture"
+    );
+    if (!buffer_future.Valid() || !texture_future.Valid() ||
+        buffer_future.ExpectedByteSize() !=
+            readback_element_count * sizeof(uint32) ||
+        texture_future.ExpectedByteSize() !=
+            texture_values.size() * sizeof(uint32)) {
+        throw std::runtime_error(
+            "owning readback did not preserve logical byte sizes"
+        );
+    }
+
+    std::atomic<uint32> callback_count{0};
+    std::atomic_bool callbacks_observed_siblings_terminal{true};
+    buffer_future.Then([&](const ReadbackResult& _result) {
+        if (_result.status != ReadbackStatus::Ready ||
+            texture_future.Status() == ReadbackStatus::Pending) {
+            callbacks_observed_siblings_terminal.store(
+                false, std::memory_order_release
+            );
+        }
+        callback_count.fetch_add(1, std::memory_order_relaxed);
+    });
+    texture_future.Then([&](const ReadbackResult& _result) {
+        if (_result.status != ReadbackStatus::Ready ||
+            buffer_future.Status() == ReadbackStatus::Pending) {
+            callbacks_observed_siblings_terminal.store(
+                false, std::memory_order_release
+            );
+        }
+        callback_count.fetch_add(1, std::memory_order_relaxed);
+    });
+
+    RHIExecutor::Get().Submit(
+        EQueueType::Copy,
+        commands.Submit(),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+
+    const ReadbackResult buffer_result = buffer_future.Get();
+    const ReadbackResult texture_result = texture_future.Get();
+    const auto readback_buffer_values =
+        buffer_result.CopyAs<uint32>();
+    const auto readback_texture_values =
+        texture_result.CopyAs<uint32>();
+    if (buffer_result.status != ReadbackStatus::Ready ||
+        texture_result.status != ReadbackStatus::Ready ||
+        !readback_buffer_values.has_value() ||
+        !readback_texture_values.has_value()) {
+        throw std::runtime_error(
+            "owning readback Future did not resolve Ready with typed data"
+        );
+    }
+    if (!std::equal(
+            readback_buffer_values->begin(),
+            readback_buffer_values->end(),
+            buffer_values.begin() + readback_first_element
+        )) {
+        LOG_ERROR(
+            "owning buffer subrange mismatch actual_first={} "
+            "expected_first={} actual_last={} expected_last={}",
+            readback_buffer_values->front(),
+            buffer_values[readback_first_element],
+            readback_buffer_values->back(),
+            buffer_values[
+                readback_first_element +
+                readback_element_count - 1
+            ]
+        );
+        throw std::runtime_error(
+            "owning buffer subrange readback mismatch"
+        );
+    }
+    const Array<uint32> expected_texture_values(
+        texture_values.begin(), texture_values.end()
+    );
+    if (*readback_texture_values != expected_texture_values) {
+        throw std::runtime_error(
+            "owning mip/layer texture readback mismatch"
+        );
+    }
+    // Get is released by terminal publication; callback notification is a
+    // deliberately later phase. Data acquisition above therefore does not
+    // require a global Sync, while this Sync makes callback accounting
+    // deterministic for the test.
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (callback_count.load(std::memory_order_acquire) != 2 ||
+        !callbacks_observed_siblings_terminal.load(
+            std::memory_order_acquire
+        )) {
+        throw std::runtime_error(
+            "owning readback callbacks did not observe terminal siblings"
+        );
+    }
+
+    LOG_INFO(
+        "[TESTCASE][PASS] name=OwningReadbackFuture "
+        "queue=Copy buffer=subrange texture=mip1,layer1 "
+        "bytes={},{} callbacks=exactly_once siblings=terminal "
+        "native_staging=completion-owned host_snapshot=future-owned "
+        "unsupported=compressed,msaa,partial",
+        buffer_result.ByteSize(),
+        texture_result.ByteSize()
+    );
+}
+
 } // namespace
 
 int main(int argc, const char** argv) {
@@ -13674,6 +14035,8 @@ int main(int argc, const char** argv) {
             present_boundary || present_hard;
         const bool rt_export_rejection =
             HasArgument(argc, argv, "--rt-export-rejection");
+        const bool readback_future_mode =
+            HasArgument(argc, argv, "--readback-future");
         const bool timestamp_query_mode =
             HasArgument(argc, argv, "--timestamp-query");
         const bool timestamp_query_success_batch_mode =
@@ -13702,6 +14065,7 @@ int main(int argc, const char** argv) {
             .rhi_bypass       = false,
             .parallel_recording =
                 parallel || pipeline_window_mode || present_mode ||
+                readback_future_mode ||
                 timestamp_query_mode ||
                 timestamp_query_success_batch_mode ||
                 timestamp_query_mid_failure_mode ||
@@ -13709,6 +14073,7 @@ int main(int argc, const char** argv) {
             .parallel_record_workers = 4,
             .parallel_record_verify =
                 parallel || pipeline_window_mode || present_mode ||
+                readback_future_mode ||
                 timestamp_query_mode ||
                 timestamp_query_success_batch_mode ||
                 timestamp_query_mid_failure_mode ||
@@ -13718,6 +14083,15 @@ int main(int argc, const char** argv) {
             .parallel_record_worker_throw_trigger = inject_worker_failure ? 1u : 0u,
         });
         render_device_initialized = true;
+
+        if (readback_future_mode) {
+            RunOwningReadbackFuture();
+            RenderDevice::Dispose();
+            render_device_initialized = false;
+            TaskSystem::ShutDown();
+            task_system_initialized = false;
+            return 0;
+        }
 
         if (timestamp_query_success_batch_mode) {
             RunTimestampQuerySuccessfulBatchPublication();
@@ -13783,6 +14157,7 @@ int main(int argc, const char** argv) {
 
         if (rt_export_rejection) {
             RunRaytracingExportAcceptanceRejection();
+            RunRaytracingAcceptedReadbackMaterializationFailure();
             RenderDevice::Dispose();
             render_device_initialized = false;
             TaskSystem::ShutDown();

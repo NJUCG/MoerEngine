@@ -55,24 +55,28 @@ bool RaytracingRenderer::DumpTextureToFile(
         return static_cast<unsigned char>(color * 255.f);
     };
 
-    size_t            size = 0;
-    Array<Moer::byte> copy_back_data;
-    std::string       file_name = "screenshot_";
-    bool              hdr       = false;
+    size_t         size = 0;
+    ReadbackFuture readback{};
+    std::string    file_name = "screenshot_";
+    bool           hdr       = false;
 
     const uint3 resolution = frame_resources.ldr_color->GetExtent();
     switch (config.output_texture) {
         case EOT_LDR:
             size = sizeof(uint) * resolution.x * resolution.y;
-            copy_back_data.resize(size);
-            command_list.CopyFrom(frame_resources.ldr_color->GetView(), copy_back_data);
+            readback = command_list.Readback(
+                frame_resources.ldr_color->GetView(),
+                "RaytracingExportLdrReadback"
+            );
             file_name += suffix;
             file_name += ".png";
             break;
         case EOT_HDR:
             size = sizeof(float2) * resolution.x * resolution.y;
-            copy_back_data.resize(size);
-            command_list.CopyFrom(frame_resources.resolved_color->GetView(), copy_back_data);
+            readback = command_list.Readback(
+                frame_resources.resolved_color->GetView(),
+                "RaytracingExportHdrReadback"
+            );
             file_name += suffix;
             file_name += ".exr";
             hdr = true;
@@ -81,7 +85,7 @@ bool RaytracingRenderer::DumpTextureToFile(
             break;
     }
 
-    if (size == 0) {
+    if (size == 0 || !readback.Valid()) {
         return false;
     }
 
@@ -94,8 +98,21 @@ bool RaytracingRenderer::DumpTextureToFile(
         std::move(readback_submit),
         ERHIExecSubmitFlags::FlushGPU
     );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     if (!export_submission.ResolveReadbackAcceptance()) {
+        return false;
+    }
+    ReadbackResult readback_result = readback.Get();
+    if (readback_result.status != ReadbackStatus::Ready ||
+        readback_result.ByteSize() != size) {
+        export_submission.MarkAcceptedReadbackFailed();
+        LOG_ERROR(
+            "Raytracing export readback failed: status={} expected_bytes={} "
+            "actual_bytes={} reason={}",
+            static_cast<uint32>(readback_result.status),
+            size,
+            readback_result.ByteSize(),
+            readback_result.error_reason
+        );
         return false;
     }
 
@@ -110,22 +127,31 @@ bool RaytracingRenderer::DumpTextureToFile(
         );
     }
 
-    return export_submission.DispatchEncoder([&] {
+    const std::shared_ptr<const Array<byte>> payload =
+        readback_result.data;
+    return export_submission.DispatchEncoder([&, payload] {
         LambdaTask::Create([=,
-                            data(std::move(copy_back_data)),
                             dequantize_byte_to_srgb(std::move(dequantize_byte_to_srgb)),
                             dequantize_half(std::move(dequantize_half))]() mutable {
-            auto copy_back_data = std::move(data);
+            Array<byte> copy_back_data(
+                payload->begin(), payload->end()
+            );
+            const size_t pixel_count =
+                static_cast<size_t>(resolution.x) *
+                static_cast<size_t>(resolution.y);
             if (hdr) {
                 constexpr uint range_count = 8;
-                const uint     range       = copy_back_data.size() / range_count;
-                Array<float4>  copy_back_data_f4(copy_back_data.size() / 8);
+                Array<float4>  copy_back_data_f4(pixel_count);
                 ParallelFor(range_count, [&](uint index) {
-                    const size_t start = range * index;
-                    const size_t end   = range * (index + 1);
-                    for (size_t i = start; i < copy_back_data.size() && i < end; i += 8) {
-                        float4* output = &copy_back_data_f4[i / 8];
-                        short*  input  = reinterpret_cast<short*>(&copy_back_data[i]);
+                    const size_t begin =
+                        pixel_count * index / range_count;
+                    const size_t end =
+                        pixel_count * (index + 1) / range_count;
+                    for (size_t pixel = begin; pixel < end; ++pixel) {
+                        float4* output = &copy_back_data_f4[pixel];
+                        short* input = reinterpret_cast<short*>(
+                            &copy_back_data[pixel * 8]
+                        );
                         output->x      = dequantize_half(input[0]);
                         output->y      = dequantize_half(input[1]);
                         output->z      = dequantize_half(input[2]);
@@ -141,19 +167,21 @@ bool RaytracingRenderer::DumpTextureToFile(
                 );
             } else {
                 constexpr uint range_count = 8;
-                const uint     range       = copy_back_data.size() / range_count;
                 ParallelFor(range_count, [&](uint index) {
-                    const size_t start = range * index;
-                    const size_t end   = range * (index + 1);
-                    for (size_t i = start; i < copy_back_data.size() && i < end; i += 4) {
-                        copy_back_data[i] =
-                            static_cast<Moer::byte>(dequantize_byte_to_srgb(ubyte(copy_back_data[i])));
-                        copy_back_data[i + 1] =
-                            static_cast<Moer::byte>(dequantize_byte_to_srgb(ubyte(copy_back_data[i + 1])));
-                        copy_back_data[i + 2] =
-                            static_cast<Moer::byte>(dequantize_byte_to_srgb(ubyte(copy_back_data[i + 2])));
-                        copy_back_data[i + 3] =
-                            static_cast<Moer::byte>(dequantize_byte_to_srgb(ubyte(copy_back_data[i + 3])));
+                    const size_t begin =
+                        pixel_count * index / range_count;
+                    const size_t end =
+                        pixel_count * (index + 1) / range_count;
+                    for (size_t pixel = begin; pixel < end; ++pixel) {
+                        const size_t offset = pixel * 4;
+                        copy_back_data[offset] =
+                            static_cast<Moer::byte>(dequantize_byte_to_srgb(ubyte(copy_back_data[offset])));
+                        copy_back_data[offset + 1] =
+                            static_cast<Moer::byte>(dequantize_byte_to_srgb(ubyte(copy_back_data[offset + 1])));
+                        copy_back_data[offset + 2] =
+                            static_cast<Moer::byte>(dequantize_byte_to_srgb(ubyte(copy_back_data[offset + 2])));
+                        copy_back_data[offset + 3] =
+                            static_cast<Moer::byte>(dequantize_byte_to_srgb(ubyte(copy_back_data[offset + 3])));
                     }
                 });
                 stbi_write_png(

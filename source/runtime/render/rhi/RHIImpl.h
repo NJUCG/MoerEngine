@@ -99,7 +99,8 @@ private:
     uint64      handle{};
     uint64      offset{};
     uint64      byte_size{};
-    void* const data{};
+    void*       data{};
+    ReadbackToken owning_readback{};
     CopyBackBufferCmd() : Command(EType::CopyBackBuffer) {}
 
 public:
@@ -115,6 +116,19 @@ public:
         offset(_offset),
         byte_size(_byte_size),
         data(_data) {}
+
+    CopyBackBufferCmd(
+        uint64           _handle,
+        uint64           _offset,
+        uint64           _byte_size,
+        ReadbackToken    _owning_readback,
+        std::string_view _name = typenames[uint(EType::CopyBackBuffer)]
+    ) :
+        Command(EType::CopyBackBuffer, _name),
+        handle(_handle),
+        offset(_offset),
+        byte_size(_byte_size),
+        owning_readback(std::move(_owning_readback)) {}
 
     //generate getters
     EQueueType GetQueueType() const override {
@@ -132,6 +146,12 @@ public:
     auto Data() const {
         return data;
     }
+    bool HasOwningReadback() const noexcept {
+        return owning_readback.Valid();
+    }
+    const ReadbackToken& OwningReadback() const noexcept {
+        return owning_readback;
+    }
 
     mutable BufferView staging_buffer;
 };
@@ -140,15 +160,19 @@ struct CopyBackTextureCmd : public Command {
 private:
     uint64          handle{};
     uint            mip_level{};
+    uint            array_layer{};
     uint3           offset{};
     uint3           size{};
+    uint64          byte_size{};
     std::span<byte> data;
+    ReadbackToken   owning_readback{};
     CopyBackTextureCmd() : Command(EType::CopyBackTexture) {}
 
 public:
     CopyBackTextureCmd(
         uint64           _handle,
         uint             _mip_level,
+        uint             _array_layer,
         uint3            _offset,
         uint3            _size,
         std::span<byte>  _data,
@@ -157,9 +181,29 @@ public:
         Command(EType::CopyBackTexture, _name),
         handle(_handle),
         mip_level(_mip_level),
+        array_layer(_array_layer),
         offset{_offset.x, _offset.y, _offset.z},
         size{_size.x, _size.y, _size.z},
+        byte_size(_data.size_bytes()),
         data(_data) {}
+
+    CopyBackTextureCmd(
+        uint64           _handle,
+        uint             _mip_level,
+        uint             _array_layer,
+        uint3            _offset,
+        uint3            _size,
+        ReadbackToken    _owning_readback,
+        std::string_view _name = typenames[uint(EType::CopyBackTexture)]
+    ) :
+        Command(EType::CopyBackTexture, _name),
+        handle(_handle),
+        mip_level(_mip_level),
+        array_layer(_array_layer),
+        offset{_offset.x, _offset.y, _offset.z},
+        size{_size.x, _size.y, _size.z},
+        byte_size(_owning_readback.ByteSize()),
+        owning_readback(std::move(_owning_readback)) {}
 
     EQueueType GetQueueType() const override {
         return EQueueType::Copy;
@@ -171,6 +215,9 @@ public:
     auto MipLevel() const {
         return mip_level;
     }
+    auto ArrayLayer() const {
+        return array_layer;
+    }
     auto Offset() const {
         return offset;
     }
@@ -179,6 +226,15 @@ public:
     }
     auto Data() const {
         return data;
+    }
+    auto ByteSize() const {
+        return byte_size;
+    }
+    bool HasOwningReadback() const noexcept {
+        return owning_readback.Valid();
+    }
+    const ReadbackToken& OwningReadback() const noexcept {
+        return owning_readback;
     }
 
     mutable BufferView staging_buffer;

@@ -142,6 +142,19 @@ public:
         return readback_outcome == EExportSubmissionOutcome::Accepted;
     }
 
+    // Native submission acceptance is necessary but not sufficient for an
+    // export readback. A staging/materialization failure after acceptance is
+    // a hard readback failure and must participate in frame latch policy.
+    void MarkAcceptedReadbackFailed() {
+        RequireReadbackActive();
+        if (!ResolveReadbackAcceptance()) {
+            throw std::logic_error(
+                "only an accepted export readback can fail materialization"
+            );
+        }
+        readback_outcome = EExportSubmissionOutcome::Failed;
+    }
+
     template <typename EncoderDispatch>
     [[nodiscard]] bool DispatchEncoder(EncoderDispatch&& _dispatch) {
         if (!ResolveReadbackAcceptance() || encoder_dispatched) {

@@ -273,6 +273,37 @@ private:
         }
     }
 
+    void ConsumeCounterReadback() {
+        if (!m_counter_readback.Valid()) {
+            return;
+        }
+
+        const std::optional<ReadbackResult> result =
+            m_counter_readback.TryGet();
+        if (!result.has_value()) {
+            return;
+        }
+        if (result->status == ReadbackStatus::Ready) {
+            const std::optional<GpuCullingCounterData> counters =
+                result->ReadValue<GpuCullingCounterData>();
+            if (counters.has_value()) {
+                m_readback_counters = *counters;
+            }
+        }
+        m_counter_readback = {};
+    }
+
+    void QueueCounterReadback(
+        CommandList& _command_list,
+        BufferView   _counter_buffer
+    ) {
+        if (!m_counter_readback.Valid()) {
+            m_counter_readback = _command_list.Readback(
+                _counter_buffer, "RasterGpuCullingCounters"
+            );
+        }
+    }
+
     // Dispatches the culling compute pass and prepares its outputs for indirect drawing.
     void Process(
         RasterContext&                    context,
@@ -291,6 +322,7 @@ private:
             context.device, context.bdls, context.cmd_list, "Raster::GpuCulling", draw_count, instance_count
         );
 
+        ConsumeCounterReadback();
         if (out_stats) {
             *out_stats = ToStatistics(m_readback_counters);
         }
@@ -298,9 +330,9 @@ private:
         context.cmd_list.ClearResource(visibility_set.counter_buf->GetView(), 0u);
 
         if (draw_count == 0) {
-            context.cmd_list.CopyFrom(
-                visibility_set.counter_buf->GetView(),
-                std::span<byte>(reinterpret_cast<byte*>(&m_readback_counters), sizeof(GpuCullingCounterData))
+            QueueCounterReadback(
+                context.cmd_list,
+                visibility_set.counter_buf->GetView()
             );
             return;
         }
@@ -358,9 +390,9 @@ private:
             context.cmd_list.PopScopeWithTimeScope();
         }
 
-        context.cmd_list.CopyFrom(
-            visibility_set.counter_buf->GetView(),
-            std::span<byte>(reinterpret_cast<byte*>(&m_readback_counters), sizeof(GpuCullingCounterData))
+        QueueCounterReadback(
+            context.cmd_list,
+            visibility_set.counter_buf->GetView()
         );
     }
 
@@ -370,6 +402,7 @@ private:
     BufferRef                m_cull_data_buffer;
     BufferRef                m_cluster_group_dummy_buf;
     GpuCullingCounterData    m_readback_counters{};
+    ReadbackFuture           m_counter_readback{};
 };
 
 } // namespace Moer::Render::Raster

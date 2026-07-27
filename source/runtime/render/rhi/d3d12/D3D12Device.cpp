@@ -1277,6 +1277,10 @@ struct D3D12CommandPreprocessVisitor {
             case Command::EType::CopyBackBuffer:
                 Visit(static_cast<const CopyBackBufferCmd&>(*_cmd));
                 break;
+            case Command::EType::CopyBackTexture:
+                throw std::runtime_error(
+                    "D3D12 texture readback is unsupported"
+                );
             case Command::EType::BufferToBuffer:
                 Visit(static_cast<const CopyBufferCmd&>(*_cmd));
                 break;
@@ -1336,9 +1340,50 @@ struct D3D12CommandVisitor {
         cmd_list.CopyBuffer(
             src_buffer, tmp_buffer.buffer, _cmd.ByteSize(), _cmd.Offset(), tmp_buffer.byte_offset
         );
-        allocator.AddOnComplete([tmp_buffer, &cmd_list(cmd_list), dst(_cmd.Data()), size(_cmd.ByteSize())] {
-            cmd_list.CopyData(dst, tmp_buffer, size);
-        });
+        if (_cmd.HasOwningReadback()) {
+            const ReadbackToken readback = _cmd.OwningReadback();
+            const uint64 logical_size = _cmd.ByteSize();
+            allocator.AddOnComplete(
+                [tmp_buffer, &cmd_list(cmd_list), readback, logical_size] {
+                    struct WriterContext {
+                        D3D12CommandList*       command_list{};
+                        D3D12StagingBufferView staging{};
+                        uint64                 byte_size{};
+                    } context{&cmd_list, tmp_buffer, logical_size};
+                    (void)ReadbackBackendAccess::MaterializePayload(
+                        readback,
+                        &context,
+                        [](void* _context, std::span<byte> _destination) {
+                            auto* writer =
+                                static_cast<WriterContext*>(_context);
+                            if (writer == nullptr ||
+                                _destination.size_bytes() !=
+                                    writer->byte_size) {
+                                throw std::runtime_error(
+                                    "D3D12 buffer readback payload size mismatch"
+                                );
+                            }
+                            writer->command_list->CopyData(
+                                _destination.data(),
+                                writer->staging,
+                                writer->byte_size
+                            );
+                        }
+                    );
+                }
+            );
+        } else {
+            allocator.AddOnComplete(
+                [tmp_buffer,
+                 &cmd_list(cmd_list),
+                 destination(_cmd.Data()),
+                 logical_size = _cmd.ByteSize()] {
+                    cmd_list.CopyData(
+                        destination, tmp_buffer, logical_size
+                    );
+                }
+            );
+        }
     }
 
     void Visit(const CopyBufferCmd& _cmd) {
@@ -1424,6 +1469,10 @@ struct D3D12CommandVisitor {
             case Command::EType::CopyBackBuffer:
                 Visit(static_cast<const CopyBackBufferCmd&>(*_cmd));
                 break;
+            case Command::EType::CopyBackTexture:
+                throw std::runtime_error(
+                    "D3D12 texture readback is unsupported"
+                );
             case Command::EType::BufferToBuffer:
                 Visit(static_cast<const CopyBufferCmd&>(*_cmd));
                 break;
