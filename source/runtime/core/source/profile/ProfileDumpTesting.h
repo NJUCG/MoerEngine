@@ -12,6 +12,7 @@ enum class FaultPoint : std::uint8_t {
     None = 0,
     StartAllocation,
     BeforeThreadCreate,
+    ShutdownFinalizeAllocation,
     OpenTempFile,
     WritePacket,
     FlushFile,

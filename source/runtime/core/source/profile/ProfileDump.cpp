@@ -398,19 +398,22 @@ bool IsIoFault(RuntimeFault _fault) noexcept {
            _fault == RuntimeFault::RenameFinal;
 }
 
+bool ShouldInjectLocked(TestHooks& _hooks, Testing::FaultPoint _point) noexcept {
+    if (_hooks.fault_point != _point || _hooks.fault_fired) {
+        return false;
+    }
+    ++_hooks.matching_hits;
+    if (_hooks.matching_hits != std::max<std::uint64_t>(_hooks.trigger_hit, 1)) {
+        return false;
+    }
+    _hooks.fault_fired = true;
+    return true;
+}
+
 bool ShouldInject(Testing::FaultPoint _point) noexcept {
     Hub&            hub = GetHub();
     std::lock_guard lock(hub.mutex);
-    TestHooks&      hooks = hub.test_hooks;
-    if (hooks.fault_point != _point || hooks.fault_fired) {
-        return false;
-    }
-    ++hooks.matching_hits;
-    if (hooks.matching_hits != std::max<std::uint64_t>(hooks.trigger_hit, 1)) {
-        return false;
-    }
-    hooks.fault_fired = true;
-    return true;
+    return ShouldInjectLocked(hub.test_hooks, _point);
 }
 
 struct WriterFailure {
@@ -921,6 +924,13 @@ void WriterMain(Hub& _hub, std::shared_ptr<Admission> _session_admission) noexce
                     return !_hub.messages.empty() || _hub.pending_loss.pending ||
                            _hub.state.load(std::memory_order_acquire) == RuntimeState::Faulted;
                 });
+                if (_hub.state.load(std::memory_order_acquire) == RuntimeState::Faulted) {
+                    RuntimeFault fault = _hub.last_fault.load(std::memory_order_acquire);
+                    if (fault == RuntimeFault::None) {
+                        fault = RuntimeFault::WriterException;
+                    }
+                    throw WriterFailure{fault};
+                }
                 if (_hub.messages.empty() && !_hub.pending_loss.pending) {
                     return;
                 }
@@ -1513,10 +1523,15 @@ ShutdownResult Shutdown() noexcept {
             if (hub.state.load(std::memory_order_acquire) != RuntimeState::Faulted) {
                 hub.state.store(RuntimeState::Draining, std::memory_order_release);
                 try {
+                    if (ShouldInjectLocked(hub.test_hooks, Testing::FaultPoint::ShutdownFinalizeAllocation)) {
+                        throw std::bad_alloc{};
+                    }
                     fence              = std::make_shared<FlushFence>();
                     hub.shutdown_fence = fence;
                     hub.messages.emplace_back(FinalizeMessage{.fence = fence});
                 } catch (...) {
+                    hub.shutdown_fence.reset();
+                    fence.reset();
                     hub.state.store(RuntimeState::Faulted, std::memory_order_release);
                     hub.last_fault.store(RuntimeFault::WriterException, std::memory_order_release);
                     hub.test_hooks.writer_resume = true;

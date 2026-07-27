@@ -678,6 +678,49 @@ void TestStartAllocationFailureIsContained() {
     Testing::ClearHooks();
 }
 
+void TestShutdownFinalizeAllocationFailureClosesWriter() {
+    Testing::ClearHooks();
+    Expect(
+        Testing::ConfigureFault(Testing::FaultPoint::ShutdownFinalizeAllocation),
+        "shutdown finalize allocation fault hook could not be configured while stopped"
+    );
+
+    ScopedOutput        output("moer-profile-shutdown-allocation-fault");
+    const RuntimeConfig config = MakeRuntimeConfig(output);
+    Expect(Start(config) == StartResult::Started, "shutdown allocation fault runtime failed to start");
+    Expect(
+        Shutdown() == ShutdownResult::Faulted, "shutdown finalize allocation failure did not report a fault"
+    );
+    const RuntimeStats stats = GetRuntimeStats();
+    Expect(stats.last_fault == RuntimeFault::WriterException, "shutdown allocation fault identity changed");
+    Expect(GetRuntimeState() == RuntimeState::Stopped, "shutdown allocation fault did not reap the runtime");
+    Expect(!std::filesystem::exists(output.path), "shutdown allocation fault published a partial final");
+
+    const std::filesystem::path session_temp = output.InProgressPath();
+    std::filesystem::path       moved_temp   = output.directory / "closed-writer-forensic.inprogress";
+    std::error_code             move_error;
+    for (std::uint32_t attempt = 0; attempt < 8; ++attempt) {
+        move_error.clear();
+        std::filesystem::rename(session_temp, moved_temp, move_error);
+        if (!move_error) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1U << std::min<std::uint32_t>(attempt, 5U)));
+    }
+    Expect(!move_error, "shutdown allocation fault left the writer file handle open");
+    Expect(
+        Shutdown() == ShutdownResult::AlreadyStopped,
+        "shutdown allocation fault did not restore shutdown idempotence"
+    );
+
+    Testing::ClearHooks();
+    RuntimeConfig recovery_config    = config;
+    recovery_config.replace_existing = true;
+    Expect(Start(recovery_config) == StartResult::Started, "runtime did not restart after shutdown OOM");
+    Expect(Shutdown() == ShutdownResult::Completed, "shutdown OOM recovery did not publish a clean capture");
+    Expect(std::filesystem::exists(moved_temp), "shutdown OOM recovery removed the previous forensic temp");
+}
+
 void TestExclusiveTempCreateRace() {
     Testing::ClearHooks();
     Expect(
@@ -1288,6 +1331,7 @@ int main() {
         TestSchemaHashCoverage();
         TestRuntimeLifecycleAndRestart();
         TestStartAllocationFailureIsContained();
+        TestShutdownFinalizeAllocationFailureClosesWriter();
         TestExclusiveTempCreateRace();
         TestReplacementPreservesForeignTemp();
         TestFinalPublicationRaces();
