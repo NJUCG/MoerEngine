@@ -1675,10 +1675,35 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
     });
 
     // Build the complete retirement packet before crossing the native submit
-    // boundary. Query capability failure is published by the Completion owner
-    // after the GPU fence and submit signals, but before ordinary callbacks.
-    // This keeps user Query callbacks outside RHIExecutor's publication gate
-    // and preserves the same terminal ordering as native query backends.
+    // boundary. The legacy backend fails GPU completion futures closed as an
+    // unsupported capability, but the native Completion owner still releases
+    // their callbacks after the fence and submit signals.
+    Array<GpuCompletionToken> gpu_completion_tokens =
+        _submit.gpu_completion_tokens;
+    Array<std::function<void()>> gpu_completion_callbacks{};
+    if (!gpu_completion_tokens.empty()) {
+        const GpuCompletionPublishBatch completion_batch =
+            _submit.gpu_completion_publish_batch.Valid() ?
+                _submit.gpu_completion_publish_batch :
+                GpuCompletionBackendAccess::BeginPublishBatch();
+        _submit.gpu_completion_publish_batch = completion_batch;
+        GpuCompletionBackendAccess::PublishErrorsIfPending(
+            gpu_completion_tokens,
+            "D3D12 GPU completion futures are unsupported",
+            completion_batch
+        );
+        gpu_completion_callbacks.emplace_back(
+            [tokens = std::move(gpu_completion_tokens),
+             completion_batch] {
+                GpuCompletionBackendAccess::NotifyTerminals(
+                    tokens, completion_batch
+                );
+            }
+        );
+    }
+
+    // Query capability failure follows the same publication/notification
+    // split and remains ordered before ordinary callbacks.
     Array<QueryToken> query_tokens = _submit.query_tokens;
     Array<std::function<void()>> query_completion_callbacks{};
     if (!query_tokens.empty()) {
@@ -1719,6 +1744,13 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
     );
     for (const SignalEvent& event : _submit.signal_events) {
         retirement_events.emplace_back(event, next_fence_value, false);
+    }
+    if (!gpu_completion_callbacks.empty()) {
+        retirement_events.emplace_back(
+            std::move(gpu_completion_callbacks),
+            next_fence_value,
+            true
+        );
     }
     if (!query_completion_callbacks.empty()) {
         retirement_events.emplace_back(
@@ -1777,6 +1809,8 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
     event_queue.splice(event_queue.end(), retirement_events);
     _submit.callbacks.clear();
     _submit.success_callbacks.clear();
+    _submit.gpu_completion_tokens.clear();
+    _submit.gpu_completion_publish_batch = {};
     _submit.query_tokens.clear();
     _submit.query_publish_batch = {};
     _submit.signal_events.clear();

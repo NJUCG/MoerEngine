@@ -270,6 +270,107 @@ bool FrontendQueryRejectionTerminalizesBeforeOrdinaryCallbacks() {
             );
 }
 
+bool FrontendCompletionRejectionIsOneTerminalTransaction() {
+    std::atomic<int>  stage{0};
+    std::atomic<int>  completion_callbacks{0};
+    std::atomic<int>  query_callbacks{0};
+    std::atomic<int>  ordinary_callbacks{0};
+    std::atomic<int>  success_callbacks{0};
+    std::atomic<bool> signal_ordered{false};
+    std::atomic<bool> completion_ordered{false};
+    std::atomic<bool> query_ordered{false};
+    std::atomic<bool> ordinary_ordered{false};
+
+    RecordingFenceProbe signal(
+        {},
+        [&] {
+            signal_ordered.store(
+                stage.load(std::memory_order_acquire) == 0,
+                std::memory_order_release
+            );
+            stage.store(1, std::memory_order_release);
+        }
+    );
+    CommandList commands(EQueueType::Graphics);
+    commands.Signal(&signal, 15);
+    const GpuCompletionFuture completion =
+        commands.TrackGpuCompletion("FrontendRejectedCompletion");
+    QueryToken query =
+        commands.BeginTimestampQuery("FrontendRejectedPeerQuery");
+    commands.EndTimestampQuery(query);
+    const QueryFuture query_future = query.GetFuture();
+
+    completion.Then([&](const GpuCompletionResult& _result) {
+        const auto peer = query_future.TryGet();
+        completion_ordered.store(
+            _result.status == GpuCompletionStatus::Error &&
+                signal.IsRejected(15) &&
+                peer.has_value() &&
+                peer->status == QueryStatus::Error &&
+                stage.load(std::memory_order_acquire) == 1,
+            std::memory_order_release
+        );
+        stage.store(2, std::memory_order_release);
+        completion_callbacks.fetch_add(1, std::memory_order_release);
+    });
+    query_future.Then([&](const QueryResult& _result) {
+        query_ordered.store(
+            _result.status == QueryStatus::Error &&
+                completion.Status() == GpuCompletionStatus::Error &&
+                stage.load(std::memory_order_acquire) == 2,
+            std::memory_order_release
+        );
+        stage.store(3, std::memory_order_release);
+        query_callbacks.fetch_add(1, std::memory_order_release);
+    });
+    commands.AddCallback([&] {
+        ordinary_ordered.store(
+            stage.load(std::memory_order_acquire) == 3,
+            std::memory_order_release
+        );
+        stage.store(4, std::memory_order_release);
+        ordinary_callbacks.fetch_add(1, std::memory_order_release);
+    });
+    commands.AddSuccessCallback([&] {
+        success_callbacks.fetch_add(1, std::memory_order_release);
+    });
+
+    RHIExecutor::Get().Submit(
+        EQueueType::Ignore,
+        commands.Submit(),
+        ERHIExecSubmitFlags::None
+    );
+
+    return Expect(
+               signal_ordered.load(std::memory_order_acquire),
+               "frontend rejection did not reject Signal first"
+           ) &&
+           Expect(
+               completion_ordered.load(std::memory_order_acquire) &&
+                   completion_callbacks.load(
+                       std::memory_order_acquire
+                   ) == 1,
+               "Completion callback observed a partial terminal batch"
+           ) &&
+           Expect(
+               query_ordered.load(std::memory_order_acquire) &&
+                   query_callbacks.load(std::memory_order_acquire) == 1,
+               "Query callback did not follow Completion notification"
+           ) &&
+           Expect(
+               ordinary_ordered.load(std::memory_order_acquire) &&
+                   ordinary_callbacks.load(
+                       std::memory_order_acquire
+                   ) == 1 &&
+                   stage.load(std::memory_order_acquire) == 4,
+               "ordinary callback ran before Future notifications"
+           ) &&
+           Expect(
+               success_callbacks.load(std::memory_order_acquire) == 0,
+               "frontend rejection invoked a success-only callback"
+           );
+}
+
 bool FrontendPresentRejectionPublishesBatchBeforeReceipt() {
     PresentReceiptRef receipt = std::make_shared<PresentReceipt>();
     std::atomic<bool> signal_observed_pending_receipt{false};
@@ -901,6 +1002,131 @@ bool RecordingPreflightFailureTerminalizesEveryQueryGeneration() {
     return okay;
 }
 
+bool RecordingPreflightFailureTerminalizesEveryCompletionGeneration() {
+    RHIExecutor::StartUp();
+
+    auto first_list =
+        Moer::MakeShared<CommandList>(EQueueType::Graphics);
+    auto middle_list =
+        Moer::MakeShared<CommandList>(EQueueType::Graphics);
+    auto last_list =
+        Moer::MakeShared<CommandList>(EQueueType::Graphics);
+    const std::array<Moer::SharedPtr<CommandList>, 3> command_lists{
+        first_list,
+        middle_list,
+        last_list,
+    };
+
+    std::array<GpuCompletionFuture, 3> completion_futures{};
+    std::array<std::atomic<int>, 3> completion_callbacks{};
+    std::array<std::atomic<int>, 3> ordinary_callbacks{};
+    std::array<std::atomic<int>, 3> success_callbacks{};
+    for (size_t index = 0; index < command_lists.size(); ++index) {
+        completion_futures[index] =
+            command_lists[index]->TrackGpuCompletion(
+                "RecordingPreflightCompletion"
+            );
+        completion_futures[index].Then(
+            [&, index](const GpuCompletionResult& _result) {
+                if (_result.status == GpuCompletionStatus::Error) {
+                    completion_callbacks[index].fetch_add(
+                        1, std::memory_order_release
+                    );
+                }
+            }
+        );
+        command_lists[index]->AddCallback([&, index] {
+            ordinary_callbacks[index].fetch_add(
+                1, std::memory_order_release
+            );
+        });
+        command_lists[index]->AddSuccessCallback([&, index] {
+            success_callbacks[index].fetch_add(
+                1, std::memory_order_release
+            );
+        });
+    }
+
+    std::atomic<bool> first_observed_last_terminal{false};
+    completion_futures[0].Then(
+        [&](const GpuCompletionResult& _result) {
+            first_observed_last_terminal.store(
+                _result.status == GpuCompletionStatus::Error &&
+                    completion_futures[2].WaitFor(100ms) &&
+                    completion_futures[2].Status() ==
+                        GpuCompletionStatus::Error,
+                std::memory_order_release
+            );
+        }
+    );
+
+    QueryToken unclosed =
+        middle_list->BeginTimestampQuery(
+            "CompletionPreflightTrigger"
+        );
+    const QueryFuture trigger_future = unclosed.GetFuture();
+
+    Moer::Array<RHIRecordingSource> sources{};
+    for (const Moer::SharedPtr<CommandList>& command_list :
+         command_lists) {
+        sources.emplace_back(RHIRecordingSource{
+            .command_list = command_list,
+            .completion   = RHIRecordingGate::Create(true),
+        });
+    }
+    RHIExecutor::Get().SubmitRecording(
+        std::move(sources),
+        ERHIExecSubmitFlags::None
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    bool okay = true;
+    for (size_t index = 0;
+         index < completion_futures.size();
+         ++index) {
+        okay &= Expect(
+            completion_futures[index].WaitFor(100ms) &&
+                completion_futures[index].Status() ==
+                    GpuCompletionStatus::Error,
+            "recording preflight failure left a completion Pending"
+        );
+        okay &= Expect(
+            completion_callbacks[index].load(
+                std::memory_order_acquire
+            ) == 1,
+            "recording preflight failure did not notify a completion once"
+        );
+        okay &= Expect(
+            ordinary_callbacks[index].load(
+                std::memory_order_acquire
+            ) == 1,
+            "recording preflight failure did not drain ordinary cleanup"
+        );
+        okay &= Expect(
+            success_callbacks[index].load(
+                std::memory_order_acquire
+            ) == 0,
+            "recording preflight failure invoked success cleanup"
+        );
+        okay &= Expect(
+            command_lists[index]->IsEmpty(),
+            "recording preflight failure left a completion generation"
+        );
+    }
+    okay &= Expect(
+        first_observed_last_terminal.load(std::memory_order_acquire),
+        "an earlier completion callback observed a later source Pending"
+    );
+    okay &= Expect(
+        trigger_future.WaitFor(100ms) &&
+            trigger_future.Status() == QueryStatus::Error,
+        "completion preflight trigger query did not terminalize"
+    );
+
+    RHIExecutor::ShutDown();
+    return okay;
+}
+
 bool SubmitRecordingRefreshesAStaleQueryCancellationView() {
     RHIExecutor::StartUp();
 
@@ -970,6 +1196,76 @@ bool SubmitRecordingRefreshesAStaleQueryCancellationView() {
     okay &= Expect(
         command_list->IsEmpty(),
         "stale cancellation-view shutdown left the current CommandList generation undrained"
+    );
+    return okay;
+}
+
+bool SubmitRecordingRefreshesAStaleCompletionCancellationView() {
+    RHIExecutor::StartUp();
+
+    auto command_list =
+        Moer::MakeShared<CommandList>(EQueueType::Graphics);
+    GpuCompletionCancellationView stale_cancellation =
+        command_list->GetGpuCompletionCancellationView();
+    {
+        CmdSubmit prior_generation = command_list->Submit();
+    }
+
+    const GpuCompletionFuture current_future =
+        command_list->TrackGpuCompletion(
+            "CurrentCompletionGeneration"
+        );
+    std::atomic<int> current_callbacks{0};
+    std::atomic<bool> callback_observed_error{false};
+    current_future.Then([&](const GpuCompletionResult& _result) {
+        callback_observed_error.store(
+            _result.status == GpuCompletionStatus::Error,
+            std::memory_order_release
+        );
+        current_callbacks.fetch_add(1, std::memory_order_release);
+    });
+
+    auto pending_gate = RHIRecordingGate::Create();
+    Moer::Array<RHIRecordingSource> sources{};
+    sources.emplace_back(RHIRecordingSource{
+        .command_list = command_list,
+        .completion   = pending_gate,
+        .gpu_completion_cancellation = stale_cancellation,
+    });
+    RHIExecutor::Get().SubmitRecording(
+        std::move(sources),
+        ERHIExecSubmitFlags::None
+    );
+    RHIExecutor::ShutDown();
+
+    bool okay = Expect(
+                    stale_cancellation.Valid() &&
+                        !stale_cancellation.IsCancelled(),
+                    "SubmitRecording cancelled a stale completion generation"
+                ) &&
+                Expect(
+                    current_future.WaitFor(100ms) &&
+                        current_future.Status() ==
+                            GpuCompletionStatus::Error,
+                    "shutdown left the current completion generation Pending"
+                ) &&
+                Expect(
+                    current_callbacks.load(
+                        std::memory_order_acquire
+                    ) == 0,
+                    "opaque shutdown released a completion callback early"
+                );
+
+    pending_gate->Signal();
+    (void)command_list->DrainOrdinaryCallbacksForRejection();
+    okay &= Expect(
+        current_callbacks.load(std::memory_order_acquire) == 1 &&
+            callback_observed_error.load(std::memory_order_acquire),
+        "safe producer ownership did not release completion callback once"
+    );
+    okay &= Expect(
+        command_list->IsEmpty(),
+        "stale completion-view shutdown left its generation undrained"
     );
     return okay;
 }
@@ -1736,12 +2032,15 @@ bool ShutdownDrainsAcceptedReadyWork() {
 int main() {
     if (!CommandListSignalTracksNativeAcceptanceAndRejection() ||
         !FrontendQueryRejectionTerminalizesBeforeOrdinaryCallbacks() ||
+        !FrontendCompletionRejectionIsOneTerminalTransaction() ||
         !FrontendPresentRejectionPublishesBatchBeforeReceipt() ||
         !DeferredOpaqueCancellationTicketSurvivesSubmit() ||
         !DirectCommandListGroupPreflightRejectsEverySource() ||
         !DirectCommandListGroupMaterializationFailureRejectsPrefixAndSuffix() ||
         !RecordingPreflightFailureTerminalizesEveryQueryGeneration() ||
+        !RecordingPreflightFailureTerminalizesEveryCompletionGeneration() ||
         !SubmitRecordingRefreshesAStaleQueryCancellationView() ||
+        !SubmitRecordingRefreshesAStaleCompletionCancellationView() ||
         !PerSourceGatesPreserveFifo() ||
         !ReadyWorkUsesStableExecutorOwnerAndCannotBeOvertaken() ||
         !FailedGateRejectsOnlyItsGroupAndPreservesFifo() ||

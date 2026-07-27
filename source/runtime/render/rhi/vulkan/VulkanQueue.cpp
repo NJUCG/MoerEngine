@@ -716,10 +716,20 @@ void VulkanBatchCompletionGroup::Arrive(
         ready    = std::move(participants);
     }
 
-    // Every participant has already published its Fence and Query terminal
-    // state. Release Query callbacks first across the whole batch, then the
-    // two ordinary callback tiers, and keep resources alive until all user
-    // code has returned. The last arriver is itself a Completion owner.
+    // Every participant has already published its Fence, Completion and Query
+    // terminal state. Release Future callbacks across the whole batch before
+    // either ordinary tier, and keep resources alive until user code returns.
+    // The last arriver is itself a Completion owner.
+    for (auto& slot : ready) {
+        Participant& participant = *slot;
+        if (!participant.gpu_completion_tokens.empty()) {
+            GpuCompletionBackendAccess::NotifyTerminals(
+                participant.gpu_completion_tokens,
+                participant.gpu_completion_batch
+            );
+            participant.gpu_completion_tokens.clear();
+        }
+    }
     for (auto& slot : ready) {
         Participant& participant = *slot;
         if (!participant.query_tokens.empty()) {
@@ -4941,7 +4951,20 @@ static void TerminalizeRejectedSubmit(
         VulkanOperationResult{EVulkanOperationStatus::Rejected, _result}
     );
     FinalizeRejectedBindlessUpdates(_submit);
-    _submit.RejectPendingQueries(_context);
+    const GpuCompletionPublishBatch completion_batch =
+        _submit.gpu_completion_publish_batch.Valid() ?
+            _submit.gpu_completion_publish_batch :
+            GpuCompletionBackendAccess::BeginPublishBatch();
+    const QueryPublishBatch query_batch =
+        _submit.query_publish_batch.Valid() ?
+            _submit.query_publish_batch :
+            QueryBackendAccess::BeginPublishBatch();
+    _submit.PublishPendingGpuCompletionErrors(
+        _context, completion_batch
+    );
+    _submit.PublishPendingQueryErrors(_context, query_batch);
+    _submit.NotifyPendingGpuCompletions(completion_batch);
+    _submit.NotifyPendingQueries(query_batch);
 
     // Completion callbacks are the only user code retained on a rejected
     // packet. Success callbacks are intentionally destroyed without running.
@@ -9071,6 +9094,20 @@ void VkCommandQueue::CompletionThreadMain() {
                         query_failure_reason, query_batch
                     );
 
+                    const GpuCompletionPublishBatch
+                        gpu_completion_batch =
+                            _batch.submit.
+                                    gpu_completion_publish_batch.Valid() ?
+                                _batch.submit.
+                                    gpu_completion_publish_batch :
+                                GpuCompletionBackendAccess::
+                                    BeginPublishBatch();
+                    _batch.submit.PublishPendingGpuCompletionOutcome(
+                        batch_gpu_success,
+                        "Vulkan submission did not reach successful GPU completion",
+                        gpu_completion_batch
+                    );
+
                     bool recycle_batch =
                         batch_gpu_success && !vk_device.IsFaulted();
                     if (recycle_batch) {
@@ -9098,6 +9135,12 @@ void VkCommandQueue::CompletionThreadMain() {
                         grouped_completion{};
                     if (_batch.batch_completion.Valid()) {
                         grouped_completion.emplace();
+                        grouped_completion->gpu_completion_tokens =
+                            std::move(
+                                _batch.submit.gpu_completion_tokens
+                            );
+                        grouped_completion->gpu_completion_batch =
+                            gpu_completion_batch;
                         grouped_completion->query_tokens =
                             std::move(_batch.submit.query_tokens);
                         grouped_completion->query_batch = query_batch;
@@ -9112,6 +9155,8 @@ void VkCommandQueue::CompletionThreadMain() {
                             batch_gpu_success;
                         grouped_completion->release_safe =
                             batch_release_safe;
+                        _batch.submit.gpu_completion_publish_batch =
+                            {};
                         _batch.submit.query_publish_batch = {};
                     } else {
                         callbacks =
@@ -9127,6 +9172,9 @@ void VkCommandQueue::CompletionThreadMain() {
                     _batch.submit.debug_label.clear();
 
                     if (!grouped_completion.has_value()) {
+                        _batch.submit.NotifyPendingGpuCompletions(
+                            gpu_completion_batch
+                        );
                         _batch.submit.NotifyPendingQueries(query_batch);
                         for (auto& allocator : _batch.allocators.submitted) {
                             allocator->NotifyTimestampQueriesAfterGpuCompletion(
@@ -9651,6 +9699,7 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
             !recorded->submit.signal_events.empty() ||
             !recorded->submit.callbacks.empty() ||
             !recorded->submit.success_callbacks.empty() ||
+            !recorded->submit.gpu_completion_tokens.empty() ||
             !recorded->submit.query_tokens.empty() ||
             recorded->submit.b_sync ||
             recorded->submit.b_tick_profiling ||
@@ -10287,6 +10336,20 @@ void VkCopyQueue::ExecuteThread() {
                         query_failure_reason, query_batch
                     );
 
+                    const GpuCompletionPublishBatch
+                        gpu_completion_batch =
+                            _batch.submit.
+                                    gpu_completion_publish_batch.Valid() ?
+                                _batch.submit.
+                                    gpu_completion_publish_batch :
+                                GpuCompletionBackendAccess::
+                                    BeginPublishBatch();
+                    _batch.submit.PublishPendingGpuCompletionOutcome(
+                        batch_gpu_success,
+                        "Vulkan Copy submission did not reach successful GPU completion",
+                        gpu_completion_batch
+                    );
+
                     bool recycle_batch =
                         batch_gpu_success && !device.IsFaulted();
                     if (recycle_batch) {
@@ -10314,6 +10377,12 @@ void VkCopyQueue::ExecuteThread() {
                         grouped_completion{};
                     if (_batch.batch_completion.Valid()) {
                         grouped_completion.emplace();
+                        grouped_completion->gpu_completion_tokens =
+                            std::move(
+                                _batch.submit.gpu_completion_tokens
+                            );
+                        grouped_completion->gpu_completion_batch =
+                            gpu_completion_batch;
                         grouped_completion->query_tokens =
                             std::move(_batch.submit.query_tokens);
                         grouped_completion->query_batch = query_batch;
@@ -10327,6 +10396,8 @@ void VkCopyQueue::ExecuteThread() {
                         grouped_completion->gpu_success  =
                             batch_gpu_success;
                         grouped_completion->release_safe = false;
+                        _batch.submit.gpu_completion_publish_batch =
+                            {};
                         _batch.submit.query_publish_batch = {};
                     } else {
                         callbacks =
@@ -10342,6 +10413,9 @@ void VkCopyQueue::ExecuteThread() {
                     _batch.submit.debug_label.clear();
 
                     if (!grouped_completion.has_value()) {
+                        _batch.submit.NotifyPendingGpuCompletions(
+                            gpu_completion_batch
+                        );
                         _batch.submit.NotifyPendingQueries(query_batch);
                         for (auto& allocator : _batch.allocators.submitted) {
                             allocator->NotifyTimestampQueriesAfterGpuCompletion(
