@@ -1279,6 +1279,120 @@ void TestTextureAttachmentStateMatchesSelectedAspects(TestSuite& suite) {
     );
 }
 
+void TestPresentationSourceBoundaryContract(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "presentation source boundary contract";
+    auto import_color = [](RenderGraph& graph, int& physical) {
+        const auto texture = graph.ImportTexture(
+            "Color",
+            &physical,
+            RenderGraph::TextureDesc{
+                .aspects = RenderGraph::TextureAspect::Color,
+            }
+        );
+        graph.SetInitialState(
+            texture,
+            RenderGraph::TextureState::ShaderResource,
+            RenderGraph::QueueRole::Graphics,
+            RenderGraph::AccessMode::Read
+        );
+        graph.AddPass(
+            "SideEffect",
+            [](RenderGraph::PassBuilder& builder) {
+                builder.SideEffect();
+            },
+            [] {}
+        );
+        return texture;
+    };
+
+    RenderGraph valid_graph("ValidPresentationSource");
+    int         valid_physical = 0;
+    const auto  valid_texture =
+        import_color(valid_graph, valid_physical);
+    valid_graph.Export(
+        valid_texture,
+        RenderGraph::TextureState::PresentationSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    suite.Check(
+        valid_graph.Compile(),
+        test_name,
+        "a color texture must be exportable as a read-only presentation source: " +
+            valid_graph.GetCompileError()
+    );
+
+    RenderGraph write_graph("PresentationSourceWriteRejected");
+    int         write_physical = 0;
+    const auto  write_texture =
+        import_color(write_graph, write_physical);
+    write_graph.Export(
+        write_texture,
+        RenderGraph::TextureState::PresentationSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Write
+    );
+    suite.Check(
+        !write_graph.Compile() &&
+            Contains(write_graph.GetCompileError(), "boundary access"),
+        test_name,
+        "a presentation source boundary must reject write access"
+    );
+
+    RenderGraph read_write_graph("PresentationSourceReadWriteRejected");
+    int         read_write_physical = 0;
+    const auto  read_write_texture =
+        import_color(read_write_graph, read_write_physical);
+    read_write_graph.Export(
+        read_write_texture,
+        RenderGraph::TextureState::PresentationSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::ReadWrite
+    );
+    suite.Check(
+        !read_write_graph.Compile() &&
+            Contains(read_write_graph.GetCompileError(), "boundary access"),
+        test_name,
+        "a presentation source boundary must reject read-write access"
+    );
+
+    RenderGraph depth_graph("DepthPresentationSourceRejected");
+    int         depth_physical = 0;
+    const auto  depth_texture = depth_graph.ImportTexture(
+        "Depth",
+        &depth_physical,
+        RenderGraph::TextureDesc{
+            .aspects = RenderGraph::TextureAspect::Depth,
+        }
+    );
+    depth_graph.SetInitialState(
+        depth_texture,
+        RenderGraph::TextureState::DepthStencilRead,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    depth_graph.AddPass(
+        "SideEffect",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect();
+        },
+        [] {}
+    );
+    depth_graph.Export(
+        depth_texture,
+        RenderGraph::TextureState::PresentationSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    suite.Check(
+        !depth_graph.Compile() &&
+            Contains(depth_graph.GetCompileError(), "selected aspects"),
+        test_name,
+        "only a color aspect may be exported as a presentation source"
+    );
+}
+
 void TestTypedAliasDescriptorMismatchIsRejected(TestSuite& suite) {
     constexpr std::string_view test_name = "typed alias descriptor mismatch";
     RenderGraph                graph("AliasDescriptorMismatch");
@@ -3828,6 +3942,7 @@ public:
         ETextureUsageFlags usage =
             ETextureUsageFlags::SAMPLED |
             ETextureUsageFlags::COLOR_ATTACHMENT |
+            ETextureUsageFlags::PRESENTATION_SOURCE |
             ETextureUsageFlags::TRANSFER_SRC |
             ETextureUsageFlags::TRANSFER_DST,
         ETextureAspectFlags aspects = ETextureAspectFlags::COLOR
@@ -4293,7 +4408,7 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
             export_barrier->export_boundary &&
             export_barrier->after_state ==
                 RenderGraph::ResourceState::Texture(
-                    RenderGraph::TextureState::TransferSource
+                    RenderGraph::TextureState::PresentationSource
                 ) &&
             export_barrier->after_access == RenderGraph::AccessMode::Read;
     }
@@ -4319,7 +4434,7 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
     suite.Check(
         export_contract_valid,
         test_name,
-        "a presentation target was not exported as Graphics TransferSource/Read"
+        "a presentation target was not exported as Graphics PresentationSource/Read"
     );
     const std::string dump = graph.Dump();
     suite.Check(
@@ -4375,6 +4490,13 @@ void TestUiFrameGraphRejectsInvalidPhysicalContracts(TestSuite& suite) {
         "InvalidOutput",
         ETextureUsageFlags::SAMPLED |
             ETextureUsageFlags::COLOR_ATTACHMENT
+    ));
+    TextureRef missing_presentation_usage(MoerNew(FakeUiTexture)(
+        "MissingPresentationUsage",
+        ETextureUsageFlags::SAMPLED |
+            ETextureUsageFlags::COLOR_ATTACHMENT |
+            ETextureUsageFlags::TRANSFER_SRC |
+            ETextureUsageFlags::TRANSFER_DST
     ));
 
     auto slots   = Moer::MakeShared<FakeUiViewportResources>(23);
@@ -4436,6 +4558,61 @@ void TestUiFrameGraphRejectsInvalidPhysicalContracts(TestSuite& suite) {
         test_name,
         "linear fallback bypassed UI target validation or claimed the copied "
         "packet"
+    );
+
+    RenderGraph semantic_graph("UiFrameGraphMissingPresentationUsage");
+    const auto  scene_handle = semantic_graph.ImportTexture(
+        "SceneColor",
+        scene_color,
+        RenderGraph::TextureDesc{
+            .mip_count   = 1,
+            .layer_count = 1,
+            .aspects     = RenderGraph::TextureAspect::Color,
+        }
+    );
+    const auto semantic_ready =
+        semantic_graph.CreateTransientToken("PresentationReady");
+    UiFrameGraphPass::GraphPasses semantic_passes{};
+    suite.Check(
+        !UiFrameGraphPassTestAccess::AddPassesWithComposeRecorder(
+            semantic_graph,
+            [](CommandList&) {},
+            prepared,
+            scene_handle,
+            scene_color,
+            missing_presentation_usage,
+            semantic_ready,
+            semantic_passes
+        ) &&
+            !semantic_passes.IsValid() &&
+            prepared->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::Prepared,
+        test_name,
+        "graph declaration accepted a target without PRESENTATION_SOURCE "
+        "usage"
+    );
+
+    CommandList semantic_linear_commands{};
+    const bool semantic_linear_recorded =
+        UiFrameGraphPassTestAccess::ProcessLinearWithComposeRecorder(
+            semantic_linear_commands,
+            [](CommandList&) {},
+            prepared,
+            scene_color,
+            missing_presentation_usage
+        );
+    const CmdSubmit semantic_rejected_submit =
+        semantic_linear_commands.Submit();
+    suite.Check(
+        !semantic_linear_recorded &&
+            semantic_rejected_submit.cmds.empty() &&
+            backend->render_count == 0 && slots->CommitCount() == 0 &&
+            slots->PendingSlot() == 23 &&
+            prepared->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::Prepared,
+        test_name,
+        "linear fallback accepted a target without PRESENTATION_SOURCE "
+        "usage"
     );
 }
 
@@ -5669,6 +5846,7 @@ int main() {
     TestInvalidTypedRangeIsRejected(suite);
     TestUnknownTextureAspectIsRejected(suite);
     TestTextureAttachmentStateMatchesSelectedAspects(suite);
+    TestPresentationSourceBoundaryContract(suite);
     TestTypedAliasDescriptorMismatchIsRejected(suite);
     TestMultipleReadersProduceAllWarEdges(suite);
     TestExplicitStateValidation(suite);

@@ -75,6 +75,9 @@ template<typename Enum>
         case TextureState::TransferSource:
             layout = ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC;
             return true;
+        case TextureState::PresentationSource:
+            layout = ETextureLayout::TEXTURE_LAYOUT_COMMON;
+            return true;
         case TextureState::TransferDestination:
             layout = ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST;
             return true;
@@ -147,6 +150,10 @@ template<typename Enum>
                 scope.access = ERHIAccessFlags::UNDEFINED;
                 return true;
             case TextureState::TransferSource:
+                scope.stages = ERHIPipelineStageFlags::PS_TRANSFER;
+                scope.access = ERHIAccessFlags::TRANSFER_READ;
+                return true;
+            case TextureState::PresentationSource:
                 scope.stages = ERHIPipelineStageFlags::PS_TRANSFER;
                 scope.access = ERHIAccessFlags::TRANSFER_READ;
                 return true;
@@ -773,6 +780,13 @@ bool RenderGraphLowering::Lower(
             access.state.texture == TextureState::Present) {
             return fail("Present state requires an external synchronization endpoint on resource '" +
                         resource.name + "'");
+        }
+        if (access.state.kind == ResourceKind::Texture &&
+            access.state.texture == TextureState::PresentationSource) {
+            return fail(
+                "PresentationSource is an export-boundary-only state on resource '" +
+                resource.name + "'"
+            );
         }
     }
 

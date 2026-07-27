@@ -101,6 +101,7 @@ bool SupportsUiPresentation(const TextureRef& texture) {
            HasTextureUsage(
                texture,
                ETextureUsageFlags::COLOR_ATTACHMENT |
+                   ETextureUsageFlags::PRESENTATION_SOURCE |
                    ETextureUsageFlags::TRANSFER_SRC |
                    ETextureUsageFlags::TRANSFER_DST
            );
@@ -477,7 +478,7 @@ bool UiFrameGraphPass::AddPassesWithComposeRecorder(
     for (const auto target : target_handles) {
         graph.Export(
             target,
-            RenderGraph::TextureState::TransferSource,
+            RenderGraph::TextureState::PresentationSource,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );

@@ -658,6 +658,9 @@ public:
     uint32_t GetNumArray() const {
         return info.array_size;
     }
+    uint32_t GetNumSamples() const {
+        return info.num_samples;
+    }
     uint32_t GetDepth() const {
         return info.depth;
     }

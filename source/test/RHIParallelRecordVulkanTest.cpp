@@ -8241,6 +8241,231 @@ void RunSerialControlPipelineBoundary() {
     }
 }
 
+void RunPresentSourceContractRejection() {
+    using namespace std::chrono_literals;
+
+    auto& device = RenderDevice::Get();
+    constexpr ETextureUsageFlags present_source_usage =
+        ETextureUsageFlags::PRESENTATION_SOURCE |
+        ETextureUsageFlags::TRANSFER_SRC |
+        ETextureUsageFlags::TRANSFER_DST;
+    TextureRef valid_source = device.CreateTexture(
+        "present_source_contract_valid",
+        Extent3D(4, 4, 1),
+        PF_R8G8B8A8_UNORM,
+        present_source_usage
+    );
+    TextureRef missing_usage_source = device.CreateTexture(
+        "present_source_contract_missing_usage",
+        Extent3D(4, 4, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::TRANSFER_SRC |
+            ETextureUsageFlags::TRANSFER_DST
+    );
+    TextureRef missing_transfer_source = device.CreateTexture(
+        "present_source_contract_missing_transfer_src",
+        Extent3D(4, 4, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::PRESENTATION_SOURCE |
+            ETextureUsageFlags::TRANSFER_DST
+    );
+    TextureRef multisampled_source = device.CreateTexture(
+        "present_source_contract_multisampled",
+        TextureInfo{
+            ETextureDimension::TEX_2D,
+            present_source_usage,
+            PF_R8G8B8A8_UNORM,
+            EClearAttachment{},
+            Extent3D(4, 4, 1),
+            1,
+            1,
+            4
+        }
+    );
+    TextureRef incompatible_format_source = device.CreateTexture(
+        "present_source_contract_incompatible_format",
+        Extent3D(4, 4, 1),
+        PF_R16G16B16A16_SFLOAT,
+        present_source_usage
+    );
+    TextureRef compressed_source = device.CreateTexture(
+        "present_source_contract_compressed",
+        Extent3D(4, 4, 1),
+        PF_BC1_RGBA_UNORM_BLOCK,
+        present_source_usage
+    );
+    SwapchainRef scripted_swapchain{
+        MoerNew(HeadlessScriptedSwapchain)()
+    };
+    SwapchainRef compressed_stride_swapchain{
+        MoerNew(HeadlessScriptedSwapchain)()
+    };
+    compressed_stride_swapchain->format =
+        PF_R16G16B16A16_SFLOAT;
+    if (!valid_source.IsValid() ||
+        !missing_usage_source.IsValid() ||
+        !missing_transfer_source.IsValid() ||
+        !multisampled_source.IsValid() ||
+        !incompatible_format_source.IsValid() ||
+        !compressed_source.IsValid() ||
+        !scripted_swapchain.IsValid() ||
+        !compressed_stride_swapchain.IsValid()) {
+        throw std::runtime_error(
+            "Present source-contract resources were not created"
+        );
+    }
+
+    ScriptedPresentCapture scripted_capture(
+        VulkanScriptedPresentResult{
+            .outcome = {
+                EVulkanOperationStatus::Recreate,
+                VK_ERROR_OUT_OF_DATE_KHR,
+            },
+        }
+    );
+    ScopedScriptedPresentOverride scripted_override(
+        scripted_capture
+    );
+
+    uint32 rejected_count = 0;
+    const auto expect_rejected =
+        [&](
+            TextureView       _source,
+            std::string_view  _case_name,
+            const SwapchainRef& _swapchain
+        ) {
+            PresentReceiptRef receipt = MakeShared<PresentReceipt>();
+            RHIExecutor::Get().Present(
+                RHIPresentRequest(
+                    _swapchain,
+                    _source,
+                    receipt
+                ),
+                true
+            );
+            const PresentReceiptResult result =
+                receipt->WaitForSubmission(5s);
+            if (!result.resolved || result.submitted ||
+                result.recreate_swapchain ||
+                receipt->ResolutionAttemptCount() != 1 ||
+                scripted_capture.count.load(
+                    std::memory_order_acquire
+                ) != 0) {
+                throw std::runtime_error(
+                    "Present source contract did not reject " +
+                    std::string(_case_name) +
+                    " before the scripted override"
+                );
+            }
+            ++rejected_count;
+        };
+
+    expect_rejected(
+        TextureView{},
+        "null source texture",
+        scripted_swapchain
+    );
+
+    expect_rejected(
+        missing_usage_source->GetView(),
+        "missing PRESENTATION_SOURCE usage",
+        scripted_swapchain
+    );
+
+    expect_rejected(
+        missing_transfer_source->GetView(),
+        "missing TRANSFER_SRC usage",
+        scripted_swapchain
+    );
+
+    expect_rejected(
+        multisampled_source->GetView(),
+        "multisampled source",
+        scripted_swapchain
+    );
+
+    expect_rejected(
+        incompatible_format_source->GetView(),
+        "size-incompatible format",
+        scripted_swapchain
+    );
+
+    expect_rejected(
+        compressed_source->GetView(),
+        "compressed format with matching block stride",
+        compressed_stride_swapchain
+    );
+
+    TextureView invalid_mip = valid_source->GetView();
+    invalid_mip.mip_level   = 1;
+    expect_rejected(
+        invalid_mip,
+        "nonzero mip",
+        scripted_swapchain
+    );
+
+    TextureView invalid_layer = valid_source->GetView();
+    invalid_layer.array_layer = 1;
+    expect_rejected(
+        invalid_layer,
+        "nonzero array layer",
+        scripted_swapchain
+    );
+
+    TextureView invalid_offset = valid_source->GetView();
+    invalid_offset.offset.x    = 1;
+    expect_rejected(
+        invalid_offset,
+        "nonzero offset",
+        scripted_swapchain
+    );
+
+    TextureView invalid_extent = valid_source->GetView();
+    --invalid_extent.extent.x;
+    expect_rejected(
+        invalid_extent,
+        "partial extent",
+        scripted_swapchain
+    );
+
+    PresentReceiptRef valid_receipt = MakeShared<PresentReceipt>();
+    RHIExecutor::Get().Present(
+        RHIPresentRequest(
+            scripted_swapchain,
+            valid_source->GetView(),
+            valid_receipt
+        ),
+        true
+    );
+    const PresentReceiptResult valid_result =
+        valid_receipt->WaitForSubmission(5s);
+    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+    if (!valid_result.resolved || valid_result.submitted ||
+        !valid_result.recreate_swapchain ||
+        valid_receipt->ResolutionAttemptCount() != 1 ||
+        scripted_capture.count.load(
+            std::memory_order_acquire
+        ) != 1 ||
+        scripted_capture.timeline.load(
+            std::memory_order_acquire
+        ) == 0 ||
+        scripted_capture.wrong_owner.load(
+            std::memory_order_acquire
+        )) {
+        throw std::runtime_error(
+            "a valid Present source did not reach the scripted override"
+        );
+    }
+
+    LOG_INFO(
+        "[TESTCASE][PASS] name=PresentSourceContractRejection "
+        "rejected={} null=true usage=true transfer_src=true samples=true "
+        "format=true compressed=true mip=true layer=true offset=true extent=true "
+        "valid_override=1 owner=Submission",
+        rejected_count
+    );
+}
+
 void RunPresentPipelineBoundary() {
     using namespace std::chrono_literals;
 
@@ -8292,7 +8517,8 @@ void RunPresentPipelineBoundary() {
         "phase15f_present_source",
         Extent3D(4, 4, 1),
         PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::TRANSFER_SRC |
+        ETextureUsageFlags::PRESENTATION_SOURCE |
+            ETextureUsageFlags::TRANSFER_SRC |
             ETextureUsageFlags::TRANSFER_DST
     );
     SwapchainRef scripted_swapchain{
@@ -8729,7 +8955,8 @@ void RunQueuedPresentShutdownBoundary() {
         "phase15f_shutdown_present_source",
         Extent3D(4, 4, 1),
         PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::TRANSFER_SRC |
+        ETextureUsageFlags::PRESENTATION_SOURCE |
+            ETextureUsageFlags::TRANSFER_SRC |
             ETextureUsageFlags::TRANSFER_DST
     );
     SwapchainRef scripted_swapchain{
@@ -8917,7 +9144,8 @@ void RunPresentHardFailureBoundary() {
         "phase15f_present_hard_source",
         Extent3D(4, 4, 1),
         PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::TRANSFER_SRC |
+        ETextureUsageFlags::PRESENTATION_SOURCE |
+            ETextureUsageFlags::TRANSFER_SRC |
             ETextureUsageFlags::TRANSFER_DST
     );
     SwapchainRef scripted_swapchain{
@@ -11391,6 +11619,7 @@ int main(int argc, const char** argv) {
 
         if (present_mode) {
             if (present_boundary) {
+                RunPresentSourceContractRejection();
                 RunSerialControlPipelineBoundary();
                 RunPresentPipelineBoundary();
                 // This is the terminal focused lifecycle test: it stops and

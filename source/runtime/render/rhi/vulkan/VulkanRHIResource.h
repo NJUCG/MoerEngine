@@ -691,6 +691,21 @@ public:
 
     static VkImageType       METoVKImageType(ETextureDimension _dim);
     static VkImageUsageFlags METoVKImageUsageFlags(ETextureUsageFlags _me_flags);
+    [[nodiscard]] static VkImageLayout PreferredLayoutForUsage(
+        ETextureUsageFlags _usage
+    ) noexcept {
+        const bool presentation_source =
+            (_usage & ETextureUsageFlags::PRESENTATION_SOURCE) ==
+            ETextureUsageFlags::PRESENTATION_SOURCE;
+        const bool prefer_sample =
+            !presentation_source &&
+            (_usage & ETextureUsageFlags::SAMPLED) ==
+                ETextureUsageFlags::SAMPLED &&
+            (_usage & ETextureUsageFlags::UNORDERED_ACCESS) ==
+                ETextureUsageFlags::UNDEFINED;
+        return prefer_sample ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL :
+                               VK_IMAGE_LAYOUT_GENERAL;
+    }
 
     uint        GetMipByteSize(uint _mip_idx) const override;
     VkImageView GetView(

@@ -1625,8 +1625,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
     VulkanTexture::VulkanTexture(const TextureInfo& _info, VulkanDevice* _device, VkImage _image)
         : Texture(_info), VulkanDeviceObject(_device) {
         b_present = (_info.usage & ETextureUsageFlags::PRESENT) == ETextureUsageFlags::PRESENT;
-        bool b_prefer_sample = (_info.usage & ETextureUsageFlags::SAMPLED) == ETextureUsageFlags::SAMPLED && (_info.usage & ETextureUsageFlags::UNORDERED_ACCESS) == ETextureUsageFlags::UNDEFINED;
-        m_preferred_layout = b_prefer_sample ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
+        m_preferred_layout = PreferredLayoutForUsage(_info.usage);
 
         if (_image != VK_NULL_HANDLE) {
             m_alloc.image = _image;

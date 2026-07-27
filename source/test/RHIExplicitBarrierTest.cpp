@@ -323,6 +323,28 @@ int64 FindCommandLayer(
     return -1;
 }
 
+void PresentationSourceUsageSelectsGeneralPreferredLayout() {
+    const ETextureUsageFlags sampled_output_usage =
+        ETextureUsageFlags::SAMPLED |
+        ETextureUsageFlags::COLOR_ATTACHMENT |
+        ETextureUsageFlags::TRANSFER_SRC |
+        ETextureUsageFlags::TRANSFER_DST;
+
+    Expect(
+        VulkanTexture::PreferredLayoutForUsage(
+            sampled_output_usage |
+            ETextureUsageFlags::PRESENTATION_SOURCE
+        ) == VK_IMAGE_LAYOUT_GENERAL,
+        "sampled presentation source must prefer GENERAL"
+    );
+    Expect(
+        VulkanTexture::PreferredLayoutForUsage(
+            sampled_output_usage
+        ) == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        "ordinary sampled texture must keep its shader-read preferred layout"
+    );
+}
+
 void LocalExplicitPayloadAndOwnershipArePreserved() {
     TestBuffer       buffer_resource(256);
     TestTexture      texture_resource(6, 4, ETextureAspectFlags::DEPTH_SLICE);
@@ -863,6 +885,7 @@ void ReleaseSentinelOverlapUsesExactBufferAndTextureRanges() {
 int main() {
     try {
         LegacyVulkanStateMappingIsStageCompatible();
+        PresentationSourceUsageSelectsGeneralPreferredLayout();
         LocalExplicitPayloadAndOwnershipArePreserved();
         ReleaseAndAcquirePayloadsPreserveEndpointAffinity();
         InvalidQueueTransferEndpointsFailWithoutMutation();

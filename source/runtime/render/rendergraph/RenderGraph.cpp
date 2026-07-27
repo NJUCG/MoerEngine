@@ -143,6 +143,8 @@ const char* ToString(RenderGraph::TextureState state) {
             return "undefined";
         case RenderGraph::TextureState::TransferSource:
             return "transfer-src";
+        case RenderGraph::TextureState::PresentationSource:
+            return "presentation-src";
         case RenderGraph::TextureState::TransferDestination:
             return "transfer-dst";
         case RenderGraph::TextureState::ShaderResource:

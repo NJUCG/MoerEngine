@@ -382,6 +382,7 @@ struct RaytracingRenderer::RuntimeState {
             Extent2D(renderer.resolution.x, renderer.resolution.y),
             renderer.swapchain->format,
             ETextureUsageFlags::COLOR_ATTACHMENT |
+                ETextureUsageFlags::PRESENTATION_SOURCE |
                 ETextureUsageFlags::TRANSFER_SRC |
                 ETextureUsageFlags::TRANSFER_DST
         )),
@@ -1981,6 +1982,7 @@ void RaytracingRenderer::RecreateFrameResources(uint2 new_extent) {
         Extent2D(new_extent.x, new_extent.y),
         swapchain->format,
         ETextureUsageFlags::COLOR_ATTACHMENT |
+            ETextureUsageFlags::PRESENTATION_SOURCE |
             ETextureUsageFlags::TRANSFER_SRC |
             ETextureUsageFlags::TRANSFER_DST
     );

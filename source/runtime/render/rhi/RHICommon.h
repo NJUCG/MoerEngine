@@ -960,7 +960,12 @@ enum class ETextureUsageFlags : uint32_t {
     FRAGMENT_SHADING_RATE_ATTACHMENT = 1 << 15,
 
     VIDEO_ENCODE = 1 << 16,
-    // ATTACHMENT_FEEDBACK_LOOP = 1 << 17,
+    /**
+     * Texture is handed to the presentation-copy path. This is a semantic
+     * usage bit: native image usage is still supplied by TRANSFER_SRC, while
+     * backends keep the idle/preferred state compatible with presentation.
+     */
+    PRESENTATION_SOURCE = 1 << 17,
     // SRGB    = 1 << 18, // 这个Enum貌似没用
     PRESENT = 1 << 19,
     Num     = 20

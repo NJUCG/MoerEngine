@@ -476,8 +476,18 @@ void VulkanCmdList::CopyTexture(
     uint3          _src_offset,
     uint3          _dst_offset,
     uint32         _src_mip_level,
-    uint32         _dst_mip_level
+    uint32         _dst_mip_level,
+    VkImageLayout  _src_layout,
+    VkImageLayout  _dst_layout
 ) {
+    if ((_src_layout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL &&
+         _src_layout != VK_IMAGE_LAYOUT_GENERAL) ||
+        (_dst_layout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
+         _dst_layout != VK_IMAGE_LAYOUT_GENERAL)) {
+        throw std::invalid_argument(
+            "vkCmdCopyImage requires GENERAL or transfer-optimal layouts"
+        );
+    }
     VkImageCopy copy_region = {
         .srcSubresource =
             {.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
@@ -507,9 +517,9 @@ void VulkanCmdList::CopyTexture(
     vkCmdCopyImage(
         command_buffer,
         _src->GetHandle(),
-        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        _src_layout,
         _dst->GetHandle(),
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        _dst_layout,
         1,
         &copy_region
     );

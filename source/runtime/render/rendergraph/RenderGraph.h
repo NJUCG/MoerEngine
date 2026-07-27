@@ -328,6 +328,12 @@ public:
         Automatic,
         Undefined,
         TransferSource,
+        /**
+         * External presentation-copy source. This boundary-only state keeps
+         * the image in COMMON/GENERAL while establishing transfer-read
+         * visibility for the presentation queue.
+         */
+        PresentationSource,
         TransferDestination,
         ShaderResource,
         Sampled,

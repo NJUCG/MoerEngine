@@ -112,7 +112,9 @@ public:
         uint3          _src_offset,
         uint3          _dst_offset,
         uint32         _src_mip_level,
-        uint32         _dst_mip_level
+        uint32         _dst_mip_level,
+        VkImageLayout  _src_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VkImageLayout  _dst_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
     );
     void BeginRendering(VkRenderingInfo&& _info);
     void EndRendering();

@@ -358,6 +358,79 @@ void TestDepthAttachmentReadUsesBackendAttachmentLayout(TestSuite& suite) {
     );
 }
 
+void TestPresentationSourceLowersToCommonTransferRead(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "presentation source lowers to common transfer read";
+    TextureRef texture =
+        MoerNew(FakeTexture)(1, 1, ETextureAspectFlags::COLOR);
+
+    RenderGraph graph("PresentationSourceLowering");
+    const auto  color = graph.ImportTexture(
+        "Color",
+        texture,
+        RenderGraph::TextureDesc{
+            .mip_count   = 1,
+            .layer_count = 1,
+            .aspects     = RenderGraph::TextureAspect::Color,
+        }
+    );
+    graph.SetInitialState(
+        color,
+        RenderGraph::TextureState::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None
+    );
+    const auto writer = graph.AddPass(
+        "Writer",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Write(color, RenderGraph::TextureState::RenderTarget)
+                .SideEffect();
+        },
+        [] {}
+    );
+    graph.Export(
+        color,
+        RenderGraph::TextureState::PresentationSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    RenderGraphLowering::LoweredPlan lowered{};
+    std::string error{};
+    suite.Check(
+        RenderGraphLowering::Lower(graph, lowered, error),
+        test_name,
+        error
+    );
+
+    const auto after_writer = lowered.After(writer);
+    const auto transition = std::find_if(
+        after_writer.begin(),
+        after_writer.end(),
+        [](const RenderGraphLowering::LoweredInstruction& instruction) {
+            return instruction.instruction_kind ==
+                       RenderGraphLowering::InstructionKind::Barrier &&
+                   instruction.export_boundary &&
+                   instruction.after_state ==
+                       RenderGraph::ResourceState::Texture(
+                           RenderGraph::TextureState::PresentationSource
+                       );
+        }
+    );
+    suite.Check(
+        transition != after_writer.end() &&
+            transition->destination.layout ==
+                ETextureLayout::TEXTURE_LAYOUT_COMMON &&
+            transition->destination.stages ==
+                ERHIPipelineStageFlags::PS_TRANSFER &&
+            transition->destination.access ==
+                ERHIAccessFlags::TRANSFER_READ,
+        test_name,
+        "presentation export must lower to COMMON / TRANSFER / TRANSFER_READ"
+    );
+}
+
 void TestSameStateReadGetsStateSeed(TestSuite& suite) {
     constexpr std::string_view test_name = "same-state read receives explicit state seed";
     BufferRef buffer = MoerNew(FakeBuffer)(256);
@@ -1451,6 +1524,7 @@ int main() {
     TestTextureFanInAndDeterminism(suite);
     TestShaderResourceAndSampledLayoutsRemainDistinct(suite);
     TestDepthAttachmentReadUsesBackendAttachmentLayout(suite);
+    TestPresentationSourceLowersToCommonTransferRead(suite);
     TestSameStateReadGetsStateSeed(suite);
     TestCrossNativeTokenSynchronization(suite);
     TestSameNativeTokenSynchronizationNeedsNoGpuSync(suite);

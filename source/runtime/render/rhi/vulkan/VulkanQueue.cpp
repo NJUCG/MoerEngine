@@ -49,6 +49,126 @@ std::atomic<const VulkanScriptedQueryPreparationOverrideForTesting*>
 std::atomic<const VulkanScriptedPresentOverrideForTesting*>
     g_scripted_present_override{nullptr};
 
+struct VulkanPresentSourceContract {
+    bool        valid{false};
+    const char* reason{"unknown present-source contract failure"};
+};
+
+[[nodiscard]] bool AreVulkanCopyFormatsSizeCompatible(
+    EPixelFormat _source,
+    EPixelFormat _destination
+) noexcept {
+    const uint source_index = static_cast<uint>(_source);
+    const uint destination_index = static_cast<uint>(_destination);
+    constexpr uint first_single_plane_color =
+        static_cast<uint>(PF_R4G4_UNORM_PACK8);
+    constexpr uint last_single_plane_color =
+        static_cast<uint>(PF_E5B9G9R9_UFLOAT_PACK32);
+    const auto is_known_single_plane_color = [](
+        uint _format_index
+    ) noexcept {
+        return _format_index >= first_single_plane_color &&
+               _format_index <= last_single_plane_color;
+    };
+    if (!is_known_single_plane_color(source_index) ||
+        !is_known_single_plane_color(destination_index)) {
+        return false;
+    }
+
+    const FormatInfo& source =
+        g_platform_pixel_formats[source_index];
+    const FormatInfo& destination =
+        g_platform_pixel_formats[destination_index];
+    return source.format != VK_FORMAT_UNDEFINED &&
+           destination.format != VK_FORMAT_UNDEFINED &&
+           source.stride != 0 &&
+           source.stride == destination.stride;
+}
+
+[[nodiscard]] VulkanPresentSourceContract ValidatePresentSourceContract(
+    const TextureView& _view,
+    const Swapchain*   _swapchain
+) noexcept {
+    if (_swapchain == nullptr) {
+        return {false, "Vulkan Present requires a swapchain"};
+    }
+    const Texture* texture = _view.texture;
+    if (texture == nullptr) {
+        return {false, "Vulkan Present requires a source texture"};
+    }
+    if ((texture->GetUsage() &
+         ETextureUsageFlags::PRESENTATION_SOURCE) !=
+        ETextureUsageFlags::PRESENTATION_SOURCE) {
+        return {
+            false,
+            "Vulkan present source must declare PRESENTATION_SOURCE usage"
+        };
+    }
+    if ((texture->GetUsage() &
+         ETextureUsageFlags::TRANSFER_SRC) !=
+        ETextureUsageFlags::TRANSFER_SRC) {
+        return {
+            false,
+            "Vulkan present source must declare TRANSFER_SRC usage"
+        };
+    }
+    if (texture->GetDimension() != ETextureDimension::TEX_2D) {
+        return {false, "Vulkan present source must be a 2D texture"};
+    }
+    if (texture->GetAspectFlags() != ETextureAspectFlags::COLOR) {
+        return {false, "Vulkan present source must be color-only"};
+    }
+    if (texture->GetNumSamples() != 1) {
+        return {
+            false,
+            "Vulkan present source must be single-sampled for vkCmdCopyImage"
+        };
+    }
+    if (!AreVulkanCopyFormatsSizeCompatible(
+            texture->GetFormat(), _swapchain->format
+        )) {
+        return {
+            false,
+            "Vulkan present source and swapchain formats must be size-compatible"
+        };
+    }
+    if (_view.offset.x != 0 || _view.offset.y != 0 ||
+        _view.offset.z != 0) {
+        return {false, "Vulkan present source offset must be zero"};
+    }
+    if (_view.mip_level != 0 || _view.num_mips != 1) {
+        return {
+            false,
+            "Vulkan present source must select exactly mip level zero"
+        };
+    }
+    if (_view.array_layer != 0 || _view.num_array != 1) {
+        return {
+            false,
+            "Vulkan present source must select exactly array layer zero"
+        };
+    }
+
+    const uint3 texture_extent = texture->GetExtent();
+    if (_view.extent.x != texture_extent.x ||
+        _view.extent.y != texture_extent.y ||
+        _view.extent.z != texture_extent.z) {
+        return {
+            false,
+            "Vulkan present source view must cover the complete texture extent"
+        };
+    }
+    if (_view.extent.z != 1 ||
+        _view.extent.x != _swapchain->size.x ||
+        _view.extent.y != _swapchain->size.y) {
+        return {
+            false,
+            "Vulkan present source extent must match the 2D swapchain"
+        };
+    }
+    return {true, ""};
+}
+
 void NotifyNativeSubmission(
     EQueueType                   _queue,
     VkQueue                      _native_queue,
@@ -4547,9 +4667,30 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
         GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
         "runtime Present must run on the Submission owner"
     );
-    assert(_source.texture != nullptr && "Present source texture is null");
     try {
         TextureRef source_texture{_source.texture};
+        const VulkanPresentSourceContract source_contract =
+            ValidatePresentSourceContract(
+                _source, _swapchain.Get()
+            );
+        if (!source_contract.valid) {
+            vk_device.RecordRejectedPresent();
+            ResolvePresentReceiptNoexcept(_receipt, false, false);
+            try {
+                LOG_ERROR(
+                    "[RHIExecutor][Vulkan] rejected Present source contract: {}",
+                    source_contract.reason
+                );
+            } catch (...) {
+            }
+            return {
+                .outcome = {
+                    EVulkanOperationStatus::Rejected,
+                    VK_ERROR_UNKNOWN
+                },
+                .recoverable_rejection = true,
+            };
+        }
         if (vk_device.IsFaulted()) {
             vk_device.RecordRejectedPresent();
             ResolvePresentReceiptNoexcept(_receipt, false, false);
@@ -6656,7 +6797,6 @@ void VkCommandQueue::Present(
     TextureView       _view,
     PresentReceiptRef _receipt
 ) {
-    assert(_view.texture != nullptr && "Present source texture is null");
     TextureRef source_texture{_view.texture};
 
     if (!ClaimLegacyOwnership("Present")) {
@@ -6766,6 +6906,13 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
     Array<RHIResource*>        deferred_releases{};
 
     try {
+        const VulkanPresentSourceContract source_contract =
+            ValidatePresentSourceContract(_view, _sc.Get());
+        if (!source_contract.valid) {
+            throw std::invalid_argument(source_contract.reason);
+        }
+        auto* vk_source_texture =
+            static_cast<VulkanTexture*>(_view.texture);
         if (vk_device.IsFaulted()) {
             vk_device.RecordRejectedPresent();
             final_outcome = {
@@ -6797,7 +6944,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                     auto& vk_allocator = *presentor;
                     auto& vk_cmd_list  = vk_allocator.GetCmdList();
                     auto& vk_tracker   = vk_allocator.GetTracker();
-                    auto* vk_src_tex   = static_cast<VulkanTexture*>(_view.texture);
+                    auto* vk_src_tex   = vk_source_texture;
                     const uint idx     = acquire.image_index;
                     auto* swapchain_tex =
                         ResourceCast(sc->GetSwapchainImage(idx).texture);
@@ -6809,9 +6956,32 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                         present_label, {0.0f, 0.85f, 0.95f, 1.0f}
                     );
                     vk_tracker.SetPassType(EPassType::Graphics);
-                    vk_tracker.RecordState(
+                    // PRESENTATION_SOURCE is a producer-side terminal
+                    // contract. The active graph exports GENERAL with
+                    // TRANSFER_READ visibility, while legacy recording
+                    // restores these textures to their GENERAL preferred
+                    // layout. Present consumes that state directly instead
+                    // of guessing and changing the source layout here. A
+                    // GENERAL->GENERAL memory barrier still connects the
+                    // accepted producer writes to this copy.
+                    vk_tracker.EmitExplicitBarrier(
                         vk_src_tex,
-                        vk_tracker.ReadTexture(vk_src_tex, ETextureState::TRANSFER)
+                        VulkanEnumTranslator::METoVKImageAspectFlags(
+                            vk_src_tex->GetAspectFlags()
+                        ),
+                        0,
+                        1,
+                        0,
+                        1,
+                        EBarrierQueueTransferPhase::None,
+                        VK_QUEUE_FAMILY_IGNORED,
+                        VK_QUEUE_FAMILY_IGNORED,
+                        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                        VK_ACCESS_2_MEMORY_WRITE_BIT,
+                        VK_IMAGE_LAYOUT_GENERAL,
+                        VK_PIPELINE_STAGE_2_COPY_BIT,
+                        VK_ACCESS_2_TRANSFER_READ_BIT,
+                        VK_IMAGE_LAYOUT_GENERAL
                     );
                     vk_tracker.RecordState(
                         swapchain_tex,
@@ -6831,7 +7001,9 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                         {0, 0, 0},
                         {0, 0, 0},
                         0,
-                        0
+                        0,
+                        VK_IMAGE_LAYOUT_GENERAL,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
                     );
                     vk_tracker.RecordState(
                         swapchain_tex,
@@ -6840,8 +7012,6 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                         VK_PIPELINE_STAGE_2_COPY_BIT
                     );
                     vk_tracker.ResolveBarriers();
-                    vk_tracker.DispatchBarriers(vk_cmd_list);
-                    vk_tracker.RestoreState();
                     vk_tracker.DispatchBarriers(vk_cmd_list);
                     vk_cmd_list.EndLabel();
                     VK_CHECK_RESULT(vk_cmd_list.End());
