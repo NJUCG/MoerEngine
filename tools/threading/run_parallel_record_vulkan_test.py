@@ -824,7 +824,9 @@ def _require_phase15f_present_boundary(mode: str, text: str) -> None:
         and fields.get("recreate") == "false"
         and fields.get("later_batch") == "rejected"
         and fields.get("native_after_present") == "0"
-        and fields.get("hard_latch") == "verified"
+        and fields.get("device_fault_priority") == "true"
+        and fields.get("invalid_source") == "true"
+        and fields.get("concurrent_hard_latch") == "verified"
         and fields.get("replay") == "0",
         f"{mode}: incomplete hard Present boundary contract",
     )

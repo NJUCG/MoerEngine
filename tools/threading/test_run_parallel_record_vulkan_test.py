@@ -166,7 +166,8 @@ def present_hard_line() -> str:
         "[TESTCASE][PASS] name=PresentHardFailureBoundary "
         "outcome=Rejected owner=Submission receipt_attempts=1 "
         "submitted=false recreate=false later_batch=rejected "
-        "native_after_present=0 hard_latch=verified replay=0\n"
+        "native_after_present=0 device_fault_priority=true "
+        "invalid_source=true concurrent_hard_latch=verified replay=0\n"
     )
 
 
@@ -1340,6 +1341,26 @@ class VulkanRunnerTests(unittest.TestCase):
                     "native_after_present=1",
                 ),
             )
+
+    def test_present_hard_requires_fault_priority_and_concurrent_latch(
+        self,
+    ) -> None:
+        for original, replacement in (
+            ("device_fault_priority=true", "device_fault_priority=false"),
+            ("invalid_source=true", "invalid_source=false"),
+            (
+                "concurrent_hard_latch=verified",
+                "concurrent_hard_latch=missing",
+            ),
+        ):
+            with self.subTest(field=original), self.assertRaisesRegex(
+                runner.VulkanTestError,
+                "hard Present boundary contract",
+            ):
+                runner.validate_log(
+                    "present-hard",
+                    present_hard_line().replace(original, replacement),
+                )
 
     def test_serial_accepts_only_pass_marker(self) -> None:
         runner.validate_log("serial", pass_line("serial", "false"))
