@@ -374,9 +374,9 @@ struct RaytracingRenderer::RuntimeState {
 
     VisualizeConfig visualize_config{};
 
-    explicit RuntimeState(RaytracingRenderer& renderer) :
+    explicit RuntimeState(RaytracingRenderer& renderer, uint2 scene_extent) :
         shader_utils(renderer.manager),
-        importance_sampling_params(CreateImportanceSamplingParams(renderer.resolution)),
+        importance_sampling_params(CreateImportanceSamplingParams(scene_extent)),
         importance_sampling_context(importance_sampling_params),
         output(renderer.device.CreateTexture(
             Extent2D(renderer.resolution.x, renderer.resolution.y),
@@ -401,7 +401,7 @@ struct RaytracingRenderer::RuntimeState {
             std::filesystem::create_directory(exported_file_path);
         }
 
-        rt_ctx->SetResolution(renderer.resolution);
+        rt_ctx->SetResolution(scene_extent);
         antialias_pass_info = AntialiasPass::CreateInfo{
             .motion              = rt_ctx->frame_rt.motion,
             .feedback_color_ping = rt_ctx->frame_rt.feedback_color_ping,
@@ -412,7 +412,7 @@ struct RaytracingRenderer::RuntimeState {
 #if WITH_NRD
         nrd_plugin    = renderer.device.LoadPlugin<Ext::NRDPlugin>();
         nrd_interface = nrd_plugin->CreateInterface(
-            renderer.max_frame_in_flight, renderer.resolution.x, renderer.resolution.y
+            renderer.max_frame_in_flight, scene_extent.x, scene_extent.y
         );
 #endif
 
@@ -431,7 +431,8 @@ RaytracingRenderer::RaytracingRenderer(
 ) :
     Renderer(resolution, config),
     runtime_assets(runtime_assets),
-    runtime_state(MakeUnique<RuntimeState>(*this)) {
+    scene_render_extent_tracker(resolution),
+    runtime_state(MakeUnique<RuntimeState>(*this, scene_render_extent_tracker.GetActiveExtent())) {
     const auto& graph_config            = ConfigManager::GetInstance().GetConfig().engine.render.raytracing;
     runtime_state->render_graph_enabled = graph_config.render_graph;
     runtime_state->render_graph_debug_dump         = graph_config.render_graph_debug_dump;
@@ -595,6 +596,11 @@ RaytracingRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, co
         if (hooks.on_capture_ui_composition) {
             frame_packet.ui_composition = hooks.on_capture_ui_composition();
         }
+        frame_packet.scene_render_extent = CaptureSceneRenderExtentRequest(
+            frame_packet.ui_composition.enabled,
+            frame_packet.ui_composition.scene_color_resolution,
+            frame_packet.window.resolution
+        );
     }
     {
         ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.ui_draw_packet_ms);
@@ -625,6 +631,15 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
 
     auto& state     = *runtime_state;
     auto& ui_config = frame_packet.config;
+    auto  scene_extent_request = frame_packet.scene_render_extent;
+    // Keep dock-only changes debounced, but accept a matching OS-window
+    // change immediately because presentation resources already have to move.
+    if (frame_packet.window.state == EWindowState::SizeChanged && scene_extent_request.valid) {
+        scene_extent_request.immediate = true;
+    }
+    const bool scene_extent_advanced =
+        scene_render_extent_tracker.Observe(scene_extent_request);
+    const uint2 active_scene_extent = scene_render_extent_tracker.GetActiveExtent();
     const auto ui_execution_thread =
         IsCurrentlyRenderThread() ?
             EUiDrawExecutionThread::Render :
@@ -665,6 +680,10 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     bool  linear_visualize_recorded       = false;
     bool  linear_ui_recorded              = false;
     bool  nrd_recorded                    = false;
+    bool  lighting_temporal_history_valid = false;
+    bool  scene_resources_recreated       = false;
+    bool  output_resources_recreated      = false;
+    bool  scene_resize_deferred            = false;
     uint8 gbuffer_history_bit             = 0;
     float tone_mapping_elapsed_for_commit = 0.f;
     bool  tone_mapping_enabled_for_commit = false;
@@ -690,7 +709,6 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             skip_present = true;
             break;
         case EWindowState::SizeChanged:
-            RecreateFrameResources(resolution);
             break;
         case EWindowState::Default:
             break;
@@ -698,6 +716,67 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             assert(false);
             break;
     }
+
+    const uint3 current_scene_extent_3d  = state.rt_ctx->frame_rt.ldr_color->GetExtent();
+    const uint3 current_output_extent_3d = state.output->GetExtent();
+    const bool recreate_scene_resources = !EqualRenderExtent(
+        uint2(current_scene_extent_3d.x, current_scene_extent_3d.y), active_scene_extent
+    );
+    const bool recreate_output_resources = !EqualRenderExtent(
+        uint2(current_output_extent_3d.x, current_output_extent_3d.y),
+        frame_packet.window.resolution
+    );
+
+    if (!skip_present && (recreate_scene_resources || recreate_output_resources)) {
+        if (recreate_output_resources) {
+            RecreateOutputResources(frame_packet.window.resolution);
+            output_resources_recreated = true;
+        }
+        if (recreate_scene_resources) {
+            if (state.render_graph_recording_failure_latched) {
+                scene_resize_deferred = scene_extent_advanced;
+                if (scene_resize_deferred) {
+                    LOG_WARNING(
+                        "[RenderGraph][Fallback] Preserving the last accepted "
+                        "raytracing SceneColor resources instead of resizing "
+                        "them to {}x{}.",
+                        active_scene_extent.x,
+                        active_scene_extent.y
+                    );
+                }
+            } else {
+                scene_resources_recreated = RecreateSceneResources(active_scene_extent);
+            }
+        }
+
+        if (scene_resources_recreated || output_resources_recreated) {
+            ++render_extent_generation;
+            LOG_INFO(
+                "[RenderExtent][Raytracing] generation={} requested={}x{} request_valid={} "
+                "active_scene={}x{} presentation_output={}x{} swapchain={}x{} "
+                "scene_recreated={} output_recreated={} temporal_history_reset={}.",
+                render_extent_generation,
+                frame_packet.scene_render_extent.extent.x,
+                frame_packet.scene_render_extent.extent.y,
+                frame_packet.scene_render_extent.valid,
+                active_scene_extent.x,
+                active_scene_extent.y,
+                frame_packet.window.resolution.x,
+                frame_packet.window.resolution.y,
+                swapchain->size.x,
+                swapchain->size.y,
+                scene_resources_recreated,
+                output_resources_recreated,
+                scene_resources_recreated
+            );
+        }
+    }
+    const uint3 allocated_scene_extent_3d =
+        state.rt_ctx->frame_rt.ldr_color->GetExtent();
+    const uint2 allocated_scene_extent(
+        allocated_scene_extent_3d.x,
+        allocated_scene_extent_3d.y
+    );
 
     state.timer.Stop();
     [[maybe_unused]] const auto frame_time = state.timer.ElapsedMilliseconds();
@@ -709,9 +788,9 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
 
     if (frame_packet.scene_updates.scene_ready && frame_packet.runtime_assets_ready &&
         !graph_recording_failed) {
-        bool render_graph_boundary_frame = state.first_load || state.b_new_env_map ||
-                                           frame_packet.window.state == EWindowState::SizeChanged ||
-                                           ui_config.export_cfg.b_export;
+        bool render_graph_boundary_frame =
+            state.first_load || state.b_new_env_map || scene_resources_recreated ||
+            output_resources_recreated || ui_config.export_cfg.b_export;
         const bool nrd_active_this_frame = IsNrdDenoiserActive(ui_config.denoiser_cfg.denoiser_type);
         const SceneUpdateResult scene_update =
             ExecuteSceneUpdates(frame_packet.scene_updates);
@@ -957,6 +1036,18 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 lighting_reservoir_block_array_pitch
             );
         }
+        const auto& lighting_buffer_indices =
+            state.rt_ctx->is_ctx.GetReSTIRDIBufferIndices();
+        const uint temporal_input_slice =
+            lighting_buffer_indices.temperal_resample_input_buff_idx;
+        const uint8 temporal_input_bit =
+            temporal_input_slice < 3u ? uint8(1u << temporal_input_slice) : uint8(0);
+        const uint8 previous_gbuffer_bit =
+            state.rt_ctx->b_current_frame ? uint8(2) : uint8(1);
+        lighting_temporal_history_valid =
+            temporal_input_bit != 0 &&
+            (state.lighting_initialized_reservoir_mask & temporal_input_bit) != 0 &&
+            (state.gbuffer_initialized_history_mask & previous_gbuffer_bit) != 0;
         prepared_lights.emplace(
             state.prepare_light_pass->Prepare(*state.rt_ctx, scene_snapshot, state.rt_instance_revision)
         );
@@ -979,7 +1070,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             auto command = NrdDenoisePass::Prepare(
                 state.nrd_interface,
                 static_cast<uint32>(state.nrd_time),
-                Vector2ui(resolution.x, resolution.y),
+                Vector2ui(allocated_scene_extent.x, allocated_scene_extent.y),
                 state.antialias_pass->GetPixelOffset(),
                 Transpose(camera.GetViewMatrix()),
                 Transpose(camera.GetProjectionMatrix()),
@@ -1305,7 +1396,10 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             ScopedGpuMarker lighting_marker(cmd_list, "Pass: Lighting", GpuMarkerPalette::Pass());
             state.prepare_light_pass->RecordLightingInputTransitions(cmd_list, *prepared_lights);
             local_light_sampling = state.lighting_pass->Process(
-                cmd_list, *state.rt_ctx, prepared_lights->GetLightBufferParams()
+                cmd_list,
+                *state.rt_ctx,
+                prepared_lights->GetLightBufferParams(),
+                lighting_temporal_history_valid
             );
             state.prepare_light_pass->RecordAcceptedBoundary(cmd_list, *prepared_lights);
             linear_lighting_recorded = true;
@@ -1696,10 +1790,17 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 "renderer instance."
             );
         } else {
+            // TickFrame rotates the planned ReSTIR reservoir indices before
+            // native acceptance is known. A recoverably rejected export frame
+            // must not let the next retry treat that planned slice as accepted
+            // temporal history. Keep the GBuffer history, but conservatively
+            // warm the reservoir ring again on the linear path.
+            state.lighting_initialized_reservoir_mask = 0;
             LOG_WARNING(
                 "[Raytracing][Export] Export prefix and its dependent tail "
-                "were recoverably rejected. Preserving renderer history and "
-                "the export request without latching managed recording."
+                "were recoverably rejected. Preserving accepted GBuffer "
+                "history and the export request, while resetting ReSTIR "
+                "reservoir eligibility without latching managed recording."
             );
         }
     }
@@ -1974,7 +2075,7 @@ RaytracingRenderer::SceneUpdateResult RaytracingRenderer::ExecuteSceneUpdates(
     };
 }
 
-void RaytracingRenderer::RecreateFrameResources(uint2 new_extent) {
+void RaytracingRenderer::RecreateOutputResources(uint2 new_extent) {
     auto& state = *runtime_state;
 
     state.output = device.CreateTexture(
@@ -1986,16 +2087,11 @@ void RaytracingRenderer::RecreateFrameResources(uint2 new_extent) {
             ETextureUsageFlags::TRANSFER_SRC |
             ETextureUsageFlags::TRANSFER_DST
     );
+}
 
-    if (state.render_graph_recording_failure_latched) {
-        LOG_WARNING(
-            "[RenderGraph][Fallback] Resized raytracing presentation resources "
-            "to {}x{} while preserving the last accepted RT frame resources.",
-            new_extent.x,
-            new_extent.y
-        );
-        return;
-    }
+bool RaytracingRenderer::RecreateSceneResources(uint2 new_extent) {
+    auto& state = *runtime_state;
+    assert(!state.render_graph_recording_failure_latched);
 
     state.rt_ctx->SetResolution(new_extent);
 
@@ -2022,6 +2118,7 @@ void RaytracingRenderer::RecreateFrameResources(uint2 new_extent) {
     state.lighting_working_set                 = {};
     state.lighting_reservoir_block_array_pitch = 0;
     state.lighting_initialized_reservoir_mask  = 0;
+    return true;
 }
 
 } // namespace Moer::Render::Raytracing

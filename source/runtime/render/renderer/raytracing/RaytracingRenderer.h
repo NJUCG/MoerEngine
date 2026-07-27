@@ -53,13 +53,15 @@ private:
         bool rt_scene_replaced      = false;
     };
 
-    RuntimeAssets&          runtime_assets;
-    UniquePtr<RuntimeState> runtime_state;
+    RuntimeAssets&           runtime_assets;
+    SceneRenderExtentTracker scene_render_extent_tracker;
+    UniquePtr<RuntimeState>  runtime_state;
 
     RaytracingDebugFrameInput              debug_ui_frame_input{};
     ProfileData                            debug_ui_profiler_data{};
     Array<std::string>                     debug_ui_material_texture_names;
-    uint64                                 next_frame_id                   = 0;
+    uint64                                 next_frame_id                    = 0;
+    uint64                                 render_extent_generation         = 0;
     bool                                   capture_scene_geometry_snapshot = true;
     bool                                   debug_ui_registered             = false;
     bool                                   export_request_in_flight        = false;
@@ -67,7 +69,8 @@ private:
     void EnsureDebugUiRegistered(const EngineHooks& hooks);
     bool RefreshSceneRuntimeRefs();
     SceneUpdateResult ExecuteSceneUpdates(SceneUpdateBatch& batch);
-    void RecreateFrameResources(uint2 new_extent);
+    bool RecreateSceneResources(uint2 new_extent);
+    void RecreateOutputResources(uint2 new_extent);
 
     [[nodiscard]] bool DumpTextureToFile(
         const ExportConfig&    _config,

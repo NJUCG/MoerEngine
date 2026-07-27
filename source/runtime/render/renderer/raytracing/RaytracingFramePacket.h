@@ -3,6 +3,7 @@
 #include "RaytracingConfig.h"
 #include "RaytracingSceneFrameSnapshot.h"
 #include "renderer/Renderer.h"
+#include "renderer/SceneRenderExtent.h"
 #include "rhi/RHICommand.h"
 
 namespace Moer::Render::Raytracing {
@@ -31,6 +32,7 @@ struct RaytracingFramePacket {
     bool                         runtime_assets_ready = false;
     RaytracingDebugFrameInput    debug_input{};
 
+    SceneRenderExtentRequest scene_render_extent{};
     UiCompositionFrameData ui_composition{};
     UiDrawFramePacket      ui_draw_frame{};
 };

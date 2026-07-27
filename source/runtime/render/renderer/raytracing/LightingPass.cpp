@@ -239,7 +239,8 @@ void LightingPass::RecordDispatch(
 LightingPass::LocalLightSamplingDecision LightingPass::Process(
     CommandList&                 cmd_list,
     RTContext&                   rt_ctx,
-    const DI::LightBufferParams& light_buffer_params
+    const DI::LightBufferParams& light_buffer_params,
+    bool                         temporal_history_valid
 ) {
     const PreparedCommand command   = Prepare(rt_ctx, light_buffer_params);
     const RecordResources resources = CaptureResources(rt_ctx);
@@ -256,7 +257,9 @@ LightingPass::LocalLightSamplingDecision LightingPass::Process(
         RecordDispatch(cmd_list, command, resources, ELightingDispatch::PresampleLightGrid);
     }
     RecordDispatch(cmd_list, command, resources, ELightingDispatch::GenerateInitialSample);
-    RecordDispatch(cmd_list, command, resources, ELightingDispatch::TemporalResample);
+    if (temporal_history_valid) {
+        RecordDispatch(cmd_list, command, resources, ELightingDispatch::TemporalResample);
+    }
     RecordDispatch(cmd_list, command, resources, ELightingDispatch::SpatialResample);
     RecordDispatch(cmd_list, command, resources, ELightingDispatch::ShadeSample);
     cmd_list.PopScopeWithTimeScope();
