@@ -343,6 +343,8 @@ struct VulkanScriptedPresentResult {
 
 using VulkanScriptedPresentCallback =
     VulkanScriptedPresentResult (*)(void*, uint64) noexcept;
+using VulkanPresentSourceRejectionCallback =
+    void (*)(void*) noexcept;
 
 struct VulkanScriptedPresentOverrideForTesting {
     void*                           context{nullptr};
@@ -350,6 +352,12 @@ struct VulkanScriptedPresentOverrideForTesting {
     // Opt-in for source-state boundary tests. Ordinary scripted outcomes do
     // not record/copy an image and therefore need no native source layout.
     bool require_present_source_ready{false};
+    // Optional race-injection point after the initial device-fault check has
+    // passed but immediately before an invalid/not-ready source is
+    // classified. This keeps fault-priority tests deterministic without
+    // weakening the production source contract.
+    VulkanPresentSourceRejectionCallback
+        before_source_rejection{nullptr};
 };
 
 // Narrow deterministic test seam for no-GPU-tail Present outcomes. The

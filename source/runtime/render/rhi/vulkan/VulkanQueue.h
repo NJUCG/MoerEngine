@@ -100,6 +100,14 @@ struct QueryFrameDiagnostics {
     uint32 used_query_count{0};
 };
 
+// Immutable per-submit publication delta built from the original command
+// order before dependency reordering or native recording. Submission commits
+// it only after the corresponding native packet has been accepted.
+struct VulkanPresentationSourceStateDelta {
+    TextureRef texture;
+    bool       ready{false};
+};
+
 struct ProfilerStorage {
     static constexpr int s_max_num_profiler_queries_per_frame =
         s_query_max_storage * 2; // *2 is for begin&end
@@ -750,6 +758,8 @@ private:
         std::optional<VulkanDescriptorPushLease> descriptor_lease;
         Array<RHIResource*>                     deferred_releases;
         VulkanBatchCompletionTicket             batch_completion{};
+        Array<VulkanPresentationSourceStateDelta>
+                                                presentation_source_delta;
         CurrentVulkanRecordedSubmitProfile      profile;
         RHITransferableOwnershipGate::Lease     execution_lease{};
         VulkanOperationResult                   retirement_outcome{
@@ -812,6 +822,8 @@ private:
         const CmdReorderer&            _reorderer,
         double                         _reorder_time,
         std::chrono::steady_clock::time_point _profile_started,
+        Array<VulkanPresentationSourceStateDelta>&
+                                      _presentation_source_delta,
         std::optional<CurrentVulkanRecordedSubmit>* _out_recorded = nullptr
     );
     VulkanRuntimeSubmissionResult PresentNow(
@@ -1074,6 +1086,8 @@ private:
         uint64                              logical_timeline{0};
         VulkanAllocatorBatch                allocators{};
         VulkanBatchCompletionTicket         batch_completion{};
+        Array<VulkanPresentationSourceStateDelta>
+                                            presentation_source_delta;
         RHITransferableOwnershipGate::Lease execution_lease{};
         VulkanOperationResult               retirement_outcome{
             EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN

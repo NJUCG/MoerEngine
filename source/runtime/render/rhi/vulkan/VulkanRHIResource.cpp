@@ -2602,6 +2602,31 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         return resource_allocation_counts.find(_resource) != resource_allocation_counts.end();
     }
 
+    Array<TextureRef>
+    VulkanBindlessArray::SnapshotPresentationSourceTextures() {
+        std::unique_lock<std::mutex> lock(mtx);
+        Array<TextureRef> textures{};
+        textures.reserve(resource_allocation_counts.size());
+        for (const auto& [handle, allocation] :
+             resource_allocation_counts) {
+            (void)handle;
+            RHIResource* resource = allocation.resource.Get();
+            if (resource == nullptr ||
+                resource->GetResourceType() != RRT_TEXTURE) {
+                continue;
+            }
+            auto* texture =
+                static_cast<::Moer::Render::Texture*>(resource);
+            if ((texture->GetUsage() &
+                 ETextureUsageFlags::PRESENTATION_SOURCE) !=
+                ETextureUsageFlags::PRESENTATION_SOURCE) {
+                continue;
+            }
+            textures.emplace_back(texture);
+        }
+        return textures;
+    }
+
     bool VulkanBindlessArray::IsTextureViewAllocated(
         uint64 _texture,
         uint8  _mip_level,

@@ -75,6 +75,19 @@ private:
     EQueueType             queue;
 };
 
+class OpaquePresentationStateProbeCommand final : public CustomCmd {
+public:
+    OpaquePresentationStateProbeCommand() :
+        CustomCmd(
+            CustomCmdId::CUSTOM_CMD_NONE,
+            "OpaquePresentationStateProbe"
+        ) {}
+
+    EQueueType GetQueueType() const override {
+        return EQueueType::Graphics;
+    }
+};
+
 class PipelineTranslateProbeCommand final : public VkCustomDispatchCmd {
 public:
     PipelineTranslateProbeCommand(
@@ -746,24 +759,49 @@ public:
         return capture.result;
     }
 
+    static void LatchDeviceFaultBeforeSourceRejection(
+        void* _context
+    ) noexcept {
+        auto& capture =
+            *static_cast<ScriptedPresentCapture*>(_context);
+        capture.source_rejection_hook_count.fetch_add(
+            1, std::memory_order_acq_rel
+        );
+        if (!TryLatchVulkanDeviceFaultForTesting(
+                VK_ERROR_DEVICE_LOST
+            )) {
+            capture.source_rejection_hook_failed.store(
+                true, std::memory_order_release
+            );
+        }
+    }
+
     VulkanScriptedPresentResult result{};
     std::atomic<uint32>         count{0};
     std::atomic<uint64>         timeline{0};
     std::atomic<uint32>         thread_id{0};
     std::atomic<bool>           wrong_owner{false};
+    std::atomic<uint32>         source_rejection_hook_count{0};
+    std::atomic<bool>           source_rejection_hook_failed{false};
 };
 
 class ScopedScriptedPresentOverride final {
 public:
     explicit ScopedScriptedPresentOverride(
         ScriptedPresentCapture& _capture,
-        bool _require_present_source_ready = false
+        bool _require_present_source_ready = false,
+        bool _latch_fault_before_source_rejection = false
     ) :
         scripted_override{
             .context  = &_capture,
             .callback = &ScriptedPresentCapture::Observe,
             .require_present_source_ready =
                 _require_present_source_ready,
+            .before_source_rejection =
+                _latch_fault_before_source_rejection ?
+                    &ScriptedPresentCapture::
+                        LatchDeviceFaultBeforeSourceRejection :
+                    nullptr,
         } {
         if (!TryInstallVulkanScriptedPresentOverrideForTesting(
                 &scripted_override
@@ -8291,6 +8329,26 @@ void RunPresentSourceContractRejection() {
             present_source_usage |
                 ETextureUsageFlags::COLOR_ATTACHMENT
         );
+    TextureRef rejected_suffix_source = device.CreateTexture(
+        "present_source_contract_rejected_suffix",
+        Extent3D(4, 4, 1),
+        PF_R8G8B8A8_UNORM,
+        present_source_usage
+    );
+    TextureRef copy_commit_source = device.CreateTexture(
+        "present_source_contract_copy_commit",
+        Extent3D(4, 4, 1),
+        PF_R8G8B8A8_UNORM,
+        present_source_usage
+    );
+    TextureRef mutation_copy_source = device.CreateTexture(
+        "present_source_contract_mutation_copy_source",
+        Extent3D(4, 4, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::TRANSFER_SRC |
+            ETextureUsageFlags::TRANSFER_DST |
+            ETextureUsageFlags::COLOR_ATTACHMENT
+    );
     TextureRef missing_usage_source = device.CreateTexture(
         "present_source_contract_missing_usage",
         Extent3D(4, 4, 1),
@@ -8344,6 +8402,9 @@ void RunPresentSourceContractRejection() {
         !backend_tracked_source.IsValid() ||
         !rejected_backend_tracked_source.IsValid() ||
         !backend_nonterminal_source.IsValid() ||
+        !rejected_suffix_source.IsValid() ||
+        !copy_commit_source.IsValid() ||
+        !mutation_copy_source.IsValid() ||
         !missing_usage_source.IsValid() ||
         !missing_transfer_source.IsValid() ||
         !multisampled_source.IsValid() ||
@@ -8556,6 +8617,154 @@ void RunPresentSourceContractRejection() {
         );
     }
 
+    // An independently accepted mutation must close the publication from the
+    // previous packet even when no trailing BarrierCmd describes that touch.
+    FenceRef accepted_mutation_done = device.CreateFence();
+    CommandList accepted_mutation(EQueueType::Graphics);
+    accepted_mutation.ClearResource(
+        backend_tracked_source->GetView(),
+        float4(0.25f, 0.f, 0.f, 1.f)
+    );
+    CmdSubmit accepted_mutation_submit =
+        accepted_mutation.Submit();
+    accepted_mutation_submit.Signal(
+        accepted_mutation_done.Get(), 1
+    );
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        std::move(accepted_mutation_submit),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (!ResourceCast(accepted_mutation_done.Get())
+             ->WaitSubmitted(1) ||
+        ResourceCast(backend_tracked_source.Get())
+            ->IsPresentationSourceReady()) {
+        throw std::runtime_error(
+            "an accepted standalone Clear left stale Present readiness"
+        );
+    }
+    expect_rejected(
+        backend_tracked_source->GetView(),
+        "source cleared by a later accepted packet",
+        scripted_swapchain
+    );
+
+    // Re-publish, then reject a later mutation before native acceptance. The
+    // rejected packet must not speculatively clear the accepted readiness.
+    FenceRef republished_done = device.CreateFence();
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        make_backend_tracked_publication(
+            backend_tracked_source,
+            republished_done,
+            1
+        ),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (!ResourceCast(republished_done.Get())->WaitSubmitted(1) ||
+        !ResourceCast(backend_tracked_source.Get())
+             ->IsPresentationSourceReady()) {
+        throw std::runtime_error(
+            "accepted re-publication did not restore Present readiness"
+        );
+    }
+
+    FenceRef rejected_mutation_dependency = device.CreateFence();
+    FenceRef rejected_mutation_done       = device.CreateFence();
+    rejected_mutation_dependency->Reject(1);
+    CommandList rejected_mutation(EQueueType::Graphics);
+    rejected_mutation.ClearResource(
+        backend_tracked_source->GetView(),
+        float4(0.f, 0.25f, 0.f, 1.f)
+    );
+    CmdSubmit rejected_mutation_submit =
+        rejected_mutation.Submit();
+    rejected_mutation_submit.Wait(
+        rejected_mutation_dependency.Get(), 1
+    );
+    rejected_mutation_submit.Signal(
+        rejected_mutation_done.Get(), 1
+    );
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        std::move(rejected_mutation_submit),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (!ResourceCast(rejected_mutation_done.Get())
+             ->IsRejected(1) ||
+        ResourceCast(rejected_mutation_done.Get())->IsFailed() ||
+        !ResourceCast(backend_tracked_source.Get())
+             ->IsPresentationSourceReady()) {
+        throw std::runtime_error(
+            "a rejected standalone Clear polluted accepted Present readiness"
+        );
+    }
+
+    const uint32 scripted_before_rejected_mutation_present =
+        scripted_capture.count.load(std::memory_order_acquire);
+    PresentReceiptRef rejected_mutation_receipt =
+        MakeShared<PresentReceipt>();
+    RHIExecutor::Get().Present(
+        RHIPresentRequest(
+            scripted_swapchain,
+            backend_tracked_source->GetView(),
+            rejected_mutation_receipt
+        ),
+        true
+    );
+    const PresentReceiptResult rejected_mutation_result =
+        rejected_mutation_receipt->WaitForSubmission(5s);
+    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+    if (!rejected_mutation_result.resolved ||
+        rejected_mutation_result.submitted ||
+        !rejected_mutation_result.recreate_swapchain ||
+        rejected_mutation_receipt->ResolutionAttemptCount() != 1 ||
+        scripted_capture.count.load(std::memory_order_acquire) !=
+            scripted_before_rejected_mutation_present + 1) {
+        throw std::runtime_error(
+            "a rejected standalone Clear hid the last accepted publication"
+        );
+    }
+
+    // Keep the fixture on Graphics: the source was published there, and this
+    // test targets state-ledger invalidation rather than queue-family transfer
+    // ownership (covered separately by the explicit multi-queue tests).
+    constexpr EQueueType mutation_queue = EQueueType::Graphics;
+    FenceRef accepted_copy_mutation_done = device.CreateFence();
+    CommandList accepted_copy_mutation(mutation_queue);
+    accepted_copy_mutation.CopyFrom(
+        mutation_copy_source->GetView(),
+        backend_tracked_source->GetView(),
+        "PresentSourceAcceptedCopyMutation"
+    );
+    CmdSubmit accepted_copy_mutation_submit =
+        accepted_copy_mutation.Submit();
+    accepted_copy_mutation_submit.Signal(
+        accepted_copy_mutation_done.Get(), 1
+    );
+    RHIExecutor::Get().Submit(
+        mutation_queue,
+        std::move(accepted_copy_mutation_submit),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (!ResourceCast(accepted_copy_mutation_done.Get())
+             ->WaitSubmitted(1) ||
+        ResourceCast(backend_tracked_source.Get())
+            ->IsPresentationSourceReady()) {
+        throw std::runtime_error(
+            "an accepted TextureToTexture copy left stale Present readiness"
+        );
+    }
+    expect_rejected(
+        backend_tracked_source->GetView(),
+        "source overwritten by an accepted texture copy",
+        scripted_swapchain
+    );
+
     FenceRef rejected_backend_dependency = device.CreateFence();
     FenceRef rejected_backend_done = device.CreateFence();
     rejected_backend_dependency->Reject(1);
@@ -8576,6 +8785,8 @@ void RunPresentSourceContractRejection() {
         rejected_backend_tracked_source->GetView(),
         rejected_backend_receipt
     );
+    const uint32 scripted_before_rejected_backend =
+        scripted_capture.count.load(std::memory_order_acquire);
     RHIExecutor::Get().Submit(
         EQueueType::Graphics,
         std::move(rejected_backend_submit),
@@ -8596,7 +8807,7 @@ void RunPresentSourceContractRejection() {
         rejected_backend_receipt->ResolutionAttemptCount() != 1 ||
         scripted_capture.count.load(
             std::memory_order_acquire
-        ) != 1) {
+        ) != scripted_before_rejected_backend) {
         throw std::runtime_error(
             "rejected BackendTracked producer published readiness or "
             "reached its same-batch Present"
@@ -8624,17 +8835,9 @@ void RunPresentSourceContractRejection() {
         },
         {}
     );
-    backend_nonterminal_producer.TextureBarriers(
-        EQueueType::Graphics,
-        EQueueType::Graphics,
-        EPassType::Graphics,
-        {},
-        Array<WriteTexture>{
-            WriteTexture{
-                backend_nonterminal_source->GetView(),
-                ETextureState::RENDER_TARGET,
-            },
-        }
+    backend_nonterminal_producer.ClearResource(
+        backend_nonterminal_source->GetView(),
+        float4(0.f, 0.f, 0.25f, 1.f)
     );
     CmdSubmit backend_nonterminal_submit =
         backend_nonterminal_producer.Submit();
@@ -8648,6 +8851,8 @@ void RunPresentSourceContractRejection() {
         backend_nonterminal_source->GetView(),
         backend_nonterminal_receipt
     );
+    const uint32 scripted_before_backend_nonterminal =
+        scripted_capture.count.load(std::memory_order_acquire);
     RHIExecutor::Get().Submit(
         EQueueType::Graphics,
         std::move(backend_nonterminal_submit),
@@ -8667,7 +8872,7 @@ void RunPresentSourceContractRejection() {
         backend_nonterminal_receipt->ResolutionAttemptCount() != 1 ||
         scripted_capture.count.load(
             std::memory_order_acquire
-        ) != 1) {
+        ) != scripted_before_backend_nonterminal) {
         throw std::runtime_error(
             "a BackendTracked publication followed by a terminal write "
             "remained ready or reached Present"
@@ -8732,6 +8937,197 @@ void RunPresentSourceContractRejection() {
         ERHIAccessFlags::TRANSFER_WRITE,
         ETextureLayout::TEXTURE_LAYOUT_COMMON
     );
+    const RHIQueueTopology topology = device.GetQueueTopology();
+
+    // The materializer commits each accepted segment independently. Verify
+    // that a publication accepted by the first segment is closed by a later
+    // accepted mutation before the submit-level Present is resolved.
+    constexpr uint64 segmented_present_scope =
+        0x5048313850524553ull;
+    FenceRef segmented_present_done = device.CreateFence();
+    CommandList segmented_present_producer(
+        EQueueType::Graphics
+    );
+    segmented_present_producer.SetResourceStateOwnership(
+        ERHIResourceStateOwnership::Explicit
+    );
+    BarrierCreateInfo segmented_publication =
+        BarrierCreateInfo::Transition(
+            backend_nonterminal_source->GetView(),
+            undefined_state,
+            presentation_state,
+            ETextureAspectFlags::COLOR
+        );
+    segmented_publication.publish_external_state = true;
+    segmented_present_producer.Barriers(
+        {segmented_publication}
+    );
+    segmented_present_producer.Barriers(
+        {BarrierCreateInfo::Transition(
+            backend_nonterminal_source->GetView(),
+            presentation_state,
+            transfer_write_state,
+            ETextureAspectFlags::COLOR
+        )}
+    );
+    CmdSubmit segmented_present_submit =
+        segmented_present_producer.Submit();
+    segmented_present_submit.SetResourceStateOwnership(
+        ERHIResourceStateOwnership::Explicit
+    );
+    segmented_present_submit.async_queue_scope =
+        segmented_present_scope;
+    segmented_present_submit.segments = {
+        RHISubmitSegment{EQueueType::Graphics, 0, 1},
+        RHISubmitSegment{EQueueType::Graphics, 1, 2},
+    };
+    segmented_present_submit.Signal(
+        segmented_present_done.Get(), 1
+    );
+    PresentReceiptRef segmented_present_receipt =
+        MakeShared<PresentReceipt>();
+    RHIPresentRequest segmented_present(
+        scripted_swapchain,
+        backend_nonterminal_source->GetView(),
+        segmented_present_receipt
+    );
+    const uint32 scripted_before_segmented_present =
+        scripted_capture.count.load(std::memory_order_acquire);
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        std::move(segmented_present_submit),
+        ERHIExecSubmitFlags::FlushGPU,
+        &segmented_present
+    );
+    const PresentReceiptResult segmented_present_result =
+        segmented_present_receipt->WaitForSubmission(5s);
+    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+    if (!ResourceCast(segmented_present_done.Get())
+             ->WaitSubmitted(1) ||
+        ResourceCast(backend_nonterminal_source.Get())
+            ->IsPresentationSourceReady() ||
+        !segmented_present_result.resolved ||
+        segmented_present_result.submitted ||
+        segmented_present_result.recreate_swapchain ||
+        segmented_present_receipt->ResolutionAttemptCount() != 1 ||
+        scripted_capture.count.load(
+            std::memory_order_acquire
+        ) != scripted_before_segmented_present) {
+        throw std::runtime_error(
+            "an accepted later segment did not close an earlier "
+            "presentation-source publication"
+        );
+    }
+
+    // A later materialized segment can reject before native recording without
+    // rolling back an earlier segment that Vulkan already accepted. The
+    // accepted publication remains the externally visible final state.
+    constexpr uint64 rejected_suffix_scope =
+        0x5048313852535546ull;
+    FenceRef rejected_suffix_done = device.CreateFence();
+    CommandList rejected_suffix_producer(
+        EQueueType::Graphics
+    );
+    rejected_suffix_producer.SetResourceStateOwnership(
+        ERHIResourceStateOwnership::Explicit
+    );
+    BarrierCreateInfo rejected_suffix_publication =
+        BarrierCreateInfo::Transition(
+            rejected_suffix_source->GetView(),
+            undefined_state,
+            presentation_state,
+            ETextureAspectFlags::COLOR
+        );
+    rejected_suffix_publication.publish_external_state = true;
+    rejected_suffix_producer.Barriers(
+        {rejected_suffix_publication}
+    );
+    rejected_suffix_producer.AddCustomCommand(
+        MakeUnique<OpaquePresentationStateProbeCommand>(),
+        "RejectedPresentationStateSuffix"
+    );
+    CmdSubmit rejected_suffix_submit =
+        rejected_suffix_producer.Submit();
+    rejected_suffix_submit.SetResourceStateOwnership(
+        ERHIResourceStateOwnership::Explicit
+    );
+    rejected_suffix_submit.async_queue_scope =
+        rejected_suffix_scope;
+    rejected_suffix_submit.segments = {
+        RHISubmitSegment{EQueueType::Graphics, 0, 1},
+        RHISubmitSegment{EQueueType::Graphics, 1, 2},
+    };
+    rejected_suffix_submit.Signal(
+        rejected_suffix_done.Get(), 1
+    );
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        std::move(rejected_suffix_submit),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (!ResourceCast(rejected_suffix_done.Get())
+             ->IsRejected(1) ||
+        ResourceCast(rejected_suffix_done.Get())->IsFailed() ||
+        !ResourceCast(rejected_suffix_source.Get())
+             ->IsPresentationSourceReady()) {
+        throw std::runtime_error(
+            "a rejected materialized suffix rolled back or hid its "
+            "accepted presentation-source prefix"
+        );
+    }
+
+    const uint32 scripted_before_rejected_suffix_present =
+        scripted_capture.count.load(std::memory_order_acquire);
+    PresentReceiptRef rejected_suffix_receipt =
+        MakeShared<PresentReceipt>();
+    RHIExecutor::Get().Present(
+        RHIPresentRequest(
+            scripted_swapchain,
+            rejected_suffix_source->GetView(),
+            rejected_suffix_receipt
+        ),
+        true
+    );
+    const PresentReceiptResult rejected_suffix_result =
+        rejected_suffix_receipt->WaitForSubmission(5s);
+    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+    if (!rejected_suffix_result.resolved ||
+        rejected_suffix_result.submitted ||
+        !rejected_suffix_result.recreate_swapchain ||
+        rejected_suffix_receipt->ResolutionAttemptCount() != 1 ||
+        scripted_capture.count.load(std::memory_order_acquire) !=
+            scripted_before_rejected_suffix_present + 1) {
+        throw std::runtime_error(
+            "an accepted presentation-source prefix was not visible after "
+            "its recoverably rejected suffix"
+        );
+    }
+
+    if (topology.copy.available) {
+        auto* vk_copy_commit_source =
+            ResourceCast(copy_commit_source.Get());
+        vk_copy_commit_source->PublishPresentationSourceReady(true);
+        submit_source_state(
+            copy_commit_source,
+            EQueueType::Copy,
+            undefined_state,
+            transfer_write_state,
+            false,
+            1
+        );
+        if (vk_copy_commit_source->IsPresentationSourceReady()) {
+            throw std::runtime_error(
+                "an accepted Copy queue packet did not commit its "
+                "presentation-source invalidation"
+            );
+        }
+        expect_rejected(
+            copy_commit_source->GetView(),
+            "source invalidated by an accepted Copy queue packet",
+            scripted_swapchain
+        );
+    }
 
     submit_source_state(
         valid_source,
@@ -8781,7 +9177,6 @@ void RunPresentSourceContractRejection() {
         );
     }
 
-    const RHIQueueTopology topology = device.GetQueueTopology();
     if (topology.compute.available) {
         submit_source_state(
             wrong_queue_source,
@@ -8863,7 +9258,7 @@ void RunPresentSourceContractRejection() {
         valid_receipt->ResolutionAttemptCount() != 1 ||
         scripted_capture.count.load(
             std::memory_order_acquire
-        ) != 2 ||
+        ) != 4 ||
         scripted_capture.timeline.load(
             std::memory_order_acquire
         ) == 0 ||
@@ -8881,9 +9276,12 @@ void RunPresentSourceContractRejection() {
         "format=true compressed=true mip=true layer=true offset=true extent=true "
         "fresh=true accepted_export=true stale_clear=true "
         "backend_tracked_same_batch=true backend_rejected=true "
-        "backend_nonterminal_clear=true "
+        "marker_then_clear=true accepted_mutation_clear=true "
+        "rejected_mutation_preserves=true accepted_copy_mutation=true "
+        "marker_then_segmented_state_change=true "
+        "accepted_prefix_rejected_suffix=true copy_commit=true "
         "wrong_queue_clear=true rejected_export_clear=true "
-        "valid_override=2 owner=Submission",
+        "valid_override=4 owner=Submission",
         rejected_count
     );
 }
@@ -9594,7 +9992,9 @@ void RunPresentHardFailureBoundary() {
         }
     );
     ScopedScriptedPresentOverride scripted_override(
-        scripted_capture
+        scripted_capture,
+        false,
+        true
     );
 
     PresentReceiptRef receipt = MakeShared<PresentReceipt>();
@@ -9603,14 +10003,6 @@ void RunPresentHardFailureBoundary() {
     std::atomic<uint32> success_callbacks{0};
 
     try {
-        if (!TryLatchVulkanDeviceFaultForTesting(
-                VK_ERROR_DEVICE_LOST
-            )) {
-            throw std::runtime_error(
-                "hard Present fixture could not pre-fault the Vulkan device"
-            );
-        }
-
         RHIExecutor::Get().Present(
             RHIPresentRequest(
                 scripted_swapchain,
@@ -9653,6 +10045,12 @@ void RunPresentHardFailureBoundary() {
                 std::memory_order_acquire
             ) != 0 ||
             scripted_capture.wrong_owner.load(
+                std::memory_order_acquire
+            ) ||
+            scripted_capture.source_rejection_hook_count.load(
+                std::memory_order_acquire
+            ) != 1 ||
+            scripted_capture.source_rejection_hook_failed.load(
                 std::memory_order_acquire
             ) ||
             boundary_capture.Count() != 2 ||
@@ -9714,7 +10112,7 @@ void RunPresentHardFailureBoundary() {
             "outcome=Rejected owner=Submission receipt_attempts=1 "
             "submitted=false recreate=false later_batch=rejected "
             "native_after_present=0 device_fault_priority=true "
-            "invalid_source=true hard_latch=verified replay=0"
+            "invalid_source=true concurrent_hard_latch=verified replay=0"
         );
     } catch (...) {
         RHIExecutor::Get().Sync(ERHISyncDepth::Present);

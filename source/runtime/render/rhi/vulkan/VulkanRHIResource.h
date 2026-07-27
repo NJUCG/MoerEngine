@@ -830,6 +830,10 @@ public:
         uint8  _array_layer,
         uint8  _array_count
     ) const;
+    // Returns a stable intrusive-reference snapshot while holding the
+    // bindless allocation lock. Presentation-state collection uses it before
+    // translation so opaque bindless accesses cannot leave stale readiness.
+    Array<TextureRef> SnapshotPresentationSourceTextures();
     void DeAllocateResource(uint64 _handle);
     void FinalizeUpdateCommand(
         const Array<BindlessArray::UpdateCmd>& _updates,
