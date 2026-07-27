@@ -29,6 +29,7 @@
 #include <filesystem>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <semaphore>
 #include <span>
 #include <stdexcept>
@@ -48,6 +49,19 @@ constexpr size_t kElementCount = 64;
 constexpr uint32 kIterations   = 24;
 constexpr uint32 kHeavyCopiesPerWave = 48;
 constexpr uint32 kHeavyCopyCount = kHeavyCopiesPerWave * 2;
+
+bool IsExpectedZeroOcclusionResult(
+    const OcclusionQueryResult* _result,
+    bool                        _precise
+) {
+    if (_result == nullptr || _result->visible) {
+        return false;
+    }
+    return _precise ?
+               _result->sample_count ==
+                   std::optional<std::uint64_t>{0} :
+               !_result->sample_count.has_value();
+}
 
 class TranslateProbeCommand final : public VkCustomDispatchCmd {
 public:
@@ -1255,6 +1269,7 @@ void ValidateArguments(int _argc, const char** _argv) {
             argument != "--present-hard" &&
             argument != "--rt-export-rejection" &&
             argument != "--readback-future" &&
+            argument != "--occlusion-query" &&
             argument != "--timestamp-query" &&
             argument != "--timestamp-query-success-batch" &&
             argument != "--timestamp-query-mid-failure" &&
@@ -11615,6 +11630,303 @@ void RunTimestampQueryCompletionOwnership() {
     );
 }
 
+void RunOcclusionQueryCompletionOwnership() {
+    auto& device = RenderDevice::Get();
+    const auto* vulkan_device =
+        static_cast<const VulkanDevice*>(device.GetImpl());
+    const bool precise_sample_count =
+        vulkan_device != nullptr &&
+        vulkan_device->GetCoreFeatures().core_1_0.occlusionQueryPrecise ==
+            VK_TRUE;
+    const EBufferUsageFlags usage =
+        EBufferUsageFlags::TRANSFER_SRC |
+        EBufferUsageFlags::TRANSFER_DST;
+
+    BufferRef source = device.CreateBuffer<uint32>(
+        "occlusion_query_source", kElementCount, usage
+    );
+    BufferRef destination = device.CreateBuffer<uint32>(
+        "occlusion_query_destination", kElementCount, usage
+    );
+    std::array<uint32, kElementCount> values{};
+    std::array<uint32, kElementCount> readback{};
+    for (uint32 index = 0; index < values.size(); ++index) {
+        values[index] = 0x200C0000u + index * 31u;
+    }
+
+    std::atomic<uint32> callback_count{0};
+    std::atomic<uint32> completion_callback_count{0};
+    std::atomic<uint32> ordinary_callback_count{0};
+    std::atomic<uint32> callback_errors{0};
+    std::atomic<uint32> callback_stage{0};
+    FenceRef            query_done = device.CreateFence();
+
+    CommandList commands(EQueueType::Graphics);
+    GpuCompletionFuture gpu_completion =
+        commands.TrackGpuCompletion("Phase20OcclusionCompletion");
+    commands.CopyFrom(
+        OwnedBytes(values),
+        source->GetView(),
+        "OcclusionQueryInitialize"
+    );
+
+    QueryToken query =
+        commands.BeginOcclusionQuery("Phase20Occlusion");
+    QueryFuture future = query.GetFuture();
+    gpu_completion.Then([&](const GpuCompletionResult& _result) {
+        const std::optional<QueryResult> query_result =
+            future.TryGet();
+        if (GetCurrentRHIThreadRole() !=
+                ERHIThreadRole::Completion ||
+            _result.status != GpuCompletionStatus::Ready ||
+            !query_result.has_value() ||
+            query_result->status != QueryStatus::Ready ||
+            query_done.Get()->GetValue() < 1 ||
+            query_done.Get()->IsRejected(1) ||
+            ResourceCast(query_done.Get())->IsFailed() ||
+            callback_stage.load(std::memory_order_acquire) != 0) {
+            callback_errors.fetch_add(
+                1, std::memory_order_relaxed
+            );
+        }
+        callback_stage.store(1, std::memory_order_release);
+        completion_callback_count.fetch_add(
+            1, std::memory_order_release
+        );
+    });
+    future.Then([&](const QueryResult& _result) {
+        const auto* occlusion =
+            std::get_if<OcclusionQueryResult>(&_result.payload);
+        if (GetCurrentRHIThreadRole() !=
+                ERHIThreadRole::Completion ||
+            _result.status != QueryStatus::Ready ||
+            _result.kind != QueryKind::Occlusion ||
+            !IsExpectedZeroOcclusionResult(
+                occlusion, precise_sample_count
+            ) ||
+            gpu_completion.Status() !=
+                GpuCompletionStatus::Ready ||
+            callback_stage.load(std::memory_order_acquire) != 1) {
+            callback_errors.fetch_add(
+                1, std::memory_order_relaxed
+            );
+        }
+        callback_stage.store(2, std::memory_order_release);
+        callback_count.fetch_add(1, std::memory_order_release);
+    });
+
+    // A visibility query can legally span non-raster commands. This gives the
+    // real Vulkan path observable work while retaining the deterministic
+    // zero-sample result needed by the headless gate.
+    for (uint32 copy = 0; copy < 16; ++copy) {
+        if ((copy & 1u) == 0) {
+            commands.CopyFrom(
+                source->GetView(),
+                destination->GetView(),
+                "OcclusionQueryForwardCopy"
+            );
+        } else {
+            commands.CopyFrom(
+                destination->GetView(),
+                source->GetView(),
+                "OcclusionQueryReverseCopy"
+            );
+        }
+    }
+    commands.EndOcclusionQuery(query);
+    commands.CopyFrom(
+        destination->GetView(),
+        WritableBytes(readback),
+        "OcclusionQueryReadback"
+    );
+    commands.AddCallback([&] {
+        if (GetCurrentRHIThreadRole() !=
+                ERHIThreadRole::Completion ||
+            callback_stage.load(std::memory_order_acquire) != 2) {
+            callback_errors.fetch_add(
+                1, std::memory_order_relaxed
+            );
+        }
+        callback_stage.store(3, std::memory_order_release);
+        ordinary_callback_count.fetch_add(
+            1, std::memory_order_release
+        );
+    });
+
+    CmdSubmit submit = commands.Submit();
+    submit.Signal(query_done.Get(), 1);
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        std::move(submit),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    const GpuCompletionResult completion_result =
+        gpu_completion.Get();
+    const QueryResult result = future.Get();
+    const auto* occlusion =
+        std::get_if<OcclusionQueryResult>(&result.payload);
+    if (result.status != QueryStatus::Ready ||
+        result.kind != QueryKind::Occlusion ||
+        !IsExpectedZeroOcclusionResult(
+            occlusion, precise_sample_count
+        ) ||
+        completion_result.status !=
+            GpuCompletionStatus::Ready ||
+        callback_count.load(std::memory_order_acquire) != 1 ||
+        completion_callback_count.load(
+            std::memory_order_acquire
+        ) != 1 ||
+        ordinary_callback_count.load(
+            std::memory_order_acquire
+        ) != 1 ||
+        callback_stage.load(std::memory_order_acquire) != 3 ||
+        callback_errors.load(std::memory_order_acquire) != 0 ||
+        readback != values) {
+        throw std::runtime_error(
+            "Vulkan occlusion query violated result or Completion ordering"
+        );
+    }
+
+    constexpr size_t bulk_pair_count = 48;
+    std::array<QueryFuture, bulk_pair_count> bulk_futures{};
+    std::array<std::atomic<uint32>, bulk_pair_count>
+        bulk_callback_counts{};
+    std::atomic<uint32> bulk_callback_errors{0};
+    CommandList bulk_commands(EQueueType::Graphics);
+    for (size_t index = 0; index < bulk_pair_count; ++index) {
+        QueryToken bulk_query =
+            bulk_commands.BeginOcclusionQuery(
+                "Phase20OcclusionBulk"
+            );
+        bulk_futures[index] = bulk_query.GetFuture();
+        bulk_futures[index].Then(
+            [&, index](const QueryResult& _result) {
+                const auto* bulk_occlusion =
+                    std::get_if<OcclusionQueryResult>(
+                        &_result.payload
+                    );
+                if (GetCurrentRHIThreadRole() !=
+                        ERHIThreadRole::Completion ||
+                    _result.status != QueryStatus::Ready ||
+                    _result.kind != QueryKind::Occlusion ||
+                    !IsExpectedZeroOcclusionResult(
+                        bulk_occlusion, precise_sample_count
+                    )) {
+                    bulk_callback_errors.fetch_add(
+                        1, std::memory_order_relaxed
+                    );
+                }
+                bulk_callback_counts[index].fetch_add(
+                    1, std::memory_order_release
+                );
+            }
+        );
+        bulk_commands.EndOcclusionQuery(bulk_query);
+    }
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        bulk_commands.Submit(),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    for (size_t index = 0; index < bulk_pair_count; ++index) {
+        const QueryResult bulk_result =
+            bulk_futures[index].Get();
+        const auto* bulk_occlusion =
+            std::get_if<OcclusionQueryResult>(
+                &bulk_result.payload
+            );
+        if (bulk_result.status != QueryStatus::Ready ||
+            bulk_result.kind != QueryKind::Occlusion ||
+            !IsExpectedZeroOcclusionResult(
+                bulk_occlusion, precise_sample_count
+            ) ||
+            bulk_callback_counts[index].load(
+                std::memory_order_acquire
+            ) != 1) {
+            throw std::runtime_error(
+                "bulk Vulkan occlusion query did not resolve exactly once"
+            );
+        }
+    }
+    if (bulk_callback_errors.load(
+            std::memory_order_acquire
+        ) != 0) {
+        throw std::runtime_error(
+            "bulk Vulkan occlusion query callbacks left Completion ownership"
+        );
+    }
+
+    std::atomic<uint32> reused_callback_count{0};
+    CommandList reused_commands(EQueueType::Graphics);
+    QueryToken reused_query =
+        reused_commands.BeginOcclusionQuery(
+            "Phase20OcclusionPostGrowthReuse"
+        );
+    QueryFuture reused_future = reused_query.GetFuture();
+    reused_future.Then([&](const QueryResult& _result) {
+        const auto* reused_occlusion =
+            std::get_if<OcclusionQueryResult>(&_result.payload);
+        if (GetCurrentRHIThreadRole() !=
+                ERHIThreadRole::Completion ||
+            _result.status != QueryStatus::Ready ||
+            _result.kind != QueryKind::Occlusion ||
+            !IsExpectedZeroOcclusionResult(
+                reused_occlusion, precise_sample_count
+            )) {
+            callback_errors.fetch_add(
+                1, std::memory_order_relaxed
+            );
+        }
+        reused_callback_count.fetch_add(
+            1, std::memory_order_release
+        );
+    });
+    reused_commands.EndOcclusionQuery(reused_query);
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        reused_commands.Submit(),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    const QueryResult reused_result = reused_future.Get();
+    const auto* reused_occlusion =
+        std::get_if<OcclusionQueryResult>(
+            &reused_result.payload
+        );
+    if (reused_result.status != QueryStatus::Ready ||
+        reused_result.kind != QueryKind::Occlusion ||
+        !IsExpectedZeroOcclusionResult(
+            reused_occlusion, precise_sample_count
+        ) ||
+        reused_callback_count.load(
+            std::memory_order_acquire
+        ) != 1 ||
+        callback_errors.load(std::memory_order_acquire) != 0) {
+        throw std::runtime_error(
+            "Vulkan occlusion query allocator reuse failed"
+        );
+    }
+
+    LOG_INFO(
+        "[TESTCASE][PASS] name=OcclusionQueryCompletionOwnership "
+        "queue=Graphics status=Ready samples={} visible={} "
+        "count_precise={} "
+        "availability=explicit pool=allocator_local bulk_pairs={} "
+        "growth=verified reuse=verified "
+        "recording=serial_island "
+        "order=signal->completion->query->ordinary "
+        "callbacks=exactly_once readback=verified replay=0",
+        occlusion->sample_count.value_or(0),
+        occlusion->visible,
+        precise_sample_count,
+        bulk_pair_count
+    );
+}
+
 void RunTimestampQuerySuccessfulBatchPublication() {
     using namespace std::chrono_literals;
 
@@ -14183,6 +14495,8 @@ int main(int argc, const char** argv) {
             HasArgument(argc, argv, "--rt-export-rejection");
         const bool readback_future_mode =
             HasArgument(argc, argv, "--readback-future");
+        const bool occlusion_query_mode =
+            HasArgument(argc, argv, "--occlusion-query");
         const bool timestamp_query_mode =
             HasArgument(argc, argv, "--timestamp-query");
         const bool timestamp_query_success_batch_mode =
@@ -14212,6 +14526,7 @@ int main(int argc, const char** argv) {
             .parallel_recording =
                 parallel || pipeline_window_mode || present_mode ||
                 readback_future_mode ||
+                occlusion_query_mode ||
                 timestamp_query_mode ||
                 timestamp_query_success_batch_mode ||
                 timestamp_query_mid_failure_mode ||
@@ -14220,6 +14535,7 @@ int main(int argc, const char** argv) {
             .parallel_record_verify =
                 parallel || pipeline_window_mode || present_mode ||
                 readback_future_mode ||
+                occlusion_query_mode ||
                 timestamp_query_mode ||
                 timestamp_query_success_batch_mode ||
                 timestamp_query_mid_failure_mode ||
@@ -14232,6 +14548,15 @@ int main(int argc, const char** argv) {
 
         if (readback_future_mode) {
             RunOwningReadbackFuture();
+            RenderDevice::Dispose();
+            render_device_initialized = false;
+            TaskSystem::ShutDown();
+            task_system_initialized = false;
+            return 0;
+        }
+
+        if (occlusion_query_mode) {
+            RunOcclusionQueryCompletionOwnership();
             RenderDevice::Dispose();
             render_device_initialized = false;
             TaskSystem::ShutDown();

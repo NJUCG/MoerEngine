@@ -551,6 +551,39 @@ void QueryDigestIgnoresRingPlacementButPreservesEvents() {
     Expect(baseline.digest != different_stage.digest, "query pipeline stage was omitted");
 }
 
+void QueryDigestDistinguishesTimestampAndOcclusion() {
+    SerialQuerySectionBuilder timestamp_builder;
+    timestamp_builder.AddEvent(
+        SerialQueryEvent::Begin, "Visibility", 0, 0
+    );
+    timestamp_builder.AddEvent(
+        SerialQueryEvent::End, "Visibility", 1, 0
+    );
+
+    SerialQuerySectionBuilder occlusion_builder;
+    occlusion_builder.AddEvent(
+        SerialQueryEvent::OcclusionBegin, "Visibility", 0, 0
+    );
+    occlusion_builder.AddEvent(
+        SerialQueryEvent::OcclusionEnd, "Visibility", 1, 0
+    );
+
+    const SerialGoldenSection timestamp =
+        timestamp_builder.Finish();
+    const SerialGoldenSection occlusion =
+        occlusion_builder.Finish();
+    Expect(
+        timestamp.digest != occlusion.digest,
+        "timestamp and occlusion events collapsed to one query digest"
+    );
+    Expect(
+        timestamp.item_count == 2 &&
+            occlusion.item_count == 2 &&
+            timestamp.complete && occlusion.complete,
+        "typed query events changed diagnostics completeness"
+    );
+}
+
 void CombinedDigestKeepsSectionIdentity() {
     const SerialCommandLayerSection commands = BuildAliasedCommandSection(0x4000);
     AliasedTokens tokens = MakeAliasedTokens(0x5000);
@@ -814,6 +847,7 @@ int main() {
         QueueFamilyRolesAreStableCompleteAndDirectional();
         DescriptorDigestIncludesLayoutResourceAndSemanticBytes();
         QueryDigestIgnoresRingPlacementButPreservesEvents();
+        QueryDigestDistinguishesTimestampAndOcclusion();
         CombinedDigestKeepsSectionIdentity();
         UnresolvedAndOpaqueObjectsFailClosed();
         BindlessUpdateLifecycleIsOneShotAndDiscardSafe();

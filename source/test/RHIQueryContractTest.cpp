@@ -92,6 +92,297 @@ TimestampQueryResult TestTimestampResult() {
     };
 }
 
+OcclusionQueryResult TestOcclusionResult(
+    std::uint64_t _sample_count = 37,
+    bool          _visible      = true
+) {
+    return OcclusionQueryResult{
+        .sample_count = _sample_count,
+        .visible      = _visible,
+    };
+}
+
+OcclusionQueryResult TestVisibilityOnlyOcclusionResult(bool _visible) {
+    return OcclusionQueryResult{
+        .sample_count = std::nullopt,
+        .visible      = _visible,
+    };
+}
+
+void OcclusionPayloadAndBatchResolutionAreTyped() {
+    CommandList single_list(EQueueType::Graphics);
+    QueryToken  single = single_list.BeginOcclusionQuery("SingleOcclusion");
+    single_list.EndOcclusionQuery(single);
+    CmdSubmit single_submit = single_list.Submit();
+
+    Expect(
+        !QueryBackendAccess::ResolveTimestamp(single, TestTimestampResult()),
+        "timestamp resolution accepted an occlusion token"
+    );
+    Expect(
+        single.GetFuture().Status() == QueryStatus::Pending,
+        "wrong-kind resolution terminalized an occlusion query"
+    );
+    Expect(
+        QueryBackendAccess::ResolveOcclusion(
+            single, TestOcclusionResult(91, true)
+        ),
+        "occlusion resolution did not win the one-shot transition"
+    );
+    const QueryResult single_result = single.GetFuture().Get();
+    Expect(
+        single_result.status == QueryStatus::Ready &&
+            single_result.kind == QueryKind::Occlusion &&
+            single_result.query_id == single.Id() &&
+            single_result.name == "SingleOcclusion" &&
+            single_result.error_reason.empty(),
+        "occlusion result lost its terminal metadata"
+    );
+    const auto* single_payload =
+        std::get_if<OcclusionQueryResult>(&single_result.payload);
+    Expect(
+        single_payload != nullptr && single_payload->sample_count == 91 &&
+            single_payload->visible,
+        "occlusion result has the wrong typed payload"
+    );
+
+    CommandList visibility_list(EQueueType::Graphics);
+    QueryToken visibility =
+        visibility_list.BeginOcclusionQuery("VisibilityOnlyOcclusion");
+    visibility_list.EndOcclusionQuery(visibility);
+    CmdSubmit visibility_submit = visibility_list.Submit();
+    Expect(
+        QueryBackendAccess::ResolveOcclusion(
+            visibility, TestVisibilityOnlyOcclusionResult(true)
+        ),
+        "visibility-only occlusion resolution did not become terminal"
+    );
+    const QueryResult visibility_result = visibility.GetFuture().Get();
+    const auto* visibility_payload =
+        std::get_if<OcclusionQueryResult>(&visibility_result.payload);
+    Expect(
+        visibility_payload != nullptr &&
+            !visibility_payload->sample_count.has_value() &&
+            visibility_payload->visible,
+        "visibility-only occlusion result exposed an inexact sample count"
+    );
+
+    CommandList timestamp_list(EQueueType::Graphics);
+    QueryToken timestamp =
+        timestamp_list.BeginTimestampQuery("WrongKindTimestamp");
+    timestamp_list.EndTimestampQuery(timestamp);
+    CmdSubmit timestamp_submit = timestamp_list.Submit();
+    Expect(
+        !QueryBackendAccess::ResolveOcclusion(
+            timestamp, TestOcclusionResult()
+        ),
+        "occlusion resolution accepted a timestamp token"
+    );
+    Expect(
+        timestamp.GetFuture().Status() == QueryStatus::Pending,
+        "wrong-kind occlusion resolution terminalized a timestamp query"
+    );
+    QueryBackendAccess::ResolveErrorIfPending(
+        timestamp, "wrong-kind test cleanup"
+    );
+
+    CommandList batch_list(EQueueType::Graphics);
+    QueryToken batch_first =
+        batch_list.BeginOcclusionQuery("BatchOcclusionFirst");
+    batch_list.EndOcclusionQuery(batch_first);
+    QueryToken batch_second =
+        batch_list.BeginOcclusionQuery("BatchOcclusionSecond");
+    batch_list.EndOcclusionQuery(batch_second);
+    CmdSubmit batch_submit = batch_list.Submit();
+
+    std::atomic<int> batch_callback_count{0};
+    std::atomic_bool first_observed_second_ready{false};
+    const QueryFuture second_future = batch_second.GetFuture();
+    batch_first.Then([&](const QueryResult& _result) {
+        const auto* payload =
+            std::get_if<OcclusionQueryResult>(&_result.payload);
+        first_observed_second_ready.store(
+            _result.status == QueryStatus::Ready &&
+                payload != nullptr && payload->sample_count == 11 &&
+                second_future.Status() == QueryStatus::Ready,
+            std::memory_order_release
+        );
+        batch_callback_count.fetch_add(1, std::memory_order_relaxed);
+    });
+    batch_second.Then([&](const QueryResult& _result) {
+        const auto* payload =
+            std::get_if<OcclusionQueryResult>(&_result.payload);
+        if (_result.status == QueryStatus::Ready && payload != nullptr &&
+            payload->sample_count == 0 && !payload->visible) {
+            batch_callback_count.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+
+    const QueryPublishBatch batch =
+        QueryBackendAccess::BeginPublishBatch();
+    Expect(
+        QueryBackendAccess::PublishOcclusion(
+            batch_first, TestOcclusionResult(11, true), batch
+        ) &&
+            QueryBackendAccess::PublishOcclusion(
+                batch_second, TestOcclusionResult(0, false), batch
+            ),
+        "occlusion batch did not publish every result"
+    );
+    Expect(
+        batch_callback_count.load(std::memory_order_relaxed) == 0,
+        "occlusion batch released callbacks during publication"
+    );
+    QueryBackendAccess::NotifyTerminals(batch_submit.query_tokens, batch);
+    Expect(
+        first_observed_second_ready.load(std::memory_order_acquire) &&
+            batch_callback_count.load(std::memory_order_relaxed) == 2,
+        "occlusion batch did not publish peers before notification"
+    );
+}
+
+void OcclusionQueueCapabilityAndCommandOpsAreExplicit() {
+    CommandList graphics(EQueueType::Graphics);
+    QueryToken token = graphics.BeginOcclusionQuery("GraphicsOcclusion");
+    graphics.EndOcclusionQuery(token);
+    CmdSubmit graphics_submit = graphics.Submit();
+
+    Expect(
+        graphics_submit.cmds.size() == 2 &&
+            QueryAt(graphics_submit, 0).Op() ==
+                QueryCmd::EOp::BeginOcclusion &&
+            QueryAt(graphics_submit, 1).Op() ==
+                QueryCmd::EOp::EndOcclusion,
+        "graphics occlusion query did not emit its exact command pair"
+    );
+    Expect(
+        QueryAt(graphics_submit, 0).IsBegin() &&
+            QueryAt(graphics_submit, 1).IsEnd() &&
+            QueryAt(graphics_submit, 0).IsOcclusion() &&
+            !QueryAt(graphics_submit, 0).IsTimestamp() &&
+            QueryAt(graphics_submit, 0).GetQueueType() ==
+                EQueueType::Graphics &&
+            QueryAt(graphics_submit, 0).Token().Kind() ==
+                QueryKind::Occlusion,
+        "QueryCmd lost its occlusion operation, kind, or queue"
+    );
+    QueryBackendAccess::ResolveErrorIfPending(
+        token, "graphics command contract cleanup"
+    );
+
+    for (const EQueueType queue :
+         {EQueueType::Compute, EQueueType::Copy}) {
+        CommandList unsupported(queue);
+        QueryToken unsupported_token =
+            unsupported.BeginOcclusionQuery("UnsupportedOcclusion");
+        const QueryResult result = unsupported_token.GetFuture().Get();
+        Expect(
+            unsupported_token.Valid() &&
+                unsupported_token.Kind() == QueryKind::Occlusion &&
+                result.status == QueryStatus::Error &&
+                !result.error_reason.empty(),
+            "non-Graphics occlusion query did not return a capability Error"
+        );
+        unsupported.EndOcclusionQuery(unsupported_token);
+        Expect(
+            unsupported.IsEmpty(),
+            "non-Graphics occlusion capability failure recorded a command"
+        );
+    }
+}
+
+void MixedQueryNestingIsStrictAndOcclusionIsNotRecursive() {
+    CommandList mixed(EQueueType::Graphics);
+    QueryToken outer_timestamp =
+        mixed.BeginTimestampQuery("MixedOuterTimestamp");
+    QueryToken occlusion = mixed.BeginOcclusionQuery("MixedOcclusion");
+    QueryToken inner_timestamp =
+        mixed.BeginTimestampQuery("MixedInnerTimestamp");
+
+    Expect(
+        mixed.HasOpenQueries() && mixed.HasOpenTimestampQueries() &&
+            mixed.HasOpenOcclusionQueries(),
+        "mixed query stack did not report every open kind"
+    );
+    ExpectThrows<std::logic_error>(
+        [&] {
+            mixed.EndOcclusionQuery(occlusion);
+        },
+        "mixed query stack accepted an out-of-order occlusion End"
+    );
+    ExpectThrows<std::logic_error>(
+        [&] {
+            [[maybe_unused]] QueryToken nested_occlusion =
+                mixed.BeginOcclusionQuery("IllegalNestedOcclusion");
+        },
+        "nested occlusion query was accepted"
+    );
+    ExpectThrows<std::invalid_argument>(
+        [&] {
+            mixed.EndTimestampQuery(occlusion);
+        },
+        "EndTimestampQuery accepted an occlusion token"
+    );
+    ExpectThrows<std::invalid_argument>(
+        [&] {
+            mixed.EndOcclusionQuery(inner_timestamp);
+        },
+        "EndOcclusionQuery accepted a timestamp token"
+    );
+
+    mixed.EndTimestampQuery(inner_timestamp);
+    mixed.EndOcclusionQuery(occlusion);
+    mixed.EndTimestampQuery(outer_timestamp);
+    Expect(
+        !mixed.HasOpenQueries() && !mixed.HasOpenTimestampQueries() &&
+            !mixed.HasOpenOcclusionQueries(),
+        "closed mixed query stack still reported an open query"
+    );
+
+    CmdSubmit mixed_submit = mixed.Submit();
+    Expect(
+        mixed_submit.cmds.size() == 6 &&
+            QueryAt(mixed_submit, 0).Op() ==
+                QueryCmd::EOp::BeginTimestamp &&
+            QueryAt(mixed_submit, 1).Op() ==
+                QueryCmd::EOp::BeginOcclusion &&
+            QueryAt(mixed_submit, 2).Op() ==
+                QueryCmd::EOp::BeginTimestamp &&
+            QueryAt(mixed_submit, 3).Op() ==
+                QueryCmd::EOp::EndTimestamp &&
+            QueryAt(mixed_submit, 4).Op() ==
+                QueryCmd::EOp::EndOcclusion &&
+            QueryAt(mixed_submit, 5).Op() ==
+                QueryCmd::EOp::EndTimestamp,
+        "mixed query stack did not preserve strict LIFO command order"
+    );
+
+    CommandList owner(EQueueType::Graphics);
+    CommandList foreign(EQueueType::Graphics);
+    QueryToken owned = owner.BeginOcclusionQuery("OwnedOcclusion");
+    ExpectThrows<std::invalid_argument>(
+        [&] {
+            foreign.EndOcclusionQuery(owned);
+        },
+        "a different CommandList accepted an occlusion token"
+    );
+    owner.EndOcclusionQuery(owned);
+    CmdSubmit owner_submit = owner.Submit();
+
+    QueryBackendAccess::ResolveErrorIfPending(
+        outer_timestamp, "mixed contract cleanup"
+    );
+    QueryBackendAccess::ResolveErrorIfPending(
+        inner_timestamp, "mixed contract cleanup"
+    );
+    QueryBackendAccess::ResolveErrorIfPending(
+        occlusion, "mixed contract cleanup"
+    );
+    QueryBackendAccess::ResolveErrorIfPending(
+        owned, "mixed contract cleanup"
+    );
+}
+
 void FutureIsThreadSafeOneShotAndContainsCallbackExceptions() {
     CommandList list(EQueueType::Graphics);
     QueryToken  token = list.BeginTimestampQuery("ConcurrentTimestamp");
@@ -682,6 +973,32 @@ void InvalidSubmissionRejectionAndDestructionAreTerminal() {
         "invalid Submit did not terminalize its query"
     );
 
+    QueryFuture unclosed_occlusion_future{};
+    {
+        CommandList unclosed(EQueueType::Graphics);
+        QueryToken token =
+            unclosed.BeginOcclusionQuery("UnclosedOcclusionSubmit");
+        unclosed_occlusion_future = token.GetFuture();
+        ExpectThrows<std::logic_error>(
+            [&] {
+                [[maybe_unused]] CmdSubmit rejected = unclosed.Submit();
+            },
+            "Submit accepted an unclosed occlusion query"
+        );
+        Expect(
+            unclosed.IsEmpty(),
+            "invalid Submit retained a partial occlusion query stream"
+        );
+    }
+    const QueryResult unclosed_occlusion_result =
+        unclosed_occlusion_future.Get();
+    Expect(
+        unclosed_occlusion_result.status == QueryStatus::Error &&
+            unclosed_occlusion_result.kind == QueryKind::Occlusion &&
+            !unclosed_occlusion_result.error_reason.empty(),
+        "invalid Submit did not terminalize its occlusion query"
+    );
+
     QueryFuture drained_future{};
     {
         CommandList rejected(EQueueType::Graphics);
@@ -950,6 +1267,52 @@ void MoveAndSubmitRetainIdentityAndLifetime() {
     moved_submit.query_tokens.clear();
     Expect(moved_future.Get().status == QueryStatus::Ready, "moved query did not retain the Ready result");
 
+    QueryFuture moved_occlusion_future{};
+    {
+        CommandList source(EQueueType::Graphics);
+        QueryToken token =
+            source.BeginOcclusionQuery("MovedOcclusionList");
+        moved_occlusion_future = token.GetFuture();
+
+        CommandList destination(std::move(source));
+        destination.EndOcclusionQuery(token);
+        ExpectThrows<std::invalid_argument>(
+            [&] {
+                source.EndOcclusionQuery(token);
+            },
+            "moved-from CommandList retained occlusion query ownership"
+        );
+
+        CmdSubmit submit = destination.Submit();
+        Expect(
+            submit.query_tokens.size() == 1 &&
+                QueryAt(submit, 0).Op() ==
+                    QueryCmd::EOp::BeginOcclusion &&
+                QueryAt(submit, 1).Op() ==
+                    QueryCmd::EOp::EndOcclusion,
+            "CommandList move lost its occlusion query stream"
+        );
+        Expect(
+            QueryBackendAccess::ResolveOcclusion(
+                submit.query_tokens.front(),
+                TestOcclusionResult(123, true)
+            ),
+            "moved occlusion query could not be resolved"
+        );
+    }
+    const QueryResult moved_occlusion_result =
+        moved_occlusion_future.Get();
+    const auto* moved_occlusion_payload =
+        std::get_if<OcclusionQueryResult>(
+            &moved_occlusion_result.payload
+        );
+    Expect(
+        moved_occlusion_result.status == QueryStatus::Ready &&
+            moved_occlusion_payload != nullptr &&
+            moved_occlusion_payload->sample_count == 123,
+        "moved occlusion query did not retain its Ready payload"
+    );
+
     QueryFuture overwritten_future{};
     CmdSubmit   destination = CommandList(EQueueType::Graphics).Submit();
     {
@@ -1000,14 +1363,19 @@ void CancellationViewIsStableAndGenerationScoped() {
 
     QueryToken existing = list.BeginTimestampQuery("BeforeCancel");
     list.EndTimestampQuery(existing);
+    QueryToken existing_occlusion =
+        list.BeginOcclusionQuery("OcclusionBeforeCancel");
+    list.EndOcclusionQuery(existing_occlusion);
     Expect(
         first_generation.Cancel("recording source shutdown"),
         "first cancellation did not win the generation transition"
     );
     Expect(!first_generation.Cancel("duplicate shutdown"), "cancellation domain was not one-shot");
     Expect(
-        existing.GetFuture().Get().status == QueryStatus::Error,
-        "cancellation did not terminate an existing token"
+        existing.GetFuture().Get().status == QueryStatus::Error &&
+            existing_occlusion.GetFuture().Get().status ==
+                QueryStatus::Error,
+        "cancellation did not terminate every existing query kind"
     );
 
     QueryToken late = list.BeginTimestampQuery("AfterCancel");
@@ -1050,6 +1418,9 @@ int main() {
     static_assert(std::is_copy_constructible_v<QueryCancellationView>);
 
     try {
+        OcclusionPayloadAndBatchResolutionAreTyped();
+        OcclusionQueueCapabilityAndCommandOpsAreExplicit();
+        MixedQueryNestingIsStrictAndOcclusionIsNotRecursive();
         FutureIsThreadSafeOneShotAndContainsCallbackExceptions();
         ReadyAndErrorResolutionRaceHasOneWinner();
         ReadyBatchPublishesEveryPeerBeforeNotification();

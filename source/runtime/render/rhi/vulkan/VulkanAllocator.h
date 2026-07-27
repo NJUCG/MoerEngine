@@ -152,31 +152,36 @@ public:
 
     void ResetBufferAlloc();
 
-    // Timestamp slots and their tokens are allocator-local. The allocator is
-    // the native command-buffer owner and already travels in the atomic
-    // Submission -> Completion packet, so query state never needs a global
-    // active-recording map or lock.
-    void EnsureTimestampQueryCapacity(size_t _required_count);
-    void RecordTimestampQuery(VulkanCmdList& _cmd_list, const QueryCmd& _cmd);
+    // Query slots and their tokens are allocator-local. The allocator is the
+    // native command-buffer owner and already travels in the atomic Submission
+    // -> Completion packet, so query state never needs a global active-
+    // recording map or lock. Timestamp boundaries consume one slot each;
+    // every occlusion begin/end pair shares one slot.
+    void EnsureQueryCapacity(
+        size_t _timestamp_slot_count,
+        size_t _occlusion_pair_count
+    );
+    void RecordQuery(VulkanCmdList& _cmd_list, const QueryCmd& _cmd);
     // GPU completion is a two-stage transaction. Prepare performs native
     // readback and fault classification without publishing user callbacks.
     // The queue Completion owner later terminalizes submit signals, invokes
     // allocator retirement callbacks, publishes every query in the batch, and
     // only then releases Query callbacks.
-    [[nodiscard]] VkResult PrepareTimestampQueriesAfterGpuCompletion(
+    [[nodiscard]] VkResult PrepareQueriesAfterGpuCompletion(
         const VulkanOperationContext& _context
     ) noexcept;
-    void PublishTimestampQueriesAfterGpuCompletion(
+    void PublishQueriesAfterGpuCompletion(
         QueryPublishBatch _batch,
         bool              _gpu_success,
         std::string_view  _failure_reason
     ) noexcept;
-    void NotifyTimestampQueriesAfterGpuCompletion(
+    void NotifyQueriesAfterGpuCompletion(
         QueryPublishBatch _batch
     ) noexcept;
     bool CompleteSuccessCallbacks() noexcept;
-    [[nodiscard]] bool HasTimestampQueries() const noexcept {
-        return !timestamp_query_records.empty();
+    [[nodiscard]] bool HasQueries() const noexcept {
+        return !timestamp_query_records.empty() ||
+               !occlusion_query_records.empty();
     }
 
     bool CompleteSuccess() noexcept override;
@@ -254,17 +259,65 @@ private:
         TimestampQueryResult prepared_result{};
     };
 
+    struct OcclusionQueryRecord {
+        enum class EPreparedState : uint8 {
+            Unprepared,
+            Ready,
+            Incomplete,
+            Unavailable,
+            NativeFault,
+        };
+
+        QueryToken token{};
+        uint32     slot{std::numeric_limits<uint32>::max()};
+        bool       ended{false};
+        bool       precise{false};
+        EPreparedState       prepared_state{EPreparedState::Unprepared};
+        OcclusionQueryResult prepared_result{};
+    };
+
+    void EnsureTimestampQueryCapacity(size_t _required_count);
+    void EnsureOcclusionQueryCapacity(size_t _required_count);
+    void RecordTimestampQuery(VulkanCmdList& _cmd_list, const QueryCmd& _cmd);
+    void RecordOcclusionQuery(VulkanCmdList& _cmd_list, const QueryCmd& _cmd);
     TimestampQueryRecord* FindTimestampQueryRecord(uint64 _token_id) noexcept;
+    OcclusionQueryRecord* FindOcclusionQueryRecord(uint64 _token_id) noexcept;
     uint32                AllocateTimestampQuerySlot();
-    void                  ClearTimestampQueries() noexcept;
+    uint32                AllocateOcclusionQuerySlot();
+    [[nodiscard]] VkResult PrepareTimestampQueriesAfterGpuCompletion(
+        const VulkanOperationContext& _context
+    ) noexcept;
+    [[nodiscard]] VkResult PrepareOcclusionQueriesAfterGpuCompletion(
+        const VulkanOperationContext& _context
+    ) noexcept;
+    void PublishTimestampQueriesAfterGpuCompletion(
+        QueryPublishBatch _batch,
+        bool              _gpu_success,
+        std::string_view  _failure_reason
+    ) noexcept;
+    void PublishOcclusionQueriesAfterGpuCompletion(
+        QueryPublishBatch _batch,
+        bool              _gpu_success,
+        std::string_view  _failure_reason
+    ) noexcept;
+    void NotifyTimestampQueriesAfterGpuCompletion(
+        QueryPublishBatch _batch
+    ) noexcept;
+    void NotifyOcclusionQueriesAfterGpuCompletion(
+        QueryPublishBatch _batch
+    ) noexcept;
+    void ClearQueries() noexcept;
 
     Array<TimestampQueryRecord> timestamp_query_records;
+    Array<OcclusionQueryRecord> occlusion_query_records;
     uint32                      next_timestamp_query{0};
+    uint32                      next_occlusion_query{0};
     uint32                      timestamp_valid_bits{0};
     double                      timestamp_period_ns{0.0};
     // Most allocators never record an explicit Query command. Lazily creating
     // this pool avoids adding a native driver object to every ordinary,
     // parallel-worker, fallback, and Copy allocator.
     std::optional<VkNativeQueryPool> timestamp_pool;
+    std::optional<VkNativeQueryPool> occlusion_pool;
 };
 } // namespace Moer::Render

@@ -166,7 +166,8 @@ def present_hard_line() -> str:
         "[TESTCASE][PASS] name=PresentHardFailureBoundary "
         "outcome=Rejected owner=Submission receipt_attempts=1 "
         "submitted=false recreate=false later_batch=rejected "
-        "native_after_present=0 hard_latch=verified replay=0\n"
+        "native_after_present=0 device_fault_priority=true "
+        "invalid_source=true concurrent_hard_latch=verified replay=0\n"
     )
 
 
@@ -190,6 +191,19 @@ def readback_future_line() -> str:
         "bytes=32,64,64,256 callbacks=exactly_once siblings=terminal "
         "native_staging=completion-owned host_snapshot=future-owned "
         "unsupported=compressed,msaa,partial\n"
+    )
+
+
+def occlusion_query_line() -> str:
+    return (
+        "[TESTCASE][PASS] name=OcclusionQueryCompletionOwnership "
+        "queue=Graphics status=Ready samples=0 visible=false "
+        "count_precise=true "
+        "availability=explicit pool=allocator_local bulk_pairs=48 "
+        "growth=verified reuse=verified "
+        "recording=serial_island "
+        "order=signal->completion->query->ordinary "
+        "callbacks=exactly_once readback=verified replay=0\n"
     )
 
 
@@ -1018,6 +1032,11 @@ class VulkanRunnerTests(unittest.TestCase):
                 readback_future_line(),
             ),
             (
+                "occlusion-query",
+                "--occlusion-query",
+                occlusion_query_line(),
+            ),
+            (
                 "timestamp-query-success-batch",
                 "--timestamp-query-success-batch",
                 timestamp_query_success_batch_line(),
@@ -1080,6 +1099,74 @@ class VulkanRunnerTests(unittest.TestCase):
                 "readback-future",
                 "VUID-VkImageMemoryBarrier2-oldLayout-01197\n"
                 + readback_future_line(),
+            )
+
+    def test_occlusion_query_contract_is_accepted(self) -> None:
+        runner.validate_log(
+            "occlusion-query",
+            occlusion_query_line(),
+        )
+
+    def test_occlusion_query_requires_serial_island(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete native query contract",
+        ):
+            runner.validate_log(
+                "occlusion-query",
+                occlusion_query_line().replace(
+                    "recording=serial_island",
+                    "recording=parallel_wave",
+                ),
+            )
+
+    def test_occlusion_query_requires_bulk_growth(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete native query contract",
+        ):
+            runner.validate_log(
+                "occlusion-query",
+                occlusion_query_line().replace(
+                    "bulk_pairs=48 growth=verified",
+                    "bulk_pairs=1 growth=unverified",
+                ),
+            )
+
+    def test_occlusion_query_requires_precision_capability(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete native query contract",
+        ):
+            runner.validate_log(
+                "occlusion-query",
+                occlusion_query_line().replace(
+                    "count_precise=true ",
+                    "",
+                ),
+            )
+
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete native query contract",
+        ):
+            runner.validate_log(
+                "occlusion-query",
+                occlusion_query_line().replace(
+                    "count_precise=true",
+                    "count_precise=unknown",
+                ),
+            )
+
+    def test_occlusion_query_rejects_validation_vuid(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "Vulkan validation VUID",
+        ):
+            runner.validate_log(
+                "occlusion-query",
+                "VUID-vkCmdBeginQuery-None-00807\n"
+                + occlusion_query_line(),
             )
 
     def test_timestamp_query_success_batch_contract_is_accepted(
@@ -1280,6 +1367,26 @@ class VulkanRunnerTests(unittest.TestCase):
                     "native_after_present=1",
                 ),
             )
+
+    def test_present_hard_requires_fault_priority_and_concurrent_latch(
+        self,
+    ) -> None:
+        for original, replacement in (
+            ("device_fault_priority=true", "device_fault_priority=false"),
+            ("invalid_source=true", "invalid_source=false"),
+            (
+                "concurrent_hard_latch=verified",
+                "concurrent_hard_latch=missing",
+            ),
+        ):
+            with self.subTest(field=original), self.assertRaisesRegex(
+                runner.VulkanTestError,
+                "hard Present boundary contract",
+            ):
+                runner.validate_log(
+                    "present-hard",
+                    present_hard_line().replace(original, replacement),
+                )
 
     def test_serial_accepts_only_pass_marker(self) -> None:
         runner.validate_log("serial", pass_line("serial", "false"))

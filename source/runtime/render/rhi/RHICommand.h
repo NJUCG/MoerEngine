@@ -1692,11 +1692,10 @@ public:
     );
     RENDER_API void PopScopeWithTimeScope();
 
-    // Phase 17A deliberately exposes timestamp queries only. QueryKind keeps
-    // the Occlusion value reserved so the ABI can grow without conflating the
-    // two result payloads.
     RENDER_API QueryToken BeginTimestampQuery(std::string_view _name = "TimestampQuery");
     RENDER_API void EndTimestampQuery(const QueryToken& _token);
+    RENDER_API QueryToken BeginOcclusionQuery(std::string_view _name = "OcclusionQuery");
+    RENDER_API void EndOcclusionQuery(const QueryToken& _token);
 
     template<typename T, typename... Args>
     struct CountType;
@@ -1932,8 +1931,26 @@ public:
         return gpu_completion_cancellation_domain.GetView();
     }
 
-    [[nodiscard]] bool HasOpenTimestampQueries() const noexcept {
+    [[nodiscard]] bool HasOpenQueries() const noexcept {
         return !active_query_stack.empty();
+    }
+
+    [[nodiscard]] bool HasOpenTimestampQueries() const noexcept {
+        for (const QueryToken& token : active_query_stack) {
+            if (token.Kind() == QueryKind::Timestamp) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool HasOpenOcclusionQueries() const noexcept {
+        for (const QueryToken& token : active_query_stack) {
+            if (token.Kind() == QueryKind::Occlusion) {
+                return true;
+            }
+        }
+        return false;
     }
 
     EQueueType GetQueueType() const noexcept {

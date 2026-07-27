@@ -1303,7 +1303,7 @@ struct D3D12CommandPreprocessVisitor {
                 Visit(static_cast<const DispatchCmd&>(*_cmd));
                 break;
             case Command::EType::Query:
-                // Timestamp queries are rejected once at Execute entry. The
+                // GPU queries are rejected once at Execute entry. The
                 // command remains an explicit no-op here so unrelated work in
                 // the same submit can still be translated.
                 break;
@@ -1472,7 +1472,7 @@ struct D3D12CommandVisitor {
                 Visit(static_cast<const DispatchCmd&>(*_cmd));
                 break;
             case Command::EType::Query:
-                // Timestamp queries are rejected once at Execute entry. The
+                // GPU queries are rejected once at Execute entry. The
                 // command remains an explicit no-op here so unrelated work in
                 // the same submit can still be recorded and submitted.
                 break;
@@ -1758,11 +1758,15 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
                 _submit.query_publish_batch :
                 QueryBackendAccess::BeginPublishBatch();
         _submit.query_publish_batch = query_batch;
-        QueryBackendAccess::PublishErrorsIfPending(
-            query_tokens,
-            "D3D12 timestamp queries are unsupported",
-            query_batch
-        );
+        for (const QueryToken& token : query_tokens) {
+            QueryBackendAccess::PublishErrorIfPending(
+                token,
+                token.Kind() == QueryKind::Occlusion ?
+                    "D3D12 occlusion queries are unsupported" :
+                    "D3D12 timestamp queries are unsupported",
+                query_batch
+            );
+        }
         query_completion_callbacks.emplace_back(
             [tokens = std::move(query_tokens), query_batch] {
                 QueryBackendAccess::NotifyTerminals(tokens, query_batch);

@@ -577,6 +577,23 @@ void VulkanCmdList::ResetQueryPool(VkNativeQueryPool& _query_pool, uint32 _first
     vkCmdResetQueryPool(command_buffer, _query_pool.GetHandle(), _first_query, _query_cnt);
 }
 
+void VulkanCmdList::BeginQuery(
+    VkNativeQueryPool&  _query_pool,
+    uint32              _query,
+    VkQueryControlFlags _flags
+) {
+    vkCmdBeginQuery(
+        command_buffer, _query_pool.GetHandle(), _query, _flags
+    );
+}
+
+void VulkanCmdList::EndQuery(
+    VkNativeQueryPool& _query_pool,
+    uint32             _query
+) {
+    vkCmdEndQuery(command_buffer, _query_pool.GetHandle(), _query);
+}
+
 void VulkanCmdList::WriteTimeStamp(
     VkNativeQueryPool&       _query_pool,
     uint32                   _query_idx,

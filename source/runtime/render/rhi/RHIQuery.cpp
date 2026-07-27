@@ -188,6 +188,29 @@ bool QueryFuture::PublishTimestamp(
     return true;
 }
 
+bool QueryFuture::PublishOcclusion(
+    const OcclusionQueryResult& _result,
+    std::uint64_t               _notification_owner
+) const noexcept {
+    if (!state_ || _notification_owner == 0) {
+        return false;
+    }
+
+    {
+        std::scoped_lock lock(state_->mutex);
+        if (state_->result.status != QueryStatus::Pending) {
+            return false;
+        }
+        state_->result.status = QueryStatus::Ready;
+        state_->result.payload.emplace<OcclusionQueryResult>(_result);
+        state_->result.error_reason.clear();
+        state_->notification_released = false;
+        state_->notification_owner    = _notification_owner;
+    }
+    state_->cv.notify_all();
+    return true;
+}
+
 bool QueryFuture::PublishError(
     std::string_view _reason,
     std::uint64_t    _notification_owner
@@ -294,6 +317,16 @@ bool QueryToken::PublishTimestamp(
     return future_.PublishTimestamp(_result, _notification_owner);
 }
 
+bool QueryToken::PublishOcclusion(
+    const OcclusionQueryResult& _result,
+    std::uint64_t               _notification_owner
+) const noexcept {
+    if (!Valid() || kind_ != QueryKind::Occlusion) {
+        return false;
+    }
+    return future_.PublishOcclusion(_result, _notification_owner);
+}
+
 bool QueryToken::PublishErrorIfPending(
     std::string_view _reason,
     std::uint64_t    _notification_owner
@@ -331,6 +364,19 @@ bool QueryBackendAccess::ResolveTimestamp(
     return published;
 }
 
+bool QueryBackendAccess::ResolveOcclusion(
+    const QueryToken&           _token,
+    const OcclusionQueryResult& _result
+) noexcept {
+    const QueryPublishBatch batch = BeginPublishBatch();
+    const bool published =
+        _token.PublishOcclusion(_result, batch.notification_owner_);
+    if (published) {
+        _token.NotifyTerminal(batch.notification_owner_);
+    }
+    return published;
+}
+
 bool QueryBackendAccess::ResolveErrorIfPending(
     const QueryToken& _token,
     std::string_view  _reason
@@ -350,6 +396,14 @@ bool QueryBackendAccess::PublishTimestamp(
     QueryPublishBatch           _batch
 ) noexcept {
     return _token.PublishTimestamp(_result, _batch.notification_owner_);
+}
+
+bool QueryBackendAccess::PublishOcclusion(
+    const QueryToken&           _token,
+    const OcclusionQueryResult& _result,
+    QueryPublishBatch           _batch
+) noexcept {
+    return _token.PublishOcclusion(_result, _batch.notification_owner_);
 }
 
 bool QueryBackendAccess::PublishErrorIfPending(

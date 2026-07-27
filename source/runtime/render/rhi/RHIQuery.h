@@ -18,8 +18,6 @@ namespace Moer::Render {
 
 enum class QueryKind : std::uint8_t {
     Timestamp = 0,
-    // Reserved for the next query slice. Phase 17A intentionally exposes no
-    // occlusion-recording API until its backend contract is implemented.
     Occlusion = 1,
 };
 
@@ -38,8 +36,11 @@ struct TimestampQueryResult {
 };
 
 struct OcclusionQueryResult {
-    std::uint64_t sample_count{0};
-    bool          visible{false};
+    // Exact only when the backend requested a precise native query. A
+    // visibility-only backend leaves this empty instead of exposing an
+    // implementation-defined nonzero value as a real sample count.
+    std::optional<std::uint64_t> sample_count{};
+    bool                         visible{false};
 };
 
 struct QueryResult {
@@ -98,6 +99,10 @@ private:
         const TimestampQueryResult& _result,
         std::uint64_t               _notification_owner
     ) const noexcept;
+    bool PublishOcclusion(
+        const OcclusionQueryResult& _result,
+        std::uint64_t               _notification_owner
+    ) const noexcept;
     bool PublishError(
         std::string_view _reason,
         std::uint64_t    _notification_owner
@@ -136,6 +141,10 @@ private:
     [[nodiscard]] std::uint64_t OwnerId() const noexcept;
     bool PublishTimestamp(
         const TimestampQueryResult& _result,
+        std::uint64_t               _notification_owner
+    ) const noexcept;
+    bool PublishOcclusion(
+        const OcclusionQueryResult& _result,
         std::uint64_t               _notification_owner
     ) const noexcept;
     bool PublishErrorIfPending(
@@ -189,6 +198,10 @@ public:
         const QueryToken&           _token,
         const TimestampQueryResult& _result
     ) noexcept;
+    static bool ResolveOcclusion(
+        const QueryToken&           _token,
+        const OcclusionQueryResult& _result
+    ) noexcept;
     static bool ResolveErrorIfPending(
         const QueryToken& _token,
         std::string_view  _reason
@@ -201,6 +214,11 @@ public:
     static bool PublishTimestamp(
         const QueryToken&           _token,
         const TimestampQueryResult& _result,
+        QueryPublishBatch           _batch
+    ) noexcept;
+    static bool PublishOcclusion(
+        const QueryToken&           _token,
+        const OcclusionQueryResult& _result,
         QueryPublishBatch           _batch
     ) noexcept;
     static bool PublishErrorIfPending(

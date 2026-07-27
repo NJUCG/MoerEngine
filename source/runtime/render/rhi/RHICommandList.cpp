@@ -513,7 +513,7 @@ CmdSubmit CommandList::Submit() {
             DrainOrdinaryCallbacksForRejection();
         InvokeCallbacksNoexcept(cleanup_callbacks);
         throw std::logic_error(
-            "CommandList::Submit rejected an unclosed timestamp query"
+            "CommandList::Submit rejected an unclosed query"
         );
     }
     // Construct the next recording generation before transferring callbacks,
@@ -1402,6 +1402,120 @@ void CommandList::EndTimestampQuery(const QueryToken& _token) {
     auto command = MakeUnique<QueryCmd>(
         _token,
         QueryCmd::EOp::EndTimestamp,
+        queue_type,
+        _token.Name()
+    );
+    commands.emplace_back(std::move(command));
+    active_query_stack.pop_back();
+}
+
+QueryToken CommandList::BeginOcclusionQuery(std::string_view _name) {
+    if (HasOpenOcclusionQueries()) {
+        throw std::logic_error(
+            "nested occlusion queries are unsupported"
+        );
+    }
+
+    QueryToken token(
+        NextNonZeroId(g_query_token_id),
+        QueryKind::Occlusion,
+        query_owner_id,
+        _name
+    );
+    query_cancellation_domain.Register(token);
+
+    // Vulkan and D3D visibility queries execute inside a graphics command
+    // stream. Return an inspectable terminal capability result on every other
+    // queue without manufacturing an untranslatable QueryCmd.
+    if (queue_type != EQueueType::Graphics) {
+        QueryBackendAccess::ResolveErrorIfPending(
+            token,
+            "occlusion queries are unsupported on non-Graphics queues"
+        );
+        return token;
+    }
+
+    auto command = MakeUnique<QueryCmd>(
+        token,
+        QueryCmd::EOp::BeginOcclusion,
+        queue_type,
+        token.Name()
+    );
+    std::function<void()> rejection_fallback = [token] {
+        QueryBackendAccess::ResolveErrorIfPending(
+            token,
+            "occlusion query submission did not reach GPU completion"
+        );
+    };
+
+    commands.reserve(commands.size() + 1);
+    callbacks.reserve(callbacks.size() + 1);
+    query_tokens.reserve(query_tokens.size() + 1);
+    active_query_stack.reserve(active_query_stack.size() + 1);
+
+    const size_t command_count  = commands.size();
+    const size_t callback_count = callbacks.size();
+    const size_t query_count    = query_tokens.size();
+    const size_t stack_depth    = active_query_stack.size();
+    try {
+        commands.emplace_back(std::move(command));
+        callbacks.emplace_back(std::move(rejection_fallback));
+        query_tokens.emplace_back(token);
+        active_query_stack.emplace_back(token);
+    } catch (...) {
+        commands.resize(command_count);
+        callbacks.resize(callback_count);
+        query_tokens.resize(query_count);
+        active_query_stack.resize(stack_depth);
+        QueryBackendAccess::ResolveErrorIfPending(
+            token,
+            "occlusion query recording failed before Begin was published"
+        );
+        throw;
+    }
+    return token;
+}
+
+void CommandList::EndOcclusionQuery(const QueryToken& _token) {
+    if (!_token.Valid()) {
+        throw std::invalid_argument(
+            "EndOcclusionQuery requires a valid QueryToken"
+        );
+    }
+    if (_token.OwnerId() != query_owner_id) {
+        throw std::invalid_argument(
+            "EndOcclusionQuery token belongs to another CommandList"
+        );
+    }
+    if (_token.Kind() != QueryKind::Occlusion) {
+        throw std::invalid_argument(
+            "EndOcclusionQuery token has the wrong query kind"
+        );
+    }
+    if (queue_type != EQueueType::Graphics) {
+        // BeginOcclusionQuery on Compute/Copy intentionally records no Begin
+        // command and resolves the returned token as a capability Error.
+        if (_token.GetFuture().Status() == QueryStatus::Error) {
+            return;
+        }
+        throw std::logic_error(
+            "non-Graphics occlusion token has no terminal capability result"
+        );
+    }
+    if (active_query_stack.empty()) {
+        throw std::logic_error(
+            "EndOcclusionQuery has no matching open query"
+        );
+    }
+    if (active_query_stack.back().Id() != _token.Id()) {
+        throw std::logic_error(
+            "EndOcclusionQuery violates strict LIFO query pairing"
+        );
+    }
+
+    auto command = MakeUnique<QueryCmd>(
+        _token,
+        QueryCmd::EOp::EndOcclusion,
         queue_type,
         _token.Name()
     );

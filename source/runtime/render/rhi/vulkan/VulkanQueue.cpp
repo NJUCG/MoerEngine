@@ -3397,7 +3397,7 @@ public:
     }
 
     void Visit(const QueryCmd& _cmd) {
-        allocator.RecordTimestampQuery(cmd_list, _cmd);
+        allocator.RecordQuery(cmd_list, _cmd);
     }
 
     void Visit(const BuildAccelerationStructuresCmd& _cmd) {
@@ -5002,14 +5002,14 @@ static QueryPublishBatch PublishUnsubmittedQueryErrors(
     if (_allocators != nullptr) {
         for (auto& allocator : _allocators->submitted) {
             if (allocator) {
-                allocator->PublishTimestampQueriesAfterGpuCompletion(
+                allocator->PublishQueriesAfterGpuCompletion(
                     query_batch, false, _reason
                 );
             }
         }
         for (auto& allocator : _allocators->abandoned) {
             if (allocator) {
-                allocator->PublishTimestampQueriesAfterGpuCompletion(
+                allocator->PublishQueriesAfterGpuCompletion(
                     query_batch, false, _reason
                 );
             }
@@ -6145,7 +6145,7 @@ bool VkCommandQueue::TryExecuteParallel(
         // A query pair must stay in one native command buffer owned by one
         // allocator. Other source packets can still translate concurrently;
         // only this source falls back to its serial recorder.
-        verify_fallback("timestamp-query-serial-island");
+        verify_fallback("query-serial-island");
         return false;
     }
 
@@ -7146,16 +7146,19 @@ void VkCommandQueue::ExecuteNow(
         return;
     }
 
-    const size_t timestamp_query_slot_count = static_cast<size_t>(
-        std::count_if(
-            _submit.cmds.begin(),
-            _submit.cmds.end(),
-            [](const UniquePtr<Command>& _command) {
-                return _command &&
-                       _command->Type() == Command::EType::Query;
-            }
-        )
-    );
+    size_t timestamp_query_slot_count = 0;
+    size_t occlusion_query_pair_count = 0;
+    for (const UniquePtr<Command>& command : _submit.cmds) {
+        if (!command || command->Type() != Command::EType::Query) {
+            continue;
+        }
+        const auto& query = *static_cast<const QueryCmd*>(command.get());
+        if (query.IsTimestamp()) {
+            ++timestamp_query_slot_count;
+        } else if (query.IsOcclusion() && query.IsBegin()) {
+            ++occlusion_query_pair_count;
+        }
+    }
     auto reject_before_native_record =
         [&](const VulkanOperationResult& _outcome,
             std::string_view             _reason,
@@ -7270,6 +7273,17 @@ void VkCommandQueue::ExecuteNow(
         );
         return;
     }
+    if (occlusion_query_pair_count != 0 &&
+        queue.GetType() != EQueueType::Graphics) {
+        reject_before_native_record(
+            VulkanOperationResult{
+                EVulkanOperationStatus::Rejected,
+                VK_ERROR_FEATURE_NOT_PRESENT
+            },
+            "occlusion queries require the Graphics queue"
+        );
+        return;
+    }
     if (timestamp_query_slot_count >
         std::numeric_limits<uint32>::max()) {
         reject_before_native_record(
@@ -7278,6 +7292,17 @@ void VkCommandQueue::ExecuteNow(
                 VK_ERROR_OUT_OF_POOL_MEMORY
             },
             "timestamp query slot count exceeds uint32 capacity"
+        );
+        return;
+    }
+    if (occlusion_query_pair_count >
+        std::numeric_limits<uint32>::max()) {
+        reject_before_native_record(
+            VulkanOperationResult{
+                EVulkanOperationStatus::Rejected,
+                VK_ERROR_OUT_OF_POOL_MEMORY
+            },
+            "occlusion query pair count exceeds uint32 capacity"
         );
         return;
     }
@@ -7376,16 +7401,18 @@ void VkCommandQueue::ExecuteNow(
     }
     try {
         // Explicit Query commands force this source onto the serial recorder.
-        // Size (and lazily create) its allocator-local pool before Begin() so
+        // Size (and lazily create) its allocator-local pools before Begin() so
         // a legal large query packet cannot fail after native recording has
-        // already produced side effects.
-        vk_allocator.EnsureTimestampQueryCapacity(
-            timestamp_query_slot_count
+        // already produced side effects. Timestamp boundaries consume one
+        // slot each; an occlusion begin/end pair shares one slot.
+        vk_allocator.EnsureQueryCapacity(
+            timestamp_query_slot_count,
+            occlusion_query_pair_count
         );
     } catch (const std::exception& error) {
         try {
             LOG_ERROR(
-                "[RHIExecutor][Vulkan] timestamp query pool preparation "
+                "[RHIExecutor][Vulkan] query pool preparation "
                 "failed: {}",
                 error.what()
             );
@@ -7401,7 +7428,7 @@ void VkCommandQueue::ExecuteNow(
                     vk_device.GetFirstFaultResult() :
                     VK_ERROR_OUT_OF_POOL_MEMORY
             },
-            "timestamp query pool preparation failed",
+            "query pool preparation failed",
             &allocator_ptr
         );
         return;
@@ -7416,7 +7443,7 @@ void VkCommandQueue::ExecuteNow(
                     vk_device.GetFirstFaultResult() :
                     VK_ERROR_OUT_OF_POOL_MEMORY
             },
-            "timestamp query pool preparation failed",
+            "query pool preparation failed",
             &allocator_ptr
         );
         return;
@@ -7702,14 +7729,21 @@ void VkCommandQueue::ExecuteNow(
                 );
                 if (cmd->Type() == Command::EType::Query) {
                     const auto& query = *static_cast<const QueryCmd*>(cmd);
+                    const bool is_occlusion = query.IsOcclusion();
                     serial_golden->RecordQueryEvent(
-                        query.IsBegin() ?
-                            SerialQueryEvent::Begin :
-                            SerialQueryEvent::End,
+                        is_occlusion ?
+                            (query.IsBegin() ?
+                                 SerialQueryEvent::OcclusionBegin :
+                                 SerialQueryEvent::OcclusionEnd) :
+                            (query.IsBegin() ?
+                                 SerialQueryEvent::Begin :
+                                 SerialQueryEvent::End),
                         query.Token().Name(),
-                        query.IsBegin() ?
-                            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT :
-                            VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT
+                        is_occlusion ?
+                            VK_PIPELINE_STAGE_2_NONE :
+                            (query.IsBegin() ?
+                                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT :
+                                 VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT)
                     );
                 } else if (emits_profiling_queries && cmd->Type() == Command::EType::Scope) {
                     const auto& scope = *static_cast<const ScopeCmd*>(cmd);
@@ -9129,7 +9163,7 @@ void VkCommandQueue::CompletionThreadMain() {
 
                             for (auto& allocator : _batch.allocators.submitted) {
                                 const VkResult query_result =
-                                    allocator->PrepareTimestampQueriesAfterGpuCompletion(
+                                    allocator->PrepareQueriesAfterGpuCompletion(
                                         _batch.context
                                     );
                                 if (query_result != VK_SUCCESS) {
@@ -9191,20 +9225,20 @@ void VkCommandQueue::CompletionThreadMain() {
                             QueryBackendAccess::BeginPublishBatch();
                     const std::string_view query_failure_reason =
                         batch_gpu_success ?
-                            "Vulkan timestamp query did not resolve after GPU completion" :
+                            "Vulkan query did not resolve after GPU completion" :
                             "Vulkan submission did not reach successful GPU completion";
                     for (auto& allocator : _batch.allocators.submitted) {
-                        allocator->PublishTimestampQueriesAfterGpuCompletion(
+                        allocator->PublishQueriesAfterGpuCompletion(
                             query_batch,
                             batch_gpu_success,
                             query_failure_reason
                         );
                     }
                     for (auto& allocator : _batch.allocators.abandoned) {
-                        allocator->PublishTimestampQueriesAfterGpuCompletion(
+                        allocator->PublishQueriesAfterGpuCompletion(
                             query_batch,
                             false,
-                            "Vulkan timestamp query recorder was abandoned before native submission"
+                            "Vulkan query recorder was abandoned before native submission"
                         );
                     }
                     // Every CmdSubmit token must become terminal even if a
@@ -9298,12 +9332,12 @@ void VkCommandQueue::CompletionThreadMain() {
                         );
                         _batch.submit.NotifyPendingQueries(query_batch);
                         for (auto& allocator : _batch.allocators.submitted) {
-                            allocator->NotifyTimestampQueriesAfterGpuCompletion(
+                            allocator->NotifyQueriesAfterGpuCompletion(
                                 query_batch
                             );
                         }
                         for (auto& allocator : _batch.allocators.abandoned) {
-                            allocator->NotifyTimestampQueriesAfterGpuCompletion(
+                            allocator->NotifyQueriesAfterGpuCompletion(
                                 query_batch
                             );
                         }
@@ -10392,7 +10426,7 @@ void VkCopyQueue::ExecuteThread() {
 
                             for (auto& allocator : _batch.allocators.submitted) {
                                 const VkResult query_result =
-                                    allocator->PrepareTimestampQueriesAfterGpuCompletion(
+                                    allocator->PrepareQueriesAfterGpuCompletion(
                                         _batch.context
                                     );
                                 if (query_result != VK_SUCCESS) {
@@ -10452,20 +10486,20 @@ void VkCopyQueue::ExecuteThread() {
                             QueryBackendAccess::BeginPublishBatch();
                     const std::string_view query_failure_reason =
                         batch_gpu_success ?
-                            "Vulkan timestamp query did not resolve after GPU completion" :
+                            "Vulkan query did not resolve after GPU completion" :
                             "Vulkan submission did not reach successful GPU completion";
                     for (auto& allocator : _batch.allocators.submitted) {
-                        allocator->PublishTimestampQueriesAfterGpuCompletion(
+                        allocator->PublishQueriesAfterGpuCompletion(
                             query_batch,
                             batch_gpu_success,
                             query_failure_reason
                         );
                     }
                     for (auto& allocator : _batch.allocators.abandoned) {
-                        allocator->PublishTimestampQueriesAfterGpuCompletion(
+                        allocator->PublishQueriesAfterGpuCompletion(
                             query_batch,
                             false,
-                            "Vulkan Copy timestamp query recorder was abandoned before native submission"
+                            "Vulkan Copy query recorder was abandoned before native submission"
                         );
                     }
                     _batch.submit.PublishPendingQueryErrors(
@@ -10554,12 +10588,12 @@ void VkCopyQueue::ExecuteThread() {
                         );
                         _batch.submit.NotifyPendingQueries(query_batch);
                         for (auto& allocator : _batch.allocators.submitted) {
-                            allocator->NotifyTimestampQueriesAfterGpuCompletion(
+                            allocator->NotifyQueriesAfterGpuCompletion(
                                 query_batch
                             );
                         }
                         for (auto& allocator : _batch.allocators.abandoned) {
-                            allocator->NotifyTimestampQueriesAfterGpuCompletion(
+                            allocator->NotifyQueriesAfterGpuCompletion(
                                 query_batch
                             );
                         }
