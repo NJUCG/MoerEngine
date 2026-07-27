@@ -429,6 +429,68 @@ void TestPresentationSourceLowersToCommonTransferRead(TestSuite& suite) {
         test_name,
         "presentation export must lower to COMMON / TRANSFER / TRANSFER_READ"
     );
+
+    TextureRef rejected_texture =
+        MoerNew(FakeTexture)(1, 1, ETextureAspectFlags::COLOR);
+    RenderGraph rejected_graph("PresentationSourceImportLoweringRejected");
+    const auto rejected_color = rejected_graph.ImportTexture(
+        "Color",
+        rejected_texture,
+        RenderGraph::TextureDesc{
+            .mip_count   = 1,
+            .layer_count = 1,
+            .aspects     = RenderGraph::TextureAspect::Color,
+        }
+    );
+    rejected_graph.SetInitialState(
+        rejected_color,
+        RenderGraph::TextureState::PresentationSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    rejected_graph.AddPass(
+        "ReadImportedColor",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder
+                .Read(
+                    rejected_color,
+                    RenderGraph::TextureState::ShaderResource
+                )
+                .SideEffect();
+        },
+        [] {}
+    );
+    rejected_graph.Export(
+        rejected_color,
+        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+
+    suite.Check(
+        !rejected_graph.Compile() &&
+            Contains(
+                rejected_graph.GetCompileError(),
+                "export-boundary-only"
+            ),
+        test_name,
+        "PresentationSource must be rejected as an import boundary before lowering"
+    );
+    RenderGraphLowering::LoweredPlan rejected_lowered{};
+    std::string rejected_error{};
+    suite.Check(
+        !RenderGraphLowering::Lower(
+            rejected_graph,
+            rejected_lowered,
+            rejected_error
+        ) &&
+            rejected_lowered.prologue.empty() &&
+            rejected_lowered.passes.empty() &&
+            rejected_lowered.queue_syncs.empty() &&
+            Contains(rejected_error, "compiled before lowering"),
+        test_name,
+        "a graph with a PresentationSource import boundary reached lowering"
+    );
 }
 
 void TestSameStateReadGetsStateSeed(TestSuite& suite) {

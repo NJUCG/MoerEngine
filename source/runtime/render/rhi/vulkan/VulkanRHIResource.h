@@ -718,7 +718,15 @@ public:
     void          SetName(const std::string_view _name) override;
     bool          b_has_preferred_state : 1 = false;
     bool          b_present : 1             = false;
-    VkImageLayout GetPreferredLayout() {
+    void PublishPresentationSourceReady(bool _ready) noexcept {
+        presentation_source_ready.store(
+            _ready, std::memory_order_release
+        );
+    }
+    [[nodiscard]] bool IsPresentationSourceReady() const noexcept {
+        return presentation_source_ready.load(std::memory_order_acquire);
+    }
+    VkImageLayout GetPreferredLayout() const {
         return m_preferred_layout;
     };
 
@@ -773,6 +781,7 @@ private:
     UnorderedMap<uint64, VkImageView> m_views;
     mutable std::mutex                m_views_mutex;
     VkImageLayout                     m_preferred_layout = VK_IMAGE_LAYOUT_GENERAL;
+    std::atomic_bool                  presentation_source_ready{false};
 };
 
 class VulkanBindlessArray final : public BindlessArray, public VulkanDeviceObject {

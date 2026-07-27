@@ -523,6 +523,10 @@ struct CmdSubmit {
 struct ReadTexture {
     TextureView   texture;
     ETextureState state;
+    // BackendTracked analogue of an explicit export boundary. The Vulkan
+    // backend may publish the restored external state only after the native
+    // submit containing this terminal read has been accepted.
+    bool          publish_external_state{false};
 };
 struct WriteTexture {
     TextureView   texture;
@@ -628,6 +632,10 @@ struct BarrierCreateInfo {
     // or a plane subset is transitioned.
     ETextureAspectFlags texture_aspects{ETextureAspectFlags::NONE};
     BarrierQueueTransfer queue_transfer{};
+    // Marks an upper-level export boundary whose accepted destination state
+    // may be consumed outside this command stream. Backends publish it only
+    // after the native submit has been accepted.
+    bool publish_external_state{false};
 
     static BarrierCreateInfo Transition(
         TextureView         _texture,
@@ -1752,7 +1760,12 @@ private:
         InnerWriteBuffer(_buffer.buffer, _buffer.state, _pass);
     }
     RENDER_API void InnerBarrier(ReadTexture _texture, EPassType _pass) {
-        InnerReadTexture(_texture.texture, _texture.state, _pass);
+        InnerReadTexture(
+            _texture.texture,
+            _texture.state,
+            _pass,
+            _texture.publish_external_state
+        );
     }
     RENDER_API void InnerBarrier(WriteTexture _texture, EPassType _pass) {
         InnerWriteTexture(_texture.texture, _texture.state, _pass);
@@ -1760,7 +1773,12 @@ private:
 
     RENDER_API void InnerReadBuffer(BufferView _buffer, EBufferState _state, EPassType _pass);
     RENDER_API void InnerWriteBuffer(BufferView _buffer, EBufferState _state, EPassType _pass);
-    RENDER_API void InnerReadTexture(TextureView _texture, ETextureState _state, EPassType _pass);
+    RENDER_API void InnerReadTexture(
+        TextureView   _texture,
+        ETextureState _state,
+        EPassType     _pass,
+        bool          _publish_external_state = false
+    );
     RENDER_API void InnerWriteTexture(TextureView _texture, ETextureState _state, EPassType _pass);
     RENDER_API void EndBarriers();
 

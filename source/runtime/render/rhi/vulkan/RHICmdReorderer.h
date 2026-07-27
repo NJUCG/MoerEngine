@@ -896,7 +896,8 @@ public:
             read_resources.emplace_back(range_handle);
             read_ranges.emplace_back(range);
         }
-        for (const auto& [handle, state, pass_type, mip_level, mip_cnt, array_layer, array_cnt] :
+        for (const auto& [handle, state, pass_type, publish_external_state,
+                          mip_level, mip_cnt, array_layer, array_cnt] :
              _cmd->ReadTextures()) {
             RangeHandle* range_handle =
                 static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
@@ -915,7 +916,8 @@ public:
             write_ranges.emplace_back(range);
         }
 
-        for (const auto& [handle, state, pass_type, mip_level, mip_cnt, array_layer, array_cnt] :
+        for (const auto& [handle, state, pass_type, publish_external_state,
+                          mip_level, mip_cnt, array_layer, array_cnt] :
              _cmd->WriteTextures()) {
             RangeHandle* range_handle =
                 static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));

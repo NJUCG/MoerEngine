@@ -540,6 +540,7 @@ struct TextureBarrier {
     uint64        handle;
     ETextureState state;
     EPassType     pass_type;
+    bool          publish_external_state{false};
     uint          mip_level : 8;
     uint          mip_cnt : 8;
     uint          array_layer : 8;
@@ -560,6 +561,7 @@ struct ExplicitTextureBarrier {
     BarrierState        dst_state{};
     ETextureAspectFlags texture_aspects{ETextureAspectFlags::NONE};
     BarrierQueueTransfer queue_transfer{};
+    bool                publish_external_state{false};
     uint8               mip_level{};
     uint8               mip_count{1};
     uint8               array_layer{};
@@ -589,12 +591,18 @@ private:
     bool                  b_queue_transition = false;
 
 public:
-    BarrierCmd& ReadTexture(const TextureView& _view, ETextureState _dst_state, EPassType _pass_type) {
+    BarrierCmd& ReadTexture(
+        const TextureView& _view,
+        ETextureState      _dst_state,
+        EPassType          _pass_type,
+        bool               _publish_external_state = false
+    ) {
         read_textures.emplace_back(
             TextureBarrier{
                 reinterpret_cast<uint64>(_view.texture),
                 _dst_state,
                 _pass_type,
+                _publish_external_state,
                 _view.mip_level,
                 _view.num_mips,
                 _view.array_layer,
@@ -609,6 +617,7 @@ public:
                 reinterpret_cast<uint64>(_view.texture),
                 _dst_state,
                 _pass_type,
+                false,
                 _view.mip_level,
                 _view.num_mips,
                 _view.array_layer,
@@ -658,6 +667,8 @@ public:
                         .dst_state       = _barrier.dst_state,
                         .texture_aspects = _barrier.texture_aspects,
                         .queue_transfer  = _barrier.queue_transfer,
+                        .publish_external_state =
+                            _barrier.publish_external_state,
                         .mip_level       = _resource.mip_level,
                         .mip_count       = _resource.num_mips,
                         .array_layer     = _resource.array_layer,

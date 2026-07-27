@@ -807,6 +807,21 @@ bool RenderGraphLowering::Lower(
                     resource.name + "'";
             return false;
         }
+        if (state.state.kind == ResourceKind::Texture &&
+            state.state.texture == TextureState::PresentationSource) {
+            if (initial) {
+                error =
+                    "PresentationSource is an export-boundary-only state on resource '" +
+                    resource.name + "'";
+                return false;
+            }
+            if (state.queue != RenderGraph::QueueRole::Graphics) {
+                error =
+                    "PresentationSource export requires the Graphics queue on resource '" +
+                    resource.name + "'";
+                return false;
+            }
+        }
         if (!initial && state.state.IsUndefined()) {
             error = "Undefined state cannot be an export destination on resource '" +
                     resource.name + "'";

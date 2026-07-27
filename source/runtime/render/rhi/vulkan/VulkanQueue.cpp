@@ -356,6 +356,27 @@ bool RemoveVulkanScriptedPresentOverrideForTesting(
     );
 }
 
+bool TryLatchVulkanDeviceFaultForTesting(VkResult _result) noexcept {
+    try {
+        auto* device = static_cast<VulkanDevice*>(
+            RenderDevice::Get().GetImpl()
+        );
+        if (device == nullptr) {
+            return false;
+        }
+        const VulkanOperationContext context{
+            .operation  = EVulkanFaultOperation::PresentSubmit,
+            .queue_type = EQueueType::Graphics,
+        };
+        return device->TryLatchFirstFault(
+                   context, _result, true, false, true
+               ) ||
+               device->IsFaulted();
+    } catch (...) {
+        return false;
+    }
+}
+
 bool TryInstallVulkanSubmissionDependencyWaitObserver(
     const VulkanSubmissionDependencyWaitObserver* _observer
 ) noexcept {
@@ -4005,6 +4026,191 @@ static void MarkSubmissionAccepted(
     }
 }
 
+[[nodiscard]] static bool IsPresentationSourceTexture(
+    const VulkanTexture* _texture
+) noexcept {
+    return _texture != nullptr &&
+           (_texture->GetUsage() &
+            ETextureUsageFlags::PRESENTATION_SOURCE) ==
+               ETextureUsageFlags::PRESENTATION_SOURCE;
+}
+
+[[nodiscard]] static bool BarrierReferencesTexture(
+    const BarrierCmd& _command,
+    uint64            _handle
+) noexcept {
+    const auto matches = [_handle](const auto& _barrier) {
+        return _barrier.handle == _handle;
+    };
+    return std::ranges::any_of(_command.ReadTextures(), matches) ||
+           std::ranges::any_of(_command.WriteTextures(), matches) ||
+           std::ranges::any_of(_command.ExplicitTextures(), matches);
+}
+
+[[nodiscard]] static bool HasLaterTextureBarrierReference(
+    const CmdSubmit& _submit,
+    size_t           _command_index,
+    uint64           _handle
+) noexcept {
+    for (size_t index = _command_index + 1;
+         index < _submit.cmds.size();
+         ++index) {
+        const Command* command = _submit.cmds[index].get();
+        if (command != nullptr &&
+            command->Type() == Command::EType::Barrier &&
+            BarrierReferencesTexture(
+                static_cast<const BarrierCmd&>(*command), _handle
+            )) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] static bool IsAcceptedPresentationSourcePublication(
+    const ExplicitTextureBarrier& _barrier,
+    const VulkanTexture&          _texture
+) noexcept {
+    return _barrier.publish_external_state &&
+           _barrier.queue_transfer.phase ==
+               EBarrierQueueTransferPhase::None &&
+           _barrier.dst_state.stage ==
+               ERHIPipelineStageFlags::PS_TRANSFER &&
+           _barrier.dst_state.access ==
+               ERHIAccessFlags::TRANSFER_READ &&
+           _barrier.dst_state.texture_layout ==
+               ETextureLayout::TEXTURE_LAYOUT_COMMON &&
+           _barrier.texture_aspects ==
+               ETextureAspectFlags::COLOR &&
+           _barrier.mip_level == 0 &&
+           _barrier.mip_count == _texture.GetNumMips() &&
+           _barrier.array_layer == 0 &&
+           _barrier.array_count == _texture.GetNumArray();
+}
+
+[[nodiscard]] static bool IsAcceptedPresentationSourcePublication(
+    const TextureBarrier& _barrier,
+    const VulkanTexture&  _texture
+) noexcept {
+    const ETextureUsageFlags required_usage =
+        ETextureUsageFlags::PRESENTATION_SOURCE |
+        ETextureUsageFlags::TRANSFER_SRC;
+    return _barrier.publish_external_state &&
+           _barrier.state == ETextureState::TRANSFER &&
+           _barrier.pass_type == EPassType::Copy &&
+           (_texture.GetUsage() & required_usage) == required_usage &&
+           _texture.GetAspectFlags() == ETextureAspectFlags::COLOR &&
+           _texture.GetNumSamples() == 1 &&
+           !_texture.b_present &&
+           _texture.GetPreferredLayout() ==
+               VK_IMAGE_LAYOUT_GENERAL &&
+           _barrier.mip_level == 0 &&
+           _barrier.mip_cnt == _texture.GetNumMips() &&
+           _barrier.array_layer == 0 &&
+           _barrier.array_cnt == _texture.GetNumArray();
+}
+
+// Commit only the final presentation-source delta from an accepted native
+// packet. A later accepted barrier that leaves the external GENERAL /
+// TRANSFER_READ contract clears readiness; rejected packets never call here.
+static void PublishAcceptedPresentationSourceStates(
+    const CmdSubmit& _submit,
+    EQueueType       _accepted_queue
+) noexcept {
+    for (size_t command_index = 0;
+         command_index < _submit.cmds.size();
+         ++command_index) {
+        const Command* command = _submit.cmds[command_index].get();
+        if (command == nullptr ||
+            command->Type() != Command::EType::Barrier) {
+            continue;
+        }
+        const auto& barrier_command =
+            static_cast<const BarrierCmd&>(*command);
+
+        const auto publish_terminal =
+            [&](uint64 _handle) noexcept {
+                if (HasLaterTextureBarrierReference(
+                        _submit, command_index, _handle
+                    )) {
+                    return;
+                }
+                auto* texture =
+                    reinterpret_cast<VulkanTexture*>(_handle);
+                if (!IsPresentationSourceTexture(texture)) {
+                    return;
+                }
+
+                bool ready = false;
+                if (_accepted_queue != EQueueType::Graphics) {
+                    ready = false;
+                } else if (_submit.HasExplicitResourceStateOwnership()) {
+                    const auto& explicit_barriers =
+                        barrier_command.ExplicitTextures();
+                    const auto terminal = std::find_if(
+                        explicit_barriers.rbegin(),
+                        explicit_barriers.rend(),
+                        [_handle](const ExplicitTextureBarrier& _barrier) {
+                            return _barrier.handle == _handle;
+                        }
+                    );
+                    ready =
+                        terminal != explicit_barriers.rend() &&
+                        IsAcceptedPresentationSourcePublication(
+                            *terminal, *texture
+                        );
+                } else {
+                    // A successful BackendTracked translation restores every
+                    // touched texture after its terminal legacy barrier. Only
+                    // one full-range, explicitly published TRANSFER read is a
+                    // presentation boundary; terminal writes, partial reads,
+                    // or incidental legacy barriers clear readiness.
+                    const TextureBarrier* publication = nullptr;
+                    size_t reference_count = 0;
+                    for (const TextureBarrier& barrier :
+                         barrier_command.ReadTextures()) {
+                        if (barrier.handle == _handle) {
+                            ++reference_count;
+                            publication = &barrier;
+                        }
+                    }
+                    for (const TextureBarrier& barrier :
+                         barrier_command.WriteTextures()) {
+                        if (barrier.handle == _handle) {
+                            ++reference_count;
+                        }
+                    }
+                    for (const ExplicitTextureBarrier& barrier :
+                         barrier_command.ExplicitTextures()) {
+                        if (barrier.handle == _handle) {
+                            ++reference_count;
+                        }
+                    }
+                    ready =
+                        reference_count == 1 &&
+                        publication != nullptr &&
+                        IsAcceptedPresentationSourcePublication(
+                            *publication, *texture
+                        );
+                }
+                texture->PublishPresentationSourceReady(ready);
+            };
+
+        for (const TextureBarrier& barrier :
+             barrier_command.ReadTextures()) {
+            publish_terminal(barrier.handle);
+        }
+        for (const TextureBarrier& barrier :
+             barrier_command.WriteTextures()) {
+            publish_terminal(barrier.handle);
+        }
+        for (const ExplicitTextureBarrier& barrier :
+             barrier_command.ExplicitTextures()) {
+            publish_terminal(barrier.handle);
+        }
+    }
+}
+
 static bool IsRecoverableUnsubmittedSignal(
     VulkanDevice& _device, const VulkanOperationResult& _outcome
 ) {
@@ -4668,6 +4874,16 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
         "runtime Present must run on the Submission owner"
     );
     try {
+        if (vk_device.IsFaulted()) {
+            vk_device.RecordRejectedPresent();
+            ResolvePresentReceiptNoexcept(_receipt, false, false);
+            return {
+                .outcome = {
+                    EVulkanOperationStatus::Rejected,
+                    vk_device.GetFirstFaultResult()
+                }
+            };
+        }
         TextureRef source_texture{_source.texture};
         const VulkanPresentSourceContract source_contract =
             ValidatePresentSourceContract(
@@ -4691,14 +4907,28 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
                 .recoverable_rejection = true,
             };
         }
-        if (vk_device.IsFaulted()) {
+        auto* vk_source_texture =
+            static_cast<VulkanTexture*>(_source.texture);
+        const VulkanScriptedPresentOverrideForTesting* scripted_override =
+            g_scripted_present_override.load(std::memory_order_acquire);
+        if (!vk_source_texture->IsPresentationSourceReady() &&
+            (scripted_override == nullptr ||
+             scripted_override->require_present_source_ready)) {
             vk_device.RecordRejectedPresent();
             ResolvePresentReceiptNoexcept(_receipt, false, false);
+            try {
+                LOG_ERROR(
+                    "[RHIExecutor][Vulkan] rejected Present source before an "
+                    "accepted producer export published GENERAL / TRANSFER_READ"
+                );
+            } catch (...) {
+            }
             return {
                 .outcome = {
                     EVulkanOperationStatus::Rejected,
-                    vk_device.GetFirstFaultResult()
-                }
+                    VK_ERROR_UNKNOWN
+                },
+                .recoverable_rejection = true,
             };
         }
 
@@ -4706,8 +4936,6 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
         std::unique_lock<std::mutex> execution_lock(exec_mtx);
         const uint64 current_timeline =
             last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
-        const VulkanScriptedPresentOverrideForTesting* scripted_override =
-            g_scripted_present_override.load(std::memory_order_acquire);
         if (scripted_override != nullptr) {
             VulkanScriptedPresentResult scripted =
                 scripted_override->callback(
@@ -4857,6 +5085,14 @@ VkCommandQueue::SubmitRecorded(
         // exception must still retire it as GPU-submitted.
         _recorded.retirement_outcome = submit_outcome;
         if (submit_outcome.WasSubmitted()) {
+            // Publish accepted resource state before waking any host waiter.
+            // Raster uses WaitSubmitted() to gate platform-window presents;
+            // exposing the timeline first would let that thread observe an
+            // accepted source while its presentation readiness was still
+            // stale.
+            PublishAcceptedPresentationSourceStates(
+                _recorded.submit, queue.GetType()
+            );
             MarkSubmissionAccepted(
                 timeline, _recorded.timeline, _recorded.submit.signal_events
             );
@@ -6900,26 +7136,34 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
     bool                            gpu_submitted = false;
     bool                            present_accepted = false;
     bool                            recreate_swapchain = false;
+    bool                            recoverable_rejection = false;
     EVulkanPresentorRetirementState presentor_state =
         EVulkanPresentorRetirementState::Unused;
     UniquePtr<VulkanPresentor> presentor{};
     Array<RHIResource*>        deferred_releases{};
 
     try {
-        const VulkanPresentSourceContract source_contract =
-            ValidatePresentSourceContract(_view, _sc.Get());
-        if (!source_contract.valid) {
-            throw std::invalid_argument(source_contract.reason);
-        }
-        auto* vk_source_texture =
-            static_cast<VulkanTexture*>(_view.texture);
         if (vk_device.IsFaulted()) {
             vk_device.RecordRejectedPresent();
             final_outcome = {
                 EVulkanOperationStatus::Rejected,
                 vk_device.GetFirstFaultResult()
             };
+        } else if (const VulkanPresentSourceContract source_contract =
+                       ValidatePresentSourceContract(_view, _sc.Get());
+                   !source_contract.valid) {
+            throw std::invalid_argument(source_contract.reason);
+        } else if (!static_cast<VulkanTexture*>(_view.texture)
+                        ->IsPresentationSourceReady()) {
+            vk_device.RecordRejectedPresent();
+            final_outcome = {
+                EVulkanOperationStatus::Rejected,
+                VK_ERROR_UNKNOWN
+            };
+            recoverable_rejection = true;
         } else {
+            auto* vk_source_texture =
+                static_cast<VulkanTexture*>(_view.texture);
             VkSwapchain* sc = ResourceCast(_sc.Get());
             presentor       = GetPresentor();
             if (!sc->WaitFrameInFlight()) {
@@ -7099,7 +7343,10 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
         _receipt, present_accepted, recreate_swapchain
     );
 
-    VulkanRuntimeSubmissionResult runtime_result{.outcome = final_outcome};
+    VulkanRuntimeSubmissionResult runtime_result{
+        .outcome = final_outcome,
+        .recoverable_rejection = recoverable_rejection,
+    };
     if (gpu_submitted) {
         runtime_result.completion = WaitEvent{uint64(timeline), _timeline};
     }
@@ -8811,6 +9058,9 @@ VulkanRuntimeSubmissionResult VkCopyQueue::SubmitRecordedForRuntime(
                     );
                 _recorded.native_submit_resolved = true;
                 if (_recorded.retirement_outcome.WasSubmitted()) {
+                    PublishAcceptedPresentationSourceStates(
+                        _recorded.submit, EQueueType::Copy
+                    );
                     MarkSubmissionAccepted(
                         timeline.Get(),
                         _recorded.logical_timeline,

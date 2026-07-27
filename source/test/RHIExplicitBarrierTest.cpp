@@ -345,6 +345,63 @@ void PresentationSourceUsageSelectsGeneralPreferredLayout() {
     );
 }
 
+void BackendTrackedPublicationMarkerPreservesLegacyOwnership() {
+    TestTexture texture_resource(
+        3,
+        2,
+        ETextureAspectFlags::COLOR
+    );
+    Array<ReadTexture> publications{
+        ReadTexture{
+            texture_resource.GetView(0, 3),
+            ETextureState::TRANSFER,
+            true,
+        },
+    };
+
+    CommandList list(EQueueType::Graphics);
+    list.TextureBarriers(
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        EPassType::Copy,
+        std::move(publications),
+        {}
+    );
+    CmdSubmit submit = list.Submit();
+
+    Expect(
+        !submit.HasExplicitResourceStateOwnership(),
+        "backend-tracked publication marker changed resource-state ownership"
+    );
+    Expect(
+        submit.cmds.size() == 1 &&
+            submit.cmds.front()->Type() == Command::EType::Barrier,
+        "backend-tracked publication marker did not produce one barrier"
+    );
+    const auto& barrier =
+        *static_cast<const BarrierCmd*>(submit.cmds.front().get());
+    Expect(
+        barrier.ReadTextures().size() == 1 &&
+            barrier.WriteTextures().empty() &&
+            barrier.ExplicitTextures().empty(),
+        "backend-tracked publication marker changed barrier shape"
+    );
+    const TextureBarrier& publication =
+        barrier.ReadTextures().front();
+    Expect(
+        publication.handle ==
+                reinterpret_cast<uint64>(&texture_resource) &&
+            publication.state == ETextureState::TRANSFER &&
+            publication.pass_type == EPassType::Copy &&
+            publication.publish_external_state &&
+            publication.mip_level == 0 &&
+            publication.mip_cnt == 3 &&
+            publication.array_layer == 0 &&
+            publication.array_cnt == 2,
+        "backend-tracked publication marker lost its full-range read contract"
+    );
+}
+
 void LocalExplicitPayloadAndOwnershipArePreserved() {
     TestBuffer       buffer_resource(256);
     TestTexture      texture_resource(6, 4, ETextureAspectFlags::DEPTH_SLICE);
@@ -372,11 +429,19 @@ void LocalExplicitPayloadAndOwnershipArePreserved() {
         ERHIAccessFlags::SHADER_SAMPLED_READ,
         ETextureLayout::TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     );
+    BarrierCreateInfo texture_transition =
+        BarrierCreateInfo::Transition(
+            texture,
+            texture_src,
+            texture_dst,
+            ETextureAspectFlags::DEPTH_SLICE
+        );
+    texture_transition.publish_external_state = true;
 
     CommandList list(EQueueType::Graphics);
     list.Barriers({
         BarrierCreateInfo::Transition(buffer, buffer_src, buffer_dst),
-        BarrierCreateInfo::Transition(texture, texture_src, texture_dst, ETextureAspectFlags::DEPTH_SLICE),
+        texture_transition,
     });
     CmdSubmit submit = list.Submit();
 
@@ -416,6 +481,10 @@ void LocalExplicitPayloadAndOwnershipArePreserved() {
     );
     Expect(recorded_texture.src_state == texture_src, "explicit texture src state changed");
     Expect(recorded_texture.dst_state == texture_dst, "explicit texture dst state changed");
+    Expect(
+        recorded_texture.publish_external_state,
+        "explicit texture lost external-state publication metadata"
+    );
     Expect(
         recorded_texture.queue_transfer == BarrierQueueTransfer{},
         "local explicit texture acquired queue-transfer metadata"
@@ -886,6 +955,7 @@ int main() {
     try {
         LegacyVulkanStateMappingIsStageCompatible();
         PresentationSourceUsageSelectsGeneralPreferredLayout();
+        BackendTrackedPublicationMarkerPreservesLegacyOwnership();
         LocalExplicitPayloadAndOwnershipArePreserved();
         ReleaseAndAcquirePayloadsPreserveEndpointAffinity();
         InvalidQueueTransferEndpointsFailWithoutMutation();

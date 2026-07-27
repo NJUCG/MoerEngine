@@ -347,6 +347,9 @@ using VulkanScriptedPresentCallback =
 struct VulkanScriptedPresentOverrideForTesting {
     void*                           context{nullptr};
     VulkanScriptedPresentCallback  callback{nullptr};
+    // Opt-in for source-state boundary tests. Ordinary scripted outcomes do
+    // not record/copy an image and therefore need no native source layout.
+    bool require_present_source_ready{false};
 };
 
 // Narrow deterministic test seam for no-GPU-tail Present outcomes. The
@@ -370,6 +373,11 @@ TryInstallVulkanScriptedPresentOverrideForTesting(
 RemoveVulkanScriptedPresentOverrideForTesting(
     const VulkanScriptedPresentOverrideForTesting* _override
 ) noexcept;
+
+// Terminal test seam used only by isolated fault-boundary executables. It
+// publishes a synthetic first Vulkan fault without issuing a native call.
+[[nodiscard]] RENDER_API bool
+TryLatchVulkanDeviceFaultForTesting(VkResult _result) noexcept;
 
 // Backend-internal notification points shared across Vulkan translation,
 // resource, and submission implementation units.

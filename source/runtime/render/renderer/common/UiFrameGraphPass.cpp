@@ -60,17 +60,17 @@ void AddUniqueTarget(Array<TextureRef>& targets, const TextureRef& texture) {
 }
 
 Array<TextureRef> CollectPresentationTargets(
-    const UiFrameGraphPass::PreparedFrame& frame,
-    const TextureRef&                      main_output
+    const UiCompositionFrameData& composition,
+    const UiDrawFramePacket&      draw_frame,
+    const TextureRef&             main_output
 ) {
     Array<TextureRef> targets{};
-    targets.reserve(frame.GetDrawFrame().platform_viewports.size() + 2);
+    targets.reserve(draw_frame.platform_viewports.size() + 2);
     AddUniqueTarget(targets, main_output);
-    const auto& composition = frame.GetComposition();
     if (composition.enabled && composition.separate_window) {
         AddUniqueTarget(targets, composition.window_frame_buffer);
     }
-    for (const auto& viewport : frame.GetDrawFrame().platform_viewports) {
+    for (const auto& viewport : draw_frame.platform_viewports) {
         AddUniqueTarget(targets, viewport.framebuffer);
     }
     return targets;
@@ -113,6 +113,25 @@ bool SupportsUiSceneSampling(const TextureRef& texture) {
 }
 
 bool CollectValidatedPresentationTargets(
+    const UiCompositionFrameData& composition,
+    const UiDrawFramePacket&      draw_frame,
+    const TextureRef&             main_output,
+    Array<TextureRef>&            targets
+) {
+    targets = CollectPresentationTargets(
+        composition, draw_frame, main_output
+    );
+    return !targets.empty() &&
+           std::none_of(
+               targets.begin(),
+               targets.end(),
+               [](const TextureRef& target) {
+                   return !SupportsUiPresentation(target);
+               }
+           );
+}
+
+bool CollectValidatedPresentationTargets(
     const UiFrameGraphPass::PreparedFrameRef& frame,
     const TextureRef&                         scene_color,
     const TextureRef&                         main_output,
@@ -123,15 +142,12 @@ bool CollectValidatedPresentationTargets(
         !SupportsUiPresentation(main_output)) {
         return false;
     }
-    targets = CollectPresentationTargets(*frame, main_output);
-    return !targets.empty() &&
-           std::none_of(
-               targets.begin(),
-               targets.end(),
-               [](const TextureRef& target) {
-                   return !SupportsUiPresentation(target);
-               }
-           );
+    return CollectValidatedPresentationTargets(
+        frame->GetComposition(),
+        frame->GetDrawFrame(),
+        main_output,
+        targets
+    );
 }
 
 TextureRef ResolveComposeTarget(
@@ -538,12 +554,63 @@ bool UiFrameGraphPass::ProcessLinearWithComposeRecorder(
         RecordClear(cmd_list, targets);
         compose_recorder(cmd_list);
         RecordDraw(cmd_list, *frame, main_output);
+
+        if (!RecordPresentationBoundary(
+                cmd_list,
+                frame->GetComposition(),
+                frame->GetDrawFrame(),
+                main_output
+            )) {
+            frame->Abandon();
+            return false;
+        }
+
         frame->FinishRecording();
         return frame->GetRecordingState() == ERecordingState::Recorded;
     } catch (...) {
         frame->Abandon();
         throw;
     }
+}
+
+bool UiFrameGraphPass::RecordPresentationBoundary(
+    CommandList&                  cmd_list,
+    const UiCompositionFrameData& composition,
+    const UiDrawFramePacket&      draw_frame,
+    const TextureRef&             main_output
+) {
+    Array<TextureRef> targets{};
+    if (!CollectValidatedPresentationTargets(
+            composition, draw_frame, main_output, targets
+        )) {
+        return false;
+    }
+
+    // Linear warm-up/fallback and Raster frame-tail packets remain
+    // BackendTracked. Declare their presentation boundary with a terminal
+    // legacy read instead of switching a mixed command stream to Explicit
+    // ownership. Vulkan restores these targets to their semantic preferred
+    // GENERAL layout and publishes readiness only after native acceptance.
+    Array<ReadTexture> presentation_sources{};
+    presentation_sources.reserve(targets.size());
+    for (const auto& target : targets) {
+        presentation_sources.emplace_back(ReadTexture{
+            target->GetView(
+                0,
+                static_cast<uint8>(target->GetNumMips())
+            ),
+            ETextureState::TRANSFER,
+            true,
+        });
+    }
+    cmd_list.TextureBarriers(
+        EQueueType::Graphics,
+        EQueueType::Graphics,
+        EPassType::Copy,
+        std::move(presentation_sources),
+        {}
+    );
+    return true;
 }
 
 void UiFrameGraphPass::RecordClear(

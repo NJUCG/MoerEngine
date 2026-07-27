@@ -696,6 +696,7 @@ ToBarrierState(const RenderGraphLowering::Scope& scope, bool texture) {
             ToBarrierState(instruction.destination, true),
             instruction.texture_aspects
         );
+        output.publish_external_state = instruction.export_boundary;
         return materialize_transfer();
     }
 
