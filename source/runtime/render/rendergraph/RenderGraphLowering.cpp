@@ -75,6 +75,9 @@ template<typename Enum>
         case TextureState::TransferSource:
             layout = ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC;
             return true;
+        case TextureState::PresentationSource:
+            layout = ETextureLayout::TEXTURE_LAYOUT_COMMON;
+            return true;
         case TextureState::TransferDestination:
             layout = ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST;
             return true;
@@ -147,6 +150,10 @@ template<typename Enum>
                 scope.access = ERHIAccessFlags::UNDEFINED;
                 return true;
             case TextureState::TransferSource:
+                scope.stages = ERHIPipelineStageFlags::PS_TRANSFER;
+                scope.access = ERHIAccessFlags::TRANSFER_READ;
+                return true;
+            case TextureState::PresentationSource:
                 scope.stages = ERHIPipelineStageFlags::PS_TRANSFER;
                 scope.access = ERHIAccessFlags::TRANSFER_READ;
                 return true;
@@ -774,6 +781,13 @@ bool RenderGraphLowering::Lower(
             return fail("Present state requires an external synchronization endpoint on resource '" +
                         resource.name + "'");
         }
+        if (access.state.kind == ResourceKind::Texture &&
+            access.state.texture == TextureState::PresentationSource) {
+            return fail(
+                "PresentationSource is an export-boundary-only state on resource '" +
+                resource.name + "'"
+            );
+        }
     }
 
     auto validate_boundary = [&](const RenderGraph::ResourceDeclaration& resource,
@@ -792,6 +806,21 @@ bool RenderGraphLowering::Lower(
             error = "Present boundary requires an external synchronization endpoint on resource '" +
                     resource.name + "'";
             return false;
+        }
+        if (state.state.kind == ResourceKind::Texture &&
+            state.state.texture == TextureState::PresentationSource) {
+            if (initial) {
+                error =
+                    "PresentationSource is an export-boundary-only state on resource '" +
+                    resource.name + "'";
+                return false;
+            }
+            if (state.queue != RenderGraph::QueueRole::Graphics) {
+                error =
+                    "PresentationSource export requires the Graphics queue on resource '" +
+                    resource.name + "'";
+                return false;
+            }
         }
         if (!initial && state.state.IsUndefined()) {
             error = "Undefined state cannot be an export destination on resource '" +

@@ -857,6 +857,7 @@ void CreateOrResizeViewportResources(
         PF_R8G8B8A8_SRGB,
         ETextureUsageFlags::COLOR_ATTACHMENT |
             ETextureUsageFlags::SAMPLED |
+            ETextureUsageFlags::PRESENTATION_SOURCE |
             ETextureUsageFlags::TRANSFER_SRC |
             ETextureUsageFlags::TRANSFER_DST
     );

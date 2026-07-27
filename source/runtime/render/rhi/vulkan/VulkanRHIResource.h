@@ -20,6 +20,7 @@
 #include "VulkanTypeDefs.h"
 #include <atomic>
 #include <cstddef>
+#include <memory>
 #include <mutex>
 
 // #include <vk_mem_alloc.h>
@@ -691,6 +692,21 @@ public:
 
     static VkImageType       METoVKImageType(ETextureDimension _dim);
     static VkImageUsageFlags METoVKImageUsageFlags(ETextureUsageFlags _me_flags);
+    [[nodiscard]] static VkImageLayout PreferredLayoutForUsage(
+        ETextureUsageFlags _usage
+    ) noexcept {
+        const bool presentation_source =
+            (_usage & ETextureUsageFlags::PRESENTATION_SOURCE) ==
+            ETextureUsageFlags::PRESENTATION_SOURCE;
+        const bool prefer_sample =
+            !presentation_source &&
+            (_usage & ETextureUsageFlags::SAMPLED) ==
+                ETextureUsageFlags::SAMPLED &&
+            (_usage & ETextureUsageFlags::UNORDERED_ACCESS) ==
+                ETextureUsageFlags::UNDEFINED;
+        return prefer_sample ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL :
+                               VK_IMAGE_LAYOUT_GENERAL;
+    }
 
     uint        GetMipByteSize(uint _mip_idx) const override;
     VkImageView GetView(
@@ -703,7 +719,15 @@ public:
     void          SetName(const std::string_view _name) override;
     bool          b_has_preferred_state : 1 = false;
     bool          b_present : 1             = false;
-    VkImageLayout GetPreferredLayout() {
+    void PublishPresentationSourceReady(bool _ready) noexcept {
+        presentation_source_ready.store(
+            _ready, std::memory_order_release
+        );
+    }
+    [[nodiscard]] bool IsPresentationSourceReady() const noexcept {
+        return presentation_source_ready.load(std::memory_order_acquire);
+    }
+    VkImageLayout GetPreferredLayout() const {
         return m_preferred_layout;
     };
 
@@ -758,6 +782,7 @@ private:
     UnorderedMap<uint64, VkImageView> m_views;
     mutable std::mutex                m_views_mutex;
     VkImageLayout                     m_preferred_layout = VK_IMAGE_LAYOUT_GENERAL;
+    std::atomic_bool                  presentation_source_ready{false};
 };
 
 class VulkanBindlessArray final : public BindlessArray, public VulkanDeviceObject {
@@ -806,6 +831,28 @@ public:
         uint8  _array_layer,
         uint8  _array_count
     ) const;
+    struct PresentationSourceMembershipRecord {
+        TextureRef texture{};
+        uint32     count{0};
+    };
+    struct PresentationSourceMembership {
+        UnorderedMap<uint, TextureRef> slots{};
+        UnorderedMap<
+            ::Moer::Render::Texture*,
+            PresentationSourceMembershipRecord>
+            textures{};
+    };
+    using PresentationSourceMembershipSnapshot =
+        std::shared_ptr<const PresentationSourceMembership>;
+
+    // Descriptor membership becomes visible only after the packet which
+    // updates it reaches vkQueueSubmit. CPU allocation state belongs to a
+    // different timeline and cannot classify an older immutable submit.
+    [[nodiscard]] PresentationSourceMembershipSnapshot
+        SnapshotAcceptedPresentationSourceMembership() const noexcept;
+    void PublishAcceptedPresentationSourceMembership(
+        PresentationSourceMembershipSnapshot _membership
+    ) noexcept;
     void DeAllocateResource(uint64 _handle);
     void FinalizeUpdateCommand(
         const Array<BindlessArray::UpdateCmd>& _updates,
@@ -884,6 +931,8 @@ protected:
         uint32                    count{0};
     };
     UnorderedMap<uint64, ResourceAllocationRecord> resource_allocation_counts;
+    PresentationSourceMembershipSnapshot
+        accepted_presentation_source_membership;
     UnorderedMap<
         uint64,
         UnorderedMap<

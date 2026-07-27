@@ -896,7 +896,8 @@ public:
             read_resources.emplace_back(range_handle);
             read_ranges.emplace_back(range);
         }
-        for (const auto& [handle, state, pass_type, mip_level, mip_cnt, array_layer, array_cnt] :
+        for (const auto& [handle, state, pass_type, publish_external_state,
+                          mip_level, mip_cnt, array_layer, array_cnt] :
              _cmd->ReadTextures()) {
             RangeHandle* range_handle =
                 static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
@@ -915,7 +916,8 @@ public:
             write_ranges.emplace_back(range);
         }
 
-        for (const auto& [handle, state, pass_type, mip_level, mip_cnt, array_layer, array_cnt] :
+        for (const auto& [handle, state, pass_type, publish_external_state,
+                          mip_level, mip_cnt, array_layer, array_cnt] :
              _cmd->WriteTextures()) {
             RangeHandle* range_handle =
                 static_cast<RangeHandle*>(GetHandle(handle, ResourceType::Texture_Buffer));
@@ -1518,11 +1520,26 @@ public:
     void VisitCmd(const CustomDispatchCmd* _cmd) {
         m_arg_write_resources.clear();
         m_arg_read_resources.clear();
+        temp_writed_resources.clear();
         layer_offset = m_cmd_lists.size(); // make sure the custom dispatch command is in a separate scope
-        auto func    = [&](const TArg& _arg, ParamInfoFlags _flag) {
+        Array<BindlessArrayRef> bindless_arrays{};
+        UnorderedSet<BindlessArray*> seen_bindless{};
+        auto func = [&](const TArg& _arg, ParamInfoFlags _flag) {
+            if (std::holds_alternative<BindlessArrayRef>(_arg)) {
+                const BindlessArrayRef& bindless =
+                    std::get<BindlessArrayRef>(_arg);
+                if (bindless &&
+                    seen_bindless.emplace(bindless.Get()).second) {
+                    bindless_arrays.emplace_back(bindless);
+                }
+                return;
+            }
             VisitArgs(_arg, _flag.state_flags);
         };
         _cmd->IterateArgs(func);
+        for (const BindlessArrayRef& bindless : bindless_arrays) {
+            VisitBindlessArg(bindless, temp_writed_resources);
+        }
 
         // A side-effect-only custom dispatch may intentionally expose no
         // resource usages. Keep it in the isolated custom-command scope
@@ -1533,6 +1550,10 @@ public:
         }
         for (const auto& read_res : m_arg_read_resources) {
             RecordRead(std::get<1>(read_res), std::get<0>(read_res), m_dispatch_layer);
+        }
+        if (!bindless_arrays.empty()) {
+            m_max_bdls_layer =
+                std::max(m_max_bdls_layer, m_dispatch_layer);
         }
         AddCmd(_cmd, m_dispatch_layer);
         layer_offset = m_cmd_lists.size();

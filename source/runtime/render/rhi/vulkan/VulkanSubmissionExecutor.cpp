@@ -150,7 +150,10 @@ void NotifySourceTranslation(
     EQueueType                    _queue,
     uint32                        _native_queue_id,
     uint64                        _async_queue_scope,
-    EVulkanSourceTranslationPhase _phase
+    EVulkanSourceTranslationPhase _phase,
+    bool                          _parallel_record_requested = false,
+    bool                          _parallel_record_planned = false,
+    bool                          _parallel_record_effective = false
 ) noexcept {
     assert(
         GetCurrentRHIThreadRole() == ERHIThreadRole::Translate &&
@@ -176,6 +179,11 @@ void NotifySourceTranslation(
             .async_queue_scope     = _async_queue_scope,
             .thread_id             = Platform::GetCurrentThreadID(),
             .thread_role           = GetCurrentRHIThreadRole(),
+            .parallel_record_requested =
+                _parallel_record_requested,
+            .parallel_record_planned = _parallel_record_planned,
+            .parallel_record_effective =
+                _parallel_record_effective,
             .phase                 = _phase,
         }
     );
@@ -3074,6 +3082,21 @@ void VulkanSubmissionExecutor::ProcessBatch(
                             slot.source_index
                         )
                     );
+                bool parallel_record_requested = false;
+                bool parallel_record_planned   = false;
+                bool parallel_record_effective = false;
+                if (const auto* graphics_packet =
+                        std::get_if<
+                            VkCommandQueue::
+                                CurrentVulkanRecordedSubmit>(
+                            &slot.recorded
+                        )) {
+                    const auto& sample =
+                        graphics_packet->profile.sample;
+                    parallel_record_requested = sample.requested;
+                    parallel_record_planned   = sample.planned;
+                    parallel_record_effective = sample.effective;
+                }
                 NotifySourceTranslation(
                     _batch.sequence,
                     static_cast<uint32>(slot.source_index),
@@ -3085,7 +3108,10 @@ void VulkanSubmissionExecutor::ProcessBatch(
                     slot.async_queue_scope,
                     HasRecordedSourcePacket(slot.recorded) ?
                         EVulkanSourceTranslationPhase::Recorded :
-                        EVulkanSourceTranslationPhase::Failed
+                        EVulkanSourceTranslationPhase::Failed,
+                    parallel_record_requested,
+                    parallel_record_planned,
+                    parallel_record_effective
                 );
             };
         auto fail_group = [&](size_t           failure_source,

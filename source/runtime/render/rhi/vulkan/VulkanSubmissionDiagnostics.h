@@ -110,6 +110,9 @@ struct VulkanSourceTranslationEvent {
     uint64                        async_queue_scope{0};
     uint32                        thread_id{0};
     ERHIThreadRole                thread_role{ERHIThreadRole::Unknown};
+    bool                          parallel_record_requested{false};
+    bool                          parallel_record_planned{false};
+    bool                          parallel_record_effective{false};
     EVulkanSourceTranslationPhase phase{
         EVulkanSourceTranslationPhase::Begin
     };
@@ -343,10 +346,21 @@ struct VulkanScriptedPresentResult {
 
 using VulkanScriptedPresentCallback =
     VulkanScriptedPresentResult (*)(void*, uint64) noexcept;
+using VulkanPresentSourceRejectionCallback =
+    void (*)(void*) noexcept;
 
 struct VulkanScriptedPresentOverrideForTesting {
     void*                           context{nullptr};
     VulkanScriptedPresentCallback  callback{nullptr};
+    // Opt-in for source-state boundary tests. Ordinary scripted outcomes do
+    // not record/copy an image and therefore need no native source layout.
+    bool require_present_source_ready{false};
+    // Optional race-injection point after the initial device-fault check has
+    // passed but immediately before an invalid/not-ready source is
+    // classified. This keeps fault-priority tests deterministic without
+    // weakening the production source contract.
+    VulkanPresentSourceRejectionCallback
+        before_source_rejection{nullptr};
 };
 
 // Narrow deterministic test seam for no-GPU-tail Present outcomes. The
@@ -370,6 +384,11 @@ TryInstallVulkanScriptedPresentOverrideForTesting(
 RemoveVulkanScriptedPresentOverrideForTesting(
     const VulkanScriptedPresentOverrideForTesting* _override
 ) noexcept;
+
+// Terminal test seam used only by isolated fault-boundary executables. It
+// publishes a synthetic first Vulkan fault without issuing a native call.
+[[nodiscard]] RENDER_API bool
+TryLatchVulkanDeviceFaultForTesting(VkResult _result) noexcept;
 
 // Backend-internal notification points shared across Vulkan translation,
 // resource, and submission implementation units.

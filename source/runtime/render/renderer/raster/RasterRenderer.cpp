@@ -26,6 +26,7 @@
 #include "config/ConfigManager.h"
 #include "debug/RenderDocApi.h"
 #include "misc/ScopedLogTimer.h"
+#include "renderer/common/UiFrameGraphPass.h"
 #include "rendergraph/RenderGraph.h"
 #include "rhi/RHIExecutor.h"
 #include "scene/testcase/SceneTestCaseDispatcher.h"
@@ -1493,13 +1494,28 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         );
     } else {
         ui_slot_claim.Reject();
+        skip_present = true;
         LOG_CRITICAL(
             "[Threading][UI] Raster copied-frame upload slots could not be "
-            "claimed; preserving the slots and skipping this UI frame."
+            "claimed; preserving the slots and skipping this frame's presents."
         );
     }
 
     raster_context.probe_volume.TrackFrameSubmission(cmd_list, time);
+    if (!skip_present && ui_recording_claimed &&
+        !UiFrameGraphPass::RecordPresentationBoundary(
+            cmd_list,
+            frame_packet.ui_composition,
+            frame_packet.ui_draw_frame,
+            default_output_texture
+        )) {
+        skip_present = true;
+        LOG_CRITICAL(
+            "[Presentation] Raster UI frame tail did not satisfy the "
+            "presentation-source resource contract; skipping this frame's "
+            "main and platform-window presents."
+        );
+    }
     time++;
     // Host 同步的 copy 操作已经完成。此处触发 timeline，向 validation layer 传递执行顺序，
     // 无需再额外等待 copy queue。

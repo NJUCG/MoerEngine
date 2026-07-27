@@ -100,6 +100,36 @@ struct QueryFrameDiagnostics {
     uint32 used_query_count{0};
 };
 
+// Immutable source-order program built before dependency reordering or native
+// recording. Bindless accesses remain symbolic until the Submission owner can
+// evaluate them against the last natively accepted descriptor membership.
+struct VulkanPresentationSourceStateDelta {
+    TextureRef texture;
+    bool       ready{false};
+};
+
+enum class EVulkanPresentationSourceStateEventType : uint8 {
+    TextureState,
+    BindlessAccess,
+    BindlessTextureMembership,
+};
+
+struct VulkanPresentationSourceStateEvent {
+    EVulkanPresentationSourceStateEventType type{
+        EVulkanPresentationSourceStateEventType::TextureState
+    };
+    TextureRef       texture{};
+    BindlessArrayRef bindless_array{};
+    uint             bindless_slot{0};
+    int32            membership_delta{0};
+    bool             ready{false};
+};
+
+struct VulkanPresentationSourceStateProgram {
+    Array<VulkanPresentationSourceStateEvent> events{};
+    bool                                      has_bindless_state{false};
+};
+
 struct ProfilerStorage {
     static constexpr int s_max_num_profiler_queries_per_frame =
         s_query_max_storage * 2; // *2 is for begin&end
@@ -750,6 +780,7 @@ private:
         std::optional<VulkanDescriptorPushLease> descriptor_lease;
         Array<RHIResource*>                     deferred_releases;
         VulkanBatchCompletionTicket             batch_completion{};
+        VulkanPresentationSourceStateProgram    presentation_source_program;
         CurrentVulkanRecordedSubmitProfile      profile;
         RHITransferableOwnershipGate::Lease     execution_lease{};
         VulkanOperationResult                   retirement_outcome{
@@ -812,6 +843,8 @@ private:
         const CmdReorderer&            _reorderer,
         double                         _reorder_time,
         std::chrono::steady_clock::time_point _profile_started,
+        VulkanPresentationSourceStateProgram&
+                                      _presentation_source_program,
         std::optional<CurrentVulkanRecordedSubmit>* _out_recorded = nullptr
     );
     VulkanRuntimeSubmissionResult PresentNow(
@@ -1074,6 +1107,7 @@ private:
         uint64                              logical_timeline{0};
         VulkanAllocatorBatch                allocators{};
         VulkanBatchCompletionTicket         batch_completion{};
+        VulkanPresentationSourceStateProgram presentation_source_program;
         RHITransferableOwnershipGate::Lease execution_lease{};
         VulkanOperationResult               retirement_outcome{
             EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN

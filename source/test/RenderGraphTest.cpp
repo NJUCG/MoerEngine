@@ -1,13 +1,16 @@
 #include "rendergraph/RenderGraph.h"
 #include "renderer/common/UiFrameGraphPass.h"
+#include "rhi/RHIImpl.h"
 #include "rhi/plugin/NrdPlugin.h"
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/TaskSystem.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
@@ -1276,6 +1279,188 @@ void TestTextureAttachmentStateMatchesSelectedAspects(TestSuite& suite) {
         test_name,
         "depth and stencil subsets must accept depth/stencil attachment states: " +
             valid_graph.GetCompileError()
+    );
+}
+
+void TestPresentationSourceBoundaryContract(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "presentation source boundary contract";
+    auto import_color = [](RenderGraph& graph, int& physical) {
+        const auto texture = graph.ImportTexture(
+            "Color",
+            &physical,
+            RenderGraph::TextureDesc{
+                .aspects = RenderGraph::TextureAspect::Color,
+            }
+        );
+        graph.SetInitialState(
+            texture,
+            RenderGraph::TextureState::ShaderResource,
+            RenderGraph::QueueRole::Graphics,
+            RenderGraph::AccessMode::Read
+        );
+        graph.AddPass(
+            "SideEffect",
+            [](RenderGraph::PassBuilder& builder) {
+                builder.SideEffect();
+            },
+            [] {}
+        );
+        return texture;
+    };
+
+    RenderGraph valid_graph("ValidPresentationSource");
+    int         valid_physical = 0;
+    const auto  valid_texture =
+        import_color(valid_graph, valid_physical);
+    valid_graph.Export(
+        valid_texture,
+        RenderGraph::TextureState::PresentationSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    suite.Check(
+        valid_graph.Compile(),
+        test_name,
+        "a color texture must be exportable as a read-only presentation source: " +
+            valid_graph.GetCompileError()
+    );
+
+    for (const auto [graph_name, queue] :
+         {std::pair{"ComputePresentationSourceRejected",
+                    RenderGraph::QueueRole::Compute},
+          std::pair{"CopyPresentationSourceRejected",
+                    RenderGraph::QueueRole::Copy},
+          std::pair{"UnownedPresentationSourceRejected",
+                    RenderGraph::QueueRole::None}}) {
+        RenderGraph queue_graph(graph_name);
+        int         queue_physical = 0;
+        const auto  queue_texture =
+            import_color(queue_graph, queue_physical);
+        queue_graph.Export(
+            queue_texture,
+            RenderGraph::TextureState::PresentationSource,
+            queue,
+            RenderGraph::AccessMode::Read
+        );
+        suite.Check(
+            !queue_graph.Compile() &&
+                Contains(queue_graph.GetCompileError(), "Graphics queue"),
+            test_name,
+            "a presentation source export accepted a non-Graphics owner queue"
+        );
+    }
+
+    RenderGraph initial_graph("PresentationSourceImportRejected");
+    int         initial_physical = 0;
+    const auto  initial_texture = initial_graph.ImportTexture(
+        "Color",
+        &initial_physical,
+        RenderGraph::TextureDesc{
+            .aspects = RenderGraph::TextureAspect::Color,
+        }
+    );
+    initial_graph.SetInitialState(
+        initial_texture,
+        RenderGraph::TextureState::PresentationSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    initial_graph.AddPass(
+        "ReadImportedColor",
+        [initial_texture](RenderGraph::PassBuilder& builder) {
+            builder
+                .Read(
+                    initial_texture,
+                    RenderGraph::TextureState::ShaderResource
+                )
+                .SideEffect();
+        },
+        [] {}
+    );
+    initial_graph.Export(
+        initial_texture,
+        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    suite.Check(
+        !initial_graph.Compile() &&
+            Contains(
+                initial_graph.GetCompileError(),
+                "export-boundary-only"
+            ),
+        test_name,
+        "an import boundary accepted the export-only PresentationSource state"
+    );
+
+    RenderGraph write_graph("PresentationSourceWriteRejected");
+    int         write_physical = 0;
+    const auto  write_texture =
+        import_color(write_graph, write_physical);
+    write_graph.Export(
+        write_texture,
+        RenderGraph::TextureState::PresentationSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Write
+    );
+    suite.Check(
+        !write_graph.Compile() &&
+            Contains(write_graph.GetCompileError(), "boundary access"),
+        test_name,
+        "a presentation source boundary must reject write access"
+    );
+
+    RenderGraph read_write_graph("PresentationSourceReadWriteRejected");
+    int         read_write_physical = 0;
+    const auto  read_write_texture =
+        import_color(read_write_graph, read_write_physical);
+    read_write_graph.Export(
+        read_write_texture,
+        RenderGraph::TextureState::PresentationSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::ReadWrite
+    );
+    suite.Check(
+        !read_write_graph.Compile() &&
+            Contains(read_write_graph.GetCompileError(), "boundary access"),
+        test_name,
+        "a presentation source boundary must reject read-write access"
+    );
+
+    RenderGraph depth_graph("DepthPresentationSourceRejected");
+    int         depth_physical = 0;
+    const auto  depth_texture = depth_graph.ImportTexture(
+        "Depth",
+        &depth_physical,
+        RenderGraph::TextureDesc{
+            .aspects = RenderGraph::TextureAspect::Depth,
+        }
+    );
+    depth_graph.SetInitialState(
+        depth_texture,
+        RenderGraph::TextureState::DepthStencilRead,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    depth_graph.AddPass(
+        "SideEffect",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect();
+        },
+        [] {}
+    );
+    depth_graph.Export(
+        depth_texture,
+        RenderGraph::TextureState::PresentationSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    suite.Check(
+        !depth_graph.Compile() &&
+            Contains(depth_graph.GetCompileError(), "selected aspects"),
+        test_name,
+        "only a color aspect may be exported as a presentation source"
     );
 }
 
@@ -3828,6 +4013,7 @@ public:
         ETextureUsageFlags usage =
             ETextureUsageFlags::SAMPLED |
             ETextureUsageFlags::COLOR_ATTACHMENT |
+            ETextureUsageFlags::PRESENTATION_SOURCE |
             ETextureUsageFlags::TRANSFER_SRC |
             ETextureUsageFlags::TRANSFER_DST,
         ETextureAspectFlags aspects = ETextureAspectFlags::COLOR
@@ -3927,21 +4113,77 @@ void TestRasterStyleUiSlotClaimTracksNativeAcceptance(TestSuite& suite) {
     auto accepted_backend = Moer::MakeShared<FakeUiDrawBackend>();
     auto accepted_frame =
         MakeUiDrawPacket(accepted_resources, accepted_backend, true);
+    TextureRef accepted_main_output(
+        MoerNew(FakeUiTexture)("RasterMainOutput")
+    );
+    TextureRef accepted_platform_output(
+        MoerNew(FakeUiTexture)("RasterPlatformOutput")
+    );
+    accepted_frame.platform_viewports.front().framebuffer =
+        accepted_platform_output;
     UiDrawFrameSlotClaim accepted_claim(accepted_frame);
     CommandList         accepted_commands;
     RenderUiDrawFrame(
         accepted_commands,
-        {},
+        accepted_main_output->GetView(),
         accepted_frame,
         EUiDrawExecutionThread::Game
     );
+    const bool raster_boundary_recorded =
+        UiFrameGraphPass::RecordPresentationBoundary(
+            accepted_commands,
+            {},
+            accepted_frame,
+            accepted_main_output
+        );
+    const CmdSubmit accepted_submit = accepted_commands.Submit();
+    bool raster_boundary_valid =
+        raster_boundary_recorded &&
+        !accepted_submit.HasExplicitResourceStateOwnership() &&
+        !accepted_submit.cmds.empty() &&
+        accepted_submit.cmds.back()->Type() ==
+            Command::EType::Barrier;
+    if (raster_boundary_valid) {
+        const auto& terminal = *static_cast<const BarrierCmd*>(
+            accepted_submit.cmds.back().get()
+        );
+        const std::array<Texture*, 2> expected{
+            accepted_main_output.Get(),
+            accepted_platform_output.Get(),
+        };
+        raster_boundary_valid =
+            terminal.ReadTextures().size() == expected.size() &&
+            terminal.WriteTextures().empty() &&
+            terminal.ExplicitTextures().empty();
+        for (Texture* texture : expected) {
+            const auto matches = std::count_if(
+                terminal.ReadTextures().begin(),
+                terminal.ReadTextures().end(),
+                [texture](const TextureBarrier& barrier) {
+                    return barrier.handle ==
+                               reinterpret_cast<std::uint64_t>(texture) &&
+                           barrier.state == ETextureState::TRANSFER &&
+                           barrier.pass_type == EPassType::Copy &&
+                           barrier.publish_external_state &&
+                           barrier.mip_level == 0 &&
+                           barrier.mip_cnt == texture->GetNumMips() &&
+                           barrier.array_layer == 0 &&
+                           barrier.array_cnt == texture->GetNumArray();
+                }
+            );
+            raster_boundary_valid =
+                raster_boundary_valid && matches == 1;
+        }
+    }
     suite.Check(
         accepted_backend->render_count == 1 &&
             accepted_backend->saw_valid_recording_slots &&
             accepted_resources->PendingSlot() == 23 &&
-            accepted_resources->CommitCount() == 0,
+            accepted_resources->CommitCount() == 0 &&
+            raster_boundary_valid,
         test_name,
-        "recording advanced the Raster UI upload ring before native acceptance"
+        "Raster UI recording advanced the upload ring or omitted its terminal "
+        "presentation-source boundary before native acceptance"
     );
     suite.Check(
         accepted_claim.CommitAccepted() &&
@@ -4151,6 +4393,106 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
         EUiDrawExecutionThread::Render
     );
 
+    auto linear_shared_slots =
+        Moer::MakeShared<FakeUiViewportResources>(15);
+    auto linear_platform_slots =
+        Moer::MakeShared<FakeUiViewportResources>(19);
+    auto linear_backend = Moer::MakeShared<FakeUiDrawBackend>();
+    UiDrawFramePacket linear_draw_frame{};
+    linear_draw_frame.backend = linear_backend;
+    linear_draw_frame.main_viewport.render_resources =
+        linear_shared_slots;
+    linear_draw_frame.main_viewport.commands.emplace_back();
+    const auto append_linear_platform =
+        [&](TextureRef framebuffer,
+            Moer::SharedPtr<FakeUiViewportResources> slots) {
+            UiViewportDrawPacket viewport{};
+            viewport.framebuffer      = std::move(framebuffer);
+            viewport.render_resources = std::move(slots);
+            viewport.commands.emplace_back();
+            linear_draw_frame.platform_viewports.emplace_back(
+                std::move(viewport)
+            );
+        };
+    append_linear_platform(main_output, linear_shared_slots);
+    append_linear_platform(window_output, linear_shared_slots);
+    append_linear_platform(platform_output, linear_platform_slots);
+    auto linear_prepared = UiFrameGraphPass::Prepare(
+        UiCompositionFrameData{
+            .enabled                = true,
+            .separate_window        = true,
+            .output_resolution      = Moer::uint2(64, 64),
+            .scene_color_position   = Moer::float2(0.f, 0.f),
+            .scene_color_resolution = Moer::float2(64.f, 64.f),
+            .window_frame_buffer    = window_output,
+        },
+        std::move(linear_draw_frame),
+        EUiDrawExecutionThread::Render
+    );
+    CommandList linear_commands(EQueueType::Graphics);
+    const bool linear_recorded =
+        UiFrameGraphPassTestAccess::ProcessLinearWithComposeRecorder(
+            linear_commands,
+            [](CommandList&) {},
+            linear_prepared,
+            scene_color,
+            main_output
+        );
+    CmdSubmit linear_submit = linear_commands.Submit();
+    bool linear_publications_valid =
+        linear_recorded &&
+        !linear_submit.HasExplicitResourceStateOwnership() &&
+        !linear_submit.cmds.empty() &&
+        linear_submit.cmds.back()->Type() ==
+            Command::EType::Barrier;
+    if (linear_publications_valid) {
+        const auto& terminal = *static_cast<const BarrierCmd*>(
+            linear_submit.cmds.back().get()
+        );
+        const std::array<Texture*, 3> expected{
+            main_output.Get(),
+            window_output.Get(),
+            platform_output.Get(),
+        };
+        linear_publications_valid =
+            terminal.ReadTextures().size() == expected.size() &&
+            terminal.WriteTextures().empty() &&
+            terminal.ExplicitTextures().empty();
+        for (Texture* texture : expected) {
+            const auto matches = std::count_if(
+                terminal.ReadTextures().begin(),
+                terminal.ReadTextures().end(),
+                [texture](const TextureBarrier& barrier) {
+                    return barrier.handle ==
+                               reinterpret_cast<std::uint64_t>(
+                                   texture
+                               ) &&
+                           barrier.state ==
+                               ETextureState::TRANSFER &&
+                           barrier.pass_type == EPassType::Copy &&
+                           barrier.publish_external_state &&
+                           barrier.mip_level == 0 &&
+                           barrier.mip_cnt ==
+                               texture->GetNumMips() &&
+                           barrier.array_layer == 0 &&
+                           barrier.array_cnt ==
+                               texture->GetNumArray();
+                }
+            );
+            linear_publications_valid =
+                linear_publications_valid && matches == 1;
+        }
+    }
+    suite.Check(
+        linear_publications_valid &&
+            linear_prepared->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::Recorded &&
+            linear_backend->render_count == 1,
+        test_name,
+        "linear UI tail did not retain BackendTracked ownership with one "
+        "terminal full-range publication per presentation target"
+    );
+
     RenderGraph graph("UiFrameGraphTailContract");
     const auto scene = graph.ImportTexture(
         "SceneColor",
@@ -4293,7 +4635,7 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
             export_barrier->export_boundary &&
             export_barrier->after_state ==
                 RenderGraph::ResourceState::Texture(
-                    RenderGraph::TextureState::TransferSource
+                    RenderGraph::TextureState::PresentationSource
                 ) &&
             export_barrier->after_access == RenderGraph::AccessMode::Read;
     }
@@ -4319,7 +4661,7 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
     suite.Check(
         export_contract_valid,
         test_name,
-        "a presentation target was not exported as Graphics TransferSource/Read"
+        "a presentation target was not exported as Graphics PresentationSource/Read"
     );
     const std::string dump = graph.Dump();
     suite.Check(
@@ -4375,6 +4717,13 @@ void TestUiFrameGraphRejectsInvalidPhysicalContracts(TestSuite& suite) {
         "InvalidOutput",
         ETextureUsageFlags::SAMPLED |
             ETextureUsageFlags::COLOR_ATTACHMENT
+    ));
+    TextureRef missing_presentation_usage(MoerNew(FakeUiTexture)(
+        "MissingPresentationUsage",
+        ETextureUsageFlags::SAMPLED |
+            ETextureUsageFlags::COLOR_ATTACHMENT |
+            ETextureUsageFlags::TRANSFER_SRC |
+            ETextureUsageFlags::TRANSFER_DST
     ));
 
     auto slots   = Moer::MakeShared<FakeUiViewportResources>(23);
@@ -4436,6 +4785,61 @@ void TestUiFrameGraphRejectsInvalidPhysicalContracts(TestSuite& suite) {
         test_name,
         "linear fallback bypassed UI target validation or claimed the copied "
         "packet"
+    );
+
+    RenderGraph semantic_graph("UiFrameGraphMissingPresentationUsage");
+    const auto  scene_handle = semantic_graph.ImportTexture(
+        "SceneColor",
+        scene_color,
+        RenderGraph::TextureDesc{
+            .mip_count   = 1,
+            .layer_count = 1,
+            .aspects     = RenderGraph::TextureAspect::Color,
+        }
+    );
+    const auto semantic_ready =
+        semantic_graph.CreateTransientToken("PresentationReady");
+    UiFrameGraphPass::GraphPasses semantic_passes{};
+    suite.Check(
+        !UiFrameGraphPassTestAccess::AddPassesWithComposeRecorder(
+            semantic_graph,
+            [](CommandList&) {},
+            prepared,
+            scene_handle,
+            scene_color,
+            missing_presentation_usage,
+            semantic_ready,
+            semantic_passes
+        ) &&
+            !semantic_passes.IsValid() &&
+            prepared->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::Prepared,
+        test_name,
+        "graph declaration accepted a target without PRESENTATION_SOURCE "
+        "usage"
+    );
+
+    CommandList semantic_linear_commands{};
+    const bool semantic_linear_recorded =
+        UiFrameGraphPassTestAccess::ProcessLinearWithComposeRecorder(
+            semantic_linear_commands,
+            [](CommandList&) {},
+            prepared,
+            scene_color,
+            missing_presentation_usage
+        );
+    const CmdSubmit semantic_rejected_submit =
+        semantic_linear_commands.Submit();
+    suite.Check(
+        !semantic_linear_recorded &&
+            semantic_rejected_submit.cmds.empty() &&
+            backend->render_count == 0 && slots->CommitCount() == 0 &&
+            slots->PendingSlot() == 23 &&
+            prepared->GetRecordingState() ==
+                UiFrameGraphPass::ERecordingState::Prepared,
+        test_name,
+        "linear fallback accepted a target without PRESENTATION_SOURCE "
+        "usage"
     );
 }
 
@@ -5669,6 +6073,7 @@ int main() {
     TestInvalidTypedRangeIsRejected(suite);
     TestUnknownTextureAspectIsRejected(suite);
     TestTextureAttachmentStateMatchesSelectedAspects(suite);
+    TestPresentationSourceBoundaryContract(suite);
     TestTypedAliasDescriptorMismatchIsRejected(suite);
     TestMultipleReadersProduceAllWarEdges(suite);
     TestExplicitStateValidation(suite);

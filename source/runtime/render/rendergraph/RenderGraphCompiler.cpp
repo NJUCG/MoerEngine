@@ -87,6 +87,7 @@ ReasonLess(const RenderGraph::CompiledEdgeReason& lhs, const RenderGraph::Compil
         case State::Undefined:
             return false;
         case State::TransferSource:
+        case State::PresentationSource:
         case State::ShaderResource:
         case State::Sampled:
         case State::DepthStencilRead:
@@ -111,6 +112,7 @@ ReasonLess(const RenderGraph::CompiledEdgeReason& lhs, const RenderGraph::Compil
     switch (state) {
         case RenderGraph::TextureState::RenderTarget:
         case RenderGraph::TextureState::UnorderedAccess:
+        case RenderGraph::TextureState::PresentationSource:
         case RenderGraph::TextureState::Present:
             return selected == AspectMask(TextureAspect::Color);
         case RenderGraph::TextureState::DepthStencilRead:
@@ -361,6 +363,23 @@ bool RenderGraphCompiler::NormalizeDeclarations() {
                 if (declaration.state.IsAutomatic()) {
                     return Fail("boundary state cannot be automatic on resource '" + resource.name + "'");
                 }
+                const bool presentation_source =
+                    resource.kind == ResourceKind::Texture &&
+                    declaration.state.texture ==
+                        RenderGraph::TextureState::PresentationSource;
+                if (presentation_source && initial) {
+                    return Fail(
+                        "PresentationSource is an export-boundary-only state on resource '" +
+                        resource.name + "'"
+                    );
+                }
+                if (presentation_source &&
+                    declaration.queue != RenderGraph::QueueRole::Graphics) {
+                    return Fail(
+                        "PresentationSource export requires the Graphics queue on resource '" +
+                        resource.name + "'"
+                    );
+                }
                 if (declaration.queue == RenderGraph::QueueRole::None &&
                     !declaration.state.IsUndefined()) {
                     return Fail("a known boundary state requires an owner queue on resource '" + resource.name + "'");
@@ -555,7 +574,9 @@ bool RenderGraphCompiler::ValidateAccessState(
     if (resource.kind == ResourceKind::Texture) {
         supported = TextureStateSupports(state.texture, mode) &&
                     state.texture != RenderGraph::TextureState::Undefined &&
-                    state.texture != RenderGraph::TextureState::Present;
+                    state.texture != RenderGraph::TextureState::Present &&
+                    state.texture !=
+                        RenderGraph::TextureState::PresentationSource;
         transfer_state = state.texture == RenderGraph::TextureState::TransferSource ||
                          state.texture == RenderGraph::TextureState::TransferDestination;
         const bool attachment_state = state.texture == RenderGraph::TextureState::RenderTarget ||

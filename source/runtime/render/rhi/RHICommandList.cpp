@@ -1073,9 +1073,19 @@ void CommandList::InnerWriteBuffer(BufferView _buffer, EBufferState _state, EPas
     barrier->WriteBuffer(_buffer, _state, _pass);
 }
 
-void CommandList::InnerReadTexture(TextureView _texture, ETextureState _state, EPassType _pass) {
+void CommandList::InnerReadTexture(
+    TextureView   _texture,
+    ETextureState _state,
+    EPassType     _pass,
+    bool          _publish_external_state
+) {
     BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
-    barrier->ReadTexture(_texture, _state, _pass);
+    barrier->ReadTexture(
+        _texture,
+        _state,
+        _pass,
+        _publish_external_state
+    );
 }
 
 void CommandList::InnerWriteTexture(TextureView _texture, ETextureState _state, EPassType _pass) {
