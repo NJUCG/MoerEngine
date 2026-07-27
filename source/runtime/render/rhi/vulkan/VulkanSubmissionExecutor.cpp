@@ -223,6 +223,7 @@ GraphEventRef MakeCompletedEvent() {
 
 bool SubmitHasSideEffects(const CmdSubmit& _submit) {
     return !_submit.callbacks.empty() || !_submit.success_callbacks.empty() ||
+           !_submit.gpu_completion_tokens.empty() ||
            !_submit.query_tokens.empty() ||
            !_submit.wait_events.empty() || !_submit.signal_events.empty() || _submit.b_sync ||
            _submit.b_tick_profiling || _submit.b_delete_resources;
@@ -817,6 +818,11 @@ MaterializeMultiSegmentBatch(RHIBackendSubmissionBatch& _batch, const RHIQueueTo
         CmdSubmit& last_submit =
             executable_sources[materialization.executable_begin + materialization.executable_count - 1]
                 .submit;
+        last_submit.gpu_completion_tokens =
+            std::move(source_entry.submit.gpu_completion_tokens);
+        last_submit.gpu_completion_publish_batch =
+            source_entry.submit.gpu_completion_publish_batch;
+        source_entry.submit.gpu_completion_publish_batch = {};
         for (const SignalEvent& signal : source_entry.submit.signal_events) {
             last_submit.signal_events.emplace_back(signal);
         }
@@ -1141,10 +1147,13 @@ void VulkanSubmissionExecutor::Completion::Wait() {
 VulkanSubmissionExecutor::BatchRejectionPublication::
     BatchRejectionPublication(RHIBackendSubmissionBatch& _batch) {
     sources.reserve(_batch.submits.size());
+    const GpuCompletionPublishBatch common_completion_batch =
+        GpuCompletionBackendAccess::BeginPublishBatch();
     const QueryPublishBatch common_query_batch =
         QueryBackendAccess::BeginPublishBatch();
 
     size_t executable_count = 0;
+    bool   has_completion   = false;
     bool   has_query        = false;
     if (_batch.topology.source_plans.size() == _batch.submits.size()) {
         for (size_t source_index = 0;
@@ -1155,13 +1164,18 @@ VulkanSubmissionExecutor::BatchRejectionPublication::
                 continue;
             }
             ++executable_count;
+            has_completion =
+                has_completion ||
+                !_batch.submits[source_index].submit.
+                    gpu_completion_tokens.empty();
             has_query =
                 has_query ||
                 !_batch.submits[source_index].submit.query_tokens.empty();
         }
     }
     std::shared_ptr<VulkanBatchCompletionGroup> completion_group{};
-    if (executable_count > 1 && has_query) {
+    if (executable_count > 1 &&
+        (has_completion || has_query)) {
         completion_group =
             std::make_shared<VulkanBatchCompletionGroup>(
                 executable_count
@@ -1186,6 +1200,16 @@ VulkanSubmissionExecutor::BatchRejectionPublication::
             }
         }
 
+        source.gpu_completion_tokens =
+            entry.submit.gpu_completion_tokens;
+        if (!source.gpu_completion_tokens.empty()) {
+            source.gpu_completion_batch =
+                entry.submit.gpu_completion_publish_batch.Valid() ?
+                    entry.submit.gpu_completion_publish_batch :
+                    common_completion_batch;
+            entry.submit.gpu_completion_publish_batch =
+                source.gpu_completion_batch;
+        }
         source.query_tokens = entry.submit.query_tokens;
         if (!source.query_tokens.empty()) {
             source.query_batch =
@@ -1271,6 +1295,21 @@ void VulkanSubmissionExecutor::BatchRejectionPublication::PublishSuffix(
         _reason.empty() ?
             "Vulkan submission suffix was rejected before GPU completion" :
             _reason;
+    for (size_t source_index = begin;
+         source_index < sources.size();
+         ++source_index) {
+        RejectionSourceSnapshot& source = sources[source_index];
+        if (source.terminalized) {
+            continue;
+        }
+        if (source.gpu_completion_batch.Valid()) {
+            GpuCompletionBackendAccess::PublishErrorsIfPending(
+                source.gpu_completion_tokens,
+                reason,
+                source.gpu_completion_batch
+            );
+        }
+    }
     for (size_t source_index = begin;
          source_index < sources.size();
          ++source_index) {
@@ -2374,6 +2413,21 @@ void VulkanSubmissionExecutor::RejectBatch(
         // Queue rejection must not add an exact-value rejection after a hard
         // failure has already been published for the whole fence.
         submit.signal_events.clear();
+    }
+
+    const GpuCompletionPublishBatch completion_batch =
+        GpuCompletionBackendAccess::BeginPublishBatch();
+    for (size_t source_index = first_source;
+         source_index < _batch.submits.size();
+         ++source_index) {
+        CmdSubmit& submit = _batch.submits[source_index].submit;
+        const GpuCompletionPublishBatch source_completion_batch =
+            submit.gpu_completion_publish_batch.Valid() ?
+                submit.gpu_completion_publish_batch :
+                completion_batch;
+        submit.PublishPendingGpuCompletionErrors(
+            _reason, source_completion_batch
+        );
     }
 
     const QueryPublishBatch query_batch =

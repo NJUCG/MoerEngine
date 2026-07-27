@@ -87,6 +87,8 @@ private:
 
     struct RejectionSourceSnapshot {
         Array<RejectionSignalHandle> signals{};
+        Array<GpuCompletionToken>     gpu_completion_tokens{};
+        GpuCompletionPublishBatch     gpu_completion_batch{};
         Array<QueryToken>            query_tokens{};
         QueryPublishBatch            query_batch{};
         VulkanBatchCompletionTicket  completion_ticket{};

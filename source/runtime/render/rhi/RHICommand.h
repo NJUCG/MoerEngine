@@ -9,6 +9,7 @@
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "rhi/RHICommon.h"
+#include "rhi/RHICompletion.h"
 #include "rhi/RHIQuery.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHISubmissionTopology.h"
@@ -282,6 +283,8 @@ struct CmdSubmit {
     Array<UniquePtr<Command>>        cmds;
     Array<std::function<void(void)>> callbacks;
     Array<std::function<void(void)>> success_callbacks;
+    Array<GpuCompletionToken>        gpu_completion_tokens;
+    GpuCompletionPublishBatch        gpu_completion_publish_batch{};
     Array<QueryToken>                query_tokens;
     // Optional owner ticket when a whole backend batch publishes Query
     // terminal states before per-submit Completion packets are enqueued.
@@ -392,6 +395,11 @@ struct CmdSubmit {
         cmds               = std::move(_other.cmds);
         callbacks          = std::move(_other.callbacks);
         success_callbacks  = std::move(_other.success_callbacks);
+        gpu_completion_tokens = std::move(
+            _other.gpu_completion_tokens
+        );
+        gpu_completion_publish_batch =
+            _other.gpu_completion_publish_batch;
         query_tokens        = std::move(_other.query_tokens);
         query_publish_batch = _other.query_publish_batch;
         wait_events        = std::move(_other.wait_events);
@@ -407,6 +415,8 @@ struct CmdSubmit {
         async_queue_scope  = _other.async_queue_scope;
         debug_label        = std::move(_other.debug_label);
         debug_label_color  = _other.debug_label_color;
+        _other.gpu_completion_tokens.clear();
+        _other.gpu_completion_publish_batch = {};
         _other.query_tokens.clear();
         _other.query_publish_batch = {};
         _other.signal_events.clear();
@@ -417,6 +427,17 @@ struct CmdSubmit {
             return *this;
         }
         RejectPendingSignals();
+        Array<GpuCompletionToken> replaced_completion_tokens =
+            std::move(gpu_completion_tokens);
+        const GpuCompletionPublishBatch replaced_completion_batch =
+            gpu_completion_publish_batch.Valid() ?
+                gpu_completion_publish_batch :
+                GpuCompletionBackendAccess::BeginPublishBatch();
+        GpuCompletionBackendAccess::PublishErrorsIfPending(
+            replaced_completion_tokens,
+            "GPU completion submit was replaced before completion",
+            replaced_completion_batch
+        );
         Array<QueryToken> replaced_query_tokens = std::move(query_tokens);
         const QueryPublishBatch replaced_query_batch =
             query_publish_batch.Valid() ?
@@ -430,6 +451,11 @@ struct CmdSubmit {
         cmds               = std::move(_other.cmds);
         callbacks          = std::move(_other.callbacks);
         success_callbacks  = std::move(_other.success_callbacks);
+        gpu_completion_tokens = std::move(
+            _other.gpu_completion_tokens
+        );
+        gpu_completion_publish_batch =
+            _other.gpu_completion_publish_batch;
         query_tokens        = std::move(_other.query_tokens);
         query_publish_batch = _other.query_publish_batch;
         wait_events        = std::move(_other.wait_events);
@@ -445,12 +471,17 @@ struct CmdSubmit {
         async_queue_scope  = _other.async_queue_scope;
         debug_label        = std::move(_other.debug_label);
         debug_label_color  = _other.debug_label_color;
+        _other.gpu_completion_tokens.clear();
+        _other.gpu_completion_publish_batch = {};
         _other.query_tokens.clear();
         _other.query_publish_batch = {};
         _other.signal_events.clear();
 
         // The replacement is fully installed before user Query callbacks can
         // re-enter this object. No outer write may overwrite re-entrant state.
+        GpuCompletionBackendAccess::NotifyTerminals(
+            replaced_completion_tokens, replaced_completion_batch
+        );
         QueryBackendAccess::NotifyTerminals(
             replaced_query_tokens, replaced_query_batch
         );
@@ -459,7 +490,24 @@ struct CmdSubmit {
 
     ~CmdSubmit() {
         RejectPendingSignals();
-        RejectPendingQueries("query submit was destroyed before completion");
+        const GpuCompletionPublishBatch completion_batch =
+            gpu_completion_publish_batch.Valid() ?
+                gpu_completion_publish_batch :
+                GpuCompletionBackendAccess::BeginPublishBatch();
+        const QueryPublishBatch query_batch =
+            query_publish_batch.Valid() ?
+                query_publish_batch :
+                QueryBackendAccess::BeginPublishBatch();
+        PublishPendingGpuCompletionErrors(
+            "GPU completion submit was destroyed before completion",
+            completion_batch
+        );
+        PublishPendingQueryErrors(
+            "query submit was destroyed before completion",
+            query_batch
+        );
+        NotifyPendingGpuCompletions(completion_batch);
+        NotifyPendingQueries(query_batch);
     }
 
     void RejectPendingSignals() noexcept {
@@ -470,6 +518,57 @@ struct CmdSubmit {
             }
         }
         signal_events.clear();
+    }
+
+    void PublishPendingGpuCompletionOutcome(
+        bool                      _gpu_success,
+        std::string_view          _failure_reason,
+        GpuCompletionPublishBatch _batch
+    ) noexcept {
+        const GpuCompletionPublishBatch effective_batch =
+            gpu_completion_publish_batch.Valid() ?
+                gpu_completion_publish_batch :
+                _batch;
+        gpu_completion_publish_batch = effective_batch;
+        GpuCompletionBackendAccess::PublishOutcome(
+            gpu_completion_tokens,
+            _gpu_success,
+            _failure_reason,
+            effective_batch
+        );
+    }
+
+    void PublishPendingGpuCompletionErrors(
+        std::string_view          _reason,
+        GpuCompletionPublishBatch _batch
+    ) noexcept {
+        PublishPendingGpuCompletionOutcome(false, _reason, _batch);
+    }
+
+    void NotifyPendingGpuCompletions(
+        GpuCompletionPublishBatch _batch
+    ) noexcept {
+        Array<GpuCompletionToken> tokens =
+            std::move(gpu_completion_tokens);
+        const GpuCompletionPublishBatch effective_batch =
+            gpu_completion_publish_batch.Valid() ?
+                gpu_completion_publish_batch :
+                _batch;
+        gpu_completion_publish_batch = {};
+        GpuCompletionBackendAccess::NotifyTerminals(
+            tokens, effective_batch
+        );
+    }
+
+    void RejectPendingGpuCompletions(
+        std::string_view _reason
+    ) noexcept {
+        const GpuCompletionPublishBatch batch =
+            gpu_completion_publish_batch.Valid() ?
+                gpu_completion_publish_batch :
+                GpuCompletionBackendAccess::BeginPublishBatch();
+        PublishPendingGpuCompletionErrors(_reason, batch);
+        NotifyPendingGpuCompletions(batch);
     }
 
     void PublishPendingQueryErrors(
@@ -1642,6 +1741,13 @@ public:
 
     RENDER_API void AddCallback(std::function<void()>&& _callback);
     RENDER_API void AddSuccessCallback(std::function<void()>&& _callback);
+
+    // Creates a host-visible terminal handle for this recording generation.
+    // The Future resolves only after the complete logical submission reaches
+    // successful GPU retirement, or Error on any terminal rejection/fault.
+    RENDER_API GpuCompletionFuture TrackGpuCompletion(
+        std::string_view _name = {}
+    );
     /**
      * Attaches a native-submission acceptance marker to this CommandList.
      * Unlike CmdSubmit::Signal(), this form is available to independently
@@ -1677,6 +1783,11 @@ public:
 
     [[nodiscard]] QueryCancellationView GetQueryCancellationView() const noexcept {
         return query_cancellation_domain.GetView();
+    }
+
+    [[nodiscard]] GpuCompletionCancellationView
+    GetGpuCompletionCancellationView() const noexcept {
+        return gpu_completion_cancellation_domain.GetView();
     }
 
     [[nodiscard]] bool HasOpenTimestampQueries() const noexcept {
@@ -1783,6 +1894,9 @@ private:
     RENDER_API void EndBarriers();
 
     RENDER_API void RejectPendingQueries(std::string_view _reason) noexcept;
+    RENDER_API void RejectPendingGpuCompletions(
+        std::string_view _reason
+    ) noexcept;
 
 #pragma region[ raytracing ]
     RENDER_API void TraceRays(PipelineHandle _pipeline, ArrayArguments&& _args, uint3 _extent);
@@ -1793,6 +1907,9 @@ private:
     Command*                     current_barriers{nullptr};
     Array<std::function<void()>> callbacks;
     Array<std::function<void()>> success_callbacks;
+    Array<GpuCompletionToken>     gpu_completion_tokens;
+    GpuCompletionCancellationDomain
+                                  gpu_completion_cancellation_domain;
     Array<QueryToken>             query_tokens;
     Array<QueryToken>             active_query_stack;
     QueryCancellationDomain       query_cancellation_domain;

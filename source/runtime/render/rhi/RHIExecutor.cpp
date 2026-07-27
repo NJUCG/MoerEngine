@@ -55,7 +55,9 @@ GraphEventRef MakeCompletedBackendEvent() {
 
 bool SubmitHasWork(const CmdSubmit& _submit) {
     return !_submit.cmds.empty() || !_submit.callbacks.empty() ||
-           !_submit.success_callbacks.empty() || !_submit.query_tokens.empty() ||
+           !_submit.success_callbacks.empty() ||
+           !_submit.gpu_completion_tokens.empty() ||
+           !_submit.query_tokens.empty() ||
            !_submit.wait_events.empty() ||
            !_submit.signal_events.empty() || _submit.b_sync ||
            _submit.b_tick_profiling || _submit.b_delete_resources;
@@ -126,6 +128,18 @@ void FinalizeRejectedSubmissions(
     // Terminalize every query in the rejected batch before invoking any user
     // callback. A callback from an earlier submit is allowed to inspect or
     // wait on a query from a later submit without depending on callback order.
+    const GpuCompletionPublishBatch completion_batch =
+        GpuCompletionBackendAccess::BeginPublishBatch();
+    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
+        const GpuCompletionPublishBatch entry_batch =
+            entry.submit.gpu_completion_publish_batch.Valid() ?
+                entry.submit.gpu_completion_publish_batch :
+                completion_batch;
+        entry.submit.PublishPendingGpuCompletionErrors(
+            _reason, entry_batch
+        );
+    }
+
     const QueryPublishBatch query_batch =
         QueryBackendAccess::BeginPublishBatch();
     for (RHIBackendSubmissionBatchEntry& entry : _submits) {
@@ -142,6 +156,13 @@ void FinalizeRejectedSubmissions(
     // notification so user code can safely wait for the receipt.
     ResolveRejectedPresent(_present);
 
+    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
+        entry.submit.NotifyPendingGpuCompletions(
+            entry.submit.gpu_completion_publish_batch.Valid() ?
+                entry.submit.gpu_completion_publish_batch :
+                completion_batch
+        );
+    }
     for (RHIBackendSubmissionBatchEntry& entry : _submits) {
         entry.submit.NotifyPendingQueries(
             entry.submit.query_publish_batch.Valid() ?
@@ -181,6 +202,8 @@ void FinalizeRejectedSubmissions(
 // before any Query or ordinary cleanup callback is allowed to run.
 void FinalizeRejectedCommandListGroup(
     Array<CommandList>&                         _command_lists,
+    const Array<GpuCompletionCancellationView>&
+                                                _completion_cancellations,
     const Array<QueryCancellationView>&         _query_cancellations,
     const Array<size_t>&                        _materialized_source_indices,
     Array<RHIBackendSubmissionBatchEntry>&&     _submits,
@@ -194,11 +217,40 @@ void FinalizeRejectedCommandListGroup(
         command_list.RejectPendingSignals();
     }
 
-    const bool captured_every_generation =
+    const bool captured_every_completion_generation =
+        _completion_cancellations.size() ==
+        _command_lists.size();
+    const GpuCompletionPublishBatch completion_batch =
+        GpuCompletionBackendAccess::BeginPublishBatch();
+    if (captured_every_completion_generation) {
+        for (const GpuCompletionCancellationView& cancellation :
+             _completion_cancellations) {
+            (void)cancellation.PublishCancellation(
+                _reason, completion_batch
+            );
+        }
+    } else {
+        assert(_submits.empty());
+        for (CommandList& command_list : _command_lists) {
+            (void)command_list.GetGpuCompletionCancellationView().
+                PublishCancellation(_reason, completion_batch);
+        }
+    }
+    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
+        const GpuCompletionPublishBatch entry_batch =
+            entry.submit.gpu_completion_publish_batch.Valid() ?
+                entry.submit.gpu_completion_publish_batch :
+                completion_batch;
+        entry.submit.PublishPendingGpuCompletionErrors(
+            _reason, entry_batch
+        );
+    }
+
+    const bool captured_every_query_generation =
         _query_cancellations.size() == _command_lists.size();
     const QueryPublishBatch query_batch =
         QueryBackendAccess::BeginPublishBatch();
-    if (captured_every_generation) {
+    if (captured_every_query_generation) {
         for (const QueryCancellationView& cancellation :
              _query_cancellations) {
             (void)cancellation.PublishCancellation(_reason, query_batch);
@@ -227,7 +279,28 @@ void FinalizeRejectedCommandListGroup(
     // callbacks so they may synchronously observe or wait for that receipt.
     ResolveRejectedPresent(_present);
 
-    if (captured_every_generation) {
+    if (captured_every_completion_generation) {
+        for (const size_t source_index :
+             _materialized_source_indices) {
+            if (source_index >=
+                _completion_cancellations.size()) {
+                continue;
+            }
+            const GpuCompletionCancellationView& cancellation =
+                _completion_cancellations[source_index];
+            cancellation.NotifyCancellation(completion_batch);
+            cancellation.NotifyPublishedCancellation();
+        }
+    }
+    for (RHIBackendSubmissionBatchEntry& entry : _submits) {
+        entry.submit.NotifyPendingGpuCompletions(
+            entry.submit.gpu_completion_publish_batch.Valid() ?
+                entry.submit.gpu_completion_publish_batch :
+                completion_batch
+        );
+    }
+
+    if (captured_every_query_generation) {
         for (const size_t source_index : _materialized_source_indices) {
             if (source_index >= _query_cancellations.size()) {
                 continue;
@@ -348,11 +421,11 @@ bool RecordingSourceIsTerminal(const RHIRecordingSource& _source) noexcept {
            _source.completion.Status() != ERHIRecordingStatus::Pending;
 }
 
-// Query cancellation is one transaction across the complete recording group.
-// Terminal sources reject their declared signal values first, then all query
-// states publish Error, and only then may callbacks run. Mutable/opaque sources
-// publish Error so Wait/Get remain bounded during shutdown, but defer callback
-// notification until their CommandList can safely reject its internal signals.
+// Future cancellation is one transaction across the complete recording group.
+// Terminal sources reject their declared signal values first, then all
+// Completion/Query states publish Error, and only then may callbacks run.
+// Mutable sources publish Error so Wait/Get remain bounded during shutdown,
+// but defer callback notification until their CommandList is safely owned.
 void TerminalizeRecordingSourceQueries(
     Array<RHIRecordingSource>& _sources,
     std::string_view            _reason
@@ -385,6 +458,13 @@ void TerminalizeRecordingSourceQueries(
         }
     }
 
+    const GpuCompletionPublishBatch completion_batch =
+        GpuCompletionBackendAccess::BeginPublishBatch();
+    for (RHIRecordingSource& source : _sources) {
+        (void)source.gpu_completion_cancellation.
+            PublishCancellation(_reason, completion_batch);
+    }
+
     const QueryPublishBatch query_batch =
         QueryBackendAccess::BeginPublishBatch();
     for (RHIRecordingSource& source : _sources) {
@@ -396,6 +476,10 @@ void TerminalizeRecordingSourceQueries(
         for (size_t source_index = 0; source_index < _sources.size();
              ++source_index) {
             if (terminal_snapshot[source_index] != 0) {
+                _sources[source_index].
+                    gpu_completion_cancellation.NotifyCancellation(
+                        completion_batch
+                    );
                 _sources[source_index].query_cancellation.NotifyCancellation(
                     query_batch
                 );
@@ -679,10 +763,22 @@ public:
             );
         }
 
-        // D3D12 intentionally exposes timestamp Query as unsupported in
-        // Phase 17A. Publish the complete legacy batch before the first queue
-        // can retire so an earlier Query callback may safely wait on a later
-        // source; each native Completion packet still owns callback release.
+        // The legacy D3D12 backend has no reliable per-submit fault outcome.
+        // Fail closed for host completion futures rather than reporting a
+        // false Ready. Publish the whole batch before the first queue can
+        // retire; each native Completion packet still owns callback release.
+        const GpuCompletionPublishBatch completion_batch =
+            GpuCompletionBackendAccess::BeginPublishBatch();
+        for (RHIBackendSubmissionBatchEntry& entry : _batch.submits) {
+            if (!entry.submit.gpu_completion_tokens.empty()) {
+                entry.submit.PublishPendingGpuCompletionErrors(
+                    "D3D12 GPU completion futures are unsupported",
+                    completion_batch
+                );
+            }
+        }
+
+        // D3D12 intentionally exposes timestamp Query as unsupported.
         const QueryPublishBatch query_batch =
             QueryBackendAccess::BeginPublishBatch();
         for (RHIBackendSubmissionBatchEntry& entry : _batch.submits) {
@@ -805,6 +901,8 @@ private:
         _submit.cmds.clear();
         _submit.callbacks.clear();
         _submit.success_callbacks.clear();
+        _submit.gpu_completion_tokens.clear();
+        _submit.gpu_completion_publish_batch = {};
         _submit.query_tokens.clear();
         _submit.query_publish_batch = {};
         _submit.cached_args.clear();
@@ -1164,13 +1262,18 @@ void RHIExecutor::Submit(
     RHIPresentRequest*   _present
 ) {
     Array<RHIBackendSubmissionBatchEntry> submits{};
+    Array<GpuCompletionCancellationView> completion_cancellations{};
     Array<QueryCancellationView> query_cancellations{};
     Array<size_t> materialized_source_indices{};
     try {
         submits.reserve(_command_lists.size());
+        completion_cancellations.reserve(_command_lists.size());
         query_cancellations.reserve(_command_lists.size());
         materialized_source_indices.reserve(_command_lists.size());
         for (CommandList& command_list : _command_lists) {
+            completion_cancellations.emplace_back(
+                command_list.GetGpuCompletionCancellationView()
+            );
             query_cancellations.emplace_back(
                 command_list.GetQueryCancellationView()
             );
@@ -1185,6 +1288,7 @@ void RHIExecutor::Submit(
         }
         FinalizeRejectedCommandListGroup(
             _command_lists,
+            completion_cancellations,
             query_cancellations,
             materialized_source_indices,
             std::move(submits),
@@ -1199,6 +1303,7 @@ void RHIExecutor::Submit(
         }
         FinalizeRejectedCommandListGroup(
             _command_lists,
+            completion_cancellations,
             query_cancellations,
             materialized_source_indices,
             std::move(submits),
@@ -1219,6 +1324,7 @@ void RHIExecutor::Submit(
     if (!group_valid) {
         FinalizeRejectedCommandListGroup(
             _command_lists,
+            completion_cancellations,
             query_cancellations,
             materialized_source_indices,
             std::move(submits),
@@ -1250,6 +1356,7 @@ void RHIExecutor::Submit(
         }
         FinalizeRejectedCommandListGroup(
             _command_lists,
+            completion_cancellations,
             query_cancellations,
             materialized_source_indices,
             std::move(submits),
@@ -1264,6 +1371,7 @@ void RHIExecutor::Submit(
         }
         FinalizeRejectedCommandListGroup(
             _command_lists,
+            completion_cancellations,
             query_cancellations,
             materialized_source_indices,
             std::move(submits),
@@ -1323,6 +1431,9 @@ void RHIExecutor::SubmitRecording(
         // Publication seals the current CommandList generation. Never trust a
         // caller-supplied valid view: it may belong to an earlier Submit() and
         // would leave the actual producer generation Pending on shutdown.
+        source.gpu_completion_cancellation =
+            source.command_list->
+                GetGpuCompletionCancellationView();
         source.query_cancellation =
             source.command_list->GetQueryCancellationView();
     }
