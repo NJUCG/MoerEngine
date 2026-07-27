@@ -52,7 +52,8 @@ public:
         uint3          _src_offset,
         uint64         _dst_offset,
         uint3          _src_extent,
-        uint32         _mip_level
+        uint32         _mip_level,
+        uint32         _array_layer
     );
     void  CopyData(const BufferView& _dst, const void* _data, uint64 _size);
     void  CopyData(void* _dst, const BufferView& _src, uint64 _size);

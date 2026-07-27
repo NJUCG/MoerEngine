@@ -1411,11 +1411,110 @@ void VkTracker::DispatchBarriers(VulkanCmdList& _cmdlist) {
 }
 
 void VkTracker::RestoreState() {
+    Set<VulkanTexture*> first_restore_textures;
+    for (const auto& [key, state] : texture_states) {
+        (void)state;
+        VulkanTexture* texture = key.texture;
+        if (exported_textures.find(texture) !=
+            exported_textures.end()) {
+            continue;
+        }
+        if (texture->b_present) {
+            // Presentation images keep their externally managed layout
+            // contract and must not receive UNDEFINED complement barriers.
+            texture->b_has_preferred_state = true;
+            continue;
+        }
+        if (!texture->b_has_preferred_state) {
+            first_restore_textures.insert(texture);
+        }
+    }
+
+    // b_has_preferred_state is a whole-image promise used by the next
+    // submission. When the first submit touches only one mip/layer, restore
+    // every untouched cell from UNDEFINED as well before publishing that
+    // promise. The ranges are complementary to texture_states, so they never
+    // overlap the ordinary current-layout -> preferred-layout barriers below.
+    for (VulkanTexture* texture : first_restore_textures) {
+        const VkImageLayout layout =
+            texture->GetQueuePreferredLayout(queue_type);
+        const VkImageAspectFlags aspects =
+            VulkanEnumTranslator::METoVKImageAspectFlags(
+                texture->GetAspectFlags()
+            );
+        const uint32 mip_count = texture->GetNumMips();
+        const uint32 array_count = texture->GetNumArray();
+        const auto is_tracked =
+            [&](uint32 mip, uint32 layer) {
+                for (const auto& [key, state] : texture_states) {
+                    (void)state;
+                    if (key.texture != texture) {
+                        continue;
+                    }
+                    const uint32 mip_end =
+                        static_cast<uint32>(key.mip_level) +
+                        static_cast<uint32>(key.mip_count);
+                    const uint32 layer_end =
+                        static_cast<uint32>(key.array_layer) +
+                        static_cast<uint32>(key.array_count);
+                    if (mip >= key.mip_level && mip < mip_end &&
+                        layer >= key.array_layer &&
+                        layer < layer_end) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+
+        for (uint32 mip = 0; mip < mip_count; ++mip) {
+            uint32 layer = 0;
+            while (layer < array_count) {
+                if (is_tracked(mip, layer)) {
+                    ++layer;
+                    continue;
+                }
+                const uint32 first_layer = layer;
+                do {
+                    ++layer;
+                } while (layer < array_count &&
+                         !is_tracked(mip, layer));
+
+                texture_barriers.emplace_back(
+                    VkImageMemoryBarrier2{
+                        .sType =
+                            VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                        .pNext = nullptr,
+                        .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+                        .srcAccessMask = VK_ACCESS_2_NONE,
+                        .dstStageMask =
+                            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                        .dstAccessMask = VK_ACCESS_2_NONE,
+                        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                        .newLayout = layout,
+                        .srcQueueFamilyIndex =
+                            VK_QUEUE_FAMILY_IGNORED,
+                        .dstQueueFamilyIndex =
+                            VK_QUEUE_FAMILY_IGNORED,
+                        .image = texture->GetHandle(),
+                        .subresourceRange =
+                            VkImageSubresourceRange{
+                                .aspectMask = aspects,
+                                .baseMipLevel = mip,
+                                .levelCount = 1,
+                                .baseArrayLayer = first_layer,
+                                .layerCount = layer - first_layer,
+                            },
+                    }
+                );
+            }
+        }
+        texture->b_has_preferred_state = true;
+    }
+
     for (auto& [key, state] : texture_states) {
         VulkanTexture* texture = key.texture;
         if (exported_textures.find(texture) != exported_textures.end())
             continue;
-        texture->b_has_preferred_state = true;
         VkImageLayout layout           = texture->GetQueuePreferredLayout(queue_type);
         if (texture->b_present)
             continue;

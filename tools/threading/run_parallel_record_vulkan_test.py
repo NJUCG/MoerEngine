@@ -933,10 +933,37 @@ def _require_timestamp_query_success_batch(text: str) -> None:
     )
 
 
+def _require_owning_readback_future(text: str) -> None:
+    marker = _testcase_marker("OwningReadbackFuture", text)
+    _require(
+        marker is not None and marker[0] == "PASS",
+        "readback-future: missing owning readback PASS marker",
+    )
+    _, fields = marker
+    _require(
+        fields.get("queue") == "Copy"
+        and fields.get("buffer") == "subrange"
+        and fields.get("texture") == "mip1,layer1"
+        and fields.get("layer_copy") == "isolated_nonzero_layer"
+        and fields.get("sibling") == "next_submit_mip0_layer0"
+        and fields.get("state_restore") == "whole_image"
+        and fields.get("bytes") == "32,64,64,256"
+        and fields.get("callbacks") == "exactly_once"
+        and fields.get("siblings") == "terminal"
+        and fields.get("native_staging") == "completion-owned"
+        and fields.get("host_snapshot") == "future-owned"
+        and fields.get("unsupported") == "compressed,msaa,partial",
+        "readback-future: incomplete owning readback contract",
+    )
+
+
 def validate_log(mode: str, text: str) -> None:
     _require("[TESTCASE][FAIL]" not in text, f"{mode}: test emitted a FAIL marker")
     _require("VUID-" not in text, f"{mode}: Vulkan validation VUID was emitted")
     _require("Validation Error" not in text, f"{mode}: Vulkan validation error was emitted")
+    if mode == "readback-future":
+        _require_owning_readback_future(text)
+        return
     if mode == "timestamp-query-success-batch":
         _require_timestamp_query_success_batch(text)
         return
@@ -1233,6 +1260,8 @@ def run_case(executable: Path, outdir: Path, mode: str, timeout: float) -> Path:
         arguments.append("--present-hard")
     if mode == "rt-export-rejection":
         arguments.append("--rt-export-rejection")
+    if mode == "readback-future":
+        arguments.append("--readback-future")
     if mode == "timestamp-query-success-batch":
         arguments.append("--timestamp-query-success-batch")
 
@@ -1290,6 +1319,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "present-boundary",
                 "present-hard",
                 "rt-export-rejection",
+                "readback-future",
                 "timestamp-query-success-batch",
             )
         ]

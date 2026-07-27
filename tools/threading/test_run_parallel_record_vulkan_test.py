@@ -181,6 +181,18 @@ def rt_export_rejection_line() -> str:
     )
 
 
+def readback_future_line() -> str:
+    return (
+        "[TESTCASE][PASS] name=OwningReadbackFuture "
+        "queue=Copy buffer=subrange texture=mip1,layer1 "
+        "layer_copy=isolated_nonzero_layer "
+        "sibling=next_submit_mip0_layer0 state_restore=whole_image "
+        "bytes=32,64,64,256 callbacks=exactly_once siblings=terminal "
+        "native_staging=completion-owned host_snapshot=future-owned "
+        "unsupported=compressed,msaa,partial\n"
+    )
+
+
 def timestamp_query_success_batch_line() -> str:
     return (
         "[TESTCASE][PASS] "
@@ -1001,6 +1013,11 @@ class VulkanRunnerTests(unittest.TestCase):
                 rt_export_rejection_line(),
             ),
             (
+                "readback-future",
+                "--readback-future",
+                readback_future_line(),
+            ),
+            (
                 "timestamp-query-success-batch",
                 "--timestamp-query-success-batch",
                 timestamp_query_success_batch_line(),
@@ -1033,6 +1050,37 @@ class VulkanRunnerTests(unittest.TestCase):
                             expected_argument,
                         ],
                     )
+
+    def test_readback_future_contract_is_accepted(self) -> None:
+        runner.validate_log(
+            "readback-future",
+            readback_future_line(),
+        )
+
+    def test_readback_future_requires_whole_image_restore_marker(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete owning readback contract",
+        ):
+            runner.validate_log(
+                "readback-future",
+                readback_future_line().replace(
+                    " state_restore=whole_image", ""
+                ),
+            )
+
+    def test_readback_future_rejects_validation_vuid(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "Vulkan validation VUID",
+        ):
+            runner.validate_log(
+                "readback-future",
+                "VUID-VkImageMemoryBarrier2-oldLayout-01197\n"
+                + readback_future_line(),
+            )
 
     def test_timestamp_query_success_batch_contract_is_accepted(
         self,

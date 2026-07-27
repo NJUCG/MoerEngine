@@ -230,7 +230,9 @@ void RTContext::FillFrameResources(uint2 _resolution) {
         "ldr_color",
         Extent2D(_resolution),
         PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::SAMPLED
+        ETextureUsageFlags::COLOR_ATTACHMENT |
+            ETextureUsageFlags::SAMPLED |
+            ETextureUsageFlags::TRANSFER_SRC
     );
     frame_rt.hdr_color = device.CreateTexture(
         "hdr_color",
@@ -255,7 +257,9 @@ void RTContext::FillFrameResources(uint2 _resolution) {
         "resolved_color",
         Extent2D(_resolution),
         PF_R16G16B16A16_SFLOAT,
-        ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
+        ETextureUsageFlags::UNORDERED_ACCESS |
+            ETextureUsageFlags::SAMPLED |
+            ETextureUsageFlags::TRANSFER_SRC
     );
     Sampler spl{ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_CLAMP_TO_EDGE};
     AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_depth, frame_rt.view_depth->GetView(), spl);

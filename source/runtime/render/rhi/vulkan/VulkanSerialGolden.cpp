@@ -529,9 +529,10 @@ struct VulkanSerialGoldenTrace::Impl {
                 const auto& command = *static_cast<const CopyBackTextureCmd*>(_command);
                 resources.push_back(RegisterTexture(reinterpret_cast<Texture*>(uintptr_t(command.Handle()))));
                 hash.Add(command.MipLevel());
+                hash.Add(command.ArrayLayer());
                 AddUint3(hash, command.Offset());
                 AddUint3(hash, command.Size());
-                hash.Add(command.Data().size());
+                hash.Add(command.ByteSize());
                 break;
             }
             case Command::EType::ShaderDispatch: {

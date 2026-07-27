@@ -1201,7 +1201,10 @@ struct VkCmdPreprocessor {
             VK_ACCESS_2_TRANSFER_READ_BIT,
             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            _cmd->MipLevel()
+            _cmd->MipLevel(),
+            1, // mip_count
+            _cmd->ArrayLayer(),
+            1  // array_count
         );
         tracker.RecordState(vk_dst_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
     }
@@ -1218,7 +1221,7 @@ struct VkCmdPreprocessor {
     }
 
     void Visit(const CopyBackTextureCmd* _cmd) {
-        auto tmp_buffer      = allocator.AllocateReadbackBuffer(_cmd->Data().size_bytes(), 16);
+        auto tmp_buffer      = allocator.AllocateReadbackBuffer(_cmd->ByteSize(), 16);
         _cmd->staging_buffer = tmp_buffer;
 
         auto* vk_texture = reinterpret_cast<VulkanTexture*>(_cmd->Handle());
@@ -1227,7 +1230,10 @@ struct VkCmdPreprocessor {
             VK_ACCESS_2_TRANSFER_READ_BIT,
             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            _cmd->MipLevel()
+            _cmd->MipLevel(),
+            1,
+            _cmd->ArrayLayer(),
+            1
         );
         tracker.RegisterFlushBufferRange(
             _cmd->staging_buffer, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT
@@ -2253,9 +2259,50 @@ public:
         // LOG_INFO("copyback temp buffer handle {} offset {} size {}", (uint64)ResourceCast(tmp_buffer.GetBuffer())->GetHandle(), tmp_buffer.GetByteOffset(), tmp_buffer.GetByteSize());
 
         // tracker.RegisterFlushBuffer(VulkanBuffer *_buffer, VkAccessFlagBits2 _access, VkPipelineStageFlagBits2 _stage)
-        allocator.AddOnComplete([tmp_buffer, &cmd_list(cmd_list), src_data(_cmd.Data())]() {
-            cmd_list.CopyData(src_data, tmp_buffer, tmp_buffer.GetByteSize());
-        });
+        if (_cmd.HasOwningReadback()) {
+            const ReadbackToken readback = _cmd.OwningReadback();
+            const uint64 logical_size = _cmd.ByteSize();
+            allocator.AddOnComplete(
+                [tmp_buffer, &cmd_list(cmd_list), readback, logical_size] {
+                    struct WriterContext {
+                        VulkanCmdList* command_list{};
+                        BufferView     staging{};
+                        uint64         byte_size{};
+                    } context{&cmd_list, tmp_buffer, logical_size};
+                    (void)ReadbackBackendAccess::MaterializePayload(
+                        readback,
+                        &context,
+                        [](void* _context, std::span<byte> _destination) {
+                            auto* writer =
+                                static_cast<WriterContext*>(_context);
+                            if (writer == nullptr ||
+                                _destination.size_bytes() !=
+                                    writer->byte_size) {
+                                throw std::runtime_error(
+                                    "Vulkan buffer readback payload size mismatch"
+                                );
+                            }
+                            writer->command_list->CopyData(
+                                _destination.data(),
+                                writer->staging,
+                                writer->byte_size
+                            );
+                        }
+                    );
+                }
+            );
+        } else {
+            allocator.AddOnComplete(
+                [tmp_buffer,
+                 &cmd_list(cmd_list),
+                 destination(_cmd.Data()),
+                 logical_size = _cmd.ByteSize()] {
+                    cmd_list.CopyData(
+                        destination, tmp_buffer, logical_size
+                    );
+                }
+            );
+        }
     }
 
     void Visit(const CopyBackTextureCmd& _cmd) {
@@ -2268,18 +2315,58 @@ public:
         cmd_list.CopyTextureToBuffer(
             src_texture,
             reinterpret_cast<VulkanBuffer*>(tmp_buffer.GetBuffer()),
-            _cmd.Data().size_bytes(),
+            _cmd.ByteSize(),
             _cmd.Offset(),
             tmp_buffer.GetByteOffset(),
             _cmd.Size(),
-            _cmd.MipLevel()
+            _cmd.MipLevel(),
+            _cmd.ArrayLayer()
         );
 
-        // LOG_INFO("copyback temp buffer handle {} offset {} size {}", (uint64)ResourceCast(tmp_buffer.GetBuffer())->GetHandle(), tmp_buffer.GetByteOffset(), tmp_buffer.GetByteSize());
-
-        allocator.AddOnComplete([tmp_buffer, &cmd_list(cmd_list), src_data(_cmd.Data())]() {
-            cmd_list.CopyData(src_data.data(), tmp_buffer, tmp_buffer.GetByteSize());
-        });
+        if (_cmd.HasOwningReadback()) {
+            const ReadbackToken readback = _cmd.OwningReadback();
+            const uint64 logical_size = _cmd.ByteSize();
+            allocator.AddOnComplete(
+                [tmp_buffer, &cmd_list(cmd_list), readback, logical_size] {
+                    struct WriterContext {
+                        VulkanCmdList* command_list{};
+                        BufferView     staging{};
+                        uint64         byte_size{};
+                    } context{&cmd_list, tmp_buffer, logical_size};
+                    (void)ReadbackBackendAccess::MaterializePayload(
+                        readback,
+                        &context,
+                        [](void* _context, std::span<byte> _destination) {
+                            auto* writer =
+                                static_cast<WriterContext*>(_context);
+                            if (writer == nullptr ||
+                                _destination.size_bytes() !=
+                                    writer->byte_size) {
+                                throw std::runtime_error(
+                                    "Vulkan texture readback payload size mismatch"
+                                );
+                            }
+                            writer->command_list->CopyData(
+                                _destination.data(),
+                                writer->staging,
+                                writer->byte_size
+                            );
+                        }
+                    );
+                }
+            );
+        } else {
+            allocator.AddOnComplete(
+                [tmp_buffer,
+                 &cmd_list(cmd_list),
+                 destination(_cmd.Data()),
+                 logical_size = _cmd.ByteSize()] {
+                    cmd_list.CopyData(
+                        destination.data(), tmp_buffer, logical_size
+                    );
+                }
+            );
+        }
     }
 
     void Visit(const CopyTextureCmd& _cmd) {
@@ -2327,7 +2414,8 @@ public:
             _cmd.SrcOffset(),
             _cmd.DstOffset(),
             _cmd.Size(),
-            _cmd.MipLevel()
+            _cmd.MipLevel(),
+            _cmd.ArrayLayer()
         );
     }
 

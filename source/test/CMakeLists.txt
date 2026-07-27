@@ -99,6 +99,15 @@ set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHIGpuCompletionContract COMMAND $<TARGET_FILE:${test_target}>)
 set_tests_properties(RHIGpuCompletionContract PROPERTIES TIMEOUT 60)
 
+set(test_target TestRHIReadback)
+add_executable(${test_target} "RHIReadbackContractTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME RHIReadbackContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(RHIReadbackContract PROPERTIES TIMEOUT 60)
+
 set(test_target TestExternalCpuJoin)
 add_executable(${test_target} "ExternalCpuJoinTest.cpp")
 target_link_libraries(${test_target}

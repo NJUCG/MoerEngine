@@ -1277,6 +1277,10 @@ struct D3D12CommandPreprocessVisitor {
             case Command::EType::CopyBackBuffer:
                 Visit(static_cast<const CopyBackBufferCmd&>(*_cmd));
                 break;
+            case Command::EType::CopyBackTexture:
+                throw std::runtime_error(
+                    "D3D12 texture readback is unsupported"
+                );
             case Command::EType::BufferToBuffer:
                 Visit(static_cast<const CopyBufferCmd&>(*_cmd));
                 break;
@@ -1331,14 +1335,29 @@ struct D3D12CommandVisitor {
     }
 
     void Visit(const CopyBackBufferCmd& _cmd) {
+        if (_cmd.HasOwningReadback()) {
+            // CommandList rejects this before recording because D3D12 does
+            // not yet have a successful GpuCompletionFuture retirement path.
+            // Keep the visitor fail-closed for manually constructed commands.
+            throw std::runtime_error(
+                "D3D12 owning buffer readback is unsupported"
+            );
+        }
         auto tmp_buffer = allocator.AllocateReadbackBuffer(_cmd.ByteSize(), 256); // ? not sure alignment
         D3D12Buffer* src_buffer = reinterpret_cast<D3D12Buffer*>(_cmd.Handle());
         cmd_list.CopyBuffer(
             src_buffer, tmp_buffer.buffer, _cmd.ByteSize(), _cmd.Offset(), tmp_buffer.byte_offset
         );
-        allocator.AddOnComplete([tmp_buffer, &cmd_list(cmd_list), dst(_cmd.Data()), size(_cmd.ByteSize())] {
-            cmd_list.CopyData(dst, tmp_buffer, size);
-        });
+        allocator.AddOnComplete(
+            [tmp_buffer,
+             &cmd_list(cmd_list),
+             destination(_cmd.Data()),
+             logical_size = _cmd.ByteSize()] {
+                cmd_list.CopyData(
+                    destination, tmp_buffer, logical_size
+                );
+            }
+        );
     }
 
     void Visit(const CopyBufferCmd& _cmd) {
@@ -1424,6 +1443,10 @@ struct D3D12CommandVisitor {
             case Command::EType::CopyBackBuffer:
                 Visit(static_cast<const CopyBackBufferCmd&>(*_cmd));
                 break;
+            case Command::EType::CopyBackTexture:
+                throw std::runtime_error(
+                    "D3D12 texture readback is unsupported"
+                );
             case Command::EType::BufferToBuffer:
                 Visit(static_cast<const CopyBufferCmd&>(*_cmd));
                 break;
