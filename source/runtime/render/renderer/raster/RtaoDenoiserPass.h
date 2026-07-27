@@ -62,16 +62,32 @@ public:
         }
     }
 
+    void ResetHistory() {
+        history_valid               = false;
+        history_configuration_valid = false;
+    }
+
     // 注意，这个函数是原地操作
     uint ProcessInPlace(RasterContext& context, const RasterConfig& ui_config, uint ao_only_idx) {
         // AO不为RTAO或RTAO_AO_ONLY => return
-        if (ui_config.ao_mode != EAoMode::RTAO && ui_config.ao_mode != EAoMode::RTAO_AO_ONLY)
+        if (ui_config.ao_mode != EAoMode::RTAO &&
+            ui_config.ao_mode != EAoMode::RTAO_AO_ONLY) {
+            ResetHistory();
             return ao_only_idx;
+        }
         // 没有开启降噪 => return
-        if (!ui_config.rtao_denoiser_enable)
+        if (!ui_config.rtao_denoiser_enable) {
+            ResetHistory();
             return ao_only_idx;
+        }
 
         const bool half_res = ui_config.ao_half_resolution;
+        if (!history_configuration_valid ||
+            history_half_resolution != half_res) {
+            history_valid               = false;
+            history_half_resolution     = half_res;
+            history_configuration_valid = true;
+        }
 
         if (ao_only_idx == 0) {
             img_denoiser_history_read  = half_res ? context.textures.ao_denoiser_accumulate_1_half :
@@ -105,7 +121,7 @@ public:
         param.normal_tex        = context.textures.normal.hdl;
         param.inv_resolution    = float2(1.0f) / float2(img_ao_only.GetSize());
 
-        param.history_ratio          = ui_config.rtao_denoiser_history_ratio;
+        param.history_ratio          = history_valid ? ui_config.rtao_denoiser_history_ratio : 0.f;
         param.valid_depth_threshold  = ui_config.rtao_denoiser_valid_depth_threshold;
         param.valid_normal_threshold = ui_config.rtao_denoiser_valid_normal_threshold;
 
@@ -134,6 +150,7 @@ public:
                 ColorAttachment(img_ao_only.tex)
             );
 
+        history_valid = true;
         return ao_only_idx ^ 1; // 0 <-> 1
     }
 
@@ -144,6 +161,9 @@ private:
     TextureWithHandle        img_denoiser_history_read;
     TextureWithHandle        img_ao_only;
     TextureWithHandle        img_ao_only_prev;
+    bool                     history_valid               = false;
+    bool                     history_configuration_valid = false;
+    bool                     history_half_resolution     = false;
 };
 
 } // namespace Moer::Render::Raster

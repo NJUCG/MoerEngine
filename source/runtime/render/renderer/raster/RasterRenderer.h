@@ -102,6 +102,9 @@ private:
     bool   capture_scene_geometry_snapshot = true;
 
     uint64_t next_frame_id = 0;
+    uint64_t render_extent_generation = 0;
+
+    SceneRenderExtentTracker scene_render_extent_tracker;
 
     bool                            render_graph_enabled = false;
     bool                            render_graph_debug_dump = false;

@@ -245,7 +245,6 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     }
 
     VkSwapchainKHR          new_sc = VK_NULL_HANDLE;
-    Array<VkSemaphore>      new_image_ready_fences;
     Array<VkSemaphore>      new_render_finished_fences;
     Array<VkFence>          new_in_flight_fences;
     Array<VulkanTexture*>   new_swapchain_textures;
@@ -255,11 +254,6 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         for (auto* texture : new_swapchain_textures) {
             if (texture != nullptr) {
                 MoerDelete(texture);
-            }
-        }
-        for (VkSemaphore semaphore : new_image_ready_fences) {
-            if (semaphore != VK_NULL_HANDLE) {
-                vkDestroySemaphore(device.GetDevice(), semaphore, VK_NULL_HANDLE);
             }
         }
         for (VkSemaphore semaphore : new_render_finished_fences) {
@@ -286,10 +280,6 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         }
         swapchain_textures.clear();
         swapchain_views.clear();
-        for (VkSemaphore semaphore : image_ready_fences) {
-            vkDestroySemaphore(device.GetDevice(), semaphore, VK_NULL_HANDLE);
-        }
-        image_ready_fences.clear();
         for (VkSemaphore semaphore : render_finished_fences) {
             vkDestroySemaphore(device.GetDevice(), semaphore, VK_NULL_HANDLE);
         }
@@ -378,26 +368,9 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
 
     const uint new_max_frames_in_flight = std::min(max_frames_in_flight, uint(image_cnt));
     const bool recreate_fences = in_flight_fences.size() != new_max_frames_in_flight;
-    new_image_ready_fences.resize(image_cnt, VK_NULL_HANDLE);
     new_render_finished_fences.resize(image_cnt, VK_NULL_HANDLE);
     VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     for (uint i = 0; i < image_cnt; i++) {
-        result = vkCreateSemaphore(
-            device.GetDevice(), &semaphore_info, VK_NULL_HANDLE, &new_image_ready_fences[i]
-        );
-        if (result != VK_SUCCESS) {
-            new_image_ready_fences[i] = VK_NULL_HANDLE;
-        }
-        if (!check_device_result(result, EVulkanFaultOperation::SwapchainSemaphoreCreate)) {
-            abort_transaction();
-            return;
-        }
-        device.SetResourceName(
-            uint64(new_image_ready_fences[i]),
-            VK_OBJECT_TYPE_SEMAPHORE,
-            "ImageReadySemaphore_" + std::to_string(i)
-        );
-
         result = vkCreateSemaphore(
             device.GetDevice(), &semaphore_info, VK_NULL_HANDLE, &new_render_finished_fences[i]
         );
@@ -470,7 +443,6 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     size                      = new_size;
     format                    = new_format;
     max_frames_in_flight      = new_max_frames_in_flight;
-    image_ready_fences        = std::move(new_image_ready_fences);
     render_finished_fences    = std::move(new_render_finished_fences);
     swapchain_textures        = std::move(new_swapchain_textures);
     swapchain_views           = std::move(new_swapchain_views);
@@ -490,15 +462,11 @@ VkSwapchain::~VkSwapchain() {
     }
     for (size_t i = 0; i < swapchain_textures.size(); ++i) {
         MoerDelete(swapchain_textures[i]);
-        vkDestroySemaphore(device.GetDevice(), image_ready_fences[i], VK_NULL_HANDLE);
         vkDestroySemaphore(device.GetDevice(), render_finished_fences[i], VK_NULL_HANDLE);
     }
     for (uint i = 0; i < in_flight_fences.size(); i++) {
         vkDestroyFence(device.GetDevice(), in_flight_fences[i], VK_NULL_HANDLE);
     }
-}
-VkSemaphore VkSwapchain::GetImageReadyFence(uint _index) {
-    return image_ready_fences[_index % image_ready_fences.size()];
 }
 VkSemaphore VkSwapchain::GetRenderFinishedFence(uint _image_index) {
     return render_finished_fences[_image_index % render_finished_fences.size()];
@@ -506,14 +474,16 @@ VkSemaphore VkSwapchain::GetRenderFinishedFence(uint _image_index) {
 TextureView VkSwapchain::GetSwapchainImage(uint _index) {
     return swapchain_views[_index % swapchain_views.size()];
 }
-VkSwapchain::AcquireResult VkSwapchain::AquireNextImage(uint64 _timeout) {
-    uint32_t    aquire_idx = UINT32_MAX;
-    VkSemaphore ready_sem  = image_ready_fences[image_idx % image_ready_fences.size()];
-
+VkSwapchain::AcquireResult VkSwapchain::AquireNextImage(
+    VkSemaphore _ready_semaphore,
+    uint64      _timeout
+) {
+    assert(_ready_semaphore != VK_NULL_HANDLE);
+    uint32_t aquire_idx = UINT32_MAX;
     const VulkanOperationResult outcome = device.AcquireNextImage(
         handle,
         _timeout,
-        ready_sem,
+        _ready_semaphore,
         VK_NULL_HANDLE,
         &aquire_idx,
         VulkanOperationContext{
@@ -525,7 +495,12 @@ VkSwapchain::AcquireResult VkSwapchain::AquireNextImage(uint64 _timeout) {
     );
     if ((outcome.result == VK_SUCCESS || outcome.result == VK_SUBOPTIMAL_KHR) &&
         aquire_idx != UINT32_MAX) {
-        return {outcome, ready_sem, aquire_idx, image_idx};
+        return {
+            outcome,
+            _ready_semaphore,
+            aquire_idx,
+            image_idx
+        };
     }
     return {outcome, VK_NULL_HANDLE, UINT32_MAX, image_idx};
 }

@@ -6783,7 +6783,10 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                 };
             } else {
                 const VkSwapchain::AcquireResult acquire =
-                    sc->AquireNextImage(rhi_thread_enabled ? 0 : 50'000'000);
+                    sc->AquireNextImage(
+                        presentor->GetImageReadySemaphore(),
+                        rhi_thread_enabled ? 0 : 50'000'000
+                    );
                 final_outcome      = acquire.outcome;
                 recreate_swapchain =
                     acquire.outcome.status == EVulkanOperationStatus::Recreate;

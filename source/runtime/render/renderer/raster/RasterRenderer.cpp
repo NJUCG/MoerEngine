@@ -59,7 +59,8 @@ RasterRenderer::RasterRenderer(
     uint2                   initial_resolution,
     SharedPtr<EditorConfig> config
 ) :
-    Renderer(initial_resolution, config) {
+    Renderer(initial_resolution, config),
+    scene_render_extent_tracker(initial_resolution) {
     ScopedLogTimer startup_timer("[Startup][RasterRenderer] RasterRenderer::Constructor() total");
 
     const auto& engine_config = ConfigManager::GetInstance().GetConfig().engine;
@@ -84,7 +85,7 @@ RasterRenderer::RasterRenderer(
     );
     auto& raster_context = *raster_context_ptr;
 
-    raster_context.CreateFrameBuffers();
+    raster_context.CreateFrameBuffers(resolution, resolution);
     raster_context.UploadExternalFrameBuffers();
     raster_context.AllocateFrameBuffers();
 
@@ -422,6 +423,11 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
         if (hooks.on_capture_ui_composition) {
             frame_packet.ui_composition = hooks.on_capture_ui_composition();
         }
+        frame_packet.scene_render_extent = CaptureSceneRenderExtentRequest(
+            frame_packet.ui_composition.enabled,
+            frame_packet.ui_composition.scene_color_resolution,
+            frame_packet.window.resolution
+        );
     }
     {
         ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.ui_draw_packet_ms);
@@ -450,7 +456,14 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     assert(!IsRenderThreadInitialized() || IsCurrentlyRenderThread());
 
     auto& raster_context = *raster_context_ptr;
-    raster_context.SetResolution(frame_packet.window.resolution);
+    auto scene_extent_request = frame_packet.scene_render_extent;
+    // An OS-window resize already requires a presentation rebuild. Accept the
+    // matching SceneColor layout immediately so the two resource domains move
+    // together; dock-only drags retain the two-observation debounce.
+    if (frame_packet.window.state == EWindowState::SizeChanged && scene_extent_request.valid) {
+        scene_extent_request.immediate = true;
+    }
+    (void)scene_render_extent_tracker.Observe(scene_extent_request);
     raster_context.BeginSceneFrame(frame_packet.scene_updates);
     PrepareRenderFrame(frame_packet.window);
 
@@ -470,29 +483,72 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         // 窗口最小化后无法 present，此处主动让出线程，避免高频空转。
         std::this_thread::yield();
         skip_present = true;
+    } else {
+        assert(
+            frame_packet.window.state == EWindowState::Default ||
+            frame_packet.window.state == EWindowState::SizeChanged
+        );
+    }
 
-    } else if (frame_packet.window.state == EWindowState::SizeChanged) {
-        LOG_INFO("Size Changed.");
+    const uint2 active_scene_extent = scene_render_extent_tracker.GetActiveExtent();
+    const bool  recreate_scene_resources =
+        !EqualRenderExtent(raster_context.GetResolution(), active_scene_extent);
+    const bool recreate_output_resources =
+        !EqualRenderExtent(raster_context.GetOutputResolution(), frame_packet.window.resolution);
 
-        raster_context.FreeFrameBuffers(false);
-        raster_context.CreateFrameBuffers();
-        // 外部纹理与分辨率无关，窗口尺寸变化后仍然有效。
-        raster_context.AllocateFrameBuffers();
+    if (!skip_present && (recreate_scene_resources || recreate_output_resources)) {
+        raster_context.FreeFrameBuffers(
+            false, recreate_scene_resources, recreate_output_resources
+        );
+        raster_context.CreateFrameBuffers(
+            active_scene_extent,
+            frame_packet.window.resolution,
+            recreate_scene_resources,
+            recreate_output_resources
+        );
+        // External assets are resolution-independent and retain their bindless
+        // handles. Only the selected resource domains are allocated again.
+        raster_context.AllocateFrameBuffers(
+            recreate_scene_resources, recreate_output_resources
+        );
+
+        if (recreate_scene_resources) {
+            raster_context.csm_data.shadow_cache_config_snapshot_valid = false;
+            aa_pass->ResetHistory();
+            rtao_denoiser_pass->ResetHistory();
 
 #if WITH_CUDA
-        tensor_rt_pass->RecreateResource(
-            raster_context,
-            raster_context.textures.ao_output_ambient_only.tex,
-            raster_context.textures.depth_linear_sampler.tex->CastToTextureRef(),
-            // 下面这个color，需要传入lighting_output，而非ao_output，因为模型的输入需要不带ao的color
-            raster_context.textures.lighting_output.tex,
-            raster_context.textures.camera_motion_vector.tex,
-            raster_context.textures.ao_output_ambient_only_1.tex
-        );
+            cuda_pass->RecreateResource(raster_context.textures.ao_output.tex);
+            tensor_rt_pass->RecreateResource(
+                raster_context,
+                raster_context.textures.ao_output_ambient_only.tex,
+                raster_context.textures.depth_linear_sampler.tex->CastToTextureRef(),
+                raster_context.textures.lighting_output.tex,
+                raster_context.textures.camera_motion_vector.tex,
+                raster_context.textures.ao_output_ambient_only_1.tex
+            );
 #endif
+        }
 
-    } else {
-        assert(frame_packet.window.state == EWindowState::Default);
+        render_extent_generation++;
+        LOG_INFO(
+            "[RenderExtent][Raster] generation={} requested={}x{} request_valid={} "
+            "active_scene={}x{} presentation_output={}x{} swapchain={}x{} "
+            "scene_recreated={} output_recreated={} temporal_history_reset={}.",
+            render_extent_generation,
+            frame_packet.scene_render_extent.extent.x,
+            frame_packet.scene_render_extent.extent.y,
+            frame_packet.scene_render_extent.valid,
+            raster_context.GetResolution().x,
+            raster_context.GetResolution().y,
+            raster_context.GetOutputResolution().x,
+            raster_context.GetOutputResolution().y,
+            swapchain->size.x,
+            swapchain->size.y,
+            recreate_scene_resources,
+            recreate_output_resources,
+            recreate_scene_resources
+        );
     }
 
     TextureRef default_output_texture = raster_context.textures.output.tex;
@@ -536,21 +592,22 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
         const Camera& main_camera = scene_updates.main_camera;
         Camera        camera      = frame_packet.render_camera;
+        const uint8 smaa_t2x_phase =
+            raster_config.aa_mode == EAaMode::SMAA_T2X ?
+                aa_pass->NextSmaaT2xPhase() :
+                0u;
 
         {
             // 在不修改已捕获相机的前提下，交替使用两个 SMAA T2x 亚像素偏移。
-            static uint8_t s_smaa_frame_index = 0;
             if (raster_config.aa_mode == EAaMode::SMAA_T2X) {
-                s_smaa_frame_index ^= 1;
                 static const StaticArray<float2, 2> s_smaa_jitter_offsets = {
                     float2(0.25f, -0.25f),
                     float2(-0.25f, 0.25f)
                 };
-                const uint2 jitter_resolution = frame_packet.camera_viewport_resolution.x > 0 &&
-                                                        frame_packet.camera_viewport_resolution.y > 0 ?
-                                                    frame_packet.camera_viewport_resolution :
-                                                    frame_packet.window.resolution;
-                camera.SetJitterMatrix(s_smaa_jitter_offsets[s_smaa_frame_index], jitter_resolution);
+                camera.SetJitterMatrix(
+                    s_smaa_jitter_offsets[smaa_t2x_phase],
+                    raster_context.GetResolution()
+                );
             }
         }
 
@@ -992,8 +1049,13 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         .Write(graph_resources.aa_output);
                 },
                 [&]() {
-                    processing_image =
-                        aa_pass->Process(raster_context, raster_config, camera, processing_image);
+                    processing_image = aa_pass->Process(
+                        raster_context,
+                        raster_config,
+                        camera,
+                        processing_image,
+                        smaa_t2x_phase
+                    );
                 }
             );
             schedule(

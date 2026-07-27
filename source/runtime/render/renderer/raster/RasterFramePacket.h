@@ -3,6 +3,7 @@
 #include "RasterConfig.h"
 #include "renderer/EditorConfig.h"
 #include "renderer/Renderer.h"
+#include "renderer/SceneRenderExtent.h"
 #include "scene/Scene.h"
 #include "scene/camera/Camera.h"
 
@@ -21,6 +22,7 @@ struct RasterFramePacket {
     SceneViewGizmoConfig       scene_view_gizmos{};
     Camera                     render_camera{};
     uint2                      camera_viewport_resolution{};
+    SceneRenderExtentRequest   scene_render_extent{};
     UiCompositionFrameData     ui_composition{};
     UiDrawFramePacket          ui_draw_frame{};
     SceneUpdateBatch           scene_updates{};
