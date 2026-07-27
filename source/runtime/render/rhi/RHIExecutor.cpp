@@ -489,18 +489,22 @@ void RejectRecordingSignalMetadata(
 bool RecordingSourceIsTerminal(
     const RHIRecordingSource& _source
 ) noexcept {
-    const bool producer_terminal =
-        _source.completion &&
-        _source.completion.Status() !=
-            ERHIRecordingStatus::Pending;
-    const bool transaction_terminal =
-        !_source.commit ||
-        _source.commit.Status() != ERHIRecordingStatus::Pending;
-    const bool mutable_owner_released =
-        !_source.command_list ||
-        !_source.command_list->HasManagedRecordingLease();
-    return producer_terminal && transaction_terminal &&
-           mutable_owner_released;
+    if (!_source.completion ||
+        _source.completion.Status() ==
+            ERHIRecordingStatus::Pending) {
+        return false;
+    }
+    if (_source.commit &&
+        _source.commit.Status() ==
+            ERHIRecordingStatus::Pending) {
+        return false;
+    }
+    // The recording and optional commit gates are the synchronization handoff
+    // for the producer-owned, non-atomic lease counter. Never inspect it while
+    // either gate remains Pending: RenderGraph releases the lease immediately
+    // before signaling its transaction gate.
+    return !_source.command_list ||
+           !_source.command_list->HasManagedRecordingLease();
 }
 
 // Future cancellation is one transaction across the complete recording group.
