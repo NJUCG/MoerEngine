@@ -1,0 +1,176 @@
+#ifndef MOER_ENGINE_PROFILE_DUMP_H
+#define MOER_ENGINE_PROFILE_DUMP_H
+
+#include "API_Macro.h"
+#include "profile/ProfileDumpCodec.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <span>
+#include <string>
+
+namespace Moer::ProfileDump {
+
+enum class RuntimeState : std::uint8_t {
+    Stopped = 0,
+    Starting,
+    Running,
+    Draining,
+    Faulted,
+};
+
+enum class StartResult : std::uint8_t {
+    Started = 0,
+    AlreadyRunning,
+    Busy,
+    InvalidConfig,
+    OutputExists,
+    FileOpenFailed,
+    ThreadCreateFailed,
+    ResourceExhausted,
+};
+
+enum class FlushResult : std::uint8_t {
+    Completed = 0,
+    NothingPending,
+    Rejected,
+    Faulted,
+};
+
+enum class ShutdownResult : std::uint8_t {
+    Completed = 0,
+    AlreadyStopped,
+    Faulted,
+};
+
+enum class SchemaStatus : std::uint8_t {
+    Registered = 0,
+    AlreadyRegistered,
+    NotRunning,
+    InvalidSchema,
+    SchemaLimit,
+    SchemaBytesLimit,
+    HashCollision,
+};
+
+enum class EmitStatus : std::uint8_t {
+    Accepted = 0,
+    Disabled,
+    InvalidHandle,
+    ValueCountMismatch,
+    ValueTypeMismatch,
+    StringTooLarge,
+    RecordTooLarge,
+    QueueFull,
+    SinkFault,
+};
+
+enum class RuntimeFault : std::uint8_t {
+    None = 0,
+    OpenTempFile,
+    WritePacket,
+    FlushFile,
+    CloseFile,
+    RenameFinal,
+    WriterException,
+};
+
+struct RuntimeConfig {
+    std::filesystem::path output_path{};
+    CodecLimits           codec_limits{};
+
+    std::size_t max_schemas{1024};
+    std::size_t max_schema_bytes{1024 * 1024};
+    std::size_t max_record_bytes{64 * 1024};
+
+    std::size_t tls_publish_records{64};
+    std::size_t tls_publish_bytes{16 * 1024};
+    std::size_t tls_max_records{256};
+    std::size_t tls_max_bytes{256 * 1024};
+
+    std::size_t queue_max_chunks{128};
+    std::size_t queue_max_records{65536};
+    std::size_t queue_max_bytes{64 * 1024 * 1024};
+
+    bool replace_existing{false};
+};
+
+struct SchemaHandle {
+    std::uint64_t hash{0};
+    std::uint64_t generation{0};
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return hash != 0 && generation != 0;
+    }
+
+    friend bool operator==(const SchemaHandle&, const SchemaHandle&) = default;
+};
+
+struct SchemaRegistration {
+    SchemaStatus status{SchemaStatus::NotRunning};
+    SchemaHandle handle{};
+};
+
+struct RuntimeStats {
+    RuntimeState  state{RuntimeState::Stopped};
+    RuntimeFault  last_fault{RuntimeFault::None};
+    std::uint64_t generation{0};
+
+    std::uint64_t records_committed{0};
+    std::uint64_t records_enqueued{0};
+    std::uint64_t records_written{0};
+    std::uint64_t records_dropped_stopped{0};
+    std::uint64_t records_dropped_stale_generation{0};
+    std::uint64_t records_dropped_oversized{0};
+    std::uint64_t records_dropped_queue_full{0};
+    std::uint64_t records_dropped_after_fault{0};
+
+    std::uint64_t chunks_enqueued{0};
+    std::uint64_t chunks_written{0};
+    std::uint64_t chunks_dropped{0};
+
+    std::uint64_t resident_chunks{0};
+    std::uint64_t resident_records{0};
+    std::uint64_t resident_bytes{0};
+    std::uint64_t high_water_chunks{0};
+    std::uint64_t high_water_records{0};
+    std::uint64_t high_water_bytes{0};
+
+    std::uint64_t file_bytes_written{0};
+    std::uint64_t flush_completed{0};
+    std::uint64_t flush_failed{0};
+    std::uint64_t io_faults{0};
+};
+
+[[nodiscard]] CORE_API StartResult Start(const RuntimeConfig& _config) noexcept;
+
+[[nodiscard]] CORE_API SchemaRegistration RegisterSchema(const SchemaDescriptor& _schema) noexcept;
+
+[[nodiscard]] CORE_API EmitStatus
+Emit(SchemaHandle _schema, std::span<const FieldValueView> _values) noexcept;
+
+// Producer-thread operation. Publishes only the calling thread's TLS shard,
+// then waits until the already-published writer interval has been flushed to
+// the in-progress stream. This is not an fsync/power-loss durability
+// guarantee. Each producer must call this before it exits, or exit and let its
+// TLS destructor publish, before the owner begins final shutdown.
+[[nodiscard]] CORE_API FlushResult FlushThreadLocal() noexcept;
+
+// Process-owner synchronization fence for chunks that producers have already
+// published to the global queue. It cannot discover another live thread's
+// sub-threshold TLS shard and therefore is not a substitute for producer
+// FlushThreadLocal/exit.
+[[nodiscard]] CORE_API FlushResult FlushAll() noexcept;
+
+// Process-owner finalization. All producer threads must first FlushThreadLocal
+// or exit and be joined. The owner calls Shutdown last; it drains accepted
+// emitters, closes the writer, and publishes .inprogress as the final file.
+[[nodiscard]] CORE_API ShutdownResult Shutdown() noexcept;
+
+[[nodiscard]] CORE_API RuntimeState GetRuntimeState() noexcept;
+[[nodiscard]] CORE_API RuntimeStats GetRuntimeStats() noexcept;
+
+} // namespace Moer::ProfileDump
+
+#endif // MOER_ENGINE_PROFILE_DUMP_H
