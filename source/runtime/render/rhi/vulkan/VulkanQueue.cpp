@@ -4103,10 +4103,14 @@ static void MarkSubmissionAccepted(
            _barrier.array_cnt == _texture.GetNumArray();
 }
 
+using VulkanPresentationSourceSnapshotCache =
+    UnorderedMap<VulkanBindlessArray*, Array<TextureRef>>;
+
 template<typename TVisitor>
 static void VisitPresentationTextureArgument(
-    const TArg& _argument,
-    TVisitor&&  _visitor
+    const TArg&                            _argument,
+    VulkanPresentationSourceSnapshotCache& _snapshot_cache,
+    TVisitor&&                             _visitor
 ) {
     std::visit(
         [&](const auto& _resource) {
@@ -4127,8 +4131,15 @@ static void VisitPresentationTextureArgument(
                         static_cast<VulkanBindlessArray*>(
                             _resource.Get()
                         );
+                    auto [snapshot_it, inserted] =
+                        _snapshot_cache.try_emplace(bindless);
+                    if (inserted) {
+                        snapshot_it->second =
+                            bindless
+                                ->SnapshotPresentationSourceTextures();
+                    }
                     for (const TextureRef& texture :
-                         bindless->SnapshotPresentationSourceTextures()) {
+                         snapshot_it->second) {
                         _visitor(texture.Get());
                     }
                 }
@@ -4140,25 +4151,30 @@ static void VisitPresentationTextureArgument(
 
 template<typename TVisitor>
 static void VisitPresentationTextureArguments(
-    const ArrayArguments& _arguments,
-    TVisitor&&             _visitor
+    const ArrayArguments&                   _arguments,
+    VulkanPresentationSourceSnapshotCache&  _snapshot_cache,
+    TVisitor&&                              _visitor
 ) {
     for (const TArg& argument : _arguments.args) {
         VisitPresentationTextureArgument(
-            argument, std::forward<TVisitor>(_visitor)
+            argument,
+            _snapshot_cache,
+            std::forward<TVisitor>(_visitor)
         );
     }
 }
 
 template<typename TVisitor>
 static void VisitPresentationTextureArguments(
-    const TShaderArgArray& _arguments,
-    const TCachedArgArray& _cached_arguments,
-    TVisitor&&             _visitor
+    const TShaderArgArray&                  _arguments,
+    const TCachedArgArray&                  _cached_arguments,
+    VulkanPresentationSourceSnapshotCache& _snapshot_cache,
+    TVisitor&&                              _visitor
 ) {
     if (std::holds_alternative<ArrayArguments>(_arguments)) {
         VisitPresentationTextureArguments(
             std::get<ArrayArguments>(_arguments),
+            _snapshot_cache,
             std::forward<TVisitor>(_visitor)
         );
         return;
@@ -4169,6 +4185,7 @@ static void VisitPresentationTextureArguments(
         if (index < _cached_arguments.size()) {
             VisitPresentationTextureArguments(
                 _cached_arguments[index],
+                _snapshot_cache,
                 std::forward<TVisitor>(_visitor)
             );
         }
@@ -4186,6 +4203,7 @@ BuildPresentationSourceStateDelta(
 ) {
     Array<VulkanPresentationSourceStateDelta> delta{};
     delta.reserve(_submit.cmds.size());
+    VulkanPresentationSourceSnapshotCache bindless_snapshot_cache{};
 
     const auto record_texture =
         [&](Texture* _texture, bool _ready) {
@@ -4221,6 +4239,7 @@ BuildPresentationSourceStateDelta(
             VisitPresentationTextureArguments(
                 _arguments,
                 _submit.cached_args,
+                bindless_snapshot_cache,
                 [&](Texture* _texture) {
                     record_texture(_texture, false);
                 }
@@ -4346,6 +4365,7 @@ BuildPresentationSourceStateDelta(
                     *static_cast<const DispatchCmd*>(command);
                 VisitPresentationTextureArguments(
                     dispatch.Args(_submit.cached_args),
+                    bindless_snapshot_cache,
                     [&](Texture* _texture) {
                         record_texture(_texture, false);
                     }
@@ -4357,6 +4377,7 @@ BuildPresentationSourceStateDelta(
                     *static_cast<const TraceRayCmd*>(command);
                 VisitPresentationTextureArguments(
                     trace.Args(),
+                    bindless_snapshot_cache,
                     [&](Texture* _texture) {
                         record_texture(_texture, false);
                     }
@@ -4409,6 +4430,7 @@ BuildPresentationSourceStateDelta(
                     *static_cast<const SetDrawStateCmd*>(command);
                 VisitPresentationTextureArguments(
                     draw.Args(),
+                    bindless_snapshot_cache,
                     [&](Texture* _texture) {
                         record_texture(_texture, false);
                     }
@@ -4445,6 +4467,7 @@ BuildPresentationSourceStateDelta(
                         [&](const TArg& argument, ParamInfoFlags) {
                             VisitPresentationTextureArgument(
                                 argument,
+                                bindless_snapshot_cache,
                                 [&](Texture* _texture) {
                                     record_texture(_texture, false);
                                 }
