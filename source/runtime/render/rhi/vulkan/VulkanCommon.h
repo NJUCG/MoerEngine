@@ -21,4 +21,15 @@
 #define VK_NO_PROTOTYPES 1
 #endif
 
+#include <cstdint>
 #include <volk.h>
+
+namespace Moer::Render {
+
+enum class EVulkanTimestampQueryResetMode : std::uint8_t {
+    Unsupported,
+    CommandBuffer,
+    Host,
+};
+
+} // namespace Moer::Render

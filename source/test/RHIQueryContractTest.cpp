@@ -1039,13 +1039,43 @@ void InvalidSubmissionRejectionAndDestructionAreTerminal() {
     );
 
     CommandList copy(EQueueType::Copy);
-    QueryToken  copy_token = copy.BeginTimestampQuery("UnsupportedCopy");
+    QueryToken  copy_token = copy.BeginTimestampQuery("CopyTimestamp");
+    QueryFuture copy_future = copy_token.GetFuture();
     Expect(
-        copy_token.GetFuture().Get().status == QueryStatus::Error,
-        "Copy queue timestamp query did not fail closed"
+        copy_future.Status() == QueryStatus::Pending,
+        "Copy queue timestamp query was rejected before backend capability resolution"
     );
     copy.EndTimestampQuery(copy_token);
-    Expect(copy.IsEmpty(), "Copy queue capability failure emitted a QueryCmd");
+    CmdSubmit copy_submit = copy.Submit();
+    Expect(
+        copy_submit.cmds.size() == 2 &&
+            copy_submit.query_tokens.size() == 1 &&
+            QueryAt(copy_submit, 0).Op() == QueryCmd::EOp::BeginTimestamp &&
+            QueryAt(copy_submit, 1).Op() == QueryCmd::EOp::EndTimestamp &&
+            QueryAt(copy_submit, 0).IsTimestamp() &&
+            QueryAt(copy_submit, 1).IsTimestamp() &&
+            QueryAt(copy_submit, 0).GetQueueType() == EQueueType::Copy &&
+            QueryAt(copy_submit, 1).GetQueueType() == EQueueType::Copy &&
+            QueryAt(copy_submit, 0).Token().Id() == copy_token.Id() &&
+            QueryAt(copy_submit, 1).Token().Id() == copy_token.Id(),
+        "Copy timestamp query did not preserve its backend-resolved command pair"
+    );
+
+    std::atomic<int> copy_callback_count{0};
+    copy_future.Then([&](const QueryResult& _result) {
+        Expect(
+            _result.status == QueryStatus::Error,
+            "Copy timestamp rejection cleanup produced the wrong terminal state"
+        );
+        copy_callback_count.fetch_add(1, std::memory_order_relaxed);
+    });
+    copy_submit.RejectPendingQueries("Copy contract cleanup");
+    copy_submit.RejectPendingQueries("duplicate Copy contract cleanup");
+    Expect(
+        copy_future.Get().status == QueryStatus::Error &&
+            copy_callback_count.load(std::memory_order_relaxed) == 1,
+        "Copy timestamp rejection cleanup did not notify exactly once"
+    );
 }
 
 void SignalRejectionPrecedesQueryCallbacksAndPreservesReentrantState() {

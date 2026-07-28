@@ -232,12 +232,24 @@ public:
     inline QueueFamilyIndices GetQueueFamilyIndices() const {
         return m_device_info.queue_family_indices;
     }
-    inline uint32_t GetTimestampValidBits(EQueueType _queue_type) const {
-        const uint32_t family_index = GetQueueFamilyIndex(_queue_type);
-        return family_index < m_device_info.queue_family_props.size() ?
-                   m_device_info.queue_family_props[family_index].timestampValidBits :
-                   0u;
-    }
+    [[nodiscard]] RENDER_API uint32_t GetTimestampValidBits(
+        EQueueType _queue_type
+    ) const;
+    [[nodiscard]] RENDER_API VkQueueFlags GetQueueFamilyFlags(
+        EQueueType _queue_type
+    ) const;
+    [[nodiscard]] RENDER_API EVulkanTimestampQueryResetMode
+    GetTimestampQueryResetMode(
+        EQueueType _queue_type,
+        uint32_t   _effective_valid_bits
+    ) const;
+    [[nodiscard]] RENDER_API EVulkanTimestampQueryResetMode
+    GetTimestampQueryResetMode(
+        EQueueType _queue_type
+    ) const;
+    [[nodiscard]] RENDER_API bool SupportsTimestampQueries(
+        EQueueType _queue_type
+    ) const;
     inline VkDescriptorSetLayout GetEmptyDescriptorSetLayout() const {
         return empty_descriptor_set_layout;
     }

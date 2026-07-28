@@ -238,6 +238,20 @@ def timestamp_query_success_batch_line() -> str:
         "copy_payload=query_only copy_query=Error "
         "group_arrival=verified owner=Completion "
         "callbacks=exactly_once native_submit=2 replay=0\n"
+        "[TESTCASE][PASS] "
+        "name=TimestampQueryCopySupported "
+        "queue=Copy status=Ready valid_bits=64 reset_mode=host "
+        "copy=verified "
+        "gpu_completion=Ready "
+        "order=signal->completion->query->ordinary->success "
+        "owner=Completion callbacks=exactly_once "
+        "allocator_reuse=verified native_owner=Submission replay=0\n"
+        "[TESTCASE][PASS] "
+        "name=TimestampQueryCopyUnsupportedFallback "
+        "queue=Copy injected_valid_bits=0 query=Error copy=verified "
+        "signal=success gpu_completion=Ready native_submit=accepted "
+        "native_owner=Submission owner=Completion "
+        "callbacks=exactly_once runtime=recovered replay=0\n"
     )
 
 
@@ -1221,6 +1235,94 @@ class VulkanRunnerTests(unittest.TestCase):
                     "order=Query,SuccessInsideOrdinary",
                 ),
             )
+
+    def test_timestamp_query_success_batch_rejects_copy_isolation_failure(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete Copy unsupported fallback contract",
+        ):
+            runner.validate_log(
+                "timestamp-query-success-batch",
+                timestamp_query_success_batch_line().replace(
+                    "query=Error copy=verified signal=success",
+                    "query=Error copy=rejected signal=success",
+                ),
+            )
+
+    def test_timestamp_query_success_batch_rejects_copy_callback_owner(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete Copy unsupported fallback contract",
+        ):
+            runner.validate_log(
+                "timestamp-query-success-batch",
+                timestamp_query_success_batch_line().replace(
+                    "native_owner=Submission owner=Completion "
+                    "callbacks=exactly_once runtime=recovered",
+                    "native_owner=Submission owner=Translate "
+                    "callbacks=exactly_once runtime=recovered",
+                ),
+            )
+
+    def test_timestamp_query_success_batch_rejects_copy_allocator_reuse(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete Copy supported contract",
+        ):
+            runner.validate_log(
+                "timestamp-query-success-batch",
+                timestamp_query_success_batch_line().replace(
+                    "allocator_reuse=verified",
+                    "allocator_reuse=unverified",
+                ),
+            )
+
+    def test_timestamp_query_success_batch_rejects_copy_supported_reset_mode(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError,
+            "incomplete Copy supported contract",
+        ):
+            runner.validate_log(
+                "timestamp-query-success-batch",
+                timestamp_query_success_batch_line().replace(
+                    "valid_bits=64 reset_mode=host",
+                    "valid_bits=64 reset_mode=unsupported",
+                ),
+            )
+
+    def test_timestamp_query_success_batch_accepts_copy_reset_unsupported_skip(
+        self,
+    ) -> None:
+        supported_marker = (
+            "[TESTCASE][PASS] "
+            "name=TimestampQueryCopySupported "
+            "queue=Copy status=Ready valid_bits=64 reset_mode=host "
+            "copy=verified gpu_completion=Ready "
+            "order=signal->completion->query->ordinary->success "
+            "owner=Completion callbacks=exactly_once "
+            "allocator_reuse=verified native_owner=Submission replay=0"
+        )
+        unsupported_marker = (
+            "[TESTCASE][SKIP] "
+            "name=TimestampQueryCopySupported "
+            "reason=timestamp_unsupported valid_bits=64 "
+            "reset_mode=unsupported"
+        )
+        runner.validate_log(
+            "timestamp-query-success-batch",
+            timestamp_query_success_batch_line().replace(
+                supported_marker,
+                unsupported_marker,
+            ),
+        )
 
     def test_rt_export_rejection_contract_is_accepted(self) -> None:
         runner.validate_log(

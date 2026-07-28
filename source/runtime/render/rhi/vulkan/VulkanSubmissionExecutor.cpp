@@ -258,6 +258,11 @@ bool IsCopyCommand(Command::EType _type) {
         case Command::EType::CopyBackTexture:
         case Command::EType::Barrier:
         case Command::EType::QueueTransfer:
+        // Timestamp Query commands are legal ordering boundaries inside one
+        // Copy segment. Multi-segment sources still reject all queries above,
+        // and VkCopyQueue performs token/queue/LIFO preflight before native
+        // command-buffer recording.
+        case Command::EType::Query:
             return true;
         default:
             return false;

@@ -46,6 +46,8 @@ std::atomic<const VulkanQueueLocalSyncWaitObserver*>
     g_queue_local_sync_wait_observer{nullptr};
 std::atomic<const VulkanScriptedQueryPreparationOverrideForTesting*>
     g_scripted_query_preparation_override{nullptr};
+std::atomic<const VulkanScriptedTimestampValidBitsOverrideForTesting*>
+    g_scripted_timestamp_valid_bits_override{nullptr};
 std::atomic<const VulkanScriptedPresentOverrideForTesting*>
     g_scripted_present_override{nullptr};
 
@@ -344,6 +346,38 @@ bool RemoveVulkanScriptedQueryPreparationOverrideForTesting(
     const VulkanScriptedQueryPreparationOverrideForTesting* expected =
         _override;
     return g_scripted_query_preparation_override.compare_exchange_strong(
+        expected,
+        nullptr,
+        std::memory_order_acq_rel,
+        std::memory_order_acquire
+    );
+}
+
+bool TryInstallVulkanScriptedTimestampValidBitsOverrideForTesting(
+    const VulkanScriptedTimestampValidBitsOverrideForTesting* _override
+) noexcept {
+    if (_override == nullptr || _override->callback == nullptr) {
+        return false;
+    }
+    const VulkanScriptedTimestampValidBitsOverrideForTesting* expected =
+        nullptr;
+    return g_scripted_timestamp_valid_bits_override.compare_exchange_strong(
+        expected,
+        _override,
+        std::memory_order_release,
+        std::memory_order_relaxed
+    );
+}
+
+bool RemoveVulkanScriptedTimestampValidBitsOverrideForTesting(
+    const VulkanScriptedTimestampValidBitsOverrideForTesting* _override
+) noexcept {
+    if (_override == nullptr) {
+        return false;
+    }
+    const VulkanScriptedTimestampValidBitsOverrideForTesting* expected =
+        _override;
+    return g_scripted_timestamp_valid_bits_override.compare_exchange_strong(
         expected,
         nullptr,
         std::memory_order_acq_rel,
@@ -9887,6 +9921,134 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
             return recorded;
         }
 
+        auto reject_before_native_record =
+            [&](const VulkanOperationResult& _outcome,
+                std::string_view             _reason,
+                UniquePtr<VulkanAllocator>*  _abandoned_allocator = nullptr) {
+                try {
+                    LOG_ERROR(
+                        "[RHIExecutor][Vulkan] Copy rejected before native "
+                        "record: timeline={} reason={} VkResult={}",
+                        recorded->logical_timeline,
+                        _reason,
+                        static_cast<int32_t>(_outcome.result)
+                    );
+                } catch (...) {
+                }
+                if (_abandoned_allocator != nullptr &&
+                    *_abandoned_allocator) {
+                    recorded->allocators.abandoned.reserve(
+                        recorded->allocators.abandoned.size() + 1
+                    );
+                    recorded->allocators.abandoned.emplace_back(
+                        std::move(*_abandoned_allocator)
+                    );
+                }
+                device.RecordRejectedSubmit();
+                recorded->retirement_outcome = _outcome;
+                recorded->recoverable_rejection =
+                    _outcome.status ==
+                        EVulkanOperationStatus::Rejected &&
+                    !device.IsFaulted() &&
+                    _outcome.result != VK_ERROR_DEVICE_LOST;
+                recorded->native_submit_resolved = true;
+            };
+
+        size_t               timestamp_query_slot_count = 0;
+        Array<uint64>         open_timestamp_queries{};
+        UnorderedSet<uint64>  seen_timestamp_queries{};
+        for (const UniquePtr<Command>& command :
+             recorded->submit.cmds) {
+            if (!command ||
+                command->Type() != Command::EType::Query) {
+                continue;
+            }
+            const auto& query =
+                *static_cast<const QueryCmd*>(command.get());
+            if (!query.IsTimestamp() ||
+                query.GetQueueType() != EQueueType::Copy ||
+                !query.Token().Valid() ||
+                query.Token().Kind() != QueryKind::Timestamp) {
+                reject_before_native_record(
+                    VulkanOperationResult{
+                        EVulkanOperationStatus::Rejected,
+                        VK_ERROR_FEATURE_NOT_PRESENT
+                    },
+                    "Copy payload contains a non-Copy timestamp query"
+                );
+                return recorded;
+            }
+            const bool token_owned_by_submit = std::any_of(
+                recorded->submit.query_tokens.begin(),
+                recorded->submit.query_tokens.end(),
+                [&query](const QueryToken& _token) {
+                    return _token.Valid() &&
+                           _token.Id() == query.Token().Id() &&
+                           _token.Kind() == QueryKind::Timestamp;
+                }
+            );
+            if (!token_owned_by_submit) {
+                reject_before_native_record(
+                    VulkanOperationResult{
+                        EVulkanOperationStatus::Rejected,
+                        VK_ERROR_FEATURE_NOT_PRESENT
+                    },
+                    "Copy timestamp query token is not owned by the submit"
+                );
+                return recorded;
+            }
+            if (query.IsBegin()) {
+                if (!seen_timestamp_queries.emplace(
+                        query.Token().Id()
+                    ).second) {
+                    reject_before_native_record(
+                        VulkanOperationResult{
+                            EVulkanOperationStatus::Rejected,
+                            VK_ERROR_FEATURE_NOT_PRESENT
+                        },
+                        "Copy timestamp query token is recorded more than once"
+                    );
+                    return recorded;
+                }
+                open_timestamp_queries.push_back(query.Token().Id());
+            } else if (open_timestamp_queries.empty() ||
+                       open_timestamp_queries.back() !=
+                           query.Token().Id()) {
+                reject_before_native_record(
+                    VulkanOperationResult{
+                        EVulkanOperationStatus::Rejected,
+                        VK_ERROR_FEATURE_NOT_PRESENT
+                    },
+                    "Copy timestamp query boundaries are malformed"
+                );
+                return recorded;
+            } else {
+                open_timestamp_queries.pop_back();
+            }
+            ++timestamp_query_slot_count;
+        }
+        if (!open_timestamp_queries.empty()) {
+            reject_before_native_record(
+                VulkanOperationResult{
+                    EVulkanOperationStatus::Rejected,
+                    VK_ERROR_FEATURE_NOT_PRESENT
+                },
+                "Copy timestamp query boundaries are incomplete"
+            );
+            return recorded;
+        }
+        if (timestamp_query_slot_count >
+            std::numeric_limits<uint32>::max()) {
+            reject_before_native_record(
+                VulkanOperationResult{
+                    EVulkanOperationStatus::Rejected,
+                    VK_ERROR_OUT_OF_POOL_MEMORY
+                },
+                "Copy timestamp query slot count exceeds uint32 capacity"
+            );
+            return recorded;
+        }
+
         FunctionTable function_table{
             .is_resource_write       = &IsBufferTextureWrite,
             .is_resource_read        = &IsBufferTextureRead,
@@ -9899,8 +10061,94 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
             function_table, recorded->submit.cached_args
         };
 
+        uint32 effective_timestamp_valid_bits =
+            device.GetTimestampValidBits(EQueueType::Copy);
+        if (timestamp_query_slot_count != 0) {
+            const VulkanScriptedTimestampValidBitsOverrideForTesting*
+                scripted_override =
+                    g_scripted_timestamp_valid_bits_override.load(
+                        std::memory_order_acquire
+                    );
+            if (scripted_override != nullptr) {
+                effective_timestamp_valid_bits = std::min(
+                    effective_timestamp_valid_bits,
+                    scripted_override->callback(
+                        scripted_override->context,
+                        EQueueType::Copy,
+                        effective_timestamp_valid_bits
+                    )
+                );
+            }
+        }
+        const EVulkanTimestampQueryResetMode timestamp_reset_mode =
+            device.GetTimestampQueryResetMode(
+                EQueueType::Copy,
+                effective_timestamp_valid_bits
+            );
+        const bool suppress_timestamp_queries =
+            timestamp_query_slot_count != 0 &&
+            timestamp_reset_mode ==
+                EVulkanTimestampQueryResetMode::Unsupported;
+
         recorded->allocators.submitted.reserve(1);
-        recorded->allocators.submitted.emplace_back(GetAllocator());
+        recorded->allocators.abandoned.reserve(1);
+        auto allocator_ptr = GetAllocator();
+        try {
+            if (timestamp_query_slot_count != 0) {
+                allocator_ptr
+                    ->ConfigureTimestampCapabilityForRecording(
+                        effective_timestamp_valid_bits,
+                        timestamp_reset_mode
+                    );
+            }
+            allocator_ptr->EnsureQueryCapacity(
+                suppress_timestamp_queries ?
+                    0 :
+                    timestamp_query_slot_count,
+                0
+            );
+        } catch (const std::exception& error) {
+            try {
+                LOG_ERROR(
+                    "[RHIExecutor][Vulkan] Copy query pool preparation "
+                    "failed: {}",
+                    error.what()
+                );
+            } catch (...) {
+            }
+            const bool device_faulted = device.IsFaulted();
+            reject_before_native_record(
+                VulkanOperationResult{
+                    device_faulted ?
+                        EVulkanOperationStatus::Faulted :
+                        EVulkanOperationStatus::Rejected,
+                    device_faulted ?
+                        device.GetFirstFaultResult() :
+                        VK_ERROR_OUT_OF_POOL_MEMORY
+                },
+                "Copy query pool preparation failed",
+                &allocator_ptr
+            );
+            return recorded;
+        } catch (...) {
+            const bool device_faulted = device.IsFaulted();
+            reject_before_native_record(
+                VulkanOperationResult{
+                    device_faulted ?
+                        EVulkanOperationStatus::Faulted :
+                        EVulkanOperationStatus::Rejected,
+                    device_faulted ?
+                        device.GetFirstFaultResult() :
+                        VK_ERROR_OUT_OF_POOL_MEMORY
+                },
+                "Copy query pool preparation failed",
+                &allocator_ptr
+            );
+            return recorded;
+        }
+        recorded->allocators.submitted.emplace_back(
+            std::move(allocator_ptr)
+        );
         auto& vk_allocator =
             *recorded->allocators.submitted.front();
         auto& vk_cmd_list = vk_allocator.GetCmdList();
@@ -9923,6 +10171,10 @@ VkCopyQueue::TranslateForRuntime(CmdSubmit&& _evt) noexcept {
         );
 
         for (const auto& cmd : recorded->submit.cmds) {
+            if (suppress_timestamp_queries && cmd &&
+                cmd->Type() == Command::EType::Query) {
+                continue;
+            }
             reorderer.AcceptCmd(cmd.get());
         }
 

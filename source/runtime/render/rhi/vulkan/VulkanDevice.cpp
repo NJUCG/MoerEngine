@@ -823,6 +823,66 @@ uint VulkanDevice::GetQueueFamilyIndex(EQueueType _type) const {
     return VK_QUEUE_FAMILY_IGNORED;
 }
 
+uint32_t VulkanDevice::GetTimestampValidBits(
+    EQueueType _queue_type
+) const {
+    const uint32_t family_index = GetQueueFamilyIndex(_queue_type);
+    return family_index < m_device_info.queue_family_props.size() ?
+               m_device_info.queue_family_props[family_index].
+                   timestampValidBits :
+               0u;
+}
+
+VkQueueFlags VulkanDevice::GetQueueFamilyFlags(
+    EQueueType _queue_type
+) const {
+    const uint32_t family_index = GetQueueFamilyIndex(_queue_type);
+    return family_index < m_device_info.queue_family_props.size() ?
+               m_device_info.queue_family_props[family_index].queueFlags :
+               VkQueueFlags{0};
+}
+
+EVulkanTimestampQueryResetMode
+VulkanDevice::GetTimestampQueryResetMode(
+    EQueueType _queue_type,
+    uint32_t   _effective_valid_bits
+) const {
+    if (_effective_valid_bits == 0) {
+        return EVulkanTimestampQueryResetMode::Unsupported;
+    }
+    const VkQueueFlags queue_flags =
+        GetQueueFamilyFlags(_queue_type);
+    if ((queue_flags &
+         (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) != 0) {
+        return EVulkanTimestampQueryResetMode::CommandBuffer;
+    }
+    // VulkanDevice passes the queried Vulkan 1.2 feature chain unchanged to
+    // vkCreateDevice. A supported hostQueryReset value is therefore also the
+    // enabled value used by this native host-reset path.
+    if ((queue_flags & VK_QUEUE_TRANSFER_BIT) != 0 &&
+        m_device_info.core_features.core_1_2.hostQueryReset ==
+            VK_TRUE) {
+        return EVulkanTimestampQueryResetMode::Host;
+    }
+    return EVulkanTimestampQueryResetMode::Unsupported;
+}
+
+EVulkanTimestampQueryResetMode
+VulkanDevice::GetTimestampQueryResetMode(
+    EQueueType _queue_type
+) const {
+    return GetTimestampQueryResetMode(
+        _queue_type, GetTimestampValidBits(_queue_type)
+    );
+}
+
+bool VulkanDevice::SupportsTimestampQueries(
+    EQueueType _queue_type
+) const {
+    return GetTimestampQueryResetMode(_queue_type) !=
+           EVulkanTimestampQueryResetMode::Unsupported;
+}
+
 QueueFamilyIndices VulkanDevice::QueryQueueFamilyIndices(VkPhysicalDevice _gpu) const {
     QueueFamilyIndices indices;
 

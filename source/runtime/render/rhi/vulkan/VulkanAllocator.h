@@ -108,13 +108,16 @@ public:
     VulkanDevice& GetDevice() const {
         return device;
     }
-    // The owning allocator may grow an idle pool before command-buffer
-    // recording starts. Existing pools are never replaced while they are
-    // referenced by submitted work.
-    void EnsureCapacity(uint32 _required_count);
 
 private:
+    friend class VulkanAllocator;
+
     [[nodiscard]] VkQueryPool CreatePool(uint32 _query_count);
+    // The owning allocator may grow or host-reset an idle pool only before
+    // command-buffer recording starts. Keeping both operations private makes
+    // its single-owner synchronization contract explicit.
+    void EnsureCapacity(uint32 _required_count);
+    void ResetHost(uint32 _first_query, uint32 _query_count);
 
     VulkanDevice& device;
     VkQueryPool   query_pool{VK_NULL_HANDLE};
@@ -160,6 +163,14 @@ public:
     void EnsureQueryCapacity(
         size_t _timestamp_slot_count,
         size_t _occlusion_pair_count
+    );
+    // Queue-owned recording capability is refreshed before Copy recording so
+    // a recycled allocator can move between native and capability-degraded
+    // test paths without retaining stale state. This is legal only before any
+    // query boundary has been recorded for the current command buffer.
+    void ConfigureTimestampCapabilityForRecording(
+        uint32                         _valid_bits,
+        EVulkanTimestampQueryResetMode _reset_mode
     );
     void RecordQuery(VulkanCmdList& _cmd_list, const QueryCmd& _cmd);
     // GPU completion is a two-stage transaction. Prepare performs native
@@ -313,6 +324,9 @@ private:
     uint32                      next_timestamp_query{0};
     uint32                      next_occlusion_query{0};
     uint32                      timestamp_valid_bits{0};
+    EVulkanTimestampQueryResetMode timestamp_reset_mode{
+        EVulkanTimestampQueryResetMode::Unsupported
+    };
     double                      timestamp_period_ns{0.0};
     // Most allocators never record an explicit Query command. Lazily creating
     // this pool avoids adding a native driver object to every ordinary,
