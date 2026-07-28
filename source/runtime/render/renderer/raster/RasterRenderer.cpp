@@ -26,6 +26,7 @@
 #include "config/ConfigManager.h"
 #include "debug/RenderDocApi.h"
 #include "misc/ScopedLogTimer.h"
+#include "profile/ProfileScope.h"
 #include "renderer/common/UiFrameGraphPass.h"
 #include "rendergraph/RenderGraph.h"
 #include "rhi/RHIExecutor.h"
@@ -315,6 +316,7 @@ RasterFramePacket
 RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
     assert(!IsRenderThreadInitialized() || IsCurrentlyGameThread());
     assert(editor_config);
+    MOER_PROFILE_SCOPE("Raster.PrepareFrame");
 
     const bool           profile_logging = IsFramePrepareProfilingEnabled();
     const auto           prepare_started = BeginFramePrepareProfile();
@@ -455,6 +457,7 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
 
 RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) {
     assert(!IsRenderThreadInitialized() || IsCurrentlyRenderThread());
+    MOER_PROFILE_SCOPE("Raster.RenderFrame");
 
     auto& raster_context = *raster_context_ptr;
     auto scene_extent_request = frame_packet.scene_render_extent;

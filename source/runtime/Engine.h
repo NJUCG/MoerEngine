@@ -67,6 +67,8 @@ private:
 
     void Init3rdParty();
     void ShutDown3rdParty();
+    void InitializeProfileDump() noexcept;
+    void ShutdownProfileDump() noexcept;
 
     void TickRendererSwitchValidation(Scene& scene);
     void TickRasterLifecycleValidation(Scene& scene);
@@ -87,6 +89,7 @@ private:
     bool m_render_device_initialized   = false;
     bool m_shader_manager_initialized  = false;
     bool m_window_context_initialized  = false;
+    bool m_profile_dump_owned          = false;
 
     // Validation state is accessed only by Game Thread hooks. Render work is drained before reload.
     ERendererSwitchValidationStage m_renderer_switch_validation_stage =

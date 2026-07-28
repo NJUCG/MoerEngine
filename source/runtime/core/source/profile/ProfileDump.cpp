@@ -1570,6 +1570,10 @@ RuntimeState GetRuntimeState() noexcept {
     return GetHub().state.load(std::memory_order_acquire);
 }
 
+std::uint64_t GetRuntimeGeneration() noexcept {
+    return GetHub().generation.load(std::memory_order_acquire);
+}
+
 RuntimeStats GetRuntimeStats() noexcept {
     Hub&         hub = GetHub();
     RuntimeStats stats{};

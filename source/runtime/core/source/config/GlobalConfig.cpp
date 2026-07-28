@@ -54,6 +54,14 @@ GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_p
     loaded_config.engine.threading.max_frame_lag =
         toml_config.at_path("engine.threading.max_frame_lag").value_or(uint{0});
 
+    loaded_config.engine.profile_dump.enabled =
+        toml_config.at_path("engine.profile_dump.enabled").value_or(false);
+    loaded_config.engine.profile_dump.output_path =
+        toml_config.at_path("engine.profile_dump.output_path")
+            .value_or("./profile/MoerProfile.mpd");
+    loaded_config.engine.profile_dump.replace_existing =
+        toml_config.at_path("engine.profile_dump.replace_existing").value_or(true);
+
     loaded_config.engine.rhi.type = toml_config.at_path("engine.rhi.type").value_or("Not Specified");
     loaded_config.engine.rhi.max_frame_in_flight =
         toml_config.at_path("engine.rhi.max_frame_in_flight").value_or(3);

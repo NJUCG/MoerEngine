@@ -16,6 +16,18 @@ set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME ProfileDumpCoreContract COMMAND $<TARGET_FILE:${test_target}>)
 set_tests_properties(ProfileDumpCoreContract PROPERTIES TIMEOUT 60)
 
+set(test_target TestProfileScopeProducer)
+add_executable(${test_target} "ProfileScopeProducerTest.cpp")
+target_include_directories(${test_target}
+    PRIVATE "${moer_source_dir}/runtime/core/source/profile"
+)
+target_link_libraries(${test_target}
+    PRIVATE Moer::Core
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME ProfileScopeProducerContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(ProfileScopeProducerContract PROPERTIES TIMEOUT 60)
+
 set(test_target TestEngineOnly)
 add_executable(${test_target} "TestEngineOnly.cpp")
 target_link_libraries(${test_target}

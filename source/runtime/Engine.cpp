@@ -3,6 +3,9 @@
 // Runtime
 #include "config/ConfigManager.h"
 #include "misc/ScopedLogTimer.h"
+#include "profile/ProfileDump.h"
+#include "profile/ProfileDumpTemplates.h"
+#include "profile/ProfileScope.h"
 #include "remote/RemoteConfig.h"
 #include "remote/RemoteModule.h"
 #include "RenderThread.h"
@@ -25,6 +28,7 @@
 #include <cassert>
 #include <chrono>
 #include <charconv>
+#include <filesystem>
 #include <iterator>
 #include <mutex>
 #include <nfd.hpp>
@@ -536,6 +540,137 @@ Engine::~Engine() {
     ShutDown();
 }
 
+void Engine::InitializeProfileDump() noexcept {
+    const auto& profile_config =
+        ConfigManager::GetInstance().GetConfig().engine.profile_dump;
+    if (!profile_config.enabled) {
+        return;
+    }
+
+    try {
+        std::filesystem::path output_path(profile_config.output_path);
+        if (output_path.empty()) {
+            LOG_WARNING("[ProfileDump] Capture is enabled but output_path is empty; capture disabled.");
+            return;
+        }
+
+        if (output_path.is_relative()) {
+            output_path = ConfigManager::GetInstance().GetWorkspacePath() / output_path;
+        }
+
+        std::error_code path_error;
+        output_path = std::filesystem::weakly_canonical(output_path, path_error);
+        if (path_error) {
+            LOG_WARNING(
+                "[ProfileDump] Failed to resolve output path '{}': {}; capture disabled.",
+                profile_config.output_path,
+                path_error.message()
+            );
+            return;
+        }
+
+        ProfileDump::RuntimeConfig runtime_config;
+        runtime_config.output_path      = output_path;
+        runtime_config.replace_existing = profile_config.replace_existing;
+
+        const ProfileDump::StartResult start_result =
+            ProfileDump::Start(runtime_config);
+        if (start_result != ProfileDump::StartResult::Started) {
+            LOG_WARNING(
+                "[ProfileDump] Start failed (result={}); capture disabled.",
+                static_cast<unsigned int>(start_result)
+            );
+            return;
+        }
+
+        // Ownership is acquired only for a session started by this Engine.
+        // In particular, AlreadyRunning must never adopt an external session.
+        m_profile_dump_owned = true;
+
+        const ProfileDump::SchemaRegistration cpu_scope =
+            ProfileDump::RegisterSchema(ProfileDump::Templates::CpuScope());
+        if ((cpu_scope.status != ProfileDump::SchemaStatus::Registered &&
+             cpu_scope.status != ProfileDump::SchemaStatus::AlreadyRegistered) ||
+            !cpu_scope.handle) {
+            LOG_WARNING(
+                "[ProfileDump] CpuScope schema registration failed (status={}); "
+                "rolling back capture.",
+                static_cast<unsigned int>(cpu_scope.status)
+            );
+            ShutdownProfileDump();
+            return;
+        }
+
+        const ProfileDump::CpuScopeActivationResult activation_result =
+            ProfileDump::CpuScopeProducer::Activate(cpu_scope.handle);
+        if (activation_result != ProfileDump::CpuScopeActivationResult::Activated) {
+            LOG_WARNING(
+                "[ProfileDump] CpuScope producer activation failed (result={}); "
+                "rolling back capture.",
+                static_cast<unsigned int>(activation_result)
+            );
+            ShutdownProfileDump();
+            return;
+        }
+
+        LOG_INFO(
+            "[ProfileDump] Capture started: output='{}', replace_existing={}.",
+            output_path.generic_string(),
+            profile_config.replace_existing
+        );
+    } catch (const std::exception& error) {
+        ShutdownProfileDump();
+        try {
+            LOG_WARNING(
+                "[ProfileDump] Capture initialization failed: {}; capture disabled.",
+                error.what()
+            );
+        } catch (...) {
+        }
+    } catch (...) {
+        ShutdownProfileDump();
+        try {
+            LOG_WARNING("[ProfileDump] Capture initialization failed; capture disabled.");
+        } catch (...) {
+        }
+    }
+}
+
+void Engine::ShutdownProfileDump() noexcept {
+    if (!m_profile_dump_owned) {
+        return;
+    }
+    m_profile_dump_owned = false;
+
+    ProfileDump::CpuScopeProducer::Deactivate();
+    const ProfileDump::FlushResult flush_result =
+        ProfileDump::FlushThreadLocal();
+    const ProfileDump::ShutdownResult shutdown_result =
+        ProfileDump::Shutdown();
+
+    if (shutdown_result == ProfileDump::ShutdownResult::Faulted) {
+        const ProfileDump::RuntimeStats stats = ProfileDump::GetRuntimeStats();
+        try {
+            LOG_WARNING(
+                "[ProfileDump] Capture shutdown faulted (fault={}, flush_result={}).",
+                static_cast<unsigned int>(stats.last_fault),
+                static_cast<unsigned int>(flush_result)
+            );
+        } catch (...) {
+        }
+        return;
+    }
+
+    try {
+        LOG_INFO(
+            "[ProfileDump] Capture stopped (shutdown_result={}, flush_result={}).",
+            static_cast<unsigned int>(shutdown_result),
+            static_cast<unsigned int>(flush_result)
+        );
+    } catch (...) {
+    }
+}
+
 void Engine::Init(
     int                            argc,
     const char**                   argv,
@@ -621,6 +756,8 @@ void Engine::Init(
             "engine.render.default_render_method = \"Raster\""
         );
     }
+
+    InitializeProfileDump();
 
     // Init TaskSystem
     report_startup("Starting worker services", "Creating task-graph worker threads");
@@ -1205,6 +1342,7 @@ void Engine::ShutDown() noexcept {
         m_task_system_initialized = false;
         cleanup([]() { TaskSystem::ShutDown(); });
     }
+    ShutdownProfileDump();
     m_editor_config.reset();
 }
 
