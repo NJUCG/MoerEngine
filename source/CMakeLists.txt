@@ -1,6 +1,7 @@
 add_subdirectory(profile)
 add_subdirectory(cuda)
 add_subdirectory(runtime)
+add_subdirectory(tool/profile_consumer)
 add_subdirectory(editor)
 
 if(${moer_build_test})
