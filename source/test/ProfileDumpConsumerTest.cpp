@@ -276,6 +276,81 @@ Loaded LoadChunks(
     return loaded;
 }
 
+constexpr std::uint64_t TopologyLinearWorkOracle(std::size_t _count) noexcept {
+    return static_cast<std::uint64_t>(_count);
+}
+
+constexpr std::uint64_t TopologySortWorkOracle(std::size_t _count) noexcept {
+    const std::uint64_t count = static_cast<std::uint64_t>(_count);
+    std::uint64_t       work  = 0;
+    std::size_t         width = 1;
+    while (width < _count) {
+        work += count;
+        if (width > std::numeric_limits<std::size_t>::max() / 2) {
+            break;
+        }
+        width *= 2;
+    }
+    return work;
+}
+
+constexpr std::uint64_t TopologyBinarySearchWorkOracle(std::size_t _count) noexcept {
+    std::uint64_t work = 0;
+    while (_count != 0) {
+        ++work;
+        _count /= 2;
+    }
+    return work;
+}
+
+constexpr std::uint64_t TopologyHeapWorkOracle(std::size_t _size) noexcept {
+    std::uint64_t work = 1;
+    while (_size > 1) {
+        ++work;
+        _size /= 2;
+    }
+    return work;
+}
+
+std::uint64_t MinimumPassingTopologyBudget(std::span<const std::uint8_t> _bytes) {
+    const auto completes_with_budget = [&](std::uint64_t _budget) {
+        SessionLoadOptions options{};
+        options.limits.max_topology_work_items = _budget;
+        const Loaded loaded                    = LoadChunks(_bytes, {}, options);
+        if (loaded.result.status == SessionLoadStatus::Complete) {
+            return true;
+        }
+        Expect(
+            loaded.result.status == SessionLoadStatus::LimitExceeded &&
+                loaded.result.limit_kind == SessionLimitKind::TopologyWorkItems &&
+                !loaded.result.HasUsableSession() && !loaded.session.Valid(),
+            "topology budget search observed a non-budget failure or a partially published session"
+        );
+        return false;
+    };
+
+    std::uint64_t lower = 0;
+    std::uint64_t upper = 1;
+    while (!completes_with_budget(upper)) {
+        Expect(
+            upper <= std::numeric_limits<std::uint64_t>::max() / 2,
+            "topology budget search exceeded the uint64 range"
+        );
+        lower = upper + 1;
+        upper *= 2;
+    }
+
+    while (lower < upper) {
+        const std::uint64_t middle = lower + (upper - lower) / 2;
+        if (completes_with_budget(middle)) {
+            upper = middle;
+        } else {
+            lower = middle + 1;
+        }
+    }
+    return lower;
+}
+
 SessionBuilder MakeGoldenSession() {
     SessionBuilder         builder;
     const SchemaDescriptor unknown = UnknownSchema();
@@ -3865,20 +3940,49 @@ void TestSemanticTopologyAndLossRecovery() {
         constexpr std::uint64_t candidate_count = 32;
         constexpr std::uint64_t child_count     = 32;
 
-        SessionBuilder builder;
-        builder.Begin();
-        builder.Schema(Templates::CpuScope());
-        for (std::uint64_t index = 0; index < candidate_count; ++index) {
-            AddCpuScope(builder, index + 1, 1, "ending-candidate", 10, 10, 1);
-        }
-        for (std::uint64_t index = 0; index < child_count; ++index) {
-            AddCpuScope(builder, candidate_count + index + 1, 1, "unmatched-boundary-child", 10, 10, 2);
-        }
-        builder.End();
+        const auto make_fixture = [](std::uint32_t _child_depth) {
+            SessionBuilder builder;
+            builder.Begin();
+            builder.Schema(Templates::CpuScope());
+            for (std::uint64_t index = 0; index < candidate_count; ++index) {
+                AddCpuScope(builder, index + 1, 1, "ending-candidate", 10, 10, 1);
+            }
+            for (std::uint64_t index = 0; index < child_count; ++index) {
+                AddCpuScope(
+                    builder, candidate_count + index + 1, 1, "unmatched-boundary-child", 10, 10, _child_depth
+                );
+            }
+            builder.End();
+            return builder;
+        };
 
+        const SessionBuilder    adversarial        = make_fixture(2);
+        const SessionBuilder    control            = make_fixture(1);
+        const std::uint64_t     adversarial_budget = MinimumPassingTopologyBudget(adversarial.bytes);
+        const std::uint64_t     control_budget     = MinimumPassingTopologyBudget(control.bytes);
+        constexpr std::uint64_t scope_count        = candidate_count + child_count;
+        const std::uint64_t     expected_index_work =
+            TopologySortWorkOracle(scope_count) * 2 + TopologyLinearWorkOracle(scope_count) * 4;
+        const std::uint64_t candidate_map_work = TopologyHeapWorkOracle(1) +
+                                                 (candidate_count - 2) * TopologyHeapWorkOracle(2) +
+                                                 (candidate_count - 1) * TopologyBinarySearchWorkOracle(1);
+        const std::uint64_t control_child_map_work =
+            child_count * (TopologyHeapWorkOracle(2) + TopologyBinarySearchWorkOracle(1));
+        const std::uint64_t expected_control_budget =
+            expected_index_work + candidate_map_work + control_child_map_work;
+        Expect(
+            control_budget == expected_control_budget,
+            "CPU boundary-parent control disagreed with the independent indexing/container oracle"
+        );
+        const std::uint64_t ordered_map_delta =
+            (child_count - 1) * (TopologyBinarySearchWorkOracle(2) - TopologyBinarySearchWorkOracle(1));
+        Expect(
+            adversarial_budget == control_budget + candidate_count * child_count + ordered_map_delta,
+            "CPU boundary-parent candidate/map work was under- or over-charged"
+        );
         SessionLoadOptions exact{};
-        exact.limits.max_topology_work_items = candidate_count * child_count;
-        const Loaded exact_loaded            = LoadChunks(builder.bytes, {}, exact);
+        exact.limits.max_topology_work_items = adversarial_budget;
+        const Loaded exact_loaded            = LoadChunks(adversarial.bytes, {}, exact);
         Expect(
             exact_loaded.result.status == SessionLoadStatus::Complete &&
                 exact_loaded.session.Summary().orphan_cpu_scope_count == candidate_count + child_count,
@@ -3887,11 +3991,11 @@ void TestSemanticTopologyAndLossRecovery() {
 
         SessionLoadOptions short_by_one = exact;
         --short_by_one.limits.max_topology_work_items;
-        const Loaded limited = LoadChunks(builder.bytes, {}, short_by_one);
+        const Loaded limited = LoadChunks(adversarial.bytes, {}, short_by_one);
         Expect(
             limited.result.status == SessionLoadStatus::LimitExceeded &&
                 limited.result.limit_kind == SessionLimitKind::TopologyWorkItems &&
-                !limited.result.HasUsableSession(),
+                !limited.result.HasUsableSession() && !limited.session.Valid(),
             "CPU boundary-parent search escaped the session topology work budget"
         );
     }
@@ -4248,81 +4352,192 @@ void TestLimitsAndStickyFailure() {
         );
     }
     {
-        SessionBuilder builder;
+        constexpr std::uint64_t scope_count = 5;
+        SessionBuilder          builder;
         builder.Begin();
-        builder.Schema(Templates::GpuFrame());
-        builder.Schema(Templates::GpuScope());
-        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 4, 0, 0, "");
-        AddGpuScope(
-            builder,
-            2,
-            1,
-            2,
-            101,
-            0,
-            1,
-            0,
-            0,
-            0,
-            "topology-source-zero-child",
-            ProfileGpuScopeStatus::Ready,
-            10,
-            20,
-            64,
-            1.0,
-            10.0,
-            10.0,
-            1,
-            ""
-        );
-        AddGpuScope(
-            builder,
-            3,
-            1,
-            4,
-            201,
-            1,
-            1,
-            0,
-            0,
-            0,
-            "topology-source-one-child",
-            ProfileGpuScopeStatus::Ready,
-            30,
-            40,
-            64,
-            1.0,
-            10.0,
-            10.0,
-            1,
-            ""
-        );
-        builder.Loss({
-            .first_sequence = 4,
-            .last_sequence  = 5,
-            .record_count   = 2,
-            .value_bytes    = 16,
-            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
-        });
+        builder.Schema(Templates::CpuScope());
+        for (std::uint64_t index = 0; index < scope_count; ++index) {
+            AddCpuScope(builder, index + 1, 1, "oracle-root", index * 20, index * 20 + 10, 0);
+        }
         builder.End();
 
-        // One Loss scan + two extrema materializations + their sort/scan and
-        // record-collision searches consume 13 items before the two GPU source
-        // topology edges. The boundary verifies that all phases share one
-        // cumulative budget.
-        constexpr std::uint64_t loss_allocation_work = 13;
-        constexpr std::uint64_t gpu_topology_work    = 2;
-        SessionLoadOptions      options{};
-        options.limits.max_topology_work_items = loss_allocation_work + gpu_topology_work;
+        const std::uint64_t expected_budget =
+            TopologySortWorkOracle(scope_count) * 2 + TopologyLinearWorkOracle(scope_count) * 4;
         Expect(
-            LoadChunks(builder.bytes, {}, options).result.status == SessionLoadStatus::Complete,
+            MinimumPassingTopologyBudget(builder.bytes) == expected_budget,
+            "isolated CPU indexing disagreed with the independent sort/linear work oracle"
+        );
+    }
+    {
+        const auto add_loss = [](SessionBuilder& _builder) {
+            _builder.Loss({
+                .first_sequence = 4,
+                .last_sequence  = 5,
+                .record_count   = 2,
+                .value_bytes    = 16,
+                .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            });
+        };
+        const auto make_gpu_fixture = [&](bool _with_loss, bool _two_sources = true) {
+            SessionBuilder builder;
+            builder.Begin();
+            builder.Schema(Templates::GpuFrame());
+            builder.Schema(Templates::GpuScope());
+            AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 2, 0, 0, "");
+            AddGpuScope(
+                builder,
+                2,
+                1,
+                2,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                "topology-source-zero-root",
+                ProfileGpuScopeStatus::Ready,
+                10,
+                20,
+                64,
+                1.0,
+                10.0,
+                10.0,
+                0,
+                ""
+            );
+            AddGpuScope(
+                builder,
+                3,
+                1,
+                4,
+                0,
+                _two_sources ? 1 : 0,
+                _two_sources ? 0 : 1,
+                0,
+                0,
+                0,
+                "topology-source-one-root",
+                ProfileGpuScopeStatus::Ready,
+                30,
+                40,
+                64,
+                1.0,
+                10.0,
+                10.0,
+                0,
+                ""
+            );
+            if (_with_loss) {
+                add_loss(builder);
+            }
+            builder.End();
+            return builder;
+        };
+        const auto make_no_gpu_fixture = [&](bool _with_loss) {
+            SessionBuilder         builder;
+            const SchemaDescriptor unknown = UnknownSchema();
+            builder.Begin();
+            builder.Schema(unknown);
+            for (std::uint64_t sequence = 1; sequence <= 3; ++sequence) {
+                const std::array<FieldValueView, 2> values{
+                    sequence,
+                    std::string_view("topology-budget-control"),
+                };
+                builder.Record(unknown, sequence, values);
+            }
+            if (_with_loss) {
+                add_loss(builder);
+            }
+            builder.End();
+            return builder;
+        };
+
+        const SessionBuilder combined           = make_gpu_fixture(true);
+        const SessionBuilder gpu_only           = make_gpu_fixture(false);
+        const SessionBuilder one_source_gpu     = make_gpu_fixture(false, false);
+        const SessionBuilder no_gpu             = make_no_gpu_fixture(false);
+        const SessionBuilder no_gpu_with_loss   = make_no_gpu_fixture(true);
+        const std::uint64_t  combined_budget    = MinimumPassingTopologyBudget(combined.bytes);
+        const std::uint64_t  gpu_only_budget    = MinimumPassingTopologyBudget(gpu_only.bytes);
+        const std::uint64_t  one_source_budget  = MinimumPassingTopologyBudget(one_source_gpu.bytes);
+        const std::uint64_t  no_gpu_budget      = MinimumPassingTopologyBudget(no_gpu.bytes);
+        const std::uint64_t  no_gpu_loss_budget = MinimumPassingTopologyBudget(no_gpu_with_loss.bytes);
+        Expect(
+            no_gpu_loss_budget >= no_gpu_budget,
+            "Loss topology work unexpectedly reduced the minimum passing budget"
+        );
+        const std::uint64_t     loss_delta               = no_gpu_loss_budget - no_gpu_budget;
+        constexpr std::uint64_t mandatory_sequence_count = 2;
+        constexpr std::uint64_t emitted_record_count     = 3;
+        const std::uint64_t     expected_loss_delta =
+            TopologyLinearWorkOracle(1) + TopologyLinearWorkOracle(mandatory_sequence_count) +
+            TopologySortWorkOracle(mandatory_sequence_count) +
+            TopologyLinearWorkOracle(mandatory_sequence_count) * 2 +
+            TopologyBinarySearchWorkOracle(emitted_record_count) * mandatory_sequence_count;
+        Expect(loss_delta == expected_loss_delta, "Loss topology work disagreed with the independent oracle");
+
+        constexpr std::uint64_t frame_count       = 1;
+        constexpr std::uint64_t gpu_scope_count   = 2;
+        constexpr std::uint64_t domain_count      = 1;
+        constexpr std::uint64_t depth_tree_leaves = 2;
+        constexpr std::uint64_t two_source_count  = 2;
+        constexpr std::uint64_t one_source_count  = 1;
+        const std::uint64_t     record_index_work =
+            TopologySortWorkOracle(emitted_record_count) + TopologyLinearWorkOracle(emitted_record_count);
+        const std::uint64_t domain_track_work =
+            TopologySortWorkOracle(frame_count) + TopologyLinearWorkOracle(frame_count) +
+            TopologyLinearWorkOracle(gpu_scope_count) + TopologySortWorkOracle(gpu_scope_count) +
+            TopologyLinearWorkOracle(gpu_scope_count) + TopologyLinearWorkOracle(domain_count) +
+            TopologyLinearWorkOracle(gpu_scope_count) +
+            gpu_scope_count *
+                (TopologyBinarySearchWorkOracle(frame_count) + TopologyBinarySearchWorkOracle(domain_count)) +
+            TopologySortWorkOracle(gpu_scope_count) + TopologyLinearWorkOracle(gpu_scope_count) * 2;
+        const auto gpu_topology_work = [&](std::uint64_t _source_count) {
+            return TopologyLinearWorkOracle(frame_count) * 2 + TopologyLinearWorkOracle(gpu_scope_count) +
+                   TopologySortWorkOracle(gpu_scope_count) + TopologyLinearWorkOracle(gpu_scope_count) +
+                   TopologyLinearWorkOracle(gpu_scope_count) * 10 +
+                   TopologyLinearWorkOracle(gpu_scope_count) * 2 +
+                   gpu_scope_count * TopologyBinarySearchWorkOracle(frame_count) +
+                   TopologyLinearWorkOracle(gpu_scope_count) + TopologyLinearWorkOracle(gpu_scope_count) * 4 +
+                   TopologyLinearWorkOracle(gpu_scope_count) * 3 +
+                   TopologyLinearWorkOracle(depth_tree_leaves * 2) +
+                   TopologyLinearWorkOracle(gpu_scope_count) + TopologyLinearWorkOracle(depth_tree_leaves) +
+                   TopologyLinearWorkOracle(gpu_scope_count) * 3 + TopologyLinearWorkOracle(_source_count) +
+                   TopologySortWorkOracle(_source_count) + TopologyLinearWorkOracle(_source_count) +
+                   TopologyLinearWorkOracle(frame_count) + TopologyBinarySearchWorkOracle(frame_count) +
+                   TopologyLinearWorkOracle(gpu_scope_count) * 2 + TopologyLinearWorkOracle(frame_count);
+        };
+        const std::uint64_t expected_two_source_budget =
+            record_index_work + domain_track_work + gpu_topology_work(two_source_count);
+        const std::uint64_t expected_one_source_budget =
+            record_index_work + domain_track_work + gpu_topology_work(one_source_count);
+        Expect(
+            gpu_only_budget == expected_two_source_budget && expected_two_source_budget == 106,
+            "two-source GPU base indexing disagreed with the independent work oracle"
+        );
+        Expect(
+            one_source_budget == expected_one_source_budget && expected_one_source_budget == 102 &&
+                gpu_only_budget - one_source_budget == 4,
+            "GPU source-evidence indexing was not accumulated independently"
+        );
+        Expect(
+            combined_budget == gpu_only_budget + loss_delta,
+            "Loss and GPU topology work were not additive across the unified budget"
+        );
+
+        SessionLoadOptions options{};
+        options.limits.max_topology_work_items = combined_budget;
+        Expect(
+            LoadChunks(combined.bytes, {}, options).result.status == SessionLoadStatus::Complete,
             "exact global GPU topology work-item limit was rejected"
         );
         --options.limits.max_topology_work_items;
-        const Loaded loaded = LoadChunks(builder.bytes, {}, options);
+        const Loaded loaded = LoadChunks(combined.bytes, {}, options);
         Expect(
             loaded.result.status == SessionLoadStatus::LimitExceeded &&
-                loaded.result.limit_kind == SessionLimitKind::TopologyWorkItems,
+                loaded.result.limit_kind == SessionLimitKind::TopologyWorkItems &&
+                !loaded.result.HasUsableSession() && !loaded.session.Valid(),
             "GPU topology work-item limit was not accumulated across recording sources"
         );
     }
@@ -4332,17 +4547,60 @@ void TestLimitsAndStickyFailure() {
         expect_complete(options, "exact input byte limit was rejected");
     }
     {
-        SessionBuilder no_loss;
-        no_loss.Begin();
-        no_loss.Schema(Templates::CpuScope());
-        AddCpuScope(no_loss, 1, 1, "zero-budget-root", 0, 10, 0);
-        no_loss.End();
-
         SessionLoadOptions zero_budget{};
         zero_budget.limits.max_topology_work_items = 0;
+
+        SessionBuilder empty;
+        empty.Begin();
+        empty.End();
         Expect(
-            LoadChunks(no_loss.bytes, {}, zero_budget).result.status == SessionLoadStatus::Complete,
-            "loss-free session consumed Loss-allocation topology budget"
+            LoadChunks(empty.bytes, {}, zero_budget).result.status == SessionLoadStatus::Complete,
+            "empty session consumed topology work budget"
+        );
+
+        SessionBuilder with_cpu;
+        with_cpu.Begin();
+        with_cpu.Schema(Templates::CpuScope());
+        AddCpuScope(with_cpu, 1, 1, "zero-budget-root", 0, 10, 0);
+        with_cpu.End();
+        const Loaded cpu_limited = LoadChunks(with_cpu.bytes, {}, zero_budget);
+        Expect(
+            cpu_limited.result.status == SessionLoadStatus::LimitExceeded &&
+                cpu_limited.result.limit_kind == SessionLimitKind::TopologyWorkItems &&
+                !cpu_limited.result.HasUsableSession() && !cpu_limited.session.Valid(),
+            "non-empty CPU indexing escaped the zero topology budget or published partial state"
+        );
+
+        SessionBuilder         record_only;
+        const SchemaDescriptor unknown = UnknownSchema();
+        record_only.Begin();
+        record_only.Schema(unknown);
+        const std::array<FieldValueView, 2> unknown_values{
+            std::uint64_t{1},
+            std::string_view("gpu-index-control"),
+        };
+        record_only.Record(unknown, 1, unknown_values);
+        record_only.End();
+
+        SessionBuilder frame_only;
+        frame_only.Begin();
+        frame_only.Schema(Templates::GpuFrame());
+        AddGpuFrame(frame_only, 1, 1, ProfileGpuFrameStatus::Complete, true, 0, 0, 0, "");
+        frame_only.End();
+
+        SessionLoadOptions record_budget{};
+        record_budget.limits.max_topology_work_items = 1;
+        Expect(
+            LoadChunks(record_only.bytes, {}, record_budget).result.status == SessionLoadStatus::Complete,
+            "single record did not fit its independent record-index budget"
+        );
+        const Loaded gpu_limited = LoadChunks(frame_only.bytes, {}, record_budget);
+        Expect(
+            gpu_limited.result.status == SessionLoadStatus::LimitExceeded &&
+                gpu_limited.result.limit_kind == SessionLimitKind::TopologyWorkItems &&
+                !gpu_limited.result.HasUsableSession() && !gpu_limited.session.Valid() &&
+                MinimumPassingTopologyBudget(frame_only.bytes) == 9,
+            "GPU frame indexing escaped its GPU-specific topology budget"
         );
 
         SessionBuilder with_loss;
@@ -4359,8 +4617,8 @@ void TestLimitsAndStickyFailure() {
         Expect(
             limited.result.status == SessionLoadStatus::LimitExceeded &&
                 limited.result.limit_kind == SessionLimitKind::TopologyWorkItems &&
-                !limited.result.HasUsableSession(),
-            "Loss sequence allocation escaped the session topology work budget"
+                !limited.result.HasUsableSession() && !limited.session.Valid(),
+            "Loss sequence allocation escaped the zero topology budget or published partial state"
         );
     }
     {

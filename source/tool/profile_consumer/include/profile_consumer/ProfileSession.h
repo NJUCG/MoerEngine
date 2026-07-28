@@ -173,7 +173,12 @@ struct SessionLimits {
     std::uint32_t max_gpu_tracks{1024};
     std::uint32_t max_gpu_domains{256};
     std::uint32_t max_scope_depth{1024};
-    std::uint64_t max_topology_work_items{1'000'000};
+    // Covers ordinary O(N log N) indexing as well as exceptional topology
+    // reconstruction. This default accommodates practical offline captures,
+    // but the shared work budget may reject adversarial inputs before the
+    // independent record/scope count limits. Callers handling untrusted
+    // captures should lower it to their latency budget.
+    std::uint64_t max_topology_work_items{1'000'000'000};
 
     std::uint32_t max_unique_strings{1'000'000};
     std::uint64_t max_string_bytes{256ull * 1024 * 1024};

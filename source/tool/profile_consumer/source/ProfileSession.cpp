@@ -468,6 +468,43 @@ struct ProfileSessionReader::Impl {
         return true;
     }
 
+    [[nodiscard]] bool ChargeTopologyLinearWork(std::size_t _count) noexcept {
+        return ChargeTopologyWork(static_cast<std::uint64_t>(_count));
+    }
+
+    [[nodiscard]] bool ChargeTopologySortWork(std::size_t _count) noexcept {
+        const std::uint64_t count = static_cast<std::uint64_t>(_count);
+        std::size_t         width = 1;
+        while (width < _count) {
+            if (!ChargeTopologyWork(count)) {
+                return false;
+            }
+            if (width > std::numeric_limits<std::size_t>::max() / 2) {
+                break;
+            }
+            width *= 2;
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool ChargeTopologyBinarySearchWork(std::size_t _count) noexcept {
+        std::uint64_t work = 0;
+        while (_count != 0) {
+            ++work;
+            _count /= 2;
+        }
+        return ChargeTopologyWork(work);
+    }
+
+    [[nodiscard]] bool ChargeTopologyHeapWork(std::size_t _size) noexcept {
+        std::uint64_t work = 1;
+        while (_size > 1) {
+            ++work;
+            _size /= 2;
+        }
+        return ChargeTopologyWork(work);
+    }
+
     [[nodiscard]] bool InternString(std::string_view _value, SessionStringId& _id) {
         const auto existing = interned_strings.find(_value);
         if (existing != interned_strings.end()) {
@@ -1443,6 +1480,9 @@ struct ProfileSessionReader::Impl {
         _required_cpu_drops = 0;
         _sequence_demands.clear();
         auto& scopes = session.impl_->cpu_scopes;
+        if (!ChargeTopologySortWork(scopes.size())) {
+            return false;
+        }
         std::sort(
             scopes.begin(),
             scopes.end(),
@@ -1462,6 +1502,13 @@ struct ProfileSessionReader::Impl {
                 return _left.sequence < _right.sequence;
             }
         );
+        // One pass partitions tracks, one visits every scope, and active-stack
+        // retirement visits each scope at most once. Boundary candidate scans
+        // are charged separately where they occur.
+        if (!ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(scopes.size()) ||
+            !ChargeTopologyLinearWork(scopes.size())) {
+            return false;
+        }
 
         struct CpuGapEvent {
             std::uint64_t ancestor_index{0};
@@ -1505,6 +1552,9 @@ struct ProfileSessionReader::Impl {
                 scope.track_index     = track_index;
 
                 if (!has_boundary_time || boundary_time != scope.begin_ns) {
+                    if (!ChargeTopologyLinearWork(ending_parents_by_depth.size())) {
+                        return false;
+                    }
                     ending_parents_by_depth.clear();
                     boundary_time     = scope.begin_ns;
                     has_boundary_time = true;
@@ -1527,6 +1577,9 @@ struct ProfileSessionReader::Impl {
                         return false;
                     }
                     if (candidate.end_ns == scope.begin_ns) {
+                        if (!ChargeTopologyHeapWork(ending_parents_by_depth.size() + 1)) {
+                            return false;
+                        }
                         ending_parents_by_depth[candidate.depth].push_back(candidate_index);
                     }
                     active.pop_back();
@@ -1549,7 +1602,10 @@ struct ProfileSessionReader::Impl {
                 std::uint64_t ancestor_index = active.empty() ? kInvalidSessionIndex : active.back();
                 if (scope.begin_ns == scope.end_ns && scope.depth != 0) {
                     std::uint64_t ending_ancestor_index = kInvalidSessionIndex;
-                    auto          ending_depth          = ending_parents_by_depth.lower_bound(scope.depth);
+                    if (!ChargeTopologyBinarySearchWork(ending_parents_by_depth.size())) {
+                        return false;
+                    }
+                    auto ending_depth = ending_parents_by_depth.lower_bound(scope.depth);
                     while (ending_depth != ending_parents_by_depth.begin()) {
                         --ending_depth;
                         if (!ChargeTopologyWork(static_cast<std::uint64_t>(ending_depth->second.size()))) {
@@ -1649,6 +1705,9 @@ struct ProfileSessionReader::Impl {
                 return true;
             };
 
+        if (!ChargeTopologySortWork(gap_events.size())) {
+            return false;
+        }
         std::sort(
             gap_events.begin(),
             gap_events.end(),
@@ -1659,6 +1718,9 @@ struct ProfileSessionReader::Impl {
                 return _left.scope_index < _right.scope_index;
             }
         );
+        if (!ChargeTopologyLinearWork(gap_events.size())) {
+            return false;
+        }
         std::size_t event_begin = 0;
         while (event_begin < gap_events.size()) {
             std::size_t event_end = event_begin + 1;
@@ -1708,6 +1770,9 @@ struct ProfileSessionReader::Impl {
             return false;
         }
 
+        if (!ChargeTopologySortWork(_sequence_demands.size())) {
+            return false;
+        }
         std::sort(
             _sequence_demands.begin(),
             _sequence_demands.end(),
@@ -1718,6 +1783,9 @@ struct ProfileSessionReader::Impl {
                 return _left.deadline_sequence < _right.deadline_sequence;
             }
         );
+        if (_sequence_demands.empty()) {
+            return true;
+        }
         struct PendingCpuSequenceDemand {
             std::uint64_t deadline_sequence{0};
             std::uint64_t remaining_count{0};
@@ -1726,17 +1794,28 @@ struct ProfileSessionReader::Impl {
                                        const PendingCpuSequenceDemand& _right) {
             return _left.deadline_sequence > _right.deadline_sequence;
         };
+        std::vector<PendingCpuSequenceDemand> pending_storage;
+        pending_storage.reserve(_sequence_demands.size());
         std::priority_queue<
             PendingCpuSequenceDemand,
             std::vector<PendingCpuSequenceDemand>,
             decltype(later_deadline)>
-                      pending_demands(later_deadline);
+            pending_demands(later_deadline, std::move(pending_storage));
+        if (!ChargeTopologyLinearWork(record_sequences.size())) {
+            return false;
+        }
         std::size_t   demand_index   = 0;
         std::size_t   observed_index = 0;
-        std::uint64_t position = _sequence_demands.empty() ? 0 : _sequence_demands.front().release_sequence;
+        std::uint64_t position       = _sequence_demands.front().release_sequence;
         while (demand_index < _sequence_demands.size() || !pending_demands.empty()) {
+            if (!ChargeTopologyWork(1)) {
+                return false;
+            }
             while (demand_index < _sequence_demands.size() &&
                    _sequence_demands[demand_index].release_sequence <= position) {
+                if (!ChargeTopologyHeapWork(pending_demands.size() + 1)) {
+                    return false;
+                }
                 pending_demands.push({
                     .deadline_sequence = _sequence_demands[demand_index].deadline_sequence,
                     .remaining_count   = _sequence_demands[demand_index].count,
@@ -1765,6 +1844,9 @@ struct ProfileSessionReader::Impl {
                 continue;
             }
 
+            if (!ChargeTopologyHeapWork(pending_demands.size())) {
+                return false;
+            }
             PendingCpuSequenceDemand demand = pending_demands.top();
             pending_demands.pop();
             std::uint64_t batch_end = demand.deadline_sequence + 1;
@@ -1779,6 +1861,9 @@ struct ProfileSessionReader::Impl {
             position += assigned;
             demand.remaining_count -= assigned;
             if (demand.remaining_count != 0) {
+                if (!ChargeTopologyHeapWork(pending_demands.size() + 1)) {
+                    return false;
+                }
                 pending_demands.push(demand);
             }
         }
@@ -2262,6 +2347,9 @@ struct ProfileSessionReader::Impl {
 
     [[nodiscard]] bool BuildGpuDomainsAndTracks() {
         auto& frames = session.impl_->gpu_frames;
+        if (!ChargeTopologySortWork(frames.size())) {
+            return false;
+        }
         std::sort(
             frames.begin(),
             frames.end(),
@@ -2272,6 +2360,9 @@ struct ProfileSessionReader::Impl {
                 return _left.sequence < _right.sequence;
             }
         );
+        if (!ChargeTopologyLinearWork(frames.size())) {
+            return false;
+        }
         for (std::size_t index = 1; index < frames.size(); ++index) {
             if (frames[index - 1].frame_id == frames[index].frame_id) {
                 Fail(
@@ -2285,6 +2376,9 @@ struct ProfileSessionReader::Impl {
 
         auto&                  scopes = session.impl_->gpu_scopes;
         std::vector<DomainKey> keys;
+        if (!ChargeTopologyLinearWork(scopes.size())) {
+            return false;
+        }
         keys.reserve(scopes.size());
         for (const GpuScopeRecord& scope : scopes) {
             keys.push_back({
@@ -2292,7 +2386,13 @@ struct ProfileSessionReader::Impl {
                 .family_id       = scope.family_id,
             });
         }
+        if (!ChargeTopologySortWork(keys.size())) {
+            return false;
+        }
         std::sort(keys.begin(), keys.end());
+        if (!ChargeTopologyLinearWork(keys.size())) {
+            return false;
+        }
         keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
         if (keys.size() > options.limits.max_gpu_domains) {
             Fail(
@@ -2302,6 +2402,9 @@ struct ProfileSessionReader::Impl {
                 DecodeStatus::LimitExceeded,
                 SessionLimitKind::GpuDomains
             );
+            return false;
+        }
+        if (!ChargeTopologyLinearWork(keys.size())) {
             return false;
         }
         for (const DomainKey& key : keys) {
@@ -2314,7 +2417,14 @@ struct ProfileSessionReader::Impl {
             });
         }
 
+        if (!ChargeTopologyLinearWork(scopes.size())) {
+            return false;
+        }
         for (GpuScopeRecord& scope : scopes) {
+            if (!ChargeTopologyBinarySearchWork(frames.size()) ||
+                !ChargeTopologyBinarySearchWork(keys.size())) {
+                return false;
+            }
             const auto frame = std::lower_bound(
                 frames.begin(),
                 frames.end(),
@@ -2361,6 +2471,9 @@ struct ProfileSessionReader::Impl {
             }
         }
 
+        if (!ChargeTopologySortWork(scopes.size())) {
+            return false;
+        }
         std::sort(
             scopes.begin(),
             scopes.end(),
@@ -2386,6 +2499,9 @@ struct ProfileSessionReader::Impl {
                 return _left.scope_id < _right.scope_id;
             }
         );
+        if (!ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(scopes.size())) {
+            return false;
+        }
 
         std::size_t track_begin = 0;
         while (track_begin < scopes.size()) {
@@ -2425,13 +2541,22 @@ struct ProfileSessionReader::Impl {
     [[nodiscard]] bool BuildGpuTopology(bool _allow_missing, std::uint64_t _required_cpu_drops) {
         auto& frames = session.impl_->gpu_frames;
         auto& scopes = session.impl_->gpu_scopes;
+        if (frames.empty() && scopes.empty()) {
+            return true;
+        }
 
         const auto charge_topology_work = [&](std::uint64_t _count) {
             return ChargeTopologyWork(_count);
         };
+        if (!ChargeTopologyLinearWork(frames.size()) || !ChargeTopologyLinearWork(frames.size())) {
+            return false;
+        }
         std::vector<std::uint64_t> frame_error_counts(frames.size(), 0);
         std::vector<std::uint8_t>  frame_root_partition_ambiguous(frames.size(), 0);
         std::vector<ScopeLookup>   lookup;
+        if (!ChargeTopologyLinearWork(scopes.size())) {
+            return false;
+        }
         lookup.reserve(scopes.size());
         for (std::size_t index = 0; index < scopes.size(); ++index) {
             lookup.push_back({
@@ -2440,7 +2565,13 @@ struct ProfileSessionReader::Impl {
                 .scope_index = index,
             });
         }
+        if (!ChargeTopologySortWork(lookup.size())) {
+            return false;
+        }
         std::sort(lookup.begin(), lookup.end());
+        if (!ChargeTopologyLinearWork(lookup.size())) {
+            return false;
+        }
         for (std::size_t index = 1; index < lookup.size(); ++index) {
             if (lookup[index - 1].frame_id == lookup[index].frame_id &&
                 lookup[index - 1].scope_id == lookup[index].scope_id) {
@@ -2465,6 +2596,10 @@ struct ProfileSessionReader::Impl {
                        kInvalidSessionIndex;
         };
 
+        if (!ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(scopes.size()) ||
+            !ChargeTopologyLinearWork(scopes.size())) {
+            return false;
+        }
         std::vector<std::uint64_t> previous_child_end(scopes.size(), 0);
         std::vector<std::uint8_t>  has_previous_child(scopes.size(), 0);
         std::vector<double>        direct_child_duration(scopes.size(), 0.0);
@@ -2482,14 +2617,25 @@ struct ProfileSessionReader::Impl {
             std::uint64_t       child_index{0};
         };
         std::vector<MissingParentEvidence> missing_parent_evidence;
-        std::vector<std::uint64_t>         source_local_rank(scopes.size(), 0);
+        if (!ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(scopes.size()) ||
+            !ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(scopes.size())) {
+            return false;
+        }
+        std::vector<std::uint64_t> source_local_rank(scopes.size(), 0);
         std::vector<std::uint64_t> nearest_observed_timing_ancestor(scopes.size(), kInvalidSessionIndex);
         std::vector<std::uint64_t> completed_observed_child_end(scopes.size(), 0);
         std::vector<std::uint64_t> active_timing_stack_position(scopes.size(), kInvalidSessionIndex);
+        if (!ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(scopes.size()) ||
+            !ChargeTopologyLinearWork(scopes.size())) {
+            return false;
+        }
         missing_parent_keys.reserve(scopes.size());
         missing_parent_evidence.reserve(scopes.size());
         missing_frame_ids.reserve(scopes.size());
 
+        if (!ChargeTopologyLinearWork(scopes.size())) {
+            return false;
+        }
         for (std::size_t index = 1; index < scopes.size(); ++index) {
             const GpuScopeRecord& previous = scopes[index - 1];
             const GpuScopeRecord& scope    = scopes[index];
@@ -2510,10 +2656,16 @@ struct ProfileSessionReader::Impl {
             }
         }
 
+        if (!ChargeTopologyLinearWork(scopes.size())) {
+            return false;
+        }
         for (std::size_t index = 0; index < scopes.size(); ++index) {
             GpuScopeRecord& scope  = scopes[index];
             bool            orphan = false;
 
+            if (!ChargeTopologyBinarySearchWork(frames.size())) {
+                return false;
+            }
             const auto frame = std::lower_bound(
                 frames.begin(),
                 frames.end(),
@@ -2573,6 +2725,9 @@ struct ProfileSessionReader::Impl {
                         SessionErrorCode::GpuScopeParentInvalid,
                         "non-root GpuScope has zero depth"
                     );
+                    return false;
+                }
+                if (!ChargeTopologyBinarySearchWork(lookup.size())) {
                     return false;
                 }
                 const std::uint64_t parent_index = find_scope(scope.frame_id, scope.parent_scope_id);
@@ -2658,6 +2813,9 @@ struct ProfileSessionReader::Impl {
             }
         }
 
+        if (!ChargeTopologySortWork(missing_parent_evidence.size())) {
+            return false;
+        }
         std::sort(
             missing_parent_evidence.begin(),
             missing_parent_evidence.end(),
@@ -2678,7 +2836,12 @@ struct ProfileSessionReader::Impl {
             bool          trusted{false};
         };
         std::vector<TimingContractEnvelope> timing_contract_envelopes;
-        std::vector<std::uint64_t>          timing_contract_for_child(scopes.size(), kInvalidSessionIndex);
+        if (!ChargeTopologyLinearWork(scopes.size()) ||
+            !ChargeTopologyLinearWork(missing_parent_evidence.size()) ||
+            !ChargeTopologyLinearWork(missing_parent_evidence.size())) {
+            return false;
+        }
+        std::vector<std::uint64_t> timing_contract_for_child(scopes.size(), kInvalidSessionIndex);
         timing_contract_envelopes.reserve(missing_parent_evidence.size());
         std::size_t timing_evidence_begin = 0;
         while (timing_evidence_begin < missing_parent_evidence.size()) {
@@ -2693,7 +2856,10 @@ struct ProfileSessionReader::Impl {
 
             const MissingParentEvidence& first_evidence = missing_parent_evidence[timing_evidence_begin];
             const GpuScopeRecord& first_child = scopes[static_cast<std::size_t>(first_evidence.child_index)];
-            const auto            frame       = std::lower_bound(
+            if (!ChargeTopologyBinarySearchWork(frames.size())) {
+                return false;
+            }
+            const auto frame = std::lower_bound(
                 frames.begin(),
                 frames.end(),
                 first_evidence.frame_id,
@@ -2762,6 +2928,13 @@ struct ProfileSessionReader::Impl {
             timing_evidence_begin = timing_evidence_end;
         }
 
+        // Source partitioning, per-scope validation, and stack retirement are
+        // each monotonic over the scope array. Candidate ancestry scans remain
+        // separately charged at their point of use.
+        if (!ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(scopes.size()) ||
+            !ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(scopes.size())) {
+            return false;
+        }
         std::size_t timing_source_begin = 0;
         while (timing_source_begin < scopes.size()) {
             std::size_t timing_source_end = timing_source_begin + 1;
@@ -2974,6 +3147,10 @@ struct ProfileSessionReader::Impl {
             }
             timing_source_begin = timing_source_end;
         }
+        if (!ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(scopes.size()) ||
+            !ChargeTopologyLinearWork(scopes.size())) {
+            return false;
+        }
         std::vector<std::uint64_t> timing_subtree_end_local(scopes.size(), 0);
         for (std::size_t index = 0; index < scopes.size(); ++index) {
             timing_subtree_end_local[index] = scopes[index].local_order;
@@ -2989,6 +3166,10 @@ struct ProfileSessionReader::Impl {
         std::size_t depth_range_leaf_count = 1;
         while (depth_range_leaf_count < scopes.size()) {
             depth_range_leaf_count *= 2;
+        }
+        if (!ChargeTopologyLinearWork(depth_range_leaf_count * 2) ||
+            !ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(depth_range_leaf_count)) {
+            return false;
         }
         std::vector<std::uint32_t> depth_range_tree(
             depth_range_leaf_count * 2, std::numeric_limits<std::uint32_t>::max()
@@ -3017,20 +3198,6 @@ struct ProfileSessionReader::Impl {
             }
             return minimum;
         };
-
-        std::sort(
-            missing_parent_evidence.begin(),
-            missing_parent_evidence.end(),
-            [](const MissingParentEvidence& _left, const MissingParentEvidence& _right) {
-                if (_left.frame_id != _right.frame_id) {
-                    return _left.frame_id < _right.frame_id;
-                }
-                if (_left.parent_scope_id != _right.parent_scope_id) {
-                    return _left.parent_scope_id < _right.parent_scope_id;
-                }
-                return _left.child_local_order < _right.child_local_order;
-            }
-        );
         struct MissingParentContract {
             std::uint64_t       frame_id{0};
             ProfileLogicalQueue logical_queue{ProfileLogicalQueue::Graphics};
@@ -3048,6 +3215,10 @@ struct ProfileSessionReader::Impl {
             std::uint64_t       timing_envelope_duration{0};
         };
         std::vector<MissingParentContract> missing_parent_contracts;
+        if (!ChargeTopologyLinearWork(missing_parent_evidence.size()) ||
+            !ChargeTopologyLinearWork(missing_parent_evidence.size())) {
+            return false;
+        }
         missing_parent_contracts.reserve(missing_parent_evidence.size());
 
         std::size_t evidence_begin = 0;
@@ -3104,6 +3275,9 @@ struct ProfileSessionReader::Impl {
                         scopes[last_observed_index].local_order - (observed_before - 1);
                     std::size_t low  = source_begin_index;
                     std::size_t high = first_child_index;
+                    if (!ChargeTopologyBinarySearchWork(high - low)) {
+                        return false;
+                    }
                     while (low < high) {
                         const std::size_t   mid = low + (high - low) / 2;
                         const std::uint64_t order_without_rank =
@@ -3126,6 +3300,9 @@ struct ProfileSessionReader::Impl {
                 }
             }
 
+            if (!ChargeTopologyBinarySearchWork(frames.size())) {
+                return false;
+            }
             const auto frame = std::lower_bound(
                 frames.begin(),
                 frames.end(),
@@ -3231,6 +3408,10 @@ struct ProfileSessionReader::Impl {
                 }
                 const std::size_t last_child_index =
                     static_cast<std::size_t>(missing_parent_evidence[evidence_end - 1].child_index);
+                if (!ChargeTopologyBinarySearchWork(depth_range_leaf_count) ||
+                    !ChargeTopologyBinarySearchWork(depth_range_leaf_count)) {
+                    return false;
+                }
                 if (minimum_depth_in_range(first_child_index, last_child_index + 1) <=
                     contract.parent_depth) {
                     Fail(
@@ -3261,6 +3442,9 @@ struct ProfileSessionReader::Impl {
             evidence_begin = evidence_end;
         }
 
+        if (!ChargeTopologySortWork(missing_parent_contracts.size())) {
+            return false;
+        }
         std::sort(
             missing_parent_contracts.begin(),
             missing_parent_contracts.end(),
@@ -3296,6 +3480,10 @@ struct ProfileSessionReader::Impl {
             std::uint64_t       required_parent_record_count{0};
         };
         std::vector<SourceLossEvidence> source_loss_evidence;
+        if (!ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(scopes.size()) ||
+            !ChargeTopologyLinearWork(scopes.size())) {
+            return false;
+        }
         source_loss_evidence.reserve(scopes.size());
         std::size_t source_begin = 0;
         while (source_begin < scopes.size()) {
@@ -3372,6 +3560,9 @@ struct ProfileSessionReader::Impl {
         };
 
         std::size_t contract_begin = 0;
+        if (!ChargeTopologyLinearWork(missing_parent_contracts.size())) {
+            return false;
+        }
         while (contract_begin < missing_parent_contracts.size()) {
             std::size_t contract_end = contract_begin + 1;
             while (contract_end < missing_parent_contracts.size()) {
@@ -3385,8 +3576,11 @@ struct ProfileSessionReader::Impl {
                 ++contract_end;
             }
 
-            SourceLossEvidence* source    = nullptr;
-            const auto          source_it = std::lower_bound(
+            SourceLossEvidence* source = nullptr;
+            if (!ChargeTopologyBinarySearchWork(source_loss_evidence.size())) {
+                return false;
+            }
+            const auto source_it = std::lower_bound(
                 source_loss_evidence.begin(),
                 source_loss_evidence.end(),
                 missing_parent_contracts[contract_begin],
@@ -3406,9 +3600,12 @@ struct ProfileSessionReader::Impl {
             }
 
             std::vector<std::uint32_t> depth_coordinates;
-            depth_coordinates.reserve(
-                static_cast<std::size_t>(source->scope_count) + contract_end - contract_begin
-            );
+            const std::size_t          source_scope_count = static_cast<std::size_t>(source->scope_count);
+            const std::size_t          contract_count     = contract_end - contract_begin;
+            if (!ChargeTopologyLinearWork(source_scope_count) || !ChargeTopologyLinearWork(contract_count)) {
+                return false;
+            }
+            depth_coordinates.reserve(source_scope_count + contract_count);
             const std::size_t source_end_index =
                 static_cast<std::size_t>(source->first_scope + source->scope_count);
             std::uint64_t last_observed_root_local_order = 0;
@@ -3424,11 +3621,21 @@ struct ProfileSessionReader::Impl {
             for (std::size_t index = contract_begin; index < contract_end; ++index) {
                 depth_coordinates.push_back(missing_parent_contracts[index].parent_depth);
             }
+            if (!ChargeTopologySortWork(depth_coordinates.size()) ||
+                !ChargeTopologyLinearWork(depth_coordinates.size())) {
+                return false;
+            }
             std::sort(depth_coordinates.begin(), depth_coordinates.end());
             depth_coordinates.erase(
                 std::unique(depth_coordinates.begin(), depth_coordinates.end()), depth_coordinates.end()
             );
 
+            if (!ChargeTopologyLinearWork(depth_coordinates.size()) ||
+                !ChargeTopologyLinearWork(depth_coordinates.size()) ||
+                !ChargeTopologyLinearWork(depth_coordinates.size()) ||
+                !ChargeTopologyLinearWork(depth_coordinates.size())) {
+                return false;
+            }
             std::vector<std::uint64_t> covered_depth_tree(depth_coordinates.size() + 1, 0);
             std::vector<std::uint64_t> prefix_covered_depth_tree(depth_coordinates.size() + 1, 0);
             std::vector<std::uint8_t>  depth_covered(depth_coordinates.size(), 0);
@@ -3464,6 +3671,10 @@ struct ProfileSessionReader::Impl {
             };
 
             for (std::size_t index = contract_begin; index < contract_end; ++index) {
+                if (!ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
+                    !ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
+                    return false;
+                }
                 cover_depth(missing_parent_contracts[index].parent_depth, covered_depth_tree, depth_covered);
             }
             const bool timing_topology_trusted =
@@ -3508,6 +3719,9 @@ struct ProfileSessionReader::Impl {
                     std::size_t   chain_end{0};
                 };
 
+                if (!ChargeTopologyLinearWork(depth_coordinates.size())) {
+                    return false;
+                }
                 std::vector<std::uint64_t> latest_barrier_tree(depth_coordinates.size() + 1, 0);
                 const auto                 observe_barrier = [&](std::size_t _scope_index) {
                     const GpuScopeRecord& scope      = scopes[_scope_index];
@@ -3544,11 +3758,17 @@ struct ProfileSessionReader::Impl {
                 std::map<std::uint32_t, std::uint64_t>     previous_missing_direct_end;
                 std::map<std::uint32_t, std::uint64_t>     virtual_epoch_floor;
                 std::vector<std::size_t>                   completion_order;
+                if (!ChargeTopologyLinearWork(source_scope_count)) {
+                    return false;
+                }
                 completion_order.reserve(static_cast<std::size_t>(source->scope_count));
                 for (std::size_t index = static_cast<std::size_t>(source->first_scope);
                      index < source_end_index;
                      ++index) {
                     completion_order.push_back(index);
+                }
+                if (!ChargeTopologySortWork(completion_order.size())) {
+                    return false;
                 }
                 std::sort(
                     completion_order.begin(),
@@ -3564,6 +3784,10 @@ struct ProfileSessionReader::Impl {
                     while (completed_observed_index < completion_order.size() &&
                            timing_subtree_end_local[completion_order[completed_observed_index]] <
                                contract.child_local_order_deadline) {
+                        if (!ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
+                            !ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
+                            return false;
+                        }
                         observe_barrier(completion_order[completed_observed_index]);
                         ++completed_observed_index;
                     }
@@ -3579,6 +3803,9 @@ struct ProfileSessionReader::Impl {
 
                     const std::uint64_t anchor_first_allowed =
                         anchor_index == kInvalidSessionIndex ? 0 : scopes[anchor_index].local_order + 1;
+                    if (!ChargeTopologyBinarySearchWork(previous_missing_direct_end.size())) {
+                        return false;
+                    }
                     const auto previous_direct = previous_missing_direct_end.find(contract.parent_depth);
                     if (previous_direct != previous_missing_direct_end.end()) {
                         std::uint64_t sibling_after = 0;
@@ -3598,12 +3825,22 @@ struct ProfileSessionReader::Impl {
                             );
                             return false;
                         }
+                        if (!ChargeTopologyHeapWork(virtual_epoch_floor.size() + 1)) {
+                            return false;
+                        }
                         virtual_epoch_floor[contract.parent_depth] = sibling_after;
                     }
                     const std::size_t current_chain_begin = chain_task_indices.size();
                     for (std::uint32_t depth = base_depth;; ++depth) {
+                        if (!ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
+                            !ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
+                            return false;
+                        }
                         std::uint64_t first_allowed_slot =
                             std::max(anchor_first_allowed, latest_barrier_after(depth));
+                        if (!ChargeTopologyBinarySearchWork(virtual_epoch_floor.size())) {
+                            return false;
+                        }
                         const auto epoch = virtual_epoch_floor.find(depth);
                         if (epoch != virtual_epoch_floor.end()) {
                             first_allowed_slot = std::max(first_allowed_slot, epoch->second);
@@ -3623,6 +3860,9 @@ struct ProfileSessionReader::Impl {
                             .depth              = depth,
                             .first_allowed_slot = first_allowed_slot,
                         };
+                        if (!ChargeTopologyHeapWork(task_states.size() + 1)) {
+                            return false;
+                        }
                         auto [state_it, state_inserted]          = task_states.try_emplace(key);
                         MissingTaskState& state                  = state_it->second;
                         std::uint64_t     task_index             = state.canonical_task_index;
@@ -3738,6 +3978,9 @@ struct ProfileSessionReader::Impl {
                                         .depth              = clone.depth,
                                         .first_allowed_slot = clone.first_allowed_slot,
                                     };
+                                    if (!ChargeTopologyHeapWork(task_states.size() + 1)) {
+                                        return false;
+                                    }
                                     MissingTaskState& clone_state    = task_states[clone_key];
                                     clone_state.canonical_task_index = clone_index;
                                     clone_state.canonical_is_direct  = clone.depth == contract.parent_depth;
@@ -3775,10 +4018,17 @@ struct ProfileSessionReader::Impl {
                         }
                     }
                     chain_ends.push_back(static_cast<std::uint64_t>(chain_task_indices.size()));
+                    if (!ChargeTopologyHeapWork(previous_missing_direct_end.size() + 1)) {
+                        return false;
+                    }
                     previous_missing_direct_end[contract.parent_depth] =
                         contract.last_child_subtree_end_local;
                 }
 
+                if (!ChargeTopologyLinearWork(tasks.size()) ||
+                    !ChargeTopologyLinearWork(chain_task_indices.size())) {
+                    return false;
+                }
                 std::vector<std::uint8_t> task_active(tasks.size(), 0);
                 std::uint64_t             active_task_count = 0;
                 for (const std::uint64_t task_index : chain_task_indices) {
@@ -3799,11 +4049,17 @@ struct ProfileSessionReader::Impl {
                 const bool has_spare_local_holes =
                     source->required_parent_record_count < source->local_hole_count;
                 std::vector<std::uint64_t> task_order;
+                if (!ChargeTopologyLinearWork(tasks.size())) {
+                    return false;
+                }
                 task_order.reserve(static_cast<std::size_t>(active_task_count));
                 for (std::size_t index = 0; index < tasks.size(); ++index) {
                     if (task_active[index] != 0) {
                         task_order.push_back(static_cast<std::uint64_t>(index));
                     }
+                }
+                if (!ChargeTopologySortWork(task_order.size())) {
+                    return false;
                 }
                 std::sort(
                     task_order.begin(),
@@ -3834,6 +4090,10 @@ struct ProfileSessionReader::Impl {
                         --slot;
                     }
                 };
+                if (!ChargeTopologyLinearWork(task_order.size()) ||
+                    !ChargeTopologyLinearWork(source_scope_count)) {
+                    return false;
+                }
                 while (ordered_task_index < task_order.size() || !ready_tasks.empty()) {
                     if (!has_slot) {
                         Fail(
@@ -3845,6 +4105,9 @@ struct ProfileSessionReader::Impl {
                     }
                     while (ordered_task_index < task_order.size() &&
                            tasks[task_order[ordered_task_index]].deadline_slot > slot) {
+                        if (!ChargeTopologyHeapWork(ready_tasks.size() + 1)) {
+                            return false;
+                        }
                         ready_tasks.push(task_order[ordered_task_index]);
                         ++ordered_task_index;
                     }
@@ -3871,12 +4134,18 @@ struct ProfileSessionReader::Impl {
                         );
                         return false;
                     }
+                    if (!ChargeTopologyHeapWork(ready_tasks.size())) {
+                        return false;
+                    }
                     ready_tasks.pop();
                     tasks[task_index].assigned_slot = slot;
                     move_to_previous_slot();
                 }
 
                 std::size_t chain_begin = 0;
+                if (!ChargeTopologyLinearWork(chain_task_indices.size())) {
+                    return false;
+                }
                 for (const std::uint64_t chain_end_value : chain_ends) {
                     const std::size_t chain_end = static_cast<std::size_t>(chain_end_value);
                     for (std::size_t index = chain_begin + 1; index < chain_end; ++index) {
@@ -3894,6 +4163,10 @@ struct ProfileSessionReader::Impl {
                 }
 
                 std::vector<std::uint64_t> occupied_local_orders;
+                if (!ChargeTopologyLinearWork(source_scope_count) ||
+                    !ChargeTopologyLinearWork(tasks.size())) {
+                    return false;
+                }
                 occupied_local_orders.reserve(
                     static_cast<std::size_t>(source->scope_count) +
                     static_cast<std::size_t>(active_task_count)
@@ -3908,8 +4181,17 @@ struct ProfileSessionReader::Impl {
                         occupied_local_orders.push_back(tasks[task_index].assigned_slot);
                     }
                 }
+                if (!ChargeTopologySortWork(occupied_local_orders.size())) {
+                    return false;
+                }
                 std::sort(occupied_local_orders.begin(), occupied_local_orders.end());
 
+                if (!ChargeTopologyLinearWork(root_partition_candidates.size()) ||
+                    !ChargeTopologyLinearWork(root_partition_candidates.size()) ||
+                    !ChargeTopologyLinearWork(root_partition_candidates.size()) ||
+                    !ChargeTopologyLinearWork(tasks.size())) {
+                    return false;
+                }
                 std::vector<std::uint64_t> candidate_split_root_slot(
                     root_partition_candidates.size(), kInvalidSessionIndex
                 );
@@ -3919,9 +4201,15 @@ struct ProfileSessionReader::Impl {
                 std::vector<std::uint8_t>  task_has_concrete_split(tasks.size(), 0);
                 std::set<std::uint64_t>    reserved_split_slots;
                 std::vector<std::size_t>   candidate_order;
+                if (!ChargeTopologyLinearWork(root_partition_candidates.size())) {
+                    return false;
+                }
                 candidate_order.reserve(root_partition_candidates.size());
                 for (std::size_t index = 0; index < root_partition_candidates.size(); ++index) {
                     candidate_order.push_back(index);
+                }
+                if (!ChargeTopologySortWork(candidate_order.size())) {
+                    return false;
                 }
                 std::sort(
                     candidate_order.begin(),
@@ -4000,10 +4288,17 @@ struct ProfileSessionReader::Impl {
                                     if (!charge_topology_work(1)) {
                                         return false;
                                     }
-                                    if (!std::binary_search(
-                                            occupied_local_orders.begin(), occupied_local_orders.end(), cursor
-                                        ) &&
-                                        !reserved_split_slots.contains(cursor)) {
+                                    if (!ChargeTopologyBinarySearchWork(occupied_local_orders.size())) {
+                                        return false;
+                                    }
+                                    const bool occupied = std::binary_search(
+                                        occupied_local_orders.begin(), occupied_local_orders.end(), cursor
+                                    );
+                                    if (!occupied &&
+                                        !ChargeTopologyBinarySearchWork(reserved_split_slots.size())) {
+                                        return false;
+                                    }
+                                    if (!occupied && !reserved_split_slots.contains(cursor)) {
                                         found = true;
                                         break;
                                     }
@@ -4012,6 +4307,9 @@ struct ProfileSessionReader::Impl {
                                     candidate_feasible = false;
                                     break;
                                 }
+                                if (!ChargeTopologyHeapWork(reserved_split_slots.size() + 1)) {
+                                    return false;
+                                }
                                 reserved_split_slots.insert(cursor);
                                 candidate_reserved_slots.push_back(cursor);
                                 root_slot = cursor;
@@ -4019,6 +4317,9 @@ struct ProfileSessionReader::Impl {
                             if (candidate_feasible) {
                                 candidate_reserved_slot_begin[candidate_index] =
                                     candidate_reserved_slot_storage.size();
+                                if (!ChargeTopologyLinearWork(candidate_reserved_slots.size())) {
+                                    return false;
+                                }
                                 candidate_reserved_slot_storage.insert(
                                     candidate_reserved_slot_storage.end(),
                                     candidate_reserved_slots.begin(),
@@ -4030,6 +4331,9 @@ struct ProfileSessionReader::Impl {
                                 task_has_concrete_split[root_task_index]   = 1;
                             } else {
                                 for (const std::uint64_t slot : candidate_reserved_slots) {
+                                    if (!ChargeTopologyBinarySearchWork(reserved_split_slots.size())) {
+                                        return false;
+                                    }
                                     reserved_split_slots.erase(slot);
                                 }
                             }
@@ -4054,6 +4358,9 @@ struct ProfileSessionReader::Impl {
                     static_cast<std::size_t>(source->scope_count) + tasks.size() +
                     root_partition_candidates.size()
                 );
+                if (!ChargeTopologyLinearWork(source_scope_count)) {
+                    return false;
+                }
                 for (std::size_t index = static_cast<std::size_t>(source->first_scope);
                      index < source_end_index;
                      ++index) {
@@ -4081,6 +4388,10 @@ struct ProfileSessionReader::Impl {
                                                                    (std::uint64_t{1} << 63) :
                                                                    (std::uint64_t{1} << (source_valid_bits - 1));
                 const std::uint64_t source_maximum_root_step = source_half_range - 1;
+                if (!ChargeTopologyLinearWork(tasks.size()) ||
+                    !ChargeTopologyLinearWork(root_partition_candidates.size())) {
+                    return false;
+                }
                 for (std::size_t task_index = 0; task_index < tasks.size(); ++task_index) {
                     while (candidate_order_index < candidate_order.size() &&
                            root_partition_candidates[candidate_order[candidate_order_index]].root_task_index <
@@ -4144,6 +4455,9 @@ struct ProfileSessionReader::Impl {
                             for (std::size_t slot_index = candidate_reserved_slot_begin[candidate_index];
                                  slot_index < candidate_reserved_slot_end[candidate_index];
                                  ++slot_index) {
+                                if (!ChargeTopologyHeapWork(used_split_slots.size() + 1)) {
+                                    return false;
+                                }
                                 used_split_slots.insert(candidate_reserved_slot_storage[slot_index]);
                             }
                             split_root_components.push_back(split_component);
@@ -4178,6 +4492,10 @@ struct ProfileSessionReader::Impl {
                     }
                     split_root_components.push_back(split_component);
                 }
+                if (!ChargeTopologySortWork(root_components.size()) ||
+                    !ChargeTopologySortWork(split_root_components.size())) {
+                    return false;
+                }
                 const auto sort_root_components = [](std::vector<RootComponent>& _components) {
                     std::sort(
                         _components.begin(),
@@ -4190,6 +4508,10 @@ struct ProfileSessionReader::Impl {
                 };
                 sort_root_components(root_components);
                 sort_root_components(split_root_components);
+                if (!ChargeTopologyLinearWork(root_components.size()) ||
+                    !ChargeTopologyLinearWork(split_root_components.size())) {
+                    return false;
+                }
                 const auto duplicate_root_slot = [](const std::vector<RootComponent>& _components) {
                     return std::adjacent_find(
                                _components.begin(),
@@ -4229,6 +4551,10 @@ struct ProfileSessionReader::Impl {
                                                                 _occupied_local_orders) {
                         if (_components.empty()) {
                             return true;
+                        }
+                        if (!ChargeTopologyLinearWork(_components.size())) {
+                            topology_limit_failed = true;
+                            return false;
                         }
                         for (std::size_t index = 0; index < _components.size(); ++index) {
                             const RootComponent& component = _components[index];
@@ -4278,11 +4604,21 @@ struct ProfileSessionReader::Impl {
                         for (std::size_t index = 1; index < _components.size(); ++index) {
                             const RootComponent& previous_component = _components[index - 1];
                             const RootComponent& component          = _components[index];
-                            const auto           occupied_begin     = std::upper_bound(
+                            if (!ChargeTopologyBinarySearchWork(_occupied_local_orders.size())) {
+                                topology_limit_failed = true;
+                                return false;
+                            }
+                            const auto occupied_begin = std::upper_bound(
                                 _occupied_local_orders.begin(),
                                 _occupied_local_orders.end(),
                                 previous_component.subtree_end_local
                             );
+                            if (!ChargeTopologyBinarySearchWork(
+                                    static_cast<std::size_t>(_occupied_local_orders.end() - occupied_begin)
+                                )) {
+                                topology_limit_failed = true;
+                                return false;
+                            }
                             const auto occupied_end = std::lower_bound(
                                 occupied_begin, _occupied_local_orders.end(), component.local_order
                             );
@@ -4408,6 +4744,10 @@ struct ProfileSessionReader::Impl {
                             if (next_frontier.empty()) {
                                 return false;
                             }
+                            if (!ChargeTopologySortWork(next_frontier.size())) {
+                                topology_limit_failed = true;
+                                return false;
+                            }
                             std::sort(
                                 next_frontier.begin(),
                                 next_frontier.end(),
@@ -4422,6 +4762,10 @@ struct ProfileSessionReader::Impl {
                                 }
                             );
                             std::vector<RootSerialState> pruned_frontier;
+                            if (!ChargeTopologyLinearWork(next_frontier.size())) {
+                                topology_limit_failed = true;
+                                return false;
+                            }
                             pruned_frontier.reserve(next_frontier.size());
                             for (const RootSerialState& state : next_frontier) {
                                 if (!pruned_frontier.empty() && !((state.end) < pruned_frontier.back().end)) {
@@ -4437,12 +4781,19 @@ struct ProfileSessionReader::Impl {
                     bool used_split_plan     = false;
                     bool root_sequence_valid = validate_root_sequence(root_components, occupied_local_orders);
                     if (!root_sequence_valid && !topology_limit_failed && has_split_plan) {
+                        if (!ChargeTopologyLinearWork(occupied_local_orders.size()) ||
+                            !ChargeTopologyLinearWork(used_split_slots.size())) {
+                            return false;
+                        }
                         std::vector<std::uint64_t> split_occupied_local_orders = occupied_local_orders;
                         split_occupied_local_orders.insert(
                             split_occupied_local_orders.end(),
                             used_split_slots.begin(),
                             used_split_slots.end()
                         );
+                        if (!ChargeTopologySortWork(split_occupied_local_orders.size())) {
+                            return false;
+                        }
                         std::sort(split_occupied_local_orders.begin(), split_occupied_local_orders.end());
                         root_sequence_valid =
                             validate_root_sequence(split_root_components, split_occupied_local_orders);
@@ -4486,13 +4837,21 @@ struct ProfileSessionReader::Impl {
             }
 
             if (!timing_topology_trusted) {
+                if (!ChargeTopologyLinearWork(contract_count)) {
+                    return false;
+                }
                 std::size_t   observed_index              = static_cast<std::size_t>(source->first_scope);
                 std::uint64_t hidden_ancestor_lower_bound = 0;
                 std::map<std::uint32_t, std::uint32_t> required_prefix_depth_intervals;
                 std::uint32_t                          exposed_prefix_depth                = 0;
                 std::uint64_t                          required_prefix_depth_count         = 0;
                 std::uint64_t                          matched_required_direct_depth_count = 0;
+                bool                                   prefix_budget_failed                = false;
                 const auto                             prefix_depth_was_required = [&](std::uint32_t _depth) {
+                    if (!ChargeTopologyBinarySearchWork(required_prefix_depth_intervals.size())) {
+                        prefix_budget_failed = true;
+                        return false;
+                    }
                     const auto interval = required_prefix_depth_intervals.upper_bound(_depth);
                     if (interval == required_prefix_depth_intervals.begin()) {
                         return false;
@@ -4502,6 +4861,13 @@ struct ProfileSessionReader::Impl {
                 };
                 const auto prefix_direct_depth_count_in_range = [&](std::uint32_t _begin,
                                                                     std::uint32_t _end) {
+                    if (!ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
+                        !ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
+                        !ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
+                        !ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
+                        prefix_budget_failed = true;
+                        return std::uint64_t{0};
+                    }
                     return covered_depth_count_before(_end, prefix_covered_depth_tree) -
                            covered_depth_count_before(_begin, prefix_covered_depth_tree);
                 };
@@ -4510,6 +4876,10 @@ struct ProfileSessionReader::Impl {
                         return;
                     }
 
+                    if (!ChargeTopologyBinarySearchWork(required_prefix_depth_intervals.size())) {
+                        prefix_budget_failed = true;
+                        return;
+                    }
                     auto interval = required_prefix_depth_intervals.lower_bound(_begin);
                     if (interval != required_prefix_depth_intervals.begin()) {
                         auto previous = std::prev(interval);
@@ -4523,11 +4893,19 @@ struct ProfileSessionReader::Impl {
                     std::uint32_t cursor       = _begin;
                     while (interval != required_prefix_depth_intervals.end() && interval->first <= merged_end
                     ) {
+                        if (!ChargeTopologyWork(1)) {
+                            prefix_budget_failed = true;
+                            return;
+                        }
                         if (cursor < _end && cursor < interval->first) {
                             const std::uint32_t uncovered_end = std::min(_end, interval->first);
                             required_prefix_depth_count += static_cast<std::uint64_t>(uncovered_end - cursor);
-                            matched_required_direct_depth_count +=
+                            const std::uint64_t direct_depth_count =
                                 prefix_direct_depth_count_in_range(cursor, uncovered_end);
+                            if (prefix_budget_failed) {
+                                return;
+                            }
+                            matched_required_direct_depth_count += direct_depth_count;
                         }
                         cursor       = std::max(cursor, interval->second);
                         merged_begin = std::min(merged_begin, interval->first);
@@ -4536,10 +4914,27 @@ struct ProfileSessionReader::Impl {
                     }
                     if (cursor < _end) {
                         required_prefix_depth_count += static_cast<std::uint64_t>(_end - cursor);
-                        matched_required_direct_depth_count +=
+                        const std::uint64_t direct_depth_count =
                             prefix_direct_depth_count_in_range(cursor, _end);
+                        if (prefix_budget_failed) {
+                            return;
+                        }
+                        matched_required_direct_depth_count += direct_depth_count;
+                    }
+                    if (prefix_budget_failed ||
+                        !ChargeTopologyHeapWork(required_prefix_depth_intervals.size() + 1)) {
+                        prefix_budget_failed = true;
+                        return;
                     }
                     required_prefix_depth_intervals.emplace(merged_begin, merged_end);
+                };
+                const auto charge_and_add_required_prefix_range = [&](std::uint32_t _begin,
+                                                                      std::uint32_t _end) {
+                    if (_begin >= _end) {
+                        return true;
+                    }
+                    add_required_prefix_range(_begin, _end);
+                    return !prefix_budget_failed;
                 };
 
                 std::vector<std::uint32_t> observed_ancestor_depths;
@@ -4548,8 +4943,11 @@ struct ProfileSessionReader::Impl {
                     source_end_index - static_cast<std::size_t>(source->first_scope)
                 ));
                 for (std::size_t index = contract_begin; index < contract_end; ++index) {
-                    const MissingParentContract& contract                = missing_parent_contracts[index];
-                    const std::size_t            parent_depth_coordinate = static_cast<std::size_t>(
+                    const MissingParentContract& contract = missing_parent_contracts[index];
+                    if (!ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
+                        return false;
+                    }
+                    const std::size_t parent_depth_coordinate = static_cast<std::size_t>(
                         std::lower_bound(
                             depth_coordinates.begin(), depth_coordinates.end(), contract.parent_depth
                         ) -
@@ -4558,6 +4956,10 @@ struct ProfileSessionReader::Impl {
                     if (prefix_depth_covered[parent_depth_coordinate] == 0 &&
                         prefix_depth_was_required(contract.parent_depth)) {
                         ++matched_required_direct_depth_count;
+                    }
+                    if (prefix_budget_failed || !ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
+                        !ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
+                        return false;
                     }
                     cover_depth(contract.parent_depth, prefix_covered_depth_tree, prefix_depth_covered);
 
@@ -4571,6 +4973,10 @@ struct ProfileSessionReader::Impl {
                             }
                             ancestor_index = nearest_observed_timing_ancestor[ancestor_index];
                         }
+                        if (!ChargeTopologySortWork(observed_ancestor_depths.size()) ||
+                            !ChargeTopologyLinearWork(observed_ancestor_depths.size())) {
+                            return false;
+                        }
                         std::sort(observed_ancestor_depths.begin(), observed_ancestor_depths.end());
                         observed_ancestor_depths.erase(
                             std::unique(observed_ancestor_depths.begin(), observed_ancestor_depths.end()),
@@ -4579,6 +4985,12 @@ struct ProfileSessionReader::Impl {
                     } else {
                         while (observed_index < source_end_index &&
                                scopes[observed_index].local_order < contract.latest_parent_local_order) {
+                            if (!ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
+                                !ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
+                                !ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
+                                !ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
+                                return false;
+                            }
                             cover_depth(scopes[observed_index].depth, covered_depth_tree, depth_covered);
                             cover_depth(
                                 scopes[observed_index].depth, prefix_covered_depth_tree, prefix_depth_covered
@@ -4587,10 +4999,17 @@ struct ProfileSessionReader::Impl {
                         }
                     }
 
+                    if (!ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
+                        !ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
+                        return false;
+                    }
                     std::uint64_t covered_ancestor_depths =
                         covered_depth_count_before(contract.parent_depth, covered_depth_tree);
                     if (timing_topology_trusted) {
                         for (const std::uint32_t depth : observed_ancestor_depths) {
+                            if (!ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
+                                return false;
+                            }
                             const std::size_t coordinate = static_cast<std::size_t>(
                                 std::lower_bound(depth_coordinates.begin(), depth_coordinates.end(), depth) -
                                 depth_coordinates.begin()
@@ -4607,25 +5026,39 @@ struct ProfileSessionReader::Impl {
                     if (timing_topology_trusted) {
                         std::uint32_t interval_begin = 0;
                         for (const std::uint32_t depth : observed_ancestor_depths) {
-                            add_required_prefix_range(interval_begin, depth);
+                            if (!charge_and_add_required_prefix_range(interval_begin, depth)) {
+                                return false;
+                            }
                             interval_begin = depth + 1;
                         }
-                        add_required_prefix_range(interval_begin, contract.parent_depth);
+                        if (!charge_and_add_required_prefix_range(interval_begin, contract.parent_depth)) {
+                            return false;
+                        }
                     } else if (contract.parent_depth > exposed_prefix_depth) {
                         std::uint32_t interval_begin = exposed_prefix_depth;
-                        auto          coordinate     = std::lower_bound(
+                        if (!ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
+                            return false;
+                        }
+                        auto coordinate = std::lower_bound(
                             depth_coordinates.begin(), depth_coordinates.end(), exposed_prefix_depth
                         );
                         while (coordinate != depth_coordinates.end() && *coordinate < contract.parent_depth) {
                             const std::size_t coordinate_index =
                                 static_cast<std::size_t>(coordinate - depth_coordinates.begin());
                             if (prefix_depth_covered[coordinate_index] != 0) {
-                                add_required_prefix_range(interval_begin, *coordinate);
+                                if (!charge_and_add_required_prefix_range(interval_begin, *coordinate)) {
+                                    return false;
+                                }
                                 interval_begin = *coordinate + 1;
+                            }
+                            if (!ChargeTopologyWork(1)) {
+                                return false;
                             }
                             ++coordinate;
                         }
-                        add_required_prefix_range(interval_begin, contract.parent_depth);
+                        if (!charge_and_add_required_prefix_range(interval_begin, contract.parent_depth)) {
+                            return false;
+                        }
                         exposed_prefix_depth = contract.parent_depth;
                     }
 
@@ -4685,6 +5118,9 @@ struct ProfileSessionReader::Impl {
             std::uint64_t required_parent_record_count{0};
         };
         std::vector<FrameLossEvidence> frame_loss_evidence;
+        if (!ChargeTopologyLinearWork(source_loss_evidence.size())) {
+            return false;
+        }
         frame_loss_evidence.reserve(source_loss_evidence.size());
         for (const SourceLossEvidence& source : source_loss_evidence) {
             frame_loss_evidence.push_back({
@@ -4692,6 +5128,9 @@ struct ProfileSessionReader::Impl {
                 .local_hole_count             = source.local_hole_count,
                 .required_parent_record_count = source.required_parent_record_count,
             });
+        }
+        if (!ChargeTopologySortWork(frame_loss_evidence.size())) {
+            return false;
         }
         std::sort(
             frame_loss_evidence.begin(),
@@ -4701,6 +5140,9 @@ struct ProfileSessionReader::Impl {
             }
         );
         std::size_t frame_evidence_count = 0;
+        if (!ChargeTopologyLinearWork(frame_loss_evidence.size())) {
+            return false;
+        }
         for (std::size_t index = 0; index < frame_loss_evidence.size(); ++index) {
             if (frame_evidence_count == 0 || frame_loss_evidence[frame_evidence_count - 1].frame_id !=
                                                  frame_loss_evidence[index].frame_id) {
@@ -4743,6 +5185,10 @@ struct ProfileSessionReader::Impl {
                        static_cast<const FrameLossEvidence*>(nullptr);
         };
 
+        if (!ChargeTopologySortWork(missing_parent_keys.size()) ||
+            !ChargeTopologyLinearWork(missing_parent_keys.size())) {
+            return false;
+        }
         std::sort(missing_parent_keys.begin(), missing_parent_keys.end());
         missing_parent_keys.erase(
             std::unique(
@@ -4754,6 +5200,10 @@ struct ProfileSessionReader::Impl {
             ),
             missing_parent_keys.end()
         );
+        if (!ChargeTopologySortWork(missing_frame_ids.size()) ||
+            !ChargeTopologyLinearWork(missing_frame_ids.size())) {
+            return false;
+        }
         std::sort(missing_frame_ids.begin(), missing_frame_ids.end());
         missing_frame_ids.erase(
             std::unique(missing_frame_ids.begin(), missing_frame_ids.end()), missing_frame_ids.end()
@@ -4791,6 +5241,9 @@ struct ProfileSessionReader::Impl {
             return true;
         };
 
+        if (!ChargeTopologyLinearWork(frames.size())) {
+            return false;
+        }
         for (std::size_t index = 0; index < frames.size(); ++index) {
             GpuFrameRecord&     frame  = frames[index];
             const std::uint64_t errors = frame_error_counts[index];
@@ -4807,7 +5260,12 @@ struct ProfileSessionReader::Impl {
                 return false;
             }
 
-            const std::uint64_t      missing_scopes          = frame.admitted_scope_count - frame.scope_count;
+            const std::uint64_t missing_scopes = frame.admitted_scope_count - frame.scope_count;
+            if (!ChargeTopologyBinarySearchWork(missing_parent_keys.size()) ||
+                !ChargeTopologyBinarySearchWork(missing_parent_keys.size()) ||
+                !ChargeTopologyBinarySearchWork(frame_loss_evidence.size())) {
+                return false;
+            }
             const std::uint64_t      missing_parents         = missing_parent_count(frame.frame_id);
             const FrameLossEvidence* loss_evidence           = find_frame_loss_evidence(frame.frame_id);
             const std::uint64_t      required_parent_records = std::max(
@@ -4849,7 +5307,15 @@ struct ProfileSessionReader::Impl {
         if (!add_required_gpu_drops(static_cast<std::uint64_t>(missing_frame_ids.size()))) {
             return false;
         }
+        if (!ChargeTopologyLinearWork(missing_frame_ids.size())) {
+            return false;
+        }
         for (const std::uint64_t frame_id : missing_frame_ids) {
+            if (!ChargeTopologyBinarySearchWork(frame_loss_evidence.size()) ||
+                !ChargeTopologyBinarySearchWork(missing_parent_keys.size()) ||
+                !ChargeTopologyBinarySearchWork(missing_parent_keys.size())) {
+                return false;
+            }
             const FrameLossEvidence* loss_evidence           = find_frame_loss_evidence(frame_id);
             const std::uint64_t      required_parent_records = std::max(
                 missing_parent_count(frame_id),
@@ -4872,6 +5338,9 @@ struct ProfileSessionReader::Impl {
         }
 
         std::uint64_t previous_root_index = kInvalidSessionIndex;
+        if (!ChargeTopologyLinearWork(scopes.size())) {
+            return false;
+        }
         for (std::size_t index = 0; index < scopes.size(); ++index) {
             const GpuScopeRecord& scope = scopes[index];
             if (scope.parent_scope_id != 0 || scope.frame_index == kInvalidSessionIndex) {
@@ -4919,6 +5388,9 @@ struct ProfileSessionReader::Impl {
             previous_root_index = index;
         }
 
+        if (!ChargeTopologyLinearWork(scopes.size())) {
+            return false;
+        }
         for (std::size_t index = 0; index < scopes.size(); ++index) {
             const GpuScopeRecord& scope = scopes[index];
             if (scope.frame_index == kInvalidSessionIndex) {
@@ -4960,6 +5432,9 @@ struct ProfileSessionReader::Impl {
                 return false;
             }
         }
+        if (!ChargeTopologyLinearWork(frames.size())) {
+            return false;
+        }
         for (std::size_t index = 0; index < frames.size(); ++index) {
             GpuFrameRecord& frame         = frames[index];
             frame.timing_topology_trusted = frame.status == ProfileGpuFrameStatus::Complete &&
@@ -4970,7 +5445,13 @@ struct ProfileSessionReader::Impl {
     }
 
     [[nodiscard]] bool BuildIndexes(bool _forensic) {
+        if (!ChargeTopologySortWork(record_sequences.size())) {
+            return false;
+        }
         std::sort(record_sequences.begin(), record_sequences.end());
+        if (!ChargeTopologyLinearWork(record_sequences.size())) {
+            return false;
+        }
         if (!record_sequences.empty() && record_sequences.front() == 0) {
             Fail(
                 SessionLoadStatus::ProtocolViolation,
