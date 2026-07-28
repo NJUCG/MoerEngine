@@ -19,11 +19,16 @@
 
 namespace Moer::Render {
 
-Renderer::Renderer(uint2 initial_resolution, const SharedPtr<EditorConfig> config) :
+Renderer::Renderer(
+    uint2                         initial_resolution,
+    const SharedPtr<EditorConfig> config,
+    RenderProfileCapture*         _render_profile_capture
+) :
     device(RenderDevice::Get()),
     manager(ShaderManager::Get()),
     gfx_queue(device.GetCommandQueue(EQueueType::Graphics)),
     resolution(initial_resolution),
+    render_profile_capture(_render_profile_capture),
     scene(),
     cmd_list() {
 

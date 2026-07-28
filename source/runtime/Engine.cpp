@@ -1127,7 +1127,9 @@ void Engine::Run(const EngineHooks& hooks) {
         auto create_renderer = [this, runtime_hooks, selected_render_method]() {
             if (selected_render_method == ERenderMethod::Raster) {
                 m_renderer = MakeUnique<Raster::RasterRenderer>(
-                    m_editor_config->GetResolution(), m_editor_config
+                    m_editor_config->GetResolution(),
+                    m_editor_config,
+                    m_render_profile_capture.get()
                 );
 
             } else if (selected_render_method == ERenderMethod::Raytracing) {

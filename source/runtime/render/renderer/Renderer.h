@@ -20,6 +20,8 @@
 
 namespace Moer::Render {
 
+class RenderProfileCapture;
+
 struct EngineHooks {
     // Common
     std::function<void(Scene&)> on_tick_scripting;
@@ -62,7 +64,11 @@ public:
         uint2        resolution = uint2(0u, 0u);
     };
 
-    Renderer(uint2 initial_resolution, const SharedPtr<EditorConfig> config);
+    Renderer(
+        uint2                         initial_resolution,
+        const SharedPtr<EditorConfig> config,
+        RenderProfileCapture*         render_profile_capture = nullptr
+    );
 
     virtual ~Renderer();
 
@@ -105,6 +111,8 @@ protected:
     ShaderManager& manager;
     CommandQueue&  gfx_queue;
     uint2          resolution;
+    // Engine owns the capture bridge and outlives every renderer instance.
+    RenderProfileCapture* render_profile_capture = nullptr;
 
     SwapchainRef     swapchain;
     BindlessArrayRef bindless_array;

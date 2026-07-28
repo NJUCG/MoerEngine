@@ -1,6 +1,8 @@
 #include "rendergraph/RenderGraph.h"
 #include "renderer/common/UiFrameGraphPass.h"
+#include "rhi/RHIGpuScope.h"
 #include "rhi/RHIImpl.h"
+#include "rhi/RHIQuery.h"
 #include "rhi/plugin/NrdPlugin.h"
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/TaskSystem.h"
@@ -13,6 +15,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -100,6 +103,47 @@ private:
 
 [[nodiscard]] bool Contains(std::string_view text, std::string_view fragment) {
     return text.find(fragment) != std::string_view::npos;
+}
+
+[[nodiscard]] Moer::Render::GpuScopeStreamConfig
+RenderGraphGpuScopeConfig() {
+    return Moer::Render::GpuScopeStreamConfig{
+        .max_resident_frames = 4,
+        .max_pending_frames = 4,
+        .max_resident_scopes = 32,
+        .max_scopes_per_frame = 16,
+        .max_sources_per_frame = 16,
+        .max_scope_name_bytes = 128,
+        .max_error_reason_bytes = 128,
+    };
+}
+
+[[nodiscard]] Moer::Render::TimestampQueryResult
+RenderGraphTimestamp(uint64_t begin_tick, uint64_t end_tick) {
+    return Moer::Render::TimestampQueryResult{
+        .begin_tick = begin_tick,
+        .end_tick = end_tick,
+        .valid_bits = 64,
+        .tick_period_ns = 1.0,
+        .duration_ns = static_cast<double>(end_tick - begin_tick),
+    };
+}
+
+[[nodiscard]] bool ResolveRenderGraphTimestamp(
+    Moer::Render::CmdSubmit& submit,
+    uint64_t                 begin_tick,
+    uint64_t                 end_tick
+) {
+    return submit.query_tokens.size() == 1 &&
+           Moer::Render::QueryBackendAccess::ResolveTimestamp(
+               submit.query_tokens.front(),
+               RenderGraphTimestamp(begin_tick, end_tick)
+           );
+}
+
+void ReleaseRenderGraphSubmit(Moer::Render::CmdSubmit& submit) {
+    submit.callbacks.clear();
+    submit.query_tokens.clear();
 }
 
 [[nodiscard]] bool HasEdgeReason(
@@ -5158,6 +5202,12 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
         std::vector<int>        completion_order{};
         GraphEventRef           deferred_named_task{};
     } rendezvous;
+    Moer::Render::GpuScopeStream gpu_scope_stream(
+        RenderGraphGpuScopeConfig()
+    );
+    auto gpu_scope_frame = gpu_scope_stream.BeginFrame(9101);
+    std::vector<uint64_t>    profiling_source_orders{};
+    std::vector<std::string> profiling_pass_names{};
 
     const auto make_record = [&](int id) {
         return [&, id](Moer::Render::CommandList&) {
@@ -5246,6 +5296,9 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
     Moer::Array<Moer::Array<Moer::Render::RHIRecordingSource>> published{};
     bool published_pending = false;
     bool distinct_command_lists = false;
+    Moer::Render::CommandList profiling_main_list(
+        Moer::Render::EQueueType::Graphics
+    );
     Moer::TaskSystem::Init();
     const bool executed = graph.ExecuteRecording(
         {},
@@ -5260,8 +5313,63 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
             distinct_command_lists = sources.size() == 2 &&
                                      sources[0].command_list != sources[1].command_list;
             published.emplace_back(std::move(sources));
+        },
+        {},
+        RenderGraph::GpuProfilingOptions{
+            .try_bind_source =
+                [&](const RenderGraph::ExecutedPassInfo& pass,
+                    Moer::Render::CommandList&            command_list,
+                    Moer::Render::RHIQueueBinding         queue_binding,
+                    Moer::uint64                          source_order) {
+                    if (pass.execution_class ==
+                        RenderGraph::PassExecutionClass::MainThread) {
+                        return false;
+                    }
+                    profiling_source_orders.emplace_back(source_order);
+                    profiling_pass_names.emplace_back(pass.name);
+                    auto recorder = gpu_scope_frame.CreateRecorder(
+                        queue_binding, source_order
+                    );
+                    if (!recorder.Valid()) {
+                        return false;
+                    }
+                    command_list.SetGpuScopeRecorder(std::move(recorder));
+                    return true;
+                },
+            .main_thread_command_list = &profiling_main_list,
+            .source_order_base = 73,
         }
     );
+    Moer::Array<Moer::Render::CmdSubmit> profiled_submits{};
+    Moer::Render::ResolvedGpuScopeFrame  resolved_gpu_frame{};
+    bool profiling_submit_contract = false;
+    bool profiling_resolution_contract = false;
+    if (published.size() == 1 && published.front().size() == 2) {
+        profiled_submits.reserve(2);
+        for (auto& source : published.front()) {
+            profiled_submits.emplace_back(source.command_list->Submit());
+        }
+        profiling_submit_contract =
+            profiled_submits.size() == 2 &&
+            profiled_submits[0].query_tokens.size() == 1 &&
+            profiled_submits[1].query_tokens.size() == 1 &&
+            !published.front()[0].command_list->HasGpuScopeRecorder() &&
+            !published.front()[1].command_list->HasGpuScopeRecorder() &&
+            gpu_scope_stream.SealFrame(gpu_scope_frame);
+        if (profiling_submit_contract) {
+            const bool reverse_resolved =
+                ResolveRenderGraphTimestamp(
+                    profiled_submits[1], 200, 240
+                ) &&
+                !gpu_scope_stream.TryPopFrame(resolved_gpu_frame) &&
+                ResolveRenderGraphTimestamp(
+                    profiled_submits[0], 100, 130
+                );
+            profiling_resolution_contract =
+                reverse_resolved &&
+                gpu_scope_stream.TryPopFrame(resolved_gpu_frame);
+        }
+    }
     const bool avoided_named_thread_reentry = !rendezvous.named_task_ran.load();
     GraphEventRef deferred_named_task{};
     {
@@ -5298,6 +5406,21 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
         "the test must exercise completion order different from source order"
     );
     suite.Check(
+        profiling_source_orders == std::vector<uint64_t>{73, 74} &&
+            profiling_pass_names ==
+                std::vector<std::string>{"FirstRecord", "SecondRecord"} &&
+            profiling_submit_contract &&
+            profiling_resolution_contract &&
+            resolved_gpu_frame.valid &&
+            resolved_gpu_frame.queue_roots[0].size() == 2 &&
+            resolved_gpu_frame.queue_roots[0][0].name == "FirstRecord" &&
+            resolved_gpu_frame.queue_roots[0][0].source_order == 73 &&
+            resolved_gpu_frame.queue_roots[0][1].name == "SecondRecord" &&
+            resolved_gpu_frame.queue_roots[0][1].source_order == 74,
+        test_name,
+        "GPU profiling roots must follow compiled source order despite reverse worker/query completion"
+    );
+    suite.Check(
         joined_before_main,
         test_name,
         "a caller-thread pass must not run until the recording wave has joined"
@@ -5316,6 +5439,914 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
         test_name,
         "every published source gate must reach a successful terminal state"
     );
+    for (auto& submit : profiled_submits) {
+        ReleaseRenderGraphSubmit(submit);
+    }
+}
+
+void TestGpuProfilingMainThreadSparseOrderAndRebind(TestSuite& suite) {
+    using namespace Moer::Render;
+    constexpr std::string_view test_name =
+        "GPU profiling MainThread sparse order and rebind";
+
+    GpuScopeStream gpu_scope_stream(RenderGraphGpuScopeConfig());
+    auto           gpu_scope_frame = gpu_scope_stream.BeginFrame(9102);
+    CommandList    main_command_list(EQueueType::Graphics);
+    RenderGraph    graph("GpuProfileMainThread");
+
+    int main_a_calls = 0;
+    int cpu_calls = 0;
+    int external_calls = 0;
+    int main_b_calls = 0;
+    graph.AddPass(
+        "MainA",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect().MainThread();
+        },
+        [&] { ++main_a_calls; }
+    );
+    graph.AddPass(
+        "CpuPrepare",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect().CpuPrepare();
+        },
+        [&] {
+            ++cpu_calls;
+            suite.Check(
+                !main_command_list.HasGpuScopeRecorder(),
+                test_name,
+                "CpuPrepare unexpectedly inherited a GPU profiling source"
+            );
+        }
+    );
+    graph.AddPass(
+        "ExternalControl",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect().ExternalControl();
+        },
+        [&] {
+            ++external_calls;
+            suite.Check(
+                !main_command_list.HasGpuScopeRecorder(),
+                test_name,
+                "ExternalControl unexpectedly inherited a GPU profiling source"
+            );
+        }
+    );
+    graph.AddPass(
+        "MainB",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect().MainThread();
+        },
+        [&] { ++main_b_calls; }
+    );
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    std::vector<uint64_t> source_orders{};
+    std::vector<std::string> pass_names{};
+    Moer::Array<CmdSubmit> main_submits{};
+    bool recorder_cleared_after_submit = true;
+    int  observer_calls = 0;
+    int  publish_calls = 0;
+    const bool executed = graph.ExecuteRecording(
+        [&](const RenderGraph::ExecutedPassInfo&) {
+            ++observer_calls;
+            main_submits.emplace_back(main_command_list.Submit());
+            recorder_cleared_after_submit =
+                recorder_cleared_after_submit &&
+                !main_command_list.HasGpuScopeRecorder();
+        },
+        {},
+        false,
+        [&](Moer::Array<RHIRecordingSource>&&) { ++publish_calls; },
+        {},
+        RenderGraph::GpuProfilingOptions{
+            .try_bind_source =
+                [&](const RenderGraph::ExecutedPassInfo& pass,
+                    CommandList&                         command_list,
+                    RHIQueueBinding                      queue_binding,
+                    Moer::uint64                         source_order) {
+                    source_orders.emplace_back(source_order);
+                    pass_names.emplace_back(pass.name);
+                    auto recorder = gpu_scope_frame.CreateRecorder(
+                        queue_binding, source_order
+                    );
+                    if (!recorder.Valid()) {
+                        return false;
+                    }
+                    command_list.SetGpuScopeRecorder(std::move(recorder));
+                    return true;
+                },
+            .main_thread_command_list = &main_command_list,
+            .source_order_base = 100,
+        }
+    );
+
+    ResolvedGpuScopeFrame resolved{};
+    const bool submitted =
+        main_submits.size() == 2 &&
+        main_submits[0].query_tokens.size() == 1 &&
+        main_submits[1].query_tokens.size() == 1 &&
+        gpu_scope_stream.SealFrame(gpu_scope_frame);
+    bool resolved_ok = false;
+    if (submitted) {
+        resolved_ok =
+            ResolveRenderGraphTimestamp(main_submits[1], 300, 340) &&
+            !gpu_scope_stream.TryPopFrame(resolved) &&
+            ResolveRenderGraphTimestamp(main_submits[0], 200, 225) &&
+            gpu_scope_stream.TryPopFrame(resolved);
+    }
+
+    suite.Check(executed, test_name, graph.GetCompileError());
+    suite.Check(
+        main_a_calls == 1 && cpu_calls == 1 &&
+            external_calls == 1 && main_b_calls == 1 &&
+            observer_calls == 2 && publish_calls == 0,
+        test_name,
+        "MainThread/CPU/External callbacks did not retain their ownership classes"
+    );
+    suite.Check(
+        source_orders == std::vector<uint64_t>{100, 103} &&
+            pass_names == std::vector<std::string>{"MainA", "MainB"} &&
+            recorder_cleared_after_submit,
+        test_name,
+        "MainThread sources lost compiled-order gaps or Submit rebind semantics"
+    );
+    suite.Check(
+        resolved_ok && resolved.valid &&
+            resolved.queue_roots[0].size() == 2 &&
+            resolved.queue_roots[0][0].name == "MainA" &&
+            resolved.queue_roots[0][0].source_order == 100 &&
+            resolved.queue_roots[0][1].name == "MainB" &&
+            resolved.queue_roots[0][1].source_order == 103,
+        test_name,
+        "MainThread timestamp roots did not preserve sparse compiled order"
+    );
+    for (CmdSubmit& submit : main_submits) {
+        ReleaseRenderGraphSubmit(submit);
+    }
+}
+
+void TestGpuProfilingMainThreadGenerationReuse(TestSuite& suite) {
+    using namespace Moer::Render;
+    constexpr std::string_view test_name =
+        "GPU profiling MainThread generation reuse";
+
+    GpuScopeStream gpu_scope_stream(RenderGraphGpuScopeConfig());
+    auto           gpu_scope_frame = gpu_scope_stream.BeginFrame(9103);
+    CommandList    main_command_list(EQueueType::Graphics);
+    RenderGraph    graph("GpuProfileMainThreadGenerationReuse");
+
+    int pass_calls = 0;
+    for (std::string_view pass_name : {"MainA", "MainB"}) {
+        graph.AddPass(
+            pass_name,
+            [](RenderGraph::PassBuilder& builder) {
+                builder.SideEffect().MainThread();
+            },
+            [&] { ++pass_calls; }
+        );
+    }
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    int                bind_calls = 0;
+    std::vector<uint64_t> source_orders{};
+    const bool executed = graph.ExecuteRecording(
+        {},
+        {},
+        false,
+        {},
+        {},
+        RenderGraph::GpuProfilingOptions{
+            .try_bind_source =
+                [&](const RenderGraph::ExecutedPassInfo&,
+                    CommandList&                         command_list,
+                    RHIQueueBinding                      queue_binding,
+                    Moer::uint64                         source_order) {
+                    ++bind_calls;
+                    source_orders.emplace_back(source_order);
+                    auto recorder = gpu_scope_frame.CreateRecorder(
+                        queue_binding, source_order
+                    );
+                    if (!recorder.Valid()) {
+                        return false;
+                    }
+                    command_list.SetGpuScopeRecorder(std::move(recorder));
+                    return true;
+                },
+            .main_thread_command_list = &main_command_list,
+            .source_order_base = 120,
+        }
+    );
+
+    CmdSubmit submit = main_command_list.Submit();
+    ResolvedGpuScopeFrame resolved{};
+    const bool submitted =
+        submit.query_tokens.size() == 2 &&
+        !main_command_list.HasGpuScopeRecorder() &&
+        gpu_scope_stream.SealFrame(gpu_scope_frame);
+    bool resolved_ok = false;
+    if (submitted) {
+        resolved_ok =
+            QueryBackendAccess::ResolveTimestamp(
+                submit.query_tokens[1],
+                RenderGraphTimestamp(400, 440)
+            ) &&
+            !gpu_scope_stream.TryPopFrame(resolved) &&
+            QueryBackendAccess::ResolveTimestamp(
+                submit.query_tokens[0],
+                RenderGraphTimestamp(300, 325)
+            ) &&
+            gpu_scope_stream.TryPopFrame(resolved);
+    }
+
+    suite.Check(executed, test_name, graph.GetCompileError());
+    suite.Check(
+        pass_calls == 2 && bind_calls == 1 &&
+            source_orders == std::vector<uint64_t>{120},
+        test_name,
+        "one MainThread recording generation must bind exactly one stable source"
+    );
+    suite.Check(
+        resolved_ok && resolved.valid &&
+            resolved.queue_roots[0].size() == 2 &&
+            resolved.queue_roots[0][0].name == "MainA" &&
+            resolved.queue_roots[0][0].source_order == 120 &&
+            resolved.queue_roots[0][0].local_order == 0 &&
+            resolved.queue_roots[0][1].name == "MainB" &&
+            resolved.queue_roots[0][1].source_order == 120 &&
+            resolved.queue_roots[0][1].local_order == 1,
+        test_name,
+        "every pass in a shared MainThread generation must retain a timestamp root"
+    );
+    ReleaseRenderGraphSubmit(submit);
+}
+
+void TestGpuProfilingMainThreadManagedBoundary(TestSuite& suite) {
+    using namespace Moer::Render;
+    constexpr std::string_view test_name =
+        "GPU profiling MainThread managed boundary";
+
+    const auto run_case = [&](bool rotate_main_generation) {
+        CommandList main_command_list(EQueueType::Graphics);
+        RenderGraph graph(
+            rotate_main_generation ?
+                "GpuProfileManagedBoundaryRotated" :
+                "GpuProfileManagedBoundaryUnrotated"
+        );
+
+        int main_a_calls = 0;
+        int managed_calls = 0;
+        int main_b_calls = 0;
+        const auto main_a = graph.AddPass(
+            "MainA",
+            [](RenderGraph::PassBuilder& builder) {
+                builder.SideEffect().MainThread();
+            },
+            [&] { ++main_a_calls; }
+        );
+        const auto managed = graph.AddRecordPass(
+            "Managed",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.DependsOn(main_a).SideEffect();
+            },
+            [&](CommandList&) { ++managed_calls; },
+            RenderGraph::PassExecutionClass::SerialRecord
+        );
+        graph.AddPass(
+            "MainB",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.DependsOn(managed).SideEffect().MainThread();
+            },
+            [&] { ++main_b_calls; }
+        );
+
+        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+        int                   observer_calls = 0;
+        int                   bind_calls = 0;
+        std::vector<uint64_t> source_orders{};
+        Moer::Array<CmdSubmit> main_submits{};
+        Moer::Array<RHIRecordingSource> published{};
+        const bool executed = graph.ExecuteRecording(
+            [&](const RenderGraph::ExecutedPassInfo&) {
+                ++observer_calls;
+                if (rotate_main_generation) {
+                    main_submits.emplace_back(main_command_list.Submit());
+                }
+            },
+            {},
+            false,
+            [&](Moer::Array<RHIRecordingSource>&& sources) {
+                published = std::move(sources);
+            },
+            {},
+            RenderGraph::GpuProfilingOptions{
+                .try_bind_source =
+                    [&](const RenderGraph::ExecutedPassInfo&,
+                        CommandList&,
+                        RHIQueueBinding,
+                        Moer::uint64 source_order) {
+                        ++bind_calls;
+                        source_orders.emplace_back(source_order);
+                        return false;
+                    },
+                .main_thread_command_list = &main_command_list,
+                .source_order_base = 200,
+            }
+        );
+
+        if (!main_command_list.IsEmpty() ||
+            main_command_list.HasGpuScopeRecorder() ||
+            main_command_list
+                .IsLegacyGpuProfilingSuppressedForGeneration()) {
+            main_submits.emplace_back(main_command_list.Submit());
+        }
+        for (RHIRecordingSource& source : published) {
+            CmdSubmit submit = source.command_list->Submit();
+            ReleaseRenderGraphSubmit(submit);
+        }
+        for (CmdSubmit& submit : main_submits) {
+            ReleaseRenderGraphSubmit(submit);
+        }
+
+        if (rotate_main_generation) {
+            suite.Check(
+                executed && main_a_calls == 1 && managed_calls == 1 &&
+                    main_b_calls == 1 && observer_calls == 2 &&
+                    bind_calls == 3 &&
+                    source_orders ==
+                        std::vector<uint64_t>{200, 201, 202},
+                test_name,
+                graph.GetCompileError()
+            );
+        } else {
+            suite.Check(
+                !executed && main_a_calls == 1 && managed_calls == 0 &&
+                    main_b_calls == 0 && observer_calls == 1 &&
+                    bind_calls == 1 && published.empty() &&
+                    source_orders == std::vector<uint64_t>{200} &&
+                    Contains(
+                        graph.GetCompileError(),
+                        "must rotate its recording generation"
+                    ),
+                test_name,
+                "an unrotated MainThread generation was not rejected before "
+                "the managed source was bound, published, or recorded"
+            );
+        }
+    };
+
+    run_case(false);
+    run_case(true);
+
+    {
+        CommandList main_command_list(EQueueType::Graphics);
+        RenderGraph graph("GpuProfileManagedBoundaryTerminal");
+        int main_calls = 0;
+        int managed_calls = 0;
+        const auto main = graph.AddPass(
+            "Main",
+            [](RenderGraph::PassBuilder& builder) {
+                builder.SideEffect().MainThread();
+            },
+            [&] { ++main_calls; }
+        );
+        graph.AddRecordPass(
+            "ManagedTerminal",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.DependsOn(main).SideEffect();
+            },
+            [&](CommandList&) { ++managed_calls; },
+            RenderGraph::PassExecutionClass::SerialRecord
+        );
+
+        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+        int                   bind_calls = 0;
+        int                   publish_calls = 0;
+        std::vector<uint64_t> source_orders{};
+        const bool executed = graph.ExecuteRecording(
+            {},
+            {},
+            false,
+            [&](Moer::Array<RHIRecordingSource>&&) {
+                ++publish_calls;
+            },
+            {},
+            RenderGraph::GpuProfilingOptions{
+                .try_bind_source =
+                    [&](const RenderGraph::ExecutedPassInfo&,
+                        CommandList&,
+                        RHIQueueBinding,
+                        Moer::uint64 source_order) {
+                        ++bind_calls;
+                        source_orders.emplace_back(source_order);
+                        return false;
+                    },
+                .main_thread_command_list = &main_command_list,
+                .source_order_base = 220,
+            }
+        );
+
+        CmdSubmit main_submit = main_command_list.Submit();
+        ReleaseRenderGraphSubmit(main_submit);
+        suite.Check(
+            !executed && main_calls == 1 && managed_calls == 0 &&
+                bind_calls == 1 && publish_calls == 0 &&
+                source_orders == std::vector<uint64_t>{220} &&
+                Contains(
+                    graph.GetCompileError(),
+                    "must rotate its recording generation"
+                ),
+            test_name,
+            "a terminal managed source escaped the pre-publication "
+            "MainThread generation boundary"
+        );
+    }
+
+    {
+        CommandList main_command_list(EQueueType::Graphics);
+        RenderGraph graph("GpuProfileManagedBoundaryDirtyReplacement");
+        int main_calls = 0;
+        int managed_calls = 0;
+        const auto main = graph.AddPass(
+            "Main",
+            [](RenderGraph::PassBuilder& builder) {
+                builder.SideEffect().MainThread();
+            },
+            [&] { ++main_calls; }
+        );
+        graph.AddRecordPass(
+            "Managed",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.DependsOn(main).SideEffect();
+            },
+            [&](CommandList&) { ++managed_calls; },
+            RenderGraph::PassExecutionClass::SerialRecord
+        );
+
+        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+        int                    observer_calls = 0;
+        int                    bind_calls = 0;
+        int                    publish_calls = 0;
+        Moer::Array<CmdSubmit> main_submits{};
+        const bool executed = graph.ExecuteRecording(
+            [&](const RenderGraph::ExecutedPassInfo&) {
+                ++observer_calls;
+                main_submits.emplace_back(main_command_list.Submit());
+                main_command_list.PushScope("DirtyReplacement");
+                main_command_list.PopScope();
+            },
+            {},
+            false,
+            [&](Moer::Array<RHIRecordingSource>&&) {
+                ++publish_calls;
+            },
+            {},
+            RenderGraph::GpuProfilingOptions{
+                .try_bind_source =
+                    [&](const RenderGraph::ExecutedPassInfo&,
+                        CommandList&,
+                        RHIQueueBinding,
+                        Moer::uint64) {
+                        ++bind_calls;
+                        return false;
+                    },
+                .main_thread_command_list = &main_command_list,
+                .source_order_base = 230,
+            }
+        );
+
+        main_submits.emplace_back(main_command_list.Submit());
+        for (CmdSubmit& submit : main_submits) {
+            ReleaseRenderGraphSubmit(submit);
+        }
+        suite.Check(
+            !executed && main_calls == 1 && managed_calls == 0 &&
+                observer_calls == 1 && bind_calls == 1 &&
+                publish_calls == 0 &&
+                Contains(
+                    graph.GetCompileError(),
+                    "replacement recording generation empty and unbound"
+                ),
+            test_name,
+            "a MainThread observer recorded into the replacement generation "
+            "before managed publication"
+        );
+    }
+
+    {
+        RenderGraph graph("GpuProfileManagedOnly");
+        int managed_calls = 0;
+        graph.AddRecordPass(
+            "ManagedOnly",
+            [](RenderGraph::PassBuilder& builder) {
+                builder.SideEffect();
+            },
+            [&](CommandList&) { ++managed_calls; },
+            RenderGraph::PassExecutionClass::SerialRecord
+        );
+
+        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+        int bind_calls = 0;
+        Moer::Array<RHIRecordingSource> published{};
+        const bool executed = graph.ExecuteRecording(
+            {},
+            {},
+            false,
+            [&](Moer::Array<RHIRecordingSource>&& sources) {
+                published = std::move(sources);
+            },
+            {},
+            RenderGraph::GpuProfilingOptions{
+                .try_bind_source =
+                    [&](const RenderGraph::ExecutedPassInfo&,
+                        CommandList&,
+                        RHIQueueBinding,
+                        Moer::uint64) {
+                        ++bind_calls;
+                        return false;
+                    },
+            }
+        );
+
+        const bool published_succeeded =
+            published.size() == 1 &&
+            published.front().completion.Status() ==
+                ERHIRecordingStatus::Succeeded;
+        for (RHIRecordingSource& source : published) {
+            CmdSubmit submit = source.command_list->Submit();
+            ReleaseRenderGraphSubmit(submit);
+        }
+        suite.Check(
+            executed && managed_calls == 1 && bind_calls == 1 &&
+                published_succeeded,
+            test_name,
+            "a managed-only graph incorrectly required a MainThread "
+            "CommandList"
+        );
+    }
+}
+
+void TestGpuProfilingBindingFailureContracts(TestSuite& suite) {
+    using namespace Moer::Render;
+    constexpr std::string_view test_name =
+        "GPU profiling binding failure contracts";
+
+    {
+        RenderGraph graph("GpuProfileDrop");
+        int record_calls = 0;
+        int bind_calls = 0;
+        int publish_calls = 0;
+        Moer::Array<RHIRecordingSource> published{};
+        graph.AddRecordPass(
+            "Dropped",
+            [](RenderGraph::PassBuilder& builder) {
+                builder.SideEffect().SerialRecord();
+            },
+            [&](CommandList& command_list) {
+                ++record_calls;
+                suite.Check(
+                    !command_list.HasGpuScopeRecorder() &&
+                        command_list
+                            .IsLegacyGpuProfilingSuppressedForGeneration(),
+                    test_name,
+                    "a rejected profiling source did not suppress legacy "
+                    "timing for its recording generation"
+                );
+                command_list.PushScopeWithTimeScope(
+                    "RejectedInnerTimedScope"
+                );
+                command_list.PopScopeWithTimeScope();
+            },
+            RenderGraph::PassExecutionClass::SerialRecord
+        );
+        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+        const bool executed = graph.ExecuteRecording(
+            {},
+            {},
+            false,
+            [&](Moer::Array<RHIRecordingSource>&& sources) {
+                ++publish_calls;
+                published = std::move(sources);
+            },
+            {},
+            RenderGraph::GpuProfilingOptions{
+                .try_bind_source =
+                    [&](const RenderGraph::ExecutedPassInfo&,
+                        CommandList&,
+                        RHIQueueBinding,
+                        Moer::uint64) {
+                        ++bind_calls;
+                        return false;
+                    },
+            }
+        );
+        bool no_fallback_query = false;
+        if (published.size() == 1) {
+            CmdSubmit submit = published.front().command_list->Submit();
+            no_fallback_query = submit.query_tokens.empty();
+            ReleaseRenderGraphSubmit(submit);
+        }
+        suite.Check(
+            executed && record_calls == 1 && bind_calls == 1 &&
+                publish_calls == 1 && no_fallback_query,
+            test_name,
+            "a false binder result failed the graph or created a legacy timestamp"
+        );
+    }
+
+    {
+        GpuScopeStream stream(RenderGraphGpuScopeConfig());
+        auto           frame = stream.BeginFrame(9104);
+        RenderGraph    graph("MetadataSetupCannotBindGpuRecorder");
+        int            record_calls = 0;
+        int            publish_calls = 0;
+        graph.AddRecordPass(
+            "Pass",
+            [](RenderGraph::PassBuilder& builder) {
+                builder.SideEffect().SerialRecord();
+            },
+            [&](CommandList&) { ++record_calls; },
+            RenderGraph::PassExecutionClass::SerialRecord
+        );
+        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+        const bool executed = graph.ExecuteRecording(
+            {},
+            [&](const RenderGraph::ExecutedPassInfo&,
+                RHIRecordingSource& source) {
+                source.command_list->SetGpuScopeRecorder(
+                    frame.CreateRecorder(
+                        RHIQueueBinding{
+                            .queue =
+                                source.command_list->GetQueueType(),
+                            .native_queue_id = 0,
+                            .family_id = 0,
+                            .available = true,
+                        },
+                        0
+                    )
+                );
+            },
+            false,
+            [&](Moer::Array<RHIRecordingSource>&&) {
+                ++publish_calls;
+            }
+        );
+        ResolvedGpuScopeFrame resolved{};
+        const bool drained =
+            stream.SealFrame(frame) && stream.TryPopFrame(resolved);
+        suite.Check(
+            !executed && record_calls == 0 && publish_calls == 0 &&
+                Contains(
+                    graph.GetCompileError(),
+                    "may only change submit metadata"
+                ) &&
+                drained && resolved.valid,
+            test_name,
+            "metadata-only source setup bypassed the independent GPU profiling seam"
+        );
+    }
+
+    const auto expect_pre_publish_failure =
+        [&](std::string_view graph_name,
+            RenderGraph::GpuProfilingOptions::TryBindSource binder,
+            std::string_view expected_error) {
+            RenderGraph graph(graph_name);
+            int record_calls = 0;
+            int publish_calls = 0;
+            graph.AddRecordPass(
+                "Pass",
+                [](RenderGraph::PassBuilder& builder) {
+                    builder.SideEffect().SerialRecord();
+                },
+                [&](CommandList&) { ++record_calls; },
+                RenderGraph::PassExecutionClass::SerialRecord
+            );
+            suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+            const bool executed = graph.ExecuteRecording(
+                {},
+                {},
+                false,
+                [&](Moer::Array<RHIRecordingSource>&&) { ++publish_calls; },
+                {},
+                RenderGraph::GpuProfilingOptions{
+                    .try_bind_source = std::move(binder),
+                }
+            );
+            suite.Check(
+                !executed && record_calls == 0 && publish_calls == 0 &&
+                    Contains(graph.GetCompileError(), expected_error),
+                test_name,
+                graph.GetCompileError()
+            );
+        };
+
+    expect_pre_publish_failure(
+        "GpuProfileThrow",
+        [](const RenderGraph::ExecutedPassInfo&,
+           CommandList&,
+           RHIQueueBinding,
+           Moer::uint64) -> bool {
+            throw std::runtime_error("synthetic bind failure");
+        },
+        "synthetic bind failure"
+    );
+    expect_pre_publish_failure(
+        "GpuProfileMutation",
+        [](const RenderGraph::ExecutedPassInfo&,
+           CommandList& command_list,
+           RHIQueueBinding,
+           Moer::uint64) {
+            command_list.SetResourceStateOwnership(
+                ERHIResourceStateOwnership::Explicit
+            );
+            return false;
+        },
+        "illegally mutated"
+    );
+    expect_pre_publish_failure(
+        "GpuProfileResultMismatch",
+        [](const RenderGraph::ExecutedPassInfo&,
+           CommandList&,
+           RHIQueueBinding,
+           Moer::uint64) { return true; },
+        "illegally mutated"
+    );
+
+    for (const bool bind_source : {false, true}) {
+        GpuScopeStream stream(RenderGraphGpuScopeConfig());
+        auto frame = stream.BeginFrame(bind_source ? 9105 : 9106);
+        RenderGraph graph(
+            bind_source ?
+                "GpuProfilePublisherClearsRecorder" :
+                "GpuProfilePublisherClearsSuppression"
+        );
+        int record_calls = 0;
+        int publish_calls = 0;
+        graph.AddRecordPass(
+            "Pass",
+            [](RenderGraph::PassBuilder& builder) {
+                builder.SideEffect().SerialRecord();
+            },
+            [&](CommandList&) { ++record_calls; },
+            RenderGraph::PassExecutionClass::SerialRecord
+        );
+        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+        const bool executed = graph.ExecuteRecording(
+            {},
+            {},
+            false,
+            [&](Moer::Array<RHIRecordingSource>&& sources) {
+                ++publish_calls;
+                if (sources.size() == 1) {
+                    const EQueueType queue =
+                        sources.front().command_list->GetQueueType();
+                    *sources.front().command_list = CommandList(queue);
+                }
+            },
+            {},
+            RenderGraph::GpuProfilingOptions{
+                .try_bind_source =
+                    [&](const RenderGraph::ExecutedPassInfo&,
+                        CommandList& command_list,
+                        RHIQueueBinding queue_binding,
+                        Moer::uint64 source_order) {
+                        if (!bind_source) {
+                            return false;
+                        }
+                        auto recorder = frame.CreateRecorder(
+                            queue_binding, source_order
+                        );
+                        if (!recorder.Valid()) {
+                            return false;
+                        }
+                        command_list.SetGpuScopeRecorder(
+                            std::move(recorder)
+                        );
+                        return true;
+                    },
+            }
+        );
+        ResolvedGpuScopeFrame resolved{};
+        const bool drained =
+            stream.SealFrame(frame) && stream.TryPopFrame(resolved);
+        suite.Check(
+            !executed && record_calls == 0 && publish_calls == 1 &&
+                Contains(
+                    graph.GetCompileError(),
+                    "publisher mutated pending source state"
+                ) &&
+                drained && resolved.valid,
+            test_name,
+            "the publisher cleared an admitted recorder/suppression state "
+            "without failing before dispatch"
+        );
+    }
+
+    {
+        RenderGraph graph("GpuProfileOrderOverflow");
+        int bind_calls = 0;
+        int record_calls = 0;
+        int publish_calls = 0;
+        for (std::string_view name : {"First", "Second"}) {
+            graph.AddRecordPass(
+                name,
+                [](RenderGraph::PassBuilder& builder) {
+                    builder.SideEffect().SerialRecord();
+                },
+                [&](CommandList&) { ++record_calls; },
+                RenderGraph::PassExecutionClass::SerialRecord
+            );
+        }
+        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+        const bool executed = graph.ExecuteRecording(
+            {},
+            {},
+            false,
+            [&](Moer::Array<RHIRecordingSource>&&) { ++publish_calls; },
+            {},
+            RenderGraph::GpuProfilingOptions{
+                .try_bind_source =
+                    [&](const RenderGraph::ExecutedPassInfo&,
+                        CommandList&,
+                        RHIQueueBinding,
+                        Moer::uint64) {
+                        ++bind_calls;
+                        return false;
+                    },
+                .source_order_base = std::numeric_limits<Moer::uint64>::max(),
+            }
+        );
+        suite.Check(
+            !executed && bind_calls == 0 && record_calls == 0 &&
+                publish_calls == 0 &&
+                Contains(graph.GetCompileError(), "source order overflow"),
+            test_name,
+            "source-order overflow was not rejected before binding or publication"
+        );
+    }
+
+    {
+        RenderGraph graph("GpuProfileDisabledCompatibility");
+        int record_calls = 0;
+        Moer::Array<RHIRecordingSource> published{};
+        graph.AddRecordPass(
+            "Legacy",
+            [](RenderGraph::PassBuilder& builder) {
+                builder.SideEffect().SerialRecord();
+            },
+            [&](CommandList& command_list) {
+                ++record_calls;
+                suite.Check(
+                    !command_list.HasGpuScopeRecorder() &&
+                        !command_list
+                            .IsLegacyGpuProfilingSuppressedForGeneration(),
+                    test_name,
+                    "empty GPU profiling options changed the legacy path"
+                );
+                command_list.PushScopeWithTimeScope(
+                    "LegacyCompatibilityScope"
+                );
+                command_list.PopScopeWithTimeScope();
+            },
+            RenderGraph::PassExecutionClass::SerialRecord
+        );
+        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+        const bool executed = graph.ExecuteRecording(
+            {},
+            {},
+            false,
+            [&](Moer::Array<RHIRecordingSource>&& sources) {
+                published = std::move(sources);
+            }
+        );
+        bool legacy_query_preserved = false;
+        if (published.size() == 1) {
+            const bool suppression_disabled =
+                !published.front()
+                     .command_list
+                     ->IsLegacyGpuProfilingSuppressedForGeneration();
+            CmdSubmit submit = published.front().command_list->Submit();
+            const bool has_legacy_timestamp_markers =
+                submit.cmds.size() == 2 &&
+                submit.cmds[0]->Type() == Command::EType::Scope &&
+                submit.cmds[1]->Type() == Command::EType::Scope &&
+                static_cast<const ScopeCmd*>(submit.cmds[0].get())
+                    ->QueryTimestamp() &&
+                static_cast<const ScopeCmd*>(submit.cmds[1].get())
+                    ->QueryTimestamp();
+            legacy_query_preserved =
+                suppression_disabled &&
+                has_legacy_timestamp_markers &&
+                submit.query_tokens.empty();
+            ReleaseRenderGraphSubmit(submit);
+        }
+        suite.Check(
+            executed && record_calls == 1 && legacy_query_preserved,
+            test_name,
+            "empty GPU profiling options suppressed the legacy timed query"
+        );
+    }
 }
 
 void TestCpuRecordingDependenciesSplitParallelGroups(TestSuite& suite) {
@@ -6112,6 +7143,10 @@ int main() {
     TestCpuPrepareIsExcludedFromGpuQueuePlan(suite);
     TestParallelRecordingFallsBackWithoutTaskGraph(suite);
     TestParallelRecordingDispatchAndJoin(suite);
+    TestGpuProfilingMainThreadSparseOrderAndRebind(suite);
+    TestGpuProfilingMainThreadGenerationReuse(suite);
+    TestGpuProfilingMainThreadManagedBoundary(suite);
+    TestGpuProfilingBindingFailureContracts(suite);
     TestCpuRecordingDependenciesSplitParallelGroups(suite);
     TestRecordingPublicationFailureTerminatesGates(suite);
     TestFrameSetupTokenAndTlasBoundaryContract(suite);

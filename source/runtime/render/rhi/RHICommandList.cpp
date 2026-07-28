@@ -195,6 +195,7 @@ CommandList::~CommandList() {
     active_gpu_scope_depth = 0;
     gpu_scope_suppression_depth = 0;
     gpu_scope_recorder_bound_this_generation = false;
+    suppress_legacy_gpu_profiling_this_generation = false;
 
     // No externally observable rejection may run while the dying object still
     // exposes an extractable command generation.
@@ -292,6 +293,7 @@ CommandList& CommandList::operator=(CommandList&& _other) {
     active_gpu_scope_depth = 0;
     gpu_scope_suppression_depth = 0;
     gpu_scope_recorder_bound_this_generation = false;
+    suppress_legacy_gpu_profiling_this_generation = false;
 
     commands                    = std::move(_other.commands);
     current_barriers            = _other.current_barriers;
@@ -326,6 +328,8 @@ CommandList& CommandList::operator=(CommandList&& _other) {
         _other.gpu_scope_suppression_depth;
     gpu_scope_recorder_bound_this_generation =
         _other.gpu_scope_recorder_bound_this_generation;
+    suppress_legacy_gpu_profiling_this_generation =
+        _other.suppress_legacy_gpu_profiling_this_generation;
     query_owner_id              = _other.query_owner_id;
 
     _other.current_barriers          = nullptr;
@@ -356,6 +360,7 @@ CommandList& CommandList::operator=(CommandList&& _other) {
     _other.active_gpu_scope_depth = 0;
     _other.gpu_scope_suppression_depth = 0;
     _other.gpu_scope_recorder_bound_this_generation = false;
+    _other.suppress_legacy_gpu_profiling_this_generation = false;
 
     // Install the complete incoming generation before rejecting a Fence,
     // publishing a terminal Future (which wakes Wait/Get), or releasing a
@@ -642,6 +647,7 @@ CmdSubmit CommandList::Submit() {
     active_gpu_scope_depth = 0;
     gpu_scope_suppression_depth = 0;
     gpu_scope_recorder_bound_this_generation = false;
+    suppress_legacy_gpu_profiling_this_generation = false;
     translate_execution_class = ERHITranslateExecutionClass::Parallel;
     resource_state_ownership  = ERHIResourceStateOwnership::BackendTracked;
     return std::move(submit);
@@ -775,6 +781,7 @@ CmdSubmit CommandList::PrepareRecordingRejectionDrain(
     active_gpu_scope_depth = 0;
     gpu_scope_suppression_depth = 0;
     gpu_scope_recorder_bound_this_generation = false;
+    suppress_legacy_gpu_profiling_this_generation = false;
     translate_execution_class =
         ERHITranslateExecutionClass::Parallel;
     resource_state_ownership =
@@ -1135,8 +1142,10 @@ void CommandList::PushScopeWithTimeScope(std::string_view _name, float4 _color) 
     // producers are still recording; that becomes a bounded dropped subtree,
     // not a mixed modern/legacy query stream.
     const bool modern_scope = gpu_scope_recorder.IsBound();
+    const bool legacy_timestamp_allowed =
+        !suppress_legacy_gpu_profiling_this_generation;
     bool       legacy_timestamp = false;
-    if (!modern_scope) {
+    if (!modern_scope && legacy_timestamp_allowed) {
         legacy_timestamp =
             timestamp_scope_names.emplace(scope_name).second;
         assert(
@@ -1299,6 +1308,11 @@ CommandList& CommandList::SetGpuScopeRecorder(
             "GPU scope recorder is immutable for one CommandList recording generation"
         );
     }
+    if (suppress_legacy_gpu_profiling_this_generation) {
+        throw std::logic_error(
+            "GPU profiling mode is immutable for one CommandList recording generation"
+        );
+    }
     // An empty recorder is an admission failure, not an opt-out signal.
     // Callers that do not want modern profiling simply never call this API.
     // A once-bound recorder whose stream later closes remains accepted and
@@ -1326,6 +1340,32 @@ CommandList& CommandList::SetGpuScopeRecorder(
         gpu_scope_recorder.IsBound();
     return *this;
 }
+
+CommandList&
+CommandList::SuppressLegacyGpuProfilingForGeneration() {
+    if (!scope_stack.empty() || HasOpenQueries()) {
+        throw std::logic_error(
+            "GPU profiling mode cannot change while a marker or query is open"
+        );
+    }
+    if (gpu_scope_recorder_bound_this_generation ||
+        gpu_scope_recorder.IsBound()) {
+        throw std::logic_error(
+            "GPU profiling mode is immutable for one CommandList recording generation"
+        );
+    }
+    if (!timestamp_scope_names.empty()) {
+        throw std::logic_error(
+            "legacy GPU profiling can only be suppressed before any timed scope"
+        );
+    }
+    suppress_legacy_gpu_profiling_this_generation = true;
+    active_gpu_scope_id = 0;
+    active_gpu_scope_depth = 0;
+    gpu_scope_suppression_depth = 0;
+    return *this;
+}
+
 #pragma region[ raytracing ]
 
 void CommandList::BuildAccelerationStructures(Array<AccelerationStructureBuildParam>&& _geometries) {

@@ -5,6 +5,8 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
 
+#include <functional>
+
 namespace Moer::Render {
 
 /**
@@ -27,13 +29,20 @@ namespace Moer::Render {
 class RENDER_API GpuScene {
 
 public:
+    struct PendingCommandList;
+    using PendingCommandListSetupCallback =
+        std::function<void(PendingCommandList&, bool full_rebuild)>;
+
     explicit GpuScene(BindlessArrayRef bindless_array);
     ~GpuScene() noexcept;
 
     GpuScene(const GpuScene&)            = delete;
     GpuScene& operator=(const GpuScene&) = delete;
 
-    void ApplyUpdate(GpuSceneUpdate&& update);
+    void ApplyUpdate(
+        GpuSceneUpdate&&                       update,
+        const PendingCommandListSetupCallback& setup_command_lists = {}
+    );
 
 private:
     /**

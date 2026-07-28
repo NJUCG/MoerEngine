@@ -244,11 +244,19 @@ void RasterTool::ExecuteScenePendingCommands(
     (void)gfx_queue;
 
     (void)device;
+    const bool modern_graphics_profiling =
+        commands.gfx_queue_cmd_list.HasGpuScopeRecorder() ||
+        commands.gfx_queue_cmd_list
+            .IsLegacyGpuProfilingSuppressedForGeneration();
     Array<RHIBackendSubmissionBatchEntry> submissions{};
     submissions.emplace_back(EQueueType::Copy, commands.copy_queue_cmd_list.Submit());
+    CmdSubmit graphics_submit =
+        commands.gfx_queue_cmd_list.Submit();
+    if (!modern_graphics_profiling) {
+        graphics_submit.TickProfiling();
+    }
     submissions.emplace_back(
-        EQueueType::Graphics,
-        commands.gfx_queue_cmd_list.Submit().TickProfiling()
+        EQueueType::Graphics, std::move(graphics_submit)
     );
     RHIExecutor::Get().Submit(
         std::move(submissions),

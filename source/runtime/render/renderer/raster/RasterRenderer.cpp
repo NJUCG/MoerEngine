@@ -27,6 +27,7 @@
 #include "debug/RenderDocApi.h"
 #include "misc/ScopedLogTimer.h"
 #include "profile/ProfileScope.h"
+#include "profile/RenderProfileCapture.h"
 #include "renderer/common/UiFrameGraphPass.h"
 #include "rendergraph/RenderGraph.h"
 #include "rhi/RHIExecutor.h"
@@ -58,10 +59,11 @@ float GetElapsedTimeSeconds() {
 } // namespace
 
 RasterRenderer::RasterRenderer(
-    uint2                   initial_resolution,
-    SharedPtr<EditorConfig> config
+    uint2                         initial_resolution,
+    SharedPtr<EditorConfig>       config,
+    RenderProfileCapture*         render_profile_capture
 ) :
-    Renderer(initial_resolution, config),
+    Renderer(initial_resolution, config, render_profile_capture),
     scene_render_extent_tracker(initial_resolution) {
     ScopedLogTimer startup_timer("[Startup][RasterRenderer] RasterRenderer::Constructor() total");
 
@@ -459,6 +461,59 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     assert(!IsRenderThreadInitialized() || IsCurrentlyRenderThread());
     MOER_PROFILE_SCOPE("Raster.RenderFrame");
 
+    RenderProfileFrameToken gpu_profile_frame{};
+    if (render_profile_capture != nullptr) {
+        static_cast<void>(render_profile_capture->DrainReadyFrames());
+        gpu_profile_frame = render_profile_capture->BeginFrame();
+    }
+    const RHIQueueBinding graphics_profile_binding =
+        device.GetQueueTopology().Resolve(EQueueType::Graphics);
+    const RHIQueueBinding copy_profile_binding =
+        device.GetQueueTopology().Resolve(EQueueType::Copy);
+    auto try_bind_profile_source =
+        [&](CommandList&    command_list,
+            RHIQueueBinding queue_binding,
+            uint64          source_order) noexcept {
+            if (render_profile_capture == nullptr || !gpu_profile_frame.Valid()) {
+                return false;
+            }
+            return render_profile_capture->BindSource(
+                       gpu_profile_frame,
+                       command_list,
+                       queue_binding,
+                       source_order
+                   ) == RenderProfileBindResult::Bound;
+        };
+    auto ensure_profile_source =
+        [&](CommandList&    command_list,
+            RHIQueueBinding queue_binding,
+            uint64          source_order) noexcept {
+            if (command_list.HasGpuScopeRecorder()) {
+                return true;
+            }
+            if (!gpu_profile_frame.Valid() ||
+                command_list.IsLegacyGpuProfilingSuppressedForGeneration()) {
+                return false;
+            }
+            if (try_bind_profile_source(
+                    command_list, queue_binding, source_order
+                )) {
+                return true;
+            }
+            try {
+                command_list.SuppressLegacyGpuProfilingForGeneration();
+            } catch (...) {
+                // Profiling degradation must not change the render path.
+            }
+            return false;
+        };
+    // Order zero is reserved for work already resident in the persistent
+    // Raster CommandList (resize/bindless prefix). Scene-update generations
+    // advance this cursor before RDG/linear recording chooses its base.
+    uint64 next_profile_source_order = 1;
+    uint64 linear_source_order       = 1;
+    uint64 tail_source_order         = 1;
+
     auto& raster_context = *raster_context_ptr;
     auto scene_extent_request = frame_packet.scene_render_extent;
     // An OS-window resize already requires a presentation rebuild. Accept the
@@ -500,7 +555,12 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     const bool recreate_output_resources =
         !EqualRenderExtent(raster_context.GetOutputResolution(), frame_packet.window.resolution);
 
-    if (!skip_present && (recreate_scene_resources || recreate_output_resources)) {
+    const bool recreate_frame_resources =
+        !skip_present && (recreate_scene_resources || recreate_output_resources);
+    const bool resize_prefix_profile_bound =
+        recreate_frame_resources &&
+        ensure_profile_source(cmd_list, graphics_profile_binding, 0);
+    if (recreate_frame_resources) {
         raster_context.FreeFrameBuffers(
             false, recreate_scene_resources, recreate_output_resources
         );
@@ -512,9 +572,21 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         );
         // External assets are resolution-independent and retain their bindless
         // handles. Only the selected resource domains are allocated again.
-        raster_context.AllocateFrameBuffers(
-            recreate_scene_resources, recreate_output_resources
-        );
+        if (resize_prefix_profile_bound) {
+            ScopedGpuMarker resize_marker(
+                cmd_list,
+                "Raster Resource Resize",
+                GpuMarkerPalette::Transfer(),
+                EGpuMarkerMode::Timestamp
+            );
+            raster_context.AllocateFrameBuffers(
+                recreate_scene_resources, recreate_output_resources
+            );
+        } else {
+            raster_context.AllocateFrameBuffers(
+                recreate_scene_resources, recreate_output_resources
+            );
+        }
 
         if (recreate_scene_resources) {
             raster_context.csm_data.shadow_cache_config_snapshot_valid = false;
@@ -555,6 +627,21 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         );
     }
 
+    // Modern RDG/source binding requires an empty caller-thread list. Publish
+    // any already-recorded resize prefix before scene-update Copy/Graphics
+    // sources so source_order remains consistent with execution order.
+    if (gpu_profile_frame.Valid() && !cmd_list.IsEmpty()) {
+        CmdSubmit prefix_submit = cmd_list.Submit().DebugLabel(
+            std::format("Raster Frame {}/Prefix", frame_packet.frame_id),
+            GpuMarkerPalette::Transfer()
+        );
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics,
+            std::move(prefix_submit),
+            ERHIExecSubmitFlags::None
+        );
+    }
+
     TextureRef default_output_texture = raster_context.textures.output.tex;
 
     // 窗口资源就绪后再使用已准备好的场景快照。
@@ -562,8 +649,31 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     if (frame_packet.scene_updates.scene_ready) {
         // 处理场景加载过程中遗留的命令
         auto& scene_updates = frame_packet.scene_updates;
+        const auto setup_scene_update_profiling =
+            [&](GpuScene::PendingCommandList& commands,
+                bool                          full_rebuild) {
+                if (full_rebuild) {
+                    const uint64 copy_source_order =
+                        next_profile_source_order++;
+                    static_cast<void>(ensure_profile_source(
+                        commands.copy_queue_cmd_list,
+                        copy_profile_binding,
+                        copy_source_order
+                    ));
+                }
+                const uint64 graphics_source_order =
+                    next_profile_source_order++;
+                static_cast<void>(ensure_profile_source(
+                    commands.gfx_queue_cmd_list,
+                    graphics_profile_binding,
+                    graphics_source_order
+                ));
+            };
         if (scene_updates.initial_gpu_update) {
-            auto commands = render_scene->ApplyUpdate(std::move(*scene_updates.initial_gpu_update));
+            auto commands = render_scene->ApplyUpdate(
+                std::move(*scene_updates.initial_gpu_update),
+                setup_scene_update_profiling
+            );
             RasterTool::ExecuteScenePendingCommands(
                 std::move(commands), device, gfx_queue
             );
@@ -573,7 +683,24 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             first_load = false;
 
             // 第一个 Raster Pass 执行前，先发布首次场景上传创建的 descriptor。
-            cmd_list.UpdateBindlessArray(bindless_array);
+            const uint64 descriptor_source_order =
+                next_profile_source_order++;
+            const bool descriptor_profile_bound = ensure_profile_source(
+                cmd_list,
+                graphics_profile_binding,
+                descriptor_source_order
+            );
+            if (descriptor_profile_bound) {
+                ScopedGpuMarker prefix_marker(
+                    cmd_list,
+                    "Raster First Load Descriptor",
+                    GpuMarkerPalette::Transfer(),
+                    EGpuMarkerMode::Timestamp
+                );
+                cmd_list.UpdateBindlessArray(bindless_array);
+            } else {
+                cmd_list.UpdateBindlessArray(bindless_array);
+            }
             RHIExecutor::Get().Submit(
                 EQueueType::Graphics, cmd_list.Submit(), ERHIExecSubmitFlags::FlushGPU
             );
@@ -584,15 +711,24 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
         const auto& scene_tick_state = scene_updates.tick_state;
         if (scene_updates.update_gpu_update) {
-            auto commands = render_scene->ApplyUpdate(std::move(*scene_updates.update_gpu_update));
+            auto commands = render_scene->ApplyUpdate(
+                std::move(*scene_updates.update_gpu_update),
+                setup_scene_update_profiling
+            );
             RasterTool::ExecuteScenePendingCommands(
                 std::move(commands), device, gfx_queue
             );
         }
 
-        ScopedGpuMarker renderer_marker(
-            cmd_list, "Raster Renderer", GpuMarkerPalette::Renderer()
-        );
+        // ExecuteRecording owns modern per-source binding and requires the
+        // caller-thread list to be empty at graph entry. Preserve the legacy
+        // renderer label only when no modern frame was admitted.
+        std::optional<ScopedGpuMarker> renderer_marker{};
+        if (!gpu_profile_frame.Valid()) {
+            renderer_marker.emplace(
+                cmd_list, "Raster Renderer", GpuMarkerPalette::Renderer()
+            );
+        }
 
         const Camera& main_camera = scene_updates.main_camera;
         Camera        camera      = frame_packet.render_camera;
@@ -1163,10 +1299,18 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             );
         };
 
+        linear_source_order = next_profile_source_order;
+        tail_source_order   = next_profile_source_order;
         auto execute_linear = [&]() {
-            ScopedGpuMarker pipeline_marker(
-                cmd_list, "Raster Linear Pipeline", GpuMarkerPalette::RenderGraph()
-            );
+            // A visual pipeline marker may not cross ExternalControl's explicit
+            // Submit boundary. Modern capture instead uses closed per-pass
+            // timestamp roots and rebinds the next recording generation.
+            std::optional<ScopedGpuMarker> pipeline_marker{};
+            if (!gpu_profile_frame.Valid()) {
+                pipeline_marker.emplace(
+                    cmd_list, "Raster Linear Pipeline", GpuMarkerPalette::RenderGraph()
+                );
+            }
             auto linear_schedule =
                 [&](std::string_view                name,
                     auto&&,
@@ -1175,19 +1319,40 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 if (execution_class == RenderGraph::PassExecutionClass::CpuPrepare ||
                     execution_class == RenderGraph::PassExecutionClass::ExternalControl) {
                     std::forward<decltype(execute)>(execute)(cmd_list);
+                    if (execution_class == RenderGraph::PassExecutionClass::ExternalControl &&
+                        gpu_profile_frame.Valid()) {
+                        ++linear_source_order;
+                    }
                     return;
                 }
+                static_cast<void>(ensure_profile_source(
+                    cmd_list, graphics_profile_binding, linear_source_order
+                ));
                 const std::string marker_name = std::format("Pass: {}", name);
                 ScopedGpuMarker pass_marker(
-                    cmd_list, marker_name, GpuMarkerPalette::Pass()
+                    cmd_list,
+                    marker_name,
+                    GpuMarkerPalette::Pass(),
+                    cmd_list.HasGpuScopeRecorder() ?
+                        EGpuMarkerMode::Timestamp :
+                        EGpuMarkerMode::Label
                 );
                 std::forward<decltype(execute)>(execute)(cmd_list);
             };
             define_raster_passes(linear_schedule);
+            // ExternalControl may seal the current CommandList generation.
+            // The tail either reuses the post-boundary generation or binds
+            // this next unique order when no later GPU pass was recorded.
+            tail_source_order = linear_source_order;
         };
 
         if (render_graph_enabled && !render_graph_fallback_latched) {
-            RenderGraph graph("RasterFrame");
+            // Profile sources and RDG barriers must use the initialized RHI's
+            // physical queue identity rather than the test-only single-queue
+            // default (native/family zero).
+            RenderGraph graph(
+                "RasterFrame", RenderGraph::QueueTopology::FromRHI()
+            );
             auto import_physical_texture = [&](std::string_view name, Texture* physical_texture) {
                 assert(physical_texture != nullptr);
                 RenderGraph::TextureAspect aspects = RenderGraph::TextureAspect::None;
@@ -1379,7 +1544,16 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     // A long-lived renderer/graph marker cannot cross the per-pass Submit boundaries.
                     // Every pass still owns its own marker and the immutable source packet carries a
                     // stable frame/pass debug label.
-                    renderer_marker.Close();
+                    if (renderer_marker) {
+                        renderer_marker->Close();
+                    }
+                    const uint64 graph_source_order_base =
+                        next_profile_source_order;
+                    tail_source_order =
+                        graph_source_order_base +
+                        static_cast<uint64>(
+                            graph.GetCompiledPlan().execution_order.size()
+                        );
                     const auto submit_main_thread_pass =
                         [&](const RenderGraph::ExecutedPassInfo& pass) {
                             assert(
@@ -1445,11 +1619,43 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                             source.submit_metadata.translate_execution_class =
                                 ERHITranslateExecutionClass::SerialControl;
                         };
+                    RenderGraph::GpuProfilingOptions gpu_profiling{};
+                    if (gpu_profile_frame.Valid()) {
+                        gpu_profiling.try_bind_source =
+                            [&](const RenderGraph::ExecutedPassInfo&,
+                                CommandList&    recording_cmd_list,
+                                RHIQueueBinding queue_binding,
+                                uint64          source_order) noexcept {
+                                return try_bind_profile_source(
+                                    recording_cmd_list,
+                                    queue_binding,
+                                    source_order
+                                );
+                            };
+                        gpu_profiling.main_thread_command_list = &cmd_list;
+                        gpu_profiling.source_order_base =
+                            graph_source_order_base;
+                    }
                     if (!graph.ExecuteRecording(
                             submit_main_thread_pass,
                             configure_recording_source,
-                            parallel_recording_enabled
+                            parallel_recording_enabled,
+                            {},
+                            {},
+                            gpu_profiling
                         )) {
+                        if (gpu_profile_frame.Valid() &&
+                            (cmd_list.HasGpuScopeRecorder() ||
+                             cmd_list
+                                 .IsLegacyGpuProfilingSuppressedForGeneration())) {
+                            // A failed caller-thread pass never reaches the
+                            // observer Submit boundary. Rotate and reject that
+                            // partial generation so the frame tail cannot be
+                            // attributed to the failed pass source.
+                            CmdSubmit rejected_graph_generation =
+                                cmd_list.Submit();
+                            static_cast<void>(rejected_graph_generation);
+                        }
                         render_graph_fallback_latched = true;
                         LOG_ERROR(
                             "[RenderGraph][Fallback] Raster graph recording failed after execution began: {}. "
@@ -1488,36 +1694,52 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     UiDrawFrameSlotClaim ui_slot_claim(frame_packet.ui_draw_frame);
     const bool ui_recording_claimed =
         ui_slot_claim.IsReadyForRecording();
-    if (ui_recording_claimed) {
-        RenderUiDrawFrame(
-            cmd_list,
-            default_output_texture->GetView(),
-            frame_packet.ui_draw_frame,
-            ui_execution_thread
-        );
-    } else {
-        ui_slot_claim.Reject();
-        skip_present = true;
-        LOG_CRITICAL(
-            "[Threading][UI] Raster copied-frame upload slots could not be "
-            "claimed; preserving the slots and skipping this frame's presents."
-        );
-    }
+    const auto record_frame_tail = [&]() {
+        if (ui_recording_claimed) {
+            RenderUiDrawFrame(
+                cmd_list,
+                default_output_texture->GetView(),
+                frame_packet.ui_draw_frame,
+                ui_execution_thread
+            );
+        } else {
+            ui_slot_claim.Reject();
+            skip_present = true;
+            LOG_CRITICAL(
+                "[Threading][UI] Raster copied-frame upload slots could not be "
+                "claimed; preserving the slots and skipping this frame's presents."
+            );
+        }
 
-    raster_context.probe_volume.TrackFrameSubmission(cmd_list, time);
-    if (!skip_present && ui_recording_claimed &&
-        !UiFrameGraphPass::RecordPresentationBoundary(
+        raster_context.probe_volume.TrackFrameSubmission(cmd_list, time);
+        if (!skip_present && ui_recording_claimed &&
+            !UiFrameGraphPass::RecordPresentationBoundary(
+                cmd_list,
+                frame_packet.ui_composition,
+                frame_packet.ui_draw_frame,
+                default_output_texture
+            )) {
+            skip_present = true;
+            LOG_CRITICAL(
+                "[Presentation] Raster UI frame tail did not satisfy the "
+                "presentation-source resource contract; skipping this frame's "
+                "main and platform-window presents."
+            );
+        }
+    };
+    const bool tail_profile_bound = ensure_profile_source(
+        cmd_list, graphics_profile_binding, tail_source_order
+    );
+    if (tail_profile_bound) {
+        ScopedGpuMarker tail_marker(
             cmd_list,
-            frame_packet.ui_composition,
-            frame_packet.ui_draw_frame,
-            default_output_texture
-        )) {
-        skip_present = true;
-        LOG_CRITICAL(
-            "[Presentation] Raster UI frame tail did not satisfy the "
-            "presentation-source resource contract; skipping this frame's "
-            "main and platform-window presents."
+            "Raster Frame Tail",
+            GpuMarkerPalette::Ui(),
+            EGpuMarkerMode::Timestamp
         );
+        record_frame_tail();
+    } else {
+        record_frame_tail();
     }
     time++;
     // Host 同步的 copy 操作已经完成。此处触发 timeline，向 validation layer 传递执行顺序，
@@ -1571,6 +1793,10 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         ERHIExecSubmitFlags::FlushGPU,
         present_request ? &*present_request : nullptr
     );
+    if (render_profile_capture != nullptr && gpu_profile_frame.Valid()) {
+        static_cast<void>(render_profile_capture->Seal(gpu_profile_frame));
+        static_cast<void>(render_profile_capture->DrainReadyFrames());
+    }
 
     const bool frame_native_accepted = timeline->WaitSubmitted(time);
     bool       ui_source_accepted    = false;

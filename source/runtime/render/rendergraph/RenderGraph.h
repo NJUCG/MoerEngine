@@ -777,6 +777,38 @@ public:
         RenderGraphTransientAllocator* transient_allocator = nullptr;
     };
 
+    /**
+     * Optional modern GPU profiling seam for ExecuteRecording.
+     *
+     * The graph assigns source_order from the immutable compiled execution
+     * schedule before any managed producer is dispatched. A false callback
+     * result is a bounded profiling drop: it suppresses legacy timing for that
+     * CommandList generation and does not fail graph execution.
+     * Throwing, changing CommandList recording state, or returning a value that
+     * disagrees with HasGpuScopeRecorder() fails before source publication.
+     * MainThread passes reuse one binding while the caller-owned CommandList
+     * seal generation is unchanged and no managed GPU source intervenes.
+     * Before any managed GPU source is bound or published after a MainThread
+     * source, the completion observer must rotate the caller-owned generation
+     * and leave its replacement empty, unbound, and unsuppressed. The first
+     * pass of each new generation binds a new source. If a MainThread callback
+     * fails after recording begins, the caller still owns that partial
+     * generation and must reject/rotate it before recording an unrelated tail.
+     */
+    struct GpuProfilingOptions {
+        using TryBindSource = std::function<bool(
+            const ExecutedPassInfo&,
+            CommandList&,
+            RHIQueueBinding,
+            uint64 source_order
+        )>;
+
+        TryBindSource try_bind_source{};
+        /** Required for MainThread passes when try_bind_source is present. */
+        CommandList*  main_thread_command_list = nullptr;
+        uint64        source_order_base         = 0;
+    };
+
     explicit RenderGraph(std::string_view name = "RenderGraph");
     RenderGraph(std::string_view name, QueueTopology topology);
     ~RenderGraph();
@@ -909,7 +941,8 @@ public:
         const RecordingSourceSetupCallback& configure_recording_source = {},
         bool                                parallel_recording_enabled = true,
         const RecordingBatchPublisher&      publish_recording_batch = {},
-        const ActiveRecordingOptions&        active_recording = {}
+        const ActiveRecordingOptions&        active_recording = {},
+        const GpuProfilingOptions&            gpu_profiling = {}
     );
 
     [[nodiscard]] bool IsCompiled() const {
