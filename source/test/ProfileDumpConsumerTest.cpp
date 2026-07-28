@@ -1,3 +1,4 @@
+#include "misc/Crc32.h"
 #include "misc/MMemory.h"
 #include "profile/ProfileDump.h"
 #include "profile/ProfileDumpTemplates.h"
@@ -23,6 +24,18 @@
 namespace {
 
 using namespace Moer::ProfileDump;
+
+static_assert([] {
+    std::uint32_t wire_bytes = 0;
+    return Detail::TryPacketWireBytes(
+               std::numeric_limits<std::uint32_t>::max() - kPacketHeaderBytes, wire_bytes
+           ) &&
+           wire_bytes == std::numeric_limits<std::uint32_t>::max();
+}());
+static_assert([] {
+    std::uint32_t wire_bytes = 0;
+    return !Detail::TryPacketWireBytes(std::numeric_limits<std::uint32_t>::max(), wire_bytes);
+}());
 
 void Expect(bool _condition, std::string_view _message) {
     if (!_condition) {
@@ -304,7 +317,7 @@ SessionBuilder MakeGoldenSession() {
     );
     AddGpuScope(
         builder,
-        14,
+        13,
         100,
         1,
         0,
@@ -326,7 +339,7 @@ SessionBuilder MakeGoldenSession() {
     );
     AddGpuScope(
         builder,
-        16,
+        11,
         100,
         3,
         0,
@@ -348,7 +361,7 @@ SessionBuilder MakeGoldenSession() {
     );
     AddGpuScope(
         builder,
-        18,
+        6,
         100,
         4,
         0,
@@ -370,7 +383,7 @@ SessionBuilder MakeGoldenSession() {
     );
     AddGpuScope(
         builder,
-        20,
+        5,
         101,
         1,
         0,
@@ -394,7 +407,7 @@ SessionBuilder MakeGoldenSession() {
         std::uint64_t{99},
         std::string_view("future"),
     };
-    builder.Record(unknown, 22, unknown_values);
+    builder.Record(unknown, 1, unknown_values);
 
     // Emitted sequence values 4/7/8 are inside this observational interval;
     // count=2 means the interval is not an exact missing-sequence set.
@@ -435,8 +448,8 @@ void VerifyGolden(const Loaded& _loaded) {
     Expect(summary.unknown_record_count == 1, "unknown record count is wrong");
     Expect(
         summary.complete_gpu_frame_count == 1 && summary.invalid_gpu_frame_count == 1 &&
-            summary.incomplete_gpu_frame_count == 0 && summary.ready_gpu_scope_count == 4 &&
-            summary.error_gpu_scope_count == 1,
+            summary.degraded_complete_gpu_frame_count == 0 && summary.incomplete_gpu_frame_count == 0 &&
+            summary.ready_gpu_scope_count == 4 && summary.error_gpu_scope_count == 1,
         "GPU status summary is wrong"
     );
     Expect(summary.lost_record_count == 2, "loss count is wrong");
@@ -531,10 +544,12 @@ void VerifyGolden(const Loaded& _loaded) {
         complete_frame != _loaded.session.GpuFrames().end() &&
             complete_frame->status == ProfileGpuFrameStatus::Complete && complete_frame->valid &&
             complete_frame->admitted_scope_count == 4 && complete_frame->scope_count == 4 &&
-            complete_frame->error_scope_count == 0 && invalid_frame != _loaded.session.GpuFrames().end() &&
+            complete_frame->error_scope_count == 0 && complete_frame->materialization_complete &&
+            complete_frame->timing_topology_trusted && invalid_frame != _loaded.session.GpuFrames().end() &&
             invalid_frame->status == ProfileGpuFrameStatus::Invalid && !invalid_frame->valid &&
             invalid_frame->admitted_scope_count == 1 && invalid_frame->scope_count == 1 &&
-            invalid_frame->error_scope_count == 1 &&
+            invalid_frame->error_scope_count == 1 && invalid_frame->materialization_complete &&
+            !invalid_frame->timing_topology_trusted &&
             _loaded.session.String(invalid_frame->reason) == "query failed",
         "GPU frame counters or reason changed while materializing the session"
     );
@@ -542,8 +557,8 @@ void VerifyGolden(const Loaded& _loaded) {
     Expect(
         shared_domain.logical_queue_mask == (ProfileLogicalQueueBit(ProfileLogicalQueue::Graphics) |
                                              ProfileLogicalQueueBit(ProfileLogicalQueue::Compute)) &&
-            shared_domain.valid_bits == 64 && shared_domain.tick_period_ns == 1.0 &&
-            shared_domain.ready_scope_count == 3,
+            shared_domain.timing_capability_trusted && shared_domain.valid_bits == 64 &&
+            shared_domain.tick_period_ns == 1.0 && shared_domain.ready_scope_count == 3,
         "GPU physical-domain metadata is wrong"
     );
     Expect(
@@ -609,7 +624,7 @@ void TestEnvelopeSchemaAndSequenceContracts() {
             std::uint64_t{1},
             std::string_view("x"),
         };
-        builder.Record(unknown, 9, values);
+        builder.Record(unknown, 1, values);
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
@@ -858,6 +873,400 @@ void TestSemanticTopologyAndLossRecovery() {
     {
         SessionBuilder builder;
         builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        AddCpuScope(builder, 1, 1, "crossing-a", 0, 10, 0);
+        AddCpuScope(builder, 2, 1, "crossing-b", 5, 15, 0);
+        builder.Loss({
+            .first_sequence = 3,
+            .last_sequence  = 3,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::CpuScopeTopologyInvalid,
+            "Loss downgraded crossing CPU intervals"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        AddCpuScope(builder, 1, 1, "same-depth-parent", 0, 20, 0);
+        AddCpuScope(builder, 2, 1, "same-depth-child", 5, 10, 0);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::CpuScopeTopologyInvalid,
+            "same-depth nested CPU intervals were accepted"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        AddCpuScope(builder, 1, 1, "adjacent-a", 0, 10, 0);
+        AddCpuScope(builder, 2, 1, "adjacent-b", 10, 20, 0);
+        AddCpuScope(builder, 4, 2, "zero-parent", 0, 10, 0);
+        AddCpuScope(builder, 3, 2, "zero-child", 10, 10, 1);
+        builder.End();
+        const Loaded loaded     = LoadChunks(builder.bytes);
+        const auto   zero_child = std::find_if(
+            loaded.session.CpuScopes().begin(),
+            loaded.session.CpuScopes().end(),
+            [&](const CpuScopeRecord& _scope) {
+                return loaded.session.String(_scope.name) == "zero-child";
+            }
+        );
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                zero_child != loaded.session.CpuScopes().end() &&
+                zero_child->parent_index != kInvalidSessionIndex,
+            "adjacent roots or a zero-duration CPU child were rejected"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        AddCpuScope(builder, 2, 1, "ending-parent", 0, 10, 0);
+        AddCpuScope(builder, 1, 1, "boundary-child", 10, 10, 1);
+        AddCpuScope(builder, 3, 1, "starting-root", 10, 20, 0);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        const auto   child  = std::find_if(
+            loaded.session.CpuScopes().begin(),
+            loaded.session.CpuScopes().end(),
+            [&](const CpuScopeRecord& _scope) {
+                return loaded.session.String(_scope.name) == "boundary-child";
+            }
+        );
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                child != loaded.session.CpuScopes().end() && child->parent_index != kInvalidSessionIndex &&
+                loaded.session.String(loaded.session.CpuScopes()[child->parent_index].name) ==
+                    "ending-parent",
+            "CPU record sequence did not keep a zero-duration child with its ending parent"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        AddCpuScope(builder, 1, 1, "ending-root", 0, 10, 0);
+        AddCpuScope(builder, 2, 1, "boundary-child", 10, 10, 1);
+        AddCpuScope(builder, 3, 1, "starting-parent", 10, 20, 0);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        const auto   child  = std::find_if(
+            loaded.session.CpuScopes().begin(),
+            loaded.session.CpuScopes().end(),
+            [&](const CpuScopeRecord& _scope) {
+                return loaded.session.String(_scope.name) == "boundary-child";
+            }
+        );
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                child != loaded.session.CpuScopes().end() && child->parent_index != kInvalidSessionIndex &&
+                loaded.session.String(loaded.session.CpuScopes()[child->parent_index].name) ==
+                    "starting-parent",
+            "CPU record sequence did not attach a zero-duration child to its starting parent"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        AddCpuScope(builder, 4, 1, "root", 0, 100, 0);
+        AddCpuScope(builder, 1, 1, "ended-child", 0, 50, 1);
+        AddCpuScope(builder, 2, 1, "orphan-grandchild", 50, 60, 2);
+        builder.Loss({
+            .first_sequence = 3,
+            .last_sequence  = 3,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                loaded.session.Summary().orphan_cpu_scope_count == 1,
+            "a positive-duration CPU orphan after an adjacent ended scope was rejected"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        AddCpuScope(builder, 1, 1, "deep-orphan", 0, 10, 5);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                loaded.session.Summary().orphan_cpu_scope_count == 1,
+            "a lifecycle-tail CPU orphan was charged as a ProfileDump loss"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        AddCpuScope(builder, 1, 1, "thread-one-orphan", 0, 10, 1);
+        AddCpuScope(builder, 2, 2, "thread-two-orphan", 0, 10, 1);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                loaded.session.Summary().orphan_cpu_scope_count == 2,
+            "thread-local lifecycle-tail CPU orphans were rejected"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        AddCpuScope(builder, 3, 1, "root-one", 0, 10, 0);
+        AddCpuScope(builder, 1, 1, "root-one-orphan", 1, 2, 2);
+        AddCpuScope(builder, 6, 1, "root-two", 10, 20, 0);
+        AddCpuScope(builder, 4, 1, "root-two-orphan", 11, 12, 2);
+        builder.End(SessionEndInfo{
+            .generation      = builder.generation,
+            .records_written = builder.record_count,
+            .records_dropped = 1,
+        });
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::RecordSequenceInvalid,
+            "one CPU drop fabricated sequence capacity for two independent observed ancestor subtrees"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        AddCpuScope(builder, 3, 1, "root-one", 0, 10, 0);
+        AddCpuScope(builder, 1, 1, "root-one-orphan", 1, 2, 2);
+        AddCpuScope(builder, 6, 1, "root-two", 10, 20, 0);
+        AddCpuScope(builder, 4, 1, "root-two-orphan", 11, 12, 2);
+        builder.End(SessionEndInfo{
+            .generation      = builder.generation,
+            .records_written = builder.record_count,
+            .records_dropped = 2,
+        });
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                loaded.session.Summary().orphan_cpu_scope_count == 2,
+            "two CPU drops did not cover two independent observed parent subtrees"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        AddCpuScope(builder, 6, 1, "root", 0, 100, 0);
+        AddCpuScope(builder, 1, 1, "orphan-before-barrier", 0, 10, 2);
+        AddCpuScope(builder, 3, 1, "observed-depth-one-barrier", 10, 20, 1);
+        AddCpuScope(builder, 4, 1, "orphan-after-barrier", 20, 30, 2);
+        builder.End(SessionEndInfo{
+            .generation      = builder.generation,
+            .records_written = builder.record_count,
+            .records_dropped = 2,
+        });
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                loaded.session.Summary().orphan_cpu_scope_count == 2,
+            "two CPU drops did not cover gap runs separated by an observed barrier"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        AddCpuScope(builder, 2, 1, "observed-root", 0, 20, 0);
+        AddCpuScope(builder, 1, 1, "unbudgeted-depth-two", 1, 2, 2);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::CpuScopeTopologyInvalid,
+            "an observed CPU ancestor gap was treated as a lifecycle-tail orphan"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        AddCpuScope(builder, 2, 1, "observed-root", 0, 20, 0);
+        AddCpuScope(builder, 1, 1, "slotless-depth-two", 1, 2, 2);
+        builder.Loss({
+            .first_sequence = 3,
+            .last_sequence  = 3,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::CpuScopeTopologyInvalid,
+            "a missing CPU parent had no sequence slot between child and ancestor"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        AddCpuScope(builder, 0, 1, "zero-sequence", 0, 10, 0);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::RecordSequenceInvalid,
+            "reserved record sequence zero was accepted"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        AddCpuScope(builder, 100, 1, "forged-sparse-root", 0, 20, 0);
+        AddCpuScope(builder, 1, 1, "forged-sparse-child", 1, 2, 2);
+        builder.Loss({
+            .first_sequence = 2,
+            .last_sequence  = 2,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::RecordSequenceInvalid,
+            "record sequence exceeded the producer's written-plus-dropped allocation bound"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        AddCpuScope(builder, 1, 1, "early-emitted-root", 0, 20, 0);
+        AddCpuScope(builder, 2, 1, "strictly-contained-zero", 10, 10, 1);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::CpuScopeTopologyInvalid,
+            "a strictly contained zero-duration CPU child outlived its observed parent"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        AddCpuScope(builder, 2, 1, "earlier-root", 0, 10, 0);
+        AddCpuScope(builder, 1, 1, "later-root", 10, 20, 0);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::CpuScopeTopologyInvalid,
+            "adjacent CPU roots moved backward in record sequence"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        AddCpuScope(builder, 3, 1, "root", 0, 30, 0);
+        AddCpuScope(builder, 2, 1, "earlier-sibling", 0, 10, 1);
+        AddCpuScope(builder, 1, 1, "later-sibling", 10, 20, 1);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::CpuScopeTopologyInvalid,
+            "CPU siblings moved backward in record sequence"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        AddCpuScope(builder, 4, 1, "ending-root", 0, 10, 0);
+        AddCpuScope(builder, 1, 1, "early-depth-two", 1, 2, 2);
+        AddCpuScope(builder, 2, 1, "boundary-depth-two", 10, 10, 2);
+        AddCpuScope(builder, 5, 1, "starting-root", 10, 20, 0);
+        builder.Loss({
+            .first_sequence = 3,
+            .last_sequence  = 3,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                loaded.session.Summary().orphan_cpu_scope_count == 2,
+            "zero-duration CPU boundary evidence failed to share its ending ancestor's missing parent"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        builder.Schema(Templates::GpuFrame());
+        AddCpuScope(builder, 3, 1, "cpu-root", 0, 20, 0);
+        AddCpuScope(builder, 1, 1, "cpu-depth-two", 1, 2, 2);
+        AddGpuFrame(builder, 4, 1, ProfileGpuFrameStatus::Complete, true, 1, 0, 0, "");
+        builder.End(SessionEndInfo{
+            .generation      = builder.generation,
+            .records_written = builder.record_count,
+            .records_dropped = 1,
+        });
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuFrameTotalsMismatch,
+            "one ProfileDump loss was reused by CPU and GPU topology deficits"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        builder.Schema(Templates::GpuFrame());
+        AddCpuScope(builder, 1, 1, "cpu-orphan", 0, 10, 1);
+        AddGpuFrame(builder, 2, 1, ProfileGpuFrameStatus::Complete, true, 1, 0, 0, "");
+        builder.Loss({
+            .first_sequence = 3,
+            .last_sequence  = 3,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                loaded.session.Summary().orphan_cpu_scope_count == 1 &&
+                loaded.session.Summary().degraded_complete_gpu_frame_count == 1,
+            "a lifecycle-tail CPU orphan consumed the GPU ProfileDump loss budget"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
         builder.Schema(Templates::GpuFrame());
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 1, 0, 0, "");
@@ -895,7 +1304,7 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Begin();
         builder.Schema(Templates::GpuFrame());
         builder.Schema(Templates::GpuScope());
-        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 1, 0, 0, "");
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 2, 0, 0, "");
         AddGpuScope(
             builder,
             2,
@@ -938,7 +1347,180 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Begin();
         builder.Schema(Templates::GpuFrame());
         builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
+        AddGpuScope(
+            builder,
+            2,
+            1,
+            2,
+            99,
+            0,
+            1,
+            0,
+            0,
+            0,
+            "orphan-a",
+            ProfileGpuScopeStatus::Ready,
+            1,
+            2,
+            64,
+            1.0,
+            1.0,
+            1.0,
+            1,
+            ""
+        );
+        AddGpuScope(
+            builder,
+            3,
+            1,
+            3,
+            99,
+            0,
+            1,
+            1,
+            1,
+            1,
+            "orphan-b",
+            ProfileGpuScopeStatus::Ready,
+            3,
+            4,
+            64,
+            1.0,
+            1.0,
+            1.0,
+            1,
+            ""
+        );
+        builder.Loss({
+            .first_sequence = 4,
+            .last_sequence  = 4,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeParentInvalid,
+            "one missing GPU parent was allowed to have incompatible child contracts"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 2, 0, 0, "");
+        AddGpuScope(
+            builder,
+            2,
+            1,
+            2,
+            99,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "local-zero-orphan",
+            ProfileGpuScopeStatus::Ready,
+            1,
+            2,
+            64,
+            1.0,
+            1.0,
+            1.0,
+            1,
+            ""
+        );
+        builder.Loss({
+            .first_sequence = 3,
+            .last_sequence  = 3,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeParentInvalid,
+            "a missing GPU parent was placed before child local order zero"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 4, 0, 0, "");
+        AddGpuScope(
+            builder,
+            2,
+            1,
+            3,
+            98,
+            0,
+            1,
+            0,
+            0,
+            0,
+            "deadline-one",
+            ProfileGpuScopeStatus::Ready,
+            1,
+            2,
+            64,
+            1.0,
+            1.0,
+            1.0,
+            1,
+            ""
+        );
+        AddGpuScope(
+            builder,
+            3,
+            1,
+            4,
+            99,
+            0,
+            2,
+            0,
+            0,
+            0,
+            "deadline-two",
+            ProfileGpuScopeStatus::Ready,
+            3,
+            4,
+            64,
+            1.0,
+            1.0,
+            1.0,
+            1,
+            ""
+        );
+        builder.Loss({
+            .first_sequence = 4,
+            .last_sequence  = 5,
+            .record_count   = 2,
+            .value_bytes    = 16,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeParentInvalid,
+            "two missing GPU parents reused one local-order slot"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
         AddGpuScope(
             builder,
             2,
@@ -1061,6 +1643,699 @@ void TestSemanticTopologyAndLossRecovery() {
             loaded.result.status == SessionLoadStatus::ProtocolViolation &&
                 loaded.result.error_code == SessionErrorCode::GpuScopeTimingInvalid,
             "GpuScope raw ticks and duration contradiction was accepted"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 2, 0, 0, "");
+        AddGpuScope(
+            builder,
+            2,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "parent",
+            ProfileGpuScopeStatus::Ready,
+            100,
+            200,
+            64,
+            1.0,
+            100.0,
+            90.0,
+            0,
+            ""
+        );
+        AddGpuScope(
+            builder,
+            3,
+            1,
+            2,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            "outside-child",
+            ProfileGpuScopeStatus::Ready,
+            50,
+            60,
+            64,
+            1.0,
+            10.0,
+            10.0,
+            1,
+            ""
+        );
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeTimingInvalid,
+            "complete GpuFrame accepted a child outside its parent interval"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
+        AddGpuScope(
+            builder,
+            2,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "parent",
+            ProfileGpuScopeStatus::Ready,
+            100,
+            200,
+            64,
+            1.0,
+            100.0,
+            30.0,
+            0,
+            ""
+        );
+        AddGpuScope(
+            builder,
+            3,
+            1,
+            2,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            "child-a",
+            ProfileGpuScopeStatus::Ready,
+            110,
+            160,
+            64,
+            1.0,
+            50.0,
+            50.0,
+            1,
+            ""
+        );
+        AddGpuScope(
+            builder,
+            4,
+            1,
+            3,
+            1,
+            0,
+            2,
+            0,
+            0,
+            0,
+            "child-b",
+            ProfileGpuScopeStatus::Ready,
+            150,
+            170,
+            64,
+            1.0,
+            20.0,
+            20.0,
+            1,
+            ""
+        );
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeTimingInvalid,
+            "complete GpuFrame accepted overlapping direct children"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 2, 0, 0, "");
+        AddGpuScope(
+            builder,
+            2,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "root-a",
+            ProfileGpuScopeStatus::Ready,
+            100,
+            150,
+            64,
+            1.0,
+            50.0,
+            50.0,
+            0,
+            ""
+        );
+        AddGpuScope(
+            builder,
+            3,
+            1,
+            2,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            "root-b",
+            ProfileGpuScopeStatus::Ready,
+            140,
+            160,
+            64,
+            1.0,
+            20.0,
+            20.0,
+            0,
+            ""
+        );
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeTimingInvalid,
+            "complete GpuFrame accepted overlapping same-source roots"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
+        AddGpuScope(
+            builder,
+            2,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "wrapped-parent",
+            ProfileGpuScopeStatus::Ready,
+            250,
+            20,
+            8,
+            1.0,
+            26.0,
+            14.0,
+            0,
+            ""
+        );
+        AddGpuScope(
+            builder,
+            3,
+            1,
+            2,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            "wrapped-child-a",
+            ProfileGpuScopeStatus::Ready,
+            254,
+            4,
+            8,
+            1.0,
+            6.0,
+            6.0,
+            1,
+            ""
+        );
+        AddGpuScope(
+            builder,
+            4,
+            1,
+            3,
+            1,
+            0,
+            2,
+            0,
+            0,
+            0,
+            "wrapped-child-b",
+            ProfileGpuScopeStatus::Ready,
+            4,
+            10,
+            8,
+            1.0,
+            6.0,
+            6.0,
+            1,
+            ""
+        );
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                loaded.session.GpuFrames().front().timing_topology_trusted,
+            "valid wrapped GPU parent/child timing was rejected"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
+        AddGpuScope(
+            builder,
+            2,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "wrapped-root-a",
+            ProfileGpuScopeStatus::Ready,
+            250,
+            5,
+            8,
+            1.0,
+            11.0,
+            11.0,
+            0,
+            ""
+        );
+        AddGpuScope(
+            builder,
+            3,
+            1,
+            2,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            "wrapped-root-b",
+            ProfileGpuScopeStatus::Ready,
+            5,
+            10,
+            8,
+            1.0,
+            5.0,
+            5.0,
+            0,
+            ""
+        );
+        AddGpuScope(
+            builder,
+            4,
+            1,
+            3,
+            0,
+            0,
+            2,
+            0,
+            0,
+            0,
+            "wrapped-root-c",
+            ProfileGpuScopeStatus::Ready,
+            10,
+            20,
+            8,
+            1.0,
+            10.0,
+            10.0,
+            0,
+            ""
+        );
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                loaded.session.GpuFrames().front().timing_topology_trusted,
+            "adjacent same-source GPU roots across timestamp wrap were rejected"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 2, 0, 0, "");
+        AddGpuScope(
+            builder,
+            2,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "wrapped-overlap-a",
+            ProfileGpuScopeStatus::Ready,
+            250,
+            5,
+            8,
+            1.0,
+            11.0,
+            11.0,
+            0,
+            ""
+        );
+        AddGpuScope(
+            builder,
+            3,
+            1,
+            2,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            "wrapped-overlap-b",
+            ProfileGpuScopeStatus::Ready,
+            4,
+            10,
+            8,
+            1.0,
+            6.0,
+            6.0,
+            0,
+            ""
+        );
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeTimingInvalid,
+            "overlapping same-source GPU roots across timestamp wrap were accepted"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 2, 0, 0, "");
+        AddGpuScope(
+            builder,
+            2,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "tolerant-parent",
+            ProfileGpuScopeStatus::Ready,
+            0,
+            100,
+            64,
+            1.0,
+            100.0,
+            80.0,
+            0,
+            ""
+        );
+        AddGpuScope(
+            builder,
+            3,
+            1,
+            2,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            "tolerant-child",
+            ProfileGpuScopeStatus::Ready,
+            10,
+            30,
+            64,
+            1.00000001,
+            20.0000002,
+            20.0000002,
+            1,
+            ""
+        );
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                loaded.session.GpuFrames().front().timing_topology_trusted,
+            "producer-equivalent timestamp-period tolerance was rejected"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 1, 0, 0, "");
+        AddGpuScope(
+            builder,
+            2,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "bad-exclusive",
+            ProfileGpuScopeStatus::Ready,
+            0,
+            10,
+            64,
+            1.0,
+            10.0,
+            9.0,
+            0,
+            ""
+        );
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeTimingInvalid,
+            "complete GpuFrame accepted an exclusive duration that disagrees with its full child set"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
+        AddGpuScope(
+            builder,
+            2,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "partial-parent",
+            ProfileGpuScopeStatus::Ready,
+            0,
+            10,
+            64,
+            1.0,
+            10.0,
+            5.0,
+            0,
+            ""
+        );
+        AddGpuScope(
+            builder,
+            3,
+            1,
+            2,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            "partial-child",
+            ProfileGpuScopeStatus::Ready,
+            0,
+            6,
+            64,
+            1.0,
+            6.0,
+            6.0,
+            1,
+            ""
+        );
+        builder.End(SessionEndInfo{
+            .generation      = builder.generation,
+            .records_written = builder.record_count,
+            .records_dropped = 1,
+        });
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeTimingInvalid,
+            "partial GpuFrame accepted observed child plus exclusive time beyond its parent"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Invalid, false, 2, 0, 0, "topology invalid");
+        AddGpuScope(
+            builder,
+            2,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "invalid-parent",
+            ProfileGpuScopeStatus::Ready,
+            100,
+            200,
+            64,
+            1.0,
+            100.0,
+            0.0,
+            0,
+            ""
+        );
+        AddGpuScope(
+            builder,
+            3,
+            1,
+            2,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            "invalid-outside-child",
+            ProfileGpuScopeStatus::Ready,
+            50,
+            60,
+            32,
+            2.0,
+            20.0,
+            0.0,
+            1,
+            ""
+        );
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                loaded.session.GpuFrames().front().materialization_complete &&
+                !loaded.session.GpuFrames().front().timing_topology_trusted &&
+                !loaded.session.GpuDomains().front().timing_capability_trusted,
+            "producer Invalid timing/domain evidence was rejected or marked trusted"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
+        AddGpuScope(
+            builder,
+            2,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "first-root",
+            ProfileGpuScopeStatus::Ready,
+            0,
+            10,
+            8,
+            1.0,
+            10.0,
+            10.0,
+            0,
+            ""
+        );
+        AddGpuScope(
+            builder,
+            3,
+            1,
+            3,
+            0,
+            0,
+            2,
+            0,
+            0,
+            0,
+            "third-root",
+            ProfileGpuScopeStatus::Ready,
+            200,
+            210,
+            8,
+            1.0,
+            10.0,
+            10.0,
+            0,
+            ""
+        );
+        builder.End(SessionEndInfo{
+            .generation      = builder.generation,
+            .records_written = builder.record_count,
+            .records_dropped = 1,
+        });
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                loaded.session.Summary().degraded_complete_gpu_frame_count == 1 &&
+                !loaded.session.GpuFrames().front().timing_topology_trusted,
+            "missing middle root caused an unsound half-range comparison"
         );
     }
     {
@@ -1233,6 +2508,215 @@ void TestSemanticTopologyAndLossRecovery() {
         SessionBuilder builder;
         builder.Begin();
         builder.Schema(Templates::GpuFrame());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 100, 0, 0, "");
+        builder.Loss({
+            .first_sequence = 2,
+            .last_sequence  = 2,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuFrameTotalsMismatch,
+            "one dropped record explained an unbounded complete-frame deficit"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 2, 0, 0, "");
+        AddGpuFrame(builder, 2, 2, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
+        builder.End(SessionEndInfo{
+            .generation      = builder.generation,
+            .records_written = builder.record_count,
+            .records_dropped = 4,
+        });
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuFrameTotalsMismatch,
+            "drop budget was reused independently by multiple complete frames"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 5, 0, 0, "");
+        builder.End(SessionEndInfo{
+            .generation      = builder.generation,
+            .records_written = builder.record_count,
+            .records_dropped = 5,
+        });
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                loaded.session.Summary().degraded_complete_gpu_frame_count == 1 &&
+                loaded.session.GpuFrames().front().export_missing_scope_count == 5 &&
+                !loaded.session.GpuFrames().front().materialization_complete &&
+                !loaded.session.GpuFrames().front().timing_topology_trusted,
+            "a fully budgeted complete-frame deficit was not marked degraded"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Invalid, false, 1, 0, 1, "query failed");
+        AddGpuScope(
+            builder,
+            2,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "undeclared-ready",
+            ProfileGpuScopeStatus::Ready,
+            10,
+            20,
+            64,
+            1.0,
+            10.0,
+            10.0,
+            0,
+            ""
+        );
+        builder.End(SessionEndInfo{
+            .generation      = builder.generation,
+            .records_written = builder.record_count,
+            .records_dropped = 100,
+        });
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuFrameTotalsMismatch,
+            "drop budget allowed more Ready scopes than the frame declared"
+        );
+    }
+    for (const ProfileGpuFrameStatus status :
+         {ProfileGpuFrameStatus::Incomplete, ProfileGpuFrameStatus::Invalid}) {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(
+            builder,
+            1,
+            1,
+            status,
+            false,
+            1,
+            status == ProfileGpuFrameStatus::Incomplete ? 1 : 0,
+            0,
+            "untrusted frame"
+        );
+        AddGpuScope(
+            builder,
+            2,
+            1,
+            2,
+            99,
+            0,
+            1,
+            0,
+            0,
+            0,
+            "impossible-orphan",
+            ProfileGpuScopeStatus::Ready,
+            10,
+            20,
+            64,
+            1.0,
+            10.0,
+            0.0,
+            1,
+            ""
+        );
+        builder.End(SessionEndInfo{
+            .generation      = builder.generation,
+            .records_written = builder.record_count,
+            .records_dropped = 1,
+        });
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuFrameTotalsMismatch,
+            "untrusted GpuFrame had more missing parents than missing admitted scopes"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Incomplete, false, 4, 1, 0, "RHI drops");
+        AddGpuScope(
+            builder,
+            2,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "surviving-incomplete",
+            ProfileGpuScopeStatus::Ready,
+            10,
+            20,
+            64,
+            1.0,
+            10.0,
+            0.0,
+            0,
+            ""
+        );
+        AddGpuScope(
+            builder,
+            3,
+            1,
+            2,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            "conflicting-incomplete",
+            ProfileGpuScopeStatus::Ready,
+            30,
+            35,
+            32,
+            2.0,
+            10.0,
+            0.0,
+            0,
+            ""
+        );
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                loaded.session.GpuFrames().front().export_missing_scope_count == 2 &&
+                !loaded.session.GpuFrames().front().timing_topology_trusted &&
+                !loaded.session.GpuDomains().front().timing_capability_trusted,
+            "GpuFrame v1 Incomplete producer omissions/domain conflicts were rejected or trusted"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 2, 0, 0, "");
         AddGpuScope(
@@ -1265,8 +2749,906 @@ void TestSemanticTopologyAndLossRecovery() {
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
             loaded.result.status == SessionLoadStatus::Complete &&
-                loaded.session.Summary().unnotified_drop_count == 1,
+                loaded.session.Summary().unnotified_drop_count == 1 &&
+                loaded.session.Summary().degraded_complete_gpu_frame_count == 1 &&
+                loaded.session.GpuFrames().front().export_missing_scope_count == 1,
             "unnotified SessionEnd drops did not explain an undersized GPU frame"
+        );
+    }
+    const auto add_ready_scope = [](SessionBuilder&  _builder,
+                                    std::uint64_t    _sequence,
+                                    std::uint64_t    _frame_id,
+                                    std::uint64_t    _scope_id,
+                                    std::uint64_t    _parent_scope_id,
+                                    std::uint64_t    _source_order,
+                                    std::uint64_t    _local_order,
+                                    std::string_view _name,
+                                    std::uint64_t    _begin_tick,
+                                    std::uint64_t    _end_tick,
+                                    std::uint32_t    _depth) {
+        AddGpuScope(
+            _builder,
+            _sequence,
+            _frame_id,
+            _scope_id,
+            _parent_scope_id,
+            _source_order,
+            _local_order,
+            0,
+            0,
+            0,
+            _name,
+            ProfileGpuScopeStatus::Ready,
+            _begin_tick,
+            _end_tick,
+            64,
+            1.0,
+            static_cast<double>(_end_tick - _begin_tick),
+            static_cast<double>(_end_tick - _begin_tick),
+            _depth,
+            ""
+        );
+    };
+    const auto add_ready_scope_bits = [](SessionBuilder&  _builder,
+                                         std::uint64_t    _sequence,
+                                         std::uint64_t    _frame_id,
+                                         std::uint64_t    _scope_id,
+                                         std::uint64_t    _parent_scope_id,
+                                         std::uint64_t    _source_order,
+                                         std::uint64_t    _local_order,
+                                         std::string_view _name,
+                                         std::uint64_t    _begin_tick,
+                                         std::uint64_t    _end_tick,
+                                         std::uint32_t    _valid_bits,
+                                         double           _total_duration,
+                                         double           _exclusive_duration,
+                                         std::uint32_t    _depth) {
+        AddGpuScope(
+            _builder,
+            _sequence,
+            _frame_id,
+            _scope_id,
+            _parent_scope_id,
+            _source_order,
+            _local_order,
+            0,
+            0,
+            0,
+            _name,
+            ProfileGpuScopeStatus::Ready,
+            _begin_tick,
+            _end_tick,
+            _valid_bits,
+            1.0,
+            _total_duration,
+            _exclusive_duration,
+            _depth,
+            ""
+        );
+    };
+    const auto add_queue_loss =
+        [](SessionBuilder& _builder, std::uint64_t _first_sequence, std::uint64_t _record_count) {
+            _builder.Loss({
+                .first_sequence = _first_sequence,
+                .last_sequence  = _first_sequence + _record_count - 1,
+                .record_count   = _record_count,
+                .value_bytes    = _record_count * 8,
+                .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            });
+        };
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 1, 0, 0, "");
+        add_ready_scope(builder, 2, 1, 1, 0, 0, 1, "root-after-hole", 10, 20, 0);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuFrameTotalsMismatch,
+            "a Complete GPU source started after an unexplained local-order hole"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
+        add_ready_scope(builder, 2, 1, 1, 0, 0, 1, "source-zero-root", 10, 20, 0);
+        add_ready_scope(builder, 3, 1, 2, 0, 1, 1, "source-one-root", 30, 40, 0);
+        builder.Loss({
+            .first_sequence = 4,
+            .last_sequence  = 4,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuFrameTotalsMismatch,
+            "one frame-level deficit was reused by two GPU source local-order holes"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 2, 0, 0, "");
+        add_ready_scope(builder, 2, 1, 3, 99, 0, 2, "depth-two-orphan", 10, 20, 2);
+        builder.Loss({
+            .first_sequence = 3,
+            .last_sequence  = 3,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuFrameTotalsMismatch,
+            "one missing GPU record explained both a parent and its hidden root"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
+        add_ready_scope(builder, 2, 1, 3, 99, 0, 2, "budgeted-depth-two-orphan", 10, 20, 2);
+        builder.Loss({
+            .first_sequence = 3,
+            .last_sequence  = 4,
+            .record_count   = 2,
+            .value_bytes    = 16,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                loaded.session.Summary().degraded_complete_gpu_frame_count == 1 &&
+                loaded.session.GpuFrames().front().export_missing_scope_count == 2,
+            "a fully budgeted hidden GPU ancestor chain was rejected"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
+        add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "observed-root", 0, 100, 0);
+        add_ready_scope(builder, 3, 1, 3, 99, 0, 2, "orphan-with-observed-root", 10, 20, 2);
+        builder.Loss({
+            .first_sequence = 4,
+            .last_sequence  = 4,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                loaded.session.Summary().degraded_complete_gpu_frame_count == 1 &&
+                loaded.session.Summary().orphan_gpu_scope_count == 1,
+            "an observed GPU root was not reused by a missing parent chain"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
+        add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "expired-observed-root", 0, 10, 0);
+        add_ready_scope(builder, 3, 1, 3, 99, 0, 2, "orphan-after-root", 20, 30, 2);
+        builder.Loss({
+            .first_sequence = 4,
+            .last_sequence  = 4,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeParentInvalid,
+            "an expired observed GPU root was reused as an orphan subtree ancestor"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Incomplete, false, 4, 2, 0, "RHI drops");
+        add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "early-root", 0, 100, 0);
+        add_ready_scope(builder, 3, 1, 2, 1, 0, 4, "late-depth-one", 10, 20, 1);
+        add_ready_scope(builder, 4, 1, 4, 99, 0, 5, "depth-three-orphan", 30, 40, 3);
+        builder.Loss({
+            .first_sequence = 5,
+            .last_sequence  = 5,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuFrameTotalsMismatch,
+            "a late observed GPU ancestor was reused before a missing parent's latest slot"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 8, 0, 0, "");
+        add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "prefix-root-zero", 0, 1, 0);
+        add_ready_scope(builder, 3, 1, 2, 0, 0, 1, "prefix-root-one", 2, 3, 0);
+        add_ready_scope(builder, 4, 1, 3, 0, 0, 2, "prefix-root-two", 4, 5, 0);
+        add_ready_scope(builder, 5, 1, 4, 0, 0, 3, "prefix-root-three", 6, 7, 0);
+        add_ready_scope(builder, 6, 1, 6, 99, 0, 5, "prefix-depth-three", 8, 9, 3);
+        add_ready_scope(builder, 7, 1, 7, 0, 0, 7, "post-child-hole-root", 10, 11, 0);
+        builder.Loss({
+            .first_sequence = 8,
+            .last_sequence  = 9,
+            .record_count   = 2,
+            .value_bytes    = 16,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeParentInvalid,
+            "a GPU child borrowed hidden-ancestor capacity from a later local-order hole"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 6, 0, 0, "");
+        add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "deadline-root-zero", 0, 1, 0);
+        add_ready_scope(builder, 3, 1, 2, 0, 0, 1, "deadline-root-one", 2, 3, 0);
+        add_ready_scope(builder, 4, 1, 4, 99, 0, 3, "early-depth-three", 4, 5, 3);
+        add_ready_scope(builder, 5, 1, 6, 100, 0, 5, "late-depth-two", 6, 7, 2);
+        builder.Loss({
+            .first_sequence = 6,
+            .last_sequence  = 7,
+            .record_count   = 2,
+            .value_bytes    = 16,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeParentInvalid,
+            "a later missing GPU parent was reused before its own scheduling deadline"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 7, 0, 0, "");
+        add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "release-root", 0, 200, 0);
+        add_ready_scope(builder, 3, 1, 2, 1, 0, 4, "release-anchor", 10, 100, 1);
+        add_ready_scope(builder, 4, 1, 3, 99, 0, 6, "release-orphan", 20, 30, 4);
+        builder.Loss({
+            .first_sequence = 5,
+            .last_sequence  = 8,
+            .record_count   = 4,
+            .value_bytes    = 32,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeParentInvalid,
+            "GPU ancestry borrowed local-order holes from before its observed anchor"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 7, 0, 0, "");
+        add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "barrier-root", 0, 100, 0);
+        add_ready_scope(builder, 3, 1, 3, 101, 0, 3, "barrier-orphan-one", 10, 20, 3);
+        add_ready_scope(builder, 4, 1, 4, 1, 0, 4, "observed-depth-one-barrier", 40, 60, 1);
+        add_ready_scope(builder, 5, 1, 6, 102, 0, 6, "barrier-orphan-two", 80, 90, 3);
+        builder.Loss({
+            .first_sequence = 6,
+            .last_sequence  = 8,
+            .record_count   = 3,
+            .value_bytes    = 24,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeParentInvalid,
+            "GPU hidden ancestors were shared across an observed same-depth timing barrier"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
+        add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "crossing-before-hole", 0, 100, 0);
+        add_ready_scope(builder, 3, 1, 2, 0, 0, 2, "crossing-after-hole", 50, 150, 0);
+        builder.Loss({
+            .first_sequence = 4,
+            .last_sequence  = 4,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeTimingInvalid,
+            "a local-order hole concealed crossing Complete GPU roots"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 5, 0, 0, "");
+        add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "replacement-root", 0, 100, 0);
+        add_ready_scope(builder, 3, 1, 3, 200, 0, 3, "child-of-missing-p", 10, 20, 3);
+        add_ready_scope(builder, 4, 1, 4, 100, 0, 4, "child-of-missing-q", 30, 40, 2);
+        builder.Loss({
+            .first_sequence = 5,
+            .last_sequence  = 6,
+            .record_count   = 2,
+            .value_bytes    = 16,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                loaded.session.Summary().orphan_gpu_scope_count == 2 &&
+                loaded.session.GpuFrames().front().export_missing_scope_count == 2,
+            "a later direct missing GPU parent did not replace an earlier anonymous ancestor demand"
+        );
+    }
+    for (const std::uint32_t timing_case : {0u, 1u, 2u}) {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
+        add_ready_scope(builder, 2, 1, 2, 99, 0, 1, "missing-parent-child-a", 10, 20, 1);
+        const std::uint64_t second_begin = timing_case == 0 ? 20 : timing_case == 1 ? 15 : 5;
+        add_ready_scope(builder, 3, 1, 3, 99, 0, 2, "missing-parent-child-b", second_begin, 30, 1);
+        builder.Loss({
+            .first_sequence = 4,
+            .last_sequence  = 4,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded       = LoadChunks(builder.bytes);
+        const bool   valid_timing = timing_case == 0;
+        Expect(
+            valid_timing ? loaded.result.status == SessionLoadStatus::Complete &&
+                               loaded.session.Summary().orphan_gpu_scope_count == 2 :
+                           loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                               loaded.result.error_code == SessionErrorCode::GpuScopeTimingInvalid,
+            valid_timing ? "adjacent observed children of one missing GPU parent were rejected" :
+                           "overlapping or backward observed children of one missing GPU parent were accepted"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
+        add_ready_scope_bits(builder, 2, 1, 1, 0, 0, 0, "wide-root", 0, 220, 8, 220.0, 218.0, 0);
+        add_ready_scope_bits(builder, 3, 1, 2, 1, 0, 1, "wide-child-a", 0, 1, 8, 1.0, 1.0, 1);
+        add_ready_scope_bits(builder, 4, 1, 3, 1, 0, 2, "wide-child-b", 200, 201, 8, 1.0, 1.0, 1);
+        builder.End();
+        Expect(
+            LoadChunks(builder.bytes).result.status == SessionLoadStatus::Complete,
+            "internal GPU siblings were incorrectly subjected to the root half-range rule"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
+        add_ready_scope_bits(builder, 2, 1, 2, 99, 0, 1, "wide-missing-child-a", 0, 1, 8, 1.0, 1.0, 1);
+        add_ready_scope_bits(builder, 3, 1, 3, 99, 0, 2, "wide-missing-child-b", 200, 201, 8, 1.0, 1.0, 1);
+        add_queue_loss(builder, 4, 1);
+        builder.End();
+        Expect(
+            LoadChunks(builder.bytes).result.status == SessionLoadStatus::Complete,
+            "a valid wide envelope under one missing GPU parent was rejected"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 5, 0, 0, "");
+        add_ready_scope_bits(builder, 2, 1, 2, 99, 0, 1, "cycle-child-a", 0, 1, 8, 1.0, 1.0, 1);
+        add_ready_scope_bits(builder, 3, 1, 3, 99, 0, 2, "cycle-child-b", 100, 101, 8, 1.0, 1.0, 1);
+        add_ready_scope_bits(builder, 4, 1, 4, 99, 0, 3, "cycle-child-c", 200, 201, 8, 1.0, 1.0, 1);
+        add_ready_scope_bits(builder, 5, 1, 5, 99, 0, 4, "cycle-child-d", 44, 45, 8, 1.0, 1.0, 1);
+        add_queue_loss(builder, 6, 1);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeTimingInvalid,
+            "children of one missing GPU parent spanned more than one timestamp cycle"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
+        add_ready_scope_bits(builder, 2, 1, 2, 99, 0, 1, "wrapped-missing-child-a", 250, 5, 8, 11.0, 11.0, 1);
+        add_ready_scope_bits(builder, 3, 1, 3, 99, 0, 2, "wrapped-missing-child-b", 5, 10, 8, 5.0, 5.0, 1);
+        add_queue_loss(builder, 4, 1);
+        builder.End();
+        Expect(
+            LoadChunks(builder.bytes).result.status == SessionLoadStatus::Complete,
+            "a valid wrapped envelope under one missing GPU parent was rejected"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
+        add_ready_scope_bits(builder, 2, 1, 1, 0, 0, 0, "bridge-root-a", 0, 1, 8, 1.0, 1.0, 0);
+        add_ready_scope_bits(builder, 3, 1, 2, 0, 0, 2, "bridge-root-b", 255, 0, 8, 1.0, 1.0, 0);
+        add_queue_loss(builder, 4, 1);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeTimingInvalid,
+            "one lost root bridged more than two legal half-range timestamp steps"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 4, 0, 0, "");
+        add_ready_scope_bits(builder, 2, 1, 1, 0, 0, 0, "three-step-root-a", 0, 100, 8, 100.0, 100.0, 0);
+        add_ready_scope_bits(builder, 3, 1, 2, 0, 0, 3, "three-step-root-b", 50, 60, 8, 10.0, 10.0, 0);
+        add_queue_loss(builder, 4, 2);
+        builder.End();
+        Expect(
+            LoadChunks(builder.bytes).result.status == SessionLoadStatus::Complete,
+            "two lost roots could not bridge a legal three-step timestamp wrap"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 4, 0, 0, "");
+        add_ready_scope_bits(builder, 2, 1, 1, 0, 0, 0, "endpoint-root", 0, 100, 64, 100.0, 50.0, 0);
+        add_ready_scope(builder, 3, 1, 2, 1, 0, 1, "endpoint-sibling-a", 0, 50, 1);
+        add_ready_scope(builder, 4, 1, 4, 99, 0, 3, "endpoint-orphan", 50, 50, 2);
+        add_queue_loss(builder, 5, 1);
+        builder.End();
+        Expect(
+            LoadChunks(builder.bytes).result.status == SessionLoadStatus::Complete,
+            "a zero-duration orphan at a completed sibling boundary chose that sibling as its parent"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
+        add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "endpoint-grandparent", 0, 50, 0);
+        add_ready_scope(builder, 3, 1, 3, 99, 0, 2, "endpoint-grandchild", 50, 50, 2);
+        add_queue_loss(builder, 4, 1);
+        builder.End();
+        Expect(
+            LoadChunks(builder.bytes).result.status == SessionLoadStatus::Complete,
+            "a genuine zero-duration grandchild at its observed ancestor endpoint was rejected"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 5, 0, 0, "");
+        add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "contract-barrier-root", 0, 100, 0);
+        add_ready_scope(builder, 3, 1, 3, 99, 0, 2, "contract-child-a", 10, 20, 2);
+        add_ready_scope(builder, 4, 1, 4, 1, 0, 3, "contract-barrier", 30, 40, 1);
+        add_ready_scope(builder, 5, 1, 5, 99, 0, 4, "contract-child-b", 50, 60, 2);
+        add_queue_loss(builder, 6, 1);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeParentInvalid,
+            "one missing GPU parent crossed an observed same-depth hierarchy barrier"
+        );
+    }
+    for (const bool leave_sibling_hole : {false, true}) {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 5, 0, 0, "");
+        add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "virtual-sibling-root", 0, 100, 0);
+        const std::uint64_t first_child_order  = leave_sibling_hole ? 2 : 3;
+        const std::uint64_t second_child_order = leave_sibling_hole ? 4 : 4;
+        add_ready_scope(builder, 3, 1, 3, 101, 0, first_child_order, "virtual-sibling-child-a", 10, 20, 2);
+        add_ready_scope(builder, 4, 1, 4, 102, 0, second_child_order, "virtual-sibling-child-b", 30, 40, 2);
+        add_queue_loss(builder, 5, 2);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            leave_sibling_hole ? loaded.result.status == SessionLoadStatus::Complete :
+                                 loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                                     loaded.result.error_code == SessionErrorCode::GpuScopeParentInvalid,
+            leave_sibling_hole ?
+                "distinct missing GPU siblings were rejected despite a hole between their subtrees" :
+                "distinct missing GPU siblings borrowed only pre-subtree holes"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 6, 0, 0, "");
+        add_ready_scope_bits(builder, 2, 1, 1, 0, 0, 0, "contract-lca-root", 0, 100, 64, 100.0, 50.0, 0);
+        add_ready_scope(builder, 3, 1, 2, 1, 0, 1, "contract-lca-sibling", 0, 50, 1);
+        add_ready_scope(builder, 4, 1, 4, 99, 0, 4, "contract-lca-zero-child", 50, 50, 3);
+        add_ready_scope(builder, 5, 1, 5, 99, 0, 5, "contract-lca-late-child", 60, 70, 3);
+        add_queue_loss(builder, 6, 2);
+        builder.End();
+        Expect(
+            LoadChunks(builder.bytes).result.status == SessionLoadStatus::Complete,
+            "a missing-parent envelope did not choose its deepest common observed ancestor"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 4, 0, 0, "");
+        add_ready_scope_bits(builder, 2, 1, 1, 0, 0, 0, "virtual-chain-root-a", 0, 127, 8, 127.0, 127.0, 0);
+        add_ready_scope_bits(builder, 3, 1, 3, 99, 0, 2, "virtual-chain-child", 200, 210, 8, 10.0, 10.0, 1);
+        add_ready_scope_bits(builder, 4, 1, 4, 0, 0, 3, "virtual-chain-root-b", 100, 110, 8, 10.0, 10.0, 0);
+        add_queue_loss(builder, 5, 1);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeTimingInvalid,
+            "a virtual root bypassed the serial root timestamp contract"
+        );
+    }
+    for (const std::uint64_t split_loss_count : {3ull, 4ull}) {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 2 + split_loss_count, 0, 0, "");
+        add_ready_scope_bits(builder, 2, 1, 3, 101, 0, 2, "split-root-child-a", 10, 30, 8, 20.0, 20.0, 2);
+        const std::uint64_t second_child_order = split_loss_count == 3 ? 4 : 5;
+        add_ready_scope_bits(
+            builder, 3, 1, 4, 102, 0, second_child_order, "split-root-child-b", 20, 40, 8, 20.0, 20.0, 2
+        );
+        add_queue_loss(builder, 4, split_loss_count);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            split_loss_count == 4 ? loaded.result.status == SessionLoadStatus::Complete :
+                                    loaded.result.status == SessionLoadStatus::ProtocolViolation,
+            split_loss_count == 4 ?
+                "overlapping virtual-root envelopes did not split despite spare ancestry holes" :
+                "overlapping virtual-root envelopes split without enough ancestry holes"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 7, 0, 0, "");
+        add_ready_scope_bits(builder, 2, 1, 3, 101, 0, 2, "wide-root-child-a", 10, 20, 8, 10.0, 10.0, 2);
+        add_ready_scope_bits(builder, 3, 1, 4, 102, 0, 5, "wide-root-child-b", 200, 210, 8, 10.0, 10.0, 2);
+        add_ready_scope_bits(builder, 4, 1, 5, 0, 0, 6, "wide-root-successor", 220, 230, 8, 10.0, 10.0, 0);
+        add_queue_loss(builder, 5, 4);
+        builder.End();
+        Expect(
+            LoadChunks(builder.bytes).result.status == SessionLoadStatus::Complete,
+            "a wide virtual envelope was not partitioned before a later observed root"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 7, 0, 0, "");
+        add_ready_scope_bits(builder, 2, 1, 3, 101, 0, 2, "partition-child-a", 0, 10, 8, 10.0, 10.0, 2);
+        add_ready_scope_bits(builder, 3, 1, 4, 102, 0, 5, "partition-child-b", 100, 110, 8, 10.0, 10.0, 2);
+        add_ready_scope_bits(builder, 4, 1, 5, 0, 0, 6, "partition-successor", 150, 160, 8, 10.0, 10.0, 0);
+        add_queue_loss(builder, 5, 4);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                !loaded.session.GpuFrames().front().materialization_complete &&
+                !loaded.session.GpuFrames().front().timing_topology_trusted,
+            "a timing-driven virtual-root partition with an internal spare hole was rejected or trusted"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 9, 0, 0, "");
+        add_ready_scope_bits(
+            builder, 2, 1, 2, 100, 0, 1, "future-shared-child-zero", 0, 10, 8, 10.0, 10.0, 1
+        );
+        add_ready_scope_bits(
+            builder, 3, 1, 3, 201, 0, 5, "future-shared-child-one", 100, 105, 8, 5.0, 5.0, 3
+        );
+        add_ready_scope_bits(
+            builder, 4, 1, 4, 202, 0, 7, "future-shared-child-two", 106, 110, 8, 4.0, 4.0, 3
+        );
+        add_ready_scope_bits(
+            builder, 5, 1, 5, 0, 0, 8, "future-shared-successor", 150, 160, 8, 10.0, 10.0, 0
+        );
+        add_queue_loss(builder, 6, 5);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                !loaded.session.GpuFrames().front().materialization_complete &&
+                !loaded.session.GpuFrames().front().timing_topology_trusted,
+            "a future-shared missing suffix inflated an earlier virtual-root partition cost"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 9, 0, 0, "");
+        add_ready_scope_bits(builder, 2, 1, 2, 100, 0, 1, "partial-split-child-zero", 0, 0, 8, 0.0, 0.0, 1);
+        add_ready_scope_bits(
+            builder, 3, 1, 3, 201, 0, 4, "partial-split-child-one", 100, 100, 8, 0.0, 0.0, 2
+        );
+        add_ready_scope_bits(
+            builder, 4, 1, 4, 202, 0, 6, "partial-split-child-two", 110, 110, 8, 0.0, 0.0, 2
+        );
+        add_ready_scope_bits(builder, 5, 1, 5, 0, 0, 8, "partial-split-successor", 50, 60, 8, 10.0, 10.0, 0);
+        add_queue_loss(builder, 6, 5);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                !loaded.session.GpuFrames().front().materialization_complete &&
+                !loaded.session.GpuFrames().front().timing_topology_trusted,
+            "a later infeasible cut rolled back an earlier valid virtual-root partition"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 5, 0, 0, "");
+        add_ready_scope_bits(builder, 2, 1, 1, 0, 0, 0, "occurrence-frontier-root-a", 0, 0, 8, 0.0, 0.0, 0);
+        add_ready_scope_bits(
+            builder, 3, 1, 3, 99, 0, 3, "occurrence-frontier-child", 125, 125, 8, 0.0, 0.0, 1
+        );
+        add_ready_scope_bits(
+            builder, 4, 1, 4, 0, 0, 4, "occurrence-frontier-root-b", 175, 180, 8, 5.0, 5.0, 0
+        );
+        add_queue_loss(builder, 5, 2);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                !loaded.session.GpuFrames().front().materialization_complete &&
+                !loaded.session.GpuFrames().front().timing_topology_trusted,
+            "a later flexible-envelope occurrence hid an earlier valid serial timestamp witness"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 8, 0, 0, "");
+        add_ready_scope_bits(
+            builder, 2, 1, 1, 0, 0, 0, "partition-soundness-root-a", 0, 127, 8, 127.0, 127.0, 0
+        );
+        add_ready_scope_bits(
+            builder, 3, 1, 3, 101, 0, 3, "partition-soundness-child-a", 255, 255, 8, 0.0, 0.0, 2
+        );
+        add_ready_scope_bits(
+            builder, 4, 1, 4, 102, 0, 6, "partition-soundness-child-b", 255, 255, 8, 0.0, 0.0, 2
+        );
+        add_ready_scope_bits(
+            builder, 5, 1, 5, 0, 0, 7, "partition-soundness-root-b", 150, 160, 8, 10.0, 10.0, 0
+        );
+        add_queue_loss(builder, 6, 4);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeTimingInvalid,
+            "a local-order virtual-root split erased its predecessor and successor timestamp constraints"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 7, 0, 0, "");
+        add_ready_scope_bits(
+            builder, 2, 1, 3, 101, 0, 3, "blocked-partition-child-a", 0, 10, 8, 10.0, 10.0, 2
+        );
+        add_ready_scope_bits(
+            builder, 3, 1, 4, 102, 0, 5, "blocked-partition-child-b", 100, 110, 8, 10.0, 10.0, 2
+        );
+        add_ready_scope_bits(
+            builder, 4, 1, 5, 0, 0, 6, "blocked-partition-successor", 150, 160, 8, 10.0, 10.0, 0
+        );
+        add_queue_loss(builder, 5, 4);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeTimingInvalid,
+            "a virtual-root partition borrowed a spare hole before its first subtree"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 4, 0, 0, "");
+        add_ready_scope_bits(
+            builder, 2, 1, 2, 99, 0, 1, "long-atomic-virtual-child", 0, 200, 8, 200.0, 200.0, 1
+        );
+        add_ready_scope_bits(builder, 3, 1, 3, 0, 0, 3, "long-atomic-successor", 210, 220, 8, 10.0, 10.0, 0);
+        add_queue_loss(builder, 4, 2);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeTimingInvalid,
+            "a long atomic virtual root borrowed an optional partition before its successor"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 5, 0, 0, "");
+        add_ready_scope_bits(builder, 2, 1, 1, 0, 0, 0, "late-root-a", 0, 100, 8, 100.0, 100.0, 0);
+        add_ready_scope_bits(builder, 3, 1, 3, 99, 0, 3, "late-root-child", 250, 0, 8, 6.0, 6.0, 1);
+        add_ready_scope_bits(builder, 4, 1, 4, 0, 0, 4, "late-root-b", 0, 10, 8, 10.0, 10.0, 0);
+        add_queue_loss(builder, 5, 2);
+        builder.End();
+        Expect(
+            LoadChunks(builder.bytes).result.status == SessionLoadStatus::Complete,
+            "a required virtual root was not scheduled after an optional bridge root"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 4, 0, 0, "");
+        add_ready_scope_bits(builder, 2, 1, 1, 0, 0, 0, "long-root", 0, 200, 8, 200.0, 200.0, 0);
+        add_ready_scope_bits(builder, 3, 1, 3, 99, 0, 3, "long-root-successor", 210, 220, 8, 10.0, 10.0, 1);
+        add_queue_loss(builder, 4, 2);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeTimingInvalid,
+            "a root longer than one legal serial step borrowed a later optional root"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 4, 0, 0, "");
+        add_ready_scope_bits(builder, 2, 1, 1, 0, 0, 0, "closed-parent-root", 0, 100, 64, 100.0, 50.0, 0);
+        add_ready_scope_bits(builder, 3, 1, 2, 1, 0, 1, "closed-parent", 0, 30, 64, 30.0, 20.0, 1);
+        add_ready_scope(builder, 4, 1, 3, 1, 0, 2, "closing-sibling", 40, 60, 1);
+        add_ready_scope(builder, 5, 1, 4, 2, 0, 3, "late-closed-child", 10, 20, 2);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeParentInvalid,
+            "a child reopened an observed parent after a later sibling closed it"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 1, 0, 0, "");
+        add_ready_scope(
+            builder,
+            2,
+            1,
+            1,
+            0,
+            0,
+            std::numeric_limits<std::uint64_t>::max(),
+            "overflow-local-order",
+            10,
+            20,
+            0
+        );
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuScopeIdentityInvalid,
+            "UINT64_MAX GPU local order overflowed its source span"
         );
     }
 }
@@ -1537,8 +3919,8 @@ void TestLimitsAndStickyFailure() {
         SessionBuilder builder;
         builder.Begin();
         builder.Schema(Templates::CpuScope());
-        AddCpuScope(builder, 1, 1, "parent", 0, 20, 0);
-        AddCpuScope(builder, 2, 1, "child", 5, 10, 1);
+        AddCpuScope(builder, 2, 1, "parent", 0, 20, 0);
+        AddCpuScope(builder, 1, 1, "child", 5, 10, 1);
         builder.End();
 
         SessionLoadOptions options{};
@@ -1622,6 +4004,79 @@ void TestLimitsAndStickyFailure() {
         );
     }
     {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 4, 0, 0, "");
+        AddGpuScope(
+            builder,
+            2,
+            1,
+            2,
+            101,
+            0,
+            1,
+            0,
+            0,
+            0,
+            "topology-source-zero-child",
+            ProfileGpuScopeStatus::Ready,
+            10,
+            20,
+            64,
+            1.0,
+            10.0,
+            10.0,
+            1,
+            ""
+        );
+        AddGpuScope(
+            builder,
+            3,
+            1,
+            4,
+            201,
+            1,
+            1,
+            0,
+            0,
+            0,
+            "topology-source-one-child",
+            ProfileGpuScopeStatus::Ready,
+            30,
+            40,
+            64,
+            1.0,
+            10.0,
+            10.0,
+            1,
+            ""
+        );
+        builder.Loss({
+            .first_sequence = 4,
+            .last_sequence  = 5,
+            .record_count   = 2,
+            .value_bytes    = 16,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+
+        SessionLoadOptions options{};
+        options.limits.max_topology_work_items = 2;
+        Expect(
+            LoadChunks(builder.bytes, {}, options).result.status == SessionLoadStatus::Complete,
+            "exact global GPU topology work-item limit was rejected"
+        );
+        options.limits.max_topology_work_items = 1;
+        const Loaded loaded                    = LoadChunks(builder.bytes, {}, options);
+        Expect(
+            loaded.result.status == SessionLoadStatus::LimitExceeded &&
+                loaded.result.limit_kind == SessionLimitKind::TopologyWorkItems,
+            "GPU topology work-item limit was not accumulated across recording sources"
+        );
+    }
+    {
         SessionLoadOptions options{};
         options.limits.max_input_bytes = golden.bytes.size();
         expect_complete(options, "exact input byte limit was rejected");
@@ -1635,6 +4090,51 @@ void TestLimitsAndStickyFailure() {
                 loaded.result.limit_kind == SessionLimitKind::InputBytes,
             "input byte limit was not enforced"
         );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+
+        Moer::Array<std::uint8_t>       forged_header;
+        const Moer::Array<std::uint8_t> empty_payload;
+        Expect(
+            WrapPacket(
+                PacketType::Schema, builder.next_packet_index, empty_payload, builder.limits, forged_header
+            ) == EncodeStatus::Ok &&
+                forged_header.size() == kPacketHeaderBytes,
+            "could not build the packet-size boundary fixture"
+        );
+        const auto write_u32 = [](Moer::Array<std::uint8_t>& _bytes, std::size_t _offset, std::uint32_t _value
+                               ) {
+            for (std::size_t byte = 0; byte < sizeof(_value); ++byte) {
+                _bytes[_offset + byte] = static_cast<std::uint8_t>(_value >> (byte * 8));
+            }
+        };
+        write_u32(forged_header, 12, std::numeric_limits<std::uint32_t>::max());
+        const auto header_prefix = std::span<const std::uint8_t>(forged_header).first(28);
+        write_u32(forged_header, 28, crc32_fast(header_prefix.data(), header_prefix.size()));
+        builder.bytes.insert(builder.bytes.end(), forged_header.begin(), forged_header.end());
+
+        SessionLoadOptions options{};
+        options.limits.codec.max_packet_payload_bytes = std::numeric_limits<std::uint32_t>::max();
+        options.limits.max_input_bytes                = builder.bytes.size();
+        const Loaded loaded                           = LoadChunks(builder.bytes, {}, options);
+        Expect(
+            loaded.result.status == SessionLoadStatus::LimitExceeded,
+            "an unaddressable or input-impossible packet wire size was not rejected before reserve"
+        );
+        if constexpr (sizeof(std::size_t) == sizeof(std::uint32_t)) {
+            Expect(
+                loaded.result.limit_kind == SessionLimitKind::Codec &&
+                    loaded.result.codec_status == DecodeStatus::PayloadTooLarge,
+                "32-bit packet-size overflow did not use the stable codec limit contract"
+            );
+        } else {
+            Expect(
+                loaded.result.limit_kind == SessionLimitKind::InputBytes,
+                "declared packet size bypassed the configured input byte limit"
+            );
+        }
     }
     {
         SessionLoadOptions options{};

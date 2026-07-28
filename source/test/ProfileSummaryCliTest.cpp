@@ -507,6 +507,58 @@ void ExpectContractHeader(const Json& _document) {
     Expect(_document.at("version") == 1, "summary contract version changed");
 }
 
+void TestCliBoundaryContract() {
+    SessionErrorCode emergency_error  = SessionErrorCode::None;
+    const auto       emergency_writer = [&](SessionErrorCode _error) noexcept {
+        emergency_error = _error;
+    };
+
+    Expect(
+        RunProfileSummaryCliBoundary(
+            [] {
+                return 2;
+            },
+            emergency_writer
+        ) == 2 &&
+            emergency_error == SessionErrorCode::None,
+        "CLI boundary changed a normal exit code"
+    );
+    Expect(
+        RunProfileSummaryCliBoundary(
+            []() -> int {
+                throw std::bad_alloc{};
+            },
+            emergency_writer
+        ) == 14 &&
+            emergency_error == SessionErrorCode::ResourceAllocationFailed,
+        "CLI boundary did not map bad_alloc to exit code 14"
+    );
+    Expect(
+        RunProfileSummaryCliBoundary(
+            []() -> int {
+                throw 7;
+            },
+            emergency_writer
+        ) == 14 &&
+            emergency_error == SessionErrorCode::UnexpectedFailure,
+        "CLI boundary did not map an unexpected exception to exit code 14"
+    );
+
+    for (const SessionErrorCode error :
+         {SessionErrorCode::ResourceAllocationFailed, SessionErrorCode::UnexpectedFailure}) {
+        const Json emergency = Json::parse(ProfileSummaryEmergencyJson(error));
+        ExpectContractHeader(emergency);
+        Expect(
+            emergency.at("load").at("status") == "resource_exhausted" &&
+                emergency.at("load").at("error_code") ==
+                    (error == SessionErrorCode::ResourceAllocationFailed ? "resource_allocation_failed" :
+                                                                           "unexpected_failure") &&
+                emergency.at("load").at("codec_status") == "ok" && !emergency.contains("session"),
+            "emergency JSON contract changed"
+        );
+    }
+}
+
 void ExpectLoadU64Fields(const Json& _document) {
     const Json& load = _document.at("load");
     ExpectU64(load.at("input_bytes"), "load.input_bytes");
@@ -551,7 +603,7 @@ void ExpectUsableSessionU64Fields(const Json& _document, bool _has_session_end) 
     }
 
     const Json& gpu = _document.at("gpu");
-    for (const char* field : {"total", "complete", "incomplete", "invalid"}) {
+    for (const char* field : {"total", "complete", "degraded_complete", "incomplete", "invalid"}) {
         ExpectU64(gpu.at("frames").at(field), std::string("gpu.frames.") + field);
     }
     for (const char* field : {"total", "ready", "error", "orphan"}) {
@@ -628,9 +680,10 @@ void TestComplete(ProcessRunner& _runner, const std::filesystem::path& _path) {
         gpu.at("clock") == "raw_device_ticks" && gpu.at("cross_cpu_alignment") == "none" &&
             gpu.at("cross_domain_alignment") == "none" && gpu.at("tracks") == "1" &&
             gpu.at("frames").at("total") == "1" && gpu.at("frames").at("complete") == "1" &&
-            gpu.at("frames").at("incomplete") == "0" && gpu.at("frames").at("invalid") == "0" &&
-            gpu.at("scopes").at("total") == "1" && gpu.at("scopes").at("ready") == "1" &&
-            gpu.at("scopes").at("error") == "0" && gpu.at("scopes").at("orphan") == "0",
+            gpu.at("frames").at("degraded_complete") == "0" && gpu.at("frames").at("incomplete") == "0" &&
+            gpu.at("frames").at("invalid") == "0" && gpu.at("scopes").at("total") == "1" &&
+            gpu.at("scopes").at("ready") == "1" && gpu.at("scopes").at("error") == "0" &&
+            gpu.at("scopes").at("orphan") == "0",
         "complete GPU summary changed"
     );
     Expect(gpu.at("domains").size() == 1, "complete GPU domain count changed");
@@ -638,9 +691,9 @@ void TestComplete(ProcessRunner& _runner, const std::filesystem::path& _path) {
     Expect(
         domain.at("native_queue_id") == 5 && domain.at("family_id") == 6 &&
             domain.at("logical_queues") == Json::array({"graphics"}) &&
-            domain.at("has_ready_timestamps") == true && domain.at("valid_bits") == 64 &&
-            domain.at("tick_period_ns") == 2.0 && domain.at("ready_scopes") == "1" &&
-            domain.at("error_scopes") == "0",
+            domain.at("has_ready_timestamps") == true && domain.at("timing_capability_trusted") == true &&
+            domain.at("valid_bits") == 64 && domain.at("tick_period_ns") == 2.0 &&
+            domain.at("ready_scopes") == "1" && domain.at("error_scopes") == "0",
         "complete GPU domain metadata changed"
     );
 }
@@ -734,6 +787,7 @@ void TestInvalidArguments(ProcessRunner& _runner, const std::filesystem::path& _
 
 int main(int _argument_count, char** _arguments) {
     try {
+        TestCliBoundaryContract();
         Expect(_argument_count == 2, "expected MoerProfileSummary path in argv[1]");
         const std::filesystem::path executable = std::filesystem::absolute(_arguments[1]);
         Expect(std::filesystem::is_regular_file(executable), "MoerProfileSummary executable does not exist");

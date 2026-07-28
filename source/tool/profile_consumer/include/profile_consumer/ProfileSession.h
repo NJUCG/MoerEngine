@@ -8,6 +8,7 @@
 #include <limits>
 #include <span>
 #include <string_view>
+#include <type_traits>
 
 namespace Moer::ProfileDump {
 
@@ -15,6 +16,26 @@ using SessionStringId = std::uint32_t;
 
 inline constexpr SessionStringId kInvalidSessionString = std::numeric_limits<SessionStringId>::max();
 inline constexpr std::uint64_t   kInvalidSessionIndex  = std::numeric_limits<std::uint64_t>::max();
+
+namespace Detail {
+
+// Compute the full wire size before converting the untrusted uint32 payload
+// length to the address-space-sized reader counter. The generic Size keeps the
+// 32-bit boundary independently testable on a 64-bit build.
+template<typename Size>
+[[nodiscard]] constexpr bool TryPacketWireBytes(std::uint32_t _payload_bytes, Size& _result) noexcept {
+    static_assert(std::is_unsigned_v<Size>);
+    constexpr std::uint64_t maximum = static_cast<std::uint64_t>(std::numeric_limits<Size>::max());
+    const std::uint64_t     total =
+        static_cast<std::uint64_t>(kPacketHeaderBytes) + static_cast<std::uint64_t>(_payload_bytes);
+    if (total > maximum) {
+        return false;
+    }
+    _result = static_cast<Size>(total);
+    return true;
+}
+
+} // namespace Detail
 
 enum class SessionLoadStatus : std::uint8_t {
     Reading = 0,
@@ -61,6 +82,7 @@ enum class SessionErrorCode : std::uint16_t {
     RecordPayloadInvalid,
     RecordSchemaUnregistered,
     RecordSequenceDuplicate,
+    RecordSequenceInvalid,
     LossPayloadInvalid,
     LossTotalsOverflow,
     CpuScopePayloadInvalid,
@@ -81,6 +103,7 @@ enum class SessionErrorCode : std::uint16_t {
     GpuScopeRootDepthInvalid,
     GpuScopeParentMissing,
     GpuScopeParentInvalid,
+    CpuScopeTopologyInvalid,
 };
 
 enum class SessionLimitKind : std::uint8_t {
@@ -102,6 +125,7 @@ enum class SessionLimitKind : std::uint8_t {
     StringBytes,
     LogicalModelBytes,
     ScopeDepth,
+    TopologyWorkItems,
 };
 
 enum class KnownProfileSchema : std::uint8_t {
@@ -149,6 +173,7 @@ struct SessionLimits {
     std::uint32_t max_gpu_tracks{1024};
     std::uint32_t max_gpu_domains{256};
     std::uint32_t max_scope_depth{1024};
+    std::uint64_t max_topology_work_items{1'000'000};
 
     std::uint32_t max_unique_strings{1'000'000};
     std::uint64_t max_string_bytes{256ull * 1024 * 1024};
@@ -245,6 +270,9 @@ struct GpuFrameRecord {
     std::uint64_t         error_scope_count{0};
     SessionStringId       reason{kInvalidSessionString};
     std::uint64_t         scope_count{0};
+    std::uint64_t         export_missing_scope_count{0};
+    bool                  materialization_complete{false};
+    bool                  timing_topology_trusted{false};
 };
 
 // One physical timestamp domain. Different logical roles may share it when
@@ -256,6 +284,7 @@ struct GpuTimestampDomain {
     // Bit positions are defined by ProfileLogicalQueue.
     std::uint32_t logical_queue_mask{0};
     bool          has_ready_timestamps{false};
+    bool          timing_capability_trusted{false};
     std::uint32_t valid_bits{0};
     double        tick_period_ns{0.0};
     std::uint64_t ready_scope_count{0};
@@ -319,6 +348,7 @@ struct ProfileSessionSummary {
     std::uint64_t unknown_record_count{0};
 
     std::uint64_t complete_gpu_frame_count{0};
+    std::uint64_t degraded_complete_gpu_frame_count{0};
     std::uint64_t incomplete_gpu_frame_count{0};
     std::uint64_t invalid_gpu_frame_count{0};
     std::uint64_t ready_gpu_scope_count{0};

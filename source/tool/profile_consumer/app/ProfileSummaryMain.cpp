@@ -4,6 +4,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
+#include <cstdio>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -99,6 +100,8 @@ using Json = nlohmann::ordered_json;
             return "record_schema_unregistered";
         case SessionErrorCode::RecordSequenceDuplicate:
             return "record_sequence_duplicate";
+        case SessionErrorCode::RecordSequenceInvalid:
+            return "record_sequence_invalid";
         case SessionErrorCode::LossPayloadInvalid:
             return "loss_payload_invalid";
         case SessionErrorCode::LossTotalsOverflow:
@@ -139,6 +142,8 @@ using Json = nlohmann::ordered_json;
             return "gpu_scope_parent_missing";
         case SessionErrorCode::GpuScopeParentInvalid:
             return "gpu_scope_parent_invalid";
+        case SessionErrorCode::CpuScopeTopologyInvalid:
+            return "cpu_scope_topology_invalid";
     }
     return "unknown";
 }
@@ -213,6 +218,8 @@ using Json = nlohmann::ordered_json;
             return "logical_model_bytes";
         case SessionLimitKind::ScopeDepth:
             return "scope_depth";
+        case SessionLimitKind::TopologyWorkItems:
+            return "topology_work_items";
     }
     return "unknown";
 }
@@ -305,6 +312,7 @@ using Json = nlohmann::ordered_json;
             {
                 {"total", U64(summary.gpu_frame_count)},
                 {"complete", U64(summary.complete_gpu_frame_count)},
+                {"degraded_complete", U64(summary.degraded_complete_gpu_frame_count)},
                 {"incomplete", U64(summary.incomplete_gpu_frame_count)},
                 {"invalid", U64(summary.invalid_gpu_frame_count)},
             },
@@ -338,6 +346,7 @@ using Json = nlohmann::ordered_json;
             {"family_id", domain.family_id},
             {"logical_queues", std::move(logical_queues)},
             {"has_ready_timestamps", domain.has_ready_timestamps},
+            {"timing_capability_trusted", domain.timing_capability_trusted},
             {"valid_bits", domain.valid_bits},
             {"tick_period_ns", domain.tick_period_ns},
             {"ready_scopes", U64(domain.ready_scope_count)},
@@ -352,46 +361,70 @@ using Json = nlohmann::ordered_json;
 int RunSummary(const std::filesystem::path& _path, const SessionLoadOptions& _options) {
     ProfileSession          session;
     const SessionLoadResult result = LoadProfileSessionFile(_path, _options, session);
-    std::cout << BuildJson(result, session).dump(2) << '\n';
+    std::string             output = BuildJson(result, session).dump(2);
+    output.push_back('\n');
+    if (std::fwrite(output.data(), 1, output.size(), stdout) != output.size()) {
+        return ProfileSummaryExitCode(SessionLoadStatus::ResourceExhausted);
+    }
     return ProfileSummaryExitCode(result.status);
+}
+
+void WriteEmergencySummary(SessionErrorCode _error) noexcept {
+    const std::string_view output = ProfileSummaryEmergencyJson(_error);
+    std::fwrite(output.data(), 1, output.size(), stdout);
+    std::fputc('\n', stdout);
 }
 
 } // namespace
 
 #if defined(_WIN32)
 int wmain(int _argument_count, wchar_t** _arguments) {
-    if (_argument_count < 2 || _argument_count > 3) {
-        std::cerr << "usage: MoerProfileSummary <capture.mpd> [--allow-truncated]\n";
-        return 10;
-    }
+    return RunProfileSummaryCliBoundary(
+        [&]() -> int {
+            if (_argument_count < 2 || _argument_count > 3) {
+                std::cerr << "usage: MoerProfileSummary <capture.mpd> [--allow-truncated]\n";
+                return 10;
+            }
 
-    SessionLoadOptions options{};
-    if (_argument_count == 3) {
-        if (std::wstring_view(_arguments[2]) != L"--allow-truncated") {
-            std::wcerr << L"unknown option: " << _arguments[2] << L'\n';
-            return 10;
+            SessionLoadOptions options{};
+            if (_argument_count == 3) {
+                if (std::wstring_view(_arguments[2]) != L"--allow-truncated") {
+                    std::wcerr << L"unknown option: " << _arguments[2] << L'\n';
+                    return 10;
+                }
+                options.allow_forensic_truncation = true;
+            }
+
+            return RunSummary(std::filesystem::path(_arguments[1]), options);
+        },
+        [](SessionErrorCode _error) noexcept {
+            WriteEmergencySummary(_error);
         }
-        options.allow_forensic_truncation = true;
-    }
-
-    return RunSummary(std::filesystem::path(_arguments[1]), options);
+    );
 }
 #else
 int main(int _argument_count, char** _arguments) {
-    if (_argument_count < 2 || _argument_count > 3) {
-        std::cerr << "usage: MoerProfileSummary <capture.mpd> [--allow-truncated]\n";
-        return 10;
-    }
+    return RunProfileSummaryCliBoundary(
+        [&]() -> int {
+            if (_argument_count < 2 || _argument_count > 3) {
+                std::cerr << "usage: MoerProfileSummary <capture.mpd> [--allow-truncated]\n";
+                return 10;
+            }
 
-    SessionLoadOptions options{};
-    if (_argument_count == 3) {
-        if (std::string_view(_arguments[2]) != "--allow-truncated") {
-            std::cerr << "unknown option: " << _arguments[2] << '\n';
-            return 10;
+            SessionLoadOptions options{};
+            if (_argument_count == 3) {
+                if (std::string_view(_arguments[2]) != "--allow-truncated") {
+                    std::cerr << "unknown option: " << _arguments[2] << '\n';
+                    return 10;
+                }
+                options.allow_forensic_truncation = true;
+            }
+
+            return RunSummary(std::filesystem::path(_arguments[1]), options);
+        },
+        [](SessionErrorCode _error) noexcept {
+            WriteEmergencySummary(_error);
         }
-        options.allow_forensic_truncation = true;
-    }
-
-    return RunSummary(std::filesystem::path(_arguments[1]), options);
+    );
 }
 #endif
