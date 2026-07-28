@@ -20,6 +20,9 @@ namespace Moer {
 class EditorUI;
 class RuntimeAssets;
 class RenderThreadService;
+namespace Render {
+class RenderProfileCapture;
+}
 
 class RENDER_API Engine {
 public:
@@ -68,6 +71,8 @@ private:
     void Init3rdParty();
     void ShutDown3rdParty();
     void InitializeProfileDump() noexcept;
+    void InitializeRenderProfileCapture() noexcept;
+    void ShutdownRenderProfileCapture(bool rhi_drained) noexcept;
     void ShutdownProfileDump() noexcept;
 
     void TickRendererSwitchValidation(Scene& scene);
@@ -81,6 +86,7 @@ private:
     UniquePtr<remote::RemoteModule>  m_remote_module;
     UniquePtr<Render::Renderer>      m_renderer;
     UniquePtr<RenderThreadService>   m_render_thread_service;
+    UniquePtr<Render::RenderProfileCapture> m_render_profile_capture;
 
     uint m_max_frame_lag = 0;
     bool m_has_shutdown = false;
