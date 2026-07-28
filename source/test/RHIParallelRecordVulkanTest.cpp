@@ -7,6 +7,7 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIExecutor.h"
+#include "rhi/RHIGpuScope.h"
 #include "rhi/RHISubmissionPipelinePolicy.h"
 #include "rhi/RHIThreadOwnership.h"
 #include "rhi/vulkan/VulkanCustomCommand.h"
@@ -22,6 +23,7 @@
 #include <atomic>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -1345,7 +1347,8 @@ void ValidateArguments(int _argc, const char** _argv) {
             argument != "--timestamp-query" &&
             argument != "--timestamp-query-success-batch" &&
             argument != "--timestamp-query-mid-failure" &&
-            argument != "--timestamp-query-record-failure") {
+            argument != "--timestamp-query-record-failure" &&
+            argument != "--gpu-scope-stream") {
             throw std::invalid_argument("unsupported argument: " + std::string(argument));
         }
     }
@@ -11383,6 +11386,676 @@ void PrimeGlobalTransientPoolForDispose() {
     }
 }
 
+void RunGpuScopeStreamCompletionAndParallelIsolation() {
+    auto& device = RenderDevice::Get();
+    const RHIQueueTopology topology = device.GetQueueTopology();
+    if (!topology.graphics.available) {
+        LOG_INFO(
+            "[TESTCASE][SKIP] "
+            "name=GpuScopeStreamCompletionAndParallelIsolation "
+            "reason=graphics_queue_unavailable"
+        );
+        return;
+    }
+
+    constexpr uint64 frame_id = 0x5048323142324652ull;
+    constexpr uint64 async_queue_scope = 0x5048323142325343ull;
+    constexpr size_t sibling_copy_count = 8;
+    constexpr uint32 inner_copy_count = 128;
+    constexpr uint32 outer_copy_count = 16;
+    const EBufferUsageFlags usage =
+        EBufferUsageFlags::TRANSFER_SRC |
+        EBufferUsageFlags::TRANSFER_DST;
+
+    std::array<uint32, kElementCount> values{};
+    std::array<uint32, kElementCount> scope_readback{};
+    std::array<
+        std::array<uint32, kElementCount>,
+        sibling_copy_count
+    > sibling_readbacks{};
+    for (uint32 index = 0; index < values.size(); ++index) {
+        values[index] = 0x21B20000u + index * 37u;
+    }
+
+    BufferRef scope_ping = device.CreateBuffer<uint32>(
+        "gpu_scope_stream_ping", kElementCount, usage
+    );
+    BufferRef scope_pong = device.CreateBuffer<uint32>(
+        "gpu_scope_stream_pong", kElementCount, usage
+    );
+    std::array<BufferRef, sibling_copy_count> sibling_sources{};
+    std::array<BufferRef, sibling_copy_count>
+        sibling_destinations{};
+    for (size_t index = 0; index < sibling_copy_count; ++index) {
+        sibling_sources[index] = device.CreateBuffer<uint32>(
+            "gpu_scope_parallel_source_" +
+                std::to_string(index),
+            kElementCount,
+            usage
+        );
+        sibling_destinations[index] =
+            device.CreateBuffer<uint32>(
+                "gpu_scope_parallel_destination_" +
+                    std::to_string(index),
+                kElementCount,
+                usage
+            );
+    }
+    if (!scope_ping || !scope_pong ||
+        std::any_of(
+            sibling_sources.begin(),
+            sibling_sources.end(),
+            [](const BufferRef& _buffer) {
+                return !_buffer;
+            }
+        ) ||
+        std::any_of(
+            sibling_destinations.begin(),
+            sibling_destinations.end(),
+            [](const BufferRef& _buffer) {
+                return !_buffer;
+            }
+        )) {
+        throw std::runtime_error(
+            "failed to allocate GPU scope focused-test buffers"
+        );
+    }
+
+    // Initialize every source outside the observed batch. The query-free
+    // sibling can then consist solely of independent GPU copies, which is the
+    // smallest real workload that proves it remains parallel-record eligible.
+    CommandList initialize(EQueueType::Graphics);
+    initialize.CopyFrom(
+        OwnedBytes(values),
+        scope_ping->GetView(),
+        "GpuScopeInitializePing"
+    );
+    for (size_t index = 0; index < sibling_copy_count; ++index) {
+        initialize.CopyFrom(
+            OwnedBytes(values),
+            sibling_sources[index]->GetView(),
+            "GpuScopeInitializeParallelSource"
+        );
+    }
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        initialize.Submit(),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    GpuScopeStream stream(GpuScopeStreamConfig{
+        .max_resident_frames = 2,
+        .max_pending_frames = 2,
+        .max_resident_scopes = 16,
+        .max_scopes_per_frame = 8,
+        .max_sources_per_frame = 4,
+        .max_scope_name_bytes = 128,
+        .max_error_reason_bytes = 256,
+    });
+    GpuScopeFrameHandle frame = stream.BeginFrame(frame_id);
+    if (!frame.Valid()) {
+        throw std::runtime_error(
+            "GPU scope focused frame was not admitted"
+        );
+    }
+
+    std::atomic<uint32> callback_errors{0};
+    std::atomic<uint32> completion_callbacks{0};
+    std::array<std::atomic<uint32>, 2> query_callbacks{};
+    std::array<std::atomic<uint32>, 2> ordinary_callbacks{};
+    std::array<std::atomic<uint32>, 2> success_callbacks{};
+    std::array<QueryFuture, 2> scope_futures{};
+
+    CommandList scoped(EQueueType::Graphics);
+    scoped.SetResourceStateOwnership(
+        ERHIResourceStateOwnership::Explicit
+    );
+    scoped.SetGpuScopeRecorder(
+        frame.CreateRecorder(topology.graphics, 0)
+    );
+    GpuCompletionFuture gpu_completion =
+        scoped.TrackGpuCompletion(
+            "Phase21B2GpuScopeCompletion"
+        );
+    gpu_completion.Then(
+        [&](const GpuCompletionResult& _result) {
+            if (GetCurrentRHIThreadRole() !=
+                    ERHIThreadRole::Completion ||
+                _result.status !=
+                    GpuCompletionStatus::Ready) {
+                callback_errors.fetch_add(
+                    1, std::memory_order_relaxed
+                );
+            }
+            completion_callbacks.fetch_add(
+                1, std::memory_order_release
+            );
+        }
+    );
+
+    auto record_ping_pong =
+        [&](CommandList& _commands, uint32 _count) {
+            for (uint32 copy = 0; copy < _count; ++copy) {
+                if ((copy & 1u) == 0) {
+                    _commands.CopyFrom(
+                        scope_ping->GetView(),
+                        scope_pong->GetView(),
+                        "GpuScopePingToPong"
+                    );
+                } else {
+                    _commands.CopyFrom(
+                        scope_pong->GetView(),
+                        scope_ping->GetView(),
+                        "GpuScopePongToPing"
+                    );
+                }
+            }
+        };
+
+    scoped.PushScopeWithTimeScope("Phase21B2Outer");
+    record_ping_pong(scoped, outer_copy_count);
+    scoped.PushScopeWithTimeScope("Phase21B2Inner");
+    record_ping_pong(scoped, inner_copy_count);
+    scoped.PopScopeWithTimeScope();
+    record_ping_pong(scoped, outer_copy_count);
+    scoped.PopScopeWithTimeScope();
+    scoped.CopyFrom(
+        scope_ping->GetView(),
+        WritableBytes(scope_readback),
+        "GpuScopeFocusedReadback"
+    );
+    scoped.AddCallback([&] {
+        const GpuScopeStreamStats stats =
+            stream.GetStats();
+        if (GetCurrentRHIThreadRole() !=
+                ERHIThreadRole::Completion ||
+            completion_callbacks.load(
+                std::memory_order_acquire
+            ) != 1 ||
+            query_callbacks[0].load(
+                std::memory_order_acquire
+            ) != 1 ||
+            query_callbacks[1].load(
+                std::memory_order_acquire
+            ) != 1 ||
+            stats.frames_ready != 1 ||
+            stats.scopes_ready != 2) {
+            callback_errors.fetch_add(
+                1, std::memory_order_relaxed
+            );
+        }
+        ordinary_callbacks[0].fetch_add(
+            1, std::memory_order_release
+        );
+    });
+    scoped.AddSuccessCallback([&] {
+        if (GetCurrentRHIThreadRole() !=
+                ERHIThreadRole::Completion ||
+            ordinary_callbacks[0].load(
+                std::memory_order_acquire
+            ) != 1 ||
+            ordinary_callbacks[1].load(
+                std::memory_order_acquire
+            ) != 1) {
+            callback_errors.fetch_add(
+                1, std::memory_order_relaxed
+            );
+        }
+        success_callbacks[0].fetch_add(
+            1, std::memory_order_release
+        );
+    });
+
+    CmdSubmit scoped_submit = scoped.Submit();
+    if (scoped_submit.query_tokens.size() != 2) {
+        throw std::runtime_error(
+            "nested GPU scopes did not emit two timestamp queries"
+        );
+    }
+    const size_t query_command_count = std::count_if(
+        scoped_submit.cmds.begin(),
+        scoped_submit.cmds.end(),
+        [](const UniquePtr<Command>& _command) {
+            return _command &&
+                   _command->Type() == Command::EType::Query;
+        }
+    );
+    if (query_command_count != 4) {
+        throw std::runtime_error(
+            "nested GPU scopes did not emit two complete query pairs"
+        );
+    }
+
+    scope_futures[0] =
+        scoped_submit.query_tokens[0].GetFuture();
+    scope_futures[1] =
+        scoped_submit.query_tokens[1].GetFuture();
+    for (size_t index = 0; index < scope_futures.size();
+         ++index) {
+        scope_futures[index].Then(
+            [&, index](const QueryResult& _result) {
+                if (GetCurrentRHIThreadRole() !=
+                        ERHIThreadRole::Completion ||
+                    _result.status != QueryStatus::Ready ||
+                    _result.kind != QueryKind::Timestamp ||
+                    std::get_if<TimestampQueryResult>(
+                        &_result.payload
+                    ) == nullptr) {
+                    callback_errors.fetch_add(
+                        1, std::memory_order_relaxed
+                    );
+                }
+                query_callbacks[index].fetch_add(
+                    1, std::memory_order_release
+                );
+            }
+        );
+    }
+    FenceRef scoped_done = device.CreateFence();
+    scoped_submit.SetTranslateExecutionClass(
+        ERHITranslateExecutionClass::Parallel
+    );
+    scoped_submit.SetResourceStateOwnership(
+        ERHIResourceStateOwnership::Explicit
+    );
+    scoped_submit.async_queue_scope = async_queue_scope;
+    scoped_submit.Signal(scoped_done.Get(), 1);
+
+    CommandList sibling(EQueueType::Graphics);
+    sibling.SetResourceStateOwnership(
+        ERHIResourceStateOwnership::Explicit
+    );
+    for (size_t index = 0; index < sibling_copy_count; ++index) {
+        sibling.CopyFrom(
+            sibling_sources[index]->GetView(),
+            sibling_destinations[index]->GetView(),
+            "GpuScopeQueryFreeParallelCopy"
+        );
+    }
+    sibling.AddCallback([&] {
+        if (GetCurrentRHIThreadRole() !=
+            ERHIThreadRole::Completion) {
+            callback_errors.fetch_add(
+                1, std::memory_order_relaxed
+            );
+        }
+        ordinary_callbacks[1].fetch_add(
+            1, std::memory_order_release
+        );
+    });
+    sibling.AddSuccessCallback([&] {
+        if (GetCurrentRHIThreadRole() !=
+                ERHIThreadRole::Completion ||
+            ordinary_callbacks[0].load(
+                std::memory_order_acquire
+            ) != 1 ||
+            ordinary_callbacks[1].load(
+                std::memory_order_acquire
+            ) != 1) {
+            callback_errors.fetch_add(
+                1, std::memory_order_relaxed
+            );
+        }
+        success_callbacks[1].fetch_add(
+            1, std::memory_order_release
+        );
+    });
+    CmdSubmit sibling_submit = sibling.Submit();
+    FenceRef sibling_done = device.CreateFence();
+    sibling_submit.SetTranslateExecutionClass(
+        ERHITranslateExecutionClass::Parallel
+    );
+    sibling_submit.SetResourceStateOwnership(
+        ERHIResourceStateOwnership::Explicit
+    );
+    sibling_submit.async_queue_scope = async_queue_scope;
+    sibling_submit.Signal(sibling_done.Get(), 1);
+
+    if (!stream.SealFrame(frame)) {
+        throw std::runtime_error(
+            "GPU scope focused frame could not be sealed"
+        );
+    }
+    ResolvedGpuScopeFrame premature{};
+    if (stream.TryPopFrame(premature)) {
+        throw std::runtime_error(
+            "GPU scope frame became visible before GPU Completion"
+        );
+    }
+
+    SourceTranslationCapture translation_capture(
+        async_queue_scope, EQueueType::Graphics
+    );
+    ScopedSourceTranslationObserver translation_observer(
+        translation_capture
+    );
+
+    Array<RHIBackendSubmissionBatchEntry> batch{};
+    batch.emplace_back(
+        EQueueType::Graphics, std::move(scoped_submit)
+    );
+    batch.emplace_back(
+        EQueueType::Graphics, std::move(sibling_submit)
+    );
+    RHIExecutor::Get().Submit(
+        std::move(batch), ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    // Verify the query-free source's actual GPU writes with a separate
+    // SerialControl submission. Keeping readback out of the observed source
+    // preserves the topology under test while preventing planner diagnostics
+    // alone from masking dropped parallel-recorded copies.
+    CommandList verify_sibling_copies(EQueueType::Graphics);
+    verify_sibling_copies.SetTranslateExecutionClass(
+        ERHITranslateExecutionClass::SerialControl
+    );
+    for (size_t index = 0; index < sibling_copy_count; ++index) {
+        verify_sibling_copies.CopyFrom(
+            sibling_destinations[index]->GetView(),
+            WritableBytes(sibling_readbacks[index]),
+            "GpuScopeParallelSiblingReadback"
+        );
+    }
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        verify_sibling_copies.Submit(),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    const GpuCompletionResult completion_result =
+        gpu_completion.Get();
+    std::array<QueryResult, 2> query_results{
+        scope_futures[0].Get(),
+        scope_futures[1].Get(),
+    };
+    std::array<const TimestampQueryResult*, 2> timestamps{
+        std::get_if<TimestampQueryResult>(
+            &query_results[0].payload
+        ),
+        std::get_if<TimestampQueryResult>(
+            &query_results[1].payload
+        ),
+    };
+    if (completion_result.status !=
+            GpuCompletionStatus::Ready ||
+        timestamps[0] == nullptr ||
+        timestamps[1] == nullptr ||
+        query_results[0].status != QueryStatus::Ready ||
+        query_results[1].status != QueryStatus::Ready ||
+        timestamps[0]->valid_bits == 0 ||
+        timestamps[0]->valid_bits > 64 ||
+        timestamps[1]->valid_bits == 0 ||
+        timestamps[1]->valid_bits > 64 ||
+        timestamps[0]->tick_period_ns <= 0.0 ||
+        timestamps[1]->tick_period_ns <= 0.0 ||
+        timestamps[0]->duration_ns <= 0.0 ||
+        timestamps[1]->duration_ns <= 0.0) {
+        throw std::runtime_error(
+            "real nested GPU scope queries did not resolve valid raw timestamps"
+        );
+    }
+
+    auto signal_succeeded = [](const FenceRef& _fence) {
+        auto* vk_fence = ResourceCast(_fence.Get());
+        return vk_fence != nullptr &&
+               vk_fence->WaitSubmitted(1) &&
+               !_fence->IsRejected(1) &&
+               !vk_fence->IsFailed();
+    };
+    if (!signal_succeeded(scoped_done) ||
+        !signal_succeeded(sibling_done) ||
+        scope_readback != values ||
+        !std::all_of(
+            sibling_readbacks.begin(),
+            sibling_readbacks.end(),
+            [&](const auto& _readback) {
+                return _readback == values;
+            }
+        )) {
+        throw std::runtime_error(
+            "GPU scope focused batch signal, scope readback, or parallel sibling readback failed"
+        );
+    }
+
+    ResolvedGpuScopeFrame resolved{};
+    if (!stream.TryPopFrame(resolved) || !resolved.valid ||
+        resolved.frame_id != frame_id ||
+        resolved.admitted_scope_count != 2 ||
+        resolved.dropped_scope_count != 0 ||
+        resolved.error_scope_count != 0 ||
+        resolved.queue_roots[0].size() != 1 ||
+        !resolved.queue_roots[1].empty() ||
+        !resolved.queue_roots[2].empty()) {
+        throw std::runtime_error(
+            "real GPU scope frame lost readiness, accounting, or queue topology"
+        );
+    }
+
+    const GpuScopeNode& outer =
+        resolved.queue_roots[0].front();
+    if (outer.name != "Phase21B2Outer" ||
+        outer.depth != 0 ||
+        outer.parent_scope_id != 0 ||
+        outer.children.size() != 1) {
+        throw std::runtime_error(
+            "real GPU scope outer hierarchy is invalid"
+        );
+    }
+    const GpuScopeNode& inner = outer.children.front();
+    if (inner.name != "Phase21B2Inner" ||
+        inner.depth != 1 ||
+        inner.parent_scope_id != outer.scope_id ||
+        !inner.children.empty() ||
+        outer.queue_binding != topology.graphics ||
+        inner.queue_binding != topology.graphics ||
+        outer.source_order != 0 ||
+        inner.source_order != 0 ||
+        outer.local_order >= inner.local_order ||
+        outer.status != GpuScopeTerminalStatus::Ready ||
+        inner.status != GpuScopeTerminalStatus::Ready) {
+        throw std::runtime_error(
+            "real GPU scope child hierarchy or timestamp domain is invalid"
+        );
+    }
+
+    auto approximately_equal =
+        [](double _actual, double _expected) {
+        const double scale =
+            std::max(1.0, std::abs(_expected));
+        return std::abs(_actual - _expected) <=
+               scale * 1.0e-9;
+        };
+    auto matches_timestamp =
+        [&](const GpuScopeNode& _node,
+            const QueryResult& _query,
+            const TimestampQueryResult& _timestamp) {
+            return _node.query_id == _query.query_id &&
+                   _node.begin_tick == _timestamp.begin_tick &&
+                   _node.end_tick == _timestamp.end_tick &&
+                   _node.valid_bits == _timestamp.valid_bits &&
+                   approximately_equal(
+                       _node.tick_period_ns,
+                       _timestamp.tick_period_ns
+                   ) &&
+                   approximately_equal(
+                       _node.total_duration_ns,
+                       _timestamp.duration_ns
+                   );
+        };
+    if (!matches_timestamp(
+            outer, query_results[0], *timestamps[0]
+        ) ||
+        !matches_timestamp(
+            inner, query_results[1], *timestamps[1]
+        ) ||
+        !approximately_equal(
+            inner.exclusive_duration_ns,
+            inner.total_duration_ns
+        ) ||
+        !approximately_equal(
+            outer.exclusive_duration_ns,
+            std::max(
+                0.0,
+                outer.total_duration_ns -
+                    inner.total_duration_ns
+            )
+        )) {
+        throw std::runtime_error(
+            "GPU scope raw ticks, duration, or exclusive time changed during materialization"
+        );
+    }
+
+    if (!translation_capture.IsValid() ||
+        !translation_capture.Seen(
+            0, EVulkanSourceTranslationPhase::Begin
+        ) ||
+        !translation_capture.Seen(
+            0, EVulkanSourceTranslationPhase::Recorded
+        ) ||
+        !translation_capture.Seen(
+            1, EVulkanSourceTranslationPhase::Begin
+        ) ||
+        !translation_capture.Seen(
+            1, EVulkanSourceTranslationPhase::Recorded
+        ) ||
+        translation_capture.Seen(
+            0, EVulkanSourceTranslationPhase::Failed
+        ) ||
+        translation_capture.Seen(
+            1, EVulkanSourceTranslationPhase::Failed
+        )) {
+        throw std::runtime_error(
+            "GPU scope focused batch lost source translation diagnostics"
+        );
+    }
+    const VulkanSourceTranslationEvent& query_source =
+        translation_capture.Event(
+            0, EVulkanSourceTranslationPhase::Recorded
+        );
+    const VulkanSourceTranslationEvent& parallel_sibling =
+        translation_capture.Event(
+            1, EVulkanSourceTranslationPhase::Recorded
+        );
+    if (query_source.batch_sequence == 0 ||
+        query_source.batch_sequence !=
+            parallel_sibling.batch_sequence ||
+        query_source.source_index != 0 ||
+        query_source.original_source_index != 0 ||
+        query_source.source_segment_index != 0 ||
+        query_source.source_segment_count != 1 ||
+        query_source.queue != EQueueType::Graphics ||
+        query_source.native_queue_id !=
+            topology.graphics.native_queue_id ||
+        query_source.async_queue_scope !=
+            async_queue_scope ||
+        !query_source.parallel_record_requested ||
+        query_source.parallel_record_planned ||
+        query_source.parallel_record_effective) {
+        throw std::runtime_error(
+            "timestamp-bearing GPU scope source did not remain a query serial island"
+        );
+    }
+    if (parallel_sibling.source_index != 1 ||
+        parallel_sibling.original_source_index != 1 ||
+        parallel_sibling.source_segment_index != 0 ||
+        parallel_sibling.source_segment_count != 1 ||
+        parallel_sibling.queue != EQueueType::Graphics ||
+        parallel_sibling.native_queue_id !=
+            topology.graphics.native_queue_id ||
+        parallel_sibling.async_queue_scope !=
+            async_queue_scope ||
+        !parallel_sibling.parallel_record_requested ||
+        !parallel_sibling.parallel_record_planned ||
+        !parallel_sibling.parallel_record_effective) {
+        throw std::runtime_error(
+            "query-free sibling lost effective parallel recording"
+        );
+    }
+
+    if (callback_errors.load(std::memory_order_acquire) != 0 ||
+        completion_callbacks.load(
+            std::memory_order_acquire
+        ) != 1 ||
+        query_callbacks[0].load(
+            std::memory_order_acquire
+        ) != 1 ||
+        query_callbacks[1].load(
+            std::memory_order_acquire
+        ) != 1 ||
+        ordinary_callbacks[0].load(
+            std::memory_order_acquire
+        ) != 1 ||
+        ordinary_callbacks[1].load(
+            std::memory_order_acquire
+        ) != 1 ||
+        success_callbacks[0].load(
+            std::memory_order_acquire
+        ) != 1 ||
+        success_callbacks[1].load(
+            std::memory_order_acquire
+        ) != 1) {
+        throw std::runtime_error(
+            "GPU scope focused callbacks violated Completion ownership or exactly-once delivery"
+        );
+    }
+
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    ResolvedGpuScopeFrame replay{};
+    const GpuScopeStreamStats stats = stream.GetStats();
+    if (stream.TryPopFrame(replay) ||
+        !translation_capture.IsValid() ||
+        callback_errors.load(std::memory_order_acquire) != 0 ||
+        completion_callbacks.load(
+            std::memory_order_acquire
+        ) != 1 ||
+        query_callbacks[0].load(
+            std::memory_order_acquire
+        ) != 1 ||
+        query_callbacks[1].load(
+            std::memory_order_acquire
+        ) != 1 ||
+        ordinary_callbacks[0].load(
+            std::memory_order_acquire
+        ) != 1 ||
+        ordinary_callbacks[1].load(
+            std::memory_order_acquire
+        ) != 1 ||
+        success_callbacks[0].load(
+            std::memory_order_acquire
+        ) != 1 ||
+        success_callbacks[1].load(
+            std::memory_order_acquire
+        ) != 1 ||
+        stats.frames_ready != 1 ||
+        stats.frames_popped != 1 ||
+        stats.scopes_ready != 2 ||
+        stats.resident_frames != 0 ||
+        stats.resident_scopes != 0) {
+        throw std::runtime_error(
+            "a second RHI Sync replayed GPU scope publication or callbacks"
+        );
+    }
+
+    LOG_INFO(
+        "[TESTCASE][PASS] "
+        "name=GpuScopeStreamCompletionAndParallelIsolation "
+        "frame_id={} queue=Graphics scopes=2 hierarchy=nested "
+        "query_source=query-serial-island "
+        "query_free_sibling=parallel-effective "
+        "raw_ticks=verified duration_ns={},{} "
+        "exclusive_ns={},{} owner=Completion "
+        "readback=verified sibling_readbacks=8/8 replay=0",
+        frame_id,
+        outer.total_duration_ns,
+        inner.total_duration_ns,
+        outer.exclusive_duration_ns,
+        inner.exclusive_duration_ns
+    );
+}
+
 void RunTimestampQueryCompletionOwnership() {
     auto& device = RenderDevice::Get();
     const EBufferUsageFlags usage =
@@ -14897,6 +15570,8 @@ int main(int argc, const char** argv) {
             HasArgument(
                 argc, argv, "--timestamp-query-record-failure"
             );
+        const bool gpu_scope_stream_mode =
+            HasArgument(argc, argv, "--gpu-scope-stream");
         const uint32 submission_batch_window =
             pipeline_window1 ? 1u : 2u;
 
@@ -14918,7 +15593,8 @@ int main(int argc, const char** argv) {
                 timestamp_query_mode ||
                 timestamp_query_success_batch_mode ||
                 timestamp_query_mid_failure_mode ||
-                timestamp_query_record_failure_mode,
+                timestamp_query_record_failure_mode ||
+                gpu_scope_stream_mode,
             .parallel_record_workers = 4,
             .parallel_record_verify =
                 parallel || pipeline_window_mode || present_mode ||
@@ -14927,7 +15603,8 @@ int main(int argc, const char** argv) {
                 timestamp_query_mode ||
                 timestamp_query_success_batch_mode ||
                 timestamp_query_mid_failure_mode ||
-                timestamp_query_record_failure_mode,
+                timestamp_query_record_failure_mode ||
+                gpu_scope_stream_mode,
             .parallel_record_min_work_units_per_job = production_gate ? 64u : 1u,
             .submission_batch_window = submission_batch_window,
             .parallel_record_worker_throw_trigger = inject_worker_failure ? 1u : 0u,
@@ -14945,6 +15622,15 @@ int main(int argc, const char** argv) {
 
         if (occlusion_query_mode) {
             RunOcclusionQueryCompletionOwnership();
+            RenderDevice::Dispose();
+            render_device_initialized = false;
+            TaskSystem::ShutDown();
+            task_system_initialized = false;
+            return 0;
+        }
+
+        if (gpu_scope_stream_mode) {
+            RunGpuScopeStreamCompletionAndParallelIsolation();
             RenderDevice::Dispose();
             render_device_initialized = false;
             TaskSystem::ShutDown();

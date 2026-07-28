@@ -190,6 +190,11 @@ CommandList::~CommandList() {
         scope_stack.pop();
     }
     timestamp_scope_names.clear();
+    gpu_scope_recorder = {};
+    active_gpu_scope_id = 0;
+    active_gpu_scope_depth = 0;
+    gpu_scope_suppression_depth = 0;
+    gpu_scope_recorder_bound_this_generation = false;
 
     // No externally observable rejection may run while the dying object still
     // exposes an extractable command generation.
@@ -282,6 +287,11 @@ CommandList& CommandList::operator=(CommandList&& _other) {
         scope_stack.pop();
     }
     timestamp_scope_names.clear();
+    gpu_scope_recorder = {};
+    active_gpu_scope_id = 0;
+    active_gpu_scope_depth = 0;
+    gpu_scope_suppression_depth = 0;
+    gpu_scope_recorder_bound_this_generation = false;
 
     commands                    = std::move(_other.commands);
     current_barriers            = _other.current_barriers;
@@ -308,6 +318,14 @@ CommandList& CommandList::operator=(CommandList&& _other) {
     );
     scope_stack.swap(_other.scope_stack);
     timestamp_scope_names.swap(_other.timestamp_scope_names);
+    gpu_scope_recorder          =
+        std::move(_other.gpu_scope_recorder);
+    active_gpu_scope_id         = _other.active_gpu_scope_id;
+    active_gpu_scope_depth      = _other.active_gpu_scope_depth;
+    gpu_scope_suppression_depth =
+        _other.gpu_scope_suppression_depth;
+    gpu_scope_recorder_bound_this_generation =
+        _other.gpu_scope_recorder_bound_this_generation;
     query_owner_id              = _other.query_owner_id;
 
     _other.current_barriers          = nullptr;
@@ -333,6 +351,11 @@ CommandList& CommandList::operator=(CommandList&& _other) {
         _other.scope_stack.pop();
     }
     _other.timestamp_scope_names.clear();
+    _other.gpu_scope_recorder = {};
+    _other.active_gpu_scope_id = 0;
+    _other.active_gpu_scope_depth = 0;
+    _other.gpu_scope_suppression_depth = 0;
+    _other.gpu_scope_recorder_bound_this_generation = false;
 
     // Install the complete incoming generation before rejecting a Fence,
     // publishing a terminal Future (which wakes Wait/Get), or releasing a
@@ -533,7 +556,13 @@ CmdSubmit CommandList::Submit() {
         while (!scope_stack.empty()) {
             const ScopeState& scope = scope_stack.top();
             commands.push_back(
-                MakeUnique<ScopeCmd>(scope.name, false, scope.query_timestamp, scope.color)
+                MakeUnique<ScopeCmd>(
+                    scope.name,
+                    false,
+                    scope.legacy_timestamp,
+                    scope.color,
+                    queue_type
+                )
             );
             scope_stack.pop();
         }
@@ -608,6 +637,11 @@ CmdSubmit CommandList::Submit() {
     signal_events.clear();
     signal_rejection_keepalives.clear();
     timestamp_scope_names.clear();
+    gpu_scope_recorder = {};
+    active_gpu_scope_id = 0;
+    active_gpu_scope_depth = 0;
+    gpu_scope_suppression_depth = 0;
+    gpu_scope_recorder_bound_this_generation = false;
     translate_execution_class = ERHITranslateExecutionClass::Parallel;
     resource_state_ownership  = ERHIResourceStateOwnership::BackendTracked;
     return std::move(submit);
@@ -736,6 +770,11 @@ CmdSubmit CommandList::PrepareRecordingRejectionDrain(
         scope_stack.pop();
     }
     timestamp_scope_names.clear();
+    gpu_scope_recorder = {};
+    active_gpu_scope_id = 0;
+    active_gpu_scope_depth = 0;
+    gpu_scope_suppression_depth = 0;
+    gpu_scope_recorder_bound_this_generation = false;
     translate_execution_class =
         ERHITranslateExecutionClass::Parallel;
     resource_state_ownership =
@@ -1073,23 +1112,120 @@ void CommandList::ClearResource(TextureView _texture, uint _value) {
 void CommandList::PushScope(std::string_view _name, float4 _color) {
     assert(!_name.empty() && "GPU marker scope name must not be empty");
     const std::string scope_name = _name.empty() ? "Unnamed GPU Scope" : std::string(_name);
-    commands.push_back(MakeUnique<ScopeCmd>(scope_name, true, false, _color));
-    scope_stack.emplace(ScopeState{scope_name, _color, false});
+    commands.push_back(
+        MakeUnique<ScopeCmd>(
+            scope_name, true, false, _color, queue_type
+        )
+    );
+    scope_stack.emplace(ScopeState{
+        .name = scope_name,
+        .color = _color,
+        .timed_scope = false,
+        .legacy_timestamp = false,
+        .previous_gpu_scope_id = active_gpu_scope_id,
+        .previous_gpu_scope_depth = active_gpu_scope_depth,
+    });
 }
 
 void CommandList::PushScopeWithTimeScope(std::string_view _name, float4 _color) {
     assert(!_name.empty() && "GPU timestamp scope name must not be empty");
     const std::string scope_name = _name.empty() ? "Unnamed GPU Timestamp Scope" : std::string(_name);
-    const bool unique_timestamp_name = timestamp_scope_names.emplace(scope_name).second;
-    assert(
-        unique_timestamp_name &&
-        "GPU timestamp scope names must be unique within a CommandList submission"
-    );
+    // Once a recording generation is explicitly bound to the modern sink it
+    // must never fall back to the legacy profiler. A stream may close while
+    // producers are still recording; that becomes a bounded dropped subtree,
+    // not a mixed modern/legacy query stream.
+    const bool modern_scope = gpu_scope_recorder.IsBound();
+    bool       legacy_timestamp = false;
+    if (!modern_scope) {
+        legacy_timestamp =
+            timestamp_scope_names.emplace(scope_name).second;
+        assert(
+            legacy_timestamp &&
+            "GPU timestamp scope names must be unique within a legacy profiled submission"
+        );
+    }
 
-    // In release builds, a duplicate remains useful as a visual marker but
-    // deliberately does not allocate/reuse an ambiguous profiler query pair.
-    commands.push_back(MakeUnique<ScopeCmd>(scope_name, true, unique_timestamp_name, _color));
-    scope_stack.emplace(ScopeState{scope_name, _color, unique_timestamp_name});
+    // Allocate all visual-marker storage before reserving a bounded modern
+    // scope. Once admission succeeds, no later marker allocation can strand
+    // the reservation.
+    auto marker = MakeUnique<ScopeCmd>(
+        scope_name,
+        true,
+        legacy_timestamp,
+        _color,
+        queue_type
+    );
+    commands.reserve(commands.size() + (modern_scope ? 2 : 1));
+
+    GpuScopeCompletionTicket scope_ticket{};
+    if (modern_scope) {
+        if (gpu_scope_suppression_depth != 0) {
+            gpu_scope_recorder.RecordSuppressedScope();
+        } else {
+            scope_ticket = gpu_scope_recorder.TryBeginScope(
+                scope_name,
+                active_gpu_scope_id,
+                active_gpu_scope_depth
+            );
+        }
+    }
+    const bool suppresses_modern_children =
+        modern_scope && !scope_ticket.Valid();
+
+    ScopeState scope{
+        .name = scope_name,
+        .color = _color,
+        .timed_scope = true,
+        .legacy_timestamp = legacy_timestamp,
+        .gpu_scope_ticket = scope_ticket,
+        .previous_gpu_scope_id = active_gpu_scope_id,
+        .previous_gpu_scope_depth = active_gpu_scope_depth,
+        .suppresses_modern_children =
+            suppresses_modern_children,
+    };
+    bool scope_state_installed = false;
+    try {
+        scope_stack.emplace(std::move(scope));
+        scope_state_installed = true;
+        commands.emplace_back(std::move(marker));
+    } catch (...) {
+        if (scope_state_installed) {
+            scope_stack.pop();
+        }
+        scope_ticket.Fail(
+            "GPU scope marker allocation failed before query recording"
+        );
+        if (legacy_timestamp) {
+            timestamp_scope_names.erase(scope_name);
+        }
+        throw;
+    }
+
+    if (!scope_ticket.Valid()) {
+        if (suppresses_modern_children) {
+            ++gpu_scope_suppression_depth;
+        }
+        return;
+    }
+
+    try {
+        QueryToken query = BeginTimestampQueryWithCallback(
+            scope_name,
+            [scope_ticket](const QueryResult& _result) noexcept {
+                scope_ticket.Resolve(_result);
+            }
+        );
+        scope_stack.top().timestamp_query = std::move(query);
+        active_gpu_scope_id = scope_ticket.ScopeId();
+        ++active_gpu_scope_depth;
+    } catch (...) {
+        commands.pop_back();
+        scope_stack.pop();
+        scope_ticket.Fail(
+            "GPU scope query recording failed before submission"
+        );
+        throw;
+    }
 }
 
 void CommandList::PopScope() {
@@ -1098,9 +1234,18 @@ void CommandList::PopScope() {
         return;
     }
     const ScopeState& scope = scope_stack.top();
-    assert(!scope.query_timestamp && "PopScope must match PushScope, not PushScopeWithTimeScope");
+    assert(
+        !scope.timed_scope &&
+        "PopScope must match PushScope, not PushScopeWithTimeScope"
+    );
     commands.push_back(
-        MakeUnique<ScopeCmd>(scope.name, false, scope.query_timestamp, scope.color)
+        MakeUnique<ScopeCmd>(
+            scope.name,
+            false,
+            scope.legacy_timestamp,
+            scope.color,
+            queue_type
+        )
     );
     scope_stack.pop();
 }
@@ -1112,13 +1257,74 @@ void CommandList::PopScopeWithTimeScope() {
     }
     const ScopeState& scope = scope_stack.top();
     assert(
-        scope.query_timestamp &&
+        scope.timed_scope &&
         "PopScopeWithTimeScope must match PushScopeWithTimeScope, not PushScope"
     );
-    commands.push_back(
-        MakeUnique<ScopeCmd>(scope.name, false, scope.query_timestamp, scope.color)
+    auto marker = MakeUnique<ScopeCmd>(
+        scope.name,
+        false,
+        scope.legacy_timestamp,
+        scope.color,
+        queue_type
     );
+    commands.reserve(
+        commands.size() +
+        (scope.gpu_scope_ticket.Valid() ? 2 : 1)
+    );
+    if (scope.gpu_scope_ticket.Valid()) {
+        EndTimestampQuery(scope.timestamp_query);
+        active_gpu_scope_id = scope.previous_gpu_scope_id;
+        active_gpu_scope_depth =
+            scope.previous_gpu_scope_depth;
+    } else if (scope.suppresses_modern_children) {
+        assert(gpu_scope_suppression_depth != 0);
+        if (gpu_scope_suppression_depth != 0) {
+            --gpu_scope_suppression_depth;
+        }
+    }
+    commands.emplace_back(std::move(marker));
     scope_stack.pop();
+}
+
+CommandList& CommandList::SetGpuScopeRecorder(
+    GpuScopeRecorder _recorder
+) {
+    if (!scope_stack.empty() || HasOpenQueries()) {
+        throw std::logic_error(
+            "GPU scope recorder cannot change while a marker or query is open"
+        );
+    }
+    if (gpu_scope_recorder_bound_this_generation) {
+        throw std::logic_error(
+            "GPU scope recorder is immutable for one CommandList recording generation"
+        );
+    }
+    // An empty recorder is an admission failure, not an opt-out signal.
+    // Callers that do not want modern profiling simply never call this API.
+    // A once-bound recorder whose stream later closes remains accepted and
+    // fail-closed through IsBound(), preventing silent legacy fallback.
+    if (!_recorder.IsBound()) {
+        throw std::invalid_argument(
+            "GPU scope recorder must own an admitted recording source"
+        );
+    }
+    if (_recorder.BoundQueueBinding().queue != queue_type) {
+        throw std::invalid_argument(
+            "GPU scope recorder queue must match its CommandList"
+        );
+    }
+    if (!timestamp_scope_names.empty()) {
+        throw std::logic_error(
+            "GPU scope recorder must be bound before any legacy timed scope in a CommandList recording generation"
+        );
+    }
+    gpu_scope_recorder = std::move(_recorder);
+    active_gpu_scope_id = 0;
+    active_gpu_scope_depth = 0;
+    gpu_scope_suppression_depth = 0;
+    gpu_scope_recorder_bound_this_generation =
+        gpu_scope_recorder.IsBound();
+    return *this;
 }
 #pragma region[ raytracing ]
 
@@ -1304,37 +1510,48 @@ GpuCompletionFuture CommandList::TrackGpuCompletion(
 }
 
 QueryToken CommandList::BeginTimestampQuery(std::string_view _name) {
+    return BeginTimestampQueryWithCallback(_name, {});
+}
+
+QueryToken CommandList::BeginTimestampQueryWithCallback(
+    std::string_view      _name,
+    QueryFuture::Callback _callback
+) {
     QueryToken token(
         NextNonZeroId(g_query_token_id),
         QueryKind::Timestamp,
         query_owner_id,
         _name
     );
-    query_cancellation_domain.Register(token);
-
-    auto command = MakeUnique<QueryCmd>(
-        token,
-        QueryCmd::EOp::BeginTimestamp,
-        queue_type,
-        token.Name()
-    );
-    std::function<void()> rejection_fallback = [token] {
-        QueryBackendAccess::ResolveErrorIfPending(
-            token,
-            "timestamp query submission did not reach GPU completion"
-        );
-    };
-
-    commands.reserve(commands.size() + 1);
-    callbacks.reserve(callbacks.size() + 1);
-    query_tokens.reserve(query_tokens.size() + 1);
-    active_query_stack.reserve(active_query_stack.size() + 1);
 
     const size_t command_count  = commands.size();
     const size_t callback_count = callbacks.size();
     const size_t query_count    = query_tokens.size();
     const size_t stack_depth    = active_query_stack.size();
     try {
+        // Register observer storage before mutating the CommandList. If the
+        // callback array allocation fails, no open native query has been
+        // recorded and the caller can release its bounded admission directly.
+        token.Then(std::move(_callback));
+        query_cancellation_domain.Register(token);
+
+        auto command = MakeUnique<QueryCmd>(
+            token,
+            QueryCmd::EOp::BeginTimestamp,
+            queue_type,
+            token.Name()
+        );
+        std::function<void()> rejection_fallback = [token] {
+            QueryBackendAccess::ResolveErrorIfPending(
+                token,
+                "timestamp query submission did not reach GPU completion"
+            );
+        };
+
+        commands.reserve(commands.size() + 1);
+        callbacks.reserve(callbacks.size() + 1);
+        query_tokens.reserve(query_tokens.size() + 1);
+        active_query_stack.reserve(active_query_stack.size() + 1);
         commands.emplace_back(std::move(command));
         callbacks.emplace_back(std::move(rejection_fallback));
         query_tokens.emplace_back(token);
@@ -1346,7 +1563,7 @@ QueryToken CommandList::BeginTimestampQuery(std::string_view _name) {
         active_query_stack.resize(stack_depth);
         QueryBackendAccess::ResolveErrorIfPending(
             token,
-            "timestamp query recording failed before Begin was published"
+            "timestamp query recording failed before Begin was committed"
         );
         throw;
     }

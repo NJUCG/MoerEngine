@@ -1811,17 +1811,19 @@ public:
         std::string_view _name,
         bool             _push,
         bool             _query_timestamp,
-        float4           _color = GpuMarkerPalette::Scope()
+        float4           _color = GpuMarkerPalette::Scope(),
+        EQueueType       _queue_type = EQueueType::Graphics
     ) :
         Command(EType::Scope, _name),
         b_push(_push),
         scope_name(_name),
         b_query_timestamp(_query_timestamp),
-        color(_color) {}
+        color(_color),
+        queue_type(_queue_type) {}
 
 public:
     EQueueType GetQueueType() const override {
-        return EQueueType::Graphics;
+        return queue_type;
     }
     bool IsPush() const {
         return b_push;
@@ -1844,6 +1846,7 @@ private:
     bool        b_query_timestamp = false;
     std::string scope_name;
     float4      color = GpuMarkerPalette::Scope();
+    EQueueType  queue_type = EQueueType::Graphics;
 };
 
 struct CustomCmd : public Command {

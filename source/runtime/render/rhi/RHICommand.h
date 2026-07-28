@@ -10,6 +10,7 @@
 #include "misc/Traits.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHICompletion.h"
+#include "rhi/RHIGpuScope.h"
 #include "rhi/RHIQuery.h"
 #include "rhi/RHIReadback.h"
 #include "rhi/RHIResource.h"
@@ -1697,6 +1698,18 @@ public:
     RENDER_API QueryToken BeginOcclusionQuery(std::string_view _name = "OcclusionQuery");
     RENDER_API void EndOcclusionQuery(const QueryToken& _token);
 
+    // Binds one stable topology source for this recording generation before
+    // any timed scope is recorded. Submit/rejection clears the recorder so
+    // frame metadata cannot leak into a later generation. The recorder queue
+    // must match this CommandList. Passing an empty recorder is an admission
+    // error; omit this call entirely to retain the legacy profiling path.
+    RENDER_API CommandList& SetGpuScopeRecorder(
+        GpuScopeRecorder _recorder
+    );
+    [[nodiscard]] bool HasGpuScopeRecorder() const noexcept {
+        return gpu_scope_recorder.IsBound();
+    }
+
     template<typename T, typename... Args>
     struct CountType;
 
@@ -2057,6 +2070,10 @@ private:
     RENDER_API void RejectPendingGpuCompletions(
         std::string_view _reason
     ) noexcept;
+    RENDER_API QueryToken BeginTimestampQueryWithCallback(
+        std::string_view       _name,
+        QueryFuture::Callback  _callback
+    );
 
 #pragma region[ raytracing ]
     RENDER_API void TraceRays(PipelineHandle _pipeline, ArrayArguments&& _args, uint3 _extent);
@@ -2092,11 +2109,22 @@ private:
     struct ScopeState {
         std::string name;
         float4      color;
-        bool        query_timestamp = false;
+        bool        timed_scope = false;
+        bool        legacy_timestamp = false;
+        QueryToken  timestamp_query{};
+        GpuScopeCompletionTicket gpu_scope_ticket{};
+        uint64      previous_gpu_scope_id{0};
+        uint32      previous_gpu_scope_depth{0};
+        bool        suppresses_modern_children{false};
     };
 
     Stack<ScopeState>            scope_stack;
     UnorderedSet<std::string>    timestamp_scope_names;
+    GpuScopeRecorder             gpu_scope_recorder{};
+    uint64                       active_gpu_scope_id{0};
+    uint32                       active_gpu_scope_depth{0};
+    uint32                       gpu_scope_suppression_depth{0};
+    bool                         gpu_scope_recorder_bound_this_generation{false};
 };
 
 // Non-copyable, non-movable RAII wrapper used by high-level render code. It guarantees that a

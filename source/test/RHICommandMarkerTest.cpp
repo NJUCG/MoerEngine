@@ -182,6 +182,29 @@ void ProfilingPhasesPreserveOneLogicalFrame() {
     );
 }
 
+void ScopeCommandsPreserveCommandListQueueAffinity() {
+    for (EQueueType queue :
+         {EQueueType::Graphics, EQueueType::Compute, EQueueType::Copy}) {
+        CommandList cmd_list(queue);
+        cmd_list.PushScope("QueueLabel");
+        cmd_list.PopScope();
+        cmd_list.PushScopeWithTimeScope("QueueTimed");
+        cmd_list.PopScopeWithTimeScope();
+
+        CmdSubmit submit = cmd_list.Submit();
+        Expect(
+            submit.cmds.size() == 4,
+            "queue-affinity marker test emitted an unexpected command count"
+        );
+        for (std::size_t index = 0; index < submit.cmds.size(); ++index) {
+            Expect(
+                ScopeAt(submit, index).GetQueueType() == queue,
+                "ScopeCmd lost its originating CommandList queue"
+            );
+        }
+    }
+}
+
 void ConstSpanUploadsOwnImmutableSnapshots() {
     BufferRef target_buffer(MoerNew(RetainedTestBuffer)());
     const Array<byte> expected{
@@ -376,6 +399,7 @@ int main() {
     try {
         MarkerScopesAreBalancedColoredAndImmobile();
         ProfilingPhasesPreserveOneLogicalFrame();
+        ScopeCommandsPreserveCommandListQueueAffinity();
         ConstSpanUploadsOwnImmutableSnapshots();
         PointAndCsmMarkerNamesAreCompleteAndDisjoint();
         PreparedRaytracingUpdatesAreNullSafeAndOneShot();
