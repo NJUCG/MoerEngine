@@ -126,6 +126,7 @@ enum class SessionLimitKind : std::uint8_t {
     LogicalModelBytes,
     ScopeDepth,
     TopologyWorkItems,
+    TopologyFlowEdges,
 };
 
 enum class KnownProfileSchema : std::uint8_t {
@@ -179,6 +180,10 @@ struct SessionLimits {
     // independent record/scope count limits. Callers handling untrusted
     // captures should lower it to their latency budget.
     std::uint64_t max_topology_work_items{1'000'000'000};
+    // Counts forward residual-network edges before allocation. Reverse edges
+    // are checked separately for addressability and allocated as part of each
+    // admitted forward edge.
+    std::uint64_t max_topology_flow_edges{1'000'000};
 
     std::uint32_t max_unique_strings{1'000'000};
     std::uint64_t max_string_bytes{256ull * 1024 * 1024};

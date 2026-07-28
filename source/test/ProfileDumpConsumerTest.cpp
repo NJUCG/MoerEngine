@@ -351,6 +351,45 @@ std::uint64_t MinimumPassingTopologyBudget(std::span<const std::uint8_t> _bytes)
     return lower;
 }
 
+std::uint64_t
+MinimumPassingTopologyFlowEdges(std::span<const std::uint8_t> _bytes, SessionLoadOptions _base_options = {}) {
+    const auto completes_with_limit = [&](std::uint64_t _limit) {
+        SessionLoadOptions options             = _base_options;
+        options.limits.max_topology_flow_edges = _limit;
+        const Loaded loaded                    = LoadChunks(_bytes, {}, options);
+        if (loaded.result.HasUsableSession()) {
+            return true;
+        }
+        Expect(
+            loaded.result.status == SessionLoadStatus::LimitExceeded &&
+                loaded.result.limit_kind == SessionLimitKind::TopologyFlowEdges &&
+                !loaded.result.HasUsableSession() && !loaded.session.Valid(),
+            "topology flow-edge search observed a non-edge failure or a partially published session"
+        );
+        return false;
+    };
+
+    std::uint64_t lower = 0;
+    std::uint64_t upper = 1;
+    while (!completes_with_limit(upper)) {
+        Expect(
+            upper <= std::numeric_limits<std::uint64_t>::max() / 2,
+            "topology flow-edge search exceeded the uint64 range"
+        );
+        lower = upper + 1;
+        upper *= 2;
+    }
+    while (lower < upper) {
+        const std::uint64_t middle = lower + (upper - lower) / 2;
+        if (completes_with_limit(middle)) {
+            upper = middle;
+        } else {
+            lower = middle + 1;
+        }
+    }
+    return lower;
+}
+
 SessionBuilder MakeGoldenSession() {
     SessionBuilder         builder;
     const SchemaDescriptor unknown = UnknownSchema();
@@ -360,17 +399,18 @@ SessionBuilder MakeGoldenSession() {
     builder.Schema(Templates::GpuScope());
     builder.Schema(unknown);
 
-    // Record sequence and packet order are deliberately unrelated. CPU child
-    // and GPU child also precede their parents in the file.
+    // Record sequence and packet order are deliberately unrelated. CPU scope
+    // sequence is not a hierarchy key, while GPU sequences still preserve the
+    // producer's frame-first/pre-order emission contract.
     AddCpuScope(builder, 4, 11, "cpu-child", 120, 150, 1);
     AddCpuScope(builder, 7, 11, "cpu-parent", 100, 300, 0);
     AddCpuScope(builder, 2, 22, "cpu-other", 50, 60, 0);
 
     AddGpuFrame(builder, 10, 100, ProfileGpuFrameStatus::Complete, true, 4, 0, 0, "");
-    AddGpuFrame(builder, 12, 101, ProfileGpuFrameStatus::Invalid, false, 1, 0, 1, "query failed");
+    AddGpuFrame(builder, 15, 101, ProfileGpuFrameStatus::Invalid, false, 1, 0, 1, "query failed");
     AddGpuScope(
         builder,
-        8,
+        12,
         100,
         2,
         1,
@@ -392,7 +432,7 @@ SessionBuilder MakeGoldenSession() {
     );
     AddGpuScope(
         builder,
-        13,
+        11,
         100,
         1,
         0,
@@ -414,7 +454,7 @@ SessionBuilder MakeGoldenSession() {
     );
     AddGpuScope(
         builder,
-        11,
+        14,
         100,
         3,
         0,
@@ -436,7 +476,7 @@ SessionBuilder MakeGoldenSession() {
     );
     AddGpuScope(
         builder,
-        6,
+        13,
         100,
         4,
         0,
@@ -458,7 +498,7 @@ SessionBuilder MakeGoldenSession() {
     );
     AddGpuScope(
         builder,
-        5,
+        16,
         101,
         1,
         0,
@@ -510,7 +550,13 @@ const GpuScopeRecord& FindGpuScope(const ProfileSession& _session, std::string_v
 }
 
 void VerifyGolden(const Loaded& _loaded) {
-    Expect(_loaded.result.status == SessionLoadStatus::Complete, "golden session did not complete");
+    Expect(
+        _loaded.result.status == SessionLoadStatus::Complete,
+        "golden session did not complete (status=" +
+            std::to_string(static_cast<unsigned>(_loaded.result.status)) +
+            ", error=" + std::to_string(static_cast<unsigned>(_loaded.result.error_code)) +
+            ", diagnostic=" + _loaded.diagnostic + ")"
+    );
     Expect(_loaded.session.Valid(), "golden session model is invalid");
     const ProfileSessionSummary& summary = _loaded.session.Summary();
     Expect(summary.generation == 7, "session generation is wrong");
@@ -1071,7 +1117,7 @@ void TestChecksumAndForensicTruncation() {
         AddGpuFrame(builder, 1, 3, ProfileGpuFrameStatus::Complete, true, 2, 0, 0, "");
         AddGpuScope(
             builder,
-            2,
+            3,
             3,
             2,
             1,
@@ -1512,7 +1558,7 @@ void TestSemanticTopologyAndLossRecovery() {
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
             loaded.result.status == SessionLoadStatus::ProtocolViolation &&
-                loaded.result.error_code == SessionErrorCode::GpuFrameTotalsMismatch,
+                loaded.result.error_code == SessionErrorCode::RecordSequenceInvalid,
             "one ProfileDump loss was reused by CPU and GPU topology deficits"
         );
     }
@@ -1547,7 +1593,7 @@ void TestSemanticTopologyAndLossRecovery() {
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 1, 0, 0, "");
         AddGpuScope(
             builder,
-            2,
+            3,
             1,
             2,
             99,
@@ -1582,7 +1628,7 @@ void TestSemanticTopologyAndLossRecovery() {
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 2, 0, 0, "");
         AddGpuScope(
             builder,
-            2,
+            3,
             1,
             2,
             99,
@@ -1603,8 +1649,8 @@ void TestSemanticTopologyAndLossRecovery() {
             ""
         );
         builder.Loss({
-            .first_sequence = 3,
-            .last_sequence  = 3,
+            .first_sequence = 2,
+            .last_sequence  = 2,
             .record_count   = 1,
             .value_bytes    = 8,
             .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
@@ -1622,10 +1668,10 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Begin();
         builder.Schema(Templates::GpuFrame());
         builder.Schema(Templates::GpuScope());
-        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 4, 0, 0, "");
         AddGpuScope(
             builder,
-            2,
+            3,
             1,
             2,
             99,
@@ -1647,7 +1693,7 @@ void TestSemanticTopologyAndLossRecovery() {
         );
         AddGpuScope(
             builder,
-            3,
+            5,
             1,
             3,
             99,
@@ -1668,10 +1714,10 @@ void TestSemanticTopologyAndLossRecovery() {
             ""
         );
         builder.Loss({
-            .first_sequence = 4,
+            .first_sequence = 2,
             .last_sequence  = 4,
-            .record_count   = 1,
-            .value_bytes    = 8,
+            .record_count   = 2,
+            .value_bytes    = 16,
             .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
         });
         builder.End();
@@ -1679,7 +1725,10 @@ void TestSemanticTopologyAndLossRecovery() {
         Expect(
             loaded.result.status == SessionLoadStatus::ProtocolViolation &&
                 loaded.result.error_code == SessionErrorCode::GpuScopeParentInvalid,
-            "one missing GPU parent was allowed to have incompatible child contracts"
+            "one missing GPU parent was allowed to have incompatible child contracts (status=" +
+                std::to_string(static_cast<unsigned>(loaded.result.status)) +
+                ", error=" + std::to_string(static_cast<unsigned>(loaded.result.error_code)) +
+                ", diagnostic=" + loaded.diagnostic + ")"
         );
     }
     {
@@ -1733,7 +1782,7 @@ void TestSemanticTopologyAndLossRecovery() {
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 4, 0, 0, "");
         AddGpuScope(
             builder,
-            2,
+            3,
             1,
             3,
             98,
@@ -1755,7 +1804,7 @@ void TestSemanticTopologyAndLossRecovery() {
         );
         AddGpuScope(
             builder,
-            3,
+            4,
             1,
             4,
             99,
@@ -1776,7 +1825,7 @@ void TestSemanticTopologyAndLossRecovery() {
             ""
         );
         builder.Loss({
-            .first_sequence = 4,
+            .first_sequence = 2,
             .last_sequence  = 5,
             .record_count   = 2,
             .value_bytes    = 16,
@@ -2583,7 +2632,7 @@ void TestSemanticTopologyAndLossRecovery() {
         );
         AddGpuScope(
             builder,
-            3,
+            4,
             1,
             3,
             0,
@@ -2604,8 +2653,8 @@ void TestSemanticTopologyAndLossRecovery() {
             ""
         );
         builder.Loss({
-            .first_sequence = 4,
-            .last_sequence  = 4,
+            .first_sequence = 3,
+            .last_sequence  = 3,
             .record_count   = 1,
             .value_bytes    = 8,
             .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
@@ -3142,11 +3191,11 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuFrame());
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
-        add_ready_scope(builder, 2, 1, 1, 0, 0, 1, "source-zero-root", 10, 20, 0);
-        add_ready_scope(builder, 3, 1, 2, 0, 1, 1, "source-one-root", 30, 40, 0);
+        add_ready_scope(builder, 3, 1, 1, 0, 0, 1, "source-zero-root", 10, 20, 0);
+        add_ready_scope(builder, 5, 1, 2, 0, 1, 1, "source-one-root", 30, 40, 0);
         builder.Loss({
-            .first_sequence = 4,
-            .last_sequence  = 4,
+            .first_sequence = 2,
+            .last_sequence  = 2,
             .record_count   = 1,
             .value_bytes    = 8,
             .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
@@ -3165,10 +3214,10 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuFrame());
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 2, 0, 0, "");
-        add_ready_scope(builder, 2, 1, 3, 99, 0, 2, "depth-two-orphan", 10, 20, 2);
+        add_ready_scope(builder, 4, 1, 3, 99, 0, 2, "depth-two-orphan", 10, 20, 2);
         builder.Loss({
-            .first_sequence = 3,
-            .last_sequence  = 3,
+            .first_sequence = 2,
+            .last_sequence  = 2,
             .record_count   = 1,
             .value_bytes    = 8,
             .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
@@ -3187,10 +3236,10 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuFrame());
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
-        add_ready_scope(builder, 2, 1, 3, 99, 0, 2, "budgeted-depth-two-orphan", 10, 20, 2);
+        add_ready_scope(builder, 4, 1, 3, 99, 0, 2, "budgeted-depth-two-orphan", 10, 20, 2);
         builder.Loss({
-            .first_sequence = 3,
-            .last_sequence  = 4,
+            .first_sequence = 2,
+            .last_sequence  = 3,
             .record_count   = 2,
             .value_bytes    = 16,
             .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
@@ -3211,10 +3260,10 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
         add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "observed-root", 0, 100, 0);
-        add_ready_scope(builder, 3, 1, 3, 99, 0, 2, "orphan-with-observed-root", 10, 20, 2);
+        add_ready_scope(builder, 4, 1, 3, 99, 0, 2, "orphan-with-observed-root", 10, 20, 2);
         builder.Loss({
-            .first_sequence = 4,
-            .last_sequence  = 4,
+            .first_sequence = 3,
+            .last_sequence  = 3,
             .record_count   = 1,
             .value_bytes    = 8,
             .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
@@ -3235,10 +3284,10 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
         add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "expired-observed-root", 0, 10, 0);
-        add_ready_scope(builder, 3, 1, 3, 99, 0, 2, "orphan-after-root", 20, 30, 2);
+        add_ready_scope(builder, 4, 1, 3, 99, 0, 2, "orphan-after-root", 20, 30, 2);
         builder.Loss({
-            .first_sequence = 4,
-            .last_sequence  = 4,
+            .first_sequence = 3,
+            .last_sequence  = 3,
             .record_count   = 1,
             .value_bytes    = 8,
             .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
@@ -3285,11 +3334,11 @@ void TestSemanticTopologyAndLossRecovery() {
         add_ready_scope(builder, 3, 1, 2, 0, 0, 1, "prefix-root-one", 2, 3, 0);
         add_ready_scope(builder, 4, 1, 3, 0, 0, 2, "prefix-root-two", 4, 5, 0);
         add_ready_scope(builder, 5, 1, 4, 0, 0, 3, "prefix-root-three", 6, 7, 0);
-        add_ready_scope(builder, 6, 1, 6, 99, 0, 5, "prefix-depth-three", 8, 9, 3);
-        add_ready_scope(builder, 7, 1, 7, 0, 0, 7, "post-child-hole-root", 10, 11, 0);
+        add_ready_scope(builder, 7, 1, 6, 99, 0, 5, "prefix-depth-three", 8, 9, 3);
+        add_ready_scope(builder, 9, 1, 7, 0, 0, 7, "post-child-hole-root", 10, 11, 0);
         builder.Loss({
-            .first_sequence = 8,
-            .last_sequence  = 9,
+            .first_sequence = 6,
+            .last_sequence  = 8,
             .record_count   = 2,
             .value_bytes    = 16,
             .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
@@ -3310,11 +3359,11 @@ void TestSemanticTopologyAndLossRecovery() {
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 6, 0, 0, "");
         add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "deadline-root-zero", 0, 1, 0);
         add_ready_scope(builder, 3, 1, 2, 0, 0, 1, "deadline-root-one", 2, 3, 0);
-        add_ready_scope(builder, 4, 1, 4, 99, 0, 3, "early-depth-three", 4, 5, 3);
-        add_ready_scope(builder, 5, 1, 6, 100, 0, 5, "late-depth-two", 6, 7, 2);
+        add_ready_scope(builder, 5, 1, 4, 99, 0, 3, "early-depth-three", 4, 5, 3);
+        add_ready_scope(builder, 7, 1, 6, 100, 0, 5, "late-depth-two", 6, 7, 2);
         builder.Loss({
-            .first_sequence = 6,
-            .last_sequence  = 7,
+            .first_sequence = 4,
+            .last_sequence  = 6,
             .record_count   = 2,
             .value_bytes    = 16,
             .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
@@ -3334,11 +3383,11 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 7, 0, 0, "");
         add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "release-root", 0, 200, 0);
-        add_ready_scope(builder, 3, 1, 2, 1, 0, 4, "release-anchor", 10, 100, 1);
-        add_ready_scope(builder, 4, 1, 3, 99, 0, 6, "release-orphan", 20, 30, 4);
+        add_ready_scope(builder, 6, 1, 2, 1, 0, 4, "release-anchor", 10, 100, 1);
+        add_ready_scope(builder, 8, 1, 3, 99, 0, 6, "release-orphan", 20, 30, 4);
         builder.Loss({
-            .first_sequence = 5,
-            .last_sequence  = 8,
+            .first_sequence = 3,
+            .last_sequence  = 7,
             .record_count   = 4,
             .value_bytes    = 32,
             .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
@@ -3358,12 +3407,12 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 7, 0, 0, "");
         add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "barrier-root", 0, 100, 0);
-        add_ready_scope(builder, 3, 1, 3, 101, 0, 3, "barrier-orphan-one", 10, 20, 3);
-        add_ready_scope(builder, 4, 1, 4, 1, 0, 4, "observed-depth-one-barrier", 40, 60, 1);
-        add_ready_scope(builder, 5, 1, 6, 102, 0, 6, "barrier-orphan-two", 80, 90, 3);
+        add_ready_scope(builder, 5, 1, 3, 101, 0, 3, "barrier-orphan-one", 10, 20, 3);
+        add_ready_scope(builder, 6, 1, 4, 1, 0, 4, "observed-depth-one-barrier", 40, 60, 1);
+        add_ready_scope(builder, 8, 1, 6, 102, 0, 6, "barrier-orphan-two", 80, 90, 3);
         builder.Loss({
-            .first_sequence = 6,
-            .last_sequence  = 8,
+            .first_sequence = 3,
+            .last_sequence  = 7,
             .record_count   = 3,
             .value_bytes    = 24,
             .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
@@ -3383,10 +3432,10 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
         add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "crossing-before-hole", 0, 100, 0);
-        add_ready_scope(builder, 3, 1, 2, 0, 0, 2, "crossing-after-hole", 50, 150, 0);
+        add_ready_scope(builder, 4, 1, 2, 0, 0, 2, "crossing-after-hole", 50, 150, 0);
         builder.Loss({
-            .first_sequence = 4,
-            .last_sequence  = 4,
+            .first_sequence = 3,
+            .last_sequence  = 3,
             .record_count   = 1,
             .value_bytes    = 8,
             .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
@@ -3406,11 +3455,11 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 5, 0, 0, "");
         add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "replacement-root", 0, 100, 0);
-        add_ready_scope(builder, 3, 1, 3, 200, 0, 3, "child-of-missing-p", 10, 20, 3);
-        add_ready_scope(builder, 4, 1, 4, 100, 0, 4, "child-of-missing-q", 30, 40, 2);
+        add_ready_scope(builder, 5, 1, 3, 200, 0, 3, "child-of-missing-p", 10, 20, 3);
+        add_ready_scope(builder, 6, 1, 4, 100, 0, 4, "child-of-missing-q", 30, 40, 2);
         builder.Loss({
-            .first_sequence = 5,
-            .last_sequence  = 6,
+            .first_sequence = 3,
+            .last_sequence  = 4,
             .record_count   = 2,
             .value_bytes    = 16,
             .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
@@ -3430,12 +3479,12 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuFrame());
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
-        add_ready_scope(builder, 2, 1, 2, 99, 0, 1, "missing-parent-child-a", 10, 20, 1);
+        add_ready_scope(builder, 3, 1, 2, 99, 0, 1, "missing-parent-child-a", 10, 20, 1);
         const std::uint64_t second_begin = timing_case == 0 ? 20 : timing_case == 1 ? 15 : 5;
-        add_ready_scope(builder, 3, 1, 3, 99, 0, 2, "missing-parent-child-b", second_begin, 30, 1);
+        add_ready_scope(builder, 4, 1, 3, 99, 0, 2, "missing-parent-child-b", second_begin, 30, 1);
         builder.Loss({
-            .first_sequence = 4,
-            .last_sequence  = 4,
+            .first_sequence = 2,
+            .last_sequence  = 2,
             .record_count   = 1,
             .value_bytes    = 8,
             .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
@@ -3473,9 +3522,9 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuFrame());
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
-        add_ready_scope_bits(builder, 2, 1, 2, 99, 0, 1, "wide-missing-child-a", 0, 1, 8, 1.0, 1.0, 1);
-        add_ready_scope_bits(builder, 3, 1, 3, 99, 0, 2, "wide-missing-child-b", 200, 201, 8, 1.0, 1.0, 1);
-        add_queue_loss(builder, 4, 1);
+        add_ready_scope_bits(builder, 3, 1, 2, 99, 0, 1, "wide-missing-child-a", 0, 1, 8, 1.0, 1.0, 1);
+        add_ready_scope_bits(builder, 4, 1, 3, 99, 0, 2, "wide-missing-child-b", 200, 201, 8, 1.0, 1.0, 1);
+        add_queue_loss(builder, 2, 1);
         builder.End();
         Expect(
             LoadChunks(builder.bytes).result.status == SessionLoadStatus::Complete,
@@ -3488,11 +3537,11 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuFrame());
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 5, 0, 0, "");
-        add_ready_scope_bits(builder, 2, 1, 2, 99, 0, 1, "cycle-child-a", 0, 1, 8, 1.0, 1.0, 1);
-        add_ready_scope_bits(builder, 3, 1, 3, 99, 0, 2, "cycle-child-b", 100, 101, 8, 1.0, 1.0, 1);
-        add_ready_scope_bits(builder, 4, 1, 4, 99, 0, 3, "cycle-child-c", 200, 201, 8, 1.0, 1.0, 1);
-        add_ready_scope_bits(builder, 5, 1, 5, 99, 0, 4, "cycle-child-d", 44, 45, 8, 1.0, 1.0, 1);
-        add_queue_loss(builder, 6, 1);
+        add_ready_scope_bits(builder, 3, 1, 2, 99, 0, 1, "cycle-child-a", 0, 1, 8, 1.0, 1.0, 1);
+        add_ready_scope_bits(builder, 4, 1, 3, 99, 0, 2, "cycle-child-b", 100, 101, 8, 1.0, 1.0, 1);
+        add_ready_scope_bits(builder, 5, 1, 4, 99, 0, 3, "cycle-child-c", 200, 201, 8, 1.0, 1.0, 1);
+        add_ready_scope_bits(builder, 6, 1, 5, 99, 0, 4, "cycle-child-d", 44, 45, 8, 1.0, 1.0, 1);
+        add_queue_loss(builder, 2, 1);
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
@@ -3507,9 +3556,9 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuFrame());
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
-        add_ready_scope_bits(builder, 2, 1, 2, 99, 0, 1, "wrapped-missing-child-a", 250, 5, 8, 11.0, 11.0, 1);
-        add_ready_scope_bits(builder, 3, 1, 3, 99, 0, 2, "wrapped-missing-child-b", 5, 10, 8, 5.0, 5.0, 1);
-        add_queue_loss(builder, 4, 1);
+        add_ready_scope_bits(builder, 3, 1, 2, 99, 0, 1, "wrapped-missing-child-a", 250, 5, 8, 11.0, 11.0, 1);
+        add_ready_scope_bits(builder, 4, 1, 3, 99, 0, 2, "wrapped-missing-child-b", 5, 10, 8, 5.0, 5.0, 1);
+        add_queue_loss(builder, 2, 1);
         builder.End();
         Expect(
             LoadChunks(builder.bytes).result.status == SessionLoadStatus::Complete,
@@ -3523,8 +3572,8 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
         add_ready_scope_bits(builder, 2, 1, 1, 0, 0, 0, "bridge-root-a", 0, 1, 8, 1.0, 1.0, 0);
-        add_ready_scope_bits(builder, 3, 1, 2, 0, 0, 2, "bridge-root-b", 255, 0, 8, 1.0, 1.0, 0);
-        add_queue_loss(builder, 4, 1);
+        add_ready_scope_bits(builder, 4, 1, 2, 0, 0, 2, "bridge-root-b", 255, 0, 8, 1.0, 1.0, 0);
+        add_queue_loss(builder, 3, 1);
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
@@ -3540,8 +3589,8 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 4, 0, 0, "");
         add_ready_scope_bits(builder, 2, 1, 1, 0, 0, 0, "three-step-root-a", 0, 100, 8, 100.0, 100.0, 0);
-        add_ready_scope_bits(builder, 3, 1, 2, 0, 0, 3, "three-step-root-b", 50, 60, 8, 10.0, 10.0, 0);
-        add_queue_loss(builder, 4, 2);
+        add_ready_scope_bits(builder, 5, 1, 2, 0, 0, 3, "three-step-root-b", 50, 60, 8, 10.0, 10.0, 0);
+        add_queue_loss(builder, 3, 2);
         builder.End();
         Expect(
             LoadChunks(builder.bytes).result.status == SessionLoadStatus::Complete,
@@ -3556,8 +3605,8 @@ void TestSemanticTopologyAndLossRecovery() {
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 4, 0, 0, "");
         add_ready_scope_bits(builder, 2, 1, 1, 0, 0, 0, "endpoint-root", 0, 100, 64, 100.0, 50.0, 0);
         add_ready_scope(builder, 3, 1, 2, 1, 0, 1, "endpoint-sibling-a", 0, 50, 1);
-        add_ready_scope(builder, 4, 1, 4, 99, 0, 3, "endpoint-orphan", 50, 50, 2);
-        add_queue_loss(builder, 5, 1);
+        add_ready_scope(builder, 5, 1, 4, 99, 0, 3, "endpoint-orphan", 50, 50, 2);
+        add_queue_loss(builder, 4, 1);
         builder.End();
         Expect(
             LoadChunks(builder.bytes).result.status == SessionLoadStatus::Complete,
@@ -3571,8 +3620,8 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
         add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "endpoint-grandparent", 0, 50, 0);
-        add_ready_scope(builder, 3, 1, 3, 99, 0, 2, "endpoint-grandchild", 50, 50, 2);
-        add_queue_loss(builder, 4, 1);
+        add_ready_scope(builder, 4, 1, 3, 99, 0, 2, "endpoint-grandchild", 50, 50, 2);
+        add_queue_loss(builder, 3, 1);
         builder.End();
         Expect(
             LoadChunks(builder.bytes).result.status == SessionLoadStatus::Complete,
@@ -3586,10 +3635,10 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 5, 0, 0, "");
         add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "contract-barrier-root", 0, 100, 0);
-        add_ready_scope(builder, 3, 1, 3, 99, 0, 2, "contract-child-a", 10, 20, 2);
-        add_ready_scope(builder, 4, 1, 4, 1, 0, 3, "contract-barrier", 30, 40, 1);
-        add_ready_scope(builder, 5, 1, 5, 99, 0, 4, "contract-child-b", 50, 60, 2);
-        add_queue_loss(builder, 6, 1);
+        add_ready_scope(builder, 4, 1, 3, 99, 0, 2, "contract-child-a", 10, 20, 2);
+        add_ready_scope(builder, 5, 1, 4, 1, 0, 3, "contract-barrier", 30, 40, 1);
+        add_ready_scope(builder, 6, 1, 5, 99, 0, 4, "contract-child-b", 50, 60, 2);
+        add_queue_loss(builder, 3, 1);
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
@@ -3605,11 +3654,43 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 5, 0, 0, "");
         add_ready_scope(builder, 2, 1, 1, 0, 0, 0, "virtual-sibling-root", 0, 100, 0);
-        const std::uint64_t first_child_order  = leave_sibling_hole ? 2 : 3;
-        const std::uint64_t second_child_order = leave_sibling_hole ? 4 : 4;
-        add_ready_scope(builder, 3, 1, 3, 101, 0, first_child_order, "virtual-sibling-child-a", 10, 20, 2);
-        add_ready_scope(builder, 4, 1, 4, 102, 0, second_child_order, "virtual-sibling-child-b", 30, 40, 2);
-        add_queue_loss(builder, 5, 2);
+        const std::uint64_t first_child_order     = leave_sibling_hole ? 2 : 3;
+        const std::uint64_t second_child_order    = leave_sibling_hole ? 4 : 4;
+        const std::uint64_t first_child_sequence  = leave_sibling_hole ? 4 : 5;
+        const std::uint64_t second_child_sequence = 6;
+        add_ready_scope(
+            builder,
+            first_child_sequence,
+            1,
+            3,
+            101,
+            0,
+            first_child_order,
+            "virtual-sibling-child-a",
+            10,
+            20,
+            2
+        );
+        add_ready_scope(
+            builder,
+            second_child_sequence,
+            1,
+            4,
+            102,
+            0,
+            second_child_order,
+            "virtual-sibling-child-b",
+            30,
+            40,
+            2
+        );
+        builder.Loss({
+            .first_sequence = 3,
+            .last_sequence  = leave_sibling_hole ? 5ull : 4ull,
+            .record_count   = 2,
+            .value_bytes    = 16,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
@@ -3629,9 +3710,9 @@ void TestSemanticTopologyAndLossRecovery() {
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 6, 0, 0, "");
         add_ready_scope_bits(builder, 2, 1, 1, 0, 0, 0, "contract-lca-root", 0, 100, 64, 100.0, 50.0, 0);
         add_ready_scope(builder, 3, 1, 2, 1, 0, 1, "contract-lca-sibling", 0, 50, 1);
-        add_ready_scope(builder, 4, 1, 4, 99, 0, 4, "contract-lca-zero-child", 50, 50, 3);
-        add_ready_scope(builder, 5, 1, 5, 99, 0, 5, "contract-lca-late-child", 60, 70, 3);
-        add_queue_loss(builder, 6, 2);
+        add_ready_scope(builder, 6, 1, 4, 99, 0, 4, "contract-lca-zero-child", 50, 50, 3);
+        add_ready_scope(builder, 7, 1, 5, 99, 0, 5, "contract-lca-late-child", 60, 70, 3);
+        add_queue_loss(builder, 4, 2);
         builder.End();
         Expect(
             LoadChunks(builder.bytes).result.status == SessionLoadStatus::Complete,
@@ -3645,9 +3726,9 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 4, 0, 0, "");
         add_ready_scope_bits(builder, 2, 1, 1, 0, 0, 0, "virtual-chain-root-a", 0, 127, 8, 127.0, 127.0, 0);
-        add_ready_scope_bits(builder, 3, 1, 3, 99, 0, 2, "virtual-chain-child", 200, 210, 8, 10.0, 10.0, 1);
-        add_ready_scope_bits(builder, 4, 1, 4, 0, 0, 3, "virtual-chain-root-b", 100, 110, 8, 10.0, 10.0, 0);
-        add_queue_loss(builder, 5, 1);
+        add_ready_scope_bits(builder, 4, 1, 3, 99, 0, 2, "virtual-chain-child", 200, 210, 8, 10.0, 10.0, 1);
+        add_ready_scope_bits(builder, 5, 1, 4, 0, 0, 3, "virtual-chain-root-b", 100, 110, 8, 10.0, 10.0, 0);
+        add_queue_loss(builder, 3, 1);
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
@@ -3662,12 +3743,32 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuFrame());
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 2 + split_loss_count, 0, 0, "");
-        add_ready_scope_bits(builder, 2, 1, 3, 101, 0, 2, "split-root-child-a", 10, 30, 8, 20.0, 20.0, 2);
-        const std::uint64_t second_child_order = split_loss_count == 3 ? 4 : 5;
+        add_ready_scope_bits(builder, 4, 1, 3, 101, 0, 2, "split-root-child-a", 10, 30, 8, 20.0, 20.0, 2);
+        const std::uint64_t second_child_order    = split_loss_count == 3 ? 4 : 5;
+        const std::uint64_t second_child_sequence = split_loss_count == 3 ? 6 : 7;
         add_ready_scope_bits(
-            builder, 3, 1, 4, 102, 0, second_child_order, "split-root-child-b", 20, 40, 8, 20.0, 20.0, 2
+            builder,
+            second_child_sequence,
+            1,
+            4,
+            102,
+            0,
+            second_child_order,
+            "split-root-child-b",
+            20,
+            40,
+            8,
+            20.0,
+            20.0,
+            2
         );
-        add_queue_loss(builder, 4, split_loss_count);
+        builder.Loss({
+            .first_sequence = 2,
+            .last_sequence  = split_loss_count == 3 ? 5ull : 6ull,
+            .record_count   = split_loss_count,
+            .value_bytes    = split_loss_count * 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
@@ -3684,10 +3785,16 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuFrame());
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 7, 0, 0, "");
-        add_ready_scope_bits(builder, 2, 1, 3, 101, 0, 2, "wide-root-child-a", 10, 20, 8, 10.0, 10.0, 2);
-        add_ready_scope_bits(builder, 3, 1, 4, 102, 0, 5, "wide-root-child-b", 200, 210, 8, 10.0, 10.0, 2);
-        add_ready_scope_bits(builder, 4, 1, 5, 0, 0, 6, "wide-root-successor", 220, 230, 8, 10.0, 10.0, 0);
-        add_queue_loss(builder, 5, 4);
+        add_ready_scope_bits(builder, 4, 1, 3, 101, 0, 2, "wide-root-child-a", 10, 20, 8, 10.0, 10.0, 2);
+        add_ready_scope_bits(builder, 7, 1, 4, 102, 0, 5, "wide-root-child-b", 200, 210, 8, 10.0, 10.0, 2);
+        add_ready_scope_bits(builder, 8, 1, 5, 0, 0, 6, "wide-root-successor", 220, 230, 8, 10.0, 10.0, 0);
+        builder.Loss({
+            .first_sequence = 2,
+            .last_sequence  = 6,
+            .record_count   = 4,
+            .value_bytes    = 32,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
         builder.End();
         Expect(
             LoadChunks(builder.bytes).result.status == SessionLoadStatus::Complete,
@@ -3700,10 +3807,16 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuFrame());
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 7, 0, 0, "");
-        add_ready_scope_bits(builder, 2, 1, 3, 101, 0, 2, "partition-child-a", 0, 10, 8, 10.0, 10.0, 2);
-        add_ready_scope_bits(builder, 3, 1, 4, 102, 0, 5, "partition-child-b", 100, 110, 8, 10.0, 10.0, 2);
-        add_ready_scope_bits(builder, 4, 1, 5, 0, 0, 6, "partition-successor", 150, 160, 8, 10.0, 10.0, 0);
-        add_queue_loss(builder, 5, 4);
+        add_ready_scope_bits(builder, 4, 1, 3, 101, 0, 2, "partition-child-a", 0, 10, 8, 10.0, 10.0, 2);
+        add_ready_scope_bits(builder, 7, 1, 4, 102, 0, 5, "partition-child-b", 100, 110, 8, 10.0, 10.0, 2);
+        add_ready_scope_bits(builder, 8, 1, 5, 0, 0, 6, "partition-successor", 150, 160, 8, 10.0, 10.0, 0);
+        builder.Loss({
+            .first_sequence = 2,
+            .last_sequence  = 6,
+            .record_count   = 4,
+            .value_bytes    = 32,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
@@ -3720,18 +3833,24 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 9, 0, 0, "");
         add_ready_scope_bits(
-            builder, 2, 1, 2, 100, 0, 1, "future-shared-child-zero", 0, 10, 8, 10.0, 10.0, 1
+            builder, 3, 1, 2, 100, 0, 1, "future-shared-child-zero", 0, 10, 8, 10.0, 10.0, 1
         );
         add_ready_scope_bits(
-            builder, 3, 1, 3, 201, 0, 5, "future-shared-child-one", 100, 105, 8, 5.0, 5.0, 3
+            builder, 7, 1, 3, 201, 0, 5, "future-shared-child-one", 100, 105, 8, 5.0, 5.0, 3
         );
         add_ready_scope_bits(
-            builder, 4, 1, 4, 202, 0, 7, "future-shared-child-two", 106, 110, 8, 4.0, 4.0, 3
+            builder, 9, 1, 4, 202, 0, 7, "future-shared-child-two", 106, 110, 8, 4.0, 4.0, 3
         );
         add_ready_scope_bits(
-            builder, 5, 1, 5, 0, 0, 8, "future-shared-successor", 150, 160, 8, 10.0, 10.0, 0
+            builder, 10, 1, 5, 0, 0, 8, "future-shared-successor", 150, 160, 8, 10.0, 10.0, 0
         );
-        add_queue_loss(builder, 6, 5);
+        builder.Loss({
+            .first_sequence = 2,
+            .last_sequence  = 8,
+            .record_count   = 5,
+            .value_bytes    = 40,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
@@ -3747,15 +3866,21 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuFrame());
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 9, 0, 0, "");
-        add_ready_scope_bits(builder, 2, 1, 2, 100, 0, 1, "partial-split-child-zero", 0, 0, 8, 0.0, 0.0, 1);
+        add_ready_scope_bits(builder, 3, 1, 2, 100, 0, 1, "partial-split-child-zero", 0, 0, 8, 0.0, 0.0, 1);
         add_ready_scope_bits(
-            builder, 3, 1, 3, 201, 0, 4, "partial-split-child-one", 100, 100, 8, 0.0, 0.0, 2
+            builder, 6, 1, 3, 201, 0, 4, "partial-split-child-one", 100, 100, 8, 0.0, 0.0, 2
         );
         add_ready_scope_bits(
-            builder, 4, 1, 4, 202, 0, 6, "partial-split-child-two", 110, 110, 8, 0.0, 0.0, 2
+            builder, 8, 1, 4, 202, 0, 6, "partial-split-child-two", 110, 110, 8, 0.0, 0.0, 2
         );
-        add_ready_scope_bits(builder, 5, 1, 5, 0, 0, 8, "partial-split-successor", 50, 60, 8, 10.0, 10.0, 0);
-        add_queue_loss(builder, 6, 5);
+        add_ready_scope_bits(builder, 10, 1, 5, 0, 0, 8, "partial-split-successor", 50, 60, 8, 10.0, 10.0, 0);
+        builder.Loss({
+            .first_sequence = 2,
+            .last_sequence  = 9,
+            .record_count   = 5,
+            .value_bytes    = 40,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
@@ -3773,12 +3898,12 @@ void TestSemanticTopologyAndLossRecovery() {
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 5, 0, 0, "");
         add_ready_scope_bits(builder, 2, 1, 1, 0, 0, 0, "occurrence-frontier-root-a", 0, 0, 8, 0.0, 0.0, 0);
         add_ready_scope_bits(
-            builder, 3, 1, 3, 99, 0, 3, "occurrence-frontier-child", 125, 125, 8, 0.0, 0.0, 1
+            builder, 5, 1, 3, 99, 0, 3, "occurrence-frontier-child", 125, 125, 8, 0.0, 0.0, 1
         );
         add_ready_scope_bits(
-            builder, 4, 1, 4, 0, 0, 4, "occurrence-frontier-root-b", 175, 180, 8, 5.0, 5.0, 0
+            builder, 6, 1, 4, 0, 0, 4, "occurrence-frontier-root-b", 175, 180, 8, 5.0, 5.0, 0
         );
-        add_queue_loss(builder, 5, 2);
+        add_queue_loss(builder, 3, 2);
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
@@ -3798,15 +3923,21 @@ void TestSemanticTopologyAndLossRecovery() {
             builder, 2, 1, 1, 0, 0, 0, "partition-soundness-root-a", 0, 127, 8, 127.0, 127.0, 0
         );
         add_ready_scope_bits(
-            builder, 3, 1, 3, 101, 0, 3, "partition-soundness-child-a", 255, 255, 8, 0.0, 0.0, 2
+            builder, 5, 1, 3, 101, 0, 3, "partition-soundness-child-a", 255, 255, 8, 0.0, 0.0, 2
         );
         add_ready_scope_bits(
-            builder, 4, 1, 4, 102, 0, 6, "partition-soundness-child-b", 255, 255, 8, 0.0, 0.0, 2
+            builder, 8, 1, 4, 102, 0, 6, "partition-soundness-child-b", 255, 255, 8, 0.0, 0.0, 2
         );
         add_ready_scope_bits(
-            builder, 5, 1, 5, 0, 0, 7, "partition-soundness-root-b", 150, 160, 8, 10.0, 10.0, 0
+            builder, 9, 1, 5, 0, 0, 7, "partition-soundness-root-b", 150, 160, 8, 10.0, 10.0, 0
         );
-        add_queue_loss(builder, 6, 4);
+        builder.Loss({
+            .first_sequence = 3,
+            .last_sequence  = 7,
+            .record_count   = 4,
+            .value_bytes    = 32,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
@@ -3822,15 +3953,21 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 7, 0, 0, "");
         add_ready_scope_bits(
-            builder, 2, 1, 3, 101, 0, 3, "blocked-partition-child-a", 0, 10, 8, 10.0, 10.0, 2
+            builder, 5, 1, 3, 101, 0, 3, "blocked-partition-child-a", 0, 10, 8, 10.0, 10.0, 2
         );
         add_ready_scope_bits(
-            builder, 3, 1, 4, 102, 0, 5, "blocked-partition-child-b", 100, 110, 8, 10.0, 10.0, 2
+            builder, 7, 1, 4, 102, 0, 5, "blocked-partition-child-b", 100, 110, 8, 10.0, 10.0, 2
         );
         add_ready_scope_bits(
-            builder, 4, 1, 5, 0, 0, 6, "blocked-partition-successor", 150, 160, 8, 10.0, 10.0, 0
+            builder, 8, 1, 5, 0, 0, 6, "blocked-partition-successor", 150, 160, 8, 10.0, 10.0, 0
         );
-        add_queue_loss(builder, 5, 4);
+        builder.Loss({
+            .first_sequence = 2,
+            .last_sequence  = 6,
+            .record_count   = 4,
+            .value_bytes    = 32,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
@@ -3846,10 +3983,16 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 4, 0, 0, "");
         add_ready_scope_bits(
-            builder, 2, 1, 2, 99, 0, 1, "long-atomic-virtual-child", 0, 200, 8, 200.0, 200.0, 1
+            builder, 3, 1, 2, 99, 0, 1, "long-atomic-virtual-child", 0, 200, 8, 200.0, 200.0, 1
         );
-        add_ready_scope_bits(builder, 3, 1, 3, 0, 0, 3, "long-atomic-successor", 210, 220, 8, 10.0, 10.0, 0);
-        add_queue_loss(builder, 4, 2);
+        add_ready_scope_bits(builder, 5, 1, 3, 0, 0, 3, "long-atomic-successor", 210, 220, 8, 10.0, 10.0, 0);
+        builder.Loss({
+            .first_sequence = 2,
+            .last_sequence  = 4,
+            .record_count   = 2,
+            .value_bytes    = 16,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
@@ -3865,9 +4008,9 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 5, 0, 0, "");
         add_ready_scope_bits(builder, 2, 1, 1, 0, 0, 0, "late-root-a", 0, 100, 8, 100.0, 100.0, 0);
-        add_ready_scope_bits(builder, 3, 1, 3, 99, 0, 3, "late-root-child", 250, 0, 8, 6.0, 6.0, 1);
-        add_ready_scope_bits(builder, 4, 1, 4, 0, 0, 4, "late-root-b", 0, 10, 8, 10.0, 10.0, 0);
-        add_queue_loss(builder, 5, 2);
+        add_ready_scope_bits(builder, 5, 1, 3, 99, 0, 3, "late-root-child", 250, 0, 8, 6.0, 6.0, 1);
+        add_ready_scope_bits(builder, 6, 1, 4, 0, 0, 4, "late-root-b", 0, 10, 8, 10.0, 10.0, 0);
+        add_queue_loss(builder, 3, 2);
         builder.End();
         Expect(
             LoadChunks(builder.bytes).result.status == SessionLoadStatus::Complete,
@@ -3881,8 +4024,8 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Schema(Templates::GpuScope());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 4, 0, 0, "");
         add_ready_scope_bits(builder, 2, 1, 1, 0, 0, 0, "long-root", 0, 200, 8, 200.0, 200.0, 0);
-        add_ready_scope_bits(builder, 3, 1, 3, 99, 0, 3, "long-root-successor", 210, 220, 8, 10.0, 10.0, 1);
-        add_queue_loss(builder, 4, 2);
+        add_ready_scope_bits(builder, 5, 1, 3, 99, 0, 3, "long-root-successor", 210, 220, 8, 10.0, 10.0, 1);
+        add_queue_loss(builder, 3, 2);
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
@@ -3997,6 +4140,947 @@ void TestSemanticTopologyAndLossRecovery() {
                 limited.result.limit_kind == SessionLimitKind::TopologyWorkItems &&
                 !limited.result.HasUsableSession() && !limited.session.Valid(),
             "CPU boundary-parent search escaped the session topology work budget"
+        );
+    }
+}
+
+void TestGpuProducerSequenceProofs() {
+    const auto add_scope = [](SessionBuilder&  _builder,
+                              std::uint64_t    _sequence,
+                              std::uint64_t    _frame_id,
+                              std::uint64_t    _scope_id,
+                              std::uint64_t    _parent_scope_id,
+                              std::uint64_t    _source_order,
+                              std::uint64_t    _local_order,
+                              std::uint32_t    _depth,
+                              std::string_view _name) {
+        AddGpuScope(
+            _builder,
+            _sequence,
+            _frame_id,
+            _scope_id,
+            _parent_scope_id,
+            _source_order,
+            _local_order,
+            0,
+            0,
+            0,
+            _name,
+            ProfileGpuScopeStatus::Ready,
+            10,
+            20,
+            64,
+            1.0,
+            10.0,
+            10.0,
+            _depth,
+            ""
+        );
+    };
+    const auto add_loss =
+        [](SessionBuilder& _builder, std::uint64_t _first, std::uint64_t _last, std::uint64_t _count) {
+            _builder.Loss({
+                .first_sequence = _first,
+                .last_sequence  = _last,
+                .record_count   = _count,
+                .value_bytes    = _count * 8,
+                .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+            });
+        };
+    const auto expect_rejected = [](const Loaded&    _loaded,
+                                    SessionErrorCode _error,
+                                    std::string_view _message,
+                                    std::string_view _diagnostic = {}) {
+        Expect(
+            _loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                _loaded.result.error_code == _error && !_loaded.result.HasUsableSession() &&
+                !_loaded.session.Valid() && (_diagnostic.empty() || _loaded.diagnostic == _diagnostic),
+            std::string(_message) + " (diagnostic=" + _loaded.diagnostic + ")"
+        );
+    };
+
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 3, 1, ProfileGpuFrameStatus::Complete, true, 1, 0, 0, "");
+        add_scope(builder, 2, 1, 1, 0, 0, 0, 0, "scope-before-own-frame");
+        builder.End();
+        expect_rejected(
+            LoadChunks(builder.bytes),
+            SessionErrorCode::RecordSequenceInvalid,
+            "a GpuScope record preceded its owning GpuFrame record",
+            "GpuFrame record sequence does not precede its GpuScope records"
+        );
+
+        SessionBuilder control;
+        control.Begin();
+        control.Schema(Templates::GpuFrame());
+        control.Schema(Templates::GpuScope());
+        AddGpuFrame(control, 1, 1, ProfileGpuFrameStatus::Complete, true, 1, 0, 0, "");
+        add_scope(control, 2, 1, 1, 0, 0, 0, 0, "scope-after-own-frame");
+        control.End();
+        const Loaded loaded = LoadChunks(control.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete && loaded.session.Valid(),
+            "a GpuScope record after its owning frame was rejected"
+        );
+    }
+    {
+        const auto add_parent_child =
+            [](SessionBuilder& _builder, std::uint64_t _parent_sequence, std::uint64_t _child_sequence) {
+                AddGpuScope(
+                    _builder,
+                    _parent_sequence,
+                    1,
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    "observed-parent",
+                    ProfileGpuScopeStatus::Ready,
+                    10,
+                    30,
+                    64,
+                    1.0,
+                    20.0,
+                    10.0,
+                    0,
+                    ""
+                );
+                AddGpuScope(
+                    _builder,
+                    _child_sequence,
+                    1,
+                    2,
+                    1,
+                    0,
+                    1,
+                    0,
+                    0,
+                    0,
+                    "observed-child",
+                    ProfileGpuScopeStatus::Ready,
+                    15,
+                    25,
+                    64,
+                    1.0,
+                    10.0,
+                    10.0,
+                    1,
+                    ""
+                );
+            };
+
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 2, 0, 0, "");
+        add_parent_child(builder, 3, 2);
+        builder.End();
+        expect_rejected(
+            LoadChunks(builder.bytes),
+            SessionErrorCode::RecordSequenceInvalid,
+            "an observed GPU parent was emitted after its child",
+            "GpuScope parent record sequence does not precede its child"
+        );
+
+        SessionBuilder control;
+        control.Begin();
+        control.Schema(Templates::GpuFrame());
+        control.Schema(Templates::GpuScope());
+        AddGpuFrame(control, 1, 1, ProfileGpuFrameStatus::Complete, true, 2, 0, 0, "");
+        add_parent_child(control, 2, 3);
+        control.End();
+        const Loaded loaded = LoadChunks(control.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete && loaded.session.Valid(),
+            "an observed GPU parent before its child was rejected"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 2, 0, 0, "");
+        add_scope(builder, 3, 1, 1, 0, 0, 0, 0, "later-sequence-source-zero");
+        add_scope(builder, 2, 1, 2, 0, 1, 0, 0, "earlier-sequence-source-one");
+        builder.End();
+        expect_rejected(
+            LoadChunks(builder.bytes),
+            SessionErrorCode::RecordSequenceInvalid,
+            "GPU recording sources reversed producer emission order",
+            "GpuScope records reverse producer emission order"
+        );
+
+        SessionBuilder control;
+        control.Begin();
+        control.Schema(Templates::GpuFrame());
+        control.Schema(Templates::GpuScope());
+        AddGpuFrame(control, 1, 1, ProfileGpuFrameStatus::Complete, true, 2, 0, 0, "");
+        add_scope(control, 2, 1, 1, 0, 0, 0, 0, "ordered-source-zero");
+        add_scope(control, 3, 1, 2, 0, 1, 0, 0, "ordered-source-one");
+        control.End();
+        const Loaded loaded = LoadChunks(control.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete && loaded.session.Valid(),
+            "producer-ordered GPU recording sources were rejected"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 1, 0, 0, "");
+        add_scope(builder, 4, 1, 1, 0, 0, 0, 0, "scope-after-next-frame");
+        AddGpuFrame(builder, 3, 2, ProfileGpuFrameStatus::Complete, true, 0, 0, 0, "");
+        builder.End();
+        expect_rejected(
+            LoadChunks(builder.bytes),
+            SessionErrorCode::RecordSequenceInvalid,
+            "a GpuScope crossed the next known frame boundary",
+            "GPU frame emission boundaries reverse producer frame order"
+        );
+
+        SessionBuilder control;
+        control.Begin();
+        control.Schema(Templates::GpuFrame());
+        control.Schema(Templates::GpuScope());
+        AddGpuFrame(control, 1, 1, ProfileGpuFrameStatus::Complete, true, 1, 0, 0, "");
+        add_scope(control, 2, 1, 1, 0, 0, 0, 0, "scope-before-next-frame");
+        AddGpuFrame(control, 3, 2, ProfileGpuFrameStatus::Complete, true, 0, 0, 0, "");
+        control.End();
+        const Loaded loaded = LoadChunks(control.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete && loaded.session.Valid(),
+            "a GpuScope before the next known frame boundary was rejected"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 3, 0, 0, "");
+        add_scope(builder, 2, 1, 1, 0, 0, 0, 0, "source-a-root");
+        add_scope(builder, 4, 1, 3, 0, 1, 0, 0, "source-b-root");
+        add_loss(builder, 3, 3, 1);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete && loaded.session.Valid() &&
+                loaded.session.Summary().degraded_complete_gpu_frame_count == 1,
+            "a Complete-frame source-tail loss between observed sources was rejected"
+        );
+    }
+
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 0, 0, 0, "");
+        AddGpuFrame(builder, 3, 3, ProfileGpuFrameStatus::Complete, true, 0, 0, 0, "");
+        add_scope(builder, 4, 2, 1, 0, 0, 0, 0, "missing-frame-after-next-frame");
+        add_loss(builder, 2, 2, 1);
+        builder.End();
+        expect_rejected(
+            LoadChunks(builder.bytes),
+            SessionErrorCode::RecordSequenceInvalid,
+            "a missing frame emitted scopes after the next known frame record"
+        );
+
+        SessionBuilder control;
+        control.Begin();
+        control.Schema(Templates::GpuFrame());
+        control.Schema(Templates::GpuScope());
+        AddGpuFrame(control, 1, 1, ProfileGpuFrameStatus::Complete, true, 0, 0, 0, "");
+        AddGpuFrame(control, 4, 3, ProfileGpuFrameStatus::Complete, true, 0, 0, 0, "");
+        add_scope(control, 3, 2, 1, 0, 0, 0, 0, "ordered-missing-frame");
+        add_loss(control, 2, 2, 1);
+        control.End();
+        Expect(
+            LoadChunks(control.bytes).result.status == SessionLoadStatus::Complete,
+            "a producer-ordered missing frame was rejected"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 1, 0, 0, "");
+        add_scope(builder, 3, 2, 1, 0, 0, 0, 0, "missing-next-frame-root");
+        add_loss(builder, 2, 4, 2);
+        builder.End();
+        expect_rejected(
+            LoadChunks(builder.bytes),
+            SessionErrorCode::GpuFrameTotalsMismatch,
+            "a Complete-frame tail crossed the record of the next missing frame"
+        );
+
+        SessionBuilder control;
+        control.Begin();
+        control.Schema(Templates::GpuFrame());
+        control.Schema(Templates::GpuScope());
+        AddGpuFrame(control, 1, 1, ProfileGpuFrameStatus::Complete, true, 1, 0, 0, "");
+        add_scope(control, 4, 2, 1, 0, 0, 0, 0, "ordered-next-frame-root");
+        add_loss(control, 2, 3, 2);
+        control.End();
+        Expect(
+            LoadChunks(control.bytes).result.status == SessionLoadStatus::Complete,
+            "a Complete-frame tail and following missing frame did not fit valid ordered slots"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Incomplete, false, 3, 1, 0, "RHI drops");
+        add_scope(builder, 3, 1, 1, 0, 1, 0, 0, "observed-root-predecessor");
+        add_scope(builder, 4, 1, 3, 99, 1, 2, 1, "child-after-missing-root");
+        add_loss(builder, 2, 2, 1);
+        builder.End();
+        expect_rejected(
+            LoadChunks(builder.bytes),
+            SessionErrorCode::GpuFrameTotalsMismatch,
+            "a missing direct GPU parent was placed before its producer predecessor"
+        );
+
+        SessionBuilder control;
+        control.Begin();
+        control.Schema(Templates::GpuFrame());
+        control.Schema(Templates::GpuScope());
+        AddGpuFrame(control, 1, 1, ProfileGpuFrameStatus::Incomplete, false, 3, 1, 0, "RHI drops");
+        add_scope(control, 2, 1, 1, 0, 1, 0, 0, "ordered-root-predecessor");
+        add_scope(control, 4, 1, 3, 99, 1, 2, 1, "ordered-child-after-missing-root");
+        add_loss(control, 3, 3, 1);
+        control.End();
+        Expect(
+            LoadChunks(control.bytes).result.status == SessionLoadStatus::Complete,
+            "a direct GPU parent in its producer-valid slot was rejected"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Incomplete, false, 4, 1, 0, "RHI drops");
+        add_scope(builder, 3, 1, 3, 99, 1, 2, 2, "early-depth-two-child");
+        add_scope(builder, 6, 1, 4, 0, 2, 0, 0, "later-unrelated-root");
+        add_loss(builder, 2, 5, 2);
+        builder.End();
+        expect_rejected(
+            LoadChunks(builder.bytes),
+            SessionErrorCode::GpuFrameTotalsMismatch,
+            "a hidden GPU ancestor was placed after the child that requires it"
+        );
+
+        SessionBuilder control;
+        control.Begin();
+        control.Schema(Templates::GpuFrame());
+        control.Schema(Templates::GpuScope());
+        AddGpuFrame(control, 1, 1, ProfileGpuFrameStatus::Incomplete, false, 4, 1, 0, "RHI drops");
+        add_scope(control, 4, 1, 3, 99, 1, 2, 2, "ordered-depth-two-child");
+        add_scope(control, 6, 1, 4, 0, 2, 0, 0, "ordered-later-root");
+        add_loss(control, 2, 3, 2);
+        control.End();
+        Expect(
+            LoadChunks(control.bytes).result.status == SessionLoadStatus::Complete,
+            "a hidden GPU ancestor chain before its child was rejected"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 0, 0, 0, "");
+        add_scope(builder, 4, 2, 3, 99, 1, 2, 2, "missing-frame-depth-two-child");
+        add_scope(builder, 7, 2, 4, 0, 2, 0, 0, "missing-frame-later-root");
+        add_loss(builder, 2, 6, 3);
+        builder.End();
+        expect_rejected(
+            LoadChunks(builder.bytes),
+            SessionErrorCode::GpuFrameTotalsMismatch,
+            "a missing frame record and its parent chain reused too few pre-child slots"
+        );
+
+        SessionBuilder control;
+        control.Begin();
+        control.Schema(Templates::GpuFrame());
+        control.Schema(Templates::GpuScope());
+        AddGpuFrame(control, 1, 1, ProfileGpuFrameStatus::Complete, true, 0, 0, 0, "");
+        add_scope(control, 5, 2, 3, 99, 1, 2, 2, "ordered-missing-frame-child");
+        add_scope(control, 7, 2, 4, 0, 2, 0, 0, "ordered-missing-frame-root");
+        add_loss(control, 2, 4, 3);
+        control.End();
+        Expect(
+            LoadChunks(control.bytes).result.status == SessionLoadStatus::Complete,
+            "a missing frame record and parent chain in valid slots were rejected"
+        );
+    }
+    {
+        const auto make_distinct_parent_fixture =
+            [&](std::uint64_t _second_child_sequence, bool _with_loss, std::uint64_t _loss_last) {
+                SessionBuilder builder;
+                builder.Begin();
+                builder.Schema(Templates::GpuFrame());
+                builder.Schema(Templates::GpuScope());
+                AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Incomplete, false, 4, 0, 0, "");
+                add_scope(builder, 4, 1, 2, 99, 0, 1, 1, "first-missing-parent-child");
+                add_scope(builder, _second_child_sequence, 1, 3, 100, 0, 3, 1, "second-missing-parent-child");
+                if (_with_loss) {
+                    add_loss(builder, 2, _loss_last, 2);
+                    builder.End();
+                }
+                return builder;
+            };
+
+        SessionBuilder no_intervening_slot = make_distinct_parent_fixture(5, true, 3);
+        expect_rejected(
+            LoadChunks(no_intervening_slot.bytes),
+            SessionErrorCode::GpuFrameTotalsMismatch,
+            "distinct missing GPU parents crossed an observed child subtree"
+        );
+
+        SessionBuilder misplaced_loss = make_distinct_parent_fixture(6, true, 3);
+        expect_rejected(
+            LoadChunks(misplaced_loss.bytes),
+            SessionErrorCode::GpuFrameTotalsMismatch,
+            "noticed Loss before the first child was reused for its later sibling parent"
+        );
+
+        SessionBuilder complete_control = make_distinct_parent_fixture(6, true, 5);
+        const Loaded   complete_loaded  = LoadChunks(complete_control.bytes);
+        Expect(
+            complete_loaded.result.status == SessionLoadStatus::Complete && complete_loaded.session.Valid(),
+            "distinct missing GPU parents in producer-valid Loss slots were rejected"
+        );
+
+        SessionBuilder     forensic_control = make_distinct_parent_fixture(6, false, 0);
+        SessionLoadOptions forensic_options{};
+        forensic_options.allow_forensic_truncation = true;
+        const Loaded forensic_loaded               = LoadChunks(forensic_control.bytes, {}, forensic_options);
+        Expect(
+            forensic_loaded.result.status == SessionLoadStatus::ForensicTruncated &&
+                forensic_loaded.session.Valid(),
+            "forensic distinct missing GPU parents with producer-valid holes were rejected"
+        );
+    }
+    {
+        const auto make_hidden_depth_fixture = [&](std::uint64_t _second_child_sequence,
+                                                   std::uint64_t _loss_last) {
+            SessionBuilder builder;
+            builder.Begin();
+            builder.Schema(Templates::GpuFrame());
+            builder.Schema(Templates::GpuScope());
+            AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Incomplete, false, 4, 0, 0, "");
+            add_scope(builder, 4, 1, 2, 99, 0, 1, 1, "missing-root-child");
+            add_scope(builder, _second_child_sequence, 1, 3, 100, 0, 3, 2, "later-missing-depth-one-child");
+            add_loss(builder, 2, _loss_last, 2);
+            builder.End();
+            return builder;
+        };
+
+        SessionBuilder builder = make_hidden_depth_fixture(5, 3);
+        expect_rejected(
+            LoadChunks(builder.bytes),
+            SessionErrorCode::GpuFrameTotalsMismatch,
+            "a later virtual missing task crossed a completed observed subtree"
+        );
+
+        SessionBuilder control        = make_hidden_depth_fixture(6, 5);
+        const Loaded   control_loaded = LoadChunks(control.bytes);
+        Expect(
+            control_loaded.result.status == SessionLoadStatus::Complete && control_loaded.session.Valid(),
+            "a later virtual missing task in its producer-valid slot was rejected"
+        );
+    }
+    {
+        const auto make_structural_epoch_fixture = [&](std::uint64_t _orphan_sequence,
+                                                       std::uint64_t _admitted,
+                                                       std::uint64_t _loss_last,
+                                                       std::uint64_t _loss_count) {
+            SessionBuilder builder;
+            builder.Begin();
+            builder.Schema(Templates::GpuFrame());
+            builder.Schema(Templates::GpuScope());
+            AddGpuFrame(
+                builder, 1, 1, ProfileGpuFrameStatus::Incomplete, false, _admitted, 0, 0, "RHI drops"
+            );
+            add_scope(builder, 2, 1, 1, 0, 0, 0, 0, "first-root");
+            add_scope(builder, 3, 1, 2, 1, 0, 1, 1, "first-root-child");
+            add_scope(builder, 4, 1, 3, 0, 0, 2, 0, "second-root");
+            add_scope(builder, _orphan_sequence, 1, 6, 99, 0, 5, 3, "second-root-orphan");
+            add_loss(builder, 5, _loss_last, _loss_count);
+            builder.End();
+            return builder;
+        };
+
+        SessionBuilder builder = make_structural_epoch_fixture(6, 5, 5, 1);
+        expect_rejected(
+            LoadChunks(builder.bytes),
+            SessionErrorCode::GpuFrameTotalsMismatch,
+            "an observed depth from a completed root epoch hid a new hidden GPU ancestor"
+        );
+
+        SessionBuilder control        = make_structural_epoch_fixture(7, 6, 6, 2);
+        const Loaded   control_loaded = LoadChunks(control.bytes);
+        Expect(
+            control_loaded.result.status == SessionLoadStatus::Complete && control_loaded.session.Valid(),
+            "a hidden GPU ancestor after a new root epoch was rejected"
+        );
+    }
+    {
+        const auto make_local_assignment_fixture = [&](std::uint64_t _second_child_sequence,
+                                                       std::uint64_t _loss_last) {
+            SessionBuilder builder;
+            builder.Begin();
+            builder.Schema(Templates::GpuFrame());
+            builder.Schema(Templates::GpuScope());
+            AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Incomplete, false, 5, 0, 0, "RHI drops");
+            add_scope(builder, 2, 1, 1, 0, 0, 0, 0, "assignment-root");
+            add_scope(builder, 5, 1, 3, 99, 0, 2, 2, "assignment-orphan-a");
+            add_scope(builder, _second_child_sequence, 1, 5, 100, 0, 4, 1, "assignment-orphan-b");
+            add_loss(builder, 3, _loss_last, 2);
+            builder.End();
+            return builder;
+        };
+
+        SessionBuilder builder = make_local_assignment_fixture(6, 4);
+        expect_rejected(
+            LoadChunks(builder.bytes),
+            SessionErrorCode::GpuFrameTotalsMismatch,
+            "local EDF assignments reused a record-sequence predecessor from an earlier structural segment"
+        );
+
+        SessionBuilder control        = make_local_assignment_fixture(7, 6);
+        const Loaded   control_loaded = LoadChunks(control.bytes);
+        Expect(
+            control_loaded.result.status == SessionLoadStatus::Complete && control_loaded.session.Valid(),
+            "local EDF assignments with compatible record-sequence segments were rejected"
+        );
+
+        const std::uint64_t exact_budget = MinimumPassingTopologyBudget(control.bytes);
+        Expect(
+            exact_budget == 718,
+            "nontrusted virtual-task topology work disagreed with the independent oracle (actual=" +
+                std::to_string(exact_budget) + ")"
+        );
+        SessionLoadOptions exact{};
+        exact.limits.max_topology_work_items = exact_budget;
+        const Loaded exact_loaded            = LoadChunks(control.bytes, {}, exact);
+        Expect(
+            exact_loaded.result.status == SessionLoadStatus::Complete && exact_loaded.session.Valid(),
+            "the exact nontrusted virtual-task topology budget was rejected"
+        );
+        SessionLoadOptions short_by_one = exact;
+        --short_by_one.limits.max_topology_work_items;
+        const Loaded limited = LoadChunks(control.bytes, {}, short_by_one);
+        Expect(
+            limited.result.status == SessionLoadStatus::LimitExceeded &&
+                limited.result.limit_kind == SessionLimitKind::TopologyWorkItems &&
+                !limited.result.HasUsableSession() && !limited.session.Valid(),
+            "nontrusted virtual-task work escaped the topology budget"
+        );
+    }
+    {
+        const auto make_spare_hole_fixture = [&](std::uint64_t _second_child_sequence,
+                                                 std::uint64_t _loss_last) {
+            SessionBuilder builder;
+            builder.Begin();
+            builder.Schema(Templates::GpuFrame());
+            builder.Schema(Templates::GpuScope());
+            AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Incomplete, false, 4, 2, 0, "");
+            add_scope(builder, 5, 1, 2, 99, 0, 3, 1, "first-child-after-spare-holes");
+            add_scope(
+                builder, _second_child_sequence, 1, 3, 100, 0, 5, 1, "second-child-after-first-subtree"
+            );
+            add_loss(builder, 2, _loss_last, 2);
+            builder.End();
+            return builder;
+        };
+
+        SessionBuilder builder = make_spare_hole_fixture(6, 3);
+        expect_rejected(
+            LoadChunks(builder.bytes),
+            SessionErrorCode::GpuFrameTotalsMismatch,
+            "spare early local-order holes hid a later sibling-parent sequence violation"
+        );
+
+        SessionBuilder control        = make_spare_hole_fixture(7, 6);
+        const Loaded   control_loaded = LoadChunks(control.bytes);
+        Expect(
+            control_loaded.result.status == SessionLoadStatus::Complete && control_loaded.session.Valid(),
+            "a sibling parent after spare local-order holes was rejected"
+        );
+    }
+    {
+        const auto make_joint_local_sequence_fixture = [&](std::uint64_t _last_child_local_order,
+                                                           std::uint64_t _dropped_scope_count) {
+            SessionBuilder builder;
+            builder.Begin();
+            builder.Schema(Templates::GpuFrame());
+            builder.Schema(Templates::GpuScope());
+            AddGpuFrame(
+                builder,
+                1,
+                1,
+                ProfileGpuFrameStatus::Incomplete,
+                false,
+                7,
+                _dropped_scope_count,
+                0,
+                "RHI drops"
+            );
+            add_scope(builder, 2, 1, 1, 0, 0, 0, 0, "joint-root");
+            add_scope(builder, 4, 1, 2, 99, 0, 2, 1, "joint-child-b");
+            add_scope(builder, 6, 1, 3, 100, 0, 5, 2, "joint-child-c");
+            add_scope(builder, 8, 1, 4, 101, 0, _last_child_local_order, 1, "joint-child-d");
+            add_loss(builder, 3, 3, 1);
+            add_loss(builder, 5, 5, 1);
+            add_loss(builder, 7, 7, 1);
+            builder.End();
+            return builder;
+        };
+
+        SessionBuilder no_post_c_local_hole = make_joint_local_sequence_fixture(6, 0);
+        expect_rejected(
+            LoadChunks(no_post_c_local_hole.bytes),
+            SessionErrorCode::GpuFrameTotalsMismatch,
+            "two virtual GPU parents reused one pre-C sequence/Loss slot"
+        );
+
+        SessionBuilder joint_control        = make_joint_local_sequence_fixture(7, 1);
+        const Loaded   joint_control_loaded = LoadChunks(joint_control.bytes);
+        Expect(
+            joint_control_loaded.result.status == SessionLoadStatus::Complete &&
+                joint_control_loaded.session.Valid(),
+            "a virtual GPU parent in the post-C local/sequence cell was rejected"
+        );
+
+        const std::uint64_t exact_flow_edges = MinimumPassingTopologyFlowEdges(joint_control.bytes);
+        Expect(
+            exact_flow_edges == 22,
+            "joint topology flow-edge count disagreed with the independent oracle (actual=" +
+                std::to_string(exact_flow_edges) + ")"
+        );
+        SessionLoadOptions exact{};
+        exact.limits.max_topology_flow_edges = exact_flow_edges;
+        const Loaded exact_loaded            = LoadChunks(joint_control.bytes, {}, exact);
+        Expect(
+            exact_loaded.result.status == SessionLoadStatus::Complete && exact_loaded.session.Valid(),
+            "the exact joint topology flow-edge limit was rejected"
+        );
+        SessionLoadOptions short_by_one = exact;
+        --short_by_one.limits.max_topology_flow_edges;
+        const Loaded limited = LoadChunks(joint_control.bytes, {}, short_by_one);
+        Expect(
+            limited.result.status == SessionLoadStatus::LimitExceeded &&
+                limited.result.limit_kind == SessionLimitKind::TopologyFlowEdges &&
+                !limited.result.HasUsableSession() && !limited.session.Valid(),
+            "joint topology flow edges escaped their resource limit or published a partial session"
+        );
+        SessionLoadOptions zero_edges{};
+        zero_edges.limits.max_topology_flow_edges = 0;
+        const Loaded task_limited                 = LoadChunks(joint_control.bytes, {}, zero_edges);
+        Expect(
+            task_limited.result.status == SessionLoadStatus::LimitExceeded &&
+                task_limited.result.limit_kind == SessionLimitKind::TopologyFlowEdges &&
+                !task_limited.result.HasUsableSession() && !task_limited.session.Valid(),
+            "virtual GPU task allocation escaped the zero flow-edge limit"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Incomplete, false, 8, 2, 0, "optional empty cell");
+        add_scope(builder, 2, 1, 1, 0, 0, 0, 0, "empty-cell-root");
+        add_scope(builder, 4, 1, 2, 99, 0, 2, 1, "empty-cell-b");
+        add_scope(builder, 6, 1, 3, 100, 0, 5, 2, "empty-cell-c");
+        add_scope(builder, 7, 1, 4, 3, 0, 7, 3, "empty-cell-explicit-c-child");
+        add_scope(builder, 9, 1, 5, 101, 0, 9, 1, "empty-cell-d");
+        add_loss(builder, 3, 3, 1);
+        add_loss(builder, 5, 5, 1);
+        add_loss(builder, 8, 8, 1);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete && loaded.session.Valid(),
+            "an optional empty local/sequence cell rejected a task with a later valid cell"
+        );
+        const std::uint64_t exact_flow_edges = MinimumPassingTopologyFlowEdges(builder.bytes);
+        Expect(
+            exact_flow_edges == 22,
+            "optional-cell topology flow-edge count disagreed with the independent oracle (actual=" +
+                std::to_string(exact_flow_edges) + ")"
+        );
+        SessionLoadOptions exact{};
+        exact.limits.max_topology_flow_edges = exact_flow_edges;
+        const Loaded exact_loaded            = LoadChunks(builder.bytes, {}, exact);
+        Expect(
+            exact_loaded.result.status == SessionLoadStatus::Complete && exact_loaded.session.Valid(),
+            "the exact optional-cell topology flow-edge limit was rejected"
+        );
+        SessionLoadOptions short_by_one = exact;
+        --short_by_one.limits.max_topology_flow_edges;
+        const Loaded limited = LoadChunks(builder.bytes, {}, short_by_one);
+        Expect(
+            limited.result.status == SessionLoadStatus::LimitExceeded &&
+                limited.result.limit_kind == SessionLimitKind::TopologyFlowEdges &&
+                !limited.result.HasUsableSession() && !limited.session.Valid(),
+            "a pruned optional cell polluted the exact flow-edge limit or published a partial session"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddGpuFrame(
+            builder,
+            std::numeric_limits<std::uint64_t>::max() - 2,
+            1,
+            ProfileGpuFrameStatus::Incomplete,
+            false,
+            2,
+            0,
+            0,
+            ""
+        );
+        add_scope(
+            builder,
+            std::numeric_limits<std::uint64_t>::max(),
+            1,
+            2,
+            99,
+            0,
+            1,
+            1,
+            "forensic-upper-bound-joint-child"
+        );
+
+        SessionLoadOptions forensic{};
+        forensic.allow_forensic_truncation = true;
+        const Loaded loaded                = LoadChunks(builder.bytes, {}, forensic);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ForensicTruncated && loaded.session.Valid(),
+            "forensic joint topology rejected the UINT64_MAX-adjacent sequence hole"
+        );
+
+        const std::uint64_t exact_flow_edges = MinimumPassingTopologyFlowEdges(builder.bytes, forensic);
+        Expect(
+            exact_flow_edges == 6,
+            "forensic joint topology flow-edge count disagreed with the independent oracle (actual=" +
+                std::to_string(exact_flow_edges) + ")"
+        );
+        SessionLoadOptions exact             = forensic;
+        exact.limits.max_topology_flow_edges = exact_flow_edges;
+        const Loaded exact_loaded            = LoadChunks(builder.bytes, {}, exact);
+        Expect(
+            exact_loaded.result.status == SessionLoadStatus::ForensicTruncated &&
+                exact_loaded.session.Valid(),
+            "the exact forensic joint topology flow-edge limit was rejected"
+        );
+        SessionLoadOptions short_by_one = exact;
+        --short_by_one.limits.max_topology_flow_edges;
+        const Loaded limited = LoadChunks(builder.bytes, {}, short_by_one);
+        Expect(
+            limited.result.status == SessionLoadStatus::LimitExceeded &&
+                limited.result.limit_kind == SessionLimitKind::TopologyFlowEdges &&
+                !limited.result.HasUsableSession() && !limited.session.Valid(),
+            "forensic joint topology edges escaped their limit or published a partial session"
+        );
+    }
+
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddCpuScope(builder, 1, 77, "mixed-virtual-cpu-child", 10, 20, 2);
+        AddGpuFrame(builder, 2, 1, ProfileGpuFrameStatus::Incomplete, false, 2, 0, 0, "");
+        add_scope(builder, 4, 1, 2, 99, 0, 1, 1, "mixed-virtual-gpu-child");
+        AddCpuScope(builder, 5, 77, "mixed-virtual-cpu-ancestor", 0, 30, 0);
+        add_loss(builder, 3, 3, 1);
+        builder.End();
+        expect_rejected(
+            LoadChunks(builder.bytes),
+            SessionErrorCode::RecordSequenceInvalid,
+            "an insufficient mixed CPU/nontrusted-GPU Loss total was classified as a GPU-only failure",
+            "CPU/GPU deficits exceed the noticed allocated-record loss budget"
+        );
+    }
+
+    const auto make_cpu_gpu_shared_hole = [&](std::uint64_t _cpu_ancestor_sequence) {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddCpuScope(builder, 1, 77, "compressed-cpu-child", 10, 20, 2);
+        AddGpuFrame(builder, 2, 1, ProfileGpuFrameStatus::Complete, true, 2, 0, 0, "");
+        add_scope(builder, 4, 1, 2, 1, 0, 1, 1, "compressed-gpu-child");
+        AddCpuScope(builder, _cpu_ancestor_sequence, 77, "compressed-cpu-ancestor", 0, 30, 0);
+        return builder;
+    };
+    {
+        SessionBuilder builder = make_cpu_gpu_shared_hole(6);
+        add_loss(builder, 3, 3, 1);
+        builder.End();
+        expect_rejected(
+            LoadChunks(builder.bytes),
+            SessionErrorCode::RecordSequenceInvalid,
+            "an insufficient mixed CPU/GPU Loss total was classified as a GPU-only failure",
+            "CPU/GPU deficits exceed the noticed allocated-record loss budget"
+        );
+    }
+    {
+        SessionBuilder     builder = make_cpu_gpu_shared_hole(5);
+        SessionLoadOptions options{};
+        options.allow_forensic_truncation = true;
+        expect_rejected(
+            LoadChunks(builder.bytes, {}, options),
+            SessionErrorCode::RecordSequenceInvalid,
+            "forensic CPU/GPU topology demands reused one record-sequence hole"
+        );
+
+        SessionBuilder control        = make_cpu_gpu_shared_hole(6);
+        const Loaded   control_loaded = LoadChunks(control.bytes, {}, options);
+        Expect(
+            control_loaded.result.status == SessionLoadStatus::ForensicTruncated &&
+                control_loaded.session.Valid(),
+            "forensic CPU/GPU topology with distinct holes was rejected"
+        );
+    }
+    {
+        SessionBuilder builder = make_cpu_gpu_shared_hole(7);
+        add_loss(builder, 3, 8, 2);
+        builder.End();
+        expect_rejected(
+            LoadChunks(builder.bytes),
+            SessionErrorCode::RecordSequenceInvalid,
+            "structural sequence capacity bypassed incompatible noticed-Loss intervals"
+        );
+
+        SessionBuilder control = make_cpu_gpu_shared_hole(7);
+        add_loss(control, 3, 5, 2);
+        control.End();
+        const Loaded control_loaded = LoadChunks(control.bytes);
+        Expect(
+            control_loaded.result.status == SessionLoadStatus::Complete && control_loaded.session.Valid(),
+            "compatible CPU/GPU structural and noticed-Loss sequence proofs were rejected"
+        );
+
+        const std::uint64_t exact_budget = MinimumPassingTopologyBudget(control.bytes);
+        SessionLoadOptions  exact{};
+        exact.limits.max_topology_work_items = exact_budget;
+        const Loaded exact_loaded            = LoadChunks(control.bytes, {}, exact);
+        Expect(
+            exact_loaded.result.status == SessionLoadStatus::Complete && exact_loaded.session.Valid(),
+            "the exact combined CPU/GPU sequence/Loss topology budget was rejected"
+        );
+
+        SessionLoadOptions short_by_one = exact;
+        --short_by_one.limits.max_topology_work_items;
+        const Loaded limited = LoadChunks(control.bytes, {}, short_by_one);
+        Expect(
+            limited.result.status == SessionLoadStatus::LimitExceeded &&
+                limited.result.limit_kind == SessionLimitKind::TopologyWorkItems &&
+                !limited.result.HasUsableSession() && !limited.session.Valid(),
+            "combined CPU/GPU sequence/Loss work escaped the topology budget"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::GpuFrame());
+        AddGpuFrame(
+            builder,
+            std::numeric_limits<std::uint64_t>::max() - 1,
+            1,
+            ProfileGpuFrameStatus::Complete,
+            true,
+            1,
+            0,
+            0,
+            ""
+        );
+        SessionLoadOptions options{};
+        options.allow_forensic_truncation = true;
+        const Loaded loaded               = LoadChunks(builder.bytes, {}, options);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ForensicTruncated && loaded.session.Valid(),
+            "a forensic Complete-frame tail did not consume the inclusive UINT64_MAX sequence slot"
+        );
+
+        SessionBuilder exhausted;
+        exhausted.Begin();
+        exhausted.Schema(Templates::GpuFrame());
+        AddGpuFrame(
+            exhausted,
+            std::numeric_limits<std::uint64_t>::max(),
+            1,
+            ProfileGpuFrameStatus::Complete,
+            true,
+            1,
+            0,
+            0,
+            ""
+        );
+        expect_rejected(
+            LoadChunks(exhausted.bytes, {}, options),
+            SessionErrorCode::GpuFrameTotalsMismatch,
+            "a Complete-frame tail escaped an exhausted record-sequence domain"
+        );
+    }
+    {
+        const auto make_upper_bound_loss_fixture = [&](std::uint64_t _loss_first) {
+            SessionBuilder builder;
+            builder.Begin();
+            builder.Schema(Templates::GpuFrame());
+            AddGpuFrame(
+                builder,
+                std::numeric_limits<std::uint64_t>::max() - 2,
+                1,
+                ProfileGpuFrameStatus::Complete,
+                true,
+                2,
+                0,
+                0,
+                ""
+            );
+            add_loss(builder, _loss_first, std::numeric_limits<std::uint64_t>::max(), 2);
+            builder.End();
+            return builder;
+        };
+
+        SessionBuilder incompatible =
+            make_upper_bound_loss_fixture(std::numeric_limits<std::uint64_t>::max() - 3);
+        expect_rejected(
+            LoadChunks(incompatible.bytes),
+            SessionErrorCode::GpuFrameTotalsMismatch,
+            "Loss below a Complete frame was reused for a UINT64_MAX tail demand"
+        );
+
+        SessionBuilder control = make_upper_bound_loss_fixture(std::numeric_limits<std::uint64_t>::max() - 1);
+        const Loaded   loaded  = LoadChunks(control.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete && loaded.session.Valid(),
+            "a non-forensic Complete-frame tail failed Loss flow at UINT64_MAX"
         );
     }
 }
@@ -4494,31 +5578,37 @@ void TestLimitsAndStickyFailure() {
                 (TopologyBinarySearchWorkOracle(frame_count) + TopologyBinarySearchWorkOracle(domain_count)) +
             TopologySortWorkOracle(gpu_scope_count) + TopologyLinearWorkOracle(gpu_scope_count) * 2;
         const auto gpu_topology_work = [&](std::uint64_t _source_count) {
-            return TopologyLinearWorkOracle(frame_count) * 2 + TopologyLinearWorkOracle(gpu_scope_count) +
+            return TopologyLinearWorkOracle(frame_count) * 3 + TopologyLinearWorkOracle(gpu_scope_count) +
                    TopologySortWorkOracle(gpu_scope_count) + TopologyLinearWorkOracle(gpu_scope_count) +
                    TopologyLinearWorkOracle(gpu_scope_count) * 10 +
-                   TopologyLinearWorkOracle(gpu_scope_count) * 2 +
+                   TopologyLinearWorkOracle(gpu_scope_count) + TopologySortWorkOracle(gpu_scope_count) +
+                   TopologyLinearWorkOracle(gpu_scope_count) + TopologyLinearWorkOracle(gpu_scope_count) * 2 +
                    gpu_scope_count * TopologyBinarySearchWorkOracle(frame_count) +
                    TopologyLinearWorkOracle(gpu_scope_count) + TopologyLinearWorkOracle(gpu_scope_count) * 4 +
                    TopologyLinearWorkOracle(gpu_scope_count) * 3 +
                    TopologyLinearWorkOracle(depth_tree_leaves * 2) +
                    TopologyLinearWorkOracle(gpu_scope_count) + TopologyLinearWorkOracle(depth_tree_leaves) +
                    TopologyLinearWorkOracle(gpu_scope_count) * 3 + TopologyLinearWorkOracle(_source_count) +
-                   TopologySortWorkOracle(_source_count) + TopologyLinearWorkOracle(_source_count) +
-                   TopologyLinearWorkOracle(frame_count) + TopologyBinarySearchWorkOracle(frame_count) +
-                   TopologyLinearWorkOracle(gpu_scope_count) * 2 + TopologyLinearWorkOracle(frame_count);
+                   TopologySortWorkOracle(_source_count) + TopologyLinearWorkOracle(_source_count) * 2 +
+                   TopologyLinearWorkOracle(_source_count) + TopologySortWorkOracle(_source_count) +
+                   TopologyLinearWorkOracle(gpu_scope_count) + TopologyLinearWorkOracle(frame_count) +
+                   TopologyBinarySearchWorkOracle(frame_count) +
+                   TopologyLinearWorkOracle(gpu_scope_count) * 2 + TopologyLinearWorkOracle(frame_count) +
+                   TopologyLinearWorkOracle(frame_count) * 3;
         };
         const std::uint64_t expected_two_source_budget =
             record_index_work + domain_track_work + gpu_topology_work(two_source_count);
         const std::uint64_t expected_one_source_budget =
             record_index_work + domain_track_work + gpu_topology_work(one_source_count);
         Expect(
-            gpu_only_budget == expected_two_source_budget && expected_two_source_budget == 106,
-            "two-source GPU base indexing disagreed with the independent work oracle"
+            gpu_only_budget == expected_two_source_budget && expected_two_source_budget == 124,
+            "two-source GPU base indexing disagreed with the independent work oracle (actual=" +
+                std::to_string(gpu_only_budget) + ", oracle=" + std::to_string(expected_two_source_budget) +
+                ")"
         );
         Expect(
-            one_source_budget == expected_one_source_budget && expected_one_source_budget == 102 &&
-                gpu_only_budget - one_source_budget == 4,
+            one_source_budget == expected_one_source_budget && expected_one_source_budget == 116 &&
+                gpu_only_budget - one_source_budget == 8,
             "GPU source-evidence indexing was not accumulated independently"
         );
         Expect(
@@ -4599,7 +5689,7 @@ void TestLimitsAndStickyFailure() {
             gpu_limited.result.status == SessionLoadStatus::LimitExceeded &&
                 gpu_limited.result.limit_kind == SessionLimitKind::TopologyWorkItems &&
                 !gpu_limited.result.HasUsableSession() && !gpu_limited.session.Valid() &&
-                MinimumPassingTopologyBudget(frame_only.bytes) == 9,
+                MinimumPassingTopologyBudget(frame_only.bytes) == 13,
             "GPU frame indexing escaped its GPU-specific topology budget"
         );
 
@@ -4904,6 +5994,7 @@ int main() {
         TestEnvelopeSchemaAndSequenceContracts();
         TestChecksumAndForensicTruncation();
         TestSemanticTopologyAndLossRecovery();
+        TestGpuProducerSequenceProofs();
         TestReaderPublicationAndAllocatorContracts();
         TestLimitsAndStickyFailure();
         TestFileWrapperAndMoveOwnership();

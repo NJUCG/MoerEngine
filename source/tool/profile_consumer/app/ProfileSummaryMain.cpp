@@ -220,6 +220,8 @@ using Json = nlohmann::ordered_json;
             return "scope_depth";
         case SessionLimitKind::TopologyWorkItems:
             return "topology_work_items";
+        case SessionLimitKind::TopologyFlowEdges:
+            return "topology_flow_edges";
     }
     return "unknown";
 }

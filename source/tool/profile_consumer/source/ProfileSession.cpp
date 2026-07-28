@@ -378,6 +378,22 @@ struct ProfileSessionReader::Impl {
         std::uint64_t count{0};
     };
 
+    struct JointVirtualTask {
+        std::uint64_t first_allowed_local{0};
+        std::uint64_t deadline_local{0};
+        std::uint64_t deadline_sequence{0};
+    };
+
+    struct JointLocalCell {
+        std::uint64_t            frame_id{0};
+        std::uint64_t            local_begin{0};
+        std::uint64_t            local_end{0};
+        std::uint64_t            release_sequence{0};
+        std::uint64_t            deadline_sequence{0};
+        std::uint64_t            local_capacity{0};
+        std::vector<std::size_t> task_indices{};
+    };
+
     explicit Impl(const SessionLoadOptions& _options) noexcept : options(_options) {
         session.impl_ = new (std::nothrow) ProfileSession::Impl();
         if (session.impl_ == nullptr) {
@@ -1770,6 +1786,14 @@ struct ProfileSessionReader::Impl {
             return false;
         }
 
+        return true;
+    }
+
+    [[nodiscard]] bool ValidateSequenceSlotCapacity(
+        std::vector<RecordSequenceDemand>& _sequence_demands,
+        bool                               _has_cpu_demands,
+        bool                               _has_gpu_demands
+    ) {
         if (!ChargeTopologySortWork(_sequence_demands.size())) {
             return false;
         }
@@ -1786,24 +1810,42 @@ struct ProfileSessionReader::Impl {
         if (_sequence_demands.empty()) {
             return true;
         }
-        struct PendingCpuSequenceDemand {
+
+        const auto capacity_error = [&]() {
+            if (_has_cpu_demands && _has_gpu_demands) {
+                return SessionErrorCode::RecordSequenceInvalid;
+            }
+            return _has_gpu_demands ? SessionErrorCode::GpuFrameTotalsMismatch :
+                                      SessionErrorCode::CpuScopeTopologyInvalid;
+        };
+        const auto fail_capacity = [&]() {
+            Fail(
+                SessionLoadStatus::ProtocolViolation,
+                capacity_error(),
+                "missing CPU/GPU topology records cannot occupy distinct record-sequence holes"
+            );
+            return false;
+        };
+
+        struct PendingSequenceDemand {
             std::uint64_t deadline_sequence{0};
             std::uint64_t remaining_count{0};
         };
-        const auto later_deadline = [](const PendingCpuSequenceDemand& _left,
-                                       const PendingCpuSequenceDemand& _right) {
+        const auto later_deadline = [](const PendingSequenceDemand& _left,
+                                       const PendingSequenceDemand& _right) {
             return _left.deadline_sequence > _right.deadline_sequence;
         };
-        std::vector<PendingCpuSequenceDemand> pending_storage;
+        std::vector<PendingSequenceDemand> pending_storage;
         pending_storage.reserve(_sequence_demands.size());
         std::priority_queue<
-            PendingCpuSequenceDemand,
-            std::vector<PendingCpuSequenceDemand>,
+            PendingSequenceDemand,
+            std::vector<PendingSequenceDemand>,
             decltype(later_deadline)>
             pending_demands(later_deadline, std::move(pending_storage));
         if (!ChargeTopologyLinearWork(record_sequences.size())) {
             return false;
         }
+
         std::size_t   demand_index   = 0;
         std::size_t   observed_index = 0;
         std::uint64_t position       = _sequence_demands.front().release_sequence;
@@ -1827,18 +1869,16 @@ struct ProfileSessionReader::Impl {
                 continue;
             }
             if (pending_demands.top().deadline_sequence < position) {
-                Fail(
-                    SessionLoadStatus::ProtocolViolation,
-                    SessionErrorCode::CpuScopeTopologyInvalid,
-                    "missing CpuScope parents cannot occupy distinct record-sequence holes"
-                );
-                return false;
+                return fail_capacity();
             }
 
             while (observed_index < record_sequences.size() && record_sequences[observed_index] < position) {
                 ++observed_index;
             }
             if (observed_index < record_sequences.size() && record_sequences[observed_index] == position) {
+                if (position == std::numeric_limits<std::uint64_t>::max()) {
+                    return fail_capacity();
+                }
                 ++position;
                 ++observed_index;
                 continue;
@@ -1847,19 +1887,35 @@ struct ProfileSessionReader::Impl {
             if (!ChargeTopologyHeapWork(pending_demands.size())) {
                 return false;
             }
-            PendingCpuSequenceDemand demand = pending_demands.top();
+            PendingSequenceDemand demand = pending_demands.top();
             pending_demands.pop();
-            std::uint64_t batch_end = demand.deadline_sequence + 1;
-            if (observed_index < record_sequences.size()) {
-                batch_end = std::min(batch_end, record_sequences[observed_index]);
+
+            std::uint64_t available = demand.remaining_count;
+            if (demand.deadline_sequence != std::numeric_limits<std::uint64_t>::max() || position != 0) {
+                available = std::min(available, demand.deadline_sequence - position + std::uint64_t{1});
             }
-            if (demand_index < _sequence_demands.size()) {
-                batch_end = std::min(batch_end, _sequence_demands[demand_index].release_sequence);
+            if (observed_index < record_sequences.size() && record_sequences[observed_index] >= position) {
+                available = std::min(available, record_sequences[observed_index] - position);
             }
-            const std::uint64_t available = batch_end - position;
-            const std::uint64_t assigned  = std::min(available, demand.remaining_count);
-            position += assigned;
-            demand.remaining_count -= assigned;
+            if (demand_index < _sequence_demands.size() &&
+                _sequence_demands[demand_index].release_sequence > position) {
+                available = std::min(available, _sequence_demands[demand_index].release_sequence - position);
+            }
+            if (available == 0) {
+                return fail_capacity();
+            }
+
+            demand.remaining_count -= available;
+            const bool exhausts_sequence_domain =
+                available > std::numeric_limits<std::uint64_t>::max() - position;
+            if (exhausts_sequence_domain) {
+                if (demand.remaining_count != 0 || demand_index != _sequence_demands.size() ||
+                    !pending_demands.empty()) {
+                    return fail_capacity();
+                }
+                return true;
+            }
+            position += available;
             if (demand.remaining_count != 0) {
                 if (!ChargeTopologyHeapWork(pending_demands.size() + 1)) {
                     return false;
@@ -1870,11 +1926,22 @@ struct ProfileSessionReader::Impl {
         return true;
     }
 
-    [[nodiscard]] bool
-    ValidateCpuLossCompatibility(std::span<const RecordSequenceDemand> _cpu_sequence_demands) {
-        if (_cpu_sequence_demands.empty()) {
+    [[nodiscard]] bool ValidateTopologyLossCompatibility(
+        std::span<const RecordSequenceDemand> _sequence_demands,
+        bool                                  _has_cpu_demands,
+        bool                                  _has_gpu_demands,
+        bool                                  _forensic
+    ) {
+        if (_sequence_demands.empty() && joint_virtual_tasks.empty()) {
             return true;
         }
+        _has_gpu_demands               = _has_gpu_demands || !joint_virtual_tasks.empty();
+        const auto compatibility_error = [&](SessionErrorCode _cpu_error, SessionErrorCode _gpu_error) {
+            if (_has_cpu_demands && _has_gpu_demands) {
+                return SessionErrorCode::RecordSequenceInvalid;
+            }
+            return _has_gpu_demands ? _gpu_error : _cpu_error;
+        };
 
         struct LossBucket {
             std::uint64_t release_sequence{0};
@@ -1882,12 +1949,14 @@ struct ProfileSessionReader::Impl {
             std::uint64_t count{0};
         };
 
-        std::uint64_t input_work = static_cast<std::uint64_t>(session.impl_->losses.size());
-        if (AddOverflow(input_work, static_cast<std::uint64_t>(_cpu_sequence_demands.size()), input_work)) {
+        std::uint64_t input_work = _forensic ? 0 : static_cast<std::uint64_t>(session.impl_->losses.size());
+        if (AddOverflow(input_work, static_cast<std::uint64_t>(_sequence_demands.size()), input_work) ||
+            AddOverflow(input_work, static_cast<std::uint64_t>(joint_virtual_tasks.size()), input_work) ||
+            AddOverflow(input_work, static_cast<std::uint64_t>(joint_local_cells.size()), input_work)) {
             Fail(
                 SessionLoadStatus::LimitExceeded,
                 SessionErrorCode::LimitExceeded,
-                "CPU/Loss topology input count overflows",
+                "profile topology/Loss input count overflows",
                 DecodeStatus::LimitExceeded,
                 SessionLimitKind::TopologyWorkItems
             );
@@ -1899,63 +1968,120 @@ struct ProfileSessionReader::Impl {
 
         std::uint64_t loss_bucket_count = 0;
         std::uint64_t loss_bucket_total = 0;
-        for (const ProfileLossRecord& loss : session.impl_->losses) {
-            std::uint64_t buckets_for_loss = 1;
-            if (loss.record_count != 1) {
-                ++buckets_for_loss;
+        if (!_forensic) {
+            for (const ProfileLossRecord& loss : session.impl_->losses) {
+                std::uint64_t buckets_for_loss = 1;
+                if (loss.record_count != 1) {
+                    ++buckets_for_loss;
+                }
+                if (loss.record_count > 2) {
+                    ++buckets_for_loss;
+                }
+                if (AddOverflow(loss_bucket_count, buckets_for_loss, loss_bucket_count) ||
+                    AddOverflow(loss_bucket_total, loss.record_count, loss_bucket_total)) {
+                    Fail(
+                        SessionLoadStatus::ProtocolViolation,
+                        SessionErrorCode::LossTotalsOverflow,
+                        "profile noticed-loss bucket total overflows"
+                    );
+                    return false;
+                }
             }
-            if (loss.record_count > 2) {
-                ++buckets_for_loss;
-            }
-            if (AddOverflow(loss_bucket_count, buckets_for_loss, loss_bucket_count) ||
-                AddOverflow(loss_bucket_total, loss.record_count, loss_bucket_total)) {
+        }
+        std::uint64_t demand_total = 0;
+        for (const RecordSequenceDemand& demand : _sequence_demands) {
+            if (AddOverflow(demand_total, demand.count, demand_total)) {
                 Fail(
                     SessionLoadStatus::ProtocolViolation,
-                    SessionErrorCode::LossTotalsOverflow,
-                    "profile noticed-loss bucket total overflows"
+                    compatibility_error(
+                        SessionErrorCode::CpuScopeTopologyInvalid, SessionErrorCode::GpuFrameTotalsMismatch
+                    ),
+                    "profile sequence-backed topology demand overflows"
                 );
                 return false;
             }
         }
-        std::uint64_t cpu_demand_total = 0;
-        for (const RecordSequenceDemand& demand : _cpu_sequence_demands) {
-            if (AddOverflow(cpu_demand_total, demand.count, cpu_demand_total)) {
-                Fail(
-                    SessionLoadStatus::ProtocolViolation,
-                    SessionErrorCode::CpuScopeTopologyInvalid,
-                    "CPU sequence-backed loss demand overflows"
-                );
-                return false;
-            }
-        }
-        if (loss_bucket_total != session.impl_->summary.lost_record_count ||
-            cpu_demand_total > loss_bucket_total) {
+        std::uint64_t required_topology_total = 0;
+        if (AddOverflow(
+                demand_total, static_cast<std::uint64_t>(joint_virtual_tasks.size()), required_topology_total
+            )) {
             Fail(
                 SessionLoadStatus::ProtocolViolation,
-                SessionErrorCode::CpuScopeParentMissing,
-                "CPU hierarchy deficits exceed noticed allocated-record losses"
+                compatibility_error(
+                    SessionErrorCode::CpuScopeTopologyInvalid, SessionErrorCode::GpuFrameTotalsMismatch
+                ),
+                "joint profile topology demand overflows"
+            );
+            return false;
+        }
+        if (!_forensic && (loss_bucket_total != session.impl_->summary.lost_record_count ||
+                           required_topology_total > loss_bucket_total)) {
+            Fail(
+                SessionLoadStatus::ProtocolViolation,
+                compatibility_error(
+                    SessionErrorCode::CpuScopeParentMissing, SessionErrorCode::GpuFrameTotalsMismatch
+                ),
+                "CPU/GPU topology deficits exceed noticed allocated-record losses"
+            );
+            return false;
+        }
+
+        std::uint64_t       early_edge_lower_bound = _forensic ? 0 : loss_bucket_count;
+        const std::uint64_t early_dummy_edge =
+            !_forensic && loss_bucket_total != required_topology_total ? 1 : 0;
+        if (AddOverflow(
+                early_edge_lower_bound,
+                static_cast<std::uint64_t>(_sequence_demands.size()),
+                early_edge_lower_bound
+            ) ||
+            AddOverflow(
+                early_edge_lower_bound,
+                static_cast<std::uint64_t>(joint_local_cells.size()),
+                early_edge_lower_bound
+            ) ||
+            AddOverflow(
+                early_edge_lower_bound,
+                static_cast<std::uint64_t>(joint_virtual_tasks.size()),
+                early_edge_lower_bound
+            ) ||
+            AddOverflow(early_edge_lower_bound, joint_cell_task_edge_count, early_edge_lower_bound) ||
+            AddOverflow(early_edge_lower_bound, early_dummy_edge, early_edge_lower_bound) ||
+            early_edge_lower_bound > options.limits.max_topology_flow_edges) {
+            Fail(
+                SessionLoadStatus::LimitExceeded,
+                SessionErrorCode::LimitExceeded,
+                "profile topology flow-edge lower bound exceeds the configured limit",
+                DecodeStatus::LimitExceeded,
+                SessionLimitKind::TopologyFlowEdges
             );
             return false;
         }
 
         std::uint64_t loss_critical_count   = 0;
         std::uint64_t demand_critical_count = 0;
+        std::uint64_t cell_critical_count   = 0;
         std::uint64_t critical_point_count  = 0;
         std::uint64_t construction_work     = 0;
         if (AddOverflow(loss_bucket_count, loss_bucket_count, loss_critical_count) ||
             AddOverflow(
-                static_cast<std::uint64_t>(_cpu_sequence_demands.size()),
-                static_cast<std::uint64_t>(_cpu_sequence_demands.size()),
+                static_cast<std::uint64_t>(_sequence_demands.size()),
+                static_cast<std::uint64_t>(_sequence_demands.size()),
                 demand_critical_count
             ) ||
+            AddOverflow(
+                static_cast<std::uint64_t>(joint_local_cells.size()),
+                static_cast<std::uint64_t>(joint_local_cells.size()),
+                cell_critical_count
+            ) ||
             AddOverflow(loss_critical_count, demand_critical_count, critical_point_count) ||
+            AddOverflow(critical_point_count, cell_critical_count, critical_point_count) ||
             AddOverflow(loss_bucket_count, critical_point_count, construction_work) ||
             loss_bucket_count > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()) ||
             critical_point_count > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
             Fail(
                 SessionLoadStatus::LimitExceeded,
                 SessionErrorCode::LimitExceeded,
-                "CPU/Loss topology preprocessing exceeds the addressable range",
+                "profile topology/Loss preprocessing exceeds the addressable range",
                 DecodeStatus::LimitExceeded,
                 SessionLimitKind::TopologyWorkItems
             );
@@ -1983,19 +2109,36 @@ struct ProfileSessionReader::Impl {
             critical_points.push_back(_release);
             critical_points.push_back(_deadline);
         };
-        for (const ProfileLossRecord& loss : session.impl_->losses) {
-            add_loss_bucket(loss.first_sequence, loss.first_sequence, 1);
-            if (loss.record_count != 1) {
-                add_loss_bucket(loss.last_sequence, loss.last_sequence, 1);
-            }
-            if (loss.record_count > 2) {
-                add_loss_bucket(loss.first_sequence + 1, loss.last_sequence - 1, loss.record_count - 2);
+        if (!_forensic) {
+            for (const ProfileLossRecord& loss : session.impl_->losses) {
+                add_loss_bucket(loss.first_sequence, loss.first_sequence, 1);
+                if (loss.record_count != 1) {
+                    add_loss_bucket(loss.last_sequence, loss.last_sequence, 1);
+                }
+                if (loss.record_count > 2) {
+                    add_loss_bucket(loss.first_sequence + 1, loss.last_sequence - 1, loss.record_count - 2);
+                }
             }
         }
-        for (const RecordSequenceDemand& demand : _cpu_sequence_demands) {
+        for (const RecordSequenceDemand& demand : _sequence_demands) {
             critical_points.push_back(demand.release_sequence);
             critical_points.push_back(demand.deadline_sequence);
         }
+        for (const JointLocalCell& cell : joint_local_cells) {
+            critical_points.push_back(cell.release_sequence);
+            critical_points.push_back(cell.deadline_sequence);
+        }
+        if (!ChargeTopologySortWork(loss_buckets.size())) {
+            return false;
+        }
+        std::sort(
+            loss_buckets.begin(),
+            loss_buckets.end(),
+            [](const LossBucket& _left, const LossBucket& _right) {
+                return std::tie(_left.release_sequence, _left.deadline_sequence) <
+                       std::tie(_right.release_sequence, _right.deadline_sequence);
+            }
+        );
 
         // std::sort is introspective O(N log N). Charge one abstract work item
         // per element and merge level before invoking it so preprocessing cannot
@@ -2033,7 +2176,7 @@ struct ProfileSessionReader::Impl {
                 Fail(
                     SessionLoadStatus::LimitExceeded,
                     SessionErrorCode::LimitExceeded,
-                    "CPU/Loss sequence segmentation overflows",
+                    "profile topology/Loss sequence segmentation overflows",
                     DecodeStatus::LimitExceeded,
                     SessionLimitKind::TopologyWorkItems
                 );
@@ -2049,7 +2192,7 @@ struct ProfileSessionReader::Impl {
             Fail(
                 SessionLoadStatus::LimitExceeded,
                 SessionErrorCode::LimitExceeded,
-                "CPU/Loss sequence segmentation exceeds the addressable range",
+                "profile topology/Loss sequence segmentation exceeds the addressable range",
                 DecodeStatus::LimitExceeded,
                 SessionLimitKind::TopologyWorkItems
             );
@@ -2059,10 +2202,38 @@ struct ProfileSessionReader::Impl {
             return false;
         }
 
+        struct LossCoverage {
+            std::uint64_t begin{0};
+            std::uint64_t end{0};
+        };
+        std::vector<LossCoverage> loss_coverage;
+        if (!_forensic) {
+            if (!ChargeTopologyLinearWork(loss_buckets.size())) {
+                return false;
+            }
+            loss_coverage.reserve(loss_buckets.size());
+            for (const LossBucket& bucket : loss_buckets) {
+                if (loss_coverage.empty() ||
+                    (loss_coverage.back().end != std::numeric_limits<std::uint64_t>::max() &&
+                     bucket.release_sequence > loss_coverage.back().end + 1)) {
+                    loss_coverage.push_back({
+                        .begin = bucket.release_sequence,
+                        .end   = bucket.deadline_sequence,
+                    });
+                } else {
+                    loss_coverage.back().end = std::max(loss_coverage.back().end, bucket.deadline_sequence);
+                }
+            }
+        }
+
         std::vector<SequenceSegment> segments;
-        segments.reserve(static_cast<std::size_t>(maximum_segment_count));
-        std::size_t observed_index = 0;
-        const auto  add_segment    = [&](std::uint64_t _begin, std::uint64_t _end) {
+        const std::uint64_t          segment_edge_capacity = options.limits.max_topology_flow_edges / 2;
+        segments.reserve(static_cast<std::size_t>(std::min(maximum_segment_count, segment_edge_capacity)));
+        std::size_t         observed_index       = 0;
+        std::size_t         loss_coverage_index  = 0;
+        bool                segment_build_failed = false;
+        const std::uint64_t flow_target          = _forensic ? required_topology_total : loss_bucket_total;
+        const auto          add_segment          = [&](std::uint64_t _begin, std::uint64_t _end) {
             while (observed_index < record_sequences.size() && record_sequences[observed_index] < _begin) {
                 ++observed_index;
             }
@@ -2079,28 +2250,120 @@ struct ProfileSessionReader::Impl {
                 // excluding any observed sequence, or can be capped directly
                 // by the total flow when none are observed.
                 available = observed_count == 0 ?
-                                    loss_bucket_total :
-                                    std::numeric_limits<std::uint64_t>::max() - (observed_count - 1);
+                                                  flow_target :
+                                                  std::numeric_limits<std::uint64_t>::max() - (observed_count - 1);
             } else {
                 const std::uint64_t span = span_minus_one + 1;
                 available                = observed_count < span ? span - observed_count : 0;
             }
-            const std::uint64_t capacity = std::min(available, loss_bucket_total);
-            if (capacity != 0) {
-                segments.push_back({
-                        .begin    = _begin,
-                        .end      = _end,
-                        .capacity = capacity,
-                });
+            const std::uint64_t capacity = std::min(available, flow_target);
+            if (capacity == 0) {
+                return;
             }
+            if (!_forensic) {
+                while (loss_coverage_index < loss_coverage.size() &&
+                       loss_coverage[loss_coverage_index].end < _begin) {
+                    ++loss_coverage_index;
+                }
+                if (loss_coverage_index == loss_coverage.size() ||
+                    loss_coverage[loss_coverage_index].begin > _begin ||
+                    loss_coverage[loss_coverage_index].end < _end) {
+                    return;
+                }
+            }
+            if (static_cast<std::uint64_t>(segments.size()) >= segment_edge_capacity) {
+                Fail(
+                    SessionLoadStatus::LimitExceeded,
+                    SessionErrorCode::LimitExceeded,
+                    "profile sequence segments exceed the topology flow-edge limit",
+                    DecodeStatus::LimitExceeded,
+                    SessionLimitKind::TopologyFlowEdges
+                );
+                segment_build_failed = true;
+                return;
+            }
+            segments.push_back({
+                                  .begin    = _begin,
+                                  .end      = _end,
+                                  .capacity = capacity,
+            });
         };
         for (std::size_t index = 0; index < critical_points.size(); ++index) {
+            if (segment_build_failed) {
+                return false;
+            }
             const std::uint64_t point = critical_points[index];
             add_segment(point, point);
             if (index + 1 < critical_points.size() && point != std::numeric_limits<std::uint64_t>::max() &&
                 critical_points[index + 1] > point + 1) {
                 add_segment(point + 1, critical_points[index + 1] - 1);
             }
+        }
+        if (segment_build_failed) {
+            return false;
+        }
+
+        struct SegmentRange {
+            std::size_t begin{0};
+            std::size_t end{0};
+        };
+        const auto find_segment_range = [&](std::uint64_t _release, std::uint64_t _deadline) {
+            const auto begin = std::lower_bound(
+                segments.begin(),
+                segments.end(),
+                _release,
+                [](const SequenceSegment& _segment, std::uint64_t _sequence) {
+                    return _segment.end < _sequence;
+                }
+            );
+            const auto end = std::upper_bound(
+                begin,
+                segments.end(),
+                _deadline,
+                [](std::uint64_t _sequence, const SequenceSegment& _segment) {
+                    return _sequence < _segment.begin;
+                }
+            );
+            return SegmentRange{
+                .begin = static_cast<std::size_t>(begin - segments.begin()),
+                .end   = static_cast<std::size_t>(end - segments.begin()),
+            };
+        };
+        if (!ChargeTopologyLinearWork(loss_buckets.size()) ||
+            !ChargeTopologyLinearWork(_sequence_demands.size()) ||
+            !ChargeTopologyLinearWork(joint_local_cells.size())) {
+            return false;
+        }
+        std::vector<SegmentRange> loss_segment_ranges;
+        std::vector<SegmentRange> demand_segment_ranges;
+        std::vector<SegmentRange> cell_segment_ranges;
+        loss_segment_ranges.reserve(loss_buckets.size());
+        demand_segment_ranges.reserve(_sequence_demands.size());
+        cell_segment_ranges.reserve(joint_local_cells.size());
+        for (const LossBucket& bucket : loss_buckets) {
+            if (!ChargeTopologyBinarySearchWork(segments.size()) ||
+                !ChargeTopologyBinarySearchWork(segments.size())) {
+                return false;
+            }
+            loss_segment_ranges.push_back(
+                find_segment_range(bucket.release_sequence, bucket.deadline_sequence)
+            );
+        }
+        for (const RecordSequenceDemand& demand : _sequence_demands) {
+            if (!ChargeTopologyBinarySearchWork(segments.size()) ||
+                !ChargeTopologyBinarySearchWork(segments.size())) {
+                return false;
+            }
+            demand_segment_ranges.push_back(
+                find_segment_range(demand.release_sequence, demand.deadline_sequence)
+            );
+        }
+        for (const JointLocalCell& cell : joint_local_cells) {
+            if (!ChargeTopologyBinarySearchWork(segments.size()) ||
+                !ChargeTopologyBinarySearchWork(segments.size())) {
+                return false;
+            }
+            cell_segment_ranges.push_back(find_segment_range(cell.release_sequence, cell.deadline_sequence));
         }
 
         std::uint64_t graph_node_work = 3;
@@ -2110,18 +2373,34 @@ struct ProfileSessionReader::Impl {
         if (!add_node_work(static_cast<std::uint64_t>(loss_buckets.size())) ||
             !add_node_work(static_cast<std::uint64_t>(segments.size())) ||
             !add_node_work(static_cast<std::uint64_t>(segments.size())) ||
-            !add_node_work(static_cast<std::uint64_t>(_cpu_sequence_demands.size())) ||
+            !add_node_work(static_cast<std::uint64_t>(_sequence_demands.size())) ||
+            !add_node_work(static_cast<std::uint64_t>(joint_local_cells.size())) ||
+            !add_node_work(static_cast<std::uint64_t>(joint_local_cells.size())) ||
+            !add_node_work(static_cast<std::uint64_t>(joint_virtual_tasks.size())) ||
             graph_node_work > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
             Fail(
                 SessionLoadStatus::LimitExceeded,
                 SessionErrorCode::LimitExceeded,
-                "CPU/Loss topology graph exceeds the addressable node range",
+                "profile topology/Loss graph exceeds the addressable node range",
                 DecodeStatus::LimitExceeded,
                 SessionLimitKind::TopologyWorkItems
             );
             return false;
         }
-        if (!ChargeTopologyWork(graph_node_work)) {
+        std::uint64_t graph_storage_work = 0;
+        if (AddOverflow(graph_node_work, graph_node_work, graph_storage_work) ||
+            AddOverflow(graph_storage_work, graph_node_work, graph_storage_work) ||
+            AddOverflow(graph_storage_work, graph_node_work, graph_storage_work)) {
+            Fail(
+                SessionLoadStatus::LimitExceeded,
+                SessionErrorCode::LimitExceeded,
+                "profile topology/Loss graph storage work overflows",
+                DecodeStatus::LimitExceeded,
+                SessionLimitKind::TopologyWorkItems
+            );
+            return false;
+        }
+        if (!ChargeTopologyWork(graph_storage_work)) {
             return false;
         }
 
@@ -2218,25 +2497,138 @@ struct ProfileSessionReader::Impl {
             std::vector<std::size_t>       pending_nodes;
         };
 
-        const std::size_t source_node       = 0;
-        const std::size_t loss_base         = 1;
-        const std::size_t segment_in_base   = loss_base + loss_buckets.size();
-        const std::size_t segment_out_base  = segment_in_base + segments.size();
-        const std::size_t cpu_demand_base   = segment_out_base + segments.size();
-        const std::size_t dummy_demand_node = cpu_demand_base + _cpu_sequence_demands.size();
-        const std::size_t sink_node         = dummy_demand_node + 1;
-        FlowNetwork       network(*this, sink_node + 1);
-        const auto        add_edge = [&](std::size_t _source, std::size_t _target, std::uint64_t _capacity) {
+        const std::size_t   source_node         = 0;
+        const std::size_t   loss_base           = 1;
+        const std::size_t   segment_in_base     = loss_base + loss_buckets.size();
+        const std::size_t   segment_out_base    = segment_in_base + segments.size();
+        const std::size_t   demand_base         = segment_out_base + segments.size();
+        const std::size_t   cell_in_base        = demand_base + _sequence_demands.size();
+        const std::size_t   cell_out_base       = cell_in_base + joint_local_cells.size();
+        const std::size_t   task_base           = cell_out_base + joint_local_cells.size();
+        const std::size_t   dummy_demand_node   = task_base + joint_virtual_tasks.size();
+        const std::size_t   sink_node           = dummy_demand_node + 1;
+        const std::uint64_t dummy_capacity      = _forensic ? 0 : loss_bucket_total - required_topology_total;
+        std::uint64_t       forward_edge_count  = 0;
+        const auto          count_forward_edges = [&](std::uint64_t _count) {
+            std::uint64_t next = 0;
+            if (AddOverflow(forward_edge_count, _count, next) ||
+                next > options.limits.max_topology_flow_edges) {
+                Fail(
+                    SessionLoadStatus::LimitExceeded,
+                    SessionErrorCode::LimitExceeded,
+                    "profile topology flow-edge limit exceeded",
+                    DecodeStatus::LimitExceeded,
+                    SessionLimitKind::TopologyFlowEdges
+                );
+                return false;
+            }
+            if (!ChargeTopologyWork(_count)) {
+                return false;
+            }
+            forward_edge_count = next;
+            return true;
+        };
+        std::uint64_t fixed_edge_count = static_cast<std::uint64_t>(segments.size());
+        if (AddOverflow(
+                fixed_edge_count,
+                static_cast<std::uint64_t>(_forensic ? segments.size() : loss_buckets.size()),
+                fixed_edge_count
+            ) ||
+            AddOverflow(
+                fixed_edge_count, static_cast<std::uint64_t>(_sequence_demands.size()), fixed_edge_count
+            ) ||
+            AddOverflow(
+                fixed_edge_count, static_cast<std::uint64_t>(joint_local_cells.size()), fixed_edge_count
+            ) ||
+            AddOverflow(
+                fixed_edge_count, static_cast<std::uint64_t>(joint_virtual_tasks.size()), fixed_edge_count
+            ) ||
+            AddOverflow(
+                fixed_edge_count, dummy_capacity == 0 ? std::uint64_t{0} : std::uint64_t{1}, fixed_edge_count
+            )) {
+            Fail(
+                SessionLoadStatus::LimitExceeded,
+                SessionErrorCode::LimitExceeded,
+                "profile topology flow-edge count overflows",
+                DecodeStatus::LimitExceeded,
+                SessionLimitKind::TopologyFlowEdges
+            );
+            return false;
+        }
+        if (!count_forward_edges(fixed_edge_count)) {
+            return false;
+        }
+        const auto count_segment_range_edges = [&](const SegmentRange& _range) {
+            const std::uint64_t count = static_cast<std::uint64_t>(_range.end - _range.begin);
+            return count_forward_edges(count);
+        };
+        for (const SegmentRange& range : loss_segment_ranges) {
+            if (!count_segment_range_edges(range)) {
+                return false;
+            }
+        }
+        for (const SegmentRange& range : demand_segment_ranges) {
+            if (!count_segment_range_edges(range)) {
+                return false;
+            }
+        }
+        for (const SegmentRange& range : cell_segment_ranges) {
+            if (!count_segment_range_edges(range)) {
+                return false;
+            }
+        }
+        if (dummy_capacity != 0) {
+            if (!count_forward_edges(static_cast<std::uint64_t>(segments.size()))) {
+                return false;
+            }
+        }
+        for (const JointLocalCell& cell : joint_local_cells) {
+            if (!count_forward_edges(static_cast<std::uint64_t>(cell.task_indices.size()))) {
+                return false;
+            }
+            for (const std::size_t task_index : cell.task_indices) {
+                if (task_index >= joint_virtual_tasks.size()) {
+                    Fail(
+                        SessionLoadStatus::ProtocolViolation,
+                        SessionErrorCode::GpuFrameTotalsMismatch,
+                        "joint GPU local cell references an invalid virtual task"
+                    );
+                    return false;
+                }
+            }
+        }
+        if (forward_edge_count > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max() / 2)) {
+            Fail(
+                SessionLoadStatus::LimitExceeded,
+                SessionErrorCode::LimitExceeded,
+                "profile topology residual edges exceed the addressable range",
+                DecodeStatus::LimitExceeded,
+                SessionLimitKind::TopologyFlowEdges
+            );
+            return false;
+        }
+        FlowNetwork   network(*this, sink_node + 1);
+        std::uint64_t built_forward_edges = 0;
+        const auto    add_edge = [&](std::size_t _source, std::size_t _target, std::uint64_t _capacity) {
             if (!ChargeTopologyWork(1)) {
                 return false;
             }
             network.AddEdge(_source, _target, _capacity);
+            ++built_forward_edges;
             return true;
         };
 
-        for (std::size_t index = 0; index < loss_buckets.size(); ++index) {
-            if (!add_edge(source_node, loss_base + index, loss_buckets[index].count)) {
-                return false;
+        if (_forensic) {
+            for (std::size_t index = 0; index < segments.size(); ++index) {
+                if (!add_edge(source_node, segment_in_base + index, segments[index].capacity)) {
+                    return false;
+                }
+            }
+        } else {
+            for (std::size_t index = 0; index < loss_buckets.size(); ++index) {
+                if (!add_edge(source_node, loss_base + index, loss_buckets[index].count)) {
+                    return false;
+                }
             }
         }
         for (std::size_t index = 0; index < segments.size(); ++index) {
@@ -2244,101 +2636,106 @@ struct ProfileSessionReader::Impl {
                 return false;
             }
         }
-        for (std::size_t index = 0; index < _cpu_sequence_demands.size(); ++index) {
-            if (!add_edge(cpu_demand_base + index, sink_node, _cpu_sequence_demands[index].count)) {
+        for (std::size_t index = 0; index < _sequence_demands.size(); ++index) {
+            if (!add_edge(demand_base + index, sink_node, _sequence_demands[index].count)) {
                 return false;
             }
         }
-        if (!add_edge(dummy_demand_node, sink_node, loss_bucket_total - cpu_demand_total)) {
+        for (std::size_t index = 0; index < joint_local_cells.size(); ++index) {
+            if (!add_edge(
+                    cell_in_base + index, cell_out_base + index, joint_local_cells[index].local_capacity
+                )) {
+                return false;
+            }
+        }
+        for (std::size_t index = 0; index < joint_virtual_tasks.size(); ++index) {
+            if (!add_edge(task_base + index, sink_node, 1)) {
+                return false;
+            }
+        }
+        if (dummy_capacity != 0 && !add_edge(dummy_demand_node, sink_node, dummy_capacity)) {
             return false;
         }
 
-        const auto charge_segment_search = [&]() {
-            std::uint64_t remaining = static_cast<std::uint64_t>(segments.size());
-            std::uint64_t work      = 0;
-            while (remaining != 0) {
-                ++work;
-                remaining /= 2;
-            }
-            return ChargeTopologyWork(work);
-        };
-        for (std::size_t loss_index = 0; loss_index < loss_buckets.size(); ++loss_index) {
-            const LossBucket& bucket = loss_buckets[loss_index];
-            if (!charge_segment_search()) {
-                return false;
-            }
-            auto segment_it = std::lower_bound(
-                segments.begin(),
-                segments.end(),
-                bucket.release_sequence,
-                [](const SequenceSegment& _segment, std::uint64_t _sequence) {
-                    return _segment.end < _sequence;
+        if (!_forensic) {
+            for (std::size_t loss_index = 0; loss_index < loss_buckets.size(); ++loss_index) {
+                const LossBucket&   bucket = loss_buckets[loss_index];
+                const SegmentRange& range  = loss_segment_ranges[loss_index];
+                for (std::size_t segment_index = range.begin; segment_index < range.end; ++segment_index) {
+                    const SequenceSegment& segment = segments[segment_index];
+                    if (!add_edge(
+                            loss_base + loss_index,
+                            segment_in_base + segment_index,
+                            std::min(bucket.count, segment.capacity)
+                        )) {
+                        return false;
+                    }
                 }
-            );
-            for (; segment_it != segments.end() && segment_it->begin <= bucket.deadline_sequence;
-                 ++segment_it) {
-                if (!ChargeTopologyWork(1)) {
-                    return false;
-                }
-                const std::size_t segment_index = static_cast<std::size_t>(segment_it - segments.begin());
-                const SequenceSegment& segment  = segments[segment_index];
-                if (segment.begin >= bucket.release_sequence && segment.end <= bucket.deadline_sequence &&
-                    !add_edge(
-                        loss_base + loss_index,
-                        segment_in_base + segment_index,
-                        std::min(bucket.count, segment.capacity)
+            }
+        }
+        if (dummy_capacity != 0) {
+            for (std::size_t segment_index = 0; segment_index < segments.size(); ++segment_index) {
+                if (!add_edge(
+                        segment_out_base + segment_index, dummy_demand_node, segments[segment_index].capacity
                     )) {
                     return false;
                 }
             }
         }
-        for (std::size_t segment_index = 0; segment_index < segments.size(); ++segment_index) {
-            if (!add_edge(
-                    segment_out_base + segment_index, dummy_demand_node, segments[segment_index].capacity
-                )) {
-                return false;
-            }
-        }
-        for (std::size_t demand_index = 0; demand_index < _cpu_sequence_demands.size(); ++demand_index) {
-            const RecordSequenceDemand& demand = _cpu_sequence_demands[demand_index];
-            if (!charge_segment_search()) {
-                return false;
-            }
-            auto segment_it = std::lower_bound(
-                segments.begin(),
-                segments.end(),
-                demand.release_sequence,
-                [](const SequenceSegment& _segment, std::uint64_t _sequence) {
-                    return _segment.end < _sequence;
-                }
-            );
-            for (; segment_it != segments.end() && segment_it->begin <= demand.deadline_sequence;
-                 ++segment_it) {
-                if (!ChargeTopologyWork(1)) {
-                    return false;
-                }
-                const std::size_t segment_index = static_cast<std::size_t>(segment_it - segments.begin());
-                const SequenceSegment& segment  = segments[segment_index];
-                if (segment.begin >= demand.release_sequence && segment.end <= demand.deadline_sequence &&
-                    !add_edge(
+        for (std::size_t demand_index = 0; demand_index < _sequence_demands.size(); ++demand_index) {
+            const RecordSequenceDemand& demand = _sequence_demands[demand_index];
+            const SegmentRange&         range  = demand_segment_ranges[demand_index];
+            for (std::size_t segment_index = range.begin; segment_index < range.end; ++segment_index) {
+                const SequenceSegment& segment = segments[segment_index];
+                if (!add_edge(
                         segment_out_base + segment_index,
-                        cpu_demand_base + demand_index,
+                        demand_base + demand_index,
                         std::min(segment.capacity, demand.count)
                     )) {
                     return false;
                 }
             }
         }
+        for (std::size_t cell_index = 0; cell_index < joint_local_cells.size(); ++cell_index) {
+            const JointLocalCell& cell  = joint_local_cells[cell_index];
+            const SegmentRange&   range = cell_segment_ranges[cell_index];
+            for (std::size_t segment_index = range.begin; segment_index < range.end; ++segment_index) {
+                const SequenceSegment& segment = segments[segment_index];
+                if (!add_edge(
+                        segment_out_base + segment_index,
+                        cell_in_base + cell_index,
+                        std::min(segment.capacity, cell.local_capacity)
+                    )) {
+                    return false;
+                }
+            }
+            for (const std::size_t task_index : cell.task_indices) {
+                if (!add_edge(cell_out_base + cell_index, task_base + task_index, 1)) {
+                    return false;
+                }
+            }
+        }
 
-        std::uint64_t allocated_loss_count = 0;
-        if (!network.MaxFlow(source_node, sink_node, loss_bucket_total, allocated_loss_count)) {
+        if (built_forward_edges != forward_edge_count) {
+            Fail(
+                SessionLoadStatus::ResourceExhausted,
+                SessionErrorCode::UnexpectedFailure,
+                "profile topology flow-edge preflight disagrees with construction"
+            );
             return false;
         }
-        if (allocated_loss_count != loss_bucket_total) {
+        std::uint64_t allocated_flow = 0;
+        if (!network.MaxFlow(source_node, sink_node, flow_target, allocated_flow)) {
+            return false;
+        }
+        if (allocated_flow != flow_target) {
             Fail(
                 SessionLoadStatus::ProtocolViolation,
-                SessionErrorCode::CpuScopeParentMissing,
-                "noticed Loss intervals cannot jointly explain missing CPU parent sequences"
+                compatibility_error(
+                    SessionErrorCode::CpuScopeParentMissing, SessionErrorCode::GpuFrameTotalsMismatch
+                ),
+                _forensic ? "raw record-sequence holes cannot jointly explain missing CPU/GPU topology" :
+                            "noticed Loss intervals cannot jointly explain missing CPU/GPU topology sequences"
             );
             return false;
         }
@@ -2369,6 +2766,14 @@ struct ProfileSessionReader::Impl {
                     SessionLoadStatus::ProtocolViolation,
                     SessionErrorCode::GpuFrameDuplicate,
                     "duplicate GpuFrame identity"
+                );
+                return false;
+            }
+            if (frames[index - 1].sequence >= frames[index].sequence) {
+                Fail(
+                    SessionLoadStatus::ProtocolViolation,
+                    SessionErrorCode::RecordSequenceInvalid,
+                    "GpuFrame records reverse producer FIFO order"
                 );
                 return false;
             }
@@ -2538,9 +2943,17 @@ struct ProfileSessionReader::Impl {
         return true;
     }
 
-    [[nodiscard]] bool BuildGpuTopology(bool _allow_missing, std::uint64_t _required_cpu_drops) {
-        auto& frames = session.impl_->gpu_frames;
-        auto& scopes = session.impl_->gpu_scopes;
+    [[nodiscard]] bool BuildGpuTopology(
+        bool                               _allow_missing,
+        std::uint64_t                      _required_cpu_drops,
+        std::vector<RecordSequenceDemand>& _sequence_demands
+    ) {
+        _sequence_demands.clear();
+        joint_virtual_tasks.clear();
+        joint_local_cells.clear();
+        joint_cell_task_edge_count = 0;
+        auto& frames               = session.impl_->gpu_frames;
+        auto& scopes               = session.impl_->gpu_scopes;
         if (frames.empty() && scopes.empty()) {
             return true;
         }
@@ -2548,12 +2961,43 @@ struct ProfileSessionReader::Impl {
         const auto charge_topology_work = [&](std::uint64_t _count) {
             return ChargeTopologyWork(_count);
         };
-        if (!ChargeTopologyLinearWork(frames.size()) || !ChargeTopologyLinearWork(frames.size())) {
+        if (!ChargeTopologyLinearWork(frames.size()) || !ChargeTopologyLinearWork(frames.size()) ||
+            !ChargeTopologyLinearWork(frames.size())) {
             return false;
         }
         std::vector<std::uint64_t> frame_error_counts(frames.size(), 0);
         std::vector<std::uint8_t>  frame_root_partition_ambiguous(frames.size(), 0);
-        std::vector<ScopeLookup>   lookup;
+        struct FrameSequenceEvidence {
+            std::uint64_t earliest_scope_sequence{0};
+            std::uint64_t latest_scope_sequence{0};
+            std::uint64_t constrained_missing_scope_count{0};
+        };
+        std::vector<FrameSequenceEvidence> frame_sequence_evidence(frames.size());
+        const auto                         add_sequence_demand =
+            [&](std::uint64_t _release, std::uint64_t _deadline, std::uint64_t _count, const char* _diagnostic
+            ) {
+                if (_count == 0) {
+                    return true;
+                }
+                if (_release == 0 || _release > _deadline || _deadline - _release + 1 < _count) {
+                    Fail(
+                        SessionLoadStatus::ProtocolViolation,
+                        SessionErrorCode::GpuFrameTotalsMismatch,
+                        _diagnostic
+                    );
+                    return false;
+                }
+                if (!ChargeTopologyWork(1)) {
+                    return false;
+                }
+                _sequence_demands.push_back({
+                    .release_sequence  = _release,
+                    .deadline_sequence = _deadline,
+                    .count             = _count,
+                });
+                return true;
+            };
+        std::vector<ScopeLookup> lookup;
         if (!ChargeTopologyLinearWork(scopes.size())) {
             return false;
         }
@@ -2604,7 +3048,12 @@ struct ProfileSessionReader::Impl {
         std::vector<std::uint8_t>  has_previous_child(scopes.size(), 0);
         std::vector<double>        direct_child_duration(scopes.size(), 0.0);
         std::vector<ScopeLookup>   missing_parent_keys;
-        std::vector<std::uint64_t> missing_frame_ids;
+        struct MissingFrameEvidence {
+            std::uint64_t frame_id{0};
+            std::uint64_t earliest_scope_sequence{0};
+            std::uint64_t latest_scope_sequence{0};
+        };
+        std::vector<MissingFrameEvidence> missing_frame_evidence;
         struct MissingParentEvidence {
             std::uint64_t       frame_id{0};
             std::uint64_t       parent_scope_id{0};
@@ -2631,7 +3080,7 @@ struct ProfileSessionReader::Impl {
         }
         missing_parent_keys.reserve(scopes.size());
         missing_parent_evidence.reserve(scopes.size());
-        missing_frame_ids.reserve(scopes.size());
+        missing_frame_evidence.reserve(scopes.size());
 
         if (!ChargeTopologyLinearWork(scopes.size())) {
             return false;
@@ -2663,6 +3112,15 @@ struct ProfileSessionReader::Impl {
             GpuScopeRecord& scope  = scopes[index];
             bool            orphan = false;
 
+            if (scope.local_order == std::numeric_limits<std::uint64_t>::max()) {
+                Fail(
+                    SessionLoadStatus::ProtocolViolation,
+                    SessionErrorCode::GpuScopeIdentityInvalid,
+                    "GpuScope source local-order span overflows"
+                );
+                return false;
+            }
+
             if (!ChargeTopologyBinarySearchWork(frames.size())) {
                 return false;
             }
@@ -2677,7 +3135,11 @@ struct ProfileSessionReader::Impl {
             bool validate_timing = false;
             if (frame == frames.end() || frame->frame_id != scope.frame_id) {
                 orphan = true;
-                missing_frame_ids.push_back(scope.frame_id);
+                missing_frame_evidence.push_back({
+                    .frame_id                = scope.frame_id,
+                    .earliest_scope_sequence = scope.sequence,
+                    .latest_scope_sequence   = scope.sequence,
+                });
                 if (!_allow_missing) {
                     Fail(
                         SessionLoadStatus::ProtocolViolation,
@@ -2689,6 +3151,21 @@ struct ProfileSessionReader::Impl {
             } else {
                 const std::size_t frame_index = static_cast<std::size_t>(frame - frames.begin());
                 scope.frame_index             = frame_index;
+                if (frame->sequence >= scope.sequence) {
+                    Fail(
+                        SessionLoadStatus::ProtocolViolation,
+                        SessionErrorCode::RecordSequenceInvalid,
+                        "GpuFrame record sequence does not precede its GpuScope records"
+                    );
+                    return false;
+                }
+                FrameSequenceEvidence& sequence_evidence = frame_sequence_evidence[frame_index];
+                sequence_evidence.earliest_scope_sequence =
+                    sequence_evidence.earliest_scope_sequence == 0 ?
+                        scope.sequence :
+                        std::min(sequence_evidence.earliest_scope_sequence, scope.sequence);
+                sequence_evidence.latest_scope_sequence =
+                    std::max(sequence_evidence.latest_scope_sequence, scope.sequence);
                 // GpuFrame v1 only proves that producer-side topology was
                 // valid for Complete. Incomplete can also represent a
                 // structurally invalid frame accompanied by RHI drops.
@@ -2770,6 +3247,14 @@ struct ProfileSessionReader::Impl {
                         );
                         return false;
                     }
+                    if (parent.sequence >= scope.sequence) {
+                        Fail(
+                            SessionLoadStatus::ProtocolViolation,
+                            SessionErrorCode::RecordSequenceInvalid,
+                            "GpuScope parent record sequence does not precede its child"
+                        );
+                        return false;
+                    }
                     scope.parent_index = parent_index;
                     if (validate_timing) {
                         if (parent.status != ProfileGpuScopeStatus::Ready ||
@@ -2811,6 +3296,115 @@ struct ProfileSessionReader::Impl {
             if (orphan) {
                 ++session.impl_->summary.orphan_gpu_scope_count;
             }
+        }
+
+        if (!ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologySortWork(scopes.size()) ||
+            !ChargeTopologyLinearWork(scopes.size())) {
+            return false;
+        }
+        std::vector<std::size_t> emission_order;
+        emission_order.reserve(scopes.size());
+        for (std::size_t index = 0; index < scopes.size(); ++index) {
+            emission_order.push_back(index);
+        }
+        std::sort(
+            emission_order.begin(),
+            emission_order.end(),
+            [&](std::size_t _left_index, std::size_t _right_index) {
+                const GpuScopeRecord& left  = scopes[_left_index];
+                const GpuScopeRecord& right = scopes[_right_index];
+                return std::tie(
+                           left.frame_id,
+                           left.logical_queue,
+                           left.native_queue_id,
+                           left.family_id,
+                           left.source_order,
+                           left.local_order,
+                           left.scope_id
+                       ) <
+                       std::tie(
+                           right.frame_id,
+                           right.logical_queue,
+                           right.native_queue_id,
+                           right.family_id,
+                           right.source_order,
+                           right.local_order,
+                           right.scope_id
+                       );
+            }
+        );
+        std::size_t emission_begin = 0;
+        while (emission_begin < emission_order.size()) {
+            std::size_t emission_end = emission_begin + 1;
+            while (emission_end < emission_order.size() && scopes[emission_order[emission_end]].frame_id ==
+                                                               scopes[emission_order[emission_begin]].frame_id
+            ) {
+                ++emission_end;
+            }
+
+            const GpuScopeRecord& first_scope     = scopes[emission_order[emission_begin]];
+            const bool            has_known_frame = first_scope.frame_index != kInvalidSessionIndex;
+            const std::size_t     frame_index =
+                has_known_frame ? static_cast<std::size_t>(first_scope.frame_index) : 0;
+            const bool complete_frame =
+                has_known_frame && frames[frame_index].status == ProfileGpuFrameStatus::Complete;
+            std::uint64_t previous_sequence =
+                has_known_frame ? frames[frame_index].sequence : std::uint64_t{0};
+            std::uint64_t constrained_missing_scope_count = 0;
+            bool          has_previous_record             = has_known_frame;
+            bool          has_previous_scope              = false;
+            for (std::size_t order_index = emission_begin; order_index < emission_end; ++order_index) {
+                const GpuScopeRecord& scope = scopes[emission_order[order_index]];
+                if (has_previous_record && scope.sequence <= previous_sequence) {
+                    Fail(
+                        SessionLoadStatus::ProtocolViolation,
+                        SessionErrorCode::RecordSequenceInvalid,
+                        "GpuScope records reverse producer emission order"
+                    );
+                    return false;
+                }
+
+                if (complete_frame) {
+                    std::uint64_t gap_count = scope.local_order;
+                    if (has_previous_scope) {
+                        const GpuScopeRecord& previous    = scopes[emission_order[order_index - 1]];
+                        const bool            same_source = previous.logical_queue == scope.logical_queue &&
+                                                 previous.native_queue_id == scope.native_queue_id &&
+                                                 previous.family_id == scope.family_id &&
+                                                 previous.source_order == scope.source_order;
+                        if (same_source) {
+                            gap_count = scope.local_order - previous.local_order - 1;
+                        }
+                    }
+                    if (gap_count != 0 &&
+                        !add_sequence_demand(
+                            previous_sequence + 1,
+                            scope.sequence - 1,
+                            gap_count,
+                            "missing Complete GpuFrame scopes have no compatible record-sequence slots"
+                        )) {
+                        return false;
+                    }
+                    if (AddOverflow(
+                            constrained_missing_scope_count, gap_count, constrained_missing_scope_count
+                        )) {
+                        Fail(
+                            SessionLoadStatus::ProtocolViolation,
+                            SessionErrorCode::GpuFrameTotalsMismatch,
+                            "Complete GpuFrame sequence-constrained deficit count overflows"
+                        );
+                        return false;
+                    }
+                }
+                previous_sequence   = scope.sequence;
+                has_previous_record = true;
+                has_previous_scope  = true;
+            }
+            if (complete_frame) {
+                frame_sequence_evidence[frame_index].constrained_missing_scope_count =
+                    constrained_missing_scope_count;
+            }
+            emission_begin = emission_end;
         }
 
         if (!ChargeTopologySortWork(missing_parent_evidence.size())) {
@@ -3148,19 +3742,29 @@ struct ProfileSessionReader::Impl {
             timing_source_begin = timing_source_end;
         }
         if (!ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(scopes.size()) ||
-            !ChargeTopologyLinearWork(scopes.size())) {
+            !ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(scopes.size())) {
             return false;
         }
         std::vector<std::uint64_t> timing_subtree_end_local(scopes.size(), 0);
+        std::vector<std::uint64_t> structural_subtree_end_local(scopes.size(), 0);
         for (std::size_t index = 0; index < scopes.size(); ++index) {
-            timing_subtree_end_local[index] = scopes[index].local_order;
+            timing_subtree_end_local[index]     = scopes[index].local_order;
+            structural_subtree_end_local[index] = scopes[index].local_order;
         }
         for (std::size_t index = scopes.size(); index != 0; --index) {
-            const std::size_t   scope_index  = index - 1;
-            const std::uint64_t parent_index = nearest_observed_timing_ancestor[scope_index];
-            if (parent_index != kInvalidSessionIndex) {
-                timing_subtree_end_local[parent_index] =
-                    std::max(timing_subtree_end_local[parent_index], timing_subtree_end_local[scope_index]);
+            const std::size_t   scope_index         = index - 1;
+            const std::uint64_t timing_parent_index = nearest_observed_timing_ancestor[scope_index];
+            if (timing_parent_index != kInvalidSessionIndex) {
+                timing_subtree_end_local[timing_parent_index] = std::max(
+                    timing_subtree_end_local[timing_parent_index], timing_subtree_end_local[scope_index]
+                );
+            }
+            const std::uint64_t structural_parent_index = scopes[scope_index].parent_index;
+            if (structural_parent_index != kInvalidSessionIndex) {
+                structural_subtree_end_local[structural_parent_index] = std::max(
+                    structural_subtree_end_local[structural_parent_index],
+                    structural_subtree_end_local[scope_index]
+                );
             }
         }
         std::size_t depth_range_leaf_count = 1;
@@ -3206,6 +3810,7 @@ struct ProfileSessionReader::Impl {
             std::uint64_t       source_order{0};
             std::uint32_t       parent_depth{0};
             std::uint64_t       child_local_order_deadline{0};
+            std::uint64_t       earliest_child_sequence{0};
             std::uint64_t       latest_parent_local_order{0};
             std::uint64_t       observed_local_orders_before_deadline{0};
             bool                timing_topology_trusted{false};
@@ -3233,8 +3838,12 @@ struct ProfileSessionReader::Impl {
             }
 
             const MissingParentEvidence& contract = missing_parent_evidence[evidence_begin];
-            std::uint64_t                last_child_subtree_end_local =
+            std::uint64_t                last_child_timing_subtree_end_local =
                 timing_subtree_end_local[static_cast<std::size_t>(contract.child_index)];
+            std::uint64_t last_child_structural_subtree_end_local =
+                structural_subtree_end_local[static_cast<std::size_t>(contract.child_index)];
+            std::uint64_t earliest_child_sequence =
+                scopes[static_cast<std::size_t>(contract.child_index)].sequence;
             for (std::size_t index = evidence_begin + 1; index < evidence_end; ++index) {
                 const MissingParentEvidence& evidence = missing_parent_evidence[index];
                 if (evidence.logical_queue != contract.logical_queue ||
@@ -3249,9 +3858,16 @@ struct ProfileSessionReader::Impl {
                     );
                     return false;
                 }
-                last_child_subtree_end_local = std::max(
-                    last_child_subtree_end_local,
+                last_child_timing_subtree_end_local = std::max(
+                    last_child_timing_subtree_end_local,
                     timing_subtree_end_local[static_cast<std::size_t>(evidence.child_index)]
+                );
+                last_child_structural_subtree_end_local = std::max(
+                    last_child_structural_subtree_end_local,
+                    structural_subtree_end_local[static_cast<std::size_t>(evidence.child_index)]
+                );
+                earliest_child_sequence = std::min(
+                    earliest_child_sequence, scopes[static_cast<std::size_t>(evidence.child_index)].sequence
                 );
             }
 
@@ -3431,11 +4047,14 @@ struct ProfileSessionReader::Impl {
                 .source_order                          = contract.source_order,
                 .parent_depth                          = contract.parent_depth,
                 .child_local_order_deadline            = contract.child_local_order,
+                .earliest_child_sequence               = earliest_child_sequence,
                 .latest_parent_local_order             = latest_parent_local_order,
                 .observed_local_orders_before_deadline = observed_before,
                 .timing_topology_trusted               = timing_topology_trusted,
                 .observed_ancestor_index               = observed_ancestor_index,
-                .last_child_subtree_end_local          = last_child_subtree_end_local,
+                .last_child_subtree_end_local          = timing_topology_trusted ?
+                                                             last_child_timing_subtree_end_local :
+                                                             last_child_structural_subtree_end_local,
                 .timing_envelope_begin_tick            = envelope_begin_tick,
                 .timing_envelope_duration              = envelope_end_offset,
             });
@@ -3468,6 +4087,135 @@ struct ProfileSessionReader::Impl {
             }
         );
 
+        if (!ChargeTopologySortWork(missing_frame_evidence.size()) ||
+            !ChargeTopologyLinearWork(missing_frame_evidence.size())) {
+            return false;
+        }
+        std::sort(
+            missing_frame_evidence.begin(),
+            missing_frame_evidence.end(),
+            [](const MissingFrameEvidence& _left, const MissingFrameEvidence& _right) {
+                if (_left.frame_id != _right.frame_id) {
+                    return _left.frame_id < _right.frame_id;
+                }
+                return _left.earliest_scope_sequence < _right.earliest_scope_sequence;
+            }
+        );
+        std::size_t missing_frame_count = 0;
+        for (const MissingFrameEvidence& evidence : missing_frame_evidence) {
+            if (missing_frame_count == 0 ||
+                missing_frame_evidence[missing_frame_count - 1].frame_id != evidence.frame_id) {
+                missing_frame_evidence[missing_frame_count++] = evidence;
+            } else {
+                missing_frame_evidence[missing_frame_count - 1].earliest_scope_sequence = std::min(
+                    missing_frame_evidence[missing_frame_count - 1].earliest_scope_sequence,
+                    evidence.earliest_scope_sequence
+                );
+                missing_frame_evidence[missing_frame_count - 1].latest_scope_sequence = std::max(
+                    missing_frame_evidence[missing_frame_count - 1].latest_scope_sequence,
+                    evidence.latest_scope_sequence
+                );
+            }
+        }
+        missing_frame_evidence.resize(missing_frame_count);
+
+        struct FrameEmissionBoundary {
+            std::uint64_t frame_id{0};
+            std::uint64_t earliest_scope_sequence{0};
+            std::uint64_t latest_observed_sequence{0};
+            std::size_t   source_index{0};
+            bool          known{false};
+        };
+        if (frames.size() > std::numeric_limits<std::size_t>::max() - missing_frame_evidence.size()) {
+            Fail(
+                SessionLoadStatus::LimitExceeded,
+                SessionErrorCode::LimitExceeded,
+                "GPU frame emission boundary count exceeds the addressable range",
+                DecodeStatus::LimitExceeded,
+                SessionLimitKind::TopologyWorkItems
+            );
+            return false;
+        }
+        const std::size_t boundary_count = frames.size() + missing_frame_evidence.size();
+        if (!ChargeTopologyWork(static_cast<std::uint64_t>(boundary_count)) ||
+            !ChargeTopologyLinearWork(boundary_count) || !ChargeTopologyLinearWork(boundary_count)) {
+            return false;
+        }
+        std::vector<FrameEmissionBoundary> frame_boundaries;
+        frame_boundaries.reserve(boundary_count);
+        std::size_t known_index   = 0;
+        std::size_t missing_index = 0;
+        while (known_index < frames.size() || missing_index < missing_frame_evidence.size()) {
+            const bool take_known =
+                missing_index == missing_frame_evidence.size() ||
+                (known_index < frames.size() &&
+                 frames[known_index].frame_id < missing_frame_evidence[missing_index].frame_id);
+            if (take_known) {
+                frame_boundaries.push_back({
+                    .frame_id                 = frames[known_index].frame_id,
+                    .earliest_scope_sequence  = frame_sequence_evidence[known_index].earliest_scope_sequence,
+                    .latest_observed_sequence = std::max(
+                        frames[known_index].sequence,
+                        frame_sequence_evidence[known_index].latest_scope_sequence
+                    ),
+                    .source_index = known_index,
+                    .known        = true,
+                });
+                ++known_index;
+            } else {
+                frame_boundaries.push_back({
+                    .frame_id                 = missing_frame_evidence[missing_index].frame_id,
+                    .earliest_scope_sequence  = missing_frame_evidence[missing_index].earliest_scope_sequence,
+                    .latest_observed_sequence = missing_frame_evidence[missing_index].latest_scope_sequence,
+                    .source_index             = missing_index,
+                    .known                    = false,
+                });
+                ++missing_index;
+            }
+        }
+
+        std::vector<std::uint64_t> known_frame_tail_deadlines(
+            frames.size(), std::numeric_limits<std::uint64_t>::max()
+        );
+        std::vector<std::uint64_t> missing_frame_record_releases(missing_frame_evidence.size(), 1);
+        std::uint64_t              previous_observed_end = 0;
+        bool                       has_previous_boundary = false;
+        for (std::size_t index = 0; index < frame_boundaries.size(); ++index) {
+            FrameEmissionBoundary& boundary = frame_boundaries[index];
+            if (boundary.known) {
+                const GpuFrameRecord& frame = frames[boundary.source_index];
+                if (has_previous_boundary && previous_observed_end >= frame.sequence) {
+                    Fail(
+                        SessionLoadStatus::ProtocolViolation,
+                        SessionErrorCode::RecordSequenceInvalid,
+                        "GPU frame emission boundaries reverse producer frame order"
+                    );
+                    return false;
+                }
+            } else {
+                if (boundary.earliest_scope_sequence == 0 ||
+                    (has_previous_boundary && previous_observed_end >= boundary.earliest_scope_sequence)) {
+                    Fail(
+                        SessionLoadStatus::ProtocolViolation,
+                        SessionErrorCode::RecordSequenceInvalid,
+                        "GpuScopes of a missing frame reverse producer frame order"
+                    );
+                    return false;
+                }
+                const std::uint64_t release =
+                    has_previous_boundary ? previous_observed_end + 1 : std::uint64_t{1};
+                missing_frame_record_releases[boundary.source_index] = release;
+            }
+
+            previous_observed_end = boundary.latest_observed_sequence;
+            has_previous_boundary = true;
+            if (boundary.known && index + 1 < frame_boundaries.size()) {
+                const FrameEmissionBoundary& next = frame_boundaries[index + 1];
+                known_frame_tail_deadlines[boundary.source_index] =
+                    next.known ? frames[next.source_index].sequence - 1 : next.earliest_scope_sequence - 1;
+            }
+        }
+
         struct SourceLossEvidence {
             std::uint64_t       frame_id{0};
             ProfileLogicalQueue logical_queue{ProfileLogicalQueue::Graphics};
@@ -3478,6 +4226,7 @@ struct ProfileSessionReader::Impl {
             std::uint64_t       scope_count{0};
             std::uint64_t       local_hole_count{0};
             std::uint64_t       required_parent_record_count{0};
+            std::uint64_t       producer_predecessor_sequence{0};
         };
         std::vector<SourceLossEvidence> source_loss_evidence;
         if (!ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(scopes.size()) ||
@@ -3521,17 +4270,68 @@ struct ProfileSessionReader::Impl {
             }
             const std::uint64_t observed_count = static_cast<std::uint64_t>(source_end - source_begin);
             source_loss_evidence.push_back({
-                .frame_id                     = scopes[source_begin].frame_id,
-                .logical_queue                = scopes[source_begin].logical_queue,
-                .native_queue_id              = scopes[source_begin].native_queue_id,
-                .family_id                    = scopes[source_begin].family_id,
-                .source_order                 = scopes[source_begin].source_order,
-                .first_scope                  = source_begin,
-                .scope_count                  = observed_count,
-                .local_hole_count             = local_span - observed_count,
-                .required_parent_record_count = 0,
+                .frame_id                      = scopes[source_begin].frame_id,
+                .logical_queue                 = scopes[source_begin].logical_queue,
+                .native_queue_id               = scopes[source_begin].native_queue_id,
+                .family_id                     = scopes[source_begin].family_id,
+                .source_order                  = scopes[source_begin].source_order,
+                .first_scope                   = source_begin,
+                .scope_count                   = observed_count,
+                .local_hole_count              = local_span - observed_count,
+                .required_parent_record_count  = 0,
+                .producer_predecessor_sequence = 0,
             });
             source_begin = source_end;
+        }
+
+        if (!ChargeTopologyLinearWork(source_loss_evidence.size()) ||
+            !ChargeTopologySortWork(source_loss_evidence.size())) {
+            return false;
+        }
+        std::vector<std::size_t> source_emission_order;
+        source_emission_order.reserve(source_loss_evidence.size());
+        for (std::size_t index = 0; index < source_loss_evidence.size(); ++index) {
+            source_emission_order.push_back(index);
+        }
+        std::sort(
+            source_emission_order.begin(),
+            source_emission_order.end(),
+            [&](std::size_t _left_index, std::size_t _right_index) {
+                const SourceLossEvidence& left  = source_loss_evidence[_left_index];
+                const SourceLossEvidence& right = source_loss_evidence[_right_index];
+                return std::tie(
+                           left.frame_id,
+                           left.logical_queue,
+                           left.native_queue_id,
+                           left.family_id,
+                           left.source_order
+                       ) <
+                       std::tie(
+                           right.frame_id,
+                           right.logical_queue,
+                           right.native_queue_id,
+                           right.family_id,
+                           right.source_order
+                       );
+            }
+        );
+        std::uint64_t previous_source_frame_id = 0;
+        std::uint64_t previous_source_sequence = 0;
+        bool          has_previous_source      = false;
+        if (!ChargeTopologyLinearWork(source_emission_order.size())) {
+            return false;
+        }
+        for (const std::size_t source_index : source_emission_order) {
+            SourceLossEvidence& source = source_loss_evidence[source_index];
+            std::uint64_t predecessor  = has_previous_source && previous_source_frame_id == source.frame_id ?
+                                             previous_source_sequence :
+                                             std::uint64_t{0};
+            source.producer_predecessor_sequence = predecessor;
+            const std::size_t source_end_index =
+                static_cast<std::size_t>(source.first_scope + source.scope_count);
+            previous_source_frame_id = source.frame_id;
+            previous_source_sequence = scopes[source_end_index - 1].sequence;
+            has_previous_source      = true;
         }
 
         const auto same_contract_source = [](const MissingParentContract& _contract,
@@ -3598,6 +4398,40 @@ struct ProfileSessionReader::Impl {
                 );
                 return false;
             }
+            if (!ChargeTopologyBinarySearchWork(frame_boundaries.size())) {
+                return false;
+            }
+            const auto frame_boundary = std::lower_bound(
+                frame_boundaries.begin(),
+                frame_boundaries.end(),
+                source->frame_id,
+                [](const FrameEmissionBoundary& _boundary, std::uint64_t _frame_id) {
+                    return _boundary.frame_id < _frame_id;
+                }
+            );
+            if (frame_boundary == frame_boundaries.end() || frame_boundary->frame_id != source->frame_id) {
+                Fail(
+                    SessionLoadStatus::ProtocolViolation,
+                    SessionErrorCode::GpuScopeFrameMissing,
+                    "joint GPU topology has no frame emission boundary"
+                );
+                return false;
+            }
+            std::uint64_t source_frame_release = 0;
+            if (frame_boundary->known) {
+                const GpuFrameRecord& frame = frames[frame_boundary->source_index];
+                if (frame.sequence == std::numeric_limits<std::uint64_t>::max()) {
+                    Fail(
+                        SessionLoadStatus::ProtocolViolation,
+                        SessionErrorCode::GpuFrameTotalsMismatch,
+                        "joint GPU topology has no sequence after its frame record"
+                    );
+                    return false;
+                }
+                source_frame_release = frame.sequence + 1;
+            } else {
+                source_frame_release = missing_frame_record_releases[frame_boundary->source_index];
+            }
 
             std::vector<std::uint32_t> depth_coordinates;
             const std::size_t          source_scope_count = static_cast<std::size_t>(source->scope_count);
@@ -3633,6 +4467,8 @@ struct ProfileSessionReader::Impl {
             if (!ChargeTopologyLinearWork(depth_coordinates.size()) ||
                 !ChargeTopologyLinearWork(depth_coordinates.size()) ||
                 !ChargeTopologyLinearWork(depth_coordinates.size()) ||
+                !ChargeTopologyLinearWork(depth_coordinates.size()) ||
+                !ChargeTopologyLinearWork(depth_coordinates.size()) ||
                 !ChargeTopologyLinearWork(depth_coordinates.size())) {
                 return false;
             }
@@ -3640,7 +4476,10 @@ struct ProfileSessionReader::Impl {
             std::vector<std::uint64_t> prefix_covered_depth_tree(depth_coordinates.size() + 1, 0);
             std::vector<std::uint8_t>  depth_covered(depth_coordinates.size(), 0);
             std::vector<std::uint8_t>  prefix_depth_covered(depth_coordinates.size(), 0);
-            const auto                 cover_depth = [&](std::uint32_t               _depth,
+            std::vector<std::uint8_t>  active_observed_depth(depth_coordinates.size(), 0);
+            std::vector<std::size_t>   active_observed_depth_stack;
+            active_observed_depth_stack.reserve(depth_coordinates.size());
+            const auto cover_depth = [&](std::uint32_t               _depth,
                                          std::vector<std::uint64_t>& _tree,
                                          std::vector<std::uint8_t>&  _covered) {
                 const std::size_t coordinate = static_cast<std::size_t>(
@@ -4840,6 +5679,209 @@ struct ProfileSessionReader::Impl {
                 if (!ChargeTopologyLinearWork(contract_count)) {
                     return false;
                 }
+                struct VirtualSequenceTaskState {
+                    std::uint64_t canonical_task_index{kInvalidSessionIndex};
+                    bool          canonical_is_direct{false};
+                };
+                struct VirtualSequenceTaskKey {
+                    std::uint32_t depth{0};
+                    std::uint64_t first_allowed_slot{0};
+
+                    [[nodiscard]] bool operator<(const VirtualSequenceTaskKey& _right) const noexcept {
+                        return std::tie(depth, first_allowed_slot) <
+                               std::tie(_right.depth, _right.first_allowed_slot);
+                    }
+                };
+                struct VirtualSequenceTask {
+                    std::uint64_t first_allowed_slot{0};
+                    std::uint64_t deadline_slot{0};
+                    std::uint64_t deadline_sequence{0};
+                    std::uint32_t depth{0};
+                };
+
+                if (!ChargeTopologyLinearWork(depth_coordinates.size()) ||
+                    !ChargeTopologyLinearWork(source_scope_count)) {
+                    return false;
+                }
+                std::vector<std::uint64_t> structural_barrier_tree(depth_coordinates.size() + 1, 0);
+                const auto                 observe_structural_barrier = [&](std::size_t _scope_index) {
+                    const GpuScopeRecord& scope      = scopes[_scope_index];
+                    const std::size_t     coordinate = static_cast<std::size_t>(
+                        std::lower_bound(depth_coordinates.begin(), depth_coordinates.end(), scope.depth) -
+                        depth_coordinates.begin()
+                    );
+                    std::uint64_t local_order_after = 0;
+                    if (AddOverflow(
+                            structural_subtree_end_local[_scope_index], std::uint64_t{1}, local_order_after
+                        )) {
+                        Fail(
+                            SessionLoadStatus::ProtocolViolation,
+                            SessionErrorCode::GpuScopeIdentityInvalid,
+                            "observed GPU structural subtree overflows local-order space"
+                        );
+                        return false;
+                    }
+                    for (std::size_t tree_index = coordinate + 1; tree_index < structural_barrier_tree.size();
+                         tree_index += tree_index & (~tree_index + 1)) {
+                        structural_barrier_tree[tree_index] =
+                            std::max(structural_barrier_tree[tree_index], local_order_after);
+                    }
+                    return true;
+                };
+                const auto latest_structural_barrier_after = [&](std::uint32_t _depth) {
+                    std::size_t tree_index = static_cast<std::size_t>(
+                        std::upper_bound(depth_coordinates.begin(), depth_coordinates.end(), _depth) -
+                        depth_coordinates.begin()
+                    );
+                    std::uint64_t latest = 0;
+                    while (tree_index != 0) {
+                        latest = std::max(latest, structural_barrier_tree[tree_index]);
+                        tree_index &= tree_index - 1;
+                    }
+                    return latest;
+                };
+
+                std::vector<std::size_t> structural_completion_order;
+                structural_completion_order.reserve(source_scope_count);
+                for (std::size_t index = static_cast<std::size_t>(source->first_scope);
+                     index < source_end_index;
+                     ++index) {
+                    structural_completion_order.push_back(index);
+                }
+                if (!ChargeTopologySortWork(structural_completion_order.size())) {
+                    return false;
+                }
+                std::sort(
+                    structural_completion_order.begin(),
+                    structural_completion_order.end(),
+                    [&](std::size_t _left, std::size_t _right) {
+                        return std::tie(structural_subtree_end_local[_left], scopes[_left].local_order) <
+                               std::tie(structural_subtree_end_local[_right], scopes[_right].local_order);
+                    }
+                );
+
+                std::map<VirtualSequenceTaskKey, VirtualSequenceTaskState> virtual_task_states;
+                std::map<std::uint32_t, std::uint64_t>                     previous_missing_direct_end;
+                std::vector<VirtualSequenceTask>                           virtual_sequence_tasks;
+                std::size_t                                                completed_structural_index = 0;
+                const auto add_virtual_sequence_task = [&](std::uint32_t                _depth,
+                                                           const MissingParentContract& _contract,
+                                                           bool                         _direct) {
+                    if (_contract.earliest_child_sequence == 0) {
+                        Fail(
+                            SessionLoadStatus::ProtocolViolation,
+                            SessionErrorCode::GpuScopeParentInvalid,
+                            "missing GpuScope sequence obligation has no child deadline"
+                        );
+                        return false;
+                    }
+                    if (!ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
+                        !ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
+                        return false;
+                    }
+                    std::uint64_t first_allowed_slot = latest_structural_barrier_after(_depth);
+                    if (_direct) {
+                        if (!ChargeTopologyBinarySearchWork(previous_missing_direct_end.size())) {
+                            return false;
+                        }
+                        const auto previous_direct = previous_missing_direct_end.find(_depth);
+                        if (previous_direct != previous_missing_direct_end.end()) {
+                            std::uint64_t direct_epoch = 0;
+                            if (AddOverflow(previous_direct->second, std::uint64_t{1}, direct_epoch)) {
+                                Fail(
+                                    SessionLoadStatus::ProtocolViolation,
+                                    SessionErrorCode::GpuScopeIdentityInvalid,
+                                    "missing GPU parent subtree overflows local-order space"
+                                );
+                                return false;
+                            }
+                            first_allowed_slot = std::max(first_allowed_slot, direct_epoch);
+                        }
+                    }
+                    if (first_allowed_slot >= _contract.child_local_order_deadline) {
+                        Fail(
+                            SessionLoadStatus::ProtocolViolation,
+                            SessionErrorCode::GpuFrameTotalsMismatch,
+                            "missing GPU ancestry has no slot after its structural barrier"
+                        );
+                        return false;
+                    }
+
+                    const VirtualSequenceTaskKey key{
+                        .depth              = _depth,
+                        .first_allowed_slot = first_allowed_slot,
+                    };
+                    if (!ChargeTopologyBinarySearchWork(virtual_task_states.size())) {
+                        return false;
+                    }
+                    auto       state            = virtual_task_states.find(key);
+                    const bool shares_canonical = state != virtual_task_states.end() &&
+                                                  (!_direct || !state->second.canonical_is_direct);
+                    if (shares_canonical) {
+                        VirtualSequenceTask& task =
+                            virtual_sequence_tasks[static_cast<std::size_t>(state->second.canonical_task_index
+                            )];
+                        task.deadline_slot =
+                            std::min(task.deadline_slot, _contract.child_local_order_deadline);
+                        task.deadline_sequence =
+                            std::min(task.deadline_sequence, _contract.earliest_child_sequence - 1);
+                        if (task.first_allowed_slot >= task.deadline_slot) {
+                            Fail(
+                                SessionLoadStatus::ProtocolViolation,
+                                SessionErrorCode::GpuFrameTotalsMismatch,
+                                "shared missing GPU ancestry crosses its structural local-order barrier"
+                            );
+                            return false;
+                        }
+                        if (_direct) {
+                            state->second.canonical_is_direct = true;
+                        }
+                        return true;
+                    }
+
+                    std::uint64_t next_task_edge_count = 0;
+                    if (AddOverflow(
+                            static_cast<std::uint64_t>(joint_virtual_tasks.size()),
+                            static_cast<std::uint64_t>(virtual_sequence_tasks.size()),
+                            next_task_edge_count
+                        ) ||
+                        AddOverflow(next_task_edge_count, std::uint64_t{1}, next_task_edge_count) ||
+                        next_task_edge_count > options.limits.max_topology_flow_edges) {
+                        Fail(
+                            SessionLoadStatus::LimitExceeded,
+                            SessionErrorCode::LimitExceeded,
+                            "joint GPU virtual tasks exceed the topology flow-edge limit",
+                            DecodeStatus::LimitExceeded,
+                            SessionLimitKind::TopologyFlowEdges
+                        );
+                        return false;
+                    }
+                    if (!ChargeTopologyWork(1)) {
+                        return false;
+                    }
+                    const std::uint64_t task_index =
+                        static_cast<std::uint64_t>(virtual_sequence_tasks.size());
+                    virtual_sequence_tasks.push_back({
+                        .first_allowed_slot = first_allowed_slot,
+                        .deadline_slot      = _contract.child_local_order_deadline,
+                        .deadline_sequence  = _contract.earliest_child_sequence - 1,
+                        .depth              = _depth,
+                    });
+                    if (state == virtual_task_states.end()) {
+                        if (!ChargeTopologyHeapWork(virtual_task_states.size() + 1)) {
+                            return false;
+                        }
+                        virtual_task_states.emplace(
+                            key,
+                            VirtualSequenceTaskState{
+                                .canonical_task_index = task_index,
+                                .canonical_is_direct  = _direct,
+                            }
+                        );
+                    }
+                    return true;
+                };
+
                 std::size_t   observed_index              = static_cast<std::size_t>(source->first_scope);
                 std::uint64_t hidden_ancestor_lower_bound = 0;
                 std::map<std::uint32_t, std::uint32_t> required_prefix_depth_intervals;
@@ -4944,6 +5986,22 @@ struct ProfileSessionReader::Impl {
                 ));
                 for (std::size_t index = contract_begin; index < contract_end; ++index) {
                     const MissingParentContract& contract = missing_parent_contracts[index];
+                    while (completed_structural_index < structural_completion_order.size() &&
+                           structural_subtree_end_local
+                                   [structural_completion_order[completed_structural_index]] <
+                               contract.child_local_order_deadline) {
+                        if (!ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
+                            !ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
+                            !observe_structural_barrier(
+                                structural_completion_order[completed_structural_index]
+                            )) {
+                            return false;
+                        }
+                        ++completed_structural_index;
+                    }
+                    if (!add_virtual_sequence_task(contract.parent_depth, contract, true)) {
+                        return false;
+                    }
                     if (!ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
                         return false;
                     }
@@ -4988,6 +6046,7 @@ struct ProfileSessionReader::Impl {
                             if (!ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
                                 !ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
                                 !ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
+                                !ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
                                 !ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
                                 return false;
                             }
@@ -4995,7 +6054,48 @@ struct ProfileSessionReader::Impl {
                             cover_depth(
                                 scopes[observed_index].depth, prefix_covered_depth_tree, prefix_depth_covered
                             );
+                            const std::size_t observed_depth_coordinate = static_cast<std::size_t>(
+                                std::lower_bound(
+                                    depth_coordinates.begin(),
+                                    depth_coordinates.end(),
+                                    scopes[observed_index].depth
+                                ) -
+                                depth_coordinates.begin()
+                            );
+                            while (!active_observed_depth_stack.empty() &&
+                                   depth_coordinates[active_observed_depth_stack.back()] >=
+                                       scopes[observed_index].depth) {
+                                if (!ChargeTopologyWork(1)) {
+                                    return false;
+                                }
+                                active_observed_depth[active_observed_depth_stack.back()] = 0;
+                                active_observed_depth_stack.pop_back();
+                            }
+                            if (!ChargeTopologyWork(1)) {
+                                return false;
+                            }
+                            active_observed_depth[observed_depth_coordinate] = 1;
+                            active_observed_depth_stack.push_back(observed_depth_coordinate);
                             ++observed_index;
+                        }
+                    }
+
+                    if (!ChargeTopologyWork(static_cast<std::uint64_t>(contract.parent_depth))) {
+                        return false;
+                    }
+                    for (std::uint32_t depth = 0; depth < contract.parent_depth; ++depth) {
+                        if (!ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
+                            return false;
+                        }
+                        const auto coordinate =
+                            std::lower_bound(depth_coordinates.begin(), depth_coordinates.end(), depth);
+                        const bool observed_depth = coordinate != depth_coordinates.end() &&
+                                                    *coordinate == depth &&
+                                                    active_observed_depth[static_cast<std::size_t>(
+                                                        coordinate - depth_coordinates.begin()
+                                                    )] != 0;
+                        if (!observed_depth && !add_virtual_sequence_task(depth, contract, false)) {
+                            return false;
                         }
                     }
 
@@ -5080,6 +6180,12 @@ struct ProfileSessionReader::Impl {
                         );
                         return false;
                     }
+
+                    if (!ChargeTopologyHeapWork(previous_missing_direct_end.size() + 1)) {
+                        return false;
+                    }
+                    previous_missing_direct_end[contract.parent_depth] =
+                        contract.last_child_subtree_end_local;
                 }
 
                 const std::uint64_t direct_parent_count =
@@ -5099,12 +6205,236 @@ struct ProfileSessionReader::Impl {
                     );
                     return false;
                 }
-                source->required_parent_record_count = depth_required_parent_records;
-                if (source->required_parent_record_count > source->local_hole_count) {
+                if (depth_required_parent_records > source->local_hole_count) {
                     Fail(
                         SessionLoadStatus::ProtocolViolation,
                         SessionErrorCode::GpuScopeParentInvalid,
                         "missing GpuScope ancestry exceeds its source local-order holes"
+                    );
+                    return false;
+                }
+                const std::uint64_t sequence_required_parent_records =
+                    static_cast<std::uint64_t>(virtual_sequence_tasks.size());
+                if (sequence_required_parent_records < depth_required_parent_records) {
+                    Fail(
+                        SessionLoadStatus::ProtocolViolation,
+                        SessionErrorCode::GpuScopeParentInvalid,
+                        "missing GpuScope sequence obligations disagree with the topology lower bound"
+                    );
+                    return false;
+                }
+                depth_required_parent_records        = sequence_required_parent_records;
+                source->required_parent_record_count = depth_required_parent_records;
+                if (source->required_parent_record_count > source->local_hole_count) {
+                    Fail(
+                        SessionLoadStatus::ProtocolViolation,
+                        SessionErrorCode::GpuFrameTotalsMismatch,
+                        "structural GPU ancestry generations exceed source local-order holes"
+                    );
+                    return false;
+                }
+
+                const auto source_scope_begin =
+                    scopes.begin() + static_cast<std::ptrdiff_t>(source->first_scope);
+                const auto source_scope_end = scopes.begin() + static_cast<std::ptrdiff_t>(source_end_index);
+                const std::size_t global_task_begin = joint_virtual_tasks.size();
+                if (virtual_sequence_tasks.size() > joint_virtual_tasks.max_size() - global_task_begin ||
+                    !ChargeTopologyLinearWork(virtual_sequence_tasks.size())) {
+                    Fail(
+                        SessionLoadStatus::LimitExceeded,
+                        SessionErrorCode::LimitExceeded,
+                        "joint GPU topology task count exceeds the addressable range",
+                        DecodeStatus::LimitExceeded,
+                        SessionLimitKind::TopologyWorkItems
+                    );
+                    return false;
+                }
+                std::uint64_t task_edge_lower_bound = 0;
+                if (AddOverflow(
+                        static_cast<std::uint64_t>(joint_virtual_tasks.size()),
+                        static_cast<std::uint64_t>(virtual_sequence_tasks.size()),
+                        task_edge_lower_bound
+                    ) ||
+                    task_edge_lower_bound > options.limits.max_topology_flow_edges) {
+                    Fail(
+                        SessionLoadStatus::LimitExceeded,
+                        SessionErrorCode::LimitExceeded,
+                        "joint GPU task edges exceed the topology flow-edge limit",
+                        DecodeStatus::LimitExceeded,
+                        SessionLimitKind::TopologyFlowEdges
+                    );
+                    return false;
+                }
+                for (std::size_t task_index = 0; task_index < virtual_sequence_tasks.size(); ++task_index) {
+                    const VirtualSequenceTask& task = virtual_sequence_tasks[task_index];
+                    joint_virtual_tasks.push_back({
+                        .first_allowed_local = task.first_allowed_slot,
+                        .deadline_local      = task.deadline_slot,
+                        .deadline_sequence   = task.deadline_sequence,
+                    });
+                }
+
+                std::uint64_t       boundary_capacity = 1;
+                const std::uint64_t task_count = static_cast<std::uint64_t>(virtual_sequence_tasks.size());
+                if (AddOverflow(boundary_capacity, task_count, boundary_capacity) ||
+                    AddOverflow(boundary_capacity, task_count, boundary_capacity) ||
+                    AddOverflow(boundary_capacity, source_scope_count, boundary_capacity) ||
+                    AddOverflow(boundary_capacity, source_scope_count, boundary_capacity) ||
+                    boundary_capacity > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()) ||
+                    !ChargeTopologyWork(boundary_capacity)) {
+                    Fail(
+                        SessionLoadStatus::LimitExceeded,
+                        SessionErrorCode::LimitExceeded,
+                        "joint GPU local-cell boundaries exceed the addressable range",
+                        DecodeStatus::LimitExceeded,
+                        SessionLimitKind::TopologyWorkItems
+                    );
+                    return false;
+                }
+                std::vector<std::uint64_t> local_boundaries;
+                local_boundaries.reserve(static_cast<std::size_t>(boundary_capacity));
+                local_boundaries.push_back(0);
+                for (const VirtualSequenceTask& task : virtual_sequence_tasks) {
+                    local_boundaries.push_back(task.first_allowed_slot);
+                    local_boundaries.push_back(task.deadline_slot);
+                }
+                for (auto scope = source_scope_begin; scope != source_scope_end; ++scope) {
+                    local_boundaries.push_back(scope->local_order);
+                    local_boundaries.push_back(scope->local_order + 1);
+                }
+                if (!ChargeTopologySortWork(local_boundaries.size()) ||
+                    !ChargeTopologyLinearWork(local_boundaries.size())) {
+                    return false;
+                }
+                std::sort(local_boundaries.begin(), local_boundaries.end());
+                local_boundaries.erase(
+                    std::unique(local_boundaries.begin(), local_boundaries.end()), local_boundaries.end()
+                );
+
+                std::vector<std::uint8_t> task_has_cell(virtual_sequence_tasks.size(), 0);
+                for (std::size_t boundary_index = 0; boundary_index + 1 < local_boundaries.size();
+                     ++boundary_index) {
+                    const std::uint64_t cell_begin = local_boundaries[boundary_index];
+                    const std::uint64_t cell_end   = local_boundaries[boundary_index + 1];
+                    if (cell_begin >= cell_end) {
+                        continue;
+                    }
+                    if (!ChargeTopologyBinarySearchWork(source_scope_count)) {
+                        return false;
+                    }
+                    const auto successor = std::lower_bound(
+                        source_scope_begin,
+                        source_scope_end,
+                        cell_begin,
+                        [](const GpuScopeRecord& _scope, std::uint64_t _local_order) {
+                            return _scope.local_order < _local_order;
+                        }
+                    );
+                    if (successor != source_scope_end && successor->local_order == cell_begin) {
+                        continue;
+                    }
+                    if (successor == source_scope_end || successor->local_order < cell_end ||
+                        successor->sequence == 0) {
+                        continue;
+                    }
+
+                    std::uint64_t predecessor_sequence = source->producer_predecessor_sequence;
+                    if (successor != source_scope_begin) {
+                        predecessor_sequence = std::prev(successor)->sequence;
+                    }
+                    if (predecessor_sequence == std::numeric_limits<std::uint64_t>::max()) {
+                        Fail(
+                            SessionLoadStatus::ProtocolViolation,
+                            SessionErrorCode::GpuFrameTotalsMismatch,
+                            "joint GPU local cell has no sequence after its producer predecessor"
+                        );
+                        return false;
+                    }
+                    const std::uint64_t release_sequence =
+                        std::max(predecessor_sequence + 1, source_frame_release);
+                    const std::uint64_t deadline_sequence = successor->sequence - 1;
+                    if (release_sequence > deadline_sequence) {
+                        continue;
+                    }
+
+                    JointLocalCell cell{
+                        .frame_id          = source->frame_id,
+                        .local_begin       = cell_begin,
+                        .local_end         = cell_end,
+                        .release_sequence  = release_sequence,
+                        .deadline_sequence = deadline_sequence,
+                    };
+                    std::uint64_t accepted_task_count = 0;
+                    if (!ChargeTopologyLinearWork(virtual_sequence_tasks.size())) {
+                        return false;
+                    }
+                    for (std::size_t task_index = 0; task_index < virtual_sequence_tasks.size();
+                         ++task_index) {
+                        const VirtualSequenceTask& task = virtual_sequence_tasks[task_index];
+                        if (task.first_allowed_slot <= cell_begin && cell_end <= task.deadline_slot) {
+                            if (successor->sequence - 1 > task.deadline_sequence) {
+                                Fail(
+                                    SessionLoadStatus::ProtocolViolation,
+                                    SessionErrorCode::GpuFrameTotalsMismatch,
+                                    "joint GPU local cell crosses its task sequence deadline"
+                                );
+                                return false;
+                            }
+                            std::uint64_t next_accepted_task_count = 0;
+                            std::uint64_t proposed_task_edge_count = 0;
+                            std::uint64_t proposed_cell_count      = 0;
+                            std::uint64_t flow_edge_lower_bound    = 0;
+                            if (AddOverflow(
+                                    accepted_task_count, std::uint64_t{1}, next_accepted_task_count
+                                ) ||
+                                AddOverflow(
+                                    joint_cell_task_edge_count,
+                                    next_accepted_task_count,
+                                    proposed_task_edge_count
+                                ) ||
+                                AddOverflow(
+                                    static_cast<std::uint64_t>(joint_local_cells.size()),
+                                    std::uint64_t{1},
+                                    proposed_cell_count
+                                ) ||
+                                AddOverflow(
+                                    static_cast<std::uint64_t>(joint_virtual_tasks.size()),
+                                    proposed_cell_count,
+                                    flow_edge_lower_bound
+                                ) ||
+                                AddOverflow(
+                                    flow_edge_lower_bound, proposed_task_edge_count, flow_edge_lower_bound
+                                ) ||
+                                flow_edge_lower_bound > options.limits.max_topology_flow_edges) {
+                                Fail(
+                                    SessionLoadStatus::LimitExceeded,
+                                    SessionErrorCode::LimitExceeded,
+                                    "joint GPU local-cell edges exceed the topology flow-edge limit",
+                                    DecodeStatus::LimitExceeded,
+                                    SessionLimitKind::TopologyFlowEdges
+                                );
+                                return false;
+                            }
+                            accepted_task_count = next_accepted_task_count;
+                            cell.task_indices.push_back(global_task_begin + task_index);
+                            task_has_cell[task_index] = 1;
+                        }
+                    }
+                    if (accepted_task_count == 0) {
+                        continue;
+                    }
+                    cell.local_capacity = std::min<std::uint64_t>(cell_end - cell_begin, accepted_task_count);
+                    joint_cell_task_edge_count += accepted_task_count;
+                    joint_local_cells.push_back(std::move(cell));
+                }
+                if (!ChargeTopologyLinearWork(task_has_cell.size())) {
+                    return false;
+                }
+                if (std::ranges::find(task_has_cell, std::uint8_t{0}) != task_has_cell.end()) {
+                    Fail(
+                        SessionLoadStatus::ProtocolViolation,
+                        SessionErrorCode::GpuFrameTotalsMismatch,
+                        "missing GPU ancestry has no joint local-order cell"
                     );
                     return false;
                 }
@@ -5200,14 +6530,6 @@ struct ProfileSessionReader::Impl {
             ),
             missing_parent_keys.end()
         );
-        if (!ChargeTopologySortWork(missing_frame_ids.size()) ||
-            !ChargeTopologyLinearWork(missing_frame_ids.size())) {
-            return false;
-        }
-        std::sort(missing_frame_ids.begin(), missing_frame_ids.end());
-        missing_frame_ids.erase(
-            std::unique(missing_frame_ids.begin(), missing_frame_ids.end()), missing_frame_ids.end()
-        );
 
         const auto missing_parent_count = [&](std::uint64_t _frame_id) {
             const ScopeLookup first{
@@ -5293,44 +6615,105 @@ struct ProfileSessionReader::Impl {
             frame.export_missing_scope_count = missing_scopes;
             frame.materialization_complete   = missing_scopes == 0;
             if (frame.status == ProfileGpuFrameStatus::Complete) {
+                const std::uint64_t constrained_missing =
+                    frame_sequence_evidence[index].constrained_missing_scope_count;
+                if (constrained_missing > missing_scopes) {
+                    Fail(
+                        SessionLoadStatus::ProtocolViolation,
+                        SessionErrorCode::GpuFrameTotalsMismatch,
+                        "GpuFrame sequence-constrained deficits exceed its missing scope count"
+                    );
+                    return false;
+                }
+                const std::uint64_t unconstrained_missing = missing_scopes - constrained_missing;
+                if (unconstrained_missing != 0) {
+                    if (frame.sequence == std::numeric_limits<std::uint64_t>::max()) {
+                        Fail(
+                            SessionLoadStatus::ProtocolViolation,
+                            SessionErrorCode::GpuFrameTotalsMismatch,
+                            "missing Complete GpuFrame scopes have no record-sequence capacity after the "
+                            "frame"
+                        );
+                        return false;
+                    }
+                    if (!add_sequence_demand(
+                            frame.sequence + 1,
+                            known_frame_tail_deadlines[index],
+                            unconstrained_missing,
+                            "missing Complete GpuFrame scopes have no record-sequence capacity after the "
+                            "frame"
+                        )) {
+                        return false;
+                    }
+                }
                 if (!add_required_gpu_drops(missing_scopes)) {
                     return false;
                 }
                 if (missing_scopes != 0) {
                     ++session.impl_->summary.degraded_complete_gpu_frame_count;
                 }
-            } else if (!add_required_gpu_drops(required_parent_records)) {
-                return false;
+            } else {
+                if (!add_required_gpu_drops(required_parent_records)) {
+                    return false;
+                }
             }
         }
 
-        if (!add_required_gpu_drops(static_cast<std::uint64_t>(missing_frame_ids.size()))) {
+        if (!ChargeTopologyLinearWork(missing_frame_evidence.size())) {
             return false;
         }
-        if (!ChargeTopologyLinearWork(missing_frame_ids.size())) {
-            return false;
-        }
-        for (const std::uint64_t frame_id : missing_frame_ids) {
+        for (std::size_t missing_frame_index = 0; missing_frame_index < missing_frame_evidence.size();
+             ++missing_frame_index) {
+            const MissingFrameEvidence& missing_frame = missing_frame_evidence[missing_frame_index];
             if (!ChargeTopologyBinarySearchWork(frame_loss_evidence.size()) ||
                 !ChargeTopologyBinarySearchWork(missing_parent_keys.size()) ||
                 !ChargeTopologyBinarySearchWork(missing_parent_keys.size())) {
                 return false;
             }
-            const FrameLossEvidence* loss_evidence           = find_frame_loss_evidence(frame_id);
+            const FrameLossEvidence* loss_evidence = find_frame_loss_evidence(missing_frame.frame_id);
             const std::uint64_t      required_parent_records = std::max(
-                missing_parent_count(frame_id),
+                missing_parent_count(missing_frame.frame_id),
                 loss_evidence != nullptr ? loss_evidence->required_parent_record_count : 0
             );
-            if (!add_required_gpu_drops(required_parent_records)) {
+            std::uint64_t required_frame_records = 0;
+            if (AddOverflow(required_parent_records, std::uint64_t{1}, required_frame_records)) {
+                Fail(
+                    SessionLoadStatus::ProtocolViolation,
+                    SessionErrorCode::GpuFrameTotalsMismatch,
+                    "missing GpuFrame topology record count overflows"
+                );
+                return false;
+            }
+            if (missing_frame.earliest_scope_sequence <= 1) {
+                Fail(
+                    SessionLoadStatus::ProtocolViolation,
+                    SessionErrorCode::GpuFrameTotalsMismatch,
+                    "missing GpuFrame topology has no compatible record-sequence slots"
+                );
+                return false;
+            }
+            if (!add_sequence_demand(
+                    missing_frame_record_releases[missing_frame_index],
+                    missing_frame.earliest_scope_sequence - 1,
+                    1,
+                    "missing GpuFrame topology has no compatible record-sequence slots"
+                )) {
+                return false;
+            }
+            if (!add_required_gpu_drops(required_frame_records)) {
                 return false;
             }
         }
         if (session.impl_->summary.has_session_end) {
             const std::uint64_t total_drop_budget = session.impl_->summary.lost_record_count;
             if (required_gpu_drops > total_drop_budget) {
+                const bool has_cpu_drop_requirement = _required_cpu_drops != 0;
+                const bool has_gpu_drop_requirement = required_gpu_drops > _required_cpu_drops;
                 Fail(
                     SessionLoadStatus::ProtocolViolation,
-                    SessionErrorCode::GpuFrameTotalsMismatch,
+                    has_cpu_drop_requirement && has_gpu_drop_requirement ?
+                        SessionErrorCode::RecordSequenceInvalid :
+                        SessionErrorCode::GpuFrameTotalsMismatch,
                     "CPU/GPU deficits exceed the noticed allocated-record loss budget"
                 );
                 return false;
@@ -5486,6 +6869,7 @@ struct ProfileSessionReader::Impl {
         if (!BuildCpuTracks(allow_missing, required_cpu_drops, cpu_sequence_demands)) {
             return false;
         }
+        const bool has_cpu_sequence_demands = !cpu_sequence_demands.empty();
         if (session.impl_->summary.has_session_end &&
             required_cpu_drops > session.impl_->summary.lost_record_count) {
             Fail(
@@ -5495,10 +6879,42 @@ struct ProfileSessionReader::Impl {
             );
             return false;
         }
-        if (!_forensic && !ValidateCpuLossCompatibility(cpu_sequence_demands)) {
+        std::vector<RecordSequenceDemand> gpu_sequence_demands;
+        if (!BuildGpuDomainsAndTracks() ||
+            !BuildGpuTopology(allow_missing, required_cpu_drops, gpu_sequence_demands)) {
             return false;
         }
-        if (!BuildGpuDomainsAndTracks() || !BuildGpuTopology(allow_missing, required_cpu_drops)) {
+        const bool has_gpu_sequence_demands = !gpu_sequence_demands.empty();
+        if (has_gpu_sequence_demands) {
+            if (gpu_sequence_demands.size() > cpu_sequence_demands.max_size() - cpu_sequence_demands.size()) {
+                Fail(
+                    SessionLoadStatus::LimitExceeded,
+                    SessionErrorCode::LimitExceeded,
+                    "combined CPU/GPU sequence demand count exceeds the addressable range",
+                    DecodeStatus::LimitExceeded,
+                    SessionLimitKind::TopologyWorkItems
+                );
+                return false;
+            }
+            const std::size_t combined_demand_count =
+                cpu_sequence_demands.size() + gpu_sequence_demands.size();
+            if (!ChargeTopologyLinearWork(combined_demand_count)) {
+                return false;
+            }
+            cpu_sequence_demands.reserve(combined_demand_count);
+            cpu_sequence_demands.insert(
+                cpu_sequence_demands.end(), gpu_sequence_demands.begin(), gpu_sequence_demands.end()
+            );
+        }
+        if (!ValidateSequenceSlotCapacity(
+                cpu_sequence_demands, has_cpu_sequence_demands, has_gpu_sequence_demands
+            )) {
+            return false;
+        }
+        if ((!_forensic || !joint_virtual_tasks.empty()) &&
+            !ValidateTopologyLossCompatibility(
+                cpu_sequence_demands, has_cpu_sequence_demands, has_gpu_sequence_demands, _forensic
+            )) {
             return false;
         }
         session.impl_->valid = true;
@@ -5510,6 +6926,9 @@ struct ProfileSessionReader::Impl {
         std::unordered_map<std::uint64_t, SchemaEntry>{}.swap(schemas);
         std::unordered_map<std::string_view, SessionStringId>{}.swap(interned_strings);
         std::vector<std::uint64_t>{}.swap(record_sequences);
+        std::vector<JointVirtualTask>{}.swap(joint_virtual_tasks);
+        std::vector<JointLocalCell>{}.swap(joint_local_cells);
+        joint_cell_task_edge_count = 0;
     }
 
     [[nodiscard]] SessionLoadResult Feed(std::span<const std::uint8_t> _bytes) noexcept {
@@ -5726,6 +7145,9 @@ struct ProfileSessionReader::Impl {
     std::unordered_map<std::uint64_t, SchemaEntry>        schemas{};
     std::unordered_map<std::string_view, SessionStringId> interned_strings{};
     std::vector<std::uint64_t>                            record_sequences{};
+    std::vector<JointVirtualTask>                         joint_virtual_tasks{};
+    std::vector<JointLocalCell>                           joint_local_cells{};
+    std::uint64_t                                         joint_cell_task_edge_count{0};
     std::uint64_t                                         schema_bytes{0};
     std::uint64_t                                         string_bytes{0};
     std::uint64_t                                         topology_work_items{0};
