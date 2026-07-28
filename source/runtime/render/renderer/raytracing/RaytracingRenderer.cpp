@@ -5,6 +5,7 @@
 #include "config/ConfigManager.h"
 #include "misc/BoundingBox.h"
 #include "misc/Timer.h"
+#include "profile/ProfileScope.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIExecutor.h"
@@ -475,6 +476,7 @@ RaytracingFramePacket
 RaytracingRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
     assert(IsCurrentlyGameThread());
     assert(editor_config);
+    MOER_PROFILE_SCOPE("Raytracing.PrepareFrame");
 
     const bool            profile_logging = IsFramePrepareProfilingEnabled();
     const auto            prepare_started = BeginFramePrepareProfile();
@@ -628,6 +630,7 @@ RaytracingRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, co
 RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket frame_packet) {
     assert(!IsRenderThreadInitialized() || IsCurrentlyRenderThread());
     assert(runtime_state);
+    MOER_PROFILE_SCOPE("Raytracing.RenderFrame");
 
     auto& state     = *runtime_state;
     auto& ui_config = frame_packet.config;

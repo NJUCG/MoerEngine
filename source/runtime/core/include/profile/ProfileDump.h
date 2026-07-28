@@ -169,6 +169,7 @@ Emit(SchemaHandle _schema, std::span<const FieldValueView> _values) noexcept;
 [[nodiscard]] CORE_API ShutdownResult Shutdown() noexcept;
 
 [[nodiscard]] CORE_API RuntimeState GetRuntimeState() noexcept;
+[[nodiscard]] CORE_API std::uint64_t GetRuntimeGeneration() noexcept;
 [[nodiscard]] CORE_API RuntimeStats GetRuntimeStats() noexcept;
 
 } // namespace Moer::ProfileDump

@@ -1,6 +1,7 @@
 #include "rendergraph/RenderGraph.h"
 
 #include "log/LogSystem.h"
+#include "profile/ProfileScope.h"
 #include "rendergraph/RenderGraphCompiler.h"
 #include "rendergraph/RenderGraphLowering.h"
 #include "rhi/RHI.h"
@@ -1242,6 +1243,7 @@ bool RenderGraph::Compile() {
         compile_error = "graph has already executed and cannot be compiled again";
         return false;
     }
+    MOER_PROFILE_SCOPE("RenderGraph.Compile");
     return RenderGraphCompiler(*this).Compile();
 }
 
@@ -1314,6 +1316,7 @@ bool RenderGraph::ExecuteRecording(
         compile_error = "a per-frame RenderGraph can only be executed once";
         return false;
     }
+    MOER_PROFILE_SCOPE("RenderGraph.ExecuteRecording");
 
     struct TransientBindingReleaseGuard {
         RenderGraphTransientAllocator* allocator{nullptr};
@@ -2178,6 +2181,7 @@ bool RenderGraph::ExecuteRecording(
         auto run_job =
             [error, store_error, attach_recording_lifetime](RecordingJob job) mutable {
             RHIThreadRoleScope record_owner(ERHIThreadRole::RecordWorker);
+            ProfileDump::ScopedCpuProfile profile_scope("RenderGraph.Record", job.pass_name);
             ProducerGateGuard producer_gate_guard{.gate = job.completion};
             bool lifetime_attached = false;
             auto attach_lifetime = [&] {

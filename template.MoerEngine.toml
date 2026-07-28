@@ -31,6 +31,12 @@ parallel_record_min_work_units_per_job = 64
 # If Graphics and Compute alias the same native queue, the effective window is 1.
 submission_batch_window = 2
 
+[engine.profile_dump]
+enabled = false
+output_path = "./profile/MoerProfile.mpd"
+# The previous final capture is replaced only after the new capture closes successfully.
+replace_existing = true
+
 [engine.rhi]
 type = "Vulkan"
 api_version = "1.3"

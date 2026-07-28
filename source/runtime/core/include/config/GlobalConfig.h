@@ -45,6 +45,12 @@ struct CORE_API GlobalConfig {
             uint max_frame_lag           = 0;
         } threading;
 
+        struct ProfileDump {
+            bool        enabled          = false;
+            std::string output_path      = "./profile/MoerProfile.mpd";
+            bool        replace_existing = true;
+        } profile_dump;
+
         struct RHI {
             std::string type;
             std::string api_version;
