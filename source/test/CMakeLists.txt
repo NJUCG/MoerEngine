@@ -102,6 +102,24 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHIQueryContract COMMAND $<TARGET_FILE:${test_target}>)
 
+# CPU-only contract for the bounded, Completion-fed GPU scope stream. It
+# validates queue-domain hierarchy, ordered frame visibility, capacity
+# recovery, rejection ownership, and move/close lifetime without a GPU.
+set(test_target TestRHIGpuScope)
+add_executable(${test_target} "RHIGpuScopeContractTest.cpp")
+target_compile_definitions(moer_render
+    PRIVATE MOER_RHI_GPU_SCOPE_TEST_HOOKS=1
+)
+target_compile_definitions(${test_target}
+    PRIVATE MOER_RHI_GPU_SCOPE_TEST_HOOKS=1
+)
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME RHIGpuScopeContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(RHIGpuScopeContract PROPERTIES TIMEOUT 60)
+
 set(test_target TestRHIGpuCompletion)
 add_executable(${test_target} "RHIGpuCompletionContractTest.cpp")
 target_link_libraries(${test_target}
