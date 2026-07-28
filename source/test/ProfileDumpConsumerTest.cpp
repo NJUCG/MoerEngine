@@ -4306,14 +4306,20 @@ void TestLimitsAndStickyFailure() {
         });
         builder.End();
 
-        SessionLoadOptions options{};
-        options.limits.max_topology_work_items = 2;
+        // One Loss scan + two extrema materializations + their sort/scan and
+        // record-collision searches consume 13 items before the two GPU source
+        // topology edges. The boundary verifies that all phases share one
+        // cumulative budget.
+        constexpr std::uint64_t loss_allocation_work = 13;
+        constexpr std::uint64_t gpu_topology_work    = 2;
+        SessionLoadOptions      options{};
+        options.limits.max_topology_work_items = loss_allocation_work + gpu_topology_work;
         Expect(
             LoadChunks(builder.bytes, {}, options).result.status == SessionLoadStatus::Complete,
             "exact global GPU topology work-item limit was rejected"
         );
-        options.limits.max_topology_work_items = 1;
-        const Loaded loaded                    = LoadChunks(builder.bytes, {}, options);
+        --options.limits.max_topology_work_items;
+        const Loaded loaded = LoadChunks(builder.bytes, {}, options);
         Expect(
             loaded.result.status == SessionLoadStatus::LimitExceeded &&
                 loaded.result.limit_kind == SessionLimitKind::TopologyWorkItems,
@@ -4324,6 +4330,38 @@ void TestLimitsAndStickyFailure() {
         SessionLoadOptions options{};
         options.limits.max_input_bytes = golden.bytes.size();
         expect_complete(options, "exact input byte limit was rejected");
+    }
+    {
+        SessionBuilder no_loss;
+        no_loss.Begin();
+        no_loss.Schema(Templates::CpuScope());
+        AddCpuScope(no_loss, 1, 1, "zero-budget-root", 0, 10, 0);
+        no_loss.End();
+
+        SessionLoadOptions zero_budget{};
+        zero_budget.limits.max_topology_work_items = 0;
+        Expect(
+            LoadChunks(no_loss.bytes, {}, zero_budget).result.status == SessionLoadStatus::Complete,
+            "loss-free session consumed Loss-allocation topology budget"
+        );
+
+        SessionBuilder with_loss;
+        with_loss.Begin();
+        with_loss.Loss({
+            .first_sequence = 1,
+            .last_sequence  = 1,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        with_loss.End();
+        const Loaded limited = LoadChunks(with_loss.bytes, {}, zero_budget);
+        Expect(
+            limited.result.status == SessionLoadStatus::LimitExceeded &&
+                limited.result.limit_kind == SessionLimitKind::TopologyWorkItems &&
+                !limited.result.HasUsableSession(),
+            "Loss sequence allocation escaped the session topology work budget"
+        );
     }
     {
         SessionLoadOptions options{};

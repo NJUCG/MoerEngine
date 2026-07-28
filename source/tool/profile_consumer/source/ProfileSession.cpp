@@ -1033,15 +1033,23 @@ struct ProfileSessionReader::Impl {
     }
 
     [[nodiscard]] bool ValidateLossSequenceAllocation() {
+        if (session.impl_->losses.empty()) {
+            return true;
+        }
+
         struct SequenceDemand {
             std::uint64_t release_sequence{0};
             std::uint64_t deadline_sequence{0};
             std::uint64_t count{0};
         };
-        std::vector<std::uint64_t>  occupied_sequences = record_sequences;
-        std::vector<SequenceDemand> residual_demands;
-        residual_demands.reserve(session.impl_->losses.size());
 
+        const std::uint64_t loss_notice_count = static_cast<std::uint64_t>(session.impl_->losses.size());
+        if (!ChargeTopologyWork(loss_notice_count)) {
+            return false;
+        }
+
+        std::uint64_t mandatory_sequence_count = 0;
+        std::uint64_t residual_demand_count    = 0;
         for (const ProfileLossRecord& loss : session.impl_->losses) {
             if (loss.first_sequence == 0 ||
                 (loss.record_count == 1 && loss.first_sequence != loss.last_sequence)) {
@@ -1053,9 +1061,50 @@ struct ProfileSessionReader::Impl {
                 return false;
             }
 
-            occupied_sequences.push_back(loss.first_sequence);
+            std::uint64_t mandatory_for_loss = 1;
             if (loss.record_count != 1) {
-                occupied_sequences.push_back(loss.last_sequence);
+                ++mandatory_for_loss;
+            }
+            if (loss.record_count > 2) {
+                ++residual_demand_count;
+            }
+            if (AddOverflow(mandatory_sequence_count, mandatory_for_loss, mandatory_sequence_count)) {
+                Fail(
+                    SessionLoadStatus::LimitExceeded,
+                    SessionErrorCode::LimitExceeded,
+                    "profile loss allocation preprocessing overflows",
+                    DecodeStatus::LimitExceeded,
+                    SessionLimitKind::TopologyWorkItems
+                );
+                return false;
+            }
+        }
+
+        std::uint64_t construction_work = 0;
+        if (AddOverflow(mandatory_sequence_count, residual_demand_count, construction_work) ||
+            mandatory_sequence_count > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()) ||
+            residual_demand_count > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+            Fail(
+                SessionLoadStatus::LimitExceeded,
+                SessionErrorCode::LimitExceeded,
+                "profile loss allocation model exceeds the addressable range",
+                DecodeStatus::LimitExceeded,
+                SessionLimitKind::TopologyWorkItems
+            );
+            return false;
+        }
+        if (!ChargeTopologyWork(construction_work)) {
+            return false;
+        }
+
+        std::vector<std::uint64_t> mandatory_sequences;
+        mandatory_sequences.reserve(static_cast<std::size_t>(mandatory_sequence_count));
+        std::vector<SequenceDemand> residual_demands;
+        residual_demands.reserve(static_cast<std::size_t>(residual_demand_count));
+        for (const ProfileLossRecord& loss : session.impl_->losses) {
+            mandatory_sequences.push_back(loss.first_sequence);
+            if (loss.record_count != 1) {
+                mandatory_sequences.push_back(loss.last_sequence);
             }
             if (loss.record_count > 2) {
                 residual_demands.push_back({
@@ -1066,9 +1115,38 @@ struct ProfileSessionReader::Impl {
             }
         }
 
-        std::sort(occupied_sequences.begin(), occupied_sequences.end());
-        if (std::adjacent_find(occupied_sequences.begin(), occupied_sequences.end()) !=
-            occupied_sequences.end()) {
+        const auto charge_sort_work = [&](std::uint64_t _count) {
+            std::uint64_t width = 1;
+            while (width < _count) {
+                if (!ChargeTopologyWork(_count)) {
+                    return false;
+                }
+                if (width > std::numeric_limits<std::uint64_t>::max() / 2) {
+                    break;
+                }
+                width *= 2;
+            }
+            return true;
+        };
+        const auto charge_binary_search = [&](std::size_t _count) {
+            std::uint64_t work      = 0;
+            std::size_t   remaining = _count;
+            while (remaining != 0) {
+                ++work;
+                remaining /= 2;
+            }
+            return ChargeTopologyWork(work);
+        };
+
+        if (!charge_sort_work(mandatory_sequence_count)) {
+            return false;
+        }
+        std::sort(mandatory_sequences.begin(), mandatory_sequences.end());
+        if (!ChargeTopologyWork(mandatory_sequence_count)) {
+            return false;
+        }
+        if (std::adjacent_find(mandatory_sequences.begin(), mandatory_sequences.end()) !=
+            mandatory_sequences.end()) {
             Fail(
                 SessionLoadStatus::ProtocolViolation,
                 SessionErrorCode::RecordSequenceInvalid,
@@ -1076,9 +1154,29 @@ struct ProfileSessionReader::Impl {
             );
             return false;
         }
+        if (!ChargeTopologyWork(mandatory_sequence_count)) {
+            return false;
+        }
+        for (const std::uint64_t sequence : mandatory_sequences) {
+            if (!charge_binary_search(record_sequences.size())) {
+                return false;
+            }
+            const auto record = std::lower_bound(record_sequences.begin(), record_sequences.end(), sequence);
+            if (record != record_sequences.end() && *record == sequence) {
+                Fail(
+                    SessionLoadStatus::ProtocolViolation,
+                    SessionErrorCode::RecordSequenceInvalid,
+                    "profile records and loss notices claim the same allocated sequence"
+                );
+                return false;
+            }
+        }
 
         if (residual_demands.empty()) {
             return true;
+        }
+        if (!charge_sort_work(residual_demand_count)) {
+            return false;
         }
         std::sort(
             residual_demands.begin(),
@@ -1098,8 +1196,18 @@ struct ProfileSessionReader::Impl {
         const auto later_deadline = [](const PendingDemand& _left, const PendingDemand& _right) {
             return _left.deadline_sequence > _right.deadline_sequence;
         };
+        std::vector<PendingDemand> pending_storage;
+        pending_storage.reserve(residual_demands.size());
         std::priority_queue<PendingDemand, std::vector<PendingDemand>, decltype(later_deadline)>
-            pending_demands(later_deadline);
+                   pending_demands(later_deadline, std::move(pending_storage));
+        const auto charge_heap_work = [&](std::size_t _size) {
+            std::uint64_t work = 1;
+            while (_size > 1) {
+                ++work;
+                _size /= 2;
+            }
+            return ChargeTopologyWork(work);
+        };
 
         const auto fail_allocation = [&]() {
             Fail(
@@ -1111,15 +1219,22 @@ struct ProfileSessionReader::Impl {
         };
 
         std::size_t   demand_index             = 0;
-        std::size_t   occupied_index           = 0;
+        std::size_t   record_index             = 0;
+        std::size_t   mandatory_index          = 0;
         std::uint64_t position                 = residual_demands.front().release_sequence;
         bool          sequence_space_exhausted = false;
         while (demand_index < residual_demands.size() || !pending_demands.empty()) {
+            if (!ChargeTopologyWork(1)) {
+                return false;
+            }
             if (sequence_space_exhausted) {
                 return fail_allocation();
             }
             while (demand_index < residual_demands.size() &&
                    residual_demands[demand_index].release_sequence <= position) {
+                if (!charge_heap_work(pending_demands.size() + 1)) {
+                    return false;
+                }
                 pending_demands.push({
                     .deadline_sequence = residual_demands[demand_index].deadline_sequence,
                     .remaining_count   = residual_demands[demand_index].count,
@@ -1134,27 +1249,54 @@ struct ProfileSessionReader::Impl {
                 return fail_allocation();
             }
 
-            occupied_index = static_cast<std::size_t>(
-                std::lower_bound(
-                    occupied_sequences.begin() + occupied_index, occupied_sequences.end(), position
-                ) -
-                occupied_sequences.begin()
-            );
-            if (occupied_index < occupied_sequences.size() &&
-                occupied_sequences[occupied_index] == position) {
+            if (record_index < record_sequences.size() && record_sequences[record_index] < position) {
+                if (!charge_binary_search(record_sequences.size() - record_index)) {
+                    return false;
+                }
+                record_index = static_cast<std::size_t>(
+                    std::lower_bound(
+                        record_sequences.begin() + record_index, record_sequences.end(), position
+                    ) -
+                    record_sequences.begin()
+                );
+            }
+            while (mandatory_index < mandatory_sequences.size() &&
+                   mandatory_sequences[mandatory_index] < position) {
+                if (!ChargeTopologyWork(1)) {
+                    return false;
+                }
+                ++mandatory_index;
+            }
+
+            const bool          has_record    = record_index < record_sequences.size();
+            const bool          has_mandatory = mandatory_index < mandatory_sequences.size();
+            const std::uint64_t next_record =
+                has_record ? record_sequences[record_index] : std::numeric_limits<std::uint64_t>::max();
+            const std::uint64_t next_mandatory = has_mandatory ? mandatory_sequences[mandatory_index] :
+                                                                 std::numeric_limits<std::uint64_t>::max();
+            const bool          has_occupied   = has_record || has_mandatory;
+            const std::uint64_t next_occupied  = std::min(next_record, next_mandatory);
+            if (has_occupied && next_occupied == position) {
                 if (position == std::numeric_limits<std::uint64_t>::max()) {
                     return fail_allocation();
                 }
+                if (has_record && next_record == position) {
+                    ++record_index;
+                } else {
+                    ++mandatory_index;
+                }
                 ++position;
-                ++occupied_index;
                 continue;
             }
 
+            if (!charge_heap_work(pending_demands.size())) {
+                return false;
+            }
             PendingDemand demand = pending_demands.top();
             pending_demands.pop();
             std::uint64_t batch_end = demand.deadline_sequence;
-            if (occupied_index < occupied_sequences.size() && occupied_sequences[occupied_index] > position) {
-                batch_end = std::min(batch_end, occupied_sequences[occupied_index] - 1);
+            if (has_occupied && next_occupied > position) {
+                batch_end = std::min(batch_end, next_occupied - 1);
             }
             if (demand_index < residual_demands.size() &&
                 residual_demands[demand_index].release_sequence > position) {
@@ -1175,6 +1317,9 @@ struct ProfileSessionReader::Impl {
                 position = batch_end + 1;
             }
             if (demand.remaining_count != 0) {
+                if (!charge_heap_work(pending_demands.size() + 1)) {
+                    return false;
+                }
                 pending_demands.push(demand);
             }
         }
