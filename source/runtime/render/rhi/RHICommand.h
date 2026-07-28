@@ -1701,7 +1701,8 @@ public:
     // Binds one stable topology source for this recording generation before
     // any timed scope is recorded. Submit/rejection clears the recorder so
     // frame metadata cannot leak into a later generation. The recorder queue
-    // must match this CommandList.
+    // must match this CommandList. Passing an empty recorder is an admission
+    // error; omit this call entirely to retain the legacy profiling path.
     RENDER_API CommandList& SetGpuScopeRecorder(
         GpuScopeRecorder _recorder
     );

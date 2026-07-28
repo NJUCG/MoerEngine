@@ -1299,13 +1299,21 @@ CommandList& CommandList::SetGpuScopeRecorder(
             "GPU scope recorder is immutable for one CommandList recording generation"
         );
     }
-    if (_recorder.IsBound() &&
-        _recorder.BoundQueueBinding().queue != queue_type) {
+    // An empty recorder is an admission failure, not an opt-out signal.
+    // Callers that do not want modern profiling simply never call this API.
+    // A once-bound recorder whose stream later closes remains accepted and
+    // fail-closed through IsBound(), preventing silent legacy fallback.
+    if (!_recorder.IsBound()) {
+        throw std::invalid_argument(
+            "GPU scope recorder must own an admitted recording source"
+        );
+    }
+    if (_recorder.BoundQueueBinding().queue != queue_type) {
         throw std::invalid_argument(
             "GPU scope recorder queue must match its CommandList"
         );
     }
-    if (_recorder.IsBound() && !timestamp_scope_names.empty()) {
+    if (!timestamp_scope_names.empty()) {
         throw std::logic_error(
             "GPU scope recorder must be bound before any legacy timed scope in a CommandList recording generation"
         );

@@ -805,6 +805,36 @@ void ClosedModernStreamNeverFallsBackToLegacyProfiling() {
 }
 
 void RecorderBindingIsImmutableUntilGenerationReset() {
+    {
+        GpuScopeStream rejected_stream(SmallConfig());
+        GpuScopeFrameHandle sealed_frame =
+            rejected_stream.BeginFrame(4700);
+        Expect(
+            rejected_stream.SealFrame(sealed_frame),
+            "empty-recorder frame could not be sealed"
+        );
+        CommandList rejected_list(EQueueType::Graphics);
+        bool invalid_recorder_rejected = false;
+        try {
+            rejected_list.SetGpuScopeRecorder(
+                sealed_frame.CreateRecorder(
+                    QueueBinding(EQueueType::Graphics, 0, 0), 0
+                )
+            );
+        } catch (const std::invalid_argument&) {
+            invalid_recorder_rejected = true;
+        }
+        ResolvedGpuScopeFrame rejected_frame{};
+        Expect(
+            invalid_recorder_rejected &&
+                !rejected_list.HasGpuScopeRecorder() &&
+                rejected_stream.TryPopFrame(rejected_frame) &&
+                rejected_frame.valid &&
+                rejected_frame.admitted_scope_count == 0,
+            "failed recorder creation silently selected legacy profiling"
+        );
+    }
+
     GpuScopeStream stream(SmallConfig());
     GpuScopeFrameHandle first_frame = stream.BeginFrame(4701);
     CommandList list(EQueueType::Graphics);
