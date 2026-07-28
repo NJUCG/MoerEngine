@@ -3,7 +3,9 @@
 #include "mimalloc.h"
 #endif
 #include "platform/Platform.h"
+#include <limits>
 #include <memory>
+#include <new>
 
 #if USE_MIMALLOC
 #if PLATFORM_WINDOWS
@@ -62,11 +64,18 @@ void* Memory::MallocAligned(size_t size, size_t alignment) noexcept {
 #endif
 }
 
-void* Memory::MallocN(size_t count, size_t size) noexcept {
+void* Memory::MallocN(size_t count, size_t size) {
+    if (size != 0 && count > std::numeric_limits<size_t>::max() / size) {
+        throw std::bad_array_new_length();
+    }
 #if USE_MIMALLOC
     return mi_new_n(count, size);
 #else
-    return malloc(count * size);
+    void* allocation = malloc(count * size);
+    if (allocation == nullptr && count != 0 && size != 0) {
+        throw std::bad_alloc();
+    }
+    return allocation;
 #endif
 }
 void* Memory::CallocAligned(size_t count, size_t size, size_t alignment) noexcept {

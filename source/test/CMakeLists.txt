@@ -16,6 +16,31 @@ set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME ProfileDumpCoreContract COMMAND $<TARGET_FILE:${test_target}>)
 set_tests_properties(ProfileDumpCoreContract PROPERTIES TIMEOUT 60)
 
+set(test_target TestProfileDumpConsumer)
+add_executable(${test_target} "ProfileDumpConsumerTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::ProfileConsumer
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME ProfileDumpConsumerContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(ProfileDumpConsumerContract PROPERTIES TIMEOUT 120)
+
+set(test_target TestProfileSummaryCli)
+add_executable(${test_target} "ProfileSummaryCliTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE
+        Moer::ProfileConsumer
+        Moer::Core
+        nlohmann_json::nlohmann_json
+)
+add_dependencies(${test_target} MoerProfileSummary)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(
+    NAME ProfileSummaryCliContract
+    COMMAND $<TARGET_FILE:${test_target}> $<TARGET_FILE:MoerProfileSummary>
+)
+set_tests_properties(ProfileSummaryCliContract PROPERTIES TIMEOUT 120)
+
 set(test_target TestProfileScopeProducer)
 add_executable(${test_target} "ProfileScopeProducerTest.cpp")
 target_include_directories(${test_target}

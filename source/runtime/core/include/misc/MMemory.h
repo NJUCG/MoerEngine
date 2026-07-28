@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <cstddef>
 #include <cstdint>
+#include <new>
 #include <utility>
 
 #define USE_MIMALLOC 1
@@ -11,7 +12,10 @@ class CORE_API Memory {
 public:
     static void* Malloc(size_t size) noexcept;
     static void* MallocAligned(size_t size, size_t alignment) noexcept;
-    static void* MallocN(size_t count, size_t size) noexcept;
+    // Array allocation follows the standard allocator contract: overflow or
+    // allocation failure is reported with std::bad_alloc instead of escaping
+    // through a noexcept boundary.
+    static void* MallocN(size_t count, size_t size);
     static void* Calloc(size_t count, size_t size) noexcept;
     static void* CallocAligned(size_t count, size_t size, size_t alignment) noexcept;
     static void* ReAlloc(void* p, size_t newsize) noexcept;
@@ -103,18 +107,15 @@ struct MoerStlAllocator : public MoerStlAllocatorCommon<T> {
         Memory::Free(p);
     }
 
-#if (__cplusplus >= 201703L) // C++17
     MOER_NODISCARD T* allocate(size_type count) {
+        if (count > this->max_size()) {
+            throw std::bad_array_new_length();
+        }
         return static_cast<T*>(Memory::MallocN(count, sizeof(T)));
     }
     MOER_NODISCARD T* allocate(size_type count, const void*) {
         return allocate(count);
     }
-#else
-    MOER_NODISCARD pointer allocate(size_type count, const void* = 0) {
-        return static_cast<pointer>(Memory::MallocN(count, sizeof(value_type)));
-    }
-#endif
 
 #if ((__cplusplus >= 201103L) || (_MSC_VER > 1900)) // C++11
     using is_always_equal = std::true_type;
