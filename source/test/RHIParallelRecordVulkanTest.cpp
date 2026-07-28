@@ -956,6 +956,78 @@ private:
     bool                                             installed{false};
 };
 
+class ScriptedTimestampValidBitsCapture final {
+public:
+    static uint32 ForceUnsupported(
+        void*      _context,
+        EQueueType _queue,
+        uint32     _native_valid_bits
+    ) noexcept {
+        auto& capture =
+            *static_cast<ScriptedTimestampValidBitsCapture*>(_context);
+        if (GetCurrentRHIThreadRole() != ERHIThreadRole::Translate) {
+            capture.wrong_owner.store(true, std::memory_order_relaxed);
+        }
+        capture.queue.store(
+            static_cast<uint32>(_queue), std::memory_order_relaxed
+        );
+        capture.native_valid_bits.store(
+            _native_valid_bits, std::memory_order_relaxed
+        );
+        capture.count.fetch_add(1, std::memory_order_release);
+        return 0;
+    }
+
+    std::atomic<uint32> count{0};
+    std::atomic<uint32> queue{
+        static_cast<uint32>(EQueueType::Ignore)
+    };
+    std::atomic<uint32> native_valid_bits{0};
+    std::atomic<bool>   wrong_owner{false};
+};
+
+class ScopedScriptedTimestampValidBitsOverride final {
+public:
+    explicit ScopedScriptedTimestampValidBitsOverride(
+        ScriptedTimestampValidBitsCapture& _capture
+    ) :
+        scripted_override{
+            .context  = &_capture,
+            .callback =
+                &ScriptedTimestampValidBitsCapture::ForceUnsupported,
+        } {
+        if (!TryInstallVulkanScriptedTimestampValidBitsOverrideForTesting(
+                &scripted_override
+            )) {
+            throw std::runtime_error(
+                "Vulkan scripted timestamp valid-bits override was already installed"
+            );
+        }
+        installed = true;
+    }
+
+    ~ScopedScriptedTimestampValidBitsOverride() noexcept {
+        if (installed &&
+            !RemoveVulkanScriptedTimestampValidBitsOverrideForTesting(
+                &scripted_override
+            )) {
+            std::terminate();
+        }
+    }
+
+    ScopedScriptedTimestampValidBitsOverride(
+        const ScopedScriptedTimestampValidBitsOverride&
+    ) = delete;
+    ScopedScriptedTimestampValidBitsOverride& operator=(
+        const ScopedScriptedTimestampValidBitsOverride&
+    ) = delete;
+
+private:
+    VulkanScriptedTimestampValidBitsOverrideForTesting
+        scripted_override{};
+    bool installed{false};
+};
+
 class DependencyWaitCapture final {
 public:
     explicit DependencyWaitCapture(EQueueType _queue) :
@@ -12857,10 +12929,9 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
     graphics_future = graphics_query.GetFuture();
     graphics.EndTimestampQuery(graphics_query);
 
-    // The public Copy API resolves timestamp capability as an immediate
-    // Error. Build the backend-internal query-only payload from a valid token
-    // and strip its native commands to exercise the executable-source
-    // contract that batch admission and rejection paths may still construct.
+    // Keep a backend-internal query-only payload alongside the real Copy query
+    // coverage below. Stripping its native commands exercises the executable
+    // source contract that batch admission and rejection paths may construct.
     CommandList copy_payload_builder(EQueueType::Graphics);
     copy_completion =
         copy_payload_builder.TrackGpuCompletion(
@@ -13084,6 +13155,323 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
         "copy_completion=Ready completion_only_copy=Ready "
         "group_arrival=verified owner=Completion "
         "callbacks=exactly_once native_submit=2 replay=0"
+    );
+}
+
+void RunCopyTimestampQueryCapabilityAndIsolation() {
+    auto& device = RenderDevice::Get();
+    auto* vk_device =
+        static_cast<VulkanDevice*>(device.GetImpl());
+    if (vk_device == nullptr) {
+        throw std::runtime_error(
+            "Copy timestamp test could not access the Vulkan device"
+        );
+    }
+
+    const uint32 native_valid_bits =
+        vk_device->GetTimestampValidBits(EQueueType::Copy);
+    const EVulkanTimestampQueryResetMode native_reset_mode =
+        vk_device->GetTimestampQueryResetMode(EQueueType::Copy);
+    const bool native_supported =
+        vk_device->SupportsTimestampQueries(EQueueType::Copy);
+    const char* native_reset_mode_name =
+        native_reset_mode ==
+                EVulkanTimestampQueryResetMode::CommandBuffer ?
+            "command_buffer" :
+        native_reset_mode == EVulkanTimestampQueryResetMode::Host ?
+            "host" :
+            "unsupported";
+    const EBufferUsageFlags usage =
+        EBufferUsageFlags::TRANSFER_SRC |
+        EBufferUsageFlags::TRANSFER_DST;
+    BufferRef source = device.CreateBuffer<uint32>(
+        "copy_timestamp_source", kElementCount, usage
+    );
+    BufferRef destination = device.CreateBuffer<uint32>(
+        "copy_timestamp_destination", kElementCount, usage
+    );
+
+    NativeSubmissionCapture        native_capture{};
+    ScopedNativeSubmissionObserver native_observer(native_capture);
+    size_t                          expected_native_submits = 0;
+
+    auto run_copy_submission =
+        [&](uint32 _seed, bool _expect_ready) -> QueryResult {
+        std::array<uint32, kElementCount> values{};
+        std::array<uint32, kElementCount> readback{};
+        for (uint32 index = 0; index < values.size(); ++index) {
+            values[index] = _seed + index * 37u;
+        }
+
+        std::atomic<uint32> callback_stage{0};
+        std::atomic<uint32> completion_callbacks{0};
+        std::atomic<uint32> query_callbacks{0};
+        std::atomic<uint32> ordinary_callbacks{0};
+        std::atomic<uint32> success_callbacks{0};
+        std::atomic<uint32> callback_errors{0};
+        FenceRef            done = device.CreateFence();
+
+        auto signal_succeeded = [&] {
+            auto* fence = static_cast<VulkanFence*>(
+                ResourceCast(done.Get())
+            );
+            return fence != nullptr && done->GetValue() >= 1 &&
+                   !fence->IsRejected(1) && !fence->IsFailed();
+        };
+        auto query_matches_expectation =
+            [&](const QueryResult& _result) {
+            const auto* timestamp =
+                std::get_if<TimestampQueryResult>(&_result.payload);
+            if (_expect_ready) {
+                return _result.status == QueryStatus::Ready &&
+                       _result.kind == QueryKind::Timestamp &&
+                       _result.error_reason.empty() &&
+                       timestamp != nullptr &&
+                       timestamp->valid_bits ==
+                           std::min(native_valid_bits, uint32{64}) &&
+                       timestamp->valid_bits != 0 &&
+                       timestamp->tick_period_ns > 0.0 &&
+                       timestamp->duration_ns >= 0.0;
+            }
+            return _result.status == QueryStatus::Error &&
+                   _result.kind == QueryKind::Timestamp &&
+                   !_result.error_reason.empty() &&
+                   timestamp == nullptr;
+        };
+
+        CommandList commands(EQueueType::Copy);
+        GpuCompletionFuture completion =
+            commands.TrackGpuCompletion(
+                _expect_ready ?
+                    "Phase21BCopyTimestampCompletion" :
+                    "Phase21BCopyTimestampUnsupportedCompletion"
+            );
+        commands.CopyFrom(
+            OwnedBytes(values),
+            source->GetView(),
+            "CopyTimestampUpload"
+        );
+        QueryToken query = commands.BeginTimestampQuery(
+            _expect_ready ?
+                "Phase21BCopyTimestamp" :
+                "Phase21BCopyTimestampUnsupported"
+        );
+        QueryFuture future = query.GetFuture();
+        commands.CopyFrom(
+            source->GetView(),
+            destination->GetView(),
+            "CopyTimestampMeasuredCopy"
+        );
+        commands.EndTimestampQuery(query);
+        commands.CopyFrom(
+            destination->GetView(),
+            WritableBytes(readback),
+            "CopyTimestampReadback"
+        );
+
+        completion.Then([&](const GpuCompletionResult& _result) {
+            const std::optional<QueryResult> query_result =
+                future.TryGet();
+            if (GetCurrentRHIThreadRole() !=
+                    ERHIThreadRole::Completion ||
+                _result.status != GpuCompletionStatus::Ready ||
+                !signal_succeeded() ||
+                !query_result.has_value() ||
+                !query_matches_expectation(*query_result) ||
+                callback_stage.load(std::memory_order_acquire) != 0) {
+                callback_errors.fetch_add(
+                    1, std::memory_order_relaxed
+                );
+            }
+            callback_stage.store(1, std::memory_order_release);
+            completion_callbacks.fetch_add(
+                1, std::memory_order_release
+            );
+        });
+        future.Then([&](const QueryResult& _result) {
+            if (GetCurrentRHIThreadRole() !=
+                    ERHIThreadRole::Completion ||
+                !query_matches_expectation(_result) ||
+                completion.Status() != GpuCompletionStatus::Ready ||
+                !signal_succeeded() ||
+                callback_stage.load(std::memory_order_acquire) != 1) {
+                callback_errors.fetch_add(
+                    1, std::memory_order_relaxed
+                );
+            }
+            callback_stage.store(2, std::memory_order_release);
+            query_callbacks.fetch_add(1, std::memory_order_release);
+        });
+        commands.AddCallback([&] {
+            if (GetCurrentRHIThreadRole() !=
+                    ERHIThreadRole::Completion ||
+                callback_stage.load(std::memory_order_acquire) != 2) {
+                callback_errors.fetch_add(
+                    1, std::memory_order_relaxed
+                );
+            }
+            callback_stage.store(3, std::memory_order_release);
+            ordinary_callbacks.fetch_add(
+                1, std::memory_order_release
+            );
+        });
+        commands.AddSuccessCallback([&] {
+            if (GetCurrentRHIThreadRole() !=
+                    ERHIThreadRole::Completion ||
+                callback_stage.load(std::memory_order_acquire) != 3) {
+                callback_errors.fetch_add(
+                    1, std::memory_order_relaxed
+                );
+            }
+            callback_stage.store(4, std::memory_order_release);
+            success_callbacks.fetch_add(
+                1, std::memory_order_release
+            );
+        });
+
+        CmdSubmit submit = commands.Submit();
+        submit.Signal(done.Get(), 1);
+        RHIExecutor::Get().Submit(
+            EQueueType::Copy,
+            std::move(submit),
+            ERHIExecSubmitFlags::FlushGPU
+        );
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        ++expected_native_submits;
+
+        const GpuCompletionResult completion_result =
+            completion.Get();
+        const QueryResult result = future.Get();
+        if (!query_matches_expectation(result) ||
+            completion_result.status != GpuCompletionStatus::Ready ||
+            !signal_succeeded() ||
+            readback != values ||
+            callback_stage.load(std::memory_order_acquire) != 4 ||
+            completion_callbacks.load(std::memory_order_acquire) !=
+                1 ||
+            query_callbacks.load(std::memory_order_acquire) != 1 ||
+            ordinary_callbacks.load(std::memory_order_acquire) !=
+                1 ||
+            success_callbacks.load(std::memory_order_acquire) != 1 ||
+            callback_errors.load(std::memory_order_acquire) != 0) {
+            throw std::runtime_error(
+                _expect_ready ?
+                    "supported Copy timestamp submission violated its Completion contract" :
+                    "unsupported Copy timestamp profiling disrupted real Copy work"
+            );
+        }
+
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        if (completion_callbacks.load(std::memory_order_acquire) !=
+                1 ||
+            query_callbacks.load(std::memory_order_acquire) != 1 ||
+            ordinary_callbacks.load(std::memory_order_acquire) !=
+                1 ||
+            success_callbacks.load(std::memory_order_acquire) != 1) {
+            throw std::runtime_error(
+                "Copy timestamp submission replayed Completion callbacks"
+            );
+        }
+        return result;
+    };
+
+    std::optional<QueryResult> first_supported_result{};
+    if (native_supported) {
+        first_supported_result.emplace(
+            run_copy_submission(0x21B10000u, true)
+        );
+    }
+
+    ScriptedTimestampValidBitsCapture unsupported_capture{};
+    QueryResult unsupported_result{};
+    {
+        ScopedScriptedTimestampValidBitsOverride
+            scripted_override(unsupported_capture);
+        unsupported_result =
+            run_copy_submission(0x21B20000u, false);
+    }
+    if (unsupported_capture.count.load(std::memory_order_acquire) !=
+            1 ||
+        unsupported_capture.queue.load(std::memory_order_acquire) !=
+            static_cast<uint32>(EQueueType::Copy) ||
+        unsupported_capture.native_valid_bits.load(
+            std::memory_order_acquire
+        ) != native_valid_bits ||
+        unsupported_capture.wrong_owner.load(
+            std::memory_order_acquire
+        ) ||
+        unsupported_result.status != QueryStatus::Error) {
+        throw std::runtime_error(
+            "scripted Copy timestamp capability override lost ownership or identity"
+        );
+    }
+
+    const QueryResult recovery_result =
+        run_copy_submission(
+            0x21B30000u,
+            native_supported
+        );
+
+    if (native_capture.Overflowed() ||
+        native_capture.Count() != expected_native_submits) {
+        throw std::runtime_error(
+            "Copy timestamp test observed the wrong native submission count"
+        );
+    }
+    for (size_t index = 0; index < native_capture.Count(); ++index) {
+        const VulkanNativeSubmissionEvent& event =
+            native_capture.Event(index);
+        if (event.queue != EQueueType::Copy ||
+            event.thread_role != ERHIThreadRole::Submission ||
+            !event.outcome.WasSubmitted()) {
+            throw std::runtime_error(
+                "Copy timestamp work did not retain native Submission ownership"
+            );
+        }
+    }
+
+    if (native_supported) {
+        const auto* first_timestamp =
+            std::get_if<TimestampQueryResult>(
+                &first_supported_result->payload
+            );
+        const auto* recovery_timestamp =
+            std::get_if<TimestampQueryResult>(
+                &recovery_result.payload
+            );
+        if (first_timestamp == nullptr ||
+            recovery_timestamp == nullptr ||
+            first_timestamp->valid_bits == 0 ||
+            recovery_timestamp->valid_bits == 0) {
+            throw std::runtime_error(
+                "Copy timestamp allocator reuse did not restore native capability"
+            );
+        }
+        LOG_INFO(
+            "[TESTCASE][PASS] name=TimestampQueryCopySupported "
+            "queue=Copy status=Ready valid_bits={} reset_mode={} "
+            "copy=verified "
+            "gpu_completion=Ready order=signal->completion->query->ordinary->success "
+            "owner=Completion callbacks=exactly_once "
+            "allocator_reuse=verified native_owner=Submission replay=0",
+            recovery_timestamp->valid_bits,
+            native_reset_mode_name
+        );
+    } else {
+        LOG_INFO(
+            "[TESTCASE][SKIP] name=TimestampQueryCopySupported "
+            "reason=timestamp_unsupported valid_bits={} "
+            "reset_mode=unsupported",
+            native_valid_bits
+        );
+    }
+
+    LOG_INFO(
+        "[TESTCASE][PASS] name=TimestampQueryCopyUnsupportedFallback "
+        "queue=Copy injected_valid_bits=0 query=Error copy=verified "
+        "signal=success gpu_completion=Ready native_submit=accepted "
+        "native_owner=Submission owner=Completion "
+        "callbacks=exactly_once runtime=recovered replay=0"
     );
 }
 
@@ -14569,6 +14957,7 @@ int main(int argc, const char** argv) {
             RunTimestampQueryCrossQueueBatchPublication();
             RunTimestampQueryMixedMultiSegmentCallbackTiers();
             RunTimestampQueryCopyOnlyPayloadArrival();
+            RunCopyTimestampQueryCapabilityAndIsolation();
             RenderDevice::Dispose();
             render_device_initialized = false;
             TaskSystem::ShutDown();
@@ -14597,6 +14986,7 @@ int main(int argc, const char** argv) {
             RunTimestampQueryCrossQueueBatchPublication();
             RunTimestampQueryMixedMultiSegmentCallbackTiers();
             RunTimestampQueryCopyOnlyPayloadArrival();
+            RunCopyTimestampQueryCapabilityAndIsolation();
             RunTimestampQueryPreparationRejection();
             // This malformed-batch rejection hard-latches the runtime, so the
             // mid-batch Translate failure has its own focused invocation.

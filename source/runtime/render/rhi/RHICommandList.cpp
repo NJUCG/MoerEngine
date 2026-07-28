@@ -1312,16 +1312,6 @@ QueryToken CommandList::BeginTimestampQuery(std::string_view _name) {
     );
     query_cancellation_domain.Register(token);
 
-    // Phase 17A does not translate timestamp queries on the Copy queue. Return
-    // a terminal token without manufacturing an untranslatable command.
-    if (queue_type == EQueueType::Copy) {
-        QueryBackendAccess::ResolveErrorIfPending(
-            token,
-            "timestamp queries are unsupported on Copy queues"
-        );
-        return token;
-    }
-
     auto command = MakeUnique<QueryCmd>(
         token,
         QueryCmd::EOp::BeginTimestamp,
@@ -1377,15 +1367,6 @@ void CommandList::EndTimestampQuery(const QueryToken& _token) {
     if (_token.Kind() != QueryKind::Timestamp) {
         throw std::invalid_argument(
             "EndTimestampQuery token has the wrong query kind"
-        );
-    }
-    if (queue_type == EQueueType::Copy) {
-        // BeginTimestampQuery on Copy intentionally records no Begin command.
-        if (_token.GetFuture().Status() == QueryStatus::Error) {
-            return;
-        }
-        throw std::logic_error(
-            "Copy queue timestamp token has no terminal capability result"
         );
     }
     if (active_query_stack.empty()) {

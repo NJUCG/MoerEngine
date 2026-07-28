@@ -934,6 +934,71 @@ def _require_timestamp_query_success_batch(text: str) -> None:
         "timestamp-query-success-batch: incomplete Copy query-only arrival contract",
     )
 
+    copy_supported = _testcase_marker(
+        "TimestampQueryCopySupported", text
+    )
+    _require(
+        copy_supported is not None,
+        "timestamp-query-success-batch: missing Copy supported marker",
+    )
+    supported_status, supported_fields = copy_supported
+    if supported_status == "SKIP":
+        valid_bits = supported_fields.get("valid_bits")
+        _require(
+            supported_fields.get("reason") == "timestamp_unsupported"
+            and supported_fields.get("reset_mode") == "unsupported"
+            and valid_bits is not None
+            and valid_bits.isdigit()
+            and 0 <= int(valid_bits) <= 64,
+            "timestamp-query-success-batch: invalid Copy supported SKIP contract",
+        )
+    else:
+        valid_bits = supported_fields.get("valid_bits")
+        _require(
+            supported_status == "PASS"
+            and supported_fields.get("queue") == "Copy"
+            and supported_fields.get("status") == "Ready"
+            and valid_bits is not None
+            and valid_bits.isdigit()
+            and 0 < int(valid_bits) <= 64
+            and supported_fields.get("reset_mode")
+            in {"command_buffer", "host"}
+            and supported_fields.get("copy") == "verified"
+            and supported_fields.get("gpu_completion") == "Ready"
+            and supported_fields.get("order")
+            == "signal->completion->query->ordinary->success"
+            and supported_fields.get("owner") == "Completion"
+            and supported_fields.get("callbacks") == "exactly_once"
+            and supported_fields.get("allocator_reuse") == "verified"
+            and supported_fields.get("native_owner") == "Submission"
+            and supported_fields.get("replay") == "0",
+            "timestamp-query-success-batch: incomplete Copy supported contract",
+        )
+
+    copy_unsupported = _testcase_marker(
+        "TimestampQueryCopyUnsupportedFallback", text
+    )
+    _require(
+        copy_unsupported is not None and copy_unsupported[0] == "PASS",
+        "timestamp-query-success-batch: missing Copy unsupported fallback PASS marker",
+    )
+    _, unsupported_fields = copy_unsupported
+    _require(
+        unsupported_fields.get("queue") == "Copy"
+        and unsupported_fields.get("injected_valid_bits") == "0"
+        and unsupported_fields.get("query") == "Error"
+        and unsupported_fields.get("copy") == "verified"
+        and unsupported_fields.get("signal") == "success"
+        and unsupported_fields.get("gpu_completion") == "Ready"
+        and unsupported_fields.get("native_submit") == "accepted"
+        and unsupported_fields.get("native_owner") == "Submission"
+        and unsupported_fields.get("owner") == "Completion"
+        and unsupported_fields.get("callbacks") == "exactly_once"
+        and unsupported_fields.get("runtime") == "recovered"
+        and unsupported_fields.get("replay") == "0",
+        "timestamp-query-success-batch: incomplete Copy unsupported fallback contract",
+    )
+
 
 def _require_owning_readback_future(text: str) -> None:
     marker = _testcase_marker("OwningReadbackFuture", text)

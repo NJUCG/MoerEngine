@@ -262,6 +262,26 @@ VkResult VkNativeQueryPool::GetResults(
     );
 }
 
+void VkNativeQueryPool::ResetHost(
+    uint32 _first_query,
+    uint32 _query_count
+) {
+    if (_query_count == 0) {
+        return;
+    }
+    if (_first_query > count || _query_count > count - _first_query) {
+        throw std::out_of_range(
+            "Vulkan host query reset range exceeds the native pool"
+        );
+    }
+    vkResetQueryPool(
+        device.GetDevice(),
+        query_pool,
+        _first_query,
+        _query_count
+    );
+}
+
 void VkNativeQueryPool::EnsureCapacity(uint32 _required_count) {
     if (_required_count <= count) {
         return;
@@ -297,6 +317,9 @@ VulkanAllocator::VulkanAllocator(VulkanDevice* _device, EQueueType _type) :
     scratch_allocator(_device, &allocator),
     shader_buffer_allocator(_device, &allocator),
     timestamp_valid_bits(_device->GetTimestampValidBits(_type)),
+    timestamp_reset_mode(
+        _device->GetTimestampQueryResetMode(_type)
+    ),
     timestamp_period_ns(_device->GetCoreProperties().core_1_0.limits.timestampPeriod) {}
 
 VulkanAllocator::~VulkanAllocator() {
@@ -380,6 +403,28 @@ void VulkanAllocator::EnsureQueryCapacity(
     EnsureOcclusionQueryCapacity(_occlusion_pair_count);
 }
 
+void VulkanAllocator::ConfigureTimestampCapabilityForRecording(
+    uint32                         _valid_bits,
+    EVulkanTimestampQueryResetMode _reset_mode
+) {
+    if (next_timestamp_query != 0 || !timestamp_query_records.empty()) {
+        throw std::logic_error(
+            "Vulkan timestamp capability can change only before recording"
+        );
+    }
+    timestamp_valid_bits = std::min(_valid_bits, uint32{64});
+    const EVulkanTimestampQueryResetMode expected_mode =
+        m_device->GetTimestampQueryResetMode(
+            queue_type, timestamp_valid_bits
+        );
+    if (_reset_mode != expected_mode) {
+        throw std::invalid_argument(
+            "Vulkan timestamp reset mode does not match queue capability"
+        );
+    }
+    timestamp_reset_mode = _reset_mode;
+}
+
 void VulkanAllocator::EnsureTimestampQueryCapacity(size_t _required_count) {
     if (_required_count == 0) {
         return;
@@ -389,9 +434,10 @@ void VulkanAllocator::EnsureTimestampQueryCapacity(size_t _required_count) {
             "Vulkan timestamp query pool can grow only before recording"
         );
     }
-    if (timestamp_valid_bits == 0) {
+    if (timestamp_reset_mode ==
+        EVulkanTimestampQueryResetMode::Unsupported) {
         throw std::runtime_error(
-            "Vulkan queue family does not support timestamp queries"
+            "Vulkan queue family cannot safely reset timestamp queries"
         );
     }
     if (_required_count > std::numeric_limits<uint32>::max()) {
@@ -413,9 +459,13 @@ void VulkanAllocator::EnsureTimestampQueryCapacity(size_t _required_count) {
             required_count,
             queue_type
         );
-        return;
+    } else {
+        timestamp_pool->EnsureCapacity(required_count);
     }
-    timestamp_pool->EnsureCapacity(required_count);
+    if (timestamp_reset_mode ==
+        EVulkanTimestampQueryResetMode::Host) {
+        timestamp_pool->ResetHost(0, required_count);
+    }
 }
 
 void VulkanAllocator::EnsureOcclusionQueryCapacity(size_t _required_count) {
@@ -511,9 +561,15 @@ void VulkanAllocator::RecordTimestampQuery(
     if (!token.Valid() || token.Kind() != QueryKind::Timestamp) {
         throw std::runtime_error("invalid Vulkan timestamp query token");
     }
-    if (timestamp_valid_bits == 0) {
+    if (_cmd.GetQueueType() != queue_type) {
         throw std::runtime_error(
-            "Vulkan queue family does not support timestamp queries"
+            "Vulkan timestamp query command queue does not match allocator"
+        );
+    }
+    if (timestamp_reset_mode ==
+        EVulkanTimestampQueryResetMode::Unsupported) {
+        throw std::runtime_error(
+            "Vulkan timestamp query recording is unsupported on this queue"
         );
     }
 
@@ -523,7 +579,10 @@ void VulkanAllocator::RecordTimestampQuery(
             throw std::runtime_error("duplicate Vulkan timestamp query begin");
         }
         const uint32 slot = AllocateTimestampQuerySlot();
-        _cmd_list.ResetQueryPool(*timestamp_pool, slot, 1);
+        if (timestamp_reset_mode ==
+            EVulkanTimestampQueryResetMode::CommandBuffer) {
+            _cmd_list.ResetQueryPool(*timestamp_pool, slot, 1);
+        }
         _cmd_list.WriteTimeStamp(
             *timestamp_pool, slot, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT
         );
@@ -545,7 +604,10 @@ void VulkanAllocator::RecordTimestampQuery(
         throw std::runtime_error("duplicate Vulkan timestamp query end");
     }
     const uint32 slot = AllocateTimestampQuerySlot();
-    _cmd_list.ResetQueryPool(*timestamp_pool, slot, 1);
+    if (timestamp_reset_mode ==
+        EVulkanTimestampQueryResetMode::CommandBuffer) {
+        _cmd_list.ResetQueryPool(*timestamp_pool, slot, 1);
+    }
     _cmd_list.WriteTimeStamp(
         *timestamp_pool, slot, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT
     );

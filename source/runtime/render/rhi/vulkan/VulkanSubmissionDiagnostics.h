@@ -343,6 +343,32 @@ RemoveVulkanScriptedQueryPreparationOverrideForTesting(
     const VulkanScriptedQueryPreparationOverrideForTesting* _override
 ) noexcept;
 
+using VulkanScriptedTimestampValidBitsCallback =
+    uint32 (*)(void*, EQueueType, uint32) noexcept;
+
+struct VulkanScriptedTimestampValidBitsOverrideForTesting {
+    void*                                    context{nullptr};
+    VulkanScriptedTimestampValidBitsCallback callback{nullptr};
+};
+
+// Narrow Copy-query capability seam. The callback receives the native queue
+// family value on the Translate owner and returns an upper bound for this
+// recording. The runtime clamps it to the native value, so a test can degrade
+// capability but can never manufacture unsupported hardware capability.
+// Production has no installed override. Tests use zero to prove that
+// timestamp observability degrades without rejecting real Copy work.
+//
+// Override storage and context are caller-owned and immutable while installed.
+// Quiesce the RHI runtime before removal and destroy them only after removal.
+[[nodiscard]] RENDER_API bool
+TryInstallVulkanScriptedTimestampValidBitsOverrideForTesting(
+    const VulkanScriptedTimestampValidBitsOverrideForTesting* _override
+) noexcept;
+[[nodiscard]] RENDER_API bool
+RemoveVulkanScriptedTimestampValidBitsOverrideForTesting(
+    const VulkanScriptedTimestampValidBitsOverrideForTesting* _override
+) noexcept;
+
 struct VulkanScriptedPresentResult {
     VulkanOperationResult outcome{
         EVulkanOperationStatus::Retry,
