@@ -50,12 +50,16 @@ namespace Moer::Render::Raster {
           .IndivisualMips()                                                                                     \
           .SamplerConfig(SF_LINEAR, SAM_CLAMP_TO_EDGE))                                                         \
     X(TexHandle, tonemapping_output, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_UNORM).Usage(E_SAMPLED_COLOR))    \
-    X(TexHandle, ui_frame_buffer, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_UNORM).Usage(E_SAMPLED_COLOR))       \
-        X(TexHandle,                                                                                                \
-            output,                                                                                                   \
-            Tex2DTag,                                                                                                 \
-            TexConfig::Default(PF_R8G8B8A8_SRGB)                                                                      \
-                    .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC))       \
+    X(TexHandle,                                                                                                \
+      ui_frame_buffer,                                                                                          \
+      Tex2DTag,                                                                                                 \
+      TexConfig::Default(PF_R8G8B8A8_UNORM).Usage(E_SAMPLED_COLOR).OutputSize())                               \
+    X(TexHandle,                                                                                                \
+      output,                                                                                                   \
+      Tex2DTag,                                                                                                 \
+      TexConfig::Default(PF_R8G8B8A8_SRGB)                                                                      \
+          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC)         \
+          .OutputSize())                                                                                        \
     X(DepthBufferWithHandle,                                                                                    \
       depth_linear_sampler,                                                                                     \
       TexDepthTag,                                                                                              \
@@ -137,12 +141,13 @@ struct RasterTextures {
     RASTER_TEXTURES_TABLE_DOWNSAMPLED
 #undef X
 
-    void CreateFrameBuffers(RenderDevice& device, const uint2& size) {
+    void CreateFrameBuffers(RenderDevice& device, const uint2& scene_size, const uint2& output_size) {
         // Full-resolution textures
-#define X(TYPE, NAME, TEXTYPE, CONFIG)                                                  \
-    {                                                                                   \
-        TexConfig cfg = (CONFIG);                                                       \
-        AssetTool::CreateRasterResource<TEXTYPE>(this->NAME, device, MOER_TEXT_STRINGIZE(NAME), size, cfg); \
+#define X(TYPE, NAME, TEXTYPE, CONFIG)                                                                     \
+    {                                                                                                      \
+        TexConfig cfg = (CONFIG);                                                                          \
+        const uint2& tex_size = cfg.b_output_size ? output_size : scene_size;                              \
+        AssetTool::CreateRasterResource<TEXTYPE>(this->NAME, device, MOER_TEXT_STRINGIZE(NAME), tex_size, cfg); \
     }
         RASTER_TEXTURES_TABLE
         RASTER_TEXTURES_TABLE_DOWNSAMPLED
@@ -150,7 +155,7 @@ struct RasterTextures {
 
         // Half-resolution variants
         {
-            uint2 half_size = uint2(std::max(1u, size.x / 2), std::max(1u, size.y / 2));
+            uint2 half_size = uint2(std::max(1u, scene_size.x / 2), std::max(1u, scene_size.y / 2));
 #define X(TYPE, NAME, TEXTYPE, CONFIG)                                                                    \
     {                                                                                                     \
         TexConfig cfg = (CONFIG);                                                                         \
@@ -191,6 +196,65 @@ struct RasterTextures {
     }
         RASTER_TEXTURES_TABLE_DOWNSAMPLED
 #undef X
+
+        // Initial layout transition: frame-buffer textures are created in UNDEFINED layout.
+        // Raster passes call BeginRendering directly, so bring color/depth attachments to the
+        // expected initial layout before the first frame.
+        Array<BarrierCreateInfo> initial_transitions;
+        auto add_initial_transition = [&initial_transitions](TextureView view, ETextureUsageFlags usage) {
+            Texture* tex = view.GetTexture();
+            if (tex == nullptr) {
+                return;
+            }
+            // Default GetView() only exposes mip 0, but the tracker requires whole-resource
+            // barriers when ETrackedStateUpdateMode::Update is used.
+            TextureView whole_view(tex, tex->GetFormat(), 0, tex->GetNumMips());
+            if ((usage & ETextureUsageFlags::COLOR_ATTACHMENT) == ETextureUsageFlags::COLOR_ATTACHMENT) {
+                initial_transitions.emplace_back(BarrierCreateInfo::Transition(
+                    whole_view,
+                    MakeBarrierState(ETextureState::UNDEFINED, EPassType::Graphics),
+                    MakeBarrierState(ETextureState::RENDER_TARGET, EPassType::Graphics)
+                ));
+            } else if (
+                (usage & ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) ==
+                ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) {
+                initial_transitions.emplace_back(BarrierCreateInfo::Transition(
+                    whole_view,
+                    MakeBarrierState(ETextureState::UNDEFINED, EPassType::Graphics),
+                    MakeBarrierState(ETextureState::DEPTH_STENCIL_WRITE, EPassType::Graphics)
+                ));
+            }
+        };
+
+#define X(TYPE, NAME, TEXTYPE, CONFIG)                                                         \
+    {                                                                                          \
+        TexConfig cfg = (CONFIG);                                                              \
+        if (!cfg.is_asset && cfg.alias_ptr == nullptr && NAME.tex != nullptr) {                \
+            add_initial_transition(NAME.tex->GetView(), cfg.usage);                            \
+        }                                                                                      \
+    }
+        RASTER_TEXTURES_TABLE
+        RASTER_TEXTURES_TABLE_DOWNSAMPLED
+#undef X
+
+#define X(TYPE, NAME, TEXTYPE, CONFIG)                                                         \
+    {                                                                                          \
+        TexConfig cfg = (CONFIG);                                                              \
+        if (!cfg.is_asset && cfg.alias_ptr == nullptr && NAME##_half.tex != nullptr) {         \
+            add_initial_transition(NAME##_half.tex->GetView(), cfg.usage);                     \
+        }                                                                                      \
+    }
+        RASTER_TEXTURES_TABLE_DOWNSAMPLED
+#undef X
+
+        if (!initial_transitions.empty()) {
+            cmd_list.Barriers(
+                initial_transitions,
+                EQueueType::Graphics,
+                EQueueType::Graphics,
+                ETrackedStateUpdateMode::Update
+            );
+        }
 
         cmd_list.Barriers(
             EQueueType::Graphics,

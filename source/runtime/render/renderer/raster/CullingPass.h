@@ -167,6 +167,32 @@ private:
             return;
         }
 
+        // Ensure culling output buffers are in UAV state for the compute dispatch.
+        // These barriers were removed in a previous cleanup and caused the shadow
+        // depth pass to read stale/indeterminate data when GPU culling was enabled.
+        context.cmd_list.Barriers(
+            {
+                BarrierCreateInfo::Transition(
+                    visibility_set.visible_instance_id_buf.buf->GetView(),
+                    MakeBarrierState(EBufferState::UNDEFINED, EPassType::Compute),
+                    MakeBarrierState(EBufferState::UNORDERED_ACCESS, EPassType::Compute)
+                ),
+                BarrierCreateInfo::Transition(
+                    visibility_set.draw_cmd_buf->GetView(),
+                    MakeBarrierState(EBufferState::UNDEFINED, EPassType::Compute),
+                    MakeBarrierState(EBufferState::UNORDERED_ACCESS, EPassType::Compute)
+                ),
+                BarrierCreateInfo::Transition(
+                    visibility_set.counter_buf->GetView(),
+                    MakeBarrierState(EBufferState::TRANSFER_DST, EPassType::Compute),
+                    MakeBarrierState(EBufferState::UNORDERED_ACCESS, EPassType::Compute)
+                ),
+            },
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
+        );
+
         const uint dispatch_count = (params.draw_count + 63) / 64;
 
         if (!profile_scope_name.empty()) {
@@ -189,6 +215,31 @@ private:
         if (!profile_scope_name.empty()) {
             context.cmd_list.PopScopeWithTimeScope();
         }
+
+        // Transition culling outputs to the read-only states consumed by the
+        // following indirect draw and the CPU readback of culling counters.
+        context.cmd_list.Barriers(
+            {
+                BarrierCreateInfo::Transition(
+                    visibility_set.visible_instance_id_buf.buf->GetView(),
+                    MakeBarrierState(EBufferState::UNORDERED_ACCESS, EPassType::Compute),
+                    MakeBarrierState(EBufferState::SHADER_RESOURCE, EPassType::Graphics)
+                ),
+                BarrierCreateInfo::Transition(
+                    visibility_set.draw_cmd_buf->GetView(),
+                    MakeBarrierState(EBufferState::UNORDERED_ACCESS, EPassType::Compute),
+                    MakeBarrierState(EBufferState::INDIRECT_ARGUMENT, EPassType::Graphics)
+                ),
+                BarrierCreateInfo::Transition(
+                    visibility_set.counter_buf->GetView(),
+                    MakeBarrierState(EBufferState::UNORDERED_ACCESS, EPassType::Compute),
+                    MakeBarrierState(EBufferState::INDIRECT_ARGUMENT, EPassType::Graphics)
+                ),
+            },
+            EQueueType::Graphics,
+            EQueueType::Graphics,
+            ETrackedStateUpdateMode::Update
+        );
 
         context.cmd_list.CopyFrom(
             visibility_set.counter_buf->GetView(),

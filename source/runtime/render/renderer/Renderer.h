@@ -44,10 +44,11 @@ public:
     };
 
     Renderer(
-        uint2&                 _resolution,
+        uint2&                        _resolution,
+        uint2&                        _render_resolution,
         const SharedPtr<EditorConfig> _config,
-        const EngineHooks&     hooks,
-        ::Moer::RuntimeAssets& _runtime_assets
+        const EngineHooks&            hooks,
+        ::Moer::RuntimeAssets&        _runtime_assets
     );
 
     virtual ~Renderer();
@@ -71,7 +72,8 @@ protected:
     RenderDevice&  device;
     ShaderManager& manager;
     CommandQueue&  gfx_queue;
-    uint2&         resolution; // 数据源位于EditorConfig中
+    uint2&         resolution;       // 窗口/交换链尺寸（数据源位于EditorConfig中）
+    uint2&         render_resolution; // 实际场景渲染尺寸（SceneColor viewport 尺寸）
     ::Moer::RuntimeAssets& runtime_assets;
 
     UniquePtr<PresentationSurface> presentation_surface;

@@ -16,6 +16,7 @@ class RENDER_API RaytracingRenderer : public Renderer {
 public:
     RaytracingRenderer(
         uint2&                        _resolution,
+        uint2&                        _render_resolution,
         const SharedPtr<EditorConfig> _config,
         const EngineHooks&            _hooks,
         RuntimeAssets&                _runtime_assets

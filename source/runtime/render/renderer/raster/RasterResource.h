@@ -47,8 +47,12 @@ public:
 
     float frame_time;
 
-    uint2 GetResolution() {
-        return uint2(resolution.x, resolution.y);
+    uint2 GetRenderResolution() const {
+        return uint2(render_resolution.x, render_resolution.y);
+    }
+
+    uint2 GetFramebufferRenderResolution() const {
+        return framebuffer_render_resolution;
     }
 
     // MARK: Hold ownership
@@ -155,7 +159,8 @@ private:
         });
     }
 
-    uint2& resolution; // Be careful, resolution is also a reference
+    uint2& render_resolution; // 实际场景渲染尺寸（SceneColor viewport 尺寸）
+    uint2  framebuffer_render_resolution = {0, 0};
 
 public:
     // Constructor
@@ -166,7 +171,7 @@ public:
         BindlessArrayRef bdls,
         CommandList&     cmd_list,
         Scene&           scene,
-        uint2&           resolution
+        uint2&           render_resolution
     ) :
         device(device),
         manager(manager),
@@ -174,7 +179,7 @@ public:
         bdls(bdls),
         cmd_list(cmd_list),
         scene(scene),
-        resolution(resolution) {
+        render_resolution(render_resolution) {
 
         // textures
         textures = RasterTextures{};
@@ -201,8 +206,9 @@ public:
 
     // MARK: Frame Buffers
 
-    void CreateFrameBuffers() {
-        textures.CreateFrameBuffers(device, resolution);
+    void CreateFrameBuffers(const uint2& output_size) {
+        textures.CreateFrameBuffers(device, render_resolution, output_size);
+        framebuffer_render_resolution = render_resolution;
     }
 
     //功能：加载外部纹理并在这一步Create它们的buffer

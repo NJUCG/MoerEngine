@@ -245,6 +245,26 @@ void EditorUI::TickUI() {
     ui.EndMainDockspace();
     ResetState();
     ShowSceneColor();
+
+    // 将 SceneColor 面板的实际内容尺寸同步给渲染器，作为实际场景渲染分辨率
+    m_config->SetRenderResolution(
+        static_cast<uint>(m_scene_color_resolution.x),
+        static_cast<uint>(m_scene_color_resolution.y)
+    );
+
+    // 同步到 WindowInput，供 Camera 计算正确的 aspect ratio
+    {
+        WindowInput& input          = WindowInput::Get();
+        input.m_scene_color_resolution = {
+            static_cast<uint>(m_scene_color_resolution.x),
+            static_cast<uint>(m_scene_color_resolution.y)
+        };
+        input.m_scene_color_pos = {
+            static_cast<uint>(m_scene_color_pos.x),
+            static_cast<uint>(m_scene_color_pos.y)
+        };
+    }
+
     ShowConfig();
 #if WITH_PROFILE
     m_runtime_profiler.TickUI();
@@ -407,12 +427,21 @@ void EditorUI::ShowConfig() {
     if (ui.TreeNode("Camera")) {
 
         ui.SliderFloat("Speed (log10)", &m_config->camera_speed_log10, -1.f, 2.6f);
-        ui.SliderFloat("Fov Y", &m_config->camera_fovy, 1.f, 160.f);
 
-        ui.SliderFloat("Near Clip (log10)", &m_config->camera_near_clip_log10, -4.f, 0.99f);
-        ui.SliderFloat("Far Clip (log10)", &m_config->camera_far_clip_log10, 0.f, 4.f);
+        ui.Checkbox("Override Projection", &m_config->camera_projection_override_enabled);
+
+        bool projection_changed = false;
+        projection_changed |= ui.SliderFloat("Fov Y", &m_config->camera_fovy, 1.f, 160.f);
+        projection_changed |=
+            ui.SliderFloat("Near Clip (log10)", &m_config->camera_near_clip_log10, -4.f, 0.99f);
+        projection_changed |=
+            ui.SliderFloat("Far Clip (log10)", &m_config->camera_far_clip_log10, 0.f, 4.f);
         m_config->camera_near_clip_log10 =
             std::min(m_config->camera_near_clip_log10, m_config->camera_far_clip_log10 - 0.1f);
+
+        if (projection_changed) {
+            m_config->camera_projection_override_enabled = true;
+        }
 
         ui.TreePop();
     }

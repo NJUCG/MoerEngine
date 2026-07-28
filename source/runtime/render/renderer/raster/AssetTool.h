@@ -38,6 +38,7 @@ struct TexConfig {
     bool        is_asset           = false;
     bool        b_create_mip_views = false;
     bool        b_downsampled      = false;
+    bool        b_output_size      = false; // 使用窗口尺寸而非场景渲染尺寸
 
     //为Depth设计，共用一张纹理
     template<typename T>
@@ -110,6 +111,11 @@ struct TexConfig {
 
     TexConfig& DownSampled(bool b = true) {
         b_downsampled = b;
+        return *this;
+    }
+
+    TexConfig& OutputSize(bool b = true) {
+        b_output_size = b;
         return *this;
     }
 

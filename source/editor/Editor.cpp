@@ -67,6 +67,7 @@ void Editor::Init(int argc, const char** argv) {
     auto editor_config = MakeShared<EditorConfig>();
     const auto& startup_config = ConfigManager::GetInstance().GetConfig();
     editor_config->SetResolution(startup_config.editor.width, startup_config.editor.height);
+    editor_config->SetRenderResolution(startup_config.editor.width, startup_config.editor.height);
     editor_config->scene_path = startup_config.engine.scene.scene_path;
     editor_config->selected_render_method =
         ResolveDefaultRenderMethod(startup_config.engine.render.default_render_method);

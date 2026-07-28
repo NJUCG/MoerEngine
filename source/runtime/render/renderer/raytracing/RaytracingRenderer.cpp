@@ -115,11 +115,12 @@ struct RGRaytracingLowDiscrepancyParams {
 
 RaytracingRenderer::RaytracingRenderer(
     uint2&                        _resolution,
+    uint2&                        _render_resolution,
     const SharedPtr<EditorConfig> _config,
     const EngineHooks&            _hooks,
     RuntimeAssets&                _runtime_assets
 ) :
-    Renderer(_resolution, _config, _hooks, _runtime_assets) {}
+    Renderer(_resolution, _render_resolution, _config, _hooks, _runtime_assets) {}
 
 void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
     ::Moer::RaytracingUI config_ui(editor_config->raytracing_config);
@@ -143,10 +144,12 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     ShaderUtils        sd_utils(device, manager);
 
     ImportantSamplingParams is_params{};
-    is_params.render_size = resolution;
+    is_params.render_size = render_resolution;
     ImportanceSamplingContext is_ctx(is_params);
 
     bool first_load = true;
+
+    uint2 current_render_resolution = render_resolution;
 
     UnorderedMap<String, TextureWithHandle> material_textures;
 
@@ -154,7 +157,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 
     TextureRef output = device.CreateTexture(
         MOER_TEXT("output"),
-        Extent2D(resolution.x, resolution.y),
+        Extent2D(render_resolution.x, render_resolution.y),
         presentation_surface->GetFormat(),
         ETextureUsageFlags::COLOR_ATTACHMENT
     );
@@ -166,17 +169,17 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC
     );
 
-    auto create_frame_buffers = [&](uint2 _new_extent) {
+    auto create_output_textures = [&](uint2 _scene_size, uint2 _window_size) {
         output = device.CreateTexture(
             MOER_TEXT("output"),
-            Extent2D(_new_extent.x, _new_extent.y),
+            Extent2D(_scene_size.x, _scene_size.y),
             presentation_surface->GetFormat(),
             ETextureUsageFlags::COLOR_ATTACHMENT
         );
 
         combine_output = device.CreateTexture(
             MOER_TEXT("combine_output"),
-            Extent2D(_new_extent.x, _new_extent.y),
+            Extent2D(_window_size.x, _window_size.y),
             presentation_surface->GetFormat(),
             ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC
         );
@@ -206,7 +209,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
     UniquePtr<RTContext>        rt_ctx             = MakeUnique<RTContext>(sd_utils, is_ctx, bindless_array);
     UniquePtr<ToneMappingPass>  tone_mapping_pass;
 
-    rt_ctx->SetResolution(resolution);
+    rt_ctx->SetResolution(render_resolution);
     AntialiasPass::CreateInfo antialias_pass_info{
         .motion              = RTRHI(rt_ctx->frame_rt.motion),
         .feedback_color_ping = RTRHI(rt_ctx->frame_rt.feedback_color_ping),
@@ -223,7 +226,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
 #if WITH_NRD
     uint64 nrd_time      = 0ull;
     auto*  nrd_plugin    = device.LoadPlugin<Ext::NRDPlugin>();
-    auto   nrd_interface = nrd_plugin->CreateInterface(max_frame_in_flight, resolution.x, resolution.y);
+    auto   nrd_interface = nrd_plugin->CreateInterface(max_frame_in_flight, render_resolution.x, render_resolution.y);
 #endif
 
     VisualizeConfig visualize_config{};
@@ -283,30 +286,8 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             std::this_thread::yield();
             skip_present = true;
 
-        } else if (window_state == EWindowState::SizeChanged) {
-            create_frame_buffers(resolution);
-
-            rt_ctx->SetResolution(resolution);
-
-            is_ctx.~ImportanceSamplingContext();
-            is_params.render_size = resolution;
-            new (&is_ctx) ImportanceSamplingContext(is_params);
-
-#if WITH_NRD
-            nrd_interface =
-                nrd_plugin->RecreateInterface(std::move(nrd_interface), resolution.x, resolution.y);
-#endif
-
-            antialias_pass_info.motion              = RTRHI(rt_ctx->frame_rt.motion);
-            antialias_pass_info.feedback_color_ping = RTRHI(rt_ctx->frame_rt.feedback_color_ping);
-            antialias_pass_info.feedback_color_pong = RTRHI(rt_ctx->frame_rt.feedback_color_pong);
-            antialias_pass_info.resolved_color      = RTRHI(rt_ctx->frame_rt.resolved_color);
-            antialias_pass_info.hdr_color           = RTRHI(rt_ctx->frame_rt.hdr_color);
-            antialias_pass   = MakeUnique<AntialiasPass>(device, manager, scene, antialias_pass_info);
-            b_feedback_valid = false;
-
-        } else if (window_state == EWindowState::Default) {
-            // do nothing
+        } else if (window_state == EWindowState::SizeChanged || window_state == EWindowState::Default) {
+            // 分辨率变化的具体处理推迟到 TickUI 之后，因为 render_resolution 可能在此期间改变
 
         } else {
             assert(false);
@@ -315,6 +296,50 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
         if (hooks.on_tick_ui) {
             TRACE_SCOPE_CAT("Raytracing.TickUI", "Frame");
             hooks.on_tick_ui(scene);
+        }
+
+        // 检查窗口尺寸与实际场景渲染尺寸是否发生变化，需要时重建输出纹理与 RT 上下文
+        if (!skip_present) {
+            const bool window_size_changed       = (window_state == EWindowState::SizeChanged);
+            const bool render_resolution_changed =
+                current_render_resolution.x != render_resolution.x ||
+                current_render_resolution.y != render_resolution.y;
+            const bool render_resolution_valid =
+                render_resolution.x > 0 && render_resolution.y > 0;
+
+            if ((window_size_changed || render_resolution_changed) && render_resolution_valid) {
+                LOG_INFO(
+                    MOER_TEXT("Raytracing recreate resources: window_size_changed={}, render_resolution_changed={}")
+                    , window_size_changed
+                    , render_resolution_changed
+                );
+
+                create_output_textures(render_resolution, resolution);
+
+                if (render_resolution_changed) {
+                    rt_ctx->SetResolution(render_resolution);
+
+                    is_ctx.~ImportanceSamplingContext();
+                    is_params.render_size = render_resolution;
+                    new (&is_ctx) ImportanceSamplingContext(is_params);
+
+#if WITH_NRD
+                    nrd_interface = nrd_plugin->RecreateInterface(
+                        std::move(nrd_interface), render_resolution.x, render_resolution.y
+                    );
+#endif
+
+                    antialias_pass_info.motion              = RTRHI(rt_ctx->frame_rt.motion);
+                    antialias_pass_info.feedback_color_ping = RTRHI(rt_ctx->frame_rt.feedback_color_ping);
+                    antialias_pass_info.feedback_color_pong = RTRHI(rt_ctx->frame_rt.feedback_color_pong);
+                    antialias_pass_info.resolved_color      = RTRHI(rt_ctx->frame_rt.resolved_color);
+                    antialias_pass_info.hdr_color           = RTRHI(rt_ctx->frame_rt.hdr_color);
+                    antialias_pass = MakeUnique<AntialiasPass>(device, manager, scene, antialias_pass_info);
+                    b_feedback_valid = false;
+
+                    current_render_resolution = render_resolution;
+                }
+            }
         }
 
         timer.Stop();
@@ -761,7 +786,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                     nrd_interface->Begin();
                     nrd_interface->UpdateCommonSettings(
                         nrd_time++,
-                        Vector2ui(resolution.x, resolution.y),
+                        Vector2ui(render_resolution.x, render_resolution.y),
                         pixel_jitter,
                         Transpose(camera.GetViewMatrix()),
                         Transpose(camera.GetProjectionMatrix())
@@ -876,7 +901,7 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
                 params->ldr_color        = RTWholeTextureView(rg_rt.ldr_color);
                 const uint selected_texture_handle = material_textures[selected_material_texture_name].hdl;
                 ShowTextureParams show_texture_params{};
-                show_texture_params.dst_dim      = resolution;
+                show_texture_params.dst_dim      = render_resolution;
                 show_texture_params.bdls_handle  = selected_texture_handle;
                 show_texture_params.mip_level    = mip_level;
                 show_texture_params.use_bindless = b_use_bindless;

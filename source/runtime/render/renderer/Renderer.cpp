@@ -16,11 +16,13 @@ namespace Moer::Render {
 
 Renderer::Renderer(
     uint2&                        _resolution,
+    uint2&                        _render_resolution,
     const SharedPtr<EditorConfig> _config,
     const EngineHooks&            hooks,
     ::Moer::RuntimeAssets&        _runtime_assets
 ) :
     resolution(_resolution),
+    render_resolution(_render_resolution),
     device(RenderDevice::Get()),
     manager(ShaderManager::Get()),
     gfx_queue(device.GetCommandQueue(EQueueType::Graphics)),

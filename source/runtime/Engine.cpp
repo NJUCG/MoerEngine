@@ -181,13 +181,21 @@ void Engine::Run() {
 
         if (m_editor_config->selected_render_method == ERenderMethod::Raster) {
             m_renderer = MakeUnique<Raster::RasterRenderer>(
-                m_editor_config->GetResolution(), m_editor_config, hooks, *m_runtime_assets
+                m_editor_config->GetResolution(),
+                m_editor_config->GetRenderResolution(),
+                m_editor_config,
+                hooks,
+                *m_runtime_assets
             );
 
         } else if (m_editor_config->selected_render_method == ERenderMethod::Raytracing) {
             // Render::Raytracing::RaytracingMain(m_editor_ui, *m_runtime_assets);
             m_renderer = MakeUnique<Raytracing::RaytracingRenderer>(
-                m_editor_config->GetResolution(), m_editor_config, hooks, *m_runtime_assets
+                m_editor_config->GetResolution(),
+                m_editor_config->GetRenderResolution(),
+                m_editor_config,
+                hooks,
+                *m_runtime_assets
             );
 
         } else {
