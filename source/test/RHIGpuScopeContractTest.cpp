@@ -315,7 +315,7 @@ void FramesPopInBeginOrderAndSealIsOneShot() {
     ReleaseTerminalSubmit(second_submit);
 }
 
-void GraphicsAndComputeRemainIndependentTimestampDomains() {
+void ManagedQueuesRemainIndependentTimestampDomains() {
     GpuScopeStream stream(SmallConfig());
     GpuScopeFrameHandle frame = stream.BeginFrame(3001);
 
@@ -323,6 +323,8 @@ void GraphicsAndComputeRemainIndependentTimestampDomains() {
         QueueBinding(EQueueType::Graphics, 11, 2);
     const RHIQueueBinding compute_binding =
         QueueBinding(EQueueType::Compute, 22, 5);
+    const RHIQueueBinding copy_binding =
+        QueueBinding(EQueueType::Copy, 33, 7);
 
     CommandList graphics(EQueueType::Graphics);
     graphics.SetGpuScopeRecorder(
@@ -338,10 +340,18 @@ void GraphicsAndComputeRemainIndependentTimestampDomains() {
     RecordTimedScope(compute, "ComputeRoot");
     CmdSubmit compute_submit = compute.Submit();
 
+    CommandList copy(EQueueType::Copy);
+    copy.SetGpuScopeRecorder(
+        frame.CreateRecorder(copy_binding, 7)
+    );
+    RecordTimedScope(copy, "CopyRoot");
+    CmdSubmit copy_submit = copy.Submit();
+
     Expect(
         stream.SealFrame(frame),
         "multi-domain frame could not be sealed"
     );
+    ResolveTimestampAt(copy_submit, 0, Timestamp(100, 108, 4.0));
     ResolveTimestampAt(compute_submit, 0, Timestamp(100, 110, 3.0));
     ResolveTimestampAt(graphics_submit, 0, Timestamp(100, 120, 2.0));
 
@@ -353,18 +363,22 @@ void GraphicsAndComputeRemainIndependentTimestampDomains() {
     Expect(
         resolved.queue_roots[0].size() == 1 &&
             resolved.queue_roots[1].size() == 1 &&
-            resolved.queue_roots[2].empty(),
-        "Graphics/Compute roots were not independently partitioned"
+            resolved.queue_roots[2].size() == 1,
+        "managed-queue roots were not independently partitioned"
     );
     const GpuScopeNode& graphics_node =
         resolved.queue_roots[0].front();
     const GpuScopeNode& compute_node =
         resolved.queue_roots[1].front();
+    const GpuScopeNode& copy_node =
+        resolved.queue_roots[2].front();
     Expect(
         graphics_node.queue_binding == graphics_binding &&
             compute_node.queue_binding == compute_binding &&
+            copy_node.queue_binding == copy_binding &&
             graphics_node.source_order == 7 &&
-            compute_node.source_order == 7,
+            compute_node.source_order == 7 &&
+            copy_node.source_order == 7,
         "queue-domain identity or per-domain source order was lost"
     );
     ExpectNear(
@@ -378,6 +392,11 @@ void GraphicsAndComputeRemainIndependentTimestampDomains() {
         "Compute duration was converted through another domain"
     );
     ExpectNear(
+        copy_node.total_duration_ns,
+        32.0,
+        "Copy duration was converted through another domain"
+    );
+    ExpectNear(
         graphics_node.exclusive_duration_ns,
         40.0,
         "Graphics root exclusive duration is wrong"
@@ -387,9 +406,15 @@ void GraphicsAndComputeRemainIndependentTimestampDomains() {
         30.0,
         "Compute root exclusive duration is wrong"
     );
+    ExpectNear(
+        copy_node.exclusive_duration_ns,
+        32.0,
+        "Copy root exclusive duration is wrong"
+    );
 
     ReleaseTerminalSubmit(graphics_submit);
     ReleaseTerminalSubmit(compute_submit);
+    ReleaseTerminalSubmit(copy_submit);
 }
 
 void ErrorCancelAndRejectAreExactlyOnce() {
@@ -1781,7 +1806,7 @@ int main() {
     try {
         ReverseTerminalOrderBuildsNestedHierarchyAndExclusiveTime();
         FramesPopInBeginOrderAndSealIsOneShot();
-        GraphicsAndComputeRemainIndependentTimestampDomains();
+        ManagedQueuesRemainIndependentTimestampDomains();
         ErrorCancelAndRejectAreExactlyOnce();
         MalformedTimestampPayloadAndTopologyFailClosed();
         ClosedModernStreamNeverFallsBackToLegacyProfiling();

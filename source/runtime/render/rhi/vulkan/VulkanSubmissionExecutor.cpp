@@ -258,6 +258,11 @@ bool IsCopyCommand(Command::EType _type) {
         case Command::EType::CopyBackTexture:
         case Command::EType::Barrier:
         case Command::EType::QueueTransfer:
+        // Scope commands are queue-agnostic debug-label boundaries. Modern
+        // GPU scopes lower to Scope + Query pairs; VkCopyQueue already routes
+        // both through CmdReorderer/VkCmdVisitor, so rejecting the label half
+        // would reject an otherwise legal Copy timestamp source.
+        case Command::EType::Scope:
         // Timestamp Query commands are legal ordering boundaries inside one
         // Copy segment. Multi-segment sources still reject all queries above,
         // and VkCopyQueue performs token/queue/LIFO preflight before native

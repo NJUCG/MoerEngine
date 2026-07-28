@@ -13924,6 +13924,11 @@ void RunCopyTimestampQueryCapabilityAndIsolation() {
             source->GetView(),
             "CopyTimestampUpload"
         );
+        commands.PushScope(
+            _expect_ready ?
+                "Phase21BCopyTimestampScope" :
+                "Phase21BCopyTimestampUnsupportedScope"
+        );
         QueryToken query = commands.BeginTimestampQuery(
             _expect_ready ?
                 "Phase21BCopyTimestamp" :
@@ -13936,6 +13941,7 @@ void RunCopyTimestampQueryCapabilityAndIsolation() {
             "CopyTimestampMeasuredCopy"
         );
         commands.EndTimestampQuery(query);
+        commands.PopScope();
         commands.CopyFrom(
             destination->GetView(),
             WritableBytes(readback),
@@ -14003,6 +14009,19 @@ void RunCopyTimestampQueryCapabilityAndIsolation() {
         });
 
         CmdSubmit submit = commands.Submit();
+        const size_t scope_command_count = std::count_if(
+            submit.cmds.begin(),
+            submit.cmds.end(),
+            [](const UniquePtr<Command>& _command) {
+                return _command &&
+                       _command->Type() == Command::EType::Scope;
+            }
+        );
+        if (scope_command_count != 2) {
+            throw std::runtime_error(
+                "Copy timestamp source lost its balanced visual scope"
+            );
+        }
         submit.Signal(done.Get(), 1);
         RHIExecutor::Get().Submit(
             EQueueType::Copy,
@@ -14123,7 +14142,7 @@ void RunCopyTimestampQueryCapabilityAndIsolation() {
         LOG_INFO(
             "[TESTCASE][PASS] name=TimestampQueryCopySupported "
             "queue=Copy status=Ready valid_bits={} reset_mode={} "
-            "copy=verified "
+            "copy=verified scope=balanced "
             "gpu_completion=Ready order=signal->completion->query->ordinary->success "
             "owner=Completion callbacks=exactly_once "
             "allocator_reuse=verified native_owner=Submission replay=0",
@@ -14142,6 +14161,7 @@ void RunCopyTimestampQueryCapabilityAndIsolation() {
     LOG_INFO(
         "[TESTCASE][PASS] name=TimestampQueryCopyUnsupportedFallback "
         "queue=Copy injected_valid_bits=0 query=Error copy=verified "
+        "scope=balanced "
         "signal=success gpu_completion=Ready native_submit=accepted "
         "native_owner=Submission owner=Completion "
         "callbacks=exactly_once runtime=recovered replay=0"

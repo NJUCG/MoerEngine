@@ -43,7 +43,11 @@ class TensorRTPass;
 class RENDER_API RasterRenderer : public Renderer {
 
 public:
-    RasterRenderer(uint2 initial_resolution, SharedPtr<EditorConfig> config);
+    RasterRenderer(
+        uint2                         initial_resolution,
+        SharedPtr<EditorConfig>       config,
+        RenderProfileCapture*         render_profile_capture
+    );
 
     ~RasterRenderer() override;
 

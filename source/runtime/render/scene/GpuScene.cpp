@@ -73,11 +73,55 @@ static constexpr std::string_view s_rt_scene_update_tlas_scope_name = "RTScene U
 
 GpuScene::GpuScene(BindlessArrayRef bindless_array) : m_bindless_array(std::move(bindless_array)) {}
 
-void GpuScene::ApplyUpdate(GpuSceneUpdate&& update) {
+void GpuScene::ApplyUpdate(
+    GpuSceneUpdate&&                       update,
+    const PendingCommandListSetupCallback& setup_command_lists
+) {
     assert(IsCurrentlyGameThread() || IsCurrentlyRenderThread());
     assert(update.HasWork());
 
     m_pending_cmd_lists = PendingCommandList{};
+    if (setup_command_lists) {
+        setup_command_lists(
+            m_pending_cmd_lists, update.full_rebuild
+        );
+    }
+
+    auto begin_profile_root =
+        [](CommandList& command_list,
+           std::string_view name,
+           float4 color) -> UniquePtr<ScopedGpuMarker> {
+            const bool modern_generation =
+                command_list.HasGpuScopeRecorder() ||
+                command_list
+                    .IsLegacyGpuProfilingSuppressedForGeneration();
+            if (!modern_generation) {
+                return {};
+            }
+            return MakeUnique<ScopedGpuMarker>(
+                command_list,
+                name,
+                color,
+                command_list.HasGpuScopeRecorder() ?
+                    EGpuMarkerMode::Timestamp :
+                    EGpuMarkerMode::Label
+            );
+        };
+    auto copy_profile_root = begin_profile_root(
+        m_pending_cmd_lists.copy_queue_cmd_list,
+        update.full_rebuild ?
+            "GpuScene Initial Copy Update" :
+            "GpuScene Copy Update",
+        GpuMarkerPalette::Transfer()
+    );
+    auto graphics_profile_root = begin_profile_root(
+        m_pending_cmd_lists.gfx_queue_cmd_list,
+        update.full_rebuild ?
+            "GpuScene Initial Graphics Update" :
+            "GpuScene Graphics Update",
+        GpuMarkerPalette::Renderer()
+    );
+
     auto update_data = MakeShared<GpuSceneUpdate>(std::move(update));
     auto& pending_update = *update_data;
 
@@ -122,6 +166,13 @@ void GpuScene::ApplyUpdate(GpuSceneUpdate&& update) {
                 );
                 break;
         }
+    }
+
+    if (copy_profile_root) {
+        copy_profile_root->Close();
+    }
+    if (graphics_profile_root) {
+        graphics_profile_root->Close();
     }
 
     // CopyFrom(span) stores a non-owning pointer. Keep the snapshot alive through each relevant submit.

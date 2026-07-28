@@ -13,7 +13,10 @@ public:
     RenderScene(const RenderScene&)            = delete;
     RenderScene& operator=(const RenderScene&) = delete;
 
-    GpuScene::PendingCommandList ApplyUpdate(GpuSceneUpdate&& update);
+    GpuScene::PendingCommandList ApplyUpdate(
+        GpuSceneUpdate&&                                  update,
+        const GpuScene::PendingCommandListSetupCallback& setup_command_lists = {}
+    );
 
     bool IsReady() const {
         return m_gpu_scene != nullptr;

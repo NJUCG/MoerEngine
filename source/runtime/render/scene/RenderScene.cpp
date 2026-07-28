@@ -11,7 +11,10 @@ RenderScene::RenderScene(BindlessArrayRef bindless_array) : m_bindless_array(std
 
 RenderScene::~RenderScene() = default;
 
-GpuScene::PendingCommandList RenderScene::ApplyUpdate(GpuSceneUpdate&& update) {
+GpuScene::PendingCommandList RenderScene::ApplyUpdate(
+    GpuSceneUpdate&&                                  update,
+    const GpuScene::PendingCommandListSetupCallback& setup_command_lists
+) {
     assert(IsCurrentlyGameThread() || IsCurrentlyRenderThread());
     assert(update.HasWork());
 
@@ -36,7 +39,9 @@ GpuScene::PendingCommandList RenderScene::ApplyUpdate(GpuSceneUpdate&& update) {
     }
 
     assert(m_gpu_scene && "The first RenderScene update must be a full rebuild.");
-    m_gpu_scene->ApplyUpdate(std::move(update));
+    m_gpu_scene->ApplyUpdate(
+        std::move(update), setup_command_lists
+    );
     return m_gpu_scene->PopPendingCommandList();
 }
 

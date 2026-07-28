@@ -591,6 +591,17 @@ RenderGraph::PassBuilder::ExecuteOn(QueueRole queue, PipelineType pipeline) {
     return EQueueType::Ignore;
 }
 
+[[nodiscard]] RHIQueueBinding ToRHIQueueBinding(
+    const RenderGraph::QueueBinding& binding
+) {
+    return RHIQueueBinding{
+        .queue           = ToRHIQueue(binding.role),
+        .native_queue_id = binding.native_queue_id,
+        .family_id       = binding.family_id,
+        .available       = binding.available,
+    };
+}
+
 [[nodiscard]] RenderGraph::TextureAspect
 RaiseTextureAspects(ETextureAspectFlags aspects) {
     RenderGraph::TextureAspect result = RenderGraph::TextureAspect::None;
@@ -1306,7 +1317,8 @@ bool RenderGraph::ExecuteRecording(
     const RecordingSourceSetupCallback& configure_recording_source,
     bool                                parallel_recording_enabled,
     const RecordingBatchPublisher&      publish_recording_batch,
-    const ActiveRecordingOptions&       active_recording
+    const ActiveRecordingOptions&       active_recording,
+    const GpuProfilingOptions&          gpu_profiling
 ) {
     if (!compiled) {
         compile_error = "ExecuteRecording called before a successful Compile";
@@ -1317,6 +1329,67 @@ bool RenderGraph::ExecuteRecording(
         return false;
     }
     MOER_PROFILE_SCOPE("RenderGraph.ExecuteRecording");
+
+    if (gpu_profiling.try_bind_source) {
+        bool has_main_thread_pass = false;
+        for (const CompiledRecordingBatch& batch :
+             compiled_plan.recording_batches) {
+            if (batch.passes.size() != 1) {
+                compile_error =
+                    "GPU profiling requires one pass per compiled recording batch";
+                return false;
+            }
+            if (batch.id >= compiled_plan.execution_order.size() ||
+                compiled_plan.execution_order[batch.id] !=
+                    batch.passes.front()) {
+                compile_error =
+                    "GPU profiling recording batch order does not match "
+                    "compiled execution order";
+                return false;
+            }
+            if (gpu_profiling.source_order_base >
+                std::numeric_limits<uint64>::max() -
+                    static_cast<uint64>(batch.id)) {
+                compile_error = "GPU profiling source order overflow";
+                return false;
+            }
+            if (batch.execution == PassExecutionClass::MainThread) {
+                has_main_thread_pass = true;
+                if (gpu_profiling.main_thread_command_list == nullptr) {
+                    compile_error =
+                        "GPU profiling requires a caller-owned CommandList for "
+                        "MainThread passes";
+                    return false;
+                }
+                if (gpu_profiling.main_thread_command_list->GetQueueType() !=
+                    ToRHIQueue(batch.queue.role)) {
+                    compile_error =
+                        "GPU profiling MainThread CommandList queue does not "
+                        "match compiled pass queue";
+                    return false;
+                }
+            }
+        }
+        if (has_main_thread_pass &&
+            (!gpu_profiling.main_thread_command_list->IsEmpty() ||
+             gpu_profiling.main_thread_command_list
+                 ->HasGpuScopeRecorder() ||
+             gpu_profiling.main_thread_command_list
+                 ->IsLegacyGpuProfilingSuppressedForGeneration())) {
+            compile_error =
+                "GPU profiling requires an empty, unbound, unsuppressed MainThread "
+                "CommandList at graph entry";
+            return false;
+        }
+        if (has_main_thread_pass && active_recording.enabled &&
+            active_recording.main_thread_command_list !=
+                gpu_profiling.main_thread_command_list) {
+            compile_error =
+                "GPU profiling and active recording must use the same "
+                "MainThread CommandList";
+            return false;
+        }
+    }
 
     struct TransientBindingReleaseGuard {
         RenderGraphTransientAllocator* allocator{nullptr};
@@ -1620,6 +1693,10 @@ bool RenderGraph::ExecuteRecording(
         RecordCallback      record{};
         SharedPtr<CommandList> command_list{};
         RHIRecordingGateRef completion{};
+        RHIQueueBinding     gpu_profile_queue_binding{};
+        uint64              gpu_profile_source_order{0};
+        bool                gpu_profile_requested{false};
+        bool                gpu_profile_bound{false};
         ERHITranslateExecutionClass translate_execution_class{
             ERHITranslateExecutionClass::Parallel
         };
@@ -1835,6 +1912,103 @@ bool RenderGraph::ExecuteRecording(
         };
     };
 
+    enum class GpuProfileBindOutcome : uint8 {
+        Bound,
+        Dropped,
+        Failed,
+    };
+    auto bind_gpu_profile_source =
+        [&](const ExecutedPassInfo& pass_info,
+            CommandList&            command_list,
+            RHIQueueBinding         queue_binding,
+            uint64                  source_order) {
+            if (!gpu_profiling.try_bind_source) {
+                return GpuProfileBindOutcome::Dropped;
+            }
+            if (!command_list.IsEmpty() ||
+                command_list.HasGpuScopeRecorder() ||
+                command_list
+                    .IsLegacyGpuProfilingSuppressedForGeneration()) {
+                compile_error =
+                    "GPU profiling source binding requires an empty, unbound, "
+                    "unsuppressed "
+                    "CommandList for pass '" +
+                    std::string(pass_info.name) + "'";
+                return GpuProfileBindOutcome::Failed;
+            }
+
+            const uint64 seal_generation =
+                command_list.GetSealGeneration();
+            const bool explicit_resource_state =
+                command_list.HasExplicitResourceStateOwnership();
+            const ERHITranslateExecutionClass translate_execution =
+                command_list.GetTranslateExecutionClass();
+            const bool legacy_profiling_suppressed =
+                command_list
+                    .IsLegacyGpuProfilingSuppressedForGeneration();
+
+            bool bound = false;
+            try {
+                RHIThreadRoleScope configuration_owner(
+                    ERHIThreadRole::RecordWorker
+                );
+                bound = gpu_profiling.try_bind_source(
+                    pass_info,
+                    command_list,
+                    queue_binding,
+                    source_order
+                );
+            } catch (const std::exception& exception) {
+                compile_error =
+                    "GPU profiling source binding failed for pass '" +
+                    std::string(pass_info.name) + "': " + exception.what();
+                return GpuProfileBindOutcome::Failed;
+            } catch (...) {
+                compile_error =
+                    "GPU profiling source binding failed for pass '" +
+                    std::string(pass_info.name) + "'";
+                return GpuProfileBindOutcome::Failed;
+            }
+
+            if (!command_list.IsEmpty() ||
+                command_list.GetSealGeneration() != seal_generation ||
+                command_list.HasExplicitResourceStateOwnership() !=
+                    explicit_resource_state ||
+                command_list.GetTranslateExecutionClass() !=
+                    translate_execution ||
+                command_list
+                        .IsLegacyGpuProfilingSuppressedForGeneration() !=
+                    legacy_profiling_suppressed ||
+                command_list.HasGpuScopeRecorder() != bound) {
+                compile_error =
+                    "GPU profiling source binding illegally mutated "
+                    "CommandList state for pass '" +
+                    std::string(pass_info.name) + "'";
+                return GpuProfileBindOutcome::Failed;
+            }
+            if (bound) {
+                return GpuProfileBindOutcome::Bound;
+            }
+            try {
+                command_list
+                    .SuppressLegacyGpuProfilingForGeneration();
+            } catch (const std::exception& exception) {
+                compile_error =
+                    "GPU profiling source drop suppression failed for pass '" +
+                    std::string(pass_info.name) + "': " + exception.what();
+                return GpuProfileBindOutcome::Failed;
+            } catch (...) {
+                compile_error =
+                    "GPU profiling source drop suppression failed for pass '" +
+                    std::string(pass_info.name) + "'";
+                return GpuProfileBindOutcome::Failed;
+            }
+            return GpuProfileBindOutcome::Dropped;
+        };
+    std::optional<uint64> gpu_profile_main_thread_generation{};
+    bool                  gpu_profile_main_thread_bound{false};
+    bool gpu_profile_managed_source_since_main_thread{false};
+
     auto store_error = [](const std::shared_ptr<RecordingError>& error, std::string message) {
         std::lock_guard lock(error->mutex);
         if (error->message.empty()) {
@@ -1951,6 +2125,59 @@ bool RenderGraph::ExecuteRecording(
                 };
 
             try {
+                bool gpu_profile_bound = false;
+                if (first_batch.execution ==
+                        PassExecutionClass::MainThread &&
+                    gpu_profiling.try_bind_source) {
+                    CommandList& profiling_list =
+                        *gpu_profiling.main_thread_command_list;
+                    const uint64 generation =
+                        profiling_list.GetSealGeneration();
+                    if (!gpu_profile_main_thread_generation ||
+                        *gpu_profile_main_thread_generation != generation) {
+                        const uint64 source_order =
+                            gpu_profiling.source_order_base +
+                            static_cast<uint64>(first_batch.id);
+                        const GpuProfileBindOutcome bind_outcome =
+                            bind_gpu_profile_source(
+                                make_pass_info(first_handle),
+                                profiling_list,
+                                ToRHIQueueBinding(first_batch.queue),
+                                source_order
+                            );
+                        if (bind_outcome == GpuProfileBindOutcome::Failed) {
+                            return reject_main_thread(
+                                std::move(compile_error)
+                            );
+                        }
+                        gpu_profile_main_thread_generation = generation;
+                        gpu_profile_main_thread_bound =
+                            bind_outcome == GpuProfileBindOutcome::Bound;
+                        gpu_profile_managed_source_since_main_thread = false;
+                    } else if (
+                        gpu_profile_managed_source_since_main_thread
+                    ) {
+                        return reject_main_thread(
+                            "GPU profiling MainThread CommandList must rotate "
+                            "its recording generation after an intervening "
+                            "managed GPU source"
+                        );
+                    } else if (
+                        profiling_list.HasGpuScopeRecorder() !=
+                            gpu_profile_main_thread_bound ||
+                        profiling_list
+                                .IsLegacyGpuProfilingSuppressedForGeneration() ==
+                            gpu_profile_main_thread_bound
+                    ) {
+                        return reject_main_thread(
+                            "GPU profiling MainThread CommandList changed "
+                            "recorder state within one recording generation"
+                        );
+                    }
+                    gpu_profile_bound =
+                        gpu_profile_main_thread_bound;
+                }
+
                 if (active_physical_main_thread) {
                     auto& command_list =
                         *active_recording.main_thread_command_list;
@@ -1972,7 +2199,21 @@ bool RenderGraph::ExecuteRecording(
                         active_recording.main_thread_command_list
                             ->GetSealGeneration() :
                         0;
-                first_pass.execute();
+                if (first_batch.execution ==
+                        PassExecutionClass::MainThread &&
+                    gpu_profiling.try_bind_source) {
+                    ScopedGpuMarker pass_marker(
+                        *gpu_profiling.main_thread_command_list,
+                        first_pass.name,
+                        GpuMarkerPalette::Pass(),
+                        gpu_profile_bound ?
+                            EGpuMarkerMode::Timestamp :
+                            EGpuMarkerMode::Label
+                    );
+                    first_pass.execute();
+                } else {
+                    first_pass.execute();
+                }
 
                 if (active_physical_main_thread &&
                     active_recording.main_thread_command_list
@@ -2017,6 +2258,30 @@ bool RenderGraph::ExecuteRecording(
             continue;
         }
 
+        if (gpu_profiling.try_bind_source &&
+            gpu_profile_main_thread_generation) {
+            const CommandList& profiling_list =
+                *gpu_profiling.main_thread_command_list;
+            if (profiling_list.GetSealGeneration() ==
+                *gpu_profile_main_thread_generation) {
+                compile_error =
+                    "GPU profiling MainThread CommandList must rotate its "
+                    "recording generation before a managed GPU source is "
+                    "bound or published";
+                return false;
+            }
+            if (!profiling_list.IsEmpty() ||
+                profiling_list.HasGpuScopeRecorder() ||
+                profiling_list
+                    .IsLegacyGpuProfilingSuppressedForGeneration()) {
+                compile_error =
+                    "GPU profiling MainThread observer must leave its "
+                    "replacement recording generation empty and unbound "
+                    "before a managed GPU source is bound or published";
+                return false;
+            }
+        }
+
         size_t group_end = batch_index + 1;
         if (first_batch.execution == PassExecutionClass::ParallelRecordEligible) {
             while (group_end < compiled_plan.recording_batches.size()) {
@@ -2056,6 +2321,15 @@ bool RenderGraph::ExecuteRecording(
                 .record       = pass.record,
                 .command_list = MakeShared<CommandList>(queue),
                 .completion   = RHIRecordingGate::Create(),
+                .gpu_profile_queue_binding =
+                    ToRHIQueueBinding(batch.queue),
+                .gpu_profile_source_order =
+                    gpu_profiling.try_bind_source ?
+                        gpu_profiling.source_order_base +
+                            static_cast<uint64>(batch.id) :
+                        0,
+                .gpu_profile_requested =
+                    static_cast<bool>(gpu_profiling.try_bind_source),
                 .translate_execution_class =
                     batch.translate_execution_class,
             };
@@ -2160,6 +2434,9 @@ bool RenderGraph::ExecuteRecording(
                     return false;
                 }
                 if (!source.command_list->IsEmpty() ||
+                    source.command_list->HasGpuScopeRecorder() ||
+                    source.command_list
+                        ->IsLegacyGpuProfilingSuppressedForGeneration() ||
                     source.command_list->HasExplicitResourceStateOwnership() ||
                     source.command_list->GetTranslateExecutionClass() !=
                         batch.translate_execution_class) {
@@ -2173,6 +2450,23 @@ bool RenderGraph::ExecuteRecording(
             group_gates.emplace_back(job.completion);
             jobs.emplace_back(std::move(job));
             sources.emplace_back(std::move(source));
+        }
+
+        if (gpu_profiling.try_bind_source) {
+            for (RecordingJob& job : jobs) {
+                const GpuProfileBindOutcome bind_outcome =
+                    bind_gpu_profile_source(
+                        make_pass_info(job.pass),
+                        *job.command_list,
+                        job.gpu_profile_queue_binding,
+                        job.gpu_profile_source_order
+                    );
+                if (bind_outcome == GpuProfileBindOutcome::Failed) {
+                    return false;
+                }
+                job.gpu_profile_bound =
+                    bind_outcome == GpuProfileBindOutcome::Bound;
+            }
         }
 
         PendingGateGuard pending_gate_guard{.gates = &group_gates};
@@ -2239,7 +2533,19 @@ bool RenderGraph::ExecuteRecording(
                 }
                 const uint64 seal_generation =
                     job.command_list->GetSealGeneration();
-                job.record(*job.command_list);
+                if (job.gpu_profile_requested) {
+                    ScopedGpuMarker pass_marker(
+                        *job.command_list,
+                        job.pass_name,
+                        GpuMarkerPalette::Pass(),
+                        job.gpu_profile_bound ?
+                            EGpuMarkerMode::Timestamp :
+                            EGpuMarkerMode::Label
+                    );
+                    job.record(*job.command_list);
+                } else {
+                    job.record(*job.command_list);
+                }
                 if (job.command_list->GetSealGeneration() != seal_generation) {
                     throw std::logic_error(
                         "record callback sealed its managed CommandList"
@@ -2309,10 +2615,21 @@ bool RenderGraph::ExecuteRecording(
         }
         for (size_t index = 0; index < jobs.size(); ++index) {
             const auto& job = jobs[index];
+            const bool expected_gpu_profile_recorder =
+                job.gpu_profile_requested &&
+                job.gpu_profile_bound;
+            const bool expected_legacy_profile_suppression =
+                job.gpu_profile_requested &&
+                !job.gpu_profile_bound;
             if (job.completion->Status() != ERHIRecordingStatus::Pending ||
                 job.command_list->GetSealGeneration() !=
                     publication_generations[index] ||
                 !job.command_list->IsEmpty() ||
+                job.command_list->HasGpuScopeRecorder() !=
+                    expected_gpu_profile_recorder ||
+                job.command_list
+                        ->IsLegacyGpuProfilingSuppressedForGeneration() !=
+                    expected_legacy_profile_suppression ||
                 job.command_list->HasExplicitResourceStateOwnership() ||
                 job.command_list->GetTranslateExecutionClass() !=
                     job.translate_execution_class ||
@@ -2413,6 +2730,10 @@ bool RenderGraph::ExecuteRecording(
             }
         }
         pending_gate_guard.Disarm();
+        if (gpu_profiling.try_bind_source &&
+            gpu_profile_main_thread_generation) {
+            gpu_profile_managed_source_since_main_thread = true;
+        }
         batch_index = group_end;
     }
     if (!active_transaction_guard.Commit()) {

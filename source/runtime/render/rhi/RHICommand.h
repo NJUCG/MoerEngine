@@ -1706,8 +1706,17 @@ public:
     RENDER_API CommandList& SetGpuScopeRecorder(
         GpuScopeRecorder _recorder
     );
+    // Selects the modern profiling path for this recording generation even
+    // when bounded source admission failed. Timed scopes remain visual
+    // markers but must not fall back to the unrelated legacy query stream.
+    RENDER_API CommandList&
+    SuppressLegacyGpuProfilingForGeneration();
     [[nodiscard]] bool HasGpuScopeRecorder() const noexcept {
         return gpu_scope_recorder.IsBound();
+    }
+    [[nodiscard]] bool
+    IsLegacyGpuProfilingSuppressedForGeneration() const noexcept {
+        return suppress_legacy_gpu_profiling_this_generation;
     }
 
     template<typename T, typename... Args>
@@ -2125,6 +2134,7 @@ private:
     uint32                       active_gpu_scope_depth{0};
     uint32                       gpu_scope_suppression_depth{0};
     bool                         gpu_scope_recorder_bound_this_generation{false};
+    bool suppress_legacy_gpu_profiling_this_generation{false};
 };
 
 // Non-copyable, non-movable RAII wrapper used by high-level render code. It guarantees that a
