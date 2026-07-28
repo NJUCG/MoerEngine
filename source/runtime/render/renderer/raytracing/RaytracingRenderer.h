@@ -4,7 +4,9 @@
 #include "renderer/Renderer.h"
 
 #include "renderer/common/RuntimeAssets.h"
+#include "scene/GpuScene.h"
 
+#include <functional>
 #include <optional>
 
 namespace Moer::Render::Raytracing {
@@ -20,7 +22,8 @@ public:
     RaytracingRenderer(
         uint2&                        _resolution,
         const SharedPtr<EditorConfig> _config,
-        RuntimeAssets&                _runtime_assets
+        RuntimeAssets&                _runtime_assets,
+        RenderProfileCapture*         _render_profile_capture
     );
 
     virtual ~RaytracingRenderer() override;
@@ -68,18 +71,22 @@ private:
 
     void EnsureDebugUiRegistered(const EngineHooks& hooks);
     bool RefreshSceneRuntimeRefs();
-    SceneUpdateResult ExecuteSceneUpdates(SceneUpdateBatch& batch);
+    SceneUpdateResult ExecuteSceneUpdates(
+        SceneUpdateBatch&                                batch,
+        const GpuScene::PendingCommandListSetupCallback& setup_command_lists
+    );
     bool RecreateSceneResources(uint2 new_extent);
     void RecreateOutputResources(uint2 new_extent);
 
     [[nodiscard]] bool DumpTextureToFile(
-        const ExportConfig&    _config,
-        FrameResources&        _frame_rt,
-        RenderDevice&          _device,
-        CommandQueue&          _gfx_queue,
-        std::filesystem::path& _exported_file_path,
-        std::string_view       _suffix,
-        ExportSubmissionTransaction& _export_submission
+        const ExportConfig&                       _config,
+        FrameResources&                           _frame_rt,
+        RenderDevice&                             _device,
+        CommandQueue&                             _gfx_queue,
+        std::filesystem::path&                    _exported_file_path,
+        std::string_view                          _suffix,
+        ExportSubmissionTransaction&              _export_submission,
+        const std::function<bool(CommandList&)>&  _setup_command_list
     );
 };
 

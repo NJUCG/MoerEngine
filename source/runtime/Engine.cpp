@@ -1134,7 +1134,10 @@ void Engine::Run(const EngineHooks& hooks) {
 
             } else if (selected_render_method == ERenderMethod::Raytracing) {
                 m_renderer = MakeUnique<Raytracing::RaytracingRenderer>(
-                    m_editor_config->GetResolution(), m_editor_config, *m_runtime_assets
+                    m_editor_config->GetResolution(),
+                    m_editor_config,
+                    *m_runtime_assets,
+                    m_render_profile_capture.get()
                 );
 
             } else {

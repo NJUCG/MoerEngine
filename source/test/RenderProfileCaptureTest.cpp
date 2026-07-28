@@ -617,6 +617,303 @@ void HappyPathPreservesTopologyAndRawTimestampDomains() {
     );
 }
 
+void RaytracingCaptureAggregationWaitsForReverseCompletionAndRecovers() {
+    ScopedOutput output("moer-render-profile-raytracing-aggregation");
+    StartRuntime(output);
+    const RegisteredGpuSchemas schemas = RegisterGpuSchemas();
+    RenderProfileCapture capture(schemas.frame, schemas.scope);
+    const RHIQueueBinding graphics_binding =
+        Binding(EQueueType::Graphics, 5, 11);
+
+    RenderProfileFrameToken ordered_frame = capture.BeginFrame();
+    Expect(
+        ordered_frame.Valid() && ordered_frame.FrameId() == 1,
+        "raytracing ordered frame admission failed"
+    );
+
+    CommandList persistent(EQueueType::Graphics);
+    Expect(
+        capture.BindSource(
+            ordered_frame, persistent, graphics_binding, 10
+        ) == RenderProfileBindResult::Bound,
+        "raytracing linear/graph generation bind failed"
+    );
+    persistent.PushScopeWithTimeScope("RT.LinearOrGraph");
+    persistent.PopScopeWithTimeScope();
+    // Production records the export prefix into the already-bound linear
+    // generation, then rotates for the independent readback and frame tail.
+    persistent.PushScopeWithTimeScope("RT.ExportPrefix");
+    persistent.PopScopeWithTimeScope();
+    CmdSubmit render_prefix = persistent.Submit();
+
+    CommandList readback(EQueueType::Graphics);
+    Expect(
+        capture.BindSource(
+            ordered_frame, readback, graphics_binding, 20
+        ) == RenderProfileBindResult::Bound,
+        "raytracing readback generation bind failed"
+    );
+    readback.PushScopeWithTimeScope("RT.ExportReadback");
+    readback.PopScopeWithTimeScope();
+    CmdSubmit export_readback = readback.Submit();
+
+    Expect(
+        capture.BindSource(
+            ordered_frame, persistent, graphics_binding, 30
+        ) == RenderProfileBindResult::Bound,
+        "raytracing frame tail generation bind failed"
+    );
+    persistent.PushScopeWithTimeScope("RT.FrameTail");
+    persistent.PopScopeWithTimeScope();
+    CmdSubmit frame_tail = persistent.Submit().TickProfiling();
+    Expect(
+        frame_tail.ProfilingPhase() ==
+                ERHIProfilingPhase::Complete &&
+            frame_tail.query_tokens.size() == 1,
+        "raytracing modern tail did not retain its legacy Complete boundary"
+    );
+
+    Expect(
+        capture.Seal(ordered_frame),
+        "raytracing ordered frame seal failed"
+    );
+    ResolveTimestampAt(frame_tail, 0, Timestamp(300, 310));
+    Expect(
+        capture.DrainReadyFrames() == 0,
+        "raytracing frame drained after only tail completion"
+    );
+    ResolveTimestampAt(export_readback, 0, Timestamp(200, 210));
+    Expect(
+        capture.DrainReadyFrames() == 0,
+        "raytracing frame drained before render-prefix queries completed"
+    );
+    ResolveTimestampAt(render_prefix, 1, Timestamp(110, 120));
+    Expect(
+        capture.DrainReadyFrames() == 0,
+        "raytracing frame drained before its linear query completed"
+    );
+    ResolveTimestampAt(render_prefix, 0, Timestamp(100, 110));
+    Expect(
+        capture.DrainReadyFrames() == 1,
+        "reverse-completed raytracing frame did not drain"
+    );
+
+    RenderProfileFrameToken invalid_frame = capture.BeginFrame();
+    Expect(
+        invalid_frame.Valid() && invalid_frame.FrameId() == 2,
+        "raytracing invalid frame admission failed"
+    );
+
+    Expect(
+        capture.BindSource(
+            invalid_frame, persistent, graphics_binding, 10
+        ) == RenderProfileBindResult::Bound,
+        "invalid raytracing linear generation bind failed"
+    );
+    persistent.PushScopeWithTimeScope("RT.Invalid.LinearOrGraph");
+    persistent.PopScopeWithTimeScope();
+    persistent.PushScopeWithTimeScope("RT.Invalid.ExportPrefix");
+    persistent.PopScopeWithTimeScope();
+    CmdSubmit invalid_render_prefix = persistent.Submit();
+
+    CommandList rejected_readback(EQueueType::Graphics);
+    Expect(
+        capture.BindSource(
+            invalid_frame, rejected_readback, graphics_binding, 20
+        ) == RenderProfileBindResult::Bound,
+        "invalid raytracing readback bind failed"
+    );
+    rejected_readback.PushScopeWithTimeScope(
+        "RT.Invalid.ExportReadback"
+    );
+    rejected_readback.PopScopeWithTimeScope();
+    CmdSubmit invalid_readback = rejected_readback.Submit();
+
+    Expect(
+        capture.BindSource(
+            invalid_frame, persistent, graphics_binding, 30
+        ) == RenderProfileBindResult::Bound,
+        "invalid raytracing tail bind failed"
+    );
+    persistent.PushScopeWithTimeScope("RT.Invalid.FrameTail");
+    persistent.PopScopeWithTimeScope();
+    CmdSubmit invalid_tail = persistent.Submit();
+
+    Expect(
+        capture.Seal(invalid_frame),
+        "invalid raytracing frame seal failed"
+    );
+    invalid_readback.RejectPendingQueries(
+        "raytracing export readback submission rejected"
+    );
+    Expect(
+        QueryBackendAccess::ResolveErrorIfPending(
+            invalid_tail.query_tokens.front(),
+            "raytracing frame tail query failed"
+        ),
+        "raytracing tail query error was not published"
+    );
+    Expect(
+        capture.DrainReadyFrames() == 0,
+        "invalid raytracing frame drained before healthy sources completed"
+    );
+    ResolveTimestampAt(
+        invalid_render_prefix, 1, Timestamp(120, 130)
+    );
+    ResolveTimestampAt(
+        invalid_render_prefix, 0, Timestamp(110, 120)
+    );
+    Expect(
+        capture.DrainReadyFrames() == 1,
+        "invalid raytracing frame did not drain after terminal publication"
+    );
+
+    RenderProfileFrameToken recovered_frame = capture.BeginFrame();
+    Expect(
+        recovered_frame.Valid() && recovered_frame.FrameId() == 3,
+        "capture did not admit the frame after raytracing rejection"
+    );
+    Expect(
+        capture.BindSource(
+            recovered_frame, persistent, graphics_binding, 50
+        ) == RenderProfileBindResult::Bound,
+        "recovered raytracing tail bind failed"
+    );
+    persistent.PushScopeWithTimeScope("RT.Recovered.FrameTail");
+    persistent.PopScopeWithTimeScope();
+    CmdSubmit recovered_tail = persistent.Submit();
+    Expect(
+        capture.Seal(recovered_frame),
+        "recovered raytracing frame seal failed"
+    );
+    ResolveTimestampAt(recovered_tail, 0, Timestamp(500, 520));
+    Expect(
+        capture.DrainReadyFrames() == 1,
+        "recovered raytracing frame did not drain"
+    );
+
+    capture.ShutdownAfterRhiDrain();
+    const RenderProfileCaptureStats stats = capture.GetStats();
+    Expect(
+        stats.closed && !stats.accepting &&
+            stats.frames_attempted == 3 &&
+            stats.frames_admitted == 3 &&
+            stats.frames_sealed == 3 &&
+            stats.frames_emitted == 3 &&
+            stats.frames_invalid == 1 &&
+            stats.sources_bound == 7 &&
+            stats.scopes_emitted == 9 &&
+            stats.shutdown_abandoned_frames == 0 &&
+            stats.terminal_faults == 0,
+        "raytracing capture aggregation stats are inconsistent"
+    );
+
+    ReleaseSubmit(render_prefix);
+    ReleaseSubmit(export_readback);
+    ReleaseSubmit(frame_tail);
+    ReleaseSubmit(invalid_render_prefix);
+    ReleaseSubmit(invalid_readback);
+    ReleaseSubmit(invalid_tail);
+    ReleaseSubmit(recovered_tail);
+    FinishRuntime(output);
+
+    const ParsedDump dump = ParseDump(output.path);
+    const auto frames = RecordsFor(
+        dump, FindSchema(dump, "GpuFrame")
+    );
+    const auto scopes = RecordsFor(
+        dump, FindSchema(dump, "GpuScope")
+    );
+    Expect(
+        frames.size() == 3 && scopes.size() == 9,
+        "raytracing capture aggregation record counts are incorrect"
+    );
+    Expect(
+        ValueAt<std::uint64_t>(*frames[0], 0) == 1 &&
+            ValueAt<std::uint32_t>(*frames[0], 1) ==
+                static_cast<std::uint32_t>(
+                    GpuFrameCaptureStatus::Complete
+                ) &&
+            ValueAt<bool>(*frames[0], 2) &&
+            ValueAt<std::uint64_t>(*frames[0], 3) == 4,
+        "ordered raytracing frame payload is incorrect"
+    );
+    Expect(
+        ValueAt<std::uint64_t>(*frames[1], 0) == 2 &&
+            ValueAt<std::uint32_t>(*frames[1], 1) ==
+                static_cast<std::uint32_t>(
+                    GpuFrameCaptureStatus::Invalid
+                ) &&
+            !ValueAt<bool>(*frames[1], 2) &&
+            ValueAt<std::uint64_t>(*frames[1], 3) == 4 &&
+            ValueAt<std::uint64_t>(*frames[1], 5) == 2,
+        "rejected raytracing frame payload is incorrect"
+    );
+    Expect(
+        ValueAt<std::uint64_t>(*frames[2], 0) == 3 &&
+            ValueAt<std::uint32_t>(*frames[2], 1) ==
+                static_cast<std::uint32_t>(
+                    GpuFrameCaptureStatus::Complete
+                ) &&
+            ValueAt<bool>(*frames[2], 2),
+        "raytracing capture did not recover on the next frame"
+    );
+
+    const std::array<std::string_view, 9> expected_names{
+        "RT.LinearOrGraph",
+        "RT.ExportPrefix",
+        "RT.ExportReadback",
+        "RT.FrameTail",
+        "RT.Invalid.LinearOrGraph",
+        "RT.Invalid.ExportPrefix",
+        "RT.Invalid.ExportReadback",
+        "RT.Invalid.FrameTail",
+        "RT.Recovered.FrameTail",
+    };
+    const std::array<std::uint64_t, 9> expected_source_orders{
+        10, 10, 20, 30, 10, 10, 20, 30, 50
+    };
+    const std::array<std::uint64_t, 9> expected_local_orders{
+        0, 1, 0, 0, 0, 1, 0, 0, 0
+    };
+    for (std::size_t index = 0;
+         index < expected_names.size();
+         ++index) {
+        Expect(
+            StringAt(*scopes[index], 8) == expected_names[index] &&
+                ValueAt<std::uint64_t>(*scopes[index], 3) ==
+                    expected_source_orders[index] &&
+                ValueAt<std::uint64_t>(*scopes[index], 4) ==
+                    expected_local_orders[index] &&
+                ValueAt<std::uint32_t>(*scopes[index], 5) ==
+                    static_cast<std::uint32_t>(
+                        EQueueType::Graphics
+                    ) &&
+                ValueAt<std::uint32_t>(*scopes[index], 6) == 5 &&
+                ValueAt<std::uint32_t>(*scopes[index], 7) == 11,
+            "raytracing scope generation order or queue domain is incorrect"
+        );
+    }
+    Expect(
+        ValueAt<std::uint32_t>(*scopes[6], 9) ==
+                static_cast<std::uint32_t>(
+                    GpuScopeTerminalStatus::Error
+                ) &&
+            StringAt(*scopes[6], 17) ==
+                "raytracing export readback submission rejected",
+        "raytracing readback rejection diagnostic is incorrect"
+    );
+    Expect(
+        ValueAt<std::uint32_t>(*scopes[7], 9) ==
+                static_cast<std::uint32_t>(
+                    GpuScopeTerminalStatus::Error
+                ) &&
+            StringAt(*scopes[7], 17) ==
+                "raytracing frame tail query failed",
+        "raytracing tail error diagnostic is incorrect"
+    );
+}
+
 void AbortDetachesPendingCompletionWithoutBlocking() {
     ScopedOutput output("moer-render-profile-abort");
     StartRuntime(output);
@@ -934,6 +1231,7 @@ void AdmissionRejectDoesNotOvertakeOrderedFrames() {
 int main() {
     try {
         HappyPathPreservesTopologyAndRawTimestampDomains();
+        RaytracingCaptureAggregationWaitsForReverseCompletionAndRecovers();
         AbortDetachesPendingCompletionWithoutBlocking();
         ShutdownAfterRhiDrainPerformsFinalDrain();
         StaleGenerationFailsClosed();

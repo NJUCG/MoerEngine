@@ -28,7 +28,8 @@ bool RaytracingRenderer::DumpTextureToFile(
     CommandQueue&          gfx_queue,
     std::filesystem::path& exported_file_path,
     std::string_view       suffix,
-    ExportSubmissionTransaction& export_submission
+    ExportSubmissionTransaction& export_submission,
+    const std::function<bool(CommandList&)>& setup_command_list
 ) {
     (void)gfx_queue;
     CommandList command_list{};
@@ -64,19 +65,11 @@ bool RaytracingRenderer::DumpTextureToFile(
     switch (config.output_texture) {
         case EOT_LDR:
             size = sizeof(uint) * resolution.x * resolution.y;
-            readback = command_list.Readback(
-                frame_resources.ldr_color->GetView(),
-                "RaytracingExportLdrReadback"
-            );
             file_name += suffix;
             file_name += ".png";
             break;
         case EOT_HDR:
             size = sizeof(float2) * resolution.x * resolution.y;
-            readback = command_list.Readback(
-                frame_resources.resolved_color->GetView(),
-                "RaytracingExportHdrReadback"
-            );
             file_name += suffix;
             file_name += ".exr";
             hdr = true;
@@ -85,13 +78,45 @@ bool RaytracingRenderer::DumpTextureToFile(
             break;
     }
 
-    if (size == 0 || !readback.Valid()) {
+    if (size == 0) {
         return false;
     }
 
+    const bool profile_source_bound =
+        setup_command_list && setup_command_list(command_list);
+    {
+        ScopedGpuMarker readback_marker(
+            command_list,
+            "Raytracing Export Readback",
+            GpuMarkerPalette::Transfer(),
+            profile_source_bound ?
+                EGpuMarkerMode::Timestamp :
+                EGpuMarkerMode::Label
+        );
+        if (config.output_texture == EOT_LDR) {
+            readback = command_list.Readback(
+                frame_resources.ldr_color->GetView(),
+                "RaytracingExportLdrReadback"
+            );
+        } else {
+            readback = command_list.Readback(
+                frame_resources.resolved_color->GetView(),
+                "RaytracingExportHdrReadback"
+            );
+        }
+    }
+    if (!readback.Valid()) {
+        return false;
+    }
+
+    const bool modern_profiling =
+        command_list.HasGpuScopeRecorder() ||
+        command_list.IsLegacyGpuProfilingSuppressedForGeneration();
     export_submission.BeginReadback(device.CreateFence());
-    CmdSubmit readback_submit =
-        command_list.Submit().TickProfiling();
+    CmdSubmit readback_submit = command_list.Submit();
+    if (!modern_profiling) {
+        readback_submit.TickProfiling();
+    }
     export_submission.AttachReadbackSignal(readback_submit);
     RHIExecutor::Get().Submit(
         EQueueType::Graphics,

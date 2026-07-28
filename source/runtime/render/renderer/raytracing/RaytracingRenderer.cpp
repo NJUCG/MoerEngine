@@ -6,6 +6,7 @@
 #include "misc/BoundingBox.h"
 #include "misc/Timer.h"
 #include "profile/ProfileScope.h"
+#include "profile/RenderProfileCapture.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIExecutor.h"
@@ -280,11 +281,14 @@ void ExecuteSceneUpdate(
     RenderScene&     render_scene,
     GpuSceneUpdate&& update,
     RenderDevice&    device,
-    CommandQueue&    gfx_queue
+    CommandQueue&    gfx_queue,
+    const GpuScene::PendingCommandListSetupCallback& setup_command_lists
 ) {
     (void)gfx_queue;
     (void)device;
-    auto                                  scene_cmd_list = render_scene.ApplyUpdate(std::move(update));
+    auto scene_cmd_list = render_scene.ApplyUpdate(
+        std::move(update), setup_command_lists
+    );
     // GpuScene uploads may finish as transfer writes while untouched aliases
     // retain their previous read state. Publish one deterministic SRV/Sampled
     // boundary on the same graphics stream so the following managed RT graph
@@ -293,10 +297,18 @@ void ExecuteSceneUpdate(
         scene_cmd_list.gfx_queue_cmd_list,
         render_scene.GetGpuSceneRes()
     );
+    const bool modern_graphics_profiling =
+        scene_cmd_list.gfx_queue_cmd_list.HasGpuScopeRecorder() ||
+        scene_cmd_list.gfx_queue_cmd_list
+            .IsLegacyGpuProfilingSuppressedForGeneration();
     Array<RHIBackendSubmissionBatchEntry> submissions{};
     submissions.emplace_back(EQueueType::Copy, scene_cmd_list.copy_queue_cmd_list.Submit());
+    CmdSubmit graphics_submit = scene_cmd_list.gfx_queue_cmd_list.Submit();
+    if (!modern_graphics_profiling) {
+        graphics_submit.TickProfiling();
+    }
     submissions.emplace_back(
-        EQueueType::Graphics, scene_cmd_list.gfx_queue_cmd_list.Submit().TickProfiling()
+        EQueueType::Graphics, std::move(graphics_submit)
     );
     RHIExecutor::Get().Submit(std::move(submissions), ERHIExecSubmitFlags::FlushGPU);
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
@@ -428,9 +440,10 @@ struct RaytracingRenderer::RuntimeState {
 RaytracingRenderer::RaytracingRenderer(
     uint2&                        resolution,
     const SharedPtr<EditorConfig> config,
-    RuntimeAssets&                runtime_assets
+    RuntimeAssets&                runtime_assets,
+    RenderProfileCapture*         render_profile_capture
 ) :
-    Renderer(resolution, config),
+    Renderer(resolution, config, render_profile_capture),
     runtime_assets(runtime_assets),
     scene_render_extent_tracker(resolution),
     runtime_state(MakeUnique<RuntimeState>(*this, scene_render_extent_tracker.GetActiveExtent())) {
@@ -632,6 +645,80 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     assert(runtime_state);
     MOER_PROFILE_SCOPE("Raytracing.RenderFrame");
 
+    RenderProfileFrameToken gpu_profile_frame{};
+    if (render_profile_capture != nullptr) {
+        static_cast<void>(render_profile_capture->DrainReadyFrames());
+        gpu_profile_frame = render_profile_capture->BeginFrame();
+    }
+    const RHIQueueBinding graphics_profile_binding =
+        device.GetQueueTopology().Resolve(EQueueType::Graphics);
+    const RHIQueueBinding copy_profile_binding =
+        device.GetQueueTopology().Resolve(EQueueType::Copy);
+    auto try_bind_profile_source =
+        [&](CommandList&    command_list,
+            RHIQueueBinding queue_binding,
+            uint64          source_order) noexcept {
+            if (render_profile_capture == nullptr ||
+                !gpu_profile_frame.Valid()) {
+                return false;
+            }
+            return render_profile_capture->BindSource(
+                       gpu_profile_frame,
+                       command_list,
+                       queue_binding,
+                       source_order
+                   ) == RenderProfileBindResult::Bound;
+        };
+    auto ensure_profile_source =
+        [&](CommandList&    command_list,
+            RHIQueueBinding queue_binding,
+            uint64          source_order) noexcept {
+            if (command_list.HasGpuScopeRecorder()) {
+                return true;
+            }
+            if (!gpu_profile_frame.Valid() ||
+                command_list
+                    .IsLegacyGpuProfilingSuppressedForGeneration()) {
+                return false;
+            }
+            if (try_bind_profile_source(
+                    command_list, queue_binding, source_order
+                )) {
+                return true;
+            }
+            try {
+                command_list.SuppressLegacyGpuProfilingForGeneration();
+            } catch (...) {
+                // Profiling degradation must not change renderer behavior.
+            }
+            return false;
+        };
+    // Order zero is reserved for any already resident persistent-list prefix.
+    // Every later order is allocated by CommandList generation, never by
+    // worker arrival/completion order or by logical pass count.
+    uint64 next_profile_source_order = 1;
+    auto ensure_next_profile_source =
+        [&](CommandList& command_list,
+            RHIQueueBinding queue_binding) noexcept {
+            if (command_list.HasGpuScopeRecorder()) {
+                return true;
+            }
+            if (!gpu_profile_frame.Valid() ||
+                command_list
+                    .IsLegacyGpuProfilingSuppressedForGeneration()) {
+                return false;
+            }
+            const uint64 source_order = next_profile_source_order++;
+            return ensure_profile_source(
+                command_list, queue_binding, source_order
+            );
+        };
+    const auto marker_mode_for = [](const CommandList& command_list) {
+        return command_list.HasGpuScopeRecorder() ?
+                   EGpuMarkerMode::Timestamp :
+                   EGpuMarkerMode::Label;
+    };
+
     auto& state     = *runtime_state;
     auto& ui_config = frame_packet.config;
     auto  scene_extent_request = frame_packet.scene_render_extent;
@@ -795,8 +882,31 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             state.first_load || state.b_new_env_map || scene_resources_recreated ||
             output_resources_recreated || ui_config.export_cfg.b_export;
         const bool nrd_active_this_frame = IsNrdDenoiserActive(ui_config.denoiser_cfg.denoiser_type);
+        const auto setup_scene_update_profiling =
+            [&](GpuScene::PendingCommandList& commands,
+                bool                          full_rebuild) {
+                if (full_rebuild) {
+                    const uint64 copy_source_order =
+                        next_profile_source_order++;
+                    static_cast<void>(ensure_profile_source(
+                        commands.copy_queue_cmd_list,
+                        copy_profile_binding,
+                        copy_source_order
+                    ));
+                }
+                const uint64 graphics_source_order =
+                    next_profile_source_order++;
+                static_cast<void>(ensure_profile_source(
+                    commands.gfx_queue_cmd_list,
+                    graphics_profile_binding,
+                    graphics_source_order
+                ));
+            };
         const SceneUpdateResult scene_update =
-            ExecuteSceneUpdates(frame_packet.scene_updates);
+            ExecuteSceneUpdates(
+                frame_packet.scene_updates,
+                setup_scene_update_profiling
+            );
 #if WITH_NRD
         const int nrd_mode_this_frame =
             ui_config.denoiser_cfg.denoiser_type;
@@ -853,8 +963,19 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             }
 
             (void)RefreshSceneRuntimeRefs();
-            state.rt_ctx->FillLowDiscrepancySequence(cmd_list);
-            cmd_list.UpdateBindlessArray(bindless_array);
+            static_cast<void>(ensure_next_profile_source(
+                cmd_list, graphics_profile_binding
+            ));
+            {
+                ScopedGpuMarker bootstrap_marker(
+                    cmd_list,
+                    "Raytracing First Load Bootstrap",
+                    GpuMarkerPalette::Transfer(),
+                    marker_mode_for(cmd_list)
+                );
+                state.rt_ctx->FillLowDiscrepancySequence(cmd_list);
+                cmd_list.UpdateBindlessArray(bindless_array);
+            }
             RHIExecutor::Get().Submit(EQueueType::Graphics, cmd_list.Submit(), ERHIExecSubmitFlags::FlushGPU);
             RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
         }
@@ -862,10 +983,14 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         std::optional<ScopedGpuMarker> renderer_marker{};
         const auto ensure_renderer_marker = [&]() {
             if (!renderer_marker) {
+                static_cast<void>(ensure_next_profile_source(
+                    cmd_list, graphics_profile_binding
+                ));
                 renderer_marker.emplace(
                     cmd_list,
                     "Raytracing Renderer",
-                    GpuMarkerPalette::Renderer()
+                    GpuMarkerPalette::Renderer(),
+                    marker_mode_for(cmd_list)
                 );
             }
         };
@@ -880,7 +1005,12 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         };
 
         if (state.b_new_env_map) {
-            ScopedGpuMarker environment_marker(cmd_list, "Pass: Environment Setup", GpuMarkerPalette::Pass());
+            ScopedGpuMarker environment_marker(
+                cmd_list,
+                "Pass: Environment Setup",
+                GpuMarkerPalette::Pass(),
+                marker_mode_for(cmd_list)
+            );
             auto            src_env_map = runtime_assets.GetDefaultEnvMap();
             state.env_map               = device.CreateTexture(
                 src_env_map->GetName(),
@@ -1102,7 +1232,10 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             !render_graph_boundary_frame;
 
         if (unified_graph_eligible) {
-            RenderGraph graph("Raytracing.Frame");
+            RenderGraph graph(
+                "Raytracing.Frame",
+                RenderGraph::QueueTopology::FromRHI()
+            );
             RTGraphFrameSetupResources setup_resources{};
             const bool setup_passes_added = state.frame_setup_pass->AddPasses(
                 graph,
@@ -1279,6 +1412,9 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 // submission for an unexpected caller-side command.
                 close_renderer_marker();
                 if (!cmd_list.IsEmpty()) {
+                    static_cast<void>(ensure_next_profile_source(
+                        cmd_list, graphics_profile_binding
+                    ));
                     CmdSubmit prefix_submit = cmd_list.Submit().DebugLabel(
                         std::format("Raytracing Frame {}/Graph Prefix", frame_packet.frame_id),
                         GpuMarkerPalette::Renderer()
@@ -1292,6 +1428,13 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                     );
                 }
 
+                const uint64 graph_source_order_base =
+                    next_profile_source_order;
+                next_profile_source_order =
+                    graph_source_order_base +
+                    static_cast<uint64>(
+                        graph.GetCompiledPlan().execution_order.size()
+                    );
                 bool       graph_recording_profiling_started = split_graph_profiling_frame;
                 graph_submission_fence    = device.CreateFence();
                 ui_graph_submission_fence = device.CreateFence();
@@ -1331,12 +1474,29 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                     }
 #endif
                 };
+                RenderGraph::GpuProfilingOptions gpu_profiling{};
+                if (gpu_profile_frame.Valid()) {
+                    gpu_profiling.try_bind_source =
+                        [&](const RenderGraph::ExecutedPassInfo&,
+                            CommandList&    recording_command_list,
+                            RHIQueueBinding queue_binding,
+                            uint64          source_order) noexcept {
+                            return try_bind_profile_source(
+                                recording_command_list,
+                                queue_binding,
+                                source_order
+                            );
+                        };
+                    gpu_profiling.source_order_base =
+                        graph_source_order_base;
+                }
                 if (graph.ExecuteRecording(
                         {},
                         configure_recording_source,
                         state.render_graph_parallel_recording,
                         {},
-                        RenderGraph::ActiveRecordingOptions{.enabled = true}
+                        RenderGraph::ActiveRecordingOptions{.enabled = true},
+                        gpu_profiling
                     )) {
                     split_graph_profiling_frame = graph_recording_profiling_started;
                     frame_setup_graph_recorded  = true;
@@ -1352,6 +1512,16 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                     graph_show_texture_recorded = show_texture_in_graph;
                     graph_ui_recorded           = ui_added;
                 } else {
+                    if (gpu_profile_frame.Valid() &&
+                        (cmd_list.HasGpuScopeRecorder() ||
+                         cmd_list
+                             .IsLegacyGpuProfilingSuppressedForGeneration())) {
+                        // A failed caller-owned graph source must never leak
+                        // into the unrelated UI/present tail generation.
+                        CmdSubmit rejected_graph_generation =
+                            cmd_list.Submit();
+                        static_cast<void>(rejected_graph_generation);
+                    }
                     // ExecuteRecording joins every producer and fails the
                     // graph-wide commit gate. Sync only joins the resulting
                     // rejection cleanup and the already accepted Prefix; it is
@@ -1372,10 +1542,25 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 }
             }
         }
+        if (!graph_recording_failed) {
+            // Every linear suffix after a managed graph belongs to one fresh
+            // persistent-list generation. Repeated calls below reuse this
+            // recorder until export or the final tail seals the generation.
+            static_cast<void>(ensure_next_profile_source(
+                cmd_list, graphics_profile_binding
+            ));
+        }
         if (!graph_recording_failed && prepared_frame_setup &&
             !frame_setup_graph_recorded) {
-            frame_setup_linear_recorded =
-                state.frame_setup_pass->ProcessLinear(cmd_list, *prepared_frame_setup);
+            ScopedGpuMarker frame_setup_marker(
+                cmd_list,
+                "Pass: Frame Setup",
+                GpuMarkerPalette::Pass(),
+                marker_mode_for(cmd_list)
+            );
+            frame_setup_linear_recorded = state.frame_setup_pass->ProcessLinear(
+                cmd_list, *prepared_frame_setup
+            );
             if (!frame_setup_linear_recorded) {
                 graph_recording_failed              = true;
                 state.render_graph_fallback_latched = true;
@@ -1388,15 +1573,30 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         }
         if (!graph_recording_failed && !graph_primary_recorded) {
             {
-                ScopedGpuMarker pass_marker(cmd_list, "Pass: Prepare Lights", GpuMarkerPalette::Pass());
+                ScopedGpuMarker pass_marker(
+                    cmd_list,
+                    "Pass: Prepare Lights",
+                    GpuMarkerPalette::Pass(),
+                    marker_mode_for(cmd_list)
+                );
                 state.prepare_light_pass->Process(cmd_list, *prepared_lights);
             }
-            ScopedGpuMarker pass_marker(cmd_list, "Pass: GBuffer", GpuMarkerPalette::Pass());
+            ScopedGpuMarker pass_marker(
+                cmd_list,
+                "Pass: GBuffer",
+                GpuMarkerPalette::Pass(),
+                marker_mode_for(cmd_list)
+            );
             state.g_buffer_pass->Process(cmd_list, *state.rt_ctx);
             linear_gbuffer_recorded = true;
 
             pass_marker.Close();
-            ScopedGpuMarker lighting_marker(cmd_list, "Pass: Lighting", GpuMarkerPalette::Pass());
+            ScopedGpuMarker lighting_marker(
+                cmd_list,
+                "Pass: Lighting",
+                GpuMarkerPalette::Pass(),
+                marker_mode_for(cmd_list)
+            );
             state.prepare_light_pass->RecordLightingInputTransitions(cmd_list, *prepared_lights);
             local_light_sampling = state.lighting_pass->Process(
                 cmd_list,
@@ -1427,7 +1627,10 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 nrd_recorded = true;
             } else if (prepared_nrd) {
                 ScopedGpuMarker denoiser_marker(
-                    cmd_list, "Pass: Radiance Denoising", GpuMarkerPalette::Pass()
+                    cmd_list,
+                    "Pass: Radiance Denoising",
+                    GpuMarkerPalette::Pass(),
+                    marker_mode_for(cmd_list)
                 );
                 NrdDenoisePass::Process(cmd_list, *prepared_nrd);
                 nrd_recorded = true;
@@ -1443,11 +1646,21 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
 #endif
 
         if (!graph_recording_failed && !graph_composition_recorded) {
-            ScopedGpuMarker pass_marker(cmd_list, "Pass: Composition", GpuMarkerPalette::Pass());
+            ScopedGpuMarker pass_marker(
+                cmd_list,
+                "Pass: Composition",
+                GpuMarkerPalette::Pass(),
+                marker_mode_for(cmd_list)
+            );
             state.composition_pass->Process(cmd_list, *state.rt_ctx);
         }
         if (!graph_recording_failed && !graph_antialias_recorded) {
-            ScopedGpuMarker pass_marker(cmd_list, "Pass: Anti Aliasing", GpuMarkerPalette::Pass());
+            ScopedGpuMarker pass_marker(
+                cmd_list,
+                "Pass: Anti Aliasing",
+                GpuMarkerPalette::Pass(),
+                marker_mode_for(cmd_list)
+            );
             state.antialias_pass->Process(
                 cmd_list,
                 aa_params,
@@ -1458,20 +1671,35 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             linear_antialias_recorded = true;
         }
         if (!graph_recording_failed && !graph_tone_mapping_recorded) {
-            ScopedGpuMarker pass_marker(cmd_list, "Pass: Tone Mapping", GpuMarkerPalette::Pass());
+            ScopedGpuMarker pass_marker(
+                cmd_list,
+                "Pass: Tone Mapping",
+                GpuMarkerPalette::Pass(),
+                marker_mode_for(cmd_list)
+            );
             state.tone_mapping_pass->Process(
                 cmd_list, tone_params, state.rt_ctx->frame_rt.resolved_color, state.rt_ctx->frame_rt.ldr_color
             );
             linear_tone_mapping_recorded = true;
         }
         if (!graph_recording_failed && !graph_visualize_recorded) {
-            ScopedGpuMarker pass_marker(cmd_list, "Pass: Visualize", GpuMarkerPalette::Pass());
+            ScopedGpuMarker pass_marker(
+                cmd_list,
+                "Pass: Visualize",
+                GpuMarkerPalette::Pass(),
+                marker_mode_for(cmd_list)
+            );
             state.visualize_pass->Process(cmd_list, *state.rt_ctx, state.visualize_config);
             linear_visualize_recorded = true;
         }
 
         if (!graph_recording_failed && show_texture_requested && !graph_show_texture_recorded) {
-            ScopedGpuMarker debug_texture_marker(cmd_list, "Pass: Debug Texture", GpuMarkerPalette::Pass());
+            ScopedGpuMarker debug_texture_marker(
+                cmd_list,
+                "Pass: Debug Texture",
+                GpuMarkerPalette::Pass(),
+                marker_mode_for(cmd_list)
+            );
             state.show_texture_pass->Process(
                 cmd_list, show_texture_params, selected_debug_texture, state.rt_ctx->frame_rt.ldr_color
             );
@@ -1479,14 +1707,31 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
 
         if (state.b_export) {
             close_renderer_marker();
+            static_cast<void>(ensure_next_profile_source(
+                cmd_list, graphics_profile_binding
+            ));
+            {
+                ScopedGpuMarker export_marker(
+                    cmd_list,
+                    "Raytracing Export Prefix",
+                    GpuMarkerPalette::Transfer(),
+                    marker_mode_for(cmd_list)
+                );
+            }
+            const bool modern_export_profiling =
+                cmd_list.HasGpuScopeRecorder() ||
+                cmd_list
+                    .IsLegacyGpuProfilingSuppressedForGeneration();
             export_submission.Reset(device.CreateFence());
             CmdSubmit export_submit =
                 cmd_list.Submit()
                     .DebugLabel(
                         std::format("Raytracing Export Frame {}", frame_packet.frame_id),
                         GpuMarkerPalette::Frame()
-                    )
-                    .TickProfiling();
+                    );
+            if (!modern_export_profiling) {
+                export_submit.TickProfiling();
+            }
             export_submission.AttachSignal(export_submit);
             RHIExecutor::Get().Submit(
                 EQueueType::Graphics,
@@ -1498,6 +1743,16 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 export_submission.SourceOutcome();
             if (export_source_outcome ==
                 EExportSubmissionOutcome::Accepted) {
+                const uint64 readback_source_order =
+                    next_profile_source_order++;
+                const auto setup_readback_profile =
+                    [&](CommandList& readback_command_list) noexcept {
+                        return ensure_profile_source(
+                            readback_command_list,
+                            graphics_profile_binding,
+                            readback_source_order
+                        );
+                    };
                 const bool readback_accepted = DumpTextureToFile(
                     ui_config.export_cfg,
                     state.rt_ctx->frame_rt,
@@ -1505,7 +1760,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                     gfx_queue,
                     state.exported_file_path,
                     std::to_string(time),
-                    export_submission
+                    export_submission,
+                    setup_readback_profile
                 );
                 if (!readback_accepted) {
                     if (export_submission.ReadbackOutcome() ==
@@ -1545,12 +1801,26 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 );
             }
         }
+        // Keep the long linear renderer root inside the scene-rendering
+        // generation. The UI/present tail below owns a separate central root
+        // and may belong to a fresh generation after export.
+        close_renderer_marker();
     }
 
     const TextureRef final_color = frame_packet.debug_input.show_final_texture ?
                                        state.rt_ctx->frame_rt.ldr_color :
                                        state.rt_ctx->frame_rt.debug_color;
 
+    static_cast<void>(ensure_next_profile_source(
+        cmd_list, graphics_profile_binding
+    ));
+    std::optional<ScopedGpuMarker> frame_tail_marker{};
+    frame_tail_marker.emplace(
+        cmd_list,
+        "Raytracing Frame Tail",
+        GpuMarkerPalette::Ui(),
+        marker_mode_for(cmd_list)
+    );
     if (!graph_ui_recorded &&
         prepared_ui->GetRecordingState() ==
             UiFrameGraphPass::ERecordingState::Prepared) {
@@ -1567,7 +1837,18 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             // caller-owned command already recorded into this tail rather
             // than submitting a partially composed/potentially replayed
             // packet.
+            frame_tail_marker->Close();
+            frame_tail_marker.reset();
             static_cast<void>(cmd_list.Submit());
+            static_cast<void>(ensure_next_profile_source(
+                cmd_list, graphics_profile_binding
+            ));
+            frame_tail_marker.emplace(
+                cmd_list,
+                "Raytracing Frame Tail",
+                GpuMarkerPalette::Ui(),
+                marker_mode_for(cmd_list)
+            );
             prepared_ui->Abandon();
             graph_recording_failed                       = true;
             state.render_graph_fallback_latched          = true;
@@ -1579,7 +1860,18 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 exception.what()
             );
         } catch (...) {
+            frame_tail_marker->Close();
+            frame_tail_marker.reset();
             static_cast<void>(cmd_list.Submit());
+            static_cast<void>(ensure_next_profile_source(
+                cmd_list, graphics_profile_binding
+            ));
+            frame_tail_marker.emplace(
+                cmd_list,
+                "Raytracing Frame Tail",
+                GpuMarkerPalette::Ui(),
+                marker_mode_for(cmd_list)
+            );
             prepared_ui->Abandon();
             graph_recording_failed                       = true;
             state.render_graph_fallback_latched          = true;
@@ -1592,6 +1884,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         }
     }
 
+    frame_tail_marker->Close();
     time++;
     CmdSubmit frame_submit =
         cmd_list.Submit()
@@ -1607,6 +1900,9 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     if (split_graph_profiling_frame) {
         frame_submit.SetProfilingPhase(ERHIProfilingPhase::End);
     } else {
+        // The final tail remains the one legacy Complete boundary for linear
+        // and boundary frames. Modern per-scope queries coexist with this
+        // submit-level phase; omitting it would freeze GetProfilerEntry().
         frame_submit.TickProfiling();
     }
     std::optional<RHIPresentRequest> present_request{};
@@ -1645,6 +1941,12 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         ERHIExecSubmitFlags::FlushGPU,
         present_request ? &*present_request : nullptr
     );
+    if (render_profile_capture != nullptr && gpu_profile_frame.Valid()) {
+        static_cast<void>(
+            render_profile_capture->Seal(gpu_profile_frame)
+        );
+        static_cast<void>(render_profile_capture->DrainReadyFrames());
+    }
     // Accepted renderer state follows native queue publication, not CPU
     // recording completion. The final tail proves the ordered suffix was
     // accepted; the export and per-source graph fences prevent an accepted
@@ -2040,7 +2342,8 @@ bool RaytracingRenderer::RefreshSceneRuntimeRefs() {
 }
 
 RaytracingRenderer::SceneUpdateResult RaytracingRenderer::ExecuteSceneUpdates(
-    SceneUpdateBatch& batch
+    SceneUpdateBatch&                                  batch,
+    const GpuScene::PendingCommandListSetupCallback& setup_command_lists
 ) {
     auto& state            = *runtime_state;
     bool  updated          = false;
@@ -2048,7 +2351,13 @@ RaytracingRenderer::SceneUpdateResult RaytracingRenderer::ExecuteSceneUpdates(
     if (batch.initial_gpu_update) {
         const bool has_rt_update =
             batch.initial_gpu_update->raytracing_update != EGpuSceneRaytracingUpdate::None;
-        ExecuteSceneUpdate(*render_scene, std::move(*batch.initial_gpu_update), device, gfx_queue);
+        ExecuteSceneUpdate(
+            *render_scene,
+            std::move(*batch.initial_gpu_update),
+            device,
+            gfx_queue,
+            setup_command_lists
+        );
         updated          = true;
         rt_scene_updated = rt_scene_updated || has_rt_update;
         if (has_rt_update) {
@@ -2059,7 +2368,13 @@ RaytracingRenderer::SceneUpdateResult RaytracingRenderer::ExecuteSceneUpdates(
     if (batch.update_gpu_update) {
         const bool has_rt_update =
             batch.update_gpu_update->raytracing_update != EGpuSceneRaytracingUpdate::None;
-        ExecuteSceneUpdate(*render_scene, std::move(*batch.update_gpu_update), device, gfx_queue);
+        ExecuteSceneUpdate(
+            *render_scene,
+            std::move(*batch.update_gpu_update),
+            device,
+            gfx_queue,
+            setup_command_lists
+        );
         updated          = true;
         rt_scene_updated = rt_scene_updated || has_rt_update;
         if (has_rt_update) {
