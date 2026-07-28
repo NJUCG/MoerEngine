@@ -372,6 +372,12 @@ struct ProfileSessionReader::Impl {
         }
     };
 
+    struct RecordSequenceDemand {
+        std::uint64_t release_sequence{0};
+        std::uint64_t deadline_sequence{0};
+        std::uint64_t count{0};
+    };
+
     explicit Impl(const SessionLoadOptions& _options) noexcept : options(_options) {
         session.impl_ = new (std::nothrow) ProfileSession::Impl();
         if (session.impl_ == nullptr) {
@@ -442,6 +448,23 @@ struct ProfileSessionReader::Impl {
             );
             return false;
         }
+        return true;
+    }
+
+    [[nodiscard]] bool ChargeTopologyWork(std::uint64_t _count) noexcept {
+        std::uint64_t next_topology_work_items = 0;
+        if (AddOverflow(topology_work_items, _count, next_topology_work_items) ||
+            next_topology_work_items > options.limits.max_topology_work_items) {
+            Fail(
+                SessionLoadStatus::LimitExceeded,
+                SessionErrorCode::LimitExceeded,
+                "profile topology work-item limit exceeded",
+                DecodeStatus::LimitExceeded,
+                SessionLimitKind::TopologyWorkItems
+            );
+            return false;
+        }
+        topology_work_items = next_topology_work_items;
         return true;
     }
 
@@ -1009,6 +1032,155 @@ struct ProfileSessionReader::Impl {
         return true;
     }
 
+    [[nodiscard]] bool ValidateLossSequenceAllocation() {
+        struct SequenceDemand {
+            std::uint64_t release_sequence{0};
+            std::uint64_t deadline_sequence{0};
+            std::uint64_t count{0};
+        };
+        std::vector<std::uint64_t>  occupied_sequences = record_sequences;
+        std::vector<SequenceDemand> residual_demands;
+        residual_demands.reserve(session.impl_->losses.size());
+
+        for (const ProfileLossRecord& loss : session.impl_->losses) {
+            if (loss.first_sequence == 0 ||
+                (loss.record_count == 1 && loss.first_sequence != loss.last_sequence)) {
+                Fail(
+                    SessionLoadStatus::ProtocolViolation,
+                    SessionErrorCode::LossPayloadInvalid,
+                    "profile loss notice sequence extrema are not emitted-record sequences"
+                );
+                return false;
+            }
+
+            occupied_sequences.push_back(loss.first_sequence);
+            if (loss.record_count != 1) {
+                occupied_sequences.push_back(loss.last_sequence);
+            }
+            if (loss.record_count > 2) {
+                residual_demands.push_back({
+                    .release_sequence  = loss.first_sequence + 1,
+                    .deadline_sequence = loss.last_sequence - 1,
+                    .count             = loss.record_count - 2,
+                });
+            }
+        }
+
+        std::sort(occupied_sequences.begin(), occupied_sequences.end());
+        if (std::adjacent_find(occupied_sequences.begin(), occupied_sequences.end()) !=
+            occupied_sequences.end()) {
+            Fail(
+                SessionLoadStatus::ProtocolViolation,
+                SessionErrorCode::RecordSequenceInvalid,
+                "profile records and loss notices claim the same allocated sequence"
+            );
+            return false;
+        }
+
+        if (residual_demands.empty()) {
+            return true;
+        }
+        std::sort(
+            residual_demands.begin(),
+            residual_demands.end(),
+            [](const SequenceDemand& _left, const SequenceDemand& _right) {
+                if (_left.release_sequence != _right.release_sequence) {
+                    return _left.release_sequence < _right.release_sequence;
+                }
+                return _left.deadline_sequence < _right.deadline_sequence;
+            }
+        );
+
+        struct PendingDemand {
+            std::uint64_t deadline_sequence{0};
+            std::uint64_t remaining_count{0};
+        };
+        const auto later_deadline = [](const PendingDemand& _left, const PendingDemand& _right) {
+            return _left.deadline_sequence > _right.deadline_sequence;
+        };
+        std::priority_queue<PendingDemand, std::vector<PendingDemand>, decltype(later_deadline)>
+            pending_demands(later_deadline);
+
+        const auto fail_allocation = [&]() {
+            Fail(
+                SessionLoadStatus::ProtocolViolation,
+                SessionErrorCode::RecordSequenceInvalid,
+                "profile loss notices cannot claim distinct allocated record sequences"
+            );
+            return false;
+        };
+
+        std::size_t   demand_index             = 0;
+        std::size_t   occupied_index           = 0;
+        std::uint64_t position                 = residual_demands.front().release_sequence;
+        bool          sequence_space_exhausted = false;
+        while (demand_index < residual_demands.size() || !pending_demands.empty()) {
+            if (sequence_space_exhausted) {
+                return fail_allocation();
+            }
+            while (demand_index < residual_demands.size() &&
+                   residual_demands[demand_index].release_sequence <= position) {
+                pending_demands.push({
+                    .deadline_sequence = residual_demands[demand_index].deadline_sequence,
+                    .remaining_count   = residual_demands[demand_index].count,
+                });
+                ++demand_index;
+            }
+            if (pending_demands.empty()) {
+                position = residual_demands[demand_index].release_sequence;
+                continue;
+            }
+            if (pending_demands.top().deadline_sequence < position) {
+                return fail_allocation();
+            }
+
+            occupied_index = static_cast<std::size_t>(
+                std::lower_bound(
+                    occupied_sequences.begin() + occupied_index, occupied_sequences.end(), position
+                ) -
+                occupied_sequences.begin()
+            );
+            if (occupied_index < occupied_sequences.size() &&
+                occupied_sequences[occupied_index] == position) {
+                if (position == std::numeric_limits<std::uint64_t>::max()) {
+                    return fail_allocation();
+                }
+                ++position;
+                ++occupied_index;
+                continue;
+            }
+
+            PendingDemand demand = pending_demands.top();
+            pending_demands.pop();
+            std::uint64_t batch_end = demand.deadline_sequence;
+            if (occupied_index < occupied_sequences.size() && occupied_sequences[occupied_index] > position) {
+                batch_end = std::min(batch_end, occupied_sequences[occupied_index] - 1);
+            }
+            if (demand_index < residual_demands.size() &&
+                residual_demands[demand_index].release_sequence > position) {
+                batch_end = std::min(batch_end, residual_demands[demand_index].release_sequence - 1);
+            }
+            if (batch_end < position) {
+                return fail_allocation();
+            }
+
+            const std::uint64_t available = batch_end - position + 1;
+            const std::uint64_t assigned  = std::min(available, demand.remaining_count);
+            demand.remaining_count -= assigned;
+            if (assigned < available) {
+                position += assigned;
+            } else if (batch_end == std::numeric_limits<std::uint64_t>::max()) {
+                sequence_space_exhausted = true;
+            } else {
+                position = batch_end + 1;
+            }
+            if (demand.remaining_count != 0) {
+                pending_demands.push(demand);
+            }
+        }
+        return true;
+    }
+
     [[nodiscard]] bool ProcessPacket(const PacketView& _packet) {
         if (!CheckCountLimit(
                 session.impl_->summary.packet_count,
@@ -1118,9 +1290,14 @@ struct ProfileSessionReader::Impl {
         return true;
     }
 
-    [[nodiscard]] bool BuildCpuTracks(bool _allow_missing, std::uint64_t& _required_cpu_drops) {
+    [[nodiscard]] bool BuildCpuTracks(
+        bool                               _allow_missing,
+        std::uint64_t&                     _required_cpu_drops,
+        std::vector<RecordSequenceDemand>& _sequence_demands
+    ) {
         _required_cpu_drops = 0;
-        auto& scopes        = session.impl_->cpu_scopes;
+        _sequence_demands.clear();
+        auto& scopes = session.impl_->cpu_scopes;
         std::sort(
             scopes.begin(),
             scopes.end(),
@@ -1230,6 +1407,9 @@ struct ProfileSessionReader::Impl {
                     auto          ending_depth          = ending_parents_by_depth.lower_bound(scope.depth);
                     while (ending_depth != ending_parents_by_depth.begin()) {
                         --ending_depth;
+                        if (!ChargeTopologyWork(static_cast<std::uint64_t>(ending_depth->second.size()))) {
+                            return false;
+                        }
                         for (const std::uint64_t candidate_index : ending_depth->second) {
                             const CpuScopeRecord& candidate = scopes[candidate_index];
                             if (candidate.sequence > scope.sequence &&
@@ -1292,13 +1472,7 @@ struct ProfileSessionReader::Impl {
             track_begin = track_end;
         }
 
-        struct CpuSequenceDemand {
-            std::uint64_t release_sequence{0};
-            std::uint64_t deadline_sequence{0};
-            std::uint64_t count{0};
-        };
-        std::vector<CpuSequenceDemand> sequence_demands;
-        sequence_demands.reserve(gap_events.size());
+        _sequence_demands.reserve(gap_events.size());
         const auto add_sequence_demand =
             [&](std::uint64_t _lower_sequence, std::uint64_t _upper_sequence, std::uint64_t _count) {
                 if (_count == 0) {
@@ -1322,7 +1496,7 @@ struct ProfileSessionReader::Impl {
                     return false;
                 }
                 _required_cpu_drops = required_cpu_drops;
-                sequence_demands.push_back({
+                _sequence_demands.push_back({
                     .release_sequence  = _lower_sequence + 1,
                     .deadline_sequence = _upper_sequence - 1,
                     .count             = _count,
@@ -1390,9 +1564,9 @@ struct ProfileSessionReader::Impl {
         }
 
         std::sort(
-            sequence_demands.begin(),
-            sequence_demands.end(),
-            [](const CpuSequenceDemand& _left, const CpuSequenceDemand& _right) {
+            _sequence_demands.begin(),
+            _sequence_demands.end(),
+            [](const RecordSequenceDemand& _left, const RecordSequenceDemand& _right) {
                 if (_left.release_sequence != _right.release_sequence) {
                     return _left.release_sequence < _right.release_sequence;
                 }
@@ -1414,18 +1588,18 @@ struct ProfileSessionReader::Impl {
                       pending_demands(later_deadline);
         std::size_t   demand_index   = 0;
         std::size_t   observed_index = 0;
-        std::uint64_t position = sequence_demands.empty() ? 0 : sequence_demands.front().release_sequence;
-        while (demand_index < sequence_demands.size() || !pending_demands.empty()) {
-            while (demand_index < sequence_demands.size() &&
-                   sequence_demands[demand_index].release_sequence <= position) {
+        std::uint64_t position = _sequence_demands.empty() ? 0 : _sequence_demands.front().release_sequence;
+        while (demand_index < _sequence_demands.size() || !pending_demands.empty()) {
+            while (demand_index < _sequence_demands.size() &&
+                   _sequence_demands[demand_index].release_sequence <= position) {
                 pending_demands.push({
-                    .deadline_sequence = sequence_demands[demand_index].deadline_sequence,
-                    .remaining_count   = sequence_demands[demand_index].count,
+                    .deadline_sequence = _sequence_demands[demand_index].deadline_sequence,
+                    .remaining_count   = _sequence_demands[demand_index].count,
                 });
                 ++demand_index;
             }
             if (pending_demands.empty()) {
-                position = sequence_demands[demand_index].release_sequence;
+                position = _sequence_demands[demand_index].release_sequence;
                 continue;
             }
             if (pending_demands.top().deadline_sequence < position) {
@@ -1452,8 +1626,8 @@ struct ProfileSessionReader::Impl {
             if (observed_index < record_sequences.size()) {
                 batch_end = std::min(batch_end, record_sequences[observed_index]);
             }
-            if (demand_index < sequence_demands.size()) {
-                batch_end = std::min(batch_end, sequence_demands[demand_index].release_sequence);
+            if (demand_index < _sequence_demands.size()) {
+                batch_end = std::min(batch_end, _sequence_demands[demand_index].release_sequence);
             }
             const std::uint64_t available = batch_end - position;
             const std::uint64_t assigned  = std::min(available, demand.remaining_count);
@@ -1462,6 +1636,481 @@ struct ProfileSessionReader::Impl {
             if (demand.remaining_count != 0) {
                 pending_demands.push(demand);
             }
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool
+    ValidateCpuLossCompatibility(std::span<const RecordSequenceDemand> _cpu_sequence_demands) {
+        if (_cpu_sequence_demands.empty()) {
+            return true;
+        }
+
+        struct LossBucket {
+            std::uint64_t release_sequence{0};
+            std::uint64_t deadline_sequence{0};
+            std::uint64_t count{0};
+        };
+
+        std::uint64_t input_work = static_cast<std::uint64_t>(session.impl_->losses.size());
+        if (AddOverflow(input_work, static_cast<std::uint64_t>(_cpu_sequence_demands.size()), input_work)) {
+            Fail(
+                SessionLoadStatus::LimitExceeded,
+                SessionErrorCode::LimitExceeded,
+                "CPU/Loss topology input count overflows",
+                DecodeStatus::LimitExceeded,
+                SessionLimitKind::TopologyWorkItems
+            );
+            return false;
+        }
+        if (!ChargeTopologyWork(input_work)) {
+            return false;
+        }
+
+        std::uint64_t loss_bucket_count = 0;
+        std::uint64_t loss_bucket_total = 0;
+        for (const ProfileLossRecord& loss : session.impl_->losses) {
+            std::uint64_t buckets_for_loss = 1;
+            if (loss.record_count != 1) {
+                ++buckets_for_loss;
+            }
+            if (loss.record_count > 2) {
+                ++buckets_for_loss;
+            }
+            if (AddOverflow(loss_bucket_count, buckets_for_loss, loss_bucket_count) ||
+                AddOverflow(loss_bucket_total, loss.record_count, loss_bucket_total)) {
+                Fail(
+                    SessionLoadStatus::ProtocolViolation,
+                    SessionErrorCode::LossTotalsOverflow,
+                    "profile noticed-loss bucket total overflows"
+                );
+                return false;
+            }
+        }
+        std::uint64_t cpu_demand_total = 0;
+        for (const RecordSequenceDemand& demand : _cpu_sequence_demands) {
+            if (AddOverflow(cpu_demand_total, demand.count, cpu_demand_total)) {
+                Fail(
+                    SessionLoadStatus::ProtocolViolation,
+                    SessionErrorCode::CpuScopeTopologyInvalid,
+                    "CPU sequence-backed loss demand overflows"
+                );
+                return false;
+            }
+        }
+        if (loss_bucket_total != session.impl_->summary.lost_record_count ||
+            cpu_demand_total > loss_bucket_total) {
+            Fail(
+                SessionLoadStatus::ProtocolViolation,
+                SessionErrorCode::CpuScopeParentMissing,
+                "CPU hierarchy deficits exceed noticed allocated-record losses"
+            );
+            return false;
+        }
+
+        std::uint64_t loss_critical_count   = 0;
+        std::uint64_t demand_critical_count = 0;
+        std::uint64_t critical_point_count  = 0;
+        std::uint64_t construction_work     = 0;
+        if (AddOverflow(loss_bucket_count, loss_bucket_count, loss_critical_count) ||
+            AddOverflow(
+                static_cast<std::uint64_t>(_cpu_sequence_demands.size()),
+                static_cast<std::uint64_t>(_cpu_sequence_demands.size()),
+                demand_critical_count
+            ) ||
+            AddOverflow(loss_critical_count, demand_critical_count, critical_point_count) ||
+            AddOverflow(loss_bucket_count, critical_point_count, construction_work) ||
+            loss_bucket_count > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()) ||
+            critical_point_count > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+            Fail(
+                SessionLoadStatus::LimitExceeded,
+                SessionErrorCode::LimitExceeded,
+                "CPU/Loss topology preprocessing exceeds the addressable range",
+                DecodeStatus::LimitExceeded,
+                SessionLimitKind::TopologyWorkItems
+            );
+            return false;
+        }
+        if (!ChargeTopologyWork(construction_work)) {
+            return false;
+        }
+
+        std::vector<LossBucket> loss_buckets;
+        loss_buckets.reserve(static_cast<std::size_t>(loss_bucket_count));
+        std::vector<std::uint64_t> critical_points;
+        critical_points.reserve(static_cast<std::size_t>(critical_point_count));
+
+        const auto add_loss_bucket = [&](std::uint64_t _release, std::uint64_t _deadline, std::uint64_t _count
+                                     ) {
+            if (_count == 0) {
+                return;
+            }
+            loss_buckets.push_back({
+                .release_sequence  = _release,
+                .deadline_sequence = _deadline,
+                .count             = _count,
+            });
+            critical_points.push_back(_release);
+            critical_points.push_back(_deadline);
+        };
+        for (const ProfileLossRecord& loss : session.impl_->losses) {
+            add_loss_bucket(loss.first_sequence, loss.first_sequence, 1);
+            if (loss.record_count != 1) {
+                add_loss_bucket(loss.last_sequence, loss.last_sequence, 1);
+            }
+            if (loss.record_count > 2) {
+                add_loss_bucket(loss.first_sequence + 1, loss.last_sequence - 1, loss.record_count - 2);
+            }
+        }
+        for (const RecordSequenceDemand& demand : _cpu_sequence_demands) {
+            critical_points.push_back(demand.release_sequence);
+            critical_points.push_back(demand.deadline_sequence);
+        }
+
+        // std::sort is introspective O(N log N). Charge one abstract work item
+        // per element and merge level before invoking it so preprocessing cannot
+        // escape the session-wide topology budget.
+        std::uint64_t sort_width = 1;
+        while (sort_width < critical_point_count) {
+            if (!ChargeTopologyWork(critical_point_count)) {
+                return false;
+            }
+            if (sort_width > std::numeric_limits<std::uint64_t>::max() / 2) {
+                break;
+            }
+            sort_width *= 2;
+        }
+        std::sort(critical_points.begin(), critical_points.end());
+        if (!ChargeTopologyWork(critical_point_count)) {
+            return false;
+        }
+        critical_points.erase(
+            std::unique(critical_points.begin(), critical_points.end()), critical_points.end()
+        );
+
+        struct SequenceSegment {
+            std::uint64_t begin{0};
+            std::uint64_t end{0};
+            std::uint64_t capacity{0};
+        };
+        std::uint64_t maximum_segment_count = 0;
+        if (!critical_points.empty()) {
+            if (AddOverflow(
+                    static_cast<std::uint64_t>(critical_points.size()),
+                    static_cast<std::uint64_t>(critical_points.size()),
+                    maximum_segment_count
+                )) {
+                Fail(
+                    SessionLoadStatus::LimitExceeded,
+                    SessionErrorCode::LimitExceeded,
+                    "CPU/Loss sequence segmentation overflows",
+                    DecodeStatus::LimitExceeded,
+                    SessionLimitKind::TopologyWorkItems
+                );
+                return false;
+            }
+            --maximum_segment_count;
+        }
+        std::uint64_t segmentation_work = maximum_segment_count;
+        if (AddOverflow(
+                segmentation_work, static_cast<std::uint64_t>(record_sequences.size()), segmentation_work
+            ) ||
+            maximum_segment_count > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+            Fail(
+                SessionLoadStatus::LimitExceeded,
+                SessionErrorCode::LimitExceeded,
+                "CPU/Loss sequence segmentation exceeds the addressable range",
+                DecodeStatus::LimitExceeded,
+                SessionLimitKind::TopologyWorkItems
+            );
+            return false;
+        }
+        if (!ChargeTopologyWork(segmentation_work)) {
+            return false;
+        }
+
+        std::vector<SequenceSegment> segments;
+        segments.reserve(static_cast<std::size_t>(maximum_segment_count));
+        std::size_t observed_index = 0;
+        const auto  add_segment    = [&](std::uint64_t _begin, std::uint64_t _end) {
+            while (observed_index < record_sequences.size() && record_sequences[observed_index] < _begin) {
+                ++observed_index;
+            }
+            const std::size_t observed_begin = observed_index;
+            while (observed_index < record_sequences.size() && record_sequences[observed_index] <= _end) {
+                ++observed_index;
+            }
+            const std::uint64_t observed_count = static_cast<std::uint64_t>(observed_index - observed_begin);
+            const std::uint64_t span_minus_one = _end - _begin;
+            std::uint64_t       available      = 0;
+            if (span_minus_one == std::numeric_limits<std::uint64_t>::max()) {
+                // The full uint64 domain has 2^64 values, which cannot itself
+                // be represented. The available count is representable after
+                // excluding any observed sequence, or can be capped directly
+                // by the total flow when none are observed.
+                available = observed_count == 0 ?
+                                    loss_bucket_total :
+                                    std::numeric_limits<std::uint64_t>::max() - (observed_count - 1);
+            } else {
+                const std::uint64_t span = span_minus_one + 1;
+                available                = observed_count < span ? span - observed_count : 0;
+            }
+            const std::uint64_t capacity = std::min(available, loss_bucket_total);
+            if (capacity != 0) {
+                segments.push_back({
+                        .begin    = _begin,
+                        .end      = _end,
+                        .capacity = capacity,
+                });
+            }
+        };
+        for (std::size_t index = 0; index < critical_points.size(); ++index) {
+            const std::uint64_t point = critical_points[index];
+            add_segment(point, point);
+            if (index + 1 < critical_points.size() && point != std::numeric_limits<std::uint64_t>::max() &&
+                critical_points[index + 1] > point + 1) {
+                add_segment(point + 1, critical_points[index + 1] - 1);
+            }
+        }
+
+        std::uint64_t graph_node_work = 3;
+        const auto    add_node_work   = [&](std::uint64_t _count) {
+            return !AddOverflow(graph_node_work, _count, graph_node_work);
+        };
+        if (!add_node_work(static_cast<std::uint64_t>(loss_buckets.size())) ||
+            !add_node_work(static_cast<std::uint64_t>(segments.size())) ||
+            !add_node_work(static_cast<std::uint64_t>(segments.size())) ||
+            !add_node_work(static_cast<std::uint64_t>(_cpu_sequence_demands.size())) ||
+            graph_node_work > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+            Fail(
+                SessionLoadStatus::LimitExceeded,
+                SessionErrorCode::LimitExceeded,
+                "CPU/Loss topology graph exceeds the addressable node range",
+                DecodeStatus::LimitExceeded,
+                SessionLimitKind::TopologyWorkItems
+            );
+            return false;
+        }
+        if (!ChargeTopologyWork(graph_node_work)) {
+            return false;
+        }
+
+        struct FlowNetwork {
+            struct Edge {
+                std::size_t   target{0};
+                std::size_t   reverse_index{0};
+                std::uint64_t capacity{0};
+            };
+
+            explicit FlowNetwork(Impl& _owner, std::size_t _node_count) :
+                owner(&_owner),
+                edges(_node_count),
+                parent_nodes(_node_count),
+                parent_edges(_node_count),
+                pending_nodes(_node_count) {}
+
+            void AddEdge(std::size_t _source, std::size_t _target, std::uint64_t _capacity) {
+                const std::size_t source_reverse = edges[_target].size();
+                const std::size_t target_reverse = edges[_source].size();
+                edges[_source].push_back({
+                    .target        = _target,
+                    .reverse_index = source_reverse,
+                    .capacity      = _capacity,
+                });
+                edges[_target].push_back({
+                    .target        = _source,
+                    .reverse_index = target_reverse,
+                    .capacity      = 0,
+                });
+            }
+
+            [[nodiscard]] bool
+            MaxFlow(std::size_t _source, std::size_t _sink, std::uint64_t _target, std::uint64_t& _flow) {
+                constexpr std::size_t unreached = std::numeric_limits<std::size_t>::max();
+                _flow                           = 0;
+                while (_flow < _target) {
+                    if (!owner->ChargeTopologyWork(static_cast<std::uint64_t>(parent_nodes.size()))) {
+                        return false;
+                    }
+                    std::fill(parent_nodes.begin(), parent_nodes.end(), unreached);
+                    parent_nodes[_source]        = _source;
+                    std::size_t pending_begin    = 0;
+                    std::size_t pending_end      = 0;
+                    pending_nodes[pending_end++] = _source;
+
+                    while (pending_begin < pending_end && parent_nodes[_sink] == unreached) {
+                        const std::size_t node = pending_nodes[pending_begin++];
+                        if (!owner->ChargeTopologyWork(static_cast<std::uint64_t>(edges[node].size()))) {
+                            return false;
+                        }
+                        for (std::size_t edge_index = 0; edge_index < edges[node].size(); ++edge_index) {
+                            const Edge& edge = edges[node][edge_index];
+                            if (edge.capacity != 0 && parent_nodes[edge.target] == unreached) {
+                                parent_nodes[edge.target]    = node;
+                                parent_edges[edge.target]    = edge_index;
+                                pending_nodes[pending_end++] = edge.target;
+                                if (edge.target == _sink) {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (parent_nodes[_sink] == unreached) {
+                        return true;
+                    }
+
+                    std::uint64_t augment = _target - _flow;
+                    for (std::size_t node = _sink; node != _source; node = parent_nodes[node]) {
+                        if (!owner->ChargeTopologyWork(1)) {
+                            return false;
+                        }
+                        const Edge& edge = edges[parent_nodes[node]][parent_edges[node]];
+                        augment          = std::min(augment, edge.capacity);
+                    }
+
+                    for (std::size_t node = _sink; node != _source; node = parent_nodes[node]) {
+                        if (!owner->ChargeTopologyWork(1)) {
+                            return false;
+                        }
+                        Edge& edge = edges[parent_nodes[node]][parent_edges[node]];
+                        edge.capacity -= augment;
+                        edges[node][edge.reverse_index].capacity += augment;
+                    }
+                    _flow += augment;
+                }
+                return true;
+            }
+
+            Impl*                          owner{nullptr};
+            std::vector<std::vector<Edge>> edges;
+            std::vector<std::size_t>       parent_nodes;
+            std::vector<std::size_t>       parent_edges;
+            std::vector<std::size_t>       pending_nodes;
+        };
+
+        const std::size_t source_node       = 0;
+        const std::size_t loss_base         = 1;
+        const std::size_t segment_in_base   = loss_base + loss_buckets.size();
+        const std::size_t segment_out_base  = segment_in_base + segments.size();
+        const std::size_t cpu_demand_base   = segment_out_base + segments.size();
+        const std::size_t dummy_demand_node = cpu_demand_base + _cpu_sequence_demands.size();
+        const std::size_t sink_node         = dummy_demand_node + 1;
+        FlowNetwork       network(*this, sink_node + 1);
+        const auto        add_edge = [&](std::size_t _source, std::size_t _target, std::uint64_t _capacity) {
+            if (!ChargeTopologyWork(1)) {
+                return false;
+            }
+            network.AddEdge(_source, _target, _capacity);
+            return true;
+        };
+
+        for (std::size_t index = 0; index < loss_buckets.size(); ++index) {
+            if (!add_edge(source_node, loss_base + index, loss_buckets[index].count)) {
+                return false;
+            }
+        }
+        for (std::size_t index = 0; index < segments.size(); ++index) {
+            if (!add_edge(segment_in_base + index, segment_out_base + index, segments[index].capacity)) {
+                return false;
+            }
+        }
+        for (std::size_t index = 0; index < _cpu_sequence_demands.size(); ++index) {
+            if (!add_edge(cpu_demand_base + index, sink_node, _cpu_sequence_demands[index].count)) {
+                return false;
+            }
+        }
+        if (!add_edge(dummy_demand_node, sink_node, loss_bucket_total - cpu_demand_total)) {
+            return false;
+        }
+
+        const auto charge_segment_search = [&]() {
+            std::uint64_t remaining = static_cast<std::uint64_t>(segments.size());
+            std::uint64_t work      = 0;
+            while (remaining != 0) {
+                ++work;
+                remaining /= 2;
+            }
+            return ChargeTopologyWork(work);
+        };
+        for (std::size_t loss_index = 0; loss_index < loss_buckets.size(); ++loss_index) {
+            const LossBucket& bucket = loss_buckets[loss_index];
+            if (!charge_segment_search()) {
+                return false;
+            }
+            auto segment_it = std::lower_bound(
+                segments.begin(),
+                segments.end(),
+                bucket.release_sequence,
+                [](const SequenceSegment& _segment, std::uint64_t _sequence) {
+                    return _segment.end < _sequence;
+                }
+            );
+            for (; segment_it != segments.end() && segment_it->begin <= bucket.deadline_sequence;
+                 ++segment_it) {
+                if (!ChargeTopologyWork(1)) {
+                    return false;
+                }
+                const std::size_t segment_index = static_cast<std::size_t>(segment_it - segments.begin());
+                const SequenceSegment& segment  = segments[segment_index];
+                if (segment.begin >= bucket.release_sequence && segment.end <= bucket.deadline_sequence &&
+                    !add_edge(
+                        loss_base + loss_index,
+                        segment_in_base + segment_index,
+                        std::min(bucket.count, segment.capacity)
+                    )) {
+                    return false;
+                }
+            }
+        }
+        for (std::size_t segment_index = 0; segment_index < segments.size(); ++segment_index) {
+            if (!add_edge(
+                    segment_out_base + segment_index, dummy_demand_node, segments[segment_index].capacity
+                )) {
+                return false;
+            }
+        }
+        for (std::size_t demand_index = 0; demand_index < _cpu_sequence_demands.size(); ++demand_index) {
+            const RecordSequenceDemand& demand = _cpu_sequence_demands[demand_index];
+            if (!charge_segment_search()) {
+                return false;
+            }
+            auto segment_it = std::lower_bound(
+                segments.begin(),
+                segments.end(),
+                demand.release_sequence,
+                [](const SequenceSegment& _segment, std::uint64_t _sequence) {
+                    return _segment.end < _sequence;
+                }
+            );
+            for (; segment_it != segments.end() && segment_it->begin <= demand.deadline_sequence;
+                 ++segment_it) {
+                if (!ChargeTopologyWork(1)) {
+                    return false;
+                }
+                const std::size_t segment_index = static_cast<std::size_t>(segment_it - segments.begin());
+                const SequenceSegment& segment  = segments[segment_index];
+                if (segment.begin >= demand.release_sequence && segment.end <= demand.deadline_sequence &&
+                    !add_edge(
+                        segment_out_base + segment_index,
+                        cpu_demand_base + demand_index,
+                        std::min(segment.capacity, demand.count)
+                    )) {
+                    return false;
+                }
+            }
+        }
+
+        std::uint64_t allocated_loss_count = 0;
+        if (!network.MaxFlow(source_node, sink_node, loss_bucket_total, allocated_loss_count)) {
+            return false;
+        }
+        if (allocated_loss_count != loss_bucket_total) {
+            Fail(
+                SessionLoadStatus::ProtocolViolation,
+                SessionErrorCode::CpuScopeParentMissing,
+                "noticed Loss intervals cannot jointly explain missing CPU parent sequences"
+            );
+            return false;
         }
         return true;
     }
@@ -1632,22 +2281,8 @@ struct ProfileSessionReader::Impl {
         auto& frames = session.impl_->gpu_frames;
         auto& scopes = session.impl_->gpu_scopes;
 
-        std::uint64_t topology_work_items  = 0;
-        const auto    charge_topology_work = [&](std::uint64_t _count) {
-            std::uint64_t next_topology_work_items = 0;
-            if (AddOverflow(topology_work_items, _count, next_topology_work_items) ||
-                next_topology_work_items > options.limits.max_topology_work_items) {
-                Fail(
-                    SessionLoadStatus::LimitExceeded,
-                    SessionErrorCode::LimitExceeded,
-                    "GPU topology work-item limit exceeded",
-                    DecodeStatus::LimitExceeded,
-                    SessionLimitKind::TopologyWorkItems
-                );
-                return false;
-            }
-            topology_work_items = next_topology_work_items;
-            return true;
+        const auto charge_topology_work = [&](std::uint64_t _count) {
+            return ChargeTopologyWork(_count);
         };
         std::vector<std::uint64_t> frame_error_counts(frames.size(), 0);
         std::vector<std::uint8_t>  frame_root_partition_ambiguous(frames.size(), 0);
@@ -4080,12 +4715,12 @@ struct ProfileSessionReader::Impl {
             }
         }
         if (session.impl_->summary.has_session_end) {
-            const std::uint64_t total_drop_budget = session.impl_->summary.session_end_records_dropped;
+            const std::uint64_t total_drop_budget = session.impl_->summary.lost_record_count;
             if (required_gpu_drops > total_drop_budget) {
                 Fail(
                     SessionLoadStatus::ProtocolViolation,
                     SessionErrorCode::GpuFrameTotalsMismatch,
-                    "CPU/GPU deficits exceed the session record-loss budget"
+                    "CPU/GPU deficits exceed the noticed allocated-record loss budget"
                 );
                 return false;
             }
@@ -4207,36 +4842,34 @@ struct ProfileSessionReader::Impl {
             );
             return false;
         }
-        if (session.impl_->summary.has_session_end) {
-            std::uint64_t maximum_assigned_sequence = 0;
-            if (AddOverflow(
-                    session.impl_->summary.session_end_records_written,
-                    session.impl_->summary.session_end_records_dropped,
-                    maximum_assigned_sequence
-                ) ||
-                (!record_sequences.empty() && record_sequences.back() > maximum_assigned_sequence)) {
-                Fail(
-                    SessionLoadStatus::ProtocolViolation,
-                    SessionErrorCode::RecordSequenceInvalid,
-                    "profile record sequence exceeds the producer allocation bound"
-                );
-                return false;
-            }
+        // ProfileDump v3 does not encode the last reserved sequence.
+        // SessionEnd::records_dropped mixes pre-reservation attempts with
+        // sequence-backed losses, while value validation/encoding can consume a
+        // sequence without incrementing that aggregate. Therefore neither
+        // written+dropped nor written+noticed is a valid sequence frontier.
+        if (!ValidateLossSequenceAllocation()) {
+            return false;
         }
 
-        const bool allow_missing = _forensic || session.impl_->summary.lost_record_count != 0 ||
-                                   session.impl_->summary.unnotified_drop_count != 0;
+        // Only a Loss notice proves that an allocated record sequence was
+        // dropped. Unnotified SessionEnd attempts remain useful telemetry, but
+        // cannot justify a missing CPU/GPU record.
+        const bool    allow_missing      = _forensic || session.impl_->summary.lost_record_count != 0;
         std::uint64_t required_cpu_drops = 0;
-        if (!BuildCpuTracks(allow_missing, required_cpu_drops)) {
+        std::vector<RecordSequenceDemand> cpu_sequence_demands;
+        if (!BuildCpuTracks(allow_missing, required_cpu_drops, cpu_sequence_demands)) {
             return false;
         }
         if (session.impl_->summary.has_session_end &&
-            required_cpu_drops > session.impl_->summary.session_end_records_dropped) {
+            required_cpu_drops > session.impl_->summary.lost_record_count) {
             Fail(
                 SessionLoadStatus::ProtocolViolation,
                 SessionErrorCode::CpuScopeParentMissing,
-                "CPU hierarchy deficits exceed the session record-loss budget"
+                "CPU hierarchy deficits exceed the noticed allocated-record loss budget"
             );
+            return false;
+        }
+        if (!_forensic && !ValidateCpuLossCompatibility(cpu_sequence_demands)) {
             return false;
         }
         if (!BuildGpuDomainsAndTracks() || !BuildGpuTopology(allow_missing, required_cpu_drops)) {
@@ -4469,6 +5102,7 @@ struct ProfileSessionReader::Impl {
     std::vector<std::uint64_t>                            record_sequences{};
     std::uint64_t                                         schema_bytes{0};
     std::uint64_t                                         string_bytes{0};
+    std::uint64_t                                         topology_work_items{0};
 };
 
 ProfileSessionReader::ProfileSessionReader(const SessionLoadOptions& _options) noexcept {

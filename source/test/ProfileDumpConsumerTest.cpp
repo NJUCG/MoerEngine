@@ -725,6 +725,176 @@ void TestEnvelopeSchemaAndSequenceContracts() {
             "SessionEnd drop total smaller than noticed losses was accepted"
         );
     }
+    {
+        SessionBuilder         builder;
+        const SchemaDescriptor unknown = UnknownSchema();
+        builder.Begin();
+        builder.Schema(unknown);
+        const std::array<FieldValueView, 2> values{
+            std::uint64_t{1},
+            std::string_view("observed"),
+        };
+        builder.Record(unknown, 1, values);
+        builder.Loss({
+            .first_sequence = 1,
+            .last_sequence  = 1,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::RecordSequenceInvalid,
+            "a Loss notice reused an observed record sequence"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Loss({
+            .first_sequence = 1,
+            .last_sequence  = 5,
+            .record_count   = 3,
+            .value_bytes    = 24,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.Loss({
+            .first_sequence = 2,
+            .last_sequence  = 4,
+            .record_count   = 3,
+            .value_bytes    = 24,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::Oversized),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::RecordSequenceInvalid,
+            "overlapping Loss hulls reused their only residual sequence"
+        );
+    }
+    {
+        SessionBuilder         builder;
+        const SchemaDescriptor unknown = UnknownSchema();
+        builder.Begin();
+        builder.Schema(unknown);
+        builder.Loss({
+            .first_sequence = 1,
+            .last_sequence  = 3,
+            .record_count   = 2,
+            .value_bytes    = 16,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        const std::array<FieldValueView, 2> values{
+            std::uint64_t{2},
+            std::string_view("inside-loss-hull"),
+        };
+        builder.Record(unknown, 2, values);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                loaded.session.Summary().lost_record_count == 2,
+            "an observed record inside a Loss hull was mistaken for a lost endpoint"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Loss({
+            .first_sequence = 1,
+            .last_sequence  = 3,
+            .record_count   = 2,
+            .value_bytes    = 16,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.Loss({
+            .first_sequence = 2,
+            .last_sequence  = 2,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::Oversized),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete &&
+                loaded.session.Summary().lost_record_count == 3,
+            "distinct overlapping Loss notices were rejected"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Loss({
+            .first_sequence = 0,
+            .last_sequence  = 0,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::LossPayloadInvalid,
+            "Loss notice claimed reserved record sequence zero"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Loss({
+            .first_sequence = 1,
+            .last_sequence  = 3,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::LossPayloadInvalid,
+            "single-record Loss notice claimed different minimum and maximum sequences"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Loss({
+            .first_sequence = 100,
+            .last_sequence  = 100,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::Oversized),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete,
+            "v3 consumer invented a finite sequence frontier absent from the wire"
+        );
+    }
+    {
+        SessionBuilder         builder;
+        const SchemaDescriptor unknown = UnknownSchema();
+        builder.Begin();
+        builder.Schema(unknown);
+        const std::array<FieldValueView, 2> values{
+            std::uint64_t{2},
+            std::string_view("post-validation-gap"),
+        };
+        builder.Record(unknown, 2, values);
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::Complete,
+            "unreported post-reservation validation failure was treated as a sequence violation"
+        );
+    }
 }
 
 void TestChecksumAndForensicTruncation() {
@@ -1042,8 +1212,8 @@ void TestSemanticTopologyAndLossRecovery() {
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
             loaded.result.status == SessionLoadStatus::ProtocolViolation &&
-                loaded.result.error_code == SessionErrorCode::RecordSequenceInvalid,
-            "one CPU drop fabricated sequence capacity for two independent observed ancestor subtrees"
+                loaded.result.error_code == SessionErrorCode::CpuScopeParentMissing,
+            "an unnotified drop fabricated sequence-backed CPU parent evidence"
         );
     }
     {
@@ -1054,11 +1224,14 @@ void TestSemanticTopologyAndLossRecovery() {
         AddCpuScope(builder, 1, 1, "root-one-orphan", 1, 2, 2);
         AddCpuScope(builder, 6, 1, "root-two", 10, 20, 0);
         AddCpuScope(builder, 4, 1, "root-two-orphan", 11, 12, 2);
-        builder.End(SessionEndInfo{
-            .generation      = builder.generation,
-            .records_written = builder.record_count,
-            .records_dropped = 2,
+        builder.Loss({
+            .first_sequence = 2,
+            .last_sequence  = 5,
+            .record_count   = 2,
+            .value_bytes    = 16,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
         });
+        builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
             loaded.result.status == SessionLoadStatus::Complete &&
@@ -1074,11 +1247,14 @@ void TestSemanticTopologyAndLossRecovery() {
         AddCpuScope(builder, 1, 1, "orphan-before-barrier", 0, 10, 2);
         AddCpuScope(builder, 3, 1, "observed-depth-one-barrier", 10, 20, 1);
         AddCpuScope(builder, 4, 1, "orphan-after-barrier", 20, 30, 2);
-        builder.End(SessionEndInfo{
-            .generation      = builder.generation,
-            .records_written = builder.record_count,
-            .records_dropped = 2,
+        builder.Loss({
+            .first_sequence = 2,
+            .last_sequence  = 5,
+            .record_count   = 2,
+            .value_bytes    = 16,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
         });
+        builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
             loaded.result.status == SessionLoadStatus::Complete &&
@@ -1125,6 +1301,27 @@ void TestSemanticTopologyAndLossRecovery() {
         SessionBuilder builder;
         builder.Begin();
         builder.Schema(Templates::CpuScope());
+        AddCpuScope(builder, 3, 1, "observed-root", 0, 20, 0);
+        AddCpuScope(builder, 1, 1, "depth-two", 1, 2, 2);
+        builder.Loss({
+            .first_sequence = 4,
+            .last_sequence  = 4,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        });
+        builder.End();
+        const Loaded loaded = LoadChunks(builder.bytes);
+        Expect(
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::CpuScopeParentMissing,
+            "Loss outside the CPU parent sequence interval was reused as topology evidence"
+        );
+    }
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
         AddCpuScope(builder, 0, 1, "zero-sequence", 0, 10, 0);
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
@@ -1150,9 +1347,9 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
-            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
-                loaded.result.error_code == SessionErrorCode::RecordSequenceInvalid,
-            "record sequence exceeded the producer's written-plus-dropped allocation bound"
+            loaded.result.status == SessionLoadStatus::Complete &&
+                loaded.session.Summary().orphan_cpu_scope_count == 1,
+            "unreported post-reservation failures were mistaken for an encoded sequence frontier"
         );
     }
     {
@@ -1229,11 +1426,14 @@ void TestSemanticTopologyAndLossRecovery() {
         AddCpuScope(builder, 3, 1, "cpu-root", 0, 20, 0);
         AddCpuScope(builder, 1, 1, "cpu-depth-two", 1, 2, 2);
         AddGpuFrame(builder, 4, 1, ProfileGpuFrameStatus::Complete, true, 1, 0, 0, "");
-        builder.End(SessionEndInfo{
-            .generation      = builder.generation,
-            .records_written = builder.record_count,
-            .records_dropped = 1,
+        builder.Loss({
+            .first_sequence = 2,
+            .last_sequence  = 2,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
         });
+        builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
             loaded.result.status == SessionLoadStatus::ProtocolViolation &&
@@ -2203,11 +2403,14 @@ void TestSemanticTopologyAndLossRecovery() {
             1,
             ""
         );
-        builder.End(SessionEndInfo{
-            .generation      = builder.generation,
-            .records_written = builder.record_count,
-            .records_dropped = 1,
+        builder.Loss({
+            .first_sequence = 4,
+            .last_sequence  = 4,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
         });
+        builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
             loaded.result.status == SessionLoadStatus::ProtocolViolation &&
@@ -2325,11 +2528,14 @@ void TestSemanticTopologyAndLossRecovery() {
             0,
             ""
         );
-        builder.End(SessionEndInfo{
-            .generation      = builder.generation,
-            .records_written = builder.record_count,
-            .records_dropped = 1,
+        builder.Loss({
+            .first_sequence = 4,
+            .last_sequence  = 4,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
         });
+        builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
             loaded.result.status == SessionLoadStatus::Complete &&
@@ -2547,11 +2753,14 @@ void TestSemanticTopologyAndLossRecovery() {
         builder.Begin();
         builder.Schema(Templates::GpuFrame());
         AddGpuFrame(builder, 1, 1, ProfileGpuFrameStatus::Complete, true, 5, 0, 0, "");
-        builder.End(SessionEndInfo{
-            .generation      = builder.generation,
-            .records_written = builder.record_count,
-            .records_dropped = 5,
+        builder.Loss({
+            .first_sequence = 2,
+            .last_sequence  = 6,
+            .record_count   = 5,
+            .value_bytes    = 40,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
         });
+        builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
             loaded.result.status == SessionLoadStatus::Complete &&
@@ -2641,11 +2850,14 @@ void TestSemanticTopologyAndLossRecovery() {
             1,
             ""
         );
-        builder.End(SessionEndInfo{
-            .generation      = builder.generation,
-            .records_written = builder.record_count,
-            .records_dropped = 1,
+        builder.Loss({
+            .first_sequence = 3,
+            .last_sequence  = 3,
+            .record_count   = 1,
+            .value_bytes    = 8,
+            .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
         });
+        builder.End();
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
             loaded.result.status == SessionLoadStatus::ProtocolViolation &&
@@ -2748,11 +2960,9 @@ void TestSemanticTopologyAndLossRecovery() {
         });
         const Loaded loaded = LoadChunks(builder.bytes);
         Expect(
-            loaded.result.status == SessionLoadStatus::Complete &&
-                loaded.session.Summary().unnotified_drop_count == 1 &&
-                loaded.session.Summary().degraded_complete_gpu_frame_count == 1 &&
-                loaded.session.GpuFrames().front().export_missing_scope_count == 1,
-            "unnotified SessionEnd drops did not explain an undersized GPU frame"
+            loaded.result.status == SessionLoadStatus::ProtocolViolation &&
+                loaded.result.error_code == SessionErrorCode::GpuFrameTotalsMismatch,
+            "an unnotified drop was treated as sequence-backed GPU deficit evidence"
         );
     }
     const auto add_ready_scope = [](SessionBuilder&  _builder,
@@ -3651,6 +3861,40 @@ void TestSemanticTopologyAndLossRecovery() {
             "UINT64_MAX GPU local order overflowed its source span"
         );
     }
+    {
+        constexpr std::uint64_t candidate_count = 32;
+        constexpr std::uint64_t child_count     = 32;
+
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        for (std::uint64_t index = 0; index < candidate_count; ++index) {
+            AddCpuScope(builder, index + 1, 1, "ending-candidate", 10, 10, 1);
+        }
+        for (std::uint64_t index = 0; index < child_count; ++index) {
+            AddCpuScope(builder, candidate_count + index + 1, 1, "unmatched-boundary-child", 10, 10, 2);
+        }
+        builder.End();
+
+        SessionLoadOptions exact{};
+        exact.limits.max_topology_work_items = candidate_count * child_count;
+        const Loaded exact_loaded            = LoadChunks(builder.bytes, {}, exact);
+        Expect(
+            exact_loaded.result.status == SessionLoadStatus::Complete &&
+                exact_loaded.session.Summary().orphan_cpu_scope_count == candidate_count + child_count,
+            "exact CPU boundary-parent topology budget was rejected"
+        );
+
+        SessionLoadOptions short_by_one = exact;
+        --short_by_one.limits.max_topology_work_items;
+        const Loaded limited = LoadChunks(builder.bytes, {}, short_by_one);
+        Expect(
+            limited.result.status == SessionLoadStatus::LimitExceeded &&
+                limited.result.limit_kind == SessionLimitKind::TopologyWorkItems &&
+                !limited.result.HasUsableSession(),
+            "CPU boundary-parent search escaped the session topology work budget"
+        );
+    }
 }
 
 void TestReaderPublicationAndAllocatorContracts() {
@@ -4316,6 +4560,43 @@ void TestProducerToConsumerUnnotifiedDrop() {
             session.Summary().session_end_records_dropped == 1 && session.Summary().lost_record_count == 0 &&
             session.Summary().unnotified_drop_count == 1,
         "consumer rejected a real producer dump containing an unnotified stale-handle drop"
+    );
+
+    config.output_path = temporary.path / "generation-c.mpd";
+    Expect(Start(config) == StartResult::Started, "producer integration could not start generation C");
+    const SchemaRegistration current_registration = RegisterSchema(Templates::CpuScope());
+    Expect(
+        current_registration.status == SchemaStatus::Registered,
+        "producer integration could not register generation C schema"
+    );
+    const std::array<FieldValueView, 1> invalid_values{
+        std::uint64_t{1},
+    };
+    Expect(
+        Emit(current_registration.handle, invalid_values) == EmitStatus::ValueCountMismatch,
+        "producer integration did not reserve a sequence for a rejected value set"
+    );
+    const std::array<FieldValueView, 5> valid_values{
+        std::uint64_t{7},
+        std::string_view("sequence-two"),
+        std::uint64_t{10},
+        std::uint64_t{20},
+        std::uint32_t{0},
+    };
+    Expect(
+        Emit(current_registration.handle, valid_values) == EmitStatus::Accepted,
+        "producer integration could not emit the post-rejection record"
+    );
+    Expect(Shutdown() == ShutdownResult::Completed, "producer integration could not close generation C");
+
+    ProfileSession          sparse_session;
+    const SessionLoadResult sparse_loaded = LoadProfileSessionFile(config.output_path, {}, sparse_session);
+    Expect(
+        sparse_loaded.status == SessionLoadStatus::Complete && sparse_session.Valid() &&
+            sparse_session.Summary().record_count == 1 && sparse_session.CpuScopes().size() == 1 &&
+            sparse_session.CpuScopes().front().sequence == 2 &&
+            sparse_session.Summary().session_end_records_dropped == 0,
+        "consumer did not preserve the post-rejection sequence gap without inventing a v3 frontier"
     );
 }
 
