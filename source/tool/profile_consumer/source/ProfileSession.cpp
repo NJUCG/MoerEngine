@@ -394,7 +394,10 @@ struct ProfileSessionReader::Impl {
         std::vector<std::size_t> task_indices{};
     };
 
-    explicit Impl(const SessionLoadOptions& _options) noexcept : options(_options) {
+    // ProfileSession::Impl owns standard containers whose constructors may
+    // throw. Let the public reader constructor's catch-all convert any such
+    // construction failure into the stable ResourceExhausted state.
+    explicit Impl(const SessionLoadOptions& _options) : options(_options) {
         session.impl_ = new (std::nothrow) ProfileSession::Impl();
         if (session.impl_ == nullptr) {
             result.status     = SessionLoadStatus::ResourceExhausted;
@@ -7160,6 +7163,10 @@ struct ProfileSessionReader::Impl {
 };
 
 ProfileSessionReader::ProfileSessionReader(const SessionLoadOptions& _options) noexcept {
+    static_assert(
+        !std::is_nothrow_constructible_v<Impl, const SessionLoadOptions&>,
+        "reader implementation construction must propagate to the public catch boundary"
+    );
     try {
         impl_ = new (std::nothrow) Impl(_options);
     } catch (...) {
