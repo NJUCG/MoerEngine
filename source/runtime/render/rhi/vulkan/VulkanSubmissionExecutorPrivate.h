@@ -125,8 +125,7 @@ struct TranslateInfo {
 };
 
 struct PreprocessDependencyState {
-    GraphEventRef last_fence_event{nullptr};
-    GraphEventRef last_translate_event{nullptr};
+    // Translate ordering is now managed by dispatch-level last_submit_event / last_fence_event.
 };
 
 struct SourceSubmitSegmentPlan {
@@ -285,7 +284,10 @@ struct TranslatePipelineRuntimeState {
     std::mutex          mutex{};
     TaskPipe            dispatch_pipe{};
     TranslateSubmitState submit_state{};
-    GraphEventRef       last_serial_translate_event{nullptr};
+    GraphEventRef       last_submit_event{nullptr};          // submit-to-submit translate ordering
+    GraphEventRef       last_fence_event{nullptr};           // fence-to-fence ordering (RHIFence)
+    Array<GraphEventRef> current_submit_cl_events{};         // CL completion events within current submit
+    SourceSubmitKey     current_submit_key{};                // for submit boundary detection
 };
 
 class SubmissionPreprocessor {

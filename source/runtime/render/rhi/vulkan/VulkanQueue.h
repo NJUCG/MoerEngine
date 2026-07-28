@@ -270,7 +270,6 @@ public:
     }
     VulkanRecordedSubmit Translate(
         CmdSubmit&& _submit,
-        TrackerSeed seed = {},
         VulkanAllocator* allocator_override = nullptr
     );
     UniquePtr<VulkanSubmitPayload> SubmitPayloadForRuntime(

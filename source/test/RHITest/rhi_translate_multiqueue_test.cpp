@@ -58,6 +58,8 @@ int RunRenderGraphDispatchBindlessReadbackTest();
 int RunRenderGraphRayQueryTriangleHitTest();
 int RunRenderGraphRayQuerySceneBindlessReadbackTest();
 int RunRenderGraphRayQueryGBufferOutputReadbackTest();
+int RunBarrierTrackedStateRoundTripTest();
+int RunBarrierSubresourceSkipStateTest();
 }
 
 namespace {
@@ -1532,8 +1534,8 @@ int RunTranslateExecutionClassRoundTripTest() {
     cmd.TranslateFence(translate_fence);
 
     CmdSubmit submit = cmd.Submit();
-    if (submit.translate_execution_class != ERHITranslateExecutionClass::SerialControl) {
-        LOG_ERROR(MOER_TEXT("Translate execution class did not round-trip through CommandList::Submit"));
+    if (!submit.b_non_parallel) {
+        LOG_ERROR(MOER_TEXT("b_non_parallel did not round-trip through CommandList::Submit"));
         return 1;
     }
     if (submit.cmds.size() != 2 || submit.cmds.back()->Type() != Command::EType::Custom) {
@@ -3196,6 +3198,18 @@ int main(int argc, char** argv) {
     );
     if (rg_gbuffer_output_ret != 0) {
         return shutdown_and_return(rg_gbuffer_output_ret);
+    }
+
+    const int barrier_tracked_ret =
+        RunNamedTestCase("BarrierTrackedStateRoundTrip", TestCases::RunBarrierTrackedStateRoundTripTest);
+    if (barrier_tracked_ret != 0) {
+        return shutdown_and_return(barrier_tracked_ret);
+    }
+
+    const int barrier_skip_ret =
+        RunNamedTestCase("BarrierSubresourceSkipState", TestCases::RunBarrierSubresourceSkipStateTest);
+    if (barrier_skip_ret != 0) {
+        return shutdown_and_return(barrier_skip_ret);
     }
 
     const int multi_cmd_order_ret =

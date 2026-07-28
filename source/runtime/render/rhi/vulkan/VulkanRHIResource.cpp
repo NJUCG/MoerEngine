@@ -1671,6 +1671,16 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         b_present = (_info.usage & ETextureUsageFlags::PRESENT) == ETextureUsageFlags::PRESENT;
         bool b_prefer_sample = (_info.usage & ETextureUsageFlags::SAMPLED) == ETextureUsageFlags::SAMPLED && (_info.usage & ETextureUsageFlags::UNORDERED_ACCESS) == ETextureUsageFlags::UNDEFINED;
         m_preferred_layout = b_prefer_sample ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
+        b_has_preferred_state = true;
+        // Initialize PersistentState: known=true, state=UNDEFINED (initial layout).
+        // UNDEFINED is a valid known state (≠ unknown), so the first barrier
+        // correctly uses VK_IMAGE_LAYOUT_UNDEFINED as src.
+        persistent_state = TexturePersistentState{
+            .known = true,
+            .owner_queue = EQueueType::Graphics,
+            .state = ETextureState::UNDEFINED,
+            .last_access_kind = ERHIResourceLastAccessKind::Unknown
+        };
 
         if (_image != VK_NULL_HANDLE) {
             m_alloc.image = _image;
@@ -2062,7 +2072,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
     ) {
         auto* texture = reinterpret_cast<Texture*>(resource);
         return texture != nullptr &&
-               !texture->AreSubresourceStatesKnown(mip_level, mip_count, array_layer, array_count);
+               !texture->GetPersistentState().known;
     }
 
     static bool IsBufferStillUnknown(uint64 resource) {
@@ -2110,12 +2120,7 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         }
 
         auto* texture = _view.texture;
-        if (texture->AreSubresourceStatesKnown(
-                _view.mip_level,
-                _view.num_mips,
-                _view.array_layer,
-                _view.num_array
-            )) {
+        if (texture->GetPersistentState().known) {
             pending_init_resources.erase(_array_idx);
             return;
         }

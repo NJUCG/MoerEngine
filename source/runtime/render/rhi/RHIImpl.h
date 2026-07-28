@@ -803,6 +803,26 @@ public:
     }
 };
 
+// RHIFence: explicit fence command for cross-command-list translate ordering.
+// Recording this into a CommandList makes it non-parallel and sets a fence event
+// that subsequent command lists (both parallel and non-parallel) will wait on.
+struct RHIFenceCmd : public Command {
+    explicit RHIFenceCmd() :
+        Command(EType::RHIFence, MOER_TEXT("RHIFence")),
+        fence_event(GraphEvent::CreateGraphEvent()) {}
+
+    EQueueType GetQueueType() const override {
+        return EQueueType::Ignore;
+    }
+
+    const GraphEventRef& FenceEvent() const {
+        return fence_event;
+    }
+
+private:
+    GraphEventRef fence_event{nullptr};
+};
+
 struct UpdateBindlessArrayCmd : public Command {
 private:
     UpdateBindlessArrayCmd() : Command(EType::UpdateBindlessArray) {}

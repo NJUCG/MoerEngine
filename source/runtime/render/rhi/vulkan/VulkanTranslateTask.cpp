@@ -18,7 +18,6 @@ GraphEventRef CreateCompletedTranslateEvent() {
 TranslateResult DispatchSingleTranslate(
     EQueueType   queue_type,
     CmdSubmit&&  submit,
-    TrackerSeed&& initial_seed,
     VulkanAllocator* allocator_override
 ) {
     TranslateResult result{};
@@ -29,11 +28,7 @@ TranslateResult DispatchSingleTranslate(
         case EQueueType::Graphics:
         case EQueueType::Compute: {
             auto& queue = static_cast<VkCommandQueue&>(RenderDevice::Get().GetCommandQueue(queue_type));
-            result.recorded_submit = queue.Translate(
-                std::move(submit),
-                std::move(initial_seed),
-                allocator_override
-            );
+            result.recorded_submit = queue.Translate(std::move(submit), allocator_override);
             break;
         }
         case EQueueType::Copy: {
@@ -57,15 +52,9 @@ TranslateResult DispatchSingleTranslate(
 TranslateResult VulkanTranslateTask::DispatchSingle(
     EQueueType   queue_type,
     CmdSubmit&&  submit,
-    TrackerSeed&& initial_seed,
     VulkanAllocator* allocator_override
 ) {
-    return DispatchSingleTranslate(
-        queue_type,
-        std::move(submit),
-        std::move(initial_seed),
-        allocator_override
-    );
+    return DispatchSingleTranslate(queue_type, std::move(submit), allocator_override);
 }
 
 TranslateResult VulkanTranslateTask::MakeFailed(EQueueType queue, std::string error) {
@@ -100,12 +89,8 @@ Array<TranslateResult> VulkanTranslateTask::DispatchBatch(Array<QueueTranslateIn
             [&, index]() mutable {
                 QueueTranslateInfo& current = inputs[index];
                 TranslateResult result = current.valid ?
-                                             DispatchSingle(
-                                                 current.queue,
-                                                 std::move(current.submit),
-                                                 std::move(current.initial_seed)
-                                             ) :
-                                             MakeFailed(current.queue, std::move(current.error));
+                    DispatchSingle(current.queue, std::move(current.submit)) :
+                    MakeFailed(current.queue, std::move(current.error));
                 result.translate_complete = current.completion_event;
                 if (!result.valid && !result.error.empty()) {
                     LOG_ERROR(MOER_TEXT("{}"), result.error);

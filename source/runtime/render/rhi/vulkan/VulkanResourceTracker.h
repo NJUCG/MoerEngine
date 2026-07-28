@@ -10,35 +10,6 @@
 #include "vulkan/vulkan_core.h"
 namespace Moer::Render {
 
-// §7.2 / §9.3: Seed data for VkTracker::InitFromSeed.
-// Preprocess builds this; translate reads it (no shared mutable state).
-struct TrackerSeedEntry {
-    bool          known{false};
-    bool          has_writer{false};
-    EQueueType    owner_queue{EQueueType::Ignore};
-    EBufferState  buffer_state{EBufferState::UNDEFINED};
-    ETextureState texture_state{ETextureState::UNDEFINED};
-};
-
-// Key: raw pointer cast to uint64. Bit 0 unused — textures and buffers
-// are distinguished by a separate flag in the entry stored above.
-struct TrackerSeedTextureEntry : TrackerSeedEntry {
-    VulkanTexture* texture{nullptr};
-    uint8_t        mip_level{0};
-    uint8_t        mip_count{1};
-    uint8_t        array_layer{0};
-    uint8_t        array_count{1};
-};
-
-struct TrackerSeedBufferEntry : TrackerSeedEntry {
-    VulkanBuffer* buffer{nullptr};
-};
-
-struct TrackerSeed {
-    Array<TrackerSeedTextureEntry> textures;
-    Array<TrackerSeedBufferEntry>  buffers;
-};
-
 class VkTracker {
 private:
     struct BufferRange {
@@ -214,8 +185,13 @@ public:
         return writed_state_buffers;
     }
 
-    // §9.3: Initialize tracker src states from preprocess seed (no global state access).
-    void InitFromSeed(const TrackerSeed& seed);
+    // Load persistent state from resource into tracker when src is unknown at translate time.
+    void LoadPersistentState(VulkanBuffer* buffer);
+    void LoadPersistentState(
+        VulkanTexture* texture,
+        uint8 mip_level, uint8 mip_count,
+        uint8 array_layer, uint8 array_count
+    );
     void SetTrackedState(VulkanBuffer* buffer, EBufferState state, EQueueType owner_queue, bool access_write);
     void SetTrackedState(
         VulkanTexture* texture,

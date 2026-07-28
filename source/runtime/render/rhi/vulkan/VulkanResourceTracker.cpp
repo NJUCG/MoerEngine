@@ -14,6 +14,16 @@
 namespace Moer::Render {
 namespace {
 
+// Set via debugger to trace a specific resource: s_barrier_debug_name = L"denoised_specular_lighting"
+// Debug: set to e.g. L"denoised" to trace barrier state for matching resources.
+// Filter uses StringView (wide) comparison — no UTF-8 conversion.
+static const wchar_t* s_barrier_debug_filter = L""; // set to e.g. L"denoised" to enable
+
+static bool MatchDebugName(StringView name) {
+    return s_barrier_debug_filter && s_barrier_debug_filter[0] &&
+           name.find(StringView(s_barrier_debug_filter)) != StringView::npos;
+}
+
 static const char* QueueTypeName(EQueueType queue_type) {
     switch (queue_type) {
         case EQueueType::Graphics:
@@ -344,6 +354,9 @@ void VkTracker::RecordState(
     uint32_t                 _src_queue_family,
     uint32_t                 _dst_queue_family
 ) {
+    if (!buffer_states.contains(_buffer)) {
+        LoadPersistentState(_buffer);
+    }
     const bool is_write = IsWriteState(_access);
     MarkWriteable(_buffer, is_write);
     pending_buffers.insert(_buffer);
@@ -552,11 +565,161 @@ void VkTracker::RecordState(
     );
 }
 
+void VkTracker::LoadPersistentState(VulkanBuffer* buffer) {
+    if (buffer == nullptr || buffer_states.find(buffer) != buffer_states.end()) {
+        return; // already tracked
+    }
+
+    const BufferPersistentState ps = buffer->GetPersistentState();
+    if (!ps.known) {
+        // Truly unknown — use UNDEFINED as src.
+        buffer_states[buffer] = BufferState{
+            VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_NONE,
+            VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_NONE,
+            VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED
+        };
+        return;
+    }
+
+    if (ps.state == EBufferState::UNDEFINED) {
+        // Known initial UNDEFINED — use NONE access/stage.
+        buffer_states[buffer] = BufferState{
+            VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_NONE,
+            VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_NONE,
+            VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED
+        };
+        return;
+    }
+
+    const bool foreign_queue = ps.owner_queue != EQueueType::Ignore && ps.owner_queue != queue_type;
+    const EPassType pass_type = (foreign_queue ? queue_type : ps.owner_queue) == EQueueType::Compute ?
+                                    EPassType::Compute : EPassType::Graphics;
+
+    auto [access, stage] = (ps.last_access_kind == ERHIResourceLastAccessKind::Write) ?
+                               WriteBuffer(buffer, ps.state, pass_type) :
+                               ReadBuffer(buffer, ps.state, pass_type);
+
+    VkAccessFlagBits2        src_access = static_cast<VkAccessFlagBits2>(access);
+    VkPipelineStageFlagBits2 src_stage  = static_cast<VkPipelineStageFlagBits2>(stage);
+    if (foreign_queue) {
+        src_access = VK_ACCESS_2_NONE;
+        src_stage  = VK_PIPELINE_STAGE_2_NONE;
+    }
+
+    buffer_states[buffer] = BufferState{
+        src_access, src_stage,
+        VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_NONE,
+        VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED
+    };
+
+    RHITRACE_BARRIER_LOG(
+        verbose,
+        "[RHITrace][LoadPersistent][{}][Buffer] name={} handle=0x{:x} known={} owner={} has_writer={} src_stage=0x{:x} src_access=0x{:x}",
+        QueueTypeName(queue_type),
+        BufferName(buffer),
+        uint64(buffer),
+        ps.known,
+        QueueTypeName(ps.owner_queue),
+        ps.last_access_kind == ERHIResourceLastAccessKind::Write,
+        uint64(src_stage),
+        uint64(src_access)
+    );
+}
+
+void VkTracker::LoadPersistentState(
+    VulkanTexture* texture,
+    uint8 mip_level, uint8 mip_count,
+    uint8 array_layer, uint8 array_count
+) {
+    if (texture == nullptr) return;
+
+    const uint8 resolved_mip_count =
+        mip_count == kRemainingSubresource ? uint8(texture->GetNumMips() - mip_level) : mip_count;
+
+    for (uint8 mip = 0; mip < resolved_mip_count; ++mip) {
+        auto key = MakeTextureStateKey(texture, uint8(mip_level + mip), 1, array_layer, array_count);
+        if (texture_states.find(key) != texture_states.end()) {
+            continue; // already tracked
+        }
+
+        const TexturePersistentState ps = texture->GetPersistentState();
+        const bool dbg = MatchDebugName(texture->GetName());
+
+        if (!ps.known) {
+            if (dbg) LOG_INFO(MOER_TEXT("[Barrier] {} mip={}: UNKNOWN → src=UNDEFINED"), texture->GetName(), key.mip_level);
+            texture_states[key] = TextureState{
+                VK_ACCESS_2_NONE, VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_NONE,
+                VK_ACCESS_2_NONE, VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_NONE,
+                VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED
+            };
+            continue;
+        }
+
+        if (ps.state == ETextureState::UNDEFINED) {
+            if (dbg) LOG_INFO(MOER_TEXT("[Barrier] {} mip={}: known=UNDEFINED → src=UNDEFINED"), texture->GetName(), key.mip_level);
+            texture_states[key] = TextureState{
+                VK_ACCESS_2_NONE, VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_NONE,
+                VK_ACCESS_2_NONE, VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_NONE,
+                VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED
+            };
+            continue;
+        }
+
+        if (dbg) LOG_INFO(MOER_TEXT("[Barrier] {} mip={}: known=%d owner=%hs writer=%d"), texture->GetName(), key.mip_level, int(ps.state), QueueTypeName(ps.owner_queue), ps.last_access_kind == ERHIResourceLastAccessKind::Write);
+
+        const bool foreign_queue = ps.owner_queue != EQueueType::Ignore && ps.owner_queue != queue_type;
+        const EPassType pass_type = (foreign_queue ? queue_type : ps.owner_queue) == EQueueType::Compute ?
+                                        EPassType::Compute : EPassType::Graphics;
+
+        std::tuple<VkAccessFlags2, VkImageLayout, VkPipelineStageFlags2> result;
+        if (ps.last_access_kind == ERHIResourceLastAccessKind::Write) {
+            result = WriteTexture(texture, ps.state, pass_type);
+        } else {
+            result = ReadTexture(texture, ps.state, pass_type);
+        }
+        VkAccessFlagBits2        src_access = static_cast<VkAccessFlagBits2>(std::get<0>(result));
+        VkImageLayout            src_layout = std::get<1>(result);
+        VkPipelineStageFlagBits2 src_stage  = static_cast<VkPipelineStageFlagBits2>(std::get<2>(result));
+
+        if (foreign_queue) {
+            src_access = VK_ACCESS_2_NONE;
+            src_stage  = VK_PIPELINE_STAGE_2_NONE;
+        }
+
+        if (texture->b_present) {
+            src_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            src_access = VK_ACCESS_2_NONE;
+            src_stage  = VK_PIPELINE_STAGE_2_NONE;
+        }
+
+        texture_states[key] = TextureState{
+            src_access, src_layout, src_stage,
+            VK_ACCESS_2_NONE, VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_NONE,
+            VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED
+        };
+
+        RHITRACE_BARRIER_LOG(
+            verbose,
+            "[RHITrace][LoadPersistent][{}][Texture] name={} handle=0x{:x} mip={} layer={} known={} owner={} has_writer={} src_stage=0x{:x} src_access=0x{:x} src_layout={}",
+            QueueTypeName(queue_type),
+            TextureName(texture),
+            uint64(texture),
+            key.mip_level,
+            key.array_layer,
+            ps.known,
+            QueueTypeName(ps.owner_queue),
+            ps.last_access_kind == ERHIResourceLastAccessKind::Write,
+            uint64(src_stage),
+            uint64(src_access),
+            int(src_layout)
+        );
+    }
+}
+
 // §9.3: Initialize tracker src states from preprocess seed_tracker.
 // For each known resource, sets the src layout/access/stage from the preprocess end-state.
 // For unknown resources (known==false), sets UNDEFINED / NONE per §3.2.
-void VkTracker::InitFromSeed(const TrackerSeed& seed) {
-    auto queue_to_pass_type = [](EQueueType queue) {
+#if 0 // Deprecated: InitFromSeed replaced by LoadPersistentState {
         switch (queue) {
             case EQueueType::Compute:
                 return EPassType::Compute;
@@ -687,6 +850,7 @@ void VkTracker::InitFromSeed(const TrackerSeed& seed) {
     }
 }
 
+#endif // InitFromSeed
 void VkTracker::SetTrackedState(
     VulkanBuffer* buffer,
     EBufferState  state,
@@ -769,11 +933,10 @@ void VkTracker::SetTrackedState(
         .last_access_kind = state == ETextureState::UNDEFINED ? ERHIResourceLastAccessKind::Unknown :
                                                                 LastAccessKind(access_write)
     };
-    for (uint8 mip = 0; mip < resolved_mip_count; ++mip) {
-        for (uint8 layer = 0; layer < resolved_array_count; ++layer) {
-            texture->SetPersistentState(uint8(mip_level + mip), uint8(array_layer + layer), persistent);
-        }
+    if (MatchDebugName(texture->GetName())) {
+        LOG_INFO(MOER_TEXT("[SetTracked] {} → state=%d owner=%hs writer=%d"), texture->GetName(), int(state), QueueTypeName(owner_queue), access_write);
     }
+    texture->SetPersistentState(persistent);
 }
 
 void GetInitImageLayoutAndAccess(
@@ -1038,6 +1201,12 @@ void VkTracker::RecordState(
     }
 
     auto         key = MakeTextureStateKey(_texture, _mip_level, 1, _array_layer, _array_count);
+
+    // Auto-load from PersistentState when the resource is first encountered.
+    if (!texture_states.contains(key)) {
+        LoadPersistentState(_texture, _mip_level, 1, _array_layer, _array_count);
+    }
+
     TextureState state{
         VK_ACCESS_2_NONE,
         VK_IMAGE_LAYOUT_UNDEFINED,

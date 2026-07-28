@@ -9,7 +9,6 @@ public:
     static TranslateResult DispatchSingle(
         EQueueType queue_type,
         CmdSubmit&& submit,
-        TrackerSeed&& initial_seed,
         VulkanAllocator* allocator_override = nullptr
     );
     static Array<TranslateResult> DispatchBatch(Array<QueueTranslateInfo>&& inputs);

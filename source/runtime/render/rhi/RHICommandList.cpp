@@ -227,10 +227,28 @@ CmdSubmit CommandList::Submit() {
             submit_delete_resources
         )
     );
+    // Scan for SetTrackAccess barriers and RHIFenceCmd
+    for (const auto& cmd : submit.cmds) {
+        if (cmd->Type() == Command::EType::Barrier) {
+            const auto* barrier_cmd = static_cast<const BarrierCmd*>(cmd.get());
+            if (barrier_cmd->ShouldUpdateTrackedState()) {
+                b_non_parallel = true;
+            }
+        }
+        if (cmd->Type() == Command::EType::RHIFence) {
+            b_non_parallel = true;
+            const auto* fence_cmd = static_cast<const RHIFenceCmd*>(cmd.get());
+            fence_event = fence_cmd->FenceEvent();
+        }
+    }
+
     submit.record_complete_event = std::move(record_complete_event);
     submit.explicit_tracked_textures = std::move(explicit_tracked_textures);
     submit.explicit_tracked_buffers = std::move(explicit_tracked_buffers);
     submit.translate_execution_class = translate_execution_class;
+    submit.translate_complete_event  = GraphEvent::CreateGraphEvent();
+    submit.fence_event  = std::move(fence_event);
+    submit.b_non_parallel = b_non_parallel;
     submit.b_delete_resources = submit_delete_resources;
     commands.clear();
     callbacks.clear();
@@ -244,6 +262,9 @@ CmdSubmit CommandList::Submit() {
     explicit_tracked_textures.clear();
     explicit_tracked_buffers.clear();
     translate_execution_class = ERHITranslateExecutionClass::Parallel;
+    translate_complete_event = nullptr;
+    fence_event = nullptr;
+    b_non_parallel = false;
     submit_delete_resources = false;
     b_buffer_overlap_active = false;
     buffer_overlap_handle   = 0;
@@ -716,7 +737,15 @@ CommandList& CommandList::Signal(SyncPointRef _sync_point) {
 }
 
 CommandList& CommandList::SetTranslateExecutionClass(ERHITranslateExecutionClass _execution_class) {
-    translate_execution_class = _execution_class;
+    if (_execution_class == ERHITranslateExecutionClass::SerialControl) {
+        b_non_parallel = true;
+    }
+    return *this;
+}
+
+CommandList& CommandList::RHIFence() {
+    b_non_parallel = true;
+    commands.emplace_back(MakeUnique<RHIFenceCmd>());
     return *this;
 }
 
@@ -754,7 +783,7 @@ CommandList& CommandList::TickFrame() {
         return *this;
     }
     commands.emplace_back(MakeUnique<FrameTickCmd>());
-    translate_execution_class = ERHITranslateExecutionClass::SerialControl;
+    b_non_parallel = true;
     return *this;
 }
 

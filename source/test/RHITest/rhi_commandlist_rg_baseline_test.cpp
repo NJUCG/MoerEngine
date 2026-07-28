@@ -671,4 +671,165 @@ int RunRHICommandListRGBaselineTest() {
     return 0;
 }
 
+int RunBarrierTrackedStateRoundTripTest() {
+    auto& device = RenderDevice::Get();
+
+    constexpr uint32_t element_count = 64;
+    constexpr uint32_t tex_size = 8;
+    constexpr uint32_t tex_pixel_count = tex_size * tex_size;
+
+    auto src_buffer = device.CreateBuffer<uint32_t>(
+        MOER_TEXT("barrier_track_src"), element_count,
+        EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::UNORDERED_ACCESS
+    );
+    auto dst_buffer = device.CreateBuffer<uint32_t>(
+        MOER_TEXT("barrier_track_dst"), element_count,
+        EBufferUsageFlags::TRANSFER_DST | EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::UNORDERED_ACCESS
+    );
+    auto tex_src = device.CreateTexture(
+        MOER_TEXT("barrier_track_tex_src"), Extent2D(tex_size, tex_size), PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::SAMPLED
+    );
+    auto tex_dst = device.CreateTexture(
+        MOER_TEXT("barrier_track_tex_dst"), Extent2D(tex_size, tex_size), PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::SAMPLED
+    );
+
+    auto compute_pipeline = ShaderManager::Get().Compute<RGBaselineComputePipeline>(
+        "tests/RGBaselineCompute.comp.hlsl"
+    );
+
+    std::vector<uint32_t> src_values(element_count);
+    std::vector<uint32_t> expected_compute(element_count);
+    std::vector<uint32_t> readback_compute(element_count, 0u);
+    std::vector<uint8_t> src_pixels = MakeRgba8Pattern(tex_size, tex_size, 42u);
+    std::vector<uint8_t> readback_pixels(src_pixels.size(), 0u);
+
+    for (uint32_t i = 0; i < element_count; ++i) {
+        src_values[i] = 0xA000u + i * 7u + 3u;
+        expected_compute[i] = (src_values[i] + 17u) ^ 0x5a5a00ffu;
+    }
+
+    // --- Setup: upload with Tracked (Update) barriers ---
+    CommandList setup_cmd(EQueueType::Graphics);
+
+    // Buffer: UNDEFINED → TRANSFER_DST → copy → SHADER_RESOURCE (all tracked)
+    BufferBarrierUpdate(setup_cmd, src_buffer->GetView(), EBufferState::UNDEFINED, EBufferState::TRANSFER_DST, EPassType::Copy);
+    setup_cmd.CopyFrom(ToByteSpan(src_values), src_buffer->GetView(), MOER_TEXT("BarrierTrackUploadBuffer"));
+    setup_cmd.Barriers(
+        {BarrierCreateInfo::Transition(
+            src_buffer->GetView(),
+            MakeBarrierState(EBufferState::TRANSFER_DST, EPassType::Copy),
+            MakeBarrierState(EBufferState::SHADER_RESOURCE, EPassType::Compute)
+        )},
+        ETrackedStateUpdateMode::Update
+    );
+
+    // Texture: UNDEFINED → TRANSFER_DST → copy → TRANSFER_SRC (all tracked, whole resource)
+    TextureBarrierUpdate(setup_cmd, tex_src->GetView(), ETextureState::UNDEFINED, ETextureState::TRANSFER_DST, EPassType::Copy);
+    setup_cmd.CopyFrom(ToByteSpan(src_pixels), tex_src->GetView(), MOER_TEXT("BarrierTrackUploadTex"));
+    setup_cmd.Barriers(
+        {BarrierCreateInfo::Transition(
+            tex_src->GetView(),
+            MakeBarrierState(ETextureState::TRANSFER_DST, EPassType::Copy),
+            MakeBarrierState(ETextureState::TRANSFER_SRC, EPassType::Copy)
+        )},
+        ETrackedStateUpdateMode::Update
+    );
+
+    // --- Compute dispatch ---
+    CommandList compute_cmd(EQueueType::Compute);
+    BufferBarrierUpdate(compute_cmd, dst_buffer->GetView(), EBufferState::UNDEFINED, EBufferState::UNORDERED_ACCESS, EPassType::Compute);
+    compute_cmd
+        .Compute(
+            compute_pipeline,
+            RGBaselineComputeArgs{
+                .element_count = element_count,
+                .addend        = 17u,
+                .xor_mask      = 0x5a5a00ffu,
+            },
+            src_buffer,
+            dst_buffer
+        )
+        .Dispatch(1u, MOER_TEXT("BarrierTrackCompute"));
+
+    // --- Texture copy ---
+    CommandList copy_cmd(EQueueType::Graphics);
+    TextureBarrierUpdate(copy_cmd, tex_dst->GetView(), ETextureState::UNDEFINED, ETextureState::TRANSFER_DST, EPassType::Copy);
+    BufferBarrierUpdate(copy_cmd, dst_buffer->GetView(), EBufferState::UNORDERED_ACCESS, EBufferState::TRANSFER_SRC, EPassType::Copy);
+    copy_cmd.CopyFrom(tex_src->GetView(), tex_dst->GetView(), MOER_TEXT("BarrierTrackCopyTex"));
+
+    // --- Readback ---
+    CommandList readback_cmd(EQueueType::Graphics);
+    BufferBarrierUpdate(readback_cmd, dst_buffer->GetView(), EBufferState::TRANSFER_SRC, EBufferState::TRANSFER_SRC, EPassType::Copy);
+    TextureBarrierUpdate(readback_cmd, tex_dst->GetView(), ETextureState::TRANSFER_DST, ETextureState::TRANSFER_SRC, EPassType::Copy);
+    SyncPointRef buf_event = readback_cmd.ReadbackCopy(dst_buffer->GetView(), ToByteSpan(readback_compute), MOER_TEXT("BarrierTrackReadbackBuf"));
+    SyncPointRef tex_event = readback_cmd.ReadbackCopy(tex_dst->GetView(), ToByteSpan(readback_pixels), MOER_TEXT("BarrierTrackReadbackTex"));
+
+    Array<CommandList> command_lists;
+    command_lists.emplace_back(std::move(setup_cmd));
+    command_lists.emplace_back(std::move(compute_cmd));
+    command_lists.emplace_back(std::move(copy_cmd));
+    command_lists.emplace_back(std::move(readback_cmd));
+    SubmitAndWait(std::move(command_lists));
+    if (buf_event) buf_event->WaitHost();
+    if (tex_event) tex_event->WaitHost();
+
+    if (!ValidateBuffer(expected_compute, readback_compute, "BarrierTrackedCompute")) return 1;
+    if (!ValidateBytes(src_pixels, readback_pixels, "BarrierTrackedTextureCopy")) return 1;
+
+    LOG_INFO(MOER_TEXT("BarrierTrackedState round-trip passed"));
+    return 0;
+}
+
+int RunBarrierSubresourceSkipStateTest() {
+    auto& device = RenderDevice::Get();
+
+    constexpr uint32_t tex_size = 8;
+    constexpr uint32_t tex_pixel_count = tex_size * tex_size;
+
+    auto tex_dst = device.CreateTexture(
+        MOER_TEXT("barrier_skip_tex_dst"), Extent2D(tex_size, tex_size), PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC
+    );
+
+    std::vector<uint8_t> src_pixels = MakeRgba8Pattern(tex_size, tex_size, 99u);
+    std::vector<uint8_t> readback_pixels(src_pixels.size(), 0u);
+
+    // --- Use Skip barriers for whole-resource transitions that don't need tracking ---
+    CommandList setup_cmd(EQueueType::Graphics);
+    const ETrackedStateUpdateMode tracked_skip = ETrackedStateUpdateMode::Skip;
+
+    // Barrier with Skip: UNDEFINED → TRANSFER_DST (not tracked, but Vulkan barrier still emitted)
+    setup_cmd.Barriers(
+        {BarrierCreateInfo::Transition(tex_dst->GetView(), ETextureState::UNDEFINED, ETextureState::TRANSFER_DST, EPassType::Copy)},
+        tracked_skip
+    );
+    setup_cmd.CopyFrom(ToByteSpan(src_pixels), tex_dst->GetView(), MOER_TEXT("BarrierSkipUploadTex"));
+    // Barrier with Skip: TRANSFER_DST → TRANSFER_SRC (not tracked)
+    setup_cmd.Barriers(
+        {BarrierCreateInfo::Transition(
+            tex_dst->GetView(),
+            MakeBarrierState(ETextureState::TRANSFER_DST, EPassType::Copy),
+            MakeBarrierState(ETextureState::TRANSFER_SRC, EPassType::Copy)
+        )},
+        tracked_skip
+    );
+
+    // Readback
+    CommandList readback_cmd(EQueueType::Graphics);
+    SyncPointRef tex_event = readback_cmd.ReadbackCopy(tex_dst->GetView(), ToByteSpan(readback_pixels), MOER_TEXT("BarrierSkipReadbackTex"));
+
+    Array<CommandList> command_lists;
+    command_lists.emplace_back(std::move(setup_cmd));
+    command_lists.emplace_back(std::move(readback_cmd));
+    SubmitAndWait(std::move(command_lists));
+    if (tex_event) tex_event->WaitHost();
+
+    if (!ValidateBytes(src_pixels, readback_pixels, "BarrierSubresourceSkip")) return 1;
+
+    LOG_INFO(MOER_TEXT("BarrierSubresourceSkipState round-trip passed"));
+    return 0;
+}
+
 } // namespace Moer::Render::Tests

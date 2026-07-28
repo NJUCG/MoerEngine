@@ -381,6 +381,7 @@ struct VkCmdPreprocessor {
         }
         auto* vk_bindless_array = reinterpret_cast<VulkanBindlessArray*>(_bindless_array.Get());
 
+        // First pass: transition written textures that are now being read via bindless.
         Moer::Array<TextureSubresourceKeyT<VulkanTexture>> to_read_textures;
         for (const auto& key : tracker.GetWritedStateTextures()) {
             if (vk_bindless_array->IsTextureViewAllocated(
@@ -405,6 +406,7 @@ struct VkCmdPreprocessor {
                 );
             }
         }
+
         Moer::Array<VulkanBuffer*> to_read_buffers;
         for (const auto& i : tracker.GetWritedStateBuffers()) {
             if (vk_bindless_array->IsResourceAllocated(uint64(i)) &&
@@ -890,6 +892,9 @@ struct VkCmdPreprocessor {
             case Command::EType::QueueTransfer:
                 Visit(static_cast<const QueueTransferCmd*>(_cmd));
                 break;
+            case Command::EType::RHIFence:
+                // RHIFence is a CPU-side ordering marker; no GPU state tracking needed.
+                break;
             case Command::EType::BufferOverlap:
                 {
                     const auto* overlap_cmd = static_cast<const BufferOverlapCmd*>(_cmd);
@@ -1264,6 +1269,7 @@ struct VkCmdPreprocessor {
 
             for (const auto& barrier : _cmd->Buffers()) {
                 auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
+                tracker.LoadPersistentState(vk_buffer);
                 tracker.RecordState(
                     vk_buffer,
                     static_cast<VkAccessFlagBits2>(GetVkBarrierAccessFlags(barrier.dst_state.access)),
@@ -1285,6 +1291,13 @@ struct VkCmdPreprocessor {
 
             for (const auto& barrier : _cmd->Textures()) {
                 auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
+                tracker.LoadPersistentState(
+                    vk_texture,
+                    static_cast<uint8>(barrier.mip_level),
+                    static_cast<uint8>(barrier.mip_cnt),
+                    static_cast<uint8>(barrier.array_layer),
+                    static_cast<uint8>(barrier.array_count)
+                );
                 tracker.RecordState(
                     vk_texture,
                     static_cast<VkAccessFlagBits2>(GetVkBarrierAccessFlags(barrier.dst_state.access)),
@@ -1899,6 +1912,9 @@ public:
             case Command::EType::Custom:
                 Visit(static_cast<const CustomCmd&>(*_cmd));
                 break;
+            case Command::EType::RHIFence:
+                // RHIFence is a CPU-side ordering marker; no Vulkan commands.
+                break;
             case Command::EType::BufferOverlap:
                 // BufferOverlap is a scheduling marker only.
                 break;
@@ -2065,28 +2081,25 @@ public:
 
     // we don't need to do anything
     void Visit(const BarrierCmd& _cmd) {
-        // state                      = EState::Barrier;
-        // const auto& read_buffers   = _cmd.ReadBuffers();
-        // const auto& write_buffers  = _cmd.WriteBuffers();
-        // const auto& read_textures  = _cmd.ReadTextures();
-        // const auto& write_textures = _cmd.WriteTextures();
-
-        // for (const auto& buffer : read_buffers) {
-        //     auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(buffer.handle);
-        //     tracker.RecordState(vk_buffer, tracker.ReadBuffer(vk_buffer, buffer.state, buffer.pass_type));
-        // }
-        // for (const auto& buffer : write_buffers) {
-        //     auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(buffer.handle);
-        //     tracker.RecordState(vk_buffer, tracker.WriteBuffer(vk_buffer, buffer.state, buffer.pass_type));
-        // }
-        // for (const auto& texture : read_textures) {
-        //     auto* vk_texture = reinterpret_cast<VulkanTexture*>(texture.handle);
-        //     tracker.RecordState(vk_texture, tracker.ReadTexture(vk_texture, texture.state, texture.pass_type));
-        // }
-        // for (const auto& texture : write_textures) {
-        //     auto* vk_texture = reinterpret_cast<VulkanTexture*>(texture.handle);
-        //     tracker.RecordState(vk_texture, tracker.WriteTexture(vk_texture, texture.state, texture.pass_type));
-        // }
+        // SetTrackAccess: barrier dispatch already happened in the main loop;
+        // write persistent state back for barriers with ETrackedStateUpdateMode::Update.
+        if (_cmd.ShouldUpdateTrackedState()) {
+            const EQueueType owner_queue = _cmd.IsQueueTransition() ? _cmd.GetDstQueue() : current_queue;
+            for (const auto& barrier : _cmd.Buffers()) {
+                auto* vk_buffer = reinterpret_cast<VulkanBuffer*>(barrier.handle);
+                if (!barrier.tracked_state.has_value()) continue;
+                tracker.SetTrackedState(vk_buffer, barrier.tracked_state.value(), owner_queue, barrier.access_write);
+            }
+            for (const auto& barrier : _cmd.Textures()) {
+                auto* vk_texture = reinterpret_cast<VulkanTexture*>(barrier.handle);
+                if (!barrier.tracked_state.has_value()) continue;
+                tracker.SetTrackedState(
+                    vk_texture, barrier.tracked_state.value(), owner_queue, barrier.access_write,
+                    static_cast<uint8>(barrier.mip_level), static_cast<uint8>(barrier.mip_cnt),
+                    static_cast<uint8>(barrier.array_layer), static_cast<uint8>(barrier.array_count)
+                );
+            }
+        }
     }
 
     void Visit(const SetTrackedStateCmd& _cmd) {
@@ -3632,7 +3645,6 @@ void ProfilerStorage::VisitQueryCmd(const QueryCmd& _query_cmd) {
 #pragma region[ VkCommandQueue ]
 VulkanRecordedSubmit VkCommandQueue::Translate(
     CmdSubmit&& _submit,
-    TrackerSeed seed,
     VulkanAllocator* allocator_override
 ) {
     TRACE_SCOPE_CAT("VkCommandQueue.Translate", "Queue");
@@ -3683,10 +3695,6 @@ VulkanRecordedSubmit VkCommandQueue::Translate(
     }
     recorded.submit->wait_events.clear();
 
-    // §9.3: Initialize tracker src states from preprocess seed (§7.2 seed_tracker).
-    if (!seed.textures.empty() || !seed.buffers.empty()) {
-        tracker.InitFromSeed(seed);
-    }
 
     VulkanCmdList& active_cmd_list = vk_allocator.BeginSubmitContext();
     VulkanThreadHeartbeat::Get().PulseCurrent(MOER_TEXT("Translate.BeginSubmitContext"));

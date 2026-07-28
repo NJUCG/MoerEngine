@@ -59,10 +59,11 @@ struct QueueTranslateInfo {
     uint32 source_segment_index{0};
     EQueueType queue{EQueueType::Ignore};
     CmdSubmit submit;
-    TrackerSeed initial_seed{};
     GraphEventArray task_dependencies{};
     GraphEventRef   completion_event{nullptr};
     ERHITranslateExecutionClass execution_class{ERHITranslateExecutionClass::Parallel};
+    GraphEventRef fence_event{nullptr};   // from CmdSubmit, set by RHIFenceCmd
+    bool         b_non_parallel{false};   // from CmdSubmit
     bool         valid{true};
     std::string  error{};
 
@@ -71,16 +72,16 @@ struct QueueTranslateInfo {
         SourceSubmitKey in_source_key,
         uint32 in_source_segment_index,
         EQueueType in_queue,
-        CmdSubmit&& in_submit,
-        TrackerSeed&& in_seed
+        CmdSubmit&& in_submit
     ) :
         key(in_key),
         source_key(in_source_key),
         source_segment_index(in_source_segment_index),
         queue(in_queue),
         submit(std::move(in_submit)),
-        initial_seed(std::move(in_seed)),
-        execution_class(submit.translate_execution_class) {}
+        execution_class(submit.translate_execution_class),
+        fence_event(std::move(submit.fence_event)),
+        b_non_parallel(submit.b_non_parallel) {}
 
     QueueTranslateInfo(QueueTranslateInfo&&) noexcept            = default;
     QueueTranslateInfo& operator=(QueueTranslateInfo&&) noexcept = default;

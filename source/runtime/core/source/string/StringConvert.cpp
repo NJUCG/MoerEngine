@@ -171,13 +171,37 @@ WideString Utf8ToWide(Utf8StringView text) {
     return output;
 }
 
+// Returns U+FFFD (replacement character) for invalid sequences — no exceptions.
+static char32_t DecodeWideCodePointSafe(WideStringView text, std::size_t& index) noexcept {
+    const std::size_t saved = index;
+    if (index >= text.size()) return 0xFFFD;
+    const char32_t first = static_cast<char32_t>(text[index++]);
+
+    if constexpr (sizeof(WideChar) == 2) {
+        if (first >= kHighSurrogateStart && first <= kHighSurrogateEnd) {
+            if (index >= text.size()) { index = saved + 1; return 0xFFFD; }
+            const char32_t second = static_cast<char32_t>(text[index++]);
+            if (second < kLowSurrogateStart || second > kLowSurrogateEnd) { index = saved + 1; return 0xFFFD; }
+            return 0x10000 + (((first - kHighSurrogateStart) << 10) | (second - kLowSurrogateStart));
+        }
+        if (first >= kLowSurrogateStart && first <= kLowSurrogateEnd) {
+            return 0xFFFD;
+        }
+    }
+
+    if (first > kMaxCodePoint || IsSurrogate(first)) {
+        return 0xFFFD;
+    }
+    return first;
+}
+
 Utf8String WideToUtf8(WideStringView text) {
     Utf8String output;
     output.reserve(text.size());
 
     std::size_t index = 0;
     while (index < text.size()) {
-        AppendUtf8CodePoint(output, DecodeWideCodePoint(text, index));
+        AppendUtf8CodePoint(output, DecodeWideCodePointSafe(text, index));
     }
 
     return output;

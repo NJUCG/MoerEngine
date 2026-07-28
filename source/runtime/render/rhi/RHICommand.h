@@ -64,7 +64,8 @@ public:
         Scope,
         Query,
         Custom,
-        BufferOverlap
+        BufferOverlap,
+        RHIFence
     };
 
     static constexpr StringView typenames[] = {
@@ -74,7 +75,7 @@ public:
         MOER_TEXT("Barrier"),         MOER_TEXT("SetTrackedState"),     MOER_TEXT("QueueTransfer"),  MOER_TEXT("SetDrawState"),
         MOER_TEXT("SetGeometryPassDrawState"), MOER_TEXT("MultiDraw"),  MOER_TEXT("UpdateBindlessArray"), MOER_TEXT("ClearResource"),
         MOER_TEXT("Scope"),           MOER_TEXT("Query"),               MOER_TEXT("Custom"),
-        MOER_TEXT("BufferOverlap")
+        MOER_TEXT("BufferOverlap"),   MOER_TEXT("RHIFence")
     };
 
 private:
@@ -555,6 +556,9 @@ struct CmdSubmit {
     Array<TrackedTextureState> explicit_tracked_textures{};
     Array<TrackedBufferState>  explicit_tracked_buffers{};
     ERHITranslateExecutionClass translate_execution_class{ERHITranslateExecutionClass::Parallel};
+    GraphEventRef      translate_complete_event{nullptr}; // signaled when translate finishes
+    GraphEventRef      fence_event{nullptr};             // set by RHIFenceCmd
+    bool               b_non_parallel{false};            // SetTrackAccess barrier or RHIFence
     bool               b_sync{false}; //force sync queue timeline
     bool               b_tick_profiling{false};
     bool               b_delete_resources{false};
@@ -609,6 +613,9 @@ struct CmdSubmit {
         cached_args        = std::move(_other.cached_args);
         segments           = std::move(_other.segments);
         translate_execution_class = _other.translate_execution_class;
+        translate_complete_event  = std::move(_other.translate_complete_event);
+        fence_event        = std::move(_other.fence_event);
+        b_non_parallel     = _other.b_non_parallel;
         b_sync             = _other.b_sync;
         b_tick_profiling   = _other.b_tick_profiling;
         b_delete_resources = _other.b_delete_resources;
@@ -629,6 +636,9 @@ struct CmdSubmit {
         cached_args        = std::move(_other.cached_args);
         segments           = std::move(_other.segments);
         translate_execution_class = _other.translate_execution_class;
+        translate_complete_event  = std::move(_other.translate_complete_event);
+        fence_event        = std::move(_other.fence_event);
+        b_non_parallel     = _other.b_non_parallel;
         b_sync             = _other.b_sync;
         b_tick_profiling   = _other.b_tick_profiling;
         b_delete_resources = _other.b_delete_resources;
@@ -1649,6 +1659,7 @@ public:
     RENDER_API CommandList& Wait(SyncPointRef _sync_point);
     RENDER_API CommandList& Signal(SyncPointRef _sync_point);
     RENDER_API CommandList& SetTranslateExecutionClass(ERHITranslateExecutionClass _execution_class);
+    RENDER_API CommandList& RHIFence();
     RENDER_API CommandList& SetExplicitTrackedState(
         Array<TrackedTextureState>&& tracked_textures,
         Array<TrackedBufferState>&&  tracked_buffers
@@ -1762,6 +1773,9 @@ private:
     Array<TrackedTextureState>   explicit_tracked_textures{};
     Array<TrackedBufferState>    explicit_tracked_buffers{};
     ERHITranslateExecutionClass  translate_execution_class{ERHITranslateExecutionClass::Parallel};
+    GraphEventRef                translate_complete_event{nullptr};
+    GraphEventRef                fence_event{nullptr};
+    bool                         b_non_parallel{false};
     bool                         submit_delete_resources{false};
     EQueueType                   queue_type{EQueueType::Graphics};
     Stack<String>                scope_stack;

@@ -461,8 +461,7 @@ void SeedImportedTextureStateRange(RGTexture& texture, RGTextureStateRange& stat
         for (uint32_t layer = state_range.range.array_min;
              layer < state_range.range.array_min + state_range.range.array_count;
              ++layer) {
-            const Render::TexturePersistentState persistent =
-                rhi_texture->GetPersistentState(static_cast<uint8>(mip), static_cast<uint8>(layer));
+            const Render::TexturePersistentState persistent = rhi_texture->GetPersistentState();
             if (!persistent.known) {
                 return;
             }
@@ -1215,88 +1214,99 @@ void RenderGraph::EmitFinalTrackedStates(RHICommandList& cmd_list) const {
     Moer::Array<Render::TrackedBufferState>  buffers{};
 
     for (const Moer::UniquePtr<RGTexture>& texture : m_textures) {
-        if (!texture->exported || !texture->imported || !texture->IsAllocated()) {
+        if (!texture->IsAllocated()) {
             continue;
         }
         auto* rhi_texture = texture->RHI().Get();
         if (rhi_texture == nullptr) {
             continue;
         }
+
+        // Determine the effective final state: use exported final_state if set,
+        // otherwise derive from the last state_range, or fall back to the texture's
+        // implicit preferred layout as a SHADER_RESOURCE / UNORDERED_ACCESS state.
+        Render::ETextureState effective_final_state = texture->final_state;
+        if (effective_final_state == Render::ETextureState::UNDEFINED && !texture->state_ranges.empty()) {
+            effective_final_state = texture->state_ranges.back().state;
+        }
+        if (effective_final_state == Render::ETextureState::UNDEFINED) {
+            continue; // No known final state — skip (PersistentState stays as-initialized)
+        }
+
         const EPassType final_pass_type = PassTypeForQueue(texture->owner_queue);
         bool            final_transition_emitted = false;
-        for (const RGTextureStateRange& state_range : texture->state_ranges) {
-            const Render::EQueueType src_queue =
-                state_range.queue == Render::EQueueType::Ignore ? texture->owner_queue : state_range.queue;
-            if (state_range.state == Render::ETextureState::UNDEFINED ||
-                (state_range.state == texture->final_state && src_queue == texture->owner_queue)) {
-                continue;
+        if (texture->exported) {
+            for (const RGTextureStateRange& state_range : texture->state_ranges) {
+                const Render::EQueueType src_queue =
+                    state_range.queue == Render::EQueueType::Ignore ? texture->owner_queue : state_range.queue;
+                if (state_range.state == Render::ETextureState::UNDEFINED ||
+                    (state_range.state == texture->final_state && src_queue == texture->owner_queue)) {
+                    continue;
+                }
+                const std::array<Render::BarrierCreateInfo, 1> barriers{
+                    Render::BarrierCreateInfo::Transition(
+                        texture->GetView(state_range.range),
+                        Render::MakeBarrierState(state_range.state, final_pass_type),
+                        Render::MakeBarrierState(texture->final_state, final_pass_type)
+                    )
+                };
+                cmd_list.Barriers(barriers, src_queue, texture->owner_queue, Render::ETrackedStateUpdateMode::Skip);
+                final_transition_emitted = true;
             }
-            const std::array<Render::BarrierCreateInfo, 1> barriers{
-                Render::BarrierCreateInfo::Transition(
-                    texture->GetView(state_range.range),
-                    Render::MakeBarrierState(state_range.state, final_pass_type),
-                    Render::MakeBarrierState(texture->final_state, final_pass_type)
-                )
-            };
-            cmd_list.Barriers(
-                barriers,
-                src_queue,
-                texture->owner_queue,
-                Render::ETrackedStateUpdateMode::Skip
-            );
-            final_transition_emitted = true;
         }
         textures.emplace_back(
             Render::TrackedTextureState{
-                .texture = Render::TextureView(
-                    rhi_texture,
-                    rhi_texture->GetFormat(),
-                    0,
-                    static_cast<uint8>(rhi_texture->GetNumMips())
-                ),
-                .state        = texture->final_state,
+                .texture = Render::TextureView(rhi_texture, rhi_texture->GetFormat(), 0,
+                    static_cast<uint8>(rhi_texture->GetNumMips())),
+                .state        = effective_final_state,
                 .owner_queue  = texture->owner_queue,
-                .access_write = final_transition_emitted || RGTextureStateWrites(texture->final_state)
+                .access_write = final_transition_emitted || RGTextureStateWrites(effective_final_state)
             }
         );
     }
 
     for (const Moer::UniquePtr<RGBuffer>& buffer : m_buffers) {
-        if (!buffer->exported || !buffer->imported || !buffer->IsAllocated()) {
+        if (!buffer->IsAllocated()) {
             continue;
         }
         auto* rhi_buffer = buffer->RHI().Get();
         if (rhi_buffer == nullptr) {
             continue;
         }
+
+        Render::EBufferState effective_final_state = buffer->final_state;
+        if (effective_final_state == Render::EBufferState::UNDEFINED && !buffer->state_ranges.empty()) {
+            effective_final_state = buffer->state_ranges.back().state;
+        }
+        if (effective_final_state == Render::EBufferState::UNDEFINED) {
+            continue;
+        }
+
         const EPassType final_pass_type = PassTypeForQueue(buffer->owner_queue);
-        for (const RGBufferStateRange& state_range : buffer->state_ranges) {
-            const Render::EQueueType src_queue =
-                state_range.queue == Render::EQueueType::Ignore ? buffer->owner_queue : state_range.queue;
-            if (state_range.state == Render::EBufferState::UNDEFINED ||
-                (state_range.state == buffer->final_state && src_queue == buffer->owner_queue)) {
-                continue;
+        if (buffer->exported) {
+            for (const RGBufferStateRange& state_range : buffer->state_ranges) {
+                const Render::EQueueType src_queue =
+                    state_range.queue == Render::EQueueType::Ignore ? buffer->owner_queue : state_range.queue;
+                if (state_range.state == Render::EBufferState::UNDEFINED ||
+                    (state_range.state == buffer->final_state && src_queue == buffer->owner_queue)) {
+                    continue;
+                }
+                const std::array<Render::BarrierCreateInfo, 1> barriers{
+                    Render::BarrierCreateInfo::Transition(
+                        buffer->GetView(state_range.range),
+                        Render::MakeBarrierState(state_range.state, final_pass_type),
+                        Render::MakeBarrierState(buffer->final_state, final_pass_type)
+                    )
+                };
+                cmd_list.Barriers(barriers, src_queue, buffer->owner_queue, Render::ETrackedStateUpdateMode::Skip);
             }
-            const std::array<Render::BarrierCreateInfo, 1> barriers{
-                Render::BarrierCreateInfo::Transition(
-                    buffer->GetView(state_range.range),
-                    Render::MakeBarrierState(state_range.state, final_pass_type),
-                    Render::MakeBarrierState(buffer->final_state, final_pass_type)
-                )
-            };
-            cmd_list.Barriers(
-                barriers,
-                src_queue,
-                buffer->owner_queue,
-                Render::ETrackedStateUpdateMode::Skip
-            );
         }
         buffers.emplace_back(
             Render::TrackedBufferState{
                 .buffer       = rhi_buffer->GetView(),
-                .state        = buffer->final_state,
+                .state        = effective_final_state,
                 .owner_queue  = buffer->owner_queue,
-                .access_write = RGBufferStateWrites(buffer->final_state)
+                .access_write = RGBufferStateWrites(effective_final_state)
             }
         );
     }

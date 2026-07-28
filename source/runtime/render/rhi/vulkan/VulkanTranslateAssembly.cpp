@@ -152,50 +152,6 @@ static void InjectAutoCommandListGpuEvents(CmdSubmit& submit) {
     submit.gpu_events = std::move(rebuilt_events);
 }
 
-static TrackerSeed BuildTrackerSeed(const ResourceStateSnapshot& snapshot) {
-    TrackerSeed seed{};
-    seed.textures.reserve(snapshot.size());
-    seed.buffers.reserve(snapshot.size());
-
-    for (const auto& [resource_key, value] : snapshot) {
-        if (resource_key.type == ETrackedResourceType::Texture) {
-            auto* texture = reinterpret_cast<VulkanTexture*>(resource_key.handle);
-            if (texture == nullptr) {
-                continue;
-            }
-
-            TrackerSeedTextureEntry entry{};
-            entry.known         = value.known;
-            entry.has_writer    = value.has_writer;
-            entry.owner_queue   = value.owner_queue;
-            entry.texture_state = value.texture_state;
-            entry.texture       = texture;
-            entry.mip_level     = resource_key.mip_level;
-            entry.mip_count     = ResolveTextureMipCount(texture, resource_key);
-            entry.array_layer   = resource_key.array_layer;
-            entry.array_count   = ResolveTextureArrayCount(texture, resource_key);
-            seed.textures.push_back(entry);
-            continue;
-        }
-
-        if (resource_key.type == ETrackedResourceType::Buffer) {
-            auto* buffer = reinterpret_cast<VulkanBuffer*>(resource_key.handle);
-            if (buffer == nullptr) {
-                continue;
-            }
-
-            TrackerSeedBufferEntry entry{};
-            entry.known        = value.known;
-            entry.has_writer   = value.has_writer;
-            entry.owner_queue  = value.owner_queue;
-            entry.buffer_state = value.buffer_state;
-            entry.buffer       = buffer;
-            seed.buffers.push_back(entry);
-        }
-    }
-
-    return seed;
-}
 
 static TranslatePipelineBatch AssembleTranslatePipelineOps(
     Array<ExecutorOp>&&             ops,
@@ -253,6 +209,9 @@ static TranslatePipelineBatch AssembleTranslatePipelineOps(
         segment_submit.wait_sync_points = std::move(wait_sync_points);
         segment_submit.signal_sync_points = std::move(signal_sync_points);
         segment_submit.translate_execution_class = source_submit.translate_execution_class;
+        segment_submit.translate_complete_event  = source_submit.translate_complete_event;
+        segment_submit.fence_event  = source_submit.fence_event;
+        segment_submit.b_non_parallel = source_submit.b_non_parallel;
         if (attach_signals_and_callbacks) {
             segment_submit.b_sync             = source_submit.b_sync;
             segment_submit.b_tick_profiling   = source_submit.b_tick_profiling && descriptor.queue != EQueueType::Copy;
@@ -338,8 +297,7 @@ static TranslatePipelineBatch AssembleTranslatePipelineOps(
                                 source_key,
                                 static_cast<uint32>(segment_plan_index),
                                 translate_info->queue,
-                                std::move(segment_submit),
-                                BuildTrackerSeed(translate_info->initial_state_snapshot)
+                                std::move(segment_submit)
                             };
                             translate_task.task_dependencies = translate_info->task_dependencies;
                             translate_task.completion_event = translate_info->completion_event;
@@ -498,11 +456,37 @@ void TranslatePipelineRuntime::Dispatch(
 
                 {
                     std::lock_guard<std::mutex> state_lock(state.mutex);
+
+                    // Submit boundary detection: when source_key changes, finalize the previous submit.
+                    if (state.current_submit_key != translate_info.source_key) {
+                        // Finalize previous submit's last_submit_event
+                        if (!state.current_submit_cl_events.empty()) {
+                            GraphEventRef submit_event = GraphEvent::CreateGraphEvent();
+                            for (const auto& cl_event : state.current_submit_cl_events) {
+                                submit_event->WaitUntil(cl_event);
+                            }
+                            submit_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+                            state.last_submit_event = submit_event;
+                            state.current_submit_cl_events.clear();
+                        }
+                        state.current_submit_key = translate_info.source_key;
+                    }
+
+                    // Build dependencies: all CLs depend on last_submit + last_fence
+                    AppendUniqueDependency(dependencies, state.last_submit_event);
+                    AppendUniqueDependency(dependencies, state.last_fence_event);
+
+                    // Non-parallel CLs additionally depend on all preceding CLs in this submit
+                    if (translate_info.b_non_parallel) {
+                        for (const auto& prev_event : state.current_submit_cl_events) {
+                            AppendUniqueDependency(dependencies, prev_event);
+                        }
+                    }
+
                     const uint32 command_count = CountTranslateCommands(translate_info);
                     const bool can_append_to_current =
                         state.submit_state.current_batch != nullptr &&
                         state.submit_state.current_batch->queue == translate_info.queue &&
-                        state.submit_state.current_batch->execution_class == translate_info.execution_class &&
                         state.submit_state.current_batch->command_count + command_count <=
                             s_max_translate_batch_commands;
 
@@ -513,15 +497,12 @@ void TranslatePipelineRuntime::Dispatch(
 
                         auto new_batch = std::make_shared<TranslateBatch>();
                         new_batch->queue           = translate_info.queue;
-                        new_batch->execution_class = translate_info.execution_class;
+                        new_batch->execution_class = ERHITranslateExecutionClass::Parallel;
                         new_batch->trace_frame     = request->batch_trace_frame;
                         state.submit_state.current_batch = std::move(new_batch);
                     }
 
                     batch = state.submit_state.current_batch;
-                    if (translate_info.execution_class != ERHITranslateExecutionClass::Parallel) {
-                        AppendUniqueDependency(dependencies, state.last_serial_translate_event);
-                    }
 
                     std::lock_guard<std::mutex> batch_lock(batch->mutex);
                     batch_entry_index = static_cast<uint32>(batch->entries.size());
@@ -582,7 +563,6 @@ void TranslatePipelineRuntime::Dispatch(
                                                      VulkanTranslateTask::DispatchSingle(
                                                          job->translate_info.queue,
                                                          std::move(job->translate_info.submit),
-                                                         std::move(job->translate_info.initial_seed),
                                                          allocator_override
                                                      ) :
                                                      VulkanTranslateTask::MakeFailed(
@@ -640,9 +620,33 @@ void TranslatePipelineRuntime::Dispatch(
                     batch->entries[batch_entry_index].translate_event = translate_event;
                 }
 
-                if (batch->execution_class != ERHITranslateExecutionClass::Parallel) {
+                // Track CL completion for submit-level dependency chain
+                {
                     std::lock_guard<std::mutex> state_lock(state.mutex);
-                    state.last_serial_translate_event = translate_event;
+                    state.current_submit_cl_events.push_back(translate_event);
+
+                    // RHIFence: update last_fence_event for subsequent CLs
+                    if (translate_info.fence_event) {
+                        GraphEventRef chained_fence = GraphEvent::CreateGraphEvent();
+                        chained_fence->WaitUntil(translate_event);
+                        chained_fence->WaitUntil(translate_info.fence_event);
+                        chained_fence->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+                        state.last_fence_event = chained_fence;
+                    }
+                }
+            }
+
+            // Finalize the last submit's event chain
+            {
+                std::lock_guard<std::mutex> state_lock(state.mutex);
+                if (!state.current_submit_cl_events.empty()) {
+                    GraphEventRef submit_event = GraphEvent::CreateGraphEvent();
+                    for (const auto& cl_event : state.current_submit_cl_events) {
+                        submit_event->WaitUntil(cl_event);
+                    }
+                    submit_event->TryUnlockSubsequents(EThread::UNKNOWN_THREAD);
+                    state.last_submit_event = submit_event;
+                    state.current_submit_cl_events.clear();
                 }
             }
 
@@ -677,7 +681,9 @@ void TranslatePipelineRuntime::EnqueuePendingSubmits(
                 state.submit_state.batches.clear();
                 present_ops = std::move(state.submit_state.present_ops);
                 state.submit_state.present_ops.clear();
-                state.last_serial_translate_event = nullptr;
+                state.last_submit_event = nullptr;
+                state.last_fence_event = nullptr;
+                state.current_submit_cl_events.clear();
             }
 
             if (!batches.empty() || !present_ops.empty()) {

@@ -7,17 +7,6 @@ namespace Moer::Render {
 
 namespace {
 
-static const TranslateFenceCmd* TryGetTranslateFenceCmd(const Command* cmd) {
-    if (cmd == nullptr || cmd->Type() != Command::EType::Custom) {
-        return nullptr;
-    }
-    const auto* custom_cmd = static_cast<const CustomCmd*>(cmd);
-    if (custom_cmd->CustomId() != CustomCmd::CustomCmdId::CUSTOM_TRANSLATE_FENCE) {
-        return nullptr;
-    }
-    return static_cast<const TranslateFenceCmd*>(custom_cmd);
-}
-
 static const FrameTickCmd* TryGetFrameTickCmd(const Command* cmd) {
     if (cmd == nullptr || cmd->Type() != Command::EType::Custom) {
         return nullptr;
@@ -169,10 +158,6 @@ static void TraceDigest(
     }
 }
 
-static ERHIResourceLastAccessKind ToPersistentAccessKind(bool has_writer) {
-    return has_writer ? ERHIResourceLastAccessKind::Write : ERHIResourceLastAccessKind::Read;
-}
-
 static ResourceStateValue LoadPersistentState(const ResourceKey& resource_key) {
     ResourceStateValue state{};
     switch (resource_key.type) {
@@ -207,8 +192,7 @@ static ResourceStateValue LoadPersistentState(const ResourceKey& resource_key) {
                 IsSingleTextureSubresourceKey(resource_key) &&
                 "Texture persistent load must use canonical single-subresource keys"
             );
-            const TexturePersistentState persistent_state =
-                texture->GetPersistentState(resource_key.mip_level, resource_key.array_layer);
+            const TexturePersistentState persistent_state = texture->GetPersistentState();
             state.known         = persistent_state.known;
             state.has_writer    = persistent_state.last_access_kind == ERHIResourceLastAccessKind::Write;
             state.owner_queue   = persistent_state.owner_queue;
@@ -255,47 +239,6 @@ static void EnsureDigestStateLoaded(
             continue;
         }
         snapshot.emplace(resource_key, LoadPersistentState(resource_key));
-    }
-}
-
-static void CommitPersistentResourceStates(const ResourceStateSnapshot& snapshot) {
-    for (const auto& [resource_key, state] : snapshot) {
-        switch (resource_key.type) {
-            case ETrackedResourceType::Buffer: {
-                auto* buffer = reinterpret_cast<Buffer*>(resource_key.handle);
-                if (buffer == nullptr) {
-                    break;
-                }
-                buffer->SetPersistentState(BufferPersistentState{
-                    .known = state.known,
-                    .owner_queue = state.owner_queue,
-                    .state = state.buffer_state,
-                    .last_access_kind = state.known ? ToPersistentAccessKind(state.has_writer) :
-                                                      ERHIResourceLastAccessKind::Unknown
-                });
-                break;
-            }
-            case ETrackedResourceType::Texture: {
-                auto* texture = reinterpret_cast<Texture*>(resource_key.handle);
-                if (texture == nullptr) {
-                    break;
-                }
-                assert(
-                    IsSingleTextureSubresourceKey(resource_key) &&
-                    "Texture persistent commit must use canonical single-subresource keys"
-                );
-                texture->SetPersistentState(resource_key.mip_level, resource_key.array_layer, TexturePersistentState{
-                    .known = state.known,
-                    .owner_queue = state.owner_queue,
-                    .state = state.texture_state,
-                    .last_access_kind = state.known ? ToPersistentAccessKind(state.has_writer) :
-                                                      ERHIResourceLastAccessKind::Unknown
-                });
-                break;
-            }
-            default:
-                break;
-        }
     }
 }
 
@@ -1340,6 +1283,7 @@ private:
             case Command::EType::Scope:
             case Command::EType::Query:
             case Command::EType::BufferOverlap:
+            case Command::EType::RHIFence:
                 break;
             default:
                 break;
@@ -1351,23 +1295,6 @@ private:
     const TCachedArgArray& cached_args;
     DirtyWrittenResources* dirty_written_resources{nullptr};
 };
-
-static Array<GraphEventRef> CollectSegmentFenceEvents(
-    const CmdSubmit&        submit,
-    const RHISubmitSegment& segment
-) {
-    Array<GraphEventRef> fence_events{};
-    auto append_fence_event = [&](const Command* cmd) {
-        if (const auto* fence_cmd = TryGetTranslateFenceCmd(cmd); fence_cmd != nullptr && fence_cmd->Fence().event) {
-            fence_events.emplace_back(fence_cmd->Fence().event);
-        }
-    };
-
-    for (size_t cmd_index = segment.begin; cmd_index < segment.end; ++cmd_index) {
-        append_fence_event(submit.cmds[cmd_index].get());
-    }
-    return fence_events;
-}
 
 static bool SegmentContainsFrameTick(const CmdSubmit& submit, const RHISubmitSegment& segment) {
     for (size_t cmd_index = segment.begin; cmd_index < segment.end; ++cmd_index) {
@@ -1788,13 +1715,8 @@ static PreprocessTranslateStore PreprocessFrameOps(
                         translate_info.completion_event = GraphEvent::CreateGraphEvent();
 
                         AppendUniqueDependency(translate_info.task_dependencies, submit.record_complete_event);
-                        AppendUniqueDependency(translate_info.task_dependencies, dependency_state.last_fence_event);
-                        if (submit.translate_execution_class != ERHITranslateExecutionClass::Parallel) {
-                            AppendUniqueDependency(
-                                translate_info.task_dependencies,
-                                dependency_state.last_translate_event
-                            );
-                        }
+                        // Per-CL translate ordering (last_submit, last_fence, non-parallel chain) is now
+                        // injected in TranslatePipelineRuntime::Dispatch() using CmdSubmit::b_non_parallel.
 
                         ResourceStateSnapshot segment_state{};
                         EnsureExplicitTrackedStateLoaded(
@@ -1833,7 +1755,9 @@ static PreprocessTranslateStore PreprocessFrameOps(
                             segment_state
                         );
                         translate_info.last_state_snapshot = segment_state;
-                        CommitPersistentResourceStates(translate_info.last_state_snapshot);
+                        // PersistentState is now set during Vulkan translate (SetTrackAccess)
+                        // and initialized at resource creation time (known=true, state=UNDEFINED).
+                        // Preprocess no longer commits predicted state.
                         ApplyDigestToDirtyWrittenResources(
                             dirty_written_resources,
                             translate_info.digest
@@ -1869,16 +1793,6 @@ static PreprocessTranslateStore PreprocessFrameOps(
                             .inherit_source_runtime_payload = false,
                             .include = true
                         });
-                        dependency_state.last_translate_event = ChainGraphEvents(
-                            dependency_state.last_translate_event,
-                            translate_info.completion_event
-                        );
-                        for (const GraphEventRef& fence_event : CollectSegmentFenceEvents(submit, segment)) {
-                            dependency_state.last_fence_event = ChainGraphEvents(
-                                dependency_state.last_fence_event,
-                                fence_event
-                            );
-                        }
                         if (SegmentContainsFrameTick(submit, segment)) {
                             if (segment_index + 1 != segments.size()) {
                                 LOG_ERROR(MOER_TEXT("FrameTick must terminate the recorded CommandList segment sequence"));
@@ -1937,7 +1851,7 @@ static PreprocessTranslateStore PreprocessFrameOps(
                     SubmissionKey{op_seq, 0},
                     present_snapshot
                 );
-                CommitPersistentResourceStates(present_snapshot);
+                // PersistentState now managed at translate time and resource creation.
                 ApplyDigestToDirtyWrittenResources(dirty_written_resources, present_digest);
                 RHITRACE_RESOURCE_LOG(
                     static_cast<VulkanTexture*>(present_op->target.texture)->GetName(),

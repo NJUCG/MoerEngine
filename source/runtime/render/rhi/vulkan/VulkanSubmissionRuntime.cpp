@@ -288,42 +288,18 @@ SubmissionPresentResult SubmissionPresentContext::Present(
     cmd_list.BeginLabel(MOER_TEXT("Submission Present"), {0.0f, 1.0f, 1.0f, 1.0f});
     tracker.SetPassType(EPassType::Graphics);
 
-    TrackerSeed        present_seed{};
-    TrackerSeedTextureEntry source_seed{};
-    source_seed.texture     = src_texture;
-    source_seed.mip_level   = static_cast<uint8_t>(present_op.target.mip_level);
-    source_seed.mip_count   = 1;
-    source_seed.array_layer = static_cast<uint8_t>(present_op.target.array_layer);
-    source_seed.array_count = 1;
-    if (source_texture_state != nullptr) {
-        source_seed.known         = source_texture_state->known;
-        source_seed.has_writer    = source_texture_state->has_writer;
-        source_seed.owner_queue   = source_texture_state->owner_queue;
-        source_seed.texture_state = source_texture_state->texture_state;
-    }
-    present_seed.textures.emplace_back(source_seed);
-    tracker.InitFromSeed(present_seed);
+    tracker.LoadPersistentState(
+        src_texture,
+        static_cast<uint8_t>(present_op.target.mip_level), 1,
+        static_cast<uint8_t>(present_op.target.array_layer), 1
+    );
 
-    if (source_texture_state != nullptr && source_texture_state->known) {
-        auto [src_access, src_layout, _src_stage] =
-            ResolveTextureSeedState(src_texture, *source_texture_state);
-        RHITRACE_RESOURCE_LOG(
-            src_texture->GetName(),
-            "[ResourceTrace][Present][SeedSrc] {} : known={} owner_queue={} state={} layout={} access=0x{:x}",
-            src_texture->GetName(),
-            source_texture_state->known,
-            QueueTypeName(source_texture_state->owner_queue),
-            int(source_texture_state->texture_state),
-            VkLayoutStr(src_layout),
-            uint64(src_access)
-        );
-    } else {
-        RHITRACE_RESOURCE_LOG(
-            src_texture->GetName(),
-            "[ResourceTrace][Present][SeedSrc] {} : persistent state UNKNOWN",
-            src_texture->GetName()
-        );
-    }
+    const TexturePersistentState ps = src_texture->GetPersistentState();
+    RHITRACE_RESOURCE_LOG(
+        src_texture->GetName(),
+        "[ResourceTrace][Present][Src] {} : known={} state={} owner={}",
+        src_texture->GetName(), ps.known, int(ps.state), QueueTypeName(ps.owner_queue)
+    );
     auto src_to_transfer = tracker.ReadTexture(src_texture, ETextureState::TRANSFER_SRC);
     tracker.EmitLocalTransition(
         src_texture,
