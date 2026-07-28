@@ -132,6 +132,18 @@ set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHIGpuScopeContract COMMAND $<TARGET_FILE:${test_target}>)
 set_tests_properties(RHIGpuScopeContract PROPERTIES TIMEOUT 60)
 
+set(test_target TestRenderProfileCapture)
+add_executable(${test_target} "RenderProfileCaptureTest.cpp")
+target_include_directories(${test_target}
+    PRIVATE "${moer_source_dir}/runtime/core/source/profile"
+)
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME RenderProfileCaptureContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(RenderProfileCaptureContract PROPERTIES TIMEOUT 60)
+
 set(test_target TestRHIGpuCompletion)
 add_executable(${test_target} "RHIGpuCompletionContractTest.cpp")
 target_link_libraries(${test_target}
