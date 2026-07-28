@@ -4910,6 +4910,44 @@ void TestGpuProducerSequenceProofs() {
         builder.Begin();
         builder.Schema(Templates::CpuScope());
         builder.Schema(Templates::GpuFrame());
+        AddCpuScope(builder, 1, 77, "cpu-only-over-budget-child", 10, 20, 3);
+        AddCpuScope(builder, 5, 77, "cpu-only-over-budget-ancestor", 0, 30, 0);
+        AddGpuFrame(builder, 6, 1, ProfileGpuFrameStatus::Complete, true, 0, 0, 0, "");
+        add_loss(builder, 2, 2, 1);
+        builder.End();
+        expect_rejected(
+            LoadChunks(builder.bytes),
+            SessionErrorCode::CpuScopeParentMissing,
+            "zero-demand GPU data changed a CPU-only over-budget diagnostic",
+            "CPU hierarchy deficits exceed the noticed allocated-record loss budget"
+        );
+    }
+
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddCpuScope(builder, 1, 77, "mixed-over-budget-cpu-child", 10, 20, 3);
+        AddGpuFrame(builder, 2, 1, ProfileGpuFrameStatus::Incomplete, false, 2, 0, 0, "");
+        add_scope(builder, 4, 1, 2, 99, 0, 1, 1, "mixed-over-budget-gpu-child");
+        AddCpuScope(builder, 6, 77, "mixed-over-budget-cpu-ancestor", 0, 30, 0);
+        add_loss(builder, 3, 3, 1);
+        builder.End();
+        expect_rejected(
+            LoadChunks(builder.bytes),
+            SessionErrorCode::RecordSequenceInvalid,
+            "a CPU deficit already over budget hid a simultaneous nontrusted GPU deficit",
+            "CPU/GPU deficits exceed the noticed allocated-record loss budget"
+        );
+    }
+
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        builder.Schema(Templates::GpuFrame());
         builder.Schema(Templates::GpuScope());
         AddCpuScope(builder, 1, 77, "mixed-virtual-cpu-child", 10, 20, 2);
         AddGpuFrame(builder, 2, 1, ProfileGpuFrameStatus::Incomplete, false, 2, 0, 0, "");
@@ -4922,6 +4960,46 @@ void TestGpuProducerSequenceProofs() {
             SessionErrorCode::RecordSequenceInvalid,
             "an insufficient mixed CPU/nontrusted-GPU Loss total was classified as a GPU-only failure",
             "CPU/GPU deficits exceed the noticed allocated-record loss budget"
+        );
+    }
+
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        builder.Schema(Templates::GpuFrame());
+        builder.Schema(Templates::GpuScope());
+        AddCpuScope(builder, 1, 77, "mixed-slot-cpu-child", 10, 20, 2);
+        AddCpuScope(builder, 2, 88, "mixed-slot-occupied-record", 40, 50, 0);
+        AddCpuScope(builder, 3, 77, "mixed-slot-cpu-ancestor", 0, 30, 0);
+        AddGpuFrame(builder, 4, 1, ProfileGpuFrameStatus::Incomplete, false, 2, 0, 0, "");
+        add_scope(builder, 6, 1, 2, 99, 0, 1, 1, "mixed-slot-gpu-child");
+        add_loss(builder, 5, 7, 2);
+        builder.End();
+        expect_rejected(
+            LoadChunks(builder.bytes),
+            SessionErrorCode::RecordSequenceInvalid,
+            "a CPU sequence-slot failure ignored a simultaneous nontrusted GPU topology demand",
+            "missing CPU/GPU topology records cannot occupy distinct record-sequence holes"
+        );
+    }
+
+    {
+        SessionBuilder builder;
+        builder.Begin();
+        builder.Schema(Templates::CpuScope());
+        builder.Schema(Templates::GpuFrame());
+        AddCpuScope(builder, 1, 77, "cpu-only-slot-child", 10, 20, 2);
+        AddCpuScope(builder, 2, 88, "cpu-only-slot-occupied-record", 40, 50, 0);
+        AddCpuScope(builder, 3, 77, "cpu-only-slot-ancestor", 0, 30, 0);
+        AddGpuFrame(builder, 4, 1, ProfileGpuFrameStatus::Complete, true, 0, 0, 0, "");
+        add_loss(builder, 5, 5, 1);
+        builder.End();
+        expect_rejected(
+            LoadChunks(builder.bytes),
+            SessionErrorCode::CpuScopeTopologyInvalid,
+            "GPU records without a GPU topology demand changed a CPU-only sequence-slot failure",
+            "missing CPU/GPU topology records cannot occupy distinct record-sequence holes"
         );
     }
 

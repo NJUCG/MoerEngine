@@ -6705,15 +6705,16 @@ struct ProfileSessionReader::Impl {
             }
         }
         if (session.impl_->summary.has_session_end) {
-            const std::uint64_t total_drop_budget = session.impl_->summary.lost_record_count;
-            if (required_gpu_drops > total_drop_budget) {
-                const bool has_cpu_drop_requirement = _required_cpu_drops != 0;
-                const bool has_gpu_drop_requirement = required_gpu_drops > _required_cpu_drops;
+            const std::uint64_t total_drop_budget        = session.impl_->summary.lost_record_count;
+            const bool          has_cpu_drop_requirement = _required_cpu_drops != 0;
+            const bool          has_gpu_drop_requirement = required_gpu_drops > _required_cpu_drops;
+            if (has_gpu_drop_requirement && required_gpu_drops > total_drop_budget) {
+                const SessionErrorCode deficit_error = has_cpu_drop_requirement ?
+                                                           SessionErrorCode::RecordSequenceInvalid :
+                                                           SessionErrorCode::GpuFrameTotalsMismatch;
                 Fail(
                     SessionLoadStatus::ProtocolViolation,
-                    has_cpu_drop_requirement && has_gpu_drop_requirement ?
-                        SessionErrorCode::RecordSequenceInvalid :
-                        SessionErrorCode::GpuFrameTotalsMismatch,
+                    deficit_error,
                     "CPU/GPU deficits exceed the noticed allocated-record loss budget"
                 );
                 return false;
@@ -6869,7 +6870,16 @@ struct ProfileSessionReader::Impl {
         if (!BuildCpuTracks(allow_missing, required_cpu_drops, cpu_sequence_demands)) {
             return false;
         }
-        const bool has_cpu_sequence_demands = !cpu_sequence_demands.empty();
+        const bool                        has_cpu_sequence_demands = !cpu_sequence_demands.empty();
+        std::vector<RecordSequenceDemand> gpu_sequence_demands;
+        if (!BuildGpuDomainsAndTracks() ||
+            !BuildGpuTopology(allow_missing, required_cpu_drops, gpu_sequence_demands)) {
+            return false;
+        }
+        // BuildGpuTopology rejects aggregate failures only when GPU topology
+        // adds a drop requirement. Preserve the CPU-only diagnostic here for
+        // both its empty-GPU fast path and valid zero-deficit GPU data, without
+        // returning before GPU topology is known.
         if (session.impl_->summary.has_session_end &&
             required_cpu_drops > session.impl_->summary.lost_record_count) {
             Fail(
@@ -6879,12 +6889,8 @@ struct ProfileSessionReader::Impl {
             );
             return false;
         }
-        std::vector<RecordSequenceDemand> gpu_sequence_demands;
-        if (!BuildGpuDomainsAndTracks() ||
-            !BuildGpuTopology(allow_missing, required_cpu_drops, gpu_sequence_demands)) {
-            return false;
-        }
         const bool has_gpu_sequence_demands = !gpu_sequence_demands.empty();
+        const bool has_gpu_topology_demands = has_gpu_sequence_demands || !joint_virtual_tasks.empty();
         if (has_gpu_sequence_demands) {
             if (gpu_sequence_demands.size() > cpu_sequence_demands.max_size() - cpu_sequence_demands.size()) {
                 Fail(
@@ -6907,13 +6913,13 @@ struct ProfileSessionReader::Impl {
             );
         }
         if (!ValidateSequenceSlotCapacity(
-                cpu_sequence_demands, has_cpu_sequence_demands, has_gpu_sequence_demands
+                cpu_sequence_demands, has_cpu_sequence_demands, has_gpu_topology_demands
             )) {
             return false;
         }
         if ((!_forensic || !joint_virtual_tasks.empty()) &&
             !ValidateTopologyLossCompatibility(
-                cpu_sequence_demands, has_cpu_sequence_demands, has_gpu_sequence_demands, _forensic
+                cpu_sequence_demands, has_cpu_sequence_demands, has_gpu_topology_demands, _forensic
             )) {
             return false;
         }
