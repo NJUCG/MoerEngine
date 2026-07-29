@@ -640,19 +640,15 @@ void Engine::InitializeProfileDump() noexcept {
 }
 
 void Engine::InitializeRenderProfileCapture() noexcept {
-    if (!m_profile_dump_owned || m_render_profile_capture) {
+    if (!m_profile_dump_owned || !m_render_profile_capture || m_render_profile_capture->Valid()) {
         return;
     }
 
     try {
         const ProfileDump::SchemaRegistration gpu_frame =
-            ProfileDump::RegisterSchema(
-                ProfileDump::Templates::GpuFrame()
-            );
-        if ((gpu_frame.status !=
-                 ProfileDump::SchemaStatus::Registered &&
-             gpu_frame.status !=
-                 ProfileDump::SchemaStatus::AlreadyRegistered) ||
+            ProfileDump::RegisterSchema(ProfileDump::Templates::GpuFrame());
+        if ((gpu_frame.status != ProfileDump::SchemaStatus::Registered &&
+             gpu_frame.status != ProfileDump::SchemaStatus::AlreadyRegistered) ||
             !gpu_frame.handle) {
             LOG_WARNING(
                 "[ProfileDump] GpuFrame schema registration failed "
@@ -663,13 +659,9 @@ void Engine::InitializeRenderProfileCapture() noexcept {
         }
 
         const ProfileDump::SchemaRegistration gpu_scope =
-            ProfileDump::RegisterSchema(
-                ProfileDump::Templates::GpuScope()
-            );
-        if ((gpu_scope.status !=
-                 ProfileDump::SchemaStatus::Registered &&
-             gpu_scope.status !=
-                 ProfileDump::SchemaStatus::AlreadyRegistered) ||
+            ProfileDump::RegisterSchema(ProfileDump::Templates::GpuScope());
+        if ((gpu_scope.status != ProfileDump::SchemaStatus::Registered &&
+             gpu_scope.status != ProfileDump::SchemaStatus::AlreadyRegistered) ||
             !gpu_scope.handle) {
             LOG_WARNING(
                 "[ProfileDump] GpuScope schema registration failed "
@@ -679,25 +671,22 @@ void Engine::InitializeRenderProfileCapture() noexcept {
             return;
         }
 
-        auto capture =
-            MakeUnique<Render::RenderProfileCapture>(
-                gpu_frame.handle, gpu_scope.handle
-            );
-        if (!capture->Valid()) {
+        const Render::RenderProfileSessionStartResult start_result =
+            m_render_profile_capture->StartSession(gpu_frame.handle, gpu_scope.handle);
+        if (start_result != Render::RenderProfileSessionStartResult::Started) {
             LOG_WARNING(
                 "[ProfileDump] GPU capture bridge rejected the current "
-                "schema generation; GPU capture disabled."
+                "schema generation (result={}); GPU capture disabled.",
+                static_cast<unsigned int>(start_result)
             );
             return;
         }
-        m_render_profile_capture = std::move(capture);
         LOG_INFO(
             "[ProfileDump] GPU capture bridge initialized "
             "(generation={}).",
             gpu_frame.handle.generation
         );
     } catch (const std::exception& error) {
-        m_render_profile_capture.reset();
         try {
             LOG_WARNING(
                 "[ProfileDump] GPU capture bridge initialization failed: "
@@ -707,23 +696,21 @@ void Engine::InitializeRenderProfileCapture() noexcept {
         } catch (...) {
         }
     } catch (...) {
-        m_render_profile_capture.reset();
         try {
-            LOG_WARNING(
-                "[ProfileDump] GPU capture bridge initialization failed; "
-                "CPU capture remains enabled."
-            );
+            LOG_WARNING("[ProfileDump] GPU capture bridge initialization failed; "
+                        "CPU capture remains enabled.");
         } catch (...) {
         }
     }
 }
 
-void Engine::ShutdownRenderProfileCapture(
-    bool _rhi_drained
-) noexcept {
-    UniquePtr<Render::RenderProfileCapture> capture =
-        std::move(m_render_profile_capture);
-    if (!capture) {
+void Engine::ShutdownRenderProfileCapture(bool _rhi_drained) noexcept {
+    Render::RenderProfileCapture* capture = m_render_profile_capture.get();
+    if (capture == nullptr) {
+        return;
+    }
+    const Render::RenderProfileCaptureStats before_shutdown = capture->GetStats();
+    if (before_shutdown.generation == 0) {
         return;
     }
 
@@ -732,15 +719,11 @@ void Engine::ShutdownRenderProfileCapture(
     } else {
         capture->Abort();
     }
-    const Render::RenderProfileCaptureStats stats =
-        capture->GetStats();
+    const Render::RenderProfileCaptureStats stats = capture->GetStats();
 
     try {
-        if (!_rhi_drained ||
-            stats.shutdown_abandoned_frames != 0 ||
-            stats.terminal_faults != 0 ||
-            stats.frames_admission_rejected != 0 ||
-            stats.frame_records_dropped != 0 ||
+        if (!_rhi_drained || stats.shutdown_abandoned_frames != 0 || stats.terminal_faults != 0 ||
+            stats.frames_admission_rejected != 0 || stats.frame_records_dropped != 0 ||
             stats.scope_records_dropped != 0) {
             LOG_WARNING(
                 "[ProfileDump] GPU capture bridge stopped "
@@ -771,19 +754,22 @@ void Engine::ShutdownRenderProfileCapture(
 }
 
 void Engine::ShutdownProfileDump() noexcept {
-    // Defensive rollback path. Normal shutdown has already drained and reset
-    // the bridge after RHI Completion joined.
-    ShutdownRenderProfileCapture(false);
+    // Defensive rollback path. Normal shutdown has already drained and closed
+    // the facade's current session after RHI Completion joined.
+    if (m_render_profile_capture) {
+        const Render::RenderProfileCaptureStats bridge_stats = m_render_profile_capture->GetStats();
+        if (bridge_stats.generation != 0 && !bridge_stats.closed) {
+            ShutdownRenderProfileCapture(false);
+        }
+    }
     if (!m_profile_dump_owned) {
         return;
     }
     m_profile_dump_owned = false;
 
     ProfileDump::CpuScopeProducer::Deactivate();
-    const ProfileDump::FlushResult flush_result =
-        ProfileDump::FlushThreadLocal();
-    const ProfileDump::ShutdownResult shutdown_result =
-        ProfileDump::Shutdown();
+    const ProfileDump::FlushResult    flush_result    = ProfileDump::FlushThreadLocal();
+    const ProfileDump::ShutdownResult shutdown_result = ProfileDump::Shutdown();
 
     if (shutdown_result == ProfileDump::ShutdownResult::Faulted) {
         const ProfileDump::RuntimeStats stats = ProfileDump::GetRuntimeStats();
@@ -894,6 +880,19 @@ void Engine::Init(
         );
     }
 
+    try {
+        // Renderers retain this facade pointer for their whole lifetime.
+        // Individual ProfileDump generations bind and unbind session state
+        // inside the facade; the pointer itself never changes.
+        m_render_profile_capture = MakeUnique<Render::RenderProfileCapture>();
+    } catch (...) {
+        m_render_profile_capture.reset();
+        try {
+            LOG_WARNING("[ProfileDump] Failed to allocate the stable GPU capture "
+                        "facade; GPU capture will remain disabled.");
+        } catch (...) {
+        }
+    }
     InitializeProfileDump();
 
     // Init TaskSystem
