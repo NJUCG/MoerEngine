@@ -24,8 +24,33 @@ enum class EmitDisposition : std::uint8_t {
 };
 
 #if defined(MOER_RENDER_PROFILE_CAPTURE_TEST_HOOKS)
+enum class InjectedStartValidationException : std::uint8_t {
+    None = 0,
+    BadAlloc,
+    Other,
+};
+
+struct StartValidationExceptionForTesting final {};
+
+std::atomic<InjectedStartValidationException> g_start_validation_exception{
+    InjectedStartValidationException::None
+};
 std::atomic<std::atomic_uint32_t*> g_start_publish_pause_entered{nullptr};
 std::atomic<std::atomic_bool*>     g_start_publish_pause_release{nullptr};
+
+void ThrowInjectedStartValidationExceptionForTesting() {
+    switch (g_start_validation_exception.exchange(
+        InjectedStartValidationException::None,
+        std::memory_order_acq_rel
+    )) {
+        case InjectedStartValidationException::BadAlloc:
+            throw std::bad_alloc{};
+        case InjectedStartValidationException::Other:
+            throw StartValidationExceptionForTesting{};
+        case InjectedStartValidationException::None:
+            return;
+    }
+}
 
 void PauseBeforeStartPublishForTesting() noexcept {
     std::atomic_uint32_t* entered =
@@ -51,24 +76,44 @@ RenderProfileSessionStartResult ValidateSessionStart(
     ProfileDump::SchemaHandle _gpu_frame_schema,
     ProfileDump::SchemaHandle _gpu_scope_schema
 ) noexcept {
-    if (!_gpu_frame_schema || !_gpu_scope_schema ||
-        _gpu_frame_schema.hash != ProfileDump::ComputeSchemaHash(ProfileDump::Templates::GpuFrame()) ||
-        _gpu_scope_schema.hash != ProfileDump::ComputeSchemaHash(ProfileDump::Templates::GpuScope())) {
-        return RenderProfileSessionStartResult::InvalidSchema;
-    }
+    try {
+#if defined(MOER_RENDER_PROFILE_CAPTURE_TEST_HOOKS)
+        ThrowInjectedStartValidationExceptionForTesting();
+#endif
+        // GpuFrame()/GpuScope() use function-local static descriptors whose
+        // first construction allocates strings and field arrays. Keep that
+        // lazy initialization inside this noexcept translation boundary.
+        const std::uint64_t expected_frame_hash =
+            ProfileDump::ComputeSchemaHash(ProfileDump::Templates::GpuFrame());
+        const std::uint64_t expected_scope_hash =
+            ProfileDump::ComputeSchemaHash(ProfileDump::Templates::GpuScope());
+        if (!_gpu_frame_schema || !_gpu_scope_schema ||
+            _gpu_frame_schema.hash != expected_frame_hash ||
+            _gpu_scope_schema.hash != expected_scope_hash) {
+            return RenderProfileSessionStartResult::InvalidSchema;
+        }
 
-    const std::uint64_t             generation_before = ProfileDump::GetRuntimeGeneration();
-    const ProfileDump::RuntimeState runtime_state     = ProfileDump::GetRuntimeState();
-    const std::uint64_t             generation_after  = ProfileDump::GetRuntimeGeneration();
-    if (runtime_state != ProfileDump::RuntimeState::Running || generation_before == 0 ||
-        generation_before != generation_after) {
-        return RenderProfileSessionStartResult::RuntimeUnavailable;
+        const std::uint64_t generation_before =
+            ProfileDump::GetRuntimeGeneration();
+        const ProfileDump::RuntimeState runtime_state =
+            ProfileDump::GetRuntimeState();
+        const std::uint64_t generation_after =
+            ProfileDump::GetRuntimeGeneration();
+        if (runtime_state != ProfileDump::RuntimeState::Running ||
+            generation_before == 0 ||
+            generation_before != generation_after) {
+            return RenderProfileSessionStartResult::RuntimeUnavailable;
+        }
+        if (_gpu_frame_schema.generation != generation_after ||
+            _gpu_scope_schema.generation != generation_after) {
+            return RenderProfileSessionStartResult::StaleGeneration;
+        }
+        return RenderProfileSessionStartResult::Started;
+    } catch (const std::bad_alloc&) {
+        return RenderProfileSessionStartResult::ResourceExhausted;
+    } catch (...) {
+        return RenderProfileSessionStartResult::InvalidConfiguration;
     }
-    if (_gpu_frame_schema.generation != generation_after ||
-        _gpu_scope_schema.generation != generation_after) {
-        return RenderProfileSessionStartResult::StaleGeneration;
-    }
-    return RenderProfileSessionStartResult::Started;
 }
 
 } // namespace
@@ -843,6 +888,27 @@ RenderProfileCaptureStats RenderProfileCapture::GetStats() const noexcept {
 
 #if defined(MOER_RENDER_PROFILE_CAPTURE_TEST_HOOKS)
 namespace RenderProfileTesting {
+
+void InjectNextStartValidationBadAlloc() noexcept {
+    g_start_validation_exception.store(
+        InjectedStartValidationException::BadAlloc,
+        std::memory_order_release
+    );
+}
+
+void InjectNextStartValidationException() noexcept {
+    g_start_validation_exception.store(
+        InjectedStartValidationException::Other,
+        std::memory_order_release
+    );
+}
+
+void ClearStartValidationException() noexcept {
+    g_start_validation_exception.store(
+        InjectedStartValidationException::None,
+        std::memory_order_release
+    );
+}
 
 void InstallStartPublishPause(std::atomic_uint32_t& _entered_count, std::atomic_bool& _release) noexcept {
     g_start_publish_pause_release.store(&_release, std::memory_order_release);

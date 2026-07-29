@@ -955,19 +955,21 @@ public:
                 const Range range(
                     handle.mip_level, handle.num_mips, handle.array_layer, handle.num_array
                 );
-                const int64 prior_write_layer =
-                    range_handle->GetMaxWriteLayer(range);
+                const int64 prior_access_layer = std::max(
+                    range_handle->GetMaxReadLayer(range),
+                    range_handle->GetMaxWriteLayer(range)
+                );
                 assert(
-                    prior_write_layer < 0 &&
+                    prior_access_layer < 0 &&
                     std::format(
-                        "Import Texture {} should precede its first resource write",
+                        "Import Texture {} should precede its first resource access",
                         handle.GetTexture()->GetName()
                     )
                         .c_str()
                 );
                 layer = std::max(
                     layer,
-                    GetLayerWithOffset(prior_write_layer + 1)
+                    GetLayerWithOffset(prior_access_layer + 1)
                 );
             }
 
@@ -976,19 +978,21 @@ public:
                     GetHandle(uint64(handle.GetBuffer()), ResourceType::Texture_Buffer)
                 );
                 const Range range(handle.GetByteOffset(), handle.GetByteSize());
-                const int64 prior_write_layer =
-                    range_handle->GetMaxWriteLayer(range);
+                const int64 prior_access_layer = std::max(
+                    range_handle->GetMaxReadLayer(range),
+                    range_handle->GetMaxWriteLayer(range)
+                );
                 assert(
-                    prior_write_layer < 0 &&
+                    prior_access_layer < 0 &&
                     std::format(
-                        "Import Buffer {} should precede its first resource write",
+                        "Import Buffer {} should precede its first resource access",
                         handle.GetBuffer()->GetName()
                     )
                         .c_str()
                 );
                 layer = std::max(
                     layer,
-                    GetLayerWithOffset(prior_write_layer + 1)
+                    GetLayerWithOffset(prior_access_layer + 1)
                 );
             }
 

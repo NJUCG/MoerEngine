@@ -348,6 +348,104 @@ void ResourceImportsMayFollowNonResourceOrderingBoundaries() {
     );
 }
 
+void ResourceImportsDetectPriorTextureAndBufferReads() {
+    TCachedArgArray cached_args;
+    CmdReorderer   reorderer(MakeFunctionTable(), cached_args);
+
+    ScopeCmd root_scope(
+        "Profiled Prior Read",
+        true,
+        false,
+        GpuMarkerPalette::Renderer(),
+        EQueueType::Graphics
+    );
+    CommandList query_source(EQueueType::Graphics);
+    QueryToken  timestamp =
+        query_source.BeginTimestampQuery("Profiled Prior Read");
+    query_source.EndTimestampQuery(timestamp);
+    CmdSubmit query_submit = query_source.Submit();
+    Expect(
+        query_submit.cmds.size() == 2 &&
+            query_submit.cmds.front()->Type() == Command::EType::Query,
+        "prior-read timestamp source did not emit its query pair"
+    );
+
+    TestTexture texture;
+    TestBuffer  buffer(
+        16,
+        4,
+        EBufferUsageFlags::UNORDERED_ACCESS |
+            EBufferUsageFlags::TRANSFER_DST
+    );
+    auto* texture_handle = static_cast<CmdReorderer::RangeHandle*>(
+        reorderer.GetHandle(
+            uint64(&texture),
+            CmdReorderer::ResourceType::Texture_Buffer
+        )
+    );
+    auto* buffer_handle = static_cast<CmdReorderer::RangeHandle*>(
+        reorderer.GetHandle(
+            uint64(&buffer),
+            CmdReorderer::ResourceType::Texture_Buffer
+        )
+    );
+    const CmdReorderer::Range texture_range(0, 1, 0, 1);
+    const CmdReorderer::Range buffer_range(0, buffer.GetByteSize());
+
+    reorderer.AcceptCmd(&root_scope);
+    reorderer.AcceptCmd(query_submit.cmds.front().get());
+    Expect(
+        reorderer.SetRead(texture_handle, texture_range) == 2,
+        "texture prior read did not follow the profiling prefix"
+    );
+    Expect(
+        reorderer.SetRead(buffer_handle, buffer_range) == 2,
+        "buffer prior read did not follow the profiling prefix"
+    );
+    Expect(
+        texture_handle->GetMaxReadLayer(texture_range) == 2 &&
+            texture_handle->GetMaxWriteLayer(texture_range) < 0,
+        "texture prior read was not distinguishable from a fresh import range"
+    );
+    Expect(
+        buffer_handle->GetMaxReadLayer(buffer_range) == 2 &&
+            buffer_handle->GetMaxWriteLayer(buffer_range) < 0,
+        "buffer prior read was not distinguishable from a fresh import range"
+    );
+
+#if defined(NDEBUG)
+    // Debug deliberately rejects this invalid ownership order with an
+    // assertion. Release keeps a fail-safe dependency so the transfer can
+    // never move before the already-recorded resource reads.
+    QueueTransferCmd import(
+        EQueueType::Copy,
+        Array<ImportTexture>{
+            ImportTexture(texture.GetView(), ETextureState::SAMPLE)
+        },
+        Array<ImportBuffer>{
+            ImportBuffer(buffer.GetView(), EBufferState::UNORDERED_ACCESS)
+        }
+    );
+    reorderer.AcceptCmd(&import);
+    Expect(
+        FindCommandLayer(reorderer, &import) == 3,
+        "release import fallback did not wait for prior texture and buffer reads"
+    );
+    Expect(
+        reorderer.SetRead(texture_handle, texture_range) == 4,
+        "texture use did not wait for the release import fallback"
+    );
+    Expect(
+        reorderer.SetRead(buffer_handle, buffer_range) == 4,
+        "buffer use did not wait for the release import fallback"
+    );
+#endif
+
+    QueryBackendAccess::ResolveErrorIfPending(
+        timestamp, "reorderer prior-read test cleanup"
+    );
+}
+
 void CommandResourcePreprocessingIsTaskGraphIndependent() {
     std::exception_ptr worker_error;
     std::jthread worker([&] {
@@ -491,6 +589,7 @@ int main() {
         WriteBarrierWaitsForPriorRead();
         ScopeCommandsOwnExclusiveLayers();
         ResourceImportsMayFollowNonResourceOrderingBoundaries();
+        ResourceImportsDetectPriorTextureAndBufferReads();
         CommandResourcePreprocessingIsTaskGraphIndependent();
         std::cout << "RHI command reorderer tests passed\n";
         return 0;

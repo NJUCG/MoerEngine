@@ -179,6 +179,13 @@ private:
 
 #if defined(MOER_RENDER_PROFILE_CAPTURE_TEST_HOOKS)
 namespace RenderProfileTesting {
+// Deterministic seams for exceptions that can escape first-use construction
+// of the lazy ProfileDump schema descriptors. Production builds do not
+// declare or compile these injectors.
+RENDER_API void InjectNextStartValidationBadAlloc() noexcept;
+RENDER_API void InjectNextStartValidationException() noexcept;
+RENDER_API void ClearStartValidationException() noexcept;
+
 RENDER_API void
 InstallStartPublishPause(std::atomic_uint32_t& _entered_count, std::atomic_bool& _release) noexcept;
 RENDER_API void ClearStartPublishPause() noexcept;

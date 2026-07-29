@@ -404,6 +404,48 @@ void LegacyConstructorRejectsInvalidStreamConfiguration() {
     FinishRuntime(output);
 }
 
+void StartValidationExceptionsReturnStableResults() {
+    ScopedOutput output("moer-render-profile-start-validation-exception");
+    StartRuntime(output);
+    const RegisteredGpuSchemas schemas = RegisterGpuSchemas();
+    RenderProfileCapture       capture;
+
+    RenderProfileTesting::InjectNextStartValidationBadAlloc();
+    Expect(
+        capture.StartSession(schemas.frame, schemas.scope) ==
+            RenderProfileSessionStartResult::ResourceExhausted,
+        "schema descriptor allocation failure escaped the noexcept start boundary"
+    );
+    Expect(
+        !capture.Valid() && capture.GetStats().generation == 0,
+        "schema descriptor allocation failure published session state"
+    );
+
+    RenderProfileTesting::InjectNextStartValidationException();
+    Expect(
+        capture.StartSession(schemas.frame, schemas.scope) ==
+            RenderProfileSessionStartResult::InvalidConfiguration,
+        "schema descriptor exception escaped the noexcept start boundary"
+    );
+    Expect(
+        !capture.Valid() && capture.GetStats().generation == 0,
+        "schema descriptor exception published session state"
+    );
+
+    Expect(
+        capture.StartSession(schemas.frame, schemas.scope) ==
+            RenderProfileSessionStartResult::Started,
+        "capture did not recover after translated start-validation exceptions"
+    );
+    Expect(
+        capture.TryFinishSession() ==
+            RenderProfileSessionFinishResult::Closed,
+        "recovered capture session did not close cleanly"
+    );
+    RenderProfileTesting::ClearStartValidationException();
+    FinishRuntime(output);
+}
+
 void FinishSessionOwnsStopAndTokenDestructorSeal() {
     RenderProfileCapture capture;
 
@@ -1839,6 +1881,7 @@ int main() {
     try {
         DefaultSessionFacadeIsInactive();
         LegacyConstructorRejectsInvalidStreamConfiguration();
+        StartValidationExceptionsReturnStableResults();
         FinishSessionOwnsStopAndTokenDestructorSeal();
         SessionGateStopsAdmissionDrainsAndRestartsNextGeneration();
         AbortedPendingQueryCannotPolluteNextRuntimeGeneration();
