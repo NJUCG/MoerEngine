@@ -41,6 +41,20 @@ add_test(
 )
 set_tests_properties(ProfileSummaryCliContract PROPERTIES TIMEOUT 120)
 
+set(test_target TestProfileTimelineIndex)
+add_executable(${test_target} "ProfileTimelineIndexTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE
+        Moer::ProfileConsumer
+        Moer::Core
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(
+    NAME ProfileTimelineIndexContract
+    COMMAND $<TARGET_FILE:${test_target}>
+)
+set_tests_properties(ProfileTimelineIndexContract PROPERTIES TIMEOUT 60)
+
 set(test_target TestProfileScopeProducer)
 add_executable(${test_target} "ProfileScopeProducerTest.cpp")
 target_include_directories(${test_target}
