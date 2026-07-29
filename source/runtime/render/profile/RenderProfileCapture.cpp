@@ -76,6 +76,10 @@ RenderProfileSessionStartResult ValidateSessionStart(
     ProfileDump::SchemaHandle _gpu_frame_schema,
     ProfileDump::SchemaHandle _gpu_scope_schema
 ) noexcept {
+    if (!_gpu_frame_schema || !_gpu_scope_schema) {
+        return RenderProfileSessionStartResult::InvalidSchema;
+    }
+
     try {
 #if defined(MOER_RENDER_PROFILE_CAPTURE_TEST_HOOKS)
         ThrowInjectedStartValidationExceptionForTesting();
@@ -87,8 +91,7 @@ RenderProfileSessionStartResult ValidateSessionStart(
             ProfileDump::ComputeSchemaHash(ProfileDump::Templates::GpuFrame());
         const std::uint64_t expected_scope_hash =
             ProfileDump::ComputeSchemaHash(ProfileDump::Templates::GpuScope());
-        if (!_gpu_frame_schema || !_gpu_scope_schema ||
-            _gpu_frame_schema.hash != expected_frame_hash ||
+        if (_gpu_frame_schema.hash != expected_frame_hash ||
             _gpu_scope_schema.hash != expected_scope_hash) {
             return RenderProfileSessionStartResult::InvalidSchema;
         }

@@ -412,6 +412,14 @@ void StartValidationExceptionsReturnStableResults() {
 
     RenderProfileTesting::InjectNextStartValidationBadAlloc();
     Expect(
+        capture.StartSession({}, {}) ==
+            RenderProfileSessionStartResult::InvalidSchema,
+        "invalid handles did not retain precedence over lazy schema initialization"
+    );
+    RenderProfileTesting::ClearStartValidationException();
+
+    RenderProfileTesting::InjectNextStartValidationBadAlloc();
+    Expect(
         capture.StartSession(schemas.frame, schemas.scope) ==
             RenderProfileSessionStartResult::ResourceExhausted,
         "schema descriptor allocation failure escaped the noexcept start boundary"

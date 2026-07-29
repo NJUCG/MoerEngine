@@ -27,7 +27,8 @@ public:
 
 class TestTexture final : public Texture {
 public:
-    TestTexture() : Texture(MakeInfo()) {}
+    explicit TestTexture(uint16_t _array_size = 1, uint8_t _num_mips = 1) :
+        Texture(MakeInfo(_array_size, _num_mips)) {}
 
     uint GetMipByteSize(uint) const override {
         return 4;
@@ -36,14 +37,14 @@ public:
     void SetName(const std::string_view) override {}
 
 private:
-    static TextureInfo MakeInfo() {
+    static TextureInfo MakeInfo(uint16_t _array_size, uint8_t _num_mips) {
         TextureInfo info{};
         info.usage =
             ETextureUsageFlags::SAMPLED |
             ETextureUsageFlags::TRANSFER_DST;
         info.extent       = {4, 4};
-        info.num_mips     = 1;
-        info.array_size   = 1;
+        info.num_mips     = _num_mips;
+        info.array_size   = _array_size;
         info.aspect_flags = ETextureAspectFlags::COLOR;
         return info;
     }
@@ -68,6 +69,38 @@ bool FalseBindlessMembership(uint64, uint64) {
     return false;
 }
 
+uint64 aliased_texture_resource = 0;
+uint64 aliased_buffer_resource  = 0;
+uint64 aliasing_bindless_handle = 0;
+
+bool SelectedBindlessMembership(uint64 _resource, uint64 _bindless_handle) {
+    return _bindless_handle == aliasing_bindless_handle &&
+           (_resource == aliased_texture_resource ||
+            _resource == aliased_buffer_resource);
+}
+
+class ScopedBindlessMembership final {
+public:
+    ScopedBindlessMembership(
+        uint64 _texture_resource,
+        uint64 _buffer_resource,
+        uint64 _bindless_handle
+    ) {
+        aliased_texture_resource = _texture_resource;
+        aliased_buffer_resource  = _buffer_resource;
+        aliasing_bindless_handle = _bindless_handle;
+    }
+
+    ~ScopedBindlessMembership() {
+        aliased_texture_resource = 0;
+        aliased_buffer_resource  = 0;
+        aliasing_bindless_handle = 0;
+    }
+
+    ScopedBindlessMembership(const ScopedBindlessMembership&) = delete;
+    ScopedBindlessMembership& operator=(const ScopedBindlessMembership&) = delete;
+};
+
 void NoopBindlessLock(uint64) {}
 
 FunctionTable MakeFunctionTable() {
@@ -79,6 +112,12 @@ FunctionTable MakeFunctionTable() {
         .lock_bdls_array         = &NoopBindlessLock,
         .unlock_bdls_array       = &NoopBindlessLock,
     };
+}
+
+FunctionTable MakeAliasingFunctionTable() {
+    FunctionTable functions           = MakeFunctionTable();
+    functions.is_resource_in_bindless = &SelectedBindlessMembership;
+    return functions;
 }
 
 template<typename FirstAccess, typename SecondAccess>
@@ -412,6 +451,20 @@ void ResourceImportsDetectPriorTextureAndBufferReads() {
             buffer_handle->GetMaxWriteLayer(buffer_range) < 0,
         "buffer prior read was not distinguishable from a fresh import range"
     );
+    const CmdReorderer::PriorResourceAccess texture_prior =
+        reorderer.GetPriorResourceAccess(texture_handle, texture_range);
+    const CmdReorderer::PriorResourceAccess buffer_prior =
+        reorderer.GetPriorResourceAccess(buffer_handle, buffer_range);
+    Expect(
+        texture_prior.direct_exact_layer == 2 &&
+            texture_prior.conservative_layer == 2,
+        "texture prior read was missing from the exact import history"
+    );
+    Expect(
+        buffer_prior.direct_exact_layer == 2 &&
+            buffer_prior.conservative_layer == 2,
+        "buffer prior read was missing from the exact import history"
+    );
 
 #if defined(NDEBUG)
     // Debug deliberately rejects this invalid ownership order with an
@@ -443,6 +496,618 @@ void ResourceImportsDetectPriorTextureAndBufferReads() {
 
     QueryBackendAccess::ResolveErrorIfPending(
         timestamp, "reorderer prior-read test cleanup"
+    );
+}
+
+void ResourceImportsDetectPriorTextureAndBufferWrites() {
+    TCachedArgArray cached_args;
+    CmdReorderer   reorderer(MakeFunctionTable(), cached_args);
+
+    TestTexture texture;
+    TestBuffer  buffer(
+        16,
+        4,
+        EBufferUsageFlags::UNORDERED_ACCESS |
+            EBufferUsageFlags::TRANSFER_DST
+    );
+    auto* texture_handle = static_cast<CmdReorderer::RangeHandle*>(
+        reorderer.GetHandle(
+            uint64(&texture),
+            CmdReorderer::ResourceType::Texture_Buffer
+        )
+    );
+    auto* buffer_handle = static_cast<CmdReorderer::RangeHandle*>(
+        reorderer.GetHandle(
+            uint64(&buffer),
+            CmdReorderer::ResourceType::Texture_Buffer
+        )
+    );
+    const CmdReorderer::Range texture_range(0, 1, 0, 1);
+    const CmdReorderer::Range buffer_range(0, buffer.GetByteSize());
+
+    Expect(
+        reorderer.SetWrite(texture_handle, texture_range) == 0,
+        "texture prior write did not enter the first resource layer"
+    );
+    Expect(
+        reorderer.SetWrite(buffer_handle, buffer_range) == 0,
+        "buffer prior write did not enter the first resource layer"
+    );
+    const CmdReorderer::PriorResourceAccess texture_prior =
+        reorderer.GetPriorResourceAccess(texture_handle, texture_range);
+    const CmdReorderer::PriorResourceAccess buffer_prior =
+        reorderer.GetPriorResourceAccess(buffer_handle, buffer_range);
+    Expect(
+        texture_prior.direct_exact_layer == 0 &&
+            texture_prior.conservative_layer == 0,
+        "texture prior write was missing from the exact import history"
+    );
+    Expect(
+        buffer_prior.direct_exact_layer == 0 &&
+            buffer_prior.conservative_layer == 0,
+        "buffer prior write was missing from the exact import history"
+    );
+
+#if defined(NDEBUG)
+    QueueTransferCmd import(
+        EQueueType::Copy,
+        Array<ImportTexture>{
+            ImportTexture(texture.GetView(), ETextureState::SAMPLE)
+        },
+        Array<ImportBuffer>{
+            ImportBuffer(buffer.GetView(), EBufferState::UNORDERED_ACCESS)
+        }
+    );
+    reorderer.AcceptCmd(&import);
+    Expect(
+        FindCommandLayer(reorderer, &import) == 1,
+        "release import fallback did not wait for prior writes"
+    );
+    Expect(
+        reorderer.SetRead(texture_handle, texture_range) == 2,
+        "texture use did not wait for the prior-write import fallback"
+    );
+    Expect(
+        reorderer.SetRead(buffer_handle, buffer_range) == 2,
+        "buffer use did not wait for the prior-write import fallback"
+    );
+#endif
+}
+
+void VerifyOpaqueBindlessImportWait(
+    bool   _current_membership,
+    uint64 _bindless_handle
+) {
+    TCachedArgArray cached_args;
+    TestTexture texture;
+    TestBuffer  buffer(
+        16,
+        4,
+        EBufferUsageFlags::UNORDERED_ACCESS |
+            EBufferUsageFlags::TRANSFER_DST
+    );
+    ScopedBindlessMembership membership(
+        _current_membership ? uint64(&texture) : 0,
+        _current_membership ? uint64(&buffer) : 0,
+        _current_membership ? _bindless_handle : 0
+    );
+    CmdReorderer reorderer(MakeAliasingFunctionTable(), cached_args);
+    ScopeCmd root_scope(
+        "Opaque Bindless Prior Access",
+        true,
+        false,
+        GpuMarkerPalette::Renderer(),
+        EQueueType::Graphics
+    );
+    reorderer.AcceptCmd(&root_scope);
+
+    auto* texture_handle = static_cast<CmdReorderer::RangeHandle*>(
+        reorderer.GetHandle(
+            uint64(&texture),
+            CmdReorderer::ResourceType::Texture_Buffer
+        )
+    );
+    auto* buffer_handle = static_cast<CmdReorderer::RangeHandle*>(
+        reorderer.GetHandle(
+            uint64(&buffer),
+            CmdReorderer::ResourceType::Texture_Buffer
+        )
+    );
+    const CmdReorderer::Range texture_range(0, 1, 0, 1);
+    const CmdReorderer::Range buffer_range(0, buffer.GetByteSize());
+
+    UnorderedSet<uint64> no_current_writes;
+    reorderer.VisitBindlessArg(_bindless_handle, no_current_writes);
+    const int64 bindless_layer = reorderer.m_dispatch_layer;
+    reorderer.RecordArgReads(bindless_layer);
+    reorderer.m_max_bdls_layer =
+        std::max(reorderer.m_max_bdls_layer, bindless_layer);
+    Expect(
+        bindless_layer == 1,
+        "bindless access did not follow the profiling prefix"
+    );
+    Expect(
+        texture_handle->GetMaxExactAccess(texture_range).layer < 0 &&
+            buffer_handle->GetMaxExactAccess(buffer_range).layer < 0 &&
+            texture_handle->GetExactAccessCount() == 0 &&
+            buffer_handle->GetExactAccessCount() == 0,
+        "bindless alias test unexpectedly created a direct resource access"
+    );
+    const CmdReorderer::PriorResourceAccess texture_prior =
+        reorderer.GetPriorResourceAccess(texture_handle, texture_range);
+    const CmdReorderer::PriorResourceAccess buffer_prior =
+        reorderer.GetPriorResourceAccess(buffer_handle, buffer_range);
+    Expect(
+        texture_prior.direct_exact_layer < 0 &&
+            texture_prior.conservative_layer == bindless_layer,
+        "texture import did not conservatively wait for opaque bindless access"
+    );
+    Expect(
+        buffer_prior.direct_exact_layer < 0 &&
+            buffer_prior.conservative_layer == bindless_layer,
+        "buffer import did not conservatively wait for opaque bindless access"
+    );
+
+    QueueTransferCmd import(
+        EQueueType::Copy,
+        Array<ImportTexture>{
+            ImportTexture(texture.GetView(), ETextureState::SAMPLE)
+        },
+        Array<ImportBuffer>{
+            ImportBuffer(buffer.GetView(), EBufferState::UNORDERED_ACCESS)
+        }
+    );
+    reorderer.AcceptCmd(&import);
+    Expect(
+        FindCommandLayer(reorderer, &import) == bindless_layer + 1,
+        "import moved before an opaque bindless access"
+    );
+    Expect(
+        reorderer.SetRead(texture_handle, texture_range) ==
+            bindless_layer + 2,
+        "texture use did not wait for the bindless import fallback"
+    );
+    Expect(
+        reorderer.SetRead(buffer_handle, buffer_range) ==
+            bindless_layer + 2,
+        "buffer use did not wait for the conservative bindless import"
+    );
+
+}
+
+void ResourceImportsConservativelyWaitForOpaqueBindlessAccess() {
+    // Current membership cannot describe historical membership. Both values
+    // must therefore produce the same conservative ordering and neither may
+    // turn into a Debug assertion without a direct resource access.
+    VerifyOpaqueBindlessImportWait(true, 0xB1AD1E55);
+    VerifyOpaqueBindlessImportWait(false, 0xB1AD1E56);
+}
+
+void QueueTransferWritesFeedBindlessAliasOrderingWithoutExactPollution() {
+    TCachedArgArray cached_args;
+    TestTexture texture;
+    TestBuffer  buffer(
+        16,
+        4,
+        EBufferUsageFlags::UNORDERED_ACCESS |
+            EBufferUsageFlags::TRANSFER_DST
+    );
+    constexpr uint64 bindless_handle = 0xB1AD1E57;
+    ScopedBindlessMembership membership(
+        uint64(&texture),
+        uint64(&buffer),
+        bindless_handle
+    );
+    CmdReorderer reorderer(MakeAliasingFunctionTable(), cached_args);
+
+    QueueTransferCmd import(
+        EQueueType::Copy,
+        Array<ImportTexture>{
+            ImportTexture(texture.GetView(), ETextureState::SAMPLE)
+        },
+        Array<ImportBuffer>{
+            ImportBuffer(buffer.GetView(), EBufferState::UNORDERED_ACCESS)
+        }
+    );
+    reorderer.AcceptCmd(&import);
+    Expect(
+        reorderer.m_write_resources.contains(uint64(&texture)) &&
+            reorderer.m_write_resources.contains(uint64(&buffer)),
+        "QueueTransfer import did not publish texture and buffer writes for bindless tracking"
+    );
+
+    auto* texture_handle = static_cast<CmdReorderer::RangeHandle*>(
+        reorderer.GetHandle(
+            uint64(&texture),
+            CmdReorderer::ResourceType::Texture_Buffer
+        )
+    );
+    auto* buffer_handle = static_cast<CmdReorderer::RangeHandle*>(
+        reorderer.GetHandle(
+            uint64(&buffer),
+            CmdReorderer::ResourceType::Texture_Buffer
+        )
+    );
+    const CmdReorderer::Range texture_range(0, 1, 0, 1);
+    const CmdReorderer::Range buffer_range(0, buffer.GetByteSize());
+    Expect(
+        texture_handle->GetExactAccessCount() == 1 &&
+            buffer_handle->GetExactAccessCount() == 1,
+        "QueueTransfer import did not create its exact write provenance"
+    );
+
+    reorderer.m_dispatch_layer = -1;
+    reorderer.m_arg_read_resources.clear();
+    reorderer.m_arg_write_resources.clear();
+    reorderer.temp_writed_resources.clear();
+    reorderer.VisitBindlessArg(
+        bindless_handle,
+        reorderer.temp_writed_resources
+    );
+    Expect(
+        reorderer.m_dispatch_layer == 1,
+        "bindless alias read did not wait for QueueTransfer import"
+    );
+    reorderer.RecordArgReads(reorderer.m_dispatch_layer);
+    reorderer.m_max_bdls_layer = std::max(
+        reorderer.m_max_bdls_layer,
+        reorderer.m_dispatch_layer
+    );
+
+    Expect(
+        texture_handle->GetMaxReadLayer(texture_range) == 1 &&
+            buffer_handle->GetMaxReadLayer(buffer_range) == 1,
+        "bindless membership read did not reach the conservative resource map"
+    );
+    Expect(
+        texture_handle->GetMaxExactAccess(texture_range).layer == 0 &&
+            buffer_handle->GetMaxExactAccess(buffer_range).layer == 0 &&
+            texture_handle->GetExactAccessCount() == 1 &&
+            buffer_handle->GetExactAccessCount() == 1,
+        "frontend bindless membership polluted exact import provenance"
+    );
+}
+
+void ExactImportHistoryIsBoundedAndMergesDuplicateRanges() {
+    TCachedArgArray cached_args;
+    CmdReorderer   reorderer(MakeFunctionTable(), cached_args);
+
+    TestBuffer buffer(
+        300,
+        4,
+        EBufferUsageFlags::UNORDERED_ACCESS |
+            EBufferUsageFlags::TRANSFER_DST
+    );
+    TestTexture texture(132);
+    auto* buffer_handle = static_cast<CmdReorderer::RangeHandle*>(
+        reorderer.GetHandle(
+            uint64(&buffer),
+            CmdReorderer::ResourceType::Texture_Buffer
+        )
+    );
+    auto* texture_handle = static_cast<CmdReorderer::RangeHandle*>(
+        reorderer.GetHandle(
+            uint64(&texture),
+            CmdReorderer::ResourceType::Texture_Buffer
+        )
+    );
+    const CmdReorderer::Range repeated_buffer_range(0, 4);
+    const CmdReorderer::Range repeated_texture_range(0, 1, 0, 1);
+    for (uint repeat = 0; repeat < 128; ++repeat) {
+        reorderer.RecordRead(buffer_handle, repeated_buffer_range, 0);
+        reorderer.RecordRead(texture_handle, repeated_texture_range, 0);
+    }
+    Expect(
+        buffer_handle->GetExactAccessCount() == 1 &&
+            texture_handle->GetExactAccessCount() == 1,
+        "repeated exact ranges allocated duplicate history entries"
+    );
+
+    for (int64 index = 1; index < 64; ++index) {
+        reorderer.RecordRead(
+            buffer_handle,
+            CmdReorderer::Range(index * 8, 4),
+            0
+        );
+        reorderer.RecordRead(
+            texture_handle,
+            CmdReorderer::Range(0, 1, index * 2, 1),
+            0
+        );
+    }
+    Expect(
+        buffer_handle->GetExactAccessCount() == 64 &&
+            texture_handle->GetExactAccessCount() == 64 &&
+            buffer_handle->GetMaxExactAccess(repeated_buffer_range).complete &&
+            texture_handle->GetMaxExactAccess(repeated_texture_range).complete,
+        "exact history became incomplete before reaching 64 unique ranges"
+    );
+
+    const CmdReorderer::Range overflow_buffer_range(64 * 8, 4);
+    const CmdReorderer::Range overflow_texture_range(0, 1, 64 * 2, 1);
+    reorderer.RecordRead(buffer_handle, overflow_buffer_range, 0);
+    reorderer.RecordRead(texture_handle, overflow_texture_range, 0);
+    reorderer.RecordRead(
+        buffer_handle,
+        CmdReorderer::Range(65 * 8, 4),
+        0
+    );
+    reorderer.RecordRead(
+        texture_handle,
+        CmdReorderer::Range(0, 1, 65 * 2, 1),
+        0
+    );
+    reorderer.RecordRead(buffer_handle, repeated_buffer_range, 7);
+    reorderer.RecordRead(texture_handle, repeated_texture_range, 7);
+
+    const CmdReorderer::RangeHandle::ExactAccessQuery buffer_overflow =
+        buffer_handle->GetMaxExactAccess(overflow_buffer_range);
+    const CmdReorderer::RangeHandle::ExactAccessQuery texture_overflow =
+        texture_handle->GetMaxExactAccess(overflow_texture_range);
+    Expect(
+        buffer_handle->GetExactAccessCount() == 64 &&
+            texture_handle->GetExactAccessCount() == 64 &&
+            buffer_overflow.layer < 0 && !buffer_overflow.complete &&
+            texture_overflow.layer < 0 && !texture_overflow.complete,
+        "overflowing exact history allocated beyond its 64-range bound"
+    );
+    Expect(
+        buffer_handle->GetMaxExactAccess(repeated_buffer_range).layer == 7 &&
+            texture_handle->GetMaxExactAccess(repeated_texture_range).layer == 7,
+        "incomplete exact history stopped merging a previously known range"
+    );
+
+    const CmdReorderer::PriorResourceAccess buffer_prior =
+        reorderer.GetPriorResourceAccess(buffer_handle, overflow_buffer_range);
+    const CmdReorderer::PriorResourceAccess texture_prior =
+        reorderer.GetPriorResourceAccess(texture_handle, overflow_texture_range);
+    Expect(
+        buffer_prior.direct_exact_layer < 0 &&
+            !buffer_prior.direct_exact_complete &&
+            buffer_prior.conservative_layer == 0,
+        "incomplete buffer history did not fall back to conservative ordering"
+    );
+    Expect(
+        texture_prior.direct_exact_layer < 0 &&
+            !texture_prior.direct_exact_complete &&
+            texture_prior.conservative_layer == 0,
+        "incomplete texture history did not fall back to conservative ordering"
+    );
+
+    QueueTransferCmd import(
+        EQueueType::Copy,
+        Array<ImportTexture>{
+            ImportTexture(
+                texture.GetView().Slice(128, 1),
+                ETextureState::SAMPLE
+            )
+        },
+        Array<ImportBuffer>{
+            ImportBuffer(
+                BufferView(&buffer, 64 * 8, 1, 4),
+                EBufferState::UNORDERED_ACCESS
+            )
+        }
+    );
+    reorderer.AcceptCmd(&import);
+    Expect(
+        FindCommandLayer(reorderer, &import) == 1,
+        "unknown overflow import ignored the bounded-history fallback"
+    );
+    Expect(
+        buffer_handle->GetExactAccessCount() == 64 &&
+            texture_handle->GetExactAccessCount() == 64,
+        "overflow import allocated new exact-history entries"
+    );
+}
+
+void ResourceImportExactHistorySurvivesReadWriteAndTwoDimensionalCompression() {
+    TCachedArgArray cached_args;
+    CmdReorderer   reorderer(MakeFunctionTable(), cached_args);
+
+    TestBuffer read_buffer(
+        64,
+        4,
+        EBufferUsageFlags::UNORDERED_ACCESS |
+            EBufferUsageFlags::TRANSFER_DST
+    );
+    TestBuffer write_buffer(
+        64,
+        4,
+        EBufferUsageFlags::UNORDERED_ACCESS |
+            EBufferUsageFlags::TRANSFER_DST
+    );
+    TestTexture read_texture(34, 2);
+    TestTexture write_texture(34, 2);
+
+    auto* read_buffer_handle = static_cast<CmdReorderer::RangeHandle*>(
+        reorderer.GetHandle(
+            uint64(&read_buffer),
+            CmdReorderer::ResourceType::Texture_Buffer
+        )
+    );
+    auto* write_buffer_handle = static_cast<CmdReorderer::RangeHandle*>(
+        reorderer.GetHandle(
+            uint64(&write_buffer),
+            CmdReorderer::ResourceType::Texture_Buffer
+        )
+    );
+    auto* read_texture_handle = static_cast<CmdReorderer::RangeHandle*>(
+        reorderer.GetHandle(
+            uint64(&read_texture),
+            CmdReorderer::ResourceType::Texture_Buffer
+        )
+    );
+    auto* write_texture_handle = static_cast<CmdReorderer::RangeHandle*>(
+        reorderer.GetHandle(
+            uint64(&write_texture),
+            CmdReorderer::ResourceType::Texture_Buffer
+        )
+    );
+
+    constexpr int64 accessed_range_count = 17;
+    for (int64 index = 0; index < accessed_range_count; ++index) {
+        const CmdReorderer::Range buffer_range(index * 8, 4);
+        const CmdReorderer::Range texture_range(
+            index % 2,
+            1,
+            index * 2 + index % 2,
+            1
+        );
+        Expect(
+            reorderer.SetRead(read_buffer_handle, buffer_range) == 0 &&
+                reorderer.SetRead(read_texture_handle, texture_range) == 0,
+            "disjoint direct reads unexpectedly depended on each other"
+        );
+        Expect(
+            reorderer.SetWrite(write_buffer_handle, buffer_range) == 0 &&
+                reorderer.SetWrite(write_texture_handle, texture_range) == 0,
+            "disjoint direct writes unexpectedly depended on each other"
+        );
+    }
+
+    const CmdReorderer::Range touched_buffer_range(8, 4);
+    const CmdReorderer::Range touched_texture_range(1, 1, 3, 1);
+    const CmdReorderer::Range buffer_gap(4, 4);
+    const CmdReorderer::Range texture_cross_gap(0, 1, 3, 1);
+    Expect(
+        read_buffer_handle->GetMaxReadLayer(buffer_gap) == 0 &&
+            write_buffer_handle->GetMaxWriteLayer(buffer_gap) == 0 &&
+            read_texture_handle->GetMaxReadLayer(texture_cross_gap) == 0 &&
+            write_texture_handle->GetMaxWriteLayer(texture_cross_gap) == 0,
+        "test did not trigger conservative read/write range compression"
+    );
+
+    const auto expect_touched = [&](CmdReorderer::RangeHandle* _handle,
+                                    const CmdReorderer::Range& _range,
+                                    const char* _message) {
+        const auto exact = _handle->GetMaxExactAccess(_range);
+        Expect(
+            exact.layer == 0 && exact.complete &&
+                _handle->GetExactAccessCount() == accessed_range_count,
+            _message
+        );
+    };
+    expect_touched(
+        read_buffer_handle,
+        touched_buffer_range,
+        "compressed buffer read lost a touched exact range"
+    );
+    expect_touched(
+        write_buffer_handle,
+        touched_buffer_range,
+        "compressed buffer write lost a touched exact range"
+    );
+    expect_touched(
+        read_texture_handle,
+        touched_texture_range,
+        "compressed texture read lost a touched exact range"
+    );
+    expect_touched(
+        write_texture_handle,
+        touched_texture_range,
+        "compressed texture write lost a touched exact range"
+    );
+
+    const auto expect_gap = [&](CmdReorderer::RangeHandle* _handle,
+                                const CmdReorderer::Range& _range,
+                                const char* _message) {
+        const auto exact = _handle->GetMaxExactAccess(_range);
+        const auto prior = reorderer.GetPriorResourceAccess(_handle, _range);
+        Expect(
+            exact.layer < 0 && exact.complete &&
+                prior.direct_exact_layer < 0 &&
+                prior.direct_exact_complete &&
+                prior.conservative_layer < 0,
+            _message
+        );
+    };
+    expect_gap(
+        read_buffer_handle,
+        buffer_gap,
+        "exact history falsely marked a compressed buffer-read gap"
+    );
+    expect_gap(
+        write_buffer_handle,
+        buffer_gap,
+        "exact history falsely marked a compressed buffer-write gap"
+    );
+    expect_gap(
+        read_texture_handle,
+        texture_cross_gap,
+        "exact history falsely marked a texture-read mip-array cross-gap"
+    );
+    expect_gap(
+        write_texture_handle,
+        texture_cross_gap,
+        "exact history falsely marked a texture-write mip-array cross-gap"
+    );
+
+#if defined(NDEBUG)
+    QueueTransferCmd touched_import(
+        EQueueType::Copy,
+        Array<ImportTexture>{
+            ImportTexture(
+                read_texture.GetView(1, 1).Slice(3, 1),
+                ETextureState::SAMPLE
+            ),
+            ImportTexture(
+                write_texture.GetView(1, 1).Slice(3, 1),
+                ETextureState::SAMPLE
+            )
+        },
+        Array<ImportBuffer>{
+            ImportBuffer(
+                read_buffer.GetView(8, 4),
+                EBufferState::UNORDERED_ACCESS
+            ),
+            ImportBuffer(
+                write_buffer.GetView(8, 4),
+                EBufferState::UNORDERED_ACCESS
+            )
+        }
+    );
+    reorderer.AcceptCmd(&touched_import);
+    Expect(
+        FindCommandLayer(reorderer, &touched_import) == 1,
+        "NDEBUG touched-range import missed its exact fallback"
+    );
+#endif
+
+    QueueTransferCmd gap_import(
+        EQueueType::Copy,
+        Array<ImportTexture>{
+            ImportTexture(
+                read_texture.GetView(0, 1).Slice(3, 1),
+                ETextureState::SAMPLE
+            ),
+            ImportTexture(
+                write_texture.GetView(0, 1).Slice(3, 1),
+                ETextureState::SAMPLE
+            )
+        },
+        Array<ImportBuffer>{
+            ImportBuffer(
+                read_buffer.GetView(4, 4),
+                EBufferState::UNORDERED_ACCESS
+            ),
+            ImportBuffer(
+                write_buffer.GetView(4, 4),
+                EBufferState::UNORDERED_ACCESS
+            )
+        }
+    );
+    reorderer.AcceptCmd(&gap_import);
+    Expect(
+        FindCommandLayer(reorderer, &gap_import) == 0,
+        "untouched compressed gap import gained a false dependency"
+    );
+    Expect(
+        reorderer.SetRead(read_buffer_handle, buffer_gap) == 1 &&
+            reorderer.SetRead(write_buffer_handle, buffer_gap) == 1 &&
+            reorderer.SetRead(read_texture_handle, texture_cross_gap) == 1 &&
+            reorderer.SetRead(write_texture_handle, texture_cross_gap) == 1,
+        "gap resource use did not wait for its successful import"
     );
 }
 
@@ -590,6 +1255,11 @@ int main() {
         ScopeCommandsOwnExclusiveLayers();
         ResourceImportsMayFollowNonResourceOrderingBoundaries();
         ResourceImportsDetectPriorTextureAndBufferReads();
+        ResourceImportsDetectPriorTextureAndBufferWrites();
+        ResourceImportsConservativelyWaitForOpaqueBindlessAccess();
+        QueueTransferWritesFeedBindlessAliasOrderingWithoutExactPollution();
+        ExactImportHistoryIsBoundedAndMergesDuplicateRanges();
+        ResourceImportExactHistorySurvivesReadWriteAndTwoDimensionalCompression();
         CommandResourcePreprocessingIsTaskGraphIndependent();
         std::cout << "RHI command reorderer tests passed\n";
         return 0;

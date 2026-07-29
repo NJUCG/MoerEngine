@@ -229,14 +229,53 @@ public:
             ArenaAllocatorWrapper<std::pair<const Range, ResourceView>>>;
 
     private:
+        struct ExactAccess {
+            Range        range;
+            int64        layer{-1};
+            ExactAccess* next{nullptr};
+        };
+
+        ArenaAllocator&       exact_access_allocator;
+        ExactAccess*          exact_access_history{nullptr};
+        uint                  exact_access_count{0};
+        bool                  exact_access_complete{true};
         ResourceView          max_view{-1, -1};
         Range                 read_range;
         Range                 write_range;
         Map                   range2view;
         static constexpr uint max_range_size = 16;
+        static constexpr uint max_exact_access_size = 64;
+
+        void RecordExactAccess(const Range& _range, int64 _layer) {
+            for (ExactAccess* access = exact_access_history;
+                 access != nullptr;
+                 access = access->next) {
+                if (access->range == _range) {
+                    access->layer = std::max(access->layer, _layer);
+                    return;
+                }
+            }
+            if (!exact_access_complete) {
+                return;
+            }
+            if (exact_access_count >= max_exact_access_size) {
+                exact_access_complete = false;
+                return;
+            }
+            ExactAccess* access = exact_access_allocator.Malloc<ExactAccess>();
+            new (access) ExactAccess{_range, _layer, exact_access_history};
+            exact_access_history = access;
+            ++exact_access_count;
+        }
 
     public:
+        struct ExactAccessQuery {
+            int64 layer{-1};
+            bool  complete{true};
+        };
+
         RangeHandle(const ArenaAllocatorWrapper<ResourceView>& _alloc) :
+            exact_access_allocator(_alloc.allocator()),
             read_range(
                 std::numeric_limits<int64>::max(),
                 std::numeric_limits<int64>::min(),
@@ -251,13 +290,29 @@ public:
             ),
             range2view(max_range_size, _alloc) {}
 
-        int64 GetMaxReadLayer(const Range& _range) {
+        ExactAccessQuery GetMaxExactAccess(const Range& _range) const {
+            int64 layer = -1;
+            for (const ExactAccess* access = exact_access_history;
+                 access != nullptr;
+                 access = access->next) {
+                if (access->range.Colide(_range)) {
+                    layer = std::max(layer, access->layer);
+                }
+            }
+            return ExactAccessQuery{layer, exact_access_complete};
+        }
+
+        uint GetExactAccessCount() const {
+            return exact_access_count;
+        }
+
+        int64 GetMaxReadLayer(const Range& _range) const {
 
             int64 max_layer = -1;
             if (!_range.Colide(read_range)) {
                 return max_layer;
             }
-            for (auto& [range, view] : range2view) {
+            for (const auto& [range, view] : range2view) {
                 if (range.Colide(_range)) {
                     max_layer = std::max(max_layer, view.read_layer);
                     if (max_layer >= max_view.read_layer) {
@@ -268,12 +323,12 @@ public:
             return max_layer;
         }
 
-        int64 GetMaxWriteLayer(const Range& _range) {
+        int64 GetMaxWriteLayer(const Range& _range) const {
             int64 max_layer = -1;
             if (!_range.Colide(write_range)) {
                 return max_layer;
             }
-            for (auto& [range, view] : range2view) {
+            for (const auto& [range, view] : range2view) {
                 if (range.Colide(_range)) {
                     max_layer = std::max(max_layer, view.write_layer);
                     if (max_layer >= max_view.write_layer) {
@@ -292,7 +347,10 @@ public:
             value.write_layer = max_view.write_layer;
         }
 
-        void EmplaceReadLayer(const Range& _range, int64 _layer) {
+        void EmplaceReadLayer(const Range& _range, int64 _layer, bool _record_exact = true) {
+            if (_record_exact) {
+                RecordExactAccess(_range, _layer);
+            }
 
             read_range.primary_min = std::min(read_range.primary_min, _range.primary_min);
             read_range.primary_max = std::max(read_range.primary_max, _range.primary_max);
@@ -314,6 +372,8 @@ public:
         }
 
         void EmplaceWriteLayer(const Range& _range, int64 _layer) {
+            RecordExactAccess(_range, _layer);
+
             read_range.primary_min  = std::min(read_range.primary_min, _range.primary_min);
             read_range.primary_max  = std::max(read_range.primary_max, _range.primary_max);
             read_range.layer_min    = std::min(read_range.layer_min, _range.layer_min);
@@ -347,6 +407,16 @@ public:
     struct BindlessHandle : public ResourceHandle {
         ResourceView view{-1, -1};
     };
+    struct PriorResourceAccess {
+        int64 direct_exact_layer{-1};
+        int64 conservative_layer{-1};
+        bool  direct_exact_complete{true};
+    };
+    struct ArgReadResource {
+        Range           range;
+        ResourceHandle* handle{nullptr};
+        bool            record_exact{true};
+    };
     struct CommandListNode {
         Command const*         cmd;
         CommandListNode const* next;
@@ -365,7 +435,7 @@ public:
     UnorderedSet<uint64> m_writed_geometry;
 
     //temporal resources
-    Array<std::tuple<Range, ResourceHandle*>> m_arg_read_resources;
+    Array<ArgReadResource>                    m_arg_read_resources;
     Array<std::tuple<Range, ResourceHandle*>> m_arg_write_resources;
     UnorderedSet<uint64>                      temp_writed_resources;
 
@@ -418,8 +488,8 @@ public:
         return std::max(_layer, (int64)layer_offset);
     }
 
-    int64 GetLastLayerWrite(RangeHandle* _handle, const Range& _range) {
-        int64 layer = _handle->GetMaxReadLayer(_range);
+    int64 GetMaxBindlessAliasAccessLayer(RangeHandle* _handle, int64 _layer) {
+        int64 layer = _layer;
         if (m_max_bdls_layer >= layer) {
             //check contains certain resource
             for (auto&& i : m_bindless_handles) {
@@ -430,6 +500,40 @@ public:
                 m_funcs.unlock_bdls_array(i.first);
             }
         }
+        return layer;
+    }
+
+    PriorResourceAccess GetPriorResourceAccess(
+        RangeHandle* _handle,
+        const Range& _range
+    ) const {
+        const RangeHandle::ExactAccessQuery exact_access =
+            _handle->GetMaxExactAccess(_range);
+        int64 conservative_layer = exact_access.layer;
+        if (!exact_access.complete) {
+            conservative_layer = std::max(
+                conservative_layer,
+                std::max(
+                    _handle->GetMaxReadLayer(_range),
+                    _handle->GetMaxWriteLayer(_range)
+                )
+            );
+        }
+        // Bindless membership is mutable and the function table exposes only
+        // its current value, not a historical snapshot. It therefore cannot
+        // prove that a particular resource was accessed by an earlier
+        // bindless dispatch. Conservatively wait for the latest opaque
+        // bindless access while keeping Debug validation exact.
+        return PriorResourceAccess{
+            exact_access.layer,
+            std::max(conservative_layer, m_max_bdls_layer),
+            exact_access.complete
+        };
+    }
+
+    int64 GetLastLayerWrite(RangeHandle* _handle, const Range& _range) {
+        const int64 layer =
+            GetMaxBindlessAliasAccessLayer(_handle, _handle->GetMaxReadLayer(_range));
         return GetLayerWithOffset(layer + 1);
     }
 
@@ -503,7 +607,12 @@ public:
         return SetRead(handle, _range);
     }
 
-    void RecordRead(ResourceHandle* _handle, Range _range, int64 _layer) {
+    void RecordRead(
+        ResourceHandle* _handle,
+        Range           _range,
+        int64           _layer,
+        bool            _record_exact = true
+    ) {
         switch (_handle->type) {
 
             case ResourceType::Mesh:
@@ -520,8 +629,19 @@ public:
             default: {
 
                 auto* range_handle = static_cast<RangeHandle*>(_handle);
-                range_handle->EmplaceReadLayer(_range, _layer);
+                range_handle->EmplaceReadLayer(_range, _layer, _record_exact);
             }
+        }
+    }
+
+    void RecordArgReads(int64 _layer) {
+        for (const ArgReadResource& read_resource : m_arg_read_resources) {
+            RecordRead(
+                read_resource.handle,
+                read_resource.range,
+                _layer,
+                read_resource.record_exact
+            );
         }
     }
 
@@ -648,7 +768,13 @@ public:
         return layer;
     }
 
-    void EmplaceArg(uint64 _handle, ResourceType _type, const Range& _range, bool _b_write) {
+    void EmplaceArg(
+        uint64       _handle,
+        ResourceType _type,
+        const Range& _range,
+        bool         _b_write,
+        bool         _record_exact = true
+    ) {
         ResourceHandle* handle = GetHandle(_handle, _type);
         if (_b_write) {
             switch (_type) {
@@ -690,7 +816,9 @@ public:
                     );
                 }
             }
-            m_arg_read_resources.emplace_back(_range, handle);
+            m_arg_read_resources.emplace_back(
+                ArgReadResource{_range, handle, _record_exact}
+            );
         }
     }
 
@@ -745,17 +873,33 @@ public:
         );
     }
 
-    void VisitBindlessArg(BindlessArrayRef _bdls, const UnorderedSet<uint64>& _temp_write_resources) {
-        m_funcs.lock_bdls_array((uint64)(_bdls.Get()));
+    void VisitBindlessArg(uint64 _bindless_handle, const UnorderedSet<uint64>& _temp_write_resources) {
+        m_funcs.lock_bdls_array(_bindless_handle);
         for (auto&& res : m_write_resources) {
             if (!_temp_write_resources.contains(res) &&
-                m_funcs.is_resource_in_bindless(res, (uint64)(_bdls.Get()))) {
-                EmplaceArg(res, ResourceType::Texture_Buffer, Range{}, false);
+                m_funcs.is_resource_in_bindless(res, _bindless_handle)) {
+                EmplaceArg(
+                    res,
+                    ResourceType::Texture_Buffer,
+                    Range{},
+                    false,
+                    false
+                );
             }
         }
-        m_funcs.unlock_bdls_array((uint64)(_bdls.Get()));
+        m_funcs.unlock_bdls_array(_bindless_handle);
         //emplace self
-        EmplaceArg((uint64)(_bdls.Get()), ResourceType::Bindless, Range{}, false);
+        EmplaceArg(
+            _bindless_handle,
+            ResourceType::Bindless,
+            Range{},
+            false,
+            false
+        );
+    }
+
+    void VisitBindlessArg(BindlessArrayRef _bdls, const UnorderedSet<uint64>& _temp_write_resources) {
+        VisitBindlessArg(uint64(_bdls.Get()), _temp_write_resources);
     }
 
     void VisitCmd(const UploadBufferCmd* _cmd) {
@@ -955,12 +1099,10 @@ public:
                 const Range range(
                     handle.mip_level, handle.num_mips, handle.array_layer, handle.num_array
                 );
-                const int64 prior_access_layer = std::max(
-                    range_handle->GetMaxReadLayer(range),
-                    range_handle->GetMaxWriteLayer(range)
-                );
+                const PriorResourceAccess prior_access =
+                    GetPriorResourceAccess(range_handle, range);
                 assert(
-                    prior_access_layer < 0 &&
+                    prior_access.direct_exact_layer < 0 &&
                     std::format(
                         "Import Texture {} should precede its first resource access",
                         handle.GetTexture()->GetName()
@@ -969,7 +1111,7 @@ public:
                 );
                 layer = std::max(
                     layer,
-                    GetLayerWithOffset(prior_access_layer + 1)
+                    GetLayerWithOffset(prior_access.conservative_layer + 1)
                 );
             }
 
@@ -978,12 +1120,10 @@ public:
                     GetHandle(uint64(handle.GetBuffer()), ResourceType::Texture_Buffer)
                 );
                 const Range range(handle.GetByteOffset(), handle.GetByteSize());
-                const int64 prior_access_layer = std::max(
-                    range_handle->GetMaxReadLayer(range),
-                    range_handle->GetMaxWriteLayer(range)
-                );
+                const PriorResourceAccess prior_access =
+                    GetPriorResourceAccess(range_handle, range);
                 assert(
-                    prior_access_layer < 0 &&
+                    prior_access.direct_exact_layer < 0 &&
                     std::format(
                         "Import Buffer {} should precede its first resource access",
                         handle.GetBuffer()->GetName()
@@ -992,7 +1132,7 @@ public:
                 );
                 layer = std::max(
                     layer,
-                    GetLayerWithOffset(prior_access_layer + 1)
+                    GetLayerWithOffset(prior_access.conservative_layer + 1)
                 );
             }
 
@@ -1003,6 +1143,7 @@ public:
                 range_handle->EmplaceWriteLayer(
                     Range(handle.mip_level, handle.num_mips, handle.array_layer, handle.num_array), layer
                 );
+                m_write_resources.emplace(range_handle->handle);
             }
 
             for (const auto& [handle, state] : _cmd->ImportBuffers()) {
@@ -1010,6 +1151,7 @@ public:
                     GetHandle(uint64(handle.GetBuffer()), ResourceType::Texture_Buffer)
                 );
                 range_handle->EmplaceWriteLayer(Range(handle.GetByteOffset(), handle.GetByteSize()), layer);
+                m_write_resources.emplace(range_handle->handle);
             }
         } else {
             barrier_resources.reserve(_cmd->ExportTextures().size());
@@ -1046,6 +1188,7 @@ public:
                 range_handle->EmplaceWriteLayer(
                     Range(handle.mip_level, handle.num_mips, handle.array_layer, handle.num_array), layer
                 );
+                m_write_resources.emplace(range_handle->handle);
             }
 
             for (const auto& [handle, state] : _cmd->ExportBuffers()) {
@@ -1053,6 +1196,7 @@ public:
                     GetHandle(uint64(handle.GetBuffer()), ResourceType::Texture_Buffer)
                 );
                 range_handle->EmplaceWriteLayer(Range(handle.GetByteOffset(), handle.GetByteSize()), layer);
+                m_write_resources.emplace(range_handle->handle);
             }
         }
 
@@ -1165,9 +1309,7 @@ public:
             RecordWrite(std::get<1>(write_res), std::get<0>(write_res), m_dispatch_layer);
         }
 
-        for (const auto& read_res : m_arg_read_resources) {
-            RecordRead(std::get<1>(read_res), std::get<0>(read_res), m_dispatch_layer);
-        }
+        RecordArgReads(m_dispatch_layer);
 
         if (b_use_bdls) {
             m_max_bdls_layer = std::max(m_max_bdls_layer, m_dispatch_layer);
@@ -1282,9 +1424,7 @@ public:
         for (const auto& write_res : m_arg_write_resources) {
             RecordWrite(std::get<1>(write_res), std::get<0>(write_res), m_dispatch_layer);
         }
-        for (const auto& read_res : m_arg_read_resources) {
-            RecordRead(std::get<1>(read_res), std::get<0>(read_res), m_dispatch_layer);
-        }
+        RecordArgReads(m_dispatch_layer);
         if (b_use_bdls) {
             m_max_bdls_layer = std::max(m_max_bdls_layer, m_dispatch_layer);
         }
@@ -1406,9 +1546,7 @@ public:
         for (const auto& write_res : m_arg_write_resources) {
             RecordWrite(std::get<1>(write_res), std::get<0>(write_res), m_dispatch_layer);
         }
-        for (const auto& read_res : m_arg_read_resources) {
-            RecordRead(std::get<1>(read_res), std::get<0>(read_res), m_dispatch_layer);
-        }
+        RecordArgReads(m_dispatch_layer);
         if (b_use_bdls) {
             m_max_bdls_layer = std::max(m_max_bdls_layer, m_dispatch_layer);
         }
@@ -1561,9 +1699,7 @@ public:
         for (const auto& write_res : m_arg_write_resources) {
             RecordWrite(std::get<1>(write_res), std::get<0>(write_res), m_dispatch_layer);
         }
-        for (const auto& read_res : m_arg_read_resources) {
-            RecordRead(std::get<1>(read_res), std::get<0>(read_res), m_dispatch_layer);
-        }
+        RecordArgReads(m_dispatch_layer);
         if (!bindless_arrays.empty()) {
             m_max_bdls_layer =
                 std::max(m_max_bdls_layer, m_dispatch_layer);
