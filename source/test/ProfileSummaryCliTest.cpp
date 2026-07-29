@@ -50,6 +50,7 @@ static_assert(ProfileSummaryExitCode(SessionLoadStatus::OpenFailed) == 11);
 static_assert(ProfileSummaryExitCode(SessionLoadStatus::ProtocolViolation) == 12);
 static_assert(ProfileSummaryExitCode(SessionLoadStatus::LimitExceeded) == 13);
 static_assert(ProfileSummaryExitCode(SessionLoadStatus::ResourceExhausted) == 14);
+static_assert(ProfileSummaryExitCode(SessionLoadStatus::Cancelled) == 15);
 
 void Expect(bool _condition, std::string_view _message) {
     if (!_condition) {

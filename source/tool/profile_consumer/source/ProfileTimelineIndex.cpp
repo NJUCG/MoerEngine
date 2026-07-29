@@ -64,7 +64,7 @@ public:
         remaining_budget_(_control.max_work_items_before_cancel) {}
 
     [[nodiscard]] bool Requested(std::uint64_t _work_items = 1) noexcept {
-        if (_work_items >= remaining_budget_) {
+        if (_work_items > remaining_budget_) {
             remaining_budget_ = 0;
             return true;
         }

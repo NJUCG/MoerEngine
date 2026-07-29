@@ -85,9 +85,10 @@ struct TimelineIndexBuildControl {
     // Allocator and standard-library work inside one bounded run cannot be
     // interrupted. Zero is normalized to one.
     std::uint64_t cancellation_check_interval{4096};
-    // Optional deterministic cooperative budget. Exhaustion is reported as
-    // Cancelled and follows the same atomic-output contract as stop_token.
-    // This can cap background work even when the caller has no timer thread.
+    // Optional deterministic cooperative budget. Exactly this many charged
+    // work items may run; the next checkpoint reports Cancelled and follows
+    // the same atomic-output contract as stop_token. This can cap background
+    // work even when the caller has no timer thread.
     std::uint64_t max_work_items_before_cancel{std::numeric_limits<std::uint64_t>::max()};
 };
 
