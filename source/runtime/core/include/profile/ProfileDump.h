@@ -153,19 +153,19 @@ Emit(SchemaHandle _schema, std::span<const FieldValueView> _values) noexcept;
 // Producer-thread operation. Publishes only the calling thread's TLS shard,
 // then waits until the already-published writer interval has been flushed to
 // the in-progress stream. This is not an fsync/power-loss durability
-// guarantee. Each producer must call this before it exits, or exit and let its
-// TLS destructor publish, before the owner begins final shutdown.
+// guarantee.
 [[nodiscard]] CORE_API FlushResult FlushThreadLocal() noexcept;
 
-// Process-owner synchronization fence for chunks that producers have already
-// published to the global queue. It cannot discover another live thread's
-// sub-threshold TLS shard and therefore is not a substitute for producer
-// FlushThreadLocal/exit.
+// Process-owner synchronization fence. Harvests every currently registered
+// live TLS shard, then flushes that published writer interval. The harvest is
+// a per-shard cut rather than one global instantaneous snapshot: an Emit that
+// commits after its shard was visited can remain for the next interval.
 [[nodiscard]] CORE_API FlushResult FlushAll() noexcept;
 
-// Process-owner finalization. All producer threads must first FlushThreadLocal
-// or exit and be joined. The owner calls Shutdown last; it drains accepted
-// emitters, closes the writer, and publishes .inprogress as the final file.
+// Process-owner finalization. Closes admission, waits for already-accepted
+// Emit calls, harvests all registered live TLS shards, drains the writer, and
+// publishes .inprogress as the final file. Producers need not exit or flush
+// individually, but must not begin a new capture Emit after Shutdown starts.
 [[nodiscard]] CORE_API ShutdownResult Shutdown() noexcept;
 
 [[nodiscard]] CORE_API RuntimeState GetRuntimeState() noexcept;
