@@ -183,6 +183,9 @@ struct TestHooks {
     bool                pause_after_start{false};
     bool                writer_paused{false};
     bool                writer_resume{false};
+    bool                pause_emitter_after_admission{false};
+    bool                emitter_paused{false};
+    bool                emitter_resume{false};
 };
 
 struct PendingLossSlot {
@@ -191,9 +194,12 @@ struct PendingLossSlot {
     LossNotice    notice{};
 };
 
+struct ThreadLocalShardNode;
+
 struct Hub {
     std::mutex              lifecycle_mutex{};
     std::mutex              worker_join_mutex{};
+    std::mutex              tls_registry_mutex{};
     std::mutex              mutex{};
     std::condition_variable work_cv{};
     std::condition_variable start_cv{};
@@ -224,6 +230,11 @@ struct Hub {
     // unpublished so Shutdown can wait for every already-admitted Emit call.
     std::shared_ptr<Admission> retired_admission{};
 
+    // Protected by tls_registry_mutex. Nodes are owned by live producer
+    // threads and remain linked across capture generations until TLS
+    // destruction.
+    ThreadLocalShardNode* tls_shards_head{nullptr};
+
     AtomicStats stats{};
     TestHooks   test_hooks{};
 };
@@ -245,11 +256,21 @@ enum class PublishResult : std::uint8_t {
     Stale,
 };
 
-struct ThreadLocalShard {
+struct ThreadLocalShardNode {
+    std::mutex                 mutex{};
     std::uint64_t              generation{0};
     std::vector<PendingRecord> records{};
     std::size_t                payload_bytes{0};
+    ThreadLocalShardNode*      registry_previous{nullptr};
+    ThreadLocalShardNode*      registry_next{nullptr};
+    std::atomic<bool>          registered{false};
+};
 
+struct ThreadLocalShard {
+    // The registry points to this member rather than the TLS owner object.
+    // Its lifetime extends through the owner's destructor body, where the node
+    // is published and unlinked before member destruction begins.
+    ThreadLocalShardNode node{};
     ~ThreadLocalShard();
 };
 
@@ -426,103 +447,128 @@ void InjectOrContinue(Testing::FaultPoint _point, RuntimeFault _fault) {
     }
 }
 
-void ResetShard(ThreadLocalShard& _shard) noexcept {
-    _shard.records.clear();
-    _shard.records.shrink_to_fit();
-    _shard.payload_bytes = 0;
-    _shard.generation    = 0;
+void LinkTlsShardLocked(Hub& _hub, ThreadLocalShardNode& _shard) noexcept {
+    if (_shard.registered.load(std::memory_order_relaxed)) {
+        return;
+    }
+    _shard.registry_previous = nullptr;
+    _shard.registry_next     = _hub.tls_shards_head;
+    if (_hub.tls_shards_head) {
+        _hub.tls_shards_head->registry_previous = &_shard;
+    }
+    _hub.tls_shards_head = &_shard;
+    _shard.registered.store(true, std::memory_order_release);
 }
 
-void CountDroppedChunk(Hub& _hub, const ImmutableChunk& _chunk, PublishResult _reason) noexcept {
-    const std::uint64_t record_count = static_cast<std::uint64_t>(_chunk.records.size());
-    if (record_count == 0) {
+void UnlinkTlsShardLocked(Hub& _hub, ThreadLocalShardNode& _shard) noexcept {
+    if (!_shard.registered.load(std::memory_order_relaxed)) {
+        return;
+    }
+    if (_shard.registry_previous) {
+        _shard.registry_previous->registry_next = _shard.registry_next;
+    } else {
+        _hub.tls_shards_head = _shard.registry_next;
+    }
+    if (_shard.registry_next) {
+        _shard.registry_next->registry_previous = _shard.registry_previous;
+    }
+    _shard.registry_previous = nullptr;
+    _shard.registry_next     = nullptr;
+    _shard.registered.store(false, std::memory_order_release);
+}
+
+std::unique_lock<std::mutex> LockRegisteredTlsShard(ThreadLocalShardNode& _shard) {
+    if (_shard.registered.load(std::memory_order_acquire)) {
+        return std::unique_lock(_shard.mutex);
+    }
+
+    Hub&                         hub = GetHub();
+    std::unique_lock<std::mutex> registry_lock(hub.tls_registry_mutex);
+    std::unique_lock<std::mutex> shard_lock(_shard.mutex);
+    if (!_shard.registered.load(std::memory_order_relaxed)) {
+        LinkTlsShardLocked(hub, _shard);
+    }
+    registry_lock.unlock();
+    return shard_lock;
+}
+
+void CountDroppedChunk(Hub& _hub, std::uint64_t _record_count, PublishResult _reason) noexcept {
+    if (_record_count == 0) {
         return;
     }
     _hub.stats.chunks_dropped.fetch_add(1, std::memory_order_relaxed);
     switch (_reason) {
         case PublishResult::QueueFull:
-            _hub.stats.records_dropped_queue_full.fetch_add(record_count, std::memory_order_relaxed);
+            _hub.stats.records_dropped_queue_full.fetch_add(_record_count, std::memory_order_relaxed);
             break;
         case PublishResult::Faulted:
-            _hub.stats.records_dropped_after_fault.fetch_add(record_count, std::memory_order_relaxed);
+            _hub.stats.records_dropped_after_fault.fetch_add(_record_count, std::memory_order_relaxed);
             break;
         case PublishResult::Stale:
-            _hub.stats.records_dropped_stale_generation.fetch_add(record_count, std::memory_order_relaxed);
+            _hub.stats.records_dropped_stale_generation.fetch_add(_record_count, std::memory_order_relaxed);
             break;
         default:
-            _hub.stats.records_dropped_stopped.fetch_add(record_count, std::memory_order_relaxed);
+            _hub.stats.records_dropped_stopped.fetch_add(_record_count, std::memory_order_relaxed);
             break;
     }
 }
 
-PublishResult PublishTlsShard(ThreadLocalShard& _shard) noexcept {
-    if (_shard.records.empty()) {
+PublishResult PublishDetachedChunk(Hub& _hub, ImmutableChunk&& _chunk) noexcept {
+    const std::uint64_t record_count = static_cast<std::uint64_t>(_chunk.records.size());
+    if (record_count == 0) {
         return PublishResult::Nothing;
     }
 
-    ImmutableChunk chunk{
-        .generation    = _shard.generation,
-        .records       = std::move(_shard.records),
-        .payload_bytes = _shard.payload_bytes,
-    };
-    if (!chunk.records.empty()) {
-        chunk.first_sequence = chunk.records.front().sequence;
-        chunk.last_sequence  = chunk.records.front().sequence;
-        for (const PendingRecord& record : chunk.records) {
-            chunk.first_sequence = std::min(chunk.first_sequence, record.sequence);
-            chunk.last_sequence  = std::max(chunk.last_sequence, record.sequence);
-            chunk.value_bytes    = SaturatingAdd(chunk.value_bytes, RecordValueBytes(record));
-        }
-    }
-    _shard.records       = {};
-    _shard.payload_bytes = 0;
-    _shard.generation    = 0;
-
-    Hub&          hub    = GetHub();
-    PublishResult result = PublishResult::Rejected;
+    const std::uint64_t generation     = _chunk.generation;
+    const std::uint64_t payload_bytes  = static_cast<std::uint64_t>(_chunk.payload_bytes);
+    const std::uint64_t first_sequence = _chunk.first_sequence;
+    const std::uint64_t last_sequence  = _chunk.last_sequence;
+    const std::uint64_t value_bytes    = _chunk.value_bytes;
+    PublishResult       result         = PublishResult::Rejected;
     {
-        std::lock_guard     lock(hub.mutex);
-        const RuntimeState  state      = hub.state.load(std::memory_order_acquire);
-        const std::uint64_t generation = hub.generation.load(std::memory_order_acquire);
+        std::lock_guard     lock(_hub.mutex);
+        const RuntimeState  state             = _hub.state.load(std::memory_order_acquire);
+        const std::uint64_t active_generation = _hub.generation.load(std::memory_order_acquire);
 
         if (state == RuntimeState::Faulted) {
             result = PublishResult::Faulted;
-        } else if (chunk.generation != generation || chunk.generation == 0) {
+        } else if (generation != active_generation || generation == 0) {
             result = PublishResult::Stale;
         } else if (state != RuntimeState::Running) {
             result = PublishResult::Rejected;
         } else {
-            const std::uint64_t resident_chunks  = hub.stats.resident_chunks.load(std::memory_order_relaxed);
-            const std::uint64_t resident_records = hub.stats.resident_records.load(std::memory_order_relaxed);
-            const std::uint64_t resident_bytes   = hub.stats.resident_bytes.load(std::memory_order_relaxed);
-            const std::uint64_t chunk_records    = static_cast<std::uint64_t>(chunk.records.size());
-            const std::uint64_t chunk_bytes      = static_cast<std::uint64_t>(chunk.payload_bytes);
+            const std::uint64_t resident_chunks = _hub.stats.resident_chunks.load(std::memory_order_relaxed);
+            const std::uint64_t resident_records =
+                _hub.stats.resident_records.load(std::memory_order_relaxed);
+            const std::uint64_t resident_bytes = _hub.stats.resident_bytes.load(std::memory_order_relaxed);
 
             const bool full =
                 WouldExceedLimit(
-                    resident_chunks, 1, static_cast<std::uint64_t>(hub.config.queue_max_chunks)
+                    resident_chunks, 1, static_cast<std::uint64_t>(_hub.config.queue_max_chunks)
                 ) ||
                 WouldExceedLimit(
-                    resident_records, chunk_records, static_cast<std::uint64_t>(hub.config.queue_max_records)
+                    resident_records, record_count, static_cast<std::uint64_t>(_hub.config.queue_max_records)
                 ) ||
                 WouldExceedLimit(
-                    resident_bytes, chunk_bytes, static_cast<std::uint64_t>(hub.config.queue_max_bytes)
+                    resident_bytes, payload_bytes, static_cast<std::uint64_t>(_hub.config.queue_max_bytes)
                 );
             if (full) {
                 result = PublishResult::QueueFull;
             } else {
                 try {
-                    hub.messages.emplace_back(std::move(chunk));
-                    hub.stats.resident_chunks.store(resident_chunks + 1, std::memory_order_relaxed);
-                    hub.stats.resident_records.store(
-                        resident_records + chunk_records, std::memory_order_relaxed
+                    _hub.messages.emplace_back(std::move(_chunk));
+                    _hub.stats.resident_chunks.store(resident_chunks + 1, std::memory_order_relaxed);
+                    _hub.stats.resident_records.store(
+                        resident_records + record_count, std::memory_order_relaxed
                     );
-                    hub.stats.resident_bytes.store(resident_bytes + chunk_bytes, std::memory_order_relaxed);
-                    UpdateHighWater(hub.stats.high_water_chunks, resident_chunks + 1);
-                    UpdateHighWater(hub.stats.high_water_records, resident_records + chunk_records);
-                    UpdateHighWater(hub.stats.high_water_bytes, resident_bytes + chunk_bytes);
-                    hub.stats.records_enqueued.fetch_add(chunk_records, std::memory_order_relaxed);
-                    hub.stats.chunks_enqueued.fetch_add(1, std::memory_order_relaxed);
+                    _hub.stats.resident_bytes.store(
+                        resident_bytes + payload_bytes, std::memory_order_relaxed
+                    );
+                    UpdateHighWater(_hub.stats.high_water_chunks, resident_chunks + 1);
+                    UpdateHighWater(_hub.stats.high_water_records, resident_records + record_count);
+                    UpdateHighWater(_hub.stats.high_water_bytes, resident_bytes + payload_bytes);
+                    _hub.stats.records_enqueued.fetch_add(record_count, std::memory_order_relaxed);
+                    _hub.stats.chunks_enqueued.fetch_add(1, std::memory_order_relaxed);
                     result = PublishResult::Accepted;
                 } catch (...) {
                     result = PublishResult::QueueFull;
@@ -531,30 +577,95 @@ PublishResult PublishTlsShard(ThreadLocalShard& _shard) noexcept {
         }
         if (result == PublishResult::QueueFull) {
             AccumulateLossLocked(
-                hub,
-                chunk.generation,
-                chunk.first_sequence,
-                chunk.last_sequence,
-                static_cast<std::uint64_t>(chunk.records.size()),
-                chunk.value_bytes,
+                _hub,
+                generation,
+                first_sequence,
+                last_sequence,
+                record_count,
+                value_bytes,
                 LossReason::QueueFull
             );
         }
     }
 
     if (result == PublishResult::Accepted) {
-        hub.work_cv.notify_one();
+        _hub.work_cv.notify_one();
     } else {
-        CountDroppedChunk(hub, chunk, result);
+        CountDroppedChunk(_hub, record_count, result);
         if (result == PublishResult::QueueFull) {
-            hub.work_cv.notify_one();
+            _hub.work_cv.notify_one();
         }
     }
     return result;
 }
 
+PublishResult PublishTlsShardLocked(Hub& _hub, ThreadLocalShardNode& _shard) noexcept {
+    if (_shard.records.empty()) {
+        _shard.payload_bytes = 0;
+        _shard.generation    = 0;
+        return PublishResult::Nothing;
+    }
+
+    ImmutableChunk chunk{};
+    chunk.generation    = _shard.generation;
+    chunk.payload_bytes = _shard.payload_bytes;
+    chunk.records.swap(_shard.records);
+    _shard.payload_bytes = 0;
+    _shard.generation    = 0;
+
+    chunk.first_sequence = chunk.records.front().sequence;
+    chunk.last_sequence  = chunk.records.front().sequence;
+    for (const PendingRecord& record : chunk.records) {
+        chunk.first_sequence = std::min(chunk.first_sequence, record.sequence);
+        chunk.last_sequence  = std::max(chunk.last_sequence, record.sequence);
+        chunk.value_bytes    = SaturatingAdd(chunk.value_bytes, RecordValueBytes(record));
+    }
+    return PublishDetachedChunk(_hub, std::move(chunk));
+}
+
+PublishResult PublishTlsShard(ThreadLocalShardNode& _shard) noexcept {
+    Hub&            hub = GetHub();
+    std::lock_guard lock(_shard.mutex);
+    return PublishTlsShardLocked(hub, _shard);
+}
+
+int PublishResultPriority(PublishResult _result) noexcept {
+    switch (_result) {
+        case PublishResult::Faulted:
+            return 5;
+        case PublishResult::QueueFull:
+            return 4;
+        case PublishResult::Rejected:
+        case PublishResult::Stale:
+            return 3;
+        case PublishResult::Accepted:
+            return 2;
+        case PublishResult::Nothing:
+            return 1;
+    }
+    return 0;
+}
+
+PublishResult MergePublishResult(PublishResult _aggregate, PublishResult _next) noexcept {
+    return PublishResultPriority(_next) > PublishResultPriority(_aggregate) ? _next : _aggregate;
+}
+
+// The caller owns tls_registry_mutex for the entire raw-pointer traversal.
+PublishResult HarvestRegisteredTlsShardsLocked(Hub& _hub) noexcept {
+    PublishResult aggregate = PublishResult::Nothing;
+    for (ThreadLocalShardNode* shard = _hub.tls_shards_head; shard; shard = shard->registry_next) {
+        std::lock_guard shard_lock(shard->mutex);
+        aggregate = MergePublishResult(aggregate, PublishTlsShardLocked(_hub, *shard));
+    }
+    return aggregate;
+}
+
 ThreadLocalShard::~ThreadLocalShard() {
-    (void)PublishTlsShard(*this);
+    Hub&            hub = GetHub();
+    std::lock_guard registry_lock(hub.tls_registry_mutex);
+    std::lock_guard shard_lock(node.mutex);
+    (void)PublishTlsShardLocked(hub, node);
+    UnlinkTlsShardLocked(hub, node);
 }
 
 std::shared_ptr<Admission> AcquireEmitter(Hub& _hub) noexcept {
@@ -571,6 +682,20 @@ std::shared_ptr<Admission> AcquireEmitter(Hub& _hub) noexcept {
     }
     ++candidate->active_emitters;
     return candidate;
+}
+
+void PauseEmitterAfterAdmissionIfRequested(Hub& _hub) noexcept {
+    std::unique_lock lock(_hub.mutex);
+    if (!_hub.test_hooks.pause_emitter_after_admission) {
+        return;
+    }
+    _hub.test_hooks.emitter_paused = true;
+    _hub.test_cv.notify_all();
+    _hub.test_cv.wait(lock, [&] {
+        return _hub.test_hooks.emitter_resume ||
+               _hub.state.load(std::memory_order_acquire) == RuntimeState::Faulted;
+    });
+    _hub.test_hooks.emitter_paused = false;
 }
 
 EmitStatus ReleaseEmitter(const std::shared_ptr<Admission>& _admission, EmitStatus _result) noexcept {
@@ -595,7 +720,7 @@ EmitStatus ReleaseEmitter(const std::shared_ptr<Admission>& _admission, EmitStat
     }
 
     const PublishResult publish_result =
-        force_publish ? PublishTlsShard(g_tls_shard) : PublishResult::Nothing;
+        force_publish ? PublishTlsShard(g_tls_shard.node) : PublishResult::Nothing;
 
     {
         std::lock_guard lock(hub.mutex);
@@ -1106,17 +1231,79 @@ EmitStatus MapEncodeStatus(EncodeStatus _status) noexcept {
     }
 }
 
-FlushResult PublishResultToFlush(PublishResult _result) noexcept {
-    switch (_result) {
-        case PublishResult::Nothing:
-            return FlushResult::NothingPending;
-        case PublishResult::Accepted:
-            return FlushResult::Completed;
-        case PublishResult::Faulted:
-            return FlushResult::Faulted;
-        default:
-            return FlushResult::Rejected;
+std::shared_ptr<FlushFence> PrepareFlushLocked(Hub& _hub, FlushResult& _immediate_result) noexcept {
+    const RuntimeState state = _hub.state.load(std::memory_order_acquire);
+    if (state == RuntimeState::Faulted) {
+        _immediate_result = FlushResult::Faulted;
+        return {};
     }
+    if (state != RuntimeState::Running) {
+        _immediate_result = FlushResult::Rejected;
+        return {};
+    }
+    if (_hub.stats.resident_chunks.load(std::memory_order_relaxed) == 0 && !_hub.file_dirty &&
+        !_hub.pending_loss.pending) {
+        _immediate_result = FlushResult::NothingPending;
+        return {};
+    }
+
+    std::shared_ptr<FlushFence> fence;
+    if (!_hub.messages.empty()) {
+        if (auto* tail_flush = std::get_if<FlushMessage>(&_hub.messages.back())) {
+            fence = tail_flush->fence;
+        }
+    } else if (_hub.active_flush_fence && !_hub.pending_loss.pending) {
+        fence = _hub.active_flush_fence;
+    }
+
+    if (!fence) {
+        try {
+            fence = std::make_shared<FlushFence>();
+            _hub.messages.emplace_back(FlushMessage{.fence = fence});
+        } catch (...) {
+            _immediate_result = FlushResult::Rejected;
+            return {};
+        }
+    }
+    _immediate_result = FlushResult::Completed;
+    return fence;
+}
+
+FlushResult WaitPreparedFlush(
+    Hub&                               _hub,
+    const std::shared_ptr<FlushFence>& _fence,
+    FlushResult                        _immediate_result
+) noexcept {
+    if (!_fence) {
+        return _immediate_result;
+    }
+    _hub.work_cv.notify_one();
+    return WaitFence(_fence);
+}
+
+FlushResult FlushPublishedInterval() noexcept {
+    Hub&                        hub = GetHub();
+    std::shared_ptr<FlushFence> fence;
+    FlushResult                 immediate_result = FlushResult::Rejected;
+    {
+        std::lock_guard lock(hub.mutex);
+        fence = PrepareFlushLocked(hub, immediate_result);
+    }
+    return WaitPreparedFlush(hub, fence, immediate_result);
+}
+
+FlushResult ResolveHarvestedFlush(PublishResult _published, FlushResult _flushed) noexcept {
+    if (_published == PublishResult::Faulted || _flushed == FlushResult::Faulted) {
+        return FlushResult::Faulted;
+    }
+    if (_flushed == FlushResult::Rejected || _published == PublishResult::QueueFull ||
+        _published == PublishResult::Rejected || _published == PublishResult::Stale) {
+        return FlushResult::Rejected;
+    }
+    if (_published == PublishResult::Nothing && _flushed == FlushResult::NothingPending) {
+        return FlushResult::NothingPending;
+    }
+    return _flushed == FlushResult::NothingPending ? FlushResult::Completed : _flushed;
 }
 
 } // namespace
@@ -1160,6 +1347,14 @@ StartResult Start(const RuntimeConfig& _config) noexcept {
         // Replacement applies only to the final output and must never unlink
         // another process's live or forensic in-progress capture.
 
+        // A completed Shutdown normally leaves every live TLS node empty.
+        // Defensively discard any stopped-generation residue before resetting
+        // statistics and publishing the next generation.
+        {
+            std::lock_guard registry_lock(hub.tls_registry_mutex);
+            (void)HarvestRegisteredTlsShardsLocked(hub);
+        }
+
         {
             std::lock_guard lock(hub.mutex);
             hub.config    = std::move(prepared_config);
@@ -1180,10 +1375,12 @@ StartResult Start(const RuntimeConfig& _config) noexcept {
             hub.generation.store(generation, std::memory_order_release);
             hub.schemas.store(std::move(initial_schemas), std::memory_order_release);
             hub.admission.store({}, std::memory_order_release);
-            hub.test_hooks.matching_hits = 0;
-            hub.test_hooks.fault_fired   = false;
-            hub.test_hooks.writer_paused = false;
-            hub.test_hooks.writer_resume = false;
+            hub.test_hooks.matching_hits  = 0;
+            hub.test_hooks.fault_fired    = false;
+            hub.test_hooks.writer_paused  = false;
+            hub.test_hooks.writer_resume  = false;
+            hub.test_hooks.emitter_paused = false;
+            hub.test_hooks.emitter_resume = false;
             hub.state.store(RuntimeState::Starting, std::memory_order_release);
         }
 
@@ -1308,6 +1505,7 @@ EmitStatus Emit(SchemaHandle _schema, std::span<const FieldValueView> _values) n
     const auto finish = [&](EmitStatus _result) noexcept {
         return ReleaseEmitter(admission, _result);
     };
+    PauseEmitterAfterAdmissionIfRequested(hub);
 
     if (!_schema || _schema.generation != admission->generation) {
         hub.stats.records_dropped_stale_generation.fetch_add(1, std::memory_order_relaxed);
@@ -1363,112 +1561,97 @@ EmitStatus Emit(SchemaHandle _schema, std::span<const FieldValueView> _values) n
         return finish(EmitStatus::RecordTooLarge);
     }
 
-    if (g_tls_shard.generation != 0 && g_tls_shard.generation != admission->generation) {
-        (void)PublishTlsShard(g_tls_shard);
-    }
-    if (g_tls_shard.generation == 0) {
-        g_tls_shard.generation = admission->generation;
+    const std::size_t     record_bytes = payload.size();
+    PublishResult         current_publish_result{PublishResult::Nothing};
+    bool                  append_failed{false};
+    ThreadLocalShardNode& tls_shard = g_tls_shard.node;
+    {
+        // The first append links this TLS node while holding registry -> shard.
+        // Subsequent appends use only the shard lock. Publication may then
+        // acquire Hub::mutex, preserving the one-way lock order.
+        auto shard_lock = LockRegisteredTlsShard(tls_shard);
+
+        if (tls_shard.generation != 0 && tls_shard.generation != admission->generation) {
+            (void)PublishTlsShardLocked(hub, tls_shard);
+        }
+        if (tls_shard.generation == 0) {
+            tls_shard.generation = admission->generation;
+        }
+
+        if (!tls_shard.records.empty() &&
+            (tls_shard.records.size() >= admission->config.tls_max_records ||
+             payload.size() > admission->config.tls_max_bytes - tls_shard.payload_bytes)) {
+            (void)PublishTlsShardLocked(hub, tls_shard);
+            tls_shard.generation = admission->generation;
+        }
+
+        try {
+            tls_shard.records.emplace_back(PendingRecord{
+                .schema_hash = _schema.hash,
+                .sequence    = sequence,
+                .payload     = std::move(payload),
+            });
+            tls_shard.payload_bytes += record_bytes;
+        } catch (...) {
+            append_failed = true;
+        }
+
+        if (!append_failed) {
+            hub.stats.records_committed.fetch_add(1, std::memory_order_relaxed);
+            const bool publish = tls_shard.records.size() >= admission->config.tls_publish_records ||
+                                 tls_shard.payload_bytes >= admission->config.tls_publish_bytes ||
+                                 tls_shard.records.size() >= admission->config.tls_max_records ||
+                                 tls_shard.payload_bytes >= admission->config.tls_max_bytes;
+            if (publish) {
+                current_publish_result = PublishTlsShardLocked(hub, tls_shard);
+            }
+        }
     }
 
-    if (!g_tls_shard.records.empty() &&
-        (g_tls_shard.records.size() >= admission->config.tls_max_records ||
-         payload.size() > admission->config.tls_max_bytes - g_tls_shard.payload_bytes)) {
-        (void)PublishTlsShard(g_tls_shard);
-        g_tls_shard.generation = admission->generation;
-    }
-
-    const std::size_t record_bytes = payload.size();
-    try {
-        g_tls_shard.payload_bytes += record_bytes;
-        g_tls_shard.records.emplace_back(PendingRecord{
-            .schema_hash = _schema.hash,
-            .sequence    = sequence,
-            .payload     = std::move(payload),
-        });
-    } catch (...) {
-        g_tls_shard.payload_bytes -= record_bytes;
+    // Release shard ownership before any path reaches ReleaseEmitter(); a
+    // closing admission may publish this same TLS shard from that function.
+    if (append_failed) {
         hub.stats.records_dropped_queue_full.fetch_add(1, std::memory_order_relaxed);
         AccumulateLoss(
             admission->generation, sequence, sequence, 1, attempted_value_bytes, LossReason::QueueFull
         );
         return finish(EmitStatus::QueueFull);
     }
-    hub.stats.records_committed.fetch_add(1, std::memory_order_relaxed);
 
-    const bool publish = g_tls_shard.records.size() >= admission->config.tls_publish_records ||
-                         g_tls_shard.payload_bytes >= admission->config.tls_publish_bytes ||
-                         g_tls_shard.records.size() >= admission->config.tls_max_records ||
-                         g_tls_shard.payload_bytes >= admission->config.tls_max_bytes;
-    if (publish) {
-        const PublishResult result = PublishTlsShard(g_tls_shard);
-        if (result == PublishResult::QueueFull) {
-            return finish(EmitStatus::QueueFull);
-        }
-        if (result == PublishResult::Faulted) {
-            return finish(EmitStatus::SinkFault);
-        }
-        if (result != PublishResult::Accepted) {
-            return finish(EmitStatus::Disabled);
-        }
+    if (current_publish_result == PublishResult::QueueFull) {
+        return finish(EmitStatus::QueueFull);
+    }
+    if (current_publish_result == PublishResult::Faulted) {
+        return finish(EmitStatus::SinkFault);
+    }
+    if (current_publish_result != PublishResult::Nothing &&
+        current_publish_result != PublishResult::Accepted) {
+        return finish(EmitStatus::Disabled);
     }
     return finish(EmitStatus::Accepted);
 }
 
 FlushResult FlushThreadLocal() noexcept {
-    const PublishResult published      = PublishTlsShard(g_tls_shard);
-    const FlushResult   publish_result = PublishResultToFlush(published);
-    if (publish_result == FlushResult::Faulted) {
-        return FlushResult::Faulted;
-    }
-    if (publish_result == FlushResult::Rejected) {
-        return FlushResult::Rejected;
-    }
-
-    const FlushResult flush_result = FlushAll();
-    if (flush_result == FlushResult::Faulted) {
-        return flush_result;
-    }
-    if (published == PublishResult::Nothing && flush_result == FlushResult::NothingPending) {
-        return FlushResult::NothingPending;
-    }
-    return flush_result == FlushResult::NothingPending ? FlushResult::Completed : flush_result;
+    const PublishResult published = PublishTlsShard(g_tls_shard.node);
+    return ResolveHarvestedFlush(published, FlushPublishedInterval());
 }
 
 FlushResult FlushAll() noexcept {
     Hub&                        hub = GetHub();
     std::shared_ptr<FlushFence> fence;
+    FlushResult                 immediate_result = FlushResult::Rejected;
+    PublishResult               harvested        = PublishResult::Nothing;
     {
-        std::lock_guard    lock(hub.mutex);
-        const RuntimeState state = hub.state.load(std::memory_order_acquire);
-        if (state == RuntimeState::Faulted) {
-            return FlushResult::Faulted;
-        }
-        if (state != RuntimeState::Running) {
-            return FlushResult::Rejected;
-        }
-        if (hub.stats.resident_chunks.load(std::memory_order_relaxed) == 0 && !hub.file_dirty &&
-            !hub.pending_loss.pending) {
-            return FlushResult::NothingPending;
-        }
-        if (!hub.messages.empty()) {
-            if (auto* tail_flush = std::get_if<FlushMessage>(&hub.messages.back())) {
-                fence = tail_flush->fence;
-            }
-        } else if (hub.active_flush_fence && !hub.pending_loss.pending) {
-            fence = hub.active_flush_fence;
-        }
-
-        if (!fence) {
-            try {
-                fence = std::make_shared<FlushFence>();
-                hub.messages.emplace_back(FlushMessage{.fence = fence});
-            } catch (...) {
-                return FlushResult::Rejected;
-            }
-        }
+        // Pin every intrusive node through traversal and append the writer
+        // fence before a TLS destructor or first registration can cross the
+        // registry frontier.
+        std::lock_guard registry_lock(hub.tls_registry_mutex);
+        harvested = HarvestRegisteredTlsShardsLocked(hub);
+        std::lock_guard hub_lock(hub.mutex);
+        fence = PrepareFlushLocked(hub, immediate_result);
     }
-    hub.work_cv.notify_one();
-    return WaitFence(fence);
+    const FlushResult flushed = WaitPreparedFlush(hub, fence, immediate_result);
+    return ResolveHarvestedFlush(harvested, flushed);
 }
 
 ShutdownResult Shutdown() noexcept {
@@ -1487,9 +1670,9 @@ ShutdownResult Shutdown() noexcept {
         });
         state = hub.state.load(std::memory_order_acquire);
     }
-    (void)PublishTlsShard(g_tls_shard);
 
     std::shared_ptr<FlushFence> fence;
+    bool                        harvest_live_shards = false;
     {
         std::unique_lock lock(hub.mutex);
         state = hub.state.load(std::memory_order_acquire);
@@ -1501,6 +1684,7 @@ ShutdownResult Shutdown() noexcept {
                 return !hub.retired_admission || hub.retired_admission->active_emitters == 0;
             });
             hub.retired_admission.reset();
+            harvest_live_shards = true;
         } else if (state == RuntimeState::Stopped) {
             // Reap outside Hub::mutex below.
         } else if (state == RuntimeState::Running) {
@@ -1519,24 +1703,7 @@ ShutdownResult Shutdown() noexcept {
                 return !closing_admission || closing_admission->active_emitters == 0;
             });
             hub.retired_admission.reset();
-
-            if (hub.state.load(std::memory_order_acquire) != RuntimeState::Faulted) {
-                hub.state.store(RuntimeState::Draining, std::memory_order_release);
-                try {
-                    if (ShouldInjectLocked(hub.test_hooks, Testing::FaultPoint::ShutdownFinalizeAllocation)) {
-                        throw std::bad_alloc{};
-                    }
-                    fence              = std::make_shared<FlushFence>();
-                    hub.shutdown_fence = fence;
-                    hub.messages.emplace_back(FinalizeMessage{.fence = fence});
-                } catch (...) {
-                    hub.shutdown_fence.reset();
-                    fence.reset();
-                    hub.state.store(RuntimeState::Faulted, std::memory_order_release);
-                    hub.last_fault.store(RuntimeFault::WriterException, std::memory_order_release);
-                    hub.test_hooks.writer_resume = true;
-                }
-            }
+            harvest_live_shards = true;
         } else if (state == RuntimeState::Draining) {
             fence = hub.shutdown_fence;
         }
@@ -1545,6 +1712,36 @@ ShutdownResult Shutdown() noexcept {
     if (state == RuntimeState::Stopped) {
         ReapWorker(hub);
         return ShutdownResult::AlreadyStopped;
+    }
+
+    if (harvest_live_shards) {
+        // No admitted Emit remains. Keep Running while every parked live TLS
+        // shard is published, then append Finalize while the registry frontier
+        // is still pinned so no destructor can reorder an old chunk after it.
+        std::lock_guard registry_lock(hub.tls_registry_mutex);
+        (void)HarvestRegisteredTlsShardsLocked(hub);
+
+        std::lock_guard hub_lock(hub.mutex);
+        state = hub.state.load(std::memory_order_acquire);
+        if (state == RuntimeState::Running) {
+            hub.state.store(RuntimeState::Draining, std::memory_order_release);
+            try {
+                if (ShouldInjectLocked(hub.test_hooks, Testing::FaultPoint::ShutdownFinalizeAllocation)) {
+                    throw std::bad_alloc{};
+                }
+                fence              = std::make_shared<FlushFence>();
+                hub.shutdown_fence = fence;
+                hub.messages.emplace_back(FinalizeMessage{.fence = fence});
+            } catch (...) {
+                hub.shutdown_fence.reset();
+                fence.reset();
+                hub.state.store(RuntimeState::Faulted, std::memory_order_release);
+                hub.last_fault.store(RuntimeFault::WriterException, std::memory_order_release);
+                hub.test_hooks.writer_resume = true;
+            }
+        } else if (state == RuntimeState::Draining) {
+            fence = hub.shutdown_fence;
+        }
     }
 
     if (hub.state.load(std::memory_order_acquire) == RuntimeState::Faulted) {
@@ -1646,6 +1843,18 @@ bool ConfigureWriterPauseBeforeTempOpen(bool _enabled) noexcept {
     return true;
 }
 
+bool ConfigureEmitterPauseAfterAdmission(bool _enabled) noexcept {
+    Hub&            hub = GetHub();
+    std::lock_guard lock(hub.mutex);
+    if (hub.state.load(std::memory_order_acquire) != RuntimeState::Stopped) {
+        return false;
+    }
+    hub.test_hooks.pause_emitter_after_admission = _enabled;
+    hub.test_hooks.emitter_paused                = false;
+    hub.test_hooks.emitter_resume                = false;
+    return true;
+}
+
 bool WaitForWriterPaused(std::uint32_t _timeout_ms) noexcept {
     Hub&             hub = GetHub();
     std::unique_lock lock(hub.mutex);
@@ -1653,6 +1862,15 @@ bool WaitForWriterPaused(std::uint32_t _timeout_ms) noexcept {
         return hub.test_hooks.writer_paused ||
                hub.state.load(std::memory_order_acquire) == RuntimeState::Faulted;
     }) && hub.test_hooks.writer_paused;
+}
+
+bool WaitForEmitterPaused(std::uint32_t _timeout_ms) noexcept {
+    Hub&             hub = GetHub();
+    std::unique_lock lock(hub.mutex);
+    return hub.test_cv.wait_for(lock, std::chrono::milliseconds(_timeout_ms), [&] {
+        return hub.test_hooks.emitter_paused ||
+               hub.state.load(std::memory_order_acquire) == RuntimeState::Faulted;
+    }) && hub.test_hooks.emitter_paused;
 }
 
 bool CreateActiveTempCollision(const std::uint8_t* _bytes, std::size_t _byte_count) noexcept {
@@ -1677,6 +1895,15 @@ void ResumeWriter() noexcept {
     {
         std::lock_guard lock(hub.mutex);
         hub.test_hooks.writer_resume = true;
+    }
+    hub.test_cv.notify_all();
+}
+
+void ResumeEmitter() noexcept {
+    Hub& hub = GetHub();
+    {
+        std::lock_guard lock(hub.mutex);
+        hub.test_hooks.emitter_resume = true;
     }
     hub.test_cv.notify_all();
 }

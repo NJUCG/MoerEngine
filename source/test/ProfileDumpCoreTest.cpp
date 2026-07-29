@@ -28,6 +28,15 @@ void Expect(bool _condition, std::string_view _message) {
     }
 }
 
+template<typename Predicate>
+bool WaitUntil(Predicate _predicate, std::uint32_t _timeout_ms = 2000) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(_timeout_ms);
+    while (!_predicate() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    return _predicate();
+}
+
 class ScopedOutput {
 public:
     explicit ScopedOutput(std::string_view _stem) {
@@ -534,6 +543,29 @@ private:
     bool active{true};
 };
 
+class ResumeEmitterOnExit {
+public:
+    ResumeEmitterOnExit()                                      = default;
+    ResumeEmitterOnExit(const ResumeEmitterOnExit&)            = delete;
+    ResumeEmitterOnExit& operator=(const ResumeEmitterOnExit&) = delete;
+
+    ~ResumeEmitterOnExit() {
+        if (active) {
+            Testing::ResumeEmitter();
+        }
+    }
+
+    void Resume() noexcept {
+        if (active) {
+            Testing::ResumeEmitter();
+            active = false;
+        }
+    }
+
+private:
+    bool active{true};
+};
+
 class FlushWaitersOnExit {
 public:
     FlushWaitersOnExit(std::atomic<bool>& _release, std::vector<std::jthread>& _waiters) noexcept :
@@ -974,6 +1006,328 @@ void TestMultithreadedProducers() {
     Expect(stats.records_dropped_oversized == 0, "valid records were treated as oversized");
 }
 
+void TestFlushAllHarvestsParkedLiveShard() {
+    ScopedOutput  output("moer-profile-live-flush");
+    RuntimeConfig config = MakeRuntimeConfig(output);
+    Expect(Start(config) == StartResult::Started, "live-shard flush runtime failed to start");
+
+    const SchemaRegistration registration = RegisterSchema(MakeRuntimeSchema());
+    Expect(registration.status == SchemaStatus::Registered, "live-shard flush schema failed to register");
+
+    std::atomic<bool> ready{false};
+    std::atomic<bool> release{false};
+    EmitStatus        worker_status{EmitStatus::Disabled};
+    std::jthread      worker([&](std::stop_token _stop) {
+        const std::array<FieldValueView, 3> values = {
+            FieldValueView{std::uint64_t{71}},
+            FieldValueView{std::uint64_t{1}},
+            FieldValueView{std::string_view("parked-flush")},
+        };
+        worker_status = Emit(registration.handle, values);
+        ready.store(true, std::memory_order_release);
+        while (!release.load(std::memory_order_acquire) && !_stop.stop_requested()) {
+            std::this_thread::yield();
+        }
+    });
+
+    Expect(
+        WaitUntil([&] {
+            return ready.load(std::memory_order_acquire);
+        }),
+        "live-shard flush worker did not park"
+    );
+    Expect(worker_status == EmitStatus::Accepted, "live-shard flush worker record was rejected");
+    const RuntimeStats parked_stats = GetRuntimeStats();
+    Expect(parked_stats.records_committed == 1, "parked record was not committed");
+    Expect(parked_stats.records_enqueued == 0, "sub-threshold parked record published before harvest");
+
+    ExpectFlushSucceeded(FlushAll(), "owner FlushAll did not harvest a parked live shard");
+    const RuntimeStats flushed_stats = GetRuntimeStats();
+    Expect(
+        flushed_stats.records_enqueued == 1 && flushed_stats.records_written == 1,
+        "owner FlushAll did not write the parked live record"
+    );
+    Expect(!release.load(std::memory_order_acquire), "live-shard worker was released before verification");
+
+    release.store(true, std::memory_order_release);
+    worker.join();
+    Expect(Shutdown() == ShutdownResult::Completed, "live-shard flush runtime did not shut down");
+
+    const ParsedDump dump = ParseDump(output.path, config.codec_limits);
+    Expect(dump.records.size() == 1, "TLS destruction duplicated or lost the harvested live record");
+    Expect(dump.losses.empty(), "live-shard flush fabricated a loss notice");
+}
+
+void TestShutdownHarvestsParkedLiveShard() {
+    ScopedOutput  output("moer-profile-live-shutdown");
+    RuntimeConfig config = MakeRuntimeConfig(output);
+    Expect(Start(config) == StartResult::Started, "live-shard shutdown runtime failed to start");
+
+    const SchemaRegistration registration = RegisterSchema(MakeRuntimeSchema());
+    Expect(registration.status == SchemaStatus::Registered, "live-shard shutdown schema failed to register");
+
+    std::atomic<bool> ready{false};
+    std::atomic<bool> release{false};
+    EmitStatus        worker_status{EmitStatus::Disabled};
+    std::jthread      worker([&](std::stop_token _stop) {
+        const std::array<FieldValueView, 3> values = {
+            FieldValueView{std::uint64_t{72}},
+            FieldValueView{std::uint64_t{1}},
+            FieldValueView{std::string_view("parked-shutdown")},
+        };
+        worker_status = Emit(registration.handle, values);
+        ready.store(true, std::memory_order_release);
+        while (!release.load(std::memory_order_acquire) && !_stop.stop_requested()) {
+            std::this_thread::yield();
+        }
+    });
+
+    Expect(
+        WaitUntil([&] {
+            return ready.load(std::memory_order_acquire);
+        }),
+        "live-shard shutdown worker did not park"
+    );
+    Expect(worker_status == EmitStatus::Accepted, "live-shard shutdown worker record was rejected");
+    Expect(GetRuntimeStats().records_enqueued == 0, "parked shutdown record published too early");
+
+    Expect(
+        Shutdown() == ShutdownResult::Completed,
+        "owner Shutdown did not complete while the producer thread remained alive"
+    );
+    const ParsedDump dump = ParseDump(output.path, config.codec_limits);
+    Expect(dump.records.size() == 1, "owner Shutdown lost the parked live record");
+    const RuntimeStats before_worker_exit = GetRuntimeStats();
+
+    release.store(true, std::memory_order_release);
+    worker.join();
+    const RuntimeStats after_worker_exit = GetRuntimeStats();
+    Expect(
+        after_worker_exit.records_dropped_stopped == before_worker_exit.records_dropped_stopped,
+        "TLS destruction re-published an already harvested stopped-generation record"
+    );
+}
+
+void TestShutdownWaitsForAdmittedEmitterBeforeHarvest() {
+    Testing::ClearHooks();
+    ScopedOutput output("moer-profile-live-active-shutdown");
+    Expect(
+        Testing::ConfigureEmitterPauseAfterAdmission(true),
+        "active-emitter pause hook could not be configured while stopped"
+    );
+
+    std::jthread        worker;
+    std::jthread        shutdown_thread;
+    ResumeEmitterOnExit resume_guard;
+
+    RuntimeConfig config = MakeRuntimeConfig(output);
+    Expect(Start(config) == StartResult::Started, "active-emitter shutdown runtime failed to start");
+    const SchemaDescriptor   schema       = MakeRuntimeSchema();
+    const SchemaRegistration registration = RegisterSchema(schema);
+    Expect(
+        registration.status == SchemaStatus::Registered, "active-emitter shutdown schema failed to register"
+    );
+
+    EmitStatus        emit_status{EmitStatus::Disabled};
+    ShutdownResult    shutdown_result{ShutdownResult::Faulted};
+    std::atomic<bool> shutdown_done{false};
+    worker = std::jthread([&] {
+        const std::array<FieldValueView, 3> values = {
+            FieldValueView{std::uint64_t{74}},
+            FieldValueView{std::uint64_t{1}},
+            FieldValueView{std::string_view("active-shutdown")},
+        };
+        emit_status = Emit(registration.handle, values);
+    });
+    Expect(Testing::WaitForEmitterPaused(2000), "Emit did not pause after acquiring admission");
+
+    shutdown_thread = std::jthread([&] {
+        shutdown_result = Shutdown();
+        shutdown_done.store(true, std::memory_order_release);
+    });
+    Expect(
+        WaitUntil([&] {
+            return RegisterSchema(schema).status == SchemaStatus::NotRunning;
+        }),
+        "Shutdown did not close admission while the accepted Emit was paused"
+    );
+    Expect(
+        !shutdown_done.load(std::memory_order_acquire),
+        "Shutdown finalized before its already-admitted Emit completed"
+    );
+
+    resume_guard.Resume();
+    worker.join();
+    shutdown_thread.join();
+    Expect(emit_status == EmitStatus::Accepted, "already-admitted Emit failed during Shutdown");
+    Expect(shutdown_result == ShutdownResult::Completed, "active-emitter Shutdown did not complete");
+
+    const ParsedDump dump = ParseDump(output.path, config.codec_limits);
+    Expect(dump.records.size() == 1, "active-emitter Shutdown lost or duplicated its accepted record");
+    Expect(dump.losses.empty(), "active-emitter Shutdown fabricated a loss notice");
+    Testing::ClearHooks();
+}
+
+void TestParkedWorkerRebindsAcrossGenerations() {
+    ScopedOutput  first_output("moer-profile-live-generation-a");
+    ScopedOutput  second_output("moer-profile-live-generation-b");
+    RuntimeConfig first_config = MakeRuntimeConfig(first_output);
+    Expect(Start(first_config) == StartResult::Started, "first live generation failed to start");
+
+    const SchemaDescriptor   schema             = MakeRuntimeSchema();
+    const SchemaRegistration first_registration = RegisterSchema(schema);
+    Expect(
+        first_registration.status == SchemaStatus::Registered,
+        "first live generation schema failed to register"
+    );
+
+    std::array<SchemaHandle, 2> handles{};
+    handles[0] = first_registration.handle;
+    std::array<EmitStatus, 2>  statuses{EmitStatus::Disabled, EmitStatus::Disabled};
+    std::atomic<std::uint32_t> command{0};
+    std::atomic<std::uint32_t> completed{0};
+    std::atomic<bool>          release{false};
+    std::jthread               worker([&](std::stop_token _stop) {
+        for (std::uint32_t phase = 1; phase <= 2; ++phase) {
+            while (command.load(std::memory_order_acquire) < phase && !_stop.stop_requested()) {
+                std::this_thread::yield();
+            }
+            if (_stop.stop_requested()) {
+                return;
+            }
+            const std::array<FieldValueView, 3> values = {
+                FieldValueView{std::uint64_t{73}},
+                FieldValueView{std::uint64_t{phase}},
+                FieldValueView{std::string_view("parked-generation")},
+            };
+            statuses[phase - 1] = Emit(handles[phase - 1], values);
+            completed.store(phase, std::memory_order_release);
+        }
+        while (!release.load(std::memory_order_acquire) && !_stop.stop_requested()) {
+            std::this_thread::yield();
+        }
+    });
+
+    command.store(1, std::memory_order_release);
+    Expect(
+        WaitUntil([&] {
+            return completed.load(std::memory_order_acquire) >= 1;
+        }),
+        "parked worker did not emit in the first generation"
+    );
+    Expect(statuses[0] == EmitStatus::Accepted, "first parked-generation record was rejected");
+    Expect(Shutdown() == ShutdownResult::Completed, "first live generation did not shut down");
+    const ParsedDump first_dump = ParseDump(first_output.path, first_config.codec_limits);
+    Expect(first_dump.records.size() == 1, "first live generation lost or duplicated its record");
+
+    RuntimeConfig second_config = MakeRuntimeConfig(second_output);
+    Expect(Start(second_config) == StartResult::Started, "second live generation failed to start");
+    const SchemaRegistration second_registration = RegisterSchema(schema);
+    Expect(
+        second_registration.status == SchemaStatus::Registered,
+        "second live generation schema failed to register"
+    );
+    Expect(
+        second_registration.handle.generation != first_registration.handle.generation,
+        "parked worker restart reused a generation"
+    );
+    handles[1] = second_registration.handle;
+    command.store(2, std::memory_order_release);
+    Expect(
+        WaitUntil([&] {
+            return completed.load(std::memory_order_acquire) >= 2;
+        }),
+        "parked worker did not emit in the second generation"
+    );
+    Expect(statuses[1] == EmitStatus::Accepted, "second parked-generation record was rejected");
+    const RuntimeStats second_parked_stats = GetRuntimeStats();
+    Expect(second_parked_stats.records_committed == 1, "second generation inherited committed records");
+    Expect(second_parked_stats.records_enqueued == 0, "second parked record published before shutdown");
+    Expect(
+        second_parked_stats.records_dropped_stale_generation == 0,
+        "old parked data polluted second-generation stale accounting"
+    );
+
+    Expect(Shutdown() == ShutdownResult::Completed, "second live generation did not shut down");
+    const ParsedDump second_dump = ParseDump(second_output.path, second_config.codec_limits);
+    Expect(second_dump.records.size() == 1, "second live generation lost or duplicated its record");
+    Expect(
+        std::get<std::uint64_t>(first_dump.records.front().values[1]) == 1 &&
+            std::get<std::uint64_t>(second_dump.records.front().values[1]) == 2,
+        "parked worker records crossed generation boundaries"
+    );
+
+    release.store(true, std::memory_order_release);
+    worker.join();
+}
+
+void TestTlsDestructorRacesFlushAllExactlyOnce() {
+    ScopedOutput  output("moer-profile-live-destructor-race");
+    RuntimeConfig config       = MakeRuntimeConfig(output);
+    config.tls_publish_records = 64;
+    Expect(Start(config) == StartResult::Started, "TLS destructor race runtime failed to start");
+
+    const SchemaRegistration registration = RegisterSchema(MakeRuntimeSchema());
+    Expect(registration.status == SchemaStatus::Registered, "TLS destructor race schema failed to register");
+
+    constexpr std::size_t    worker_count = 96;
+    std::atomic<std::size_t> accepted{0};
+    std::atomic<bool>        workers_joined{false};
+    std::atomic<bool>        flush_failed{false};
+    std::jthread             flusher([&](std::stop_token _stop) {
+        while (!workers_joined.load(std::memory_order_acquire) && !_stop.stop_requested()) {
+            const FlushResult result = FlushAll();
+            if (result == FlushResult::Rejected || result == FlushResult::Faulted) {
+                flush_failed.store(true, std::memory_order_release);
+            }
+            std::this_thread::yield();
+        }
+    });
+
+    std::vector<std::jthread> workers;
+    workers.reserve(worker_count);
+    for (std::size_t index = 0; index < worker_count; ++index) {
+        workers.emplace_back([&, index] {
+            const std::array<FieldValueView, 3> values = {
+                FieldValueView{static_cast<std::uint64_t>(index)},
+                FieldValueView{std::uint64_t{1}},
+                FieldValueView{std::string_view("destructor-race")},
+            };
+            if (Emit(registration.handle, values) == EmitStatus::Accepted) {
+                accepted.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    workers.clear();
+    workers_joined.store(true, std::memory_order_release);
+    flusher.join();
+
+    Expect(!flush_failed.load(std::memory_order_acquire), "TLS destructor race rejected a flush interval");
+    Expect(accepted.load(std::memory_order_relaxed) == worker_count, "TLS destructor race rejected a record");
+    ExpectFlushSucceeded(FlushAll(), "final TLS destructor race flush failed");
+    Expect(Shutdown() == ShutdownResult::Completed, "TLS destructor race runtime did not shut down");
+
+    const ParsedDump dump = ParseDump(output.path, config.codec_limits);
+    Expect(dump.records.size() == worker_count, "TLS destructor race lost or duplicated records");
+    std::vector<bool> seen(worker_count, false);
+    for (const DecodedRecord& record : dump.records) {
+        const std::uint64_t producer = std::get<std::uint64_t>(record.values[0]);
+        Expect(producer < worker_count, "TLS destructor race persisted an invalid producer");
+        Expect(!seen[producer], "TLS destructor race duplicated a producer record");
+        seen[producer] = true;
+    }
+    Expect(
+        std::ranges::all_of(
+            seen,
+            [](bool _seen) {
+                return _seen;
+            }
+        ),
+        "TLS destructor race omitted a producer record"
+    );
+    Expect(dump.losses.empty(), "TLS destructor race fabricated a loss notice");
+}
+
 void TestBoundedQueueDropNewest() {
     Testing::ClearHooks();
     ScopedOutput output("moer-profile-bounded");
@@ -1106,6 +1460,152 @@ void TestBoundedQueueDropNewest() {
     Testing::ClearHooks();
 }
 
+void TestMultiShardHarvestHonorsQueueLimitsAndLoss() {
+    Testing::ClearHooks();
+    ScopedOutput output("moer-profile-live-bounded-harvest");
+    Expect(
+        Testing::ConfigureWriterPauseAfterStart(true),
+        "multi-shard harvest pause hook could not be configured while stopped"
+    );
+
+    std::jthread       flusher;
+    ResumeWriterOnExit resume_guard;
+
+    const SchemaDescriptor              schema = MakeRuntimeSchema();
+    constexpr std::string_view          label{"multi-shard"};
+    const std::array<FieldValueView, 3> sizing_values = {
+        FieldValueView{std::uint64_t{1}},
+        FieldValueView{std::uint64_t{1}},
+        FieldValueView{label},
+    };
+    Moer::Array<std::uint8_t> encoded_record;
+    const CodecLimits         limits{};
+    Expect(
+        EncodeRecordPayload(
+            ComputeSchemaHash(schema), 1, schema.fields, sizing_values, limits, encoded_record
+        ) == EncodeStatus::Ok,
+        "multi-shard harvest could not size its record"
+    );
+    const std::size_t record_bytes = encoded_record.size();
+
+    RuntimeConfig config       = MakeRuntimeConfig(output);
+    config.max_record_bytes    = record_bytes * 2;
+    config.tls_publish_records = 2;
+    config.tls_publish_bytes   = record_bytes * 2;
+    config.tls_max_records     = 2;
+    config.tls_max_bytes       = record_bytes * 2;
+    config.queue_max_chunks    = 2;
+    config.queue_max_records   = 2;
+    config.queue_max_bytes     = record_bytes * 2;
+    Expect(Start(config) == StartResult::Started, "multi-shard harvest runtime failed to start");
+    Expect(Testing::WaitForWriterPaused(2000), "multi-shard harvest writer did not pause");
+
+    const SchemaRegistration registration = RegisterSchema(schema);
+    Expect(registration.status == SchemaStatus::Registered, "multi-shard harvest schema failed to register");
+
+    constexpr std::size_t     worker_count = 4;
+    std::atomic<std::size_t>  ready{0};
+    std::atomic<std::size_t>  accepted{0};
+    std::atomic<bool>         release{false};
+    std::vector<std::jthread> workers;
+    workers.reserve(worker_count);
+    for (std::size_t index = 0; index < worker_count; ++index) {
+        workers.emplace_back([&, index](std::stop_token _stop) {
+            const std::array<FieldValueView, 3> values = {
+                FieldValueView{static_cast<std::uint64_t>(index)},
+                FieldValueView{std::uint64_t{1}},
+                FieldValueView{label},
+            };
+            if (Emit(registration.handle, values) == EmitStatus::Accepted) {
+                accepted.fetch_add(1, std::memory_order_relaxed);
+            }
+            ready.fetch_add(1, std::memory_order_release);
+            while (!release.load(std::memory_order_acquire) && !_stop.stop_requested()) {
+                std::this_thread::yield();
+            }
+        });
+    }
+    Expect(
+        WaitUntil([&] {
+            return ready.load(std::memory_order_acquire) == worker_count;
+        }),
+        "multi-shard workers did not park"
+    );
+    Expect(accepted.load(std::memory_order_relaxed) == worker_count, "a multi-shard record was rejected");
+    Expect(GetRuntimeStats().records_enqueued == 0, "multi-shard records published before owner harvest");
+
+    FlushResult flush_result{FlushResult::NothingPending};
+    flusher = std::jthread([&] {
+        flush_result = FlushAll();
+    });
+    Expect(
+        WaitUntil([&] {
+            const RuntimeStats stats = GetRuntimeStats();
+            return stats.records_enqueued + stats.records_dropped_queue_full == worker_count;
+        }),
+        "multi-shard harvest did not account every parked record"
+    );
+
+    const RuntimeStats paused_stats = GetRuntimeStats();
+    Expect(
+        paused_stats.records_committed == worker_count,
+        "multi-shard harvest changed committed record accounting"
+    );
+    Expect(
+        paused_stats.resident_chunks == 2 && paused_stats.resident_records == 2,
+        "multi-shard harvest exceeded or underfilled the bounded queue"
+    );
+    Expect(
+        paused_stats.resident_bytes == record_bytes * 2,
+        "multi-shard harvest resident bytes disagree with the queue limit"
+    );
+    Expect(
+        paused_stats.records_enqueued == 2 && paused_stats.chunks_enqueued == 2,
+        "multi-shard harvest accepted the wrong number of chunks"
+    );
+    Expect(
+        paused_stats.records_dropped_queue_full == 2 && paused_stats.chunks_dropped == 2,
+        "multi-shard harvest did not drop-newest beyond the queue limit"
+    );
+    Expect(
+        paused_stats.high_water_chunks <= config.queue_max_chunks &&
+            paused_stats.high_water_records <= config.queue_max_records &&
+            paused_stats.high_water_bytes <= config.queue_max_bytes,
+        "multi-shard harvest exceeded a hard queue high-water limit"
+    );
+
+    release.store(true, std::memory_order_release);
+    workers.clear();
+    resume_guard.Resume();
+    flusher.join();
+    Expect(
+        flush_result == FlushResult::Rejected,
+        "partial multi-shard queue rejection was not surfaced after flushing accepted data"
+    );
+    Expect(Shutdown() == ShutdownResult::Completed, "multi-shard harvest runtime did not shut down");
+
+    const ParsedDump dump = ParseDump(output.path, config.codec_limits);
+    Expect(dump.records.size() == 2, "multi-shard harvest persisted the wrong record count");
+    Expect(dump.losses.size() == 1, "multi-shard queue losses were not coalesced");
+    const LossNotice& loss = dump.losses.front();
+    Expect(loss.record_count == 2, "multi-shard loss notice has the wrong record count");
+    Expect(
+        (loss.reason_mask & static_cast<std::uint32_t>(LossReason::QueueFull)) != 0,
+        "multi-shard loss notice omitted QueueFull"
+    );
+    constexpr std::uint64_t value_bytes_per_record = 8 + 8 + 4 + label.size();
+    Expect(
+        loss.value_bytes == value_bytes_per_record * 2,
+        "multi-shard loss notice has the wrong value byte count"
+    );
+    Expect(
+        dump.session_ends.size() == 1 && dump.session_ends.front().records_written == 2 &&
+            dump.session_ends.front().records_dropped == 2,
+        "multi-shard SessionEnd totals disagree with records and Loss"
+    );
+    Testing::ClearHooks();
+}
+
 void TestConcurrentFlushWaiters() {
     Testing::ClearHooks();
     ScopedOutput output("moer-profile-concurrent-flush");
@@ -1175,6 +1675,133 @@ void TestConcurrentFlushWaiters() {
     const ParsedDump dump = ParseDump(output.path, config.codec_limits);
     Expect(dump.records.size() == 1, "concurrent flush lost or duplicated queued data");
     Expect(dump.losses.empty(), "concurrent flush fabricated a loss notice");
+    Testing::ClearHooks();
+}
+
+void TestFaultedRestartDiscardsParkedStaleShard() {
+    Testing::ClearHooks();
+    ScopedOutput output("moer-profile-live-fault-restart");
+    Expect(
+        Testing::ConfigureFault(Testing::FaultPoint::WritePacket, 2),
+        "parked fault-restart hook could not be configured"
+    );
+
+    RuntimeConfig config       = MakeRuntimeConfig(output);
+    config.tls_publish_records = 2;
+    Expect(Start(config) == StartResult::Started, "parked fault generation failed to start");
+
+    const SchemaDescriptor   schema             = MakeRuntimeSchema();
+    const SchemaRegistration first_registration = RegisterSchema(schema);
+    Expect(
+        first_registration.status == SchemaStatus::Registered,
+        "parked fault generation schema failed to register"
+    );
+
+    std::array<SchemaHandle, 2> handles{};
+    handles[0] = first_registration.handle;
+    std::array<EmitStatus, 2>  statuses{EmitStatus::Disabled, EmitStatus::Disabled};
+    std::atomic<std::uint32_t> command{0};
+    std::atomic<std::uint32_t> completed{0};
+    std::atomic<bool>          release{false};
+    std::jthread               worker([&](std::stop_token _stop) {
+        for (std::uint32_t phase = 1; phase <= 2; ++phase) {
+            while (command.load(std::memory_order_acquire) < phase && !_stop.stop_requested()) {
+                std::this_thread::yield();
+            }
+            if (_stop.stop_requested()) {
+                return;
+            }
+            const std::array<FieldValueView, 3> values = {
+                FieldValueView{std::uint64_t{88}},
+                FieldValueView{std::uint64_t{phase}},
+                FieldValueView{std::string_view("fault-restart-worker")},
+            };
+            statuses[phase - 1] = Emit(handles[phase - 1], values);
+            completed.store(phase, std::memory_order_release);
+        }
+        while (!release.load(std::memory_order_acquire) && !_stop.stop_requested()) {
+            std::this_thread::yield();
+        }
+    });
+
+    command.store(1, std::memory_order_release);
+    Expect(
+        WaitUntil([&] {
+            return completed.load(std::memory_order_acquire) >= 1;
+        }),
+        "worker did not park data before the writer fault"
+    );
+    Expect(statuses[0] == EmitStatus::Accepted, "parked pre-fault record was rejected");
+    Expect(GetRuntimeStats().records_enqueued == 0, "parked pre-fault record published too early");
+
+    const std::array<FieldValueView, 3> trigger_values = {
+        FieldValueView{std::uint64_t{99}},
+        FieldValueView{std::uint64_t{1}},
+        FieldValueView{std::string_view("fault-trigger")},
+    };
+    const EmitStatus first_trigger  = Emit(first_registration.handle, trigger_values);
+    const EmitStatus second_trigger = Emit(first_registration.handle, trigger_values);
+    Expect(
+        first_trigger == EmitStatus::Accepted,
+        "first fault-trigger record failed before filling the main TLS shard"
+    );
+    Expect(
+        second_trigger == EmitStatus::Accepted || second_trigger == EmitStatus::SinkFault,
+        "second fault-trigger record returned an unexpected status"
+    );
+    Expect(
+        WaitUntil([] {
+            return GetRuntimeState() == RuntimeState::Faulted;
+        }),
+        "writer did not enter Faulted after the deterministic packet failure"
+    );
+    Expect(Shutdown() == ShutdownResult::Faulted, "faulted parked generation did not report failure");
+    Expect(GetRuntimeState() == RuntimeState::Stopped, "faulted parked generation did not stop");
+    const RuntimeStats faulted_stats = GetRuntimeStats();
+    Expect(
+        faulted_stats.records_dropped_after_fault == 3,
+        "faulted Shutdown did not account the queued chunk and parked live shard"
+    );
+    Expect(
+        faulted_stats.chunks_dropped == 2, "faulted Shutdown did not account both queued and parked chunks"
+    );
+
+    Testing::ClearHooks();
+    config.replace_existing = true;
+    Expect(Start(config) == StartResult::Started, "parked worker did not restart after writer fault");
+    const SchemaRegistration second_registration = RegisterSchema(schema);
+    Expect(
+        second_registration.status == SchemaStatus::Registered, "parked restart schema failed to register"
+    );
+    handles[1] = second_registration.handle;
+    command.store(2, std::memory_order_release);
+    Expect(
+        WaitUntil([&] {
+            return completed.load(std::memory_order_acquire) >= 2;
+        }),
+        "parked worker did not emit after fault restart"
+    );
+    Expect(statuses[1] == EmitStatus::Accepted, "parked post-fault record was rejected");
+    const RuntimeStats restarted_stats = GetRuntimeStats();
+    Expect(restarted_stats.records_committed == 1, "fault restart inherited old committed records");
+    Expect(restarted_stats.records_enqueued == 0, "post-fault parked record published before shutdown");
+    Expect(
+        restarted_stats.records_dropped_stale_generation == 0,
+        "old faulted shard polluted restarted stale-generation accounting"
+    );
+
+    Expect(Shutdown() == ShutdownResult::Completed, "parked fault restart did not shut down cleanly");
+    const ParsedDump dump = ParseDump(output.path, config.codec_limits);
+    Expect(dump.records.size() == 1, "fault restart output retained old or duplicated new parked data");
+    Expect(
+        std::get<std::uint64_t>(dump.records.front().values[0]) == 88 &&
+            std::get<std::uint64_t>(dump.records.front().values[1]) == 2,
+        "fault restart output contains the wrong worker generation"
+    );
+    Expect(dump.losses.empty(), "fault restart output inherited an old-generation Loss");
+
+    release.store(true, std::memory_order_release);
+    worker.join();
     Testing::ClearHooks();
 }
 
@@ -1336,8 +1963,15 @@ int main() {
         TestReplacementPreservesForeignTemp();
         TestFinalPublicationRaces();
         TestMultithreadedProducers();
+        TestFlushAllHarvestsParkedLiveShard();
+        TestShutdownHarvestsParkedLiveShard();
+        TestShutdownWaitsForAdmittedEmitterBeforeHarvest();
+        TestParkedWorkerRebindsAcrossGenerations();
+        TestTlsDestructorRacesFlushAllExactlyOnce();
         TestBoundedQueueDropNewest();
+        TestMultiShardHarvestHonorsQueueLimitsAndLoss();
         TestConcurrentFlushWaiters();
+        TestFaultedRestartDiscardsParkedStaleShard();
         TestWriterFaultReleasesFlushWaiter(
             Testing::FaultPoint::WritePacket, 2, RuntimeFault::WritePacket, "moer-profile-write-fault", true
         );

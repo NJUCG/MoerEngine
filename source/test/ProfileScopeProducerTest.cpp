@@ -104,10 +104,7 @@ SchemaHandle StartCpuProducer(const RuntimeConfig& _config) {
         );
     }
     const SchemaRegistration registration = RegisterSchema(Templates::CpuScope());
-    Expect(
-        registration.status == SchemaStatus::Registered,
-        "CpuScope schema failed to register"
-    );
+    Expect(registration.status == SchemaStatus::Registered, "CpuScope schema failed to register");
     Expect(
         CpuScopeProducer::Activate(registration.handle) == CpuScopeActivationResult::Activated,
         "CpuScope producer failed to activate"
@@ -181,11 +178,11 @@ ParsedDump ParseDump(const std::filesystem::path& _path, const CodecLimits& _lim
 }
 
 struct CpuRecordView {
-    std::uint64_t thread_id{0};
+    std::uint64_t    thread_id{0};
     std::string_view name{};
-    std::uint64_t begin_ns{0};
-    std::uint64_t end_ns{0};
-    std::uint32_t depth{0};
+    std::uint64_t    begin_ns{0};
+    std::uint64_t    end_ns{0};
+    std::uint32_t    depth{0};
 };
 
 CpuRecordView ViewCpuRecord(const DecodedRecord& _record) {
@@ -230,10 +227,7 @@ void TestProfileDumpConfigParsing() {
         defaults.engine.profile_dump.output_path == "./profile/MoerProfile.mpd",
         "profile dump default output path changed"
     );
-    Expect(
-        defaults.engine.profile_dump.replace_existing,
-        "profile dump default replacement policy changed"
-    );
+    Expect(defaults.engine.profile_dump.replace_existing, "profile dump default replacement policy changed");
 
     const std::filesystem::path explicit_path = output.directory / "explicit.toml";
     WriteTextFile(
@@ -263,7 +257,9 @@ void TestDisabledAndActivationValidation() {
 
     CpuScopeProducer::Deactivate();
     Expect(!CpuScopeProducer::IsActive(), "producer began active");
-    { MOER_PROFILE_SCOPE("Disabled.BeforeRuntime"); }
+    {
+        MOER_PROFILE_SCOPE("Disabled.BeforeRuntime");
+    }
     const SchemaHandle plausible{
         .hash       = ComputeSchemaHash(Templates::CpuScope()),
         .generation = 1,
@@ -280,16 +276,17 @@ void TestDisabledAndActivationValidation() {
     ScopedOutput        output("moer-profile-scope-activation");
     const RuntimeConfig config = MakeRuntimeConfig(output);
     Expect(Start(config) == StartResult::Started, "activation runtime failed to start");
-    { ScopedCpuProfile disabled("Disabled.WhileRunning"); }
+    {
+        ScopedCpuProfile disabled("Disabled.WhileRunning");
+    }
 
     const SchemaRegistration wrong = RegisterSchema(MakeWrongSchema());
     const SchemaRegistration cpu   = RegisterSchema(Templates::CpuScope());
     Expect(wrong.status == SchemaStatus::Registered, "wrong-schema fixture failed to register");
     Expect(cpu.status == SchemaStatus::Registered, "CpuScope fixture failed to register");
     Expect(
-        CpuScopeProducer::Activate(
-            {.hash = cpu.handle.hash, .generation = cpu.handle.generation + 1}
-        ) == CpuScopeActivationResult::StaleGeneration,
+        CpuScopeProducer::Activate({.hash = cpu.handle.hash, .generation = cpu.handle.generation + 1}) ==
+            CpuScopeActivationResult::StaleGeneration,
         "producer accepted a stale generation"
     );
     Expect(
@@ -305,7 +302,9 @@ void TestDisabledAndActivationValidation() {
         CpuScopeProducer::Activate(cpu.handle) == CpuScopeActivationResult::AlreadyActive,
         "duplicate activation was not idempotent"
     );
-    { ScopedCpuProfile valid("Enabled.AfterActivation"); }
+    {
+        ScopedCpuProfile valid("Enabled.AfterActivation");
+    }
     StopCpuProducer();
 
     const ParsedDump dump = ParseDump(output.path, config.codec_limits);
@@ -322,7 +321,9 @@ void TestNestedDecode() {
     static_cast<void>(StartCpuProducer(config));
     {
         MOER_PROFILE_SCOPE("Nested.Outer");
-        { ScopedCpuProfile inner("Nested", "Inner"); }
+        {
+            ScopedCpuProfile inner("Nested", "Inner");
+        }
     }
     StopCpuProducer();
 
@@ -347,14 +348,14 @@ void TestMultithreadedTlsDepth() {
     const RuntimeConfig config = MakeRuntimeConfig(output);
     static_cast<void>(StartCpuProducer(config));
 
-    constexpr std::size_t thread_count = 4;
+    constexpr std::size_t     thread_count = 4;
     std::vector<std::jthread> threads;
     threads.reserve(thread_count);
     for (std::size_t index = 0; index < thread_count; ++index) {
         threads.emplace_back([index] {
             const std::string suffix = std::to_string(index);
-            ScopedCpuProfile outer("Thread.Outer." + suffix);
-            ScopedCpuProfile inner("Thread.Inner." + suffix);
+            ScopedCpuProfile  outer("Thread.Outer." + suffix);
+            ScopedCpuProfile  inner("Thread.Inner." + suffix);
         });
     }
     threads.clear();
@@ -365,8 +366,8 @@ void TestMultithreadedTlsDepth() {
     std::unordered_set<std::uint64_t> thread_ids;
     for (std::size_t index = 0; index < thread_count; ++index) {
         const std::string   suffix = std::to_string(index);
-        const CpuRecordView outer = ViewCpuRecord(FindRecord(dump, "Thread.Outer." + suffix));
-        const CpuRecordView inner = ViewCpuRecord(FindRecord(dump, "Thread.Inner." + suffix));
+        const CpuRecordView outer  = ViewCpuRecord(FindRecord(dump, "Thread.Outer." + suffix));
+        const CpuRecordView inner  = ViewCpuRecord(FindRecord(dump, "Thread.Inner." + suffix));
         Expect(outer.thread_id == inner.thread_id, "one thread changed id between nested scopes");
         Expect(outer.depth == 0 && inner.depth == 1, "TLS depth leaked between producer threads");
         thread_ids.insert(outer.thread_id);
@@ -375,9 +376,9 @@ void TestMultithreadedTlsDepth() {
 }
 
 void TestRestartRejectsStaleScope() {
-    ScopedOutput        first_output("moer-profile-scope-stale-first");
-    const RuntimeConfig first_config = MakeRuntimeConfig(first_output);
-    const SchemaHandle  first_handle = StartCpuProducer(first_config);
+    ScopedOutput                    first_output("moer-profile-scope-stale-first");
+    const RuntimeConfig             first_config = MakeRuntimeConfig(first_output);
+    const SchemaHandle              first_handle = StartCpuProducer(first_config);
     std::optional<ScopedCpuProfile> stale_scope;
     stale_scope.emplace("Stale.OldSession");
     CpuScopeProducer::Deactivate();
@@ -390,17 +391,18 @@ void TestRestartRejectsStaleScope() {
         second_handle.generation != first_handle.generation,
         "ProfileDump restart reused a producer generation"
     );
-    { ScopedCpuProfile current("Fresh.BeforeStaleDestructor"); }
+    {
+        ScopedCpuProfile current("Fresh.BeforeStaleDestructor");
+    }
     stale_scope.reset();
-    Expect(
-        CpuScopeProducer::IsActive(),
-        "stale destructor disabled the restarted producer"
-    );
+    Expect(CpuScopeProducer::IsActive(), "stale destructor disabled the restarted producer");
     Expect(
         GetRuntimeStats().records_dropped_stale_generation == 0,
         "stale destructor charged the restarted session"
     );
-    { ScopedCpuProfile current("Fresh.AfterStaleDestructor"); }
+    {
+        ScopedCpuProfile current("Fresh.AfterStaleDestructor");
+    }
     StopCpuProducer();
 
     const ParsedDump dump = ParseDump(second_output.path, second_config.codec_limits);
@@ -410,19 +412,13 @@ void TestRestartRejectsStaleScope() {
 }
 
 void TestRestartReplacesStaleProducerPublication() {
-    ScopedOutput        first_output("moer-profile-scope-stale-publication-first");
-    const RuntimeConfig first_config = MakeRuntimeConfig(first_output);
-    const SchemaHandle  first_handle = StartCpuProducer(first_config);
+    ScopedOutput                    first_output("moer-profile-scope-stale-publication-first");
+    const RuntimeConfig             first_config = MakeRuntimeConfig(first_output);
+    const SchemaHandle              first_handle = StartCpuProducer(first_config);
     std::optional<ScopedCpuProfile> stale_scope;
     stale_scope.emplace("Stale.BeforeMissedDeactivate");
-    Expect(
-        Shutdown() == ShutdownResult::Completed,
-        "stale-publication first runtime failed to shut down"
-    );
-    Expect(
-        !CpuScopeProducer::IsActive(),
-        "producer reported an old stopped generation as active"
-    );
+    Expect(Shutdown() == ShutdownResult::Completed, "stale-publication first runtime failed to shut down");
+    Expect(!CpuScopeProducer::IsActive(), "producer reported an old stopped generation as active");
 
     ScopedOutput        second_output("moer-profile-scope-stale-publication-second");
     const RuntimeConfig second_config = MakeRuntimeConfig(second_output);
@@ -439,11 +435,12 @@ void TestRestartReplacesStaleProducerPublication() {
         "stale-publication restart did not create a new schema generation"
     );
     Expect(
-        CpuScopeProducer::Activate(second_schema.handle) ==
-            CpuScopeActivationResult::Activated,
+        CpuScopeProducer::Activate(second_schema.handle) == CpuScopeActivationResult::Activated,
         "new generation could not replace stale producer publication"
     );
-    { ScopedCpuProfile current("Fresh.AfterMissedDeactivate"); }
+    {
+        ScopedCpuProfile current("Fresh.AfterMissedDeactivate");
+    }
     StopCpuProducer();
 
     const ParsedDump dump = ParseDump(second_output.path, second_config.codec_limits);
@@ -458,7 +455,9 @@ void TestNameBoundariesAndDepthRecovery() {
 
     const std::string accepted(ScopedCpuProfile::kMaxNameBytes, 'a');
     const std::string rejected(ScopedCpuProfile::kMaxNameBytes + 1, 'b');
-    { ScopedCpuProfile scope(accepted); }
+    {
+        ScopedCpuProfile scope(accepted);
+    }
     {
         ScopedCpuProfile ignored(rejected);
         ScopedCpuProfile recovered("Name.AfterRejected");
@@ -484,13 +483,9 @@ void TestNameBoundariesAndDepthRecovery() {
     Expect(dump.records.size() == 5, "name validation accepted or rejected the wrong boundary");
     Expect(ViewCpuRecord(FindRecord(dump, accepted)).depth == 0, "256-byte name changed depth");
     Expect(
-        ViewCpuRecord(FindRecord(dump, "Name.AfterRejected")).depth == 0,
-        "257-byte name leaked TLS depth"
+        ViewCpuRecord(FindRecord(dump, "Name.AfterRejected")).depth == 0, "257-byte name leaked TLS depth"
     );
-    Expect(
-        ViewCpuRecord(FindRecord(dump, "Name.AfterEmpty")).depth == 0,
-        "empty name leaked TLS depth"
-    );
+    Expect(ViewCpuRecord(FindRecord(dump, "Name.AfterEmpty")).depth == 0, "empty name leaked TLS depth");
     Expect(
         ViewCpuRecord(FindRecord(dump, std::string(100, 'p') + "." + std::string(155, 'n'))).depth == 0,
         "256-byte joined name was rejected"
@@ -544,12 +539,12 @@ private:
 
 void TestTaskSystemShutdownPublishesWorkerTls() {
     ScopedOutput  output("moer-profile-scope-task-shutdown");
-    RuntimeConfig config = MakeRuntimeConfig(output);
+    RuntimeConfig config       = MakeRuntimeConfig(output);
     config.tls_publish_records = 64;
     static_cast<void>(StartCpuProducer(config));
 
     TaskSystemGuard task_system;
-    GraphEventRef event = LambdaTask::Dispatch([] {
+    GraphEventRef   event = LambdaTask::Dispatch([] {
         ScopedCpuProfile outer("Task.Worker.Outer");
         ScopedCpuProfile inner("Task.Worker.Inner");
     });
@@ -566,16 +561,49 @@ void TestTaskSystemShutdownPublishesWorkerTls() {
     );
 }
 
+void TestOwnerFlushHarvestsLiveTaskWorkerTls() {
+    ScopedOutput  output("moer-profile-scope-task-live-flush");
+    RuntimeConfig config       = MakeRuntimeConfig(output);
+    config.tls_publish_records = 64;
+    static_cast<void>(StartCpuProducer(config));
+
+    TaskSystemGuard task_system;
+    GraphEventRef   event = LambdaTask::Dispatch([] {
+        ScopedCpuProfile outer("Task.LiveFlush.Outer");
+        ScopedCpuProfile inner("Task.LiveFlush.Inner");
+    });
+    event->Wait();
+
+    const RuntimeStats parked_stats = GetRuntimeStats();
+    Expect(parked_stats.records_committed == 2, "live TaskSystem scopes were not committed");
+    Expect(
+        parked_stats.records_enqueued == 0,
+        "live TaskSystem worker published its sub-threshold TLS before owner harvest"
+    );
+    ExpectFlushSucceeded(FlushAll(), "owner FlushAll did not harvest a live TaskSystem worker");
+    Expect(GetRuntimeStats().records_written == 2, "owner FlushAll did not write live TaskSystem scopes");
+
+    // Finalize the capture while the TaskSystem and its worker TLS remain
+    // alive. Its later TLS destructor must see an empty harvested shard.
+    StopCpuProducer();
+    task_system.Shutdown();
+
+    const ParsedDump dump = ParseDump(output.path, config.codec_limits);
+    Expect(dump.records.size() == 2, "live TaskSystem harvest lost or duplicated worker scopes");
+    Expect(
+        ViewCpuRecord(FindRecord(dump, "Task.LiveFlush.Outer")).depth == 0 &&
+            ViewCpuRecord(FindRecord(dump, "Task.LiveFlush.Inner")).depth == 1,
+        "live TaskSystem harvest changed worker scope depth"
+    );
+}
+
 void TestQueueFullDoesNotDisableProducer() {
     Testing::ClearHooks();
-    Expect(
-        Testing::ConfigureWriterPauseAfterStart(true),
-        "writer pause hook could not be configured"
-    );
+    Expect(Testing::ConfigureWriterPauseAfterStart(true), "writer pause hook could not be configured");
     WriterResumeGuard resume_guard;
 
     ScopedOutput  output("moer-profile-scope-queue-full");
-    RuntimeConfig config = MakeRuntimeConfig(output);
+    RuntimeConfig config       = MakeRuntimeConfig(output);
     config.max_record_bytes    = 4096;
     config.tls_publish_records = 1;
     config.tls_publish_bytes   = 4096;
@@ -587,16 +615,19 @@ void TestQueueFullDoesNotDisableProducer() {
     static_cast<void>(StartCpuProducer(config));
     Expect(Testing::WaitForWriterPaused(2000), "writer did not reach the queue-full pause point");
 
-    { ScopedCpuProfile accepted("QueueFull.Accepted"); }
-    { ScopedCpuProfile dropped("QueueFull.Dropped"); }
-    Expect(
-        CpuScopeProducer::IsActive(),
-        "bounded queue pressure disabled the CPU producer"
-    );
+    {
+        ScopedCpuProfile accepted("QueueFull.Accepted");
+    }
+    {
+        ScopedCpuProfile dropped("QueueFull.Dropped");
+    }
+    Expect(CpuScopeProducer::IsActive(), "bounded queue pressure disabled the CPU producer");
 
     resume_guard.Resume();
     ExpectFlushSucceeded(FlushAll(), "queue-full recovery did not drain accepted work");
-    { ScopedCpuProfile recovered("QueueFull.Recovered"); }
+    {
+        ScopedCpuProfile recovered("QueueFull.Recovered");
+    }
     StopCpuProducer();
     Testing::ClearHooks();
 
@@ -614,15 +645,21 @@ void TestFaultSelfDisables() {
     );
 
     ScopedOutput  output("moer-profile-scope-fault");
-    RuntimeConfig config = MakeRuntimeConfig(output);
+    RuntimeConfig config       = MakeRuntimeConfig(output);
     config.tls_publish_records = 1;
     static_cast<void>(StartCpuProducer(config));
-    { ScopedCpuProfile first("Fault.Trigger"); }
+    {
+        ScopedCpuProfile first("Fault.Trigger");
+    }
     Expect(FlushAll() == FlushResult::Faulted, "writer fault did not become observable");
     Expect(CpuScopeProducer::IsActive(), "producer stopped before observing an Emit failure");
-    { ScopedCpuProfile second("Fault.Observe"); }
+    {
+        ScopedCpuProfile second("Fault.Observe");
+    }
     Expect(!CpuScopeProducer::IsActive(), "sink fault did not self-disable the producer");
-    { ScopedCpuProfile ignored("Fault.AfterDisable"); }
+    {
+        ScopedCpuProfile ignored("Fault.AfterDisable");
+    }
     Expect(Shutdown() == ShutdownResult::Faulted, "faulted writer shutdown reported success");
     Testing::ClearHooks();
 }
@@ -639,6 +676,7 @@ int main() {
         TestRestartReplacesStaleProducerPublication();
         TestNameBoundariesAndDepthRecovery();
         TestTaskSystemShutdownPublishesWorkerTls();
+        TestOwnerFlushHarvestsLiveTaskWorkerTls();
         TestQueueFullDoesNotDisableProducer();
         TestFaultSelfDisables();
         std::cout << "ProfileScope producer contract tests passed." << std::endl;

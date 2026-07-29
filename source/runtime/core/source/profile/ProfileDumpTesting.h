@@ -27,9 +27,12 @@ CORE_API bool ConfigureFault(FaultPoint _point, std::uint64_t _trigger_hit = 1) 
 
 CORE_API bool ConfigureWriterPauseBeforeTempOpen(bool _enabled) noexcept;
 CORE_API bool ConfigureWriterPauseAfterStart(bool _enabled) noexcept;
+CORE_API bool ConfigureEmitterPauseAfterAdmission(bool _enabled) noexcept;
 CORE_API bool WaitForWriterPaused(std::uint32_t _timeout_ms) noexcept;
+CORE_API bool WaitForEmitterPaused(std::uint32_t _timeout_ms) noexcept;
 CORE_API bool CreateActiveTempCollision(const std::uint8_t* _bytes, std::size_t _byte_count) noexcept;
 CORE_API void ResumeWriter() noexcept;
+CORE_API void ResumeEmitter() noexcept;
 CORE_API void ClearHooks() noexcept;
 
 } // namespace Moer::ProfileDump::Testing
