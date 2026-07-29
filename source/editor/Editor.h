@@ -13,12 +13,16 @@ class EditorUI;
 class Engine;
 class Scene;
 
+namespace ProfileDump {
+class ProfileDocumentLoader;
+}
+
 class Editor {
 public:
     struct StartupHooks {
-        bool main_window_visible = true;
+        bool                                                                 main_window_visible = true;
         std::function<void(std::string_view title, std::string_view detail)> on_progress;
-        std::function<void()> on_first_main_present;
+        std::function<void()>                                                on_first_main_present;
     };
 
     struct ExtraHooks {
@@ -32,6 +36,8 @@ public:
     void Init(int argc, const char** argv, StartupHooks startup_hooks);
     void Run();
     void Run(const ExtraHooks& extra_hooks);
+    // Run and ShutDown are Game Thread operations. Native file-dialog
+    // initialization and teardown must remain on that owning thread.
     void ShutDown() noexcept;
 
     Engine&       GetEngine();
@@ -39,10 +45,14 @@ public:
 
 private:
     void ReportStartupProgress(std::string_view title, std::string_view detail) const noexcept;
+    void InitializeNativeFileDialog();
+    void ShutDownNativeFileDialog() noexcept;
 
-    UniquePtr<Engine>   m_engine;
-    UniquePtr<EditorUI> m_editor_ui;
-    StartupHooks        m_startup_hooks;
+    UniquePtr<Engine>                             m_engine;
+    UniquePtr<ProfileDump::ProfileDocumentLoader> m_profile_document_loader;
+    UniquePtr<EditorUI>                           m_editor_ui;
+    StartupHooks                                  m_startup_hooks;
+    bool                                          m_nfd_initialized = false;
 };
 
 } // namespace Moer

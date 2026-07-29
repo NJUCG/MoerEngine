@@ -64,12 +64,14 @@ EditorUI::EditorUI(
     UniquePtr<Render::UIRenderer>         renderer,
     SharedPtr<EditorConfig>               editor_config,
     const remote::RemoteModuleController& remote_controller,
-    Engine&                               engine
+    Engine&                               engine,
+    ProfileDump::ProfileDocumentLoader&   profile_document_loader
 ) :
     m_raster_ui(editor_config->raster_config),
     m_raytracing_ui(editor_config->raytracing_config),
     m_scene_editing_ui(editor_config->scene_test_case_config),
     m_profile_capture_ui(engine),
+    m_profile_viewer_ui(profile_document_loader),
     m_config(editor_config),
     m_remote_controller(remote_controller),
     m_ui_renderer(std::move(renderer)) {
@@ -90,6 +92,7 @@ EditorUI::EditorUI(
         m_b_show_scene_editing = window_visibility_settings.scene_editing;
         m_b_show_profile_capture =
             window_visibility_settings.profile_capture;
+        m_b_show_profile_viewer = window_visibility_settings.profile_viewer;
 #if WITH_PROFILE
         m_b_show_memory_profiler = window_visibility_settings.memory_profiler;
 #endif
@@ -102,6 +105,7 @@ EditorUI::EditorUI(
         m_b_show_scene_editing = has_saved_window_settings("Scene Editing");
         m_b_show_profile_capture =
             has_saved_window_settings("Profile Capture");
+        m_b_show_profile_viewer = has_saved_window_settings("Profile Viewer");
 #if WITH_PROFILE
         m_b_show_memory_profiler = has_saved_window_settings("Memory Profiler");
 #endif
@@ -374,6 +378,7 @@ void EditorUI::TickUI(Scene& scene) {
                 nullptr,
                 &m_b_show_profile_capture
             );
+            ImGui::MenuItem("Profile Viewer", nullptr, &m_b_show_profile_viewer);
             // ImGui::MenuItem("Demo", nullptr, &m_b_show_demo);
 #if WITH_PROFILE
             ImGui::MenuItem("Memory Profiler", nullptr, &m_b_show_memory_profiler);
@@ -385,6 +390,9 @@ void EditorUI::TickUI(Scene& scene) {
     ImGui::End();
     if (m_b_show_profile_capture) {
         m_profile_capture_ui.ShowWindow(&m_b_show_profile_capture);
+    }
+    if (m_b_show_profile_viewer) {
+        m_profile_viewer_ui.ShowWindow(&m_b_show_profile_viewer);
     }
 #if WITH_PROFILE
     if (m_b_show_memory_profiler) {
@@ -944,6 +952,7 @@ void EditorUI::SyncWindowVisibilitySettings() {
     settings.config        = m_b_show_config;
     settings.scene_editing = m_b_show_scene_editing;
     settings.profile_capture = m_b_show_profile_capture;
+    settings.profile_viewer = m_b_show_profile_viewer;
 #if WITH_PROFILE
     settings.memory_profiler = m_b_show_memory_profiler;
 #else

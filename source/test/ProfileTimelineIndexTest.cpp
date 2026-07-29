@@ -491,11 +491,28 @@ void VerifyCpuQueries(const ProfileTimelineIndex& _index, const ProfileSession& 
         query.valid && !query.truncated && query.written == exact_results.size(),
         "exact-fit CPU query was reported as truncated"
     );
+    std::array<CpuTimelineScopeRef, 2> exact_timeline_results{};
+    query = _index.QueryCpuTimelineOverlaps(thread, 700, 800, exact_timeline_results);
+    Expect(
+        query.valid && !query.truncated && query.written == exact_timeline_results.size() &&
+            exact_timeline_results[0] == _index.CpuScopes()[track.first_scope] &&
+            exact_timeline_results[1] == _index.CpuScopes()[track.first_scope + 1] &&
+            exact_timeline_results[0].source_scope_index == exact_results[0] &&
+            exact_timeline_results[1].source_scope_index == exact_results[1],
+        "typed CPU query did not preserve normalized timing or source identity"
+    );
 
     query = _index.QueryCpuOverlaps(thread, 500, 501, results);
     Expect(
         query.valid && !query.truncated && query.written == 3,
         "zero-duration CPU scope was omitted at its visible point"
+    );
+    std::array<CpuTimelineScopeRef, 4> point_timeline_results{};
+    query = _index.QueryCpuTimelineOverlaps(thread, 500, 501, point_timeline_results);
+    Expect(
+        query.valid && !query.truncated && query.written == 3 && point_timeline_results[2].begin_ns == 500 &&
+            point_timeline_results[2].end_ns == 500,
+        "typed CPU query lost a zero-duration scope or its normalized point"
     );
 
     query = _index.QueryCpuOverlaps(thread, 500, 501, std::span<std::uint64_t>(results).first(1));
@@ -507,6 +524,18 @@ void VerifyCpuQueries(const ProfileTimelineIndex& _index, const ProfileSession& 
     Expect(
         query.valid && query.truncated && query.written == 0,
         "CPU query with an empty output span did not report truncation"
+    );
+    query = _index.QueryCpuTimelineOverlaps(
+        thread, 500, 501, std::span<CpuTimelineScopeRef>(point_timeline_results).first(1)
+    );
+    Expect(
+        query.valid && query.truncated && query.written == 1,
+        "typed CPU query did not honor its caller-provided output bound"
+    );
+    query = _index.QueryCpuTimelineOverlaps(thread, 500, 501, {});
+    Expect(
+        query.valid && query.truncated && query.written == 0,
+        "typed CPU query with an empty output span did not report truncation"
     );
 
     query = _index.QueryCpuOverlaps(thread, 1000, 1001, results);
@@ -521,6 +550,15 @@ void VerifyCpuQueries(const ProfileTimelineIndex& _index, const ProfileSession& 
     Expect(
         !_index.QueryCpuOverlaps(static_cast<std::uint32_t>(_index.CpuTracks().size()), 0, 1, results).valid,
         "invalid CPU track query was reported as valid"
+    );
+    Expect(
+        !_index.QueryCpuTimelineOverlaps(thread, 500, 500, point_timeline_results).valid &&
+            !_index
+                 .QueryCpuTimelineOverlaps(
+                     static_cast<std::uint32_t>(_index.CpuTracks().size()), 0, 1, point_timeline_results
+                 )
+                 .valid,
+        "typed CPU query accepted an empty range or invalid track"
     );
 
     const auto expect_oracle = [&](std::uint64_t _begin, std::uint64_t _end) {
@@ -684,6 +722,18 @@ void VerifyGpuDomainsAndSlices(const ProfileTimelineIndex& _index, const Profile
         query.valid && !query.truncated && query.written == exact_gpu_results.size(),
         "exact-fit GPU query was reported as truncated"
     );
+    std::array<GpuTimelineScopeRef, 2> exact_gpu_timeline_results{};
+    query = _index.QueryGpuTimelineOverlaps(graphics, 100, 20, 30, exact_gpu_timeline_results);
+    Expect(
+        query.valid && !query.truncated && query.written == exact_gpu_timeline_results.size() &&
+            exact_gpu_timeline_results[0].source_scope_index == exact_gpu_results[0] &&
+            exact_gpu_timeline_results[1].source_scope_index == exact_gpu_results[1] &&
+            exact_gpu_timeline_results[0].begin_tick_offset == 0 &&
+            exact_gpu_timeline_results[0].end_tick_offset == 100 &&
+            exact_gpu_timeline_results[1].begin_tick_offset == 10 &&
+            exact_gpu_timeline_results[1].end_tick_offset == 40,
+        "typed GPU query did not preserve normalized frame-local timing or source identity"
+    );
     query = _index.QueryGpuOverlaps(compute, 100, 210, 220, query_results);
     Expect(
         query.valid && !query.truncated && query.written == 1 &&
@@ -695,15 +745,34 @@ void VerifyGpuDomainsAndSlices(const ProfileTimelineIndex& _index, const Profile
         query.valid && !query.truncated && query.written == 1,
         "wrapped GPU scope was not queryable on its normalized range"
     );
+    std::array<GpuTimelineScopeRef, 1> wrapped_timeline_result{};
+    query = _index.QueryGpuTimelineOverlaps(wrapped, 100, 0, 32, wrapped_timeline_result);
+    Expect(
+        query.valid && !query.truncated && query.written == 1 &&
+            wrapped_timeline_result[0].source_scope_index == query_results[0] &&
+            wrapped_timeline_result[0].begin_tick_offset == 0 &&
+            wrapped_timeline_result[0].end_tick_offset == 32,
+        "typed GPU query did not preserve timestamp-wrap normalization"
+    );
     query = _index.QueryGpuOverlaps(graphics, 100, 20, 30, std::span<std::uint64_t>(query_results).first(1));
     Expect(
         query.valid && query.truncated && query.written == 1,
         "GPU query did not honor its caller-provided output bound"
     );
+    query = _index.QueryGpuTimelineOverlaps(graphics, 100, 20, 30, wrapped_timeline_result);
+    Expect(
+        query.valid && query.truncated && query.written == 1,
+        "typed GPU query did not honor its caller-provided output bound"
+    );
     Expect(
         !_index.QueryGpuOverlaps(failed, 101, 0, 1, query_results).valid &&
             !_index.QueryGpuOverlaps(graphics, 999, 0, 1, query_results).valid,
         "GPU timing query accepted an error-only or missing frame"
+    );
+    Expect(
+        !_index.QueryGpuTimelineOverlaps(failed, 101, 0, 1, wrapped_timeline_result).valid &&
+            !_index.QueryGpuTimelineOverlaps(graphics, 999, 0, 1, wrapped_timeline_result).valid,
+        "typed GPU timing query accepted an error-only or missing frame"
     );
 
     const TimelineAxis& failed_axis = _index.Axes()[_index.GpuTracks()[failed].axis_index];

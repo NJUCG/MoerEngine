@@ -7,6 +7,7 @@
 #include <limits>
 #include <new>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -258,6 +259,100 @@ Overlaps(const GpuTimelineScopeRef& _scope, std::uint64_t _view_begin, std::uint
         return _scope.end_tick_offset > _view_begin && _scope.begin_tick_offset < _view_end;
     }
     return _scope.begin_tick_offset >= _view_begin && _scope.begin_tick_offset < _view_end;
+}
+
+template<typename ScopeRef, typename Output, typename Project>
+[[nodiscard]] TimelineOverlapQueryResult QueryTimelineOverlaps(
+    std::span<const ScopeRef>      _scopes,
+    std::uint64_t                  _first_scope,
+    std::uint64_t                  _scope_count,
+    const TimelineIntervalTree&    _tree,
+    std::span<const std::uint64_t> _tree_max_end,
+    std::uint64_t                  _view_begin,
+    std::uint64_t                  _view_end,
+    std::span<Output>              _output,
+    Project                        _project
+) noexcept {
+    TimelineOverlapQueryResult query{};
+    if (_view_end <= _view_begin || _first_scope > _scopes.size() ||
+        _scope_count > _scopes.size() - _first_scope) {
+        return query;
+    }
+
+    query.valid = true;
+    if (_scope_count == 0) {
+        return query;
+    }
+    if (_tree.leaf_count == 0 || _tree.tree_offset > _tree_max_end.size() ||
+        _tree.leaf_count > (_tree_max_end.size() - _tree.tree_offset) / 2) {
+        query.valid = false;
+        return query;
+    }
+
+    struct StackNode {
+        std::uint64_t node{0};
+        std::uint64_t begin{0};
+        std::uint64_t end{0};
+    };
+    std::array<StackNode, 128> stack{};
+    std::size_t                stack_size = 0;
+    stack[stack_size++]                   = {
+                          .node  = 1,
+                          .begin = 0,
+                          .end   = _tree.leaf_count,
+    };
+
+    while (stack_size != 0) {
+        const StackNode current = stack[--stack_size];
+        if (current.begin >= _scope_count) {
+            continue;
+        }
+        const std::uint64_t tree_value = _tree_max_end[_tree.tree_offset + current.node];
+        if (tree_value <= _view_begin) {
+            continue;
+        }
+
+        const ScopeRef& first = _scopes[_first_scope + current.begin];
+        if constexpr (std::is_same_v<ScopeRef, CpuTimelineScopeRef>) {
+            if (first.begin_ns >= _view_end) {
+                continue;
+            }
+        } else {
+            if (first.begin_tick_offset >= _view_end) {
+                continue;
+            }
+        }
+
+        if (current.end - current.begin == 1) {
+            if (!Overlaps(first, _view_begin, _view_end)) {
+                continue;
+            }
+            if (query.written < _output.size()) {
+                _output[query.written++] = _project(first);
+                continue;
+            }
+            query.truncated = true;
+            break;
+        }
+
+        const std::uint64_t middle = current.begin + (current.end - current.begin) / 2;
+        if (stack_size + 2 > stack.size()) {
+            query.valid = false;
+            return query;
+        }
+        // Push right first so the left/begin-time half is visited first.
+        stack[stack_size++] = {
+            .node  = current.node * 2 + 1,
+            .begin = middle,
+            .end   = current.end,
+        };
+        stack[stack_size++] = {
+            .node  = current.node * 2,
+            .begin = current.begin,
+            .end   = middle,
+        };
+    }
+    return query;
 }
 
 void AddQualityFlag(ProfileTimelineQuality& _quality, TimelineQualityFlag _flag) noexcept {
@@ -897,76 +992,52 @@ TimelineOverlapQueryResult ProfileTimelineIndex::QueryCpuOverlaps(
     std::uint64_t            _view_end_ns,
     std::span<std::uint64_t> _output
 ) const noexcept {
-    TimelineOverlapQueryResult query{};
     if (!Valid() || _track_index >= impl_->cpu_tracks.size() || _view_end_ns <= _view_begin_ns) {
-        return query;
+        return {};
     }
 
-    query.valid                        = true;
     const CpuTimelineTrackIndex& track = impl_->cpu_tracks[_track_index];
     const TimelineIntervalTree&  tree  = impl_->cpu_trees[_track_index];
-    if (track.scope_count == 0) {
-        return query;
+    return QueryTimelineOverlaps(
+        std::span<const CpuTimelineScopeRef>(impl_->cpu_scopes),
+        track.first_scope,
+        track.scope_count,
+        tree,
+        std::span<const std::uint64_t>(impl_->cpu_tree_max_end),
+        _view_begin_ns,
+        _view_end_ns,
+        _output,
+        [](const CpuTimelineScopeRef& _scope) noexcept {
+            return _scope.source_scope_index;
+        }
+    );
+}
+
+TimelineOverlapQueryResult ProfileTimelineIndex::QueryCpuTimelineOverlaps(
+    std::uint32_t                  _track_index,
+    std::uint64_t                  _view_begin_ns,
+    std::uint64_t                  _view_end_ns,
+    std::span<CpuTimelineScopeRef> _output
+) const noexcept {
+    if (!Valid() || _track_index >= impl_->cpu_tracks.size() || _view_end_ns <= _view_begin_ns) {
+        return {};
     }
 
-    struct StackNode {
-        std::uint64_t node{0};
-        std::uint64_t begin{0};
-        std::uint64_t end{0};
-    };
-    std::array<StackNode, 128> stack{};
-    std::size_t                stack_size = 0;
-    stack[stack_size++]                   = {
-                          .node  = 1,
-                          .begin = 0,
-                          .end   = tree.leaf_count,
-    };
-
-    while (stack_size != 0) {
-        const StackNode current = stack[--stack_size];
-        if (current.begin >= track.scope_count) {
-            continue;
+    const CpuTimelineTrackIndex& track = impl_->cpu_tracks[_track_index];
+    const TimelineIntervalTree&  tree  = impl_->cpu_trees[_track_index];
+    return QueryTimelineOverlaps(
+        std::span<const CpuTimelineScopeRef>(impl_->cpu_scopes),
+        track.first_scope,
+        track.scope_count,
+        tree,
+        std::span<const std::uint64_t>(impl_->cpu_tree_max_end),
+        _view_begin_ns,
+        _view_end_ns,
+        _output,
+        [](const CpuTimelineScopeRef& _scope) noexcept {
+            return _scope;
         }
-        const std::uint64_t tree_value = impl_->cpu_tree_max_end[tree.tree_offset + current.node];
-        if (tree_value <= _view_begin_ns) {
-            continue;
-        }
-
-        const CpuTimelineScopeRef& first = impl_->cpu_scopes[track.first_scope + current.begin];
-        if (first.begin_ns >= _view_end_ns) {
-            continue;
-        }
-
-        if (current.end - current.begin == 1) {
-            if (!Overlaps(first, _view_begin_ns, _view_end_ns)) {
-                continue;
-            }
-            if (query.written < _output.size()) {
-                _output[query.written++] = first.source_scope_index;
-                continue;
-            }
-            query.truncated = true;
-            break;
-        }
-
-        const std::uint64_t middle = current.begin + (current.end - current.begin) / 2;
-        if (stack_size + 2 > stack.size()) {
-            query.valid = false;
-            return query;
-        }
-        // Push right first so the left/begin-time half is visited first.
-        stack[stack_size++] = {
-            .node  = current.node * 2 + 1,
-            .begin = middle,
-            .end   = current.end,
-        };
-        stack[stack_size++] = {
-            .node  = current.node * 2,
-            .begin = current.begin,
-            .end   = middle,
-        };
-    }
-    return query;
+    );
 }
 
 const GpuTimelineFrameRef* ProfileTimelineIndex::FindGpuFrame(std::uint64_t _frame_id) const noexcept {
@@ -1026,88 +1097,67 @@ TimelineOverlapQueryResult ProfileTimelineIndex::QueryGpuOverlaps(
     std::uint64_t            _view_end_ticks,
     std::span<std::uint64_t> _output
 ) const noexcept {
-    TimelineOverlapQueryResult query{};
     if (!Valid() || _track_index >= impl_->gpu_tracks.size() || _view_end_ticks <= _view_begin_ticks) {
-        return query;
+        return {};
     }
     const GpuTimelineFrameSlice* slice = FindGpuFrameSlice(_track_index, _frame_id);
     if (slice == nullptr || slice->axis_frame_index >= impl_->gpu_axis_frames.size() ||
         !impl_->gpu_axis_frames[slice->axis_frame_index].timing_available) {
-        return query;
-    }
-
-    query.valid = true;
-    if (slice->timeline_scope_count == 0) {
-        return query;
+        return {};
     }
     const std::size_t slice_index = static_cast<std::size_t>(slice - impl_->gpu_frame_slices.data());
     if (slice_index >= impl_->gpu_trees.size()) {
-        query.valid = false;
-        return query;
+        return {};
     }
     const TimelineIntervalTree& tree = impl_->gpu_trees[slice_index];
-    if (tree.leaf_count == 0) {
-        query.valid = false;
-        return query;
+    return QueryTimelineOverlaps(
+        std::span<const GpuTimelineScopeRef>(impl_->gpu_timeline_scopes),
+        slice->first_timeline_scope,
+        slice->timeline_scope_count,
+        tree,
+        std::span<const std::uint64_t>(impl_->gpu_tree_max_end),
+        _view_begin_ticks,
+        _view_end_ticks,
+        _output,
+        [](const GpuTimelineScopeRef& _scope) noexcept {
+            return _scope.source_scope_index;
+        }
+    );
+}
+
+TimelineOverlapQueryResult ProfileTimelineIndex::QueryGpuTimelineOverlaps(
+    std::uint32_t                  _track_index,
+    std::uint64_t                  _frame_id,
+    std::uint64_t                  _view_begin_ticks,
+    std::uint64_t                  _view_end_ticks,
+    std::span<GpuTimelineScopeRef> _output
+) const noexcept {
+    if (!Valid() || _track_index >= impl_->gpu_tracks.size() || _view_end_ticks <= _view_begin_ticks) {
+        return {};
     }
-
-    struct StackNode {
-        std::uint64_t node{0};
-        std::uint64_t begin{0};
-        std::uint64_t end{0};
-    };
-    std::array<StackNode, 128> stack{};
-    std::size_t                stack_size = 0;
-    stack[stack_size++]                   = {
-                          .node  = 1,
-                          .begin = 0,
-                          .end   = tree.leaf_count,
-    };
-
-    while (stack_size != 0) {
-        const StackNode current = stack[--stack_size];
-        if (current.begin >= slice->timeline_scope_count) {
-            continue;
-        }
-        const std::uint64_t tree_value = impl_->gpu_tree_max_end[tree.tree_offset + current.node];
-        if (tree_value <= _view_begin_ticks) {
-            continue;
-        }
-
-        const GpuTimelineScopeRef& first =
-            impl_->gpu_timeline_scopes[slice->first_timeline_scope + current.begin];
-        if (first.begin_tick_offset >= _view_end_ticks) {
-            continue;
-        }
-        if (current.end - current.begin == 1) {
-            if (!Overlaps(first, _view_begin_ticks, _view_end_ticks)) {
-                continue;
-            }
-            if (query.written < _output.size()) {
-                _output[query.written++] = first.source_scope_index;
-                continue;
-            }
-            query.truncated = true;
-            break;
-        }
-
-        const std::uint64_t middle = current.begin + (current.end - current.begin) / 2;
-        if (stack_size + 2 > stack.size()) {
-            query.valid = false;
-            return query;
-        }
-        stack[stack_size++] = {
-            .node  = current.node * 2 + 1,
-            .begin = middle,
-            .end   = current.end,
-        };
-        stack[stack_size++] = {
-            .node  = current.node * 2,
-            .begin = current.begin,
-            .end   = middle,
-        };
+    const GpuTimelineFrameSlice* slice = FindGpuFrameSlice(_track_index, _frame_id);
+    if (slice == nullptr || slice->axis_frame_index >= impl_->gpu_axis_frames.size() ||
+        !impl_->gpu_axis_frames[slice->axis_frame_index].timing_available) {
+        return {};
     }
-    return query;
+    const std::size_t slice_index = static_cast<std::size_t>(slice - impl_->gpu_frame_slices.data());
+    if (slice_index >= impl_->gpu_trees.size()) {
+        return {};
+    }
+    const TimelineIntervalTree& tree = impl_->gpu_trees[slice_index];
+    return QueryTimelineOverlaps(
+        std::span<const GpuTimelineScopeRef>(impl_->gpu_timeline_scopes),
+        slice->first_timeline_scope,
+        slice->timeline_scope_count,
+        tree,
+        std::span<const std::uint64_t>(impl_->gpu_tree_max_end),
+        _view_begin_ticks,
+        _view_end_ticks,
+        _output,
+        [](const GpuTimelineScopeRef& _scope) noexcept {
+            return _scope;
+        }
+    );
 }
 
 TimelineIndexBuildResult BuildProfileTimelineIndex(

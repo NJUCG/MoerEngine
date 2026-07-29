@@ -55,6 +55,7 @@ void ParseEditorWindowVisibilityLine(EditorWindowVisibilitySettings& settings, s
             "ProfileCapture",
             settings.profile_capture
         ) ||
+        TryParseBoolSetting(line, "ProfileViewer", settings.profile_viewer) ||
         TryParseBoolSetting(line, "MemoryProfiler", settings.memory_profiler)) {
         settings.loaded = true;
     }
@@ -96,6 +97,7 @@ void EditorWindowVisibilitySettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler*
         "ProfileCapture=%d\n",
         settings.profile_capture ? 1 : 0
     );
+    out_buf->appendf("ProfileViewer=%d\n", settings.profile_viewer ? 1 : 0);
     out_buf->appendf("MemoryProfiler=%d\n\n", settings.memory_profiler ? 1 : 0);
 }
 
@@ -163,6 +165,7 @@ bool IsSameWindowVisibilitySettings(
            lhs.inspector == rhs.inspector && lhs.config == rhs.config &&
            lhs.scene_editing == rhs.scene_editing &&
            lhs.profile_capture == rhs.profile_capture &&
+           lhs.profile_viewer == rhs.profile_viewer &&
            lhs.memory_profiler == rhs.memory_profiler;
 }
 

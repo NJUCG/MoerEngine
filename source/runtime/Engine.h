@@ -87,8 +87,6 @@ private:
         Failed,
     };
 
-    void Init3rdParty();
-    void ShutDown3rdParty();
     void InitializeProfileDump() noexcept;
     void InitializeProfileCaptureLifecycleValidation() noexcept;
     void TickProfileCaptureLifecycleValidation(
