@@ -489,6 +489,9 @@ RaytracingFramePacket
 RaytracingRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
     assert(IsCurrentlyGameThread());
     assert(editor_config);
+    if (hooks.on_tick_engine_control) {
+        hooks.on_tick_engine_control();
+    }
     MOER_PROFILE_SCOPE("Raytracing.PrepareFrame");
 
     const bool            profile_logging = IsFramePrepareProfilingEnabled();

@@ -318,6 +318,9 @@ RasterFramePacket
 RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
     assert(!IsRenderThreadInitialized() || IsCurrentlyGameThread());
     assert(editor_config);
+    if (hooks.on_tick_engine_control) {
+        hooks.on_tick_engine_control();
+    }
     MOER_PROFILE_SCOPE("Raster.PrepareFrame");
 
     const bool           profile_logging = IsFramePrepareProfilingEnabled();

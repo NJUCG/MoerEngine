@@ -32,6 +32,8 @@ parallel_record_min_work_units_per_job = 64
 submission_batch_window = 2
 
 [engine.profile_dump]
+# Enqueues the initial capture session during Engine startup. The Engine-owned
+# controller may stop this generation and start later generations at runtime.
 enabled = false
 output_path = "./profile/MoerProfile.mpd"
 # The previous final capture is replaced only after the new capture closes successfully.

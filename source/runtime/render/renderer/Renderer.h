@@ -24,6 +24,9 @@ class RenderProfileCapture;
 
 struct EngineHooks {
     // Common
+    // Engine-owned lifecycle controls run on the Game Thread before the
+    // frame's outer CPU profiling scope begins.
+    std::function<void()>        on_tick_engine_control;
     std::function<void(Scene&)> on_tick_scripting;
     std::function<void(Scene&)> on_tick_test;
     std::function<void(Scene&)> on_tick_ui;

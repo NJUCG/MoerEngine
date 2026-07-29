@@ -3,10 +3,6 @@
 // Runtime
 #include "config/ConfigManager.h"
 #include "misc/ScopedLogTimer.h"
-#include "profile/ProfileDump.h"
-#include "profile/ProfileDumpTemplates.h"
-#include "profile/RenderProfileCapture.h"
-#include "profile/ProfileScope.h"
 #include "remote/RemoteConfig.h"
 #include "remote/RemoteModule.h"
 #include "RenderThread.h"
@@ -52,6 +48,24 @@ static bool ContainsNonAscii(const std::filesystem::path& p);
 namespace {
 
 using ThreadProfileClock = std::chrono::steady_clock;
+
+constexpr std::uint64_t kProfileCaptureValidationMinGpuFrames = 4;
+constexpr std::uint64_t kProfileCaptureValidationMaxGtTicks   = 60000;
+constexpr auto kProfileCaptureValidationTimeout = std::chrono::seconds(180);
+
+[[nodiscard]] bool ProfileDumpTerminalIsClean(
+    const ProfileDump::RuntimeStats& _stats,
+    std::uint64_t                    _generation
+) noexcept {
+    return _stats.state == ProfileDump::RuntimeState::Stopped &&
+           _stats.last_fault == ProfileDump::RuntimeFault::None &&
+           _stats.generation == _generation &&
+           _stats.records_dropped_stopped == 0 &&
+           _stats.records_dropped_stale_generation == 0 &&
+           _stats.records_dropped_oversized == 0 &&
+           _stats.records_dropped_queue_full == 0 &&
+           _stats.records_dropped_after_fault == 0;
+}
 
 double ThreadProfileMilliseconds(
     ThreadProfileClock::time_point begin,
@@ -342,6 +356,34 @@ bool ParseThreadingRasterLifecycleValidation(int argc, const char** argv) {
     return enabled;
 }
 
+bool ParseProfileCaptureLifecycleValidation(int argc, const char** argv) {
+    constexpr std::string_view argument_name =
+        "--profile-capture-lifecycle-validation";
+    constexpr std::string_view value_prefix =
+        "--profile-capture-lifecycle-validation=";
+
+    bool enabled = false;
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view argument = argv[index];
+        if (argument.starts_with(value_prefix)) {
+            throw std::invalid_argument(
+                "--profile-capture-lifecycle-validation is a flag and does not "
+                "accept a value"
+            );
+        }
+        if (argument != argument_name) {
+            continue;
+        }
+        if (enabled) {
+            throw std::invalid_argument(
+                "--profile-capture-lifecycle-validation may be specified only once"
+            );
+        }
+        enabled = true;
+    }
+    return enabled;
+}
+
 std::optional<std::string>
 ParseThreadingRasterFramebufferValidation(int argc, const char** argv) {
     constexpr std::string_view argument_name = "--threading-raster-framebuffer-validation";
@@ -505,13 +547,24 @@ void Engine::ValidateCommandLine(int argc, const char** argv) {
         ParseThreadingRasterLifecycleValidation(argc, argv);
     const auto raster_framebuffer_validation =
         ParseThreadingRasterFramebufferValidation(argc, argv);
+    const bool profile_capture_lifecycle_validation =
+        ParseProfileCaptureLifecycleValidation(argc, argv);
     if (renderer_switch_validation && raster_lifecycle_validation) {
         throw std::invalid_argument(
             "renderer-switch and Raster lifecycle validation modes are mutually exclusive"
         );
     }
+    if (profile_capture_lifecycle_validation &&
+        (renderer_switch_validation || raster_lifecycle_validation ||
+         raster_framebuffer_validation.has_value())) {
+        throw std::invalid_argument(
+            "profile-capture lifecycle validation is mutually exclusive with "
+            "threading Raster validation modes"
+        );
+    }
     if (!renderer_switch_validation && !raster_lifecycle_validation &&
-        !raster_framebuffer_validation.has_value()) {
+        !raster_framebuffer_validation.has_value() &&
+        !profile_capture_lifecycle_validation) {
         return;
     }
 
@@ -523,16 +576,32 @@ void Engine::ValidateCommandLine(int argc, const char** argv) {
         ParseConfigOverride(argc, argv).value_or(workspace_path / "MoerEngine.toml");
     if (!std::filesystem::is_regular_file(config_path)) {
         throw std::invalid_argument(
-            "threading validation config does not exist: " +
+            "validation config does not exist: " +
             config_path.generic_string()
         );
     }
     const auto validation_config =
         Config::GlobalConfig::LoadConfigFromTomlFile(config_path.generic_string());
-    if (validation_config.engine.render.default_render_method != "Raster") {
+    if ((renderer_switch_validation || raster_lifecycle_validation ||
+         raster_framebuffer_validation.has_value()) &&
+        validation_config.engine.render.default_render_method != "Raster") {
         throw std::invalid_argument(
             "threading Raster validation requires "
             "engine.render.default_render_method = \"Raster\""
+        );
+    }
+    if (profile_capture_lifecycle_validation &&
+        !validation_config.engine.profile_dump.enabled) {
+        throw std::invalid_argument(
+            "--profile-capture-lifecycle-validation requires "
+            "engine.profile_dump.enabled = true"
+        );
+    }
+    if (profile_capture_lifecycle_validation &&
+        validation_config.engine.profile_dump.output_path.empty()) {
+        throw std::invalid_argument(
+            "--profile-capture-lifecycle-validation requires a non-empty "
+            "engine.profile_dump.output_path"
         );
     }
 }
@@ -544,7 +613,7 @@ Engine::~Engine() {
 void Engine::InitializeProfileDump() noexcept {
     const auto& profile_config =
         ConfigManager::GetInstance().GetConfig().engine.profile_dump;
-    if (!profile_config.enabled) {
+    if (!profile_config.enabled || !m_profile_capture_controller) {
         return;
     }
 
@@ -570,59 +639,65 @@ void Engine::InitializeProfileDump() noexcept {
             return;
         }
 
-        ProfileDump::RuntimeConfig runtime_config;
-        runtime_config.output_path      = output_path;
-        runtime_config.replace_existing = profile_config.replace_existing;
+        Render::ProfileCaptureStartOptions options;
+        options.runtime.output_path      = output_path;
+        options.runtime.replace_existing = profile_config.replace_existing;
 
-        const ProfileDump::StartResult start_result =
-            ProfileDump::Start(runtime_config);
-        if (start_result != ProfileDump::StartResult::Started) {
+        Render::ProfileCaptureRequestSubmission submission =
+            m_profile_capture_controller->RequestStart(std::move(options));
+        if (submission.result != Render::ProfileCaptureSubmitResult::Queued) {
             LOG_WARNING(
-                "[ProfileDump] Start failed (result={}); capture disabled.",
-                static_cast<unsigned int>(start_result)
+                "[ProfileDump] Bootstrap request rejected (result={}); capture disabled.",
+                static_cast<unsigned int>(submission.result)
             );
             return;
         }
 
-        // Ownership is acquired only for a session started by this Engine.
-        // In particular, AlreadyRunning must never adopt an external session.
-        m_profile_dump_owned = true;
-
-        const ProfileDump::SchemaRegistration cpu_scope =
-            ProfileDump::RegisterSchema(ProfileDump::Templates::CpuScope());
-        if ((cpu_scope.status != ProfileDump::SchemaStatus::Registered &&
-             cpu_scope.status != ProfileDump::SchemaStatus::AlreadyRegistered) ||
-            !cpu_scope.handle) {
+        const Render::ProfileCaptureTickResult tick_result =
+            m_profile_capture_controller->TickOwner();
+        Render::ProfileCaptureRequestCompletion completion;
+        if (tick_result == Render::ProfileCaptureTickResult::WrongThread ||
+            !submission.ticket.TryGet(completion)) {
             LOG_WARNING(
-                "[ProfileDump] CpuScope schema registration failed (status={}); "
-                "rolling back capture.",
-                static_cast<unsigned int>(cpu_scope.status)
+                "[ProfileDump] Bootstrap request did not complete synchronously "
+                "(tick_result={}); capture disabled.",
+                static_cast<unsigned int>(tick_result)
             );
-            ShutdownProfileDump();
             return;
         }
 
-        const ProfileDump::CpuScopeActivationResult activation_result =
-            ProfileDump::CpuScopeProducer::Activate(cpu_scope.handle);
-        if (activation_result != ProfileDump::CpuScopeActivationResult::Activated) {
+        const bool cpu_only =
+            completion.status == Render::ProfileCaptureCompletionStatus::StartedCpuOnly;
+        if (completion.status != Render::ProfileCaptureCompletionStatus::Started &&
+            !cpu_only) {
             LOG_WARNING(
-                "[ProfileDump] CpuScope producer activation failed (result={}); "
-                "rolling back capture.",
-                static_cast<unsigned int>(activation_result)
+                "[ProfileDump] Bootstrap start failed "
+                "(status={}, detail={}, secondary_detail={}); capture disabled.",
+                static_cast<unsigned int>(completion.status),
+                completion.detail,
+                completion.secondary_detail
             );
-            ShutdownProfileDump();
             return;
         }
 
-        InitializeRenderProfileCapture();
-
-        LOG_INFO(
-            "[ProfileDump] Capture started: output='{}', replace_existing={}.",
-            output_path.generic_string(),
-            profile_config.replace_existing
-        );
+        if (cpu_only) {
+            LOG_WARNING(
+                "[ProfileDump] CPU-only capture started because the stable GPU facade "
+                "is unavailable: generation={}, output='{}', replace_existing={}.",
+                completion.generation,
+                output_path.generic_string(),
+                profile_config.replace_existing
+            );
+        } else {
+            LOG_INFO(
+                "[ProfileDump] Capture started: generation={}, output='{}', "
+                "replace_existing={}.",
+                completion.generation,
+                output_path.generic_string(),
+                profile_config.replace_existing
+            );
+        }
     } catch (const std::exception& error) {
-        ShutdownProfileDump();
         try {
             LOG_WARNING(
                 "[ProfileDump] Capture initialization failed: {}; capture disabled.",
@@ -631,7 +706,6 @@ void Engine::InitializeProfileDump() noexcept {
         } catch (...) {
         }
     } catch (...) {
-        ShutdownProfileDump();
         try {
             LOG_WARNING("[ProfileDump] Capture initialization failed; capture disabled.");
         } catch (...) {
@@ -639,158 +713,455 @@ void Engine::InitializeProfileDump() noexcept {
     }
 }
 
-void Engine::InitializeRenderProfileCapture() noexcept {
-    if (!m_profile_dump_owned || !m_render_profile_capture || m_render_profile_capture->Valid()) {
+void Engine::InitializeProfileCaptureLifecycleValidation() noexcept {
+    if (!m_profile_capture_lifecycle_validation_enabled) {
+        m_profile_capture_lifecycle_validation_stage =
+            EProfileCaptureLifecycleValidationStage::Disabled;
         return;
     }
 
     try {
-        const ProfileDump::SchemaRegistration gpu_frame =
-            ProfileDump::RegisterSchema(ProfileDump::Templates::GpuFrame());
-        if ((gpu_frame.status != ProfileDump::SchemaStatus::Registered &&
-             gpu_frame.status != ProfileDump::SchemaStatus::AlreadyRegistered) ||
-            !gpu_frame.handle) {
-            LOG_WARNING(
-                "[ProfileDump] GpuFrame schema registration failed "
-                "(status={}); GPU capture disabled.",
-                static_cast<unsigned int>(gpu_frame.status)
+        if (!m_profile_capture_controller || !m_render_profile_capture) {
+            FailProfileCaptureLifecycleValidation(
+                "Engine did not create both the capture controller and stable GPU facade"
             );
             return;
         }
 
-        const ProfileDump::SchemaRegistration gpu_scope =
-            ProfileDump::RegisterSchema(ProfileDump::Templates::GpuScope());
-        if ((gpu_scope.status != ProfileDump::SchemaStatus::Registered &&
-             gpu_scope.status != ProfileDump::SchemaStatus::AlreadyRegistered) ||
-            !gpu_scope.handle) {
-            LOG_WARNING(
-                "[ProfileDump] GpuScope schema registration failed "
-                "(status={}); GPU capture disabled.",
-                static_cast<unsigned int>(gpu_scope.status)
+        const Render::ProfileCaptureControllerSnapshot snapshot =
+            m_profile_capture_controller->GetSnapshot();
+        const Render::RenderProfileCaptureStats stats =
+            m_render_profile_capture->GetStats();
+        if (snapshot.state != Render::ProfileCaptureControllerState::Running ||
+            !snapshot.owns_runtime || !snapshot.cpu_producer_active ||
+            !snapshot.gpu_session_active || snapshot.active_generation == 0 ||
+            !m_render_profile_capture->Valid() || !stats.accepting ||
+            stats.generation != snapshot.active_generation) {
+            FailProfileCaptureLifecycleValidation(
+                "bootstrap did not produce a GPU-capable Running generation"
             );
             return;
         }
 
-        const Render::RenderProfileSessionStartResult start_result =
-            m_render_profile_capture->StartSession(gpu_frame.handle, gpu_scope.handle);
-        if (start_result != Render::RenderProfileSessionStartResult::Started) {
-            LOG_WARNING(
-                "[ProfileDump] GPU capture bridge rejected the current "
-                "schema generation (result={}); GPU capture disabled.",
-                static_cast<unsigned int>(start_result)
+        const auto& profile_config =
+            ConfigManager::GetInstance().GetConfig().engine.profile_dump;
+        std::filesystem::path output_path(profile_config.output_path);
+        if (output_path.is_relative()) {
+            output_path =
+                ConfigManager::GetInstance().GetWorkspacePath() / output_path;
+        }
+
+        std::error_code path_error;
+        output_path = std::filesystem::weakly_canonical(output_path, path_error);
+        if (path_error || output_path.empty()) {
+            FailProfileCaptureLifecycleValidation(
+                "bootstrap output path could not be resolved for restart"
             );
             return;
         }
-        LOG_INFO(
-            "[ProfileDump] GPU capture bridge initialized "
-            "(generation={}).",
-            gpu_frame.handle.generation
-        );
-    } catch (const std::exception& error) {
-        try {
-            LOG_WARNING(
-                "[ProfileDump] GPU capture bridge initialization failed: "
-                "{}; CPU capture remains enabled.",
-                error.what()
-            );
-        } catch (...) {
-        }
-    } catch (...) {
-        try {
-            LOG_WARNING("[ProfileDump] GPU capture bridge initialization failed; "
-                        "CPU capture remains enabled.");
-        } catch (...) {
-        }
-    }
-}
 
-void Engine::ShutdownRenderProfileCapture(bool _rhi_drained) noexcept {
-    Render::RenderProfileCapture* capture = m_render_profile_capture.get();
-    if (capture == nullptr) {
-        return;
-    }
-    const Render::RenderProfileCaptureStats before_shutdown = capture->GetStats();
-    if (before_shutdown.generation == 0) {
-        return;
-    }
-
-    if (_rhi_drained) {
-        capture->ShutdownAfterRhiDrain();
-    } else {
-        capture->Abort();
-    }
-    const Render::RenderProfileCaptureStats stats = capture->GetStats();
-
-    try {
-        if (!_rhi_drained || stats.shutdown_abandoned_frames != 0 || stats.terminal_faults != 0 ||
-            stats.frames_admission_rejected != 0 || stats.frame_records_dropped != 0 ||
-            stats.scope_records_dropped != 0) {
-            LOG_WARNING(
-                "[ProfileDump] GPU capture bridge stopped "
-                "(rhi_drained={}, emitted_frames={}, emitted_scopes={}, "
-                "admission_rejects={}, frame_drops={}, scope_drops={}, "
-                "abandoned_frames={}, terminal_faults={}).",
-                _rhi_drained,
-                stats.frames_emitted,
-                stats.scopes_emitted,
-                stats.frames_admission_rejected,
-                stats.frame_records_dropped,
-                stats.scope_records_dropped,
-                stats.shutdown_abandoned_frames,
-                stats.terminal_faults
-            );
+        const std::string extension = output_path.extension().string();
+        std::string       restart_filename;
+        if (extension.empty()) {
+            restart_filename = output_path.filename().string() + ".restart";
         } else {
-            LOG_INFO(
-                "[ProfileDump] GPU capture bridge drained "
-                "(frames={}, scopes={}, frame_drops={}, scope_drops={}).",
-                stats.frames_emitted,
-                stats.scopes_emitted,
-                stats.frame_records_dropped,
-                stats.scope_records_dropped
-            );
+            restart_filename =
+                output_path.stem().string() + ".restart" + extension;
         }
+        std::filesystem::path restart_path =
+            output_path.parent_path() / restart_filename;
+        if (restart_path == output_path) {
+            FailProfileCaptureLifecycleValidation(
+                "restart output path aliases the bootstrap output path"
+            );
+            return;
+        }
+
+        m_profile_capture_validation_restart_options = {};
+        m_profile_capture_validation_restart_options.runtime.output_path =
+            std::move(restart_path);
+        // Validation must be repeatable without requiring callers to clean a
+        // previous successful restart artifact.
+        m_profile_capture_validation_restart_options.runtime.replace_existing =
+            true;
+        m_profile_capture_validation_first_generation =
+            snapshot.active_generation;
+        m_profile_capture_validation_second_generation = 0;
+        m_profile_capture_validation_gt_ticks          = 0;
+        m_profile_capture_validation_ticket            = {};
+        m_profile_capture_validation_deadline =
+            std::chrono::steady_clock::now() +
+            kProfileCaptureValidationTimeout;
+        m_profile_capture_lifecycle_validation_stage =
+            EProfileCaptureLifecycleValidationStage::
+                WaitingForFirstGenerationFrames;
+
+        LOG_INFO(
+            "[ProfileCaptureValidation] Enabled on the Game Thread: "
+            "generation_a={}, restart_output='{}', required_gpu_frames={}, "
+            "timeout_seconds={}, max_gt_ticks={}, stable_facade={}.",
+            m_profile_capture_validation_first_generation,
+            m_profile_capture_validation_restart_options.runtime.output_path
+                .generic_string(),
+            kProfileCaptureValidationMinGpuFrames,
+            std::chrono::duration_cast<std::chrono::seconds>(
+                kProfileCaptureValidationTimeout
+            ).count(),
+            kProfileCaptureValidationMaxGtTicks,
+            static_cast<const void*>(m_render_profile_capture.get())
+        );
     } catch (...) {
+        FailProfileCaptureLifecycleValidation(
+            "unexpected exception while arming validation"
+        );
     }
 }
 
-void Engine::ShutdownProfileDump() noexcept {
-    // Defensive rollback path. Normal shutdown has already drained and closed
-    // the facade's current session after RHI Completion joined.
+void Engine::FailProfileCaptureLifecycleValidation(
+    std::string_view reason
+) noexcept {
+    if (!m_profile_capture_lifecycle_validation_enabled ||
+        m_profile_capture_lifecycle_validation_stage ==
+            EProfileCaptureLifecycleValidationStage::Complete ||
+        m_profile_capture_lifecycle_validation_stage ==
+            EProfileCaptureLifecycleValidationStage::Failed) {
+        return;
+    }
+
+    Render::ProfileCaptureControllerSnapshot snapshot{};
+    Render::RenderProfileCaptureStats         stats{};
+    if (m_profile_capture_controller) {
+        snapshot = m_profile_capture_controller->GetSnapshot();
+    }
     if (m_render_profile_capture) {
-        const Render::RenderProfileCaptureStats bridge_stats = m_render_profile_capture->GetStats();
-        if (bridge_stats.generation != 0 && !bridge_stats.closed) {
-            ShutdownRenderProfileCapture(false);
-        }
-    }
-    if (!m_profile_dump_owned) {
-        return;
-    }
-    m_profile_dump_owned = false;
-
-    ProfileDump::CpuScopeProducer::Deactivate();
-    const ProfileDump::FlushResult    flush_result    = ProfileDump::FlushThreadLocal();
-    const ProfileDump::ShutdownResult shutdown_result = ProfileDump::Shutdown();
-
-    if (shutdown_result == ProfileDump::ShutdownResult::Faulted) {
-        const ProfileDump::RuntimeStats stats = ProfileDump::GetRuntimeStats();
-        try {
-            LOG_WARNING(
-                "[ProfileDump] Capture shutdown faulted (fault={}, flush_result={}).",
-                static_cast<unsigned int>(stats.last_fault),
-                static_cast<unsigned int>(flush_result)
-            );
-        } catch (...) {
-        }
-        return;
+        stats = m_render_profile_capture->GetStats();
     }
 
     try {
-        LOG_INFO(
-            "[ProfileDump] Capture stopped (shutdown_result={}, flush_result={}).",
-            static_cast<unsigned int>(shutdown_result),
-            static_cast<unsigned int>(flush_result)
+        LOG_ERROR(
+            "[ProfileCaptureValidation][FAIL] reason='{}', stage={}, "
+            "gt_ticks={}, controller_state={}, generation={}, owns_runtime={}, "
+            "gpu_session_active={}, facade_generation={}, facade_accepting={}, "
+            "frames={}, scopes={}.",
+            reason,
+            static_cast<unsigned int>(
+                m_profile_capture_lifecycle_validation_stage
+            ),
+            m_profile_capture_validation_gt_ticks,
+            static_cast<unsigned int>(snapshot.state),
+            snapshot.active_generation,
+            snapshot.owns_runtime,
+            snapshot.gpu_session_active,
+            stats.generation,
+            stats.accepting,
+            stats.frames_emitted,
+            stats.scopes_emitted
         );
     } catch (...) {
+    }
+
+    m_profile_capture_lifecycle_validation_stage =
+        EProfileCaptureLifecycleValidationStage::Failed;
+    if (m_window_context_initialized &&
+        !m_profile_capture_validation_exit_requested) {
+        m_profile_capture_validation_exit_requested = true;
+        try {
+            RequestExit();
+        } catch (...) {
+        }
+    }
+}
+
+void Engine::TickProfileCaptureLifecycleValidation(Render::ProfileCaptureTickResult tick_result) noexcept {
+    assert(IsCurrentlyGameThread());
+    try {
+        if (!m_profile_capture_lifecycle_validation_enabled ||
+            m_profile_capture_lifecycle_validation_stage ==
+                EProfileCaptureLifecycleValidationStage::Disabled ||
+            m_profile_capture_lifecycle_validation_stage ==
+                EProfileCaptureLifecycleValidationStage::Complete) {
+            return;
+        }
+        if (m_profile_capture_lifecycle_validation_stage == EProfileCaptureLifecycleValidationStage::Failed) {
+            if (!m_profile_capture_validation_exit_requested) {
+                m_profile_capture_validation_exit_requested = true;
+                try {
+                    RequestExit();
+                } catch (...) {
+                }
+            }
+            return;
+        }
+
+        ++m_profile_capture_validation_gt_ticks;
+        if (tick_result == Render::ProfileCaptureTickResult::WrongThread) {
+            FailProfileCaptureLifecycleValidation("controller TickOwner did not run on its Game Thread owner"
+            );
+            return;
+        }
+        if (tick_result == Render::ProfileCaptureTickResult::Shutdown) {
+            FailProfileCaptureLifecycleValidation("controller shut down before validation completed");
+            return;
+        }
+        if (m_profile_capture_validation_gt_ticks > kProfileCaptureValidationMaxGtTicks ||
+            std::chrono::steady_clock::now() > m_profile_capture_validation_deadline) {
+            FailProfileCaptureLifecycleValidation("bounded Game Thread validation timeout expired");
+            return;
+        }
+        if (!m_profile_capture_controller || !m_render_profile_capture) {
+            FailProfileCaptureLifecycleValidation("controller or stable GPU facade disappeared");
+            return;
+        }
+
+        const auto live_generation_matches = [this](
+                                                 const Render::ProfileCaptureControllerSnapshot& snapshot,
+                                                 const Render::RenderProfileCaptureStats&        stats,
+                                                 std::uint64_t                                   generation
+                                             ) noexcept {
+            return generation != 0 && snapshot.state == Render::ProfileCaptureControllerState::Running &&
+                   snapshot.owns_runtime && snapshot.cpu_producer_active && snapshot.gpu_session_active &&
+                   snapshot.active_generation == generation && m_render_profile_capture->Valid() &&
+                   stats.accepting && !stats.closed && stats.generation == generation;
+        };
+        const auto accept_submission =
+            [this](Render::ProfileCaptureRequestSubmission&& submission, std::string_view failure) noexcept {
+                if (submission.result != Render::ProfileCaptureSubmitResult::Queued ||
+                    !submission.ticket.Valid()) {
+                    FailProfileCaptureLifecycleValidation(failure);
+                    return false;
+                }
+                m_profile_capture_validation_ticket = std::move(submission.ticket);
+                return true;
+            };
+
+        const Render::ProfileCaptureControllerSnapshot snapshot = m_profile_capture_controller->GetSnapshot();
+        const Render::RenderProfileCaptureStats        stats    = m_render_profile_capture->GetStats();
+        const ProfileDump::RuntimeStats runtime_stats =
+            ProfileDump::GetRuntimeStats();
+        Render::ProfileCaptureRequestCompletion        completion{};
+
+        switch (m_profile_capture_lifecycle_validation_stage) {
+            case EProfileCaptureLifecycleValidationStage::WaitingForFirstGenerationFrames: {
+                if (!live_generation_matches(
+                        snapshot, stats, m_profile_capture_validation_first_generation
+                    )) {
+                    FailProfileCaptureLifecycleValidation("generation A left GPU-capable Running state");
+                    return;
+                }
+                if (!m_first_main_present_notified ||
+                    stats.frames_emitted < kProfileCaptureValidationMinGpuFrames ||
+                    stats.scopes_emitted == 0) {
+                    return;
+                }
+
+                if (!accept_submission(
+                        RequestProfileCaptureStop(m_profile_capture_validation_first_generation),
+                        "Stop(A) request was not admitted"
+                    )) {
+                    return;
+                }
+                m_profile_capture_lifecycle_validation_stage =
+                    EProfileCaptureLifecycleValidationStage::WaitingForFirstStop;
+                LOG_INFO(
+                    "[ProfileCaptureValidation] generation A ran on GPU "
+                    "(generation={}, frames={}, scopes={}); Stop(A) queued after "
+                    "the controller tick and must complete on a later GT tick.",
+                    m_profile_capture_validation_first_generation,
+                    stats.frames_emitted,
+                    stats.scopes_emitted
+                );
+                return;
+            }
+
+            case EProfileCaptureLifecycleValidationStage::WaitingForFirstStop: {
+                if (!m_profile_capture_validation_ticket.TryGet(completion)) {
+                    return;
+                }
+                if (completion.status != Render::ProfileCaptureCompletionStatus::Stopped ||
+                    completion.generation != m_profile_capture_validation_first_generation ||
+                    snapshot.state != Render::ProfileCaptureControllerState::Idle || snapshot.owns_runtime ||
+                    snapshot.gpu_session_active || !stats.closed ||
+                    stats.generation != m_profile_capture_validation_first_generation ||
+                    !ProfileDumpTerminalIsClean(
+                        runtime_stats,
+                        m_profile_capture_validation_first_generation
+                    )) {
+                    FailProfileCaptureLifecycleValidation(
+                        "Stop(A) did not publish a clean terminal generation"
+                    );
+                    return;
+                }
+
+                LOG_INFO(
+                    "[ProfileCaptureValidation] Stop(A) terminal on a later GT "
+                    "tick: generation={}, status={}, frames={}, scopes={}.",
+                    completion.generation,
+                    static_cast<unsigned int>(completion.status),
+                    stats.frames_emitted,
+                    stats.scopes_emitted
+                );
+                if (!accept_submission(
+                        RequestProfileCaptureStart(m_profile_capture_validation_restart_options),
+                        "Start(B) request was not admitted"
+                    )) {
+                    return;
+                }
+                m_profile_capture_lifecycle_validation_stage =
+                    EProfileCaptureLifecycleValidationStage::WaitingForRestart;
+                LOG_INFO(
+                    "[ProfileCaptureValidation] Start(B) queued after the "
+                    "controller tick: output='{}'.",
+                    m_profile_capture_validation_restart_options.runtime.output_path.generic_string()
+                );
+                return;
+            }
+
+            case EProfileCaptureLifecycleValidationStage::WaitingForRestart: {
+                if (!m_profile_capture_validation_ticket.TryGet(completion)) {
+                    return;
+                }
+                if (completion.status != Render::ProfileCaptureCompletionStatus::Started ||
+                    completion.generation <= m_profile_capture_validation_first_generation ||
+                    !live_generation_matches(snapshot, stats, completion.generation)) {
+                    FailProfileCaptureLifecycleValidation(
+                        "Start(B) did not bind a newer GPU-capable generation"
+                    );
+                    return;
+                }
+
+                m_profile_capture_validation_second_generation = completion.generation;
+                LOG_INFO(
+                    "[ProfileCaptureValidation] Start(B) completed on a later GT "
+                    "tick: generation_a={}, generation_b={}, status={}, "
+                    "stable_facade={}.",
+                    m_profile_capture_validation_first_generation,
+                    m_profile_capture_validation_second_generation,
+                    static_cast<unsigned int>(completion.status),
+                    static_cast<const void*>(m_render_profile_capture.get())
+                );
+                if (!accept_submission(
+                        RequestProfileCaptureStop(m_profile_capture_validation_first_generation),
+                        "stale Stop(A) request was not admitted"
+                    )) {
+                    return;
+                }
+                m_profile_capture_lifecycle_validation_stage =
+                    EProfileCaptureLifecycleValidationStage::WaitingForStaleStop;
+                LOG_INFO("[ProfileCaptureValidation] stale Stop(A) queued against "
+                         "running generation B; it must be rejected on a later GT tick.");
+                return;
+            }
+
+            case EProfileCaptureLifecycleValidationStage::WaitingForStaleStop: {
+                if (!m_profile_capture_validation_ticket.TryGet(completion)) {
+                    return;
+                }
+                if (completion.status != Render::ProfileCaptureCompletionStatus::RejectedStaleGeneration ||
+                    completion.generation != m_profile_capture_validation_second_generation ||
+                    !live_generation_matches(
+                        snapshot, stats, m_profile_capture_validation_second_generation
+                    )) {
+                    FailProfileCaptureLifecycleValidation(
+                        "stale Stop(A) mutated or failed to protect generation B"
+                    );
+                    return;
+                }
+
+                LOG_INFO(
+                    "[ProfileCaptureValidation] stale Stop(A) rejected on a later "
+                    "GT tick: protected_generation={}, status={}; generation B "
+                    "remains GPU-capable Running.",
+                    completion.generation,
+                    static_cast<unsigned int>(completion.status)
+                );
+                m_profile_capture_lifecycle_validation_stage =
+                    EProfileCaptureLifecycleValidationStage::WaitingForSecondGenerationFrames;
+                return;
+            }
+
+            case EProfileCaptureLifecycleValidationStage::WaitingForSecondGenerationFrames: {
+                if (!live_generation_matches(
+                        snapshot, stats, m_profile_capture_validation_second_generation
+                    )) {
+                    FailProfileCaptureLifecycleValidation("generation B left GPU-capable Running state");
+                    return;
+                }
+                if (stats.frames_emitted < kProfileCaptureValidationMinGpuFrames ||
+                    stats.scopes_emitted == 0) {
+                    return;
+                }
+
+                if (!accept_submission(
+                        RequestProfileCaptureStop(m_profile_capture_validation_second_generation),
+                        "Stop(B) request was not admitted"
+                    )) {
+                    return;
+                }
+                m_profile_capture_lifecycle_validation_stage =
+                    EProfileCaptureLifecycleValidationStage::WaitingForSecondStop;
+                LOG_INFO(
+                    "[ProfileCaptureValidation] generation B ran on GPU "
+                    "(generation={}, frames={}, scopes={}); Stop(B) queued after "
+                    "the controller tick.",
+                    m_profile_capture_validation_second_generation,
+                    stats.frames_emitted,
+                    stats.scopes_emitted
+                );
+                return;
+            }
+
+            case EProfileCaptureLifecycleValidationStage::WaitingForSecondStop: {
+                if (!m_profile_capture_validation_ticket.TryGet(completion)) {
+                    return;
+                }
+                if (completion.status != Render::ProfileCaptureCompletionStatus::Stopped ||
+                    completion.generation != m_profile_capture_validation_second_generation ||
+                    snapshot.state != Render::ProfileCaptureControllerState::Idle || snapshot.owns_runtime ||
+                    snapshot.gpu_session_active || !stats.closed ||
+                    stats.generation != m_profile_capture_validation_second_generation ||
+                    stats.frames_emitted < kProfileCaptureValidationMinGpuFrames ||
+                    stats.scopes_emitted == 0 ||
+                    !ProfileDumpTerminalIsClean(
+                        runtime_stats,
+                        m_profile_capture_validation_second_generation
+                    )) {
+                    FailProfileCaptureLifecycleValidation(
+                        "Stop(B) did not publish a clean terminal generation"
+                    );
+                    return;
+                }
+
+                m_profile_capture_lifecycle_validation_stage =
+                    EProfileCaptureLifecycleValidationStage::Complete;
+                LOG_INFO(
+                    "[ProfileCaptureValidation][PASS] dynamic GPU capture "
+                    "lifecycle completed on the Game Thread: generation_a={}, "
+                    "generation_b={}, generation_b_frames={}, "
+                    "generation_b_scopes={}, gt_ticks={}, stable_facade={}.",
+                    m_profile_capture_validation_first_generation,
+                    m_profile_capture_validation_second_generation,
+                    stats.frames_emitted,
+                    stats.scopes_emitted,
+                    m_profile_capture_validation_gt_ticks,
+                    static_cast<const void*>(m_render_profile_capture.get())
+                );
+                if (!m_profile_capture_validation_exit_requested) {
+                    m_profile_capture_validation_exit_requested = true;
+                    try {
+                        RequestExit();
+                    } catch (...) {
+                    }
+                }
+                return;
+            }
+
+            case EProfileCaptureLifecycleValidationStage::Disabled:
+            case EProfileCaptureLifecycleValidationStage::Complete:
+            case EProfileCaptureLifecycleValidationStage::Failed:
+                return;
+        }
+    } catch (...) {
+        FailProfileCaptureLifecycleValidation("unexpected exception while advancing validation");
     }
 }
 
@@ -854,6 +1225,8 @@ void Engine::Init(
         ParseThreadingRasterLifecycleValidation(argc, argv);
     const auto raster_framebuffer_validation =
         ParseThreadingRasterFramebufferValidation(argc, argv);
+    m_profile_capture_lifecycle_validation_enabled =
+        ParseProfileCaptureLifecycleValidation(argc, argv);
     const uint submission_batch_window =
         RHISubmissionPipelinePolicy::ClampBatchWindow(
             config.engine.threading.submission_batch_window
@@ -871,12 +1244,28 @@ void Engine::Init(
             "renderer-switch and Raster lifecycle validation modes are mutually exclusive"
         );
     }
+    if (m_profile_capture_lifecycle_validation_enabled &&
+        (renderer_switch_validation_enabled ||
+         raster_lifecycle_validation_enabled ||
+         raster_framebuffer_validation.has_value())) {
+        throw std::invalid_argument(
+            "profile-capture lifecycle validation is mutually exclusive with "
+            "threading Raster validation modes"
+        );
+    }
     if ((renderer_switch_validation_enabled || raster_lifecycle_validation_enabled ||
          raster_framebuffer_validation.has_value()) &&
         config.engine.render.default_render_method != "Raster") {
         throw std::invalid_argument(
             "threading Raster validation requires "
             "engine.render.default_render_method = \"Raster\""
+        );
+    }
+    if (m_profile_capture_lifecycle_validation_enabled &&
+        !config.engine.profile_dump.enabled) {
+        throw std::invalid_argument(
+            "--profile-capture-lifecycle-validation requires "
+            "engine.profile_dump.enabled = true"
         );
     }
 
@@ -893,7 +1282,21 @@ void Engine::Init(
         } catch (...) {
         }
     }
+    try {
+        m_profile_capture_controller =
+            MakeUnique<Render::ProfileCaptureController>(m_render_profile_capture.get());
+    } catch (...) {
+        m_profile_capture_controller.reset();
+        try {
+            LOG_WARNING(
+                "[ProfileDump] Failed to allocate the Engine-owned capture controller; "
+                "dynamic capture will remain disabled."
+            );
+        } catch (...) {
+        }
+    }
     InitializeProfileDump();
+    InitializeProfileCaptureLifecycleValidation();
 
     // Init TaskSystem
     report_startup("Starting worker services", "Creating task-graph worker threads");
@@ -1081,6 +1484,22 @@ void Engine::Run(const EngineHooks& hooks) {
         };
     const bool thread_profile_logging =
         ConfigManager::GetInstance().GetConfig().engine.threading.profile_logging;
+    auto on_tick_engine_control = std::move(runtime_hooks.on_tick_engine_control);
+    runtime_hooks.on_tick_engine_control =
+        [this, callback = std::move(on_tick_engine_control)]() {
+            Render::ProfileCaptureTickResult capture_tick_result =
+                Render::ProfileCaptureTickResult::Shutdown;
+            if (m_profile_capture_controller) {
+                capture_tick_result =
+                    m_profile_capture_controller->TickOwner();
+            }
+            if (m_profile_capture_lifecycle_validation_enabled) {
+                TickProfileCaptureLifecycleValidation(capture_tick_result);
+            }
+            if (callback) {
+                callback();
+            }
+        };
     runtime_hooks.on_tick_scripting = [this](Scene& scene) {
         if (m_script_host) {
             m_script_host->ProcessMainThreadCommands(scene);
@@ -1417,9 +1836,52 @@ scripting::ScriptExecutionFuture Engine::SubmitScriptExecution(scripting::Script
     return scripting::ScriptExecutionFuture(promise.get_future());
 }
 
+Render::ProfileCaptureRequestSubmission
+Engine::RequestProfileCaptureStart(Render::ProfileCaptureStartOptions options) noexcept {
+    if (!m_profile_capture_controller) {
+        return {
+            .result = Render::ProfileCaptureSubmitResult::AdmissionClosed,
+            .ticket = {},
+        };
+    }
+    return m_profile_capture_controller->RequestStart(std::move(options));
+}
+
+Render::ProfileCaptureRequestSubmission
+Engine::RequestProfileCaptureStop(std::uint64_t expected_generation) noexcept {
+    if (!m_profile_capture_controller) {
+        return {
+            .result = Render::ProfileCaptureSubmitResult::AdmissionClosed,
+            .ticket = {},
+        };
+    }
+    return m_profile_capture_controller->RequestStop(expected_generation);
+}
+
+Render::ProfileCaptureControllerSnapshot Engine::GetProfileCaptureSnapshot() const noexcept {
+    if (m_profile_capture_controller) {
+        return m_profile_capture_controller->GetSnapshot();
+    }
+    Render::ProfileCaptureControllerSnapshot snapshot;
+    snapshot.state              = Render::ProfileCaptureControllerState::Shutdown;
+    snapshot.accepting_requests = false;
+    return snapshot;
+}
+
 void Engine::ShutDown() noexcept {
     if (m_has_shutdown) {
         return;
+    }
+    if (m_profile_capture_lifecycle_validation_enabled &&
+        m_profile_capture_lifecycle_validation_stage !=
+            EProfileCaptureLifecycleValidationStage::Complete &&
+        m_profile_capture_lifecycle_validation_stage !=
+            EProfileCaptureLifecycleValidationStage::Failed &&
+        m_profile_capture_lifecycle_validation_stage !=
+            EProfileCaptureLifecycleValidationStage::Disabled) {
+        FailProfileCaptureLifecycleValidation(
+            "Engine shutdown began before validation reached PASS"
+        );
     }
     m_has_shutdown = true;
 
@@ -1431,6 +1893,61 @@ void Engine::ShutDown() noexcept {
             // releasing later subsystems even if one cleanup operation fails.
         }
     };
+    bool capture_shutdown_trace_enabled =
+        m_profile_capture_lifecycle_validation_enabled;
+    if (m_profile_capture_controller) {
+        const Render::ProfileCaptureControllerSnapshot snapshot =
+            m_profile_capture_controller->GetSnapshot();
+        capture_shutdown_trace_enabled =
+            capture_shutdown_trace_enabled || snapshot.owns_runtime ||
+            snapshot.active_generation != 0;
+    }
+    const auto report_capture_boundary =
+        [this, capture_shutdown_trace_enabled](
+            std::string_view                     boundary,
+            Render::ProfileCaptureLifecycleResult result
+        ) noexcept {
+            if (result == Render::ProfileCaptureLifecycleResult::Advanced ||
+                result == Render::ProfileCaptureLifecycleResult::AlreadyAtBoundary) {
+                if (capture_shutdown_trace_enabled &&
+                    m_profile_capture_controller) {
+                    const Render::ProfileCaptureControllerSnapshot snapshot =
+                        m_profile_capture_controller->GetSnapshot();
+                    try {
+                        LOG_INFO(
+                            "[ProfileCapture][Shutdown] boundary='{}' complete "
+                            "(result={}, controller_state={}, generation={}, "
+                            "owns_runtime={}, gpu_session_active={}).",
+                            boundary,
+                            static_cast<unsigned int>(result),
+                            static_cast<unsigned int>(snapshot.state),
+                            snapshot.active_generation,
+                            snapshot.owns_runtime,
+                            snapshot.gpu_session_active
+                        );
+                    } catch (...) {
+                    }
+                }
+                return;
+            }
+            try {
+                LOG_WARNING(
+                    "[ProfileCapture][Shutdown] Capture controller failed the "
+                    "'{}' boundary "
+                    "(result={}); its generation-guarded destructor fallback will run.",
+                    boundary,
+                    static_cast<unsigned int>(result)
+                );
+            } catch (...) {
+            }
+        };
+
+    if (m_profile_capture_controller) {
+        report_capture_boundary(
+            "request-admission-before-renderer",
+            m_profile_capture_controller->BeginEngineShutdown()
+        );
+    }
 
     if (m_remote_module) {
         cleanup([this]() { m_remote_module->Stop(); });
@@ -1485,12 +2002,62 @@ void Engine::ShutDown() noexcept {
             rhi_drained = false;
         }
     }
-    ShutdownRenderProfileCapture(rhi_drained);
+    if (m_profile_capture_controller) {
+        report_capture_boundary(
+            rhi_drained ? "gpu-finalization-after-rhi-drain" :
+                          "gpu-abort-after-rhi-drain-failure",
+            m_profile_capture_controller->FinalizeGpuAfterRhiDrain(rhi_drained)
+        );
+    }
+    bool task_workers_joined = !m_task_system_initialized;
     if (m_task_system_initialized) {
         m_task_system_initialized = false;
-        cleanup([]() { TaskSystem::ShutDown(); });
+        if (capture_shutdown_trace_enabled) {
+            try {
+                LOG_INFO(
+                    "[ProfileCapture][Shutdown] TaskSystem worker shutdown "
+                    "begins after the GPU post-RHI boundary."
+                );
+            } catch (...) {
+            }
+        }
+        try {
+            TaskSystem::ShutDown();
+            task_workers_joined = true;
+        } catch (...) {
+            task_workers_joined = false;
+        }
     }
-    ShutdownProfileDump();
+    if (capture_shutdown_trace_enabled) {
+        try {
+            if (task_workers_joined) {
+                LOG_INFO(
+                    "[ProfileCapture][Shutdown] TaskSystem workers joined; "
+                    "ProfileDump runtime finalization may begin."
+                );
+            } else {
+                LOG_WARNING(
+                    "[ProfileCapture][Shutdown] TaskSystem worker shutdown "
+                    "failed before ProfileDump runtime finalization."
+                );
+            }
+        } catch (...) {
+        }
+    }
+    if (m_profile_capture_controller) {
+        if (task_workers_joined) {
+            report_capture_boundary(
+                "profiledump-finalization-after-workers",
+                m_profile_capture_controller->FinalizeRuntimeAfterWorkers()
+            );
+        } else {
+            report_capture_boundary(
+                "profiledump-abandoned-after-worker-failure",
+                m_profile_capture_controller
+                    ->AbandonRuntimeAfterWorkerShutdownFailure()
+            );
+        }
+    }
     m_editor_config.reset();
 }
 
