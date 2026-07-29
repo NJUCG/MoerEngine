@@ -63,6 +63,46 @@ StopCompletionStatus(RenderProfileSessionFinishResult _result) noexcept {
     return ProfileCaptureCompletionStatus::GpuSessionFaulted;
 }
 
+[[nodiscard]] bool
+RuntimeHasDroppedRecords(const ProfileDump::RuntimeStats& _stats) noexcept {
+    return _stats.records_dropped_stopped != 0 ||
+           _stats.records_dropped_stale_generation != 0 ||
+           _stats.records_dropped_oversized != 0 ||
+           _stats.records_dropped_queue_full != 0 ||
+           _stats.records_dropped_after_fault != 0;
+}
+
+[[nodiscard]] ProfileCaptureCompletionStatus AccountRuntimeFinalization(
+    ProfileCaptureCompletionStatus  _status,
+    ProfileDump::FlushResult         _flush_result,
+    ProfileDump::ShutdownResult      _shutdown_result,
+    const ProfileDump::RuntimeStats& _pre_shutdown_stats,
+    std::uint64_t                    _generation
+) noexcept {
+    const ProfileDump::RuntimeStats post_shutdown_stats =
+        ProfileDump::GetRuntimeStats();
+    if (_pre_shutdown_stats.generation != _generation ||
+        post_shutdown_stats.generation != _generation ||
+        _shutdown_result == ProfileDump::ShutdownResult::AlreadyStopped) {
+        return ProfileCaptureCompletionStatus::RuntimeOwnershipLost;
+    }
+    if (_flush_result == ProfileDump::FlushResult::Faulted ||
+        _shutdown_result == ProfileDump::ShutdownResult::Faulted ||
+        _pre_shutdown_stats.last_fault != ProfileDump::RuntimeFault::None ||
+        post_shutdown_stats.last_fault != ProfileDump::RuntimeFault::None ||
+        post_shutdown_stats.state != ProfileDump::RuntimeState::Stopped) {
+        return ProfileCaptureCompletionStatus::RuntimeShutdownFaulted;
+    }
+
+    const bool runtime_loss =
+        _flush_result == ProfileDump::FlushResult::Rejected ||
+        RuntimeHasDroppedRecords(post_shutdown_stats);
+    if (_status == ProfileCaptureCompletionStatus::Stopped && runtime_loss) {
+        return ProfileCaptureCompletionStatus::StoppedWithLoss;
+    }
+    return _status;
+}
+
 } // namespace
 
 ProfileCaptureRequestTicket::ProfileCaptureRequestTicket(
@@ -567,6 +607,7 @@ void ProfileCaptureController::FinalizeDynamicRuntime(
     ProfileDump::FlushResult flush_result = ProfileDump::FlushResult::Rejected;
     ProfileDump::ShutdownResult shutdown_result =
         ProfileDump::ShutdownResult::AlreadyStopped;
+    ProfileDump::RuntimeStats pre_shutdown_stats{};
 
     if (!OwnsPublishedGeneration()) {
         status = ProfileCaptureCompletionStatus::RuntimeOwnershipLost;
@@ -576,11 +617,15 @@ void ProfileCaptureController::FinalizeDynamicRuntime(
             cpu_producer_active_ = false;
         }
         flush_result    = ProfileDump::FlushAll();
+        pre_shutdown_stats = ProfileDump::GetRuntimeStats();
         shutdown_result = ProfileDump::Shutdown();
-        if (flush_result == ProfileDump::FlushResult::Faulted ||
-            shutdown_result == ProfileDump::ShutdownResult::Faulted) {
-            status = ProfileCaptureCompletionStatus::RuntimeShutdownFaulted;
-        }
+        status = AccountRuntimeFinalization(
+            status,
+            flush_result,
+            shutdown_result,
+            pre_shutdown_stats,
+            generation
+        );
     }
 
     owns_runtime_       = false;
@@ -698,8 +743,10 @@ ProfileCaptureController::FinalizeRuntimeAfterWorkers() noexcept {
 
     ProfileCaptureCompletionStatus stop_status =
         StopCompletionStatus(shutdown_gpu_result_);
+    ProfileDump::FlushResult flush_result = ProfileDump::FlushResult::NothingPending;
     ProfileDump::ShutdownResult shutdown_result =
         ProfileDump::ShutdownResult::AlreadyStopped;
+    ProfileDump::RuntimeStats pre_shutdown_stats{};
 
     if (owns_runtime_) {
         if (!OwnsPublishedGeneration()) {
@@ -709,13 +756,16 @@ ProfileCaptureController::FinalizeRuntimeAfterWorkers() noexcept {
                 ProfileDump::CpuScopeProducer::Deactivate();
                 cpu_producer_active_ = false;
             }
-            const ProfileDump::FlushResult flush_result = ProfileDump::FlushAll();
+            flush_result    = ProfileDump::FlushAll();
+            pre_shutdown_stats = ProfileDump::GetRuntimeStats();
             shutdown_result = ProfileDump::Shutdown();
-            if (flush_result == ProfileDump::FlushResult::Faulted ||
-                shutdown_result == ProfileDump::ShutdownResult::Faulted) {
-                stop_status =
-                    ProfileCaptureCompletionStatus::RuntimeShutdownFaulted;
-            }
+            stop_status = AccountRuntimeFinalization(
+                stop_status,
+                flush_result,
+                shutdown_result,
+                pre_shutdown_stats,
+                generation
+            );
         }
     }
 

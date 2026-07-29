@@ -53,6 +53,20 @@ constexpr std::uint64_t kProfileCaptureValidationMinGpuFrames = 4;
 constexpr std::uint64_t kProfileCaptureValidationMaxGtTicks   = 60000;
 constexpr auto kProfileCaptureValidationTimeout = std::chrono::seconds(180);
 
+[[nodiscard]] bool ProfileDumpTerminalIsClean(
+    const ProfileDump::RuntimeStats& _stats,
+    std::uint64_t                    _generation
+) noexcept {
+    return _stats.state == ProfileDump::RuntimeState::Stopped &&
+           _stats.last_fault == ProfileDump::RuntimeFault::None &&
+           _stats.generation == _generation &&
+           _stats.records_dropped_stopped == 0 &&
+           _stats.records_dropped_stale_generation == 0 &&
+           _stats.records_dropped_oversized == 0 &&
+           _stats.records_dropped_queue_full == 0 &&
+           _stats.records_dropped_after_fault == 0;
+}
+
 double ThreadProfileMilliseconds(
     ThreadProfileClock::time_point begin,
     ThreadProfileClock::time_point end
@@ -922,6 +936,8 @@ void Engine::TickProfileCaptureLifecycleValidation(Render::ProfileCaptureTickRes
 
         const Render::ProfileCaptureControllerSnapshot snapshot = m_profile_capture_controller->GetSnapshot();
         const Render::RenderProfileCaptureStats        stats    = m_render_profile_capture->GetStats();
+        const ProfileDump::RuntimeStats runtime_stats =
+            ProfileDump::GetRuntimeStats();
         Render::ProfileCaptureRequestCompletion        completion{};
 
         switch (m_profile_capture_lifecycle_validation_stage) {
@@ -965,7 +981,11 @@ void Engine::TickProfileCaptureLifecycleValidation(Render::ProfileCaptureTickRes
                     completion.generation != m_profile_capture_validation_first_generation ||
                     snapshot.state != Render::ProfileCaptureControllerState::Idle || snapshot.owns_runtime ||
                     snapshot.gpu_session_active || !stats.closed ||
-                    stats.generation != m_profile_capture_validation_first_generation) {
+                    stats.generation != m_profile_capture_validation_first_generation ||
+                    !ProfileDumpTerminalIsClean(
+                        runtime_stats,
+                        m_profile_capture_validation_first_generation
+                    )) {
                     FailProfileCaptureLifecycleValidation(
                         "Stop(A) did not publish a clean terminal generation"
                     );
@@ -1100,7 +1120,11 @@ void Engine::TickProfileCaptureLifecycleValidation(Render::ProfileCaptureTickRes
                     snapshot.gpu_session_active || !stats.closed ||
                     stats.generation != m_profile_capture_validation_second_generation ||
                     stats.frames_emitted < kProfileCaptureValidationMinGpuFrames ||
-                    stats.scopes_emitted == 0) {
+                    stats.scopes_emitted == 0 ||
+                    !ProfileDumpTerminalIsClean(
+                        runtime_stats,
+                        m_profile_capture_validation_second_generation
+                    )) {
                     FailProfileCaptureLifecycleValidation(
                         "Stop(B) did not publish a clean terminal generation"
                     );

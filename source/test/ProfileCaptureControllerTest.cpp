@@ -5,6 +5,7 @@
 #include "profile/RenderProfileCapture.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <barrier>
 #include <chrono>
@@ -80,6 +81,50 @@ ProfileCaptureStartOptions StartOptions(
     options.runtime.output_path      = _output.Path(_filename);
     options.runtime.replace_existing = true;
     return options;
+}
+
+ProfileCaptureStartOptions LossyStartOptions(
+    const ScopedCaptureOutput& _output,
+    std::string_view           _filename
+) {
+    ProfileCaptureStartOptions options = StartOptions(_output, _filename);
+    options.runtime.max_record_bytes   = 64;
+    return options;
+}
+
+void EmitOversizedRuntimeRecord(std::uint64_t _generation) {
+    const SchemaDescriptor schema = {
+        .name           = "ControllerLossProbe",
+        .event_type     = "contract.controller_loss_probe",
+        .kind           = EventKind::Instant,
+        .channel        = Channel::CpuThread,
+        .schema_version = 1,
+        .fields =
+            {
+                {"payload", FieldType::String},
+            },
+    };
+    const SchemaRegistration registration = RegisterSchema(schema);
+    Expect(
+        registration.status == SchemaStatus::Registered &&
+            registration.handle.generation == _generation,
+        "loss probe schema did not bind the controller generation"
+    );
+
+    const std::string oversized_payload(256, 'x');
+    const std::array<FieldValueView, 1> values = {
+        FieldValueView{std::string_view(oversized_payload)},
+    };
+    Expect(
+        Emit(registration.handle, values) == EmitStatus::RecordTooLarge,
+        "loss probe did not deterministically reject an oversized record"
+    );
+    const RuntimeStats stats = GetRuntimeStats();
+    Expect(
+        stats.generation == _generation &&
+            stats.records_dropped_oversized == 1,
+        "loss probe rejection was not attributed to the controller generation"
+    );
 }
 
 ProfileCaptureRequestCompletion CompletionOf(
@@ -914,6 +959,91 @@ void EngineShutdownPreservesRhiAndWorkerOwnershipBoundaries() {
     );
 }
 
+void DynamicStopReportsProfileDumpRecordLoss() {
+    ScopedCaptureOutput      output("moer-profile-controller-dynamic-loss");
+    ProfileCaptureController controller(nullptr, 4);
+    const std::uint64_t generation = StartCpuOnlyCapture(
+        controller,
+        LossyStartOptions(output, "dynamic-loss.mpd")
+    );
+    EmitOversizedRuntimeRecord(generation);
+
+    const ProfileCaptureRequestCompletion completion =
+        StopCapture(controller, generation);
+    Expect(
+        completion.status ==
+                ProfileCaptureCompletionStatus::StoppedWithLoss &&
+            completion.generation == generation &&
+            GetRuntimeState() == RuntimeState::Stopped,
+        "dynamic Stop published a clean terminal status after ProfileDump loss"
+    );
+}
+
+void EngineShutdownReportsProfileDumpRecordLoss() {
+    ScopedCaptureOutput      output("moer-profile-controller-shutdown-loss");
+    RenderProfileCapture     capture;
+    ProfileCaptureController controller(&capture, 4);
+    const std::uint64_t generation = StartCapture(
+        controller,
+        LossyStartOptions(output, "shutdown-loss.mpd")
+    );
+    EmitOversizedRuntimeRecord(generation);
+
+    RenderProfileFrameToken frame = capture.BeginFrame();
+    Expect(frame.Valid(), "shutdown-loss setup did not admit a GPU frame");
+    ProfileCaptureRequestSubmission stop =
+        controller.RequestStop(generation);
+    Expect(
+        stop.result == ProfileCaptureSubmitResult::Queued &&
+            controller.TickOwner() == ProfileCaptureTickResult::WaitingForGpu &&
+            !stop.ticket.Ready(),
+        "shutdown-loss setup did not retain an active Stop ticket"
+    );
+
+    Expect(
+        controller.BeginEngineShutdown() ==
+            ProfileCaptureLifecycleResult::Advanced,
+        "shutdown-loss setup did not cross the admission boundary"
+    );
+    Expect(
+        capture.Seal(frame),
+        "shutdown-loss setup could not seal its admitted GPU frame"
+    );
+    Expect(
+        controller.FinalizeGpuAfterRhiDrain(true) ==
+            ProfileCaptureLifecycleResult::Advanced,
+        "shutdown-loss setup did not cross the post-RHI boundary"
+    );
+    const RenderProfileCaptureStats gpu_stats = capture.GetStats();
+    Expect(
+        gpu_stats.closed && gpu_stats.frames_emitted == 1 &&
+            gpu_stats.frame_records_dropped == 0 &&
+            gpu_stats.scope_records_dropped == 0 &&
+            gpu_stats.terminal_faults == 0 &&
+            gpu_stats.shutdown_abandoned_frames == 0 &&
+            !stop.ticket.Ready(),
+        "shutdown-loss setup introduced GPU loss instead of isolating ProfileDump loss"
+    );
+    Expect(
+        controller.FinalizeRuntimeAfterWorkers() ==
+            ProfileCaptureLifecycleResult::Advanced,
+        "shutdown-loss setup did not cross the post-worker boundary"
+    );
+
+    const ProfileCaptureRequestCompletion completion =
+        CompletionOf(
+            stop.ticket,
+            "Engine shutdown did not complete the active Stop ticket"
+        );
+    Expect(
+        completion.status ==
+                ProfileCaptureCompletionStatus::StoppedWithLoss &&
+            completion.generation == generation &&
+            GetRuntimeState() == RuntimeState::Stopped,
+        "post-worker finalization published a clean status after ProfileDump loss"
+    );
+}
+
 void WorkerShutdownFailureAbandonsRuntimeWithoutUnsafeFinalization() {
     ScopedCaptureOutput  output("moer-profile-controller-worker-failure");
     RenderProfileCapture capture;
@@ -1036,6 +1166,8 @@ int main() {
         RestartUsesStableFacadeAndRejectsStaleStop();
         AdmittedFrameKeepsDynamicStopPendingUntilSealed();
         EngineShutdownPreservesRhiAndWorkerOwnershipBoundaries();
+        DynamicStopReportsProfileDumpRecordLoss();
+        EngineShutdownReportsProfileDumpRecordLoss();
         WorkerShutdownFailureAbandonsRuntimeWithoutUnsafeFinalization();
         ClosingAdmissionCancelsQueuedTickets();
     } catch (const std::exception& error) {
