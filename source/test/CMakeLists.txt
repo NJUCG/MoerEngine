@@ -184,6 +184,26 @@ set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME ProfileCaptureControllerContract COMMAND $<TARGET_FILE:${test_target}>)
 set_tests_properties(ProfileCaptureControllerContract PROPERTIES TIMEOUT 60)
 
+set(test_target TestProfileCaptureControlModel)
+add_executable(
+    ${test_target}
+    "ProfileCaptureControlModelTest.cpp"
+    "${moer_source_dir}/editor/profile_capture_ui/ProfileCaptureControlModel.cpp"
+)
+target_include_directories(
+    ${test_target}
+    PRIVATE "${moer_source_dir}/editor"
+)
+target_link_libraries(${test_target}
+    PRIVATE Moer::Runtime
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(
+    NAME ProfileCaptureControlModelContract
+    COMMAND $<TARGET_FILE:${test_target}>
+)
+set_tests_properties(ProfileCaptureControlModelContract PROPERTIES TIMEOUT 60)
+
 set(test_target TestRHIGpuCompletion)
 add_executable(${test_target} "RHIGpuCompletionContractTest.cpp")
 target_link_libraries(${test_target}

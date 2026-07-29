@@ -47,7 +47,8 @@ void Editor::Run(const ExtraHooks& extra_hooks) {
     m_editor_ui = MakeUnique<EditorUI>(
         MakeUnique<Render::UIRenderer>(RenderDevice::Get()),
         m_engine->GetEditorConfig(),
-        m_engine->GetRemoteModuleController()
+        m_engine->GetRemoteModuleController(),
+        *m_engine
     );
 
     m_engine->Run(

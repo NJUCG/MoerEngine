@@ -50,6 +50,11 @@ void ParseEditorWindowVisibilityLine(EditorWindowVisibilitySettings& settings, s
         TryParseBoolSetting(line, "Inspector", settings.inspector) ||
         TryParseBoolSetting(line, "Configs", settings.config) ||
         TryParseBoolSetting(line, "SceneEditing", settings.scene_editing) ||
+        TryParseBoolSetting(
+            line,
+            "ProfileCapture",
+            settings.profile_capture
+        ) ||
         TryParseBoolSetting(line, "MemoryProfiler", settings.memory_profiler)) {
         settings.loaded = true;
     }
@@ -87,6 +92,10 @@ void EditorWindowVisibilitySettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler*
     out_buf->appendf("Inspector=%d\n", settings.inspector ? 1 : 0);
     out_buf->appendf("Configs=%d\n", settings.config ? 1 : 0);
     out_buf->appendf("SceneEditing=%d\n", settings.scene_editing ? 1 : 0);
+    out_buf->appendf(
+        "ProfileCapture=%d\n",
+        settings.profile_capture ? 1 : 0
+    );
     out_buf->appendf("MemoryProfiler=%d\n\n", settings.memory_profiler ? 1 : 0);
 }
 
@@ -152,7 +161,9 @@ bool IsSameWindowVisibilitySettings(
     return lhs.loaded == rhs.loaded && lhs.scene_color == rhs.scene_color &&
            lhs.scene_view == rhs.scene_view && lhs.hierarchy == rhs.hierarchy &&
            lhs.inspector == rhs.inspector && lhs.config == rhs.config &&
-           lhs.scene_editing == rhs.scene_editing && lhs.memory_profiler == rhs.memory_profiler;
+           lhs.scene_editing == rhs.scene_editing &&
+           lhs.profile_capture == rhs.profile_capture &&
+           lhs.memory_profiler == rhs.memory_profiler;
 }
 
 } // namespace
