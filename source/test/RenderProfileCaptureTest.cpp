@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <barrier>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -20,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -364,6 +366,649 @@ void FinishRuntime(const ScopedOutput& _output) {
         !_output.HasInProgressFile(),
         "ProfileDump left an in-progress file"
     );
+}
+
+void DefaultSessionFacadeIsInactive() {
+    RenderProfileCapture            capture;
+    const RenderProfileCaptureStats stats = capture.GetStats();
+
+    Expect(!capture.Valid() && !capture.BeginFrame().Valid(), "default GPU capture facade admitted work");
+    Expect(
+        capture.RequestStop() == RenderProfileSessionStopResult::Inactive,
+        "default GPU capture facade accepted a stop request"
+    );
+    Expect(
+        capture.TryFinishSession() == RenderProfileSessionFinishResult::Inactive,
+        "default GPU capture facade reported a terminal session"
+    );
+    Expect(
+        !stats.accepting && !stats.closed && stats.generation == 0,
+        "default GPU capture facade exposed non-empty state"
+    );
+}
+
+void LegacyConstructorRejectsInvalidStreamConfiguration() {
+    ScopedOutput output("moer-render-profile-invalid-config");
+    StartRuntime(output);
+    const RegisteredGpuSchemas schemas = RegisterGpuSchemas();
+    GpuScopeStreamConfig       invalid_config{};
+    invalid_config.max_resident_frames = 0;
+
+    bool rejected = false;
+    try {
+        RenderProfileCapture capture(schemas.frame, schemas.scope, invalid_config);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    Expect(rejected, "legacy GPU capture constructor silently accepted invalid stream configuration");
+    FinishRuntime(output);
+}
+
+void FinishSessionOwnsStopAndTokenDestructorSeal() {
+    RenderProfileCapture capture;
+
+    {
+        ScopedOutput output("moer-render-profile-finish-owned-stop");
+        StartRuntime(output);
+        const RegisteredGpuSchemas schemas = RegisterGpuSchemas();
+        Expect(
+            capture.StartSession(schemas.frame, schemas.scope) == RenderProfileSessionStartResult::Started,
+            "self-stopping GPU capture session did not start"
+        );
+        RenderProfileFrameToken frame = capture.BeginFrame();
+        Expect(frame.Valid() && capture.Seal(frame), "self-stopping session frame did not seal");
+        Expect(
+            capture.TryFinishSession() == RenderProfileSessionFinishResult::Closed,
+            "TryFinishSession did not own its admission-stop boundary"
+        );
+        const RenderProfileCaptureStats stats = capture.GetStats();
+        Expect(
+            stats.closed && stats.frames_sealed == 1 && stats.frames_emitted == 1 &&
+                stats.shutdown_abandoned_frames == 0,
+            "self-stopping session did not drain cleanly"
+        );
+        FinishRuntime(output);
+    }
+
+    {
+        ScopedOutput output("moer-render-profile-token-auto-seal");
+        StartRuntime(output);
+        const RegisteredGpuSchemas schemas = RegisterGpuSchemas();
+        Expect(
+            capture.StartSession(schemas.frame, schemas.scope) == RenderProfileSessionStartResult::Started,
+            "token auto-seal GPU capture session did not start"
+        );
+        {
+            RenderProfileFrameToken frame = capture.BeginFrame();
+            Expect(frame.Valid(), "token auto-seal frame admission failed");
+            Expect(
+                capture.RequestStop() == RenderProfileSessionStopResult::StopRequested,
+                "token auto-seal session stop request failed"
+            );
+            Expect(frame.Valid(), "stop invalidated the token before its destructor");
+        }
+        Expect(
+            capture.TryFinishSession() == RenderProfileSessionFinishResult::Closed,
+            "stopped token destructor did not auto-seal and drain"
+        );
+        const RenderProfileCaptureStats stats = capture.GetStats();
+        Expect(
+            stats.frames_sealed == 1 && stats.frames_emitted == 1 && stats.shutdown_abandoned_frames == 0,
+            "token destructor auto-seal accounting is inconsistent"
+        );
+        FinishRuntime(output);
+    }
+}
+
+void SessionGateStopsAdmissionDrainsAndRestartsNextGeneration() {
+    RenderProfileCapture capture;
+    std::uint64_t        first_generation = 0;
+
+    {
+        ScopedOutput output("moer-render-profile-session-a");
+        StartRuntime(output);
+        const RegisteredGpuSchemas schemas = RegisterGpuSchemas();
+        Expect(
+            capture.StartSession(schemas.frame, schemas.scope) == RenderProfileSessionStartResult::Started,
+            "first GPU capture session did not start"
+        );
+        first_generation = capture.GetStats().generation;
+        Expect(first_generation != 0 && capture.Valid(), "first GPU capture session has no live generation");
+
+        RenderProfileFrameToken frame = capture.BeginFrame();
+        Expect(frame.Valid() && frame.FrameId() == 1, "first session frame admission failed");
+        Expect(
+            capture.RequestStop() == RenderProfileSessionStopResult::StopRequested,
+            "first session stop request was not accepted"
+        );
+        Expect(
+            capture.RequestStop() == RenderProfileSessionStopResult::AlreadyStopping,
+            "repeated session stop did not report an existing stop"
+        );
+        Expect(
+            !capture.Valid() && !capture.BeginFrame().Valid(),
+            "stopping session continued to admit new frames"
+        );
+        Expect(frame.Valid(), "stopping session invalidated an admitted frame token");
+        Expect(
+            capture.TryFinishSession() == RenderProfileSessionFinishResult::Pending,
+            "session closed while an admitted frame was still unsealed"
+        );
+
+        CommandList list(EQueueType::Graphics);
+        Expect(
+            capture.BindSource(frame, list, Binding(EQueueType::Graphics, 6, 12), 4) ==
+                RenderProfileBindResult::Bound,
+            "stopping session rejected an admitted frame source"
+        );
+        list.PushScopeWithTimeScope("SessionA.AcceptedBeforeStop");
+        list.PopScopeWithTimeScope();
+        CmdSubmit submit = list.Submit();
+        Expect(capture.Seal(frame), "stopping session could not seal an admitted frame");
+        Expect(
+            capture.TryFinishSession() == RenderProfileSessionFinishResult::Pending,
+            "session closed before its admitted query completed"
+        );
+
+        ResolveTimestampAt(submit, 0, Timestamp(40, 55));
+        Expect(
+            capture.GetStats().stream.resident_ready_frames == 1,
+            "completed query did not publish a ready frame before owner polling"
+        );
+        Expect(
+            capture.TryFinishSession() == RenderProfileSessionFinishResult::Closed,
+            "finish did not drain the ready frame and close cleanly"
+        );
+        const RenderProfileCaptureStats closed = capture.GetStats();
+        Expect(
+            closed.closed && !closed.accepting && closed.frames_admitted == 1 && closed.frames_emitted == 1 &&
+                closed.scopes_emitted == 1 && closed.shutdown_abandoned_frames == 0 &&
+                closed.terminal_faults == 0,
+            "clean session close statistics are inconsistent"
+        );
+        Expect(
+            capture.TryFinishSession() == RenderProfileSessionFinishResult::Closed,
+            "clean session finish was not idempotent"
+        );
+        Expect(
+            capture.StartSession(schemas.frame, schemas.scope) ==
+                RenderProfileSessionStartResult::GenerationAlreadyUsed,
+            "closed session rebound inside one ProfileDump generation"
+        );
+
+        ReleaseSubmit(submit);
+        FinishRuntime(output);
+        const ParsedDump dump = ParseDump(output.path);
+        Expect(
+            RecordsFor(dump, FindSchema(dump, "GpuFrame")).size() == 1 &&
+                RecordsFor(dump, FindSchema(dump, "GpuScope")).size() == 1,
+            "first session did not persist its clean drain"
+        );
+    }
+
+    {
+        ScopedOutput output("moer-render-profile-session-b");
+        StartRuntime(output);
+        const RegisteredGpuSchemas schemas = RegisterGpuSchemas();
+        Expect(
+            capture.StartSession(schemas.frame, schemas.scope) == RenderProfileSessionStartResult::Started,
+            "stable facade did not start in the next runtime generation"
+        );
+        Expect(
+            capture.GetStats().generation != first_generation,
+            "stable facade retained the previous runtime generation"
+        );
+
+        RenderProfileFrameToken frame = capture.BeginFrame();
+        Expect(
+            frame.Valid() && frame.FrameId() == 1 && capture.Seal(frame),
+            "second session did not reset and seal frame identity"
+        );
+        Expect(
+            capture.RequestStop() == RenderProfileSessionStopResult::StopRequested &&
+                capture.TryFinishSession() == RenderProfileSessionFinishResult::Closed,
+            "second session did not close cleanly"
+        );
+        const RenderProfileCaptureStats closed = capture.GetStats();
+        Expect(
+            closed.frames_emitted == 1 && closed.scopes_emitted == 0 && closed.shutdown_abandoned_frames == 0,
+            "second session inherited first-generation accounting"
+        );
+
+        FinishRuntime(output);
+        const ParsedDump dump = ParseDump(output.path);
+        Expect(
+            RecordsFor(dump, FindSchema(dump, "GpuFrame")).size() == 1 && dump.records.size() == 1,
+            "second session output contains cross-generation records"
+        );
+    }
+}
+
+void AbortedPendingQueryCannotPolluteNextRuntimeGeneration() {
+    RenderProfileCapture     capture;
+    CommandList              persistent(EQueueType::Graphics);
+    std::optional<CmdSubmit> old_submit{};
+    RenderProfileFrameToken  stale_token{};
+
+    {
+        ScopedOutput output("moer-render-profile-session-abort-old");
+        StartRuntime(output);
+        const RegisteredGpuSchemas schemas = RegisterGpuSchemas();
+        Expect(
+            capture.StartSession(schemas.frame, schemas.scope) == RenderProfileSessionStartResult::Started,
+            "old GPU capture session did not start"
+        );
+
+        RenderProfileFrameToken frame = capture.BeginFrame();
+        Expect(
+            capture.BindSource(frame, persistent, Binding(EQueueType::Graphics, 7, 13), 1) ==
+                RenderProfileBindResult::Bound,
+            "old pending source bind failed"
+        );
+        persistent.PushScopeWithTimeScope("OldGeneration.Pending");
+        persistent.PopScopeWithTimeScope();
+        old_submit.emplace(persistent.Submit());
+        Expect(capture.Seal(frame), "old pending frame seal failed");
+        stale_token = capture.BeginFrame();
+        Expect(
+            stale_token.Valid() && stale_token.FrameId() == 2,
+            "old generation stale-token frame admission failed"
+        );
+
+        capture.Abort();
+        const RenderProfileCaptureStats aborted = capture.GetStats();
+        Expect(
+            aborted.closed && !aborted.accepting && aborted.shutdown_abandoned_frames == 2 &&
+                capture.TryFinishSession() == RenderProfileSessionFinishResult::Aborted,
+            "abort did not detach the old pending session"
+        );
+        Expect(
+            capture.StartSession(schemas.frame, schemas.scope) ==
+                RenderProfileSessionStartResult::GenerationAlreadyUsed,
+            "aborted session rebound inside one ProfileDump generation"
+        );
+        FinishRuntime(output);
+    }
+
+    {
+        ScopedOutput output("moer-render-profile-session-abort-new");
+        StartRuntime(output);
+        const RegisteredGpuSchemas schemas = RegisterGpuSchemas();
+        Expect(
+            capture.StartSession(schemas.frame, schemas.scope) == RenderProfileSessionStartResult::Started,
+            "new GPU capture generation did not rebind"
+        );
+        CommandList stale_list(EQueueType::Graphics);
+        Expect(
+            !stale_token.Valid() &&
+                capture.BindSource(stale_token, stale_list, Binding(EQueueType::Graphics, 8, 14), 0) ==
+                    RenderProfileBindResult::InvalidFrame &&
+                !capture.Seal(stale_token) && capture.Valid() && capture.GetStats().frames_attempted == 0,
+            "old generation frame token entered or replaced the new session"
+        );
+
+        RenderProfileFrameToken frame = capture.BeginFrame();
+        Expect(
+            capture.BindSource(frame, persistent, Binding(EQueueType::Graphics, 8, 14), 2) ==
+                RenderProfileBindResult::Bound,
+            "persistent CommandList did not bind to the new session"
+        );
+        persistent.PushScopeWithTimeScope("NewGeneration.Current");
+        persistent.PopScopeWithTimeScope();
+        CmdSubmit current_submit = persistent.Submit();
+        Expect(capture.Seal(frame), "new generation frame seal failed");
+        const RenderProfileCaptureStats before_old_completion = capture.GetStats();
+        Expect(
+            before_old_completion.stream.resident_frames == 1 &&
+                before_old_completion.stream.resident_pending_frames == 1 &&
+                before_old_completion.frames_emitted == 0,
+            "new generation did not retain its same-id frame while the old callback was pending"
+        );
+
+        Expect(
+            QueryBackendAccess::ResolveTimestamp(old_submit->query_tokens.front(), Timestamp(1, 2)),
+            "old generation query could not complete safely"
+        );
+        Expect(capture.DrainReadyFrames() == 0, "old generation completion became a current frame");
+        const RenderProfileCaptureStats after_old_completion = capture.GetStats();
+        Expect(
+            after_old_completion.frames_emitted == before_old_completion.frames_emitted &&
+                after_old_completion.scopes_emitted == before_old_completion.scopes_emitted &&
+                after_old_completion.frames_invalid == before_old_completion.frames_invalid &&
+                after_old_completion.stream.resident_frames == before_old_completion.stream.resident_frames,
+            "old generation completion mutated the current session"
+        );
+
+        ResolveTimestampAt(current_submit, 0, Timestamp(100, 125));
+        Expect(capture.DrainReadyFrames() == 1, "new generation frame did not drain");
+        Expect(
+            capture.RequestStop() == RenderProfileSessionStopResult::StopRequested &&
+                capture.TryFinishSession() == RenderProfileSessionFinishResult::Closed,
+            "new generation did not close after old completion"
+        );
+        ReleaseSubmit(current_submit);
+        ReleaseSubmit(*old_submit);
+        FinishRuntime(output);
+
+        const ParsedDump dump   = ParseDump(output.path);
+        const auto       frames = RecordsFor(dump, FindSchema(dump, "GpuFrame"));
+        const auto       scopes = RecordsFor(dump, FindSchema(dump, "GpuScope"));
+        Expect(
+            frames.size() == 1 && scopes.size() == 1 &&
+                StringAt(*scopes.front(), 8) == "NewGeneration.Current",
+            "old generation callback polluted the new dump"
+        );
+    }
+}
+
+void DelayedStaleStartCannotFaultNewGeneration() {
+    RenderProfileCapture            capture;
+    RegisteredGpuSchemas            stale_schemas{};
+    std::atomic_uint32_t            pause_entered{0};
+    std::atomic_bool                pause_release{false};
+    RenderProfileSessionStartResult stale_result = RenderProfileSessionStartResult::InvalidSchema;
+
+    ScopedOutput stale_output("moer-render-profile-delayed-start-old");
+    StartRuntime(stale_output);
+    stale_schemas = RegisterGpuSchemas();
+    RenderProfileTesting::InstallStartPublishPause(pause_entered, pause_release);
+
+    std::optional<std::jthread> stale_starter;
+    try {
+        stale_starter.emplace([&] {
+            stale_result = capture.StartSession(stale_schemas.frame, stale_schemas.scope);
+        });
+    } catch (...) {
+        RenderProfileTesting::ClearStartPublishPause();
+        throw;
+    }
+
+    struct PauseCleanup {
+        std::atomic_bool& release;
+        bool              active{true};
+
+        ~PauseCleanup() {
+            if (active) {
+                release.store(true, std::memory_order_release);
+                RenderProfileTesting::ClearStartPublishPause();
+            }
+        }
+
+        void Finish() noexcept {
+            release.store(true, std::memory_order_release);
+            RenderProfileTesting::ClearStartPublishPause();
+            active = false;
+        }
+    } pause_cleanup{pause_release};
+
+    const auto pause_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (pause_entered.load(std::memory_order_acquire) == 0 &&
+           std::chrono::steady_clock::now() < pause_deadline) {
+        std::this_thread::yield();
+    }
+    if (pause_entered.load(std::memory_order_acquire) == 0) {
+        pause_cleanup.Finish();
+        stale_starter->join();
+        Expect(false, "delayed StartSession did not reach its deterministic publish boundary");
+    }
+
+    FinishRuntime(stale_output);
+
+    ScopedOutput current_output("moer-render-profile-delayed-start-current");
+    StartRuntime(current_output);
+    const RegisteredGpuSchemas            current_schemas = RegisterGpuSchemas();
+    const RenderProfileSessionStartResult current_result =
+        capture.StartSession(current_schemas.frame, current_schemas.scope);
+
+    pause_cleanup.Finish();
+    stale_starter->join();
+    Expect(
+        current_result == RenderProfileSessionStartResult::Started &&
+            stale_result == RenderProfileSessionStartResult::StaleGeneration,
+        "delayed stale StartSession did not lose to the current generation"
+    );
+    const RenderProfileCaptureStats current_stats = capture.GetStats();
+    Expect(
+        capture.Valid() && current_stats.generation == current_schemas.frame.generation &&
+            current_stats.terminal_faults == 0,
+        "delayed stale StartSession faulted or replaced the current session"
+    );
+
+    RenderProfileFrameToken frame = capture.BeginFrame();
+    Expect(frame.Valid() && capture.Seal(frame), "current session failed after delayed stale start");
+    Expect(
+        capture.RequestStop() == RenderProfileSessionStopResult::StopRequested &&
+            capture.TryFinishSession() == RenderProfileSessionFinishResult::Closed,
+        "current session did not close after delayed stale start"
+    );
+    FinishRuntime(current_output);
+}
+
+void DelayedStartCannotPublishStaleCandidate() {
+    RenderProfileCapture       capture;
+    std::atomic_uint32_t       pause_entered{0};
+    std::atomic_bool           pause_release{false};
+    RenderProfileSessionStartResult stale_result =
+        RenderProfileSessionStartResult::InvalidSchema;
+
+    ScopedOutput stale_output("moer-render-profile-publish-race-old");
+    StartRuntime(stale_output);
+    const RegisteredGpuSchemas stale_schemas = RegisterGpuSchemas();
+    RenderProfileTesting::InstallStartPublishPause(pause_entered, pause_release);
+
+    std::optional<std::jthread> stale_starter;
+    try {
+        stale_starter.emplace([&] {
+            stale_result = capture.StartSession(stale_schemas.frame, stale_schemas.scope);
+        });
+    } catch (...) {
+        RenderProfileTesting::ClearStartPublishPause();
+        throw;
+    }
+
+    struct PauseCleanup {
+        std::atomic_bool& release;
+        bool              active{true};
+
+        ~PauseCleanup() {
+            if (active) {
+                release.store(true, std::memory_order_release);
+                RenderProfileTesting::ClearStartPublishPause();
+            }
+        }
+
+        void Finish() noexcept {
+            release.store(true, std::memory_order_release);
+            RenderProfileTesting::ClearStartPublishPause();
+            active = false;
+        }
+    } pause_cleanup{pause_release};
+
+    const auto pause_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (pause_entered.load(std::memory_order_acquire) == 0 &&
+           std::chrono::steady_clock::now() < pause_deadline) {
+        std::this_thread::yield();
+    }
+    if (pause_entered.load(std::memory_order_acquire) == 0) {
+        pause_cleanup.Finish();
+        stale_starter->join();
+        Expect(false, "StartSession did not pause immediately before publication");
+    }
+
+    FinishRuntime(stale_output);
+
+    ScopedOutput current_output("moer-render-profile-publish-race-current");
+    StartRuntime(current_output);
+    const RegisteredGpuSchemas current_schemas = RegisterGpuSchemas();
+
+    // No current session is published yet, so the delayed compare-exchange
+    // succeeds. The post-CAS generation check must still reject and close
+    // only that stale candidate instead of reporting Started.
+    pause_cleanup.Finish();
+    stale_starter->join();
+    const RenderProfileCaptureStats stale_stats = capture.GetStats();
+    Expect(
+        stale_result == RenderProfileSessionStartResult::StaleGeneration &&
+            stale_stats.closed && stale_stats.generation == stale_schemas.frame.generation &&
+            stale_stats.terminal_faults == 1,
+        "post-publication generation check accepted a stale candidate"
+    );
+
+    Expect(
+        capture.StartSession(current_schemas.frame, current_schemas.scope) ==
+            RenderProfileSessionStartResult::Started,
+        "current generation could not replace the rejected stale candidate"
+    );
+    const RenderProfileCaptureStats current_stats = capture.GetStats();
+    Expect(
+        capture.Valid() && current_stats.generation == current_schemas.frame.generation &&
+            current_stats.terminal_faults == 0,
+        "current generation inherited the stale candidate's terminal state"
+    );
+    RenderProfileFrameToken frame = capture.BeginFrame();
+    Expect(frame.Valid() && capture.Seal(frame), "current frame failed after stale publication rejection");
+    Expect(
+        capture.RequestStop() == RenderProfileSessionStopResult::StopRequested &&
+            capture.TryFinishSession() == RenderProfileSessionFinishResult::Closed,
+        "current session did not close after stale publication rejection"
+    );
+    FinishRuntime(current_output);
+}
+
+void ConcurrentSessionStartHasOneWinner() {
+    ScopedOutput output("moer-render-profile-concurrent-start");
+    StartRuntime(output);
+    const RegisteredGpuSchemas schemas = RegisterGpuSchemas();
+    RenderProfileCapture       capture;
+
+    constexpr std::size_t thread_count = 16;
+    std::barrier          start_line(static_cast<std::ptrdiff_t>(thread_count + 1));
+    std::array<RenderProfileSessionStartResult, thread_count> results{};
+    results.fill(RenderProfileSessionStartResult::InvalidSchema);
+    std::vector<std::jthread> starters;
+    starters.reserve(thread_count);
+    for (std::size_t index = 0; index < thread_count; ++index) {
+        starters.emplace_back([&, index] {
+            start_line.arrive_and_wait();
+            results[index] = capture.StartSession(schemas.frame, schemas.scope);
+        });
+    }
+    start_line.arrive_and_wait();
+    starters.clear();
+
+    const std::size_t started =
+        static_cast<std::size_t>(std::ranges::count(results, RenderProfileSessionStartResult::Started));
+    const std::size_t already_active =
+        static_cast<std::size_t>(std::ranges::count(results, RenderProfileSessionStartResult::AlreadyActive));
+    Expect(
+        started == 1 && already_active == thread_count - 1 && capture.Valid(),
+        "concurrent session start did not elect exactly one winner"
+    );
+
+    Expect(
+        capture.RequestStop() == RenderProfileSessionStopResult::StopRequested &&
+            capture.TryFinishSession() == RenderProfileSessionFinishResult::Closed,
+        "concurrently started session did not close cleanly"
+    );
+    FinishRuntime(output);
+}
+
+void StaleSchemaHandlesCannotReplaceCurrentSession() {
+    RegisteredGpuSchemas stale_schemas{};
+    {
+        ScopedOutput output("moer-render-profile-stale-session");
+        StartRuntime(output);
+        stale_schemas = RegisterGpuSchemas();
+        FinishRuntime(output);
+    }
+
+    ScopedOutput output("moer-render-profile-current-session");
+    StartRuntime(output);
+    const RegisteredGpuSchemas current_schemas = RegisterGpuSchemas();
+    RenderProfileCapture       capture;
+    Expect(
+        capture.StartSession(current_schemas.frame, current_schemas.scope) ==
+            RenderProfileSessionStartResult::Started,
+        "current GPU capture session did not start"
+    );
+    const std::uint64_t current_generation = capture.GetStats().generation;
+    Expect(
+        capture.StartSession(stale_schemas.frame, stale_schemas.scope) ==
+            RenderProfileSessionStartResult::StaleGeneration,
+        "stale schema handles were not explicitly rejected"
+    );
+    Expect(
+        capture.Valid() && capture.GetStats().generation == current_generation,
+        "stale schema handles replaced the current session"
+    );
+
+    RenderProfileFrameToken frame = capture.BeginFrame();
+    Expect(
+        frame.Valid() && frame.FrameId() == 1 && capture.Seal(frame),
+        "current session did not survive the stale start attempt"
+    );
+    Expect(
+        capture.RequestStop() == RenderProfileSessionStopResult::StopRequested &&
+            capture.TryFinishSession() == RenderProfileSessionFinishResult::Closed,
+        "current session did not close after stale-handle rejection"
+    );
+    FinishRuntime(output);
+
+    const ParsedDump dump = ParseDump(output.path);
+    Expect(
+        RecordsFor(dump, FindSchema(dump, "GpuFrame")).size() == 1,
+        "stale-handle rejection lost the current frame"
+    );
+}
+
+void SourceAndScopeDropsCloseWithLoss() {
+    ScopedOutput output("moer-render-profile-source-scope-loss");
+    StartRuntime(output);
+    const RegisteredGpuSchemas schemas = RegisterGpuSchemas();
+    GpuScopeStreamConfig       stream_config{};
+    stream_config.max_scope_name_bytes = 4;
+    RenderProfileCapture capture(schemas.frame, schemas.scope, stream_config);
+
+    RenderProfileFrameToken frame = capture.BeginFrame();
+    Expect(frame.Valid(), "loss-classification frame admission failed");
+
+    CommandList rejected_source(EQueueType::Graphics);
+    Expect(
+        capture.BindSource(frame, rejected_source, RHIQueueBinding{}, 0) ==
+            RenderProfileBindResult::InvalidQueue,
+        "invalid source did not reach the bridge rejection path"
+    );
+
+    CommandList dropped_scope(EQueueType::Graphics);
+    Expect(
+        capture.BindSource(
+            frame,
+            dropped_scope,
+            Binding(EQueueType::Graphics, 9, 15),
+            1
+        ) == RenderProfileBindResult::Bound,
+        "scope-drop source bind failed"
+    );
+    dropped_scope.PushScopeWithTimeScope("TooLong");
+    dropped_scope.PopScopeWithTimeScope();
+    CmdSubmit submit = dropped_scope.Submit();
+    Expect(capture.Seal(frame), "loss-classification frame seal failed");
+
+    Expect(
+        capture.RequestStop() == RenderProfileSessionStopResult::StopRequested &&
+            capture.TryFinishSession() == RenderProfileSessionFinishResult::ClosedWithLoss,
+        "source/scope drops did not produce a lossy terminal state"
+    );
+    const RenderProfileCaptureStats stats = capture.GetStats();
+    Expect(
+        stats.closed && stats.sources_rejected == 1 && stats.frames_invalid == 1 &&
+            stats.stream.scopes_dropped_name_too_large == 1 &&
+            stats.frames_emitted == 1 && stats.terminal_faults == 0,
+        "source/scope loss accounting is inconsistent"
+    );
+
+    ReleaseSubmit(submit);
+    FinishRuntime(output);
 }
 
 void HappyPathPreservesTopologyAndRawTimestampDomains() {
@@ -1040,39 +1685,29 @@ void StaleGenerationFailsClosed() {
 
 void QueueFullDropsRecordsWithoutDisablingCapture() {
     Testing::ClearHooks();
-    Expect(
-        Testing::ConfigureWriterPauseAfterStart(true),
-        "writer pause hook could not be configured"
-    );
+    Expect(Testing::ConfigureWriterPauseAfterStart(true), "writer pause hook could not be configured");
     WriterResumeGuard resume_guard;
 
-    ScopedOutput output("moer-render-profile-queue-full");
+    ScopedOutput  output("moer-render-profile-queue-full");
     RuntimeConfig config{};
-    config.max_record_bytes = 4096;
+    config.max_record_bytes    = 4096;
     config.tls_publish_records = 1;
-    config.tls_publish_bytes = 4096;
-    config.tls_max_records = 1;
-    config.tls_max_bytes = 4096;
-    config.queue_max_chunks = 1;
-    config.queue_max_records = 1;
-    config.queue_max_bytes = 4096;
+    config.tls_publish_bytes   = 4096;
+    config.tls_max_records     = 1;
+    config.tls_max_bytes       = 4096;
+    config.queue_max_chunks    = 1;
+    config.queue_max_records   = 1;
+    config.queue_max_bytes     = 4096;
     StartRuntime(output, config);
-    Expect(
-        Testing::WaitForWriterPaused(2000),
-        "writer did not reach the deterministic pause"
-    );
+    Expect(Testing::WaitForWriterPaused(2000), "writer did not reach the deterministic pause");
 
     const RegisteredGpuSchemas schemas = RegisterGpuSchemas();
-    RenderProfileCapture capture(schemas.frame, schemas.scope);
-    RenderProfileFrameToken frame = capture.BeginFrame();
-    CommandList list(EQueueType::Graphics);
+    RenderProfileCapture       capture(schemas.frame, schemas.scope);
+    RenderProfileFrameToken    frame = capture.BeginFrame();
+    CommandList                list(EQueueType::Graphics);
     Expect(
-        capture.BindSource(
-            frame,
-            list,
-            Binding(EQueueType::Graphics, 0, 0),
-            0
-        ) == RenderProfileBindResult::Bound,
+        capture.BindSource(frame, list, Binding(EQueueType::Graphics, 0, 0), 0) ==
+            RenderProfileBindResult::Bound,
         "queue-full source bind failed"
     );
     list.PushScopeWithTimeScope("QueueFull.Scope");
@@ -1080,15 +1715,10 @@ void QueueFullDropsRecordsWithoutDisablingCapture() {
     CmdSubmit submit = list.Submit();
     Expect(capture.Seal(frame), "queue-full frame seal failed");
     ResolveTimestampAt(submit, 0, Timestamp(1, 2));
-    Expect(
-        capture.DrainReadyFrames() == 1,
-        "queue-full frame did not materialize"
-    );
+    Expect(capture.DrainReadyFrames() == 1, "queue-full frame did not materialize");
     RenderProfileCaptureStats pressured = capture.GetStats();
     Expect(
-        capture.Valid() &&
-            pressured.frames_emitted == 1 &&
-            pressured.scope_records_dropped == 1 &&
+        capture.Valid() && pressured.frames_emitted == 1 && pressured.scope_records_dropped == 1 &&
             pressured.terminal_faults == 0,
         "QueueFull disabled capture or changed drop accounting"
     );
@@ -1096,27 +1726,25 @@ void QueueFullDropsRecordsWithoutDisablingCapture() {
     resume_guard.Resume();
     const FlushResult drained = FlushAll();
     Expect(
-        drained == FlushResult::Completed ||
-            drained == FlushResult::NothingPending,
+        drained == FlushResult::Completed || drained == FlushResult::NothingPending,
         "queue-full recovery did not drain accepted work"
     );
     {
         RenderProfileFrameToken recovered = capture.BeginFrame();
         Expect(recovered.Valid(), "capture did not recover after QueueFull");
     }
-    Expect(
-        capture.DrainReadyFrames() == 1,
-        "recovered empty frame did not drain"
-    );
+    Expect(capture.DrainReadyFrames() == 1, "recovered empty frame did not drain");
     const RenderProfileCaptureStats recovered = capture.GetStats();
     Expect(
-        capture.Valid() &&
-            recovered.frames_emitted == 2 &&
-            recovered.terminal_faults == 0,
+        capture.Valid() && recovered.frames_emitted == 2 && recovered.terminal_faults == 0,
         "capture did not remain active after QueueFull recovery"
     );
 
     capture.ShutdownAfterRhiDrain();
+    Expect(
+        capture.TryFinishSession() == RenderProfileSessionFinishResult::ClosedWithLoss,
+        "QueueFull session did not expose its lossy terminal state"
+    );
     ReleaseSubmit(submit);
     FinishRuntime(output);
     Testing::ClearHooks();
@@ -1125,42 +1753,37 @@ void QueueFullDropsRecordsWithoutDisablingCapture() {
 void WriterFaultFailsCaptureClosed() {
     Testing::ClearHooks();
     Expect(
-        Testing::ConfigureFault(
-            Testing::FaultPoint::WritePacket, 2
-        ),
+        Testing::ConfigureFault(Testing::FaultPoint::WritePacket, 2),
         "writer fault hook could not be configured"
     );
 
-    ScopedOutput output("moer-render-profile-writer-fault");
+    ScopedOutput  output("moer-render-profile-writer-fault");
     RuntimeConfig config{};
     config.tls_publish_records = 1;
     StartRuntime(output, config);
     const RegisteredGpuSchemas schemas = RegisterGpuSchemas();
-    RenderProfileCapture capture(schemas.frame, schemas.scope);
+    RenderProfileCapture       capture(schemas.frame, schemas.scope);
 
     {
         RenderProfileFrameToken frame = capture.BeginFrame();
         Expect(frame.Valid(), "fault trigger frame admission failed");
     }
     static_cast<void>(capture.DrainReadyFrames());
-    Expect(
-        FlushAll() == FlushResult::Faulted,
-        "injected writer fault did not become observable"
-    );
+    Expect(FlushAll() == FlushResult::Faulted, "injected writer fault did not become observable");
     Expect(
         !capture.BeginFrame().Valid() && !capture.Valid(),
         "faulted ProfileDump runtime did not close the GPU bridge"
     );
     const RenderProfileCaptureStats stats = capture.GetStats();
     Expect(
-        stats.closed && stats.terminal_faults == 1,
-        "writer fault did not latch one terminal bridge fault"
+        stats.closed && stats.terminal_faults == 1, "writer fault did not latch one terminal bridge fault"
+    );
+    Expect(
+        capture.TryFinishSession() == RenderProfileSessionFinishResult::Faulted,
+        "writer fault did not expose the faulted terminal state"
     );
     capture.Abort();
-    Expect(
-        Shutdown() == ShutdownResult::Faulted,
-        "faulted ProfileDump shutdown reported success"
-    );
+    Expect(Shutdown() == ShutdownResult::Faulted, "faulted ProfileDump shutdown reported success");
     Testing::ClearHooks();
 }
 
@@ -1168,59 +1791,43 @@ void AdmissionRejectDoesNotOvertakeOrderedFrames() {
     ScopedOutput output("moer-render-profile-admission-order");
     StartRuntime(output);
     const RegisteredGpuSchemas schemas = RegisterGpuSchemas();
-    GpuScopeStreamConfig stream_config{};
+    GpuScopeStreamConfig       stream_config{};
     stream_config.max_resident_frames = 2;
-    stream_config.max_pending_frames = 1;
-    RenderProfileCapture capture(
-        schemas.frame, schemas.scope, stream_config
-    );
+    stream_config.max_pending_frames  = 1;
+    RenderProfileCapture capture(schemas.frame, schemas.scope, stream_config);
 
     RenderProfileFrameToken first = capture.BeginFrame();
-    Expect(
-        first.Valid() && first.FrameId() == 1,
-        "ordered admission first frame failed"
-    );
+    Expect(first.Valid() && first.FrameId() == 1, "ordered admission first frame failed");
     RenderProfileFrameToken rejected = capture.BeginFrame();
+    Expect(!rejected.Valid() && rejected.FrameId() == 2, "pending-frame limit did not reject frame 2");
     Expect(
-        !rejected.Valid() && rejected.FrameId() == 2,
-        "pending-frame limit did not reject frame 2"
-    );
-    Expect(
-        capture.Seal(first) &&
-            capture.DrainReadyFrames() == 1,
-        "ordered admission first frame did not drain"
+        capture.Seal(first) && capture.DrainReadyFrames() == 1, "ordered admission first frame did not drain"
     );
 
     {
         RenderProfileFrameToken recovered = capture.BeginFrame();
         Expect(
-            recovered.Valid() && recovered.FrameId() == 3,
-            "capture did not recover after admission rejection"
+            recovered.Valid() && recovered.FrameId() == 3, "capture did not recover after admission rejection"
         );
     }
+    Expect(capture.DrainReadyFrames() == 1, "ordered admission recovered frame did not drain");
     Expect(
-        capture.DrainReadyFrames() == 1,
-        "ordered admission recovered frame did not drain"
+        capture.RequestStop() == RenderProfileSessionStopResult::StopRequested &&
+            capture.TryFinishSession() == RenderProfileSessionFinishResult::ClosedWithLoss,
+        "frame admission rejection did not close through the dynamic lossy finish path"
     );
-    capture.ShutdownAfterRhiDrain();
     const RenderProfileCaptureStats stats = capture.GetStats();
     Expect(
-        stats.frames_attempted == 3 &&
-            stats.frames_admitted == 2 &&
-            stats.frames_admission_rejected == 1 &&
-            stats.frames_emitted == 2 &&
-            stats.shutdown_abandoned_frames == 0,
+        stats.frames_attempted == 3 && stats.frames_admitted == 2 && stats.frames_admission_rejected == 1 &&
+            stats.frames_emitted == 2 && stats.shutdown_abandoned_frames == 0,
         "admission rejection accounting is incorrect"
     );
     FinishRuntime(output);
 
-    const ParsedDump dump = ParseDump(output.path);
-    const auto frames = RecordsFor(
-        dump, FindSchema(dump, "GpuFrame")
-    );
+    const ParsedDump dump   = ParseDump(output.path);
+    const auto       frames = RecordsFor(dump, FindSchema(dump, "GpuFrame"));
     Expect(
-        frames.size() == 2 &&
-            ValueAt<std::uint64_t>(*frames[0], 0) == 1 &&
+        frames.size() == 2 && ValueAt<std::uint64_t>(*frames[0], 0) == 1 &&
             ValueAt<std::uint64_t>(*frames[1], 0) == 3,
         "rejected frame overtook or polluted ordered frame output"
     );
@@ -1230,6 +1837,16 @@ void AdmissionRejectDoesNotOvertakeOrderedFrames() {
 
 int main() {
     try {
+        DefaultSessionFacadeIsInactive();
+        LegacyConstructorRejectsInvalidStreamConfiguration();
+        FinishSessionOwnsStopAndTokenDestructorSeal();
+        SessionGateStopsAdmissionDrainsAndRestartsNextGeneration();
+        AbortedPendingQueryCannotPolluteNextRuntimeGeneration();
+        DelayedStaleStartCannotFaultNewGeneration();
+        DelayedStartCannotPublishStaleCandidate();
+        ConcurrentSessionStartHasOneWinner();
+        StaleSchemaHandlesCannotReplaceCurrentSession();
+        SourceAndScopeDropsCloseWithLoss();
         HappyPathPreservesTopologyAndRawTimestampDomains();
         RaytracingCaptureAggregationWaitsForReverseCompletionAndRecovers();
         AbortDetachesPendingCompletionWithoutBlocking();
@@ -1239,11 +1856,9 @@ int main() {
         WriterFaultFailsCaptureClosed();
         AdmissionRejectDoesNotOvertakeOrderedFrames();
     } catch (const std::exception& error) {
-        std::cerr << "RenderProfileCaptureContract: "
-                  << error.what() << '\n';
+        std::cerr << "RenderProfileCaptureContract: " << error.what() << '\n';
         return 1;
     }
-    std::cout
-        << "RenderProfileCaptureContract: all checks passed\n";
+    std::cout << "RenderProfileCaptureContract: all checks passed\n";
     return 0;
 }

@@ -25,6 +25,30 @@ public:
     void SetName(const std::string_view) override {}
 };
 
+class TestTexture final : public Texture {
+public:
+    TestTexture() : Texture(MakeInfo()) {}
+
+    uint GetMipByteSize(uint) const override {
+        return 4;
+    }
+
+    void SetName(const std::string_view) override {}
+
+private:
+    static TextureInfo MakeInfo() {
+        TextureInfo info{};
+        info.usage =
+            ETextureUsageFlags::SAMPLED |
+            ETextureUsageFlags::TRANSFER_DST;
+        info.extent       = {4, 4};
+        info.num_mips     = 1;
+        info.array_size   = 1;
+        info.aspect_flags = ETextureAspectFlags::COLOR;
+        return info;
+    }
+};
+
 void ExpectRange(
     const UnorderedMap<Buffer*, BufferRange>& _ranges,
     Buffer*                                   _buffer,
@@ -236,6 +260,94 @@ void ScopeCommandsOwnExclusiveLayers() {
     Expect(FindCommandLayer(reorderer, &renderer_pop) == 5, "renderer pop did not own the final layer");
 }
 
+void ResourceImportsMayFollowNonResourceOrderingBoundaries() {
+    TCachedArgArray cached_args;
+    CmdReorderer   reorderer(MakeFunctionTable(), cached_args);
+
+    ScopeCmd root_scope(
+        "Profiled Import",
+        true,
+        false,
+        GpuMarkerPalette::Renderer(),
+        EQueueType::Graphics
+    );
+    CommandList query_source(EQueueType::Graphics);
+    QueryToken  timestamp =
+        query_source.BeginTimestampQuery("Profiled Import");
+    query_source.EndTimestampQuery(timestamp);
+    CmdSubmit query_submit = query_source.Submit();
+    Expect(
+        query_submit.cmds.size() == 2 &&
+            query_submit.cmds.front()->Type() == Command::EType::Query,
+        "timestamp source did not emit its query pair"
+    );
+
+    TestTexture texture;
+    TestBuffer  buffer(
+        16,
+        4,
+        EBufferUsageFlags::UNORDERED_ACCESS |
+            EBufferUsageFlags::TRANSFER_DST
+    );
+    QueueTransferCmd import(
+        EQueueType::Copy,
+        Array<ImportTexture>{
+            ImportTexture(texture.GetView(), ETextureState::SAMPLE)
+        },
+        Array<ImportBuffer>{
+            ImportBuffer(buffer.GetView(), EBufferState::UNORDERED_ACCESS)
+        }
+    );
+
+    reorderer.AcceptCmd(&root_scope);
+    reorderer.AcceptCmd(query_submit.cmds.front().get());
+    reorderer.AcceptCmd(&import);
+
+    Expect(
+        FindCommandLayer(reorderer, &root_scope) == 0,
+        "profile root did not retain its ordering boundary"
+    );
+    Expect(
+        FindCommandLayer(reorderer, query_submit.cmds.front().get()) == 1,
+        "timestamp begin did not retain its ordering boundary"
+    );
+    Expect(
+        FindCommandLayer(reorderer, &import) == 2,
+        "fresh resource import did not follow the profiling prefix"
+    );
+
+    auto* texture_handle = static_cast<CmdReorderer::RangeHandle*>(
+        reorderer.GetHandle(
+            uint64(&texture),
+            CmdReorderer::ResourceType::Texture_Buffer
+        )
+    );
+    auto* buffer_handle = static_cast<CmdReorderer::RangeHandle*>(
+        reorderer.GetHandle(
+            uint64(&buffer),
+            CmdReorderer::ResourceType::Texture_Buffer
+        )
+    );
+    Expect(
+        reorderer.SetRead(
+            texture_handle,
+            CmdReorderer::Range(0, 1, 0, 1)
+        ) == 3,
+        "texture use did not wait for its profiled import"
+    );
+    Expect(
+        reorderer.SetRead(
+            buffer_handle,
+            CmdReorderer::Range(0, buffer.GetByteSize())
+        ) == 3,
+        "buffer use did not wait for its profiled import"
+    );
+
+    QueryBackendAccess::ResolveErrorIfPending(
+        timestamp, "reorderer import-prefix test cleanup"
+    );
+}
+
 void CommandResourcePreprocessingIsTaskGraphIndependent() {
     std::exception_ptr worker_error;
     std::jthread worker([&] {
@@ -378,6 +490,7 @@ int main() {
         MultiResourceBarrierPublishesEveryAccessAtItsFinalLayer();
         WriteBarrierWaitsForPriorRead();
         ScopeCommandsOwnExclusiveLayers();
+        ResourceImportsMayFollowNonResourceOrderingBoundaries();
         CommandResourcePreprocessingIsTaskGraphIndependent();
         std::cout << "RHI command reorderer tests passed\n";
         return 0;

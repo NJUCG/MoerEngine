@@ -5,6 +5,7 @@
 #include "profile/ProfileDump.h"
 #include "rhi/RHIGpuScope.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -30,6 +31,34 @@ enum class RenderProfileBindResult : std::uint8_t {
     InvalidQueue,
     SourceRejected,
     CommandListRejected,
+};
+
+enum class RenderProfileSessionStartResult : std::uint8_t {
+    Started = 0,
+    AlreadyActive,
+    GenerationAlreadyUsed,
+    InvalidSchema,
+    RuntimeUnavailable,
+    StaleGeneration,
+    InvalidConfiguration,
+    ResourceExhausted,
+};
+
+enum class RenderProfileSessionStopResult : std::uint8_t {
+    StopRequested = 0,
+    AlreadyStopping,
+    Inactive,
+};
+
+enum class RenderProfileSessionFinishResult : std::uint8_t {
+    Pending = 0,
+    Closed,
+    // The session drained and closed, but at least one frame, source, scope,
+    // or serialized record was rejected or dropped.
+    ClosedWithLoss,
+    Faulted,
+    Aborted,
+    Inactive,
 };
 
 struct RenderProfileCaptureStats {
@@ -60,13 +89,12 @@ public:
     RenderProfileFrameToken() = default;
     ~RenderProfileFrameToken();
 
-    RenderProfileFrameToken(const RenderProfileFrameToken&) = delete;
+    RenderProfileFrameToken(const RenderProfileFrameToken&)            = delete;
     RenderProfileFrameToken& operator=(const RenderProfileFrameToken&) = delete;
     RenderProfileFrameToken(RenderProfileFrameToken&& _other) noexcept;
-    RenderProfileFrameToken&
-    operator=(RenderProfileFrameToken&& _other) noexcept;
+    RenderProfileFrameToken& operator=(RenderProfileFrameToken&& _other) noexcept;
 
-    [[nodiscard]] bool Valid() const noexcept;
+    [[nodiscard]] bool          Valid() const noexcept;
     [[nodiscard]] std::uint64_t FrameId() const noexcept;
 
 private:
@@ -88,19 +116,39 @@ private:
 
 class RENDER_API RenderProfileCapture final {
 public:
+    // Stable facade. One instance may bind to successive ProfileDump
+    // generations, but never to two sessions in the same generation.
+    RenderProfileCapture() noexcept = default;
+    // Compatibility constructor: invalid stream configuration and allocation
+    // failure retain the throwing behavior of the original one-shot facade.
     RenderProfileCapture(
-        ProfileDump::SchemaHandle     _gpu_frame_schema,
-        ProfileDump::SchemaHandle     _gpu_scope_schema,
-        const GpuScopeStreamConfig&   _stream_config = {}
+        ProfileDump::SchemaHandle   _gpu_frame_schema,
+        ProfileDump::SchemaHandle   _gpu_scope_schema,
+        const GpuScopeStreamConfig& _stream_config = {}
     );
     ~RenderProfileCapture();
 
-    RenderProfileCapture(const RenderProfileCapture&) = delete;
+    RenderProfileCapture(const RenderProfileCapture&)            = delete;
     RenderProfileCapture& operator=(const RenderProfileCapture&) = delete;
-    RenderProfileCapture(RenderProfileCapture&&) = delete;
-    RenderProfileCapture& operator=(RenderProfileCapture&&) = delete;
+    RenderProfileCapture(RenderProfileCapture&&)                 = delete;
+    RenderProfileCapture& operator=(RenderProfileCapture&&)      = delete;
 
-    [[nodiscard]] bool Valid() const noexcept;
+    [[nodiscard]] RenderProfileSessionStartResult StartSession(
+        ProfileDump::SchemaHandle   _gpu_frame_schema,
+        ProfileDump::SchemaHandle   _gpu_scope_schema,
+        const GpuScopeStreamConfig& _stream_config = {}
+    ) noexcept;
+
+    // Stops only future BeginFrame admission. Tokens admitted before the
+    // boundary remain valid and may still bind sources and seal.
+    [[nodiscard]] RenderProfileSessionStopResult RequestStop() noexcept;
+
+    // Stops admission, drains ready frames, and closes only after every
+    // admitted frame has left the resident stream. Pending callbacks retain
+    // the old session state and can never enter a later generation.
+    [[nodiscard]] RenderProfileSessionFinishResult TryFinishSession() noexcept;
+
+    [[nodiscard]] bool                    Valid() const noexcept;
     [[nodiscard]] RenderProfileFrameToken BeginFrame() noexcept;
     [[nodiscard]] RenderProfileBindResult BindSource(
         RenderProfileFrameToken& _frame,
@@ -108,9 +156,7 @@ public:
         RHIQueueBinding          _queue_binding,
         std::uint64_t            _source_order
     ) noexcept;
-    [[nodiscard]] bool Seal(
-        RenderProfileFrameToken& _frame
-    ) noexcept;
+    [[nodiscard]] bool Seal(RenderProfileFrameToken& _frame) noexcept;
 
     // Consumer-only operation. It materializes ready frames in BeginFrame
     // order and emits ProfileDump records on the calling thread. Completion
@@ -128,8 +174,16 @@ public:
     [[nodiscard]] RenderProfileCaptureStats GetStats() const noexcept;
 
 private:
-    std::shared_ptr<RenderProfileDetail::CaptureState> state_{};
+    std::atomic<std::shared_ptr<RenderProfileDetail::CaptureState>> state_{};
 };
+
+#if defined(MOER_RENDER_PROFILE_CAPTURE_TEST_HOOKS)
+namespace RenderProfileTesting {
+RENDER_API void
+InstallStartPublishPause(std::atomic_uint32_t& _entered_count, std::atomic_bool& _release) noexcept;
+RENDER_API void ClearStartPublishPause() noexcept;
+} // namespace RenderProfileTesting
+#endif
 
 } // namespace Moer::Render
 

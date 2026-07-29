@@ -952,19 +952,22 @@ public:
                 RangeHandle* range_handle = static_cast<RangeHandle*>(
                     GetHandle(uint64(handle.GetTexture()), ResourceType::Texture_Buffer)
                 );
-                layer = std::max(
-                    layer,
-                    GetLastLayerRead(
-                        range_handle,
-                        Range(handle.mip_level, handle.num_mips, handle.array_layer, handle.num_array)
-                    )
+                const Range range(
+                    handle.mip_level, handle.num_mips, handle.array_layer, handle.num_array
                 );
+                const int64 prior_write_layer =
+                    range_handle->GetMaxWriteLayer(range);
                 assert(
-                    layer == 0 &&
+                    prior_write_layer < 0 &&
                     std::format(
-                        "Import Texture {} should be the first command", handle.GetTexture()->GetName()
+                        "Import Texture {} should precede its first resource write",
+                        handle.GetTexture()->GetName()
                     )
                         .c_str()
+                );
+                layer = std::max(
+                    layer,
+                    GetLayerWithOffset(prior_write_layer + 1)
                 );
             }
 
@@ -972,14 +975,20 @@ public:
                 RangeHandle* range_handle = static_cast<RangeHandle*>(
                     GetHandle(uint64(handle.GetBuffer()), ResourceType::Texture_Buffer)
                 );
+                const Range range(handle.GetByteOffset(), handle.GetByteSize());
+                const int64 prior_write_layer =
+                    range_handle->GetMaxWriteLayer(range);
+                assert(
+                    prior_write_layer < 0 &&
+                    std::format(
+                        "Import Buffer {} should precede its first resource write",
+                        handle.GetBuffer()->GetName()
+                    )
+                        .c_str()
+                );
                 layer = std::max(
                     layer,
-                    GetLastLayerRead(range_handle, Range(handle.GetByteOffset(), handle.GetByteSize()))
-                );
-                assert(
-                    layer == 0 &&
-                    std::format("Import Buffer {} should be the first command", handle.GetBuffer()->GetName())
-                        .c_str()
+                    GetLayerWithOffset(prior_write_layer + 1)
                 );
             }
 

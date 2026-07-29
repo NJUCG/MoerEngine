@@ -159,6 +159,12 @@ set_tests_properties(RHIGpuScopeContract PROPERTIES TIMEOUT 60)
 
 set(test_target TestRenderProfileCapture)
 add_executable(${test_target} "RenderProfileCaptureTest.cpp")
+target_compile_definitions(moer_render
+    PRIVATE MOER_RENDER_PROFILE_CAPTURE_TEST_HOOKS=1
+)
+target_compile_definitions(${test_target}
+    PRIVATE MOER_RENDER_PROFILE_CAPTURE_TEST_HOOKS=1
+)
 target_include_directories(${test_target}
     PRIVATE "${moer_source_dir}/runtime/core/source/profile"
 )
