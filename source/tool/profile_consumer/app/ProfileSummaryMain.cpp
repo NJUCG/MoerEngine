@@ -38,6 +38,8 @@ using Json = nlohmann::ordered_json;
             return "limit_exceeded";
         case SessionLoadStatus::ResourceExhausted:
             return "resource_exhausted";
+        case SessionLoadStatus::Cancelled:
+            return "cancelled";
     }
     return "unknown";
 }
@@ -144,6 +146,8 @@ using Json = nlohmann::ordered_json;
             return "gpu_scope_parent_invalid";
         case SessionErrorCode::CpuScopeTopologyInvalid:
             return "cpu_scope_topology_invalid";
+        case SessionErrorCode::Cancelled:
+            return "cancelled";
     }
     return "unknown";
 }
@@ -222,6 +226,8 @@ using Json = nlohmann::ordered_json;
             return "topology_work_items";
         case SessionLimitKind::TopologyFlowEdges:
             return "topology_flow_edges";
+        case SessionLimitKind::TransientMaterializationBytes:
+            return "transient_materialization_bytes";
     }
     return "unknown";
 }

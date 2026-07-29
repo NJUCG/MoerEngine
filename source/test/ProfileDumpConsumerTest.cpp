@@ -19,6 +19,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -36,6 +37,10 @@ static_assert([] {
     std::uint32_t wire_bytes = 0;
     return !Detail::TryPacketWireBytes(std::numeric_limits<std::uint32_t>::max(), wire_bytes);
 }());
+static_assert(
+    SessionLimits{}.max_transient_materialization_bytes >= SessionLimits{}.max_logical_model_bytes,
+    "default transient materialization capacity must cover the retained-model default domain"
+);
 
 void Expect(bool _condition, std::string_view _message) {
     if (!_condition) {
@@ -246,9 +251,10 @@ struct Loaded {
 Loaded LoadChunks(
     std::span<const std::uint8_t> _bytes,
     std::span<const std::size_t>  _pattern = {},
-    const SessionLoadOptions&     _options = {}
+    const SessionLoadOptions&     _options = {},
+    const SessionLoadControl&     _control = {}
 ) {
-    ProfileSessionReader reader(_options);
+    ProfileSessionReader reader(_options, _control);
     std::size_t          offset        = 0;
     std::size_t          pattern_index = 0;
     while (offset < _bytes.size() && reader.Result().status == SessionLoadStatus::Reading) {
@@ -5214,6 +5220,247 @@ void TestReaderPublicationAndAllocatorContracts() {
     );
 }
 
+void ExpectCancelledResult(const SessionLoadResult& _result, std::string_view _context) {
+    Expect(
+        _result.status == SessionLoadStatus::Cancelled && _result.error_code == SessionErrorCode::Cancelled &&
+            _result.incomplete_reason == SessionIncompleteReason::None &&
+            _result.limit_kind == SessionLimitKind::None && _result.codec_status == DecodeStatus::Ok &&
+            _result.error_byte_offset == kInvalidSessionIndex &&
+            _result.error_packet_index == kInvalidSessionIndex &&
+            _result.incomplete_byte_offset == kInvalidSessionIndex &&
+            _result.incomplete_packet_index == kInvalidSessionIndex && _result.IsTerminal() &&
+            !_result.HasUsableSession(),
+        _context
+    );
+}
+
+void TestReaderCooperativeCancellation() {
+    const SessionBuilder golden = MakeGoldenSession();
+
+    {
+        std::stop_source source;
+        source.request_stop();
+        const SessionLoadControl control{
+            .stop_token = source.get_token(),
+        };
+        ProfileSessionReader reader({}, control);
+        ExpectCancelledResult(reader.Result(), "pre-cancelled reader did not start terminal");
+        ExpectCancelledResult(
+            reader.Feed(golden.bytes), "pre-cancelled reader Feed did not preserve sticky cancellation"
+        );
+        ExpectCancelledResult(
+            reader.Finish(), "pre-cancelled reader Finish did not preserve sticky cancellation"
+        );
+        Expect(
+            !reader.Session().Valid() && !reader.TakeSession().Valid(),
+            "pre-cancelled reader published a session"
+        );
+    }
+
+    {
+        std::stop_source         source;
+        const SessionLoadControl control{
+            .stop_token = source.get_token(),
+        };
+        ProfileSessionReader    reader({}, control);
+        const PacketRange&      begin = golden.ranges.front();
+        const SessionLoadResult fed =
+            reader.Feed(std::span<const std::uint8_t>(golden.bytes).first(begin.size));
+        Expect(
+            fed.status == SessionLoadStatus::Reading && fed.packet_count == 1 &&
+                fed.valid_prefix_bytes == begin.size,
+            "reader cancellation fixture did not admit its complete prefix"
+        );
+        source.request_stop();
+        const SessionLoadResult cancelled = reader.Feed({});
+        ExpectCancelledResult(cancelled, "empty Feed did not observe cancellation between chunks");
+        Expect(
+            cancelled.packet_count == 1 && cancelled.valid_prefix_bytes == begin.size &&
+                !reader.Session().Valid(),
+            "between-chunk cancellation damaged the valid-prefix counters or published the model"
+        );
+        ExpectCancelledResult(reader.Finish(), "between-chunk cancellation was not sticky");
+    }
+
+    {
+        const SessionLoadControl control{
+            .max_work_items_before_cancel = static_cast<std::uint64_t>(golden.ranges.size()),
+        };
+        ProfileSessionReader    reader({}, control);
+        const SessionLoadResult fed = reader.Feed(golden.bytes);
+        Expect(
+            fed.status == SessionLoadStatus::Reading && fed.packet_count == golden.ranges.size() &&
+                fed.valid_prefix_bytes == golden.bytes.size(),
+            "deterministic cancellation budget did not admit exactly N packet work items"
+        );
+        ExpectCancelledResult(
+            reader.Feed({}), "deterministic cancellation budget did not stop at the next checkpoint"
+        );
+    }
+
+    {
+        const SessionLoadControl control{
+            .max_work_items_before_cancel = static_cast<std::uint64_t>(golden.ranges.size()) + 1,
+        };
+        ProfileSessionReader    reader({}, control);
+        const SessionLoadResult fed = reader.Feed(golden.bytes);
+        Expect(
+            fed.status == SessionLoadStatus::Reading && fed.packet_count == golden.ranges.size(),
+            "Finish cancellation budget expired during Feed"
+        );
+        ExpectCancelledResult(reader.Finish(), "materialization budget did not cancel Finish");
+        Expect(
+            !reader.Session().Valid() && !reader.TakeSession().Valid(),
+            "cancelled Finish published a partially materialized session"
+        );
+    }
+
+    {
+        SessionLoadOptions options{};
+        options.allow_forensic_truncation = true;
+        const PacketRange& session_end    = golden.ranges.back();
+        const auto         prefix = std::span<const std::uint8_t>(golden.bytes).first(session_end.offset);
+        const SessionLoadControl control{
+            .max_work_items_before_cancel = static_cast<std::uint64_t>(golden.ranges.size()),
+        };
+        ProfileSessionReader    reader(options, control);
+        const SessionLoadResult fed = reader.Feed(prefix);
+        Expect(
+            fed.status == SessionLoadStatus::Reading && fed.packet_count == golden.ranges.size() - 1,
+            "forensic cancellation budget expired during Feed"
+        );
+        ExpectCancelledResult(
+            reader.Finish(), "cancelled forensic materialization was incorrectly exposed as usable"
+        );
+        Expect(!reader.Session().Valid(), "cancelled forensic materialization published a session");
+    }
+
+    {
+        std::stop_source         source;
+        const SessionLoadControl control{
+            .stop_token = source.get_token(),
+        };
+        ProfileSessionReader reader({}, control);
+        const PacketRange&   begin = golden.ranges.front();
+        Expect(
+            reader.Feed(std::span<const std::uint8_t>(golden.bytes).first(begin.size)).status ==
+                SessionLoadStatus::Reading,
+            "reader move cancellation fixture did not admit SessionBegin"
+        );
+        ProfileSessionReader moved(std::move(reader));
+        source.request_stop();
+        ExpectCancelledResult(moved.Feed({}), "moved reader lost its stop-state connection");
+        Expect(
+            reader.Result().status == SessionLoadStatus::ResourceExhausted,
+            "moved-from reader did not retain its documented empty state"
+        );
+    }
+
+    {
+        std::stop_source   source;
+        SessionLoadOptions options{};
+        options.limits.max_packets = 0;
+        const SessionLoadControl control{
+            .stop_token = source.get_token(),
+        };
+        ProfileSessionReader    reader(options, control);
+        const PacketRange&      begin = golden.ranges.front();
+        const SessionLoadResult limited =
+            reader.Feed(std::span<const std::uint8_t>(golden.bytes).first(begin.size));
+        Expect(
+            limited.status == SessionLoadStatus::LimitExceeded &&
+                limited.error_code == SessionErrorCode::LimitExceeded &&
+                limited.limit_kind == SessionLimitKind::Packets,
+            "sticky cancellation fixture did not reach LimitExceeded"
+        );
+        source.request_stop();
+        Expect(
+            reader.Feed({}).status == limited.status && reader.Finish().status == limited.status &&
+                reader.Result().error_code == limited.error_code,
+            "stop request overwrote an existing LimitExceeded terminal state"
+        );
+    }
+
+    {
+        std::vector<std::uint8_t> corrupt(
+            golden.bytes.begin(),
+            golden.bytes.begin() + static_cast<std::ptrdiff_t>(golden.ranges.front().size)
+        );
+        corrupt.back() ^= 0x80;
+        std::stop_source         source;
+        const SessionLoadControl control{
+            .stop_token = source.get_token(),
+        };
+        ProfileSessionReader    reader({}, control);
+        const SessionLoadResult rejected = reader.Feed(corrupt);
+        Expect(
+            rejected.status == SessionLoadStatus::CorruptData &&
+                rejected.error_code == SessionErrorCode::CodecPacketInvalid,
+            "sticky cancellation fixture did not reach CorruptData"
+        );
+        source.request_stop();
+        Expect(
+            reader.Feed({}).status == rejected.status && reader.Finish().status == rejected.status &&
+                reader.Result().error_code == rejected.error_code,
+            "stop request overwrote an existing CorruptData terminal state"
+        );
+    }
+}
+
+void TestConcurrentMidFinishCancellation() {
+    constexpr std::uint64_t kScopeCount = 200'000;
+
+    SessionBuilder builder(101);
+    builder.Begin();
+    builder.Schema(Templates::CpuScope());
+    for (std::uint64_t index = 0; index < kScopeCount; ++index) {
+        AddCpuScope(builder, index + 1, 77, "concurrent-cancel-root", index * 2, index * 2 + 1, 0);
+    }
+    builder.End();
+
+    std::stop_source         stop_source;
+    const SessionLoadControl control{
+        .stop_token                  = stop_source.get_token(),
+        .cancellation_check_interval = 64,
+    };
+    ProfileSessionReader    reader({}, control);
+    const SessionLoadResult fed = reader.Feed(builder.bytes);
+    Expect(
+        fed.status == SessionLoadStatus::Reading && fed.packet_count == builder.ranges.size(),
+        "concurrent cancellation fixture did not reach Finish"
+    );
+
+    std::atomic_bool  finish_started{false};
+    std::atomic_bool  finish_done{false};
+    SessionLoadResult finished{};
+    std::thread       worker([&] {
+        finish_started.store(true, std::memory_order_release);
+        finished = reader.Finish();
+        finish_done.store(true, std::memory_order_release);
+    });
+
+    while (!finish_started.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    const bool request_was_mid_finish = !finish_done.load(std::memory_order_acquire);
+    const auto cancel_begin           = std::chrono::steady_clock::now();
+    stop_source.request_stop();
+    worker.join();
+    const auto cancel_latency = std::chrono::steady_clock::now() - cancel_begin;
+
+    Expect(request_was_mid_finish, "concurrent cancellation fixture completed before request_stop");
+    Expect(
+        cancel_latency < std::chrono::seconds(5),
+        "concurrent Finish cancellation exceeded the bounded-latency test threshold"
+    );
+    ExpectCancelledResult(finished, "concurrent request_stop did not cancel an active Finish");
+    Expect(
+        !reader.Session().Valid() && !reader.TakeSession().Valid(),
+        "concurrent cancellation published a partially materialized session"
+    );
+}
+
 void TestLimitsAndStickyFailure() {
     const SessionBuilder golden   = MakeGoldenSession();
     const Loaded         baseline = LoadChunks(golden.bytes);
@@ -5987,6 +6234,75 @@ void TestFileWrapperAndMoveOwnership() {
             preflight.input_bytes == golden.bytes.size() && moved.Valid() && moved.Summary().generation == 7,
         "file-size preflight did not enforce the exact input limit atomically"
     );
+
+    {
+        std::stop_source source;
+        source.request_stop();
+        const SessionLoadControl control{
+            .stop_token = source.get_token(),
+        };
+        const SessionLoadResult cancelled = LoadProfileSessionFile(valid_path, {}, moved, control);
+        ExpectCancelledResult(cancelled, "file wrapper did not report pre-cancellation");
+        Expect(
+            moved.Valid() && moved.Summary().generation == 7,
+            "pre-cancelled file load replaced the caller's valid output"
+        );
+    }
+
+    {
+        const SessionLoadControl control{
+            .max_work_items_before_cancel = static_cast<std::uint64_t>(golden.ranges.size()) + 1,
+        };
+        const SessionLoadResult cancelled = LoadProfileSessionFile(valid_path, {}, moved, control);
+        ExpectCancelledResult(cancelled, "file wrapper did not cancel Finish materialization");
+        Expect(
+            moved.Valid() && moved.Summary().generation == 7,
+            "Finish-cancelled file load replaced the caller's valid output"
+        );
+    }
+
+    SessionBuilder transient_fixture(99);
+    transient_fixture.Begin();
+    const SchemaDescriptor unknown = UnknownSchema();
+    transient_fixture.Schema(unknown);
+    const std::array<FieldValueView, 2> first_values{
+        std::uint64_t{1},
+        std::string_view("first"),
+    };
+    const std::array<FieldValueView, 2> second_values{
+        std::uint64_t{2},
+        std::string_view("second"),
+    };
+    transient_fixture.Record(unknown, 1, first_values);
+    transient_fixture.Record(unknown, 2, second_values);
+    transient_fixture.End();
+    const std::filesystem::path transient_path = temporary.path / "transient.mpds";
+    WriteBytes(transient_path, transient_fixture.bytes);
+
+    SessionLoadOptions transient_options{};
+    transient_options.limits.max_transient_materialization_bytes = sizeof(std::uint64_t) * 2;
+    const SessionLoadControl single_item_runs{
+        .cancellation_check_interval = 1,
+    };
+    ProfileSession          transient_session;
+    const SessionLoadResult exact_transient =
+        LoadProfileSessionFile(transient_path, transient_options, transient_session, single_item_runs);
+    Expect(
+        exact_transient.status == SessionLoadStatus::Complete && transient_session.Valid() &&
+            transient_session.Summary().generation == 99,
+        "exact transient materialization byte limit was rejected"
+    );
+
+    --transient_options.limits.max_transient_materialization_bytes;
+    const SessionLoadResult short_transient =
+        LoadProfileSessionFile(transient_path, transient_options, moved, single_item_runs);
+    Expect(
+        short_transient.status == SessionLoadStatus::LimitExceeded &&
+            short_transient.error_code == SessionErrorCode::LimitExceeded &&
+            short_transient.limit_kind == SessionLimitKind::TransientMaterializationBytes && moved.Valid() &&
+            moved.Summary().generation == 7,
+        "transient materialization byte limit was not enforced atomically"
+    );
 }
 
 void TestProducerToConsumerUnnotifiedDrop() {
@@ -6074,6 +6390,8 @@ int main() {
         TestSemanticTopologyAndLossRecovery();
         TestGpuProducerSequenceProofs();
         TestReaderPublicationAndAllocatorContracts();
+        TestReaderCooperativeCancellation();
+        TestConcurrentMidFinishCancellation();
         TestLimitsAndStickyFailure();
         TestFileWrapperAndMoveOwnership();
         TestProducerToConsumerUnnotifiedDrop();

@@ -46,6 +46,8 @@ inline constexpr std::string_view kProfileSummaryUnexpectedFailureJson{
             return 13;
         case SessionLoadStatus::ResourceExhausted:
             return 14;
+        case SessionLoadStatus::Cancelled:
+            return 15;
     }
     return 12;
 }

@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <limits>
 #include <span>
+#include <stop_token>
 #include <string_view>
 #include <type_traits>
 
@@ -49,6 +50,7 @@ enum class SessionLoadStatus : std::uint8_t {
     ProtocolViolation,
     LimitExceeded,
     ResourceExhausted,
+    Cancelled,
 };
 
 enum class SessionIncompleteReason : std::uint8_t {
@@ -104,6 +106,7 @@ enum class SessionErrorCode : std::uint16_t {
     GpuScopeParentMissing,
     GpuScopeParentInvalid,
     CpuScopeTopologyInvalid,
+    Cancelled,
 };
 
 enum class SessionLimitKind : std::uint8_t {
@@ -127,6 +130,7 @@ enum class SessionLimitKind : std::uint8_t {
     ScopeDepth,
     TopologyWorkItems,
     TopologyFlowEdges,
+    TransientMaterializationBytes,
 };
 
 enum class KnownProfileSchema : std::uint8_t {
@@ -191,6 +195,9 @@ struct SessionLimits {
     // guarantee. Transient decode/index storage remains bounded by the count
     // and codec limits above.
     std::uint64_t max_logical_model_bytes{1024ull * 1024 * 1024};
+    // Peak scratch payload admitted by one cancellable materialization sort.
+    // This is independent of retained logical_model_bytes.
+    std::uint64_t max_transient_materialization_bytes{1024ull * 1024 * 1024};
 };
 
 struct SessionLoadOptions {
@@ -199,6 +206,23 @@ struct SessionLoadOptions {
     // Only a clean prefix ending at the last complete packet may be exposed.
     // CRC, schema, protocol, and semantic failures are never downgraded.
     bool allow_forensic_truncation{false};
+};
+
+struct SessionLoadControl {
+    std::stop_token stop_token{};
+    // Linear decode/materialization loops sample cancellation at this
+    // interval. Potentially large sorts are split into bounded runs no larger
+    // than this interval (and an internal responsiveness cap), with
+    // cancellable merge passes. Zero is normalized to one. Decoding and
+    // processing one complete packet is an atomic, non-interruptible boundary;
+    // the default CodecLimits cap its payload at 1 MiB, while raising that
+    // limit also raises the worst-case cancellation tail latency.
+    std::uint64_t cancellation_check_interval{4096};
+    // Optional deterministic cooperative budget. Exactly N charged work
+    // items are admitted; cancellation occurs before the first item that
+    // would exceed N, or at the next zero-work checkpoint after exhaustion.
+    // Cancellation follows the same no-publication contract as stop_token.
+    std::uint64_t max_work_items_before_cancel{std::numeric_limits<std::uint64_t>::max()};
 };
 
 struct SessionLoadResult {
@@ -413,6 +437,7 @@ private:
 class ProfileSessionReader final {
 public:
     explicit ProfileSessionReader(const SessionLoadOptions& _options = {}) noexcept;
+    ProfileSessionReader(const SessionLoadOptions& _options, const SessionLoadControl& _control) noexcept;
     ~ProfileSessionReader();
 
     ProfileSessionReader(const ProfileSessionReader&)            = delete;
@@ -443,6 +468,13 @@ private:
     const std::filesystem::path& _path,
     const SessionLoadOptions&    _options,
     ProfileSession&              _output
+) noexcept;
+
+[[nodiscard]] SessionLoadResult LoadProfileSessionFile(
+    const std::filesystem::path& _path,
+    const SessionLoadOptions&    _options,
+    ProfileSession&              _output,
+    const SessionLoadControl&    _control
 ) noexcept;
 
 } // namespace Moer::ProfileDump

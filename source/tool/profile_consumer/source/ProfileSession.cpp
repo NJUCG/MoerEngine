@@ -9,6 +9,7 @@
 #include <cstring>
 #include <deque>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -248,6 +249,50 @@ template<typename T>
     return result;
 }
 
+class CancellationProbe final {
+public:
+    explicit CancellationProbe(const SessionLoadControl& _control) noexcept :
+        stop_token_(_control.stop_token),
+        interval_(std::max<std::uint64_t>(std::uint64_t{1}, _control.cancellation_check_interval)),
+        remaining_budget_(_control.max_work_items_before_cancel) {}
+
+    [[nodiscard]] bool Requested(std::uint64_t _work_items = 1) noexcept {
+        if (_work_items > remaining_budget_) {
+            remaining_budget_ = 0;
+            return true;
+        }
+        remaining_budget_ -= _work_items;
+        return StopRequested(_work_items);
+    }
+
+    [[nodiscard]] bool RequestedNow() const noexcept {
+        return remaining_budget_ == 0 || stop_token_.stop_requested();
+    }
+
+    [[nodiscard]] bool StopRequested(std::uint64_t _actual_iterations = 1) noexcept {
+        if (!stop_token_.stop_possible()) {
+            return false;
+        }
+        if (_actual_iterations >= interval_ - pending_stop_iterations_) {
+            pending_stop_iterations_ = 0;
+            return stop_token_.stop_requested();
+        }
+        pending_stop_iterations_ += _actual_iterations;
+        return false;
+    }
+
+    [[nodiscard]] std::size_t SortRunSize() const noexcept {
+        constexpr std::uint64_t kMaximumSortRunSize = 4096;
+        return static_cast<std::size_t>(std::min(interval_, kMaximumSortRunSize));
+    }
+
+private:
+    std::stop_token stop_token_{};
+    std::uint64_t   interval_{1};
+    std::uint64_t   pending_stop_iterations_{0};
+    std::uint64_t   remaining_budget_{std::numeric_limits<std::uint64_t>::max()};
+};
+
 } // namespace
 
 struct ProfileSession::Impl {
@@ -397,17 +442,236 @@ struct ProfileSessionReader::Impl {
     // ProfileSession::Impl owns standard containers whose constructors may
     // throw. Let the public reader constructor's catch-all convert any such
     // construction failure into the stable ResourceExhausted state.
-    explicit Impl(const SessionLoadOptions& _options) : options(_options) {
+    Impl(const SessionLoadOptions& _options, const SessionLoadControl& _control) :
+        options(_options),
+        cancellation(_control) {
         session.impl_ = new (std::nothrow) ProfileSession::Impl();
         if (session.impl_ == nullptr) {
             result.status     = SessionLoadStatus::ResourceExhausted;
             result.error_code = SessionErrorCode::ResourceAllocationFailed;
             diagnostic        = "profile session model allocation failed";
+        } else if (cancellation.RequestedNow()) {
+            Cancel();
         }
     }
 
     [[nodiscard]] bool IsReading() const noexcept {
         return result.status == SessionLoadStatus::Reading;
+    }
+
+    void Cancel() noexcept {
+        if (!IsReading()) {
+            return;
+        }
+        result.status                  = SessionLoadStatus::Cancelled;
+        result.incomplete_reason       = SessionIncompleteReason::None;
+        result.error_code              = SessionErrorCode::Cancelled;
+        result.limit_kind              = SessionLimitKind::None;
+        result.codec_status            = DecodeStatus::Ok;
+        result.error_byte_offset       = kInvalidSessionIndex;
+        result.error_packet_index      = kInvalidSessionIndex;
+        result.incomplete_byte_offset  = kInvalidSessionIndex;
+        result.incomplete_packet_index = kInvalidSessionIndex;
+        diagnostic                     = "profile session load cancelled";
+        if (session.impl_ != nullptr) {
+            session.impl_->valid = false;
+        }
+    }
+
+    [[nodiscard]] bool CheckCancellation(std::uint64_t _work_items = 1) noexcept {
+        if (!IsReading() || !cancellation.Requested(_work_items)) {
+            return !IsReading();
+        }
+        Cancel();
+        return true;
+    }
+
+    [[nodiscard]] bool CheckCancellationNow() noexcept {
+        if (!IsReading() || !cancellation.RequestedNow()) {
+            return !IsReading();
+        }
+        Cancel();
+        return true;
+    }
+
+    [[nodiscard]] bool CheckStopOnly(std::uint64_t _actual_iterations = 1) noexcept {
+        if (!IsReading() || !cancellation.StopRequested(_actual_iterations)) {
+            return !IsReading();
+        }
+        Cancel();
+        return true;
+    }
+
+    template<typename Iterator, typename Compare>
+    [[nodiscard]] bool CancellableSort(Iterator _begin, Iterator _end, Compare _compare) {
+        using Value = typename std::iterator_traits<Iterator>::value_type;
+
+        const auto signed_count = std::distance(_begin, _end);
+        if (signed_count < 0) {
+            Fail(
+                SessionLoadStatus::ResourceExhausted,
+                SessionErrorCode::UnexpectedFailure,
+                "profile sort range is invalid"
+            );
+            return false;
+        }
+        const std::size_t count = static_cast<std::size_t>(signed_count);
+        if (count < 2) {
+            return !CheckCancellationNow();
+        }
+
+        const std::size_t run_size = std::min(count, cancellation.SortRunSize());
+        for (std::size_t run_begin = 0; run_begin < count;) {
+            const std::size_t run_count = std::min(run_size, count - run_begin);
+            if (CheckCancellation(static_cast<std::uint64_t>(run_count))) {
+                return false;
+            }
+            const Iterator begin = _begin + static_cast<std::ptrdiff_t>(run_begin);
+            std::sort(begin, begin + static_cast<std::ptrdiff_t>(run_count), _compare);
+            run_begin += run_count;
+        }
+
+        if (CheckCancellationNow()) {
+            return false;
+        }
+        if (run_size == count) {
+            return true;
+        }
+
+        std::uint64_t scratch_bytes = 0;
+        if (sizeof(Value) != 0 &&
+            static_cast<std::uint64_t>(count) >
+                std::numeric_limits<std::uint64_t>::max() / static_cast<std::uint64_t>(sizeof(Value))) {
+            Fail(
+                SessionLoadStatus::LimitExceeded,
+                SessionErrorCode::LimitExceeded,
+                "profile transient materialization sort size overflows",
+                DecodeStatus::LimitExceeded,
+                SessionLimitKind::TransientMaterializationBytes
+            );
+            return false;
+        }
+        scratch_bytes = static_cast<std::uint64_t>(count) * static_cast<std::uint64_t>(sizeof(Value));
+        if (scratch_bytes > options.limits.max_transient_materialization_bytes) {
+            Fail(
+                SessionLoadStatus::LimitExceeded,
+                SessionErrorCode::LimitExceeded,
+                "profile transient materialization byte limit exceeded",
+                DecodeStatus::LimitExceeded,
+                SessionLimitKind::TransientMaterializationBytes
+            );
+            return false;
+        }
+
+        std::vector<Value> scratch;
+        scratch.reserve(count);
+        for (std::size_t width = run_size; width < count;) {
+            scratch.clear();
+            std::size_t block_begin = 0;
+            while (block_begin < count) {
+                const std::size_t middle    = block_begin + std::min(width, count - block_begin);
+                const std::size_t block_end = middle + std::min(width, count - middle);
+                std::size_t       left      = block_begin;
+                std::size_t       right     = middle;
+                while (left < middle || right < block_end) {
+                    if (CheckCancellation()) {
+                        return false;
+                    }
+                    if (right == block_end ||
+                        (left < middle && !_compare(*(_begin + right), *(_begin + left)))) {
+                        scratch.push_back(std::move(*(_begin + left)));
+                        ++left;
+                    } else {
+                        scratch.push_back(std::move(*(_begin + right)));
+                        ++right;
+                    }
+                }
+                block_begin = block_end;
+            }
+            if (scratch.size() != count) {
+                Fail(
+                    SessionLoadStatus::ResourceExhausted,
+                    SessionErrorCode::UnexpectedFailure,
+                    "profile cancellable sort produced an invalid merge"
+                );
+                return false;
+            }
+            for (std::size_t index = 0; index < count; ++index) {
+                if (CheckCancellation()) {
+                    return false;
+                }
+                *(_begin + static_cast<std::ptrdiff_t>(index)) = std::move(scratch[index]);
+            }
+            width = width > count - width ? count : width * 2;
+        }
+        return !CheckCancellationNow();
+    }
+
+    template<typename Iterator>
+    [[nodiscard]] bool CancellableSort(Iterator _begin, Iterator _end) {
+        using Value = typename std::iterator_traits<Iterator>::value_type;
+        return CancellableSort(_begin, _end, std::less<Value>{});
+    }
+
+    template<typename Iterator, typename BinaryPredicate>
+    [[nodiscard]] bool
+    CancellableAdjacentMatch(Iterator _begin, Iterator _end, BinaryPredicate _predicate, bool& _matched) {
+        _matched = false;
+        if (_begin == _end) {
+            return !CheckCancellationNow();
+        }
+
+        Iterator previous = _begin;
+        Iterator current  = _begin;
+        ++current;
+        for (; current != _end; ++previous, ++current) {
+            if (CheckStopOnly()) {
+                return false;
+            }
+            if (_predicate(*previous, *current)) {
+                _matched = true;
+                return !CheckCancellationNow();
+            }
+        }
+        return !CheckCancellationNow();
+    }
+
+    template<typename Iterator>
+    [[nodiscard]] bool CancellableAdjacentMatch(Iterator _begin, Iterator _end, bool& _matched) {
+        using Value = typename std::iterator_traits<Iterator>::value_type;
+        return CancellableAdjacentMatch(_begin, _end, std::equal_to<Value>{}, _matched);
+    }
+
+    template<typename Iterator, typename BinaryPredicate>
+    [[nodiscard]] bool
+    CancellableUnique(Iterator _begin, Iterator _end, BinaryPredicate _predicate, Iterator& _new_end) {
+        _new_end = _begin;
+        if (_begin == _end) {
+            return !CheckCancellationNow();
+        }
+
+        Iterator result  = _begin;
+        Iterator current = _begin;
+        ++current;
+        for (; current != _end; ++current) {
+            if (CheckStopOnly()) {
+                return false;
+            }
+            if (!_predicate(*result, *current)) {
+                ++result;
+                if (result != current) {
+                    *result = std::move(*current);
+                }
+            }
+        }
+        _new_end = ++result;
+        return !CheckCancellationNow();
+    }
+
+    template<typename Iterator>
+    [[nodiscard]] bool CancellableUnique(Iterator _begin, Iterator _end, Iterator& _new_end) {
+        using Value = typename std::iterator_traits<Iterator>::value_type;
+        return CancellableUnique(_begin, _end, std::equal_to<Value>{}, _new_end);
     }
 
     void Fail(
@@ -471,6 +735,9 @@ struct ProfileSessionReader::Impl {
     }
 
     [[nodiscard]] bool ChargeTopologyWork(std::uint64_t _count) noexcept {
+        if ((_count == 0 && CheckCancellationNow()) || (_count != 0 && CheckCancellation(_count))) {
+            return false;
+        }
         std::uint64_t next_topology_work_items = 0;
         if (AddOverflow(topology_work_items, _count, next_topology_work_items) ||
             next_topology_work_items > options.limits.max_topology_work_items) {
@@ -937,6 +1204,9 @@ struct ProfileSessionReader::Impl {
 
         const std::uint64_t first_field = session.impl_->schema_fields.size();
         for (const SchemaField& field : descriptor.fields) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (!ChargeModel(sizeof(ProfileSchemaFieldInfo))) {
                 return false;
             }
@@ -1107,6 +1377,9 @@ struct ProfileSessionReader::Impl {
         std::uint64_t mandatory_sequence_count = 0;
         std::uint64_t residual_demand_count    = 0;
         for (const ProfileLossRecord& loss : session.impl_->losses) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (loss.first_sequence == 0 ||
                 (loss.record_count == 1 && loss.first_sequence != loss.last_sequence)) {
                 Fail(
@@ -1158,6 +1431,9 @@ struct ProfileSessionReader::Impl {
         std::vector<SequenceDemand> residual_demands;
         residual_demands.reserve(static_cast<std::size_t>(residual_demand_count));
         for (const ProfileLossRecord& loss : session.impl_->losses) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             mandatory_sequences.push_back(loss.first_sequence);
             if (loss.record_count != 1) {
                 mandatory_sequences.push_back(loss.last_sequence);
@@ -1197,12 +1473,19 @@ struct ProfileSessionReader::Impl {
         if (!charge_sort_work(mandatory_sequence_count)) {
             return false;
         }
-        std::sort(mandatory_sequences.begin(), mandatory_sequences.end());
+        if (!CancellableSort(mandatory_sequences.begin(), mandatory_sequences.end())) {
+            return false;
+        }
         if (!ChargeTopologyWork(mandatory_sequence_count)) {
             return false;
         }
-        if (std::adjacent_find(mandatory_sequences.begin(), mandatory_sequences.end()) !=
-            mandatory_sequences.end()) {
+        bool duplicate_mandatory_sequence = false;
+        if (!CancellableAdjacentMatch(
+                mandatory_sequences.begin(), mandatory_sequences.end(), duplicate_mandatory_sequence
+            )) {
+            return false;
+        }
+        if (duplicate_mandatory_sequence) {
             Fail(
                 SessionLoadStatus::ProtocolViolation,
                 SessionErrorCode::RecordSequenceInvalid,
@@ -1214,6 +1497,9 @@ struct ProfileSessionReader::Impl {
             return false;
         }
         for (const std::uint64_t sequence : mandatory_sequences) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (!charge_binary_search(record_sequences.size())) {
                 return false;
             }
@@ -1234,16 +1520,18 @@ struct ProfileSessionReader::Impl {
         if (!charge_sort_work(residual_demand_count)) {
             return false;
         }
-        std::sort(
-            residual_demands.begin(),
-            residual_demands.end(),
-            [](const SequenceDemand& _left, const SequenceDemand& _right) {
-                if (_left.release_sequence != _right.release_sequence) {
-                    return _left.release_sequence < _right.release_sequence;
+        if (!CancellableSort(
+                residual_demands.begin(),
+                residual_demands.end(),
+                [](const SequenceDemand& _left, const SequenceDemand& _right) {
+                    if (_left.release_sequence != _right.release_sequence) {
+                        return _left.release_sequence < _right.release_sequence;
+                    }
+                    return _left.deadline_sequence < _right.deadline_sequence;
                 }
-                return _left.deadline_sequence < _right.deadline_sequence;
-            }
-        );
+            )) {
+            return false;
+        }
 
         struct PendingDemand {
             std::uint64_t deadline_sequence{0};
@@ -1502,25 +1790,27 @@ struct ProfileSessionReader::Impl {
         if (!ChargeTopologySortWork(scopes.size())) {
             return false;
         }
-        std::sort(
-            scopes.begin(),
-            scopes.end(),
-            [](const CpuScopeRecord& _left, const CpuScopeRecord& _right) {
-                if (_left.thread_id != _right.thread_id) {
-                    return _left.thread_id < _right.thread_id;
+        if (!CancellableSort(
+                scopes.begin(),
+                scopes.end(),
+                [](const CpuScopeRecord& _left, const CpuScopeRecord& _right) {
+                    if (_left.thread_id != _right.thread_id) {
+                        return _left.thread_id < _right.thread_id;
+                    }
+                    if (_left.begin_ns != _right.begin_ns) {
+                        return _left.begin_ns < _right.begin_ns;
+                    }
+                    if (_left.end_ns != _right.end_ns) {
+                        return _left.end_ns > _right.end_ns;
+                    }
+                    if (_left.depth != _right.depth) {
+                        return _left.depth < _right.depth;
+                    }
+                    return _left.sequence < _right.sequence;
                 }
-                if (_left.begin_ns != _right.begin_ns) {
-                    return _left.begin_ns < _right.begin_ns;
-                }
-                if (_left.end_ns != _right.end_ns) {
-                    return _left.end_ns > _right.end_ns;
-                }
-                if (_left.depth != _right.depth) {
-                    return _left.depth < _right.depth;
-                }
-                return _left.sequence < _right.sequence;
-            }
-        );
+            )) {
+            return false;
+        }
         // One pass partitions tracks, one visits every scope, and active-stack
         // retirement visits each scope at most once. Boundary candidate scans
         // are charged separately where they occur.
@@ -1538,9 +1828,15 @@ struct ProfileSessionReader::Impl {
         gap_events.reserve(scopes.size());
         std::size_t track_begin = 0;
         while (track_begin < scopes.size()) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             std::size_t track_end = track_begin + 1;
             while (track_end < scopes.size() && scopes[track_end].thread_id == scopes[track_begin].thread_id
             ) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 ++track_end;
             }
             if (!CheckCountLimit(
@@ -1567,6 +1863,9 @@ struct ProfileSessionReader::Impl {
             std::uint64_t                                       boundary_time     = 0;
             bool                                                has_boundary_time = false;
             for (std::size_t index = track_begin; index < track_end; ++index) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 CpuScopeRecord& scope = scopes[index];
                 scope.track_index     = track_index;
 
@@ -1579,6 +1878,9 @@ struct ProfileSessionReader::Impl {
                     has_boundary_time = true;
                 }
                 while (!active.empty()) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     const std::uint64_t   candidate_index = active.back();
                     const CpuScopeRecord& candidate       = scopes[candidate_index];
                     const bool            zero_duration_child_at_end =
@@ -1631,6 +1933,9 @@ struct ProfileSessionReader::Impl {
                             return false;
                         }
                         for (const std::uint64_t candidate_index : ending_depth->second) {
+                            if (CheckStopOnly()) {
+                                return false;
+                            }
                             const CpuScopeRecord& candidate = scopes[candidate_index];
                             if (candidate.sequence > scope.sequence &&
                                 (ending_ancestor_index == kInvalidSessionIndex ||
@@ -1727,30 +2032,41 @@ struct ProfileSessionReader::Impl {
         if (!ChargeTopologySortWork(gap_events.size())) {
             return false;
         }
-        std::sort(
-            gap_events.begin(),
-            gap_events.end(),
-            [](const CpuGapEvent& _left, const CpuGapEvent& _right) {
-                if (_left.ancestor_index != _right.ancestor_index) {
-                    return _left.ancestor_index < _right.ancestor_index;
+        if (!CancellableSort(
+                gap_events.begin(),
+                gap_events.end(),
+                [](const CpuGapEvent& _left, const CpuGapEvent& _right) {
+                    if (_left.ancestor_index != _right.ancestor_index) {
+                        return _left.ancestor_index < _right.ancestor_index;
+                    }
+                    return _left.scope_index < _right.scope_index;
                 }
-                return _left.scope_index < _right.scope_index;
-            }
-        );
+            )) {
+            return false;
+        }
         if (!ChargeTopologyLinearWork(gap_events.size())) {
             return false;
         }
         std::size_t event_begin = 0;
         while (event_begin < gap_events.size()) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             std::size_t event_end = event_begin + 1;
             while (event_end < gap_events.size() &&
                    gap_events[event_end].ancestor_index == gap_events[event_begin].ancestor_index) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 ++event_end;
             }
 
             std::uint32_t previous_gap      = gap_events[event_begin].depth_gap;
             std::uint64_t previous_sequence = scopes[gap_events[event_begin].scope_index].sequence;
             for (std::size_t index = event_begin + 1; index < event_end; ++index) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 const CpuGapEvent&  event          = gap_events[index];
                 const std::uint64_t event_sequence = scopes[event.scope_index].sequence;
                 if (event_sequence <= previous_sequence) {
@@ -1800,16 +2116,18 @@ struct ProfileSessionReader::Impl {
         if (!ChargeTopologySortWork(_sequence_demands.size())) {
             return false;
         }
-        std::sort(
-            _sequence_demands.begin(),
-            _sequence_demands.end(),
-            [](const RecordSequenceDemand& _left, const RecordSequenceDemand& _right) {
-                if (_left.release_sequence != _right.release_sequence) {
-                    return _left.release_sequence < _right.release_sequence;
+        if (!CancellableSort(
+                _sequence_demands.begin(),
+                _sequence_demands.end(),
+                [](const RecordSequenceDemand& _left, const RecordSequenceDemand& _right) {
+                    if (_left.release_sequence != _right.release_sequence) {
+                        return _left.release_sequence < _right.release_sequence;
+                    }
+                    return _left.deadline_sequence < _right.deadline_sequence;
                 }
-                return _left.deadline_sequence < _right.deadline_sequence;
-            }
-        );
+            )) {
+            return false;
+        }
         if (_sequence_demands.empty()) {
             return true;
         }
@@ -1876,6 +2194,9 @@ struct ProfileSessionReader::Impl {
             }
 
             while (observed_index < record_sequences.size() && record_sequences[observed_index] < position) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 ++observed_index;
             }
             if (observed_index < record_sequences.size() && record_sequences[observed_index] == position) {
@@ -1973,6 +2294,9 @@ struct ProfileSessionReader::Impl {
         std::uint64_t loss_bucket_total = 0;
         if (!_forensic) {
             for (const ProfileLossRecord& loss : session.impl_->losses) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 std::uint64_t buckets_for_loss = 1;
                 if (loss.record_count != 1) {
                     ++buckets_for_loss;
@@ -1993,6 +2317,9 @@ struct ProfileSessionReader::Impl {
         }
         std::uint64_t demand_total = 0;
         for (const RecordSequenceDemand& demand : _sequence_demands) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (AddOverflow(demand_total, demand.count, demand_total)) {
                 Fail(
                     SessionLoadStatus::ProtocolViolation,
@@ -2114,6 +2441,9 @@ struct ProfileSessionReader::Impl {
         };
         if (!_forensic) {
             for (const ProfileLossRecord& loss : session.impl_->losses) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 add_loss_bucket(loss.first_sequence, loss.first_sequence, 1);
                 if (loss.record_count != 1) {
                     add_loss_bucket(loss.last_sequence, loss.last_sequence, 1);
@@ -2124,27 +2454,35 @@ struct ProfileSessionReader::Impl {
             }
         }
         for (const RecordSequenceDemand& demand : _sequence_demands) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             critical_points.push_back(demand.release_sequence);
             critical_points.push_back(demand.deadline_sequence);
         }
         for (const JointLocalCell& cell : joint_local_cells) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             critical_points.push_back(cell.release_sequence);
             critical_points.push_back(cell.deadline_sequence);
         }
         if (!ChargeTopologySortWork(loss_buckets.size())) {
             return false;
         }
-        std::sort(
-            loss_buckets.begin(),
-            loss_buckets.end(),
-            [](const LossBucket& _left, const LossBucket& _right) {
-                return std::tie(_left.release_sequence, _left.deadline_sequence) <
-                       std::tie(_right.release_sequence, _right.deadline_sequence);
-            }
-        );
+        if (!CancellableSort(
+                loss_buckets.begin(),
+                loss_buckets.end(),
+                [](const LossBucket& _left, const LossBucket& _right) {
+                    return std::tie(_left.release_sequence, _left.deadline_sequence) <
+                           std::tie(_right.release_sequence, _right.deadline_sequence);
+                }
+            )) {
+            return false;
+        }
 
-        // std::sort is introspective O(N log N). Charge one abstract work item
-        // per element and merge level before invoking it so preprocessing cannot
+        // Charge one abstract work item per element and merge level before
+        // invoking the bounded-run cancellable sort so preprocessing cannot
         // escape the session-wide topology budget.
         std::uint64_t sort_width = 1;
         while (sort_width < critical_point_count) {
@@ -2156,13 +2494,17 @@ struct ProfileSessionReader::Impl {
             }
             sort_width *= 2;
         }
-        std::sort(critical_points.begin(), critical_points.end());
+        if (!CancellableSort(critical_points.begin(), critical_points.end())) {
+            return false;
+        }
         if (!ChargeTopologyWork(critical_point_count)) {
             return false;
         }
-        critical_points.erase(
-            std::unique(critical_points.begin(), critical_points.end()), critical_points.end()
-        );
+        auto critical_points_end = critical_points.begin();
+        if (!CancellableUnique(critical_points.begin(), critical_points.end(), critical_points_end)) {
+            return false;
+        }
+        critical_points.erase(critical_points_end, critical_points.end());
 
         struct SequenceSegment {
             std::uint64_t begin{0};
@@ -2216,6 +2558,9 @@ struct ProfileSessionReader::Impl {
             }
             loss_coverage.reserve(loss_buckets.size());
             for (const LossBucket& bucket : loss_buckets) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 if (loss_coverage.empty() ||
                     (loss_coverage.back().end != std::numeric_limits<std::uint64_t>::max() &&
                      bucket.release_sequence > loss_coverage.back().end + 1)) {
@@ -2232,16 +2577,21 @@ struct ProfileSessionReader::Impl {
         std::vector<SequenceSegment> segments;
         const std::uint64_t          segment_edge_capacity = options.limits.max_topology_flow_edges / 2;
         segments.reserve(static_cast<std::size_t>(std::min(maximum_segment_count, segment_edge_capacity)));
-        std::size_t         observed_index       = 0;
-        std::size_t         loss_coverage_index  = 0;
-        bool                segment_build_failed = false;
-        const std::uint64_t flow_target          = _forensic ? required_topology_total : loss_bucket_total;
-        const auto          add_segment          = [&](std::uint64_t _begin, std::uint64_t _end) {
+        std::size_t         observed_index      = 0;
+        std::size_t         loss_coverage_index = 0;
+        const std::uint64_t flow_target         = _forensic ? required_topology_total : loss_bucket_total;
+        const auto          add_segment         = [&](std::uint64_t _begin, std::uint64_t _end) {
             while (observed_index < record_sequences.size() && record_sequences[observed_index] < _begin) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 ++observed_index;
             }
             const std::size_t observed_begin = observed_index;
             while (observed_index < record_sequences.size() && record_sequences[observed_index] <= _end) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 ++observed_index;
             }
             const std::uint64_t observed_count = static_cast<std::uint64_t>(observed_index - observed_begin);
@@ -2253,25 +2603,28 @@ struct ProfileSessionReader::Impl {
                 // excluding any observed sequence, or can be capped directly
                 // by the total flow when none are observed.
                 available = observed_count == 0 ?
-                                                  flow_target :
-                                                  std::numeric_limits<std::uint64_t>::max() - (observed_count - 1);
+                                                 flow_target :
+                                                 std::numeric_limits<std::uint64_t>::max() - (observed_count - 1);
             } else {
                 const std::uint64_t span = span_minus_one + 1;
                 available                = observed_count < span ? span - observed_count : 0;
             }
             const std::uint64_t capacity = std::min(available, flow_target);
             if (capacity == 0) {
-                return;
+                return true;
             }
             if (!_forensic) {
                 while (loss_coverage_index < loss_coverage.size() &&
                        loss_coverage[loss_coverage_index].end < _begin) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     ++loss_coverage_index;
                 }
                 if (loss_coverage_index == loss_coverage.size() ||
                     loss_coverage[loss_coverage_index].begin > _begin ||
                     loss_coverage[loss_coverage_index].end < _end) {
-                    return;
+                    return true;
                 }
             }
             if (static_cast<std::uint64_t>(segments.size()) >= segment_edge_capacity) {
@@ -2282,28 +2635,29 @@ struct ProfileSessionReader::Impl {
                     DecodeStatus::LimitExceeded,
                     SessionLimitKind::TopologyFlowEdges
                 );
-                segment_build_failed = true;
-                return;
+                return false;
             }
             segments.push_back({
-                                  .begin    = _begin,
-                                  .end      = _end,
-                                  .capacity = capacity,
+                                 .begin    = _begin,
+                                 .end      = _end,
+                                 .capacity = capacity,
             });
+            return true;
         };
         for (std::size_t index = 0; index < critical_points.size(); ++index) {
-            if (segment_build_failed) {
+            if (CheckStopOnly()) {
                 return false;
             }
             const std::uint64_t point = critical_points[index];
-            add_segment(point, point);
+            if (!add_segment(point, point)) {
+                return false;
+            }
             if (index + 1 < critical_points.size() && point != std::numeric_limits<std::uint64_t>::max() &&
                 critical_points[index + 1] > point + 1) {
-                add_segment(point + 1, critical_points[index + 1] - 1);
+                if (!add_segment(point + 1, critical_points[index + 1] - 1)) {
+                    return false;
+                }
             }
-        }
-        if (segment_build_failed) {
-            return false;
         }
 
         struct SegmentRange {
@@ -2344,6 +2698,9 @@ struct ProfileSessionReader::Impl {
         demand_segment_ranges.reserve(_sequence_demands.size());
         cell_segment_ranges.reserve(joint_local_cells.size());
         for (const LossBucket& bucket : loss_buckets) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (!ChargeTopologyBinarySearchWork(segments.size()) ||
                 !ChargeTopologyBinarySearchWork(segments.size())) {
                 return false;
@@ -2353,6 +2710,9 @@ struct ProfileSessionReader::Impl {
             );
         }
         for (const RecordSequenceDemand& demand : _sequence_demands) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (!ChargeTopologyBinarySearchWork(segments.size()) ||
                 !ChargeTopologyBinarySearchWork(segments.size())) {
                 return false;
@@ -2362,6 +2722,9 @@ struct ProfileSessionReader::Impl {
             );
         }
         for (const JointLocalCell& cell : joint_local_cells) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (!ChargeTopologyBinarySearchWork(segments.size()) ||
                 !ChargeTopologyBinarySearchWork(segments.size())) {
                 return false;
@@ -2444,7 +2807,12 @@ struct ProfileSessionReader::Impl {
                     if (!owner->ChargeTopologyWork(static_cast<std::uint64_t>(parent_nodes.size()))) {
                         return false;
                     }
-                    std::fill(parent_nodes.begin(), parent_nodes.end(), unreached);
+                    for (std::size_t& parent_node : parent_nodes) {
+                        if (owner->CheckStopOnly()) {
+                            return false;
+                        }
+                        parent_node = unreached;
+                    }
                     parent_nodes[_source]        = _source;
                     std::size_t pending_begin    = 0;
                     std::size_t pending_end      = 0;
@@ -2456,6 +2824,9 @@ struct ProfileSessionReader::Impl {
                             return false;
                         }
                         for (std::size_t edge_index = 0; edge_index < edges[node].size(); ++edge_index) {
+                            if (owner->CheckStopOnly()) {
+                                return false;
+                            }
                             const Edge& edge = edges[node][edge_index];
                             if (edge.capacity != 0 && parent_nodes[edge.target] == unreached) {
                                 parent_nodes[edge.target]    = node;
@@ -2566,16 +2937,25 @@ struct ProfileSessionReader::Impl {
             return count_forward_edges(count);
         };
         for (const SegmentRange& range : loss_segment_ranges) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (!count_segment_range_edges(range)) {
                 return false;
             }
         }
         for (const SegmentRange& range : demand_segment_ranges) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (!count_segment_range_edges(range)) {
                 return false;
             }
         }
         for (const SegmentRange& range : cell_segment_ranges) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (!count_segment_range_edges(range)) {
                 return false;
             }
@@ -2586,10 +2966,16 @@ struct ProfileSessionReader::Impl {
             }
         }
         for (const JointLocalCell& cell : joint_local_cells) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (!count_forward_edges(static_cast<std::uint64_t>(cell.task_indices.size()))) {
                 return false;
             }
             for (const std::size_t task_index : cell.task_indices) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 if (task_index >= joint_virtual_tasks.size()) {
                     Fail(
                         SessionLoadStatus::ProtocolViolation,
@@ -2623,28 +3009,43 @@ struct ProfileSessionReader::Impl {
 
         if (_forensic) {
             for (std::size_t index = 0; index < segments.size(); ++index) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 if (!add_edge(source_node, segment_in_base + index, segments[index].capacity)) {
                     return false;
                 }
             }
         } else {
             for (std::size_t index = 0; index < loss_buckets.size(); ++index) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 if (!add_edge(source_node, loss_base + index, loss_buckets[index].count)) {
                     return false;
                 }
             }
         }
         for (std::size_t index = 0; index < segments.size(); ++index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (!add_edge(segment_in_base + index, segment_out_base + index, segments[index].capacity)) {
                 return false;
             }
         }
         for (std::size_t index = 0; index < _sequence_demands.size(); ++index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (!add_edge(demand_base + index, sink_node, _sequence_demands[index].count)) {
                 return false;
             }
         }
         for (std::size_t index = 0; index < joint_local_cells.size(); ++index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (!add_edge(
                     cell_in_base + index, cell_out_base + index, joint_local_cells[index].local_capacity
                 )) {
@@ -2652,6 +3053,9 @@ struct ProfileSessionReader::Impl {
             }
         }
         for (std::size_t index = 0; index < joint_virtual_tasks.size(); ++index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (!add_edge(task_base + index, sink_node, 1)) {
                 return false;
             }
@@ -2662,9 +3066,15 @@ struct ProfileSessionReader::Impl {
 
         if (!_forensic) {
             for (std::size_t loss_index = 0; loss_index < loss_buckets.size(); ++loss_index) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 const LossBucket&   bucket = loss_buckets[loss_index];
                 const SegmentRange& range  = loss_segment_ranges[loss_index];
                 for (std::size_t segment_index = range.begin; segment_index < range.end; ++segment_index) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     const SequenceSegment& segment = segments[segment_index];
                     if (!add_edge(
                             loss_base + loss_index,
@@ -2678,6 +3088,9 @@ struct ProfileSessionReader::Impl {
         }
         if (dummy_capacity != 0) {
             for (std::size_t segment_index = 0; segment_index < segments.size(); ++segment_index) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 if (!add_edge(
                         segment_out_base + segment_index, dummy_demand_node, segments[segment_index].capacity
                     )) {
@@ -2686,9 +3099,15 @@ struct ProfileSessionReader::Impl {
             }
         }
         for (std::size_t demand_index = 0; demand_index < _sequence_demands.size(); ++demand_index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             const RecordSequenceDemand& demand = _sequence_demands[demand_index];
             const SegmentRange&         range  = demand_segment_ranges[demand_index];
             for (std::size_t segment_index = range.begin; segment_index < range.end; ++segment_index) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 const SequenceSegment& segment = segments[segment_index];
                 if (!add_edge(
                         segment_out_base + segment_index,
@@ -2700,9 +3119,15 @@ struct ProfileSessionReader::Impl {
             }
         }
         for (std::size_t cell_index = 0; cell_index < joint_local_cells.size(); ++cell_index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             const JointLocalCell& cell  = joint_local_cells[cell_index];
             const SegmentRange&   range = cell_segment_ranges[cell_index];
             for (std::size_t segment_index = range.begin; segment_index < range.end; ++segment_index) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 const SequenceSegment& segment = segments[segment_index];
                 if (!add_edge(
                         segment_out_base + segment_index,
@@ -2713,6 +3138,9 @@ struct ProfileSessionReader::Impl {
                 }
             }
             for (const std::size_t task_index : cell.task_indices) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 if (!add_edge(cell_out_base + cell_index, task_base + task_index, 1)) {
                     return false;
                 }
@@ -2750,20 +3178,25 @@ struct ProfileSessionReader::Impl {
         if (!ChargeTopologySortWork(frames.size())) {
             return false;
         }
-        std::sort(
-            frames.begin(),
-            frames.end(),
-            [](const GpuFrameRecord& _left, const GpuFrameRecord& _right) {
-                if (_left.frame_id != _right.frame_id) {
-                    return _left.frame_id < _right.frame_id;
+        if (!CancellableSort(
+                frames.begin(),
+                frames.end(),
+                [](const GpuFrameRecord& _left, const GpuFrameRecord& _right) {
+                    if (_left.frame_id != _right.frame_id) {
+                        return _left.frame_id < _right.frame_id;
+                    }
+                    return _left.sequence < _right.sequence;
                 }
-                return _left.sequence < _right.sequence;
-            }
-        );
+            )) {
+            return false;
+        }
         if (!ChargeTopologyLinearWork(frames.size())) {
             return false;
         }
         for (std::size_t index = 1; index < frames.size(); ++index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (frames[index - 1].frame_id == frames[index].frame_id) {
                 Fail(
                     SessionLoadStatus::ProtocolViolation,
@@ -2789,6 +3222,9 @@ struct ProfileSessionReader::Impl {
         }
         keys.reserve(scopes.size());
         for (const GpuScopeRecord& scope : scopes) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             keys.push_back({
                 .native_queue_id = scope.native_queue_id,
                 .family_id       = scope.family_id,
@@ -2797,11 +3233,17 @@ struct ProfileSessionReader::Impl {
         if (!ChargeTopologySortWork(keys.size())) {
             return false;
         }
-        std::sort(keys.begin(), keys.end());
+        if (!CancellableSort(keys.begin(), keys.end())) {
+            return false;
+        }
         if (!ChargeTopologyLinearWork(keys.size())) {
             return false;
         }
-        keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+        auto unique_keys_end = keys.begin();
+        if (!CancellableUnique(keys.begin(), keys.end(), unique_keys_end)) {
+            return false;
+        }
+        keys.erase(unique_keys_end, keys.end());
         if (keys.size() > options.limits.max_gpu_domains) {
             Fail(
                 SessionLoadStatus::LimitExceeded,
@@ -2816,6 +3258,9 @@ struct ProfileSessionReader::Impl {
             return false;
         }
         for (const DomainKey& key : keys) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (!ChargeModel(sizeof(GpuTimestampDomain))) {
                 return false;
             }
@@ -2829,6 +3274,9 @@ struct ProfileSessionReader::Impl {
             return false;
         }
         for (GpuScopeRecord& scope : scopes) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (!ChargeTopologyBinarySearchWork(frames.size()) ||
                 !ChargeTopologyBinarySearchWork(keys.size())) {
                 return false;
@@ -2882,42 +3330,50 @@ struct ProfileSessionReader::Impl {
         if (!ChargeTopologySortWork(scopes.size())) {
             return false;
         }
-        std::sort(
-            scopes.begin(),
-            scopes.end(),
-            [](const GpuScopeRecord& _left, const GpuScopeRecord& _right) {
-                if (_left.logical_queue != _right.logical_queue) {
-                    return _left.logical_queue < _right.logical_queue;
+        if (!CancellableSort(
+                scopes.begin(),
+                scopes.end(),
+                [](const GpuScopeRecord& _left, const GpuScopeRecord& _right) {
+                    if (_left.logical_queue != _right.logical_queue) {
+                        return _left.logical_queue < _right.logical_queue;
+                    }
+                    if (_left.native_queue_id != _right.native_queue_id) {
+                        return _left.native_queue_id < _right.native_queue_id;
+                    }
+                    if (_left.family_id != _right.family_id) {
+                        return _left.family_id < _right.family_id;
+                    }
+                    if (_left.frame_id != _right.frame_id) {
+                        return _left.frame_id < _right.frame_id;
+                    }
+                    if (_left.source_order != _right.source_order) {
+                        return _left.source_order < _right.source_order;
+                    }
+                    if (_left.local_order != _right.local_order) {
+                        return _left.local_order < _right.local_order;
+                    }
+                    return _left.scope_id < _right.scope_id;
                 }
-                if (_left.native_queue_id != _right.native_queue_id) {
-                    return _left.native_queue_id < _right.native_queue_id;
-                }
-                if (_left.family_id != _right.family_id) {
-                    return _left.family_id < _right.family_id;
-                }
-                if (_left.frame_id != _right.frame_id) {
-                    return _left.frame_id < _right.frame_id;
-                }
-                if (_left.source_order != _right.source_order) {
-                    return _left.source_order < _right.source_order;
-                }
-                if (_left.local_order != _right.local_order) {
-                    return _left.local_order < _right.local_order;
-                }
-                return _left.scope_id < _right.scope_id;
-            }
-        );
+            )) {
+            return false;
+        }
         if (!ChargeTopologyLinearWork(scopes.size()) || !ChargeTopologyLinearWork(scopes.size())) {
             return false;
         }
 
         std::size_t track_begin = 0;
         while (track_begin < scopes.size()) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             std::size_t track_end = track_begin + 1;
             while (track_end < scopes.size() &&
                    scopes[track_end].logical_queue == scopes[track_begin].logical_queue &&
                    scopes[track_end].native_queue_id == scopes[track_begin].native_queue_id &&
                    scopes[track_end].family_id == scopes[track_begin].family_id) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 ++track_end;
             }
             if (!CheckCountLimit(
@@ -2939,6 +3395,9 @@ struct ProfileSessionReader::Impl {
                 .scope_count     = track_end - track_begin,
             });
             for (std::size_t index = track_begin; index < track_end; ++index) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 scopes[index].track_index = track_index;
             }
             track_begin = track_end;
@@ -3006,6 +3465,9 @@ struct ProfileSessionReader::Impl {
         }
         lookup.reserve(scopes.size());
         for (std::size_t index = 0; index < scopes.size(); ++index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             lookup.push_back({
                 .frame_id    = scopes[index].frame_id,
                 .scope_id    = scopes[index].scope_id,
@@ -3015,11 +3477,16 @@ struct ProfileSessionReader::Impl {
         if (!ChargeTopologySortWork(lookup.size())) {
             return false;
         }
-        std::sort(lookup.begin(), lookup.end());
+        if (!CancellableSort(lookup.begin(), lookup.end())) {
+            return false;
+        }
         if (!ChargeTopologyLinearWork(lookup.size())) {
             return false;
         }
         for (std::size_t index = 1; index < lookup.size(); ++index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (lookup[index - 1].frame_id == lookup[index].frame_id &&
                 lookup[index - 1].scope_id == lookup[index].scope_id) {
                 Fail(
@@ -3089,6 +3556,9 @@ struct ProfileSessionReader::Impl {
             return false;
         }
         for (std::size_t index = 1; index < scopes.size(); ++index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             const GpuScopeRecord& previous = scopes[index - 1];
             const GpuScopeRecord& scope    = scopes[index];
             const bool            same_source =
@@ -3112,6 +3582,9 @@ struct ProfileSessionReader::Impl {
             return false;
         }
         for (std::size_t index = 0; index < scopes.size(); ++index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             GpuScopeRecord& scope  = scopes[index];
             bool            orphan = false;
 
@@ -3308,40 +3781,51 @@ struct ProfileSessionReader::Impl {
         std::vector<std::size_t> emission_order;
         emission_order.reserve(scopes.size());
         for (std::size_t index = 0; index < scopes.size(); ++index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             emission_order.push_back(index);
         }
-        std::sort(
-            emission_order.begin(),
-            emission_order.end(),
-            [&](std::size_t _left_index, std::size_t _right_index) {
-                const GpuScopeRecord& left  = scopes[_left_index];
-                const GpuScopeRecord& right = scopes[_right_index];
-                return std::tie(
-                           left.frame_id,
-                           left.logical_queue,
-                           left.native_queue_id,
-                           left.family_id,
-                           left.source_order,
-                           left.local_order,
-                           left.scope_id
-                       ) <
-                       std::tie(
-                           right.frame_id,
-                           right.logical_queue,
-                           right.native_queue_id,
-                           right.family_id,
-                           right.source_order,
-                           right.local_order,
-                           right.scope_id
-                       );
-            }
-        );
+        if (!CancellableSort(
+                emission_order.begin(),
+                emission_order.end(),
+                [&](std::size_t _left_index, std::size_t _right_index) {
+                    const GpuScopeRecord& left  = scopes[_left_index];
+                    const GpuScopeRecord& right = scopes[_right_index];
+                    return std::tie(
+                               left.frame_id,
+                               left.logical_queue,
+                               left.native_queue_id,
+                               left.family_id,
+                               left.source_order,
+                               left.local_order,
+                               left.scope_id
+                           ) <
+                           std::tie(
+                               right.frame_id,
+                               right.logical_queue,
+                               right.native_queue_id,
+                               right.family_id,
+                               right.source_order,
+                               right.local_order,
+                               right.scope_id
+                           );
+                }
+            )) {
+            return false;
+        }
         std::size_t emission_begin = 0;
         while (emission_begin < emission_order.size()) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             std::size_t emission_end = emission_begin + 1;
             while (emission_end < emission_order.size() && scopes[emission_order[emission_end]].frame_id ==
                                                                scopes[emission_order[emission_begin]].frame_id
             ) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 ++emission_end;
             }
 
@@ -3357,6 +3841,9 @@ struct ProfileSessionReader::Impl {
             bool          has_previous_record             = has_known_frame;
             bool          has_previous_scope              = false;
             for (std::size_t order_index = emission_begin; order_index < emission_end; ++order_index) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 const GpuScopeRecord& scope = scopes[emission_order[order_index]];
                 if (has_previous_record && scope.sequence <= previous_sequence) {
                     Fail(
@@ -3413,19 +3900,21 @@ struct ProfileSessionReader::Impl {
         if (!ChargeTopologySortWork(missing_parent_evidence.size())) {
             return false;
         }
-        std::sort(
-            missing_parent_evidence.begin(),
-            missing_parent_evidence.end(),
-            [](const MissingParentEvidence& _left, const MissingParentEvidence& _right) {
-                if (_left.frame_id != _right.frame_id) {
-                    return _left.frame_id < _right.frame_id;
+        if (!CancellableSort(
+                missing_parent_evidence.begin(),
+                missing_parent_evidence.end(),
+                [](const MissingParentEvidence& _left, const MissingParentEvidence& _right) {
+                    if (_left.frame_id != _right.frame_id) {
+                        return _left.frame_id < _right.frame_id;
+                    }
+                    if (_left.parent_scope_id != _right.parent_scope_id) {
+                        return _left.parent_scope_id < _right.parent_scope_id;
+                    }
+                    return _left.child_local_order < _right.child_local_order;
                 }
-                if (_left.parent_scope_id != _right.parent_scope_id) {
-                    return _left.parent_scope_id < _right.parent_scope_id;
-                }
-                return _left.child_local_order < _right.child_local_order;
-            }
-        );
+            )) {
+            return false;
+        }
         struct TimingContractEnvelope {
             std::uint32_t parent_depth{0};
             std::uint64_t begin_tick{0};
@@ -3442,12 +3931,18 @@ struct ProfileSessionReader::Impl {
         timing_contract_envelopes.reserve(missing_parent_evidence.size());
         std::size_t timing_evidence_begin = 0;
         while (timing_evidence_begin < missing_parent_evidence.size()) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             std::size_t timing_evidence_end = timing_evidence_begin + 1;
             while (timing_evidence_end < missing_parent_evidence.size() &&
                    missing_parent_evidence[timing_evidence_end].frame_id ==
                        missing_parent_evidence[timing_evidence_begin].frame_id &&
                    missing_parent_evidence[timing_evidence_end].parent_scope_id ==
                        missing_parent_evidence[timing_evidence_begin].parent_scope_id) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 ++timing_evidence_end;
             }
 
@@ -3468,6 +3963,9 @@ struct ProfileSessionReader::Impl {
                                  frame->status == ProfileGpuFrameStatus::Complete;
             std::uint64_t envelope_end_offset = 0;
             for (std::size_t index = timing_evidence_begin; index < timing_evidence_end; ++index) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 const MissingParentEvidence& evidence = missing_parent_evidence[index];
                 const GpuScopeRecord&        child = scopes[static_cast<std::size_t>(evidence.child_index)];
                 if (evidence.logical_queue != first_evidence.logical_queue ||
@@ -3519,6 +4017,9 @@ struct ProfileSessionReader::Impl {
                 .trusted      = trusted,
             });
             for (std::size_t index = timing_evidence_begin; index < timing_evidence_end; ++index) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 timing_contract_for_child[static_cast<std::size_t>(missing_parent_evidence[index].child_index
                 )] = contract_index;
             }
@@ -3534,8 +4035,14 @@ struct ProfileSessionReader::Impl {
         }
         std::size_t timing_source_begin = 0;
         while (timing_source_begin < scopes.size()) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             std::size_t timing_source_end = timing_source_begin + 1;
             while (timing_source_end < scopes.size()) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 const GpuScopeRecord& first = scopes[timing_source_begin];
                 const GpuScopeRecord& next  = scopes[timing_source_end];
                 if (first.logical_queue != next.logical_queue ||
@@ -3558,6 +4065,9 @@ struct ProfileSessionReader::Impl {
                 ));
                 const auto close_observed_subtrees = [&](std::size_t _keep_count) {
                     while (timing_stack.size() > _keep_count) {
+                        if (CheckStopOnly()) {
+                            return false;
+                        }
                         const std::size_t child_index = static_cast<std::size_t>(timing_stack.back());
                         timing_stack.pop_back();
                         active_timing_stack_position[child_index] = kInvalidSessionIndex;
@@ -3575,8 +4085,12 @@ struct ProfileSessionReader::Impl {
                             completed_observed_child_end[parent_index], child_begin_offset + child_duration
                         );
                     }
+                    return true;
                 };
                 for (std::size_t index = timing_source_begin; index < timing_source_end; ++index) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     const GpuScopeRecord& scope = scopes[index];
                     if (scope.status != ProfileGpuScopeStatus::Ready) {
                         Fail(
@@ -3650,7 +4164,9 @@ struct ProfileSessionReader::Impl {
                     }
 
                     if (container_position != timing_stack.size()) {
-                        close_observed_subtrees(container_position + 1);
+                        if (!close_observed_subtrees(container_position + 1)) {
+                            return false;
+                        }
                         const std::size_t     container_index = static_cast<std::size_t>(timing_stack.back());
                         const GpuScopeRecord& container       = scopes[container_index];
                         const std::uint64_t   scope_begin_offset =
@@ -3707,7 +4223,9 @@ struct ProfileSessionReader::Impl {
                                 }
                             }
                         }
-                        close_observed_subtrees(0);
+                        if (!close_observed_subtrees(0)) {
+                            return false;
+                        }
                     }
 
                     const std::uint64_t timing_parent = nearest_observed_timing_ancestor[index];
@@ -3740,7 +4258,9 @@ struct ProfileSessionReader::Impl {
                     timing_stack.push_back(index);
                     active_timing_stack_position[index] = timing_stack.size() - 1;
                 }
-                close_observed_subtrees(0);
+                if (!close_observed_subtrees(0)) {
+                    return false;
+                }
             }
             timing_source_begin = timing_source_end;
         }
@@ -3751,10 +4271,16 @@ struct ProfileSessionReader::Impl {
         std::vector<std::uint64_t> timing_subtree_end_local(scopes.size(), 0);
         std::vector<std::uint64_t> structural_subtree_end_local(scopes.size(), 0);
         for (std::size_t index = 0; index < scopes.size(); ++index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             timing_subtree_end_local[index]     = scopes[index].local_order;
             structural_subtree_end_local[index] = scopes[index].local_order;
         }
         for (std::size_t index = scopes.size(); index != 0; --index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             const std::size_t   scope_index         = index - 1;
             const std::uint64_t timing_parent_index = nearest_observed_timing_ancestor[scope_index];
             if (timing_parent_index != kInvalidSessionIndex) {
@@ -3782,9 +4308,15 @@ struct ProfileSessionReader::Impl {
             depth_range_leaf_count * 2, std::numeric_limits<std::uint32_t>::max()
         );
         for (std::size_t index = 0; index < scopes.size(); ++index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             depth_range_tree[depth_range_leaf_count + index] = scopes[index].depth;
         }
         for (std::size_t index = depth_range_leaf_count; index != 1; --index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             const std::size_t parent = index - 1;
             depth_range_tree[parent] =
                 std::min(depth_range_tree[parent * 2], depth_range_tree[parent * 2 + 1]);
@@ -3831,12 +4363,18 @@ struct ProfileSessionReader::Impl {
 
         std::size_t evidence_begin = 0;
         while (evidence_begin < missing_parent_evidence.size()) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             std::size_t evidence_end = evidence_begin + 1;
             while (evidence_end < missing_parent_evidence.size() &&
                    missing_parent_evidence[evidence_end].frame_id ==
                        missing_parent_evidence[evidence_begin].frame_id &&
                    missing_parent_evidence[evidence_end].parent_scope_id ==
                        missing_parent_evidence[evidence_begin].parent_scope_id) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 ++evidence_end;
             }
 
@@ -3848,6 +4386,9 @@ struct ProfileSessionReader::Impl {
             std::uint64_t earliest_child_sequence =
                 scopes[static_cast<std::size_t>(contract.child_index)].sequence;
             for (std::size_t index = evidence_begin + 1; index < evidence_end; ++index) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 const MissingParentEvidence& evidence = missing_parent_evidence[index];
                 if (evidence.logical_queue != contract.logical_queue ||
                     evidence.native_queue_id != contract.native_queue_id ||
@@ -3954,6 +4495,9 @@ struct ProfileSessionReader::Impl {
                     scopes[missing_parent_evidence[evidence_begin].child_index];
                 envelope_end_offset = 0;
                 for (std::size_t index = evidence_begin; index < evidence_end; ++index) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     const GpuScopeRecord& child = scopes[missing_parent_evidence[index].child_index];
                     if (child.status != ProfileGpuScopeStatus::Ready) {
                         Fail(
@@ -4067,45 +4611,52 @@ struct ProfileSessionReader::Impl {
         if (!ChargeTopologySortWork(missing_parent_contracts.size())) {
             return false;
         }
-        std::sort(
-            missing_parent_contracts.begin(),
-            missing_parent_contracts.end(),
-            [](const MissingParentContract& _left, const MissingParentContract& _right) {
-                if (_left.logical_queue != _right.logical_queue) {
-                    return _left.logical_queue < _right.logical_queue;
+        if (!CancellableSort(
+                missing_parent_contracts.begin(),
+                missing_parent_contracts.end(),
+                [](const MissingParentContract& _left, const MissingParentContract& _right) {
+                    if (_left.logical_queue != _right.logical_queue) {
+                        return _left.logical_queue < _right.logical_queue;
+                    }
+                    if (_left.native_queue_id != _right.native_queue_id) {
+                        return _left.native_queue_id < _right.native_queue_id;
+                    }
+                    if (_left.family_id != _right.family_id) {
+                        return _left.family_id < _right.family_id;
+                    }
+                    if (_left.frame_id != _right.frame_id) {
+                        return _left.frame_id < _right.frame_id;
+                    }
+                    if (_left.source_order != _right.source_order) {
+                        return _left.source_order < _right.source_order;
+                    }
+                    return _left.child_local_order_deadline < _right.child_local_order_deadline;
                 }
-                if (_left.native_queue_id != _right.native_queue_id) {
-                    return _left.native_queue_id < _right.native_queue_id;
-                }
-                if (_left.family_id != _right.family_id) {
-                    return _left.family_id < _right.family_id;
-                }
-                if (_left.frame_id != _right.frame_id) {
-                    return _left.frame_id < _right.frame_id;
-                }
-                if (_left.source_order != _right.source_order) {
-                    return _left.source_order < _right.source_order;
-                }
-                return _left.child_local_order_deadline < _right.child_local_order_deadline;
-            }
-        );
+            )) {
+            return false;
+        }
 
         if (!ChargeTopologySortWork(missing_frame_evidence.size()) ||
             !ChargeTopologyLinearWork(missing_frame_evidence.size())) {
             return false;
         }
-        std::sort(
-            missing_frame_evidence.begin(),
-            missing_frame_evidence.end(),
-            [](const MissingFrameEvidence& _left, const MissingFrameEvidence& _right) {
-                if (_left.frame_id != _right.frame_id) {
-                    return _left.frame_id < _right.frame_id;
+        if (!CancellableSort(
+                missing_frame_evidence.begin(),
+                missing_frame_evidence.end(),
+                [](const MissingFrameEvidence& _left, const MissingFrameEvidence& _right) {
+                    if (_left.frame_id != _right.frame_id) {
+                        return _left.frame_id < _right.frame_id;
+                    }
+                    return _left.earliest_scope_sequence < _right.earliest_scope_sequence;
                 }
-                return _left.earliest_scope_sequence < _right.earliest_scope_sequence;
-            }
-        );
+            )) {
+            return false;
+        }
         std::size_t missing_frame_count = 0;
         for (const MissingFrameEvidence& evidence : missing_frame_evidence) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (missing_frame_count == 0 ||
                 missing_frame_evidence[missing_frame_count - 1].frame_id != evidence.frame_id) {
                 missing_frame_evidence[missing_frame_count++] = evidence;
@@ -4149,6 +4700,9 @@ struct ProfileSessionReader::Impl {
         std::size_t known_index   = 0;
         std::size_t missing_index = 0;
         while (known_index < frames.size() || missing_index < missing_frame_evidence.size()) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             const bool take_known =
                 missing_index == missing_frame_evidence.size() ||
                 (known_index < frames.size() &&
@@ -4184,6 +4738,9 @@ struct ProfileSessionReader::Impl {
         std::uint64_t              previous_observed_end = 0;
         bool                       has_previous_boundary = false;
         for (std::size_t index = 0; index < frame_boundaries.size(); ++index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             FrameEmissionBoundary& boundary = frame_boundaries[index];
             if (boundary.known) {
                 const GpuFrameRecord& frame = frames[boundary.source_index];
@@ -4239,8 +4796,14 @@ struct ProfileSessionReader::Impl {
         source_loss_evidence.reserve(scopes.size());
         std::size_t source_begin = 0;
         while (source_begin < scopes.size()) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             std::size_t source_end = source_begin + 1;
             while (source_end < scopes.size()) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 const GpuScopeRecord& first = scopes[source_begin];
                 const GpuScopeRecord& next  = scopes[source_end];
                 if (first.logical_queue != next.logical_queue ||
@@ -4252,6 +4815,9 @@ struct ProfileSessionReader::Impl {
             }
 
             for (std::size_t index = source_begin; index < source_end; ++index) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 if (scopes[index].depth > scopes[index].local_order) {
                     Fail(
                         SessionLoadStatus::ProtocolViolation,
@@ -4294,30 +4860,35 @@ struct ProfileSessionReader::Impl {
         std::vector<std::size_t> source_emission_order;
         source_emission_order.reserve(source_loss_evidence.size());
         for (std::size_t index = 0; index < source_loss_evidence.size(); ++index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             source_emission_order.push_back(index);
         }
-        std::sort(
-            source_emission_order.begin(),
-            source_emission_order.end(),
-            [&](std::size_t _left_index, std::size_t _right_index) {
-                const SourceLossEvidence& left  = source_loss_evidence[_left_index];
-                const SourceLossEvidence& right = source_loss_evidence[_right_index];
-                return std::tie(
-                           left.frame_id,
-                           left.logical_queue,
-                           left.native_queue_id,
-                           left.family_id,
-                           left.source_order
-                       ) <
-                       std::tie(
-                           right.frame_id,
-                           right.logical_queue,
-                           right.native_queue_id,
-                           right.family_id,
-                           right.source_order
-                       );
-            }
-        );
+        if (!CancellableSort(
+                source_emission_order.begin(),
+                source_emission_order.end(),
+                [&](std::size_t _left_index, std::size_t _right_index) {
+                    const SourceLossEvidence& left  = source_loss_evidence[_left_index];
+                    const SourceLossEvidence& right = source_loss_evidence[_right_index];
+                    return std::tie(
+                               left.frame_id,
+                               left.logical_queue,
+                               left.native_queue_id,
+                               left.family_id,
+                               left.source_order
+                           ) <
+                           std::tie(
+                               right.frame_id,
+                               right.logical_queue,
+                               right.native_queue_id,
+                               right.family_id,
+                               right.source_order
+                           );
+                }
+            )) {
+            return false;
+        }
         std::uint64_t previous_source_frame_id = 0;
         std::uint64_t previous_source_sequence = 0;
         bool          has_previous_source      = false;
@@ -4325,6 +4896,9 @@ struct ProfileSessionReader::Impl {
             return false;
         }
         for (const std::size_t source_index : source_emission_order) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             SourceLossEvidence& source = source_loss_evidence[source_index];
             std::uint64_t predecessor  = has_previous_source && previous_source_frame_id == source.frame_id ?
                                              previous_source_sequence :
@@ -4367,8 +4941,14 @@ struct ProfileSessionReader::Impl {
             return false;
         }
         while (contract_begin < missing_parent_contracts.size()) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             std::size_t contract_end = contract_begin + 1;
             while (contract_end < missing_parent_contracts.size()) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 const MissingParentContract& first = missing_parent_contracts[contract_begin];
                 const MissingParentContract& next  = missing_parent_contracts[contract_end];
                 if (first.logical_queue != next.logical_queue ||
@@ -4449,6 +5029,9 @@ struct ProfileSessionReader::Impl {
             bool          has_observed_root              = false;
             for (std::size_t index = static_cast<std::size_t>(source->first_scope); index < source_end_index;
                  ++index) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 depth_coordinates.push_back(scopes[index].depth);
                 if (scopes[index].parent_scope_id == 0) {
                     last_observed_root_local_order = scopes[index].local_order;
@@ -4456,16 +5039,25 @@ struct ProfileSessionReader::Impl {
                 }
             }
             for (std::size_t index = contract_begin; index < contract_end; ++index) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 depth_coordinates.push_back(missing_parent_contracts[index].parent_depth);
             }
             if (!ChargeTopologySortWork(depth_coordinates.size()) ||
                 !ChargeTopologyLinearWork(depth_coordinates.size())) {
                 return false;
             }
-            std::sort(depth_coordinates.begin(), depth_coordinates.end());
-            depth_coordinates.erase(
-                std::unique(depth_coordinates.begin(), depth_coordinates.end()), depth_coordinates.end()
-            );
+            if (!CancellableSort(depth_coordinates.begin(), depth_coordinates.end())) {
+                return false;
+            }
+            auto unique_depth_coordinates_end = depth_coordinates.begin();
+            if (!CancellableUnique(
+                    depth_coordinates.begin(), depth_coordinates.end(), unique_depth_coordinates_end
+                )) {
+                return false;
+            }
+            depth_coordinates.erase(unique_depth_coordinates_end, depth_coordinates.end());
 
             if (!ChargeTopologyLinearWork(depth_coordinates.size()) ||
                 !ChargeTopologyLinearWork(depth_coordinates.size()) ||
@@ -4513,6 +5105,9 @@ struct ProfileSessionReader::Impl {
             };
 
             for (std::size_t index = contract_begin; index < contract_end; ++index) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
                 if (!ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
                     !ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
                     return false;
@@ -4607,25 +5202,36 @@ struct ProfileSessionReader::Impl {
                 for (std::size_t index = static_cast<std::size_t>(source->first_scope);
                      index < source_end_index;
                      ++index) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     completion_order.push_back(index);
                 }
                 if (!ChargeTopologySortWork(completion_order.size())) {
                     return false;
                 }
-                std::sort(
-                    completion_order.begin(),
-                    completion_order.end(),
-                    [&](std::size_t _left, std::size_t _right) {
-                        return std::tie(timing_subtree_end_local[_left], scopes[_left].local_order) <
-                               std::tie(timing_subtree_end_local[_right], scopes[_right].local_order);
-                    }
-                );
+                if (!CancellableSort(
+                        completion_order.begin(),
+                        completion_order.end(),
+                        [&](std::size_t _left, std::size_t _right) {
+                            return std::tie(timing_subtree_end_local[_left], scopes[_left].local_order) <
+                                   std::tie(timing_subtree_end_local[_right], scopes[_right].local_order);
+                        }
+                    )) {
+                    return false;
+                }
                 std::size_t completed_observed_index = 0;
                 for (std::size_t index = contract_begin; index < contract_end; ++index) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     const MissingParentContract& contract = missing_parent_contracts[index];
                     while (completed_observed_index < completion_order.size() &&
                            timing_subtree_end_local[completion_order[completed_observed_index]] <
                                contract.child_local_order_deadline) {
+                        if (CheckStopOnly()) {
+                            return false;
+                        }
                         if (!ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
                             !ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
                             return false;
@@ -4674,6 +5280,9 @@ struct ProfileSessionReader::Impl {
                     }
                     const std::size_t current_chain_begin = chain_task_indices.size();
                     for (std::uint32_t depth = base_depth;; ++depth) {
+                        if (CheckStopOnly()) {
+                            return false;
+                        }
                         if (!ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
                             !ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
                             return false;
@@ -4797,6 +5406,9 @@ struct ProfileSessionReader::Impl {
                                 for (std::size_t chain_index = current_chain_begin;
                                      chain_index < chain_task_indices.size();
                                      ++chain_index) {
+                                    if (CheckStopOnly()) {
+                                        return false;
+                                    }
                                     MissingTask clone = tasks[chain_task_indices[chain_index]];
                                     clone.first_allowed_slot =
                                         std::max(clone.first_allowed_slot, split_first_allowed);
@@ -4874,6 +5486,9 @@ struct ProfileSessionReader::Impl {
                 std::vector<std::uint8_t> task_active(tasks.size(), 0);
                 std::uint64_t             active_task_count = 0;
                 for (const std::uint64_t task_index : chain_task_indices) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     if (task_active[static_cast<std::size_t>(task_index)] == 0) {
                         task_active[static_cast<std::size_t>(task_index)] = 1;
                         ++active_task_count;
@@ -4896,6 +5511,9 @@ struct ProfileSessionReader::Impl {
                 }
                 task_order.reserve(static_cast<std::size_t>(active_task_count));
                 for (std::size_t index = 0; index < tasks.size(); ++index) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     if (task_active[index] != 0) {
                         task_order.push_back(static_cast<std::uint64_t>(index));
                     }
@@ -4903,16 +5521,20 @@ struct ProfileSessionReader::Impl {
                 if (!ChargeTopologySortWork(task_order.size())) {
                     return false;
                 }
-                std::sort(
-                    task_order.begin(),
-                    task_order.end(),
-                    [&](std::uint64_t _left, std::uint64_t _right) {
-                        const MissingTask& left  = tasks[_left];
-                        const MissingTask& right = tasks[_right];
-                        return std::tie(left.deadline_slot, left.first_allowed_slot, left.depth, _left) >
-                               std::tie(right.deadline_slot, right.first_allowed_slot, right.depth, _right);
-                    }
-                );
+                if (!CancellableSort(
+                        task_order.begin(),
+                        task_order.end(),
+                        [&](std::uint64_t _left, std::uint64_t _right) {
+                            const MissingTask& left  = tasks[_left];
+                            const MissingTask& right = tasks[_right];
+                            return std::tie(left.deadline_slot, left.first_allowed_slot, left.depth, _left) >
+                                   std::tie(
+                                       right.deadline_slot, right.first_allowed_slot, right.depth, _right
+                                   );
+                        }
+                    )) {
+                    return false;
+                }
                 const auto earlier_release = [&](std::uint64_t _left, std::uint64_t _right) {
                     const MissingTask& left  = tasks[_left];
                     const MissingTask& right = tasks[_right];
@@ -4937,6 +5559,9 @@ struct ProfileSessionReader::Impl {
                     return false;
                 }
                 while (ordered_task_index < task_order.size() || !ready_tasks.empty()) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     if (!has_slot) {
                         Fail(
                             SessionLoadStatus::ProtocolViolation,
@@ -4959,6 +5584,9 @@ struct ProfileSessionReader::Impl {
                     }
                     while (observed_slot_index > static_cast<std::size_t>(source->first_scope) &&
                            scopes[observed_slot_index - 1].local_order > slot) {
+                        if (CheckStopOnly()) {
+                            return false;
+                        }
                         --observed_slot_index;
                     }
                     if (observed_slot_index > static_cast<std::size_t>(source->first_scope) &&
@@ -4989,8 +5617,14 @@ struct ProfileSessionReader::Impl {
                     return false;
                 }
                 for (const std::uint64_t chain_end_value : chain_ends) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     const std::size_t chain_end = static_cast<std::size_t>(chain_end_value);
                     for (std::size_t index = chain_begin + 1; index < chain_end; ++index) {
+                        if (CheckStopOnly()) {
+                            return false;
+                        }
                         if (tasks[chain_task_indices[index - 1]].assigned_slot >=
                             tasks[chain_task_indices[index]].assigned_slot) {
                             Fail(
@@ -5016,9 +5650,15 @@ struct ProfileSessionReader::Impl {
                 for (std::size_t index = static_cast<std::size_t>(source->first_scope);
                      index < source_end_index;
                      ++index) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     occupied_local_orders.push_back(scopes[index].local_order);
                 }
                 for (std::size_t task_index = 0; task_index < tasks.size(); ++task_index) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     if (task_active[task_index] != 0) {
                         occupied_local_orders.push_back(tasks[task_index].assigned_slot);
                     }
@@ -5026,7 +5666,9 @@ struct ProfileSessionReader::Impl {
                 if (!ChargeTopologySortWork(occupied_local_orders.size())) {
                     return false;
                 }
-                std::sort(occupied_local_orders.begin(), occupied_local_orders.end());
+                if (!CancellableSort(occupied_local_orders.begin(), occupied_local_orders.end())) {
+                    return false;
+                }
 
                 if (!ChargeTopologyLinearWork(root_partition_candidates.size()) ||
                     !ChargeTopologyLinearWork(root_partition_candidates.size()) ||
@@ -5048,23 +5690,31 @@ struct ProfileSessionReader::Impl {
                 }
                 candidate_order.reserve(root_partition_candidates.size());
                 for (std::size_t index = 0; index < root_partition_candidates.size(); ++index) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     candidate_order.push_back(index);
                 }
                 if (!ChargeTopologySortWork(candidate_order.size())) {
                     return false;
                 }
-                std::sort(
-                    candidate_order.begin(),
-                    candidate_order.end(),
-                    [&](std::size_t _left, std::size_t _right) {
-                        return std::tie(root_partition_candidates[_left].root_task_index, _left) <
-                               std::tie(root_partition_candidates[_right].root_task_index, _right);
-                    }
-                );
+                if (!CancellableSort(
+                        candidate_order.begin(),
+                        candidate_order.end(),
+                        [&](std::size_t _left, std::size_t _right) {
+                            return std::tie(root_partition_candidates[_left].root_task_index, _left) <
+                                   std::tie(root_partition_candidates[_right].root_task_index, _right);
+                        }
+                    )) {
+                    return false;
+                }
                 if (has_spare_local_holes) {
 
                     std::size_t group_begin = 0;
                     while (group_begin < candidate_order.size()) {
+                        if (CheckStopOnly()) {
+                            return false;
+                        }
                         std::size_t       group_end       = group_begin + 1;
                         const std::size_t root_task_index = static_cast<std::size_t>(
                             root_partition_candidates[candidate_order[group_begin]].root_task_index
@@ -5072,6 +5722,9 @@ struct ProfileSessionReader::Impl {
                         while (group_end < candidate_order.size() &&
                                root_partition_candidates[candidate_order[group_end]].root_task_index ==
                                    root_partition_candidates[candidate_order[group_begin]].root_task_index) {
+                            if (CheckStopOnly()) {
+                                return false;
+                            }
                             ++group_end;
                         }
                         if (task_active[root_task_index] == 0 ||
@@ -5082,6 +5735,9 @@ struct ProfileSessionReader::Impl {
                         }
 
                         for (std::size_t order_index = group_begin; order_index < group_end; ++order_index) {
+                            if (CheckStopOnly()) {
+                                return false;
+                            }
                             const std::size_t             candidate_index = candidate_order[order_index];
                             const RootPartitionCandidate& candidate =
                                 root_partition_candidates[candidate_index];
@@ -5098,6 +5754,9 @@ struct ProfileSessionReader::Impl {
                             for (std::size_t chain_index = candidate.chain_begin;
                                  chain_index < candidate.chain_end;
                                  ++chain_index) {
+                                if (CheckStopOnly()) {
+                                    return false;
+                                }
                                 const std::size_t task_index =
                                     static_cast<std::size_t>(chain_task_indices[chain_index]);
                                 if (chain_task_shared_with_prior[chain_index] != 0) {
@@ -5121,6 +5780,9 @@ struct ProfileSessionReader::Impl {
                             std::uint64_t              cursor    = first_unshared_slot;
                             std::uint64_t              root_slot = kInvalidSessionIndex;
                             for (std::uint64_t record = 0; record < required_split_records; ++record) {
+                                if (CheckStopOnly()) {
+                                    return false;
+                                }
                                 bool found = false;
                                 while (cursor != 0) {
                                     --cursor;
@@ -5162,17 +5824,21 @@ struct ProfileSessionReader::Impl {
                                 if (!ChargeTopologyLinearWork(candidate_reserved_slots.size())) {
                                     return false;
                                 }
-                                candidate_reserved_slot_storage.insert(
-                                    candidate_reserved_slot_storage.end(),
-                                    candidate_reserved_slots.begin(),
-                                    candidate_reserved_slots.end()
-                                );
+                                for (const std::uint64_t slot : candidate_reserved_slots) {
+                                    if (CheckStopOnly()) {
+                                        return false;
+                                    }
+                                    candidate_reserved_slot_storage.push_back(slot);
+                                }
                                 candidate_reserved_slot_end[candidate_index] =
                                     candidate_reserved_slot_storage.size();
                                 candidate_split_root_slot[candidate_index] = root_slot;
                                 task_has_concrete_split[root_task_index]   = 1;
                             } else {
                                 for (const std::uint64_t slot : candidate_reserved_slots) {
+                                    if (CheckStopOnly()) {
+                                        return false;
+                                    }
                                     if (!ChargeTopologyBinarySearchWork(reserved_split_slots.size())) {
                                         return false;
                                     }
@@ -5206,6 +5872,9 @@ struct ProfileSessionReader::Impl {
                 for (std::size_t index = static_cast<std::size_t>(source->first_scope);
                      index < source_end_index;
                      ++index) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     const GpuScopeRecord& scope = scopes[index];
                     if (scope.parent_scope_id == 0) {
                         const RootComponent component{
@@ -5235,9 +5904,15 @@ struct ProfileSessionReader::Impl {
                     return false;
                 }
                 for (std::size_t task_index = 0; task_index < tasks.size(); ++task_index) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     while (candidate_order_index < candidate_order.size() &&
                            root_partition_candidates[candidate_order[candidate_order_index]].root_task_index <
                                task_index) {
+                        if (CheckStopOnly()) {
+                            return false;
+                        }
                         ++candidate_order_index;
                     }
                     const std::size_t task_candidate_begin = candidate_order_index;
@@ -5246,6 +5921,9 @@ struct ProfileSessionReader::Impl {
                         root_partition_candidates[candidate_order[candidate_order_index]].root_task_index ==
                             task_index
                     ) {
+                        if (CheckStopOnly()) {
+                            return false;
+                        }
                         ++candidate_order_index;
                     }
                     const std::size_t task_candidate_end = candidate_order_index;
@@ -5288,6 +5966,9 @@ struct ProfileSessionReader::Impl {
                     };
                     for (std::size_t order_index = task_candidate_begin; order_index < task_candidate_end;
                          ++order_index) {
+                        if (CheckStopOnly()) {
+                            return false;
+                        }
                         const std::size_t             candidate_index = candidate_order[order_index];
                         const RootPartitionCandidate& candidate = root_partition_candidates[candidate_index];
                         const std::uint64_t split_root_slot     = candidate_split_root_slot[candidate_index];
@@ -5297,6 +5978,9 @@ struct ProfileSessionReader::Impl {
                             for (std::size_t slot_index = candidate_reserved_slot_begin[candidate_index];
                                  slot_index < candidate_reserved_slot_end[candidate_index];
                                  ++slot_index) {
+                                if (CheckStopOnly()) {
+                                    return false;
+                                }
                                 if (!ChargeTopologyHeapWork(used_split_slots.size() + 1)) {
                                     return false;
                                 }
@@ -5338,8 +6022,8 @@ struct ProfileSessionReader::Impl {
                     !ChargeTopologySortWork(split_root_components.size())) {
                     return false;
                 }
-                const auto sort_root_components = [](std::vector<RootComponent>& _components) {
-                    std::sort(
+                const auto sort_root_components = [&](std::vector<RootComponent>& _components) {
+                    return CancellableSort(
                         _components.begin(),
                         _components.end(),
                         [](const RootComponent& _left, const RootComponent& _right) {
@@ -5348,23 +6032,33 @@ struct ProfileSessionReader::Impl {
                         }
                     );
                 };
-                sort_root_components(root_components);
-                sort_root_components(split_root_components);
+                if (!sort_root_components(root_components) || !sort_root_components(split_root_components)) {
+                    return false;
+                }
                 if (!ChargeTopologyLinearWork(root_components.size()) ||
                     !ChargeTopologyLinearWork(split_root_components.size())) {
                     return false;
                 }
-                const auto duplicate_root_slot = [](const std::vector<RootComponent>& _components) {
-                    return std::adjacent_find(
-                               _components.begin(),
-                               _components.end(),
-                               [](const RootComponent& _left, const RootComponent& _right) {
-                                   return _left.local_order == _right.local_order;
-                               }
-                           ) != _components.end();
+                const auto duplicate_root_slot = [&](const std::vector<RootComponent>& _components,
+                                                     bool&                             _duplicate) {
+                    return CancellableAdjacentMatch(
+                        _components.begin(),
+                        _components.end(),
+                        [](const RootComponent& _left, const RootComponent& _right) {
+                            return _left.local_order == _right.local_order;
+                        },
+                        _duplicate
+                    );
                 };
-                if (duplicate_root_slot(root_components) ||
-                    (has_split_plan && duplicate_root_slot(split_root_components))) {
+                bool has_duplicate_root_slot = false;
+                if (!duplicate_root_slot(root_components, has_duplicate_root_slot)) {
+                    return false;
+                }
+                if (!has_duplicate_root_slot && has_split_plan &&
+                    !duplicate_root_slot(split_root_components, has_duplicate_root_slot)) {
+                    return false;
+                }
+                if (has_duplicate_root_slot) {
                     Fail(
                         SessionLoadStatus::ProtocolViolation,
                         SessionErrorCode::GpuScopeParentInvalid,
@@ -5399,6 +6093,9 @@ struct ProfileSessionReader::Impl {
                             return false;
                         }
                         for (std::size_t index = 0; index < _components.size(); ++index) {
+                            if (CheckStopOnly()) {
+                                return false;
+                            }
                             const RootComponent& component = _components[index];
                             if (index + 1 < _components.size() &&
                                 component.atomic_duration > maximum_root_step) {
@@ -5444,6 +6141,9 @@ struct ProfileSessionReader::Impl {
                         std::vector<RootSerialState> frontier{initial_state};
 
                         for (std::size_t index = 1; index < _components.size(); ++index) {
+                            if (CheckStopOnly()) {
+                                return false;
+                            }
                             const RootComponent& previous_component = _components[index - 1];
                             const RootComponent& component          = _components[index];
                             if (!ChargeTopologyBinarySearchWork(_occupied_local_orders.size())) {
@@ -5481,6 +6181,9 @@ struct ProfileSessionReader::Impl {
 
                             std::vector<RootSerialState> next_frontier;
                             for (const RootSerialState& state : frontier) {
+                                if (CheckStopOnly()) {
+                                    return false;
+                                }
                                 if (!charge_topology_work(free_root_count)) {
                                     topology_limit_failed = true;
                                     return false;
@@ -5494,6 +6197,9 @@ struct ProfileSessionReader::Impl {
                                 }
                                 bool window_overflow = false;
                                 for (std::uint64_t step = 0; step < free_root_count; ++step) {
+                                    if (CheckStopOnly()) {
+                                        return false;
+                                    }
                                     SerialTick next_upper{};
                                     if (!AddSerialTickDelta(
                                             window_upper, maximum_root_step, valid_bits, next_upper
@@ -5590,19 +6296,22 @@ struct ProfileSessionReader::Impl {
                                 topology_limit_failed = true;
                                 return false;
                             }
-                            std::sort(
-                                next_frontier.begin(),
-                                next_frontier.end(),
-                                [](const RootSerialState& _left, const RootSerialState& _right) {
-                                    if (_left.begin < _right.begin) {
-                                        return false;
+                            if (!CancellableSort(
+                                    next_frontier.begin(),
+                                    next_frontier.end(),
+                                    [](const RootSerialState& _left, const RootSerialState& _right) {
+                                        if (_left.begin < _right.begin) {
+                                            return false;
+                                        }
+                                        if (_right.begin < _left.begin) {
+                                            return true;
+                                        }
+                                        return _left.end < _right.end;
                                     }
-                                    if (_right.begin < _left.begin) {
-                                        return true;
-                                    }
-                                    return _left.end < _right.end;
-                                }
-                            );
+                                )) {
+                                topology_limit_failed = true;
+                                return false;
+                            }
                             std::vector<RootSerialState> pruned_frontier;
                             if (!ChargeTopologyLinearWork(next_frontier.size())) {
                                 topology_limit_failed = true;
@@ -5610,6 +6319,9 @@ struct ProfileSessionReader::Impl {
                             }
                             pruned_frontier.reserve(next_frontier.size());
                             for (const RootSerialState& state : next_frontier) {
+                                if (CheckStopOnly()) {
+                                    return false;
+                                }
                                 if (!pruned_frontier.empty() && !((state.end) < pruned_frontier.back().end)) {
                                     continue;
                                 }
@@ -5627,16 +6339,30 @@ struct ProfileSessionReader::Impl {
                             !ChargeTopologyLinearWork(used_split_slots.size())) {
                             return false;
                         }
-                        std::vector<std::uint64_t> split_occupied_local_orders = occupied_local_orders;
-                        split_occupied_local_orders.insert(
-                            split_occupied_local_orders.end(),
-                            used_split_slots.begin(),
-                            used_split_slots.end()
+                        std::vector<std::uint64_t> split_occupied_local_orders;
+                        split_occupied_local_orders.reserve(
+                            occupied_local_orders.size() + used_split_slots.size()
                         );
+                        for (const std::uint64_t slot : occupied_local_orders) {
+                            if (CheckStopOnly()) {
+                                return false;
+                            }
+                            split_occupied_local_orders.push_back(slot);
+                        }
+                        for (const std::uint64_t slot : used_split_slots) {
+                            if (CheckStopOnly()) {
+                                return false;
+                            }
+                            split_occupied_local_orders.push_back(slot);
+                        }
                         if (!ChargeTopologySortWork(split_occupied_local_orders.size())) {
                             return false;
                         }
-                        std::sort(split_occupied_local_orders.begin(), split_occupied_local_orders.end());
+                        if (!CancellableSort(
+                                split_occupied_local_orders.begin(), split_occupied_local_orders.end()
+                            )) {
+                            return false;
+                        }
                         root_sequence_valid =
                             validate_root_sequence(split_root_components, split_occupied_local_orders);
                         used_split_plan = root_sequence_valid;
@@ -5749,19 +6475,24 @@ struct ProfileSessionReader::Impl {
                 for (std::size_t index = static_cast<std::size_t>(source->first_scope);
                      index < source_end_index;
                      ++index) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     structural_completion_order.push_back(index);
                 }
                 if (!ChargeTopologySortWork(structural_completion_order.size())) {
                     return false;
                 }
-                std::sort(
-                    structural_completion_order.begin(),
-                    structural_completion_order.end(),
-                    [&](std::size_t _left, std::size_t _right) {
-                        return std::tie(structural_subtree_end_local[_left], scopes[_left].local_order) <
-                               std::tie(structural_subtree_end_local[_right], scopes[_right].local_order);
-                    }
-                );
+                if (!CancellableSort(
+                        structural_completion_order.begin(),
+                        structural_completion_order.end(),
+                        [&](std::size_t _left, std::size_t _right) {
+                            return std::tie(structural_subtree_end_local[_left], scopes[_left].local_order) <
+                                   std::tie(structural_subtree_end_local[_right], scopes[_right].local_order);
+                        }
+                    )) {
+                    return false;
+                }
 
                 std::map<VirtualSequenceTaskKey, VirtualSequenceTaskState> virtual_task_states;
                 std::map<std::uint32_t, std::uint64_t>                     previous_missing_direct_end;
@@ -5988,11 +6719,17 @@ struct ProfileSessionReader::Impl {
                     source_end_index - static_cast<std::size_t>(source->first_scope)
                 ));
                 for (std::size_t index = contract_begin; index < contract_end; ++index) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     const MissingParentContract& contract = missing_parent_contracts[index];
                     while (completed_structural_index < structural_completion_order.size() &&
                            structural_subtree_end_local
                                    [structural_completion_order[completed_structural_index]] <
                                contract.child_local_order_deadline) {
+                        if (CheckStopOnly()) {
+                            return false;
+                        }
                         if (!ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
                             !ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
                             !observe_structural_barrier(
@@ -6028,6 +6765,9 @@ struct ProfileSessionReader::Impl {
                     if (timing_topology_trusted) {
                         std::uint64_t ancestor_index = contract.observed_ancestor_index;
                         while (ancestor_index != kInvalidSessionIndex) {
+                            if (CheckStopOnly()) {
+                                return false;
+                            }
                             const GpuScopeRecord& ancestor = scopes[ancestor_index];
                             if (ancestor.depth < contract.parent_depth) {
                                 observed_ancestor_depths.push_back(ancestor.depth);
@@ -6038,14 +6778,28 @@ struct ProfileSessionReader::Impl {
                             !ChargeTopologyLinearWork(observed_ancestor_depths.size())) {
                             return false;
                         }
-                        std::sort(observed_ancestor_depths.begin(), observed_ancestor_depths.end());
+                        if (!CancellableSort(
+                                observed_ancestor_depths.begin(), observed_ancestor_depths.end()
+                            )) {
+                            return false;
+                        }
+                        auto unique_observed_ancestor_depths_end = observed_ancestor_depths.begin();
+                        if (!CancellableUnique(
+                                observed_ancestor_depths.begin(),
+                                observed_ancestor_depths.end(),
+                                unique_observed_ancestor_depths_end
+                            )) {
+                            return false;
+                        }
                         observed_ancestor_depths.erase(
-                            std::unique(observed_ancestor_depths.begin(), observed_ancestor_depths.end()),
-                            observed_ancestor_depths.end()
+                            unique_observed_ancestor_depths_end, observed_ancestor_depths.end()
                         );
                     } else {
                         while (observed_index < source_end_index &&
                                scopes[observed_index].local_order < contract.latest_parent_local_order) {
+                            if (CheckStopOnly()) {
+                                return false;
+                            }
                             if (!ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
                                 !ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
                                 !ChargeTopologyBinarySearchWork(depth_coordinates.size()) ||
@@ -6087,6 +6841,9 @@ struct ProfileSessionReader::Impl {
                         return false;
                     }
                     for (std::uint32_t depth = 0; depth < contract.parent_depth; ++depth) {
+                        if (CheckStopOnly()) {
+                            return false;
+                        }
                         if (!ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
                             return false;
                         }
@@ -6110,6 +6867,9 @@ struct ProfileSessionReader::Impl {
                         covered_depth_count_before(contract.parent_depth, covered_depth_tree);
                     if (timing_topology_trusted) {
                         for (const std::uint32_t depth : observed_ancestor_depths) {
+                            if (CheckStopOnly()) {
+                                return false;
+                            }
                             if (!ChargeTopologyBinarySearchWork(depth_coordinates.size())) {
                                 return false;
                             }
@@ -6129,6 +6889,9 @@ struct ProfileSessionReader::Impl {
                     if (timing_topology_trusted) {
                         std::uint32_t interval_begin = 0;
                         for (const std::uint32_t depth : observed_ancestor_depths) {
+                            if (CheckStopOnly()) {
+                                return false;
+                            }
                             if (!charge_and_add_required_prefix_range(interval_begin, depth)) {
                                 return false;
                             }
@@ -6269,6 +7032,9 @@ struct ProfileSessionReader::Impl {
                     return false;
                 }
                 for (std::size_t task_index = 0; task_index < virtual_sequence_tasks.size(); ++task_index) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     const VirtualSequenceTask& task = virtual_sequence_tasks[task_index];
                     joint_virtual_tasks.push_back({
                         .first_allowed_local = task.first_allowed_slot,
@@ -6298,10 +7064,16 @@ struct ProfileSessionReader::Impl {
                 local_boundaries.reserve(static_cast<std::size_t>(boundary_capacity));
                 local_boundaries.push_back(0);
                 for (const VirtualSequenceTask& task : virtual_sequence_tasks) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     local_boundaries.push_back(task.first_allowed_slot);
                     local_boundaries.push_back(task.deadline_slot);
                 }
                 for (auto scope = source_scope_begin; scope != source_scope_end; ++scope) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     local_boundaries.push_back(scope->local_order);
                     local_boundaries.push_back(scope->local_order + 1);
                 }
@@ -6309,14 +7081,23 @@ struct ProfileSessionReader::Impl {
                     !ChargeTopologyLinearWork(local_boundaries.size())) {
                     return false;
                 }
-                std::sort(local_boundaries.begin(), local_boundaries.end());
-                local_boundaries.erase(
-                    std::unique(local_boundaries.begin(), local_boundaries.end()), local_boundaries.end()
-                );
+                if (!CancellableSort(local_boundaries.begin(), local_boundaries.end())) {
+                    return false;
+                }
+                auto unique_local_boundaries_end = local_boundaries.begin();
+                if (!CancellableUnique(
+                        local_boundaries.begin(), local_boundaries.end(), unique_local_boundaries_end
+                    )) {
+                    return false;
+                }
+                local_boundaries.erase(unique_local_boundaries_end, local_boundaries.end());
 
                 std::vector<std::uint8_t> task_has_cell(virtual_sequence_tasks.size(), 0);
                 for (std::size_t boundary_index = 0; boundary_index + 1 < local_boundaries.size();
                      ++boundary_index) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
                     const std::uint64_t cell_begin = local_boundaries[boundary_index];
                     const std::uint64_t cell_end   = local_boundaries[boundary_index + 1];
                     if (cell_begin >= cell_end) {
@@ -6373,6 +7154,9 @@ struct ProfileSessionReader::Impl {
                     }
                     for (std::size_t task_index = 0; task_index < virtual_sequence_tasks.size();
                          ++task_index) {
+                        if (CheckStopOnly()) {
+                            return false;
+                        }
                         const VirtualSequenceTask& task = virtual_sequence_tasks[task_index];
                         if (task.first_allowed_slot <= cell_begin && cell_end <= task.deadline_slot) {
                             if (successor->sequence - 1 > task.deadline_sequence) {
@@ -6433,7 +7217,17 @@ struct ProfileSessionReader::Impl {
                 if (!ChargeTopologyLinearWork(task_has_cell.size())) {
                     return false;
                 }
-                if (std::ranges::find(task_has_cell, std::uint8_t{0}) != task_has_cell.end()) {
+                bool missing_task_cell = false;
+                for (const std::uint8_t has_cell : task_has_cell) {
+                    if (CheckStopOnly()) {
+                        return false;
+                    }
+                    if (has_cell == 0) {
+                        missing_task_cell = true;
+                        break;
+                    }
+                }
+                if (missing_task_cell) {
                     Fail(
                         SessionLoadStatus::ProtocolViolation,
                         SessionErrorCode::GpuFrameTotalsMismatch,
@@ -6456,6 +7250,9 @@ struct ProfileSessionReader::Impl {
         }
         frame_loss_evidence.reserve(source_loss_evidence.size());
         for (const SourceLossEvidence& source : source_loss_evidence) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             frame_loss_evidence.push_back({
                 .frame_id                     = source.frame_id,
                 .local_hole_count             = source.local_hole_count,
@@ -6465,18 +7262,23 @@ struct ProfileSessionReader::Impl {
         if (!ChargeTopologySortWork(frame_loss_evidence.size())) {
             return false;
         }
-        std::sort(
-            frame_loss_evidence.begin(),
-            frame_loss_evidence.end(),
-            [](const FrameLossEvidence& _left, const FrameLossEvidence& _right) {
-                return _left.frame_id < _right.frame_id;
-            }
-        );
+        if (!CancellableSort(
+                frame_loss_evidence.begin(),
+                frame_loss_evidence.end(),
+                [](const FrameLossEvidence& _left, const FrameLossEvidence& _right) {
+                    return _left.frame_id < _right.frame_id;
+                }
+            )) {
+            return false;
+        }
         std::size_t frame_evidence_count = 0;
         if (!ChargeTopologyLinearWork(frame_loss_evidence.size())) {
             return false;
         }
         for (std::size_t index = 0; index < frame_loss_evidence.size(); ++index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             if (frame_evidence_count == 0 || frame_loss_evidence[frame_evidence_count - 1].frame_id !=
                                                  frame_loss_evidence[index].frame_id) {
                 frame_loss_evidence[frame_evidence_count++] = frame_loss_evidence[index];
@@ -6522,17 +7324,21 @@ struct ProfileSessionReader::Impl {
             !ChargeTopologyLinearWork(missing_parent_keys.size())) {
             return false;
         }
-        std::sort(missing_parent_keys.begin(), missing_parent_keys.end());
-        missing_parent_keys.erase(
-            std::unique(
+        if (!CancellableSort(missing_parent_keys.begin(), missing_parent_keys.end())) {
+            return false;
+        }
+        auto unique_missing_parent_keys_end = missing_parent_keys.begin();
+        if (!CancellableUnique(
                 missing_parent_keys.begin(),
                 missing_parent_keys.end(),
                 [](const ScopeLookup& _left, const ScopeLookup& _right) {
                     return _left.frame_id == _right.frame_id && _left.scope_id == _right.scope_id;
-                }
-            ),
-            missing_parent_keys.end()
-        );
+                },
+                unique_missing_parent_keys_end
+            )) {
+            return false;
+        }
+        missing_parent_keys.erase(unique_missing_parent_keys_end, missing_parent_keys.end());
 
         const auto missing_parent_count = [&](std::uint64_t _frame_id) {
             const ScopeLookup first{
@@ -6570,6 +7376,9 @@ struct ProfileSessionReader::Impl {
             return false;
         }
         for (std::size_t index = 0; index < frames.size(); ++index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             GpuFrameRecord&     frame  = frames[index];
             const std::uint64_t errors = frame_error_counts[index];
             const bool          observed_too_many =
@@ -6667,6 +7476,9 @@ struct ProfileSessionReader::Impl {
         }
         for (std::size_t missing_frame_index = 0; missing_frame_index < missing_frame_evidence.size();
              ++missing_frame_index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             const MissingFrameEvidence& missing_frame = missing_frame_evidence[missing_frame_index];
             if (!ChargeTopologyBinarySearchWork(frame_loss_evidence.size()) ||
                 !ChargeTopologyBinarySearchWork(missing_parent_keys.size()) ||
@@ -6729,6 +7541,9 @@ struct ProfileSessionReader::Impl {
             return false;
         }
         for (std::size_t index = 0; index < scopes.size(); ++index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             const GpuScopeRecord& scope = scopes[index];
             if (scope.parent_scope_id != 0 || scope.frame_index == kInvalidSessionIndex) {
                 continue;
@@ -6779,6 +7594,9 @@ struct ProfileSessionReader::Impl {
             return false;
         }
         for (std::size_t index = 0; index < scopes.size(); ++index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             const GpuScopeRecord& scope = scopes[index];
             if (scope.frame_index == kInvalidSessionIndex) {
                 continue;
@@ -6823,6 +7641,9 @@ struct ProfileSessionReader::Impl {
             return false;
         }
         for (std::size_t index = 0; index < frames.size(); ++index) {
+            if (CheckStopOnly()) {
+                return false;
+            }
             GpuFrameRecord& frame         = frames[index];
             frame.timing_topology_trusted = frame.status == ProfileGpuFrameStatus::Complete &&
                                             frame.materialization_complete &&
@@ -6835,7 +7656,9 @@ struct ProfileSessionReader::Impl {
         if (!ChargeTopologySortWork(record_sequences.size())) {
             return false;
         }
-        std::sort(record_sequences.begin(), record_sequences.end());
+        if (!CancellableSort(record_sequences.begin(), record_sequences.end())) {
+            return false;
+        }
         if (!ChargeTopologyLinearWork(record_sequences.size())) {
             return false;
         }
@@ -6847,7 +7670,13 @@ struct ProfileSessionReader::Impl {
             );
             return false;
         }
-        if (std::adjacent_find(record_sequences.begin(), record_sequences.end()) != record_sequences.end()) {
+        bool duplicate_record_sequence = false;
+        if (!CancellableAdjacentMatch(
+                record_sequences.begin(), record_sequences.end(), duplicate_record_sequence
+            )) {
+            return false;
+        }
+        if (duplicate_record_sequence) {
             Fail(
                 SessionLoadStatus::ProtocolViolation,
                 SessionErrorCode::RecordSequenceDuplicate,
@@ -6911,9 +7740,12 @@ struct ProfileSessionReader::Impl {
                 return false;
             }
             cpu_sequence_demands.reserve(combined_demand_count);
-            cpu_sequence_demands.insert(
-                cpu_sequence_demands.end(), gpu_sequence_demands.begin(), gpu_sequence_demands.end()
-            );
+            for (const RecordSequenceDemand& demand : gpu_sequence_demands) {
+                if (CheckStopOnly()) {
+                    return false;
+                }
+                cpu_sequence_demands.push_back(demand);
+            }
         }
         if (!ValidateSequenceSlotCapacity(
                 cpu_sequence_demands, has_cpu_sequence_demands, has_gpu_topology_demands
@@ -6941,7 +7773,7 @@ struct ProfileSessionReader::Impl {
     }
 
     [[nodiscard]] SessionLoadResult Feed(std::span<const std::uint8_t> _bytes) noexcept {
-        if (!IsReading() || _bytes.empty()) {
+        if (!IsReading() || CheckCancellationNow() || _bytes.empty()) {
             return result;
         }
         try {
@@ -6965,6 +7797,9 @@ struct ProfileSessionReader::Impl {
 
             std::size_t cursor = 0;
             while (cursor < _bytes.size() && IsReading()) {
+                if (CheckCancellation()) {
+                    break;
+                }
                 if (saw_session_end) {
                     Fail(
                         SessionLoadStatus::ProtocolViolation,
@@ -7071,7 +7906,7 @@ struct ProfileSessionReader::Impl {
     }
 
     [[nodiscard]] SessionLoadResult Finish() noexcept {
-        if (!IsReading()) {
+        if (!IsReading() || CheckCancellationNow()) {
             return result;
         }
         try {
@@ -7113,7 +7948,7 @@ struct ProfileSessionReader::Impl {
                 forensic = true;
             }
 
-            if (!BuildIndexes(forensic)) {
+            if (CheckCancellationNow() || !BuildIndexes(forensic) || CheckCancellationNow()) {
                 return result;
             }
             if (forensic) {
@@ -7141,6 +7976,7 @@ struct ProfileSessionReader::Impl {
     }
 
     SessionLoadOptions options{};
+    CancellationProbe  cancellation;
     SessionLoadResult  result{};
     const char*        diagnostic{"profile session reader is accepting input"};
     ProfileSession     session{};
@@ -7162,13 +7998,19 @@ struct ProfileSessionReader::Impl {
     std::uint64_t                                         topology_work_items{0};
 };
 
-ProfileSessionReader::ProfileSessionReader(const SessionLoadOptions& _options) noexcept {
+ProfileSessionReader::ProfileSessionReader(const SessionLoadOptions& _options) noexcept :
+    ProfileSessionReader(_options, SessionLoadControl{}) {}
+
+ProfileSessionReader::ProfileSessionReader(
+    const SessionLoadOptions& _options,
+    const SessionLoadControl& _control
+) noexcept {
     static_assert(
-        !std::is_nothrow_constructible_v<Impl, const SessionLoadOptions&>,
+        !std::is_nothrow_constructible_v<Impl, const SessionLoadOptions&, const SessionLoadControl&>,
         "reader implementation construction must propagate to the public catch boundary"
     );
     try {
-        impl_ = new (std::nothrow) Impl(_options);
+        impl_ = new (std::nothrow) Impl(_options, _control);
     } catch (...) {
         impl_ = nullptr;
     }
@@ -7224,6 +8066,15 @@ SessionLoadResult LoadProfileSessionFile(
     const SessionLoadOptions&    _options,
     ProfileSession&              _output
 ) noexcept {
+    return LoadProfileSessionFile(_path, _options, _output, SessionLoadControl{});
+}
+
+SessionLoadResult LoadProfileSessionFile(
+    const std::filesystem::path& _path,
+    const SessionLoadOptions&    _options,
+    ProfileSession&              _output,
+    const SessionLoadControl&    _control
+) noexcept {
     if (_path.empty()) {
         SessionLoadResult result{};
         result.status     = SessionLoadStatus::InvalidArgument;
@@ -7232,6 +8083,11 @@ SessionLoadResult LoadProfileSessionFile(
     }
 
     try {
+        ProfileSessionReader reader(_options, _control);
+        if (reader.Result().status != SessionLoadStatus::Reading) {
+            return reader.Result();
+        }
+
         std::ifstream stream(_path, std::ios::binary | std::ios::ate);
         if (!stream.is_open()) {
             SessionLoadResult result{};
@@ -7263,14 +8119,18 @@ SessionLoadResult LoadProfileSessionFile(
             return result;
         }
 
-        ProfileSessionReader reader(_options);
-        if (reader.Result().status != SessionLoadStatus::Reading) {
-            return reader.Result();
+        const SessionLoadResult before_read = reader.Feed({});
+        if (before_read.IsTerminal()) {
+            return before_read;
         }
 
         std::array<std::uint8_t, kReadBlockBytes> block{};
         std::uint64_t                             remaining = snapshot_bytes;
         while (remaining != 0) {
+            const SessionLoadResult before_block = reader.Feed({});
+            if (before_block.IsTerminal()) {
+                return before_block;
+            }
             const std::size_t request =
                 static_cast<std::size_t>(std::min<std::uint64_t>(remaining, block.size()));
             stream.read(reinterpret_cast<char*>(block.data()), static_cast<std::streamsize>(request));
@@ -7284,6 +8144,10 @@ SessionLoadResult LoadProfileSessionFile(
                 return result;
             }
 
+            const SessionLoadResult after_read = reader.Feed({});
+            if (after_read.IsTerminal()) {
+                return after_read;
+            }
             const SessionLoadResult fed =
                 reader.Feed(std::span<const std::uint8_t>(block.data(), static_cast<std::size_t>(read)));
             if (fed.IsTerminal()) {
@@ -7292,6 +8156,10 @@ SessionLoadResult LoadProfileSessionFile(
             remaining -= static_cast<std::uint64_t>(read);
         }
 
+        const SessionLoadResult before_finish = reader.Feed({});
+        if (before_finish.IsTerminal()) {
+            return before_finish;
+        }
         const SessionLoadResult finished = reader.Finish();
         if (finished.HasUsableSession()) {
             _output = reader.TakeSession();
