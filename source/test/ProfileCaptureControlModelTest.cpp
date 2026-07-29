@@ -168,7 +168,7 @@ void CpuOnlyStartStopUsesEngineOwnedTicketBoundary() {
     );
 }
 
-void LocalValidationAndBackendRejectionStayBounded() {
+void LocalValidationAndMalformedRejectionStayBounded() {
     std::uint64_t start_calls = 0;
     ProfileCaptureControllerSnapshot snapshot;
     snapshot.state              = ProfileCaptureControllerState::Idle;
@@ -204,11 +204,11 @@ void LocalValidationAndBackendRejectionStayBounded() {
     options.runtime.output_path = "capture.mpd";
     Expect(
         model.RequestStart(std::move(options)) ==
-                EProfileCaptureControlActionResult::BackendRejected &&
+                EProfileCaptureControlActionResult::InvalidSubmission &&
             model.LastSubmitResult() ==
                 ProfileCaptureSubmitResult::QueueFull &&
             start_calls == 1 && !model.HasPendingRequest(),
-        "backend rejection did not remain a terminal bounded UI action"
+        "ticketless QueueFull submission was not rejected as malformed"
     );
 
     snapshot.state              = ProfileCaptureControllerState::Running;
@@ -240,6 +240,99 @@ void SynchronousRejectionRetainsTerminalCompletion() {
                 ProfileCaptureCompletionStatus::RejectedQueueFull &&
             !model.HasPendingRequest(),
         "synchronous rejection lost its terminal ticket payload"
+    );
+}
+
+void SynchronousRejectionProtocolFailsClosed() {
+    ProfileCaptureControllerSnapshot idle_snapshot;
+    idle_snapshot.state              = ProfileCaptureControllerState::Idle;
+    idle_snapshot.accepting_requests = true;
+
+    ProfileCaptureControlModel allocation_failure(
+        ProfileCaptureControlCallbacks{
+            .request_start =
+                [](ProfileCaptureStartOptions) {
+                    return ProfileCaptureRequestSubmission{
+                        .result =
+                            ProfileCaptureSubmitResult::ResourceExhausted,
+                        .ticket = {},
+                    };
+                },
+            .request_stop = {},
+            .get_snapshot =
+                [&idle_snapshot]() {
+                    return idle_snapshot;
+                },
+        }
+    );
+    ProfileCaptureStartOptions allocation_options;
+    allocation_options.runtime.output_path = "capture.mpd";
+    Expect(
+        allocation_failure.RequestStart(std::move(allocation_options)) ==
+                EProfileCaptureControlActionResult::BackendRejected &&
+            allocation_failure.LastSubmitResult() ==
+                ProfileCaptureSubmitResult::ResourceExhausted &&
+            !allocation_failure.LastCompletion().has_value(),
+        "ticketless allocation failure was not retained as the explicit "
+        "ResourceExhausted exception"
+    );
+
+    ProfileCaptureController pending_controller(nullptr, 4);
+    ProfileCaptureControlModel non_terminal_rejection(
+        ProfileCaptureControlCallbacks{
+            .request_start =
+                [&pending_controller](ProfileCaptureStartOptions options) {
+                    ProfileCaptureRequestSubmission submission =
+                        pending_controller.RequestStart(std::move(options));
+                    submission.result = ProfileCaptureSubmitResult::QueueFull;
+                    return submission;
+                },
+            .request_stop = {},
+            .get_snapshot =
+                [&idle_snapshot]() {
+                    return idle_snapshot;
+                },
+        }
+    );
+    ProfileCaptureStartOptions pending_options;
+    pending_options.runtime.output_path = "capture.mpd";
+    Expect(
+        non_terminal_rejection.RequestStart(std::move(pending_options)) ==
+                EProfileCaptureControlActionResult::InvalidSubmission &&
+            !non_terminal_rejection.HasPendingRequest() &&
+            !non_terminal_rejection.LastCompletion().has_value(),
+        "non-terminal ticket attached to a synchronous rejection was accepted"
+    );
+
+    ProfileCaptureController mismatch_controller(nullptr, 4);
+    ProfileCaptureControllerSnapshot running_snapshot;
+    running_snapshot.state              =
+        ProfileCaptureControllerState::Running;
+    running_snapshot.accepting_requests = true;
+    running_snapshot.owns_runtime       = true;
+    running_snapshot.active_generation  = 7;
+    ProfileCaptureControlModel mismatched_status(
+        ProfileCaptureControlCallbacks{
+            .request_start = {},
+            .request_stop =
+                [&mismatch_controller](std::uint64_t) {
+                    ProfileCaptureRequestSubmission submission =
+                        mismatch_controller.RequestStop(0);
+                    submission.result = ProfileCaptureSubmitResult::QueueFull;
+                    return submission;
+                },
+            .get_snapshot =
+                [&running_snapshot]() {
+                    return running_snapshot;
+                },
+        }
+    );
+    Expect(
+        mismatched_status.RequestStop() ==
+                EProfileCaptureControlActionResult::InvalidSubmission &&
+            !mismatched_status.HasPendingRequest() &&
+            !mismatched_status.LastCompletion().has_value(),
+        "submit result and terminal completion status mismatch was accepted"
     );
 }
 
@@ -489,8 +582,9 @@ void StaleUiStopProtectsTheNewGeneration() {
 int main() {
     try {
         CpuOnlyStartStopUsesEngineOwnedTicketBoundary();
-        LocalValidationAndBackendRejectionStayBounded();
+        LocalValidationAndMalformedRejectionStayBounded();
         SynchronousRejectionRetainsTerminalCompletion();
+        SynchronousRejectionProtocolFailsClosed();
         SnapshotFailuresStayDistinctFromControllerState();
         MismatchedTicketKindFailsClosed();
         StaleUiStopProtectsTheNewGeneration();

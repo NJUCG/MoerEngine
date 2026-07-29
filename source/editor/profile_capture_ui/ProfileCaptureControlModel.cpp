@@ -3,6 +3,35 @@
 #include <utility>
 
 namespace Moer {
+namespace {
+
+[[nodiscard]] bool IsCoherentRejection(
+    Render::ProfileCaptureSubmitResult      result,
+    Render::ProfileCaptureCompletionStatus status
+) noexcept {
+    switch (result) {
+        case Render::ProfileCaptureSubmitResult::AdmissionClosed:
+            return status ==
+                   Render::ProfileCaptureCompletionStatus::
+                       RejectedAdmissionClosed;
+        case Render::ProfileCaptureSubmitResult::QueueFull:
+            return status ==
+                   Render::ProfileCaptureCompletionStatus::RejectedQueueFull;
+        case Render::ProfileCaptureSubmitResult::InvalidArgument:
+            return status ==
+                   Render::ProfileCaptureCompletionStatus::
+                       RejectedInvalidArgument;
+        case Render::ProfileCaptureSubmitResult::ResourceExhausted:
+            return status ==
+                   Render::ProfileCaptureCompletionStatus::
+                       RejectedResourceExhausted;
+        case Render::ProfileCaptureSubmitResult::Queued:
+            return false;
+    }
+    return false;
+}
+
+} // namespace
 
 ProfileCaptureControlModel::ProfileCaptureControlModel(
     ProfileCaptureControlCallbacks callbacks
@@ -200,16 +229,32 @@ ProfileCaptureControlModel::AcceptSubmission(
 ) noexcept {
     last_submit_result_ = submission.result;
     if (submission.result != Render::ProfileCaptureSubmitResult::Queued) {
-        if (submission.ticket.Valid()) {
-            Render::ProfileCaptureRequestCompletion completion;
-            if (!submission.ticket.TryGet(completion) ||
-                completion.kind != kind) {
+        last_completion_.reset();
+        if (!submission.ticket.Valid()) {
+            // Completion-state allocation and lock acquisition can fail
+            // before the controller has a request id to publish. That
+            // deliberately ticketless ResourceExhausted result is the only
+            // well-formed rejection without a terminal ticket.
+            if (submission.result ==
+                Render::ProfileCaptureSubmitResult::ResourceExhausted) {
+                last_action_result_ =
+                    EProfileCaptureControlActionResult::BackendRejected;
+            } else {
                 last_action_result_ =
                     EProfileCaptureControlActionResult::InvalidSubmission;
-                return last_action_result_;
             }
-            last_completion_ = completion;
+            return last_action_result_;
         }
+
+        Render::ProfileCaptureRequestCompletion completion;
+        if (!submission.ticket.TryGet(completion) ||
+            completion.kind != kind ||
+            !IsCoherentRejection(submission.result, completion.status)) {
+            last_action_result_ =
+                EProfileCaptureControlActionResult::InvalidSubmission;
+            return last_action_result_;
+        }
+        last_completion_ = completion;
         last_action_result_ =
             EProfileCaptureControlActionResult::BackendRejected;
         return last_action_result_;
