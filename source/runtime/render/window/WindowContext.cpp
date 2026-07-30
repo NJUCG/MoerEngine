@@ -19,9 +19,9 @@ void WindowContext::SetFocusMode(WindowHandle* window, bool focused) {
     WindowImpl::GetInstance().SetFocusMode(window, focused);
 };
 
-void WindowContext::GetWindowSize(WindowHandle* window, int* width, int* height) {
-    WindowImpl::GetInstance().GetWindowSize(window, width, height);
-};
+Render::WindowFrameMetrics WindowContext::CaptureWindowFrameMetrics(const WindowHandle& window) {
+    return WindowImpl::GetInstance().CaptureWindowFrameMetrics(window);
+}
 
 void WindowContext::SetTitle(WindowHandle* window, const char* newTitle) {
     WindowImpl::GetInstance().SetTitle(window, newTitle);

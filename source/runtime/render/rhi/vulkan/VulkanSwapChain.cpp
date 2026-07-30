@@ -145,7 +145,7 @@ VkSwapchain::VkSwapchain(RenderDevice::Impl& _device, const SwapchainCreateInfo&
     Swapchain(),
     device(*static_cast<VulkanDevice*>(&_device)) {
     present_threads.resize(max_frames_in_flight);
-    CreateOrRecreate(_info);
+    static_cast<void>(CreateOrRecreate(_info));
 }
 bool VkSwapchain::WaitFrameInFlight() {
     // if (image_idx < max_frames_in_flight) {
@@ -207,20 +207,20 @@ VkFence VkSwapchain::GetInFlightFence(uint64 _index) {
     return in_flight_fences[_index % in_flight_fences.size()];
 }
 
-void VkSwapchain::Recreate(const SwapchainCreateInfo& _info) {
+bool VkSwapchain::Recreate(const SwapchainCreateInfo& _info) {
     //FIXME: this is not a good way to do it, and it may have issue in multi-threaded env
     //best do sync in a separate thread, and give sync op to user
     // vkQueueWaitIdle(device.GetPresentQueue());
-    CreateOrRecreate(_info);
+    return CreateOrRecreate(_info);
 }
-void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate) {
+bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate) {
     (void)_force_recreate;
     if (device.IsFaulted()) {
-        return;
+        return false;
     }
     if (_info.size.x == 0 || _info.size.y == 0) {
         LOG_WARNING("Swapchain recreate skipped due to zero window size.");
-        return;
+        return false;
     }
 
     const ESwapchainSurfaceTransition surface_transition =
@@ -234,12 +234,12 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
             false,
             true
         );
-        return;
+        return false;
     }
 
     Sync();
     if (device.IsFaulted()) {
-        return;
+        return false;
     }
 
     const VkSwapchainKHR committed_old_sc       = handle;
@@ -269,7 +269,7 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
                 false,
                 true
             );
-            return;
+            return false;
         }
     }
 
@@ -283,7 +283,7 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
             false,
             true
         );
-        return;
+        return false;
     }
 
     const VkUtil::SwapChainSupportQueryResult support_query = VkUtil::QuerySwapChainSupport(
@@ -303,7 +303,7 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
             false,
             true
         );
-        return;
+        return false;
     }
 
     const auto&        details = support_query.details;
@@ -312,7 +312,7 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     ChooseSwapExtent(&new_size.x, &new_size.y, details.capabilities);
     if (new_size.x == 0 || new_size.y == 0) {
         LOG_WARNING("Swapchain recreate skipped due to zero swapchain extent.");
-        return;
+        return false;
     }
     VkPresentModeKHR   present_mode = ChooseSwapPresentMode(details.present_modes, false);
     const EPixelFormat new_format   = (EPixelFormat)new_fmt.format;
@@ -351,7 +351,7 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
 
     auto fault_admission = device.AcquireFaultAdmission();
     if (device.IsFaulted()) {
-        return;
+        return false;
     }
 
     VkSwapchainKHR        new_sc = VK_NULL_HANDLE;
@@ -427,7 +427,7 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     }
     if (!check_device_result(result, EVulkanFaultOperation::SwapchainCreate)) {
         abort_transaction();
-        return;
+        return false;
     }
 
     uint32_t       image_cnt = 0;
@@ -437,14 +437,14 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         result = vkGetSwapchainImagesKHR(device.GetDevice(), new_sc, &image_cnt, nullptr);
         if (!check_device_result(result, EVulkanFaultOperation::SwapchainGetImages)) {
             abort_transaction();
-            return;
+            return false;
         }
         if (image_cnt == 0) {
             check_device_result(
                 VK_ERROR_INITIALIZATION_FAILED, EVulkanFaultOperation::SwapchainGetImages
             );
             abort_transaction();
-            return;
+            return false;
         }
 
         images.assign(image_cnt, VK_NULL_HANDLE);
@@ -457,14 +457,14 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         }
         if (!check_device_result(result, EVulkanFaultOperation::SwapchainGetImages)) {
             abort_transaction();
-            return;
+            return false;
         }
         if (fetched_image_cnt == 0) {
             check_device_result(
                 VK_ERROR_INITIALIZATION_FAILED, EVulkanFaultOperation::SwapchainGetImages
             );
             abort_transaction();
-            return;
+            return false;
         }
         image_cnt = fetched_image_cnt;
         images.resize(image_cnt);
@@ -477,7 +477,7 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
             VK_ERROR_INITIALIZATION_FAILED, EVulkanFaultOperation::SwapchainGetImages
         );
         abort_transaction();
-        return;
+        return false;
     }
 
     const uint new_max_frames_in_flight = std::min(max_frames_in_flight, uint(image_cnt));
@@ -493,7 +493,7 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         }
         if (!check_device_result(result, EVulkanFaultOperation::SwapchainSemaphoreCreate)) {
             abort_transaction();
-            return;
+            return false;
         }
         device.SetResourceName(
             uint64(new_render_finished_fences[i]),
@@ -514,7 +514,7 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
             }
             if (!check_device_result(result, EVulkanFaultOperation::SwapchainFenceCreate)) {
                 abort_transaction();
-                return;
+                return false;
             }
             device.SetResourceName(
                 uint64(new_in_flight_fences[i]),
@@ -542,7 +542,7 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     }
     if (!check_device_result(VK_SUCCESS, EVulkanFaultOperation::SwapchainCreate)) {
         abort_transaction();
-        return;
+        return false;
     }
 
     // A replacement surface uses oldSwapchain = VK_NULL_HANDLE, so the old
@@ -577,6 +577,7 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         in_flight_fences = std::move(new_in_flight_fences);
     }
     image_idx = 0;
+    return IsPresentationReady();
 }
 VkSwapchain::~VkSwapchain() {
     Sync();

@@ -9,6 +9,7 @@
 #include "scene/RenderScene.h"
 #include "scene/Scene.h"
 #include "shader/ShaderResourceManager.h"
+#include "window/WindowFrameSnapshot.h"
 
 #include "common/UIRenderer.h"
 #include "common/UiCombinePass.h"
@@ -55,18 +56,6 @@ struct EngineHooks {
 class RENDER_API Renderer {
 
 public:
-    enum class EWindowState {
-        Default = 0,
-        Hiding,
-        SizeChanged,
-        Num,
-    };
-
-    struct WindowFrameState {
-        EWindowState state      = EWindowState::Default;
-        uint2        resolution = uint2(0u, 0u);
-    };
-
     Renderer(
         uint2                         initial_resolution,
         const SharedPtr<EditorConfig> config,
@@ -78,8 +67,8 @@ public:
 
     void ReleaseResources();
 
-    WindowFrameState TickWindowContext(uint2 current_resolution);
-    void             LogSceneLoadStatus(const EditorConfig& config) const;
+    WindowFrameSnapshot TickWindowContext();
+    void                LogSceneLoadStatus(const EditorConfig& config) const;
 
     Renderer(const Renderer&)            = delete;
     Renderer& operator=(const Renderer&) = delete;
@@ -95,7 +84,7 @@ public:
     }
 
 protected:
-    void               PrepareRenderFrame(const WindowFrameState& window_frame);
+    [[nodiscard]] bool PrepareRenderFrame(const WindowFrameSnapshot& window_frame);
     PresentReceiptRef  CreateMainPresentReceipt(bool scene_content_ready);
     void ApplyMainPresentReceipt(const PresentReceiptRef& receipt, const EngineHooks& hooks);
     [[nodiscard]] bool IsFramePrepareProfilingEnabled() const {
@@ -121,10 +110,13 @@ protected:
     SwapchainRef     swapchain;
     BindlessArrayRef bindless_array;
 
-    SwapchainCreateInfo    swapchain_create_info;
-    Scene                  scene;
-    UniquePtr<RenderScene> render_scene;
-    CommandList            cmd_list;
+    SwapchainCreateInfo        swapchain_create_info;
+    WindowFrameSnapshotTracker main_window_frame_tracker;
+    WindowSurfaceIdentity       committed_main_surface_identity{};
+    uint64_t                    committed_main_drawable_generation = 0;
+    Scene                       scene;
+    UniquePtr<RenderScene>      render_scene;
+    CommandList                 cmd_list;
 
     UniquePtr<UiCombinePass> ui_combine_pass;
 

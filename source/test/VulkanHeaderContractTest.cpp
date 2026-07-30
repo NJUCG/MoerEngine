@@ -11,6 +11,7 @@
 #endif
 
 #include "rhi/RHIWindowSurface.h"
+#include "window/WindowFrameSnapshot.h"
 #include "rhi/vulkan/VulkanDebugCallback.h"
 #include "rhi/vulkan/VulkanFault.h"
 #include "rhi/vulkan/VulkanMemoryAllocator.h"

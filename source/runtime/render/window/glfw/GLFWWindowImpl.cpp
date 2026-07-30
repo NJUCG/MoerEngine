@@ -447,8 +447,43 @@ void GLFWWindowImpl::SetFocusMode(WindowHandle* _window, bool _focused) {
     );
 }
 
-void GLFWWindowImpl::GetWindowSize(WindowHandle* _window, int32_t* width, int32_t* height) const {
-    glfwGetWindowSize((GLFWwindow*)_window->window, width, height);
+Render::WindowFrameMetrics
+GLFWWindowImpl::CaptureWindowFrameMetrics(const WindowHandle& window) const {
+    if (!IsCurrentlyGameThread()) {
+        LOG_ERROR("Window frame metrics may only be captured on the Game Thread.");
+        return {};
+    }
+
+    auto* glfw_window = static_cast<GLFWwindow*>(window.window);
+    if (glfw_window == nullptr) {
+        return {};
+    }
+
+    int logical_width   = 0;
+    int logical_height  = 0;
+    int drawable_width  = 0;
+    int drawable_height = 0;
+    glfwGetWindowSize(glfw_window, &logical_width, &logical_height);
+    glfwGetFramebufferSize(glfw_window, &drawable_width, &drawable_height);
+    if (logical_width < 0 || logical_height < 0 || drawable_width < 0 || drawable_height < 0) {
+        LOG_ERROR(
+            "GLFW returned invalid window metrics: logical={}x{}, drawable={}x{}.",
+            logical_width,
+            logical_height,
+            drawable_width,
+            drawable_height
+        );
+        return {};
+    }
+
+    return Render::WindowFrameMetrics{
+        .logical_extent =
+            Extent2D(static_cast<uint32_t>(logical_width), static_cast<uint32_t>(logical_height)),
+        .drawable_extent = Extent2D(
+            static_cast<uint32_t>(drawable_width), static_cast<uint32_t>(drawable_height)
+        ),
+        .valid = true
+    };
 }
 
 void GLFWWindowImpl::SetTitle(WindowHandle* _window, const char* _new_title) {

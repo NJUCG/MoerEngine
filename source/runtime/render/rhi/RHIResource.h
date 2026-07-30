@@ -1395,9 +1395,10 @@ protected:
     Swapchain() : RHIResource(RRT_SWAPCHAIN) {};
 
 public:
-    virtual void Recreate(const SwapchainCreateInfo&) = 0;
-    virtual ~Swapchain()                              = default;
-    virtual void Sync()                               = 0;
+    [[nodiscard]] virtual bool Recreate(const SwapchainCreateInfo&) = 0;
+    virtual ~Swapchain()                                            = default;
+    virtual void Sync()                                             = 0;
+    [[nodiscard]] virtual bool IsPresentationReady() const noexcept = 0;
     [[nodiscard]] virtual WindowSurfaceIdentity GetCommittedSurfaceIdentity() const noexcept = 0;
 
 public:

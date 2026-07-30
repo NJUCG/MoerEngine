@@ -13,8 +13,9 @@ class UiFrameGraphPassTestAccess;
 
 /**
  * Owns the copied editor draw packet across RenderGraph recording and the
- * Executor-owned Present epilogue. The packet is immutable after capture; the
- * one-shot state protects the mutable ImGui GPU upload-ring backend.
+ * Executor-owned Present epilogue. The packet becomes immutable after RT
+ * presentation finalization and Prepare; the one-shot state protects the
+ * mutable ImGui GPU upload-ring backend.
  */
 class RENDER_API UiFrameGraphPass {
 public:

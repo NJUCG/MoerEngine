@@ -756,12 +756,13 @@ D3D12Device::PushSamplerDescriptor(std::span<const DescriptorIndex> _index_in_cp
 }
 
 D3D12Swapchain::D3D12Swapchain(D3D12Device& device, const SwapchainCreateInfo& info) : device(device) {
-    Recreate(info);
+    static_cast<void>(Recreate(info));
 }
 
-void D3D12Swapchain::Recreate(const SwapchainCreateInfo& _info) {
+bool D3D12Swapchain::Recreate(const SwapchainCreateInfo& _info) {
     (void)_info;
     FATAL("not implemented");
+    return false;
 }
 
 void D3D12Swapchain::Sync() {

@@ -40,8 +40,9 @@ public:
     friend VkCommandQueue;
     VkSwapchain(RenderDevice::Impl& _device, const SwapchainCreateInfo& _info);
     ~VkSwapchain();
-    void Recreate(const SwapchainCreateInfo& _info) override;
-    void CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate = false);
+    [[nodiscard]] bool Recreate(const SwapchainCreateInfo& _info) override;
+    [[nodiscard]] bool
+    CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate = false);
     AcquireResult AquireNextImage(
         VkSemaphore _ready_semaphore,
         uint64      _timeout = UINT64_MAX
@@ -55,6 +56,14 @@ public:
         uint64  _work_serial
     );
     void                                Sync() override;
+    [[nodiscard]] bool IsPresentationReady() const noexcept override {
+        return handle != VK_NULL_HANDLE &&
+               surface != VK_NULL_HANDLE &&
+               surface_info.IsValid() &&
+               surface_info.GetIdentity().IsValid() &&
+               size.x != 0 &&
+               size.y != 0;
+    }
     [[nodiscard]] WindowSurfaceIdentity GetCommittedSurfaceIdentity() const noexcept override {
         return surface_info.GetIdentity();
     }

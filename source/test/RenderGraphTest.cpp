@@ -4060,9 +4060,10 @@ public:
             ETextureUsageFlags::PRESENTATION_SOURCE |
             ETextureUsageFlags::TRANSFER_SRC |
             ETextureUsageFlags::TRANSFER_DST,
-        ETextureAspectFlags aspects = ETextureAspectFlags::COLOR
+        ETextureAspectFlags aspects = ETextureAspectFlags::COLOR,
+        Extent2D            extent  = Extent2D(64, 64)
     ) :
-        Texture(MakeInfo(usage, aspects)) {
+        Texture(MakeInfo(usage, aspects, extent)) {
         SetName(name);
     }
 
@@ -4077,18 +4078,51 @@ public:
 private:
     static Moer::Render::TextureInfo MakeInfo(
         ETextureUsageFlags  usage,
-        ETextureAspectFlags aspects
+        ETextureAspectFlags aspects,
+        Extent2D            extent
     ) {
         using namespace Moer::Render;
         TextureInfo info{};
         info.usage        = usage;
-        info.extent       = {64, 64};
+        info.extent       = extent;
         info.num_mips     = 1;
         info.array_size   = 1;
         info.format       = PF_R8G8B8A8_UNORM;
         info.aspect_flags = aspects;
         return info;
     }
+};
+
+class FakeUiSwapchain final : public Moer::Render::Swapchain {
+public:
+    FakeUiSwapchain(
+        Moer::Render::WindowSurfaceIdentity identity,
+        Extent2D                             extent,
+        bool                                 presentation_ready = true
+    ) :
+        identity(identity),
+        presentation_ready(presentation_ready) {
+        format = PF_R8G8B8A8_UNORM;
+        size   = extent;
+    }
+
+    [[nodiscard]] bool Recreate(const Moer::Render::SwapchainCreateInfo&) override {
+        return presentation_ready;
+    }
+    void Sync() override {}
+
+    [[nodiscard]] bool IsPresentationReady() const noexcept override {
+        return presentation_ready;
+    }
+
+    [[nodiscard]] Moer::Render::WindowSurfaceIdentity
+    GetCommittedSurfaceIdentity() const noexcept override {
+        return identity;
+    }
+
+private:
+    Moer::Render::WindowSurfaceIdentity identity{};
+    bool                                presentation_ready{true};
 };
 
 Moer::Render::UiDrawFramePacket MakeUiDrawPacket(
@@ -4107,6 +4141,300 @@ Moer::Render::UiDrawFramePacket MakeUiDrawPacket(
         packet.platform_viewports.emplace_back(std::move(platform));
     }
     return packet;
+}
+
+void TestUiDrawablePresentationContracts(TestSuite& suite) {
+    using namespace Moer;
+    using namespace Moer::Render;
+    constexpr std::string_view test_name =
+        "UI drawable presentation snapshot contract";
+
+    const WindowSurfaceIdentity identity{
+        .window_system          = EWindowSystemType::GLFW,
+        .window_system_handle   = 0x1000u,
+        .platform_window_handle = 0x2000u,
+        .generation             = 1,
+    };
+    const WindowSurfaceIdentity other_identity{
+        .window_system          = EWindowSystemType::GLFW,
+        .window_system_handle   = 0x3000u,
+        .platform_window_handle = 0x4000u,
+        .generation             = 1,
+    };
+    const WindowFrameSnapshot detached_frame{
+        .surface_identity     = identity,
+        .logical_extent       = {32, 32},
+        .drawable_extent      = {80, 80},
+        .last_drawable_extent = {80, 80},
+        .capture_sequence     = 1,
+        .drawable_generation  = 1,
+        .transition           = EWindowFrameTransition::Initial,
+    };
+    const UiViewportPresentationSnapshot committed_presentation{
+        .surface_identity    = identity,
+        .drawable_extent     = {64, 64},
+        .drawable_generation = 1,
+    };
+
+    TextureRef   framebuffer{MoerNew(FakeUiTexture)("DetachedFramebuffer")};
+    SwapchainRef matching_swapchain{
+        MoerNew(FakeUiSwapchain)(identity, Extent2D(64, 64))
+    };
+    UiViewportDrawPacket viewport{
+        .framebuffer  = framebuffer,
+        .swapchain    = matching_swapchain,
+        .window_frame = detached_frame,
+    };
+    BindUiViewportWindowFrame(viewport, detached_frame);
+    BindUiViewportPresentation(viewport, committed_presentation);
+    suite.Check(
+        IsUiViewportPresentationCurrent(viewport) &&
+            viewport.framebuffer_scale == float2(2.f, 2.f),
+        test_name,
+        "a committed 64x64 presentation for a raw 80x80 request was rejected or used raw scaling"
+    );
+
+    viewport.presentation.surface_identity = other_identity;
+    suite.Check(
+        !IsUiViewportPresentationCurrent(viewport),
+        test_name,
+        "a committed presentation with a different surface identity was accepted"
+    );
+
+    viewport.presentation = committed_presentation;
+    viewport.swapchain =
+        SwapchainRef{MoerNew(FakeUiSwapchain)(other_identity, Extent2D(64, 64))};
+    suite.Check(
+        !IsUiViewportPresentationCurrent(viewport),
+        test_name,
+        "a native swapchain with a different committed surface identity was accepted"
+    );
+
+    viewport.swapchain                         = matching_swapchain;
+    viewport.presentation                      = committed_presentation;
+    viewport.presentation.drawable_generation = 2;
+    suite.Check(
+        !IsUiViewportPresentationCurrent(viewport),
+        test_name,
+        "a committed presentation from a different drawable generation was accepted"
+    );
+
+    viewport.presentation = committed_presentation;
+    viewport.swapchain =
+        SwapchainRef{MoerNew(FakeUiSwapchain)(identity, Extent2D(64, 64), false)};
+    suite.Check(
+        !IsUiViewportPresentationCurrent(viewport),
+        test_name,
+        "a swapchain without a ready committed presentation was accepted"
+    );
+
+    viewport.swapchain = matching_swapchain;
+    viewport.presentation.drawable_extent = {32, 32};
+    suite.Check(
+        !IsUiViewportPresentationCurrent(viewport),
+        test_name,
+        "a committed drawable extent that differs from the native swapchain was accepted"
+    );
+
+    viewport.presentation = committed_presentation;
+    viewport.swapchain =
+        SwapchainRef{MoerNew(FakeUiSwapchain)(identity, Extent2D(32, 32))};
+    suite.Check(
+        !IsUiViewportPresentationCurrent(viewport),
+        test_name,
+        "a swapchain extent that differs from the drawable snapshot was accepted"
+    );
+
+    TextureRef small_framebuffer{MoerNew(FakeUiTexture)(
+        "SmallDetachedFramebuffer",
+        ETextureUsageFlags::SAMPLED |
+            ETextureUsageFlags::COLOR_ATTACHMENT |
+            ETextureUsageFlags::PRESENTATION_SOURCE |
+            ETextureUsageFlags::TRANSFER_SRC |
+            ETextureUsageFlags::TRANSFER_DST,
+        ETextureAspectFlags::COLOR,
+        Extent2D(32, 32)
+    )};
+    viewport.swapchain   = matching_swapchain;
+    viewport.framebuffer = small_framebuffer;
+    suite.Check(
+        !IsUiViewportPresentationCurrent(viewport),
+        test_name,
+        "a framebuffer extent that differs from the committed swapchain was accepted"
+    );
+
+    viewport.framebuffer  = framebuffer;
+    viewport.presentation = committed_presentation;
+    UiDrawFramePacket draw_frame{};
+    draw_frame.platform_viewports.emplace_back(std::move(viewport));
+    UiCompositionFrameData composition{
+        .enabled                = true,
+        .separate_window        = true,
+        .output_resolution      = {32, 32},
+        .scene_color_position   = {3.f, 5.f},
+        .scene_color_resolution = {10.f, 12.f},
+        .window_frame_buffer    = framebuffer,
+    };
+    suite.Check(
+        ResolveUiCompositionDrawableMetrics(
+            composition,
+            {},
+            draw_frame
+        ) &&
+            composition.output_resolution == uint2(64, 64) &&
+            composition.scene_color_position == float2(6.f, 10.f) &&
+            composition.scene_color_resolution == float2(20.f, 24.f),
+        test_name,
+        "detached composition did not use the committed actual extent and 2x drawable scale"
+    );
+
+    UiClipRect detached_clip{
+        .min = {11.f, 21.f},
+        .max = {21.f, 31.f},
+    };
+    suite.Check(
+        ConvertUiClipRectToDrawable(
+            detached_clip,
+            float2(10.f, 20.f),
+            draw_frame.platform_viewports.front().framebuffer_scale
+        ) &&
+            detached_clip.min == float2(2.f, 2.f) &&
+            detached_clip.max == float2(22.f, 22.f),
+        test_name,
+        "detached clip conversion used an assumed main-window 1x scale instead of its 2x scale"
+    );
+
+    UiViewportDrawPacket main_viewport{};
+    main_viewport.commands.emplace_back(UiDrawCommand{
+        .clip_min = {4.f, 8.f},
+        .clip_max = {12.f, 16.f},
+    });
+    BindUiViewportWindowFrame(main_viewport, detached_frame);
+    UiCompositionFrameData main_composition{
+        .enabled                = true,
+        .separate_window        = false,
+        .scene_extent_resolved  = true,
+        .output_resolution      = {80, 80},
+        .scene_color_position   = {10.f, 20.f},
+        .scene_color_resolution = {40.f, 20.f},
+    };
+    const bool main_retargeted = RetargetMainUiPresentation(
+        main_viewport,
+        main_composition,
+        detached_frame,
+        Extent2D(64, 64)
+    );
+    UiClipRect main_committed_clip{
+        .min = main_viewport.commands.front().clip_min,
+        .max = main_viewport.commands.front().clip_max,
+    };
+    const bool main_clip_resolved = ConvertUiClipRectToDrawable(
+        main_committed_clip,
+        float2(0.f, 0.f),
+        main_viewport.framebuffer_scale
+    );
+    suite.Check(
+        main_retargeted &&
+            main_clip_resolved &&
+            main_viewport.presentation.drawable_extent == Extent2D(64, 64) &&
+            main_viewport.framebuffer_scale == float2(2.f, 2.f) &&
+            main_viewport.commands.front().clip_min == float2(4.f, 8.f) &&
+            main_viewport.commands.front().clip_max == float2(12.f, 16.f) &&
+            main_committed_clip.min == float2(8.f, 16.f) &&
+            main_committed_clip.max == float2(24.f, 32.f) &&
+            main_composition.output_resolution == uint2(64, 64) &&
+            main_composition.scene_color_position == float2(8.f, 16.f) &&
+            main_composition.scene_color_resolution == float2(32.f, 16.f),
+        test_name,
+        "main UI was not retargeted from raw 80x80 into the committed 64x64 presentation domain"
+    );
+
+    auto& minimized_viewport = draw_frame.platform_viewports.front();
+    WindowFrameSnapshot minimized_frame = detached_frame;
+    minimized_frame.drawable_extent      = {0, 0};
+    minimized_frame.last_drawable_extent = detached_frame.last_drawable_extent;
+    minimized_frame.capture_sequence     = 2;
+    minimized_frame.transition           = EWindowFrameTransition::Minimized;
+    BindUiViewportWindowFrame(minimized_viewport, minimized_frame);
+    BindUiViewportPresentation(minimized_viewport, committed_presentation);
+    minimized_viewport.presentation_metadata_only = true;
+    suite.Check(
+        minimized_viewport.window_frame.GetStableDrawableExtent() ==
+                detached_frame.last_drawable_extent &&
+            IsUiViewportPresentationCommitted(minimized_viewport) &&
+            !IsUiViewportPresentationCurrent(minimized_viewport),
+        test_name,
+        "a minimized snapshot did not retain its committed detached presentation"
+    );
+
+    UiCompositionFrameData minimized_composition{
+        .enabled                = true,
+        .separate_window        = true,
+        .output_resolution      = {80, 80},
+        .scene_color_position   = {3.f, 5.f},
+        .scene_color_resolution = {10.f, 12.f},
+        .window_frame_buffer    = framebuffer,
+    };
+    suite.Check(
+        ResolveUiCompositionDrawableMetrics(
+            minimized_composition,
+            {},
+            draw_frame
+        ) &&
+            !minimized_composition.enabled &&
+            minimized_composition.scene_extent_resolved &&
+            !minimized_composition.window_frame_buffer &&
+            minimized_composition.output_resolution == uint2(64, 64) &&
+            minimized_composition.scene_color_position == float2(6.f, 10.f) &&
+            minimized_composition.scene_color_resolution == float2(20.f, 24.f),
+        test_name,
+        "minimization did not preserve scene extent as metadata-only composition state"
+    );
+
+    WindowFrameSnapshot invalid_frame = minimized_frame;
+    invalid_frame.capture_sequence     = 3;
+    invalid_frame.transition           = EWindowFrameTransition::Invalid;
+    BindUiViewportWindowFrame(minimized_viewport, invalid_frame);
+    BindUiViewportPresentation(minimized_viewport, committed_presentation);
+    UiCompositionFrameData invalid_composition{
+        .enabled             = true,
+        .separate_window     = true,
+        .window_frame_buffer = framebuffer,
+    };
+    suite.Check(
+        !IsUiViewportPresentationCommitted(minimized_viewport) &&
+            !IsUiViewportPresentationCurrent(minimized_viewport) &&
+            !ResolveUiCompositionDrawableMetrics(
+                invalid_composition,
+                {},
+                draw_frame
+            ),
+        test_name,
+        "an invalid detached snapshot reused a committed presentation"
+    );
+
+    WindowFrameSnapshot replaced_generation_frame = detached_frame;
+    replaced_generation_frame.capture_sequence     = 4;
+    replaced_generation_frame.drawable_generation  = 2;
+    replaced_generation_frame.transition           = EWindowFrameTransition::Replaced;
+    BindUiViewportWindowFrame(minimized_viewport, replaced_generation_frame);
+    BindUiViewportPresentation(minimized_viewport, committed_presentation);
+    UiCompositionFrameData replaced_composition{
+        .enabled             = true,
+        .separate_window     = true,
+        .window_frame_buffer = framebuffer,
+    };
+    suite.Check(
+        !IsUiViewportPresentationCommitted(minimized_viewport) &&
+            !IsUiViewportPresentationCurrent(minimized_viewport) &&
+            !ResolveUiCompositionDrawableMetrics(
+                replaced_composition,
+                {},
+                draw_frame
+            ),
+        test_name,
+        "a replaced detached generation reused the prior committed presentation"
+    );
 }
 
 void TestRasterStyleUiSlotClaimTracksNativeAcceptance(TestSuite& suite) {
@@ -4402,6 +4730,7 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
     TextureRef main_output(MoerNew(FakeUiTexture)("MainOutput"));
     TextureRef window_output(MoerNew(FakeUiTexture)("SceneWindow"));
     TextureRef platform_output(MoerNew(FakeUiTexture)("PlatformOutput"));
+    TextureRef metadata_output(MoerNew(FakeUiTexture)("MetadataOnlyOutput"));
 
     auto shared_slots = Moer::MakeShared<FakeUiViewportResources>(5);
     auto platform_slots = Moer::MakeShared<FakeUiViewportResources>(9);
@@ -4411,17 +4740,22 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
     draw_frame.main_viewport.render_resources = shared_slots;
     draw_frame.main_viewport.commands.emplace_back();
 
-    const auto append_platform = [&](TextureRef framebuffer,
-                                     Moer::SharedPtr<FakeUiViewportResources> slots) {
+    const auto append_platform = [&](
+                                     TextureRef framebuffer,
+                                     Moer::SharedPtr<FakeUiViewportResources> slots,
+                                     bool metadata_only = false
+                                 ) {
         UiViewportDrawPacket viewport{};
-        viewport.framebuffer      = std::move(framebuffer);
-        viewport.render_resources = std::move(slots);
+        viewport.framebuffer                 = std::move(framebuffer);
+        viewport.render_resources            = std::move(slots);
+        viewport.presentation_metadata_only  = metadata_only;
         viewport.commands.emplace_back();
         draw_frame.platform_viewports.emplace_back(std::move(viewport));
     };
     append_platform(main_output, shared_slots);
     append_platform(window_output, shared_slots);
     append_platform(platform_output, platform_slots);
+    append_platform(metadata_output, platform_slots, true);
 
     UiCompositionFrameData composition{
         .enabled                 = true,
@@ -4448,11 +4782,15 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
         linear_shared_slots;
     linear_draw_frame.main_viewport.commands.emplace_back();
     const auto append_linear_platform =
-        [&](TextureRef framebuffer,
-            Moer::SharedPtr<FakeUiViewportResources> slots) {
+        [&](
+            TextureRef framebuffer,
+            Moer::SharedPtr<FakeUiViewportResources> slots,
+            bool metadata_only = false
+        ) {
             UiViewportDrawPacket viewport{};
-            viewport.framebuffer      = std::move(framebuffer);
-            viewport.render_resources = std::move(slots);
+            viewport.framebuffer                = std::move(framebuffer);
+            viewport.render_resources           = std::move(slots);
+            viewport.presentation_metadata_only = metadata_only;
             viewport.commands.emplace_back();
             linear_draw_frame.platform_viewports.emplace_back(
                 std::move(viewport)
@@ -4461,6 +4799,7 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
     append_linear_platform(main_output, linear_shared_slots);
     append_linear_platform(window_output, linear_shared_slots);
     append_linear_platform(platform_output, linear_platform_slots);
+    append_linear_platform(metadata_output, linear_platform_slots, true);
     auto linear_prepared = UiFrameGraphPass::Prepare(
         UiCompositionFrameData{
             .enabled                = true,
@@ -7083,6 +7422,7 @@ int main() {
     TestSuite suite;
     TestStableSerialCallbackOrder(suite);
     TestPassCompletionObserverRunsAfterEachCallback(suite);
+    TestUiDrawablePresentationContracts(suite);
     TestRasterStyleUiSlotClaimTracksNativeAcceptance(suite);
     TestUiPreparedFrameLifecycleIsOneShot(suite);
     TestUiFrameGraphTailContract(suite);

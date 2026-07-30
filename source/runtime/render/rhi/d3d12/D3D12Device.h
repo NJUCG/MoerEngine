@@ -1065,8 +1065,11 @@ public:
     D3D12Swapchain(D3D12Device& device, const SwapchainCreateInfo& info);
     ~D3D12Swapchain() = default;
 
-    void Recreate(const SwapchainCreateInfo&) override;
+    [[nodiscard]] bool Recreate(const SwapchainCreateInfo&) override;
     void Sync() override;
+    [[nodiscard]] bool IsPresentationReady() const noexcept override {
+        return false;
+    }
     [[nodiscard]] WindowSurfaceIdentity GetCommittedSurfaceIdentity() const noexcept override {
         return {};
     }

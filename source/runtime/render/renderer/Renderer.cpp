@@ -159,27 +159,15 @@ void Renderer::ReleaseResources() {
     RenderGraphResourcePool::Global().Reset();
 }
 
-Renderer::WindowFrameState Renderer::TickWindowContext(uint2 current_resolution) {
+WindowFrameSnapshot Renderer::TickWindowContext() {
     WindowContext::Tick();
-
-    int w_width, w_height;
-    WindowContext::GetWindowSize(WindowContext::GetMainWindow(), &w_width, &w_height);
-    if (w_width == 0 || w_height == 0) {
-        return WindowFrameState{EWindowState::Hiding, current_resolution};
-    }
-
-    if (w_width != current_resolution.x || w_height != current_resolution.y) {
-        return WindowFrameState{
-            EWindowState::SizeChanged, uint2(static_cast<uint32>(w_width), static_cast<uint32>(w_height))
-        };
-    }
-
-    return WindowFrameState{EWindowState::Default, current_resolution};
+    return main_window_frame_tracker.Advance(
+        swapchain_create_info.surface.GetIdentity(),
+        WindowContext::CaptureWindowFrameMetrics(*WindowContext::GetMainWindow())
+    );
 }
 
-void Renderer::PrepareRenderFrame(const WindowFrameState& window_frame) {
-    resolution = window_frame.resolution;
-
+bool Renderer::PrepareRenderFrame(const WindowFrameSnapshot& window_frame) {
     if (time >= max_frame_in_flight) {
         timeline->Wait(time - max_frame_in_flight);
     }
@@ -187,23 +175,45 @@ void Renderer::PrepareRenderFrame(const WindowFrameState& window_frame) {
 
     const bool recreate_requested =
         main_swapchain_recreate_requested.exchange(false, std::memory_order_acq_rel);
-    if (window_frame.state == EWindowState::Hiding) {
-        if (recreate_requested) {
+    const bool presentation_ready =
+        swapchain && swapchain->IsPresentationReady();
+    if (!window_frame.IsDrawable()) {
+        if (recreate_requested || !presentation_ready) {
             // A zero-extent swapchain cannot be recreated. Preserve the WSI
             // recovery request until the window has a drawable extent again.
             main_swapchain_recreate_requested.store(true, std::memory_order_release);
         }
-        return;
+        return false;
+    }
+    if (!swapchain) {
+        main_swapchain_recreate_requested.store(true, std::memory_order_release);
+        return false;
     }
 
-    if (window_frame.state != EWindowState::SizeChanged && !recreate_requested) {
-        return;
+    const Extent2D drawable_extent = window_frame.drawable_extent;
+    const bool request_matches =
+        presentation_ready &&
+        committed_main_surface_identity == window_frame.surface_identity &&
+        committed_main_drawable_generation == window_frame.drawable_generation;
+    if (request_matches && !recreate_requested) {
+        resolution = uint2(swapchain->size.x, swapchain->size.y);
+        return true;
     }
 
     RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    swapchain_create_info.size = {resolution.x, resolution.y};
+    swapchain_create_info.size = drawable_extent;
     swapchain->Sync();
-    swapchain->Recreate(swapchain_create_info);
+    const bool recreated = swapchain->Recreate(swapchain_create_info);
+    if (!recreated ||
+        !swapchain->IsPresentationReady() ||
+        swapchain->GetCommittedSurfaceIdentity() != window_frame.surface_identity) {
+        main_swapchain_recreate_requested.store(true, std::memory_order_release);
+        return false;
+    }
+    committed_main_surface_identity       = window_frame.surface_identity;
+    committed_main_drawable_generation   = window_frame.drawable_generation;
+    resolution = uint2(swapchain->size.x, swapchain->size.y);
+    return true;
 }
 
 void Renderer::LogSceneLoadStatus(const EditorConfig& config) const {

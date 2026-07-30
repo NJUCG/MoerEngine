@@ -274,8 +274,17 @@ public:
         size   = Extent2D(4, 4);
     }
 
-    void Recreate(const SwapchainCreateInfo&) override {}
+    [[nodiscard]] bool Recreate(const SwapchainCreateInfo& info) override {
+        if (info.size.x == 0 || info.size.y == 0) {
+            return false;
+        }
+        size = info.size;
+        return IsPresentationReady();
+    }
     void Sync() override {}
+    [[nodiscard]] bool IsPresentationReady() const noexcept override {
+        return size.x != 0 && size.y != 0;
+    }
     [[nodiscard]] WindowSurfaceIdentity GetCommittedSurfaceIdentity() const noexcept override {
         return {};
     }

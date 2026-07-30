@@ -4,6 +4,7 @@
 #include "RenderAPI.h"
 
 #include "rhi/RHIWindowSurface.h"
+#include "window/WindowFrameSnapshot.h"
 #include <functional>
 
 namespace Moer {
@@ -69,7 +70,9 @@ public:
     static void Tick();
     static void ShutDown();
     //new support for multi window
-    static void          GetWindowSize(WindowHandle*, int* width, int* height);
+    // Captures logical and drawable extents together on the Game Thread.
+    // Render/RHI code consumes the returned value and never queries GLFW.
+    static Render::WindowFrameMetrics CaptureWindowFrameMetrics(const WindowHandle&);
     static void          SetFocusMode(WindowHandle*, bool focused);
     static bool          GetFocusMode(WindowHandle*);
     static WindowHandle* GetMainWindow();

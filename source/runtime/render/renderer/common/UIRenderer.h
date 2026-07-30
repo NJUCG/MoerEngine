@@ -6,6 +6,7 @@
 #include "RenderAPI.h"
 #include "misc/STL.h"
 #include "rhi/RHI.h"
+#include "window/WindowFrameSnapshot.h"
 #include <atomic>
 #include <cstdint>
 #include <limits>
@@ -15,8 +16,9 @@ namespace Moer::Render {
 class UiDrawFrameBackend;
 
 struct UiCompositionFrameData {
-    bool       enabled         = false;
-    bool       separate_window = false;
+    bool       enabled               = false;
+    bool       separate_window       = false;
+    bool       scene_extent_resolved = false;
     uint2      output_resolution{};
     float2     scene_color_position{};
     float2     scene_color_resolution{};
@@ -53,12 +55,32 @@ struct UiDrawVertex {
 using UiDrawIndex = uint16;
 
 struct UiDrawCommand {
+    // Viewport-local logical coordinates. The execution target's immutable
+    // framebuffer scale is applied only when the RT builds the native batch.
     float2 clip_min{};
     float2 clip_max{};
     uint32 texture_handle = 0;
     uint32 element_count  = 0;
     uint32 vertex_offset  = 0;
     uint32 index_offset   = 0;
+};
+
+struct UiClipRect {
+    float2 min{};
+    float2 max{};
+};
+
+struct UiViewportPresentationSnapshot {
+    WindowSurfaceIdentity surface_identity{};
+    Extent2D              drawable_extent{};
+    uint64_t              drawable_generation = 0;
+
+    [[nodiscard]] bool IsValid() const noexcept {
+        return surface_identity.IsValid() &&
+               drawable_extent.x != 0 &&
+               drawable_extent.y != 0 &&
+               drawable_generation != 0;
+    }
 };
 
 struct UiViewportDrawPacket {
@@ -77,6 +99,9 @@ struct UiViewportDrawPacket {
     SharedPtr<UiViewportRenderResources> render_resources;
     TextureRef                           framebuffer;
     SwapchainRef                         swapchain;
+    WindowFrameSnapshot                  window_frame;
+    UiViewportPresentationSnapshot       presentation;
+    bool                                 presentation_metadata_only = false;
 };
 
 struct UiDrawFramePacket {
@@ -94,6 +119,39 @@ struct UiDrawFramePacket {
 
 static_assert(std::is_move_constructible_v<UiDrawFramePacket>);
 static_assert(!std::is_copy_constructible_v<UiDrawFramePacket>);
+
+// Converts editor/ImGui logical coordinates to the drawable pixel domain used
+// by the selected main or detached presentation target.
+[[nodiscard]] RENDER_API bool ResolveUiCompositionDrawableMetrics(
+    UiCompositionFrameData&      composition,
+    const WindowFrameSnapshot&   main_window_frame,
+    const UiDrawFramePacket&     draw_frame
+) noexcept;
+RENDER_API void BindUiViewportWindowFrame(
+    UiViewportDrawPacket&      viewport,
+    const WindowFrameSnapshot& window_frame
+) noexcept;
+RENDER_API void BindUiViewportPresentation(
+    UiViewportDrawPacket&                 viewport,
+    const UiViewportPresentationSnapshot& presentation
+) noexcept;
+// Finalizes the main-window presentation scale and retargets composition
+// metrics from the captured raw drawable domain to the RT-committed extent.
+[[nodiscard]] RENDER_API bool RetargetMainUiPresentation(
+    UiViewportDrawPacket&      main_viewport,
+    UiCompositionFrameData&    composition,
+    const WindowFrameSnapshot& window_frame,
+    Extent2D                   committed_extent
+) noexcept;
+[[nodiscard]] RENDER_API bool ConvertUiClipRectToDrawable(
+    UiClipRect&   clip_rect,
+    const float2& display_position,
+    const float2& framebuffer_scale
+) noexcept;
+[[nodiscard]] RENDER_API bool
+IsUiViewportPresentationCommitted(const UiViewportDrawPacket& viewport) noexcept;
+[[nodiscard]] RENDER_API bool
+IsUiViewportPresentationCurrent(const UiViewportDrawPacket& viewport) noexcept;
 
 /**
  * Freezes the speculative upload-ring slots used by one copied UI frame.

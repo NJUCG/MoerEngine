@@ -5,6 +5,193 @@
 #include "rhi/RHI.h"
 
 namespace Moer::Render {
+void BindUiViewportWindowFrame(
+    UiViewportDrawPacket&      viewport,
+    const WindowFrameSnapshot& window_frame
+) noexcept {
+    viewport.window_frame = window_frame;
+    if (!window_frame.IsDrawable() ||
+        window_frame.logical_extent.x == 0 ||
+        window_frame.logical_extent.y == 0) {
+        return;
+    }
+    viewport.framebuffer_scale = float2(
+        static_cast<float>(window_frame.drawable_extent.x) /
+            static_cast<float>(window_frame.logical_extent.x),
+        static_cast<float>(window_frame.drawable_extent.y) /
+            static_cast<float>(window_frame.logical_extent.y)
+    );
+}
+
+void BindUiViewportPresentation(
+    UiViewportDrawPacket&                 viewport,
+    const UiViewportPresentationSnapshot& presentation
+) noexcept {
+    viewport.presentation = presentation;
+    if (!presentation.IsValid() ||
+        !viewport.window_frame.IsValid() ||
+        presentation.surface_identity != viewport.window_frame.surface_identity ||
+        presentation.drawable_generation != viewport.window_frame.drawable_generation ||
+        viewport.window_frame.logical_extent.x == 0 ||
+        viewport.window_frame.logical_extent.y == 0) {
+        return;
+    }
+    viewport.framebuffer_scale = float2(
+        static_cast<float>(presentation.drawable_extent.x) /
+            static_cast<float>(viewport.window_frame.logical_extent.x),
+        static_cast<float>(presentation.drawable_extent.y) /
+            static_cast<float>(viewport.window_frame.logical_extent.y)
+    );
+}
+
+bool RetargetMainUiPresentation(
+    UiViewportDrawPacket&      main_viewport,
+    UiCompositionFrameData&    composition,
+    const WindowFrameSnapshot& window_frame,
+    Extent2D                   committed_extent
+) noexcept {
+    if (!window_frame.IsDrawable() ||
+        window_frame.logical_extent.x == 0 ||
+        window_frame.logical_extent.y == 0 ||
+        committed_extent.x == 0 ||
+        committed_extent.y == 0 ||
+        window_frame.drawable_generation == 0) {
+        return false;
+    }
+    if (main_viewport.presentation.IsValid() &&
+        main_viewport.presentation.surface_identity == window_frame.surface_identity &&
+        main_viewport.presentation.drawable_generation == window_frame.drawable_generation &&
+        main_viewport.presentation.drawable_extent == committed_extent) {
+        return true;
+    }
+
+    const float2 committed_to_raw_scale(
+        static_cast<float>(committed_extent.x) /
+            static_cast<float>(window_frame.drawable_extent.x),
+        static_cast<float>(committed_extent.y) /
+            static_cast<float>(window_frame.drawable_extent.y)
+    );
+
+    BindUiViewportWindowFrame(main_viewport, window_frame);
+    BindUiViewportPresentation(
+        main_viewport,
+        UiViewportPresentationSnapshot{
+            .surface_identity    = window_frame.surface_identity,
+            .drawable_extent     = committed_extent,
+            .drawable_generation = window_frame.drawable_generation,
+        }
+    );
+
+    if (composition.scene_extent_resolved && !composition.separate_window) {
+        composition.output_resolution = uint2(committed_extent.x, committed_extent.y);
+        composition.scene_color_position.x *= committed_to_raw_scale.x;
+        composition.scene_color_position.y *= committed_to_raw_scale.y;
+        composition.scene_color_resolution.x *= committed_to_raw_scale.x;
+        composition.scene_color_resolution.y *= committed_to_raw_scale.y;
+    }
+    return true;
+}
+
+bool ConvertUiClipRectToDrawable(
+    UiClipRect&   clip_rect,
+    const float2& display_position,
+    const float2& framebuffer_scale
+) noexcept {
+    if (framebuffer_scale.x <= 0.f || framebuffer_scale.y <= 0.f) {
+        return false;
+    }
+    clip_rect.min.x = (clip_rect.min.x - display_position.x) * framebuffer_scale.x;
+    clip_rect.min.y = (clip_rect.min.y - display_position.y) * framebuffer_scale.y;
+    clip_rect.max.x = (clip_rect.max.x - display_position.x) * framebuffer_scale.x;
+    clip_rect.max.y = (clip_rect.max.y - display_position.y) * framebuffer_scale.y;
+    return clip_rect.max.x > clip_rect.min.x && clip_rect.max.y > clip_rect.min.y;
+}
+
+bool IsUiViewportPresentationCommitted(const UiViewportDrawPacket& viewport) noexcept {
+    if (!viewport.window_frame.IsValid() ||
+        !viewport.presentation.IsValid() ||
+        !viewport.framebuffer ||
+        !viewport.swapchain ||
+        !viewport.swapchain->IsPresentationReady()) {
+        return false;
+    }
+    const auto framebuffer_extent = viewport.framebuffer->GetExtent();
+    return viewport.presentation.surface_identity == viewport.window_frame.surface_identity &&
+           viewport.presentation.drawable_generation ==
+               viewport.window_frame.drawable_generation &&
+           viewport.swapchain->GetCommittedSurfaceIdentity() ==
+               viewport.presentation.surface_identity &&
+           viewport.swapchain->size == viewport.presentation.drawable_extent &&
+           framebuffer_extent.x == viewport.presentation.drawable_extent.x &&
+           framebuffer_extent.y == viewport.presentation.drawable_extent.y;
+}
+
+bool IsUiViewportPresentationCurrent(const UiViewportDrawPacket& viewport) noexcept {
+    return !viewport.presentation_metadata_only &&
+           viewport.window_frame.IsDrawable() &&
+           IsUiViewportPresentationCommitted(viewport);
+}
+
+bool ResolveUiCompositionDrawableMetrics(
+    UiCompositionFrameData&    composition,
+    const WindowFrameSnapshot& main_window_frame,
+    const UiDrawFramePacket&   draw_frame
+) noexcept {
+    composition.scene_extent_resolved = false;
+    if (!composition.enabled) {
+        return true;
+    }
+
+    const WindowFrameSnapshot* target_frame        = &main_window_frame;
+    Extent2D                   target_extent       = main_window_frame.drawable_extent;
+    float2                     drawable_scale{};
+    bool                       target_metadata_only = false;
+    if (composition.separate_window) {
+        target_frame = nullptr;
+        if (!composition.window_frame_buffer) {
+            return false;
+        }
+        for (const UiViewportDrawPacket& viewport : draw_frame.platform_viewports) {
+            if (viewport.framebuffer.Get() == composition.window_frame_buffer.Get()) {
+                if (!IsUiViewportPresentationCommitted(viewport)) {
+                    return false;
+                }
+                target_frame = &viewport.window_frame;
+                target_extent = viewport.presentation.drawable_extent;
+                drawable_scale = viewport.framebuffer_scale;
+                target_metadata_only = viewport.presentation_metadata_only;
+                break;
+            }
+        }
+    }
+
+    if (target_frame == nullptr || !target_frame->IsValid() ||
+        (!composition.separate_window && !target_frame->IsDrawable()) ||
+        target_frame->logical_extent.x == 0 || target_frame->logical_extent.y == 0) {
+        return false;
+    }
+
+    if (!composition.separate_window) {
+        drawable_scale = float2(
+            static_cast<float>(target_extent.x) /
+                static_cast<float>(target_frame->logical_extent.x),
+            static_cast<float>(target_extent.y) /
+                static_cast<float>(target_frame->logical_extent.y)
+        );
+    }
+    composition.output_resolution = uint2(target_extent.x, target_extent.y);
+    composition.scene_color_position.x *= drawable_scale.x;
+    composition.scene_color_position.y *= drawable_scale.y;
+    composition.scene_color_resolution.x *= drawable_scale.x;
+    composition.scene_color_resolution.y *= drawable_scale.y;
+    composition.scene_extent_resolved = true;
+    if (target_metadata_only) {
+        composition.enabled             = false;
+        composition.window_frame_buffer = nullptr;
+    }
+    return true;
+}
+
 UiDrawFrameSlotClaim::UiDrawFrameSlotClaim(UiDrawFramePacket& frame) {
     slots.reserve(frame.platform_viewports.size() + 1);
     Freeze(frame.main_viewport);
