@@ -333,8 +333,12 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
     {
         ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.window_ms);
         LogSceneLoadStatus(*editor_config);
-        frame_packet.window = TickWindowContext(editor_config->GetResolution());
-        editor_config->SetResolution(frame_packet.window.resolution);
+        frame_packet.window = TickWindowContext();
+        const uint2 stable_drawable_resolution =
+            frame_packet.window.GetStableDrawableResolution();
+        if (stable_drawable_resolution.x != 0 && stable_drawable_resolution.y != 0) {
+            editor_config->SetResolution(stable_drawable_resolution);
+        }
     }
 
     {
@@ -428,30 +432,42 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
     }
 
     {
-        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.ui_composition_ms);
-        if (hooks.on_capture_ui_composition) {
-            frame_packet.ui_composition = hooks.on_capture_ui_composition();
-        }
-        frame_packet.scene_render_extent = CaptureSceneRenderExtentRequest(
-            frame_packet.ui_composition.enabled,
-            frame_packet.ui_composition.scene_color_resolution,
-            frame_packet.window.resolution
-        );
-    }
-    {
         ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.ui_draw_packet_ms);
         if (hooks.on_capture_ui_draw_frame) {
             frame_packet.ui_draw_frame = hooks.on_capture_ui_draw_frame();
         }
+        BindUiViewportWindowFrame(
+            frame_packet.ui_draw_frame.main_viewport,
+            frame_packet.window
+        );
         CaptureFramePrepareUiWorkload(prepare_workload, frame_packet.ui_draw_frame);
+    }
+    {
+        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.ui_composition_ms);
+        if (hooks.on_capture_ui_composition) {
+            frame_packet.ui_composition = hooks.on_capture_ui_composition();
+        }
+        if (!ResolveUiCompositionDrawableMetrics(
+                frame_packet.ui_composition,
+                frame_packet.window,
+                frame_packet.ui_draw_frame
+            )) {
+            frame_packet.ui_composition.enabled             = false;
+            frame_packet.ui_composition.window_frame_buffer = nullptr;
+        }
+        frame_packet.scene_render_extent = CaptureSceneRenderExtentRequest(
+            frame_packet.ui_composition.scene_extent_resolved,
+            frame_packet.ui_composition.scene_color_resolution,
+            frame_packet.window.GetStableDrawableResolution()
+        );
     }
 
     if (frame_packet.frame_id == 0) {
         LOG_INFO(
             "[Threading] RasterFramePacket boundary active; resolution={}x{}, UI main vertices={}, "
             "platform viewports={}.",
-            frame_packet.window.resolution.x,
-            frame_packet.window.resolution.y,
+            frame_packet.window.GetStableDrawableResolution().x,
+            frame_packet.window.GetStableDrawableResolution().y,
             frame_packet.ui_draw_frame.main_viewport.vertices.size(),
             frame_packet.ui_draw_frame.platform_viewports.size()
         );
@@ -519,16 +535,33 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     uint64 tail_source_order         = 1;
 
     auto& raster_context = *raster_context_ptr;
+    bool  main_presentation_current =
+        PrepareRenderFrame(frame_packet.window);
+    if (main_presentation_current) {
+        main_presentation_current = RetargetMainUiPresentation(
+            frame_packet.ui_draw_frame.main_viewport,
+            frame_packet.ui_composition,
+            frame_packet.window,
+            Extent2D(resolution.x, resolution.y)
+        );
+        frame_packet.scene_render_extent = CaptureSceneRenderExtentRequest(
+            frame_packet.ui_composition.scene_extent_resolved,
+            frame_packet.ui_composition.scene_color_resolution,
+            resolution
+        );
+    }
     auto scene_extent_request = frame_packet.scene_render_extent;
     // An OS-window resize already requires a presentation rebuild. Accept the
     // matching SceneColor layout immediately so the two resource domains move
     // together; dock-only drags retain the two-observation debounce.
-    if (frame_packet.window.state == EWindowState::SizeChanged && scene_extent_request.valid) {
+    if (frame_packet.window.IsDrawable() &&
+        frame_packet.window.transition != EWindowFrameTransition::Stable &&
+        frame_packet.window.transition != EWindowFrameTransition::LogicalResized &&
+        scene_extent_request.valid) {
         scene_extent_request.immediate = true;
     }
     (void)scene_render_extent_tracker.Observe(scene_extent_request);
     raster_context.BeginSceneFrame(frame_packet.scene_updates);
-    PrepareRenderFrame(frame_packet.window);
 
     if (time == 0) {
         const uint32_t frame_thread_id = IsCurrentlyRenderThread() ? GetRenderThreadId() : GetGameThreadId();
@@ -542,22 +575,21 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     bool              skip_present = false;
     bool              split_graph_profiling_frame = false;
     PresentReceiptRef main_present_receipt{};
-    if (frame_packet.window.state == EWindowState::Hiding) {
+    if (!main_presentation_current ||
+        !frame_packet.window.IsDrawable() ||
+        !swapchain ||
+        !swapchain->IsPresentationReady()) {
         // 窗口最小化后无法 present，此处主动让出线程，避免高频空转。
         std::this_thread::yield();
         skip_present = true;
-    } else {
-        assert(
-            frame_packet.window.state == EWindowState::Default ||
-            frame_packet.window.state == EWindowState::SizeChanged
-        );
     }
 
-    const uint2 active_scene_extent = scene_render_extent_tracker.GetActiveExtent();
+    const uint2 active_scene_extent      = scene_render_extent_tracker.GetActiveExtent();
+    const uint2 presentation_resolution = resolution;
     const bool  recreate_scene_resources =
         !EqualRenderExtent(raster_context.GetResolution(), active_scene_extent);
     const bool recreate_output_resources =
-        !EqualRenderExtent(raster_context.GetOutputResolution(), frame_packet.window.resolution);
+        !EqualRenderExtent(raster_context.GetOutputResolution(), presentation_resolution);
 
     const bool recreate_frame_resources =
         !skip_present && (recreate_scene_resources || recreate_output_resources);
@@ -570,7 +602,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         );
         raster_context.CreateFrameBuffers(
             active_scene_extent,
-            frame_packet.window.resolution,
+            presentation_resolution,
             recreate_scene_resources,
             recreate_output_resources
         );
@@ -1288,11 +1320,11 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         default_output_texture = ui_combine_pass->Process(
                             cmd_list,
                             true,
-                            frame_packet.window.resolution,
+                            presentation_resolution,
                             float2(0.f, 0.f),
                             float2(
-                                static_cast<float>(frame_packet.window.resolution.x),
-                                static_cast<float>(frame_packet.window.resolution.y)
+                                static_cast<float>(presentation_resolution.x),
+                                static_cast<float>(presentation_resolution.y)
                             ),
                             TextureView(raster_context.textures.output.tex),
                             processing_image.tex,
@@ -1766,7 +1798,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
     if (!skip_present) {
         const auto output_view = default_output_texture->GetView();
-        if (frame_packet.window.state == EWindowState::SizeChanged) {
+        if (frame_packet.window.transition != EWindowFrameTransition::Stable &&
+            frame_packet.window.transition != EWindowFrameTransition::LogicalResized) {
             LOG_INFO(
                 "[Threading][Resize] Main present source={}x{}, swapchain={}x{}, UI platform viewports={}.",
                 output_view.extent.x,

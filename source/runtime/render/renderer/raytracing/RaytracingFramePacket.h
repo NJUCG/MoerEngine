@@ -25,7 +25,7 @@ struct RaytracingFramePacket {
 
     uint64 frame_id = 0;
 
-    Renderer::WindowFrameState   window{};
+    WindowFrameSnapshot          window{};
     RaytracingConfig             config{};
     SceneUpdateBatch             scene_updates{};
     RaytracingSceneFrameSnapshot scene_snapshot{};

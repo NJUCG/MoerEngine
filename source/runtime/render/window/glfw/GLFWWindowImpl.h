@@ -21,12 +21,13 @@ public:
     virtual void ShutDown() override;
 
     //for multi-window support
-    virtual void  SetFocusMode(WindowHandle*, bool _focused) override;
-    virtual void  GetWindowSize(WindowHandle*, int32_t* width, int32_t* height) const override;
-    virtual void  SetTitle(WindowHandle*, const char* _new_title) override;
-    virtual void  RequestClose(WindowHandle*) override;
-    virtual bool  ShouldClose(WindowHandle*) const override;
-    virtual void  ShowMainWindow() override;
+    virtual void SetFocusMode(WindowHandle*, bool _focused) override;
+    virtual Render::WindowFrameMetrics
+    CaptureWindowFrameMetrics(const WindowHandle&) const override;
+    virtual void SetTitle(WindowHandle*, const char* _new_title) override;
+    virtual void RequestClose(WindowHandle*) override;
+    virtual bool ShouldClose(WindowHandle*) const override;
+    virtual void ShowMainWindow() override;
     virtual Render::SwapchainSurfaceInfo CreateSwapchainSurfaceInfo(const WindowHandle&) const override;
 
 private:

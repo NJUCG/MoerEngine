@@ -504,8 +504,12 @@ RaytracingRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, co
     {
         ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.window_ms);
         LogSceneLoadStatus(*editor_config);
-        frame_packet.window = TickWindowContext(editor_config->GetResolution());
-        editor_config->SetResolution(frame_packet.window.resolution);
+        frame_packet.window = TickWindowContext();
+        const uint2 stable_drawable_resolution =
+            frame_packet.window.GetStableDrawableResolution();
+        if (stable_drawable_resolution.x != 0 && stable_drawable_resolution.y != 0) {
+            editor_config->SetResolution(stable_drawable_resolution);
+        }
     }
 
     {
@@ -611,30 +615,42 @@ RaytracingRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, co
     }
 
     {
-        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.ui_composition_ms);
-        if (hooks.on_capture_ui_composition) {
-            frame_packet.ui_composition = hooks.on_capture_ui_composition();
-        }
-        frame_packet.scene_render_extent = CaptureSceneRenderExtentRequest(
-            frame_packet.ui_composition.enabled,
-            frame_packet.ui_composition.scene_color_resolution,
-            frame_packet.window.resolution
-        );
-    }
-    {
         ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.ui_draw_packet_ms);
         if (hooks.on_capture_ui_draw_frame) {
             frame_packet.ui_draw_frame = hooks.on_capture_ui_draw_frame();
         }
+        BindUiViewportWindowFrame(
+            frame_packet.ui_draw_frame.main_viewport,
+            frame_packet.window
+        );
         CaptureFramePrepareUiWorkload(prepare_workload, frame_packet.ui_draw_frame);
+    }
+    {
+        ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.ui_composition_ms);
+        if (hooks.on_capture_ui_composition) {
+            frame_packet.ui_composition = hooks.on_capture_ui_composition();
+        }
+        if (!ResolveUiCompositionDrawableMetrics(
+                frame_packet.ui_composition,
+                frame_packet.window,
+                frame_packet.ui_draw_frame
+            )) {
+            frame_packet.ui_composition.enabled             = false;
+            frame_packet.ui_composition.window_frame_buffer = nullptr;
+        }
+        frame_packet.scene_render_extent = CaptureSceneRenderExtentRequest(
+            frame_packet.ui_composition.scene_extent_resolved,
+            frame_packet.ui_composition.scene_color_resolution,
+            frame_packet.window.GetStableDrawableResolution()
+        );
     }
 
     if (frame_packet.frame_id == 0) {
         LOG_INFO(
             "[Threading] RaytracingFramePacket boundary active on Game Thread; resolution={}x{}, "
             "UI main vertices={}, platform viewports={}.",
-            frame_packet.window.resolution.x,
-            frame_packet.window.resolution.y,
+            frame_packet.window.GetStableDrawableResolution().x,
+            frame_packet.window.GetStableDrawableResolution().y,
             frame_packet.ui_draw_frame.main_viewport.vertices.size(),
             frame_packet.ui_draw_frame.platform_viewports.size()
         );
@@ -725,10 +741,28 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
 
     auto& state     = *runtime_state;
     auto& ui_config = frame_packet.config;
+    bool  main_presentation_current =
+        PrepareRenderFrame(frame_packet.window);
+    if (main_presentation_current) {
+        main_presentation_current = RetargetMainUiPresentation(
+            frame_packet.ui_draw_frame.main_viewport,
+            frame_packet.ui_composition,
+            frame_packet.window,
+            Extent2D(resolution.x, resolution.y)
+        );
+        frame_packet.scene_render_extent = CaptureSceneRenderExtentRequest(
+            frame_packet.ui_composition.scene_extent_resolved,
+            frame_packet.ui_composition.scene_color_resolution,
+            resolution
+        );
+    }
     auto  scene_extent_request = frame_packet.scene_render_extent;
     // Keep dock-only changes debounced, but accept a matching OS-window
     // change immediately because presentation resources already have to move.
-    if (frame_packet.window.state == EWindowState::SizeChanged && scene_extent_request.valid) {
+    if (frame_packet.window.IsDrawable() &&
+        frame_packet.window.transition != EWindowFrameTransition::Stable &&
+        frame_packet.window.transition != EWindowFrameTransition::LogicalResized &&
+        scene_extent_request.valid) {
         scene_extent_request.immediate = true;
     }
     const bool scene_extent_advanced =
@@ -753,7 +787,6 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
         );
     }
 
-    PrepareRenderFrame(frame_packet.window);
     bool  skip_present                    = false;
     bool  split_graph_profiling_frame     = false;
     bool  frame_setup_graph_recorded      = false;
@@ -797,20 +830,15 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     uint64                                           graph_submission_value_count = 0;
     UiFrameGraphPass::GraphPasses                    ui_graph_passes{};
 
-    switch (frame_packet.window.state) {
-        case EWindowState::Hiding:
-            std::this_thread::yield();
-            skip_present = true;
-            break;
-        case EWindowState::SizeChanged:
-            break;
-        case EWindowState::Default:
-            break;
-        default:
-            assert(false);
-            break;
+    if (!main_presentation_current ||
+        !frame_packet.window.IsDrawable() ||
+        !swapchain ||
+        !swapchain->IsPresentationReady()) {
+        std::this_thread::yield();
+        skip_present = true;
     }
 
+    const uint2 presentation_resolution = resolution;
     const uint3 current_scene_extent_3d  = state.rt_ctx->frame_rt.ldr_color->GetExtent();
     const uint3 current_output_extent_3d = state.output->GetExtent();
     const bool recreate_scene_resources = !EqualRenderExtent(
@@ -818,12 +846,12 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     );
     const bool recreate_output_resources = !EqualRenderExtent(
         uint2(current_output_extent_3d.x, current_output_extent_3d.y),
-        frame_packet.window.resolution
+        presentation_resolution
     );
 
     if (!skip_present && (recreate_scene_resources || recreate_output_resources)) {
         if (recreate_output_resources) {
-            RecreateOutputResources(frame_packet.window.resolution);
+            RecreateOutputResources(presentation_resolution);
             output_resources_recreated = true;
         }
         if (recreate_scene_resources) {
@@ -855,8 +883,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 frame_packet.scene_render_extent.valid,
                 active_scene_extent.x,
                 active_scene_extent.y,
-                frame_packet.window.resolution.x,
-                frame_packet.window.resolution.y,
+                presentation_resolution.x,
+                presentation_resolution.y,
                 swapchain->size.x,
                 swapchain->size.y,
                 scene_resources_recreated,
@@ -1912,7 +1940,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     std::optional<RHIPresentRequest> present_request{};
     if (!skip_present) {
         const auto output_view = state.output->GetView();
-        if (frame_packet.window.state == EWindowState::SizeChanged) {
+        if (frame_packet.window.transition != EWindowFrameTransition::Stable &&
+            frame_packet.window.transition != EWindowFrameTransition::LogicalResized) {
             LOG_INFO(
                 "[Threading][Resize] Raytracing main present source={}x{}, swapchain={}x{}, UI platform "
                 "viewports={}.",

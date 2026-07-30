@@ -42,9 +42,16 @@ using namespace Moer;
 
 namespace Moer::Render {
 struct ImGuiData;
+struct GuiViewportData;
 }
 
 void InitializeGuiPlatformInterface();
+bool RefreshGuiViewportPresentation(
+    ImGuiViewport*                      viewport,
+    Moer::Render::GuiViewportData&      viewport_data,
+    Moer::Render::RenderDevice&         device,
+    uint32_t                            frames_in_flight
+);
 void RenderGuiDrawPacket(
     const UiViewportDrawPacket& _draw_packet,
     const TextureView&    _framebuffer,
@@ -108,6 +115,7 @@ struct GuiViewportRenderResources final : UiViewportRenderResources {
 
     Array<GuiFrameRenderBuffers> render_buffers;
     TextureRef                   framebuffer;
+    UiViewportPresentationSnapshot committed_presentation{};
 
     uint64_t frame_index = 0;
 
@@ -132,6 +140,9 @@ struct GuiViewportRenderResources final : UiViewportRenderResources {
 struct GuiViewportData {
     SharedPtr<GuiViewportRenderResources> render_resources;
     SwapchainSurfaceInfo                  surface_info;
+    WindowFrameSnapshotTracker            window_frame_tracker;
+    WindowFrameSnapshot                   latest_window_frame;
+    bool                                  presentation_refresh_pending = true;
 
     uint32_t        viewport_index = 0;
     static uint32_t viewport_count;
@@ -408,7 +419,19 @@ void ImGuiRenderBackend::UnregisterImage(Texture* _texture) {
 static UiViewportDrawPacket
 CaptureViewportDrawPacket(ImDrawData* _draw_data, GuiViewportData* _viewport_data) {
     UiViewportDrawPacket packet{};
-    if (!_draw_data || !_viewport_data || !_viewport_data->render_resources) {
+    if (!_viewport_data || !_viewport_data->render_resources) {
+        return packet;
+    }
+
+    packet.render_resources = _viewport_data->render_resources;
+    packet.framebuffer      = _viewport_data->render_resources->framebuffer;
+    packet.swapchain        = _viewport_data->render_resources->swapchain;
+    BindUiViewportWindowFrame(packet, _viewport_data->latest_window_frame);
+    BindUiViewportPresentation(
+        packet,
+        _viewport_data->render_resources->committed_presentation
+    );
+    if (!_draw_data) {
         return packet;
     }
 
@@ -420,10 +443,15 @@ CaptureViewportDrawPacket(ImDrawData* _draw_data, GuiViewportData* _viewport_dat
 
     packet.display_position  = {_draw_data->DisplayPos.x, _draw_data->DisplayPos.y};
     packet.display_size      = {_draw_data->DisplaySize.x, _draw_data->DisplaySize.y};
-    packet.framebuffer_scale = {_draw_data->FramebufferScale.x, _draw_data->FramebufferScale.y};
-    packet.render_resources  = _viewport_data->render_resources;
-    packet.framebuffer       = _viewport_data->render_resources->framebuffer;
-    packet.swapchain         = _viewport_data->render_resources->swapchain;
+    if (!packet.window_frame.IsValid()) {
+        // ImGui's main viewport does not use the detached-window refresh path.
+        // Preserve its platform backend scale until the renderer binds the
+        // immutable main-window snapshot to the copied packet.
+        packet.framebuffer_scale = {
+            _draw_data->FramebufferScale.x,
+            _draw_data->FramebufferScale.y
+        };
+    }
 
     if (_draw_data->DisplaySize.x <= 0.f || _draw_data->DisplaySize.y <= 0.f) {
         return packet;
@@ -468,21 +496,21 @@ CaptureViewportDrawPacket(ImDrawData* _draw_data, GuiViewportData* _viewport_dat
                 continue;
             }
 
-            const float clip_min_x =
-                (draw_command.ClipRect.x - _draw_data->DisplayPos.x) * _draw_data->FramebufferScale.x;
-            const float clip_min_y =
-                (draw_command.ClipRect.y - _draw_data->DisplayPos.y) * _draw_data->FramebufferScale.y;
-            const float clip_max_x =
-                (draw_command.ClipRect.z - _draw_data->DisplayPos.x) * _draw_data->FramebufferScale.x;
-            const float clip_max_y =
-                (draw_command.ClipRect.w - _draw_data->DisplayPos.y) * _draw_data->FramebufferScale.y;
-            if (clip_max_x <= clip_min_x || clip_max_y <= clip_min_y) {
+            UiClipRect clip_rect{
+                .min = {draw_command.ClipRect.x, draw_command.ClipRect.y},
+                .max = {draw_command.ClipRect.z, draw_command.ClipRect.w},
+            };
+            if (!ConvertUiClipRectToDrawable(
+                    clip_rect,
+                    packet.display_position,
+                    float2(1.f, 1.f)
+                )) {
                 continue;
             }
 
             packet.commands.emplace_back(UiDrawCommand{
-                .clip_min       = {clip_min_x, clip_min_y},
-                .clip_max       = {clip_max_x, clip_max_y},
+                .clip_min       = clip_rect.min,
+                .clip_max       = clip_rect.max,
                 .texture_handle = static_cast<uint32>(draw_command.TextureId),
                 .element_count  = draw_command.ElemCount,
                 .vertex_offset  = draw_command.VtxOffset + global_vertex_offset,
@@ -514,12 +542,35 @@ UiDrawFramePacket ImGuiRenderBackend::CaptureDrawFrame() {
         }
         for (int viewport_index = 1; viewport_index < platform_io.Viewports.Size; ++viewport_index) {
             ImGuiViewport* viewport = platform_io.Viewports[viewport_index];
-            if ((viewport->Flags & ImGuiViewportFlags_IsMinimized) != 0 || !viewport->DrawData) {
+            auto* viewport_data =
+                static_cast<GuiViewportData*>(viewport->RendererUserData);
+            if (viewport_data != nullptr) {
+                static_cast<void>(RefreshGuiViewportPresentation(
+                    viewport,
+                    *viewport_data,
+                    device,
+                    static_cast<ImGuiData*>(backend_data)->frames_in_flight
+                ));
+            }
+            const bool drawable =
+                viewport_data != nullptr &&
+                viewport_data->latest_window_frame.IsDrawable();
+            if (!drawable ||
+                (viewport->Flags & ImGuiViewportFlags_IsMinimized) != 0 ||
+                !viewport->DrawData) {
+                auto retained_packet =
+                    CaptureViewportDrawPacket(nullptr, viewport_data);
+                if (!drawable &&
+                    IsUiViewportPresentationCommitted(retained_packet)) {
+                    retained_packet.presentation_metadata_only = true;
+                    frame.platform_viewports.emplace_back(
+                        std::move(retained_packet)
+                    );
+                }
                 continue;
             }
-            auto* viewport_data   = static_cast<GuiViewportData*>(viewport->RendererUserData);
             auto  viewport_packet = CaptureViewportDrawPacket(viewport->DrawData, viewport_data);
-            if (viewport_packet.framebuffer && viewport_packet.swapchain) {
+            if (IsUiViewportPresentationCurrent(viewport_packet)) {
                 frame.platform_viewports.emplace_back(std::move(viewport_packet));
             }
         }
@@ -550,7 +601,7 @@ void ImGuiRenderBackend::RenderGUI(
     }
     for (size_t viewport_index = 0; viewport_index < _frame.platform_viewports.size(); ++viewport_index) {
         const auto& viewport = _frame.platform_viewports[viewport_index];
-        if (viewport.framebuffer && !viewport.commands.empty()) {
+        if (IsUiViewportPresentationCurrent(viewport) && !viewport.commands.empty()) {
             ScopedGpuMarker viewport_marker(
                 _cmd_list,
                 std::format("Platform Viewport {}", viewport_index),
@@ -580,19 +631,8 @@ void ImGuiRenderBackend::PresentWindows(
         (_execution_thread == EUiDrawExecutionThread::Render && IsCurrentlyRenderThread())
     );
     for (const auto& viewport : _frame.platform_viewports) {
-        if (viewport.swapchain && viewport.framebuffer) {
+        if (IsUiViewportPresentationCurrent(viewport)) {
             const auto framebuffer_view = viewport.framebuffer->GetView();
-            if (framebuffer_view.extent.x != viewport.swapchain->size.x ||
-                framebuffer_view.extent.y != viewport.swapchain->size.y) {
-                LOG_WARNING(
-                    "Skipping stale ImGui viewport present: source={}x{}, swapchain={}x{}.",
-                    framebuffer_view.extent.x,
-                    framebuffer_view.extent.y,
-                    viewport.swapchain->size.x,
-                    viewport.swapchain->size.y
-                );
-                continue;
-            }
             RHIExecutor::Get().Present(
                 RHIPresentRequest(viewport.swapchain, framebuffer_view), true
             );
@@ -661,9 +701,20 @@ static void BuildGuiDrawBatch(
 
     uint32 command_offset = 0;
     for (const UiDrawCommand& command : _draw_packet.commands) {
+        UiClipRect clip_rect{
+            .min = command.clip_min,
+            .max = command.clip_max,
+        };
+        if (!ConvertUiClipRectToDrawable(
+                clip_rect,
+                float2(0.f, 0.f),
+                _draw_packet.framebuffer_scale
+            )) {
+            continue;
+        }
         _arguments.emplace_back(
-            ImVec2{command.clip_min.x, command.clip_min.y},
-            ImVec2{command.clip_max.x, command.clip_max.y},
+            ImVec2{clip_rect.min.x, clip_rect.min.y},
+            ImVec2{clip_rect.max.x, clip_rect.max.y},
             command.texture_handle
         );
         batch.EmplaceDrawIndexed(
@@ -812,29 +863,42 @@ void DestroyRenderBuffers(GuiFrameRenderBuffers* _render_buffers) {
     _render_buffers->argument_buffer = nullptr;
 }
 
-void CreateOrResizeViewportResources(
-    RenderDevice&                                       _device,
-    const SharedPtr<GuiViewportRenderResources>&        _resources,
-    SwapchainSurfaceInfo                                _surface_info,
-    uint2                                               _extent,
-    uint32_t                                            _frame_in_flight,
-    uint32_t                                            _viewport_index
+bool CreateOrResizeViewportResources(
+    RenderDevice&                                _device,
+    const SharedPtr<GuiViewportRenderResources>& _resources,
+    SwapchainSurfaceInfo                         _surface_info,
+    WindowFrameSnapshot                          _window_frame,
+    uint32_t                                     _frame_in_flight,
+    uint32_t                                     _viewport_index
 ) {
     assert(_resources);
     assert(!IsRenderThreadRunning() || IsCurrentlyRenderThread());
+    if (!_surface_info.IsValid() || !_window_frame.IsDrawable() ||
+        _surface_info.GetIdentity() != _window_frame.surface_identity) {
+        return false;
+    }
 
     const bool has_swapchain = _resources->swapchain.IsValid();
-    const bool surface_matches =
-        has_swapchain && _surface_info.IsValid() &&
-        _resources->swapchain->GetCommittedSurfaceIdentity() == _surface_info.GetIdentity();
-    const bool swapchain_matches =
-        surface_matches && _resources->swapchain->size.x == _extent.x &&
-        _resources->swapchain->size.y == _extent.y;
+    const bool request_matches =
+        _resources->committed_presentation.IsValid() &&
+        _resources->committed_presentation.surface_identity == _window_frame.surface_identity &&
+        _resources->committed_presentation.drawable_generation ==
+            _window_frame.drawable_generation;
+    const bool swapchain_matches_commit =
+        has_swapchain &&
+        _resources->swapchain->IsPresentationReady() &&
+        _resources->swapchain->GetCommittedSurfaceIdentity() ==
+            _resources->committed_presentation.surface_identity &&
+        _resources->swapchain->size ==
+            _resources->committed_presentation.drawable_extent;
     const bool framebuffer_matches =
-        _resources->framebuffer && _resources->framebuffer->GetExtent().x == _extent.x &&
-        _resources->framebuffer->GetExtent().y == _extent.y;
-    if (swapchain_matches && framebuffer_matches) {
-        return;
+        _resources->framebuffer &&
+        _resources->framebuffer->GetExtent().x ==
+            _resources->committed_presentation.drawable_extent.x &&
+        _resources->framebuffer->GetExtent().y ==
+            _resources->committed_presentation.drawable_extent.y;
+    if (request_matches && swapchain_matches_commit && framebuffer_matches) {
+        return true;
     }
 
     if (has_swapchain || _resources->framebuffer) {
@@ -843,37 +907,67 @@ void CreateOrResizeViewportResources(
 
     SwapchainCreateInfo swapchain_info{
         .surface          = _surface_info,
-        .size             = _extent,
+        .size             = _window_frame.drawable_extent,
         .back_buffer_sz   = _frame_in_flight,
         .preferred_format = PF_R8G8B8A8_SRGB
     };
 
+    bool native_commit_succeeded = false;
     if (!has_swapchain) {
         _resources->swapchain = _device.CreateSwapchain(swapchain_info);
-    } else if (!swapchain_matches) {
+        native_commit_succeeded =
+            _resources->swapchain && _resources->swapchain->IsPresentationReady();
+    } else if (!request_matches || !swapchain_matches_commit) {
         _resources->swapchain->Sync();
-        _resources->swapchain->Recreate(swapchain_info);
+        native_commit_succeeded = _resources->swapchain->Recreate(swapchain_info);
+    } else {
+        native_commit_succeeded = true;
     }
 
-    _resources->framebuffer = _device.CreateTexture(
-        Extent2D(_extent.x, _extent.y),
-        PF_R8G8B8A8_SRGB,
-        ETextureUsageFlags::COLOR_ATTACHMENT |
-            ETextureUsageFlags::SAMPLED |
-            ETextureUsageFlags::PRESENTATION_SOURCE |
-            ETextureUsageFlags::TRANSFER_SRC |
-            ETextureUsageFlags::TRANSFER_DST
-    );
-    _resources->framebuffer->SetName(std::format("ImGui Window {}", _viewport_index));
+    if (!native_commit_succeeded ||
+        !_resources->swapchain ||
+        !_resources->swapchain->IsPresentationReady() ||
+        _resources->swapchain->GetCommittedSurfaceIdentity() != _window_frame.surface_identity ||
+        _resources->swapchain->size.x == 0 ||
+        _resources->swapchain->size.y == 0) {
+        return false;
+    }
+
+    const Extent2D actual_extent = _resources->swapchain->size;
+    const bool framebuffer_matches_actual =
+        _resources->framebuffer &&
+        _resources->framebuffer->GetExtent().x == actual_extent.x &&
+        _resources->framebuffer->GetExtent().y == actual_extent.y;
+    if (!framebuffer_matches_actual) {
+        _resources->framebuffer = _device.CreateTexture(
+            actual_extent,
+            PF_R8G8B8A8_SRGB,
+            ETextureUsageFlags::COLOR_ATTACHMENT |
+                ETextureUsageFlags::SAMPLED |
+                ETextureUsageFlags::PRESENTATION_SOURCE |
+                ETextureUsageFlags::TRANSFER_SRC |
+                ETextureUsageFlags::TRANSFER_DST
+        );
+        if (!_resources->framebuffer) {
+            return false;
+        }
+        _resources->framebuffer->SetName(std::format("ImGui Window {}", _viewport_index));
+    }
+    _resources->committed_presentation = UiViewportPresentationSnapshot{
+        .surface_identity     = _window_frame.surface_identity,
+        .drawable_extent      = actual_extent,
+        .drawable_generation  = _window_frame.drawable_generation,
+    };
 
     LOG_INFO(
         "[Threading][UI] {} ImGui viewport {} resources at {}x{} on {} Thread.",
         has_swapchain ? "Updated" : "Created",
         _viewport_index,
-        _extent.x,
-        _extent.y,
+        actual_extent.x,
+        actual_extent.y,
         IsCurrentlyRenderThread() ? "Render" : "Game"
     );
+    return true;
 }
 
 void ReleaseViewportResources(
@@ -890,8 +984,9 @@ void ReleaseViewportResources(
     if (_resources->swapchain) {
         _resources->swapchain->Sync();
     }
-    _resources->swapchain   = nullptr;
-    _resources->framebuffer = nullptr;
+    _resources->swapchain              = nullptr;
+    _resources->framebuffer            = nullptr;
+    _resources->committed_presentation = {};
     for (auto& render_buffers : _resources->render_buffers) {
         DestroyRenderBuffers(&render_buffers);
     }
@@ -942,51 +1037,88 @@ ImGuiRenderBackend::~ImGuiRenderBackend() {
     backend_data = nullptr;
 }
 
-void GuiCreateWindow(ImGuiViewport* _viewport) {
-    ImGuiData&       backend_data  = *GetImGuiBackendData();
-    GuiViewportData* viewport_data = MoerNew(GuiViewportData)(backend_data.frames_in_flight);
-    using namespace Moer::Render;
-    ImGuiRenderBackend& render_backend = *backend_data.render_backend;
-    RenderDevice&       rd_device      = render_backend.device;
-
-    _viewport->RendererUserData = viewport_data;
+bool RefreshGuiViewportPresentation(
+    ImGuiViewport*    viewport,
+    GuiViewportData&  viewport_data,
+    RenderDevice&     device,
+    uint32_t          frames_in_flight
+) {
+    assert(!IsRenderThreadInitialized() || IsCurrentlyGameThread());
 
     void* platform_window =
-        _viewport->PlatformHandle ? _viewport->PlatformHandle : _viewport->PlatformHandleRaw;
-    if (!platform_window) {
-        return;
-    }
-    Moer::WindowHandle handle{static_cast<Moer::WindowType*>(platform_window)};
-    using namespace Moer::Render;
-    using namespace Moer;
-
-    int width, height;
-    WindowContext::GetWindowSize(&handle, &width, &height);
-    viewport_data->surface_info = WindowContext::CreateSwapchainSurfaceInfo(handle);
-    const uint2 extent{static_cast<uint>(_viewport->Size.x), static_cast<uint>(_viewport->Size.y)};
-    if (!viewport_data->surface_info.IsValid() ||
-        width == 0 ||
-        height == 0 ||
-        extent.x == 0 ||
-        extent.y == 0) {
-        return;
+        viewport->PlatformHandle ? viewport->PlatformHandle : viewport->PlatformHandleRaw;
+    if (platform_window == nullptr) {
+        viewport_data.latest_window_frame =
+            viewport_data.window_frame_tracker.Advance({}, {});
+        viewport_data.presentation_refresh_pending = true;
+        return false;
     }
 
-    const auto render_resources = viewport_data->render_resources;
-    const auto surface_info     = viewport_data->surface_info;
-    const auto viewport_index   = viewport_data->viewport_index;
+    const WindowHandle handle{static_cast<WindowType*>(platform_window)};
+    const SwapchainSurfaceInfo incoming_surface =
+        WindowContext::CreateSwapchainSurfaceInfo(handle);
+    if (incoming_surface.IsValid()) {
+        viewport_data.surface_info = incoming_surface;
+    }
+    viewport_data.latest_window_frame = viewport_data.window_frame_tracker.Advance(
+        incoming_surface.GetIdentity(),
+        WindowContext::CaptureWindowFrameMetrics(handle)
+    );
+
+    const auto transition = viewport_data.latest_window_frame.transition;
+    const bool presentation_changed =
+        transition == EWindowFrameTransition::Initial ||
+        transition == EWindowFrameTransition::DrawableResized ||
+        transition == EWindowFrameTransition::Restored ||
+        transition == EWindowFrameTransition::Replaced;
+    viewport_data.presentation_refresh_pending =
+        viewport_data.presentation_refresh_pending || presentation_changed;
+    if (!viewport_data.latest_window_frame.IsDrawable()) {
+        return false;
+    }
+    if (!viewport_data.presentation_refresh_pending) {
+        return true;
+    }
+
+    const auto render_resources = viewport_data.render_resources;
+    const auto surface_info     = viewport_data.surface_info;
+    const auto window_frame     = viewport_data.latest_window_frame;
+    const auto viewport_index   = viewport_data.viewport_index;
+    bool       committed        = false;
     RunRenderThreadControlAndWait(
-        [&rd_device,
+        [&device,
          render_resources,
          surface_info,
-         extent,
-         frame_in_flight = backend_data.frames_in_flight,
-         viewport_index]() {
-            CreateOrResizeViewportResources(
-                rd_device, render_resources, surface_info, extent, frame_in_flight, viewport_index
+         window_frame,
+         frames_in_flight,
+         viewport_index,
+         &committed]() {
+            committed = CreateOrResizeViewportResources(
+                device,
+                render_resources,
+                surface_info,
+                window_frame,
+                frames_in_flight,
+                viewport_index
             );
         }
     );
+    viewport_data.presentation_refresh_pending = !committed;
+    return committed;
+}
+
+void GuiCreateWindow(ImGuiViewport* _viewport) {
+    ImGuiData&       backend_data  = *GetImGuiBackendData();
+    GuiViewportData* viewport_data = MoerNew(GuiViewportData)(backend_data.frames_in_flight);
+    ImGuiRenderBackend& render_backend = *backend_data.render_backend;
+
+    _viewport->RendererUserData = viewport_data;
+    static_cast<void>(RefreshGuiViewportPresentation(
+        _viewport,
+        *viewport_data,
+        render_backend.device,
+        backend_data.frames_in_flight
+    ));
 }
 
 void GuiDestroyWindow(ImGuiViewport* _viewport) {
@@ -1011,41 +1143,20 @@ void GuiDestroyWindow(ImGuiViewport* _viewport) {
 }
 void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
     auto* viewport_data = static_cast<GuiViewportData*>(_viewport->RendererUserData);
-    if (!viewport_data || !viewport_data->render_resources || _size.x == 0 || _size.y == 0) {
+    if (!viewport_data || !viewport_data->render_resources) {
         return;
     }
-
-    void* platform_window =
-        _viewport->PlatformHandle ? _viewport->PlatformHandle : _viewport->PlatformHandleRaw;
-    if (!platform_window) {
-        return;
-    }
-
+    static_cast<void>(_size);
     ImGuiData* backend_data = GetImGuiBackendData();
-    auto&      rd_device    = backend_data->render_backend->device;
-    if (!viewport_data->surface_info.IsValid()) {
-        Moer::WindowHandle handle{static_cast<Moer::WindowType*>(platform_window)};
-        viewport_data->surface_info = WindowContext::CreateSwapchainSurfaceInfo(handle);
-    }
-    if (!viewport_data->surface_info.IsValid()) {
+    if (backend_data == nullptr) {
         return;
     }
-    const auto render_resources = viewport_data->render_resources;
-    const auto surface_info     = viewport_data->surface_info;
-    const auto viewport_index   = viewport_data->viewport_index;
-    const uint2 extent{static_cast<uint>(_size.x), static_cast<uint>(_size.y)};
-    RunRenderThreadControlAndWait(
-        [&rd_device,
-         render_resources,
-         surface_info,
-         extent,
-         frame_in_flight = backend_data->frames_in_flight,
-         viewport_index]() {
-            CreateOrResizeViewportResources(
-                rd_device, render_resources, surface_info, extent, frame_in_flight, viewport_index
-            );
-        }
-    );
+    static_cast<void>(RefreshGuiViewportPresentation(
+        _viewport,
+        *viewport_data,
+        backend_data->render_backend->device,
+        backend_data->frames_in_flight
+    ));
 }
 void GuiRenderWindow(ImGuiViewport* _viewport, void* _cmd_list) {
     auto* viewport_data = static_cast<GuiViewportData*>(_viewport->RendererUserData);
@@ -1056,6 +1167,9 @@ void GuiRenderWindow(ImGuiViewport* _viewport, void* _cmd_list) {
 
     ImGuiData& backend_data = *GetImGuiBackendData();
     auto       draw_packet  = CaptureViewportDrawPacket(_viewport->DrawData, viewport_data);
+    if (!IsUiViewportPresentationCurrent(draw_packet)) {
+        return;
+    }
     draw_packet.recording_slot =
         draw_packet.render_resources->GetPendingRecordingSlot();
     RenderGuiDrawPacket(
@@ -1080,10 +1194,22 @@ void GuiSwapBuffers(ImGuiViewport* _viewport, void*) {
     if (!viewport_data || !viewport_data->render_resources) {
         return;
     }
+    UiViewportDrawPacket present_packet{
+        .framebuffer = viewport_data->render_resources->framebuffer,
+        .swapchain   = viewport_data->render_resources->swapchain,
+    };
+    BindUiViewportWindowFrame(present_packet, viewport_data->latest_window_frame);
+    BindUiViewportPresentation(
+        present_packet,
+        viewport_data->render_resources->committed_presentation
+    );
+    if (!IsUiViewportPresentationCurrent(present_packet)) {
+        return;
+    }
     RHIExecutor::Get().Present(
         RHIPresentRequest(
-            viewport_data->render_resources->swapchain,
-            viewport_data->render_resources->framebuffer->GetView()
+            present_packet.swapchain,
+            present_packet.framebuffer->GetView()
         ),
         true
     );

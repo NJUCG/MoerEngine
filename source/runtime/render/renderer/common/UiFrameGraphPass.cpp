@@ -71,7 +71,9 @@ Array<TextureRef> CollectPresentationTargets(
         AddUniqueTarget(targets, composition.window_frame_buffer);
     }
     for (const auto& viewport : draw_frame.platform_viewports) {
-        AddUniqueTarget(targets, viewport.framebuffer);
+        if (!viewport.presentation_metadata_only) {
+            AddUniqueTarget(targets, viewport.framebuffer);
+        }
     }
     return targets;
 }
