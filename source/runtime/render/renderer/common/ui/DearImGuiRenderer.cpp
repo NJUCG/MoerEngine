@@ -111,13 +111,35 @@ struct GuiFrameRenderBuffers {
     Moer::Render::BufferRef argument_buffer;
 };
 struct GuiViewportRenderResources final : UiViewportRenderResources {
-    UniquePtr<PresentationSurface> presentation_surface;
+    PresentFeedbackMailboxRef          presentation_feedback_mailbox;
+    UniquePtr<PresentationSurface>     presentation_surface;
 
     Array<GuiFrameRenderBuffers> render_buffers;
 
     uint64_t frame_index = 0;
 
-    explicit GuiViewportRenderResources(uint32_t _frame_in_flight) : render_buffers(_frame_in_flight) {}
+    explicit GuiViewportRenderResources(uint32_t _frame_in_flight) :
+        presentation_feedback_mailbox(
+            MakeShared<PresentFeedbackMailbox>()
+        ),
+        render_buffers(_frame_in_flight) {}
+
+    std::optional<RHIPresentRequest> CreatePresentRequest(
+        const WindowFrameSnapshot& window_frame,
+        TextureView                source
+    ) override {
+        if (!presentation_surface) {
+            return std::nullopt;
+        }
+        return presentation_surface->CreatePresentRequest(
+            window_frame, source
+        );
+    }
+
+    bool HasPendingPresentationRecovery() const noexcept override {
+        return presentation_feedback_mailbox &&
+               presentation_feedback_mailbox->HasPendingRecovery();
+    }
 
     uint64_t GetPendingRecordingSlot() const noexcept override {
         return frame_index;
@@ -646,11 +668,18 @@ void ImGuiRenderBackend::PresentWindows(
         (_execution_thread == EUiDrawExecutionThread::Render && IsCurrentlyRenderThread())
     );
     for (const auto& viewport : _frame.platform_viewports) {
-        if (IsUiViewportPresentationCurrent(viewport)) {
+        if (IsUiViewportPresentationCurrent(viewport) &&
+            viewport.render_resources) {
             const auto framebuffer_view = viewport.framebuffer->GetView();
-            RHIExecutor::Get().Present(
-                RHIPresentRequest(viewport.swapchain, framebuffer_view), true
-            );
+            auto present_request =
+                viewport.render_resources->CreatePresentRequest(
+                    viewport.window_frame, framebuffer_view
+                );
+            if (present_request.has_value()) {
+                RHIExecutor::Get().Present(
+                    std::move(*present_request), true
+                );
+            }
         }
     }
 }
@@ -920,6 +949,8 @@ bool CreateOrResizeViewportResources(
                             ETextureUsageFlags::TRANSFER_SRC |
                             ETextureUsageFlags::TRANSFER_DST,
                     },
+                    .feedback_mailbox =
+                        _resources->presentation_feedback_mailbox,
                 }
             );
     }
@@ -1048,8 +1079,14 @@ bool RefreshGuiViewportPresentation(
         transition == EWindowFrameTransition::DrawableResized ||
         transition == EWindowFrameTransition::Restored ||
         transition == EWindowFrameTransition::Replaced;
+    const bool presentation_recovery_pending =
+        viewport_data.render_resources &&
+        viewport_data.render_resources
+            ->HasPendingPresentationRecovery();
     viewport_data.presentation_refresh_pending =
-        viewport_data.presentation_refresh_pending || presentation_changed;
+        viewport_data.presentation_refresh_pending ||
+        presentation_changed ||
+        presentation_recovery_pending;
     if (!viewport_data.latest_window_frame.IsDrawable()) {
         return false;
     }

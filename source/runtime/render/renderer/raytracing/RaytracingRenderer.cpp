@@ -1959,14 +1959,11 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 prepared_ui->GetDrawFrame().platform_viewports.size()
             );
         }
-        feedback.main_present_receipt = CreateMainPresentReceipt(
-            frame_packet.scene_updates.scene_ready &&
-            frame_packet.runtime_assets_ready
-        );
+        PresentReceiptRef continuous_present_receipt{};
         present_request = main_presentation_surface.CreatePresentRequest(
             frame_packet.window,
             output_view,
-            feedback.main_present_receipt
+            &continuous_present_receipt
         );
         if (!present_request.has_value()) {
             feedback.main_present_receipt = {};
@@ -1976,6 +1973,12 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 output_view.extent.y,
                 presentation_extent.x,
                 presentation_extent.y
+            );
+        } else {
+            feedback.main_present_receipt = SelectMainPresentReceipt(
+                frame_packet.scene_updates.scene_ready &&
+                    frame_packet.runtime_assets_ready,
+                continuous_present_receipt
             );
         }
     }

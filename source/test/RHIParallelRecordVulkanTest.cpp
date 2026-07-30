@@ -10750,7 +10750,9 @@ void RunPresentPipelineBoundary() {
             receipt->WaitForSubmission(5s);
         if (!receipt_result.resolved ||
             receipt_result.submitted ||
-            !receipt_result.recreate_swapchain) {
+            !receipt_result.recreate_swapchain ||
+            receipt_result.status != EPresentStatus::OutOfDate ||
+            receipt_result.stage != EPresentStage::Present) {
             throw std::runtime_error(
                 "scripted Recreate Present resolved the wrong receipt state"
             );
@@ -10938,7 +10940,9 @@ void RunPresentPipelineBoundary() {
             present_only_receipt->WaitForSubmission(5s);
         if (!present_only_result.resolved ||
             present_only_result.submitted ||
-            !present_only_result.recreate_swapchain) {
+            !present_only_result.recreate_swapchain ||
+            present_only_result.status != EPresentStatus::OutOfDate ||
+            present_only_result.stage != EPresentStage::Present) {
             throw std::runtime_error(
                 "Present-only batch resolved the wrong receipt state"
             );
@@ -10976,12 +10980,126 @@ void RunPresentPipelineBoundary() {
             );
         }
 
+        const size_t surface_lost_boundary_index =
+            boundary_capture.Count();
+        scripted_capture.result = VulkanScriptedPresentResult{
+            .outcome = {
+                EVulkanOperationStatus::Recreate,
+                VK_ERROR_SURFACE_LOST_KHR,
+            },
+        };
+        PresentReceiptRef surface_lost_receipt =
+            MakeShared<PresentReceipt>();
+        RHIExecutor::Get().Present(
+            RHIPresentRequest(
+                scripted_swapchain,
+                present_source->GetView(),
+                surface_lost_receipt
+            ),
+            true
+        );
+        const PresentReceiptResult surface_lost_result =
+            surface_lost_receipt->WaitForSubmission(5s);
+        if (!surface_lost_result.resolved ||
+            surface_lost_result.submitted ||
+            !surface_lost_result.recreate_swapchain ||
+            surface_lost_result.status !=
+                EPresentStatus::SurfaceLost ||
+            surface_lost_result.stage != EPresentStage::Present) {
+            throw std::runtime_error(
+                "scripted SurfaceLost Present lost its typed receipt"
+            );
+        }
+        RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+        if (surface_lost_receipt->ResolutionAttemptCount() != 1 ||
+            scripted_capture.count.load(std::memory_order_acquire) != 3 ||
+            boundary_capture.Count() !=
+                surface_lost_boundary_index + 2 ||
+            native_capture.Count() != expected_native_count) {
+            throw std::runtime_error(
+                "scripted SurfaceLost Present was replayed or submitted "
+                "native work"
+            );
+        }
+        expect_pair(
+            surface_lost_boundary_index,
+            present_batch_sequence + 3,
+            1,
+            EVulkanSubmissionBoundaryKind::Present,
+            0
+        );
+        const VulkanSubmissionBoundaryEvent&
+            surface_lost_terminal =
+                boundary_capture.Event(surface_lost_boundary_index + 1);
+        if (surface_lost_terminal.outcome.status !=
+                EVulkanOperationStatus::Recreate ||
+            surface_lost_terminal.outcome.result !=
+                VK_ERROR_SURFACE_LOST_KHR) {
+            throw std::runtime_error(
+                "SurfaceLost terminal diagnostics lost the native result"
+            );
+        }
+
+        // A faulted device would reject before reaching the scripted
+        // callback. A typed Retry on the following request therefore proves
+        // that SurfaceLost did not poison VulkanDevice fault state.
+        scripted_capture.result = VulkanScriptedPresentResult{
+            .outcome = {
+                EVulkanOperationStatus::Retry,
+                VK_NOT_READY,
+            },
+        };
+        PresentReceiptRef post_surface_lost_receipt =
+            MakeShared<PresentReceipt>();
+        RHIExecutor::Get().Present(
+            RHIPresentRequest(
+                scripted_swapchain,
+                present_source->GetView(),
+                post_surface_lost_receipt
+            ),
+            true
+        );
+        const PresentReceiptResult post_surface_lost_result =
+            post_surface_lost_receipt->WaitForSubmission(5s);
+        if (!post_surface_lost_result.resolved ||
+            post_surface_lost_result.submitted ||
+            post_surface_lost_result.recreate_swapchain ||
+            post_surface_lost_result.status !=
+                EPresentStatus::Retry ||
+            post_surface_lost_result.stage != EPresentStage::Present) {
+            throw std::runtime_error(
+                "SurfaceLost polluted VulkanDevice fault state"
+            );
+        }
+        RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+        if (post_surface_lost_receipt->ResolutionAttemptCount() != 1 ||
+            scripted_capture.count.load(std::memory_order_acquire) != 4 ||
+            boundary_capture.Count() !=
+                surface_lost_boundary_index + 4 ||
+            native_capture.Count() != expected_native_count ||
+            scripted_capture.wrong_owner.load(
+                std::memory_order_acquire
+            )) {
+            throw std::runtime_error(
+                "post-SurfaceLost Retry did not remain on the Submission "
+                "owner exactly once"
+            );
+        }
+        expect_pair(
+            surface_lost_boundary_index + 2,
+            present_batch_sequence + 4,
+            1,
+            EVulkanSubmissionBoundaryKind::Present,
+            0
+        );
+
         LOG_INFO(
             "[TESTCASE][PASS] name=PresentPipelineBoundary "
             "outcome=Recreate order=Prefix,Bridge?,Present,Later "
             "owner=Submission receipt_attempts=1 submitted=false "
             "recreate=true completion=drained later_batch=success "
-            "present_only=verified bridge={} graphics_native={} "
+            "present_only=verified surface_lost=typed "
+            "device_healthy=verified bridge={} graphics_native={} "
             "prefix_native={} readback=verified replay=0",
             bridge_required ? "required" : "elided",
             topology.graphics.native_queue_id,

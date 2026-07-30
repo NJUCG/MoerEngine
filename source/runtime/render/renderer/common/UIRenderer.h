@@ -32,6 +32,31 @@ public:
     virtual ~UiViewportRenderResources() = default;
 
     /**
+     * Creates a Present request without transferring ownership out of the
+     * copied viewport packet. Backends that own a PresentationSurface may
+     * attach continuous feedback while the packet keeps its framebuffer,
+     * swapchain, and resource-owner references alive.
+     */
+    [[nodiscard]] virtual std::optional<RHIPresentRequest>
+    CreatePresentRequest(
+        const WindowFrameSnapshot& window_frame,
+        TextureView                source
+    ) {
+        static_cast<void>(window_frame);
+        static_cast<void>(source);
+        return std::nullopt;
+    }
+
+    /**
+     * Game-Thread scheduling hint only. The Render owner remains responsible
+     * for consuming and validating recovery feedback in PresentationSurface.
+     */
+    [[nodiscard]] virtual bool
+    HasPendingPresentationRecovery() const noexcept {
+        return false;
+    }
+
+    /**
      * UI upload-ring selection is speculative until the command source is
      * accepted by the native queue. The renderer records one frame at a time,
      * so a read-only token can be frozen in the copied packet and committed

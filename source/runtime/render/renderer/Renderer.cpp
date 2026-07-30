@@ -71,8 +71,11 @@ Renderer::Renderer(
 
 Renderer::~Renderer() = default;
 
-PresentReceiptRef Renderer::CreateMainPresentReceipt(bool scene_content_ready) {
-    if (first_main_present_confirmed.load(std::memory_order_acquire)) {
+PresentReceiptRef Renderer::SelectMainPresentReceipt(
+    bool                     scene_content_ready,
+    const PresentReceiptRef& candidate
+) {
+    if (!candidate || first_main_present_confirmed.load(std::memory_order_acquire)) {
         return {};
     }
 
@@ -101,7 +104,7 @@ PresentReceiptRef Renderer::CreateMainPresentReceipt(bool scene_content_ready) {
             );
         }
     }
-    return MakeShared<PresentReceipt>();
+    return candidate;
 }
 
 void Renderer::ApplyMainPresentReceipt(const PresentReceiptRef& receipt, const EngineHooks& hooks) {
@@ -118,10 +121,12 @@ void Renderer::ApplyMainPresentReceipt(const PresentReceiptRef& receipt, const E
         );
         return;
     }
-    if (result.recreate_swapchain) {
-        main_swapchain_recreate_requested.store(true, std::memory_order_release);
+    if (PresentStatusRequiresRefresh(result.status)) {
         LOG_INFO(
-            "[Startup][Renderer] Main swapchain requested recreation before the startup handoff."
+            "[Startup][Renderer] Main Present requested presentation recovery before the startup "
+            "handoff (status={}, stage={}).",
+            static_cast<uint32>(result.status),
+            static_cast<uint32>(result.stage)
         );
     }
     if (!result.submitted) {
@@ -176,8 +181,6 @@ bool Renderer::PrepareRenderFrame(const WindowFrameSnapshot& window_frame) {
     }
     RenderGraphResourcePool::Global().Tick();
 
-    const bool recreate_requested =
-        main_swapchain_recreate_requested.exchange(false, std::memory_order_acq_rel);
     if (!main_presentation_surface) {
         return false;
     }
@@ -185,8 +188,7 @@ bool Renderer::PrepareRenderFrame(const WindowFrameSnapshot& window_frame) {
     const EPresentationSurfaceEnsureResult result =
         main_presentation_surface->EnsureCurrent(
             main_window_surface,
-            window_frame,
-            recreate_requested
+            window_frame
         );
     if (!IsPresentationSurfaceReady(result)) {
         return false;

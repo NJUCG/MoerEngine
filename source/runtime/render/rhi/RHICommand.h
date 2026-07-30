@@ -16,6 +16,7 @@
 #include "rhi/RHIResource.h"
 #include "rhi/RHISubmissionTopology.h"
 #include "shader/ShaderPipeline.h"
+#include <atomic>
 #include <array>
 #include <chrono>
 #include <condition_variable>
@@ -2196,15 +2197,167 @@ struct ProfileData {
     Array<ProfileResultEntry> cpu_entries;
 };
 
-struct PresentReceiptResult {
-    bool resolved              = false;
-    bool submitted            = false;
-    bool recreate_swapchain   = false;
+enum class EPresentStatus : uint8_t {
+    Unresolved,
+    Success,
+    Suboptimal,
+    Retry,
+    OutOfDate,
+    SurfaceLost,
+    Rejected,
+    Faulted,
 };
+
+enum class EPresentStage : uint8_t {
+    None,
+    Validation,
+    Acquire,
+    Submit,
+    Present,
+};
+
+[[nodiscard]] constexpr bool
+PresentStatusRequiresRefresh(EPresentStatus status) noexcept {
+    return status == EPresentStatus::Suboptimal ||
+           status == EPresentStatus::OutOfDate ||
+           status == EPresentStatus::SurfaceLost;
+}
+
+[[nodiscard]] constexpr bool
+PresentStatusRequiresNativeSurfaceRefresh(EPresentStatus status) noexcept {
+    return status == EPresentStatus::SurfaceLost;
+}
+
+[[nodiscard]] constexpr uint8_t PresentRecoveryPriority(EPresentStatus status) noexcept {
+    switch (status) {
+        case EPresentStatus::SurfaceLost:
+            return 3;
+        case EPresentStatus::OutOfDate:
+            return 2;
+        case EPresentStatus::Suboptimal:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+struct PresentReceiptContext {
+    uint64 presentation_epoch  = 0;
+    uint64 drawable_generation = 0;
+    uint64 request_serial      = 0;
+};
+
+struct PresentReceiptResult {
+    bool                  resolved            = false;
+    bool                  submitted           = false;
+    bool                  recreate_swapchain  = false;
+    EPresentStatus        status              = EPresentStatus::Unresolved;
+    EPresentStage         stage               = EPresentStage::None;
+    PresentReceiptContext context{};
+};
+
+// Cross-thread, bounded recovery mailbox. Submission publishes only the latest
+// refresh-requiring result. The Render owner consumes it; the Game Thread may
+// only inspect the atomic pending bit to schedule detached-viewport control.
+class PresentFeedbackMailbox {
+public:
+    void Publish(const PresentReceiptResult& result) noexcept {
+        if (!result.resolved ||
+            !PresentStatusRequiresRefresh(result.status) ||
+            result.context.presentation_epoch == 0 ||
+            result.context.drawable_generation == 0 ||
+            result.context.request_serial == 0) {
+            return;
+        }
+        try {
+            std::unique_lock<std::mutex> lock(mutex);
+            const bool replace =
+                !latest_recovery.has_value() ||
+                result.context.presentation_epoch >
+                    latest_recovery->context.presentation_epoch ||
+                (result.context.presentation_epoch ==
+                     latest_recovery->context.presentation_epoch &&
+                 (PresentRecoveryPriority(result.status) >
+                      PresentRecoveryPriority(latest_recovery->status) ||
+                  (PresentRecoveryPriority(result.status) ==
+                       PresentRecoveryPriority(latest_recovery->status) &&
+                   result.context.request_serial >=
+                       latest_recovery->context.request_serial)));
+            if (replace) {
+                latest_recovery = result;
+                recovery_pending.store(true, std::memory_order_release);
+            }
+        } catch (...) {
+        }
+    }
+
+    [[nodiscard]] std::optional<PresentReceiptResult>
+    ConsumeLatestRecovery() noexcept {
+        try {
+            std::unique_lock<std::mutex> lock(mutex);
+            if (!latest_recovery.has_value()) {
+                recovery_pending.store(false, std::memory_order_release);
+                return std::nullopt;
+            }
+            std::optional<PresentReceiptResult> result =
+                std::move(latest_recovery);
+            latest_recovery.reset();
+            recovery_pending.store(false, std::memory_order_release);
+            return result;
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+
+    [[nodiscard]] bool HasPendingRecovery() const noexcept {
+        return recovery_pending.load(std::memory_order_acquire);
+    }
+
+    void Reset() noexcept {
+        try {
+            std::unique_lock<std::mutex> lock(mutex);
+            latest_recovery.reset();
+            recovery_pending.store(false, std::memory_order_release);
+        } catch (...) {
+        }
+    }
+
+private:
+    mutable std::mutex                  mutex;
+    std::optional<PresentReceiptResult> latest_recovery{};
+    std::atomic_bool                    recovery_pending{false};
+};
+
+using PresentFeedbackMailboxRef = SharedPtr<PresentFeedbackMailbox>;
 
 class PresentReceipt {
 public:
+    PresentReceipt() = default;
+
+    explicit PresentReceipt(
+        PresentReceiptContext     _context,
+        PresentFeedbackMailboxRef _feedback_mailbox = {}
+    ) :
+        context(_context),
+        feedback_mailbox(std::move(_feedback_mailbox)) {}
+
     void Resolve(bool _submitted, bool _recreate_swapchain = false) {
+        Resolve(
+            _submitted,
+            _recreate_swapchain ?
+                (_submitted ? EPresentStatus::Suboptimal :
+                              EPresentStatus::OutOfDate) :
+                (_submitted ? EPresentStatus::Success :
+                              EPresentStatus::Rejected),
+            EPresentStage::None
+        );
+    }
+
+    void Resolve(
+        bool           _submitted,
+        EPresentStatus _status,
+        EPresentStage  _stage
+    ) {
         {
             std::unique_lock<std::mutex> lock(mutex);
             ++resolution_attempts;
@@ -2213,7 +2366,14 @@ public:
             }
             result.resolved            = true;
             result.submitted           = _submitted;
-            result.recreate_swapchain  = _recreate_swapchain;
+            result.recreate_swapchain  =
+                PresentStatusRequiresRefresh(_status);
+            result.status              = _status;
+            result.stage               = _stage;
+            result.context             = context;
+            if (feedback_mailbox) {
+                feedback_mailbox->Publish(result);
+            }
             resolved                   = true;
         }
         cv.notify_all();
@@ -2229,17 +2389,28 @@ public:
         return result;
     }
 
+    [[nodiscard]] std::optional<PresentReceiptResult>
+    TryGetResult() const {
+        std::unique_lock<std::mutex> lock(mutex);
+        if (!resolved) {
+            return std::nullopt;
+        }
+        return result;
+    }
+
     [[nodiscard]] uint32 ResolutionAttemptCount() const noexcept {
         std::unique_lock<std::mutex> lock(mutex);
         return resolution_attempts;
     }
 
 private:
-    mutable std::mutex       mutex;
-    std::condition_variable  cv;
-    PresentReceiptResult     result{};
-    bool                     resolved{false};
-    uint32                   resolution_attempts{0};
+    mutable std::mutex        mutex;
+    std::condition_variable   cv;
+    PresentReceiptResult      result{};
+    PresentReceiptContext     context{};
+    PresentFeedbackMailboxRef feedback_mailbox{};
+    bool                      resolved{false};
+    uint32                    resolution_attempts{0};
 };
 
 using PresentReceiptRef = SharedPtr<PresentReceipt>;
