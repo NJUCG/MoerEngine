@@ -1273,17 +1273,26 @@ VulkanSubmissionExecutor::~VulkanSubmissionExecutor() {
     }
 }
 
-void VulkanSubmissionExecutor::Completion::Signal() {
+void VulkanSubmissionExecutor::Completion::Signal(
+    std::exception_ptr _failure
+) {
     {
         std::lock_guard lock(mutex);
+        failure = std::move(_failure);
         done = true;
     }
     cv.notify_all();
 }
 
 void VulkanSubmissionExecutor::Completion::Wait() {
+    std::exception_ptr wait_failure{};
     std::unique_lock lock(mutex);
     cv.wait(lock, [this] { return done; });
+    wait_failure = failure;
+    lock.unlock();
+    if (wait_failure) {
+        std::rethrow_exception(wait_failure);
+    }
 }
 
 VulkanSubmissionExecutor::BatchRejectionPublication::
@@ -1627,6 +1636,39 @@ GraphEventRef VulkanSubmissionExecutor::Sync(ERHISyncDepth _depth) {
     return MakeCompletedEvent();
 }
 
+GraphEventRef VulkanSubmissionExecutor::DrainPresentation(
+    RHIPresentationDrainTarget _target
+) {
+    if (!_target.IsValid()) {
+        throw std::invalid_argument(
+            "invalid Vulkan Presentation drain target"
+        );
+    }
+
+    auto completion = std::make_shared<Completion>();
+    {
+        std::lock_guard lock(mutex);
+        if (!accepting) {
+            throw std::runtime_error(
+                "Vulkan Presentation drain rejected during shutdown"
+            );
+        }
+        requests.emplace_back(Request{
+            .kind                = ERequestKind::PresentationDrain,
+            .sync_depth          = ERHISyncDepth::Present,
+            .presentation_target =
+                std::optional<RHIPresentationDrainTarget>(
+                    std::move(_target)
+                ),
+            .completion          = completion,
+        });
+    }
+    cv.notify_one();
+    NotifyVulkanBackendSyncWait();
+    completion->Wait();
+    return MakeCompletedEvent();
+}
+
 void VulkanSubmissionExecutor::Flush(ERHIFlushDepth) {
     // Enqueue publishes directly to the runtime FIFO and wakes its owner.
     // SubmitGPU intentionally does not wait; Sync is the explicit host boundary.
@@ -1732,6 +1774,7 @@ void VulkanSubmissionExecutor::RunExecutor() {
         }
 
         BatchExceptionState exception_state{};
+        std::exception_ptr  request_failure{};
         const VulkanSubmissionDetail::WorkerRequestDispatchResult dispatch_result =
             VulkanSubmissionDetail::DispatchWorkerRequestNoexcept(
                 request.kind,
@@ -1740,7 +1783,19 @@ void VulkanSubmissionExecutor::RunExecutor() {
                         ProcessBatch(request.batch, exception_state);
                     } else {
                         DrainPipelineBatches();
-                        ProcessSync(request.sync_depth);
+                        if (request.kind ==
+                            ERequestKind::PresentationDrain) {
+                            if (!request.presentation_target.has_value()) {
+                                throw std::runtime_error(
+                                    "Presentation drain request lost its target"
+                                );
+                            }
+                            ProcessPresentationDrain(
+                                std::move(*request.presentation_target)
+                            );
+                        } else {
+                            ProcessSync(request.sync_depth);
+                        }
                     }
                 },
                 [&] {
@@ -1766,9 +1821,25 @@ void VulkanSubmissionExecutor::RunExecutor() {
                         exception_state.rejection_publication
                     );
                 },
-                [&] { CompleteRequest(request.completion); },
+                [&] {
+                    CompleteRequest(
+                        request.completion,
+                        request.kind ==
+                                ERequestKind::PresentationDrain ?
+                            request_failure :
+                            std::exception_ptr{}
+                    );
+                },
                 [&](VulkanSubmissionDetail::EWorkerRequestFailurePhase _phase,
                     const std::exception_ptr& _exception) {
+                    if (request.kind ==
+                            ERequestKind::PresentationDrain &&
+                        _phase ==
+                            VulkanSubmissionDetail::
+                                EWorkerRequestFailurePhase::Process &&
+                        !request_failure) {
+                        request_failure = _exception;
+                    }
                     LatchHardFailure(
                         StreamPosition{
                             request.batch.sequence,
@@ -2464,6 +2535,9 @@ void VulkanSubmissionExecutor::ReportRequestFailure(
             break;
         case ERequestKind::Sync:
             kind_name = "Sync";
+            break;
+        case ERequestKind::PresentationDrain:
+            kind_name = "PresentationDrain";
             break;
         case ERequestKind::Stop:
             kind_name = "Stop";
@@ -4228,7 +4302,8 @@ void VulkanSubmissionExecutor::ProcessBatch(
 }
 
 void VulkanSubmissionExecutor::ProcessSync(ERHISyncDepth _depth) {
-    ExecuteOnSubmissionThread([this, _depth] {
+    Array<PresentationDrainPoint> presentation_points =
+        ExecuteOnSubmissionThread([this, _depth] {
         LOG_INFO(
             "[RHIExecutor][Vulkan] sync begin depth={} gfx={} compute={} copy_timeline={}",
             static_cast<uint32>(_depth),
@@ -4242,7 +4317,21 @@ void VulkanSubmissionExecutor::ProcessSync(ERHISyncDepth _depth) {
         RenderDevice::Get().GetCommandQueue(EQueueType::Graphics).Sync();
         RenderDevice::Get().GetCommandQueue(EQueueType::Compute).Sync();
         RenderDevice::Get().GetCopyQueue().Sync(last_copy_timeline);
+        if (_depth == ERHISyncDepth::Present) {
+            auto& graphics_queue = static_cast<VkCommandQueue&>(
+                RenderDevice::Get().GetCommandQueue(
+                    EQueueType::Graphics
+                )
+            );
+            return graphics_queue.FreezeAllPresentationDrains();
+        }
+        return Array<PresentationDrainPoint>{};
     });
+    for (const PresentationDrainPoint& point : presentation_points) {
+        if (point.IsValid()) {
+            point.GetState()->WaitRetired(point);
+        }
+    }
     gpu_frontier.fill(std::nullopt);
     async_scope_entry_frontier.fill(std::nullopt);
     async_scope_seen_queues.fill(false);
@@ -4252,11 +4341,33 @@ void VulkanSubmissionExecutor::ProcessSync(ERHISyncDepth _depth) {
     LOG_INFO("[RHIExecutor][Vulkan] sync complete depth={}", static_cast<uint32>(_depth));
 }
 
+void VulkanSubmissionExecutor::ProcessPresentationDrain(
+    RHIPresentationDrainTarget _target
+) {
+    PresentationDrainPoint point = ExecuteOnSubmissionThread(
+        [target = std::move(_target)]() mutable {
+            auto& graphics_queue = static_cast<VkCommandQueue&>(
+                RenderDevice::Get().GetCommandQueue(
+                    EQueueType::Graphics
+                )
+            );
+            return graphics_queue.FreezePresentationDrain(target);
+        }
+    );
+    if (!point.IsValid()) {
+        throw std::runtime_error(
+            "Submission owner could not freeze the requested Presentation frontier"
+        );
+    }
+    point.GetState()->WaitRetired(point);
+}
+
 void VulkanSubmissionExecutor::CompleteRequest(
-    const std::shared_ptr<Completion>& _completion
+    const std::shared_ptr<Completion>& _completion,
+    std::exception_ptr                 _failure
 ) {
     if (_completion) {
-        _completion->Signal();
+        _completion->Signal(std::move(_failure));
     }
 }
 

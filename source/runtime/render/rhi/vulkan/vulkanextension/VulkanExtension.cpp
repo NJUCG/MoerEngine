@@ -27,8 +27,23 @@ std::shared_ptr<VulkanDeviceExtension> CreateDeviceExtension(const VulkanExtensi
 TExtensionArray VulkanInstanceExtension::GetMERequiredInstanceExtensions() {
     TExtensionArray extensions;
     ForEachExtensionDesc(EVulkanExtensionKind::Instance, [&](const VulkanExtensionDesc& _desc) {
-        extensions.emplace_back(_desc.name);
+        if (!_desc.optional) {
+            extensions.emplace_back(_desc.name);
+        }
     });
+    return extensions;
+}
+
+TExtensionArray VulkanInstanceExtension::GetMEOptionalInstanceExtensions() {
+    TExtensionArray extensions;
+    ForEachExtensionDesc(
+        EVulkanExtensionKind::Instance,
+        [&](const VulkanExtensionDesc& _desc) {
+            if (_desc.optional) {
+                extensions.emplace_back(_desc.name);
+            }
+        }
+    );
     return extensions;
 }
 

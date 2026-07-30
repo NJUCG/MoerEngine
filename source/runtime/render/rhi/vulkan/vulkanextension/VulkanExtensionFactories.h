@@ -1,11 +1,13 @@
 #ifndef VULKAN_EXTENSION_FACTORIES_H
 #define VULKAN_EXTENSION_FACTORIES_H
 
+#include "RenderAPI.h"
 #include "VulkanExtension.h"
 
 namespace Moer::Render {
 
-std::shared_ptr<VulkanDeviceExtension> CreateVulkanEXTSwapchainMaintenance1Extension(bool _optional);
+RENDER_API std::shared_ptr<VulkanDeviceExtension>
+CreateVulkanEXTSwapchainMaintenance1Extension(bool _optional);
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRAccelerationStructureExtension(bool _optional);
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRRayTracingPipelineExtension(bool _optional);
 std::shared_ptr<VulkanDeviceExtension> CreateVulkanKHRRayQueryExtension(bool _optional);

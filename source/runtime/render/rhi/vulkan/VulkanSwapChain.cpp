@@ -182,63 +182,40 @@ ChooseSwapExtent(uint32_t* width, uint32_t* height, const VkSurfaceCapabilitiesK
 VkSwapchain::VkSwapchain(RenderDevice::Impl& _device, const SwapchainCreateInfo& _info) :
     Swapchain(),
     device(*static_cast<VulkanDevice*>(&_device)) {
-    present_threads.resize(max_frames_in_flight);
     static_cast<void>(CreateOrRecreate(_info));
 }
 bool VkSwapchain::WaitFrameInFlight() {
-    // if (image_idx < max_frames_in_flight) {
-    //     return;
-    // }
-    // auto frame_offset = image_idx % max_frames_in_flight;
-    // vkWaitForFences(device.GetDevice(), 1, &in_flight_fences[frame_offset], VK_TRUE, UINT64_MAX);
-    // vkResetFences(device.GetDevice(), 1, &in_flight_fences[frame_offset]);
-    while (!device.IsFaulted() &&
-           cur_present_cnt.load(std::memory_order_relaxed) >= max_frames_in_flight) {
-        std::this_thread::yield();
+    if (!device.HasDeviceExtension(
+            VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME
+        )) {
+        return !device.IsFaulted();
     }
-    return !device.IsFaulted();
+    return PreparePresentFence(image_idx);
 }
 
-bool VkSwapchain::WaitFrameInFlight(uint64 _image_idx) {
-    // if (_image_idx < max_frames_in_flight) {
-    //     return;
-    // }
-    auto frame_offset = _image_idx % max_frames_in_flight;
-    while (!device.IsFaulted()) {
-        const VulkanOperationContext context{
-            .operation  = EVulkanFaultOperation::PresentFenceWait,
-            .queue_type = EQueueType::Graphics,
-            .queue      = device.GetPresentQueue(),
-            .timeline   = _image_idx,
-        };
-        const VkResult result = vkWaitForFences(
-            device.GetDevice(), 1, &in_flight_fences[frame_offset], VK_TRUE, 50'000'000
-        );
-        if (result == VK_TIMEOUT) {
-            continue;
-        }
-        if (result != VK_SUCCESS) {
-            device.TryLatchFirstFault(context, result);
-            if (result != VK_ERROR_DEVICE_LOST) {
-                device.EmergencyExitWithoutVulkanCleanup(context, result);
-            }
-            return false;
-        }
-        if (device.IsDeviceLost()) {
-            return false;
-        }
-        const VkResult reset_result = device.ResetFence(
-            in_flight_fences[frame_offset],
-            VulkanOperationContext{
-                .operation  = EVulkanFaultOperation::PresentFenceReset,
-                .queue_type = EQueueType::Graphics,
-                .queue      = device.GetPresentQueue(),
-                .timeline   = _image_idx,
-            }
-        );
-        return reset_result == VK_SUCCESS && !device.IsFaulted();
+PresentationCompletionTicket VkSwapchain::ReservePresentCompletion(
+    PresentationCompletionIdentity _identity
+) {
+    const PresentationCompletionStateRef& state =
+        GetPresentationCompletionState();
+    if (!state || max_frames_in_flight == 0 ||
+        present_fence_slots.empty()) {
+        return {};
     }
-    return false;
+
+    const uint32 slot_index =
+        static_cast<uint32>(image_idx % max_frames_in_flight);
+    PresentFenceSlot& slot = present_fence_slots[slot_index];
+    ++slot.generation;
+    if (slot.generation == 0) {
+        ++slot.generation;
+    }
+    _identity.state_instance_id = state->GetInstanceId();
+    return state->Reserve(
+        _identity,
+        slot_index,
+        slot.generation
+    );
 }
 
 VkFence VkSwapchain::GetInFlightFence(uint64 _index) {
@@ -297,7 +274,12 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         return false;
     }
 
-    Sync();
+    // PresentationSurface owns this destructive lifecycle boundary and must
+    // complete its targeted Presentation drain before native recreation.
+    assert(
+        !GetPresentationCompletionState()->HasOutstanding() &&
+        "Swapchain recreate requires a completed targeted Presentation drain"
+    );
     if (device.IsFaulted()) {
         return false;
     }
@@ -593,7 +575,11 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     }
 
     const uint new_max_frames_in_flight = std::min(max_frames_in_flight, uint(image_cnt));
-    const bool recreate_fences = in_flight_fences.size() != new_max_frames_in_flight;
+    // Every successful lifecycle transaction receives fresh unsignalled Present
+    // fences. Completion owns observation, Submission owns slot reset, and the
+    // Render owner may destroy the retired set only after its targeted drain;
+    // no caller-side reset is therefore required or allowed.
+    const bool recreate_fences = true;
     new_render_finished_fences.resize(image_cnt, VK_NULL_HANDLE);
     VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     for (uint i = 0; i < image_cnt; i++) {
@@ -688,6 +674,8 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     if (recreate_fences) {
         in_flight_fences = std::move(new_in_flight_fences);
     }
+    present_fence_slots.clear();
+    present_fence_slots.resize(new_max_frames_in_flight);
     image_idx = 0;
     const bool presentation_ready = IsPresentationReady();
     if (presentation_ready) {
@@ -696,8 +684,6 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     return presentation_ready;
 }
 VkSwapchain::~VkSwapchain() {
-    Sync();
-
     for (VulkanTexture* texture : swapchain_textures) {
         MoerDelete(texture);
     }
@@ -761,23 +747,35 @@ VkSwapchain::AcquireResult VkSwapchain::AquireNextImage(
     return {outcome, VK_NULL_HANDLE, UINT32_MAX, image_idx};
 }
 
-VulkanOperationResult VkSwapchain::Present(
+VkSwapchain::PresentResult VkSwapchain::Present(
     VkQueue _queue,
     uint    _index,
     uint64  _timeline,
-    uint64  _work_serial
+    uint64  _work_serial,
+    const PresentationCompletionTicket& _completion
 ) {
+    PresentResult present_result{};
+    const auto set_wsi_mode =
+        [this, &_completion](EPresentationWsiCompletionMode _mode) {
+            if (_completion.IsValid() &&
+                !GetPresentationCompletionState()->SetWsiMode(
+                    _completion, _mode
+                )) {
+                std::terminate();
+            }
+        };
     if (_index == UINT32_MAX) {
-        return {EVulkanOperationStatus::Retry, VK_NOT_READY};
+        present_result.outcome = {
+            EVulkanOperationStatus::Retry, VK_NOT_READY
+        };
+        set_wsi_mode(EPresentationWsiCompletionMode::Immediate);
+        return present_result;
     }
     VkSemaphore finished_semaphores[] = {GetRenderFinishedFence(_index)};
     // 如果启用了 VK_EXT_swapchain_maintenance1，则使用 present fence 优化队列同步；
     // 否则退回到兼容路径，不挂 VkSwapchainPresentFenceInfoEXT，避免验证层报扩展未启用。
     const bool use_present_fence =
         device.HasDeviceExtension(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
-    if (use_present_fence && !PreparePresentFence(image_idx)) {
-        return {EVulkanOperationStatus::Rejected, device.GetFirstFaultResult()};
-    }
 
     VkSwapchainPresentFenceInfoEXT present_fence_info{VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_EXT};
     if (use_present_fence) {
@@ -792,7 +790,7 @@ VulkanOperationResult VkSwapchain::Present(
     present_info.swapchainCount     = 1;
     present_info.pSwapchains        = &handle;
     present_info.pImageIndices      = &_index;
-    const VulkanOperationResult outcome = device.PresentOnQueue(
+    present_result.outcome = device.PresentOnQueue(
         _queue,
         present_info,
         VulkanOperationContext{
@@ -803,122 +801,93 @@ VulkanOperationResult VkSwapchain::Present(
             .work_serial = _work_serial,
         }
     );
-    if (use_present_fence && (outcome.result == VK_SUCCESS || outcome.result == VK_SUBOPTIMAL_KHR)) {
-        // 仅在使用 present fence 的情况下异步等待 in_flight_fences
-        EnqueuePresent(image_idx);
+    present_result.accepted =
+        present_result.outcome.result == VK_SUCCESS ||
+        present_result.outcome.result == VK_SUBOPTIMAL_KHR;
+    // Recoverable WSI errors reject the presentation request, but Vulkan
+    // still considers the associated queue operations enqueued. Keep that
+    // lifetime fact separate from the receipt-facing success bit.
+    present_result.wsi_enqueued =
+        present_result.accepted ||
+        present_result.outcome.result == VK_ERROR_OUT_OF_DATE_KHR ||
+        present_result.outcome.result == VK_ERROR_SURFACE_LOST_KHR ||
+        present_result.outcome.result ==
+            VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT;
+    present_result.uses_present_fence =
+        present_result.wsi_enqueued && use_present_fence;
+
+    if (_completion.IsValid()) {
+        // Present fences cover both accepted presentation and the queue
+        // operations retained after recoverable WSI errors.
+        if (present_result.wsi_enqueued && use_present_fence) {
+            set_wsi_mode(
+                EPresentationWsiCompletionMode::PresentFence
+            );
+            const uint32 slot_index = _completion.GetFenceSlot();
+            if (slot_index >= present_fence_slots.size() ||
+                present_fence_slots[slot_index].generation !=
+                    _completion.GetSlotGeneration()) {
+                // The native Present is already accepted. Continuing without
+                // the exact slot generation could race reset/destruction.
+                std::terminate();
+            }
+            present_fence_slots[slot_index].completion = _completion;
+            present_result.completion_fence =
+                in_flight_fences[slot_index];
+        } else if (present_result.wsi_enqueued) {
+            set_wsi_mode(
+                EPresentationWsiCompletionMode::QueueIdleFallback
+            );
+        } else {
+            set_wsi_mode(
+                present_result.outcome.status ==
+                        EVulkanOperationStatus::Faulted ?
+                    EPresentationWsiCompletionMode::Failed :
+                    EPresentationWsiCompletionMode::Immediate
+            );
+        }
     }
     ++image_idx;
-    return outcome;
-}
-
-void VkSwapchain::OnFinishPresent(uint64 _image_idx) {
-    cur_present_cnt.fetch_sub(1, std::memory_order_acq_rel);
+    return present_result;
 }
 
 bool VkSwapchain::PreparePresentFence(uint64 _present_idx) {
-    auto& thread = present_threads[_present_idx % max_frames_in_flight];
-    if (thread.joinable()) {
-        thread.join();
+    if (in_flight_fences.empty() || present_fence_slots.empty()) {
+        return false;
     }
+    const uint32 slot_index =
+        static_cast<uint32>(_present_idx % present_fence_slots.size());
+    PresentFenceSlot& slot = present_fence_slots[slot_index];
+    if (!slot.completion.IsValid()) {
+        return !device.IsFaulted();
+    }
+
+    const PresentationCompletionStateRef& state =
+        GetPresentationCompletionState();
+    if (!state) {
+        return false;
+    }
+    state->WaitForWsi(slot.completion);
+    if (device.IsFaulted() ||
+        slot.completion.GetWsiOutcome() !=
+            EPresentationWsiCompletionOutcome::Succeeded) {
+        return false;
+    }
+
+    const VkResult result = device.ResetFence(
+        in_flight_fences[slot_index],
+        VulkanOperationContext{
+            .operation  = EVulkanFaultOperation::PresentFenceReset,
+            .queue_type = EQueueType::Graphics,
+            .queue      = device.GetPresentQueue(),
+            .timeline   = _present_idx,
+        }
+    );
+    if (result != VK_SUCCESS) {
+        return false;
+    }
+    slot.completion = {};
     return !device.IsFaulted();
 }
 
-void VkSwapchain::EnqueuePresent(uint64 _present_idx) {
-
-    cur_present_cnt.fetch_add(1, std::memory_order_acq_rel);
-    auto& thread = present_threads[_present_idx % max_frames_in_flight];
-    assert(!thread.joinable() && "Present fence slot must be retired before reuse");
-    try {
-        thread = std::jthread([this, _present_idx]() {
-            RHIThreadRoleScope owner_scope(ERHIThreadRole::Completion);
-            const uint64 frame_index = _present_idx % max_frames_in_flight;
-            while (!device.IsDeviceLost()) {
-                const VulkanOperationContext wait_context{
-                    .operation  = EVulkanFaultOperation::PresentFenceWait,
-                    .queue_type = EQueueType::Graphics,
-                    .queue      = device.GetPresentQueue(),
-                    .timeline   = _present_idx,
-                };
-                const VkResult result = vkWaitForFences(
-                    device.GetDevice(),
-                    1,
-                    &in_flight_fences[frame_index],
-                    VK_TRUE,
-                    50'000'000
-                );
-                if (result == VK_TIMEOUT) {
-                    continue;
-                }
-                if (result == VK_SUCCESS && !device.IsDeviceLost()) {
-                    const VkResult reset_result = device.ResetFence(
-                        in_flight_fences[frame_index],
-                        VulkanOperationContext{
-                            .operation  =
-                                EVulkanFaultOperation::PresentFenceReset,
-                            .queue_type = EQueueType::Graphics,
-                            .queue      = device.GetPresentQueue(),
-                            .timeline   = _present_idx,
-                        }
-                    );
-                    if (reset_result != VK_SUCCESS) {
-                        break;
-                    }
-                } else if (result != VK_SUCCESS) {
-                    device.TryLatchFirstFault(wait_context, result);
-                    if (result != VK_ERROR_DEVICE_LOST) {
-                        device.EmergencyExitWithoutVulkanCleanup(
-                            wait_context, result
-                        );
-                    }
-                }
-                break;
-            }
-            OnFinishPresent(_present_idx);
-        });
-    } catch (...) {
-        // vkQueuePresentKHR has already accepted this frame and incremented
-        // cur_present_cnt. Continuing without a waiter would make Sync hang
-        // forever and allow an in-flight present fence to be reused.
-        cur_present_cnt.fetch_sub(1, std::memory_order_acq_rel);
-        std::terminate();
-    }
-}
-
-void VkSwapchain::Sync() {
-    //wait for present copy
-    while (!device.IsDeviceLost() && cur_present_cnt.load(std::memory_order_relaxed) > 0) {
-        std::this_thread::yield();
-    }
-    for (auto& thread : present_threads) {
-        if (thread.joinable()) {
-            thread.join();
-        }
-    }
-    if (device.IsDeviceLost()) {
-        return;
-    }
-    VkQueue graphics_queue = device.GetGraphicsQueue();
-    VkQueue present_queue  = device.GetPresentQueue();
-    VkResult result        = device.WaitQueueIdle(
-        graphics_queue,
-        VulkanOperationContext{
-            .operation  = EVulkanFaultOperation::QueueWaitIdle,
-            .queue_type = EQueueType::Graphics,
-            .queue      = graphics_queue,
-        }
-    );
-    if (result != VK_SUCCESS && device.IsDeviceLost()) {
-        return;
-    }
-    if (present_queue != graphics_queue) {
-        (void)device.WaitQueueIdle(
-            present_queue,
-            VulkanOperationContext{
-                .operation  = EVulkanFaultOperation::QueueWaitIdle,
-                .queue_type = EQueueType::Graphics,
-                .queue      = present_queue,
-            }
-        );
-    }
-}
 } // namespace Moer::Render

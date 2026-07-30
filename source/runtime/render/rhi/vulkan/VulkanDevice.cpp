@@ -10,6 +10,7 @@
 #include "VulkanPlatform.h"
 #include "VulkanQueue.h"
 #include "VulkanRHIResource.h"
+#include "VulkanSubmissionDiagnostics.h"
 #include "VulkanUtil.h"
 #include "plugin/VulkanCooperativeSupport.h"
 #include "plugin/VulkanNrdPlugin.h"
@@ -205,6 +206,17 @@ void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
     };
 
     const auto instance_extensions_required = VulkanInstanceExtension::GetMERequiredInstanceExtensions();
+    const auto instance_extensions_optional =
+        VulkanInstanceExtension::GetMEOptionalInstanceExtensions();
+    const bool can_enable_surface_maintenance1 =
+        CanEnableVulkanSurfaceMaintenance1(
+            instance_extensions.contains(
+                VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME
+            ),
+            instance_extensions.contains(
+                VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME
+            )
+        );
 
     Array<const char*> instance_extensions_loaded;
     bool               b_instance_extensions_fully_supported = true;
@@ -213,6 +225,22 @@ void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
             instance_extensions_loaded.emplace_back(ext.data());
         else
             b_instance_extensions_fully_supported = false;
+    }
+    for (const auto& ext : instance_extensions_optional) {
+        if (!instance_extensions.contains(ext.data())) {
+            continue;
+        }
+        if (ext == VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME &&
+            !can_enable_surface_maintenance1) {
+            // VK_EXT_surface_maintenance1 has an explicit instance-extension
+            // dependency. Do not enable a capability that the loader cannot
+            // legally satisfy on non-Windows platforms.
+            continue;
+        }
+        instance_extensions_loaded.emplace_back(ext.data());
+        if (ext == VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME) {
+            surface_maintenance1_enabled = true;
+        }
     }
     CHECK_ASSERT(
         b_instance_extensions_fully_supported, "Not all required instance extensions are supported."
@@ -372,6 +400,21 @@ void VulkanDevice::InitGpu(uint32 _api_version) {
     auto gpu_extensions = VulkanDevice::GetGpuExtensions(m_gpu);
 
     m_device_info.enabled_extensions = VulkanDeviceExtension::GetMEEnabledDeviceExtensions(gpu_extensions);
+    if (!CanEnableVulkanSwapchainMaintenance1(
+            surface_maintenance1_enabled,
+            gpu_extensions.contains(
+                VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME
+            )
+        )) {
+        std::erase_if(
+            m_device_info.enabled_extensions,
+            [](const std::shared_ptr<VulkanDeviceExtension>& extension) {
+                return extension &&
+                       extension->GetExtensionName() ==
+                           VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
+            }
+        );
+    }
 
     // Query core features
     m_device_info.core_features = VulkanDeviceFeatures::GetGpuFeatures(m_gpu, _api_version);
@@ -1244,6 +1287,7 @@ VkResult VulkanDevice::WaitQueueIdle(
         return VK_ERROR_DEVICE_LOST;
     }
 
+    NotifyVulkanQueueIdleWait(_context);
     const VkResult result = vkQueueWaitIdle(_queue);
     if (result == VK_SUCCESS) {
         return result;
@@ -1281,6 +1325,34 @@ VkResult VulkanDevice::ResetCommandPool(
     if (publish_fault) {
         std::unique_lock<std::shared_mutex> publish_gate(native_queue_gate);
         PublishFirstFaultLocked(_context, result, false, false);
+    }
+    return result;
+}
+
+VkResult VulkanDevice::GetFenceStatus(
+    VkFence _fence,
+    const VulkanOperationContext& _context
+) {
+    std::shared_lock<std::shared_mutex> gate(native_queue_gate);
+    if (IsFaulted()) {
+        gate.unlock();
+        return GetFirstFaultResult();
+    }
+
+    const VkResult result = vkGetFenceStatus(m_device, _fence);
+    if (result == VK_SUCCESS || result == VK_NOT_READY) {
+        return result;
+    }
+
+    const bool publish_fault = TryBeginFirstFault(result);
+    gate.unlock();
+    if (publish_fault) {
+        std::unique_lock<std::shared_mutex> publish_gate(
+            native_queue_gate
+        );
+        PublishFirstFaultLocked(
+            _context, result, false, false
+        );
     }
     return result;
 }

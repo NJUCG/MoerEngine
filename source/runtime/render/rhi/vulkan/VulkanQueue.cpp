@@ -18,6 +18,7 @@
 #include "platform/Platform.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
+#include "rhi/RHIExecutorBackend.h"
 #include "rhi/RHIIO.h"
 #include "rhi/RHIResource.h"
 
@@ -44,6 +45,11 @@ std::atomic<const VulkanBackendSyncWaitObserver*>
     g_backend_sync_wait_observer{nullptr};
 std::atomic<const VulkanQueueLocalSyncWaitObserver*>
     g_queue_local_sync_wait_observer{nullptr};
+std::atomic<const VulkanQueueIdleWaitObserver*>
+    g_queue_idle_wait_observer{nullptr};
+std::atomic<
+    const VulkanScriptedPresentFenceStatusOverrideForTesting*>
+    g_scripted_present_fence_status_override{nullptr};
 std::atomic<const VulkanScriptedQueryPreparationOverrideForTesting*>
     g_scripted_query_preparation_override{nullptr};
 std::atomic<const VulkanScriptedTimestampValidBitsOverrideForTesting*>
@@ -253,6 +259,26 @@ void NotifyQueueLocalSyncWait(
 }
 
 } // namespace
+
+void NotifyVulkanQueueIdleWait(
+    const VulkanOperationContext& _context
+) noexcept {
+    const VulkanQueueIdleWaitObserver* observer =
+        g_queue_idle_wait_observer.load(std::memory_order_acquire);
+    if (observer == nullptr) {
+        return;
+    }
+    observer->callback(
+        observer->context,
+        VulkanQueueIdleWaitEvent{
+            .context             = _context,
+            .native_queue_handle =
+                reinterpret_cast<uint64>(_context.queue),
+            .thread_id           = Platform::GetCurrentThreadID(),
+            .thread_role         = GetCurrentRHIThreadRole(),
+        }
+    );
+}
 
 void NotifyVulkanSubmissionDependencyWaitBlocked(
     EQueueType _queue,
@@ -524,6 +550,70 @@ bool RemoveVulkanQueueLocalSyncWaitObserver(
         std::memory_order_acq_rel,
         std::memory_order_acquire
     );
+}
+
+bool TryInstallVulkanQueueIdleWaitObserver(
+    const VulkanQueueIdleWaitObserver* _observer
+) noexcept {
+    if (_observer == nullptr || _observer->callback == nullptr) {
+        return false;
+    }
+    const VulkanQueueIdleWaitObserver* expected = nullptr;
+    return g_queue_idle_wait_observer.compare_exchange_strong(
+        expected,
+        _observer,
+        std::memory_order_release,
+        std::memory_order_relaxed
+    );
+}
+
+bool RemoveVulkanQueueIdleWaitObserver(
+    const VulkanQueueIdleWaitObserver* _observer
+) noexcept {
+    if (_observer == nullptr) {
+        return false;
+    }
+    const VulkanQueueIdleWaitObserver* expected = _observer;
+    return g_queue_idle_wait_observer.compare_exchange_strong(
+        expected,
+        nullptr,
+        std::memory_order_acq_rel,
+        std::memory_order_acquire
+    );
+}
+
+bool TryInstallVulkanScriptedPresentFenceStatusOverrideForTesting(
+    const VulkanScriptedPresentFenceStatusOverrideForTesting* _override
+) noexcept {
+    if (_override == nullptr || _override->callback == nullptr) {
+        return false;
+    }
+    const VulkanScriptedPresentFenceStatusOverrideForTesting* expected =
+        nullptr;
+    return g_scripted_present_fence_status_override.
+        compare_exchange_strong(
+            expected,
+            _override,
+            std::memory_order_release,
+            std::memory_order_relaxed
+        );
+}
+
+bool RemoveVulkanScriptedPresentFenceStatusOverrideForTesting(
+    const VulkanScriptedPresentFenceStatusOverrideForTesting* _override
+) noexcept {
+    if (_override == nullptr) {
+        return false;
+    }
+    const VulkanScriptedPresentFenceStatusOverrideForTesting* expected =
+        _override;
+    return g_scripted_present_fence_status_override.
+        compare_exchange_strong(
+            expected,
+            nullptr,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire
+        );
 }
 
 #pragma region[ utils ]
@@ -5304,6 +5394,25 @@ VkCommandQueue::~VkCommandQueue() {
         parallel_record_pool.reset();
     }
 
+    Array<PresentationDrainPoint> shutdown_presentation_points{};
+    {
+        // The runtime backend normally performs this Present-depth drain
+        // before queue destruction. Legacy/direct and exceptional teardown
+        // paths still need a final owner handoff so a queue-idle fallback
+        // cannot leave the Completion worker polling forever during join.
+        RHIThreadRoleScope submission_owner(
+            ERHIThreadRole::Submission
+        );
+        shutdown_presentation_points =
+            FreezeAllPresentationDrains();
+    }
+    for (const PresentationDrainPoint& point :
+         shutdown_presentation_points) {
+        if (point.IsValid()) {
+            point.GetState()->WaitRetired(point);
+        }
+    }
+
     {
         std::unique_lock<std::mutex> lock(event_mutex);
         completion_worker_running = false;
@@ -5461,6 +5570,9 @@ WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
         return {uint64(timeline), current_timeline};
     }
 
+    RHIThreadRoleScope submission_owner(
+        ERHIThreadRole::Submission
+    );
     std::unique_lock<std::mutex> lock(exec_mtx);
     const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
     if (thread_profile) {
@@ -5843,7 +5955,11 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
                 std::move(_swapchain),
                 std::move(source_texture),
                 std::move(deferred_releases),
-                current_timeline
+                current_timeline,
+                {},
+                VK_NULL_HANDLE,
+                false,
+                false
             );
             ResolvePresentReceiptNoexcept(
                 _receipt, false, PresentStatusFromVulkanOutcome(scripted.outcome), EPresentStage::Present
@@ -8099,14 +8215,17 @@ void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view, PresentReceipt
                 enqueue_depth
             );
             if (thread_profile) {
-                std::get<RhiPresentWork>(rhi_work_queue.back()).caller_ms =
-                    RhiThreadProfileMilliseconds(caller_started, std::chrono::steady_clock::now());
+            std::get<RhiPresentWork>(rhi_work_queue.back()).caller_ms =
+                RhiThreadProfileMilliseconds(caller_started, std::chrono::steady_clock::now());
             }
         }
         rhi_work_cv.notify_one();
         return;
     }
 
+    RHIThreadRoleScope submission_owner(
+        ERHIThreadRole::Submission
+    );
     std::unique_lock<std::mutex> lock(exec_mtx);
     const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
     if (thread_profile) {
@@ -8165,6 +8284,11 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
     EVulkanPresentorRetirementState presentor_state       = EVulkanPresentorRetirementState::Unused;
     UniquePtr<VulkanPresentor>      presentor{};
     Array<RHIResource*>             deferred_releases{};
+    PresentationCompletionTicket    presentation_completion{};
+    VkFence                         wsi_completion_fence{VK_NULL_HANDLE};
+    bool                            wsi_enqueued{false};
+    bool                            uses_present_fence{false};
+    bool                            presentation_wsi_classified{false};
 
     try {
         const VulkanScriptedPresentOverrideForTesting* scripted_override =
@@ -8284,6 +8408,34 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                     vk_tracker.Reset();
 
                     deferred_releases = TakeDeferredReleases();
+                    PresentReceiptContext receipt_context =
+                        _receipt ? _receipt->GetContext() :
+                                   PresentReceiptContext{};
+                    if (receipt_context.presentation_epoch == 0) {
+                        receipt_context.presentation_epoch = 1;
+                    }
+                    if (receipt_context.drawable_generation == 0) {
+                        receipt_context.drawable_generation = 1;
+                    }
+                    presentation_completion =
+                        sc->ReservePresentCompletion(
+                            PresentationCompletionIdentity{
+                                .presentation_epoch =
+                                    receipt_context.presentation_epoch,
+                                .drawable_generation =
+                                    receipt_context.drawable_generation,
+                                .request_serial =
+                                    receipt_context.request_serial,
+                            }
+                        );
+                    if (!presentation_completion.IsValid()) {
+                        throw std::runtime_error(
+                            "failed to reserve Presentation completion ticket"
+                        );
+                    }
+                    RegisterPresentationCompletionState(
+                        sc->GetPresentationCompletionState()
+                    );
                     queue.Signal(timeline, _timeline, VK_PIPELINE_STAGE_2_COPY_BIT);
                     queue.Wait(acquire.ready_semaphore, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
                     queue.Signal(sc->GetRenderFinishedFence(idx), VK_PIPELINE_STAGE_2_COPY_BIT);
@@ -8298,10 +8450,45 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                         presentor_state = EVulkanPresentorRetirementState::Submitted;
                         timeline->MarkSubmitted(_timeline);
 
-                        const VulkanOperationResult present_outcome =
-                            sc->Present(queue.GetHandle(), idx, _timeline, _serial);
-                        present_accepted = present_outcome.result == VK_SUCCESS ||
-                                           present_outcome.result == VK_SUBOPTIMAL_KHR;
+                        const VkSwapchain::PresentResult present_result =
+                            sc->Present(
+                                queue.GetHandle(),
+                                idx,
+                                _timeline,
+                                _serial,
+                                presentation_completion
+                            );
+                        presentation_wsi_classified = true;
+                        const VulkanOperationResult& present_outcome =
+                            present_result.outcome;
+                        present_accepted =
+                            present_result.accepted;
+                        wsi_enqueued =
+                            present_result.wsi_enqueued;
+                        wsi_completion_fence =
+                            present_result.completion_fence;
+                        uses_present_fence =
+                            present_result.uses_present_fence;
+                        if (present_result.wsi_enqueued &&
+                            !present_result.uses_present_fence) {
+                            // Without swapchain-maintenance fences, leaving one
+                            // unresolved fallback record per frame would retain
+                            // command pools, semaphores, and swapchain resources
+                            // without bound until a resize. Performance is
+                            // secondary on this compatibility path: the sole
+                            // Submission owner resolves the current surface
+                            // frontier immediately with queue idle.
+                            const PresentationCompletionIdentity&
+                                identity =
+                                    presentation_completion.GetIdentity();
+                            ResolvePresentationQueueIdleFallback(
+                                _sc->GetPresentationCompletionState()->
+                                    Freeze(
+                                        identity.presentation_epoch,
+                                        identity.drawable_generation
+                                    )
+                            );
+                        }
                         AccumulatePresentReceiptOutcome(
                             receipt_status, receipt_stage, present_outcome, EPresentStage::Present
                         );
@@ -8334,6 +8521,20 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
         }
     }
 
+    if (presentation_completion.IsValid() &&
+        !presentation_wsi_classified && _sc) {
+        // Close only the exceptional interval after reservation but before
+        // VkSwapchain::Present classified the WSI result. A completed Present
+        // call owns its classification even when it returned
+        // OUT_OF_DATE/SURFACE_LOST as non-accepted but enqueued operations.
+        if (!_sc->GetPresentationCompletionState()->SetWsiMode(
+                presentation_completion,
+                EPresentationWsiCompletionMode::Failed
+            )) {
+            std::terminate();
+        }
+    }
+
     CommitPresentCompletion(
         final_outcome,
         context,
@@ -8343,7 +8544,11 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
         std::move(_sc),
         std::move(_source_texture),
         std::move(deferred_releases),
-        _timeline
+        _timeline,
+        std::move(presentation_completion),
+        wsi_completion_fence,
+        wsi_enqueued,
+        uses_present_fence
     );
 
     if (receipt_status == EPresentStatus::Unresolved) {
@@ -8370,7 +8575,11 @@ void VkCommandQueue::CommitPresentCompletion(
     SwapchainRef&&                  _swapchain,
     TextureRef&&                    _source_texture,
     Array<RHIResource*>&&           _deferred_releases,
-    uint64                          _timeline
+    uint64                          _timeline,
+    PresentationCompletionTicket    _presentation_completion,
+    VkFence                         _wsi_completion_fence,
+    bool                            _wsi_enqueued,
+    bool                            _uses_present_fence
 ) noexcept {
     try {
         if (!_gpu_submitted &&
@@ -8395,7 +8604,11 @@ void VkCommandQueue::CommitPresentCompletion(
             std::move(_presentor),
             std::move(_swapchain),
             std::move(_source_texture),
-            std::move(_deferred_releases)
+            std::move(_deferred_releases),
+            std::move(_presentation_completion),
+            _wsi_completion_fence,
+            _wsi_enqueued,
+            _uses_present_fence
         );
         retirement_enqueued_serial = retirement_serial;
     } catch (...) {
@@ -8403,6 +8616,202 @@ void VkCommandQueue::CommitPresentCompletion(
         std::terminate();
     }
     queue_cv.notify_one();
+}
+
+bool VkCommandQueue::EnqueuePresentationCompletionProbeForTesting(
+    SwapchainRef                 _swapchain,
+    PresentationCompletionTicket _completion,
+    bool                         _uses_present_fence
+) {
+    if (queue.GetType() != EQueueType::Graphics ||
+        !_swapchain || !_completion.IsValid()) {
+        return false;
+    }
+    const PresentationCompletionStateRef state =
+        _swapchain->GetPresentationCompletionState();
+    if (!state ||
+        state->GetStateInstanceId() !=
+            _completion.GetIdentity().state_instance_id ||
+        (_uses_present_fence &&
+         g_scripted_present_fence_status_override.load(
+             std::memory_order_acquire
+         ) == nullptr)) {
+        return false;
+    }
+
+    try {
+        std::unique_lock<std::mutex> lock(event_mutex);
+        const uint64 retirement_serial =
+            retirement_enqueued_serial + 1;
+        event_queue.emplace_back(
+            std::in_place_type<
+                VulkanPresentationCompletionProbeForTesting>,
+            _completion.GetIssueSequence(),
+            true,
+            retirement_serial,
+            std::move(_swapchain),
+            std::move(_completion),
+            _uses_present_fence
+        );
+        retirement_enqueued_serial = retirement_serial;
+    } catch (...) {
+        return false;
+    }
+    queue_cv.notify_one();
+    return true;
+}
+
+bool VkCommandQueue::
+RegisterPresentationCompletionStateForShutdownProbeForTesting(
+    const PresentationCompletionStateRef& _state
+) {
+    if (queue.GetType() != EQueueType::Graphics || !_state ||
+        rhi_thread_enabled ||
+        !ClaimLegacyOwnership(
+            "RegisterPresentationCompletionStateForShutdownProbeForTesting"
+        )) {
+        return false;
+    }
+
+    RHIThreadRoleScope submission_owner(
+        ERHIThreadRole::Submission
+    );
+    std::unique_lock<std::mutex> lock(exec_mtx);
+    RegisterPresentationCompletionState(_state);
+    return true;
+}
+
+void VkCommandQueue::RegisterPresentationCompletionState(
+    const PresentationCompletionStateRef& _state
+) {
+    if (!_state) {
+        return;
+    }
+    assert(
+        GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
+        "Presentation state registration belongs to the Submission owner"
+    );
+
+    std::erase_if(
+        active_presentation_completion_states,
+        [](const std::weak_ptr<PresentationCompletionState>& weak_state) {
+            const PresentationCompletionStateRef state =
+                weak_state.lock();
+            return !state || !state->HasOutstanding();
+        }
+    );
+    const bool already_registered = std::ranges::any_of(
+        active_presentation_completion_states,
+        [&_state](
+            const std::weak_ptr<PresentationCompletionState>& weak_state
+        ) {
+            return weak_state.lock() == _state;
+        }
+    );
+    if (!already_registered) {
+        active_presentation_completion_states.emplace_back(_state);
+    }
+}
+
+PresentationDrainPoint VkCommandQueue::FreezePresentationDrain(
+    const RHIPresentationDrainTarget& _target
+) {
+    assert(
+        GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
+        "Presentation drain frontier belongs to the Submission owner"
+    );
+    if (!_target.IsValid() ||
+        _target.swapchain->GetPresentationCompletionState() !=
+            _target.completion_state) {
+        return {};
+    }
+
+    PresentationDrainPoint point = _target.completion_state->Freeze(
+        _target.presentation_epoch,
+        _target.drawable_generation
+    );
+    ResolvePresentationQueueIdleFallback(point);
+    return point;
+}
+
+Array<PresentationDrainPoint>
+VkCommandQueue::FreezeAllPresentationDrains() {
+    assert(
+        GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
+        "Global Presentation frontier belongs to the Submission owner"
+    );
+    std::erase_if(
+        active_presentation_completion_states,
+        [](const std::weak_ptr<PresentationCompletionState>& weak_state) {
+            const PresentationCompletionStateRef state =
+                weak_state.lock();
+            return !state || !state->HasOutstanding();
+        }
+    );
+
+    Array<PresentationDrainPoint> points{};
+    points.reserve(active_presentation_completion_states.size());
+    bool requires_queue_idle = false;
+    for (const std::weak_ptr<PresentationCompletionState>& weak_state :
+         active_presentation_completion_states) {
+        const PresentationCompletionStateRef state =
+            weak_state.lock();
+        if (!state) {
+            continue;
+        }
+        PresentationDrainPoint point = state->Freeze();
+        requires_queue_idle =
+            state->RequiresQueueIdle(point) || requires_queue_idle;
+        points.emplace_back(std::move(point));
+    }
+
+    if (requires_queue_idle && !vk_device.IsFaulted()) {
+        const VkQueue present_queue = vk_device.GetPresentQueue();
+        const VkResult result = vk_device.WaitQueueIdle(
+            present_queue,
+            VulkanOperationContext{
+                .operation  = EVulkanFaultOperation::QueueWaitIdle,
+                .queue_type = EQueueType::Graphics,
+                .queue      = present_queue,
+            }
+        );
+        if (result == VK_SUCCESS) {
+            for (const PresentationDrainPoint& point : points) {
+                if (point.IsValid()) {
+                    point.GetState()->ResolveQueueIdle(point);
+                }
+            }
+        }
+    }
+    return points;
+}
+
+void VkCommandQueue::ResolvePresentationQueueIdleFallback(
+    const PresentationDrainPoint& _point
+) {
+    if (!_point.IsValid() ||
+        !_point.GetState()->RequiresQueueIdle(_point) ||
+        vk_device.IsFaulted()) {
+        return;
+    }
+    assert(
+        GetCurrentRHIThreadRole() == ERHIThreadRole::Submission &&
+        "WSI queue-idle fallback belongs to the Submission owner"
+    );
+
+    const VkQueue present_queue = vk_device.GetPresentQueue();
+    const VkResult result = vk_device.WaitQueueIdle(
+        present_queue,
+        VulkanOperationContext{
+            .operation  = EVulkanFaultOperation::QueueWaitIdle,
+            .queue_type = EQueueType::Graphics,
+            .queue      = present_queue,
+            .timeline   = _point.GetThroughIssueSequence(),
+        }
+    );
+    if (result == VK_SUCCESS) {
+        _point.GetState()->ResolveQueueIdle(_point);
+    }
 }
 
 void VkCommandQueue::Sync() {
@@ -9110,6 +9519,187 @@ void VkCommandQueue::RhiThreadMain() {
     LOG_INFO("[Threading] RHIThread id = {} stopped", Platform::GetCurrentThreadID());
 }
 
+void VkCommandQueue::FinalizePresentRetirement(
+    VulkanPresentCompletionBatch& _batch,
+    bool                          _gpu_success,
+    bool                          _release_safe
+) noexcept {
+    assert(
+        GetCurrentRHIThreadRole() == ERHIThreadRole::Completion &&
+        "Present retirement belongs to the Completion owner"
+    );
+
+    PresentationCompletionStateRef completion_state{};
+    if (_batch.swapchain) {
+        completion_state =
+            _batch.swapchain->GetPresentationCompletionState();
+    }
+    PresentationCompletionTicket completion_ticket =
+        _batch.presentation_completion;
+
+    if (_batch.presentor) {
+        bool recycle_presentor = false;
+        if (_batch.presentor_state ==
+                EVulkanPresentorRetirementState::Submitted &&
+            _gpu_success && !vk_device.IsFaulted()) {
+            recycle_presentor =
+                _batch.presentor->CompleteSuccess() &&
+                _batch.presentor->Reset();
+        } else if (
+            _batch.presentor_state ==
+                EVulkanPresentorRetirementState::Unused &&
+            _release_safe && !vk_device.IsFaulted()
+        ) {
+            // No native command buffer was begun.
+            recycle_presentor = true;
+        }
+
+        if (recycle_presentor && !vk_device.IsFaulted()) {
+            presentors.Push(_batch.presentor.release());
+        } else {
+            vk_device.RecordAllocatorQuarantine();
+            vk_device.RecordSkippedCommandPoolReset();
+            presentor_quarantine.emplace_back(
+                std::move(_batch.presentor)
+            );
+        }
+    }
+
+    if (_gpu_success || _release_safe) {
+        for (auto* resource : _batch.deferred_releases) {
+            MoerDelete(resource);
+        }
+    } else {
+        for (auto* resource : _batch.deferred_releases) {
+            vk_device.EnqueueDeferredRelease(resource);
+        }
+    }
+    _batch.deferred_releases.clear();
+
+    // No code below this point may observe the native Present fence or touch
+    // retained Present resources. Drop strong resource ownership before
+    // publishing the task-local retirement point to the Render owner.
+    _batch.source_texture        = nullptr;
+    _batch.swapchain             = nullptr;
+    _batch.wsi_completion_fence  = VK_NULL_HANDLE;
+    _batch.wsi_enqueued          = false;
+    _batch.uses_present_fence    = false;
+
+    if (completion_ticket.IsValid()) {
+        if (!completion_state ||
+            !completion_state->PublishRetired(completion_ticket)) {
+            std::terminate();
+        }
+        _batch.presentation_completion = {};
+    }
+}
+
+bool VkCommandQueue::TryPollPresentRetirement(
+    PendingPresentRetirement& _pending
+) noexcept {
+    assert(
+        GetCurrentRHIThreadRole() == ERHIThreadRole::Completion &&
+        "Present fence observation belongs to the Completion owner"
+    );
+
+    VulkanPresentCompletionBatch& batch = _pending.batch;
+    if (!batch.presentation_completion.IsValid() ||
+        !batch.swapchain) {
+        std::terminate();
+    }
+    const PresentationCompletionStateRef completion_state =
+        batch.swapchain->GetPresentationCompletionState();
+    if (!completion_state) {
+        std::terminate();
+    }
+
+    const auto fail_wsi = [&](VkResult _result) {
+        VulkanOperationContext fault_context = batch.context;
+        fault_context.operation = EVulkanFaultOperation::PresentFenceWait;
+        fault_context.queue     = vk_device.GetPresentQueue();
+        fault_context.timeline =
+            batch.presentation_completion.GetIssueSequence();
+        if (_result == VK_SUCCESS) {
+            _result = VK_ERROR_UNKNOWN;
+        }
+        vk_device.TryLatchFirstFault(
+            fault_context, _result, false, false, true
+        );
+        if (!completion_state->MarkWsiFailed(
+                batch.presentation_completion
+            )) {
+            std::terminate();
+        }
+        FinalizePresentRetirement(batch, false, false);
+    };
+
+    if (vk_device.IsFaulted()) {
+        const VkResult fault_result =
+            vk_device.GetFirstFaultResult() == VK_SUCCESS ?
+                VK_ERROR_DEVICE_LOST :
+                vk_device.GetFirstFaultResult();
+        fail_wsi(fault_result);
+        return true;
+    }
+
+    if (!batch.uses_present_fence) {
+        if (!completion_state->WaitForWsi(
+                batch.presentation_completion,
+                std::chrono::nanoseconds::zero()
+            )) {
+            return false;
+        }
+        FinalizePresentRetirement(
+            batch, _pending.gpu_success, _pending.release_safe
+        );
+        return true;
+    }
+
+    const VulkanScriptedPresentFenceStatusOverrideForTesting*
+        scripted_fence_status =
+            g_scripted_present_fence_status_override.load(
+                std::memory_order_acquire
+            );
+    VkResult fence_status = VK_ERROR_UNKNOWN;
+    if (batch.scripted_fence_status_allowed &&
+        scripted_fence_status != nullptr) {
+        fence_status = scripted_fence_status->callback(
+            scripted_fence_status->context,
+            batch.presentation_completion.GetIssueSequence()
+        );
+    } else {
+        if (batch.wsi_completion_fence == VK_NULL_HANDLE) {
+            fail_wsi(VK_ERROR_UNKNOWN);
+            return true;
+        }
+        VulkanOperationContext fence_context = batch.context;
+        fence_context.operation =
+            EVulkanFaultOperation::PresentFenceWait;
+        fence_context.queue = vk_device.GetPresentQueue();
+        fence_context.timeline =
+            batch.presentation_completion.GetIssueSequence();
+        fence_status = vk_device.GetFenceStatus(
+            batch.wsi_completion_fence, fence_context
+        );
+    }
+    if (fence_status == VK_NOT_READY) {
+        return false;
+    }
+    if (fence_status != VK_SUCCESS) {
+        fail_wsi(fence_status);
+        return true;
+    }
+    if (!completion_state->MarkWsiComplete(
+            batch.presentation_completion
+        )) {
+        std::terminate();
+    }
+    FinalizePresentRetirement(
+        batch, _pending.gpu_success, _pending.release_safe
+    );
+    return true;
+}
+
 void VkCommandQueue::CompletionThreadMain() {
     Platform::SetCurrentThreadName(
         queue.GetType() == EQueueType::Graphics ? "Vulkan Gfx Completion" : "Vulkan Compute Completion"
@@ -9118,15 +9708,39 @@ void VkCommandQueue::CompletionThreadMain() {
 
     bool batch_gpu_success = false;
     bool batch_release_safe = false;
+    Array<PendingPresentRetirement> pending_present_retirements{};
     while (true) {
+        for (auto pending = pending_present_retirements.begin();
+             pending != pending_present_retirements.end();) {
+            if (TryPollPresentRetirement(*pending)) {
+                pending =
+                    pending_present_retirements.erase(pending);
+            } else {
+                ++pending;
+            }
+        }
+
         std::optional<QueueEvent> evt;
         {
             std::unique_lock<std::mutex> lock(event_mutex);
-            queue_cv.wait(lock, [this]() {
-                return !completion_worker_running || !event_queue.empty();
-            });
-            if (!completion_worker_running && event_queue.empty()) {
+            if (pending_present_retirements.empty()) {
+                queue_cv.wait(lock, [this]() {
+                    return !completion_worker_running ||
+                           !event_queue.empty();
+                });
+            } else {
+                queue_cv.wait_for(
+                    lock,
+                    std::chrono::milliseconds(1),
+                    [this]() { return !event_queue.empty(); }
+                );
+            }
+            if (!completion_worker_running && event_queue.empty() &&
+                pending_present_retirements.empty()) {
                 break;
+            }
+            if (event_queue.empty()) {
+                continue;
             }
 
             evt.emplace(std::move(event_queue.front()));
@@ -9440,7 +10054,11 @@ void VkCommandQueue::CompletionThreadMain() {
                     }
                     _batch.deferred_releases.clear();
                 },
-                [this, event_timeline, &batch_gpu_success, &batch_release_safe](
+                [this,
+                 event_timeline,
+                 &batch_gpu_success,
+                 &batch_release_safe,
+                 &pending_present_retirements](
                     VulkanPresentCompletionBatch& _batch
                 ) {
                     batch_gpu_success = false;
@@ -9493,45 +10111,123 @@ void VkCommandQueue::CompletionThreadMain() {
                         timeline->Reject(event_timeline);
                     }
 
-                    if (_batch.presentor) {
-                        bool recycle_presentor = false;
-                        if (_batch.presentor_state ==
-                                EVulkanPresentorRetirementState::Submitted &&
-                            batch_gpu_success && !vk_device.IsFaulted()) {
-                            recycle_presentor =
-                                _batch.presentor->CompleteSuccess() &&
-                                _batch.presentor->Reset();
-                        } else if (
-                            _batch.presentor_state ==
-                                EVulkanPresentorRetirementState::Unused &&
-                            batch_release_safe && !vk_device.IsFaulted()
-                        ) {
-                            // No command buffer was begun, matching the
-                            // previous acquire-retry fast recycle path.
-                            recycle_presentor = true;
+                    PresentationCompletionStateRef completion_state{};
+                    if (_batch.presentation_completion.IsValid()) {
+                        if (!_batch.swapchain) {
+                            std::terminate();
                         }
+                        completion_state =
+                            _batch.swapchain->
+                                GetPresentationCompletionState();
+                        if (!completion_state ||
+                            !completion_state->MarkGpuComplete(
+                                _batch.presentation_completion
+                            )) {
+                            std::terminate();
+                        }
+                    }
 
-                        if (recycle_presentor && !vk_device.IsFaulted()) {
-                            presentors.Push(_batch.presentor.release());
-                        } else {
-                            vk_device.RecordAllocatorQuarantine();
-                            vk_device.RecordSkippedCommandPoolReset();
-                            presentor_quarantine.emplace_back(
-                                std::move(_batch.presentor)
+                    if (!batch_gpu_success &&
+                        _batch.presentation_completion.IsValid()) {
+                        if (_batch.wsi_enqueued &&
+                            _batch.uses_present_fence &&
+                            !vk_device.IsFaulted()) {
+                            VulkanOperationContext fault_context =
+                                _batch.context;
+                            fault_context.operation =
+                                EVulkanFaultOperation::
+                                    TimelineHostWait;
+                            vk_device.TryLatchFirstFault(
+                                fault_context,
+                                completion_result == VK_SUCCESS ?
+                                    VK_ERROR_UNKNOWN :
+                                    completion_result,
+                                false,
+                                false,
+                                true
                             );
                         }
+                        if (!completion_state->MarkWsiFailed(
+                                _batch.presentation_completion
+                            )) {
+                            std::terminate();
+                        }
+                        FinalizePresentRetirement(
+                            _batch, false, false
+                        );
+                        return;
                     }
 
-                    if (batch_gpu_success || batch_release_safe) {
-                        for (auto* resource : _batch.deferred_releases) {
-                            MoerDelete(resource);
-                        }
-                    } else {
-                        for (auto* resource : _batch.deferred_releases) {
-                            vk_device.EnqueueDeferredRelease(resource);
+                    if (_batch.presentation_completion.IsValid() &&
+                        _batch.wsi_enqueued) {
+                        if (_batch.uses_present_fence ||
+                            !completion_state->WaitForWsi(
+                                _batch.presentation_completion,
+                                std::chrono::nanoseconds::zero()
+                            )) {
+                            pending_present_retirements.emplace_back(
+                                std::move(_batch),
+                                batch_gpu_success,
+                                batch_release_safe
+                            );
+                            return;
                         }
                     }
-                    _batch.deferred_releases.clear();
+
+                    FinalizePresentRetirement(
+                        _batch,
+                        batch_gpu_success,
+                        batch_release_safe
+                    );
+                },
+                [this, &pending_present_retirements](
+                    VulkanPresentationCompletionProbeForTesting& _probe
+                ) {
+                    if (!_probe.swapchain ||
+                        !_probe.completion.IsValid()) {
+                        std::terminate();
+                    }
+                    const PresentationCompletionStateRef state =
+                        _probe.swapchain->
+                            GetPresentationCompletionState();
+                    if (!state ||
+                        !state->MarkGpuComplete(
+                            _probe.completion
+                        )) {
+                        std::terminate();
+                    }
+
+                    const uint64 issue_sequence =
+                        _probe.completion.GetIssueSequence();
+                    VulkanPresentCompletionBatch completion_batch{
+                        VulkanOperationResult{},
+                        VulkanOperationContext{
+                            .operation =
+                                EVulkanFaultOperation::
+                                    PresentFenceWait,
+                            .queue_type = EQueueType::Graphics,
+                            .queue = vk_device.GetPresentQueue(),
+                            .timeline = issue_sequence,
+                            .work_serial = issue_sequence,
+                        },
+                        false,
+                        false,
+                        EVulkanPresentorRetirementState::Unused,
+                        UniquePtr<VulkanPresentor>{},
+                        std::move(_probe.swapchain),
+                        TextureRef{},
+                        Array<RHIResource*>{},
+                        std::move(_probe.completion),
+                        VK_NULL_HANDLE,
+                        true,
+                        _probe.uses_present_fence,
+                        true
+                    };
+                    pending_present_retirements.emplace_back(
+                        std::move(completion_batch),
+                        true,
+                        true
+                    );
                 },
                 [this, &batch_gpu_success](UniquePtr<VulkanAllocator>& _allocator) {
                     if (batch_gpu_success && !vk_device.IsFaulted()) {

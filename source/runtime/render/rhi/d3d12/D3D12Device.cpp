@@ -765,10 +765,6 @@ bool D3D12Swapchain::Recreate(const SwapchainCreateInfo& _info) {
     return false;
 }
 
-void D3D12Swapchain::Sync() {
-    FATAL("not implemented");
-}
-
 void D3D12Swapchain::Present() {}
 
 void D3D12Swapchain::CreateSizeDependentResources() {

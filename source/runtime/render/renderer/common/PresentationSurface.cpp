@@ -4,6 +4,7 @@
 #include "rhi/RHIExecutor.h"
 
 #include <cassert>
+#include <exception>
 
 namespace Moer::Render {
 
@@ -173,7 +174,22 @@ EPresentationSurfaceEnsureResult PresentationSurface::EnsureCurrent(
     }
 
     state_.RequestRefresh();
-    Quiesce();
+    try {
+        Quiesce();
+    } catch (const std::exception& error) {
+        LOG_ERROR(
+            "[Presentation] targeted drain failed before recreate: {}",
+            error.what()
+        );
+        state_.Reject();
+        return EPresentationSurfaceEnsureResult::RetryPending;
+    } catch (...) {
+        LOG_ERROR(
+            "[Presentation] targeted drain failed before recreate"
+        );
+        state_.Reject();
+        return EPresentationSurfaceEnsureResult::RetryPending;
+    }
 
     const SwapchainCreateInfo create_info{
         .surface          = surface,
@@ -264,9 +280,21 @@ void PresentationSurface::Quiesce() {
     if (!swapchain_ && !frame_buffer_) {
         return;
     }
-    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
     if (swapchain_) {
-        swapchain_->Sync();
+        const PresentationSurfaceSnapshot& committed =
+            state_.GetCommittedSnapshot();
+        RHIExecutor::Get().DrainPresentation(
+            RHIPresentationDrainTarget{
+                swapchain_,
+                state_.GetCommittedEpoch(),
+                committed.drawable_generation,
+            }
+        );
+    } else {
+        // Defensive partial-construction fallback. A committed presentation
+        // surface always owns a swapchain; only a failed setup path can retain
+        // a framebuffer without one.
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     }
 }
 

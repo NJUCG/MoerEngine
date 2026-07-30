@@ -281,7 +281,6 @@ public:
         size = info.size;
         return IsPresentationReady();
     }
-    void Sync() override {}
     [[nodiscard]] bool IsPresentationReady() const noexcept override {
         return size.x != 0 && size.y != 0;
     }
@@ -825,13 +824,31 @@ public:
     ) noexcept {
         auto& capture =
             *static_cast<ScriptedPresentCapture*>(_context);
-        capture.source_rejection_hook_count.fetch_add(
-            1, std::memory_order_acq_rel
-        );
+        ObserveSourceRejectionOwner(_context);
         if (!TryLatchVulkanDeviceFaultForTesting(
                 VK_ERROR_DEVICE_LOST
             )) {
             capture.source_rejection_hook_failed.store(
+                true, std::memory_order_release
+            );
+        }
+    }
+
+    static void ObserveSourceRejectionOwner(
+        void* _context
+    ) noexcept {
+        auto& capture =
+            *static_cast<ScriptedPresentCapture*>(_context);
+        capture.source_rejection_hook_count.fetch_add(
+            1, std::memory_order_acq_rel
+        );
+        capture.thread_id.store(
+            Platform::GetCurrentThreadID(),
+            std::memory_order_release
+        );
+        if (GetCurrentRHIThreadRole() !=
+            ERHIThreadRole::Submission) {
+            capture.wrong_owner.store(
                 true, std::memory_order_release
             );
         }
@@ -851,7 +868,8 @@ public:
     explicit ScopedScriptedPresentOverride(
         ScriptedPresentCapture& _capture,
         bool _require_present_source_ready = false,
-        bool _latch_fault_before_source_rejection = false
+        bool _latch_fault_before_source_rejection = false,
+        bool _observe_source_rejection_owner = false
     ) :
         scripted_override{
             .context  = &_capture,
@@ -862,6 +880,9 @@ public:
                 _latch_fault_before_source_rejection ?
                     &ScriptedPresentCapture::
                         LatchDeviceFaultBeforeSourceRejection :
+                _observe_source_rejection_owner ?
+                    &ScriptedPresentCapture::
+                        ObserveSourceRejectionOwner :
                     nullptr,
         } {
         if (!TryInstallVulkanScriptedPresentOverrideForTesting(
@@ -1246,6 +1267,179 @@ private:
     bool                             installed{false};
 };
 
+class PresentFenceStatusCapture final {
+public:
+    PresentFenceStatusCapture(
+        uint64 _blocked_issue,
+        uint64 _ready_issue
+    ) :
+        blocked_issue(_blocked_issue),
+        ready_issue(_ready_issue) {}
+
+    static VkResult Observe(void* _context, uint64 _issue) noexcept {
+        auto& capture =
+            *static_cast<PresentFenceStatusCapture*>(_context);
+        const uint32 current_thread =
+            Platform::GetCurrentThreadID();
+        uint32 expected_thread = 0;
+        if (!capture.completion_thread.compare_exchange_strong(
+                expected_thread,
+                current_thread,
+                std::memory_order_acq_rel,
+                std::memory_order_acquire
+            ) &&
+            expected_thread != current_thread) {
+            capture.invalid.store(true, std::memory_order_release);
+        }
+        if (GetCurrentRHIThreadRole() !=
+            ERHIThreadRole::Completion) {
+            capture.invalid.store(true, std::memory_order_release);
+        }
+        capture.poll_count.fetch_add(
+            1, std::memory_order_acq_rel
+        );
+        if (_issue == capture.blocked_issue) {
+            capture.blocked_poll_count.fetch_add(
+                1, std::memory_order_acq_rel
+            );
+            return capture.release_blocked.load(
+                       std::memory_order_acquire
+                   ) ?
+                       VK_SUCCESS :
+                       VK_NOT_READY;
+        }
+        if (_issue == capture.ready_issue) {
+            capture.ready_poll_count.fetch_add(
+                1, std::memory_order_acq_rel
+            );
+            return VK_SUCCESS;
+        }
+        capture.invalid.store(true, std::memory_order_release);
+        return VK_ERROR_UNKNOWN;
+    }
+
+    std::atomic_bool   release_blocked{false};
+    std::atomic<uint32> completion_thread{0};
+    std::atomic<uint32> poll_count{0};
+    std::atomic<uint32> blocked_poll_count{0};
+    std::atomic<uint32> ready_poll_count{0};
+    std::atomic_bool   invalid{false};
+
+private:
+    uint64 blocked_issue{0};
+    uint64 ready_issue{0};
+};
+
+class ScopedPresentFenceStatusOverride final {
+public:
+    explicit ScopedPresentFenceStatusOverride(
+        PresentFenceStatusCapture& _capture
+    ) :
+        scripted_override{
+            .context  = &_capture,
+            .callback = &PresentFenceStatusCapture::Observe,
+        } {
+        if (!TryInstallVulkanScriptedPresentFenceStatusOverrideForTesting(
+                &scripted_override
+            )) {
+            throw std::runtime_error(
+                "Vulkan Present-fence status override was already installed"
+            );
+        }
+        installed = true;
+    }
+
+    ~ScopedPresentFenceStatusOverride() noexcept {
+        if (installed &&
+            !RemoveVulkanScriptedPresentFenceStatusOverrideForTesting(
+                &scripted_override
+            )) {
+            std::terminate();
+        }
+    }
+
+    ScopedPresentFenceStatusOverride(
+        const ScopedPresentFenceStatusOverride&
+    ) = delete;
+    ScopedPresentFenceStatusOverride& operator=(
+        const ScopedPresentFenceStatusOverride&
+    ) = delete;
+
+private:
+    VulkanScriptedPresentFenceStatusOverrideForTesting
+        scripted_override{};
+    bool installed{false};
+};
+
+class QueueIdleWaitCapture final {
+public:
+    static void Observe(
+        void*                             _context,
+        const VulkanQueueIdleWaitEvent& _event
+    ) noexcept {
+        auto& capture =
+            *static_cast<QueueIdleWaitCapture*>(_context);
+        if (_event.thread_role != ERHIThreadRole::Submission ||
+            _event.context.operation !=
+                EVulkanFaultOperation::QueueWaitIdle ||
+            _event.native_queue_handle == 0) {
+            capture.invalid.store(true, std::memory_order_release);
+        }
+        const uint32 current_thread = _event.thread_id;
+        uint32 expected_thread = 0;
+        if (!capture.submission_thread.compare_exchange_strong(
+                expected_thread,
+                current_thread,
+                std::memory_order_acq_rel,
+                std::memory_order_acquire
+            ) &&
+            expected_thread != current_thread) {
+            capture.invalid.store(true, std::memory_order_release);
+        }
+        capture.count.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    std::atomic<uint32> count{0};
+    std::atomic<uint32> submission_thread{0};
+    std::atomic_bool    invalid{false};
+};
+
+class ScopedQueueIdleWaitObserver final {
+public:
+    explicit ScopedQueueIdleWaitObserver(
+        QueueIdleWaitCapture& _capture
+    ) :
+        observer{
+            .context  = &_capture,
+            .callback = &QueueIdleWaitCapture::Observe,
+        } {
+        if (!TryInstallVulkanQueueIdleWaitObserver(&observer)) {
+            throw std::runtime_error(
+                "Vulkan queue-idle observer was already installed"
+            );
+        }
+        installed = true;
+    }
+
+    ~ScopedQueueIdleWaitObserver() noexcept {
+        if (installed &&
+            !RemoveVulkanQueueIdleWaitObserver(&observer)) {
+            std::terminate();
+        }
+    }
+
+    ScopedQueueIdleWaitObserver(
+        const ScopedQueueIdleWaitObserver&
+    ) = delete;
+    ScopedQueueIdleWaitObserver& operator=(
+        const ScopedQueueIdleWaitObserver&
+    ) = delete;
+
+private:
+    VulkanQueueIdleWaitObserver observer{};
+    bool                        installed{false};
+};
+
 class BatchPreflightRejectionCapture final {
 public:
     static void Observe(
@@ -1353,6 +1547,8 @@ void ValidateArguments(int _argc, const char** _argv) {
             argument != "--pipeline-window2" &&
             argument != "--present-boundary" &&
             argument != "--present-hard" &&
+            argument != "--present-legacy-owner" &&
+            argument != "--present-completion-shutdown" &&
             argument != "--rt-export-rejection" &&
             argument != "--readback-future" &&
             argument != "--occlusion-query" &&
@@ -11112,6 +11308,247 @@ void RunPresentPipelineBoundary() {
     }
 }
 
+void RunLegacyDirectPresentOwnerBoundary() {
+    using namespace std::chrono_literals;
+
+    auto& device = RenderDevice::Get();
+    auto& graphics_queue = static_cast<VkCommandQueue&>(
+        device.GetCommandQueue(EQueueType::Graphics)
+    );
+    const uint32 caller_thread =
+        Platform::GetCurrentThreadID();
+    SwapchainRef swapchain{
+        MoerNew(HeadlessScriptedSwapchain)()
+    };
+    ScriptedPresentCapture capture(
+        VulkanScriptedPresentResult{
+            .outcome = {
+                EVulkanOperationStatus::Rejected,
+                VK_ERROR_UNKNOWN,
+            },
+        }
+    );
+    ScopedScriptedPresentOverride scripted_override(
+        capture,
+        false,
+        false,
+        true
+    );
+    PresentReceiptRef receipt = MakeShared<PresentReceipt>();
+
+    graphics_queue.Present(
+        swapchain,
+        TextureView{},
+        receipt
+    );
+    const PresentReceiptResult result =
+        receipt->WaitForSubmission(5s);
+    graphics_queue.Sync();
+
+    if (!result.resolved || result.submitted ||
+        result.recreate_swapchain ||
+        receipt->ResolutionAttemptCount() != 1 ||
+        capture.source_rejection_hook_count.load(
+            std::memory_order_acquire
+        ) != 1 ||
+        capture.thread_id.load(std::memory_order_acquire) !=
+            caller_thread ||
+        capture.wrong_owner.load(std::memory_order_acquire) ||
+        capture.count.load(std::memory_order_acquire) != 0) {
+        throw std::runtime_error(
+            "legacy direct Present did not execute on the caller-side Submission owner"
+        );
+    }
+    LOG_INFO(
+        "[TESTCASE][PASS] "
+        "name=LegacyDirectPresentOwnerBoundary "
+        "rhi_thread=false owner=Submission thread=caller "
+        "receipt=exactly_once native_present=0"
+    );
+}
+
+void RunPresentationCompletionIntegrationBoundary() {
+    using namespace std::chrono_literals;
+
+    auto& device = RenderDevice::Get();
+    auto& graphics_queue = static_cast<VkCommandQueue&>(
+        device.GetCommandQueue(EQueueType::Graphics)
+    );
+    SwapchainRef swapchain{
+        MoerNew(HeadlessScriptedSwapchain)()
+    };
+    const PresentationCompletionStateRef state =
+        swapchain->GetPresentationCompletionState();
+    if (!state) {
+        throw std::runtime_error(
+            "headless Presentation completion state was not created"
+        );
+    }
+
+    const auto reserve =
+        [&](uint64 _epoch, uint64 _request, uint32 _slot) {
+            return state->Reserve(
+                PresentationCompletionIdentity{
+                    .state_instance_id =
+                        state->GetStateInstanceId(),
+                    .presentation_epoch = _epoch,
+                    .drawable_generation = 1,
+                    .request_serial = _request,
+                },
+                _slot,
+                1
+            );
+        };
+
+    const PresentationCompletionTicket blocked =
+        reserve(401, 1, 0);
+    const PresentationCompletionTicket ready =
+        reserve(402, 2, 1);
+    if (!blocked.IsValid() || !ready.IsValid() ||
+        !state->SetWsiMode(
+            blocked,
+            EPresentationWsiCompletionMode::PresentFence
+        ) ||
+        !state->SetWsiMode(
+            ready,
+            EPresentationWsiCompletionMode::PresentFence
+        )) {
+        throw std::runtime_error(
+            "Present-fence integration setup failed"
+        );
+    }
+
+    PresentFenceStatusCapture fence_status(
+        blocked.GetIssueSequence(),
+        ready.GetIssueSequence()
+    );
+    {
+        ScopedPresentFenceStatusOverride status_override(
+            fence_status
+        );
+        if (!graphics_queue.
+                EnqueuePresentationCompletionProbeForTesting(
+                    swapchain, blocked, true
+                ) ||
+            !graphics_queue.
+                EnqueuePresentationCompletionProbeForTesting(
+                    swapchain, ready, true
+                )) {
+            throw std::runtime_error(
+                "could not enqueue synthetic Present completions"
+            );
+        }
+
+        std::binary_semaphore ready_drain_finished{0};
+        std::jthread ready_drain([&] {
+            RHIExecutor::Get().DrainPresentation(
+                RHIPresentationDrainTarget{
+                    swapchain, 402, 1
+                }
+            );
+            ready_drain_finished.release();
+        });
+        if (!ready_drain_finished.try_acquire_for(5s)) {
+            fence_status.release_blocked.store(
+                true, std::memory_order_release
+            );
+            ready_drain.join();
+            throw std::runtime_error(
+                "ready Present was blocked behind an older unsignalled fence"
+            );
+        }
+        ready_drain.join();
+
+        const PresentationDrainPoint blocked_point =
+            state->Freeze(401, 1);
+        const PresentationDrainPoint ready_point =
+            state->Freeze(402, 1);
+        if (state->OutstandingCount() != 1 ||
+            state->WaitRetired(blocked_point, 1ms) ||
+            !state->WaitRetired(ready_point, 20ms) ||
+            fence_status.ready_poll_count.load(
+                std::memory_order_acquire
+            ) == 0) {
+            throw std::runtime_error(
+                "targeted Present drain retired the wrong identity"
+            );
+        }
+
+        fence_status.release_blocked.store(
+            true, std::memory_order_release
+        );
+        RHIExecutor::Get().DrainPresentation(
+            RHIPresentationDrainTarget{
+                swapchain, 401, 1
+            }
+        );
+        if (state->HasOutstanding() ||
+            fence_status.blocked_poll_count.load(
+                std::memory_order_acquire
+            ) == 0 ||
+            fence_status.invalid.load(
+                std::memory_order_acquire
+            ) ||
+            fence_status.completion_thread.load(
+                std::memory_order_acquire
+            ) == 0) {
+            throw std::runtime_error(
+                "Present-fence polling escaped the sole Completion owner"
+            );
+        }
+    }
+
+    const PresentationCompletionTicket fallback =
+        reserve(403, 3, 2);
+    if (!fallback.IsValid() ||
+        !state->SetWsiMode(
+            fallback,
+            EPresentationWsiCompletionMode::QueueIdleFallback
+        ) ||
+        !graphics_queue.
+            EnqueuePresentationCompletionProbeForTesting(
+                swapchain, fallback, false
+            )) {
+        throw std::runtime_error(
+            "queue-idle fallback integration setup failed"
+        );
+    }
+
+    QueueIdleWaitCapture queue_idle{};
+    {
+        ScopedQueueIdleWaitObserver queue_idle_observer(
+            queue_idle
+        );
+        RHIExecutor::Get().DrainPresentation(
+            RHIPresentationDrainTarget{
+                swapchain, 403, 1
+            }
+        );
+    }
+    if (state->HasOutstanding() ||
+        queue_idle.count.load(std::memory_order_acquire) == 0 ||
+        queue_idle.invalid.load(std::memory_order_acquire) ||
+        queue_idle.submission_thread.load(
+            std::memory_order_acquire
+        ) == 0 ||
+        queue_idle.submission_thread.load(
+            std::memory_order_acquire
+        ) == Platform::GetCurrentThreadID()) {
+        throw std::runtime_error(
+            "queue-idle fallback escaped the sole Submission owner"
+        );
+    }
+
+    LOG_INFO(
+        "[TESTCASE][PASS] "
+        "name=PresentationCompletionIntegrationBoundary "
+        "present_fence=nonblocking_targeted "
+        "fence_owner=Completion completion_threads=1 "
+        "queue_idle_fallback=targeted "
+        "queue_idle_owner=Submission outstanding=0"
+    );
+}
+
 void RunQueuedPresentShutdownBoundary() {
     using namespace std::chrono_literals;
 
@@ -11324,6 +11761,127 @@ void RunQueuedPresentShutdownBoundary() {
         stop_runtime();
         std::rethrow_exception(failure);
     }
+}
+
+void RunPresentationCompletionShutdownDrainBoundary() {
+    using namespace std::chrono_literals;
+
+    auto& device = RenderDevice::Get();
+    auto& graphics_queue = static_cast<VkCommandQueue&>(
+        device.GetCommandQueue(EQueueType::Graphics)
+    );
+    SwapchainRef swapchain{
+        MoerNew(HeadlessScriptedSwapchain)()
+    };
+    const PresentationCompletionStateRef state =
+        swapchain->GetPresentationCompletionState();
+    const auto reserve =
+        [&](uint64 _epoch, uint64 _request, uint32 _slot) {
+            return state->Reserve(
+                PresentationCompletionIdentity{
+                    .state_instance_id =
+                        state->GetStateInstanceId(),
+                    .presentation_epoch = _epoch,
+                    .drawable_generation = 1,
+                    .request_serial = _request,
+                },
+                _slot,
+                1
+            );
+        };
+    const PresentationCompletionTicket fence_ticket =
+        reserve(501, 1, 0);
+    const PresentationCompletionTicket fallback_ticket =
+        reserve(502, 2, 1);
+    if (!fence_ticket.IsValid() ||
+        !fallback_ticket.IsValid() ||
+        !state->SetWsiMode(
+            fence_ticket,
+            EPresentationWsiCompletionMode::PresentFence
+        ) ||
+        !state->SetWsiMode(
+            fallback_ticket,
+            EPresentationWsiCompletionMode::QueueIdleFallback
+        ) ||
+        !graphics_queue.
+            RegisterPresentationCompletionStateForShutdownProbeForTesting(
+                state
+            )) {
+        throw std::runtime_error(
+            "shutdown Presentation completion setup failed"
+        );
+    }
+
+    PresentFenceStatusCapture fence_status(
+        fence_ticket.GetIssueSequence(),
+        UINT64_MAX
+    );
+    QueueIdleWaitCapture queue_idle{};
+    ScopedPresentFenceStatusOverride fence_override(
+        fence_status
+    );
+    ScopedQueueIdleWaitObserver queue_idle_observer(
+        queue_idle
+    );
+    if (!graphics_queue.
+            EnqueuePresentationCompletionProbeForTesting(
+                swapchain, fence_ticket, true
+            ) ||
+        !graphics_queue.
+            EnqueuePresentationCompletionProbeForTesting(
+                swapchain, fallback_ticket, false
+            )) {
+        throw std::runtime_error(
+            "shutdown Presentation completion probes were not enqueued"
+        );
+    }
+
+    const auto poll_deadline =
+        std::chrono::steady_clock::now() + 2s;
+    while (fence_status.blocked_poll_count.load(
+               std::memory_order_acquire
+           ) == 0 &&
+           std::chrono::steady_clock::now() < poll_deadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    if (fence_status.blocked_poll_count.load(
+            std::memory_order_acquire
+        ) == 0) {
+        throw std::runtime_error(
+            "shutdown Present fence never reached Completion polling"
+        );
+    }
+
+    std::jthread release_fence([&] {
+        std::this_thread::sleep_for(100ms);
+        fence_status.release_blocked.store(
+            true, std::memory_order_release
+        );
+    });
+    RenderDevice::Dispose();
+    release_fence.join();
+
+    if (state->HasOutstanding() ||
+        fence_status.invalid.load(std::memory_order_acquire) ||
+        fence_status.completion_thread.load(
+            std::memory_order_acquire
+        ) == 0 ||
+        queue_idle.count.load(std::memory_order_acquire) == 0 ||
+        queue_idle.invalid.load(std::memory_order_acquire) ||
+        queue_idle.submission_thread.load(
+            std::memory_order_acquire
+        ) == 0) {
+        throw std::runtime_error(
+            "queue destruction did not perform the final owned Presentation drain"
+        );
+    }
+
+    LOG_INFO(
+        "[TESTCASE][PASS] "
+        "name=PresentationCompletionShutdownDrainBoundary "
+        "pending=fence+fallback fence_owner=Completion "
+        "queue_idle_owner=Submission outstanding=0 dispose=returned"
+    );
 }
 
 void RunPresentHardFailureBoundary() {
@@ -15700,6 +16258,22 @@ int main(int argc, const char** argv) {
             HasArgument(argc, argv, "--present-boundary");
         const bool present_hard =
             HasArgument(argc, argv, "--present-hard");
+        const bool present_legacy_owner =
+            HasArgument(argc, argv, "--present-legacy-owner");
+        const bool present_completion_shutdown =
+            HasArgument(
+                argc, argv, "--present-completion-shutdown"
+            );
+        const uint32 focused_present_mode_count =
+            static_cast<uint32>(present_boundary) +
+            static_cast<uint32>(present_hard) +
+            static_cast<uint32>(present_legacy_owner) +
+            static_cast<uint32>(present_completion_shutdown);
+        if (focused_present_mode_count > 1) {
+            throw std::invalid_argument(
+                "focused Present modes are mutually exclusive"
+            );
+        }
         const bool present_mode =
             present_boundary || present_hard;
         const bool rt_export_rejection =
@@ -15734,7 +16308,9 @@ int main(int argc, const char** argv) {
             .rhi_type         = ERHIType::Vulkan,
             .name             = "RHIParallelRecordVulkanTest",
             .rhi_api_version  = "1.3",
-            .rhi_thread       = true,
+            .rhi_thread       =
+                !present_legacy_owner &&
+                !present_completion_shutdown,
             .rhi_bypass       = false,
             .parallel_recording =
                 parallel || pipeline_window_mode || present_mode ||
@@ -15760,6 +16336,23 @@ int main(int argc, const char** argv) {
             .parallel_record_worker_throw_trigger = inject_worker_failure ? 1u : 0u,
         });
         render_device_initialized = true;
+
+        if (present_legacy_owner) {
+            RunLegacyDirectPresentOwnerBoundary();
+            RenderDevice::Dispose();
+            render_device_initialized = false;
+            TaskSystem::ShutDown();
+            task_system_initialized = false;
+            return 0;
+        }
+
+        if (present_completion_shutdown) {
+            RunPresentationCompletionShutdownDrainBoundary();
+            render_device_initialized = false;
+            TaskSystem::ShutDown();
+            task_system_initialized = false;
+            return 0;
+        }
 
         if (readback_future_mode) {
             RunOwningReadbackFuture();
@@ -15836,11 +16429,17 @@ int main(int argc, const char** argv) {
 
         if (present_mode) {
             if (present_boundary) {
+                LOG_INFO("[TESTCASE][BEGIN] name=PresentSourceContractRejection");
                 RunPresentSourceContractRejection();
+                LOG_INFO("[TESTCASE][BEGIN] name=SerialControlPipelineBoundary");
                 RunSerialControlPipelineBoundary();
+                LOG_INFO("[TESTCASE][BEGIN] name=PresentPipelineBoundary");
                 RunPresentPipelineBoundary();
+                LOG_INFO("[TESTCASE][BEGIN] name=PresentationCompletionIntegrationBoundary");
+                RunPresentationCompletionIntegrationBoundary();
                 // This is the terminal focused lifecycle test: it stops and
                 // joins the RHI runtime before returning.
+                LOG_INFO("[TESTCASE][BEGIN] name=QueuedPresentShutdownBoundary");
                 RunQueuedPresentShutdownBoundary();
             } else {
                 RunPresentHardFailureBoundary();

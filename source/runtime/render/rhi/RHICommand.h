@@ -2403,6 +2403,10 @@ public:
         return resolution_attempts;
     }
 
+    [[nodiscard]] PresentReceiptContext GetContext() const noexcept {
+        return context;
+    }
+
 private:
     mutable std::mutex        mutex;
     std::condition_variable   cv;

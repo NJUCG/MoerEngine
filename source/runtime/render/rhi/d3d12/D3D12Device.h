@@ -1066,7 +1066,6 @@ public:
     ~D3D12Swapchain() = default;
 
     [[nodiscard]] bool Recreate(const SwapchainCreateInfo&) override;
-    void Sync() override;
     [[nodiscard]] bool IsPresentationReady() const noexcept override {
         return false;
     }

@@ -4109,7 +4109,6 @@ public:
     [[nodiscard]] bool Recreate(const Moer::Render::SwapchainCreateInfo&) override {
         return presentation_ready;
     }
-    void Sync() override {}
 
     [[nodiscard]] bool IsPresentationReady() const noexcept override {
         return presentation_ready;

@@ -35,17 +35,21 @@ public:
 
     void          Enqueue(RHIBackendSubmissionBatch&& _batch) override;
     GraphEventRef Sync(ERHISyncDepth _depth = ERHISyncDepth::RHI) override;
+    GraphEventRef DrainPresentation(
+        RHIPresentationDrainTarget _target
+    ) override;
     void          Flush(ERHIFlushDepth _depth = ERHIFlushDepth::SubmitGPU) override;
     void          BeginShutdown() noexcept override;
     void          ShutDown() override;
 
 private:
     struct Completion {
-        void Signal();
+        void Signal(std::exception_ptr _failure = {});
         void Wait();
 
         std::mutex              mutex{};
         std::condition_variable cv{};
+        std::exception_ptr      failure{};
         bool                    done{false};
     };
 
@@ -57,6 +61,8 @@ private:
         ERequestKind                kind{ERequestKind::Submit};
         RHIBackendSubmissionBatch   batch{};
         ERHISyncDepth               sync_depth{ERHISyncDepth::RHI};
+        std::optional<RHIPresentationDrainTarget>
+                                    presentation_target{};
         std::shared_ptr<Completion> completion{};
     };
 
@@ -264,6 +270,9 @@ private:
         int32*         _result = nullptr
     ) const noexcept;
     void ProcessSync(ERHISyncDepth _depth);
+    void ProcessPresentationDrain(
+        RHIPresentationDrainTarget _target
+    );
     void RejectBatch(
         RHIBackendSubmissionBatch&& _batch,
         int32                       _result,
@@ -274,7 +283,10 @@ private:
         std::shared_ptr<BatchRejectionPublication>
             _rejection_publication = {}
     );
-    void CompleteRequest(const std::shared_ptr<Completion>& _completion);
+    void CompleteRequest(
+        const std::shared_ptr<Completion>& _completion,
+        std::exception_ptr                 _failure = {}
+    );
     void ReportRequestFailure(
         ERequestKind                                  _kind,
         VulkanSubmissionDetail::EWorkerRequestFailurePhase _phase,
