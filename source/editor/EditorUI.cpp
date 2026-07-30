@@ -415,7 +415,7 @@ void EditorUI::TickUI(Scene& scene) {
         ShowGameView();
     }
     if (!m_b_active_viewport_window_seen) {
-        m_b_scene_color_mouse_captured = false;
+        m_mouse_capture_viewport_id = 0;
     }
     ShowHierarchy(scene);
     ShowInspector(scene);
@@ -434,8 +434,36 @@ void EditorUI::TickUI(Scene& scene) {
         pending_input_source.mouse_button_down[MouseButtons::Left] ||
         pending_input_source.mouse_button_down[MouseButtons::Middle] ||
         pending_input_source.mouse_button_down[MouseButtons::Right];
+    const bool mouse_clicked =
+        pending_input_source.mouse_button_pressed[MouseButtons::Left] ||
+        pending_input_source.mouse_button_pressed[MouseButtons::Middle] ||
+        pending_input_source.mouse_button_pressed[MouseButtons::Right];
+    const bool has_stale_mouse_button_down =
+        (pending_input_source.mouse_button_down[MouseButtons::Left] &&
+         !pending_input_source.mouse_button_pressed[MouseButtons::Left]) ||
+        (pending_input_source.mouse_button_down[MouseButtons::Middle] &&
+         !pending_input_source.mouse_button_pressed[MouseButtons::Middle]) ||
+        (pending_input_source.mouse_button_down[MouseButtons::Right] &&
+         !pending_input_source.mouse_button_pressed[MouseButtons::Right]);
+    m_mouse_capture_viewport_id = ResolveMouseCaptureViewportId(
+        pending_input_source.focused_viewport_id,
+        m_active_input_viewport_id,
+        m_b_active_viewport_hovered,
+        mouse_clicked,
+        has_stale_mouse_button_down,
+        m_mouse_capture_viewport_id
+    );
+    const bool active_viewport_focused =
+        m_active_input_viewport_id != 0 &&
+        pending_input_source.focused_viewport_id == m_active_input_viewport_id;
+    if (m_free_look_capture_viewport_id != 0 &&
+        (pending_input_source.focused_viewport_id != m_free_look_capture_viewport_id ||
+         m_active_input_viewport_id != m_free_look_capture_viewport_id)) {
+        m_window_input_tracker.ClearKeyToggle(KeyButtons::F);
+        m_free_look_capture_viewport_id = 0;
+    }
     m_free_look_capture_viewport_id = ResolveFreeLookCaptureViewportId(
-        pending_input_source.focused,
+        pending_input_source.focused_viewport_id,
         m_window_input_tracker.IsKeyToggled(KeyButtons::F),
         m_b_active_viewport_hovered,
         m_active_input_viewport_id,
@@ -444,7 +472,8 @@ void EditorUI::TickUI(Scene& scene) {
 
     m_window_input_snapshot = m_window_input_tracker.Finalize(WindowInputPolicy{
         .scene_active =
-            m_b_scene_color_mouse_captured || m_free_look_capture_viewport_id != 0,
+            active_viewport_focused &&
+            (m_mouse_capture_viewport_id != 0 || m_free_look_capture_viewport_id != 0),
         .viewport_hovered = m_b_active_viewport_hovered,
         .viewport_resolution = uint2(
             to_extent_component(m_scene_color_resolution.x),
@@ -459,7 +488,7 @@ void EditorUI::TickUI(Scene& scene) {
     if (!any_mouse_button_down) {
         // Keep capture ownership through the release frame so a drag that
         // leaves the viewport still publishes its paired release edge.
-        m_b_scene_color_mouse_captured = false;
+        m_mouse_capture_viewport_id = 0;
     }
 
     const uint32 main_viewport_id = ImGui::GetMainViewport()->ID;
@@ -699,14 +728,14 @@ void EditorUI::ShowViewportWindow(
 
     if (!p_open || !*p_open) {
         if (m_config->active_viewport_mode == viewport_mode) {
-            m_b_scene_color_mouse_captured = false;
+            m_mouse_capture_viewport_id = 0;
         }
         return;
     }
 
     if (!ImGui::Begin(window_name, p_open, window_flags)) {
         if (m_config->active_viewport_mode == viewport_mode) {
-            m_b_scene_color_mouse_captured = false;
+            m_mouse_capture_viewport_id = 0;
         }
         ImGui::End();
         return;
@@ -866,13 +895,6 @@ void EditorUI::ShowViewportWindow(
         mouse_pos.x > scene_color_min.x && mouse_pos.x < scene_color_max.x &&
         mouse_pos.y > scene_color_min.y && mouse_pos.y < scene_color_max.y;
     m_b_active_viewport_hovered = scene_color_hovered;
-
-    const bool mouse_clicked = input_source.mouse_button_pressed[MouseButtons::Left] ||
-                               input_source.mouse_button_pressed[MouseButtons::Middle] ||
-                               input_source.mouse_button_pressed[MouseButtons::Right];
-    if (!m_b_scene_color_mouse_captured && mouse_clicked && scene_color_hovered) {
-        m_b_scene_color_mouse_captured = true;
-    }
 
     ImGui::End();
 }

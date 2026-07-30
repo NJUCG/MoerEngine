@@ -85,19 +85,19 @@ namespace {
     return static_cast<uint32_t>(value);
 }
 
-[[nodiscard]] bool HasFocusedPlatformViewport() {
+[[nodiscard]] uint32_t GetFocusedPlatformViewportId() {
     const ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
     if (platform_io.Platform_GetWindowFocus == nullptr) {
-        return !ImGui::GetIO().AppFocusLost;
+        return ImGui::GetIO().AppFocusLost ? 0u : ImGui::GetMainViewport()->ID;
     }
 
     for (ImGuiViewport* viewport : platform_io.Viewports) {
         if (viewport != nullptr && viewport->PlatformHandle != nullptr &&
             platform_io.Platform_GetWindowFocus(viewport)) {
-            return true;
+            return viewport->ID;
         }
     }
-    return false;
+    return 0;
 }
 
 } // namespace
@@ -110,7 +110,8 @@ WindowInputSourceSnapshot CaptureImGuiIOInput(uint64_t capture_sequence) {
 
     snapshot.capture_sequence      = capture_sequence;
     snapshot.gt_delta_time         = io.DeltaTime;
-    snapshot.focused               = HasFocusedPlatformViewport();
+    snapshot.focused_viewport_id   = GetFocusedPlatformViewportId();
+    snapshot.focused               = snapshot.focused_viewport_id != 0;
     snapshot.display_resolution    = uint2(
         ToDisplayExtent(io.DisplaySize.x),
         ToDisplayExtent(io.DisplaySize.y)

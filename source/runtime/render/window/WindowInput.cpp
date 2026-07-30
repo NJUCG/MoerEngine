@@ -77,6 +77,15 @@ bool WindowInputFrameTracker::IsKeyToggled(KeyButtons key) const {
     return IsValidKey(key) ? m_key_toggle[static_cast<uint32_t>(key)] : false;
 }
 
+void WindowInputFrameTracker::ClearKeyToggle(KeyButtons key) noexcept {
+    if (!IsValidKey(key)) {
+        return;
+    }
+    const uint32_t index = static_cast<uint32_t>(key);
+    m_key_toggle[index]               = false;
+    m_last_snapshot.key_toggle[index] = false;
+}
+
 WindowInputFrameSnapshot WindowInputFrameTracker::Finalize(const WindowInputPolicy& policy) {
     if (!m_has_pending_source) {
         return WithoutTransientActions(m_last_snapshot);
@@ -89,6 +98,7 @@ WindowInputFrameSnapshot WindowInputFrameTracker::Finalize(const WindowInputPoli
     frame.capture_sequence    = source.capture_sequence;
     frame.delta_time          = source.gt_delta_time > 0.0f ? source.gt_delta_time : 0.0f;
     frame.focused             = source.focused;
+    frame.focused_viewport_id = source.focused_viewport_id;
     frame.display_resolution  = source.display_resolution;
     frame.viewport_resolution = policy.viewport_resolution;
     frame.viewport_position   = policy.viewport_position;

@@ -65,6 +65,7 @@ struct RENDER_API WindowInputSourceSnapshot {
     uint64_t capture_sequence = 0;
     float    gt_delta_time    = 0.0f;
     bool     focused          = true;
+    uint32_t focused_viewport_id = 0;
 
     uint2  display_resolution = uint2(1280u, 720u);
     float2 mouse_position{};
@@ -105,19 +106,43 @@ struct RENDER_API WindowInputPolicy {
 // start only over the active Scene/Game viewport, then survives GLFW's
 // disabled-cursor virtual position moving outside the content rectangle.
 [[nodiscard]] constexpr uint32_t ResolveFreeLookCaptureViewportId(
-    bool     focused,
+    uint32_t focused_viewport_id,
     bool     free_look_toggled,
     bool     viewport_hovered,
     uint32_t active_viewport_id,
     uint32_t previous_free_look_viewport_id
 ) noexcept {
-    if (!focused || !free_look_toggled || active_viewport_id == 0) {
+    if (!free_look_toggled || active_viewport_id == 0 ||
+        focused_viewport_id != active_viewport_id) {
         return 0;
     }
     if (previous_free_look_viewport_id == active_viewport_id) {
         return active_viewport_id;
     }
     return viewport_hovered ? active_viewport_id : 0;
+}
+
+// Mouse-drag ownership is also tied to the platform viewport where the click
+// began. An existing owner cannot move merely because focus/active ownership
+// changed; a newly focused viewport must receive its own click edge.
+[[nodiscard]] constexpr uint32_t ResolveMouseCaptureViewportId(
+    uint32_t focused_viewport_id,
+    uint32_t active_viewport_id,
+    bool     viewport_hovered,
+    bool     mouse_clicked,
+    bool     has_stale_mouse_button_down,
+    uint32_t previous_mouse_capture_viewport_id
+) noexcept {
+    if (previous_mouse_capture_viewport_id != 0 &&
+        previous_mouse_capture_viewport_id == focused_viewport_id &&
+        previous_mouse_capture_viewport_id == active_viewport_id) {
+        return previous_mouse_capture_viewport_id;
+    }
+    return mouse_clicked && !has_stale_mouse_button_down && viewport_hovered &&
+                   active_viewport_id != 0 &&
+                   focused_viewport_id == active_viewport_id
+               ? active_viewport_id
+               : 0;
 }
 
 // Immutable-by-ownership frame value: it contains no references to tracker,
@@ -127,6 +152,7 @@ struct RENDER_API WindowInputFrameSnapshot {
     uint64_t capture_sequence = 0;
     float    delta_time       = 0.0f;
     bool     focused          = false;
+    uint32_t focused_viewport_id = 0;
 
     uint2 display_resolution  = uint2(0u, 0u);
     float display_aspect_ratio = 0.0f;
@@ -181,6 +207,7 @@ public:
     }
 
     [[nodiscard]] bool IsKeyToggled(KeyButtons key) const;
+    void ClearKeyToggle(KeyButtons key) noexcept;
 
     [[nodiscard]] WindowInputFrameSnapshot Finalize(const WindowInputPolicy& policy);
 

@@ -125,11 +125,11 @@ private:
     bool   m_b_show_config                = true;
     bool   m_b_show_scene_editing         = true;
     bool   m_b_show_profile_capture       = false;
-    bool   m_b_show_profile_viewer         = false;
-    bool   m_b_scene_color_mouse_captured  = false;
+    bool   m_b_show_profile_viewer          = false;
     bool   m_b_active_viewport_window_seen = false;
     bool   m_b_active_viewport_hovered      = false;
     uint32 m_active_input_viewport_id       = 0;
+    uint32 m_mouse_capture_viewport_id      = 0;
     uint32 m_cursor_capture_viewport_id     = 0;
     uint32 m_free_look_capture_viewport_id  = 0;
     // ImGui 窗口几何信息使用浮点屏幕坐标表示。

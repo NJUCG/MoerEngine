@@ -29,6 +29,7 @@ WindowInputSourceSnapshot MakeSource(uint64_t sequence) {
     source.capture_sequence  = sequence;
     source.gt_delta_time     = 1.0f / 60.0f;
     source.focused           = true;
+    source.focused_viewport_id = 17u;
     source.display_resolution = uint2(1920u, 1080u);
     source.mouse_position    = float2(320.0f, 180.0f);
     return source;
@@ -50,14 +51,30 @@ int main() {
     // has committed its own viewport owner, losing geometric hover must not end
     // free-look. The latch is deliberately independent from mouse-drag cursor
     // ownership, so a latent F toggle cannot adopt an unrelated capture ID.
-    Require(ResolveFreeLookCaptureViewportId(true, true, true, 17u, 0u) == 17u);
-    Require(ResolveFreeLookCaptureViewportId(true, true, false, 17u, 17u) == 17u);
-    Require(ResolveFreeLookCaptureViewportId(true, true, false, 17u, 0u) == 0u);
-    Require(ResolveFreeLookCaptureViewportId(true, false, false, 17u, 17u) == 0u);
-    Require(ResolveFreeLookCaptureViewportId(false, true, false, 17u, 17u) == 0u);
-    Require(ResolveFreeLookCaptureViewportId(true, true, false, 23u, 17u) == 0u);
-    Require(ResolveFreeLookCaptureViewportId(true, true, true, 23u, 17u) == 23u);
-    Require(ResolveFreeLookCaptureViewportId(true, true, false, 0u, 17u) == 0u);
+    Require(ResolveFreeLookCaptureViewportId(17u, true, true, 17u, 0u) == 17u);
+    Require(ResolveFreeLookCaptureViewportId(17u, true, false, 17u, 17u) == 17u);
+    Require(ResolveFreeLookCaptureViewportId(17u, true, false, 17u, 0u) == 0u);
+    Require(ResolveFreeLookCaptureViewportId(17u, false, false, 17u, 17u) == 0u);
+    Require(ResolveFreeLookCaptureViewportId(0u, true, false, 17u, 17u) == 0u);
+    Require(ResolveFreeLookCaptureViewportId(23u, true, false, 17u, 17u) == 0u);
+    Require(ResolveFreeLookCaptureViewportId(23u, true, false, 23u, 17u) == 0u);
+    Require(ResolveFreeLookCaptureViewportId(23u, true, true, 23u, 17u) == 23u);
+    Require(ResolveFreeLookCaptureViewportId(17u, true, false, 0u, 17u) == 0u);
+
+    // Mouse-drag capture is owned by the platform viewport where its click
+    // began. It survives geometric hover loss inside that viewport, but cannot
+    // transfer merely because focus/active ownership moves to another detached
+    // window. A fresh click in that new window establishes a new owner.
+    Require(ResolveMouseCaptureViewportId(17u, 17u, true, true, false, 0u) == 17u);
+    Require(ResolveMouseCaptureViewportId(17u, 17u, false, false, true, 17u) == 17u);
+    Require(ResolveMouseCaptureViewportId(23u, 23u, true, false, false, 17u) == 0u);
+    Require(ResolveMouseCaptureViewportId(23u, 23u, true, true, false, 17u) == 23u);
+    Require(ResolveMouseCaptureViewportId(23u, 23u, true, true, true, 17u) == 0u);
+    Require(ResolveMouseCaptureViewportId(23u, 23u, true, true, false, 0u) == 23u);
+    Require(ResolveMouseCaptureViewportId(17u, 23u, true, true, false, 0u) == 0u);
+    Require(ResolveMouseCaptureViewportId(0u, 17u, true, true, false, 17u) == 0u);
+    Require(ResolveMouseCaptureViewportId(17u, 0u, true, true, false, 17u) == 0u);
+    Require(ResolveMouseCaptureViewportId(17u, 17u, false, true, false, 0u) == 0u);
 
     // Engine-only callers have no UI hook. An empty input value must preserve
     // CameraFrameInput's safe projection default instead of publishing aspect 0.
@@ -67,6 +84,20 @@ int main() {
 
     WindowInputFrameTracker tracker;
     const WindowInputPolicy active_policy = MakeActivePolicy();
+
+    // UI ownership may revoke a persistent toggle after BeginFrame when the
+    // captured platform viewport loses focus or is replaced.
+    WindowInputFrameTracker clear_toggle_tracker;
+    WindowInputSourceSnapshot clear_toggle_source = MakeSource(1);
+    clear_toggle_source.key_released[KeyButtons::F] = true;
+    Require(clear_toggle_tracker.BeginFrame(clear_toggle_source));
+    Require(clear_toggle_tracker.IsKeyToggled(KeyButtons::F));
+    clear_toggle_tracker.ClearKeyToggle(KeyButtons::F);
+    Require(!clear_toggle_tracker.IsKeyToggled(KeyButtons::F));
+    const WindowInputFrameSnapshot clear_toggle_frame =
+        clear_toggle_tracker.Finalize(active_policy);
+    Require(!clear_toggle_frame.key_toggle[KeyButtons::F]);
+    Require(!clear_toggle_frame.cursor_hidden);
 
     // First physical F release toggles exactly once and is visible to UI before
     // Finalize, allowing policy construction in the same frame.
@@ -82,6 +113,7 @@ int main() {
     Require(!tracker.HasPendingSource());
     Require(frame1.capture_sequence == 1);
     Require(frame1.delta_time == first.gt_delta_time);
+    Require(frame1.focused_viewport_id == 17u);
     RequireUint2(frame1.display_resolution, 1920u, 1080u);
     Require(frame1.display_aspect_ratio > 1.77f && frame1.display_aspect_ratio < 1.78f);
     RequireUint2(frame1.viewport_resolution, 1280u, 720u);
@@ -192,6 +224,7 @@ int main() {
     // Losing focus is a hard reset for held/toggle/cursor/camera state.
     WindowInputSourceSnapshot focus_lost = MakeSource(7);
     focus_lost.focused                    = false;
+    focus_lost.focused_viewport_id        = 0;
     focus_lost.key_down[KeyButtons::W]    = true;
     focus_lost.mouse_button_down[MouseButtons::Left] = true;
     focus_lost.mouse_delta = float2(9.0f, 9.0f);
