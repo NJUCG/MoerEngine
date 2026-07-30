@@ -12,6 +12,7 @@
 #include "window/WindowFrameSnapshot.h"
 #include "window/WindowInput.h"
 
+#include "common/PresentationSurface.h"
 #include "common/UIRenderer.h"
 #include "common/UiCombinePass.h"
 
@@ -61,7 +62,7 @@ public:
     Renderer(
         uint2                         initial_resolution,
         const SharedPtr<EditorConfig> config,
-        SwapchainSurfaceInfo          main_window_surface,
+        SwapchainSurfaceInfo          _main_window_surface,
         RenderProfileCapture*         render_profile_capture = nullptr
     );
 
@@ -89,6 +90,13 @@ protected:
     [[nodiscard]] bool PrepareRenderFrame(const WindowFrameSnapshot& window_frame);
     PresentReceiptRef  CreateMainPresentReceipt(bool scene_content_ready);
     void ApplyMainPresentReceipt(const PresentReceiptRef& receipt, const EngineHooks& hooks);
+    [[nodiscard]] PresentationSurface& GetMainPresentationSurface() noexcept {
+        return *main_presentation_surface;
+    }
+    [[nodiscard]] const PresentationSurface&
+    GetMainPresentationSurface() const noexcept {
+        return *main_presentation_surface;
+    }
     [[nodiscard]] bool IsFramePrepareProfilingEnabled() const {
         return frame_prepare_profile_state != nullptr;
     }
@@ -109,13 +117,11 @@ protected:
     // Engine owns the capture bridge and outlives every renderer instance.
     RenderProfileCapture* render_profile_capture = nullptr;
 
-    SwapchainRef     swapchain;
     BindlessArrayRef bindless_array;
 
-    SwapchainCreateInfo        swapchain_create_info;
+    SwapchainSurfaceInfo       main_window_surface;
+    UniquePtr<PresentationSurface> main_presentation_surface;
     WindowFrameSnapshotTracker main_window_frame_tracker;
-    WindowSurfaceIdentity       committed_main_surface_identity{};
-    uint64_t                    committed_main_drawable_generation = 0;
     Scene                       scene;
     UniquePtr<RenderScene>      render_scene;
     CommandList                 cmd_list;

@@ -22,7 +22,7 @@ namespace Moer::Render {
 Renderer::Renderer(
     uint2                         initial_resolution,
     const SharedPtr<EditorConfig> config,
-    SwapchainSurfaceInfo          main_window_surface,
+    SwapchainSurfaceInfo          _main_window_surface,
     RenderProfileCapture*         _render_profile_capture
 ) :
     device(RenderDevice::Get()),
@@ -30,17 +30,19 @@ Renderer::Renderer(
     gfx_queue(device.GetCommandQueue(EQueueType::Graphics)),
     resolution(initial_resolution),
     render_profile_capture(_render_profile_capture),
+    main_window_surface(std::move(_main_window_surface)),
     scene(),
     cmd_list() {
 
     {
-        swapchain_create_info = SwapchainCreateInfo{
-            .surface          = std::move(main_window_surface),
-            .size             = {resolution.x, resolution.y},
-            .back_buffer_sz   = 2,
-            .preferred_format = PF_R8G8B8A8_SRGB
-        };
-        swapchain = device.CreateSwapchain(swapchain_create_info);
+        main_presentation_surface = MakeUnique<PresentationSurface>(
+            device,
+            PresentationSurfaceDesc{
+                .back_buffer_count = 2,
+                .preferred_format  = PF_R8G8B8A8_SRGB,
+                .debug_name        = "Main Presentation Surface",
+            }
+        );
     }
     {
         bindless_array = device.CreateBindlessArray();
@@ -142,8 +144,9 @@ void Renderer::ReleaseResources() {
     resources_released = true;
 
     timeline->Wait(time);
-    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    swapchain->Sync();
+    if (main_presentation_surface) {
+        main_presentation_surface->Release();
+    }
     device.WaitIdle();
 
     render_scene.reset();
@@ -162,7 +165,7 @@ void Renderer::ReleaseResources() {
 WindowFrameSnapshot Renderer::TickWindowContext() {
     WindowContext::Tick();
     return main_window_frame_tracker.Advance(
-        swapchain_create_info.surface.GetIdentity(),
+        main_window_surface.GetIdentity(),
         WindowContext::CaptureWindowFrameMetrics(*WindowContext::GetMainWindow())
     );
 }
@@ -175,45 +178,24 @@ bool Renderer::PrepareRenderFrame(const WindowFrameSnapshot& window_frame) {
 
     const bool recreate_requested =
         main_swapchain_recreate_requested.exchange(false, std::memory_order_acq_rel);
-    const bool presentation_ready =
-        swapchain && swapchain->IsPresentationReady();
-    if (!window_frame.IsDrawable()) {
-        if (recreate_requested || !presentation_ready) {
-            // A zero-extent swapchain cannot be recreated. Preserve the WSI
-            // recovery request until the window has a drawable extent again.
-            main_swapchain_recreate_requested.store(true, std::memory_order_release);
-        }
-        return false;
-    }
-    if (!swapchain) {
-        main_swapchain_recreate_requested.store(true, std::memory_order_release);
+    if (!main_presentation_surface) {
         return false;
     }
 
-    const Extent2D drawable_extent = window_frame.drawable_extent;
-    const bool request_matches =
-        presentation_ready &&
-        committed_main_surface_identity == window_frame.surface_identity &&
-        committed_main_drawable_generation == window_frame.drawable_generation;
-    if (request_matches && !recreate_requested) {
-        resolution = uint2(swapchain->size.x, swapchain->size.y);
-        return true;
-    }
-
-    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    swapchain_create_info.size = drawable_extent;
-    swapchain->Sync();
-    const bool recreated = swapchain->Recreate(swapchain_create_info);
-    if (!recreated ||
-        !swapchain->IsPresentationReady() ||
-        swapchain->GetCommittedSurfaceIdentity() != window_frame.surface_identity) {
-        main_swapchain_recreate_requested.store(true, std::memory_order_release);
+    const EPresentationSurfaceEnsureResult result =
+        main_presentation_surface->EnsureCurrent(
+            main_window_surface,
+            window_frame,
+            recreate_requested
+        );
+    if (!IsPresentationSurfaceReady(result)) {
         return false;
     }
-    committed_main_surface_identity       = window_frame.surface_identity;
-    committed_main_drawable_generation   = window_frame.drawable_generation;
-    resolution = uint2(swapchain->size.x, swapchain->size.y);
-    return true;
+
+    const Extent2D committed_extent =
+        main_presentation_surface->GetExtent();
+    resolution = uint2(committed_extent.x, committed_extent.y);
+    return main_presentation_surface->IsCurrent(window_frame);
 }
 
 void Renderer::LogSceneLoadStatus(const EditorConfig& config) const {

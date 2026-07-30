@@ -111,11 +111,9 @@ struct GuiFrameRenderBuffers {
     Moer::Render::BufferRef argument_buffer;
 };
 struct GuiViewportRenderResources final : UiViewportRenderResources {
-    SwapchainRef swapchain;
+    UniquePtr<PresentationSurface> presentation_surface;
 
     Array<GuiFrameRenderBuffers> render_buffers;
-    TextureRef                   framebuffer;
-    UiViewportPresentationSnapshot committed_presentation{};
 
     uint64_t frame_index = 0;
 
@@ -434,14 +432,20 @@ CaptureViewportDrawPacket(ImDrawData* _draw_data, GuiViewportData* _viewport_dat
         return packet;
     }
 
+    const PresentationSurface* presentation_surface =
+        _viewport_data->render_resources->presentation_surface.get();
     packet.render_resources = _viewport_data->render_resources;
-    packet.framebuffer      = _viewport_data->render_resources->framebuffer;
-    packet.swapchain        = _viewport_data->render_resources->swapchain;
+    if (presentation_surface) {
+        packet.framebuffer = presentation_surface->GetFrameBuffer();
+        packet.swapchain   = presentation_surface->GetSwapchain();
+    }
     BindUiViewportWindowFrame(packet, _viewport_data->latest_window_frame);
-    BindUiViewportPresentation(
-        packet,
-        _viewport_data->render_resources->committed_presentation
-    );
+    if (presentation_surface) {
+        BindUiViewportPresentation(
+            packet,
+            presentation_surface->GetCommittedSnapshot()
+        );
+    }
     if (!_draw_data) {
         return packet;
     }
@@ -655,9 +659,12 @@ TextureRef ImGuiRenderBackend::GetWindowFrameBuffer(void* _window) {
     auto* viewport      = static_cast<ImGuiViewport*>(_window);
     auto* viewport_data = static_cast<GuiViewportData*>(viewport->RendererUserData);
 
-    return viewport_data && viewport_data->render_resources && viewport_data->render_resources->framebuffer ?
-               viewport_data->render_resources->framebuffer :
-               TextureRef();
+    return viewport_data &&
+                   viewport_data->render_resources &&
+                   viewport_data->render_resources->presentation_surface ?
+               viewport_data->render_resources->presentation_surface
+                   ->GetFrameBuffer() :
+               TextureRef{};
 }
 
 } // namespace Moer::Render
@@ -856,16 +863,18 @@ void RenderGuiDrawPacket(
 void GuiCreateWindow(ImGuiViewport* _viewport);
 void GuiDestroyWindow(ImGuiViewport* _viewport);
 void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size);
-void GuiRenderWindow(ImGuiViewport* _viewport, void*);
-void GuiSwapBuffers(ImGuiViewport* _viewport, void*);
 
 void InitializeGuiPlatformInterface() {
     ImGuiPlatformIO& platform_io       = ImGui::GetPlatformIO();
     platform_io.Renderer_CreateWindow  = GuiCreateWindow;
     platform_io.Renderer_DestroyWindow = GuiDestroyWindow;
     platform_io.Renderer_SetWindowSize = GuiSetWindowSize;
-    platform_io.Renderer_RenderWindow  = GuiRenderWindow;
-    platform_io.Renderer_SwapBuffers   = GuiSwapBuffers;
+    // Rendering and Present are consumed from immutable UI frame packets on
+    // the Render owner. Do not advertise the legacy GT callbacks used by
+    // RenderPlatformWindowsDefault(); they cannot carry our CommandList or
+    // presentation ownership contract.
+    platform_io.Renderer_RenderWindow = nullptr;
+    platform_io.Renderer_SwapBuffers  = nullptr;
 }
 
 void DestroyRenderBuffers(GuiFrameRenderBuffers* _render_buffers) {
@@ -889,90 +898,50 @@ bool CreateOrResizeViewportResources(
         return false;
     }
 
-    const bool has_swapchain = _resources->swapchain.IsValid();
-    const bool request_matches =
-        _resources->committed_presentation.IsValid() &&
-        _resources->committed_presentation.surface_identity == _window_frame.surface_identity &&
-        _resources->committed_presentation.drawable_generation ==
-            _window_frame.drawable_generation;
-    const bool swapchain_matches_commit =
-        has_swapchain &&
-        _resources->swapchain->IsPresentationReady() &&
-        _resources->swapchain->GetCommittedSurfaceIdentity() ==
-            _resources->committed_presentation.surface_identity &&
-        _resources->swapchain->size ==
-            _resources->committed_presentation.drawable_extent;
-    const bool framebuffer_matches =
-        _resources->framebuffer &&
-        _resources->framebuffer->GetExtent().x ==
-            _resources->committed_presentation.drawable_extent.x &&
-        _resources->framebuffer->GetExtent().y ==
-            _resources->committed_presentation.drawable_extent.y;
-    if (request_matches && swapchain_matches_commit && framebuffer_matches) {
+    const bool had_committed_surface =
+        _resources->presentation_surface &&
+        _resources->presentation_surface->GetCommittedSnapshot().IsValid();
+    if (!_resources->presentation_surface) {
+        _resources->presentation_surface =
+            MakeUnique<PresentationSurface>(
+                _device,
+                PresentationSurfaceDesc{
+                    .back_buffer_count = _frame_in_flight,
+                    .preferred_format  = PF_R8G8B8A8_SRGB,
+                    .debug_name = std::format(
+                        "ImGui Window {}", _viewport_index
+                    ),
+                    .frame_buffer = PresentationSurfaceFrameBufferDesc{
+                        .format = PF_R8G8B8A8_SRGB,
+                        .usage =
+                            ETextureUsageFlags::COLOR_ATTACHMENT |
+                            ETextureUsageFlags::SAMPLED |
+                            ETextureUsageFlags::PRESENTATION_SOURCE |
+                            ETextureUsageFlags::TRANSFER_SRC |
+                            ETextureUsageFlags::TRANSFER_DST,
+                    },
+                }
+            );
+    }
+
+    const EPresentationSurfaceEnsureResult result =
+        _resources->presentation_surface->EnsureCurrent(
+            _surface_info,
+            _window_frame
+        );
+    if (!IsPresentationSurfaceReady(result)) {
+        return false;
+    }
+    if (result == EPresentationSurfaceEnsureResult::Current) {
         return true;
     }
 
-    if (has_swapchain || _resources->framebuffer) {
-        RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    }
-
-    SwapchainCreateInfo swapchain_info{
-        .surface          = _surface_info,
-        .size             = _window_frame.drawable_extent,
-        .back_buffer_sz   = _frame_in_flight,
-        .preferred_format = PF_R8G8B8A8_SRGB
-    };
-
-    bool native_commit_succeeded = false;
-    if (!has_swapchain) {
-        _resources->swapchain = _device.CreateSwapchain(swapchain_info);
-        native_commit_succeeded =
-            _resources->swapchain && _resources->swapchain->IsPresentationReady();
-    } else if (!request_matches || !swapchain_matches_commit) {
-        _resources->swapchain->Sync();
-        native_commit_succeeded = _resources->swapchain->Recreate(swapchain_info);
-    } else {
-        native_commit_succeeded = true;
-    }
-
-    if (!native_commit_succeeded ||
-        !_resources->swapchain ||
-        !_resources->swapchain->IsPresentationReady() ||
-        _resources->swapchain->GetCommittedSurfaceIdentity() != _window_frame.surface_identity ||
-        _resources->swapchain->size.x == 0 ||
-        _resources->swapchain->size.y == 0) {
-        return false;
-    }
-
-    const Extent2D actual_extent = _resources->swapchain->size;
-    const bool framebuffer_matches_actual =
-        _resources->framebuffer &&
-        _resources->framebuffer->GetExtent().x == actual_extent.x &&
-        _resources->framebuffer->GetExtent().y == actual_extent.y;
-    if (!framebuffer_matches_actual) {
-        _resources->framebuffer = _device.CreateTexture(
-            actual_extent,
-            PF_R8G8B8A8_SRGB,
-            ETextureUsageFlags::COLOR_ATTACHMENT |
-                ETextureUsageFlags::SAMPLED |
-                ETextureUsageFlags::PRESENTATION_SOURCE |
-                ETextureUsageFlags::TRANSFER_SRC |
-                ETextureUsageFlags::TRANSFER_DST
-        );
-        if (!_resources->framebuffer) {
-            return false;
-        }
-        _resources->framebuffer->SetName(std::format("ImGui Window {}", _viewport_index));
-    }
-    _resources->committed_presentation = UiViewportPresentationSnapshot{
-        .surface_identity     = _window_frame.surface_identity,
-        .drawable_extent      = actual_extent,
-        .drawable_generation  = _window_frame.drawable_generation,
-    };
+    const Extent2D actual_extent =
+        _resources->presentation_surface->GetExtent();
 
     LOG_INFO(
         "[Threading][UI] {} ImGui viewport {} resources at {}x{} on {} Thread.",
-        has_swapchain ? "Updated" : "Created",
+        had_committed_surface ? "Updated" : "Created",
         _viewport_index,
         actual_extent.x,
         actual_extent.y,
@@ -991,13 +960,10 @@ void ReleaseViewportResources(
     }
     assert(!IsRenderThreadRunning() || IsCurrentlyRenderThread());
 
-    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    if (_resources->swapchain) {
-        _resources->swapchain->Sync();
+    if (_resources->presentation_surface) {
+        _resources->presentation_surface->Release();
+        _resources->presentation_surface.reset();
     }
-    _resources->swapchain              = nullptr;
-    _resources->framebuffer            = nullptr;
-    _resources->committed_presentation = {};
     for (auto& render_buffers : _resources->render_buffers) {
         DestroyRenderBuffers(&render_buffers);
     }
@@ -1168,60 +1134,4 @@ void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
         backend_data->render_backend->device,
         backend_data->frames_in_flight
     ));
-}
-void GuiRenderWindow(ImGuiViewport* _viewport, void* _cmd_list) {
-    auto* viewport_data = static_cast<GuiViewportData*>(_viewport->RendererUserData);
-    if (!viewport_data || !viewport_data->render_resources || !viewport_data->render_resources->swapchain ||
-        !viewport_data->render_resources->framebuffer) {
-        return;
-    }
-
-    ImGuiData& backend_data = *GetImGuiBackendData();
-    auto       draw_packet  = CaptureViewportDrawPacket(_viewport->DrawData, viewport_data);
-    if (!IsUiViewportPresentationCurrent(draw_packet)) {
-        return;
-    }
-    draw_packet.recording_slot =
-        draw_packet.render_resources->GetPendingRecordingSlot();
-    RenderGuiDrawPacket(
-        draw_packet,
-        viewport_data->render_resources->framebuffer->GetView(),
-        *static_cast<CommandList*>(_cmd_list),
-        backend_data,
-        *backend_data.render_backend
-    );
-    if (draw_packet.render_resources->IsPendingRecordingSlot(
-            draw_packet.recording_slot
-        )) {
-        draw_packet.render_resources->CommitRecordingSlot(
-            draw_packet.recording_slot
-        );
-    }
-}
-
-void GuiSwapBuffers(ImGuiViewport* _viewport, void*) {
-    ImGuiData&       backend_data  = *GetImGuiBackendData();
-    auto* viewport_data = static_cast<GuiViewportData*>(_viewport->RendererUserData);
-    if (!viewport_data || !viewport_data->render_resources) {
-        return;
-    }
-    UiViewportDrawPacket present_packet{
-        .framebuffer = viewport_data->render_resources->framebuffer,
-        .swapchain   = viewport_data->render_resources->swapchain,
-    };
-    BindUiViewportWindowFrame(present_packet, viewport_data->latest_window_frame);
-    BindUiViewportPresentation(
-        present_packet,
-        viewport_data->render_resources->committed_presentation
-    );
-    if (!IsUiViewportPresentationCurrent(present_packet)) {
-        return;
-    }
-    RHIExecutor::Get().Present(
-        RHIPresentRequest(
-            present_packet.swapchain,
-            present_packet.framebuffer->GetView()
-        ),
-        true
-    );
 }

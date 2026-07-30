@@ -175,6 +175,15 @@ set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME WindowFrameSnapshotContract COMMAND $<TARGET_FILE:${test_target}>)
 set_tests_properties(WindowFrameSnapshotContract PROPERTIES TIMEOUT 60)
 
+set(test_target TestPresentationSurface)
+add_executable(${test_target} "PresentationSurfaceContractTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME PresentationSurfaceContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(PresentationSurfaceContract PROPERTIES TIMEOUT 60)
+
 set(test_target TestWindowInputSnapshot)
 add_executable(${test_target} "WindowInputSnapshotContractTest.cpp")
 target_link_libraries(${test_target}
