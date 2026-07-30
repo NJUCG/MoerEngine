@@ -5,6 +5,7 @@
 
 #include "RenderAPI.h"
 #include "misc/STL.h"
+#include "renderer/common/PresentationSurface.h"
 #include "rhi/RHI.h"
 #include "window/WindowFrameSnapshot.h"
 #include "window/WindowInput.h"
@@ -71,18 +72,7 @@ struct UiClipRect {
     float2 max{};
 };
 
-struct UiViewportPresentationSnapshot {
-    WindowSurfaceIdentity surface_identity{};
-    Extent2D              drawable_extent{};
-    uint64_t              drawable_generation = 0;
-
-    [[nodiscard]] bool IsValid() const noexcept {
-        return surface_identity.IsValid() &&
-               drawable_extent.x != 0 &&
-               drawable_extent.y != 0 &&
-               drawable_generation != 0;
-    }
-};
+using UiViewportPresentationSnapshot = PresentationSurfaceSnapshot;
 
 struct UiViewportDrawPacket {
     static constexpr uint64_t InvalidRecordingSlot =

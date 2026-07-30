@@ -393,7 +393,7 @@ struct RaytracingRenderer::RuntimeState {
         importance_sampling_context(importance_sampling_params),
         output(renderer.device.CreateTexture(
             Extent2D(renderer.resolution.x, renderer.resolution.y),
-            renderer.swapchain->format,
+            renderer.GetMainPresentationSurface().GetFormat(),
             ETextureUsageFlags::COLOR_ATTACHMENT |
                 ETextureUsageFlags::PRESENTATION_SOURCE |
                 ETextureUsageFlags::TRANSFER_SRC |
@@ -741,8 +741,9 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                    EGpuMarkerMode::Label;
     };
 
-    auto& state     = *runtime_state;
-    auto& ui_config = frame_packet.config;
+    auto& state                     = *runtime_state;
+    auto& ui_config                 = frame_packet.config;
+    auto& main_presentation_surface = GetMainPresentationSurface();
     bool  main_presentation_current =
         PrepareRenderFrame(frame_packet.window);
     if (main_presentation_current) {
@@ -834,8 +835,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
 
     if (!main_presentation_current ||
         !frame_packet.window.IsDrawable() ||
-        !swapchain ||
-        !swapchain->IsPresentationReady()) {
+        !main_presentation_surface.IsCurrent(frame_packet.window)) {
         std::this_thread::yield();
         skip_present = true;
     }
@@ -846,10 +846,13 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     const bool recreate_scene_resources = !EqualRenderExtent(
         uint2(current_scene_extent_3d.x, current_scene_extent_3d.y), active_scene_extent
     );
-    const bool recreate_output_resources = !EqualRenderExtent(
-        uint2(current_output_extent_3d.x, current_output_extent_3d.y),
-        presentation_resolution
-    );
+    const bool recreate_output_resources =
+        !EqualRenderExtent(
+            uint2(current_output_extent_3d.x, current_output_extent_3d.y),
+            presentation_resolution
+        ) ||
+        state.output->GetFormat() !=
+            main_presentation_surface.GetFormat();
 
     if (!skip_present && (recreate_scene_resources || recreate_output_resources)) {
         if (recreate_output_resources) {
@@ -887,8 +890,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 active_scene_extent.y,
                 presentation_resolution.x,
                 presentation_resolution.y,
-                swapchain->size.x,
-                swapchain->size.y,
+                main_presentation_surface.GetExtent().x,
+                main_presentation_surface.GetExtent().y,
                 scene_resources_recreated,
                 output_resources_recreated,
                 scene_resources_recreated
@@ -1942,6 +1945,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
     std::optional<RHIPresentRequest> present_request{};
     if (!skip_present) {
         const auto output_view = state.output->GetView();
+        const Extent2D presentation_extent =
+            main_presentation_surface.GetExtent();
         if (frame_packet.window.transition != EWindowFrameTransition::Stable &&
             frame_packet.window.transition != EWindowFrameTransition::LogicalResized) {
             LOG_INFO(
@@ -1949,23 +1954,28 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                 "viewports={}.",
                 output_view.extent.x,
                 output_view.extent.y,
-                swapchain->size.x,
-                swapchain->size.y,
+                presentation_extent.x,
+                presentation_extent.y,
                 prepared_ui->GetDrawFrame().platform_viewports.size()
             );
         }
-        if (output_view.extent.x == swapchain->size.x && output_view.extent.y == swapchain->size.y) {
-            feedback.main_present_receipt = CreateMainPresentReceipt(
-                frame_packet.scene_updates.scene_ready && frame_packet.runtime_assets_ready
-            );
-            present_request.emplace(swapchain, output_view, feedback.main_present_receipt);
-        } else {
+        feedback.main_present_receipt = CreateMainPresentReceipt(
+            frame_packet.scene_updates.scene_ready &&
+            frame_packet.runtime_assets_ready
+        );
+        present_request = main_presentation_surface.CreatePresentRequest(
+            frame_packet.window,
+            output_view,
+            feedback.main_present_receipt
+        );
+        if (!present_request.has_value()) {
+            feedback.main_present_receipt = {};
             LOG_WARNING(
                 "Skipping stale raytracing main-window present: source={}x{}, swapchain={}x{}.",
                 output_view.extent.x,
                 output_view.extent.y,
-                swapchain->size.x,
-                swapchain->size.y
+                presentation_extent.x,
+                presentation_extent.y
             );
         }
     }
@@ -2434,7 +2444,7 @@ void RaytracingRenderer::RecreateOutputResources(uint2 new_extent) {
     state.output = device.CreateTexture(
         "output",
         Extent2D(new_extent.x, new_extent.y),
-        swapchain->format,
+        GetMainPresentationSurface().GetFormat(),
         ETextureUsageFlags::COLOR_ATTACHMENT |
             ETextureUsageFlags::PRESENTATION_SOURCE |
             ETextureUsageFlags::TRANSFER_SRC |

@@ -536,7 +536,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     uint64 linear_source_order       = 1;
     uint64 tail_source_order         = 1;
 
-    auto& raster_context = *raster_context_ptr;
+    auto& raster_context            = *raster_context_ptr;
+    auto& main_presentation_surface = GetMainPresentationSurface();
     bool  main_presentation_current =
         PrepareRenderFrame(frame_packet.window);
     if (main_presentation_current) {
@@ -579,8 +580,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     PresentReceiptRef main_present_receipt{};
     if (!main_presentation_current ||
         !frame_packet.window.IsDrawable() ||
-        !swapchain ||
-        !swapchain->IsPresentationReady()) {
+        !main_presentation_surface.IsCurrent(frame_packet.window)) {
         // 窗口最小化后无法 present，此处主动让出线程，避免高频空转。
         std::this_thread::yield();
         skip_present = true;
@@ -657,8 +657,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             raster_context.GetResolution().y,
             raster_context.GetOutputResolution().x,
             raster_context.GetOutputResolution().y,
-            swapchain->size.x,
-            swapchain->size.y,
+            main_presentation_surface.GetExtent().x,
+            main_presentation_surface.GetExtent().y,
             recreate_scene_resources,
             recreate_output_resources,
             recreate_scene_resources
@@ -1800,28 +1800,34 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
     if (!skip_present) {
         const auto output_view = default_output_texture->GetView();
+        const Extent2D presentation_extent =
+            main_presentation_surface.GetExtent();
         if (frame_packet.window.transition != EWindowFrameTransition::Stable &&
             frame_packet.window.transition != EWindowFrameTransition::LogicalResized) {
             LOG_INFO(
                 "[Threading][Resize] Main present source={}x{}, swapchain={}x{}, UI platform viewports={}.",
                 output_view.extent.x,
                 output_view.extent.y,
-                swapchain->size.x,
-                swapchain->size.y,
+                presentation_extent.x,
+                presentation_extent.y,
                 frame_packet.ui_draw_frame.platform_viewports.size()
             );
         }
-        if (output_view.extent.x == swapchain->size.x && output_view.extent.y == swapchain->size.y) {
-            main_present_receipt =
-                CreateMainPresentReceipt(frame_packet.scene_updates.scene_ready);
-            present_request.emplace(swapchain, output_view, main_present_receipt);
-        } else {
+        main_present_receipt =
+            CreateMainPresentReceipt(frame_packet.scene_updates.scene_ready);
+        present_request = main_presentation_surface.CreatePresentRequest(
+            frame_packet.window,
+            output_view,
+            main_present_receipt
+        );
+        if (!present_request.has_value()) {
+            main_present_receipt = {};
             LOG_WARNING(
                 "Skipping stale main-window present: source={}x{}, swapchain={}x{}.",
                 output_view.extent.x,
                 output_view.extent.y,
-                swapchain->size.x,
-                swapchain->size.y
+                presentation_extent.x,
+                presentation_extent.y
             );
         }
     }
