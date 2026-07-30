@@ -69,6 +69,28 @@ add_test(
 )
 set_tests_properties(ProfileDocumentLoaderContract PROPERTIES TIMEOUT 120)
 
+set(test_target TestProfileViewerModel)
+add_executable(
+    ${test_target}
+    "ProfileViewerModelTest.cpp"
+    "${moer_source_dir}/editor/profile_viewer_ui/ProfileViewerModel.cpp"
+)
+target_include_directories(
+    ${test_target}
+    PRIVATE "${moer_source_dir}/editor"
+)
+target_link_libraries(${test_target}
+    PRIVATE
+        Moer::ProfileConsumer
+        Moer::Core
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(
+    NAME ProfileViewerModelContract
+    COMMAND $<TARGET_FILE:${test_target}>
+)
+set_tests_properties(ProfileViewerModelContract PROPERTIES TIMEOUT 60)
+
 set(test_target TestProfileScopeProducer)
 add_executable(${test_target} "ProfileScopeProducerTest.cpp")
 target_include_directories(${test_target}

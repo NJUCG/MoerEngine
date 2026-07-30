@@ -28,7 +28,6 @@
 #include <filesystem>
 #include <iterator>
 #include <mutex>
-#include <nfd.hpp>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -40,8 +39,6 @@
 using namespace Moer::Render;
 
 namespace Moer {
-
-static UniquePtr<NFD::Guard> nfd_guard = nullptr;
 
 static bool ContainsNonAscii(const std::filesystem::path& p);
 
@@ -2059,14 +2056,6 @@ void Engine::ShutDown() noexcept {
         }
     }
     m_editor_config.reset();
-}
-
-void Engine::Init3rdParty() {
-    nfd_guard = MakeUnique<NFD::Guard>();
-}
-
-void Engine::ShutDown3rdParty() {
-    nfd_guard.release();
 }
 
 // 检测路径中是否包含非ASCII字符（包括中文）

@@ -268,6 +268,17 @@ public:
         std::span<std::uint64_t> _output
     ) const noexcept;
 
+    // Viewer-oriented variant that returns the already-normalized timeline
+    // references as well as their source indices. This remains output-bounded
+    // and avoids rescanning a track or reconstructing relative timing in UI
+    // code.
+    [[nodiscard]] TimelineOverlapQueryResult QueryCpuTimelineOverlaps(
+        std::uint32_t                  _track_index,
+        std::uint64_t                  _view_begin_ns,
+        std::uint64_t                  _view_end_ns,
+        std::span<CpuTimelineScopeRef> _output
+    ) const noexcept;
+
     [[nodiscard]] const GpuTimelineFrameRef* FindGpuFrame(std::uint64_t _frame_id) const noexcept;
     [[nodiscard]] const GpuTimelineFrameSlice*
     FindGpuFrameSlice(std::uint32_t _track_index, std::uint64_t _frame_id) const noexcept;
@@ -283,6 +294,17 @@ public:
         std::uint64_t            _view_begin_ticks,
         std::uint64_t            _view_end_ticks,
         std::span<std::uint64_t> _output
+    ) const noexcept;
+
+    // Returns frame-local, wrap-normalized timing references. Distinct
+    // axis/frame records remain incomparable; callers must pair these offsets
+    // with the exact GpuTimelineAxisFrame selected for the query.
+    [[nodiscard]] TimelineOverlapQueryResult QueryGpuTimelineOverlaps(
+        std::uint32_t                  _track_index,
+        std::uint64_t                  _frame_id,
+        std::uint64_t                  _view_begin_ticks,
+        std::uint64_t                  _view_end_ticks,
+        std::span<GpuTimelineScopeRef> _output
     ) const noexcept;
 
 private:

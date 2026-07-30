@@ -10,6 +10,7 @@
 
 #include "inspector_ui/InspectorUI.h"
 #include "profile_capture_ui/ProfileCaptureUI.h"
+#include "profile_viewer_ui/ProfileViewerUI.h"
 #include "raster_ui/RasterUI.h"
 #include "raytracing_ui/RaytracingUI.h"
 #include "scene_editing_ui/SceneEditingUI.h"
@@ -51,7 +52,8 @@ public:
         UniquePtr<Render::UIRenderer>         renderer,
         SharedPtr<EditorConfig>               editor_config,
         const remote::RemoteModuleController& remote_controller,
-        Engine&                               engine
+        Engine&                               engine,
+        ProfileDump::ProfileDocumentLoader&   profile_document_loader
     );
     ~EditorUI() = default;
     void TickUI(Scene& scene);
@@ -89,6 +91,7 @@ public: // Sub UI
     SceneEditingUI m_scene_editing_ui;
     RemoteExamplesUI m_remote_examples_ui;
     ProfileCaptureUI m_profile_capture_ui;
+    ProfileViewerUI  m_profile_viewer_ui;
 
 private:
     void ResetFrameState();
@@ -117,6 +120,7 @@ private:
     bool   m_b_show_config                = true;
     bool   m_b_show_scene_editing         = true;
     bool   m_b_show_profile_capture       = false;
+    bool   m_b_show_profile_viewer        = false;
     bool   m_b_scene_color_mouse_captured = false;
     bool   m_b_active_viewport_window_seen = false;
     // ImGui 窗口几何信息使用浮点屏幕坐标表示。

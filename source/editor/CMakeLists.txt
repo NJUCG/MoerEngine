@@ -27,6 +27,7 @@ set_target_properties(${editor_library_target} PROPERTIES FOLDER "editor")
 
 target_link_libraries(${editor_library_target}
     PUBLIC Moer::Runtime
+    PRIVATE Moer::ProfileConsumer
     PRIVATE nfd
 )
 
