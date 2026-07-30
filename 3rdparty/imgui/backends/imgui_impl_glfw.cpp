@@ -773,7 +773,7 @@ static void ImGui_ImplGlfw_UpdateMouseCursor()
 {
     ImGuiIO& io = ImGui::GetIO();
     ImGui_ImplGlfw_Data* bd = ImGui_ImplGlfw_GetBackendData();
-    if ((io.ConfigFlags & ImGuiConfigFlags_NoMouseCursorChange) || glfwGetInputMode(bd->Window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED)
+    if (io.ConfigFlags & ImGuiConfigFlags_NoMouseCursorChange)
         return;
 
     ImGuiMouseCursor imgui_cursor = ImGui::GetMouseCursor();
@@ -781,6 +781,11 @@ static void ImGui_ImplGlfw_UpdateMouseCursor()
     for (int n = 0; n < platform_io.Viewports.Size; n++)
     {
         GLFWwindow* window = (GLFWwindow*)platform_io.Viewports[n]->PlatformHandle;
+        // An application may own relative/raw mouse capture for an individual
+        // detached viewport while the main viewport remains normal. Preserve
+        // that per-window ownership instead of forcing it back to NORMAL.
+        if (window == nullptr || glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED)
+            continue;
         if (imgui_cursor == ImGuiMouseCursor_None || io.MouseDrawCursor)
         {
             // Hide OS mouse cursor if imgui is drawing it or if it wants no cursor

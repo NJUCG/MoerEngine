@@ -305,6 +305,9 @@ struct UIRenderer::Impl {
     void UpdatePlatformWindows() {
         backend->UpdatePlatformWindows();
     }
+    const WindowInputSourceSnapshot& GetInputSnapshot() const noexcept {
+        return backend->GetInputSnapshot();
+    }
 
     UiDrawFramePacket CaptureDrawFrame() {
         auto frame    = backend->CaptureDrawFrame();
@@ -340,6 +343,10 @@ void UIRenderer::EndGUIFrame() {
 
 void UIRenderer::UpdatePlatformWindows() {
     impl->UpdatePlatformWindows();
+}
+
+const WindowInputSourceSnapshot& UIRenderer::GetInputSnapshot() const noexcept {
+    return impl->GetInputSnapshot();
 }
 
 UiDrawFramePacket UIRenderer::CaptureDrawFrame() {

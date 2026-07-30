@@ -5,7 +5,6 @@
 
 #include "rhi/RHIWindowSurface.h"
 #include "window/WindowFrameSnapshot.h"
-#include <functional>
 
 namespace Moer {
 using WindowType = void;
@@ -73,6 +72,9 @@ public:
     // Captures logical and drawable extents together on the Game Thread.
     // Render/RHI code consumes the returned value and never queries GLFW.
     static Render::WindowFrameMetrics CaptureWindowFrameMetrics(const WindowHandle&);
+    // Applies cursor capture on the Game Thread. Repeated requests for the
+    // current mode are ignored by the platform implementation.
+    static void          ApplyCursorMode(WindowHandle*, bool hidden);
     static void          SetFocusMode(WindowHandle*, bool focused);
     static bool          GetFocusMode(WindowHandle*);
     static WindowHandle* GetMainWindow();
@@ -83,34 +85,6 @@ public:
     // Captures an immutable native-window identity and surface factory. This
     // is a Game Thread operation; the returned value can be retained by RT/RHI.
     static Render::SwapchainSurfaceInfo CreateSwapchainSurfaceInfo(const WindowHandle&);
-
-    typedef std::function<void(unsigned int)>                                OnCharFunc;
-    typedef std::function<void(int entered)>                                 OnCursorEnterFunc;
-    typedef std::function<void(double xpos, double ypos)>                    OnCursorPosFunc;
-    typedef std::function<void(int path_count, const char** paths)>          OnDropFunc;
-    typedef std::function<void(int width, int height)>                       OnFrameBufferSizeFunc;
-    typedef std::function<void(int key, int scancode, int action, int mods)> OnKeyFunc;
-    typedef std::function<void(int button, int action, int mode)>            OnMouseButtonFunc;
-    typedef std::function<void(double xoffset, double yoffset)>              OnScrollFunc;
-    typedef std::function<void()>                                            OnWindowCloseFunc;
-    typedef std::function<void(float xscale, float yscale)>                  OnWindowContentScaleFunc;
-    typedef std::function<void(int xpos, int ypos)>                          OnWindowPosFunc;
-    typedef std::function<void(int width, int height)>                       OnWindowSizeFunc;
-    typedef std::function<void(int focused)>                                 OnWindowFocusFunc;
-
-    static void RegisterOnCharFunc(WindowType* handle, OnCharFunc func);
-    static void RegisterOnCursorEnterFunc(WindowType* handle, OnCursorEnterFunc func);
-    static void RegisterOnCursorPosFunc(WindowType* handle, OnCursorPosFunc func);
-    static void RegisterOnDropFunc(WindowType* handle, OnDropFunc func);
-    static void RegisterOnFrameBufferSizeFunc(WindowType* handle, OnFrameBufferSizeFunc func);
-    static void RegisterOnKeyFunc(WindowType* handle, OnKeyFunc func);
-    static void RegisterOnMouseButtonFunc(WindowType* handle, OnMouseButtonFunc func);
-    static void RegisterOnScrollFunc(WindowType* handle, OnScrollFunc func);
-    static void RegisterOnWindowCloseFunc(WindowType* handle, OnWindowCloseFunc func);
-    static void RegisterOnWindowContentScaleFunc(WindowType* handle, OnWindowContentScaleFunc func);
-    static void RegisterOnWindowPosFunc(WindowType* handle, OnWindowPosFunc func);
-    static void RegisterOnWindowSizeFunc(WindowType* handle, OnWindowSizeFunc func);
-    static void RegisterOnWindowFocusFunc(WindowType* handle, OnWindowFocusFunc func);
 
 protected:
     friend class WindowImpl;

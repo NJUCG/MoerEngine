@@ -5,6 +5,7 @@
 
 #include "misc/STL.h"
 #include "renderer/common/UIRenderer.h"
+#include "renderer/common/ui/ImGuiIOInput.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
@@ -23,6 +24,7 @@ public:
     void BeginGUIFrame();
     void EndGUIFrame();
     void UpdatePlatformWindows();
+    [[nodiscard]] const WindowInputSourceSnapshot& GetInputSnapshot() const noexcept;
 
     UiDrawFramePacket CaptureDrawFrame();
 
@@ -40,6 +42,8 @@ public:
     RenderDevice&                device;
     UnorderedMap<Texture*, uint> registered_images;
     void*                        backend_data = nullptr;
+    uint64_t                     input_capture_sequence = 0;
+    WindowInputSourceSnapshot    input_snapshot{};
 };
 } // namespace Moer::Render
 

@@ -380,13 +380,24 @@ inline ImGuiData* GetImGuiBackendData() {
     return static_cast<ImGuiData*>(ImGui::GetIO().BackendRendererUserData);
 }
 void ImGuiRenderBackend::BeginGUIFrame() {
+    assert(!IsRenderThreadInitialized() || IsCurrentlyGameThread());
     ImGui_ImplGlfw_NewFrame();
 
     ImGui::NewFrame();
+    ++input_capture_sequence;
+    if (input_capture_sequence == 0) {
+        ++input_capture_sequence;
+    }
+    input_snapshot = CaptureImGuiIOInput(input_capture_sequence);
 }
 
 void ImGuiRenderBackend::EndGUIFrame() {
     ImGui::Render();
+}
+
+const WindowInputSourceSnapshot& ImGuiRenderBackend::GetInputSnapshot() const noexcept {
+    assert(!IsRenderThreadInitialized() || IsCurrentlyGameThread());
+    return input_snapshot;
 }
 
 void ImGuiRenderBackend::UpdatePlatformWindows() {

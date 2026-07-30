@@ -7,25 +7,30 @@
 #include "renderer/EditorConfig.h"
 #include "window/WindowInput.h"
 
+#include <cmath>
+
 namespace Moer {
 
-CameraFrameInput CameraFrameInput::Capture(const EditorConfig& config) {
-    auto& input = WindowInput::Get();
-
+CameraFrameInput CameraFrameInput::Capture(
+    const WindowInputFrameSnapshot& input,
+    const EditorConfig&             config
+) {
     CameraFrameInput frame_input{};
-    frame_input.viewport_resolution = input.m_scene_color_resolution;
-    frame_input.window_aspect_ratio = input.aspect_ratio;
+    frame_input.viewport_resolution = input.viewport_resolution;
+    if (std::isfinite(input.display_aspect_ratio) && input.display_aspect_ratio > 0.0f) {
+        frame_input.window_aspect_ratio = input.display_aspect_ratio;
+    }
     frame_input.delta_time          = input.delta_time;
 
-    frame_input.cursor_delta_x = input.cursor_delta_x;
-    frame_input.cursor_delta_y = input.cursor_delta_y;
-    frame_input.scroll_offset  = input.scroll_offset;
+    frame_input.cursor_delta_x = input.cursor_delta.x;
+    frame_input.cursor_delta_y = input.cursor_delta.y;
+    frame_input.scroll_offset  = input.mouse_wheel;
 
-    frame_input.is_cursor_hiding = input.is_cursor_hiding;
-    frame_input.left_mouse       = input.mouse_button_state[MouseButtons::Left];
-    frame_input.middle_mouse     = input.mouse_button_state[MouseButtons::Middle];
-    frame_input.right_mouse      = input.mouse_button_state[MouseButtons::Right];
-    frame_input.free_look_active = input.key_button_switch_state[KeyButtons::F];
+    frame_input.is_cursor_hiding = input.cursor_hidden;
+    frame_input.left_mouse       = input.mouse_button_down[MouseButtons::Left];
+    frame_input.middle_mouse     = input.mouse_button_down[MouseButtons::Middle];
+    frame_input.right_mouse      = input.mouse_button_down[MouseButtons::Right];
+    frame_input.free_look_active = input.key_toggle[KeyButtons::F];
 
     frame_input.camera_forward  = input.camera_forward;
     frame_input.camera_backward = input.camera_backward;
@@ -43,19 +48,6 @@ CameraFrameInput CameraFrameInput::Capture(const EditorConfig& config) {
     frame_input.camera_fovy                  = config.camera_fovy;
     frame_input.camera_far_clip_log10        = config.camera_far_clip_log10;
     frame_input.camera_near_clip_log10       = config.camera_near_clip_log10;
-
-    const bool override_fov = config.camera_projection_override_enabled &&
-                              config.camera_fovy >= Camera::k_fov_min &&
-                              config.camera_fovy <= Camera::k_fov_max;
-    if (!input.is_cursor_hiding && !override_fov && !IsZero(input.scroll_offset)) {
-        input.scroll_offset = 0.0f;
-    }
-
-    const bool has_cursor_delta = Abs(input.cursor_delta_x) >= EPS || Abs(input.cursor_delta_y) >= EPS;
-    if (input.is_cursor_hiding && has_cursor_delta) {
-        input.cursor_delta_x = 0.0f;
-        input.cursor_delta_y = 0.0f;
-    }
 
     return frame_input;
 }
@@ -211,16 +203,6 @@ void Camera::SetFarClip(float far_clip) noexcept {
 void Camera::SetJitterMatrix(const Matrix4x4f& jitter_matrix) noexcept {
     m_jittered_matrix             = jitter_matrix;
     m_is_jittered_matrix_modified = true;
-}
-
-void Camera::SetJitterMatrix(const Vector2f& jitter) noexcept {
-    SetJitterMatrix(
-        jitter,
-        uint2(
-            static_cast<uint>(WindowInput::Get().width),
-            static_cast<uint>(WindowInput::Get().height)
-        )
-    );
 }
 
 void Camera::SetJitterMatrix(const Vector2f& jitter, uint2 render_resolution) noexcept {
@@ -636,11 +618,6 @@ void Camera::Tick(const CameraFrameInput& frame_input) {
 
     UpdateAllDerivedProperties();
     elapsed_time = frame_input.delta_time;
-}
-
-void Camera::Tick(const SharedPtr<EditorConfig> config) {
-    assert(config);
-    Tick(CameraFrameInput::Capture(*config));
 }
 
 Camera Camera::CreateDefaultCamera() {

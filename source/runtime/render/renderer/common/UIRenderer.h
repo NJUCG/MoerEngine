@@ -7,6 +7,7 @@
 #include "misc/STL.h"
 #include "rhi/RHI.h"
 #include "window/WindowFrameSnapshot.h"
+#include "window/WindowInput.h"
 #include <atomic>
 #include <cstdint>
 #include <limits>
@@ -232,6 +233,9 @@ public:
     RENDER_API void EndGUIFrame();
 
     RENDER_API void UpdatePlatformWindows();
+
+    [[nodiscard]] RENDER_API const WindowInputSourceSnapshot&
+    GetInputSnapshot() const noexcept;
 
     RENDER_API UiDrawFramePacket CaptureDrawFrame();
     RENDER_API void              RegisterImage(Texture* _texture, Sampler _sampler);
