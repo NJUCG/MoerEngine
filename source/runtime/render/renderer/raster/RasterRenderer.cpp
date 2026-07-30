@@ -61,9 +61,10 @@ float GetElapsedTimeSeconds() {
 RasterRenderer::RasterRenderer(
     uint2                         initial_resolution,
     SharedPtr<EditorConfig>       config,
+    SwapchainSurfaceInfo          main_window_surface,
     RenderProfileCapture*         render_profile_capture
 ) :
-    Renderer(initial_resolution, config, render_profile_capture),
+    Renderer(initial_resolution, config, std::move(main_window_surface), render_profile_capture),
     scene_render_extent_tracker(initial_resolution) {
     ScopedLogTimer startup_timer("[Startup][RasterRenderer] RasterRenderer::Constructor() total");
 

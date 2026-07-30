@@ -4,7 +4,12 @@
 #include "../WindowContextImpl.h"
 #include "window/WindowContext.h"
 
+#include <atomic>
+#include <mutex>
+
 namespace Moer {
+struct GLFWWindowSurfaceLeaseState;
+
 class GLFWWindowImpl final : public WindowImpl {
     friend WindowImpl;
 
@@ -12,9 +17,6 @@ public:
     virtual ~GLFWWindowImpl();
 
     virtual void PollEvents() const override;
-    virtual void
-    CreateVulkanSurface(void* instance, WindowHandle* window, void* allocation_callback, void* surface)
-        override;
     virtual void Tick() override;
     virtual void ShutDown() override;
 
@@ -25,7 +27,7 @@ public:
     virtual void  RequestClose(WindowHandle*) override;
     virtual bool  ShouldClose(WindowHandle*) const override;
     virtual void  ShowMainWindow() override;
-    virtual void* GetNativeWindow(WindowHandle*) const override;
+    virtual Render::SwapchainSurfaceInfo CreateSwapchainSurfaceInfo(const WindowHandle&) const override;
 
 private:
     void TickCursorState();
@@ -51,12 +53,14 @@ private:
     void InstallInterface(WindowHandle* _handle);
 
 private:
-    void InitVulkan();
-    void InitD3D12();
-
     bool m_deferred_fullscreen        = false;
     int  m_deferred_fullscreen_width  = 0;
     int  m_deferred_fullscreen_height = 0;
+
+    mutable std::mutex                                                                  surface_source_mutex;
+    mutable UnorderedMap<WindowType*, std::weak_ptr<const Render::WindowSurfaceSource>> surface_sources;
+    mutable std::atomic_uint64_t                                                        next_surface_generation{1};
+    SharedPtr<GLFWWindowSurfaceLeaseState>                                              surface_lease_state;
 };
 } // namespace Moer
 #endif

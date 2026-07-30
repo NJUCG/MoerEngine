@@ -760,48 +760,8 @@ D3D12Swapchain::D3D12Swapchain(D3D12Device& device, const SwapchainCreateInfo& i
 }
 
 void D3D12Swapchain::Recreate(const SwapchainCreateInfo& _info) {
+    (void)_info;
     FATAL("not implemented");
-    //if (width == _info.size.width && height == _info.size.height && window_handle == _info.window_handle && backbuffers.size() == _info.back_buffer_sz) {
-    //    return;
-    //}
-    //bool b_recreate = false;// false when create for first time
-    //if (window_handle != 0) {
-    //    ASSERT(window_handle == _info.window_handle);
-    //    b_recreate = true;
-    //}
-    //window_handle = _info.window_handle;
-    //width         = _info.size.width;
-    //height        = _info.size.height;
-    //backbuffers.resize(_info.back_buffer_sz);
-
-    //// note to sync before recreate
-    //DXGI_SWAP_CHAIN_DESC1 swapChainDesc;
-    //ZeroMemory(&swapChainDesc, sizeof(swapChainDesc));
-    //swapChainDesc.BufferCount        = backbuffers.size();
-    //swapChainDesc.Width              = width;
-    //swapChainDesc.Height             = height;
-    //swapChainDesc.Format             = desc.format;// TODO info.format
-    //swapChainDesc.BufferUsage        = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    //swapChainDesc.SwapEffect         = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-    //swapChainDesc.SampleDesc.Count   = 1;
-    //swapChainDesc.SampleDesc.Quality = 0;
-    //swapChainDesc.Flags              = DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;  // consider vsync?
-
-    //ComPtr<IDXGISwapChain1> swapchain1;
-    ////DX_CHECK_HRESULT(device->GetFactory()->CreateSwapChainForHwnd(
-    ////    m_device->GetGraphicsCommandContext().GetQueue(),// Swap chain needs the queue so that it can force a flush on it.
-    ////    windowHandle,
-    ////    &swapChainDesc,
-    ////    nullptr,
-    ////    nullptr,
-    ////    swapChain.put()));
-    //DX_CHECK_HRESULT(swapchain1.As(&swapchain));
-    //swapchain1 = nullptr;
-    //frame_index = swapchain->GetCurrentBackBufferIndex();
-
-    //DX_CHECK_HRESULT(device.GetFactory()->MakeWindowAssociation(reinterpret_cast<HWND>(window_handle), DXGI_MWA_NO_ALT_ENTER)); // maybe allow alt+enter to switch to full screen
-
-    //CreateSizeDependentResources();
 }
 
 void D3D12Swapchain::Sync() {

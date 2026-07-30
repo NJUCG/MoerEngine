@@ -131,6 +131,7 @@ struct GuiViewportRenderResources final : UiViewportRenderResources {
 
 struct GuiViewportData {
     SharedPtr<GuiViewportRenderResources> render_resources;
+    SwapchainSurfaceInfo                  surface_info;
 
     uint32_t        viewport_index = 0;
     static uint32_t viewport_count;
@@ -814,7 +815,7 @@ void DestroyRenderBuffers(GuiFrameRenderBuffers* _render_buffers) {
 void CreateOrResizeViewportResources(
     RenderDevice&                                       _device,
     const SharedPtr<GuiViewportRenderResources>&        _resources,
-    void*                                               _platform_window,
+    SwapchainSurfaceInfo                                _surface_info,
     uint2                                               _extent,
     uint32_t                                            _frame_in_flight,
     uint32_t                                            _viewport_index
@@ -823,8 +824,11 @@ void CreateOrResizeViewportResources(
     assert(!IsRenderThreadRunning() || IsCurrentlyRenderThread());
 
     const bool has_swapchain = _resources->swapchain.IsValid();
+    const bool surface_matches =
+        has_swapchain && _surface_info.IsValid() &&
+        _resources->swapchain->GetCommittedSurfaceIdentity() == _surface_info.GetIdentity();
     const bool swapchain_matches =
-        has_swapchain && _resources->swapchain->size.x == _extent.x &&
+        surface_matches && _resources->swapchain->size.x == _extent.x &&
         _resources->swapchain->size.y == _extent.y;
     const bool framebuffer_matches =
         _resources->framebuffer && _resources->framebuffer->GetExtent().x == _extent.x &&
@@ -837,9 +841,8 @@ void CreateOrResizeViewportResources(
         RHIExecutor::Get().Sync(ERHISyncDepth::Present);
     }
 
-    Moer::WindowHandle handle{static_cast<Moer::WindowType*>(_platform_window)};
     SwapchainCreateInfo swapchain_info{
-        .window_handle    = reinterpret_cast<uintptr_t>(&handle),
+        .surface          = _surface_info,
         .size             = _extent,
         .back_buffer_sz   = _frame_in_flight,
         .preferred_format = PF_R8G8B8A8_SRGB
@@ -959,22 +962,28 @@ void GuiCreateWindow(ImGuiViewport* _viewport) {
 
     int width, height;
     WindowContext::GetWindowSize(&handle, &width, &height);
+    viewport_data->surface_info = WindowContext::CreateSwapchainSurfaceInfo(handle);
     const uint2 extent{static_cast<uint>(_viewport->Size.x), static_cast<uint>(_viewport->Size.y)};
-    if (width == 0 || height == 0 || extent.x == 0 || extent.y == 0) {
+    if (!viewport_data->surface_info.IsValid() ||
+        width == 0 ||
+        height == 0 ||
+        extent.x == 0 ||
+        extent.y == 0) {
         return;
     }
 
     const auto render_resources = viewport_data->render_resources;
+    const auto surface_info     = viewport_data->surface_info;
     const auto viewport_index   = viewport_data->viewport_index;
     RunRenderThreadControlAndWait(
         [&rd_device,
          render_resources,
-         platform_window,
+         surface_info,
          extent,
          frame_in_flight = backend_data.frames_in_flight,
          viewport_index]() {
             CreateOrResizeViewportResources(
-                rd_device, render_resources, platform_window, extent, frame_in_flight, viewport_index
+                rd_device, render_resources, surface_info, extent, frame_in_flight, viewport_index
             );
         }
     );
@@ -1014,18 +1023,26 @@ void GuiSetWindowSize(ImGuiViewport* _viewport, ImVec2 _size) {
 
     ImGuiData* backend_data = GetImGuiBackendData();
     auto&      rd_device    = backend_data->render_backend->device;
+    if (!viewport_data->surface_info.IsValid()) {
+        Moer::WindowHandle handle{static_cast<Moer::WindowType*>(platform_window)};
+        viewport_data->surface_info = WindowContext::CreateSwapchainSurfaceInfo(handle);
+    }
+    if (!viewport_data->surface_info.IsValid()) {
+        return;
+    }
     const auto render_resources = viewport_data->render_resources;
+    const auto surface_info     = viewport_data->surface_info;
     const auto viewport_index   = viewport_data->viewport_index;
     const uint2 extent{static_cast<uint>(_size.x), static_cast<uint>(_size.y)};
     RunRenderThreadControlAndWait(
         [&rd_device,
          render_resources,
-         platform_window,
+         surface_info,
          extent,
          frame_in_flight = backend_data->frames_in_flight,
          viewport_index]() {
             CreateOrResizeViewportResources(
-                rd_device, render_resources, platform_window, extent, frame_in_flight, viewport_index
+                rd_device, render_resources, surface_info, extent, frame_in_flight, viewport_index
             );
         }
     );

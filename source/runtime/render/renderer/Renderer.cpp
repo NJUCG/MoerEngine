@@ -22,6 +22,7 @@ namespace Moer::Render {
 Renderer::Renderer(
     uint2                         initial_resolution,
     const SharedPtr<EditorConfig> config,
+    SwapchainSurfaceInfo          main_window_surface,
     RenderProfileCapture*         _render_profile_capture
 ) :
     device(RenderDevice::Get()),
@@ -34,7 +35,7 @@ Renderer::Renderer(
 
     {
         swapchain_create_info = SwapchainCreateInfo{
-            .window_handle    = (uintptr_t)WindowContext::GetMainWindow(),
+            .surface          = std::move(main_window_surface),
             .size             = {resolution.x, resolution.y},
             .back_buffer_sz   = 2,
             .preferred_format = PF_R8G8B8A8_SRGB

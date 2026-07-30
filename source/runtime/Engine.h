@@ -98,8 +98,9 @@ private:
     void TickRasterLifecycleValidation(Scene& scene);
     bool ConsumeRendererSwitchValidationReloadRequest();
 
-    SharedPtr<EditorConfig>  m_editor_config;
-    UniquePtr<RuntimeAssets> m_runtime_assets;
+    SharedPtr<EditorConfig>      m_editor_config;
+    Render::SwapchainSurfaceInfo m_main_window_surface;
+    UniquePtr<RuntimeAssets>     m_runtime_assets;
 
     UniquePtr<scripting::ScriptHost> m_script_host;
     UniquePtr<remote::RemoteModule>  m_remote_module;

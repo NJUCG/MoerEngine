@@ -46,6 +46,7 @@ public:
     RasterRenderer(
         uint2                         initial_resolution,
         SharedPtr<EditorConfig>       config,
+        SwapchainSurfaceInfo          main_window_surface,
         RenderProfileCapture*         render_profile_capture
     );
 

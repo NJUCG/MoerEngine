@@ -12,6 +12,7 @@
 #include "misc/Traits.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResourceInitilizer.h"
+#include "rhi/RHIWindowSurface.h"
 
 #include <atomic>
 #include <cassert>
@@ -1383,10 +1384,10 @@ struct RenderPassInfo {
 };
 
 struct SwapchainCreateInfo {
-    uintptr_t    window_handle;
-    Extent2D     size;
-    uint         back_buffer_sz   = 2;
-    EPixelFormat preferred_format = PF_R8G8B8A8_SRGB;
+    SwapchainSurfaceInfo surface;
+    Extent2D             size;
+    uint                 back_buffer_sz   = 2;
+    EPixelFormat         preferred_format = PF_R8G8B8A8_SRGB;
 };
 
 class RENDER_API Swapchain : public RHIResource {
@@ -1397,6 +1398,7 @@ public:
     virtual void Recreate(const SwapchainCreateInfo&) = 0;
     virtual ~Swapchain()                              = default;
     virtual void Sync()                               = 0;
+    [[nodiscard]] virtual WindowSurfaceIdentity GetCommittedSurfaceIdentity() const noexcept = 0;
 
 public:
     EPixelFormat format;

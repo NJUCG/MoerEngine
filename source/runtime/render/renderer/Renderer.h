@@ -70,6 +70,7 @@ public:
     Renderer(
         uint2                         initial_resolution,
         const SharedPtr<EditorConfig> config,
+        SwapchainSurfaceInfo          main_window_surface,
         RenderProfileCapture*         render_profile_capture = nullptr
     );
 

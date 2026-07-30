@@ -21,7 +21,6 @@
 #include "VulkanDevice.h"
 #include "VulkanMacroUtils.h"
 #include "VulkanRHIResource.h"
-#include "window/WindowContext.h"
 #include <atomic>
 #include <mutex>
 #include <thread>
@@ -31,31 +30,58 @@
 namespace VkUtil = Moer::RHI::Vulkan::Util;
 namespace Moer::Render {
 
-SwapChainSupportDetails QuerySwapChainSupport(VkPhysicalDevice _gpu, VkSurfaceKHR _surface) {
-    SwapChainSupportDetails details;
+namespace {
 
-    VK_CHECK_RESULT(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_gpu, _surface, &details.capabilities));
+class ScopedSurfaceCandidate {
+public:
+    explicit ScopedSurfaceCandidate(VkInstance instance) : instance(instance) {}
 
-    uint32_t format_count = 0;
-    VK_CHECK_RESULT(vkGetPhysicalDeviceSurfaceFormatsKHR(_gpu, _surface, &format_count, nullptr));
-    if (format_count > 0) {
-        details.formats.resize(format_count);
-        VK_CHECK_RESULT(
-            vkGetPhysicalDeviceSurfaceFormatsKHR(_gpu, _surface, &format_count, details.formats.data())
-        );
+    ~ScopedSurfaceCandidate() {
+        Reset();
     }
 
-    uint32_t present_mode_count = 0;
-    VK_CHECK_RESULT(vkGetPhysicalDeviceSurfacePresentModesKHR(_gpu, _surface, &present_mode_count, nullptr));
-    if (present_mode_count > 0) {
-        details.present_modes.resize(present_mode_count);
-        VK_CHECK_RESULT(vkGetPhysicalDeviceSurfacePresentModesKHR(
-            _gpu, _surface, &present_mode_count, details.present_modes.data()
-        ));
+    ScopedSurfaceCandidate(const ScopedSurfaceCandidate&)            = delete;
+    ScopedSurfaceCandidate& operator=(const ScopedSurfaceCandidate&) = delete;
+
+    void Adopt(VkSurfaceKHR new_surface) {
+        Reset();
+        surface = new_surface;
     }
 
-    return details;
+    [[nodiscard]] VkSurfaceKHR Release() noexcept {
+        const VkSurfaceKHR released = surface;
+        surface                     = VK_NULL_HANDLE;
+        return released;
+    }
+
+private:
+    void Reset() noexcept {
+        if (surface != VK_NULL_HANDLE) {
+            vkDestroySurfaceKHR(instance, surface, VK_NULL_HANDLE);
+            surface = VK_NULL_HANDLE;
+        }
+    }
+
+    VkInstance   instance{VK_NULL_HANDLE};
+    VkSurfaceKHR surface{VK_NULL_HANDLE};
+};
+
+VkCompositeAlphaFlagBitsKHR ChooseCompositeAlpha(const VkSurfaceCapabilitiesKHR& capabilities) {
+    constexpr VkCompositeAlphaFlagBitsKHR preferred_modes[] = {
+        VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+        VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+        VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
+        VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
+    };
+    for (const VkCompositeAlphaFlagBitsKHR mode : preferred_modes) {
+        if ((capabilities.supportedCompositeAlpha & mode) != 0) {
+            return mode;
+        }
+    }
+    return VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 }
+
+} // namespace
 
 VkSurfaceFormatKHR ChooseSwapSurfaceFormat(
     const Moer::Array<VkSurfaceFormatKHR>& _available_formats,
@@ -64,6 +90,12 @@ VkSurfaceFormatKHR ChooseSwapSurfaceFormat(
 ) {
     VkFormat preferred_format = VulkanEnumTranslator::METoVKFormat(_preferred_format);
 
+    if (_available_formats.size() == 1 && _available_formats[0].format == VK_FORMAT_UNDEFINED) {
+        return {
+            .format     = preferred_format,
+            .colorSpace = _available_formats[0].colorSpace,
+        };
+    }
     for (const auto& format : _available_formats) {
         if (format.format == preferred_format && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
             return format;
@@ -102,6 +134,9 @@ ChooseSwapExtent(uint32_t* width, uint32_t* height, const VkSurfaceCapabilitiesK
         std::clamp(extent.width, _capabilities.minImageExtent.width, _capabilities.maxImageExtent.width);
     extent.height =
         std::clamp(extent.height, _capabilities.minImageExtent.height, _capabilities.maxImageExtent.height);
+
+    *width  = extent.width;
+    *height = extent.height;
 
     return extent;
 }
@@ -188,22 +223,90 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         return;
     }
 
+    const ESwapchainSurfaceTransition surface_transition =
+        ClassifySwapchainSurfaceTransition(surface_info, surface != VK_NULL_HANDLE, _info.surface);
+    if (surface_transition == ESwapchainSurfaceTransition::Invalid) {
+        LOG_ERROR("Vulkan swapchain creation requires a valid window surface source.");
+        device.TryLatchFirstFault(
+            VulkanOperationContext{.operation = EVulkanFaultOperation::SwapchainSurfaceCreate},
+            VK_ERROR_INITIALIZATION_FAILED,
+            false,
+            false,
+            true
+        );
+        return;
+    }
+
     Sync();
     if (device.IsFaulted()) {
         return;
     }
 
-    const VkSwapchainKHR old_sc     = handle;
-    VkInstance           instance   = device.GetInstance();
-    //create surface by window handle
-    assert(_info.window_handle != 0 && "Window handle is null when creating vulkan swapchain");
-    if (surface == VK_NULL_HANDLE) {
-        Moer::WindowContext::CreateVulkanSurface(
-            instance, (WindowHandle*)_info.window_handle, VK_NULL_HANDLE, &surface
+    const VkSwapchainKHR committed_old_sc       = handle;
+    VkSurfaceKHR         candidate_surface      = surface;
+    const bool           candidate_owns_surface = surface_transition != ESwapchainSurfaceTransition::Reuse;
+    ScopedSurfaceCandidate candidate_surface_guard(device.GetInstance());
+    if (candidate_owns_surface) {
+        candidate_surface                              = VK_NULL_HANDLE;
+        const WindowSurfaceCreateResult surface_result = _info.surface.source->CreateSurface(
+            ERHIType::Vulkan, device.GetInstance(), nullptr, &candidate_surface
         );
+        candidate_surface_guard.Adopt(candidate_surface);
+        if (!surface_result.Succeeded() || candidate_surface == VK_NULL_HANDLE) {
+            VkResult native_result = VK_ERROR_INITIALIZATION_FAILED;
+            if (surface_result.native_error_code != 0) {
+                native_result = static_cast<VkResult>(static_cast<int32_t>(surface_result.native_error_code));
+            }
+            LOG_ERROR(
+                "Window surface creation failed: status={}, native_result={}.",
+                static_cast<uint32_t>(surface_result.status),
+                static_cast<int32_t>(native_result)
+            );
+            device.TryLatchFirstFault(
+                VulkanOperationContext{.operation = EVulkanFaultOperation::SwapchainSurfaceCreate},
+                native_result,
+                false,
+                false,
+                true
+            );
+            return;
+        }
     }
-    //create swapchain
-    const auto         details = VkUtil::QuerySwapChainSupport(device.GetGpu(), surface);
+
+    const QueueFamilyIndices queue_families = device.GetQueueFamilyIndices();
+    if (!queue_families.graphics.has_value() || !queue_families.present.has_value()) {
+        LOG_ERROR("Vulkan swapchain creation requires initialized graphics and present queue families.");
+        device.TryLatchFirstFault(
+            VulkanOperationContext{.operation = EVulkanFaultOperation::SwapchainSurfaceQuery},
+            VK_ERROR_INITIALIZATION_FAILED,
+            false,
+            false,
+            true
+        );
+        return;
+    }
+
+    const VkUtil::SwapChainSupportQueryResult support_query = VkUtil::QuerySwapChainSupport(
+        device.GetGpu(), candidate_surface, queue_families.present.value()
+    );
+    if (!support_query.Succeeded()) {
+        LOG_ERROR(
+            "Swapchain surface query failed: status={}, native_result={}, present_queue_family={}.",
+            static_cast<uint32_t>(support_query.status),
+            static_cast<int32_t>(support_query.native_result),
+            queue_families.present.value()
+        );
+        device.TryLatchFirstFault(
+            VulkanOperationContext{.operation = EVulkanFaultOperation::SwapchainSurfaceQuery},
+            support_query.native_result,
+            false,
+            false,
+            true
+        );
+        return;
+    }
+
+    const auto&        details = support_query.details;
     VkSurfaceFormatKHR new_fmt = ChooseSwapSurfaceFormat(details.formats, _info.preferred_format);
     Extent2D           new_size{_info.size.x, _info.size.y};
     ChooseSwapExtent(&new_size.x, &new_size.y, details.capabilities);
@@ -211,32 +314,39 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         LOG_WARNING("Swapchain recreate skipped due to zero swapchain extent.");
         return;
     }
-    VkPresentModeKHR present_mode = ChooseSwapPresentMode(details.present_modes, false);
-    const EPixelFormat new_format = (EPixelFormat)new_fmt.format;
-    uint     queue_family_index   = device.GetQueueFamilyIndices().graphics.value();
-    uint32_t image_count          = details.capabilities.minImageCount + 1;
+    VkPresentModeKHR   present_mode = ChooseSwapPresentMode(details.present_modes, false);
+    const EPixelFormat new_format   = (EPixelFormat)new_fmt.format;
+    const uint32_t queue_family_indices[] = {
+        queue_families.graphics.value(),
+        queue_families.present.value(),
+    };
+    const bool use_concurrent_sharing = queue_family_indices[0] != queue_family_indices[1];
+    uint32_t   image_count            = details.capabilities.minImageCount + 1;
     if (details.capabilities.maxImageCount > 0 && image_count > details.capabilities.maxImageCount) {
         image_count = details.capabilities.maxImageCount;
     }
+    const VkSwapchainKHR old_sc_for_create =
+        surface_transition == ESwapchainSurfaceTransition::Reuse ? committed_old_sc : VK_NULL_HANDLE;
     VkSwapchainCreateInfoKHR create_info{
         .sType                 = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
         .pNext                 = nullptr,
         .flags                 = 0,
-        .surface               = surface,
+        .surface               = candidate_surface,
         .minImageCount         = image_count,
         .imageFormat           = new_fmt.format,
         .imageColorSpace       = new_fmt.colorSpace,
         .imageExtent           = {new_size.x, new_size.y},
         .imageArrayLayers      = 1,
         .imageUsage            = VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-        .imageSharingMode      = VK_SHARING_MODE_EXCLUSIVE,
-        .queueFamilyIndexCount = 1,
-        .pQueueFamilyIndices   = &queue_family_index,
+        .imageSharingMode      = use_concurrent_sharing ? VK_SHARING_MODE_CONCURRENT :
+                                                         VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = use_concurrent_sharing ? 2u : 0u,
+        .pQueueFamilyIndices   = use_concurrent_sharing ? queue_family_indices : nullptr,
         .preTransform          = details.capabilities.currentTransform,
-        .compositeAlpha        = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+        .compositeAlpha        = ChooseCompositeAlpha(details.capabilities),
         .presentMode           = present_mode,
         .clipped               = VK_TRUE,
-        .oldSwapchain          = old_sc
+        .oldSwapchain          = old_sc_for_create
     };
 
     auto fault_admission = device.AcquireFaultAdmission();
@@ -244,11 +354,12 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         return;
     }
 
-    VkSwapchainKHR          new_sc = VK_NULL_HANDLE;
-    Array<VkSemaphore>      new_render_finished_fences;
-    Array<VkFence>          new_in_flight_fences;
-    Array<VulkanTexture*>   new_swapchain_textures;
-    Array<TextureView>      new_swapchain_views;
+    VkSwapchainKHR        new_sc = VK_NULL_HANDLE;
+    Array<VkSemaphore>    new_render_finished_fences;
+    Array<VkFence>        new_in_flight_fences;
+    Array<VulkanTexture*> new_swapchain_textures;
+    Array<TextureView>    new_swapchain_views;
+    bool                  old_resources_retired = false;
 
     auto cleanup_new_resources = [&]() {
         for (auto* texture : new_swapchain_textures) {
@@ -272,7 +383,7 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         }
     };
     auto retire_old_resources = [&]() {
-        if (old_sc == VK_NULL_HANDLE) {
+        if (old_resources_retired || committed_old_sc == VK_NULL_HANDLE) {
             return;
         }
         for (auto* texture : swapchain_textures) {
@@ -284,8 +395,9 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
             vkDestroySemaphore(device.GetDevice(), semaphore, VK_NULL_HANDLE);
         }
         render_finished_fences.clear();
-        vkDestroySwapchainKHR(device.GetDevice(), old_sc, VK_NULL_HANDLE);
+        vkDestroySwapchainKHR(device.GetDevice(), committed_old_sc, VK_NULL_HANDLE);
         handle = VK_NULL_HANDLE;
+        old_resources_retired = true;
     };
     auto check_device_result = [&](VkResult _result, EVulkanFaultOperation _operation) {
         if (_result == VK_SUCCESS && !device.IsFaulted()) {
@@ -307,7 +419,9 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
 
     VkResult result = vkCreateSwapchainKHR(device.GetDevice(), &create_info, nullptr, &new_sc);
     // Passing a non-null oldSwapchain retires it even when creation fails.
-    retire_old_resources();
+    if (old_sc_for_create != VK_NULL_HANDLE) {
+        retire_old_resources();
+    }
     if (result != VK_SUCCESS) {
         new_sc = VK_NULL_HANDLE;
     }
@@ -431,21 +545,34 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         return;
     }
 
+    // A replacement surface uses oldSwapchain = VK_NULL_HANDLE, so the old
+    // presentation bundle remains valid until every candidate resource is
+    // ready. Commit retires the old bundle and surface only at this point.
+    retire_old_resources();
+
     if (recreate_fences) {
         for (VkFence fence : in_flight_fences) {
             vkDestroyFence(device.GetDevice(), fence, VK_NULL_HANDLE);
         }
     }
 
-    handle                    = new_sc;
-    new_sc                    = VK_NULL_HANDLE;
-    fmt                       = new_fmt;
-    size                      = new_size;
-    format                    = new_format;
-    max_frames_in_flight      = new_max_frames_in_flight;
-    render_finished_fences    = std::move(new_render_finished_fences);
-    swapchain_textures        = std::move(new_swapchain_textures);
-    swapchain_views           = std::move(new_swapchain_views);
+    if (candidate_owns_surface) {
+        const VkSurfaceKHR old_surface = surface;
+        surface                        = candidate_surface_guard.Release();
+        if (old_surface != VK_NULL_HANDLE) {
+            vkDestroySurfaceKHR(device.GetInstance(), old_surface, VK_NULL_HANDLE);
+        }
+    }
+    surface_info           = _info.surface;
+    handle                 = new_sc;
+    new_sc                 = VK_NULL_HANDLE;
+    fmt                    = new_fmt;
+    size                   = new_size;
+    format                 = new_format;
+    max_frames_in_flight   = new_max_frames_in_flight;
+    render_finished_fences = std::move(new_render_finished_fences);
+    swapchain_textures     = std::move(new_swapchain_textures);
+    swapchain_views        = std::move(new_swapchain_views);
     if (recreate_fences) {
         in_flight_fences = std::move(new_in_flight_fences);
     }
@@ -454,18 +581,30 @@ void VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
 VkSwapchain::~VkSwapchain() {
     Sync();
 
-    if (handle) {
+    for (VulkanTexture* texture : swapchain_textures) {
+        MoerDelete(texture);
+    }
+    swapchain_textures.clear();
+    swapchain_views.clear();
+    for (VkSemaphore semaphore : render_finished_fences) {
+        if (semaphore != VK_NULL_HANDLE) {
+            vkDestroySemaphore(device.GetDevice(), semaphore, VK_NULL_HANDLE);
+        }
+    }
+    render_finished_fences.clear();
+    for (VkFence fence : in_flight_fences) {
+        if (fence != VK_NULL_HANDLE) {
+            vkDestroyFence(device.GetDevice(), fence, VK_NULL_HANDLE);
+        }
+    }
+    in_flight_fences.clear();
+    if (handle != VK_NULL_HANDLE) {
         vkDestroySwapchainKHR(device.GetDevice(), handle, VK_NULL_HANDLE);
+        handle = VK_NULL_HANDLE;
     }
-    if (surface) {
+    if (surface != VK_NULL_HANDLE) {
         vkDestroySurfaceKHR(device.GetInstance(), surface, VK_NULL_HANDLE);
-    }
-    for (size_t i = 0; i < swapchain_textures.size(); ++i) {
-        MoerDelete(swapchain_textures[i]);
-        vkDestroySemaphore(device.GetDevice(), render_finished_fences[i], VK_NULL_HANDLE);
-    }
-    for (uint i = 0; i < in_flight_fences.size(); i++) {
-        vkDestroyFence(device.GetDevice(), in_flight_fences[i], VK_NULL_HANDLE);
+        surface = VK_NULL_HANDLE;
     }
 }
 VkSemaphore VkSwapchain::GetRenderFinishedFence(uint _image_index) {

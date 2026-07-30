@@ -35,10 +35,6 @@ bool WindowContext::ShouldClose(WindowHandle* window) {
     return WindowImpl::GetInstance().ShouldClose(window);
 };
 
-void* WindowContext::GetNativeWindow(WindowHandle* window) {
-    return WindowImpl::GetInstance().GetNativeWindow(window);
-};
-
 WindowHandle* WindowContext::GetMainWindow() {
     return &WindowImpl::GetInstance().main_window_handle;
 };
@@ -47,14 +43,9 @@ void WindowContext::ShowMainWindow() {
     WindowImpl::GetInstance().ShowMainWindow();
 }
 
-void WindowContext::CreateVulkanSurface(
-    void*         instance,
-    WindowHandle* window,
-    void*         allocation_callback,
-    void*         surface
-) {
-    WindowImpl::GetInstance().CreateVulkanSurface(instance, window, allocation_callback, surface);
-};
+Render::SwapchainSurfaceInfo WindowContext::CreateSwapchainSurfaceInfo(const WindowHandle& window) {
+    return WindowImpl::GetInstance().CreateSwapchainSurfaceInfo(window);
+}
 
 void WindowContext::RegisterOnCharFunc(WindowType* handle, OnCharFunc func) {
     WindowImpl::GetInstance().RegisterOnCharFunc(handle, func);

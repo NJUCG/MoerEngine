@@ -9,20 +9,12 @@
 #include "misc/CountableRef.h"
 #include "rhi/RHI.h"
 #include "rhi/RHIResource.h"
-#include "window/WindowContext.h"
-
-#include "VulkanPlatform.h"
 #include "VulkanFault.h"
+#include "VulkanPlatform.h"
 #include <atomic>
 #include <mutex>
 #include <thread>
 namespace Moer::Render {
-struct SwapChainSupportDetails {
-    VkSurfaceCapabilitiesKHR  capabilities;
-    Array<VkSurfaceFormatKHR> formats;
-    Array<VkPresentModeKHR>   present_modes;
-};
-SwapChainSupportDetails QuerySwapChainSupport(VkPhysicalDevice _gpu, VkSurfaceKHR _surface);
 VkSurfaceFormatKHR      ChooseSwapSurfaceFormat(
          const Array<VkSurfaceFormatKHR>& _available_formats,
          EPixelFormat                     _preferred_format,
@@ -63,6 +55,9 @@ public:
         uint64  _work_serial
     );
     void                                Sync() override;
+    [[nodiscard]] WindowSurfaceIdentity GetCommittedSurfaceIdentity() const noexcept override {
+        return surface_info.GetIdentity();
+    }
 
     bool               WaitFrameInFlight();
     bool               WaitFrameInFlight(uint64 _image_idx);
@@ -79,6 +74,7 @@ public:
 
     VkSwapchainKHR      handle  = VK_NULL_HANDLE;
     VkSurfaceKHR        surface = VK_NULL_HANDLE;
+    SwapchainSurfaceInfo surface_info{};
     class VulkanDevice& device;
     uint64              image_idx            = 0; // present queue timeline value
     uint                max_frames_in_flight = 3;

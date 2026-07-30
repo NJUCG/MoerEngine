@@ -1067,6 +1067,9 @@ public:
 
     void Recreate(const SwapchainCreateInfo&) override;
     void Sync() override;
+    [[nodiscard]] WindowSurfaceIdentity GetCommittedSurfaceIdentity() const noexcept override {
+        return {};
+    }
 
     uint GetBackbufferIndex() const {
         return frame_index;
@@ -1088,7 +1091,6 @@ private:
 
 private:
     D3D12Device&                  device;
-    uintptr_t                     window_handle;
     ComPtr<IDXGISwapChain3>       swapchain;
     Array<ComPtr<ID3D12Resource>> backbuffers;
     uint                          width;
