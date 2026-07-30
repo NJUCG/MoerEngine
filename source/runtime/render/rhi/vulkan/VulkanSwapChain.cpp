@@ -81,6 +81,44 @@ VkCompositeAlphaFlagBitsKHR ChooseCompositeAlpha(const VkSurfaceCapabilitiesKHR&
     return VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 }
 
+[[nodiscard]] bool IsDeviceWideTerminalSwapchainResult(VkResult result) noexcept {
+    return result == VK_ERROR_DEVICE_LOST || result == VK_ERROR_OUT_OF_HOST_MEMORY ||
+           result == VK_ERROR_OUT_OF_DEVICE_MEMORY;
+}
+
+[[nodiscard]] bool IsPresentationLocalSwapchainResult(VkResult result) noexcept {
+    // These failures invalidate or temporarily block presentation state, not
+    // the logical device. Keep recovery pending so a later frame can retry.
+    return result == VK_SUBOPTIMAL_KHR || result == VK_INCOMPLETE ||
+           result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_ERROR_SURFACE_LOST_KHR ||
+           result == VK_ERROR_NATIVE_WINDOW_IN_USE_KHR ||
+           result == VK_ERROR_INCOMPATIBLE_DISPLAY_KHR ||
+           result == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT ||
+           result == VK_ERROR_FORMAT_NOT_SUPPORTED;
+}
+
+[[nodiscard]] bool ShouldLatchSwapchainFailure(
+    bool                  force_surface_recreate,
+    EVulkanFaultOperation operation,
+    VkResult              result
+) noexcept {
+    if (IsPresentationLocalSwapchainResult(result)) {
+        return false;
+    }
+    if (!force_surface_recreate || IsDeviceWideTerminalSwapchainResult(result)) {
+        return true;
+    }
+    switch (operation) {
+        case EVulkanFaultOperation::SwapchainSurfaceCreate:
+        case EVulkanFaultOperation::SwapchainSurfaceQuery:
+        case EVulkanFaultOperation::SwapchainCreate:
+        case EVulkanFaultOperation::SwapchainGetImages:
+            return false;
+        default:
+            return true;
+    }
+}
+
 } // namespace
 
 VkSurfaceFormatKHR ChooseSwapSurfaceFormat(
@@ -211,29 +249,51 @@ bool VkSwapchain::Recreate(const SwapchainCreateInfo& _info) {
     //FIXME: this is not a good way to do it, and it may have issue in multi-threaded env
     //best do sync in a separate thread, and give sync op to user
     // vkQueueWaitIdle(device.GetPresentQueue());
-    return CreateOrRecreate(_info);
+    return CreateOrRecreate(_info, _info.force_surface_recreate);
 }
 bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force_recreate) {
-    (void)_force_recreate;
     if (device.IsFaulted()) {
         return false;
     }
+    native_surface_recreate_pending_ =
+        native_surface_recreate_pending_ || _force_recreate;
+    const bool effective_force_surface_recreate =
+        native_surface_recreate_pending_;
     if (_info.size.x == 0 || _info.size.y == 0) {
         LOG_WARNING("Swapchain recreate skipped due to zero window size.");
         return false;
     }
 
-    const ESwapchainSurfaceTransition surface_transition =
+    const auto observe_setup_result = [this](VkResult result) {
+        if (result == VK_ERROR_SURFACE_LOST_KHR) {
+            native_surface_recreate_pending_ = true;
+        }
+    };
+
+    ESwapchainSurfaceTransition surface_transition =
         ClassifySwapchainSurfaceTransition(surface_info, surface != VK_NULL_HANDLE, _info.surface);
+    if (effective_force_surface_recreate &&
+        surface_transition == ESwapchainSurfaceTransition::Reuse) {
+        // Surface loss invalidates the native VkSurfaceKHR without changing
+        // the window-system identity. Force the destructive recovery path,
+        // which keeps oldSwapchain null for the replacement surface.
+        surface_transition = ESwapchainSurfaceTransition::Replace;
+    }
     if (surface_transition == ESwapchainSurfaceTransition::Invalid) {
         LOG_ERROR("Vulkan swapchain creation requires a valid window surface source.");
-        device.TryLatchFirstFault(
-            VulkanOperationContext{.operation = EVulkanFaultOperation::SwapchainSurfaceCreate},
-            VK_ERROR_INITIALIZATION_FAILED,
-            false,
-            false,
-            true
-        );
+        if (ShouldLatchSwapchainFailure(
+                effective_force_surface_recreate,
+                EVulkanFaultOperation::SwapchainSurfaceCreate,
+                VK_ERROR_INITIALIZATION_FAILED
+            )) {
+            device.TryLatchFirstFault(
+                VulkanOperationContext{.operation = EVulkanFaultOperation::SwapchainSurfaceCreate},
+                VK_ERROR_INITIALIZATION_FAILED,
+                false,
+                false,
+                true
+            );
+        }
         return false;
     }
 
@@ -242,9 +302,42 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         return false;
     }
 
-    const VkSwapchainKHR committed_old_sc       = handle;
-    VkSurfaceKHR         candidate_surface      = surface;
-    const bool           candidate_owns_surface = surface_transition != ESwapchainSurfaceTransition::Reuse;
+    if (effective_force_surface_recreate) {
+        // A lost native surface is no longer a usable transactional fallback.
+        // Some window systems also reject a second surface for the same
+        // native window while the old one exists, so retire in Vulkan order
+        // before asking the platform to create its replacement.
+        for (auto* texture : swapchain_textures) {
+            MoerDelete(texture);
+        }
+        swapchain_textures.clear();
+        swapchain_views.clear();
+        for (VkSemaphore semaphore : render_finished_fences) {
+            if (semaphore != VK_NULL_HANDLE) {
+                vkDestroySemaphore(
+                    device.GetDevice(), semaphore, VK_NULL_HANDLE
+                );
+            }
+        }
+        render_finished_fences.clear();
+        if (handle != VK_NULL_HANDLE) {
+            vkDestroySwapchainKHR(
+                device.GetDevice(), handle, VK_NULL_HANDLE
+            );
+            handle = VK_NULL_HANDLE;
+        }
+        if (surface != VK_NULL_HANDLE) {
+            vkDestroySurfaceKHR(
+                device.GetInstance(), surface, VK_NULL_HANDLE
+            );
+            surface = VK_NULL_HANDLE;
+        }
+        surface_info = {};
+    }
+
+    const VkSwapchainKHR   committed_old_sc       = handle;
+    VkSurfaceKHR           candidate_surface      = surface;
+    const bool             candidate_owns_surface = surface_transition != ESwapchainSurfaceTransition::Reuse;
     ScopedSurfaceCandidate candidate_surface_guard(device.GetInstance());
     if (candidate_owns_surface) {
         candidate_surface                              = VK_NULL_HANDLE;
@@ -257,18 +350,25 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
             if (surface_result.native_error_code != 0) {
                 native_result = static_cast<VkResult>(static_cast<int32_t>(surface_result.native_error_code));
             }
+            observe_setup_result(native_result);
             LOG_ERROR(
                 "Window surface creation failed: status={}, native_result={}.",
                 static_cast<uint32_t>(surface_result.status),
                 static_cast<int32_t>(native_result)
             );
-            device.TryLatchFirstFault(
-                VulkanOperationContext{.operation = EVulkanFaultOperation::SwapchainSurfaceCreate},
-                native_result,
-                false,
-                false,
-                true
-            );
+            if (ShouldLatchSwapchainFailure(
+                    effective_force_surface_recreate,
+                    EVulkanFaultOperation::SwapchainSurfaceCreate,
+                    native_result
+                )) {
+                device.TryLatchFirstFault(
+                    VulkanOperationContext{.operation = EVulkanFaultOperation::SwapchainSurfaceCreate},
+                    native_result,
+                    false,
+                    false,
+                    true
+                );
+            }
             return false;
         }
     }
@@ -286,23 +386,29 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         return false;
     }
 
-    const VkUtil::SwapChainSupportQueryResult support_query = VkUtil::QuerySwapChainSupport(
-        device.GetGpu(), candidate_surface, queue_families.present.value()
-    );
+    const VkUtil::SwapChainSupportQueryResult support_query =
+        VkUtil::QuerySwapChainSupport(device.GetGpu(), candidate_surface, queue_families.present.value());
     if (!support_query.Succeeded()) {
+        observe_setup_result(support_query.native_result);
         LOG_ERROR(
             "Swapchain surface query failed: status={}, native_result={}, present_queue_family={}.",
             static_cast<uint32_t>(support_query.status),
             static_cast<int32_t>(support_query.native_result),
             queue_families.present.value()
         );
-        device.TryLatchFirstFault(
-            VulkanOperationContext{.operation = EVulkanFaultOperation::SwapchainSurfaceQuery},
-            support_query.native_result,
-            false,
-            false,
-            true
-        );
+        if (ShouldLatchSwapchainFailure(
+                effective_force_surface_recreate,
+                EVulkanFaultOperation::SwapchainSurfaceQuery,
+                support_query.native_result
+            )) {
+            device.TryLatchFirstFault(
+                VulkanOperationContext{.operation = EVulkanFaultOperation::SwapchainSurfaceQuery},
+                support_query.native_result,
+                false,
+                false,
+                true
+            );
+        }
         return false;
     }
 
@@ -314,9 +420,9 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         LOG_WARNING("Swapchain recreate skipped due to zero swapchain extent.");
         return false;
     }
-    VkPresentModeKHR   present_mode = ChooseSwapPresentMode(details.present_modes, false);
-    const EPixelFormat new_format   = (EPixelFormat)new_fmt.format;
-    const uint32_t queue_family_indices[] = {
+    VkPresentModeKHR   present_mode           = ChooseSwapPresentMode(details.present_modes, false);
+    const EPixelFormat new_format             = (EPixelFormat)new_fmt.format;
+    const uint32_t     queue_family_indices[] = {
         queue_families.graphics.value(),
         queue_families.present.value(),
     };
@@ -328,18 +434,17 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
     const VkSwapchainKHR old_sc_for_create =
         surface_transition == ESwapchainSurfaceTransition::Reuse ? committed_old_sc : VK_NULL_HANDLE;
     VkSwapchainCreateInfoKHR create_info{
-        .sType                 = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
-        .pNext                 = nullptr,
-        .flags                 = 0,
-        .surface               = candidate_surface,
-        .minImageCount         = image_count,
-        .imageFormat           = new_fmt.format,
-        .imageColorSpace       = new_fmt.colorSpace,
-        .imageExtent           = {new_size.x, new_size.y},
-        .imageArrayLayers      = 1,
-        .imageUsage            = VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-        .imageSharingMode      = use_concurrent_sharing ? VK_SHARING_MODE_CONCURRENT :
-                                                         VK_SHARING_MODE_EXCLUSIVE,
+        .sType            = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+        .pNext            = nullptr,
+        .flags            = 0,
+        .surface          = candidate_surface,
+        .minImageCount    = image_count,
+        .imageFormat      = new_fmt.format,
+        .imageColorSpace  = new_fmt.colorSpace,
+        .imageExtent      = {new_size.x, new_size.y},
+        .imageArrayLayers = 1,
+        .imageUsage       = VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        .imageSharingMode = use_concurrent_sharing ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE,
         .queueFamilyIndexCount = use_concurrent_sharing ? 2u : 0u,
         .pQueueFamilyIndices   = use_concurrent_sharing ? queue_family_indices : nullptr,
         .preTransform          = details.capabilities.currentTransform,
@@ -396,10 +501,11 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         }
         render_finished_fences.clear();
         vkDestroySwapchainKHR(device.GetDevice(), committed_old_sc, VK_NULL_HANDLE);
-        handle = VK_NULL_HANDLE;
+        handle                = VK_NULL_HANDLE;
         old_resources_retired = true;
     };
     auto check_device_result = [&](VkResult _result, EVulkanFaultOperation _operation) {
+        observe_setup_result(_result);
         if (_result == VK_SUCCESS && !device.IsFaulted()) {
             return true;
         }
@@ -407,9 +513,15 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
             fault_admission.unlock();
         }
         if (_result != VK_SUCCESS) {
-            device.TryLatchFirstFault(
-                VulkanOperationContext{.operation = _operation}, _result, false, false, true
-            );
+            if (ShouldLatchSwapchainFailure(
+                    effective_force_surface_recreate,
+                    _operation,
+                    _result
+                )) {
+                device.TryLatchFirstFault(
+                    VulkanOperationContext{.operation = _operation}, _result, false, false, true
+                );
+            }
         }
         return false;
     };
@@ -545,9 +657,9 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         return false;
     }
 
-    // A replacement surface uses oldSwapchain = VK_NULL_HANDLE, so the old
-    // presentation bundle remains valid until every candidate resource is
-    // ready. Commit retires the old bundle and surface only at this point.
+    // Ordinary identity replacement remains transactional. Forced recovery
+    // has already retired its unusable native bundle, so this is a no-op for
+    // that path.
     retire_old_resources();
 
     if (recreate_fences) {
@@ -577,7 +689,11 @@ bool VkSwapchain::CreateOrRecreate(const SwapchainCreateInfo& _info, bool _force
         in_flight_fences = std::move(new_in_flight_fences);
     }
     image_idx = 0;
-    return IsPresentationReady();
+    const bool presentation_ready = IsPresentationReady();
+    if (presentation_ready) {
+        native_surface_recreate_pending_ = false;
+    }
+    return presentation_ready;
 }
 VkSwapchain::~VkSwapchain() {
     Sync();
@@ -687,9 +803,7 @@ VulkanOperationResult VkSwapchain::Present(
             .work_serial = _work_serial,
         }
     );
-    if (use_present_fence &&
-        (outcome.status == EVulkanOperationStatus::Success ||
-         outcome.status == EVulkanOperationStatus::Recreate)) {
+    if (use_present_fence && (outcome.result == VK_SUCCESS || outcome.result == VK_SUBOPTIMAL_KHR)) {
         // 仅在使用 present fence 的情况下异步等待 in_flight_fences
         EnqueuePresent(image_idx);
     }

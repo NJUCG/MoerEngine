@@ -1386,8 +1386,9 @@ struct RenderPassInfo {
 struct SwapchainCreateInfo {
     SwapchainSurfaceInfo surface;
     Extent2D             size;
-    uint                 back_buffer_sz   = 2;
-    EPixelFormat         preferred_format = PF_R8G8B8A8_SRGB;
+    uint                 back_buffer_sz         = 2;
+    EPixelFormat         preferred_format       = PF_R8G8B8A8_SRGB;
+    bool                 force_surface_recreate = false;
 };
 
 class RENDER_API Swapchain : public RHIResource {

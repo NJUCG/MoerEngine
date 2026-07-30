@@ -1180,7 +1180,7 @@ VulkanOperationResult VulkanDevice::PresentOnQueue(
         return {EVulkanOperationStatus::Retry, result};
     }
     if (result == VK_SUBOPTIMAL_KHR || result == VK_ERROR_OUT_OF_DATE_KHR ||
-        result == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) {
+        result == VK_ERROR_SURFACE_LOST_KHR || result == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) {
         return {EVulkanOperationStatus::Recreate, result};
     }
 
@@ -1209,9 +1209,8 @@ VulkanOperationResult VulkanDevice::AcquireNextImage(
         return {EVulkanOperationStatus::Rejected, GetFirstFaultResult()};
     }
 
-    const VkResult result = vkAcquireNextImageKHR(
-        m_device, _swapchain, _timeout, _semaphore, _fence, _image_index
-    );
+    const VkResult result =
+        vkAcquireNextImageKHR(m_device, _swapchain, _timeout, _semaphore, _fence, _image_index);
     if (result == VK_SUCCESS) {
         return {};
     }
@@ -1219,7 +1218,7 @@ VulkanOperationResult VulkanDevice::AcquireNextImage(
         return {EVulkanOperationStatus::Retry, result};
     }
     if (result == VK_SUBOPTIMAL_KHR || result == VK_ERROR_OUT_OF_DATE_KHR ||
-        result == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) {
+        result == VK_ERROR_SURFACE_LOST_KHR || result == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT) {
         return {EVulkanOperationStatus::Recreate, result};
     }
 
@@ -1372,10 +1371,12 @@ bool VulkanDevice::TryLatchFirstFault(
     if (_result == VK_SUCCESS) {
         return false;
     }
+    if (_result == VK_ERROR_SURFACE_LOST_KHR) {
+        return false;
+    }
     if (!_force_terminal &&
-        (_result == VK_NOT_READY || _result == VK_TIMEOUT ||
-         _result == VK_SUBOPTIMAL_KHR || _result == VK_ERROR_OUT_OF_DATE_KHR ||
-         _result == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT)) {
+        (_result == VK_NOT_READY || _result == VK_TIMEOUT || _result == VK_SUBOPTIMAL_KHR ||
+         _result == VK_ERROR_OUT_OF_DATE_KHR || _result == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT)) {
         return false;
     }
     if (!TryBeginFirstFault(_result)) {

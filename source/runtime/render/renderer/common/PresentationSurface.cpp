@@ -63,7 +63,22 @@ bool PresentationSurfaceState::Commit(
         .capture_sequence       = window_frame.capture_sequence,
         .drawable_generation    = window_frame.drawable_generation,
     };
+    committed_epoch_ = next_epoch_++;
+    if (next_epoch_ == 0) {
+        next_epoch_ = 1;
+    }
     refresh_pending_ = false;
+    return true;
+}
+
+bool PresentationSurfaceState::ApplyPresentFeedback(const PresentReceiptResult& feedback) noexcept {
+    if (!feedback.resolved || !PresentStatusRequiresRefresh(feedback.status) ||
+        feedback.context.presentation_epoch == 0 ||
+        feedback.context.presentation_epoch != committed_epoch_ ||
+        feedback.context.drawable_generation != committed_.drawable_generation) {
+        return false;
+    }
+    refresh_pending_ = true;
     return true;
 }
 
@@ -108,7 +123,11 @@ bool PresentationSurfaceState::IsCurrent(const WindowFrameSnapshot& window_frame
 
 PresentationSurface::PresentationSurface(RenderDevice& device, PresentationSurfaceDesc desc) :
     device_(device),
-    desc_(std::move(desc)) {
+    desc_(std::move(desc)),
+    feedback_mailbox_(
+        desc_.feedback_mailbox ? desc_.feedback_mailbox :
+                                 MakeShared<PresentFeedbackMailbox>()
+    ) {
     AssertRenderOwner();
 }
 
@@ -126,6 +145,14 @@ EPresentationSurfaceEnsureResult PresentationSurface::EnsureCurrent(
     bool                        force_refresh
 ) {
     AssertRenderOwner();
+    if (feedback_mailbox_) {
+        if (const auto feedback = feedback_mailbox_->ConsumeLatestRecovery();
+            feedback.has_value() && state_.ApplyPresentFeedback(*feedback)) {
+            force_surface_recreate_pending_ =
+                force_surface_recreate_pending_ ||
+                PresentStatusRequiresNativeSurfaceRefresh(feedback->status);
+        }
+    }
     if (force_refresh) {
         state_.RequestRefresh();
     }
@@ -153,6 +180,7 @@ EPresentationSurfaceEnsureResult PresentationSurface::EnsureCurrent(
         .size             = window_frame.drawable_extent,
         .back_buffer_sz   = desc_.back_buffer_count,
         .preferred_format = desc_.preferred_format,
+        .force_surface_recreate = force_surface_recreate_pending_,
     };
 
     if (!swapchain_) {
@@ -191,6 +219,7 @@ EPresentationSurfaceEnsureResult PresentationSurface::EnsureCurrent(
     if (!state_.Commit(window_frame, actual_extent)) {
         return EPresentationSurfaceEnsureResult::RetryPending;
     }
+    force_surface_recreate_pending_ = false;
     frame_buffer_ = std::move(committed_frame_buffer);
     return EPresentationSurfaceEnsureResult::Committed;
 }
@@ -198,9 +227,12 @@ EPresentationSurfaceEnsureResult PresentationSurface::EnsureCurrent(
 std::optional<RHIPresentRequest> PresentationSurface::CreatePresentRequest(
     const WindowFrameSnapshot& window_frame,
     TextureView                source,
-    PresentReceiptRef          receipt
-) const {
+    PresentReceiptRef*         out_receipt
+) {
     AssertRenderOwner();
+    if (out_receipt != nullptr) {
+        *out_receipt = {};
+    }
     if (!IsCurrent(window_frame) || source.GetTexture() == nullptr) {
         return std::nullopt;
     }
@@ -208,6 +240,21 @@ std::optional<RHIPresentRequest> PresentationSurface::CreatePresentRequest(
     const Extent2D committed_extent = state_.GetCommittedSnapshot().drawable_extent;
     if (source.extent.x != committed_extent.x || source.extent.y != committed_extent.y) {
         return std::nullopt;
+    }
+    uint64 request_serial = next_present_request_serial_++;
+    if (request_serial == 0) {
+        request_serial = next_present_request_serial_++;
+    }
+    PresentReceiptRef receipt = MakeShared<PresentReceipt>(
+        PresentReceiptContext{
+            .presentation_epoch  = state_.GetCommittedEpoch(),
+            .drawable_generation = state_.GetCommittedSnapshot().drawable_generation,
+            .request_serial      = request_serial,
+        },
+        feedback_mailbox_
+    );
+    if (out_receipt != nullptr) {
+        *out_receipt = receipt;
     }
     return RHIPresentRequest(swapchain_, source, std::move(receipt));
 }
@@ -230,6 +277,10 @@ void PresentationSurface::Release() {
     }
     swapchain_    = nullptr;
     frame_buffer_ = nullptr;
+    force_surface_recreate_pending_ = false;
+    if (feedback_mailbox_) {
+        feedback_mailbox_->Reset();
+    }
     state_.Reset();
 }
 

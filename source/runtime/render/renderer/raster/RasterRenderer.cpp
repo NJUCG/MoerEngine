@@ -1813,12 +1813,11 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 frame_packet.ui_draw_frame.platform_viewports.size()
             );
         }
-        main_present_receipt =
-            CreateMainPresentReceipt(frame_packet.scene_updates.scene_ready);
+        PresentReceiptRef continuous_present_receipt{};
         present_request = main_presentation_surface.CreatePresentRequest(
             frame_packet.window,
             output_view,
-            main_present_receipt
+            &continuous_present_receipt
         );
         if (!present_request.has_value()) {
             main_present_receipt = {};
@@ -1828,6 +1827,11 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 output_view.extent.y,
                 presentation_extent.x,
                 presentation_extent.y
+            );
+        } else {
+            main_present_receipt = SelectMainPresentReceipt(
+                frame_packet.scene_updates.scene_ready,
+                continuous_present_receipt
             );
         }
     }

@@ -159,6 +159,126 @@ int main() {
     Require(retry_state.Plan(surface_a, delayed_stable, true) == EPresentationSurfacePlan::Invalid);
     Require(retry_state.Plan(surface_a, failed_resize, true) == EPresentationSurfacePlan::Refresh);
 
+    {
+        PresentationSurfaceState   feedback_state;
+        WindowFrameSnapshotTracker feedback_tracker;
+        const WindowFrameSnapshot  feedback_frame =
+            feedback_tracker.Advance(identity_a, MakeMetrics({800, 600}, {800, 600}));
+        Require(feedback_state.Plan(surface_a, feedback_frame, false) == EPresentationSurfacePlan::Refresh);
+        Require(feedback_state.Commit(feedback_frame, {800, 600}));
+        const uint64_t initial_epoch = feedback_state.GetCommittedEpoch();
+        Require(initial_epoch != 0);
+
+        PresentReceiptResult success{
+            .resolved = true,
+            .submitted = true,
+            .status = EPresentStatus::Success,
+            .stage = EPresentStage::Present,
+            .context = {
+                .presentation_epoch = initial_epoch,
+                .drawable_generation = feedback_frame.drawable_generation,
+                .request_serial = 1,
+            },
+        };
+        Require(!feedback_state.ApplyPresentFeedback(success));
+        Require(!feedback_state.HasRefreshPending());
+
+        PresentReceiptResult stale_generation = success;
+        stale_generation.status = EPresentStatus::OutOfDate;
+        stale_generation.context.drawable_generation++;
+        Require(!feedback_state.ApplyPresentFeedback(stale_generation));
+        Require(!feedback_state.HasRefreshPending());
+
+        PresentReceiptResult current_out_of_date = success;
+        current_out_of_date.submitted = false;
+        current_out_of_date.status = EPresentStatus::OutOfDate;
+        current_out_of_date.context.request_serial = 2;
+        Require(feedback_state.ApplyPresentFeedback(current_out_of_date));
+        Require(feedback_state.HasRefreshPending());
+        Require(
+            feedback_state.Plan(surface_a, feedback_frame, true) ==
+            EPresentationSurfacePlan::Refresh
+        );
+        Require(feedback_state.Commit(feedback_frame, {800, 600}));
+        const uint64_t replacement_epoch = feedback_state.GetCommittedEpoch();
+        Require(replacement_epoch > initial_epoch);
+        Require(!feedback_state.ApplyPresentFeedback(current_out_of_date));
+        Require(!feedback_state.HasRefreshPending());
+
+        PresentReceiptResult current_surface_lost = current_out_of_date;
+        current_surface_lost.status = EPresentStatus::SurfaceLost;
+        current_surface_lost.context.presentation_epoch = replacement_epoch;
+        current_surface_lost.context.request_serial = 3;
+        Require(feedback_state.ApplyPresentFeedback(current_surface_lost));
+        Require(feedback_state.HasRefreshPending());
+    }
+
+    {
+        const PresentReceiptContext context{
+            .presentation_epoch = 7,
+            .drawable_generation = 11,
+            .request_serial = 1,
+        };
+        const PresentFeedbackMailboxRef mailbox = std::make_shared<PresentFeedbackMailbox>();
+        const PresentReceiptRef success_receipt = std::make_shared<PresentReceipt>(context, mailbox);
+        Require(!success_receipt->TryGetResult().has_value());
+        success_receipt->Resolve(true, EPresentStatus::Success, EPresentStage::Present);
+        const auto success_result = success_receipt->TryGetResult();
+        Require(success_result.has_value());
+        Require(success_result->submitted);
+        Require(success_result->status == EPresentStatus::Success);
+        Require(success_result->context.request_serial == 1);
+        Require(!mailbox->HasPendingRecovery());
+        success_receipt->Resolve(false, EPresentStatus::SurfaceLost, EPresentStage::Present);
+        Require(success_receipt->ResolutionAttemptCount() == 2);
+        Require(success_receipt->TryGetResult()->status == EPresentStatus::Success);
+        Require(!mailbox->HasPendingRecovery());
+
+        PresentReceiptResult out_of_date{
+            .resolved = true,
+            .submitted = false,
+            .status = EPresentStatus::OutOfDate,
+            .stage = EPresentStage::Acquire,
+            .context = {
+                .presentation_epoch = 7,
+                .drawable_generation = 11,
+                .request_serial = 2,
+            },
+        };
+        mailbox->Publish(out_of_date);
+        Require(mailbox->HasPendingRecovery());
+
+        PresentReceiptResult surface_lost = out_of_date;
+        surface_lost.status = EPresentStatus::SurfaceLost;
+        surface_lost.stage = EPresentStage::Present;
+        surface_lost.context.request_serial = 3;
+        mailbox->Publish(surface_lost);
+
+        PresentReceiptResult later_suboptimal = out_of_date;
+        later_suboptimal.submitted = true;
+        later_suboptimal.status = EPresentStatus::Suboptimal;
+        later_suboptimal.context.request_serial = 4;
+        mailbox->Publish(later_suboptimal);
+
+        const auto coalesced = mailbox->ConsumeLatestRecovery();
+        Require(coalesced.has_value());
+        Require(coalesced->status == EPresentStatus::SurfaceLost);
+        Require(coalesced->context.request_serial == 3);
+        Require(!mailbox->HasPendingRecovery());
+        Require(!mailbox->ConsumeLatestRecovery().has_value());
+
+        PresentReceiptResult old_epoch_surface_lost = surface_lost;
+        mailbox->Publish(old_epoch_surface_lost);
+        PresentReceiptResult new_epoch_suboptimal = later_suboptimal;
+        new_epoch_suboptimal.context.presentation_epoch = 8;
+        new_epoch_suboptimal.context.request_serial = 1;
+        mailbox->Publish(new_epoch_suboptimal);
+        const auto new_epoch_recovery = mailbox->ConsumeLatestRecovery();
+        Require(new_epoch_recovery.has_value());
+        Require(new_epoch_recovery->status == EPresentStatus::Suboptimal);
+        Require(new_epoch_recovery->context.presentation_epoch == 8);
+    }
+
     state.Reset();
     Require(state.HasRefreshPending());
     Require(!state.GetCommittedSnapshot().IsValid());

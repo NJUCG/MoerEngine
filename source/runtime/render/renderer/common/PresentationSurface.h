@@ -47,14 +47,17 @@ public:
 
     [[nodiscard]] bool Commit(const WindowFrameSnapshot& window_frame, Extent2D actual_extent) noexcept;
 
+    [[nodiscard]] bool ApplyPresentFeedback(const PresentReceiptResult& feedback) noexcept;
+
     void Reject() noexcept {
         refresh_pending_ = true;
     }
 
     void Reset() noexcept {
-        committed_       = {};
-        last_observed_   = {};
-        refresh_pending_ = true;
+        committed_        = {};
+        last_observed_    = {};
+        committed_epoch_  = 0;
+        refresh_pending_  = true;
     }
 
     [[nodiscard]] bool
@@ -68,12 +71,18 @@ public:
         return refresh_pending_;
     }
 
+    [[nodiscard]] uint64 GetCommittedEpoch() const noexcept {
+        return committed_epoch_;
+    }
+
 private:
     [[nodiscard]] bool CanObserve(const WindowFrameSnapshot& window_frame) const noexcept;
     void               Observe(const WindowFrameSnapshot& window_frame) noexcept;
 
     PresentationSurfaceSnapshot committed_{};
     WindowFrameSnapshot         last_observed_{};
+    uint64                      committed_epoch_{0};
+    uint64                      next_epoch_{1};
     bool                        refresh_pending_{true};
 };
 
@@ -87,6 +96,7 @@ struct PresentationSurfaceDesc {
     EPixelFormat                                      preferred_format{PF_R8G8B8A8_SRGB};
     std::string                                       debug_name{"PresentationSurface"};
     std::optional<PresentationSurfaceFrameBufferDesc> frame_buffer{};
+    PresentFeedbackMailboxRef                         feedback_mailbox{};
 };
 
 enum class EPresentationSurfaceEnsureResult : uint8_t {
@@ -124,8 +134,8 @@ public:
     [[nodiscard]] std::optional<RHIPresentRequest> CreatePresentRequest(
         const WindowFrameSnapshot& window_frame,
         TextureView                source,
-        PresentReceiptRef          receipt = {}
-    ) const;
+        PresentReceiptRef*         out_receipt = nullptr
+    );
 
     void Quiesce();
     void Release();
@@ -168,9 +178,12 @@ private:
 
     RenderDevice&            device_;
     PresentationSurfaceDesc  desc_;
-    PresentationSurfaceState state_{};
-    SwapchainRef             swapchain_{};
-    TextureRef               frame_buffer_{};
+    PresentationSurfaceState  state_{};
+    SwapchainRef              swapchain_{};
+    TextureRef                frame_buffer_{};
+    PresentFeedbackMailboxRef feedback_mailbox_{};
+    uint64                     next_present_request_serial_{1};
+    bool                       force_surface_recreate_pending_{false};
 };
 
 } // namespace Moer::Render

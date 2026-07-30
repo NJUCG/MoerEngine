@@ -898,7 +898,7 @@ const char* TopologyErrorName(ERHISubmissionTopologyError _error) {
 
 void ResolveRejectedPresent(std::optional<RHIPresentRequest>& _present) {
     if (_present && _present->receipt) {
-        _present->receipt->Resolve(false);
+        _present->receipt->Resolve(false, EPresentStatus::Rejected, EPresentStage::Validation);
     }
 }
 

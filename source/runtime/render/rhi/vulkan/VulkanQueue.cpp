@@ -824,16 +824,89 @@ void VulkanBatchCompletionGroup::WaitUntilSettled() {
     });
 }
 
+static EPresentStatus PresentStatusFromVulkanOutcome(const VulkanOperationResult& _outcome) noexcept {
+    switch (_outcome.result) {
+        case VK_SUCCESS:
+            return EPresentStatus::Success;
+        case VK_SUBOPTIMAL_KHR:
+            return EPresentStatus::Suboptimal;
+        case VK_NOT_READY:
+        case VK_TIMEOUT:
+            return EPresentStatus::Retry;
+        case VK_ERROR_OUT_OF_DATE_KHR:
+        case VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT:
+            return EPresentStatus::OutOfDate;
+        case VK_ERROR_SURFACE_LOST_KHR:
+            return EPresentStatus::SurfaceLost;
+        case VK_ERROR_DEVICE_LOST:
+        case VK_ERROR_OUT_OF_HOST_MEMORY:
+        case VK_ERROR_OUT_OF_DEVICE_MEMORY:
+            return EPresentStatus::Faulted;
+        default:
+            break;
+    }
+
+    switch (_outcome.status) {
+        case EVulkanOperationStatus::Success:
+            return EPresentStatus::Success;
+        case EVulkanOperationStatus::Retry:
+            return EPresentStatus::Retry;
+        case EVulkanOperationStatus::Recreate:
+            return EPresentStatus::OutOfDate;
+        case EVulkanOperationStatus::Faulted:
+            return EPresentStatus::Faulted;
+        case EVulkanOperationStatus::Rejected:
+        default:
+            return EPresentStatus::Rejected;
+    }
+}
+
+static uint8_t PresentStatusPriority(EPresentStatus _status) noexcept {
+    switch (_status) {
+        case EPresentStatus::Success:
+            return 1;
+        case EPresentStatus::Retry:
+            return 2;
+        case EPresentStatus::Rejected:
+            return 3;
+        case EPresentStatus::Suboptimal:
+            return 4;
+        case EPresentStatus::OutOfDate:
+            return 5;
+        case EPresentStatus::SurfaceLost:
+            return 6;
+        case EPresentStatus::Faulted:
+            return 7;
+        case EPresentStatus::Unresolved:
+        default:
+            return 0;
+    }
+}
+
+static void AccumulatePresentReceiptOutcome(
+    EPresentStatus&              _status,
+    EPresentStage&               _stage,
+    const VulkanOperationResult& _outcome,
+    EPresentStage                _outcome_stage
+) noexcept {
+    const EPresentStatus outcome_status = PresentStatusFromVulkanOutcome(_outcome);
+    if (PresentStatusPriority(outcome_status) >= PresentStatusPriority(_status)) {
+        _status = outcome_status;
+        _stage  = _outcome_stage;
+    }
+}
+
 static void ResolvePresentReceiptNoexcept(
     const PresentReceiptRef& _receipt,
     bool                     _submitted,
-    bool                     _recreate_swapchain
+    EPresentStatus           _status,
+    EPresentStage            _stage
 ) noexcept {
     if (!_receipt) {
         return;
     }
     try {
-        _receipt->Resolve(_submitted, _recreate_swapchain);
+        _receipt->Resolve(_submitted, _status, _stage);
     } catch (...) {
         try {
             LOG_ERROR("[RHIExecutor][Vulkan] failed to resolve Present receipt");
@@ -845,9 +918,7 @@ static void ResolvePresentReceiptNoexcept(
 class StaleBindlessUpdateBatch final : public std::runtime_error {
 public:
     StaleBindlessUpdateBatch() :
-        std::runtime_error(
-            "stale bindless update batch cannot be submitted with dependent commands"
-        ) {}
+        std::runtime_error("stale bindless update batch cannot be submitted with dependent commands") {}
 };
 
 #pragma endregion
@@ -5662,13 +5733,12 @@ void VkCommandQueue::RejectForRuntime(
 }
 
 VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
-    SwapchainRef _swapchain,
-    TextureView _source,
+    SwapchainRef      _swapchain,
+    TextureView       _source,
     PresentReceiptRef _receipt
 ) noexcept {
     assert(
-        execution_ownership_mode.load(std::memory_order_acquire) ==
-            EExecutionOwnershipMode::Runtime &&
+        execution_ownership_mode.load(std::memory_order_acquire) == EExecutionOwnershipMode::Runtime &&
         "runtime Present requires an exclusively claimed queue"
     );
     assert(
@@ -5678,36 +5748,28 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
     try {
         if (vk_device.IsFaulted()) {
             vk_device.RecordRejectedPresent();
-            ResolvePresentReceiptNoexcept(_receipt, false, false);
-            return {
-                .outcome = {
-                    EVulkanOperationStatus::Rejected,
-                    vk_device.GetFirstFaultResult()
-                }
-            };
+            ResolvePresentReceiptNoexcept(
+                _receipt, false, EPresentStatus::Faulted, EPresentStage::Validation
+            );
+            return {.outcome = {EVulkanOperationStatus::Rejected, vk_device.GetFirstFaultResult()}};
         }
-        TextureRef source_texture{_source.texture};
+        TextureRef                                     source_texture{_source.texture};
         const VulkanScriptedPresentOverrideForTesting* scripted_override =
             g_scripted_present_override.load(std::memory_order_acquire);
         const VulkanPresentSourceContract source_contract =
-            ValidatePresentSourceContract(
-                _source, _swapchain.Get()
-            );
+            ValidatePresentSourceContract(_source, _swapchain.Get());
         if (!source_contract.valid) {
-            InvokePresentSourceRejectionCallbackForTesting(
-                scripted_override
-            );
-            bool recoverable_rejection = false;
+            InvokePresentSourceRejectionCallbackForTesting(scripted_override);
+            bool                        recoverable_rejection = false;
             const VulkanOperationResult rejection =
-                ClassifyPresentSourceRejection(
-                    vk_device, recoverable_rejection
-                );
+                ClassifyPresentSourceRejection(vk_device, recoverable_rejection);
             vk_device.RecordRejectedPresent();
-            ResolvePresentReceiptNoexcept(_receipt, false, false);
+            ResolvePresentReceiptNoexcept(
+                _receipt, false, PresentStatusFromVulkanOutcome(rejection), EPresentStage::Validation
+            );
             try {
                 LOG_ERROR(
-                    "[RHIExecutor][Vulkan] rejected Present source contract: {}",
-                    source_contract.reason
+                    "[RHIExecutor][Vulkan] rejected Present source contract: {}", source_contract.reason
                 );
             } catch (...) {
             }
@@ -5716,26 +5778,20 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
                 .recoverable_rejection = recoverable_rejection,
             };
         }
-        auto* vk_source_texture =
-            static_cast<VulkanTexture*>(_source.texture);
+        auto* vk_source_texture = static_cast<VulkanTexture*>(_source.texture);
         if (!vk_source_texture->IsPresentationSourceReady() &&
-            (scripted_override == nullptr ||
-             scripted_override->require_present_source_ready)) {
-            InvokePresentSourceRejectionCallbackForTesting(
-                scripted_override
-            );
-            bool recoverable_rejection = false;
+            (scripted_override == nullptr || scripted_override->require_present_source_ready)) {
+            InvokePresentSourceRejectionCallbackForTesting(scripted_override);
+            bool                        recoverable_rejection = false;
             const VulkanOperationResult rejection =
-                ClassifyPresentSourceRejection(
-                    vk_device, recoverable_rejection
-                );
+                ClassifyPresentSourceRejection(vk_device, recoverable_rejection);
             vk_device.RecordRejectedPresent();
-            ResolvePresentReceiptNoexcept(_receipt, false, false);
+            ResolvePresentReceiptNoexcept(
+                _receipt, false, PresentStatusFromVulkanOutcome(rejection), EPresentStage::Validation
+            );
             try {
-                LOG_ERROR(
-                    "[RHIExecutor][Vulkan] rejected Present source before an "
-                    "accepted producer export published GENERAL / TRANSFER_READ"
-                );
+                LOG_ERROR("[RHIExecutor][Vulkan] rejected Present source before an "
+                          "accepted producer export published GENERAL / TRANSFER_READ");
             } catch (...) {
             }
             return {
@@ -5744,16 +5800,12 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
             };
         }
 
-        auto execution_lease = runtime_execution_gate.Acquire();
+        auto                         execution_lease = runtime_execution_gate.Acquire();
         std::unique_lock<std::mutex> execution_lock(exec_mtx);
-        const uint64 current_timeline =
-            last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
+        const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
         if (scripted_override != nullptr) {
             VulkanScriptedPresentResult scripted =
-                scripted_override->callback(
-                    scripted_override->context,
-                    current_timeline
-                );
+                scripted_override->callback(scripted_override->context, current_timeline);
             switch (scripted.outcome.status) {
                 case EVulkanOperationStatus::Retry:
                 case EVulkanOperationStatus::Recreate:
@@ -5766,8 +5818,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
                 default:
                     // A headless test hook must never claim native success or
                     // mutate VulkanDevice fault state.
-                    scripted.outcome.status =
-                        EVulkanOperationStatus::Rejected;
+                    scripted.outcome.status = EVulkanOperationStatus::Rejected;
                     if (scripted.outcome.result == VK_SUCCESS) {
                         scripted.outcome.result = VK_ERROR_UNKNOWN;
                     }
@@ -5795,10 +5846,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
                 current_timeline
             );
             ResolvePresentReceiptNoexcept(
-                _receipt,
-                false,
-                scripted.outcome.status ==
-                    EVulkanOperationStatus::Recreate
+                _receipt, false, PresentStatusFromVulkanOutcome(scripted.outcome), EPresentStage::Present
             );
             return {
                 .outcome               = scripted.outcome,
@@ -5817,20 +5865,20 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentForRuntime(
         );
     } catch (...) {
         vk_device.RecordRejectedPresent();
-        ResolvePresentReceiptNoexcept(_receipt, false, false);
+        ResolvePresentReceiptNoexcept(
+            _receipt,
+            false,
+            vk_device.IsFaulted() ? EPresentStatus::Faulted : EPresentStatus::Rejected,
+            EPresentStage::Validation
+        );
         try {
-            LOG_ERROR(
-                "[RHIExecutor][Vulkan] Present owner setup threw before timeline reservation"
-            );
+            LOG_ERROR("[RHIExecutor][Vulkan] Present owner setup threw before timeline reservation");
         } catch (...) {
         }
         return {
-            .outcome = {
-                EVulkanOperationStatus::Rejected,
-                vk_device.IsFaulted() ?
-                    vk_device.GetFirstFaultResult() :
-                    VK_ERROR_UNKNOWN
-            }
+            .outcome =
+                {EVulkanOperationStatus::Rejected,
+                 vk_device.IsFaulted() ? vk_device.GetFirstFaultResult() : VK_ERROR_UNKNOWN}
         };
     }
 }
@@ -8002,8 +8050,7 @@ void VkCommandQueue::ExecuteNow(
         );
         profiler_storage.AdvanceFrame();
     } else if (has_cmd && emits_profiling_queries) {
-        const bool submission_accepted =
-            _out_recorded != nullptr || submit_result.outcome.WasSubmitted();
+        const bool submission_accepted = _out_recorded != nullptr || submit_result.outcome.WasSubmitted();
         if (!submission_accepted) {
             ResetSplitProfilingCpuFrame();
         } else {
@@ -8015,24 +8062,16 @@ void VkCommandQueue::ExecuteNow(
     }
 }
 
-void VkCommandQueue::Present(
-    SwapchainRef      _sc,
-    TextureView       _view,
-    PresentReceiptRef _receipt
-) {
+void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view, PresentReceiptRef _receipt) {
     TextureRef source_texture{_view.texture};
 
     if (!ClaimLegacyOwnership("Present")) {
-        if (_receipt) {
-            _receipt->Resolve(false);
-        }
+        ResolvePresentReceiptNoexcept(_receipt, false, EPresentStatus::Rejected, EPresentStage::Validation);
         return;
     }
     if (vk_device.IsFaulted()) {
         vk_device.RecordRejectedPresent();
-        if (_receipt) {
-            _receipt->Resolve(false);
-        }
+        ResolvePresentReceiptNoexcept(_receipt, false, EPresentStatus::Faulted, EPresentStage::Validation);
         return;
     }
 
@@ -8096,13 +8135,13 @@ void VkCommandQueue::Present(
 }
 
 VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
-    SwapchainRef&& _sc,
-    TextureRef&&   _source_texture,
-    TextureView    _view,
+    SwapchainRef&&    _sc,
+    TextureRef&&      _source_texture,
+    TextureView       _view,
     PresentReceiptRef _receipt,
-    uint64         _timeline,
-    uint64         _serial,
-    bool           _runtime_owner
+    uint64            _timeline,
+    uint64            _serial,
+    bool              _runtime_owner
 ) noexcept {
     assert(
         _runtime_owner || !rhi_thread_enabled ||
@@ -8117,93 +8156,78 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
         .work_serial = _serial,
     };
 
-    VulkanOperationResult final_outcome{
-        EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN
-    };
-    bool                            gpu_submitted = false;
-    bool                            present_accepted = false;
-    bool                            recreate_swapchain = false;
+    VulkanOperationResult           final_outcome{EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN};
+    bool                            gpu_submitted         = false;
+    bool                            present_accepted      = false;
     bool                            recoverable_rejection = false;
-    EVulkanPresentorRetirementState presentor_state =
-        EVulkanPresentorRetirementState::Unused;
-    UniquePtr<VulkanPresentor> presentor{};
-    Array<RHIResource*>        deferred_releases{};
+    EPresentStatus                  receipt_status        = EPresentStatus::Unresolved;
+    EPresentStage                   receipt_stage         = EPresentStage::None;
+    EVulkanPresentorRetirementState presentor_state       = EVulkanPresentorRetirementState::Unused;
+    UniquePtr<VulkanPresentor>      presentor{};
+    Array<RHIResource*>             deferred_releases{};
 
     try {
-        const VulkanScriptedPresentOverrideForTesting*
-            scripted_override = g_scripted_present_override.load(
-                std::memory_order_acquire
-            );
+        const VulkanScriptedPresentOverrideForTesting* scripted_override =
+            g_scripted_present_override.load(std::memory_order_acquire);
         if (vk_device.IsFaulted()) {
             vk_device.RecordRejectedPresent();
-            final_outcome = {
-                EVulkanOperationStatus::Rejected,
-                vk_device.GetFirstFaultResult()
-            };
+            final_outcome = {EVulkanOperationStatus::Rejected, vk_device.GetFirstFaultResult()};
+            AccumulatePresentReceiptOutcome(
+                receipt_status, receipt_stage, final_outcome, EPresentStage::Validation
+            );
         } else if (const VulkanPresentSourceContract source_contract =
                        ValidatePresentSourceContract(_view, _sc.Get());
                    !source_contract.valid) {
-            InvokePresentSourceRejectionCallbackForTesting(
-                scripted_override
-            );
-            final_outcome = ClassifyPresentSourceRejection(
-                vk_device, recoverable_rejection
+            InvokePresentSourceRejectionCallbackForTesting(scripted_override);
+            final_outcome = ClassifyPresentSourceRejection(vk_device, recoverable_rejection);
+            AccumulatePresentReceiptOutcome(
+                receipt_status, receipt_stage, final_outcome, EPresentStage::Validation
             );
             vk_device.RecordRejectedPresent();
             try {
                 LOG_ERROR(
-                    "[RHIExecutor][Vulkan] rejected Present source contract: {}",
-                    source_contract.reason
+                    "[RHIExecutor][Vulkan] rejected Present source contract: {}", source_contract.reason
                 );
             } catch (...) {
             }
-        } else if (!static_cast<VulkanTexture*>(_view.texture)
-                        ->IsPresentationSourceReady()) {
-            InvokePresentSourceRejectionCallbackForTesting(
-                scripted_override
-            );
-            final_outcome = ClassifyPresentSourceRejection(
-                vk_device, recoverable_rejection
+        } else if (!static_cast<VulkanTexture*>(_view.texture)->IsPresentationSourceReady()) {
+            InvokePresentSourceRejectionCallbackForTesting(scripted_override);
+            final_outcome = ClassifyPresentSourceRejection(vk_device, recoverable_rejection);
+            AccumulatePresentReceiptOutcome(
+                receipt_status, receipt_stage, final_outcome, EPresentStage::Validation
             );
             vk_device.RecordRejectedPresent();
         } else {
-            auto* vk_source_texture =
-                static_cast<VulkanTexture*>(_view.texture);
-            VkSwapchain* sc = ResourceCast(_sc.Get());
-            presentor       = GetPresentor();
+            auto*        vk_source_texture = static_cast<VulkanTexture*>(_view.texture);
+            VkSwapchain* sc                = ResourceCast(_sc.Get());
+            presentor                      = GetPresentor();
             if (!sc->WaitFrameInFlight()) {
                 vk_device.RecordRejectedPresent();
-                final_outcome = {
-                    EVulkanOperationStatus::Rejected,
-                    GetRejectedSubmitResult(vk_device)
-                };
+                final_outcome = {EVulkanOperationStatus::Rejected, GetRejectedSubmitResult(vk_device)};
+                AccumulatePresentReceiptOutcome(
+                    receipt_status, receipt_stage, final_outcome, EPresentStage::Submit
+                );
             } else {
-                const VkSwapchain::AcquireResult acquire =
-                    sc->AquireNextImage(
-                        presentor->GetImageReadySemaphore(),
-                        rhi_thread_enabled ? 0 : 50'000'000
-                    );
-                final_outcome      = acquire.outcome;
-                recreate_swapchain =
-                    acquire.outcome.status == EVulkanOperationStatus::Recreate;
+                const VkSwapchain::AcquireResult acquire = sc->AquireNextImage(
+                    presentor->GetImageReadySemaphore(), rhi_thread_enabled ? 0 : 50'000'000
+                );
+                final_outcome = acquire.outcome;
+                AccumulatePresentReceiptOutcome(
+                    receipt_status, receipt_stage, acquire.outcome, EPresentStage::Acquire
+                );
 
                 if (acquire.HasImage()) {
-                    presentor_state =
-                        EVulkanPresentorRetirementState::RecordedNotSubmitted;
-                    auto& vk_allocator = *presentor;
-                    auto& vk_cmd_list  = vk_allocator.GetCmdList();
-                    auto& vk_tracker   = vk_allocator.GetTracker();
-                    auto* vk_src_tex   = vk_source_texture;
-                    const uint idx     = acquire.image_index;
-                    auto* swapchain_tex =
-                        ResourceCast(sc->GetSwapchainImage(idx).texture);
+                    presentor_state          = EVulkanPresentorRetirementState::RecordedNotSubmitted;
+                    auto&      vk_allocator  = *presentor;
+                    auto&      vk_cmd_list   = vk_allocator.GetCmdList();
+                    auto&      vk_tracker    = vk_allocator.GetTracker();
+                    auto*      vk_src_tex    = vk_source_texture;
+                    const uint idx           = acquire.image_index;
+                    auto*      swapchain_tex = ResourceCast(sc->GetSwapchainImage(idx).texture);
 
                     VK_CHECK_RESULT(vk_cmd_list.Begin());
-                    const std::string present_label =
-                        std::format("Present: {}", vk_src_tex->GetName());
-                    vk_cmd_list.BeginLabel(
-                        present_label, {0.0f, 0.85f, 0.95f, 1.0f}
-                    );
+                    const std::string present_label = std::format("Present: {}", vk_src_tex->GetName());
+                    vk_cmd_list.BeginLabel(present_label, {0.0f, 0.85f, 0.95f, 1.0f});
                     vk_tracker.SetPassType(EPassType::Graphics);
                     // PRESENTATION_SOURCE is a producer-side terminal
                     // contract. The active graph exports GENERAL with
@@ -8215,9 +8239,7 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                     // accepted producer writes to this copy.
                     vk_tracker.EmitExplicitBarrier(
                         vk_src_tex,
-                        VulkanEnumTranslator::METoVKImageAspectFlags(
-                            vk_src_tex->GetAspectFlags()
-                        ),
+                        VulkanEnumTranslator::METoVKImageAspectFlags(vk_src_tex->GetAspectFlags()),
                         0,
                         1,
                         0,
@@ -8233,16 +8255,11 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                         VK_IMAGE_LAYOUT_GENERAL
                     );
                     vk_tracker.RecordState(
-                        swapchain_tex,
-                        vk_tracker.WriteTexture(
-                            swapchain_tex, ETextureState::TRANSFER
-                        )
+                        swapchain_tex, vk_tracker.WriteTexture(swapchain_tex, ETextureState::TRANSFER)
                     );
                     vk_tracker.ResolveBarriers();
                     vk_tracker.DispatchBarriers(vk_cmd_list);
-                    vk_cmd_list.InsertLabel(
-                        "Copy Present Image", GpuMarkerPalette::Transfer()
-                    );
+                    vk_cmd_list.InsertLabel("Copy Present Image", GpuMarkerPalette::Transfer());
                     vk_cmd_list.CopyTexture(
                         vk_src_tex,
                         swapchain_tex,
@@ -8267,37 +8284,27 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
                     vk_tracker.Reset();
 
                     deferred_releases = TakeDeferredReleases();
-                    queue.Signal(
-                        timeline, _timeline, VK_PIPELINE_STAGE_2_COPY_BIT
-                    );
-                    queue.Wait(
-                        acquire.ready_semaphore,
-                        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
-                    );
-                    queue.Signal(
-                        sc->GetRenderFinishedFence(idx),
-                        VK_PIPELINE_STAGE_2_COPY_BIT
-                    );
+                    queue.Signal(timeline, _timeline, VK_PIPELINE_STAGE_2_COPY_BIT);
+                    queue.Wait(acquire.ready_semaphore, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+                    queue.Signal(sc->GetRenderFinishedFence(idx), VK_PIPELINE_STAGE_2_COPY_BIT);
                     const VulkanOperationResult submit_outcome =
                         queue.Submit(vk_allocator.GetCmdList(), context);
                     final_outcome = submit_outcome;
                     gpu_submitted = submit_outcome.WasSubmitted();
+                    AccumulatePresentReceiptOutcome(
+                        receipt_status, receipt_stage, submit_outcome, EPresentStage::Submit
+                    );
                     if (gpu_submitted) {
-                        presentor_state =
-                            EVulkanPresentorRetirementState::Submitted;
+                        presentor_state = EVulkanPresentorRetirementState::Submitted;
                         timeline->MarkSubmitted(_timeline);
 
                         const VulkanOperationResult present_outcome =
-                            sc->Present(
-                                queue.GetHandle(), idx, _timeline, _serial
-                            );
-                        present_accepted =
-                            present_outcome.result == VK_SUCCESS ||
-                            present_outcome.result == VK_SUBOPTIMAL_KHR;
-                        recreate_swapchain =
-                            recreate_swapchain ||
-                            present_outcome.status ==
-                                EVulkanOperationStatus::Recreate;
+                            sc->Present(queue.GetHandle(), idx, _timeline, _serial);
+                        present_accepted = present_outcome.result == VK_SUCCESS ||
+                                           present_outcome.result == VK_SUBOPTIMAL_KHR;
+                        AccumulatePresentReceiptOutcome(
+                            receipt_status, receipt_stage, present_outcome, EPresentStage::Present
+                        );
                         if (!present_outcome.Succeeded()) {
                             final_outcome = present_outcome;
                         }
@@ -8310,22 +8317,17 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
     } catch (const std::exception& error) {
         queue.DiscardPendingSubmitState();
         vk_device.RecordRejectedPresent();
-        final_outcome = {
-            EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN
-        };
+        final_outcome = {EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN};
+        AccumulatePresentReceiptOutcome(receipt_status, receipt_stage, final_outcome, EPresentStage::Submit);
         try {
-            LOG_ERROR(
-                "[RHIExecutor][Vulkan] Present threw before retirement: {}",
-                error.what()
-            );
+            LOG_ERROR("[RHIExecutor][Vulkan] Present threw before retirement: {}", error.what());
         } catch (...) {
         }
     } catch (...) {
         queue.DiscardPendingSubmitState();
         vk_device.RecordRejectedPresent();
-        final_outcome = {
-            EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN
-        };
+        final_outcome = {EVulkanOperationStatus::Rejected, VK_ERROR_UNKNOWN};
+        AccumulatePresentReceiptOutcome(receipt_status, receipt_stage, final_outcome, EPresentStage::Submit);
         try {
             LOG_ERROR("[RHIExecutor][Vulkan] Present threw before retirement");
         } catch (...) {
@@ -8344,12 +8346,13 @@ VulkanRuntimeSubmissionResult VkCommandQueue::PresentNow(
         _timeline
     );
 
-    ResolvePresentReceiptNoexcept(
-        _receipt, present_accepted, recreate_swapchain
-    );
+    if (receipt_status == EPresentStatus::Unresolved) {
+        AccumulatePresentReceiptOutcome(receipt_status, receipt_stage, final_outcome, EPresentStage::Submit);
+    }
+    ResolvePresentReceiptNoexcept(_receipt, present_accepted, receipt_status, receipt_stage);
 
     VulkanRuntimeSubmissionResult runtime_result{
-        .outcome = final_outcome,
+        .outcome               = final_outcome,
         .recoverable_rejection = recoverable_rejection,
     };
     if (gpu_submitted) {

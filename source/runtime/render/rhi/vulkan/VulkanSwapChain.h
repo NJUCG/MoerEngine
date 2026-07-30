@@ -97,7 +97,8 @@ private:
 
 private:
     Array<std::jthread> present_threads;
-    std::atomic<uint>   cur_present_cnt = 0;
+    std::atomic<uint>   cur_present_cnt                  = 0;
+    bool                native_surface_recreate_pending_ = false;
 };
 } // namespace Moer::Render
 

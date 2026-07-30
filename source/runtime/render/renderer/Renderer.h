@@ -88,7 +88,10 @@ public:
 
 protected:
     [[nodiscard]] bool PrepareRenderFrame(const WindowFrameSnapshot& window_frame);
-    PresentReceiptRef  CreateMainPresentReceipt(bool scene_content_ready);
+    PresentReceiptRef  SelectMainPresentReceipt(
+        bool                     scene_content_ready,
+        const PresentReceiptRef& candidate
+    );
     void ApplyMainPresentReceipt(const PresentReceiptRef& receipt, const EngineHooks& hooks);
     [[nodiscard]] PresentationSurface& GetMainPresentationSurface() noexcept {
         return *main_presentation_surface;
@@ -134,7 +137,6 @@ protected:
     bool     first_load;
     bool     resources_released = false;
     mutable std::atomic<bool> first_main_present_confirmed{false};
-    std::atomic<bool> main_swapchain_recreate_requested{false};
     std::optional<std::chrono::steady_clock::time_point> first_present_candidate_started_at;
     bool first_present_receipt_logged = false;
     uint     max_frame_in_flight;
