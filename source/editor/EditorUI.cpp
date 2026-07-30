@@ -291,6 +291,9 @@ void EditorUI::TickUI(Scene& scene) {
     ResetFrameState();
 
     m_ui_renderer->BeginGUIFrame();
+    const bool input_frame_accepted =
+        m_window_input_tracker.BeginFrame(m_ui_renderer->GetInputSnapshot());
+    assert(input_frame_accepted && "Each UI frame must publish one fresh input snapshot.");
 
     static bool               opt_fullscreen  = true;
     static bool               opt_padding     = false;
@@ -400,6 +403,8 @@ void EditorUI::TickUI(Scene& scene) {
     }
 #endif
     m_b_active_viewport_window_seen = false;
+    m_b_active_viewport_hovered     = false;
+    m_active_input_viewport_id      = 0;
     m_scene_color_resolution        = {0.f, 0.f};
     m_scene_color_pos               = {0.f, 0.f};
     if (m_config->active_viewport_mode == EEditorViewportMode::Game) {
@@ -410,10 +415,7 @@ void EditorUI::TickUI(Scene& scene) {
         ShowGameView();
     }
     if (!m_b_active_viewport_window_seen) {
-        m_b_scene_color_mouse_captured              = false;
-        WindowInput::Get().is_active                = false;
-        WindowInput::Get().m_scene_color_resolution = uint2(0u, 0u);
-        WindowInput::Get().m_scene_color_pos        = uint2(0u, 0u);
+        m_b_scene_color_mouse_captured = false;
     }
     ShowHierarchy(scene);
     ShowInspector(scene);
@@ -422,6 +424,69 @@ void EditorUI::TickUI(Scene& scene) {
     ShowSceneEditing(scene);
 
     SyncWindowVisibilitySettings();
+
+    const auto to_extent_component = [](float value) {
+        return value > 0.f ? static_cast<uint>(value) : 0u;
+    };
+    const WindowInputSourceSnapshot& pending_input_source =
+        m_window_input_tracker.GetPendingSource();
+    const bool any_mouse_button_down =
+        pending_input_source.mouse_button_down[MouseButtons::Left] ||
+        pending_input_source.mouse_button_down[MouseButtons::Middle] ||
+        pending_input_source.mouse_button_down[MouseButtons::Right];
+    m_free_look_capture_viewport_id = ResolveFreeLookCaptureViewportId(
+        pending_input_source.focused,
+        m_window_input_tracker.IsKeyToggled(KeyButtons::F),
+        m_b_active_viewport_hovered,
+        m_active_input_viewport_id,
+        m_free_look_capture_viewport_id
+    );
+
+    m_window_input_snapshot = m_window_input_tracker.Finalize(WindowInputPolicy{
+        .scene_active =
+            m_b_scene_color_mouse_captured || m_free_look_capture_viewport_id != 0,
+        .viewport_hovered = m_b_active_viewport_hovered,
+        .viewport_resolution = uint2(
+            to_extent_component(m_scene_color_resolution.x),
+            to_extent_component(m_scene_color_resolution.y)
+        ),
+        .viewport_position = uint2(
+            to_extent_component(m_scene_color_pos.x),
+            to_extent_component(m_scene_color_pos.y)
+        ),
+    });
+
+    if (!any_mouse_button_down) {
+        // Keep capture ownership through the release frame so a drag that
+        // leaves the viewport still publishes its paired release edge.
+        m_b_scene_color_mouse_captured = false;
+    }
+
+    const uint32 main_viewport_id = ImGui::GetMainViewport()->ID;
+    const uint32 cursor_viewport_id =
+        m_active_input_viewport_id != 0 ? m_active_input_viewport_id : main_viewport_id;
+    const auto resolve_platform_window = [](uint32 viewport_id) -> WindowType* {
+        ImGuiViewport* viewport = ImGui::FindViewportByID(viewport_id);
+        return viewport != nullptr ? static_cast<WindowType*>(viewport->PlatformHandle) : nullptr;
+    };
+
+    if (m_cursor_capture_viewport_id != 0 &&
+        (m_cursor_capture_viewport_id != cursor_viewport_id ||
+         !m_window_input_snapshot.cursor_hidden)) {
+        if (WindowType* previous_window =
+                resolve_platform_window(m_cursor_capture_viewport_id)) {
+            WindowHandle previous_handle{previous_window};
+            WindowContext::ApplyCursorMode(&previous_handle, false);
+        }
+        m_cursor_capture_viewport_id = 0;
+    }
+    if (m_window_input_snapshot.cursor_hidden) {
+        if (WindowType* cursor_window = resolve_platform_window(cursor_viewport_id)) {
+            WindowHandle active_handle{cursor_window};
+            WindowContext::ApplyCursorMode(&active_handle, true);
+            m_cursor_capture_viewport_id = cursor_viewport_id;
+        }
+    }
 
     m_ui_renderer->EndGUIFrame();
     m_ui_renderer->UpdatePlatformWindows();
@@ -744,6 +809,9 @@ void EditorUI::ShowViewportWindow(
     }
 
     m_b_active_viewport_window_seen = true;
+    if (current_window->Viewport != nullptr) {
+        m_active_input_viewport_id = current_window->Viewport->ID;
+    }
 
     const bool separate_window = current_window->ParentWindow == nullptr;
     const auto menu_rect       = current_window->MenuBarRect();
@@ -780,15 +848,6 @@ void EditorUI::ShowViewportWindow(
         m_scene_color_pos        = {local_pos.x, local_pos.y};
     }
 
-    WindowInput::Get().m_scene_color_resolution = uint2(
-        m_scene_color_resolution.x > 0.f ? static_cast<uint>(m_scene_color_resolution.x) : 0u,
-        m_scene_color_resolution.y > 0.f ? static_cast<uint>(m_scene_color_resolution.y) : 0u
-    );
-    WindowInput::Get().m_scene_color_pos = uint2(
-        m_scene_color_pos.x > 0.f ? static_cast<uint>(m_scene_color_pos.x) : 0u,
-        m_scene_color_pos.y > 0.f ? static_cast<uint>(m_scene_color_pos.y) : 0u
-    );
-
     // 只有从渲染视口内部开始的拖拽才会控制摄像机。
     static constexpr float k_viewport_border = 4.f;
 
@@ -799,30 +858,21 @@ void EditorUI::ShowViewportWindow(
         window_rect.Min.x + m_scene_color_resolution.x - k_viewport_border,
         scene_color_top + m_scene_color_resolution.y - k_viewport_border
     );
-    const ImVec2 mouse_pos = ImGui::GetMousePos();
+    const WindowInputSourceSnapshot& input_source = m_window_input_tracker.GetPendingSource();
+    const ImVec2 mouse_pos(input_source.mouse_position.x, input_source.mouse_position.y);
 
-    const bool scene_color_hovered = mouse_pos.x > scene_color_min.x && mouse_pos.x < scene_color_max.x &&
-                                     mouse_pos.y > scene_color_min.y && mouse_pos.y < scene_color_max.y;
+    const bool scene_color_hovered =
+        ImGui::IsWindowHovered() &&
+        mouse_pos.x > scene_color_min.x && mouse_pos.x < scene_color_max.x &&
+        mouse_pos.y > scene_color_min.y && mouse_pos.y < scene_color_max.y;
+    m_b_active_viewport_hovered = scene_color_hovered;
 
-    const bool mouse_clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                               ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
-                               ImGui::IsMouseClicked(ImGuiMouseButton_Right);
-    const bool mouse_down = WindowInput::Get().mouse_button_state[MouseButtons::Left] ||
-                            WindowInput::Get().mouse_button_state[MouseButtons::Middle] ||
-                            WindowInput::Get().mouse_button_state[MouseButtons::Right];
-
-    if (!mouse_down) {
-        m_b_scene_color_mouse_captured = false;
-    } else if (!m_b_scene_color_mouse_captured && mouse_clicked && scene_color_hovered) {
-        m_b_scene_color_mouse_captured     = true;
-        WindowInput::Get().is_cursor_dirty = true;
-        WindowInput::Get().cursor_delta_x  = 0.f;
-        WindowInput::Get().cursor_delta_y  = 0.f;
+    const bool mouse_clicked = input_source.mouse_button_pressed[MouseButtons::Left] ||
+                               input_source.mouse_button_pressed[MouseButtons::Middle] ||
+                               input_source.mouse_button_pressed[MouseButtons::Right];
+    if (!m_b_scene_color_mouse_captured && mouse_clicked && scene_color_hovered) {
+        m_b_scene_color_mouse_captured = true;
     }
-
-    WindowInput::Get().is_active =
-        m_b_scene_color_mouse_captured ||
-        (scene_color_hovered && WindowInput::Get().key_button_switch_state[KeyButtons::F]);
 
     ImGui::End();
 }

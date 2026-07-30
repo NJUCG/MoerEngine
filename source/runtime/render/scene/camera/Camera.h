@@ -1,5 +1,6 @@
 #pragma once
 
+#include "RenderAPI.h"
 #include "math/Math.h"
 #include "math/Transform.h"
 #include "serialize/Serializer.h"
@@ -7,6 +8,7 @@
 namespace Moer {
 
 struct EditorConfig;
+struct WindowInputFrameSnapshot;
 
 struct CameraFrameInput {
     uint2 viewport_resolution = uint2(0u, 0u);
@@ -40,7 +42,8 @@ struct CameraFrameInput {
     float camera_far_clip_log10        = 3.0f;
     float camera_near_clip_log10       = -2.0f;
 
-    static CameraFrameInput Capture(const EditorConfig& config);
+    RENDER_API static CameraFrameInput
+    Capture(const WindowInputFrameSnapshot& input, const EditorConfig& config);
 };
 
 class Camera {
@@ -139,7 +142,6 @@ public:
 
     // Jitter Matrix only affect the view_projection_matrix
     void       SetJitterMatrix(const Matrix4x4f& jitter_matrix) noexcept;
-    void       SetJitterMatrix(const Vector2f& jitter) noexcept;
     void       SetJitterMatrix(const Vector2f& jitter, uint2 render_resolution) noexcept;
     Matrix4x4f GetJitterMatrix() const noexcept;
     void       ResetJitterMatrix() noexcept;
@@ -175,7 +177,6 @@ public:
          * 
          */
     void Tick(const CameraFrameInput& frame_input);
-    void Tick(const SharedPtr<EditorConfig> editor_config);
 
     bool IsDirty() const; //judge if camera changed compared to last frame
 

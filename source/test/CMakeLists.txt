@@ -175,6 +175,15 @@ set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME WindowFrameSnapshotContract COMMAND $<TARGET_FILE:${test_target}>)
 set_tests_properties(WindowFrameSnapshotContract PROPERTIES TIMEOUT 60)
 
+set(test_target TestWindowInputSnapshot)
+add_executable(${test_target} "WindowInputSnapshotContractTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME WindowInputSnapshotContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(WindowInputSnapshotContract PROPERTIES TIMEOUT 60)
+
 set(test_target TestRHICmdReorderer)
 add_executable(${test_target} "RHICmdReordererTest.cpp")
 target_link_libraries(${test_target}

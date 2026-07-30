@@ -362,11 +362,13 @@ RasterRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const 
         }
     }
 
+    const WindowInputFrameSnapshot window_input =
+        hooks.on_capture_window_input ? hooks.on_capture_window_input() : WindowInputFrameSnapshot{};
     CameraFrameInput camera_input{};
     bool             is_run_scene_test_case = false;
     {
         ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.camera_and_test_ms);
-        camera_input                            = CameraFrameInput::Capture(*editor_config);
+        camera_input = CameraFrameInput::Capture(window_input, *editor_config);
         frame_packet.camera_viewport_resolution = camera_input.viewport_resolution;
 
         if (scene.IsReady()) {

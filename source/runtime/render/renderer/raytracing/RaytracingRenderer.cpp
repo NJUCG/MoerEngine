@@ -538,10 +538,12 @@ RaytracingRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, co
         frame_packet.debug_input          = debug_ui_frame_input;
     }
 
+    const WindowInputFrameSnapshot window_input =
+        hooks.on_capture_window_input ? hooks.on_capture_window_input() : WindowInputFrameSnapshot{};
     CameraFrameInput camera_input{};
     {
         ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.camera_and_test_ms);
-        camera_input = CameraFrameInput::Capture(*editor_config);
+        camera_input = CameraFrameInput::Capture(window_input, *editor_config);
 
         const bool submit_export_request =
             frame_packet.config.export_cfg.b_export && !export_request_in_flight;

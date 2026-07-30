@@ -10,6 +10,7 @@
 #include "scene/Scene.h"
 #include "shader/ShaderResourceManager.h"
 #include "window/WindowFrameSnapshot.h"
+#include "window/WindowInput.h"
 
 #include "common/UIRenderer.h"
 #include "common/UiCombinePass.h"
@@ -31,6 +32,7 @@ struct EngineHooks {
     std::function<void(Scene&)> on_tick_scripting;
     std::function<void(Scene&)> on_tick_test;
     std::function<void(Scene&)> on_tick_ui;
+    std::function<WindowInputFrameSnapshot()> on_capture_window_input;
     std::function<bool()>       should_reload;
 
     std::function<UiCompositionFrameData()> on_capture_ui_composition;

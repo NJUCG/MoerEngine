@@ -77,6 +77,10 @@ void Editor::Run(const ExtraHooks& extra_hooks) {
                 [this](Scene& scene) {
                     m_editor_ui->TickUI(scene);
                 },
+            .on_capture_window_input =
+                [this]() {
+                    return m_editor_ui->GetWindowInputSnapshot();
+                },
             .should_reload =
                 [this]() {
                     return m_editor_ui->NeedsReload();
