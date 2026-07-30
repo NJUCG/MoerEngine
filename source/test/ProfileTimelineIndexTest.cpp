@@ -360,6 +360,55 @@ void WriteEmptyCapture(const std::filesystem::path& _path) {
     Expect(Shutdown() == ShutdownResult::Completed, "empty fixture capture did not close cleanly");
 }
 
+void WriteOrphanGpuScopeCapture(const std::filesystem::path& _path) {
+    static_cast<void>(Shutdown());
+    RuntimeConfig config;
+    config.output_path      = _path;
+    config.replace_existing = true;
+    Expect(Start(config) == StartResult::Started, "orphan GPU fixture capture did not start");
+
+    const SchemaRegistration gpu_frame = RegisterSchema(Templates::GpuFrame());
+    const SchemaRegistration gpu_scope = RegisterSchema(Templates::GpuScope());
+    Expect(
+        gpu_frame.status == SchemaStatus::Registered && gpu_scope.status == SchemaStatus::Registered,
+        "orphan GPU fixture schemas did not register"
+    );
+
+    // Reserve the missing GpuFrame's producer sequence without writing a
+    // record. Forensic loading can then prove that the orphan scope has a
+    // compatible earlier record-sequence slot.
+    const std::array<FieldValueView, 1> rejected_frame_values{
+        std::uint64_t{42},
+    };
+    Expect(
+        Emit(gpu_frame.handle, rejected_frame_values) == EmitStatus::ValueCountMismatch,
+        "orphan GPU fixture did not reserve its missing frame sequence"
+    );
+    EmitGpuScope(
+        gpu_scope.handle,
+        42,
+        1,
+        0,
+        0,
+        0,
+        ProfileLogicalQueue::Graphics,
+        11,
+        3,
+        "orphan-root",
+        ProfileGpuScopeStatus::Ready,
+        100,
+        150,
+        64,
+        1.0,
+        50.0,
+        50.0,
+        0,
+        ""
+    );
+
+    Expect(Shutdown() == ShutdownResult::Completed, "orphan GPU fixture capture did not close cleanly");
+}
+
 struct LoadedTimeline {
     SessionLoadResult result{};
     ProfileSession    session{};
@@ -431,10 +480,14 @@ LoadedTimeline LoadForensicPrefix(const std::filesystem::path& _path) {
     LoadedTimeline loaded;
     loaded.result  = reader.Finish();
     loaded.session = reader.TakeSession();
-    Expect(
-        loaded.result.status == SessionLoadStatus::ForensicTruncated && loaded.session.Valid(),
-        "missing SessionEnd was not exposed as a forensic session"
-    );
+    if (loaded.result.status != SessionLoadStatus::ForensicTruncated || !loaded.session.Valid()) {
+        throw std::runtime_error(
+            "missing SessionEnd was not exposed as a forensic session (status=" +
+            std::to_string(static_cast<unsigned>(loaded.result.status)) +
+            ", error=" + std::to_string(static_cast<unsigned>(loaded.result.error_code)) +
+            ", diagnostic=" + std::string(reader.DiagnosticMessage()) + ")"
+        );
+    }
     return loaded;
 }
 
@@ -1320,6 +1373,48 @@ void VerifyEmptySession(const LoadedTimeline& _empty) {
     );
 }
 
+void VerifyOrphanGpuTimeline(const LoadedTimeline& _forensic) {
+    Expect(
+        _forensic.result.status == SessionLoadStatus::ForensicTruncated &&
+            _forensic.session.GpuFrames().empty() && _forensic.session.GpuScopes().size() == 1,
+        "orphan GPU fixture did not retain only its forensic scope"
+    );
+
+    ProfileTimelineIndex index;
+    Expect(
+        BuildProfileTimelineIndex(_forensic.session, _forensic.result, {}, index).Succeeded(),
+        "orphan GPU timeline index did not build"
+    );
+    Expect(
+        index.GpuFrames().empty() && index.GpuTracks().size() == 1 && index.GpuFrameSlices().size() == 1 &&
+            index.GpuAxisFrames().size() == 1 && index.GpuTimelineScopes().size() == 1,
+        "orphan GPU scope did not materialize without inventing a frame record"
+    );
+
+    const GpuTimelineAxisFrame& axis_frame = index.GpuAxisFrames().front();
+    Expect(
+        axis_frame.frame_id == 42 && axis_frame.source_frame_index == kInvalidSessionIndex &&
+            !axis_frame.has_frame_record && axis_frame.timing_available && axis_frame.origin_tick == 100 &&
+            axis_frame.extent_ticks == 50,
+        "orphan GPU axis-frame metadata is inconsistent"
+    );
+    const GpuTimelineFrameSlice& slice = index.GpuFrameSlices().front();
+    Expect(
+        slice.frame_id == 42 && slice.source_frame_index == kInvalidSessionIndex && !slice.has_frame_record &&
+            slice.axis_frame_index == 0 && slice.timeline_scope_count == 1,
+        "orphan GPU frame slice is inconsistent"
+    );
+
+    std::array<GpuTimelineScopeRef, 1> output{};
+    const TimelineOverlapQueryResult   query =
+        index.QueryGpuTimelineOverlaps(0, 42, 0, axis_frame.extent_ticks, output);
+    Expect(
+        query.valid && !query.truncated && query.written == 1 && output.front().source_scope_index == 0 &&
+            output.front().begin_tick_offset == 0 && output.front().end_tick_offset == 50,
+        "typed GPU query could not reach an orphan frame timeline"
+    );
+}
+
 } // namespace
 
 int main(int _argc, char** _argv) {
@@ -1355,6 +1450,10 @@ int main(int _argc, char** _argv) {
         VerifyGpuDomainsAndSlices(index, complete.session);
         VerifyPublicRangeIntegrity(index, complete.session);
         VerifyQualityAndAtomicLimits(complete, forensic);
+
+        ScopedTimelineCapture orphan_capture;
+        WriteOrphanGpuScopeCapture(orphan_capture.Path());
+        VerifyOrphanGpuTimeline(LoadForensicPrefix(orphan_capture.Path()));
 
         ScopedTimelineCapture empty_capture;
         WriteEmptyCapture(empty_capture.Path());

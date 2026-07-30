@@ -62,6 +62,185 @@ void TestOverflowSafeFractionMapping() {
     Expect(ProfileViewerMapFraction(99, 11, 1, 2) == 99, "reversed interval did not map to begin");
 }
 
+void ExpectGpuFrameChoice(
+    std::optional<ProfileViewerGpuFrameChoice> _choice,
+    std::uint64_t                              _frame_id,
+    bool                                       _has_frame_record,
+    std::string_view                           _message
+) {
+    Expect(
+        _choice && _choice->frame_id == _frame_id && _choice->has_frame_record == _has_frame_record, _message
+    );
+}
+
+void TestGpuFrameChoiceUnionNavigation() {
+    const std::array<GpuTimelineFrameRef, 2>  recorded_frames{{
+        {
+             .frame_id           = 10,
+             .source_frame_index = 0,
+        },
+        {
+             .frame_id           = 30,
+             .source_frame_index = 1,
+        },
+    }};
+    const std::array<GpuTimelineAxisFrame, 4> axis_frames{{
+        {
+            .frame_id         = 20,
+            .axis_index       = 1,
+            .has_frame_record = false,
+        },
+        {
+            .frame_id         = 30,
+            .axis_index       = 1,
+            .has_frame_record = true,
+        },
+        {
+            .frame_id         = 5,
+            .axis_index       = 2,
+            .has_frame_record = false,
+        },
+        {
+            .frame_id         = 20,
+            .axis_index       = 2,
+            .has_frame_record = false,
+        },
+    }};
+
+    ExpectGpuFrameChoice(
+        FindProfileViewerGpuFrameAtOrAfter(recorded_frames, axis_frames, 0),
+        5,
+        false,
+        "GPU frame union did not expose its orphan first frame"
+    );
+    ExpectGpuFrameChoice(
+        FindProfileViewerGpuFrameAtOrAfter(recorded_frames, axis_frames, 6),
+        10,
+        true,
+        "GPU frame union did not advance to a source-only frame"
+    );
+    ExpectGpuFrameChoice(
+        FindProfileViewerGpuFrameAtOrAfter(recorded_frames, axis_frames, 20),
+        20,
+        false,
+        "GPU frame union did not collapse a duplicate orphan frame across axes"
+    );
+    ExpectGpuFrameChoice(
+        FindProfileViewerGpuFrameAtOrAfter(recorded_frames, axis_frames, 30),
+        30,
+        true,
+        "GPU frame union did not retain source-record identity"
+    );
+    Expect(
+        !FindProfileViewerGpuFrameAtOrAfter(recorded_frames, axis_frames, 31),
+        "GPU frame at-or-after search advanced beyond the union"
+    );
+
+    ExpectGpuFrameChoice(
+        FindProfileViewerGpuFrameAfter(recorded_frames, axis_frames, 20),
+        30,
+        true,
+        "GPU next-frame navigation did not cross source/axis sets"
+    );
+    Expect(
+        !FindProfileViewerGpuFrameAfter(recorded_frames, axis_frames, 30),
+        "GPU next-frame navigation advanced past the final frame"
+    );
+    ExpectGpuFrameChoice(
+        FindProfileViewerGpuFrameBefore(recorded_frames, axis_frames, 20),
+        10,
+        true,
+        "GPU previous-frame navigation did not cross source/axis sets"
+    );
+    Expect(
+        !FindProfileViewerGpuFrameBefore(recorded_frames, axis_frames, 5),
+        "GPU previous-frame navigation moved before the first frame"
+    );
+    ExpectGpuFrameChoice(
+        FindProfileViewerGpuFrameAtOrBefore(recorded_frames, axis_frames, 19),
+        10,
+        true,
+        "GPU at-or-before navigation did not clamp to the preceding frame"
+    );
+    ExpectGpuFrameChoice(
+        FindProfileViewerGpuFrameAtOrBefore(recorded_frames, axis_frames, 20),
+        20,
+        false,
+        "GPU at-or-before navigation skipped an exact orphan frame"
+    );
+    Expect(
+        !FindProfileViewerGpuFrameAtOrBefore(recorded_frames, axis_frames, 4),
+        "GPU at-or-before navigation moved before the union"
+    );
+
+    const std::array<GpuTimelineAxisFrame, 1> orphan_only{{
+        {
+            .frame_id         = 42,
+            .axis_index       = 7,
+            .has_frame_record = false,
+        },
+    }};
+    ExpectGpuFrameChoice(
+        FindProfileViewerGpuFrameAtOrAfter({}, orphan_only, 0),
+        42,
+        false,
+        "axis-only orphan GPU frame was not selectable"
+    );
+    ExpectGpuFrameChoice(
+        FindProfileViewerGpuFrameAtOrAfter(recorded_frames, {}, 11),
+        30,
+        true,
+        "source-only GPU frames were dropped from the chooser"
+    );
+
+    const std::array<GpuTimelineAxisFrame, 2> axis_budget_boundary{{
+        {
+            .frame_id         = 60,
+            .axis_index       = kProfileViewerGpuRenderableAxisMax,
+            .has_frame_record = false,
+        },
+        {
+            .frame_id         = 1,
+            .axis_index       = kProfileViewerGpuRenderableAxisMax + 1,
+            .has_frame_record = false,
+        },
+    }};
+    ExpectGpuFrameChoice(
+        FindProfileViewerGpuFrameAtOrAfter({}, axis_budget_boundary, 0),
+        60,
+        false,
+        "GPU chooser did not retain the final viewer-renderable physical axis"
+    );
+    Expect(
+        !FindProfileViewerGpuFrameAfter({}, axis_budget_boundary, 60),
+        "GPU chooser exposed an orphan timeline beyond the viewer axis budget"
+    );
+
+    Expect(
+        !FindProfileViewerGpuFrameAtOrAfter({}, {}, 0) && !FindProfileViewerGpuFrameAfter({}, {}, 0) &&
+            !FindProfileViewerGpuFrameBefore({}, {}, 0) && !FindProfileViewerGpuFrameAtOrBefore({}, {}, 0),
+        "empty GPU frame sources produced a navigation result"
+    );
+
+    constexpr std::uint64_t                  maximum = std::numeric_limits<std::uint64_t>::max();
+    const std::array<GpuTimelineFrameRef, 1> maximum_frame{{
+        {
+            .frame_id           = maximum,
+            .source_frame_index = 0,
+        },
+    }};
+    ExpectGpuFrameChoice(
+        FindProfileViewerGpuFrameAtOrBefore(maximum_frame, {}, maximum),
+        maximum,
+        true,
+        "GPU frame navigation lost UINT64_MAX"
+    );
+    Expect(
+        !FindProfileViewerGpuFrameAfter(maximum_frame, {}, maximum),
+        "GPU next-frame navigation wrapped UINT64_MAX"
+    );
+}
+
 class ScopedFixtures final {
 public:
     ScopedFixtures() {
@@ -184,6 +363,11 @@ void TestPublicationAndIndependentNavigation(
     const auto ready_a = WaitForGeneration(_loader, generation_a);
     ExpectReady(ready_a, generation_a);
     Expect(
+        model.InspectSnapshot(ready_a) == EProfileViewerPublicationUpdate::Changed &&
+            model.PublishedGeneration() == kInvalidProfileDocumentGeneration,
+        "publication inspection mutated the unpublished model"
+    );
+    Expect(
         model.ObserveSnapshot(ready_a) == EProfileViewerPublicationUpdate::Changed,
         "first publication did not reset the model"
     );
@@ -297,6 +481,11 @@ void TestPublicationAndIndependentNavigation(
     const auto ready_b = WaitForGeneration(_loader, generation_b);
     ExpectReady(ready_b, generation_b);
     Expect(
+        model.InspectSnapshot(ready_b) == EProfileViewerPublicationUpdate::Changed &&
+            model.PublishedGeneration() == generation_a && model.Selection() == selection_a,
+        "publication inspection changed last-good navigation state"
+    );
+    Expect(
         model.ObserveSnapshot(ready_b) == EProfileViewerPublicationUpdate::Changed,
         "new publication did not reset the model"
     );
@@ -405,6 +594,7 @@ void TestPublicationAndIndependentNavigation(
 int main() {
     try {
         TestOverflowSafeFractionMapping();
+        TestGpuFrameChoiceUnionNavigation();
 
         ScopedFixtures fixtures;
         const auto     path_a = fixtures.Path("a");

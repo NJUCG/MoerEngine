@@ -1,6 +1,7 @@
 #include "profile_viewer_ui/ProfileViewerModel.h"
 
 #include <algorithm>
+#include <iterator>
 #include <limits>
 
 namespace Moer {
@@ -40,6 +41,142 @@ ScaleCeilSaturated(std::uint64_t _value, std::uint32_t _numerator, std::uint32_t
     return static_cast<std::uint64_t>(-(_value + 1)) + 1;
 }
 
+enum class EGpuFrameChoiceSearch : std::uint8_t {
+    AtOrAfter = 0,
+    After,
+    Before,
+    AtOrBefore,
+};
+
+template<typename Iterator>
+[[nodiscard]] Iterator FindFrameInSortedRange(
+    Iterator              _begin,
+    Iterator              _end,
+    std::uint64_t         _frame_id,
+    EGpuFrameChoiceSearch _search
+) noexcept {
+    const auto less = [](const auto& _frame, std::uint64_t _value) {
+        return _frame.frame_id < _value;
+    };
+    const auto reverse_less = [](std::uint64_t _value, const auto& _frame) {
+        return _value < _frame.frame_id;
+    };
+
+    switch (_search) {
+        case EGpuFrameChoiceSearch::AtOrAfter:
+            return std::lower_bound(_begin, _end, _frame_id, less);
+        case EGpuFrameChoiceSearch::After:
+            return std::upper_bound(_begin, _end, _frame_id, reverse_less);
+        case EGpuFrameChoiceSearch::Before: {
+            const Iterator found = std::lower_bound(_begin, _end, _frame_id, less);
+            return found == _begin ? _end : std::prev(found);
+        }
+        case EGpuFrameChoiceSearch::AtOrBefore: {
+            const Iterator found = std::upper_bound(_begin, _end, _frame_id, reverse_less);
+            return found == _begin ? _end : std::prev(found);
+        }
+    }
+    return _end;
+}
+
+void MergeGpuFrameChoice(
+    std::optional<ProfileViewerGpuFrameChoice>& _best,
+    ProfileViewerGpuFrameChoice                 _candidate,
+    EGpuFrameChoiceSearch                       _search
+) noexcept {
+    if (!_best) {
+        _best = _candidate;
+        return;
+    }
+    if (_candidate.frame_id == _best->frame_id) {
+        _best->has_frame_record = _best->has_frame_record || _candidate.has_frame_record;
+        return;
+    }
+
+    const bool prefer_lower =
+        _search == EGpuFrameChoiceSearch::AtOrAfter || _search == EGpuFrameChoiceSearch::After;
+    if ((prefer_lower && _candidate.frame_id < _best->frame_id) ||
+        (!prefer_lower && _candidate.frame_id > _best->frame_id)) {
+        _best = _candidate;
+    }
+}
+
+template<typename Iterator, typename HasFrameRecord>
+void ConsiderGpuFrameRange(
+    Iterator                                    _begin,
+    Iterator                                    _end,
+    std::uint64_t                               _frame_id,
+    EGpuFrameChoiceSearch                       _search,
+    HasFrameRecord                              _has_frame_record,
+    std::optional<ProfileViewerGpuFrameChoice>& _best
+) noexcept {
+    const Iterator found = FindFrameInSortedRange(_begin, _end, _frame_id, _search);
+    if (found != _end) {
+        MergeGpuFrameChoice(
+            _best,
+            ProfileViewerGpuFrameChoice{
+                .frame_id         = found->frame_id,
+                .has_frame_record = _has_frame_record(*found),
+            },
+            _search
+        );
+    }
+}
+
+[[nodiscard]] std::optional<ProfileViewerGpuFrameChoice> FindProfileViewerGpuFrame(
+    std::span<const ProfileDump::GpuTimelineFrameRef>  _recorded_frames,
+    std::span<const ProfileDump::GpuTimelineAxisFrame> _axis_frames,
+    std::uint64_t                                      _frame_id,
+    EGpuFrameChoiceSearch                              _search
+) noexcept {
+    std::optional<ProfileViewerGpuFrameChoice> best;
+    ConsiderGpuFrameRange(
+        _recorded_frames.begin(),
+        _recorded_frames.end(),
+        _frame_id,
+        _search,
+        [](const ProfileDump::GpuTimelineFrameRef&) {
+            return true;
+        },
+        best
+    );
+
+    // GpuAxisFrames are sorted by (axis_index, frame_id). Binary-search each
+    // physical-axis group that the UI can render (indices 1..256). This keeps
+    // chooser and tab discovery on the same contract. Work is
+    // O(renderable_axis_count * log(frame_count)) with no allocation and no
+    // scan proportional to the scope/axis-frame count.
+    auto group_begin = _axis_frames.begin();
+    while (group_begin != _axis_frames.end()) {
+        const std::uint32_t axis_index = group_begin->axis_index;
+        const auto          group_end  = std::upper_bound(
+            group_begin,
+            _axis_frames.end(),
+            axis_index,
+            [](std::uint32_t _value, const ProfileDump::GpuTimelineAxisFrame& _frame) {
+                return _value < _frame.axis_index;
+            }
+        );
+        if (axis_index > kProfileViewerGpuRenderableAxisMax) {
+            break;
+        }
+        if (axis_index != 0) {
+            ConsiderGpuFrameRange(
+                group_begin,
+                group_end,
+                _frame_id,
+                _search,
+                [](const ProfileDump::GpuTimelineAxisFrame& _frame) {
+                    return _frame.has_frame_record;
+                },
+                best
+            );
+        }
+        group_begin = group_end;
+    }
+    return best;
+}
+
 } // namespace
 
 std::uint64_t ProfileViewerMapFraction(
@@ -58,6 +195,44 @@ std::uint64_t ProfileViewerMapFraction(
     return _begin + MulDivFloor(_end - _begin, _numerator, _denominator);
 }
 
+std::optional<ProfileViewerGpuFrameChoice> FindProfileViewerGpuFrameAtOrAfter(
+    std::span<const ProfileDump::GpuTimelineFrameRef>  _recorded_frames,
+    std::span<const ProfileDump::GpuTimelineAxisFrame> _axis_frames,
+    std::uint64_t                                      _frame_id
+) noexcept {
+    return FindProfileViewerGpuFrame(
+        _recorded_frames, _axis_frames, _frame_id, EGpuFrameChoiceSearch::AtOrAfter
+    );
+}
+
+std::optional<ProfileViewerGpuFrameChoice> FindProfileViewerGpuFrameAfter(
+    std::span<const ProfileDump::GpuTimelineFrameRef>  _recorded_frames,
+    std::span<const ProfileDump::GpuTimelineAxisFrame> _axis_frames,
+    std::uint64_t                                      _frame_id
+) noexcept {
+    return FindProfileViewerGpuFrame(_recorded_frames, _axis_frames, _frame_id, EGpuFrameChoiceSearch::After);
+}
+
+std::optional<ProfileViewerGpuFrameChoice> FindProfileViewerGpuFrameBefore(
+    std::span<const ProfileDump::GpuTimelineFrameRef>  _recorded_frames,
+    std::span<const ProfileDump::GpuTimelineAxisFrame> _axis_frames,
+    std::uint64_t                                      _frame_id
+) noexcept {
+    return FindProfileViewerGpuFrame(
+        _recorded_frames, _axis_frames, _frame_id, EGpuFrameChoiceSearch::Before
+    );
+}
+
+std::optional<ProfileViewerGpuFrameChoice> FindProfileViewerGpuFrameAtOrBefore(
+    std::span<const ProfileDump::GpuTimelineFrameRef>  _recorded_frames,
+    std::span<const ProfileDump::GpuTimelineAxisFrame> _axis_frames,
+    std::uint64_t                                      _frame_id
+) noexcept {
+    return FindProfileViewerGpuFrame(
+        _recorded_frames, _axis_frames, _frame_id, EGpuFrameChoiceSearch::AtOrBefore
+    );
+}
+
 bool ProfileViewerSelection::Valid() const noexcept {
     if (kind == EProfileViewerSelectionKind::None ||
         published_generation == ProfileDump::kInvalidProfileDocumentGeneration ||
@@ -73,7 +248,8 @@ bool ProfileViewerSelection::Valid() const noexcept {
 }
 
 EProfileViewerPublicationUpdate
-ProfileViewerModel::ObserveSnapshot(const ProfileDump::ProfileDocumentLoaderSnapshot& _snapshot) noexcept {
+ProfileViewerModel::InspectSnapshot(const ProfileDump::ProfileDocumentLoaderSnapshot& _snapshot
+) const noexcept {
     const std::uint64_t observed_generation = _snapshot.published_generation;
     if (observed_generation == ProfileDump::kInvalidProfileDocumentGeneration) {
         if (_snapshot.document) {
@@ -87,10 +263,19 @@ ProfileViewerModel::ObserveSnapshot(const ProfileDump::ProfileDocumentLoaderSnap
     if (observed_generation == published_generation_) {
         return EProfileViewerPublicationUpdate::Unchanged;
     }
-
-    published_generation_ = observed_generation;
-    ResetPublicationState();
     return EProfileViewerPublicationUpdate::Changed;
+}
+
+EProfileViewerPublicationUpdate
+ProfileViewerModel::ObserveSnapshot(const ProfileDump::ProfileDocumentLoaderSnapshot& _snapshot) noexcept {
+    const EProfileViewerPublicationUpdate update = InspectSnapshot(_snapshot);
+    if (update != EProfileViewerPublicationUpdate::Changed) {
+        return update;
+    }
+    const std::uint64_t observed_generation = _snapshot.published_generation;
+    published_generation_                   = observed_generation;
+    ResetPublicationState();
+    return update;
 }
 
 std::uint64_t ProfileViewerModel::PublishedGeneration() const noexcept {

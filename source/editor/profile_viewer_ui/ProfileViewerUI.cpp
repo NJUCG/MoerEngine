@@ -17,6 +17,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <imgui.h>
@@ -33,7 +34,7 @@ constexpr std::size_t   k_filter_capacity        = 128;
 constexpr std::size_t   k_filter_name_byte_limit = 1024;
 constexpr std::size_t   k_draw_name_byte_limit   = 256;
 constexpr std::size_t   k_track_scan_budget      = 4096;
-constexpr std::size_t   k_axis_scan_budget       = 256;
+constexpr std::size_t   k_axis_scan_budget       = kProfileViewerGpuRenderableAxisMax;
 constexpr float         k_track_label_width      = 248.0f;
 constexpr float         k_lane_height            = 18.0f;
 constexpr std::uint32_t k_direct_depth_lanes     = 3;
@@ -516,8 +517,17 @@ struct ProfileViewerUI::Impl {
     ProfileDocumentLoader& loader;
     ProfileViewerModel     model{};
 
+    struct PublicationResetState {
+        std::vector<std::uint8_t>  cpu_track_visibility{};
+        std::vector<std::uint8_t>  gpu_track_visibility{};
+        std::vector<std::uint32_t> cpu_visible_tracks{};
+        std::vector<std::uint32_t> gpu_visible_tracks{};
+        std::uint64_t              selected_gpu_frame{0};
+    };
+
     std::shared_ptr<const ProfileDocument> displayed_document{};
     std::uint64_t                          publication_generation{kInvalidProfileDocumentGeneration};
+    std::uint64_t                          failed_publication_generation{kInvalidProfileDocumentGeneration};
     std::vector<std::uint8_t>              cpu_track_visibility{};
     std::vector<std::uint8_t>              gpu_track_visibility{};
     std::vector<std::uint32_t>             cpu_visible_tracks{};
@@ -530,24 +540,38 @@ struct ProfileViewerUI::Impl {
     std::uint64_t                                     selected_gpu_frame{0};
     std::string                                       dialog_status{};
 
-    void ResetForPublication(const ProfileDocument& _document) {
-        publication_generation = _document.request_generation;
-        cpu_track_visibility.assign(
+    [[nodiscard]] PublicationResetState PreparePublication(const ProfileDocument& _document) const {
+        PublicationResetState prepared;
+        prepared.cpu_track_visibility.assign(
             std::min(_document.timeline_index.CpuTracks().size(), k_track_scan_budget), 1
         );
-        gpu_track_visibility.assign(
+        prepared.gpu_track_visibility.assign(
             std::min(_document.timeline_index.GpuTracks().size(), k_track_scan_budget), 1
         );
-        cpu_visible_tracks.clear();
-        cpu_visible_tracks.reserve(cpu_track_visibility.size());
-        gpu_visible_tracks.clear();
-        gpu_visible_tracks.reserve(gpu_track_visibility.size());
+        prepared.cpu_visible_tracks.reserve(prepared.cpu_track_visibility.size());
+        prepared.gpu_visible_tracks.reserve(prepared.gpu_track_visibility.size());
+
+        const auto first_gpu_frame = FindProfileViewerGpuFrameAtOrAfter(
+            _document.timeline_index.GpuFrames(), _document.timeline_index.GpuAxisFrames(), 0
+        );
+        prepared.selected_gpu_frame = first_gpu_frame ? first_gpu_frame->frame_id : 0;
+        return prepared;
+    }
+
+    void CommitPublication(
+        const std::shared_ptr<const ProfileDocument>& _document,
+        PublicationResetState&&                       _prepared
+    ) noexcept {
+        displayed_document     = _document;
+        publication_generation = _document->request_generation;
+        cpu_track_visibility   = std::move(_prepared.cpu_track_visibility);
+        gpu_track_visibility   = std::move(_prepared.gpu_track_visibility);
+        cpu_visible_tracks     = std::move(_prepared.cpu_visible_tracks);
+        gpu_visible_tracks     = std::move(_prepared.gpu_visible_tracks);
+        selected_gpu_frame     = _prepared.selected_gpu_frame;
         filter.fill('\0');
         name_filter.Compile({});
         range.Clear();
-
-        const auto gpu_frames = _document.timeline_index.GpuFrames();
-        selected_gpu_frame    = gpu_frames.empty() ? 0 : gpu_frames.front().frame_id;
     }
 
     void ClearPublication() {
@@ -561,6 +585,16 @@ struct ProfileViewerUI::Impl {
         name_filter.Compile({});
         range.Clear();
         selected_gpu_frame = 0;
+    }
+
+    void ReportPublicationPreparationFailure(const char* _detail) noexcept {
+        try {
+            LOG_ERROR(
+                "[ProfileViewerUI] Publication preparation failed; preserving last-good state: {}",
+                _detail != nullptr && _detail[0] != '\0' ? _detail : "unknown error"
+            );
+        } catch (...) {
+        }
     }
 
     void ReportLoadRequestFailure(const char* _detail) noexcept {
@@ -1239,49 +1273,36 @@ struct ProfileViewerUI::Impl {
         }
     }
 
-    [[nodiscard]] std::size_t FindGpuFramePosition(
-        std::span<const GpuTimelineFrameRef> _frames,
-        std::uint64_t                        _frame_id
-    ) const noexcept {
-        const auto found = std::lower_bound(
-            _frames.begin(),
-            _frames.end(),
-            _frame_id,
-            [](const GpuTimelineFrameRef& _frame, std::uint64_t _value) {
-                return _frame.frame_id < _value;
-            }
-        );
-        if (found == _frames.end()) {
-            return _frames.empty() ? 0 : _frames.size() - 1;
+    void DrawGpuFrameChooser(const ProfileSession& _session, const ProfileTimelineIndex& _index) {
+        const auto recorded_frames = _index.GpuFrames();
+        const auto axis_frames     = _index.GpuAxisFrames();
+        auto current = FindProfileViewerGpuFrameAtOrAfter(recorded_frames, axis_frames, selected_gpu_frame);
+        if (!current) {
+            current = FindProfileViewerGpuFrameAtOrBefore(
+                recorded_frames, axis_frames, std::numeric_limits<std::uint64_t>::max()
+            );
         }
-        return static_cast<std::size_t>(found - _frames.begin());
-    }
-
-    void DrawGpuFrameChooser(
-        std::span<const GpuTimelineFrameRef> _frames,
-        const ProfileSession&                _session,
-        const ProfileTimelineIndex&          _index
-    ) {
-        if (_frames.empty()) {
+        if (!current) {
             return;
         }
-        std::size_t position = FindGpuFramePosition(_frames, selected_gpu_frame);
-        if (_frames[position].frame_id != selected_gpu_frame) {
-            selected_gpu_frame = _frames[position].frame_id;
+        if (current->frame_id != selected_gpu_frame) {
+            selected_gpu_frame = current->frame_id;
         }
 
         if (ImGui::Button("<##GpuFrame")) {
-            if (position > 0) {
-                --position;
-                selected_gpu_frame = _frames[position].frame_id;
+            const auto previous =
+                FindProfileViewerGpuFrameBefore(recorded_frames, axis_frames, selected_gpu_frame);
+            if (previous) {
+                selected_gpu_frame = previous->frame_id;
                 range.Clear();
             }
         }
         ImGui::SameLine();
         if (ImGui::Button(">##GpuFrame")) {
-            if (position + 1 < _frames.size()) {
-                ++position;
-                selected_gpu_frame = _frames[position].frame_id;
+            const auto next =
+                FindProfileViewerGpuFrameAfter(recorded_frames, axis_frames, selected_gpu_frame);
+            if (next) {
+                selected_gpu_frame = next->frame_id;
                 range.Clear();
             }
         }
@@ -1297,9 +1318,17 @@ struct ProfileViewerUI::Impl {
                 "%llu",
                 ImGuiInputTextFlags_EnterReturnsTrue
             )) {
-            position           = FindGpuFramePosition(_frames, requested_frame);
-            selected_gpu_frame = _frames[position].frame_id;
-            range.Clear();
+            auto requested =
+                FindProfileViewerGpuFrameAtOrAfter(recorded_frames, axis_frames, requested_frame);
+            if (!requested) {
+                requested = FindProfileViewerGpuFrameAtOrBefore(
+                    recorded_frames, axis_frames, std::numeric_limits<std::uint64_t>::max()
+                );
+            }
+            if (requested) {
+                selected_gpu_frame = requested->frame_id;
+                range.Clear();
+            }
         }
 
         const GpuTimelineFrameRef* frame_ref = _index.FindGpuFrame(selected_gpu_frame);
@@ -1318,6 +1347,12 @@ struct ProfileViewerUI::Impl {
                     ImVec4(1.0f, 0.66f, 0.22f, 1.0f), "Frame timing is incomplete or topology-untrusted."
                 );
             }
+        } else {
+            ImGui::SameLine();
+            ImGui::TextColored(
+                ImVec4(1.0f, 0.58f, 0.30f, 1.0f),
+                "Orphaned timeline | no GpuFrame record; metadata comes from indexed scopes only"
+            );
         }
     }
 
@@ -1626,13 +1661,12 @@ struct ProfileViewerUI::Impl {
     void DrawGpu(const ProfileDocument& _document) {
         const ProfileSession&       session = _document.session;
         const ProfileTimelineIndex& index   = _document.timeline_index;
-        const auto                  frames  = index.GpuFrames();
-        if (frames.empty()) {
-            ImGui::TextDisabled("No GPU frames.");
+        if (!FindProfileViewerGpuFrameAtOrAfter(index.GpuFrames(), index.GpuAxisFrames(), 0)) {
+            ImGui::TextDisabled("No GPU frames or indexed GPU timeline data.");
             return;
         }
 
-        DrawGpuFrameChooser(frames, session, index);
+        DrawGpuFrameChooser(session, index);
         ImGui::TextDisabled(
             "Each tab is one physical timestamp domain in one frame; tabs never share a ruler."
         );
@@ -1696,18 +1730,38 @@ struct ProfileViewerUI::Impl {
         }
 
         const ProfileDocumentLoaderSnapshot&  snapshot = *snapshot_storage;
-        const EProfileViewerPublicationUpdate update   = model.ObserveSnapshot(snapshot);
+        const EProfileViewerPublicationUpdate update   = model.InspectSnapshot(snapshot);
+        bool publication_prepare_failed                = update == EProfileViewerPublicationUpdate::Changed &&
+                                          snapshot.document &&
+                                          failed_publication_generation == snapshot.published_generation;
 
-        // Only a coherent snapshot can replace the UI-owned last-good
-        // publication. Invalid snapshot payloads remain diagnostic-only.
-        if (update != EProfileViewerPublicationUpdate::Invalid) {
+        // Publication is two-phase: all allocating UI state is prepared while
+        // the model and displayed document still describe the last-good
+        // generation. Only no-throw moves and model reset happen at commit.
+        if (update == EProfileViewerPublicationUpdate::Changed && !publication_prepare_failed) {
             if (snapshot.document) {
-                displayed_document = snapshot.document;
-                if (update == EProfileViewerPublicationUpdate::Changed) {
-                    ResetForPublication(*displayed_document);
+                try {
+                    PublicationResetState prepared = PreparePublication(*snapshot.document);
+                    if (model.ObserveSnapshot(snapshot) == EProfileViewerPublicationUpdate::Changed) {
+                        CommitPublication(snapshot.document, std::move(prepared));
+                        failed_publication_generation = kInvalidProfileDocumentGeneration;
+                    } else {
+                        failed_publication_generation = snapshot.published_generation;
+                        publication_prepare_failed    = true;
+                        ReportPublicationPreparationFailure("snapshot changed before commit");
+                    }
+                } catch (const std::exception& error) {
+                    failed_publication_generation = snapshot.published_generation;
+                    publication_prepare_failed    = true;
+                    ReportPublicationPreparationFailure(error.what());
+                } catch (...) {
+                    failed_publication_generation = snapshot.published_generation;
+                    publication_prepare_failed    = true;
+                    ReportPublicationPreparationFailure("unexpected allocation failure");
                 }
-            } else if (update == EProfileViewerPublicationUpdate::Changed) {
+            } else if (model.ObserveSnapshot(snapshot) == EProfileViewerPublicationUpdate::Changed) {
                 ClearPublication();
+                failed_publication_generation = kInvalidProfileDocumentGeneration;
             }
         }
         const std::shared_ptr<const ProfileDocument> document = displayed_document;
@@ -1723,6 +1777,16 @@ struct ProfileViewerUI::Impl {
             ImGui::TextColored(
                 ImVec4(1.0f, 0.35f, 0.30f, 1.0f), "Loader snapshot/document identity is invalid."
             );
+        }
+        if (publication_prepare_failed) {
+            ImGui::TextColored(
+                ImVec4(1.0f, 0.35f, 0.30f, 1.0f),
+                "New profile publication could not be prepared; the last-good viewer state was preserved."
+            );
+            ImGui::SameLine();
+            if (ImGui::Button("Retry publication preparation")) {
+                failed_publication_generation = kInvalidProfileDocumentGeneration;
+            }
         }
         if (!document || !document->Valid() || !document->timeline_index.Matches(document->session)) {
             ImGui::TextDisabled("Open a valid .mpd capture to inspect its timeline.");

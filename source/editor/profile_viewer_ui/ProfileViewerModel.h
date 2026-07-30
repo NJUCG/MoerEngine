@@ -6,10 +6,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 
 namespace Moer {
 
-inline constexpr std::size_t kProfileViewerGpuViewportCapacity = 256;
+inline constexpr std::size_t   kProfileViewerGpuViewportCapacity  = 256;
+inline constexpr std::uint32_t kProfileViewerGpuRenderableAxisMax = 256;
 
 // Maps a bounded rational position onto [begin, end] without converting the
 // uint64_t domain to floating point. Invalid fractions map to begin.
@@ -18,6 +20,39 @@ inline constexpr std::size_t kProfileViewerGpuViewportCapacity = 256;
     std::uint64_t _end,
     std::uint32_t _numerator,
     std::uint32_t _denominator
+) noexcept;
+
+struct ProfileViewerGpuFrameChoice {
+    std::uint64_t frame_id{0};
+    bool          has_frame_record{false};
+
+    friend bool operator==(const ProfileViewerGpuFrameChoice&, const ProfileViewerGpuFrameChoice&) = default;
+};
+
+// The timeline index stores GpuFrame records by frame ID and physical-axis
+// frames by (axis, frame). These allocation-free searches expose the sorted
+// union of every recorded frame plus orphan timelines on viewer-renderable
+// physical axes [1, kProfileViewerGpuRenderableAxisMax], without materializing
+// or sorting a second large catalog.
+[[nodiscard]] std::optional<ProfileViewerGpuFrameChoice> FindProfileViewerGpuFrameAtOrAfter(
+    std::span<const ProfileDump::GpuTimelineFrameRef>  _recorded_frames,
+    std::span<const ProfileDump::GpuTimelineAxisFrame> _axis_frames,
+    std::uint64_t                                      _frame_id
+) noexcept;
+[[nodiscard]] std::optional<ProfileViewerGpuFrameChoice> FindProfileViewerGpuFrameAfter(
+    std::span<const ProfileDump::GpuTimelineFrameRef>  _recorded_frames,
+    std::span<const ProfileDump::GpuTimelineAxisFrame> _axis_frames,
+    std::uint64_t                                      _frame_id
+) noexcept;
+[[nodiscard]] std::optional<ProfileViewerGpuFrameChoice> FindProfileViewerGpuFrameBefore(
+    std::span<const ProfileDump::GpuTimelineFrameRef>  _recorded_frames,
+    std::span<const ProfileDump::GpuTimelineAxisFrame> _axis_frames,
+    std::uint64_t                                      _frame_id
+) noexcept;
+[[nodiscard]] std::optional<ProfileViewerGpuFrameChoice> FindProfileViewerGpuFrameAtOrBefore(
+    std::span<const ProfileDump::GpuTimelineFrameRef>  _recorded_frames,
+    std::span<const ProfileDump::GpuTimelineAxisFrame> _axis_frames,
+    std::uint64_t                                      _frame_id
 ) noexcept;
 
 struct ProfileViewerViewport {
@@ -69,6 +104,8 @@ enum class EProfileViewerPublicationUpdate : std::uint8_t {
 // publication each frame.
 class ProfileViewerModel final {
 public:
+    [[nodiscard]] EProfileViewerPublicationUpdate
+    InspectSnapshot(const ProfileDump::ProfileDocumentLoaderSnapshot& _snapshot) const noexcept;
     [[nodiscard]] EProfileViewerPublicationUpdate
     ObserveSnapshot(const ProfileDump::ProfileDocumentLoaderSnapshot& _snapshot) noexcept;
 
