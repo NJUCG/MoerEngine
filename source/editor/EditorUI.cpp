@@ -462,13 +462,19 @@ void EditorUI::TickUI(Scene& scene) {
         m_window_input_tracker.ClearKeyToggle(KeyButtons::F);
         m_free_look_capture_viewport_id = 0;
     }
+    const bool free_look_toggled = m_window_input_tracker.IsKeyToggled(KeyButtons::F);
     m_free_look_capture_viewport_id = ResolveFreeLookCaptureViewportId(
         pending_input_source.focused_viewport_id,
-        m_window_input_tracker.IsKeyToggled(KeyButtons::F),
+        free_look_toggled,
         m_b_active_viewport_hovered,
         m_active_input_viewport_id,
         m_free_look_capture_viewport_id
     );
+    if (free_look_toggled && m_free_look_capture_viewport_id == 0) {
+        // A toggle without a committed viewport owner must not become a latent
+        // free-look request that activates later from hover alone.
+        m_window_input_tracker.ClearKeyToggle(KeyButtons::F);
+    }
 
     m_window_input_snapshot = m_window_input_tracker.Finalize(WindowInputPolicy{
         .scene_active =

@@ -99,6 +99,43 @@ int main() {
     Require(!clear_toggle_frame.key_toggle[KeyButtons::F]);
     Require(!clear_toggle_frame.cursor_hidden);
 
+    // Releasing F away from active viewport content must not leave a latent
+    // toggle that starts free-look on a later hover without another F edge.
+    WindowInputFrameTracker latent_toggle_tracker;
+    WindowInputSourceSnapshot latent_toggle_source = MakeSource(1);
+    latent_toggle_source.key_released[KeyButtons::F] = true;
+    Require(latent_toggle_tracker.BeginFrame(latent_toggle_source));
+    const uint32_t rejected_free_look_owner = ResolveFreeLookCaptureViewportId(
+        latent_toggle_source.focused_viewport_id,
+        latent_toggle_tracker.IsKeyToggled(KeyButtons::F),
+        false,
+        17u,
+        0u
+    );
+    Require(rejected_free_look_owner == 0u);
+    if (latent_toggle_tracker.IsKeyToggled(KeyButtons::F) &&
+        rejected_free_look_owner == 0u) {
+        latent_toggle_tracker.ClearKeyToggle(KeyButtons::F);
+    }
+    Require(!latent_toggle_tracker.IsKeyToggled(KeyButtons::F));
+    const WindowInputFrameSnapshot rejected_free_look_frame =
+        latent_toggle_tracker.Finalize(active_policy);
+    Require(!rejected_free_look_frame.key_toggle[KeyButtons::F]);
+    Require(!rejected_free_look_frame.cursor_hidden);
+
+    WindowInputSourceSnapshot later_hover_source = MakeSource(2);
+    Require(latent_toggle_tracker.BeginFrame(later_hover_source));
+    Require(
+        ResolveFreeLookCaptureViewportId(
+            later_hover_source.focused_viewport_id,
+            latent_toggle_tracker.IsKeyToggled(KeyButtons::F),
+            true,
+            17u,
+            0u
+        ) == 0u
+    );
+    (void)latent_toggle_tracker.Finalize(active_policy);
+
     // First physical F release toggles exactly once and is visible to UI before
     // Finalize, allowing policy construction in the same frame.
     WindowInputSourceSnapshot first = MakeSource(1);
