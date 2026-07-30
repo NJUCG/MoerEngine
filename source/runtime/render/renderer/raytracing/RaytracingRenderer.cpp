@@ -440,10 +440,11 @@ struct RaytracingRenderer::RuntimeState {
 RaytracingRenderer::RaytracingRenderer(
     uint2&                        resolution,
     const SharedPtr<EditorConfig> config,
+    SwapchainSurfaceInfo          main_window_surface,
     RuntimeAssets&                runtime_assets,
     RenderProfileCapture*         render_profile_capture
 ) :
-    Renderer(resolution, config, render_profile_capture),
+    Renderer(resolution, config, std::move(main_window_surface), render_profile_capture),
     runtime_assets(runtime_assets),
     scene_render_extent_tracker(resolution),
     runtime_state(MakeUnique<RuntimeState>(*this, scene_render_extent_tracker.GetActiveExtent())) {

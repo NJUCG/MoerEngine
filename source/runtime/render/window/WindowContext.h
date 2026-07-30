@@ -3,7 +3,7 @@
 
 #include "RenderAPI.h"
 
-#include "rhi/RHI.h"
+#include "rhi/RHIWindowSurface.h"
 #include <functional>
 
 namespace Moer {
@@ -35,31 +35,22 @@ struct RENDER_API WindowHandle {
     WindowType* window{nullptr};
 };
 
-struct RENDER_API GuiWindowInitInfo {
-    WindowType* window;
-    bool        b_install_callbacks = true;
-    ERHIType    rhi_type;
-};
-
 struct RENDER_API SurfaceInitInfo {
     SurfaceInitInfo(
-        const ERHIType&    _rhi_type,
         uint32_t           _width,
         uint32_t           _height,
         const std::string& _title,
         bool               _full_screen,
         bool               _visible = true
     ) :
-        rhi_type(_rhi_type),
         width(_width),
         height(_height),
         title(_title),
         b_fullscreen(_full_screen),
         b_visible(_visible) {}
 
-    SurfaceInitInfo() : SurfaceInitInfo(ERHIType::Vulkan, 1920, 1080, "untitled", false) {}
+    SurfaceInitInfo() : SurfaceInitInfo(1920, 1080, "untitled", false) {}
 
-    ERHIType    rhi_type;
     int         width{1280};
     int         height{720};
     std::string title{"MoerEngine"};
@@ -86,11 +77,9 @@ public:
     static void          SetTitle(WindowHandle*, const char* newTitle);
     static void          RequestClose(WindowHandle*);
     static bool          ShouldClose(WindowHandle*);
-    //for dx12 win32 window
-    static void* GetNativeWindow(WindowHandle*);
-    //for vulkan surface creation
-    static void
-    CreateVulkanSurface(void* instance, WindowHandle* window, void* allocation_callback, void* surface);
+    // Captures an immutable native-window identity and surface factory. This
+    // is a Game Thread operation; the returned value can be retained by RT/RHI.
+    static Render::SwapchainSurfaceInfo CreateSwapchainSurfaceInfo(const WindowHandle&);
 
     typedef std::function<void(unsigned int)>                                OnCharFunc;
     typedef std::function<void(int entered)>                                 OnCursorEnterFunc;

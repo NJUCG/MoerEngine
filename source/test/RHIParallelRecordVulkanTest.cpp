@@ -276,6 +276,9 @@ public:
 
     void Recreate(const SwapchainCreateInfo&) override {}
     void Sync() override {}
+    [[nodiscard]] WindowSurfaceIdentity GetCommittedSurfaceIdentity() const noexcept override {
+        return {};
+    }
 };
 
 class SourceSubmissionCapture final {

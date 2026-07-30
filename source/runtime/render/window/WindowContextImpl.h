@@ -7,12 +7,7 @@ class WindowImpl {
 
 public:
     virtual ~WindowImpl() {}
-    // virtual void  SetFocusMode(bool _focused)                          = 0;
-    // virtual void  GetWindowSize(int32_t* width, int32_t* height) const = 0;
-    // virtual void  SetTitle(const char* _new_title)                     = 0;
-    // virtual bool  ShouldClose() const                                  = 0;
     virtual void PollEvents() const = 0;
-    // virtual void* GetNativeWindow() const                              = 0;
     virtual void ShutDown() = 0;
     virtual void Tick()     = 0;
 
@@ -24,7 +19,7 @@ public:
     virtual bool ShouldClose(WindowHandle*) const                                    = 0;
     virtual void ShowMainWindow()                                                    = 0;
 
-    virtual void* GetNativeWindow(WindowHandle*) const = 0;
+    virtual Render::SwapchainSurfaceInfo CreateSwapchainSurfaceInfo(const WindowHandle&) const = 0;
 
     static void OnCharCallback(WindowType* window, unsigned int codepoint);
     static void OnCursorEnterCallback(WindowType* window, int entered);
@@ -55,9 +50,7 @@ protected:
     virtual void       OnWindowContentScaleCallbackImpl(WindowType* window, float xscale, float yscale)   = 0;
     virtual void       OnWindowPosCallbackImpl(WindowType* window, int xpos, int ypos)                    = 0;
     virtual void       OnWindowSizeCallbackImpl(WindowType* window, int width, int height)                = 0;
-    virtual void       OnWindowFocusCallbackImpl(WindowType* window, int focused)                         = 0;
-    virtual void
-    CreateVulkanSurface(void* instance, WindowHandle* window, void* allocation_callback, void* surface) = 0;
+    virtual void       OnWindowFocusCallbackImpl(WindowType* window, int focused) = 0;
 
     void OnChar(WindowType* _type, unsigned int codepoint);
     void OnCursorEnter(WindowType* _type, int entered);

@@ -27,6 +27,8 @@ enum class EVulkanFaultOperation : uint8_t {
     CommandPoolReset,
     QueryPoolCreate,
     QueryPoolResults,
+    SwapchainSurfaceCreate,
+    SwapchainSurfaceQuery,
     SwapchainCreate,
     SwapchainGetImages,
     SwapchainSemaphoreCreate,
@@ -102,6 +104,10 @@ struct VulkanFaultRecord {
             return "QueryPoolCreate";
         case EVulkanFaultOperation::QueryPoolResults:
             return "QueryPoolResults";
+        case EVulkanFaultOperation::SwapchainSurfaceCreate:
+            return "SwapchainSurfaceCreate";
+        case EVulkanFaultOperation::SwapchainSurfaceQuery:
+            return "SwapchainSurfaceQuery";
         case EVulkanFaultOperation::SwapchainCreate:
             return "SwapchainCreate";
         case EVulkanFaultOperation::SwapchainGetImages:

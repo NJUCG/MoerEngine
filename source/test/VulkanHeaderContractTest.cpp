@@ -1,12 +1,16 @@
 // This order is intentional: it reproduces the conflict that occurs when
 // vulkan_core.h declares function prototypes before Volk declares its entry
 // point variables.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <vulkan/vulkan_core.h>
 
 #ifndef VK_NO_PROTOTYPES
 #error "Moer::Render must propagate VK_NO_PROTOTYPES to every consumer."
 #endif
 
+#include "rhi/RHIWindowSurface.h"
 #include "rhi/vulkan/VulkanDebugCallback.h"
 #include "rhi/vulkan/VulkanFault.h"
 #include "rhi/vulkan/VulkanMemoryAllocator.h"

@@ -1427,7 +1427,6 @@ void Engine::Init(
         main_window_visible ? "Preparing the main window" : "Keeping the main window hidden until its first frame"
     );
     WindowContext::Init(SurfaceInitInfo(
-        RenderDevice::Get().GetRHIType(),
         m_editor_config->GetResolution().x,
         m_editor_config->GetResolution().y,
         "MoerEditor",
@@ -1435,6 +1434,10 @@ void Engine::Init(
         main_window_visible
     ));
     m_window_context_initialized = true;
+    m_main_window_surface        = WindowContext::CreateSwapchainSurfaceInfo(*WindowContext::GetMainWindow());
+    if (!m_main_window_surface.IsValid()) {
+        throw std::runtime_error("Failed to capture the main window surface source");
+    }
 
     report_startup("Loading editor resources", "Uploading editor textures and environment assets");
     m_runtime_assets =
@@ -1544,6 +1547,7 @@ void Engine::Run(const EngineHooks& hooks) {
                 m_renderer = MakeUnique<Raster::RasterRenderer>(
                     m_editor_config->GetResolution(),
                     m_editor_config,
+                    m_main_window_surface,
                     m_render_profile_capture.get()
                 );
 
@@ -1551,6 +1555,7 @@ void Engine::Run(const EngineHooks& hooks) {
                 m_renderer = MakeUnique<Raytracing::RaytracingRenderer>(
                     m_editor_config->GetResolution(),
                     m_editor_config,
+                    m_main_window_surface,
                     *m_runtime_assets,
                     m_render_profile_capture.get()
                 );
@@ -1980,6 +1985,7 @@ void Engine::ShutDown() noexcept {
     }
 
     m_runtime_assets.reset(); // 释放RuntimeAssets资源
+    m_main_window_surface = {};
 
     if (m_window_context_initialized) {
         m_window_context_initialized = false;

@@ -4,11 +4,9 @@
 #include "misc/MMemory.h"
 #include "platform/Platform.h"
 #include "rhi/RHI.h"
+#include "rhi/vulkan/VulkanCommon.h"
 #include "window/WindowContext.h"
 
-// 1： define vulkan ahead of glfw
-#include "rhi/vulkan/VulkanPlatform.h"
-// 2
 #include "GLFW/glfw3.h"
 
 #include "IconsFontAwesome6.h"
@@ -22,11 +20,113 @@
 #include <imgui.h>
 
 #include "log/LogSystem.h"
+#include <exception>
+#include <stdexcept>
 #include <string.h>
 
 #include "window/WindowInput.h"
 
 namespace Moer {
+
+struct GLFWWindowSurfaceLeaseState {
+    std::atomic_uint32_t live_surface_leases{0};
+};
+
+namespace {
+
+class GLFWInitTransaction {
+public:
+    explicit GLFWInitTransaction(WindowType*& published_window) : published_window(published_window) {}
+
+    ~GLFWInitTransaction() {
+        if (committed) {
+            return;
+        }
+        if (window != nullptr) {
+            glfwDestroyWindow(window);
+        }
+        published_window = nullptr;
+        glfwTerminate();
+    }
+
+    GLFWInitTransaction(const GLFWInitTransaction&)            = delete;
+    GLFWInitTransaction& operator=(const GLFWInitTransaction&) = delete;
+
+    void Adopt(GLFWwindow* new_window) noexcept {
+        window = new_window;
+    }
+
+    void Commit() noexcept {
+        committed = true;
+    }
+
+private:
+    WindowType*& published_window;
+    GLFWwindow*  window{nullptr};
+    bool         committed{false};
+};
+
+class GLFWWindowSurfaceSource final : public Render::WindowSurfaceSource {
+public:
+    GLFWWindowSurfaceSource(
+        GLFWwindow*                            window,
+        uintptr_t                              platform_window_handle,
+        uint64_t                               generation,
+        SharedPtr<GLFWWindowSurfaceLeaseState> lease_state
+    ) :
+        identity{
+            .window_system          = Render::EWindowSystemType::GLFW,
+            .window_system_handle   = reinterpret_cast<uintptr_t>(window),
+            .platform_window_handle = platform_window_handle,
+            .generation             = generation,
+        },
+        window(window),
+        lease_state(std::move(lease_state)) {
+        this->lease_state->live_surface_leases.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    ~GLFWWindowSurfaceSource() override {
+        lease_state->live_surface_leases.fetch_sub(1, std::memory_order_release);
+    }
+
+    [[nodiscard]] Render::WindowSurfaceIdentity GetIdentity() const noexcept override {
+        return identity;
+    }
+
+    [[nodiscard]] Render::WindowSurfaceCreateResult
+    CreateSurface(ERHIType rhi_type, void* instance, const void* allocation_callbacks, void* surface)
+        const noexcept override {
+        if (rhi_type != ERHIType::Vulkan) {
+            return {
+                .status = Render::EWindowSurfaceCreateStatus::UnsupportedRHI,
+            };
+        }
+        if (window == nullptr || instance == nullptr || surface == nullptr) {
+            return {
+                .status = Render::EWindowSurfaceCreateStatus::InvalidSource,
+            };
+        }
+
+        const VkResult result = glfwCreateWindowSurface(
+            static_cast<VkInstance>(instance),
+            window,
+            static_cast<const VkAllocationCallbacks*>(allocation_callbacks),
+            static_cast<VkSurfaceKHR*>(surface)
+        );
+        return {
+            .status            = result == VK_SUCCESS ? Render::EWindowSurfaceCreateStatus::Success :
+                                                        Render::EWindowSurfaceCreateStatus::NativeFailure,
+            .native_error_code = static_cast<int64_t>(result),
+        };
+    }
+
+private:
+    Render::WindowSurfaceIdentity          identity{};
+    GLFWwindow*                            window{nullptr};
+    SharedPtr<GLFWWindowSurfaceLeaseState> lease_state;
+};
+
+} // namespace
 
 //------------------------call back functions---------------------------
 static void UpdateKeyStateWithActionIsPress(bool& key_state, int action);                   // tool func
@@ -38,7 +138,7 @@ static void FrameBufferSizeCallbackFunc(GLFWwindow* window, int width, int heigh
 static void ScrollCallbackFunc(GLFWwindow* window, double xoffset, double yoffset);
 static void MouseButtonCallbackFunc(GLFWwindow* window, int button, int action, int mode);
 
-GLFWWindowImpl::GLFWWindowImpl() {}
+GLFWWindowImpl::GLFWWindowImpl() : surface_lease_state(MakeShared<GLFWWindowSurfaceLeaseState>()) {}
 GLFWWindowImpl::~GLFWWindowImpl() {}
 void GLFWWindowImpl::PollEvents() const {
     glfwPollEvents();
@@ -46,18 +146,12 @@ void GLFWWindowImpl::PollEvents() const {
 
 void GLFWWindowImpl::Init(const SurfaceInitInfo& info) {
     if (!glfwInit()) {
-        //error log and quit
         LOG_ERROR("Window init fail.");
-        assert(0 && "Window init fail.");
+        throw std::runtime_error("GLFW initialization failed");
     }
+    GLFWInitTransaction init_transaction(main_window_handle.window);
+
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    if (info.rhi_type == ERHIType::D3D12) {
-        InitD3D12();
-    } else if (info.rhi_type == ERHIType::Vulkan) {
-        InitVulkan();
-    } else {
-        assert(0 && "Unknown RHI type, code error.");
-    }
     glfwWindowHint(GLFW_VISIBLE, info.b_visible ? GLFW_TRUE : GLFW_FALSE);
 
     int          width   = info.width;
@@ -69,7 +163,13 @@ void GLFWWindowImpl::Init(const SurfaceInitInfo& info) {
     if (info.b_fullscreen) {
         // 全屏模式
         GLFWmonitor*       fullscreen_monitor = glfwGetPrimaryMonitor();
+        if (fullscreen_monitor == nullptr) {
+            throw std::runtime_error("No primary monitor is available for fullscreen window creation");
+        }
         const GLFWvidmode* mode               = glfwGetVideoMode(fullscreen_monitor);
+        if (mode == nullptr) {
+            throw std::runtime_error("Failed to query the primary monitor video mode");
+        }
         width                                 = mode->width;
         height                                = mode->height;
 
@@ -86,18 +186,28 @@ void GLFWWindowImpl::Init(const SurfaceInitInfo& info) {
     }
 
     GLFWwindow* window = glfwCreateWindow(width, height, info.title.c_str(), monitor, nullptr);
+    init_transaction.Adopt(window);
     // Window hints persist across creations. Restore the normal default so editor platform
     // windows are not accidentally created hidden after a hidden main-window bootstrap.
     glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
+    if (window == nullptr) {
+        const char* description = nullptr;
+        const int   error       = glfwGetError(&description);
+        LOG_ERROR(
+            "Failed to create GLFW window: error={}, description={}",
+            error,
+            description ? description : "<none>"
+        );
+        throw std::runtime_error("Failed to create GLFW window");
+    }
 
     glfwSetWindowUserPointer(window, this);
 
     this->main_window_handle.window = window;
 
-    GuiWindowInitInfo window_info{.window = window, .b_install_callbacks = true, .rhi_type = info.rhi_type};
-
     //register engine io callbacks MARK.. remains problems
     InstallInterface(&main_window_handle);
+    init_transaction.Commit();
 
     //install imgui io callbacks
     // GuiInit(window_info);
@@ -262,8 +372,28 @@ void GLFWWindowImpl::Tick() {
     TickCursorState();
 }
 void GLFWWindowImpl::ShutDown() {
-    // GuiShutDown();
-    glfwDestroyWindow((GLFWwindow*)main_window_handle.window);
+    auto* window = static_cast<GLFWwindow*>(main_window_handle.window);
+    if (window == nullptr) {
+        return;
+    }
+
+    const uint32_t live_surface_leases =
+        surface_lease_state->live_surface_leases.load(std::memory_order_acquire);
+    if (live_surface_leases != 0) {
+        LOG_ERROR(
+            "Refusing to destroy the GLFW window while {} swapchain surface source lease(s) remain.",
+            live_surface_leases
+        );
+        std::terminate();
+    }
+
+    {
+        std::scoped_lock lock(surface_source_mutex);
+        surface_sources.clear();
+    }
+    glfwDestroyWindow(window);
+    main_window_handle.window = nullptr;
+    glfwTerminate();
 }
 
 void GLFWWindowImpl::TickCursorState() {
@@ -311,33 +441,6 @@ void GLFWWindowImpl::SetCursorNormal() {
     WindowInput::Get().cursor_delta_y   = 0.0f;
 }
 
-void GLFWWindowImpl::InitVulkan() {
-    if (!glfwVulkanSupported()) {
-        LOG_ERROR("Vulkan not supported by Winodw System");
-        exit(-1);
-    }
-}
-void GLFWWindowImpl::InitD3D12() {
-#if PLATFORM_WINDOWS
-
-#endif
-}
-// void GLFWWindowImpl::CreateVulkanSurface(void* instance, WindowType* window, void* allocation_callback, void* surface) {
-//     glfwCreateWindowSurface((VkInstance)instance, (GLFWwindow*)window, (const VkAllocationCallbacks*)allocation_callback, (VkSurfaceKHR*)surface);
-// }
-void GLFWWindowImpl::CreateVulkanSurface(
-    void*         instance,
-    WindowHandle* window,
-    void*         allocation_callback,
-    void*         surface
-) {
-    glfwCreateWindowSurface(
-        (VkInstance)instance,
-        (GLFWwindow*)window->window,
-        (const VkAllocationCallbacks*)allocation_callback,
-        (VkSurfaceKHR*)surface
-    );
-}
 void GLFWWindowImpl::SetFocusMode(WindowHandle* _window, bool _focused) {
     glfwSetInputMode(
         (GLFWwindow*)_window->window, GLFW_CURSOR, focused ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL
@@ -402,11 +505,33 @@ void GLFWWindowImpl::ShowMainWindow() {
     }
     glfwShowWindow(window);
 }
-void* GLFWWindowImpl::GetNativeWindow(WindowHandle* _window) const {
+Render::SwapchainSurfaceInfo GLFWWindowImpl::CreateSwapchainSurfaceInfo(const WindowHandle& window) const {
+    if (!IsCurrentlyGameThread()) {
+        LOG_ERROR("Window surface sources may only be captured on the Game Thread.");
+        return {};
+    }
+    auto* glfw_window = static_cast<GLFWwindow*>(window.window);
+    if (glfw_window == nullptr) {
+        return {};
+    }
+
+    std::scoped_lock lock(surface_source_mutex);
+    auto&            weak_source = surface_sources[window.window];
+    if (auto source = weak_source.lock()) {
+        return {.source = std::move(source)};
+    }
+
+    uintptr_t platform_window_handle = 0;
 #if PLATFORM_WINDOWS
-    return glfwGetWin32Window((GLFWwindow*)_window->window);
+    platform_window_handle = reinterpret_cast<uintptr_t>(glfwGetWin32Window(glfw_window));
 #endif
-    return nullptr;
+
+    const uint64_t generation = next_surface_generation.fetch_add(1, std::memory_order_relaxed);
+    auto           source     = MakeShared<GLFWWindowSurfaceSource>(
+        glfw_window, platform_window_handle, generation, surface_lease_state
+    );
+    weak_source = source;
+    return {.source = std::move(source)};
 }
 
 void GLFWWindowImpl::OnCursorEnterCallbackImpl(WindowType* window, int entered) {

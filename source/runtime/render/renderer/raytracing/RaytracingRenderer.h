@@ -22,6 +22,7 @@ public:
     RaytracingRenderer(
         uint2&                        _resolution,
         const SharedPtr<EditorConfig> _config,
+        SwapchainSurfaceInfo          _main_window_surface,
         RuntimeAssets&                _runtime_assets,
         RenderProfileCapture*         _render_profile_capture
     );

@@ -13,8 +13,6 @@ class VulkanWindowsPlatform : public VulkanGenericPlatform {
 public:
     static void GetInstanceLayers(TLayerArray& _layers);
     static void GetDeviceLayers(TLayerArray& _layers) {}
-    // create the platform-specific surface object - required
-    static void CreateSurface(void* _window_handle, VkInstance _instance, VkSurfaceKHR& _surface);
 };
 
 using VulkanPlatform = VulkanWindowsPlatform;
