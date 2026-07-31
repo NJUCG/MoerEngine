@@ -118,7 +118,7 @@ enum class EPresentationSurfaceEnsureResult : uint8_t {
 class RENDER_API PresentationSurface final {
 public:
     PresentationSurface(RenderDevice& device, PresentationSurfaceDesc desc);
-    ~PresentationSurface();
+    ~PresentationSurface() noexcept;
 
     PresentationSurface(const PresentationSurface&)            = delete;
     PresentationSurface& operator=(const PresentationSurface&) = delete;
@@ -138,7 +138,7 @@ public:
     );
 
     void Quiesce();
-    void Release();
+    void Release() noexcept;
 
     [[nodiscard]] bool IsCurrent(const WindowFrameSnapshot& window_frame) const noexcept;
     [[nodiscard]] bool IsPresentable() const noexcept;

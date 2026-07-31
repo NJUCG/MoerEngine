@@ -132,7 +132,7 @@ PresentationSurface::PresentationSurface(RenderDevice& device, PresentationSurfa
     AssertRenderOwner();
 }
 
-PresentationSurface::~PresentationSurface() {
+PresentationSurface::~PresentationSurface() noexcept {
     // Explicit Release() is the normal shutdown path; keep RAII cleanup as an
     // exception-safe fallback for partially constructed renderer owners.
     if (swapchain_ || frame_buffer_) {
@@ -298,10 +298,42 @@ void PresentationSurface::Quiesce() {
     }
 }
 
-void PresentationSurface::Release() {
+void PresentationSurface::Release() noexcept {
     AssertRenderOwner();
+    const auto fallback_to_device_idle =
+        [this](const char* _reason) noexcept {
+            // Recreate must reject an unsafe transition, but teardown cannot
+            // let a cancelled/faulted executor escape an owner destructor.
+            // Device idle is the final lifetime-safe fallback because it
+            // serializes directly with every native queue operation.
+            try {
+                LOG_ERROR(
+                    "[Presentation] targeted drain failed during release; "
+                    "falling back to device idle: {}",
+                    _reason
+                );
+            } catch (...) {
+            }
+            try {
+                device_.WaitIdle();
+            } catch (...) {
+                try {
+                    LOG_ERROR(
+                        "[Presentation] device-idle fallback failed during release"
+                    );
+                } catch (...) {
+                }
+            }
+        };
+
     if (swapchain_ || frame_buffer_) {
-        Quiesce();
+        try {
+            Quiesce();
+        } catch (const std::exception& error) {
+            fallback_to_device_idle(error.what());
+        } catch (...) {
+            fallback_to_device_idle("unknown exception");
+        }
     }
     swapchain_    = nullptr;
     frame_buffer_ = nullptr;
