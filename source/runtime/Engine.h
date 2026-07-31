@@ -22,6 +22,8 @@ class RemoteModule;
 namespace Moer {
 
 class EditorUI;
+class EngineCommandEndpoint;
+class EngineConsoleControl;
 class RuntimeAssets;
 class RenderThreadService;
 
@@ -64,6 +66,8 @@ public:
         return m_editor_config;
     }
 
+    [[nodiscard]] SharedPtr<EngineCommandEndpoint> GetCommandEndpoint() const;
+
 private:
     enum class ERendererSwitchValidationStage : uint8 {
         Disabled,
@@ -98,9 +102,10 @@ private:
     void TickRasterLifecycleValidation(Scene& scene);
     bool ConsumeRendererSwitchValidationReloadRequest();
 
-    SharedPtr<EditorConfig>      m_editor_config;
-    Render::SwapchainSurfaceInfo m_main_window_surface;
-    UniquePtr<RuntimeAssets>     m_runtime_assets;
+    SharedPtr<EditorConfig>         m_editor_config;
+    UniquePtr<EngineConsoleControl> m_console_control;
+    Render::SwapchainSurfaceInfo    m_main_window_surface;
+    UniquePtr<RuntimeAssets>        m_runtime_assets;
 
     UniquePtr<scripting::ScriptHost> m_script_host;
     UniquePtr<remote::RemoteModule>  m_remote_module;

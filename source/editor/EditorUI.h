@@ -11,6 +11,7 @@
 #include "window/WindowInput.h"
 
 #include "inspector_ui/InspectorUI.h"
+#include "console/ConsolePanel.h"
 #include "profile_capture_ui/ProfileCaptureUI.h"
 #include "profile_viewer_ui/ProfileViewerUI.h"
 #include "raster_ui/RasterUI.h"
@@ -91,6 +92,7 @@ public:
     void UnregisterUIFunc(std::string name);
 
 public: // Sub UI
+    ConsolePanel    m_console_panel;
     RasterUI       m_raster_ui;
     RaytracingUI   m_raytracing_ui;
     SceneEditingUI m_scene_editing_ui;
@@ -124,6 +126,7 @@ private:
     bool   m_b_show_inspector             = true;
     bool   m_b_show_config                = true;
     bool   m_b_show_scene_editing         = true;
+    bool   m_b_show_console               = false;
     bool   m_b_show_profile_capture       = false;
     bool   m_b_show_profile_viewer          = false;
     bool   m_b_active_viewport_window_seen = false;

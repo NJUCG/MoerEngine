@@ -270,7 +270,7 @@ void RaytracingUI::ShowConfig() {
     ImGui::Text("Directional Light Config");
     m_config.sun_direction = Normalizef(m_config.sun_direction);
     ImGui::SliderFloat3("Sun Direction", &m_config.sun_direction.x, -1.0f, 1.0f);
-    ImGui::SliderFloat("Exposure", &m_config.exposure, 0.0f, 10.0f);
+    ImGui::SliderFloat("Intensity", &m_config.directional_light_intensity, 0.0f, 10.0f);
 
     ImGui::Separator();
     ImGui::Text("Capture Settings");

@@ -564,10 +564,10 @@ RaytracingRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, co
                 // manufacture dirty scene work every frame.
                 const auto& light = scene.r().get<ecs::CLightDirectional>(light_entity);
                 if (!EqualFloat3(light.color, desired_color) ||
-                    light.intensity != frame_packet.config.exposure) {
+                    light.intensity != frame_packet.config.directional_light_intensity) {
                     scene.Patch<ecs::CLightDirectional>(light_entity, [&](auto& patched_light) {
                         patched_light.color     = desired_color;
-                        patched_light.intensity = frame_packet.config.exposure;
+                        patched_light.intensity = frame_packet.config.directional_light_intensity;
                     });
                 }
 

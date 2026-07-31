@@ -3,6 +3,7 @@
 // 构建编辑器 ImGui Dockspace，协调顶层工具，并跟踪当前活动的渲染视口。
 
 // Runtime
+#include "Engine.h"
 #include "log/LogSystem.h"
 #include "window/WindowInput.h"
 
@@ -67,6 +68,7 @@ EditorUI::EditorUI(
     Engine&                               engine,
     ProfileDump::ProfileDocumentLoader&   profile_document_loader
 ) :
+    m_console_panel(engine.GetCommandEndpoint()),
     m_raster_ui(editor_config->raster_config),
     m_raytracing_ui(editor_config->raytracing_config),
     m_scene_editing_ui(editor_config->scene_test_case_config),
@@ -90,6 +92,7 @@ EditorUI::EditorUI(
         m_b_show_inspector     = window_visibility_settings.inspector;
         m_b_show_config        = window_visibility_settings.config;
         m_b_show_scene_editing = window_visibility_settings.scene_editing;
+        m_b_show_console       = window_visibility_settings.console;
         m_b_show_profile_capture =
             window_visibility_settings.profile_capture;
         m_b_show_profile_viewer = window_visibility_settings.profile_viewer;
@@ -103,6 +106,7 @@ EditorUI::EditorUI(
         m_b_show_inspector     = has_saved_window_settings("Inspector");
         m_b_show_config        = has_saved_window_settings("Configs");
         m_b_show_scene_editing = has_saved_window_settings("Scene Editing");
+        m_b_show_console       = has_saved_window_settings("Console");
         m_b_show_profile_capture =
             has_saved_window_settings("Profile Capture");
         m_b_show_profile_viewer = has_saved_window_settings("Profile Viewer");
@@ -376,6 +380,7 @@ void EditorUI::TickUI(Scene& scene) {
             ImGui::MenuItem("Inspector", nullptr, &m_b_show_inspector);
             ImGui::MenuItem("Configs", nullptr, &m_b_show_config);
             ImGui::MenuItem("Scene Editing", nullptr, &m_b_show_scene_editing);
+            ImGui::MenuItem("Console", nullptr, &m_b_show_console);
             ImGui::MenuItem(
                 "Profile Capture",
                 nullptr,
@@ -391,6 +396,9 @@ void EditorUI::TickUI(Scene& scene) {
         ImGui::EndMenuBar();
     }
     ImGui::End();
+    if (m_b_show_console) {
+        m_console_panel.ShowWindow(&m_b_show_console);
+    }
     if (m_b_show_profile_capture) {
         m_profile_capture_ui.ShowWindow(&m_b_show_profile_capture);
     }
@@ -430,6 +438,8 @@ void EditorUI::TickUI(Scene& scene) {
     };
     const WindowInputSourceSnapshot& pending_input_source =
         m_window_input_tracker.GetPendingSource();
+    const bool console_input_active =
+        m_b_show_console && m_console_panel.IsInputActive();
     const bool any_mouse_button_down =
         pending_input_source.mouse_button_down[MouseButtons::Left] ||
         pending_input_source.mouse_button_down[MouseButtons::Middle] ||
@@ -475,12 +485,21 @@ void EditorUI::TickUI(Scene& scene) {
         // free-look request that activates later from hover alone.
         m_window_input_tracker.ClearKeyToggle(KeyButtons::F);
     }
+    if (console_input_active) {
+        // A docked Console shares the same platform viewport focus as the
+        // Scene/Game panel. Its text input nevertheless owns both keyboard and
+        // mouse for this frame, so revoke any latched scene capture explicitly.
+        m_window_input_tracker.ClearKeyToggle(KeyButtons::F);
+        m_mouse_capture_viewport_id     = 0;
+        m_free_look_capture_viewport_id = 0;
+    }
 
     m_window_input_snapshot = m_window_input_tracker.Finalize(WindowInputPolicy{
         .scene_active =
-            active_viewport_focused &&
+            !console_input_active && active_viewport_focused &&
             (m_mouse_capture_viewport_id != 0 || m_free_look_capture_viewport_id != 0),
-        .viewport_hovered = m_b_active_viewport_hovered,
+        .viewport_hovered     = !console_input_active && m_b_active_viewport_hovered,
+        .force_cursor_visible = console_input_active,
         .viewport_resolution = uint2(
             to_extent_component(m_scene_color_resolution.x),
             to_extent_component(m_scene_color_resolution.y)
@@ -1029,6 +1048,7 @@ void EditorUI::SyncWindowVisibilitySettings() {
     settings.inspector     = m_b_show_inspector;
     settings.config        = m_b_show_config;
     settings.scene_editing = m_b_show_scene_editing;
+    settings.console       = m_b_show_console;
     settings.profile_capture = m_b_show_profile_capture;
     settings.profile_viewer = m_b_show_profile_viewer;
 #if WITH_PROFILE

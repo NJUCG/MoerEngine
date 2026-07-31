@@ -21,6 +21,7 @@ enum class ESubmitStatus : std::uint8_t {
     Accepted,
     Empty,
     QueueFull,
+    Closed,
 };
 
 enum class EProcessStatus : std::uint8_t {
