@@ -192,6 +192,15 @@ set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME WindowFrameSnapshotContract COMMAND $<TARGET_FILE:${test_target}>)
 set_tests_properties(WindowFrameSnapshotContract PROPERTIES TIMEOUT 60)
 
+set(test_target TestWindowPlacementPersistence)
+add_executable(${test_target} "WindowPlacementPersistenceContractTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME WindowPlacementPersistenceContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(WindowPlacementPersistenceContract PROPERTIES TIMEOUT 60)
+
 set(test_target TestPresentationSurface)
 add_executable(${test_target} "PresentationSurfaceContractTest.cpp")
 target_link_libraries(${test_target}

@@ -3,8 +3,10 @@
 
 #include "../WindowContextImpl.h"
 #include "window/WindowContext.h"
+#include "window/WindowPlacementPersistence.h"
 
 #include <atomic>
+#include <filesystem>
 #include <mutex>
 
 namespace Moer {
@@ -35,6 +37,7 @@ public:
 private:
     void SetCursorHide(WindowHandle*);
     void SetCursorNormal(WindowHandle*);
+    void CaptureMainWindowPlacement();
 
     GLFWWindowImpl();
     virtual void Init(const SurfaceInitInfo&) override;
@@ -43,6 +46,10 @@ private:
     bool m_deferred_fullscreen        = false;
     int  m_deferred_fullscreen_width  = 0;
     int  m_deferred_fullscreen_height = 0;
+    bool m_persist_window_placement   = false;
+    bool m_window_placement_valid     = false;
+    Render::WindowPlacement m_window_placement{};
+    std::filesystem::path   m_window_placement_path;
 
     mutable std::mutex                                                                  surface_source_mutex;
     mutable UnorderedMap<WindowType*, std::weak_ptr<const Render::WindowSurfaceSource>> surface_sources;

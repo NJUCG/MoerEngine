@@ -1,6 +1,7 @@
 #include "GLFWWindowImpl.h"
 
 #include "Core.h"
+#include "config/ConfigManager.h"
 #include "misc/MMemory.h"
 #include "platform/Platform.h"
 #include "rhi/RHI.h"
@@ -22,6 +23,7 @@
 #include <exception>
 #include <stdexcept>
 #include <string.h>
+#include <vector>
 
 namespace Moer {
 
@@ -123,6 +125,41 @@ private:
     SharedPtr<GLFWWindowSurfaceLeaseState> lease_state;
 };
 
+void AppendMonitorWorkArea(std::vector<Render::MonitorWorkArea>& work_areas, GLFWmonitor* monitor) {
+    if (monitor == nullptr) {
+        return;
+    }
+
+    int x      = 0;
+    int y      = 0;
+    int width  = 0;
+    int height = 0;
+    glfwGetMonitorWorkarea(monitor, &x, &y, &width, &height);
+    if (width > 0 && height > 0) {
+        work_areas.push_back({
+            .x      = x,
+            .y      = y,
+            .width  = width,
+            .height = height,
+        });
+    }
+}
+
+std::vector<Render::MonitorWorkArea> CaptureMonitorWorkAreas() {
+    std::vector<Render::MonitorWorkArea> work_areas;
+    GLFWmonitor*                         primary_monitor = glfwGetPrimaryMonitor();
+    AppendMonitorWorkArea(work_areas, primary_monitor);
+
+    int           monitor_count = 0;
+    GLFWmonitor** monitors      = glfwGetMonitors(&monitor_count);
+    for (int index = 0; monitors != nullptr && index < monitor_count; ++index) {
+        if (monitors[index] != primary_monitor) {
+            AppendMonitorWorkArea(work_areas, monitors[index]);
+        }
+    }
+    return work_areas;
+}
+
 } // namespace
 
 GLFWWindowImpl::GLFWWindowImpl() : surface_lease_state(MakeShared<GLFWWindowSurfaceLeaseState>()) {}
@@ -141,24 +178,58 @@ void GLFWWindowImpl::Init(const SurfaceInitInfo& info) {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_VISIBLE, info.b_visible ? GLFW_TRUE : GLFW_FALSE);
 
-    int          width   = info.width;
-    int          height  = info.height;
-    GLFWmonitor* monitor = nullptr;
+    int                                    width   = info.width;
+    int                                    height  = info.height;
+    GLFWmonitor*                           monitor = nullptr;
+    std::optional<Render::WindowPlacement> restored_placement;
     m_deferred_fullscreen        = false;
     m_deferred_fullscreen_width  = 0;
     m_deferred_fullscreen_height = 0;
+    m_persist_window_placement   = !info.b_fullscreen;
+    m_window_placement_valid     = false;
+    m_window_placement           = {};
+    m_window_placement_path      = ConfigManager::GetInstance().GetEditorSettingsPath() / "window_state.toml";
+
+    if (m_persist_window_placement) {
+        if (const auto saved_placement = Render::LoadWindowPlacement(m_window_placement_path)) {
+            restored_placement = Render::SanitizeWindowPlacement(*saved_placement, CaptureMonitorWorkAreas());
+            if (restored_placement) {
+                width                    = restored_placement->width;
+                height                   = restored_placement->height;
+                m_window_placement       = *restored_placement;
+                m_window_placement_valid = true;
+                glfwWindowHint(GLFW_POSITION_X, restored_placement->x);
+                glfwWindowHint(GLFW_POSITION_Y, restored_placement->y);
+                glfwWindowHint(GLFW_MAXIMIZED, restored_placement->maximized ? GLFW_TRUE : GLFW_FALSE);
+                LOG_INFO(
+                    "[EditorSettings] Restoring main window: x={}, y={}, width={}, height={}, maximized={}.",
+                    restored_placement->x,
+                    restored_placement->y,
+                    restored_placement->width,
+                    restored_placement->height,
+                    restored_placement->maximized
+                );
+            } else {
+                LOG_WARNING(
+                    "[EditorSettings] Saved main-window placement is not usable on the current displays; "
+                    "using configured defaults."
+                );
+            }
+        }
+    }
+
     if (info.b_fullscreen) {
         // 全屏模式
-        GLFWmonitor*       fullscreen_monitor = glfwGetPrimaryMonitor();
+        GLFWmonitor* fullscreen_monitor = glfwGetPrimaryMonitor();
         if (fullscreen_monitor == nullptr) {
             throw std::runtime_error("No primary monitor is available for fullscreen window creation");
         }
-        const GLFWvidmode* mode               = glfwGetVideoMode(fullscreen_monitor);
+        const GLFWvidmode* mode = glfwGetVideoMode(fullscreen_monitor);
         if (mode == nullptr) {
             throw std::runtime_error("Failed to query the primary monitor video mode");
         }
-        width                                 = mode->width;
-        height                                = mode->height;
+        width  = mode->width;
+        height = mode->height;
 
         if (info.b_visible) {
             monitor = fullscreen_monitor;
@@ -177,6 +248,9 @@ void GLFWWindowImpl::Init(const SurfaceInitInfo& info) {
     // Window hints persist across creations. Restore the normal default so editor platform
     // windows are not accidentally created hidden after a hidden main-window bootstrap.
     glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
+    glfwWindowHint(GLFW_POSITION_X, GLFW_ANY_POSITION);
+    glfwWindowHint(GLFW_POSITION_Y, GLFW_ANY_POSITION);
+    glfwWindowHint(GLFW_MAXIMIZED, GLFW_FALSE);
     if (window == nullptr) {
         const char* description = nullptr;
         const int   error       = glfwGetError(&description);
@@ -189,14 +263,23 @@ void GLFWWindowImpl::Init(const SurfaceInitInfo& info) {
     }
 
     glfwSetWindowUserPointer(window, this);
+    glfwSetWindowMaximizeCallback(window, [](GLFWwindow* callback_window, int maximized) {
+        auto* window_impl = static_cast<GLFWWindowImpl*>(glfwGetWindowUserPointer(callback_window));
+        if (window_impl != nullptr && window_impl->m_persist_window_placement &&
+            window_impl->m_window_placement_valid) {
+            window_impl->m_window_placement.maximized = maximized == GLFW_TRUE;
+        }
+    });
 
     this->main_window_handle.window = window;
+    CaptureMainWindowPlacement();
 
     init_transaction.Commit();
 }
 
 void GLFWWindowImpl::Tick() {
     PollEvents();
+    CaptureMainWindowPlacement();
 }
 void GLFWWindowImpl::ShutDown() {
     auto* window = static_cast<GLFWwindow*>(main_window_handle.window);
@@ -214,6 +297,20 @@ void GLFWWindowImpl::ShutDown() {
         std::terminate();
     }
 
+    CaptureMainWindowPlacement();
+    if (m_persist_window_placement && m_window_placement_valid) {
+        if (Render::SaveWindowPlacement(m_window_placement_path, m_window_placement)) {
+            LOG_INFO(
+                "[EditorSettings] Saved main-window placement to `{}`.", m_window_placement_path.string()
+            );
+        } else {
+            LOG_WARNING(
+                "[EditorSettings] Failed to save main-window placement to `{}`.",
+                m_window_placement_path.string()
+            );
+        }
+    }
+
     {
         std::scoped_lock lock(surface_source_mutex);
         surface_sources.clear();
@@ -221,6 +318,42 @@ void GLFWWindowImpl::ShutDown() {
     glfwDestroyWindow(window);
     main_window_handle.window = nullptr;
     glfwTerminate();
+}
+
+void GLFWWindowImpl::CaptureMainWindowPlacement() {
+    if (!m_persist_window_placement) {
+        return;
+    }
+
+    auto* window = static_cast<GLFWwindow*>(main_window_handle.window);
+    if (window == nullptr || glfwGetWindowMonitor(window) != nullptr ||
+        glfwGetWindowAttrib(window, GLFW_ICONIFIED) == GLFW_TRUE) {
+        return;
+    }
+
+    const bool maximized = glfwGetWindowAttrib(window, GLFW_MAXIMIZED) == GLFW_TRUE;
+    if (!maximized) {
+        int x      = 0;
+        int y      = 0;
+        int width  = 0;
+        int height = 0;
+        glfwGetWindowPos(window, &x, &y);
+        glfwGetWindowSize(window, &width, &height);
+        const Render::WindowPlacement observed{
+            .x         = x,
+            .y         = y,
+            .width     = width,
+            .height    = height,
+            .maximized = false,
+        };
+        if (width >= 320 && height >= 200) {
+            m_window_placement       = observed;
+            m_window_placement_valid = true;
+        }
+    }
+    if (m_window_placement_valid) {
+        m_window_placement.maximized = maximized;
+    }
 }
 
 void GLFWWindowImpl::SetCursorHide(WindowHandle* window) {

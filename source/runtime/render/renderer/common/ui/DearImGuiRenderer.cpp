@@ -27,13 +27,16 @@
 #include "misc/STL.h"
 
 #include "window/WindowContext.h"
+#include "window/WindowPlacementPersistence.h"
 
 #include <atomic>
 #include <cstddef>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <vector>
 
 #include <backends/imgui_impl_glfw.h>
 
@@ -262,19 +265,43 @@ static void InitializeGlfwBackendAndFonts(RenderDevice& _device) {
     AddFont({"msyh.ttc", 20.0f, EFontType::Chinese});
 }
 
-static void LoadImGuiLayout(ImGuiIO& _io) {
-    _io.IniFilename = "imgui.ini";
+static void LoadImGuiLayout(ImGuiIO& _io, std::string& _owned_ini_filename) {
+    const ConfigManager&        config_manager = ConfigManager::GetInstance();
+    const std::filesystem::path settings_path  = config_manager.GetEditorSettingsPath() / "imgui.ini";
+    _owned_ini_filename                        = settings_path.generic_string();
+    _io.IniFilename                            = _owned_ini_filename.c_str();
 
-    std::ifstream settings_file(_io.IniFilename);
+    std::vector<std::filesystem::path> legacy_candidates;
+    std::error_code                    current_path_error;
+    const std::filesystem::path        current_path = std::filesystem::current_path(current_path_error);
+    if (!current_path_error) {
+        legacy_candidates.emplace_back(current_path / "imgui.ini");
+    }
+    legacy_candidates.emplace_back(config_manager.GetWorkspacePath() / "imgui.ini");
+    if (const auto migrated_from = MigrateLegacyImGuiSettings(settings_path, legacy_candidates)) {
+        LOG_INFO(
+            "[EditorSettings] Migrated ImGui layout from `{}` to `{}`.",
+            migrated_from->string(),
+            settings_path.string()
+        );
+    }
+
+    std::ifstream settings_file(settings_path, std::ios::binary);
     if (settings_file.good()) {
         settings_file.close();
         ImGui::LoadIniSettingsFromDisk(_io.IniFilename);
+        LOG_INFO("[EditorSettings] Loaded ImGui layout from `{}`.", settings_path.string());
         return;
     }
 
-    const auto& preset_path = ConfigManager::GetInstance().GetConfig().editor.preset_imgui_config_path;
-    LOG_INFO("No existing imgui.ini file found, loading preset config: {}", preset_path);
-    ImGui::LoadIniSettingsFromDisk(preset_path.c_str());
+    std::filesystem::path preset_path = config_manager.GetConfig().editor.preset_imgui_config_path;
+    if (preset_path.is_relative()) {
+        preset_path = config_manager.GetWorkspacePath() / preset_path;
+    }
+    preset_path                       = std::filesystem::absolute(preset_path).lexically_normal();
+    const std::string preset_filename = preset_path.generic_string();
+    LOG_INFO("[EditorSettings] No saved ImGui layout found; loading preset `{}`.", preset_path.string());
+    ImGui::LoadIniSettingsFromDisk(preset_filename.c_str());
     ImGui::SaveIniSettingsToDisk(_io.IniFilename);
 }
 
@@ -358,7 +385,7 @@ ImGuiRenderBackend::ImGuiRenderBackend(RenderDevice& _device) : device(_device) 
 
     ImGuiIO& io = ImGui::GetIO();
     assert(io.BackendRendererUserData == nullptr && "GUI backend already initialized.");
-    LoadImGuiLayout(io);
+    LoadImGuiLayout(io, imgui_ini_filename);
 
     const auto&    config              = Moer::ConfigManager::GetInstance().GetConfig();
     const uint32_t frames_in_flight    = config.engine.rhi.max_frame_in_flight;

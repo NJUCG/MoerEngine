@@ -29,6 +29,7 @@ public:
     const std::filesystem::path& GetEngineShaderCachedPath() const;
     const std::filesystem::path& GetScenePath() const;
     const std::filesystem::path& GetCachePath() const;
+    const std::filesystem::path& GetEditorSettingsPath() const;
 
     // 仅在配置管理器完成初始化后调用。
     const Config::GlobalConfig& GetConfig() const {
@@ -53,6 +54,7 @@ private:
     std::filesystem::path m_engine_shader_cached_path;
     std::filesystem::path m_scene_path;
     std::filesystem::path m_cache_path;
+    std::filesystem::path m_editor_settings_path;
 };
 
 } // namespace Moer

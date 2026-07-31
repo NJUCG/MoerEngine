@@ -10,6 +10,8 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
 
+#include <string>
+
 #define ImTextureID uint64_t
 
 namespace Moer::Render {
@@ -42,6 +44,7 @@ public:
     RenderDevice&                device;
     UnorderedMap<Texture*, uint> registered_images;
     void*                        backend_data = nullptr;
+    std::string                  imgui_ini_filename;
     uint64_t                     input_capture_sequence = 0;
     WindowInputSourceSnapshot    input_snapshot{};
 };
