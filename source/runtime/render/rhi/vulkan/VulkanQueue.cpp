@@ -21,6 +21,7 @@
 #include "rhi/RHIExecutorBackend.h"
 #include "rhi/RHIIO.h"
 #include "rhi/RHIResource.h"
+#include "rhi/RHIThreadHeartbeat.h"
 
 #include "VulkanCustomCommand.h"
 #include "shader/ShaderPipeline.h"
@@ -36,6 +37,19 @@
 #include <variant>
 namespace Moer::Render {
 namespace {
+
+ERHIHeartbeatDomain HeartbeatDomainForQueue(EQueueType _type) noexcept {
+    switch (_type) {
+        case EQueueType::Graphics:
+            return ERHIHeartbeatDomain::Graphics;
+        case EQueueType::Compute:
+            return ERHIHeartbeatDomain::Compute;
+        case EQueueType::Copy:
+            return ERHIHeartbeatDomain::Copy;
+        default:
+            return ERHIHeartbeatDomain::General;
+    }
+}
 
 std::atomic<const VulkanNativeSubmissionObserver*>
     g_native_submission_observer{nullptr};
@@ -5573,6 +5587,11 @@ WaitEvent VkCommandQueue::Execute(CmdSubmit&& _submit) {
     RHIThreadRoleScope submission_owner(
         ERHIThreadRole::Submission
     );
+    RHIThreadHeartbeatScope heartbeat(
+        ERHIThreadRole::Submission,
+        HeartbeatDomainForQueue(queue.GetType()),
+        ERHIHeartbeatStage::Translate
+    );
     std::unique_lock<std::mutex> lock(exec_mtx);
     const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
     if (thread_profile) {
@@ -6702,6 +6721,11 @@ bool VkCommandQueue::TryExecuteParallel(
             for (size_t chunk_index = 0; chunk_index < runtime.chunks.size(); ++chunk_index) {
                 wave_jobs.emplace_back([&, layer_index, chunk_index] {
                     RHIThreadRoleScope owner_scope(ERHIThreadRole::RecordWorker);
+                    RHIThreadHeartbeatScope heartbeat(
+                        ERHIThreadRole::RecordWorker,
+                        HeartbeatDomainForQueue(queue.GetType()),
+                        ERHIHeartbeatStage::RecordCommands
+                    );
                     ParallelLayerRuntime& job_layer = runtime_layers[layer_index];
                     ParallelChunkRuntime& chunk     = job_layer.chunks[chunk_index];
                     const uint32 now_active =
@@ -8226,6 +8250,11 @@ void VkCommandQueue::Present(SwapchainRef _sc, TextureView _view, PresentReceipt
     RHIThreadRoleScope submission_owner(
         ERHIThreadRole::Submission
     );
+    RHIThreadHeartbeatScope heartbeat(
+        ERHIThreadRole::Submission,
+        HeartbeatDomainForQueue(queue.GetType()),
+        ERHIHeartbeatStage::Present
+    );
     std::unique_lock<std::mutex> lock(exec_mtx);
     const uint64 current_timeline = last_frame.fetch_add(1, std::memory_order_relaxed) + 1;
     if (thread_profile) {
@@ -9438,6 +9467,11 @@ void VkCommandQueue::RhiThreadMain() {
         queue.GetType() == EQueueType::Graphics ? "Moer RHI Thread" : "Moer Compute RHI"
     );
     RHIThreadRoleScope owner_scope(ERHIThreadRole::Submission);
+    RHIThreadHeartbeatScope heartbeat(
+        ERHIThreadRole::Submission,
+        HeartbeatDomainForQueue(queue.GetType()),
+        ERHIHeartbeatStage::WaitingForWork
+    );
     rhi_thread_id.store(Platform::GetCurrentThreadID(), std::memory_order_release);
     LOG_INFO(
         "[Threading] RHIThread id = {}, queue = {}",
@@ -9448,11 +9482,13 @@ void VkCommandQueue::RhiThreadMain() {
     while (true) {
         std::optional<RhiWork> work;
         {
+            heartbeat.Pulse(ERHIHeartbeatStage::WaitingForWork);
             std::unique_lock<std::mutex> lock(rhi_work_mutex);
             rhi_work_cv.wait(lock, [this]() {
                 return !rhi_worker_running || !rhi_work_queue.empty();
             });
             if (!rhi_worker_running && rhi_work_queue.empty()) {
+                heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
                 break;
             }
 
@@ -9461,6 +9497,11 @@ void VkCommandQueue::RhiThreadMain() {
         }
 
         const uint64 serial = std::visit([](const auto& _work) { return _work.serial; }, *work);
+        heartbeat.Pulse(
+            std::holds_alternative<RhiExecuteWork>(*work) ?
+                ERHIHeartbeatStage::Translate :
+                ERHIHeartbeatStage::Present
+        );
         {
             std::unique_lock<std::mutex> lock(exec_mtx);
             auto execute_work = [&] {
@@ -9516,6 +9557,7 @@ void VkCommandQueue::RhiThreadMain() {
         rhi_work_done_cv.notify_all();
     }
 
+    heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
     LOG_INFO("[Threading] RHIThread id = {} stopped", Platform::GetCurrentThreadID());
 }
 
@@ -9705,11 +9747,17 @@ void VkCommandQueue::CompletionThreadMain() {
         queue.GetType() == EQueueType::Graphics ? "Vulkan Gfx Completion" : "Vulkan Compute Completion"
     );
     RHIThreadRoleScope owner_scope(ERHIThreadRole::Completion);
+    RHIThreadHeartbeatScope heartbeat(
+        ERHIThreadRole::Completion,
+        HeartbeatDomainForQueue(queue.GetType()),
+        ERHIHeartbeatStage::WaitingForWork
+    );
 
     bool batch_gpu_success = false;
     bool batch_release_safe = false;
     Array<PendingPresentRetirement> pending_present_retirements{};
     while (true) {
+        heartbeat.Pulse(ERHIHeartbeatStage::PollCompletion);
         for (auto pending = pending_present_retirements.begin();
              pending != pending_present_retirements.end();) {
             if (TryPollPresentRetirement(*pending)) {
@@ -9722,6 +9770,7 @@ void VkCommandQueue::CompletionThreadMain() {
 
         std::optional<QueueEvent> evt;
         {
+            heartbeat.Pulse(ERHIHeartbeatStage::WaitingForWork);
             std::unique_lock<std::mutex> lock(event_mutex);
             if (pending_present_retirements.empty()) {
                 queue_cv.wait(lock, [this]() {
@@ -9737,6 +9786,7 @@ void VkCommandQueue::CompletionThreadMain() {
             }
             if (!completion_worker_running && event_queue.empty() &&
                 pending_present_retirements.empty()) {
+                heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
                 break;
             }
             if (event_queue.empty()) {
@@ -9747,6 +9797,7 @@ void VkCommandQueue::CompletionThreadMain() {
             event_queue.pop_front();
         }
 
+        heartbeat.Pulse(ERHIHeartbeatStage::AwaitCompletion);
         const uint64 event_timeline = evt->timeline;
         std::visit(
             Overload{
@@ -11309,21 +11360,29 @@ FenceRef VkCopyQueue::GetFenceHandle() {
 void VkCopyQueue::ExecuteThread() {
     Platform::SetCurrentThreadName("Vulkan Copy Completion");
     RHIThreadRoleScope owner_scope(ERHIThreadRole::Completion);
+    RHIThreadHeartbeatScope heartbeat(
+        ERHIThreadRole::Completion,
+        ERHIHeartbeatDomain::Copy,
+        ERHIHeartbeatStage::WaitingForWork
+    );
     bool batch_gpu_success = false;
     while (true) {
         std::optional<IOEvent> evt;
         {
+            heartbeat.Pulse(ERHIHeartbeatStage::WaitingForWork);
             std::unique_lock<std::mutex> lock(event_mutex);
             queue_cv.wait(lock, [this]() {
                 return !enabled.load(std::memory_order_acquire) || !event_queue.empty();
             });
             if (!enabled.load(std::memory_order_acquire) && event_queue.empty()) {
+                heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
                 break;
             }
             evt.emplace(std::move(event_queue.front()));
             event_queue.pop_front();
         }
 
+        heartbeat.Pulse(ERHIHeartbeatStage::AwaitCompletion);
         const uint64 event_timeline = evt->timeline;
         std::visit(
             Overload{

@@ -9,11 +9,35 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIExecutor.h"
 #include "rhi/RHIResource.h"
+#include "rhi/RHIThreadHeartbeat.h"
 #include "shader/ShaderResourceManager.h"
 #include "vulkan/VulkanDevice.h"
 #include <cassert>
 
 namespace Moer::Render {
+namespace {
+
+class RHIHeartbeatStopGuard final {
+public:
+    explicit RHIHeartbeatStopGuard(RHIThreadHeartbeat& _heartbeat) noexcept :
+        heartbeat(_heartbeat) {}
+
+    ~RHIHeartbeatStopGuard() noexcept {
+        if (armed) {
+            heartbeat.Stop();
+        }
+    }
+
+    void Dismiss() noexcept {
+        armed = false;
+    }
+
+private:
+    RHIThreadHeartbeat& heartbeat;
+    bool                armed{true};
+};
+
+} // namespace
 
 template<>
 VulkanRHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
@@ -72,22 +96,41 @@ bool RenderDevice::IsInitialized() {
     return Get().impl != nullptr;
 }
 void RenderDevice::Init(DeviceInitInfo&& _info) {
-    switch (_info.rhi_type) {
-        case ERHIType::Vulkan:
-            Get().impl =
-                std::move(UniquePtr<Impl>(MoerNew(VulkanDevice)(ResolveConfigAs<VulkanRHIConfig>(_info))));
-            break;
-        case ERHIType::D3D12:
-            Get().impl =
-                std::move(UniquePtr<Impl>(MoerNew(D3D12Device)(ResolveConfigAs<D3D12RHIConfig>(_info))));
-            //LOG_ERROR("D3D12 is not supported yet");
-            break;
+    RHIThreadHeartbeat& heartbeat = RHIThreadHeartbeat::Get();
+    heartbeat.Start(
+        RHIThreadHeartbeatConfig{
+            .enabled = _info.rhi_heartbeat_enabled,
+            .stall_timeout_ms = _info.rhi_heartbeat_stall_timeout_ms,
+            .poll_interval_ms = _info.rhi_heartbeat_poll_interval_ms,
+        }
+    );
+    RHIHeartbeatStopGuard heartbeat_stop_guard(heartbeat);
+    try {
+        switch (_info.rhi_type) {
+            case ERHIType::Vulkan:
+                Get().impl =
+                    std::move(UniquePtr<Impl>(MoerNew(VulkanDevice)(ResolveConfigAs<VulkanRHIConfig>(_info))));
+                break;
+            case ERHIType::D3D12:
+                Get().impl =
+                    std::move(UniquePtr<Impl>(MoerNew(D3D12Device)(ResolveConfigAs<D3D12RHIConfig>(_info))));
+                //LOG_ERROR("D3D12 is not supported yet");
+                break;
+        }
+        Get().rhi_type = _info.rhi_type;
+        RHIExecutor::StartUp(_info.submission_batch_window);
+        Get().impl->PostInit();
+        heartbeat_stop_guard.Dismiss();
+    } catch (...) {
+        RHIExecutor::ShutDown();
+        Get().impl.reset();
+        throw;
     }
-    Get().rhi_type = _info.rhi_type;
-    RHIExecutor::StartUp(_info.submission_batch_window);
-    Get().impl->PostInit();
 }
 void RenderDevice::Dispose() {
+    RHIHeartbeatStopGuard heartbeat_stop_guard(
+        RHIThreadHeartbeat::Get()
+    );
     RHIExecutor::ShutDown();
     // Pooled RHI objects must die while the backend implementation and its
     // allocators are still alive. In-flight owners have already drained with

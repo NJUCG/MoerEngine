@@ -42,6 +42,9 @@ struct CORE_API GlobalConfig {
             bool parallel_record_profile = false;
             uint parallel_record_min_work_units_per_job = 64;
             uint submission_batch_window = 2;
+            bool rhi_heartbeat_enabled = false;
+            uint rhi_heartbeat_stall_timeout_ms = 5000;
+            uint rhi_heartbeat_poll_interval_ms = 1000;
             uint max_frame_lag           = 0;
         } threading;
 
