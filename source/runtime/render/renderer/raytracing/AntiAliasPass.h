@@ -83,6 +83,63 @@ private:
         TAAPipeline pipeline{};
     };
 
+    struct UploadGraphParameters {
+        DEFINE_RG_BUFFER_ACCESS(
+            constants,
+            RenderGraph::AccessMode::Write,
+            RenderGraph::BufferState::TransferDestination
+        );
+        SharedPtr<RecordingOwner> owner{};
+        PreparedCommand           command{};
+
+        DEFINE_RG_PARAMETER_ACCESS(constants);
+    };
+
+    struct DispatchGraphParameters {
+        DEFINE_RG_BUFFER_ACCESS(
+            constants,
+            RenderGraph::AccessMode::Read,
+            RenderGraph::BufferState::ShaderResource
+        );
+        DEFINE_RG_TEXTURE_ACCESS(
+            hdr_color,
+            RenderGraph::AccessMode::Read,
+            RenderGraph::TextureState::Sampled
+        );
+        DEFINE_RG_TEXTURE_ACCESS(
+            motion,
+            RenderGraph::AccessMode::Read,
+            RenderGraph::TextureState::Sampled
+        );
+        DEFINE_RG_TEXTURE_ACCESS(
+            feedback_read,
+            RenderGraph::AccessMode::Read,
+            RenderGraph::TextureState::Sampled
+        );
+        DEFINE_RG_TEXTURE_ACCESS(
+            resolved_color,
+            RenderGraph::AccessMode::Write,
+            RenderGraph::TextureState::UnorderedAccess
+        );
+        DEFINE_RG_TEXTURE_ACCESS(
+            feedback_write,
+            RenderGraph::AccessMode::Write,
+            RenderGraph::TextureState::UnorderedAccess
+        );
+        SharedPtr<RecordingOwner> owner{};
+        PreparedCommand           command{};
+        RecordResources           resources{};
+
+        DEFINE_RG_PARAMETER_ACCESS(
+            constants,
+            hdr_color,
+            motion,
+            feedback_read,
+            resolved_color,
+            feedback_write
+        );
+    };
+
     PreparedCommand Prepare(
         Params            params,
         bool              prev_view_valid,

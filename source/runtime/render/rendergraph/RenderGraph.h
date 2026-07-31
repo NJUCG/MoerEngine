@@ -4,18 +4,31 @@
 #include "rendergraph/RenderGraphResourcePool.h"
 #include "rhi/RHIExecutor.h"
 
+#include <concepts>
 #include <cstdint>
 #include <functional>
 #include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace Moer::Render {
 
 class RenderGraphCompiler;
 class RenderGraphLowering;
+class RGParameterAccessCollector;
+
+template<typename T>
+concept RGParameterAccessProvider =
+    requires(
+        const std::remove_cvref_t<T>& value,
+        RGParameterAccessCollector&   collector
+    ) {
+        value.DeclareRGAccess(collector);
+    };
 
 /**
  * Typed RDG frontend with an opt-in command-recording schedule.
@@ -914,6 +927,26 @@ public:
         uint32_t             workload = 1
     );
 
+    /**
+     * Declares a command-recording pass from one graph-owned immutable
+     * parameter object. DeclareRGAccess() expands the typed access fields into
+     * this graph's existing PassBuilder contract; policy_setup remains the
+     * explicit home for queue, pipeline, side-effect and recording policy.
+     */
+    template<RGParameterAccessProvider Parameters, typename Record>
+        requires std::invocable<
+            Record&,
+            CommandList&,
+            const std::remove_cvref_t<Parameters>&>
+    PassHandle AddRecordPass(
+        std::string_view name,
+        Parameters&&     parameters,
+        SetupCallback    policy_setup,
+        Record&&         record,
+        PassExecutionClass execution = PassExecutionClass::SerialRecord,
+        uint32_t             workload = 1
+    );
+
     /** Compiles declarations without emitting barriers or recording RHI commands. */
     bool Compile();
 
@@ -1089,3 +1122,5 @@ private:
 };
 
 } // namespace Moer::Render
+
+#include "RenderGraphPassParameters.h"
