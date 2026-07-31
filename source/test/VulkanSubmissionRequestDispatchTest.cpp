@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 
 using namespace Moer::Render::VulkanSubmissionDetail;
@@ -114,6 +115,69 @@ void SyncExceptionAlwaysCompletes() {
     Expect(complete_count == 1, "Sync exception did not release its waiter");
 }
 
+void PresentationDrainExceptionReachesCompletion() {
+    uint32_t           complete_count = 0;
+    uint32_t           reject_count   = 0;
+    std::exception_ptr propagated_failure{};
+    std::vector<EWorkerRequestFailurePhase> failures;
+
+    const WorkerRequestDispatchResult result =
+        DispatchWorkerRequestNoexcept(
+            EWorkerRequestKind::PresentationDrain,
+            [] {
+                throw std::runtime_error(
+                    "injected Presentation drain failure"
+                );
+            },
+            [&] { ++reject_count; },
+            [&] {
+                ++complete_count;
+                Expect(
+                    propagated_failure != nullptr,
+                    "Presentation drain completion ran before failure publication"
+                );
+            },
+            [&](EWorkerRequestFailurePhase _phase,
+                const std::exception_ptr& _failure) {
+                failures.push_back(_phase);
+                if (_phase == EWorkerRequestFailurePhase::Process) {
+                    propagated_failure = _failure;
+                }
+            }
+        );
+
+    Expect(
+        result.failed,
+        "Presentation drain exception was not reported as failed"
+    );
+    Expect(
+        !result.stop,
+        "Presentation drain exception incorrectly stopped the worker"
+    );
+    Expect(
+        reject_count == 0,
+        "Presentation drain exception incorrectly rejected a Submit"
+    );
+    Expect(
+        complete_count == 1,
+        "Presentation drain exception did not release its waiter exactly once"
+    );
+    Expect(
+        failures.size() == 1 &&
+            failures.front() == EWorkerRequestFailurePhase::Process,
+        "Presentation drain process failure was not diagnosed exactly once"
+    );
+    try {
+        std::rethrow_exception(propagated_failure);
+    } catch (const std::runtime_error& error) {
+        Expect(
+            std::string_view(error.what()) ==
+                "injected Presentation drain failure",
+            "Presentation drain completion lost the process exception"
+        );
+    }
+}
+
 void StopExceptionsAlwaysCompleteAndExit() {
     uint32_t complete_count = 0;
     std::vector<EWorkerRequestFailurePhase> failures;
@@ -167,6 +231,7 @@ int main() {
         SubmitExceptionRejectsEveryOutstandingObligation();
         SubmitExceptionPreservesTerminalizedPrefix();
         SyncExceptionAlwaysCompletes();
+        PresentationDrainExceptionReachesCompletion();
         StopExceptionsAlwaysCompleteAndExit();
         FailureReportingCannotEscapeOrSkipRejection();
         std::cout << "Vulkan submission request dispatch tests passed\n";

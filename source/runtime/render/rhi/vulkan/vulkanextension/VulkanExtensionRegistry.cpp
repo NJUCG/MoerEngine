@@ -24,17 +24,29 @@ static constexpr VulkanExtensionDesc vulkan_extension_descs[] = {
         .factory  = nullptr,
     },
     {
+        .kind     = EVulkanExtensionKind::Instance,
+        .name     = VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME,
+        .optional = true,
+        .factory  = nullptr,
+    },
+    {
+        .kind     = EVulkanExtensionKind::Instance,
+        .name     = VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME,
+        .optional = true,
+        .factory  = nullptr,
+    },
+    {
         .kind     = EVulkanExtensionKind::Device,
         .name     = VK_KHR_SWAPCHAIN_EXTENSION_NAME,
         .optional = false,
         .factory  = nullptr,
     },
-    // {
-    //     .kind     = EVulkanExtensionKind::Device,
-    //     .name     = VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME,
-    //     .optional = false,
-    //     .factory  = &CreateVulkanEXTSwapchainMaintenance1Extension,
-    // },
+    {
+        .kind     = EVulkanExtensionKind::Device,
+        .name     = VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME,
+        .optional = true,
+        .factory  = &CreateVulkanEXTSwapchainMaintenance1Extension,
+    },
     {
         .kind     = EVulkanExtensionKind::Device,
         .name     = VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME,
@@ -113,12 +125,6 @@ static constexpr VulkanExtensionDesc vulkan_extension_descs[] = {
     {
         .kind     = EVulkanExtensionKind::Instance,
         .name     = VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
-        .optional = false,
-        .factory  = nullptr,
-    },
-    {
-        .kind     = EVulkanExtensionKind::Instance,
-        .name     = VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME,
         .optional = false,
         .factory  = nullptr,
     },

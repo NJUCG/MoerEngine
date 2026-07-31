@@ -317,6 +317,57 @@ RemoveVulkanQueueLocalSyncWaitObserver(
     const VulkanQueueLocalSyncWaitObserver* _observer
 ) noexcept;
 
+struct VulkanQueueIdleWaitEvent {
+    VulkanOperationContext context{};
+    uint64                 native_queue_handle{0};
+    uint32                 thread_id{0};
+    ERHIThreadRole         thread_role{ERHIThreadRole::Unknown};
+};
+
+using VulkanQueueIdleWaitCallback =
+    void (*)(void*, const VulkanQueueIdleWaitEvent&) noexcept;
+
+struct VulkanQueueIdleWaitObserver {
+    void*                       context{nullptr};
+    VulkanQueueIdleWaitCallback callback{nullptr};
+};
+
+// Fires after Vulkan queue synchronization has been acquired and immediately
+// before vkQueueWaitIdle. Presentation fallback tests use this seam to prove
+// the native wait remains owned by the sole Submission thread.
+[[nodiscard]] RENDER_API bool
+TryInstallVulkanQueueIdleWaitObserver(
+    const VulkanQueueIdleWaitObserver* _observer
+) noexcept;
+[[nodiscard]] RENDER_API bool
+RemoveVulkanQueueIdleWaitObserver(
+    const VulkanQueueIdleWaitObserver* _observer
+) noexcept;
+
+void NotifyVulkanQueueIdleWait(
+    const VulkanOperationContext& _context
+) noexcept;
+
+using VulkanScriptedPresentFenceStatusCallback =
+    VkResult (*)(void*, uint64) noexcept;
+
+struct VulkanScriptedPresentFenceStatusOverrideForTesting {
+    void*                                    context{nullptr};
+    VulkanScriptedPresentFenceStatusCallback callback{nullptr};
+};
+
+// Deterministic WSI-fence observation seam. It is valid only for synthetic
+// Presentation completion probes; production Present batches always query
+// their native VkFence when no override is installed.
+[[nodiscard]] RENDER_API bool
+TryInstallVulkanScriptedPresentFenceStatusOverrideForTesting(
+    const VulkanScriptedPresentFenceStatusOverrideForTesting* _override
+) noexcept;
+[[nodiscard]] RENDER_API bool
+RemoveVulkanScriptedPresentFenceStatusOverrideForTesting(
+    const VulkanScriptedPresentFenceStatusOverrideForTesting* _override
+) noexcept;
+
 using VulkanScriptedQueryPreparationCallback =
     VkResult (*)(void*, EQueueType, uint64, uint32) noexcept;
 

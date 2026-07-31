@@ -4,6 +4,7 @@
 #include "rhi/RHIExecutor.h"
 
 #include <cassert>
+#include <exception>
 
 namespace Moer::Render {
 
@@ -131,7 +132,7 @@ PresentationSurface::PresentationSurface(RenderDevice& device, PresentationSurfa
     AssertRenderOwner();
 }
 
-PresentationSurface::~PresentationSurface() {
+PresentationSurface::~PresentationSurface() noexcept {
     // Explicit Release() is the normal shutdown path; keep RAII cleanup as an
     // exception-safe fallback for partially constructed renderer owners.
     if (swapchain_ || frame_buffer_) {
@@ -173,7 +174,22 @@ EPresentationSurfaceEnsureResult PresentationSurface::EnsureCurrent(
     }
 
     state_.RequestRefresh();
-    Quiesce();
+    try {
+        Quiesce();
+    } catch (const std::exception& error) {
+        LOG_ERROR(
+            "[Presentation] targeted drain failed before recreate: {}",
+            error.what()
+        );
+        state_.Reject();
+        return EPresentationSurfaceEnsureResult::RetryPending;
+    } catch (...) {
+        LOG_ERROR(
+            "[Presentation] targeted drain failed before recreate"
+        );
+        state_.Reject();
+        return EPresentationSurfaceEnsureResult::RetryPending;
+    }
 
     const SwapchainCreateInfo create_info{
         .surface          = surface,
@@ -264,16 +280,60 @@ void PresentationSurface::Quiesce() {
     if (!swapchain_ && !frame_buffer_) {
         return;
     }
-    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
     if (swapchain_) {
-        swapchain_->Sync();
+        const PresentationSurfaceSnapshot& committed =
+            state_.GetCommittedSnapshot();
+        RHIExecutor::Get().DrainPresentation(
+            RHIPresentationDrainTarget{
+                swapchain_,
+                state_.GetCommittedEpoch(),
+                committed.drawable_generation,
+            }
+        );
+    } else {
+        // Defensive partial-construction fallback. A committed presentation
+        // surface always owns a swapchain; only a failed setup path can retain
+        // a framebuffer without one.
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     }
 }
 
-void PresentationSurface::Release() {
+void PresentationSurface::Release() noexcept {
     AssertRenderOwner();
+    const auto fallback_to_device_idle =
+        [this](const char* _reason) noexcept {
+            // Recreate must reject an unsafe transition, but teardown cannot
+            // let a cancelled/faulted executor escape an owner destructor.
+            // Device idle is the final lifetime-safe fallback because it
+            // serializes directly with every native queue operation.
+            try {
+                LOG_ERROR(
+                    "[Presentation] targeted drain failed during release; "
+                    "falling back to device idle: {}",
+                    _reason
+                );
+            } catch (...) {
+            }
+            try {
+                device_.WaitIdle();
+            } catch (...) {
+                try {
+                    LOG_ERROR(
+                        "[Presentation] device-idle fallback failed during release"
+                    );
+                } catch (...) {
+                }
+            }
+        };
+
     if (swapchain_ || frame_buffer_) {
-        Quiesce();
+        try {
+            Quiesce();
+        } catch (const std::exception& error) {
+            fallback_to_device_idle(error.what());
+        } catch (...) {
+            fallback_to_device_idle("unknown exception");
+        }
     }
     swapchain_    = nullptr;
     frame_buffer_ = nullptr;

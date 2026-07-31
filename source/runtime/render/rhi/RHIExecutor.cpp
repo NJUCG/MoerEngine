@@ -1028,22 +1028,30 @@ struct RecordingSubmissionPayload {
 
 class HandoffSyncCompletion final {
 public:
-    void Signal() noexcept {
+    void Signal(std::exception_ptr _failure = {}) noexcept {
         {
             std::lock_guard lock(mutex);
+            failure  = std::move(_failure);
             complete = true;
         }
         cv.notify_all();
     }
 
-    void Wait() noexcept {
+    void Wait() {
+        std::exception_ptr wait_failure{};
         std::unique_lock lock(mutex);
         cv.wait(lock, [this] { return complete; });
+        wait_failure = failure;
+        lock.unlock();
+        if (wait_failure) {
+            std::rethrow_exception(wait_failure);
+        }
     }
 
 private:
     std::mutex              mutex;
     std::condition_variable cv;
+    std::exception_ptr      failure{};
     bool                    complete{false};
 };
 
@@ -1210,6 +1218,17 @@ public:
             RenderDevice::Get().GetCopyQueue().Sync(copy_timeline);
         }
         return MakeCompletedBackendEvent();
+    }
+
+    GraphEventRef DrainPresentation(
+        RHIPresentationDrainTarget _target
+    ) override {
+        // The legacy backend has no independent WSI completion lane. Preserve
+        // correctness by degrading the scoped lifecycle boundary to its
+        // existing graphics Present sync. Vulkan overrides this with a
+        // generation-aware per-surface frontier.
+        (void)_target;
+        return Sync(ERHISyncDepth::Present);
     }
 
     void Flush(ERHIFlushDepth) override {
@@ -2269,10 +2288,72 @@ void RHIExecutor::Sync(ERHISyncDepth _depth) {
     completion->Wait();
 }
 
+void RHIExecutor::DrainPresentation(
+    RHIPresentationDrainTarget _target
+) {
+    if (RejectOwnedThreadBlockingCall("DrainPresentation")) {
+        throw std::logic_error(
+            "Presentation drain cannot block on an RHI owner thread"
+        );
+    }
+    if (!_target.IsValid()) {
+        LOG_ERROR(
+            "[RHIExecutor] rejected an invalid Presentation drain target"
+        );
+        throw std::invalid_argument(
+            "invalid Presentation drain target"
+        );
+    }
+
+    auto completion = std::make_shared<HandoffSyncCompletion>();
+    recording_handoff.RouteReady(RHIExecutorRecordingHandoffWork{
+        .prerequisites = {},
+        .resolve =
+            [this, target = std::move(_target), completion](
+                ERHIRecordingHandoffResult _result
+            ) mutable {
+                try {
+                    if (_result !=
+                        ERHIRecordingHandoffResult::Consume) {
+                        throw std::runtime_error(
+                            "Presentation drain was cancelled before backend publication"
+                        );
+                    }
+                    DrainPresentationReady(std::move(target));
+                    completion->Signal();
+                } catch (...) {
+                    completion->Signal(std::current_exception());
+                }
+            },
+    });
+    completion->Wait();
+}
+
 void RHIExecutor::SyncReady(ERHISyncDepth _depth) {
+    SyncOrDrainReady(_depth, std::nullopt);
+}
+
+void RHIExecutor::DrainPresentationReady(
+    RHIPresentationDrainTarget _target
+) {
+    SyncOrDrainReady(
+        ERHISyncDepth::Present,
+        std::optional<RHIPresentationDrainTarget>(std::move(_target))
+    );
+}
+
+void RHIExecutor::SyncOrDrainReady(
+    ERHISyncDepth _depth,
+    std::optional<RHIPresentationDrainTarget> _presentation_target
+) {
     {
         std::lock_guard lock(submit_mutex);
         if (lifecycle_state != ELifecycleState::Running) {
+            if (_presentation_target) {
+                throw std::runtime_error(
+                    "Presentation drain rejected while RHIExecutor is not running"
+                );
+            }
             return;
         }
     }
@@ -2340,25 +2421,48 @@ void RHIExecutor::SyncReady(ERHISyncDepth _depth) {
     }
 
     if (backend_creation_failure) {
-        ReportBackendCreationFailure("Sync", backend_creation_failure);
+        ReportBackendCreationFailure(
+            _presentation_target ? "DrainPresentation" : "Sync",
+            backend_creation_failure
+        );
         FinalizeRejectedBackendBatch(
             std::move(failed_batch), "backend creation failed while synchronizing"
         );
+        if (_presentation_target) {
+            std::rethrow_exception(backend_creation_failure);
+        }
         return;
     }
     if (backend_publication_failure) {
         ReportBackendPublicationFailure(
-            "Sync",
+            _presentation_target ? "DrainPresentation" : "Sync",
             backend_publication_failure
         );
         FinalizeRejectedBackendBatch(
             std::move(failed_batch),
             "backend publication failed while synchronizing"
         );
+        if (_presentation_target) {
+            std::rethrow_exception(backend_publication_failure);
+        }
         return;
     }
 
-    GraphEventRef completion = backend ? backend->Sync(_depth) : GraphEventRef{};
+    GraphEventRef completion{};
+    if (backend) {
+        completion = _presentation_target ?
+                         backend->DrainPresentation(
+                             std::move(*_presentation_target)
+                         ) :
+                         backend->Sync(_depth);
+    } else if (
+        _presentation_target &&
+        _presentation_target->completion_state->HasOutstanding()
+    ) {
+        throw std::runtime_error(
+            "Presentation drain has outstanding WSI work but no published backend"
+        );
+    }
     if (completion) {
         completion->Wait(EThread::UNKNOWN_THREAD);
     }

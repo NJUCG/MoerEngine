@@ -12,8 +12,6 @@
 #include "VulkanFault.h"
 #include "VulkanPlatform.h"
 #include <atomic>
-#include <mutex>
-#include <thread>
 namespace Moer::Render {
 VkSurfaceFormatKHR      ChooseSwapSurfaceFormat(
          const Array<VkSurfaceFormatKHR>& _available_formats,
@@ -37,6 +35,13 @@ public:
             return image_index != UINT32_MAX;
         }
     };
+    struct PresentResult {
+        VulkanOperationResult outcome{};
+        VkFence               completion_fence{VK_NULL_HANDLE};
+        bool                  accepted{false};
+        bool                  wsi_enqueued{false};
+        bool                  uses_present_fence{false};
+    };
     friend VkCommandQueue;
     VkSwapchain(RenderDevice::Impl& _device, const SwapchainCreateInfo& _info);
     ~VkSwapchain();
@@ -49,13 +54,13 @@ public:
     );
     TextureView                         GetSwapchainImage(uint _index);
     VkSemaphore                         GetRenderFinishedFence(uint _image_index);
-    VulkanOperationResult Present(
+    PresentResult Present(
         VkQueue _queue,
         uint    _image_index,
         uint64  _timeline,
-        uint64  _work_serial
+        uint64  _work_serial,
+        const PresentationCompletionTicket& _completion
     );
-    void                                Sync() override;
     [[nodiscard]] bool IsPresentationReady() const noexcept override {
         return handle != VK_NULL_HANDLE &&
                surface != VK_NULL_HANDLE &&
@@ -69,7 +74,9 @@ public:
     }
 
     bool               WaitFrameInFlight();
-    bool               WaitFrameInFlight(uint64 _image_idx);
+    PresentationCompletionTicket ReservePresentCompletion(
+        PresentationCompletionIdentity _identity
+    );
     VkFence            GetInFlightFence(uint64 _image_idx);
     VkSurfaceFormatKHR GetSurfaceFormat() const {
         return fmt;
@@ -92,13 +99,15 @@ public:
 
 private:
     bool PreparePresentFence(uint64 _present_idx);
-    void OnFinishPresent(uint64 _image_idx);
-    void EnqueuePresent(uint64 _present_idx);
+
+    struct PresentFenceSlot {
+        PresentationCompletionTicket completion{};
+        uint64                       generation{0};
+    };
 
 private:
-    Array<std::jthread> present_threads;
-    std::atomic<uint>   cur_present_cnt                  = 0;
-    bool                native_surface_recreate_pending_ = false;
+    Array<PresentFenceSlot> present_fence_slots{};
+    bool                    native_surface_recreate_pending_ = false;
 };
 } // namespace Moer::Render
 

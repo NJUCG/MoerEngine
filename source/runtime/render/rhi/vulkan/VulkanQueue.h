@@ -28,6 +28,7 @@
 namespace Moer::Render {
 class CmdReorderer;
 struct FunctionTable;
+struct RHIPresentationDrainTarget;
 
 static constexpr uint s_queue_max_frame_in_flight = 3;
 static constexpr uint s_query_max_storage         = 8 * 64;
@@ -423,7 +424,12 @@ struct VulkanPresentCompletionBatch {
         UniquePtr<VulkanPresentor>&&       _presentor,
         SwapchainRef&&                     _swapchain,
         TextureRef&&                       _source_texture,
-        Array<RHIResource*>&&              _deferred_releases
+        Array<RHIResource*>&&              _deferred_releases,
+        PresentationCompletionTicket       _presentation_completion,
+        VkFence                            _wsi_completion_fence,
+        bool                               _wsi_enqueued,
+        bool                               _uses_present_fence,
+        bool _scripted_fence_status_allowed = false
     ) noexcept :
         outcome(_outcome),
         context(_context),
@@ -433,7 +439,16 @@ struct VulkanPresentCompletionBatch {
         presentor(std::move(_presentor)),
         swapchain(std::move(_swapchain)),
         source_texture(std::move(_source_texture)),
-        deferred_releases(std::move(_deferred_releases)) {}
+        deferred_releases(std::move(_deferred_releases)),
+        presentation_completion(
+            std::move(_presentation_completion)
+        ),
+        wsi_completion_fence(_wsi_completion_fence),
+        wsi_enqueued(_wsi_enqueued),
+        uses_present_fence(_uses_present_fence),
+        scripted_fence_status_allowed(
+            _scripted_fence_status_allowed
+        ) {}
 
     VulkanPresentCompletionBatch(const VulkanPresentCompletionBatch&) = delete;
     VulkanPresentCompletionBatch& operator=(const VulkanPresentCompletionBatch&) = delete;
@@ -451,6 +466,26 @@ struct VulkanPresentCompletionBatch {
     SwapchainRef                    swapchain;
     TextureRef                      source_texture;
     Array<RHIResource*>             deferred_releases;
+    PresentationCompletionTicket    presentation_completion{};
+    VkFence                         wsi_completion_fence{VK_NULL_HANDLE};
+    bool                            wsi_enqueued{false};
+    bool                            uses_present_fence{false};
+    bool                            scripted_fence_status_allowed{false};
+};
+
+struct VulkanPresentationCompletionProbeForTesting {
+    VulkanPresentationCompletionProbeForTesting(
+        SwapchainRef                 _swapchain,
+        PresentationCompletionTicket _completion,
+        bool                         _uses_present_fence
+    ) noexcept :
+        swapchain(std::move(_swapchain)),
+        completion(std::move(_completion)),
+        uses_present_fence(_uses_present_fence) {}
+
+    SwapchainRef                 swapchain{};
+    PresentationCompletionTicket completion{};
+    bool                         uses_present_fence{false};
 };
 
 struct VulkanCompletionMarker {};
@@ -461,6 +496,7 @@ public:
         VulkanSubmissionEvent,
         VulkanSubmitCompletionBatch,
         VulkanPresentCompletionBatch,
+        VulkanPresentationCompletionProbeForTesting,
         UniquePtr<VulkanAllocator>,
         VulkanAllocatorBatch,
         VulkanDescriptorPushLease,
@@ -596,6 +632,16 @@ public:
     ) override;
     void        Sync() override;
     ProfileData GetProfilerEntry() override;
+    [[nodiscard]] RENDER_API bool
+    EnqueuePresentationCompletionProbeForTesting(
+        SwapchainRef                 _swapchain,
+        PresentationCompletionTicket _completion,
+        bool                         _uses_present_fence
+    );
+    [[nodiscard]] RENDER_API bool
+    RegisterPresentationCompletionStateForShutdownProbeForTesting(
+        const PresentationCompletionStateRef& _state
+    );
 
     void SetQueueSubmitMutex(std::mutex* _mutex) { queue.SetSubmitMutex(_mutex); }
 
@@ -875,7 +921,46 @@ private:
         SwapchainRef&&                     _swapchain,
         TextureRef&&                       _source_texture,
         Array<RHIResource*>&&              _deferred_releases,
-        uint64                             _timeline
+        uint64                             _timeline,
+        PresentationCompletionTicket       _presentation_completion,
+        VkFence                            _wsi_completion_fence,
+        bool                               _wsi_enqueued,
+        bool                               _uses_present_fence
+    ) noexcept;
+    void                       RegisterPresentationCompletionState(
+        const PresentationCompletionStateRef& _state
+    );
+    [[nodiscard]] PresentationDrainPoint FreezePresentationDrain(
+        const RHIPresentationDrainTarget& _target
+    );
+    [[nodiscard]] Array<PresentationDrainPoint>
+    FreezeAllPresentationDrains();
+    void                       ResolvePresentationQueueIdleFallback(
+        const PresentationDrainPoint& _point
+    );
+
+    struct PendingPresentRetirement {
+        VulkanPresentCompletionBatch batch;
+        bool                         gpu_success{false};
+        bool                         release_safe{false};
+
+        PendingPresentRetirement(
+            VulkanPresentCompletionBatch&& _batch,
+            bool                            _gpu_success,
+            bool                            _release_safe
+        ) noexcept :
+            batch(std::move(_batch)),
+            gpu_success(_gpu_success),
+            release_safe(_release_safe) {}
+    };
+
+    [[nodiscard]] bool TryPollPresentRetirement(
+        PendingPresentRetirement& _pending
+    ) noexcept;
+    void                       FinalizePresentRetirement(
+        VulkanPresentCompletionBatch& _batch,
+        bool                          _gpu_success,
+        bool                          _release_safe
     ) noexcept;
     UniquePtr<VulkanAllocator> GetAllocator();
     UniquePtr<VulkanPresentor> GetPresentor();
@@ -958,6 +1043,8 @@ private:
         EExecutionOwnershipMode::Unclaimed
     };
     std::atomic_bool runtime_dependency_waits_enabled{true};
+    Array<std::weak_ptr<PresentationCompletionState>>
+                       active_presentation_completion_states{};
     std::jthread completion_thread;
     std::jthread rhi_thread;
     Array<UniquePtr<VulkanAllocator>> allocator_quarantine;

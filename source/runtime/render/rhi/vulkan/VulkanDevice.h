@@ -296,6 +296,10 @@ public:
         const VulkanOperationContext& _context
     );
     VkResult WaitQueueIdle(VkQueue _queue, const VulkanOperationContext& _context);
+    VkResult GetFenceStatus(
+        VkFence _fence,
+        const VulkanOperationContext& _context
+    );
     VkResult ResetCommandPool(VkCommandPool _pool, const VulkanOperationContext& _context);
     VkResult ResetFence(VkFence _fence, const VulkanOperationContext& _context);
     using FaultAdmissionLock = std::unique_lock<std::shared_mutex>;
@@ -367,6 +371,7 @@ private:
     uint32                    parallel_record_min_work_units_per_job = 64;
     uint64                    parallel_record_worker_throw_trigger = 0;
     uint64                    present_submit_fault_trigger = 0;
+    bool                      surface_maintenance1_enabled = false;
     std::atomic<uint64>       present_submit_attempts{0};
 
     std::atomic<EVulkanFaultPublishState> fault_state{EVulkanFaultPublishState::Healthy};

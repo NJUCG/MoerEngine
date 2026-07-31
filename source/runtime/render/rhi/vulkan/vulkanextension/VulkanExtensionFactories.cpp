@@ -22,6 +22,16 @@ public:
         AddToPNext(_gpu_features2, m_swapchain_maintenance1_features);
     }
 
+    void PostGpuFeatures(
+        VulkanOptionalDeviceExtensions& _gpu_extensions
+    ) override {
+        m_is_usable =
+            m_swapchain_maintenance1_features.swapchainMaintenance1 ==
+            VK_TRUE;
+        _gpu_extensions.m_has_ext_swapchain_maintenance1 =
+            m_is_usable;
+    }
+
     void PreCreateDevice(VkDeviceCreateInfo& _device_create_info) override {
         if (m_is_usable && m_is_enabled) {
             AddToPNext(_device_create_info, m_swapchain_maintenance1_features);

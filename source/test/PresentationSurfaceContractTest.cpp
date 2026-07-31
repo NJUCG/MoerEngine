@@ -3,8 +3,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <type_traits>
+#include <utility>
 
 using namespace Moer::Render;
+
+static_assert(std::is_nothrow_destructible_v<PresentationSurface>);
+static_assert(noexcept(std::declval<PresentationSurface&>().Release()));
 
 namespace {
 

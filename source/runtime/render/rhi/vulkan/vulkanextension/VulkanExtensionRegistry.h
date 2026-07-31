@@ -3,11 +3,13 @@
 
 #include <span>
 
+#include "RenderAPI.h"
 #include "VulkanExtension.h"
 
 namespace Moer::Render {
 
-std::span<const VulkanExtensionDesc> GetVulkanExtensionDescs();
+RENDER_API std::span<const VulkanExtensionDesc>
+GetVulkanExtensionDescs();
 
 } // namespace Moer::Render
 

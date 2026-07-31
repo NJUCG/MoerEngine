@@ -45,6 +45,22 @@ struct VulkanExtensionDesc {
     TVulkanDeviceExtensionFactory factory  = nullptr;
 };
 
+[[nodiscard]] constexpr bool CanEnableVulkanSurfaceMaintenance1(
+    bool _surface_maintenance1_supported,
+    bool _surface_capabilities2_supported
+) noexcept {
+    return _surface_maintenance1_supported &&
+           _surface_capabilities2_supported;
+}
+
+[[nodiscard]] constexpr bool CanEnableVulkanSwapchainMaintenance1(
+    bool _surface_maintenance1_enabled,
+    bool _swapchain_maintenance1_supported
+) noexcept {
+    return _surface_maintenance1_enabled &&
+           _swapchain_maintenance1_supported;
+}
+
 class VulkanExtensionBase {
 public:
     VulkanExtensionBase(std::string_view _ext_name) : m_extension_name(_ext_name), m_is_enabled(false) {}
@@ -75,6 +91,7 @@ public:
     virtual ~VulkanInstanceExtension() = default;
 
     static TExtensionArray GetMERequiredInstanceExtensions();
+    static TExtensionArray GetMEOptionalInstanceExtensions();
 };
 
 class VulkanDeviceExtension : public VulkanExtensionBase {
@@ -171,6 +188,7 @@ public:
 
     // optional extensions
     bool m_has_ext_descriptor_buffer                       = false;
+    bool m_has_ext_swapchain_maintenance1                  = false;
     bool m_has_khr_acceleration_structure                  = false;
     bool m_has_khr_ray_tracing_pipeline                    = false;
     bool m_has_khr_ray_query                               = false;

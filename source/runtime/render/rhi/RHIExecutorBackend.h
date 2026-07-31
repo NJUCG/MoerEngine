@@ -74,6 +74,43 @@ struct RHIPresentRequest {
         receipt(std::move(_receipt)) {}
 };
 
+// Strong, generation-aware lifecycle target for one PresentationSurface.
+// The Render owner publishes this control request after all older Present
+// packets. The backend freezes the matching completion frontier only when the
+// sole Submission owner consumes it, so later frames and unrelated surfaces
+// cannot extend the drain.
+struct RHIPresentationDrainTarget {
+    SwapchainRef                   swapchain{};
+    PresentationCompletionStateRef completion_state{};
+    uint64                         state_instance_id{0};
+    uint64                         presentation_epoch{0};
+    uint64                         drawable_generation{0};
+
+    RHIPresentationDrainTarget() = default;
+
+    RHIPresentationDrainTarget(
+        SwapchainRef _swapchain,
+        uint64       _presentation_epoch,
+        uint64       _drawable_generation
+    ) :
+        swapchain(std::move(_swapchain)),
+        completion_state(
+            swapchain ? swapchain->GetPresentationCompletionState() :
+                        PresentationCompletionStateRef{}
+        ),
+        state_instance_id(
+            completion_state ? completion_state->GetInstanceId() : 0
+        ),
+        presentation_epoch(_presentation_epoch),
+        drawable_generation(_drawable_generation) {}
+
+    [[nodiscard]] bool IsValid() const noexcept {
+        return swapchain && completion_state &&
+               state_instance_id != 0 &&
+               completion_state->GetInstanceId() == state_instance_id;
+    }
+};
+
 struct RHIBackendSubmissionBatchEntry {
     EQueueType queue{EQueueType::Ignore};
     CmdSubmit  submit;
@@ -117,6 +154,9 @@ public:
     // backend must safely linearize Sync against later Enqueue/Flush calls.
     virtual void          Enqueue(RHIBackendSubmissionBatch&& _batch) = 0;
     virtual GraphEventRef Sync(ERHISyncDepth _depth = ERHISyncDepth::RHI) = 0;
+    virtual GraphEventRef DrainPresentation(
+        RHIPresentationDrainTarget _target
+    ) = 0;
     virtual void          Flush(ERHIFlushDepth _depth = ERHIFlushDepth::SubmitGPU) = 0;
     // Publish non-blocking cancellation before RHIExecutor waits for
     // concurrent Sync callers. Backends without cancellable host waits may
