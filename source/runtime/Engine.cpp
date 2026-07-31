@@ -2,6 +2,7 @@
 
 // Runtime
 #include "config/ConfigManager.h"
+#include "misc/Assert.h"
 #include "misc/ScopedLogTimer.h"
 #include "remote/RemoteConfig.h"
 #include "remote/RemoteModule.h"
@@ -1168,6 +1169,7 @@ void Engine::Init(
     bool                           main_window_visible,
     const StartupProgressCallback& on_startup_progress
 ) {
+    static_cast<void>(Platform::InitializeCrashDiagnostics());
     ScopedLogTimer startup_timer("[Startup][Engine] Engine::Init total");
 
     bool startup_logging_ready = false;
@@ -1572,7 +1574,13 @@ void Engine::Run(const EngineHooks& hooks) {
                 );
 
             } else {
-                assert(false && "Unknown render method");
+                MOER_ASSERT(
+                    false,
+                    "Unknown render method during renderer creation: {}",
+                    static_cast<std::uint32_t>(
+                        m_editor_config->selected_render_method
+                    )
+                );
             }
         };
 
@@ -1589,7 +1597,11 @@ void Engine::Run(const EngineHooks& hooks) {
 
         if (use_render_thread) {
             m_render_thread_service->RunAndWait(std::move(create_renderer));
-            assert(m_renderer && m_renderer->SupportsSynchronizedRenderThread());
+            MOER_ASSERT(
+                m_renderer &&
+                    m_renderer->SupportsSynchronizedRenderThread(),
+                "Render-thread mode requires a synchronized renderer"
+            );
 
             if (runtime_hooks.on_startup_progress && !m_first_main_present_notified) {
                 runtime_hooks.on_startup_progress(
@@ -1651,7 +1663,13 @@ void Engine::Run(const EngineHooks& hooks) {
                 raytracing_renderer->Shutdown(runtime_hooks);
 
             } else {
-                assert(false && "Unknown render method");
+                MOER_ASSERT(
+                    false,
+                    "Unknown render method during renderer shutdown: {}",
+                    static_cast<std::uint32_t>(
+                        m_editor_config->selected_render_method
+                    )
+                );
             }
         } else {
             create_renderer();

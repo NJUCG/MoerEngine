@@ -24,7 +24,10 @@ void RenderThreadMain(Event* _is_bound_to_taskgraph_event) {
     if (_is_bound_to_taskgraph_event) {
         _is_bound_to_taskgraph_event->Trigger();
     }
-    assert(IsRenderThreadInitialized() && "render thread not set");
+    MOER_ASSERT(
+        IsRenderThreadInitialized(),
+        "Render thread is not initialized before RenderThreadMain"
+    );
     LOG_INFO("[RENDER THREAD] thread id:{} executing", GetRenderThreadId());
     TaskGraph::GetInterface().ProcessThreadUntilReturn(EThread::ERenderThread);
     LOG_INFO("[RENDER THREAD] thread id:{} end", GetRenderThreadId());
@@ -62,7 +65,10 @@ private:
 };
 
 void StartRenderThread() {
-    assert(IsCurrentlyGameThread() && "Render thread must be started from the game thread.");
+    MOER_ASSERT(
+        IsCurrentlyGameThread(),
+        "Render thread must be started from the game thread"
+    );
     if (IsRenderThreadRunning()) {
         LOG_WARNING("[Threading] Render thread is already running.");
         return;
@@ -83,7 +89,10 @@ void StartRenderThread() {
 
 void StopRenderThread() {
 
-    assert(IsCurrentlyGameThread() && "Render thread must be stopped from the game thread.");
+    MOER_ASSERT(
+        IsCurrentlyGameThread(),
+        "Render thread must be stopped from the game thread"
+    );
     if (!IsRenderThreadRunning()) {
         LOG_WARNING("[Threading] Render thread is already stopped.");
         return;
@@ -95,9 +104,12 @@ void StopRenderThread() {
     //                                 .ConstructAndDispatchWhenReady(EThread::ERenderThread);
     auto return_event = GraphTask<ReturnGraphTask>::Create(EThread::ERenderThread).Dispatch();
     //not sure, game thread tasks should not be executing, because we are currently on Game Thread
-    assert(
-        !TaskGraph::GetInterface().IsThreadProcessingTask(EThread::EMainThread) &&
-        "On Game Thread while Game Thread Tasks are being executing"
+    MOER_ASSERT(
+        !TaskGraph::GetInterface().IsThreadProcessingTask(
+            EThread::EMainThread
+        ),
+        "Game thread must not process main-thread tasks while stopping the "
+        "render thread"
     );
     TaskGraph::GetInterface().WaitUntilTaskComplete(return_event, EThread::EMainThread);
 
@@ -113,9 +125,9 @@ void ShutDownRenderThread() {}
 
 void RestartRenderThread() {
     LOG_INFO("Restarting Render Thread.");
-    assert(
-        IsGameThreadInitialized() && IsCurrentlyGameThread() &&
-        "Render Thread Control is only allowed in Game Thread."
+    MOER_ASSERT(
+        IsGameThreadInitialized() && IsCurrentlyGameThread(),
+        "Render thread control is only allowed on the initialized game thread"
     );
 
     bool b_render_thread_not_shut_down = g_render_thread && g_render_thread_runnable;
@@ -124,9 +136,9 @@ void RestartRenderThread() {
 }
 
 void SuspendRenderThread(bool _restart_later) {
-    assert(
-        IsGameThreadInitialized() && IsCurrentlyGameThread() &&
-        "Render Thread Control is only allowed in Game Thread."
+    MOER_ASSERT(
+        IsGameThreadInitialized() && IsCurrentlyGameThread(),
+        "Render thread control is only allowed on the initialized game thread"
     );
     LOG_INFO("Try Suspending Render Thread.");
     if (_restart_later) {
@@ -182,7 +194,10 @@ bool IsRenderThreadRunning() {
 }
 
 RenderThreadService::~RenderThreadService() {
-    assert(!running && "RenderThreadService::Stop() must be called before destruction.");
+    MOER_ASSERT(
+        !running,
+        "RenderThreadService::Stop must be called before destruction"
+    );
 }
 
 void RenderThreadService::Start() {
@@ -205,13 +220,19 @@ void RenderThreadService::Stop() {
 }
 
 void RenderThreadService::Wait(const GraphEventRef& event) {
-    assert(running && "Cannot wait after the render thread stops.");
-    assert(IsCurrentlyGameThread() && "RenderThreadService is waited by the game thread.");
+    MOER_ASSERT(running, "Cannot wait after the render thread stops");
+    MOER_ASSERT(
+        IsCurrentlyGameThread(),
+        "RenderThreadService waits must run on the game thread"
+    );
     TaskGraph::GetInterface().WaitUntilTaskComplete(event, EThread::EMainThread);
 }
 
 void RenderThreadService::Wait(const RenderFrameFence& fence) {
-    assert(fence.rt_done && "Cannot wait on an empty render frame fence.");
+    MOER_ASSERT(
+        static_cast<bool>(fence.rt_done),
+        "Cannot wait on an empty render frame fence"
+    );
     Wait(fence.rt_done);
 }
 
@@ -224,13 +245,19 @@ void RenderThreadService::Flush() {
 }
 
 void RunRenderThreadControlAndWait(std::function<void()> task) {
-    assert(task);
+    MOER_ASSERT(
+        static_cast<bool>(task),
+        "Render control work must contain a callable"
+    );
     if (!IsRenderThreadRunning() || IsCurrentlyRenderThread()) {
         task();
         return;
     }
 
-    assert(IsCurrentlyGameThread() && "Render control work must be submitted from the game thread.");
+    MOER_ASSERT(
+        IsCurrentlyGameThread(),
+        "Render control work must be submitted from the game thread"
+    );
     using TaskType = RenderThreadServiceTask<std::function<void()>>;
     auto event = GraphTask<TaskType>::Create(std::move(task)).Dispatch(EThread::ERenderThread);
     TaskGraph::GetInterface().WaitUntilTaskComplete(event, EThread::EMainThread);
@@ -255,7 +282,10 @@ void RenderThreadFence::BeginFence() {
 }
 
 bool RenderThreadFence::IsFenceComplete() {
-    assert(Moer::IsCurrentlyGameThread());
+    MOER_ASSERT(
+        Moer::IsCurrentlyGameThread(),
+        "RenderThreadFence::IsFenceComplete must run on the game thread"
+    );
     if (!complete_event.Get() || complete_event->IsComplete()) {
         complete_event = nullptr;
         return true;
@@ -264,7 +294,10 @@ bool RenderThreadFence::IsFenceComplete() {
 }
 void RenderThreadFence::Wait() {
 
-    assert(Moer::IsCurrentlyGameThread());
+    MOER_ASSERT(
+        Moer::IsCurrentlyGameThread(),
+        "RenderThreadFence::Wait must run on the game thread"
+    );
 
     if (!IsFenceComplete()) {
         {

@@ -4,6 +4,23 @@ add_subdirectory(math)
 add_subdirectory(remote)
 add_subdirectory(scripting)
 
+set(test_target TestFatalDiagnostics)
+add_executable(${test_target} "FatalDiagnosticsTest.cpp")
+target_include_directories(${test_target}
+    PRIVATE
+        "${moer_source_dir}/runtime/core/source/profile"
+        "${moer_source_dir}/runtime/core/source/platform/Windows"
+)
+target_link_libraries(${test_target}
+    PRIVATE Moer::Core
+)
+if(WIN32)
+    target_link_libraries(${test_target} PRIVATE dbghelp)
+endif()
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME FatalDiagnosticsContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(FatalDiagnosticsContract PROPERTIES TIMEOUT 60)
+
 set(test_target TestProfileDumpCore)
 add_executable(${test_target} "ProfileDumpCoreTest.cpp")
 target_include_directories(${test_target}

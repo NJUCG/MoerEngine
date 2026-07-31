@@ -16,6 +16,16 @@ public:
     virtual uint32_t GetCurrentThreadID()                                                            = 0;
     virtual void     SetEnv(const char* _name, const char* _value)                                   = 0;
 
+    virtual PlatformStackTrace
+    CaptureStackTrace(std::uint32_t _frames_to_skip, std::uint32_t _max_frames) noexcept;
+    virtual bool InitializeCrashDiagnostics() noexcept;
+    virtual PlatformCrashArtifactResult
+    WriteCrashArtifacts(
+        const PlatformCrashArtifactRequest& _request,
+        std::uint32_t _timeout_ms
+    ) noexcept;
+    [[noreturn]] virtual void FailFast(std::string_view _reason) noexcept;
+
     virtual const PlatformMemoryInfo& GetMemoryInfo() = 0;
 };
 

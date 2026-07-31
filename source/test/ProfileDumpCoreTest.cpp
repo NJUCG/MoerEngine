@@ -1948,6 +1948,293 @@ void TestRenameFinalFault() {
     RecoverAfterFault(output, config, schema);
 }
 
+void TestCrashFlushPublishedPrefix() {
+    Testing::ClearHooks();
+    Expect(
+        FlushCrashPublishedPrefix(1) == CrashFlushResult::NotRunning,
+        "stopped crash flush did not report NotRunning"
+    );
+
+    ScopedOutput  output("moer-profile-crash-prefix");
+    RuntimeConfig config       = MakeRuntimeConfig(output);
+    config.tls_publish_records = 1;
+
+    Expect(
+        Start(config) == StartResult::Started,
+        "crash-prefix runtime failed to start"
+    );
+    const SchemaRegistration registration = RegisterSchema(MakeRuntimeSchema());
+    Expect(
+        registration.status == SchemaStatus::Registered,
+        "crash-prefix schema failed to register"
+    );
+    const std::array<FieldValueView, 3> values = {
+        FieldValueView{std::uint64_t{144}},
+        FieldValueView{std::uint64_t{233}},
+        FieldValueView{std::string_view("crash-prefix-sentinel")},
+    };
+    Expect(
+        Emit(registration.handle, values) == EmitStatus::Accepted,
+        "crash-prefix sentinel was rejected"
+    );
+    Expect(
+        WaitUntil([] {
+            return GetRuntimeStats().records_written >= 1;
+        }),
+        "crash-prefix sentinel did not reach the writer"
+    );
+    Expect(
+        FlushCrashPublishedPrefix(2000) == CrashFlushResult::Completed,
+        "crash-prefix request did not flush the written prefix"
+    );
+    Expect(
+        output.InProgressPaths().size() == 1,
+        "crash-prefix request renamed or removed the live stream"
+    );
+    Expect(
+        Shutdown() == ShutdownResult::Completed,
+        "crash-prefix runtime did not shut down cleanly"
+    );
+    const ParsedDump parsed = ParseDump(output.path, config.codec_limits);
+    Expect(
+        parsed.records.size() == 1,
+        "crash-prefix stream lost the sentinel during finalization"
+    );
+}
+
+void TestCrashFlushTimeoutIsBounded() {
+    Testing::ClearHooks();
+    Expect(
+        Testing::ConfigureWriterPauseAfterStart(true),
+        "crash-prefix writer pause hook could not be configured"
+    );
+
+    ScopedOutput  output("moer-profile-crash-timeout");
+    RuntimeConfig config = MakeRuntimeConfig(output);
+    Expect(
+        Start(config) == StartResult::Started,
+        "crash-timeout runtime failed to start"
+    );
+    Expect(
+        Testing::WaitForWriterPaused(2000),
+        "crash-timeout writer did not reach the deterministic pause"
+    );
+
+    const auto started = std::chrono::steady_clock::now();
+    const CrashFlushResult timed_out = FlushCrashPublishedPrefix(10);
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - started
+    );
+    Expect(
+        timed_out == CrashFlushResult::TimedOut,
+        "paused writer crash flush did not time out"
+    );
+    Expect(
+        elapsed < std::chrono::milliseconds(500),
+        "paused writer crash flush exceeded its bounded deadline"
+    );
+
+    Testing::ResumeWriter();
+    Expect(
+        FlushCrashPublishedPrefix(2000) == CrashFlushResult::Completed,
+        "crash flush did not recover after the writer resumed"
+    );
+    Expect(
+        Shutdown() == ShutdownResult::Completed,
+        "crash-timeout runtime did not shut down cleanly"
+    );
+    Testing::ClearHooks();
+}
+
+void TestCrashFlushRetriesLostWakeupWindow() {
+    Testing::ClearHooks();
+    Expect(
+        Testing::ConfigureWriterPauseBeforeIdleWait(true),
+        "crash-prefix idle-wait pause hook could not be configured"
+    );
+
+    ScopedOutput  output("moer-profile-crash-lost-wakeup");
+    RuntimeConfig config = MakeRuntimeConfig(output);
+    Expect(
+        Start(config) == StartResult::Started,
+        "crash lost-wakeup runtime failed to start"
+    );
+    Expect(
+        Testing::WaitForWriterIdleWaitPaused(2000),
+        "writer did not reach the deterministic pre-wait window"
+    );
+
+    std::atomic<CrashFlushResult> result{CrashFlushResult::Busy};
+    std::thread requester([&] {
+        result.store(
+            FlushCrashPublishedPrefix(2000), std::memory_order_release
+        );
+    });
+    Expect(
+        Testing::WaitForCrashFlushRequestPending(2000),
+        "crash request was not published in the deterministic wakeup window"
+    );
+    Testing::ResumeWriterIdleWait();
+    requester.join();
+
+    Expect(
+        result.load(std::memory_order_acquire) ==
+            CrashFlushResult::Completed,
+        "repeated notification did not close the lost-wakeup window"
+    );
+    Expect(
+        Shutdown() == ShutdownResult::Completed,
+        "crash lost-wakeup runtime did not shut down cleanly"
+    );
+    Testing::ClearHooks();
+}
+
+void TestCrashFlushFinalizeRaceDoesNotTimeout() {
+    Testing::ClearHooks();
+    Expect(
+        Testing::ConfigureCrashFlushPauseBeforePublish(true),
+        "crash-prefix pre-publish pause hook could not be configured"
+    );
+
+    ScopedOutput  output("moer-profile-crash-finalize-race");
+    RuntimeConfig config = MakeRuntimeConfig(output);
+    Expect(
+        Start(config) == StartResult::Started,
+        "crash finalize-race runtime failed to start"
+    );
+
+    std::atomic<CrashFlushResult> result{CrashFlushResult::Busy};
+    std::thread requester([&] {
+        result.store(
+            FlushCrashPublishedPrefix(2000), std::memory_order_release
+        );
+    });
+    Expect(
+        Testing::WaitForCrashFlushBeforePublishPaused(2000),
+        "crash request did not reach the deterministic pre-publish window"
+    );
+    Expect(
+        Shutdown() == ShutdownResult::Completed,
+        "finalize-race runtime did not shut down cleanly"
+    );
+    Testing::ResumeCrashFlushBeforePublish();
+    requester.join();
+
+    Expect(
+        result.load(std::memory_order_acquire) ==
+            CrashFlushResult::NotRunning,
+        "request admitted before finalize reported a false timeout"
+    );
+    Testing::ClearHooks();
+}
+
+void TestLaterCrashFlushFailureDoesNotPoisonEarlierSuccess() {
+    Testing::ClearHooks();
+    Expect(
+        Testing::ConfigureFault(Testing::FaultPoint::FlushFile, 2),
+        "crash multi-ticket flush fault could not be configured"
+    );
+    Expect(
+        Testing::ConfigureCrashFlushPauseAfterCompletionObserved(true),
+        "crash multi-ticket completion pause could not be configured"
+    );
+
+    ScopedOutput  output("moer-profile-crash-ticket-result");
+    RuntimeConfig config = MakeRuntimeConfig(output);
+    Expect(
+        Start(config) == StartResult::Started,
+        "crash multi-ticket runtime failed to start"
+    );
+
+    std::atomic<CrashFlushResult> first_result{CrashFlushResult::Busy};
+    std::thread first_requester([&] {
+        first_result.store(
+            FlushCrashPublishedPrefix(2000), std::memory_order_release
+        );
+    });
+    const bool first_paused =
+        Testing::WaitForCrashFlushAfterCompletionObservedPaused(2000);
+    if (!first_paused) {
+        Testing::ResumeCrashFlushAfterCompletionObserved();
+        first_requester.join();
+        Expect(false, "first crash request did not pause after successful completion");
+    }
+
+    const CrashFlushResult second_result = FlushCrashPublishedPrefix(2000);
+    Testing::ResumeCrashFlushAfterCompletionObserved();
+    first_requester.join();
+
+    Expect(
+        second_result == CrashFlushResult::Faulted,
+        "second crash request did not report its injected flush failure"
+    );
+    Expect(
+        first_result.load(std::memory_order_acquire) ==
+            CrashFlushResult::Completed,
+        "later crash flush failure poisoned an earlier successful ticket"
+    );
+    Expect(
+        Shutdown() == ShutdownResult::Faulted,
+        "faulted multi-ticket runtime did not shut down as faulted"
+    );
+    Testing::ClearHooks();
+}
+
+void TestCrashFlushRestartRejectsOldResultSnapshot() {
+    Testing::ClearHooks();
+    Expect(
+        Testing::ConfigureCrashFlushPauseAfterCompletionObserved(true),
+        "crash restart completion pause could not be configured"
+    );
+
+    ScopedOutput  first_output("moer-profile-crash-restart-first");
+    RuntimeConfig first_config = MakeRuntimeConfig(first_output);
+    ScopedOutput  second_output("moer-profile-crash-restart-second");
+    RuntimeConfig second_config = MakeRuntimeConfig(second_output);
+    Expect(
+        Start(first_config) == StartResult::Started,
+        "first crash restart runtime failed to start"
+    );
+
+    std::atomic<CrashFlushResult> old_result{CrashFlushResult::Busy};
+    std::thread old_requester([&] {
+        old_result.store(
+            FlushCrashPublishedPrefix(2000), std::memory_order_release
+        );
+    });
+    const bool old_paused =
+        Testing::WaitForCrashFlushAfterCompletionObservedPaused(2000);
+    if (!old_paused) {
+        Testing::ResumeCrashFlushAfterCompletionObserved();
+        old_requester.join();
+        Expect(false, "old crash request did not pause after completion");
+    }
+    const ShutdownResult first_shutdown = Shutdown();
+    if (first_shutdown != ShutdownResult::Completed) {
+        Testing::ResumeCrashFlushAfterCompletionObserved();
+        old_requester.join();
+        Expect(false, "first crash restart runtime did not shut down cleanly");
+    }
+
+    const StartResult second_start = Start(second_config);
+    Testing::ResumeCrashFlushAfterCompletionObserved();
+    old_requester.join();
+    Expect(
+        second_start == StartResult::Started,
+        "second crash restart runtime failed to start"
+    );
+    Expect(
+        old_result.load(std::memory_order_acquire) ==
+            CrashFlushResult::NotRunning,
+        "old crash request consumed the next generation's result markers"
+    );
+    Expect(
+        Shutdown() == ShutdownResult::Completed,
+        "second crash restart runtime did not shut down cleanly"
+    );
+    Testing::ClearHooks();
+}
+
 } // namespace
 
 int main() {
@@ -1979,6 +2266,12 @@ int main() {
             Testing::FaultPoint::FlushFile, 1, RuntimeFault::FlushFile, "moer-profile-flush-fault", false
         );
         TestRenameFinalFault();
+        TestCrashFlushPublishedPrefix();
+        TestCrashFlushTimeoutIsBounded();
+        TestCrashFlushRetriesLostWakeupWindow();
+        TestCrashFlushFinalizeRaceDoesNotTimeout();
+        TestLaterCrashFlushFailureDoesNotPoisonEarlierSuccess();
+        TestCrashFlushRestartRejectsOldResultSnapshot();
         std::cout << "ProfileDump core contract tests passed." << std::endl;
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {

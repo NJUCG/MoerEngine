@@ -38,6 +38,14 @@ enum class FlushResult : std::uint8_t {
     Faulted,
 };
 
+enum class CrashFlushResult : std::uint8_t {
+    Completed = 0,
+    NotRunning,
+    Faulted,
+    Busy,
+    TimedOut,
+};
+
 enum class ShutdownResult : std::uint8_t {
     Completed = 0,
     AlreadyStopped,
@@ -161,6 +169,14 @@ Emit(SchemaHandle _schema, std::span<const FieldValueView> _values) noexcept;
 // a per-shard cut rather than one global instantaneous snapshot: an Emit that
 // commits after its shard was visited can remain for the next interval.
 [[nodiscard]] CORE_API FlushResult FlushAll() noexcept;
+
+// Controlled-fatal boundary. This does not harvest TLS shards, allocate a
+// fence, finalize the stream, or rename the in-progress file. It asks the
+// existing writer to fflush only the prefix it has already written and waits
+// no longer than _timeout_ms. The method is therefore best-effort and never
+// promises a process-wide instantaneous snapshot.
+[[nodiscard]] CORE_API CrashFlushResult
+FlushCrashPublishedPrefix(std::uint32_t _timeout_ms) noexcept;
 
 // Process-owner finalization. Closes admission, waits for already-accepted
 // Emit calls, harvests all registered live TLS shards, drains the writer, and

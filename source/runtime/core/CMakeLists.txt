@@ -34,4 +34,8 @@ target_link_libraries(${target_name}
     PUBLIC tomlplusplus
 )
 
+if(WIN32)
+    target_link_libraries(${target_name} PRIVATE dbghelp)
+endif()
+
 # add_dependencies(${target_name} CopyMimallocDlls )

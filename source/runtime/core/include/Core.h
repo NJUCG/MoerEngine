@@ -5,6 +5,7 @@
 #include "misc/Crc32.h"
 #include "misc/EnumBitOperation.h"
 #include "misc/Hash.h"
+#include "misc/Assert.h"
 #include "misc/LockFree.h"
 #include "misc/MMemory.h"
 #include "misc/RAII.h"

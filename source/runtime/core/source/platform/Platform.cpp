@@ -3,6 +3,7 @@
 #include "misc/STL.h"
 #include <basetsd.h>
 #include <cstdint>
+#include <cstdlib>
 #if PLATFORM_WINDOWS
 #include "Windows/PlatformWindows.h"
 #elif PLATFORM_LINUX
@@ -68,6 +69,29 @@ const ProcessorGroups& GetProcessorGroups() {
 } // namespace Moer
 #else
 #endif
+
+PlatformStackTrace PlatformImplement::CaptureStackTrace(
+    std::uint32_t,
+    std::uint32_t
+) noexcept {
+    return {};
+}
+
+bool PlatformImplement::InitializeCrashDiagnostics() noexcept {
+    return false;
+}
+
+PlatformCrashArtifactResult PlatformImplement::WriteCrashArtifacts(
+    const PlatformCrashArtifactRequest&,
+    std::uint32_t
+) noexcept {
+    return {};
+}
+
+[[noreturn]] void PlatformImplement::FailFast(std::string_view) noexcept {
+    std::abort();
+}
+
 Affinity Affinity::All() {
 #if PLATFORM_WINDOWS
     Affinity affinity;
@@ -157,4 +181,27 @@ uint32_t Platform::GetCurrentThreadID() {
 
 void Platform::SetEnv(const char* _name, const char* _value) {
     PlatformImplement::GetInstance()->SetEnv(_name, _value);
+}
+
+PlatformStackTrace
+Platform::CaptureStackTrace(std::uint32_t _frames_to_skip, std::uint32_t _max_frames) noexcept {
+    return PlatformImplement::GetInstance()->CaptureStackTrace(_frames_to_skip, _max_frames);
+}
+
+bool Platform::InitializeCrashDiagnostics() noexcept {
+    return PlatformImplement::GetInstance()->InitializeCrashDiagnostics();
+}
+
+PlatformCrashArtifactResult
+Platform::WriteCrashArtifacts(
+    const PlatformCrashArtifactRequest& _request,
+    std::uint32_t _timeout_ms
+) noexcept {
+    return PlatformImplement::GetInstance()->WriteCrashArtifacts(
+        _request, _timeout_ms
+    );
+}
+
+[[noreturn]] void Platform::FailFast(std::string_view _reason) noexcept {
+    PlatformImplement::GetInstance()->FailFast(_reason);
 }
