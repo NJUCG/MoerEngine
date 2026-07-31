@@ -12,7 +12,6 @@
 #include "rhi/RHIThreadHeartbeat.h"
 #include "shader/ShaderResourceManager.h"
 #include "vulkan/VulkanDevice.h"
-#include <cassert>
 
 namespace Moer::Render {
 namespace {
@@ -42,7 +41,10 @@ private:
 template<>
 VulkanRHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
     using std::string;
-    assert(_info.rhi_type == ERHIType::Vulkan);
+    MOER_ASSERT(
+        _info.rhi_type == ERHIType::Vulkan,
+        "ResolveConfigAs<VulkanRHIConfig> requires Vulkan"
+    );
 
     VulkanRHIConfig config;
     config.rhi_thread                   = _info.rhi_thread;
@@ -71,7 +73,7 @@ VulkanRHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
         config.api_version = VK_API_VERSION_1_3;
     else {
         LOG_ERROR("Unsupported vulkan api version: {}", api);
-        assert(false);
+        MOER_ASSERT(false, "Unsupported Vulkan API version: {}", api);
     }
 
     return config;
@@ -79,7 +81,10 @@ VulkanRHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
 
 template<>
 D3D12RHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
-    assert(_info.rhi_type == ERHIType::D3D12);
+    MOER_ASSERT(
+        _info.rhi_type == ERHIType::D3D12,
+        "ResolveConfigAs<D3D12RHIConfig> requires D3D12"
+    );
 
     D3D12RHIConfig config;
 
@@ -188,7 +193,10 @@ uint64 GetSizeFromImageFormat(EPixelFormat _format, const uint3 _size) {
 
 uint64 GetByteFromPixelFormat(EPixelFormat format) {
     if (IsPixelFormatBC(format)) {
-        assert(false && "BC format does not have fixed byte per pixel");
+        MOER_ASSERT(
+            false,
+            "BC format does not have a fixed byte count per pixel"
+        );
     }
     switch (format) {
         case PF_R8G8B8A8_SRGB:
@@ -256,14 +264,21 @@ uint64 GetByteFromPixelFormat(EPixelFormat format) {
             return 1;
             break;
         default:
-            assert(false && "not support format");
+            MOER_ASSERT(
+                false,
+                "Unsupported pixel format in GetByteFromPixelFormat: {}",
+                static_cast<std::uint32_t>(format)
+            );
     }
     return 0;
 }
 
 uint64 GetChannelFromPixelFormat(EPixelFormat format) {
     if (IsPixelFormatBC(format)) {
-        assert(false && "BC format has no fixed channel count");
+        MOER_ASSERT(
+            false,
+            "BC format does not have a fixed channel count"
+        );
     }
     switch (format) {
         case PF_R8G8B8A8_SRGB:
@@ -331,7 +346,11 @@ uint64 GetChannelFromPixelFormat(EPixelFormat format) {
             return 1;
             break;
         default:
-            assert(false && "not support format");
+            MOER_ASSERT(
+                false,
+                "Unsupported pixel format in GetChannelFromPixelFormat: {}",
+                static_cast<std::uint32_t>(format)
+            );
     }
     return 0;
 }
@@ -368,7 +387,11 @@ uint64 GetSizeFromPixelFormat(EPixelFormat format, const uint3 size) {
                 return block_cnt * 16;
                 break;
             default:
-                assert(false && "not support format");
+                MOER_ASSERT(
+                    false,
+                    "Unsupported BC pixel format in GetSizeFromPixelFormat: {}",
+                    static_cast<std::uint32_t>(format)
+                );
         }
     }
     return GetByteFromPixelFormat(format) * size.x * size.y * size.z;

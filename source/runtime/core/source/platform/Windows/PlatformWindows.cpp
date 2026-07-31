@@ -1,7 +1,13 @@
 #include "PlatformWindows.h"
+
+#include "WindowsCrashDiagnostics.h"
 #include "math/Function.h"
 #include "misc/STL.h"
 
+#include <algorithm>
+#include <array>
+#include <cstdlib>
+#include <cstring>
 #include <processthreadsapi.h>
 #include <winnt.h>
 
@@ -74,6 +80,55 @@ int32_t WindowsPlatform::GetProcessorCoreCount() {
 
 uint32_t WindowsPlatform::GetCurrentThreadID() {
     return ::GetCurrentThreadId();
+}
+
+PlatformStackTrace WindowsPlatform::CaptureStackTrace(
+    std::uint32_t _frames_to_skip,
+    std::uint32_t _max_frames
+) noexcept {
+    PlatformStackTrace trace{};
+    const std::uint32_t frame_limit = std::min<std::uint32_t>(
+        _max_frames, static_cast<std::uint32_t>(trace.frames.size())
+    );
+    if (frame_limit == 0) {
+        return trace;
+    }
+    trace.frame_count = static_cast<std::uint32_t>(
+        ::CaptureStackBackTrace(
+            static_cast<DWORD>(_frames_to_skip + 1),
+            static_cast<DWORD>(frame_limit),
+            reinterpret_cast<void**>(trace.frames.data()),
+            nullptr
+        )
+    );
+    return trace;
+}
+
+bool WindowsPlatform::InitializeCrashDiagnostics() noexcept {
+    return InitializeWindowsCrashDiagnostics();
+}
+
+PlatformCrashArtifactResult WindowsPlatform::WriteCrashArtifacts(
+    const PlatformCrashArtifactRequest& _request,
+    std::uint32_t _timeout_ms
+) noexcept {
+    return SubmitWindowsCrashArtifacts(_request, _timeout_ms);
+}
+
+[[noreturn]] void WindowsPlatform::FailFast(std::string_view _reason) noexcept {
+    std::array<char, 1024> debugger_reason{};
+    const std::size_t reason_size =
+        std::min(_reason.size(), debugger_reason.size() - 1);
+    if (reason_size != 0) {
+        std::memcpy(
+            debugger_reason.data(), _reason.data(), reason_size
+        );
+    }
+    debugger_reason[reason_size] = '\0';
+    ::OutputDebugStringA(debugger_reason.data());
+    ::RaiseFailFastException(nullptr, nullptr, 0);
+    ::TerminateProcess(::GetCurrentProcess(), 3);
+    std::abort();
 }
 
 void WindowsPlatform::SetEnv(const char* _name, const char* _value) {

@@ -2,8 +2,11 @@
 #define PLATFORM_H
 #include "API_Macro.h"
 #include "misc/STL.h"
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <string_view>
 #include <variant>
 #if defined(WIN32) || defined(_WIN32) || defined(_WIN32_) || defined(WIN64) || defined(_WIN64) || \
     defined(_WIN64_)
@@ -31,6 +34,43 @@ struct PlatformMemoryInfo {
 
     // MB
     uint32_t total_physical_memory_mb = 0;
+};
+
+inline constexpr std::size_t kPlatformMaxStackFrames = 64;
+inline constexpr std::size_t kPlatformCrashPathCapacity = 1024;
+
+struct PlatformStackTrace {
+    std::array<std::uintptr_t, kPlatformMaxStackFrames> frames{};
+    std::uint32_t                                       frame_count{0};
+};
+
+struct PlatformCrashArtifactRequest {
+    std::string_view   failure_kind{};
+    std::string_view   expression{};
+    std::string_view   file{};
+    std::string_view   function{};
+    std::string_view   message{};
+    std::string_view   profile_flush_status{};
+    std::uint32_t      line{0};
+    std::uint32_t      thread_id{0};
+    bool               message_truncated{false};
+    PlatformStackTrace stack{};
+};
+
+struct PlatformCrashArtifactResult {
+    bool metadata_written{false};
+    bool metadata_completed{false};
+    bool dump_created{false};
+    bool dump_written{false};
+    bool dump_flushed{false};
+    bool request_completed{false};
+    bool timed_out{false};
+
+    std::uint32_t metadata_error{0};
+    std::uint32_t dump_error{0};
+
+    std::array<char, kPlatformCrashPathCapacity> metadata_path{};
+    std::array<char, kPlatformCrashPathCapacity> dump_path{};
 };
 
 struct Core {
@@ -90,6 +130,21 @@ public:
     CORE_API static int32_t  GetProcessorCoreCount();
     CORE_API static uint32_t GetCurrentThreadID();
     CORE_API static void     SetEnv(const char* _name, const char* _value);
+
+    CORE_API static PlatformStackTrace
+    CaptureStackTrace(std::uint32_t _frames_to_skip = 0, std::uint32_t _max_frames = 64) noexcept;
+    // Startup-only. Prepares the process-lifetime crash worker and its stable
+    // output root before any fault path needs them.
+    CORE_API static bool InitializeCrashDiagnostics() noexcept;
+    // Submits to the prestarted worker and waits at most _timeout_ms. The
+    // request describes a controlled fatal snapshot and carries no SEH
+    // exception context.
+    CORE_API static PlatformCrashArtifactResult
+    WriteCrashArtifacts(
+        const PlatformCrashArtifactRequest& _request,
+        std::uint32_t _timeout_ms = 750
+    ) noexcept;
+    [[noreturn]] CORE_API static void FailFast(std::string_view _reason) noexcept;
 
     CORE_API static const PlatformMemoryInfo& GetMemoryInfo();
 };

@@ -45,6 +45,16 @@ public:
     uint32_t        GetCurrentThreadID() override;
     virtual void    SetEnv(const char* _name, const char* _value) override;
 
+    PlatformStackTrace
+    CaptureStackTrace(std::uint32_t _frames_to_skip, std::uint32_t _max_frames) noexcept override;
+    bool InitializeCrashDiagnostics() noexcept override;
+    PlatformCrashArtifactResult
+    WriteCrashArtifacts(
+        const PlatformCrashArtifactRequest& _request,
+        std::uint32_t _timeout_ms
+    ) noexcept override;
+    [[noreturn]] void FailFast(std::string_view _reason) noexcept override;
+
     virtual const PlatformMemoryInfo& GetMemoryInfo() override;
 };
 #endif // !WINDOWS_PLATFORM_H

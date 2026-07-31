@@ -332,7 +332,10 @@ bool GLFWWindowImpl::ShouldClose(WindowHandle* _window) const {
     return glfwWindowShouldClose((GLFWwindow*)_window->window);
 }
 void GLFWWindowImpl::ShowMainWindow() {
-    assert(IsCurrentlyGameThread() && "GLFW main-window visibility must be changed on the Game Thread.");
+    MOER_ASSERT(
+        IsCurrentlyGameThread(),
+        "GLFW main-window visibility must be changed on the game thread"
+    );
     auto* window = (GLFWwindow*)main_window_handle.window;
     if (m_deferred_fullscreen) {
         GLFWmonitor* monitor = glfwGetPrimaryMonitor();
