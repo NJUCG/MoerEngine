@@ -571,17 +571,33 @@ private:
                 outcome.result.status = ESetStatus::Unchanged;
                 return outcome;
             }
+            const bool produces_callback = _invoke_callback && callback && callback_owner;
+            if (produces_callback && callback_dispatching && callback_admissions_remaining == 0) {
+                return {
+                    .result =
+                        {
+                            .status = ESetStatus::CallbackQueueFull,
+                            .detail = "callback dispatch budget is exhausted",
+                        },
+                };
+            }
+
             old_value = value;
-            if (_invoke_callback && callback && callback_owner) {
+            if (produces_callback) {
                 outcome.callback_event = std::make_shared<CallbackEvent>(old_value, _new_value);
                 callback_queue.push_back(outcome.callback_event);
             }
             value = std::move(_new_value);
         }
 
-        if (outcome.callback_event && !callback_dispatching) {
-            callback_dispatching  = true;
-            outcome.owns_dispatch = true;
+        if (outcome.callback_event) {
+            if (!callback_dispatching) {
+                callback_dispatching          = true;
+                callback_admissions_remaining = descriptor.callback_dispatch_budget - 1;
+                outcome.owns_dispatch         = true;
+            } else {
+                --callback_admissions_remaining;
+            }
         }
         return outcome;
     }
@@ -636,7 +652,8 @@ private:
             {
                 std::unique_lock lock(mutation_mutex);
                 if (IsRetired() || callback_queue.empty()) {
-                    callback_dispatching = false;
+                    callback_dispatching          = false;
+                    callback_admissions_remaining = 0;
                     if (IsRetired() && !callback_invoking) {
                         retired_callback_owner.reset(DetachCallbackOwnerLocked());
                     }
@@ -664,12 +681,14 @@ private:
                 callback_event->completed          = true;
                 if (IsRetired()) {
                     CancelQueuedCallbacksLocked();
-                    callback_dispatching = false;
+                    callback_dispatching          = false;
+                    callback_admissions_remaining = 0;
                     retired_callback_owner.reset(DetachCallbackOwnerLocked());
                     stop_dispatch = true;
                 } else if (callback_queue.empty()) {
-                    callback_dispatching = false;
-                    stop_dispatch        = true;
+                    callback_dispatching          = false;
+                    callback_admissions_remaining = 0;
+                    stop_dispatch                 = true;
                 }
             }
             retired_callback_owner.reset();
@@ -694,7 +713,8 @@ protected:
         if (callback_invoking) {
             return nullptr;
         }
-        callback_dispatching = false;
+        callback_dispatching          = false;
+        callback_admissions_remaining = 0;
         return callback_owner.release();
     }
 
@@ -704,6 +724,7 @@ protected:
         }
         callback = nullptr;
         CancelQueuedCallbacksLocked();
+        callback_admissions_remaining = 0;
         return callback_owner.release();
     }
 
@@ -713,8 +734,9 @@ private:
     Callback                                   callback = nullptr;
     std::unique_ptr<CallbackOwner>             callback_owner;
     std::deque<std::shared_ptr<CallbackEvent>> callback_queue;
-    bool                                       callback_dispatching = false;
-    bool                                       callback_invoking    = false;
+    std::size_t                                callback_admissions_remaining = 0;
+    bool                                       callback_dispatching          = false;
+    bool                                       callback_invoking             = false;
 };
 
 using BoolEntry   = Entry<bool, Detail::BoolCallback>;
@@ -777,13 +799,14 @@ void Unregister(std::uint64_t _id) noexcept {
 
 CVarDescriptor CopyDescriptor(CVarDescriptorView _view) {
     return {
-        .name         = std::string(_view.name),
-        .helper       = std::string(_view.helper),
-        .true_helper  = std::string(_view.true_helper),
-        .false_helper = std::string(_view.false_helper),
-        .flags        = _view.flags,
-        .min_value    = _view.min_value,
-        .max_value    = _view.max_value,
+        .name                     = std::string(_view.name),
+        .helper                   = std::string(_view.helper),
+        .true_helper              = std::string(_view.true_helper),
+        .false_helper             = std::string(_view.false_helper),
+        .flags                    = _view.flags,
+        .min_value                = _view.min_value,
+        .max_value                = _view.max_value,
+        .callback_dispatch_budget = _view.callback_dispatch_budget,
     };
 }
 
@@ -796,6 +819,8 @@ bool DescriptorIsInvalid(CVarDescriptorView _descriptor, const Value& _value) {
     const bool has_range_for_non_numeric = !std::is_same_v<Value, std::int64_t> &&
                                            !std::is_same_v<Value, double> &&
                                            (_descriptor.min_value || _descriptor.max_value);
+    const bool has_invalid_callback_budget = _descriptor.callback_dispatch_budget == 0 ||
+                                             _descriptor.callback_dispatch_budget > MaxCallbackDispatchBudget;
     bool default_is_invalid = false;
     if constexpr (std::is_same_v<Value, std::int64_t>) {
         default_is_invalid = (_descriptor.min_value && IntIsBelowMinimum(_value, *_descriptor.min_value)) ||
@@ -806,7 +831,7 @@ bool DescriptorIsInvalid(CVarDescriptorView _descriptor, const Value& _value) {
                              (_descriptor.max_value && _value > *_descriptor.max_value);
     }
     return !IsValidName(_descriptor.name) || has_non_finite_bound || has_inverted_range ||
-           has_range_for_non_numeric || default_is_invalid;
+           has_range_for_non_numeric || has_invalid_callback_budget || default_is_invalid;
 }
 
 template<typename EntryType, typename Value, typename Callback>
@@ -922,17 +947,18 @@ bool VisitEntrySnapshot(const std::shared_ptr<EntryBase>& _entry, SnapshotVisito
     const std::string value = _entry->CopyValueString();
     _visitor(
         {
-            .id             = _entry->id,
-            .name           = _entry->descriptor.name,
-            .helper         = _entry->descriptor.helper,
-            .true_helper    = _entry->descriptor.true_helper,
-            .false_helper   = _entry->descriptor.false_helper,
-            .value          = value,
-            .type           = _entry->type,
-            .flags          = _entry->descriptor.flags,
-            .min_value      = _entry->descriptor.min_value,
-            .max_value      = _entry->descriptor.max_value,
-            .startup_sealed = _entry->startup_sealed.load(std::memory_order_acquire),
+            .id                       = _entry->id,
+            .name                     = _entry->descriptor.name,
+            .helper                   = _entry->descriptor.helper,
+            .true_helper              = _entry->descriptor.true_helper,
+            .false_helper             = _entry->descriptor.false_helper,
+            .value                    = value,
+            .type                     = _entry->type,
+            .flags                    = _entry->descriptor.flags,
+            .min_value                = _entry->descriptor.min_value,
+            .max_value                = _entry->descriptor.max_value,
+            .callback_dispatch_budget = _entry->descriptor.callback_dispatch_budget,
+            .startup_sealed           = _entry->startup_sealed.load(std::memory_order_acquire),
         },
         _context
     );

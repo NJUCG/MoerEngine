@@ -118,6 +118,8 @@ std::string SetErrorText(const CVar::CVarSetResult& _result) {
             return "cvar is read-only";
         case CVar::ESetStatus::StartupSealed:
             return "cvar is sealed after startup";
+        case CVar::ESetStatus::CallbackQueueFull:
+            return "cvar callback dispatch budget is exhausted";
         case CVar::ESetStatus::InvalidRegistration:
             return "cvar registration is no longer active";
         case CVar::ESetStatus::Changed:
@@ -216,6 +218,10 @@ CommandOutputPollResult EngineCommandProcessor::VisitOutput(
     {
         std::lock_guard lock(impl->output_mutex);
         if (impl->output_lines.empty()) {
+            if (result.next_sequence < impl->next_output_sequence) {
+                result.dropped_count = impl->next_output_sequence - result.next_sequence;
+                result.next_sequence = impl->next_output_sequence;
+            }
             return result;
         }
 
@@ -452,6 +458,7 @@ void EngineCommandProcessor::ProcessDefaultCVar(std::string_view _text) {
         if (current->max_value) {
             AppendOutput("  maximum: " + std::to_string(*current->max_value));
         }
+        AppendOutput("  callback dispatch budget: " + std::to_string(current->callback_dispatch_budget));
         const std::string flags = FlagsText(current->flags);
         if (!flags.empty()) {
             AppendOutput("  flags: " + flags);

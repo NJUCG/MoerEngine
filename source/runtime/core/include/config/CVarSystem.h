@@ -37,6 +37,9 @@ constexpr bool HasFlag(EFlags _flags, EFlags _flag) noexcept {
     return (static_cast<std::uint32_t>(_flags) & static_cast<std::uint32_t>(_flag)) != 0;
 }
 
+inline constexpr std::size_t DefaultCallbackDispatchBudget = 64;
+inline constexpr std::size_t MaxCallbackDispatchBudget     = 4096;
+
 enum class ESetSource : std::uint8_t {
     Runtime,
     StartupConfig,
@@ -50,6 +53,7 @@ enum class ESetStatus : std::uint8_t {
     OutOfRange,
     ReadOnly,
     StartupSealed,
+    CallbackQueueFull,
     InvalidRegistration,
 };
 
@@ -73,6 +77,7 @@ struct CVarDescriptor {
     EFlags                flags = EFlags::None;
     std::optional<double> min_value;
     std::optional<double> max_value;
+    std::size_t           callback_dispatch_budget = DefaultCallbackDispatchBudget;
 };
 
 struct CVarDescriptorView {
@@ -83,6 +88,7 @@ struct CVarDescriptorView {
     EFlags                flags = EFlags::None;
     std::optional<double> min_value;
     std::optional<double> max_value;
+    std::size_t           callback_dispatch_budget = DefaultCallbackDispatchBudget;
 };
 
 struct CVarSnapshotView {
@@ -96,7 +102,8 @@ struct CVarSnapshotView {
     EFlags                flags = EFlags::None;
     std::optional<double> min_value;
     std::optional<double> max_value;
-    bool                  startup_sealed = false;
+    std::size_t           callback_dispatch_budget = DefaultCallbackDispatchBudget;
+    bool                  startup_sealed           = false;
 };
 
 struct CVarSnapshot {
@@ -110,7 +117,8 @@ struct CVarSnapshot {
     EFlags                flags = EFlags::None;
     std::optional<double> min_value;
     std::optional<double> max_value;
-    bool                  startup_sealed = false;
+    std::size_t           callback_dispatch_budget = DefaultCallbackDispatchBudget;
+    bool                  startup_sealed           = false;
 };
 
 enum class ERegistrationStatus : std::uint8_t {
@@ -134,7 +142,9 @@ struct RegistrationAccess {
 // callback later in commit order, but Reset may cancel it first. A deferred
 // result has no completion query in this phase, so its eventual callback
 // success/failure/cancellation is intentionally not reported to that caller.
-// Callbacks may re-enter the registry.
+// Each dispatch epoch admits at most callback_dispatch_budget events; further
+// callback-producing mutations fail with CallbackQueueFull without committing
+// their value. Callbacks may re-enter the registry.
 class Registration {
 public:
     Registration() noexcept = default;
@@ -235,13 +245,14 @@ CORE_API std::size_t VisitAllSnapshotsRaw(std::string_view _prefix, SnapshotVisi
 
 inline CVarDescriptorView ViewOf(const CVarDescriptor& _descriptor) noexcept {
     return {
-        .name         = _descriptor.name,
-        .helper       = _descriptor.helper,
-        .true_helper  = _descriptor.true_helper,
-        .false_helper = _descriptor.false_helper,
-        .flags        = _descriptor.flags,
-        .min_value    = _descriptor.min_value,
-        .max_value    = _descriptor.max_value,
+        .name                     = _descriptor.name,
+        .helper                   = _descriptor.helper,
+        .true_helper              = _descriptor.true_helper,
+        .false_helper             = _descriptor.false_helper,
+        .flags                    = _descriptor.flags,
+        .min_value                = _descriptor.min_value,
+        .max_value                = _descriptor.max_value,
+        .callback_dispatch_budget = _descriptor.callback_dispatch_budget,
     };
 }
 
@@ -292,17 +303,18 @@ bool InvokeStringCallback(void* _context, std::string_view _old_value, std::stri
 
 inline CVarSnapshot CopySnapshot(const CVarSnapshotView& _view) {
     return {
-        .id             = _view.id,
-        .name           = std::string(_view.name),
-        .helper         = std::string(_view.helper),
-        .true_helper    = std::string(_view.true_helper),
-        .false_helper   = std::string(_view.false_helper),
-        .value          = std::string(_view.value),
-        .type           = _view.type,
-        .flags          = _view.flags,
-        .min_value      = _view.min_value,
-        .max_value      = _view.max_value,
-        .startup_sealed = _view.startup_sealed,
+        .id                       = _view.id,
+        .name                     = std::string(_view.name),
+        .helper                   = std::string(_view.helper),
+        .true_helper              = std::string(_view.true_helper),
+        .false_helper             = std::string(_view.false_helper),
+        .value                    = std::string(_view.value),
+        .type                     = _view.type,
+        .flags                    = _view.flags,
+        .min_value                = _view.min_value,
+        .max_value                = _view.max_value,
+        .callback_dispatch_budget = _view.callback_dispatch_budget,
+        .startup_sealed           = _view.startup_sealed,
     };
 }
 

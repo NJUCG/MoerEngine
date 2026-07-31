@@ -135,6 +135,28 @@ void TestRegistrationLifetimeAndDescriptors() {
                 .status == CVar::ERegistrationStatus::InvalidDescriptor,
         "non-finite numeric range was accepted"
     );
+    Expect(
+        CVar::RegisterBool(
+            CVar::CVarDescriptor{
+                .name                     = "Test.Invalid.ZeroCallbackBudget",
+                .callback_dispatch_budget = 0,
+            },
+            false
+        )
+                .status == CVar::ERegistrationStatus::InvalidDescriptor,
+        "zero callback dispatch budget was accepted"
+    );
+    Expect(
+        CVar::RegisterBool(
+            CVar::CVarDescriptor{
+                .name                     = "Test.Invalid.ExcessiveCallbackBudget",
+                .callback_dispatch_budget = CVar::MaxCallbackDispatchBudget + 1,
+            },
+            false
+        )
+                .status == CVar::ERegistrationStatus::InvalidDescriptor,
+        "excessive callback dispatch budget was accepted"
+    );
 
     int incomplete_context = 0;
     Expect(
@@ -512,6 +534,52 @@ void TestFlagsOwnerSyncAndCallbacks() {
         "callback could not join a concurrent setter without deadlock or FIFO loss"
     );
 
+    std::atomic_uint32_t     bounded_callback_count{0};
+    std::atomic_uint32_t     bounded_deferred_count{0};
+    std::atomic_uint32_t     bounded_rejected_count{0};
+    CVar::RegistrationResult bounded_callbacks = CVar::RegisterInt(
+        CVar::CVarDescriptor{
+            .name                     = "Test.Callback.BoundedDispatch",
+            .callback_dispatch_budget = 3,
+        },
+        0,
+        [&bounded_callback_count,
+         &bounded_deferred_count,
+         &bounded_rejected_count](std::int64_t, std::int64_t _new_value) {
+            bounded_callback_count.fetch_add(1, std::memory_order_relaxed);
+            if (_new_value >= 4) {
+                return;
+            }
+            const CVar::CVarSetResult result =
+                CVar::SetValueFromString("Test.Callback.BoundedDispatch", std::to_string(_new_value + 1));
+            if (result.callback_deferred) {
+                bounded_deferred_count.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (result.status == CVar::ESetStatus::CallbackQueueFull) {
+                bounded_rejected_count.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    );
+    const CVar::CVarSetResult bounded_result = CVar::SetValueFromString("Test.Callback.BoundedDispatch", "1");
+    const std::optional<CVar::CVarSnapshot> bounded_snapshot = CVar::Find("Test.Callback.BoundedDispatch");
+    Expect(
+        bounded_callbacks.Succeeded() && bounded_result.Succeeded() &&
+            bounded_callback_count.load(std::memory_order_acquire) == 3 &&
+            bounded_deferred_count.load(std::memory_order_acquire) == 2 &&
+            bounded_rejected_count.load(std::memory_order_acquire) == 1 && bounded_snapshot &&
+            bounded_snapshot->value == "3" && bounded_snapshot->callback_dispatch_budget == 3,
+        "callback dispatch budget did not bound queue growth and drainer lifetime"
+    );
+    const CVar::CVarSetResult bounded_next_epoch =
+        CVar::SetValueFromString("Test.Callback.BoundedDispatch", "10");
+    Expect(
+        bounded_next_epoch.Succeeded() && !bounded_next_epoch.callback_deferred &&
+            bounded_callback_count.load(std::memory_order_acquire) == 4 &&
+            bounded_rejected_count.load(std::memory_order_acquire) == 1 &&
+            CVar::Find("Test.Callback.BoundedDispatch")->value == "10",
+        "callback dispatch budget did not reset for the next idle-to-dispatch epoch"
+    );
+
     std::atomic_uint32_t     queued_callback_count{0};
     std::atomic_bool         queued_first_entered{false};
     std::atomic_bool         allow_self_reset{false};
@@ -792,6 +860,12 @@ void TestBoundedQueuesAndOutputCursor() {
     );
 
     processor.ClearOutput();
+    const Command::CommandOutputBatch cleared = processor.PollOutput(1);
+    Expect(
+        cleared.lines.empty() && cleared.dropped_count == 32 &&
+            cleared.next_sequence == retained.next_sequence,
+        "clearing output did not advance an older cursor across the removed sequence range"
+    );
     Expect(
         processor.SubmitText("/still-unknown") == Command::ESubmitStatus::Accepted &&
             processor.ProcessPending().processed == 1,
