@@ -73,9 +73,10 @@ int main() {
         );
 
         EditorConfig editor_config{};
-        editor_config.raster_config.bloom_enabled           = true;
-        editor_config.raster_config.tonemapping_exposure_ev = -2.0f;
-        editor_config.raytracing_config.exposure            = 6.0f;
+        editor_config.raster_config.bloom_enabled                      = true;
+        editor_config.raster_config.tonemapping_exposure_ev            = -2.0f;
+        editor_config.raytracing_config.directional_light_intensity    = 6.0f;
+        editor_config.raytracing_config.tone_mapping_cfg.exposure_bias = -0.5f;
         control.BindEditorConfig(editor_config);
         Expect(
             !CVar::Find("Render.Raster.Bloom.Enabled")->startup_sealed,
@@ -88,20 +89,22 @@ int main() {
                     Command::ESubmitStatus::Accepted &&
                 retained_endpoint->SubmitText("Render.Raster.Tonemapping.ExposureEV 1.5") ==
                     Command::ESubmitStatus::Accepted &&
-                retained_endpoint->SubmitText("Render.Raytracing.Exposure 3.25") ==
+                retained_endpoint->SubmitText("Render.Raytracing.Tonemapping.ExposureBiasEV 3.25") ==
                     Command::ESubmitStatus::Accepted,
             "live cvar commands were not admitted"
         );
         Expect(
             control.TickGameThread(editor_config, 2) == 2 && !editor_config.raster_config.bloom_enabled &&
                 std::abs(editor_config.raster_config.tonemapping_exposure_ev - 1.5f) < 0.0001f &&
-                std::abs(editor_config.raytracing_config.exposure - 6.0f) < 0.0001f,
+                std::abs(editor_config.raytracing_config.tone_mapping_cfg.exposure_bias + 0.5f) < 0.0001f &&
+                std::abs(editor_config.raytracing_config.directional_light_intensity - 6.0f) < 0.0001f,
             "bounded Game Thread drain did not apply exactly its first two commands"
         );
         Expect(
             control.TickGameThread(editor_config, 2) == 1 &&
-                std::abs(editor_config.raytracing_config.exposure - 3.25f) < 0.0001f,
-            "second Game Thread drain did not apply the retained command"
+                std::abs(editor_config.raytracing_config.tone_mapping_cfg.exposure_bias - 3.25f) < 0.0001f &&
+                std::abs(editor_config.raytracing_config.directional_light_intensity - 6.0f) < 0.0001f,
+            "second Game Thread drain did not apply presentation exposure without changing light intensity"
         );
 
         editor_config.raster_config.tonemapping_exposure_ev = -4.5f;
@@ -109,6 +112,14 @@ int main() {
             control.TickGameThread(editor_config, 0) == 0 &&
                 std::abs(SnapshotFloat("Render.Raster.Tonemapping.ExposureEV") + 4.5) < 0.0001,
             "Editor-owned mutation did not synchronize back to the cvar registry"
+        );
+
+        editor_config.raytracing_config.tone_mapping_cfg.exposure_bias = -1.25f;
+        Expect(
+            control.TickGameThread(editor_config, 0) == 0 &&
+                std::abs(SnapshotFloat("Render.Raytracing.Tonemapping.ExposureBiasEV") + 1.25) < 0.0001 &&
+                std::abs(editor_config.raytracing_config.directional_light_intensity - 6.0f) < 0.0001f,
+            "Raytracing presentation exposure did not synchronize without changing light intensity"
         );
 
         CVar::CVarSetResult threaded_set;
@@ -148,7 +159,7 @@ int main() {
         Expect(
             !CVar::Find("Render.Raster.Bloom.Enabled").has_value() &&
                 !CVar::Find("Render.Raster.Tonemapping.ExposureEV").has_value() &&
-                !CVar::Find("Render.Raytracing.Exposure").has_value(),
+                !CVar::Find("Render.Raytracing.Tonemapping.ExposureBiasEV").has_value(),
             "live registrations outlived their EditorConfig binding"
         );
     }

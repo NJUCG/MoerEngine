@@ -261,7 +261,7 @@ struct EngineConsoleControl::Impl {
             std::scoped_lock lock(live_mutex);
             bloom.applied               = config.raster_config.bloom_enabled;
             raster_exposure.applied     = config.raster_config.tonemapping_exposure_ev;
-            raytracing_exposure.applied = config.raytracing_config.exposure;
+            raytracing_exposure.applied = config.raytracing_config.tone_mapping_cfg.exposure_bias;
         }
 
         auto bloom_result = CVar::RegisterBool(
@@ -299,13 +299,13 @@ struct EngineConsoleControl::Impl {
 
         auto raytracing_exposure_result = CVar::RegisterFloat(
             MakeDescriptor(
-                "Render.Raytracing.Exposure",
-                "Raytracing presentation exposure multiplier.",
+                "Render.Raytracing.Tonemapping.ExposureBiasEV",
+                "Raytracing tonemapping exposure bias in EV stops.",
                 CVar::EFlags::None,
-                0.0,
+                -10.0,
                 10.0
             ),
-            config.raytracing_config.exposure,
+            config.raytracing_config.tone_mapping_cfg.exposure_bias,
             [this](double, double new_value) {
                 std::scoped_lock lock(live_mutex);
                 raytracing_exposure.pending = new_value;
@@ -314,7 +314,7 @@ struct EngineConsoleControl::Impl {
         RequireLiveRegistration(
             raytracing_exposure_registration,
             std::move(raytracing_exposure_result),
-            "Render.Raytracing.Exposure"
+            "Render.Raytracing.Tonemapping.ExposureBiasEV"
         );
     }
 
@@ -359,7 +359,8 @@ struct EngineConsoleControl::Impl {
                 raster_exposure.applied = current_raster_exposure;
             }
         }
-        const double current_raytracing_exposure = static_cast<double>(config.raytracing_config.exposure);
+        const double current_raytracing_exposure =
+            static_cast<double>(config.raytracing_config.tone_mapping_cfg.exposure_bias);
         if (!raytracing_exposure.pending.has_value() &&
             current_raytracing_exposure != raytracing_exposure.applied) {
             const auto result =
@@ -386,8 +387,10 @@ struct EngineConsoleControl::Impl {
             raster_exposure.pending.reset();
         }
         if (raytracing_exposure.pending.has_value()) {
-            config.raytracing_config.exposure = static_cast<float>(*raytracing_exposure.pending);
-            const double applied              = static_cast<double>(config.raytracing_config.exposure);
+            config.raytracing_config.tone_mapping_cfg.exposure_bias =
+                static_cast<float>(*raytracing_exposure.pending);
+            const double applied =
+                static_cast<double>(config.raytracing_config.tone_mapping_cfg.exposure_bias);
             static_cast<void>(raytracing_exposure_registration.SynchronizeOwnerValue(applied));
             raytracing_exposure.applied = applied;
             raytracing_exposure.pending.reset();
