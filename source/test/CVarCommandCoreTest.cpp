@@ -193,10 +193,13 @@ void TestTypedParsingAndRanges() {
         },
         1.0
     );
+    CVar::RegistrationResult owner_float =
+        CVar::RegisterFloat(CVar::CVarDescriptor{.name = "Test.Types.OwnerFloat"}, 3.5);
     CVar::RegistrationResult string_cvar =
         CVar::RegisterString(CVar::CVarDescriptor{.name = "Test.Types.String"}, "initial");
     Expect(
-        bool_cvar.Succeeded() && int_cvar.Succeeded() && float_cvar.Succeeded() && string_cvar.Succeeded(),
+        bool_cvar.Succeeded() && int_cvar.Succeeded() && float_cvar.Succeeded() &&
+            owner_float.Succeeded() && string_cvar.Succeeded(),
         "typed cvar registration failed"
     );
 
@@ -244,6 +247,29 @@ void TestTypedParsingAndRanges() {
     Expect(
         CVar::SetValueFromString("Test.Types.Float", "-0.1").status == CVar::ESetStatus::OutOfRange,
         "float range accepted a value below minimum"
+    );
+    Expect(
+        owner_float.registration.SynchronizeOwnerValue(4.5).Succeeded(),
+        "owner synchronization rejected a finite float"
+    );
+    Expect(
+        owner_float.registration.SynchronizeOwnerValue(std::numeric_limits<double>::quiet_NaN()).status ==
+            CVar::ESetStatus::TypeMismatch,
+        "owner synchronization accepted NaN"
+    );
+    Expect(
+        owner_float.registration.SynchronizeOwnerValue(std::numeric_limits<double>::infinity()).status ==
+            CVar::ESetStatus::TypeMismatch,
+        "owner synchronization accepted positive infinity"
+    );
+    Expect(
+        owner_float.registration.SynchronizeOwnerValue(-std::numeric_limits<double>::infinity()).status ==
+            CVar::ESetStatus::TypeMismatch,
+        "owner synchronization accepted negative infinity"
+    );
+    Expect(
+        CVar::Find("Test.Types.OwnerFloat")->value == "4.5",
+        "rejected non-finite owner synchronization changed the float value"
     );
     Expect(
         CVar::SetValueFromString("Test.Types.String", "hello world").Succeeded(),

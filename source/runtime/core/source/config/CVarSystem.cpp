@@ -539,6 +539,12 @@ private:
                 };
             }
         } else if constexpr (std::is_same_v<T, double>) {
+            if (!std::isfinite(_value)) {
+                return {
+                    .status = ESetStatus::TypeMismatch,
+                    .detail = "expected finite floating-point value",
+                };
+            }
             if (descriptor.min_value && _value < *descriptor.min_value) {
                 return {
                     .status = ESetStatus::OutOfRange,
