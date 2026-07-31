@@ -53,6 +53,7 @@ void ConsolePanel::ShowWindow(bool* open) {
     ImGui::Checkbox("Auto-scroll", &auto_scroll);
     ImGui::SameLine();
     filter.Draw("Filter", 240.0f);
+    input_active = ImGui::IsItemActive() || ImGui::IsItemFocused();
     ImGui::Separator();
 
     const float footer_height =
@@ -120,7 +121,7 @@ void ConsolePanel::ShowWindow(bool* open) {
         &ConsolePanel::InputCallback,
         this
     );
-    input_active = ImGui::IsItemActive() || ImGui::IsItemFocused();
+    input_active = input_active || ImGui::IsItemActive() || ImGui::IsItemFocused();
     ImGui::PopItemWidth();
     if (submitted) {
         const Command::ESubmitStatus status = model.Submit(input_buffer.data());
