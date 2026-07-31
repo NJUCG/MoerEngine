@@ -19,6 +19,7 @@ struct EditorWindowVisibilitySettings {
     bool inspector       = true;
     bool config          = true;
     bool scene_editing   = true;
+    bool console         = false;
     bool profile_capture = false;
     bool profile_viewer  = false;
     bool memory_profiler = false;

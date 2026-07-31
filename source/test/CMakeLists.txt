@@ -22,6 +22,49 @@ set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME ConsoleLogCoreContract COMMAND $<TARGET_FILE:${test_target}>)
 set_tests_properties(ConsoleLogCoreContract PROPERTIES TIMEOUT 60)
 
+set(test_target TestConsoleSessionModel)
+add_executable(
+    ${test_target}
+    "ConsoleSessionModelTest.cpp"
+    "${moer_source_dir}/editor/console/ConsoleSessionModel.cpp"
+)
+target_include_directories(
+    ${test_target}
+    PRIVATE "${moer_source_dir}/editor"
+)
+target_link_libraries(${test_target}
+    PRIVATE Moer::Runtime
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME ConsoleSessionModelContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(ConsoleSessionModelContract PROPERTIES TIMEOUT 60)
+
+set(test_target TestEngineConsoleControl)
+add_executable(${test_target} "EngineConsoleControlTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Runtime
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME EngineConsoleControlContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(EngineConsoleControlContract PROPERTIES TIMEOUT 60)
+
+set(test_target TestEditorUISettings)
+add_executable(
+    ${test_target}
+    "EditorUISettingsTest.cpp"
+    "${moer_source_dir}/editor/EditorUISettings.cpp"
+)
+target_include_directories(
+    ${test_target}
+    PRIVATE "${moer_source_dir}/editor"
+)
+target_link_libraries(${test_target}
+    PRIVATE ImGui::imgui
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME EditorUISettingsContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(EditorUISettingsContract PROPERTIES TIMEOUT 60)
+
 set(test_target TestFatalDiagnostics)
 add_executable(${test_target} "FatalDiagnosticsTest.cpp")
 target_include_directories(${test_target}

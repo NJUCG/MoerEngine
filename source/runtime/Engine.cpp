@@ -1,6 +1,8 @@
 #include "Engine.h"
+#include "EngineConsoleControl.h"
 
 // Runtime
+#include "config/CVarSystem.h"
 #include "config/ConfigManager.h"
 #include "misc/Assert.h"
 #include "misc/ScopedLogTimer.h"
@@ -1268,6 +1270,49 @@ void Engine::Init(
         );
     }
 
+    m_console_control = MakeUnique<EngineConsoleControl>(
+        EngineConsoleStartupConfig{
+            .render_thread = config.engine.threading.render_thread,
+            .rhi_thread = config.engine.threading.rhi_thread,
+            .rhi_bypass = config.engine.threading.rhi_bypass,
+            .profile_logging = config.engine.threading.profile_logging,
+            .parallel_recording =
+                config.engine.threading.parallel_recording,
+            .parallel_record_workers =
+                config.engine.threading.parallel_record_workers,
+            .parallel_record_verify =
+                config.engine.threading.parallel_record_verify,
+            .parallel_record_profile =
+                config.engine.threading.parallel_record_profile,
+            .parallel_record_min_work_units_per_job =
+                config.engine.threading.parallel_record_min_work_units_per_job,
+            .configured_submission_batch_window =
+                config.engine.threading.submission_batch_window,
+            .rhi_heartbeat_enabled =
+                config.engine.threading.rhi_heartbeat_enabled,
+            .rhi_heartbeat_stall_timeout_ms =
+                config.engine.threading.rhi_heartbeat_stall_timeout_ms,
+            .rhi_heartbeat_poll_interval_ms =
+                config.engine.threading.rhi_heartbeat_poll_interval_ms,
+            .max_frame_lag = config.engine.threading.max_frame_lag,
+            .max_frames_in_flight = config.engine.rhi.max_frame_in_flight,
+            .raster_rdg_enabled =
+                config.engine.render.raster.render_graph,
+            .raster_rdg_debug_dump =
+                config.engine.render.raster.render_graph_debug_dump,
+            .raster_rdg_parallel_recording =
+                config.engine.render.raster.render_graph_parallel_recording,
+            .raytracing_rdg_enabled =
+                config.engine.render.raytracing.render_graph,
+            .raytracing_rdg_debug_dump =
+                config.engine.render.raytracing.render_graph_debug_dump,
+            .raytracing_rdg_parallel_recording =
+                config.engine.render.raytracing.render_graph_parallel_recording,
+        },
+        submission_batch_window
+    );
+    CVar::SealStartupOnlyCVars();
+
     try {
         // Renderers retain this facade pointer for their whole lifetime.
         // Individual ProfileDump generations bind and unbind session state
@@ -1406,6 +1451,7 @@ void Engine::Init(
     m_editor_config->selected_render_method =
         ParseDefaultRenderMethod(config.engine.render.default_render_method);
     m_editor_config->scene_path = config.engine.scene.scene_path;
+    m_console_control->BindEditorConfig(*m_editor_config);
     if (raster_framebuffer_validation.has_value()) {
         m_editor_config->validation_selected_frame_buffer_name =
             *raster_framebuffer_validation;
@@ -1511,6 +1557,18 @@ void Engine::Run(const EngineHooks& hooks) {
             }
             if (callback) {
                 callback();
+            }
+        };
+    auto on_tick_ui = std::move(runtime_hooks.on_tick_ui);
+    runtime_hooks.on_tick_ui =
+        [this, callback = std::move(on_tick_ui)](Scene& scene) {
+            if (callback) {
+                callback(scene);
+            }
+            if (m_console_control && m_editor_config) {
+                static_cast<void>(
+                    m_console_control->TickGameThread(*m_editor_config)
+                );
             }
         };
     runtime_hooks.on_tick_scripting = [this](Scene& scene) {
@@ -1899,6 +1957,15 @@ Render::ProfileCaptureControllerSnapshot Engine::GetProfileCaptureSnapshot() con
     return snapshot;
 }
 
+SharedPtr<EngineCommandEndpoint> Engine::GetCommandEndpoint() const {
+    if (!m_console_control) {
+        throw std::logic_error(
+            "Engine command processor is unavailable before Engine::Init or after shutdown."
+        );
+    }
+    return m_console_control->GetCommandEndpoint();
+}
+
 void Engine::ShutDown() noexcept {
     if (m_has_shutdown) {
         return;
@@ -2090,6 +2157,7 @@ void Engine::ShutDown() noexcept {
             );
         }
     }
+    m_console_control.reset();
     m_editor_config.reset();
 }
 
