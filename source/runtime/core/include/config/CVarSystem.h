@@ -169,12 +169,13 @@ public:
     CORE_API CVarSetResult SynchronizeOwnerValue(std::string_view _value);
 
     // Reset removes the name first and retires the caller callback thunk.
-    // Calls made outside cvar callbacks and callback-capture destruction wait
-    // for in-flight work. Any Reset made from either chain is non-blocking to
-    // avoid cross-entry wait cycles; the last active dispatcher retires the
-    // thunk after returning from user code. Snapshot visitors are not in-flight
-    // operations after capture: Reset does not wait for them, and a visitor may
-    // finish with an old id/value after a same-name generation is registered.
+    // Calls made outside cvar callbacks, callback-capture destruction, and
+    // snapshot visitors wait for in-flight work. Reset from any of those
+    // user-code chains is non-blocking to avoid cross-entry wait cycles; the
+    // last active dispatcher retires the thunk after returning from user code.
+    // Snapshot visitors are not in-flight operations after capture: Reset does
+    // not wait for them, and a visitor may finish with an old id/value after a
+    // same-name generation is registered.
     CORE_API void Reset() noexcept;
 
 private:
@@ -199,6 +200,8 @@ struct RegistrationResult {
 // visitor call. Copy it inside the callback; never retain the view. The visitor
 // runs after snapshot capture has released its active Entry operation, so Reset
 // may complete concurrently while the immutable old snapshot remains valid.
+// Reset called from visitor code is non-blocking with respect to other active
+// Entry operations to avoid user-code wait cycles.
 using SnapshotVisitor = void (*)(const CVarSnapshotView& _snapshot, void* _context);
 
 namespace Detail {

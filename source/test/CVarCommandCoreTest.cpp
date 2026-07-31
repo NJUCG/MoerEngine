@@ -3,7 +3,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -19,6 +21,10 @@
 namespace {
 
 using namespace Moer;
+
+std::atomic_bool   contract_body_succeeded{false};
+std::atomic_bool   exit_lifetime_destroy_reentered{false};
+CVar::Registration exit_lifetime_registration;
 
 void Expect(bool _condition, std::string_view _message) {
     if (!_condition) {
@@ -777,6 +783,73 @@ void TestFlagsOwnerSyncAndCallbacks() {
             !CVar::Find("Test.Visitor.CrossResetA") && !CVar::Find("Test.Visitor.CrossResetB"),
         "cross-resetting snapshot visitors deadlocked or left a registration active"
     );
+
+    std::atomic_bool        callback_wait_entered{false};
+    std::atomic_bool        reset_visitor_started{false};
+    std::atomic_bool        reset_returned_before_callback_release{false};
+    std::mutex              visitor_cycle_returned_mutex;
+    std::condition_variable visitor_cycle_returned_cv;
+    bool                    visitor_cycle_reset_returned = false;
+    CVar::RegistrationResult visitor_callback_cycle = CVar::RegisterInt(
+        CVar::CVarDescriptor{.name = "Test.Visitor.CallbackWaitCycle"},
+        0,
+        [&](std::int64_t, std::int64_t) {
+            callback_wait_entered.store(true, std::memory_order_release);
+            while (!reset_visitor_started.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            std::unique_lock lock(visitor_cycle_returned_mutex);
+            reset_returned_before_callback_release.store(
+                visitor_cycle_returned_cv.wait_for(lock, std::chrono::seconds(2), [&] {
+                    return visitor_cycle_reset_returned;
+                }),
+                std::memory_order_release
+            );
+        }
+    );
+    Expect(visitor_callback_cycle.Succeeded(), "snapshot visitor callback-cycle fixture did not register");
+    struct VisitorCallbackCycleContext {
+        CVar::Registration*      registration    = nullptr;
+        std::atomic_bool*        visitor_started = nullptr;
+        std::mutex*              returned_mutex  = nullptr;
+        std::condition_variable* returned_cv = nullptr;
+        bool*                    reset_returned = nullptr;
+    } visitor_callback_cycle_context{
+        .registration    = &visitor_callback_cycle.registration,
+        .visitor_started = &reset_visitor_started,
+        .returned_mutex  = &visitor_cycle_returned_mutex,
+        .returned_cv     = &visitor_cycle_returned_cv,
+        .reset_returned  = &visitor_cycle_reset_returned,
+    };
+    std::jthread callback_wait_setter([&] {
+        CVar::SetValueFromString("Test.Visitor.CallbackWaitCycle", "1");
+    });
+    while (!callback_wait_entered.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    std::jthread callback_wait_visitor([&] {
+        CVar::Detail::VisitSnapshotRaw(
+            "Test.Visitor.CallbackWaitCycle",
+            [](const CVar::CVarSnapshotView&, void* _context) {
+                auto& context = *static_cast<VisitorCallbackCycleContext*>(_context);
+                context.visitor_started->store(true, std::memory_order_release);
+                context.registration->Reset();
+                {
+                    std::lock_guard lock(*context.returned_mutex);
+                    *context.reset_returned = true;
+                }
+                context.returned_cv->notify_one();
+            },
+            &visitor_callback_cycle_context
+        );
+    });
+    callback_wait_visitor.join();
+    callback_wait_setter.join();
+    Expect(
+        reset_returned_before_callback_release.load(std::memory_order_acquire) &&
+            !CVar::Find("Test.Visitor.CallbackWaitCycle"),
+        "snapshot visitor Reset waited on an active callback that depended on the visitor"
+    );
 }
 
 void TestListingAndCandidates() {
@@ -1049,9 +1122,41 @@ void TestStartupSealLast() {
     );
 }
 
+void InstallExitLifetimeSmoke() {
+    std::shared_ptr<RegisterOnDestroy> destroy_capture = std::make_shared<RegisterOnDestroy>();
+    destroy_capture->destroyed                         = &exit_lifetime_destroy_reentered;
+    CVar::RegistrationResult result                   = CVar::RegisterBool(
+        CVar::CVarDescriptor{.name = "Test.Lifetime.ExitReentry"},
+        false,
+        [destroy_capture](bool, bool) {}
+    );
+    destroy_capture.reset();
+    Expect(result.Succeeded(), "process-lifetime registration fixture did not register");
+    exit_lifetime_registration = std::move(result.registration);
+}
+
+void VerifyExitLifetimeSmoke() noexcept {
+    bool succeeded = false;
+    try {
+        const std::optional<CVar::CVarSnapshot> before =
+            CVar::Find("Test.Lifetime.ExitReentry");
+        exit_lifetime_registration.Reset();
+        succeeded =
+            contract_body_succeeded.load(std::memory_order_acquire) && before &&
+            exit_lifetime_destroy_reentered.load(std::memory_order_acquire) &&
+            !CVar::Find("Test.Lifetime.ExitReentry");
+    } catch (...) {
+    }
+    std::_Exit(succeeded ? EXIT_SUCCESS : EXIT_FAILURE);
+}
+
 } // namespace
 
 int main() {
+    if (std::atexit(&VerifyExitLifetimeSmoke) != 0) {
+        std::cerr << "CVar/command core contract test could not install its exit-lifetime probe.\n";
+        return EXIT_FAILURE;
+    }
     try {
         TestRegistrationLifetimeAndDescriptors();
         TestTypedParsingAndRanges();
@@ -1060,7 +1165,9 @@ int main() {
         TestCommandProcessing();
         TestBoundedQueuesAndOutputCursor();
         TestStartupSealLast();
-        std::cout << "CVar/command core contract tests passed.\n";
+        InstallExitLifetimeSmoke();
+        std::cout << "CVar/command core contract tests passed.\n" << std::flush;
+        contract_body_succeeded.store(true, std::memory_order_release);
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
         std::cerr << "CVar/command core contract test failed: " << error.what() << '\n';

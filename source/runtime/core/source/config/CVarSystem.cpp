@@ -214,6 +214,7 @@ bool IntIsAboveMaximum(std::int64_t _value, double _maximum) noexcept {
 }
 
 thread_local std::uint32_t callback_destroy_depth = 0;
+thread_local std::uint32_t snapshot_visitor_depth = 0;
 
 struct CallbackOwner {
     CallbackOwner(void* _context, Detail::DestroyCallback _destroy) noexcept :
@@ -269,8 +270,29 @@ struct ActiveCallbackNode {
 thread_local ActiveOperationNode* active_operation = nullptr;
 thread_local ActiveCallbackNode*  active_callback  = nullptr;
 
-bool IsInsideCallbackOrDestroy() noexcept {
-    return active_callback != nullptr || callback_destroy_depth != 0;
+bool IsInsideNonblockingResetContext() noexcept {
+    return active_callback != nullptr || callback_destroy_depth != 0 || snapshot_visitor_depth != 0;
+}
+
+class SnapshotVisitorScope {
+public:
+    SnapshotVisitorScope() noexcept {
+        ++snapshot_visitor_depth;
+    }
+
+    ~SnapshotVisitorScope() {
+        --snapshot_visitor_depth;
+    }
+
+    SnapshotVisitorScope(const SnapshotVisitorScope&)            = delete;
+    SnapshotVisitorScope& operator=(const SnapshotVisitorScope&) = delete;
+};
+
+void InvokeSnapshotVisitor(
+    SnapshotVisitor _visitor, const CVarSnapshotView& _snapshot, void* _context
+) {
+    SnapshotVisitorScope scope;
+    _visitor(_snapshot, _context);
 }
 
 class EntryBase {
@@ -332,7 +354,7 @@ public:
         retired_callback_owner.reset();
 
         std::unique_lock lock(lifetime_mutex);
-        if (IsActiveOnCurrentThread() || IsInsideCallbackOrDestroy()) {
+        if (IsActiveOnCurrentThread() || IsInsideNonblockingResetContext()) {
             return;
         }
         lifetime_cv.wait(lock, [this] {
@@ -759,8 +781,12 @@ struct RegistryData {
 };
 
 RegistryData& GetRegistry() {
-    static RegistryData registry;
-    return registry;
+    // Registrations and their caller-owned destroy thunks may have static
+    // lifetime and re-enter this API during process teardown. Keep the
+    // registry alive until the process releases its address space instead of
+    // depending on cross-module static destruction order.
+    static RegistryData* const registry = new RegistryData();
+    return *registry;
 }
 
 std::shared_ptr<EntryBase> FindEntryById(std::uint64_t _id) {
@@ -973,7 +999,7 @@ bool VisitEntrySnapshot(const std::shared_ptr<EntryBase>& _entry, SnapshotVisito
     // The shared_ptr keeps descriptor storage alive and value owns its copy.
     // End the active operation before entering caller code so cross-entry
     // Reset calls from concurrent visitors cannot form a quiescence wait cycle.
-    _visitor(snapshot, _context);
+    InvokeSnapshotVisitor(_visitor, snapshot, _context);
     return true;
 }
 

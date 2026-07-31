@@ -511,11 +511,13 @@ void EngineCommandProcessor::AppendOutput(std::string_view _text) {
         return;
     }
 
+    std::string owned_text(_text);
     std::lock_guard lock(impl->output_mutex);
     impl->output_lines.push_back({
-        .sequence = impl->next_output_sequence++,
-        .text     = std::string(_text),
+        .sequence = impl->next_output_sequence,
+        .text     = std::move(owned_text),
     });
+    ++impl->next_output_sequence;
     while (impl->output_lines.size() > impl->output_capacity) {
         impl->output_lines.pop_front();
     }
