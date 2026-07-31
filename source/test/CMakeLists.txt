@@ -4,6 +4,15 @@ add_subdirectory(math)
 add_subdirectory(remote)
 add_subdirectory(scripting)
 
+set(test_target TestCVarCommandCore)
+add_executable(${test_target} "CVarCommandCoreTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Core
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME CVarCommandCoreContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(CVarCommandCoreContract PROPERTIES TIMEOUT 60)
+
 set(test_target TestFatalDiagnostics)
 add_executable(${test_target} "FatalDiagnosticsTest.cpp")
 target_include_directories(${test_target}
