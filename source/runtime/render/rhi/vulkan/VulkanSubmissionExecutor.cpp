@@ -4,6 +4,7 @@
 #include "platform/Platform.h"
 #include "rhi/RHI.h"
 #include "rhi/RHISubmissionPipelinePolicy.h"
+#include "rhi/RHIThreadHeartbeat.h"
 #include "rhi/RHIThreadOwnership.h"
 #include "taskgraph/TaskGraph.h"
 #include "VulkanDevice.h"
@@ -1759,20 +1760,35 @@ void VulkanSubmissionExecutor::ShutDown() {
 void VulkanSubmissionExecutor::RunExecutor() {
     Platform::SetCurrentThreadName("Moer Vulkan Translate");
     RHIThreadRoleScope owner_scope(ERHIThreadRole::Translate);
+    RHIThreadHeartbeatScope heartbeat(
+        ERHIThreadRole::Translate,
+        ERHIHeartbeatDomain::General,
+        ERHIHeartbeatStage::Dispatch
+    );
     while (true) {
         Request request{};
         {
+            heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
             std::unique_lock lock(mutex);
-            cv.wait(lock, [this] {
+            RHIThreadHeartbeatWaitLock wait_lock(
+                lock, heartbeat, ERHIHeartbeatStage::Dispatch
+            );
+            cv.wait(wait_lock, [this] {
                 return constructor_abort || !requests.empty();
             });
             if (constructor_abort && requests.empty()) {
+                heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
                 break;
             }
             request = std::move(requests.front());
             requests.pop_front();
         }
 
+        heartbeat.Pulse(
+            request.kind == ERequestKind::Submit ?
+                ERHIHeartbeatStage::Translate :
+                ERHIHeartbeatStage::AwaitCompletion
+        );
         BatchExceptionState exception_state{};
         std::exception_ptr  request_failure{};
         const VulkanSubmissionDetail::WorkerRequestDispatchResult dispatch_result =
@@ -1851,9 +1867,11 @@ void VulkanSubmissionExecutor::RunExecutor() {
                 }
             );
         if (dispatch_result.stop) {
+            heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
             break;
         }
     }
+    heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
     StopSubmissionThread();
 }
 
@@ -1872,20 +1890,31 @@ bool VulkanSubmissionExecutor::EnqueueSubmissionWork(SubmissionWork&& _work) {
 void VulkanSubmissionExecutor::RunSubmission() {
     Platform::SetCurrentThreadName("Moer Vulkan Submission");
     RHIThreadRoleScope owner_scope(ERHIThreadRole::Submission);
+    RHIThreadHeartbeatScope heartbeat(
+        ERHIThreadRole::Submission,
+        ERHIHeartbeatDomain::General,
+        ERHIHeartbeatStage::Dispatch
+    );
     for (;;) {
         SubmissionWork work{};
         {
+            heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
             std::unique_lock lock(submission_mutex);
-            submission_cv.wait(lock, [this] {
+            RHIThreadHeartbeatWaitLock wait_lock(
+                lock, heartbeat, ERHIHeartbeatStage::Dispatch
+            );
+            submission_cv.wait(wait_lock, [this] {
                 return !submission_accepting || !submission_work.empty();
             });
             if (submission_work.empty()) {
                 assert(!submission_accepting);
+                heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
                 break;
             }
             work = std::move(submission_work.front());
             submission_work.pop_front();
         }
+        heartbeat.Pulse(ERHIHeartbeatStage::Submit);
         if (work.execute.valid()) {
             // packaged_task captures exceptions and publishes them to the
             // waiting Translate owner; none may escape this service thread.
@@ -1907,10 +1936,16 @@ void VulkanSubmissionExecutor::StopSubmissionThread() {
 
 void VulkanSubmissionExecutor::WaitForPipelineCapacity() {
     while (in_flight_batches.size() >= batch_window) {
+        RHIThreadHeartbeat::Get().PulseCurrent(
+            ERHIHeartbeatStage::WaitForPipelineCapacity
+        );
         std::shared_ptr<Completion> completion =
             std::move(in_flight_batches.front());
         in_flight_batches.pop_front();
         completion->Wait();
+        RHIThreadHeartbeat::Get().PulseCurrent(
+            ERHIHeartbeatStage::Translate
+        );
     }
 }
 
@@ -3485,9 +3520,15 @@ void VulkanSubmissionExecutor::ProcessBatch(
                         (void)LambdaTask::Dispatch(
                             [slot, entry, &completed, &translate_slot] {
                                 RHIThreadRoleScope translate_worker(ERHIThreadRole::Translate);
+                                RHIThreadHeartbeatScope heartbeat(
+                                    ERHIThreadRole::Translate,
+                                    ERHIHeartbeatDomain::General,
+                                    ERHIHeartbeatStage::Translate
+                                );
                                 translate_slot(
                                     *slot, std::move(entry->submit)
                                 );
+                                heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
                                 completed.count_down();
                             },
                             EThread::AnyThread_NormalPri

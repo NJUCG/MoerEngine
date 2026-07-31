@@ -2,6 +2,7 @@
 
 #include "log/LogSystem.h"
 #include "platform/Platform.h"
+#include "rhi/RHIThreadHeartbeat.h"
 #include "rhi/RHIThreadOwnership.h"
 
 #include <cassert>
@@ -143,14 +144,24 @@ bool RHIExecutorRecordingHandoffQueue::IsIdle() const noexcept {
 void RHIExecutorRecordingHandoffQueue::Run(std::stop_token _stop_token) noexcept {
     Platform::SetCurrentThreadName("Moer RHI Executor");
     RHIThreadRoleScope owner_scope(ERHIThreadRole::Executor);
+    RHIThreadHeartbeatScope heartbeat(
+        ERHIThreadRole::Executor,
+        ERHIHeartbeatDomain::General,
+        ERHIHeartbeatStage::Dispatch
+    );
 
     for (;;) {
         RHIExecutorRecordingHandoffWork work{};
         {
+            heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
             std::unique_lock lock(mutex);
-            work_cv.wait(lock, _stop_token, [this] { return !pending.empty(); });
+            RHIThreadHeartbeatWaitLock wait_lock(
+                lock, heartbeat, ERHIHeartbeatStage::Dispatch
+            );
+            work_cv.wait(wait_lock, _stop_token, [this] { return !pending.empty(); });
             if (pending.empty()) {
                 assert(_stop_token.stop_requested());
+                heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
                 break;
             }
             work = std::move(pending.front());
@@ -160,6 +171,7 @@ void RHIExecutorRecordingHandoffQueue::Run(std::stop_token _stop_token) noexcept
 
         bool ready = true;
         bool cancelled = false;
+        heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
         for (const RHIRecordingGateRef& prerequisite : work.prerequisites) {
             if (!prerequisite) {
                 ready = false;
@@ -167,7 +179,9 @@ void RHIExecutorRecordingHandoffQueue::Run(std::stop_token _stop_token) noexcept
             }
             ERHIRecordingStatus status = prerequisite->Status();
             if (status == ERHIRecordingStatus::Pending) {
+                heartbeat.Pulse(ERHIHeartbeatStage::WaitForDependency);
                 status = prerequisite->Wait(_stop_token);
+                heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
             }
             if (status != ERHIRecordingStatus::Succeeded) {
                 ready = false;
@@ -195,6 +209,7 @@ void RHIExecutorRecordingHandoffQueue::Run(std::stop_token _stop_token) noexcept
         idle_cv.notify_all();
 
         if (cancelled) {
+            heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
             break;
         }
     }
@@ -210,6 +225,7 @@ void RHIExecutorRecordingHandoffQueue::Run(std::stop_token _stop_token) noexcept
     for (RHIExecutorRecordingHandoffWork& work : rejected) {
         ResolveNoThrow(work, ERHIRecordingHandoffResult::Cancel);
     }
+    heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
 }
 
 void RHIExecutorRecordingHandoffQueue::ResolveNoThrow(

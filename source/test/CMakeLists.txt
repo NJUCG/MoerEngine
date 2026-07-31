@@ -380,6 +380,17 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHIThreadOwnershipContract COMMAND $<TARGET_FILE:${test_target}>)
 
+# CPU-only deterministic watchdog contract. It uses an injected clock/sink to
+# verify stall suppression, recovery, parked stages, slot reuse and teardown.
+set(test_target TestRHIThreadHeartbeat)
+add_executable(${test_target} "RHIThreadHeartbeatTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME RHIThreadHeartbeatContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(RHIThreadHeartbeatContract PROPERTIES TIMEOUT 60)
+
 # CPU-only contract for the bounded cross-batch submission policy. It verifies
 # the configured window clamp and the correctness-critical Graphics/Compute
 # native-queue alias fallback without requiring alias-capable Vulkan hardware.

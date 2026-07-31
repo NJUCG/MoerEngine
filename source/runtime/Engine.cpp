@@ -1305,7 +1305,9 @@ void Engine::Init(
         "[Threading] render_thread={}, rhi_thread={}, rhi_bypass={}, max_frame_lag={}, "
         "profile_logging={}, parallel_recording={}, parallel_record_workers={}, "
         "parallel_record_verify={}, parallel_record_profile={}, "
-        "parallel_record_min_work_units_per_job={}, submission_batch_window={}",
+        "parallel_record_min_work_units_per_job={}, submission_batch_window={}, "
+        "rhi_heartbeat_enabled={}, rhi_heartbeat_stall_timeout_ms={}, "
+        "rhi_heartbeat_poll_interval_ms={}",
         config.engine.threading.render_thread,
         config.engine.threading.rhi_thread,
         config.engine.threading.rhi_bypass,
@@ -1316,7 +1318,10 @@ void Engine::Init(
         config.engine.threading.parallel_record_verify,
         config.engine.threading.parallel_record_profile,
         config.engine.threading.parallel_record_min_work_units_per_job,
-        submission_batch_window
+        submission_batch_window,
+        config.engine.threading.rhi_heartbeat_enabled,
+        config.engine.threading.rhi_heartbeat_stall_timeout_ms,
+        config.engine.threading.rhi_heartbeat_poll_interval_ms
     );
 
     if (config.engine.threading.render_thread) {
@@ -1378,6 +1383,12 @@ void Engine::Init(
                 .parallel_record_min_work_units_per_job =
                     config.engine.threading.parallel_record_min_work_units_per_job,
                 .submission_batch_window = submission_batch_window,
+                .rhi_heartbeat_enabled =
+                    config.engine.threading.rhi_heartbeat_enabled,
+                .rhi_heartbeat_stall_timeout_ms =
+                    config.engine.threading.rhi_heartbeat_stall_timeout_ms,
+                .rhi_heartbeat_poll_interval_ms =
+                    config.engine.threading.rhi_heartbeat_poll_interval_ms,
                 .parallel_record_worker_throw_trigger =
                     parallel_record_worker_throw_trigger,
                 .vulkan_present_submit_fault_trigger = vulkan_present_submit_fault_trigger,

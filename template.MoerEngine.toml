@@ -30,6 +30,11 @@ parallel_record_min_work_units_per_job = 64
 # Runtime clamps this value to the supported range [1, 8].
 # If Graphics and Compute alias the same native queue, the effective window is 1.
 submission_batch_window = 2
+# Backend-neutral watchdog for Executor/Translate/Submission/Completion owners.
+# Disabled creates no monitor thread and adds only a fast false check.
+rhi_heartbeat_enabled = false
+rhi_heartbeat_stall_timeout_ms = 5000
+rhi_heartbeat_poll_interval_ms = 1000
 
 [engine.profile_dump]
 # Enqueues the initial capture session during Engine startup. The Engine-owned

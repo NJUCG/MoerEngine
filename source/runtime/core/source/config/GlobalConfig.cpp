@@ -51,6 +51,14 @@ GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_p
             .value_or(uint{64});
     loaded_config.engine.threading.submission_batch_window =
         toml_config.at_path("engine.threading.submission_batch_window").value_or(uint{2});
+    loaded_config.engine.threading.rhi_heartbeat_enabled =
+        toml_config.at_path("engine.threading.rhi_heartbeat_enabled").value_or(false);
+    loaded_config.engine.threading.rhi_heartbeat_stall_timeout_ms =
+        toml_config.at_path("engine.threading.rhi_heartbeat_stall_timeout_ms")
+            .value_or(uint{5000});
+    loaded_config.engine.threading.rhi_heartbeat_poll_interval_ms =
+        toml_config.at_path("engine.threading.rhi_heartbeat_poll_interval_ms")
+            .value_or(uint{1000});
     loaded_config.engine.threading.max_frame_lag =
         toml_config.at_path("engine.threading.max_frame_lag").value_or(uint{0});
 

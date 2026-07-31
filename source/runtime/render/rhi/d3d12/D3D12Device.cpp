@@ -4,6 +4,7 @@
 
 #include "log/LogSystem.h"
 #include "rhi/RHIResourceInitilizer.h"
+#include "rhi/RHIThreadHeartbeat.h"
 #include "rhi/RHIThreadOwnership.h"
 
 #include "Core.h"
@@ -983,18 +984,29 @@ Allocation D3D12GpuGlobalAllocator::AllocateTextureHeap(
 
 void D3D12GraphicsCommandQueue::ExecuteThread(std::stop_token _st) {
     RHIThreadRoleScope completion_owner(ERHIThreadRole::Completion);
+    RHIThreadHeartbeatScope heartbeat(
+        ERHIThreadRole::Completion,
+        ERHIHeartbeatDomain::Graphics,
+        ERHIHeartbeatStage::PollCompletion
+    );
     do {
         {
+            heartbeat.Pulse(ERHIHeartbeatStage::PollCompletion);
             std::unique_lock lck(mtx);
-            if (!cv.wait(lck, _st, [&]() {
-                    return !event_queue.empty();
-                })) {
+            RHIThreadHeartbeatWaitLock wait_lock(
+                lck, heartbeat, ERHIHeartbeatStage::PollCompletion
+            );
+            const bool work_ready = cv.wait(wait_lock, _st, [&]() {
+                return !event_queue.empty();
+            });
+            if (!work_ready) {
                 continue;
             }
         }
 
         uint64 fence_value; // local state
 
+        heartbeat.Pulse(ERHIHeartbeatStage::AwaitCompletion);
         is_second_thread_busy = true;
         while (true) {
             std::optional<QueueEvent> evt;
@@ -1042,6 +1054,7 @@ void D3D12GraphicsCommandQueue::ExecuteThread(std::stop_token _st) {
         is_second_thread_busy = false;
 
     } while (!_st.stop_requested());
+    heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);
 }
 
 struct D3D12CommandPreprocessVisitor {
@@ -1502,6 +1515,11 @@ void D3D12GraphicsCommandQueue::Wait(WaitEvent _event) {
 }
 
 WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
+    RHIThreadHeartbeatScope heartbeat(
+        ERHIThreadRole::Submission,
+        ERHIHeartbeatDomain::Graphics,
+        ERHIHeartbeatStage::Translate
+    );
     struct SignalFailureGuard {
         CmdSubmit* submit{nullptr};
         bool       armed{true};
@@ -1789,7 +1807,9 @@ WaitEvent D3D12GraphicsCommandQueue::Execute(CmdSubmit&& _submit) {
     try {
         {
             ID3D12CommandList* ppCommandLists[]{cmd_list->Native()};
+            heartbeat.Pulse(ERHIHeartbeatStage::NativeSubmit);
             queue->ExecuteCommandLists(1, ppCommandLists);
+            heartbeat.Pulse(ERHIHeartbeatStage::Submit);
             native_commands_published = true;
         }
         DX_CHECK_HRESULT(queue->Signal(queue_fence.Native(), next_fence_value));
