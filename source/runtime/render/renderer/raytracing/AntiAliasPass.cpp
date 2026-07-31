@@ -216,64 +216,66 @@ bool AntialiasPass::AddPasses(
         );
     }
 
+    UploadGraphParameters upload_parameters{};
+    upload_parameters.constants = constants;
+    upload_parameters.owner     = owner;
+    upload_parameters.command   = command;
     graph.AddRecordPass(
         "RT.AntiAlias.UploadConstants",
-        [=](RenderGraph::PassBuilder& builder) {
+        std::move(upload_parameters),
+        [](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
-                       RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
-                .Write(constants, RenderGraph::BufferState::TransferDestination);
+                RenderGraph::QueueRole::Graphics,
+                RenderGraph::PipelineType::Copy
+            );
         },
-        [owner, command](CommandList& cmd_list) {
+        [](CommandList& cmd_list, const UploadGraphParameters& parameters) {
             ScopedGpuMarker marker(
                 cmd_list,
                 "Pass: RT AntiAlias Constants Upload",
                 GpuMarkerPalette::Transfer()
             );
-            RecordConstantsUpload(cmd_list, *owner, command);
+            RecordConstantsUpload(
+                cmd_list,
+                *parameters.owner,
+                parameters.command
+            );
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
 
+    DispatchGraphParameters dispatch_parameters{};
+    dispatch_parameters.constants      = constants;
+    dispatch_parameters.hdr_color      = graph_resources.hdr_color;
+    dispatch_parameters.motion         = graph_resources.motion;
+    dispatch_parameters.feedback_read  = feedback_read;
+    dispatch_parameters.resolved_color = graph_resources.resolved_color;
+    dispatch_parameters.feedback_write = feedback_write;
+    dispatch_parameters.owner          = owner;
+    dispatch_parameters.command        = command;
+    dispatch_parameters.resources      = resources;
     graph.AddRecordPass(
         "RT.AntiAlias.Dispatch",
-        [=](RenderGraph::PassBuilder& builder) {
-            builder
-                .ExecuteOn(
-                    RenderGraph::QueueRole::Graphics,
-                    RenderGraph::PipelineType::Compute
-                )
-                .Read(constants, RenderGraph::BufferState::ShaderResource)
-                .Read(
-                    graph_resources.hdr_color,
-                    RenderGraph::TextureState::Sampled
-                )
-                .Read(
-                    graph_resources.motion,
-                    RenderGraph::TextureState::Sampled
-                )
-                .Read(
-                    feedback_read,
-                    RenderGraph::TextureState::Sampled
-                )
-                .Write(
-                    graph_resources.resolved_color,
-                    RenderGraph::TextureState::UnorderedAccess
-                )
-                .Write(
-                    feedback_write,
-                    RenderGraph::TextureState::UnorderedAccess
-                );
+        std::move(dispatch_parameters),
+        [](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(
+                RenderGraph::QueueRole::Graphics,
+                RenderGraph::PipelineType::Compute
+            );
         },
-        [owner, command, resources](CommandList& cmd_list) {
+        [](CommandList& cmd_list, const DispatchGraphParameters& parameters) {
             ScopedGpuMarker marker(
                 cmd_list,
                 "AntiAliasPass",
                 GpuMarkerPalette::Pass(),
                 EGpuMarkerMode::Timestamp
             );
-            RecordTAA(cmd_list, *owner, command, resources);
+            RecordTAA(
+                cmd_list,
+                *parameters.owner,
+                parameters.command,
+                parameters.resources
+            );
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
     );
