@@ -87,29 +87,12 @@ bool EnsureDirectory(const std::filesystem::path& path) {
 
 std::filesystem::path ResolveEditorSettingsPath(const std::filesystem::path& workspace_path) {
 #if defined(_WIN32)
-    if (const auto override_path = ReadEnvironmentPath(L"MOER_EDITOR_SETTINGS_DIR")) {
-        const std::filesystem::path resolved = MakeAbsoluteNormalized(*override_path);
-        if (EnsureDirectory(resolved)) {
-            return resolved;
-        }
-        LOG_WARNING(
-            "[EditorSettings] Unable to create override directory `{}`; falling back.", resolved.string()
-        );
-    }
-
-    if (const auto local_app_data = ReadEnvironmentPath(L"LOCALAPPDATA")) {
-        const std::filesystem::path resolved =
-            MakeAbsoluteNormalized(*local_app_data / "MoerEngine" / "MoerEditor");
-        if (EnsureDirectory(resolved)) {
-            return resolved;
-        }
-        LOG_WARNING(
-            "[EditorSettings] Unable to create LocalAppData directory `{}`; falling back.", resolved.string()
-        );
-    }
+    const auto override_path = ReadEnvironmentPath(L"MOER_EDITOR_SETTINGS_DIR");
 #else
-    if (const auto override_path = ReadEnvironmentPath("MOER_EDITOR_SETTINGS_DIR")) {
-        const std::filesystem::path resolved = MakeAbsoluteNormalized(*override_path);
+    const auto override_path = ReadEnvironmentPath("MOER_EDITOR_SETTINGS_DIR");
+#endif
+    if (override_path) {
+        const std::filesystem::path resolved = ResolveWorkspacePath(workspace_path, *override_path);
         if (EnsureDirectory(resolved)) {
             return resolved;
         }
@@ -118,30 +101,16 @@ std::filesystem::path ResolveEditorSettingsPath(const std::filesystem::path& wor
         );
     }
 
-    if (const auto xdg_config_home = ReadEnvironmentPath("XDG_CONFIG_HOME")) {
-        const std::filesystem::path resolved =
-            MakeAbsoluteNormalized(*xdg_config_home / "MoerEngine" / "MoerEditor");
-        if (EnsureDirectory(resolved)) {
-            return resolved;
-        }
-    } else if (const auto home = ReadEnvironmentPath("HOME")) {
-        const std::filesystem::path resolved =
-            MakeAbsoluteNormalized(*home / ".config" / "MoerEngine" / "MoerEditor");
-        if (EnsureDirectory(resolved)) {
-            return resolved;
-        }
-    }
-#endif
-
-    const std::filesystem::path fallback = MakeAbsoluteNormalized(workspace_path / "saved" / "editor");
-    if (!EnsureDirectory(fallback)) {
+    const std::filesystem::path project_settings =
+        MakeAbsoluteNormalized(workspace_path / "saved" / "editor");
+    if (!EnsureDirectory(project_settings)) {
         LOG_WARNING(
-            "[EditorSettings] Unable to create fallback directory `{}`. "
+            "[EditorSettings] Unable to create project-local directory `{}`. "
             "Editor state will not persist.",
-            fallback.string()
+            project_settings.string()
         );
     }
-    return fallback;
+    return project_settings;
 }
 
 } // namespace

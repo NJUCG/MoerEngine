@@ -85,7 +85,7 @@ private:
 
 class ScopedEditorSettingsEnvironment {
 public:
-    explicit ScopedEditorSettingsEnvironment(const std::filesystem::path& value) {
+    explicit ScopedEditorSettingsEnvironment(const std::optional<std::filesystem::path>& value) {
 #if defined(_WIN32)
         const DWORD required_size = GetEnvironmentVariableW(L"MOER_EDITOR_SETTINGS_DIR", nullptr, 0);
         if (required_size > 0) {
@@ -95,17 +95,16 @@ public:
             }
         }
         Require(
-            SetEnvironmentVariableW(L"MOER_EDITOR_SETTINGS_DIR", value.c_str()) != FALSE,
-            "failed to set MOER_EDITOR_SETTINGS_DIR"
+            SetEnvironmentVariableW(L"MOER_EDITOR_SETTINGS_DIR", value ? value->c_str() : nullptr) != FALSE,
+            "failed to update MOER_EDITOR_SETTINGS_DIR"
         );
 #else
         if (const char* current = std::getenv("MOER_EDITOR_SETTINGS_DIR")) {
             original_ = std::string(current);
         }
-        Require(
-            setenv("MOER_EDITOR_SETTINGS_DIR", value.c_str(), 1) == 0,
-            "failed to set MOER_EDITOR_SETTINGS_DIR"
-        );
+        const int update_result = value ? setenv("MOER_EDITOR_SETTINGS_DIR", value->c_str(), 1) :
+                                          unsetenv("MOER_EDITOR_SETTINGS_DIR");
+        Require(update_result == 0, "failed to update MOER_EDITOR_SETTINGS_DIR");
 #endif
     }
 
@@ -303,18 +302,17 @@ void TestLegacyMigrationPriority(const std::filesystem::path& root) {
     );
 }
 
-void TestEditorSettingsPathIsCwdIndependent(const std::filesystem::path& root) {
-    const std::filesystem::path settings_root = std::filesystem::absolute(root / "settings");
-    const std::filesystem::path workspace     = std::filesystem::absolute(root / "workspace");
-    const std::filesystem::path cwd_a         = root / "cwd-a";
-    const std::filesystem::path cwd_b         = root / "cwd-b";
+void TestEditorSettingsPathIsProjectLocalAndCwdIndependent(const std::filesystem::path& root) {
+    const std::filesystem::path workspace = std::filesystem::absolute(root / "workspace");
+    const std::filesystem::path cwd_a     = root / "cwd-a";
+    const std::filesystem::path cwd_b     = root / "cwd-b";
     std::filesystem::create_directories(workspace);
     std::filesystem::create_directories(cwd_a);
     std::filesystem::create_directories(cwd_b);
     WriteText(workspace / "MoerEngine.toml", "# minimal contract fixture\n");
 
     ScopedCurrentPath               restore_current_path;
-    ScopedEditorSettingsEnvironment restore_environment(settings_root);
+    ScopedEditorSettingsEnvironment restore_environment(std::nullopt);
 
     std::filesystem::current_path(cwd_a);
     Moer::ConfigManager& config_manager = Moer::ConfigManager::GetInstance();
@@ -322,9 +320,10 @@ void TestEditorSettingsPathIsCwdIndependent(const std::filesystem::path& root) {
     const std::filesystem::path resolved = config_manager.GetEditorSettingsPath();
     Require(resolved.is_absolute(), "editor settings path is not absolute");
     Require(
-        Normalize(resolved) == Normalize(settings_root),
-        "editor settings override did not resolve to the requested directory"
+        Normalize(resolved) == Normalize(workspace / "saved" / "editor"),
+        "editor settings path was not kept inside the project workspace"
     );
+    Require(std::filesystem::is_directory(resolved), "project-local settings directory was not created");
     Require(
         Normalize(config_manager.GetScenePath()) ==
             Normalize(workspace / "asset" / "scenes" / "sponza" / "Sponza.gltf"),
@@ -354,6 +353,38 @@ void TestEditorSettingsPathIsCwdIndependent(const std::filesystem::path& root) {
     );
 }
 
+void TestEditorSettingsOverride(const std::filesystem::path& root) {
+    const std::filesystem::path settings_root = std::filesystem::absolute(root / "settings");
+    const std::filesystem::path workspace     = std::filesystem::absolute(root / "workspace");
+    const std::filesystem::path alternate_cwd = std::filesystem::absolute(root / "alternate-cwd");
+    std::filesystem::create_directories(workspace);
+    std::filesystem::create_directories(alternate_cwd);
+    WriteText(workspace / "MoerEngine.toml", "# minimal contract fixture\n");
+
+    Moer::ConfigManager& config_manager = Moer::ConfigManager::GetInstance();
+    {
+        const std::optional<std::filesystem::path> absolute_override{settings_root};
+        ScopedEditorSettingsEnvironment            restore_environment(absolute_override);
+        config_manager.Init(workspace);
+        Require(
+            Normalize(config_manager.GetEditorSettingsPath()) == Normalize(settings_root),
+            "absolute editor settings override did not resolve to the requested directory"
+        );
+    }
+
+    {
+        ScopedCurrentPath restore_current_path;
+        std::filesystem::current_path(alternate_cwd);
+        const std::optional<std::filesystem::path> relative_override{"relative-settings"};
+        ScopedEditorSettingsEnvironment            restore_environment(relative_override);
+        config_manager.Init(workspace);
+        Require(
+            Normalize(config_manager.GetEditorSettingsPath()) == Normalize(workspace / "relative-settings"),
+            "relative editor settings override was not anchored to the project workspace"
+        );
+    }
+}
+
 } // namespace
 
 int main() {
@@ -365,7 +396,8 @@ int main() {
         TestInvalidFilesAreRejected(root / "invalid");
         TestPlacementSanitization();
         TestLegacyMigrationPriority(root / "migration");
-        TestEditorSettingsPathIsCwdIndependent(root / "config");
+        TestEditorSettingsPathIsProjectLocalAndCwdIndependent(root / "config");
+        TestEditorSettingsOverride(root / "override");
     } catch (const std::exception& error) {
         std::cerr << "WindowPlacementPersistenceContract: " << error.what() << '\n';
         return EXIT_FAILURE;
