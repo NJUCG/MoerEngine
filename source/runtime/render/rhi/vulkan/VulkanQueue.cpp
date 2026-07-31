@@ -9470,7 +9470,7 @@ void VkCommandQueue::RhiThreadMain() {
     RHIThreadHeartbeatScope heartbeat(
         ERHIThreadRole::Submission,
         HeartbeatDomainForQueue(queue.GetType()),
-        ERHIHeartbeatStage::WaitingForWork
+        ERHIHeartbeatStage::Dispatch
     );
     rhi_thread_id.store(Platform::GetCurrentThreadID(), std::memory_order_release);
     LOG_INFO(
@@ -9482,9 +9482,12 @@ void VkCommandQueue::RhiThreadMain() {
     while (true) {
         std::optional<RhiWork> work;
         {
-            heartbeat.Pulse(ERHIHeartbeatStage::WaitingForWork);
+            heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
             std::unique_lock<std::mutex> lock(rhi_work_mutex);
-            rhi_work_cv.wait(lock, [this]() {
+            RHIThreadHeartbeatWaitLock wait_lock(
+                lock, heartbeat, ERHIHeartbeatStage::Dispatch
+            );
+            rhi_work_cv.wait(wait_lock, [this]() {
                 return !rhi_worker_running || !rhi_work_queue.empty();
             });
             if (!rhi_worker_running && rhi_work_queue.empty()) {
@@ -9750,7 +9753,7 @@ void VkCommandQueue::CompletionThreadMain() {
     RHIThreadHeartbeatScope heartbeat(
         ERHIThreadRole::Completion,
         HeartbeatDomainForQueue(queue.GetType()),
-        ERHIHeartbeatStage::WaitingForWork
+        ERHIHeartbeatStage::PollCompletion
     );
 
     bool batch_gpu_success = false;
@@ -9770,16 +9773,18 @@ void VkCommandQueue::CompletionThreadMain() {
 
         std::optional<QueueEvent> evt;
         {
-            heartbeat.Pulse(ERHIHeartbeatStage::WaitingForWork);
             std::unique_lock<std::mutex> lock(event_mutex);
+            RHIThreadHeartbeatWaitLock wait_lock(
+                lock, heartbeat, ERHIHeartbeatStage::PollCompletion
+            );
             if (pending_present_retirements.empty()) {
-                queue_cv.wait(lock, [this]() {
+                queue_cv.wait(wait_lock, [this]() {
                     return !completion_worker_running ||
                            !event_queue.empty();
                 });
             } else {
                 queue_cv.wait_for(
-                    lock,
+                    wait_lock,
                     std::chrono::milliseconds(1),
                     [this]() { return !event_queue.empty(); }
                 );
@@ -11363,15 +11368,18 @@ void VkCopyQueue::ExecuteThread() {
     RHIThreadHeartbeatScope heartbeat(
         ERHIThreadRole::Completion,
         ERHIHeartbeatDomain::Copy,
-        ERHIHeartbeatStage::WaitingForWork
+        ERHIHeartbeatStage::PollCompletion
     );
     bool batch_gpu_success = false;
     while (true) {
         std::optional<IOEvent> evt;
         {
-            heartbeat.Pulse(ERHIHeartbeatStage::WaitingForWork);
+            heartbeat.Pulse(ERHIHeartbeatStage::PollCompletion);
             std::unique_lock<std::mutex> lock(event_mutex);
-            queue_cv.wait(lock, [this]() {
+            RHIThreadHeartbeatWaitLock wait_lock(
+                lock, heartbeat, ERHIHeartbeatStage::PollCompletion
+            );
+            queue_cv.wait(wait_lock, [this]() {
                 return !enabled.load(std::memory_order_acquire) || !event_queue.empty();
             });
             if (!enabled.load(std::memory_order_acquire) && event_queue.empty()) {

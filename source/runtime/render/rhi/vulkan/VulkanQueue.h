@@ -1002,7 +1002,7 @@ private:
     VulkanFence*                                       timeline = nullptr;
     std::mutex                                         event_mutex;
     bool                                               completion_worker_running{false};
-    std::condition_variable                            queue_cv;
+    std::condition_variable_any                        queue_cv;
     VkNativeQueue                                      queue;
     VkNativeQueryPool                                  timestamp_pool;
     ProfilerStorage                                    profiler_storage;
@@ -1034,7 +1034,7 @@ private:
     uint64                  completed_rhi_work{0};
     DEQueue<RhiWork>        rhi_work_queue;
     std::mutex              rhi_work_mutex;
-    std::condition_variable rhi_work_cv;
+    std::condition_variable_any rhi_work_cv;
     std::condition_variable rhi_work_done_cv;
 
     std::mutex   exec_mtx;
@@ -1244,7 +1244,7 @@ private:
     VulkanFenceRef          timeline       = nullptr;
     std::mutex              event_mutex;
     std::atomic_bool        enabled{false};
-    std::condition_variable queue_cv; // wake up execute thread from sleeping
+    std::condition_variable_any queue_cv; // wake up execute thread from sleeping
     std::condition_variable settled_cv;
     VkNativeQueue           queue;
     std::jthread            thread;

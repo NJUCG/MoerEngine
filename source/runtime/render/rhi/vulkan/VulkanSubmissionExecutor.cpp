@@ -1763,14 +1763,17 @@ void VulkanSubmissionExecutor::RunExecutor() {
     RHIThreadHeartbeatScope heartbeat(
         ERHIThreadRole::Translate,
         ERHIHeartbeatDomain::General,
-        ERHIHeartbeatStage::WaitingForWork
+        ERHIHeartbeatStage::Dispatch
     );
     while (true) {
         Request request{};
         {
-            heartbeat.Pulse(ERHIHeartbeatStage::WaitingForWork);
+            heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
             std::unique_lock lock(mutex);
-            cv.wait(lock, [this] {
+            RHIThreadHeartbeatWaitLock wait_lock(
+                lock, heartbeat, ERHIHeartbeatStage::Dispatch
+            );
+            cv.wait(wait_lock, [this] {
                 return constructor_abort || !requests.empty();
             });
             if (constructor_abort && requests.empty()) {
@@ -1890,14 +1893,17 @@ void VulkanSubmissionExecutor::RunSubmission() {
     RHIThreadHeartbeatScope heartbeat(
         ERHIThreadRole::Submission,
         ERHIHeartbeatDomain::General,
-        ERHIHeartbeatStage::WaitingForWork
+        ERHIHeartbeatStage::Dispatch
     );
     for (;;) {
         SubmissionWork work{};
         {
-            heartbeat.Pulse(ERHIHeartbeatStage::WaitingForWork);
+            heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
             std::unique_lock lock(submission_mutex);
-            submission_cv.wait(lock, [this] {
+            RHIThreadHeartbeatWaitLock wait_lock(
+                lock, heartbeat, ERHIHeartbeatStage::Dispatch
+            );
+            submission_cv.wait(wait_lock, [this] {
                 return !submission_accepting || !submission_work.empty();
             });
             if (submission_work.empty()) {

@@ -987,15 +987,19 @@ void D3D12GraphicsCommandQueue::ExecuteThread(std::stop_token _st) {
     RHIThreadHeartbeatScope heartbeat(
         ERHIThreadRole::Completion,
         ERHIHeartbeatDomain::Graphics,
-        ERHIHeartbeatStage::WaitingForWork
+        ERHIHeartbeatStage::PollCompletion
     );
     do {
         {
-            heartbeat.Pulse(ERHIHeartbeatStage::WaitingForWork);
+            heartbeat.Pulse(ERHIHeartbeatStage::PollCompletion);
             std::unique_lock lck(mtx);
-            if (!cv.wait(lck, _st, [&]() {
-                    return !event_queue.empty();
-                })) {
+            RHIThreadHeartbeatWaitLock wait_lock(
+                lck, heartbeat, ERHIHeartbeatStage::PollCompletion
+            );
+            const bool work_ready = cv.wait(wait_lock, _st, [&]() {
+                return !event_queue.empty();
+            });
+            if (!work_ready) {
                 continue;
             }
         }

@@ -294,7 +294,7 @@ private:
     ) noexcept;
 
     std::mutex                 mutex{};
-    std::condition_variable    cv{};
+    std::condition_variable_any cv{};
     std::deque<Request>        requests{};
     std::jthread               executor_thread{};
     bool                       accepting{true};
@@ -328,7 +328,7 @@ private:
         async_scope_seen_queues{};
 
     std::mutex                 submission_mutex{};
-    std::condition_variable    submission_cv{};
+    std::condition_variable_any submission_cv{};
     std::deque<SubmissionWork> submission_work{};
     std::jthread               submission_thread{};
     bool                       submission_accepting{true};

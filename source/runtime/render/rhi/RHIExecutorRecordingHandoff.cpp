@@ -147,15 +147,18 @@ void RHIExecutorRecordingHandoffQueue::Run(std::stop_token _stop_token) noexcept
     RHIThreadHeartbeatScope heartbeat(
         ERHIThreadRole::Executor,
         ERHIHeartbeatDomain::General,
-        ERHIHeartbeatStage::WaitingForWork
+        ERHIHeartbeatStage::Dispatch
     );
 
     for (;;) {
         RHIExecutorRecordingHandoffWork work{};
         {
-            heartbeat.Pulse(ERHIHeartbeatStage::WaitingForWork);
+            heartbeat.Pulse(ERHIHeartbeatStage::Dispatch);
             std::unique_lock lock(mutex);
-            work_cv.wait(lock, _stop_token, [this] { return !pending.empty(); });
+            RHIThreadHeartbeatWaitLock wait_lock(
+                lock, heartbeat, ERHIHeartbeatStage::Dispatch
+            );
+            work_cv.wait(wait_lock, _stop_token, [this] { return !pending.empty(); });
             if (pending.empty()) {
                 assert(_stop_token.stop_requested());
                 heartbeat.Pulse(ERHIHeartbeatStage::Shutdown);

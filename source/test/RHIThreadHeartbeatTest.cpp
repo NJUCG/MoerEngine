@@ -217,6 +217,42 @@ bool ParkedStagesDoNotReportFalseStalls() {
     return okay;
 }
 
+bool WaitLockParksOnlyWhileTheQueueMutexIsReleased() {
+    RHIThreadHeartbeat& heartbeat = RHIThreadHeartbeat::Get();
+    heartbeat.Stop();
+
+    TestContext context{.now_ns = 25'000'000'000ull};
+    heartbeat.StartForTesting(EnabledConfig(), Hooks(context));
+    bool okay = true;
+    {
+        RHIThreadHeartbeatScope owner(
+            ERHIThreadRole::Executor, ERHIHeartbeatDomain::General, ERHIHeartbeatStage::Dispatch
+        );
+        std::mutex                 queue_mutex;
+        std::unique_lock           queue_lock(queue_mutex);
+        RHIThreadHeartbeatWaitLock wait_lock(queue_lock, owner, ERHIHeartbeatStage::Dispatch);
+
+        wait_lock.unlock();
+        okay &= Expect(!queue_lock.owns_lock(), "wait lock did not release the queue mutex");
+        context.now_ns += 60'000'000'000ull;
+        heartbeat.PollOnceForTesting();
+        okay &= Expect(context.events.empty(), "intentional wait was reported as stalled");
+
+        wait_lock.lock();
+        okay &= Expect(queue_lock.owns_lock(), "wait lock did not reacquire the queue mutex");
+        context.now_ns += 1'000'000'000ull;
+        heartbeat.PollOnceForTesting();
+        okay &= Expect(
+            context.events.size() == 1 && context.events.front().kind == ERHIHeartbeatEventKind::Stalled &&
+                context.events.front().stage == ERHIHeartbeatStage::Dispatch,
+            "wait lock did not restore active wake-up processing"
+        );
+    }
+
+    heartbeat.Stop();
+    return okay;
+}
+
 bool GenerationRejectsStaleHandlesAfterReuse() {
     RHIThreadHeartbeat& heartbeat = RHIThreadHeartbeat::Get();
     heartbeat.Stop();
@@ -557,9 +593,9 @@ bool MonitorSnapshotDoesNotMixPulseGenerations() {
 
 int main() {
     if (!DisabledIsAZeroServiceFastPath() || !ReportsOneStallThenOneRecovery() ||
-        !ParkedStagesDoNotReportFalseStalls() || !GenerationRejectsStaleHandlesAfterReuse() ||
-        !GenerationRejectsStaleHandlesAfterRestart() || !ScopeOwnsRegistrationLifetime() ||
-        !MonitorThreadStopsWithoutWaitingForPollTimeout() ||
+        !ParkedStagesDoNotReportFalseStalls() || !WaitLockParksOnlyWhileTheQueueMutexIsReleased() ||
+        !GenerationRejectsStaleHandlesAfterReuse() || !GenerationRejectsStaleHandlesAfterRestart() ||
+        !ScopeOwnsRegistrationLifetime() || !MonitorThreadStopsWithoutWaitingForPollTimeout() ||
         !ConcurrentRegisterPulseAndReuseLeavesNoSlots() || !ConcurrentStopWaitsForActivePulseReader() ||
         !StopClosesReaderGateAgainstLateAcquire() || !MonitorSnapshotDoesNotMixPulseGenerations()) {
         return EXIT_FAILURE;

@@ -170,4 +170,42 @@ private:
     RHIThreadHeartbeatHandle handle{};
 };
 
+// Pass this BasicLockable adapter to condition_variable_any after the initial
+// queue-mutex acquisition. The condition variable parks the heartbeat exactly
+// when it unlocks for a wait and restores the active stage before it attempts
+// to reacquire the mutex, so both initial and post-wake lock contention remain
+// visible to the watchdog.
+template<typename Mutex>
+class RHIThreadHeartbeatWaitLock final {
+public:
+    RHIThreadHeartbeatWaitLock(
+        std::unique_lock<Mutex>& _lock,
+        RHIThreadHeartbeatScope& _heartbeat,
+        ERHIHeartbeatStage       _resume_stage
+    ) noexcept :
+        lock_ref(_lock),
+        heartbeat(_heartbeat),
+        resume_stage(_resume_stage) {}
+
+    RHIThreadHeartbeatWaitLock(const RHIThreadHeartbeatWaitLock&)            = delete;
+    RHIThreadHeartbeatWaitLock& operator=(const RHIThreadHeartbeatWaitLock&) = delete;
+    RHIThreadHeartbeatWaitLock(RHIThreadHeartbeatWaitLock&&)                 = delete;
+    RHIThreadHeartbeatWaitLock& operator=(RHIThreadHeartbeatWaitLock&&)      = delete;
+
+    void lock() {
+        heartbeat.Pulse(resume_stage);
+        lock_ref.lock();
+    }
+
+    void unlock() {
+        heartbeat.Pulse(ERHIHeartbeatStage::WaitingForWork);
+        lock_ref.unlock();
+    }
+
+private:
+    std::unique_lock<Mutex>& lock_ref;
+    RHIThreadHeartbeatScope& heartbeat;
+    ERHIHeartbeatStage       resume_stage;
+};
+
 } // namespace Moer::Render
