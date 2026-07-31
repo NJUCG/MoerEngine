@@ -138,8 +138,14 @@ public:
         source_logger(std::move(_source_logger)),
         dispatch_logger(std::move(_dispatch_logger)),
         console_sink(std::move(_console_sink)) {
-        set_level(source_logger->level());
-        flush_on(source_logger->flush_level());
+        const spdlog::level::level_enum source_level       = source_logger->level();
+        const spdlog::level::level_enum source_flush_level = source_logger->flush_level();
+        set_level(source_level);
+        flush_on(source_flush_level);
+        source_logger->set_level(spdlog::level::off);
+        source_logger->flush_on(spdlog::level::off);
+        dispatch_logger->set_level(spdlog::level::trace);
+        dispatch_logger->flush_on(source_flush_level);
     }
 
 protected:
@@ -150,10 +156,8 @@ protected:
         // filter while still using the source logger's virtual dispatch (for
         // example an async queue or a custom sink_it_ override).
         SynchronizeConfiguration();
-        const std::shared_ptr<spdlog::logger>& target =
-            _message.level >= level() ? source_logger : dispatch_logger;
         SPDLOG_TRY {
-            target->log(_message.time, _message.source, _message.level, _message.payload);
+            dispatch_logger->log(_message.time, _message.source, _message.level, _message.payload);
         }
         SPDLOG_LOGGER_CATCH(_message.source)
 
@@ -190,10 +194,6 @@ protected:
     void flush_() override {
         SynchronizeConfiguration();
         SPDLOG_TRY {
-            source_logger->flush();
-        }
-        SPDLOG_LOGGER_CATCH(spdlog::source_loc())
-        SPDLOG_TRY {
             dispatch_logger->flush();
         }
         SPDLOG_LOGGER_CATCH(spdlog::source_loc())
@@ -215,13 +215,18 @@ public:
         // intentionally default-logger scoped; make a clone default and call
         // LogSystem::Init again if it also needs capture.
         SynchronizeConfiguration();
-        return source_logger->clone(std::move(_logger_name));
+        std::shared_ptr<spdlog::logger> cloned = source_logger->clone(std::move(_logger_name));
+        if (cloned) {
+            cloned->set_level(level());
+            cloned->flush_on(flush_level());
+        }
+        return cloned;
     }
 
 private:
     void SynchronizeConfiguration() {
-        source_logger->set_level(level());
-        source_logger->flush_on(flush_level());
+        source_logger->set_level(spdlog::level::off);
+        source_logger->flush_on(spdlog::level::off);
         dispatch_logger->set_level(spdlog::level::trace);
         dispatch_logger->flush_on(flush_level());
     }
@@ -280,7 +285,8 @@ void Init() {
     const std::string_view downstream_name_view(downstream_name.data(), downstream_name.size());
     // The private clone only handles below-threshold backtrace replay and is
     // retained for process lifetime with its Core-owned, non-SSO name storage.
-    // Ordinary messages still use source_logger directly.
+    // All messages use the clone so explicit flush has exactly one downstream
+    // target and custom/async virtual dispatch remains intact.
     std::shared_ptr<spdlog::logger> dispatch_logger =
         logger->clone(MakeCoreOwnedLoggerName(downstream_name_view));
     if (!dispatch_logger) {

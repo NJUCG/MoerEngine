@@ -152,6 +152,7 @@ void TestInstallationAndCapture(
     const std::shared_ptr<spdlog::logger> original_logger     = _logger;
     const std::size_t                     original_sink_count = original_logger->sinks().size();
     const std::string                     original_name       = original_logger->name();
+    const spdlog::level::level_enum       original_level      = original_logger->level();
     original_logger->flush_on(spdlog::level::err);
     LogSystem::Init();
     const std::shared_ptr<spdlog::logger> installed_logger = spdlog::default_logger();
@@ -159,10 +160,11 @@ void TestInstallationAndCapture(
     Expect(
         installed_logger && installed_logger.get() != original_logger.get() &&
             spdlog::default_logger().get() == installed_logger.get() &&
-            installed_logger->name() == original_name &&
-            installed_logger->level() == original_logger->level() &&
-            installed_logger->flush_level() == original_logger->flush_level() &&
-            installed_logger->sinks().empty() && original_logger->sinks().size() == original_sink_count &&
+            installed_logger->name() == original_name && installed_logger->level() == original_level &&
+            installed_logger->flush_level() == spdlog::level::err &&
+            original_logger->level() == spdlog::level::off &&
+            original_logger->flush_level() == spdlog::level::off && installed_logger->sinks().empty() &&
+            original_logger->sinks().size() == original_sink_count &&
             std::ranges::any_of(
                 original_logger->sinks(),
                 [&_original_sink](const spdlog::sink_ptr& _sink) {
@@ -171,6 +173,20 @@ void TestInstallationAndCapture(
             ),
         "LogSystem::Init did not install one ABI-safe forwarding logger"
     );
+    const auto*       original_counting_sink = dynamic_cast<CountingSink*>(_original_sink.get());
+    const std::size_t retained_source_count =
+        original_counting_sink ? original_counting_sink->log_count.load() : 0;
+    spdlog::set_level(spdlog::level::warn);
+    Expect(
+        installed_logger->level() == spdlog::level::warn && original_logger->level() == spdlog::level::off,
+        "global level changes re-enabled a retained source logger"
+    );
+    original_logger->critical("console-log-retained-source-disabled");
+    Expect(
+        !original_counting_sink || original_counting_sink->log_count.load() == retained_source_count,
+        "a retained source logger bypassed the forwarding logger's level authority"
+    );
+    installed_logger->set_level(spdlog::level::trace);
     _logger = installed_logger;
 
     installed_logger->set_error_handler([](const std::string&) {});
@@ -195,9 +211,14 @@ void TestInstallationAndCapture(
             external_sink->log_count.load() == 2,
         "a throwing extra sink blocked forwarded/default/later sink paths"
     );
+    const std::size_t downstream_flush_count =
+        original_counting_sink ? original_counting_sink->flush_count.load() : 0;
     installed_logger->flush();
     Expect(
-        external_sink->flush_count.load() == 1, "a throwing extra sink blocked later explicit flush targets"
+        external_sink->flush_count.load() == 1 &&
+            (!original_counting_sink ||
+             original_counting_sink->flush_count.load() == downstream_flush_count + 1),
+        "explicit flush skipped or duplicated a downstream/extra flush target"
     );
 
     installed_logger->set_level(spdlog::level::err);

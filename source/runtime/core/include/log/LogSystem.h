@@ -30,9 +30,12 @@ struct ConsoleLogPollResult {
 };
 
 // Views are borrowed only for the visitor invocation. Init installs a
-// process-lifetime forwarding default logger: the previous logger and its sink
-// storage remain untouched in their owning module, while admitted messages are
-// also copied into this channel. This avoids reallocating an owning STL
+// process-lifetime forwarding default logger: the previous logger's sink
+// storage remains untouched in its owning module, and the previous logger is
+// parked at level::off. Init transfers default-logger authority: callers must
+// discard previously acquired default_logger() references, must not re-enable
+// them, and must reacquire the installed default after Init. Admitted messages
+// are also copied into this channel. This avoids reallocating an owning STL
 // container across separate mimalloc heaps. Call Init again at a
 // logger-quiescent point after replacing the default logger; spdlog does not
 // synchronize default-logger replacement with concurrent producers. Configure
