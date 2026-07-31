@@ -60,6 +60,33 @@ struct CountOnDestroy {
     }
 };
 
+struct SelfOwnedRegistrationCallback {
+    CVar::CVarDescriptor descriptor;
+    std::string          default_value;
+
+    explicit SelfOwnedRegistrationCallback(std::string _name, std::string _default_value = {}) :
+        descriptor{
+            .name   = std::move(_name),
+            .helper = "self-owned helper",
+        },
+        default_value(std::move(_default_value)) {}
+
+    SelfOwnedRegistrationCallback(const SelfOwnedRegistrationCallback&) = delete;
+    SelfOwnedRegistrationCallback& operator=(const SelfOwnedRegistrationCallback&) = delete;
+
+    SelfOwnedRegistrationCallback(SelfOwnedRegistrationCallback&& _other) :
+        descriptor(std::move(_other.descriptor)),
+        default_value(_other.default_value) {
+        _other.descriptor.name.clear();
+        _other.descriptor.helper.clear();
+        std::ranges::fill(_other.default_value, '#');
+    }
+    SelfOwnedRegistrationCallback& operator=(SelfOwnedRegistrationCallback&&) = delete;
+
+    template<typename OldValue, typename NewValue>
+    void operator()(OldValue&&, NewValue&&) const {}
+};
+
 void TestRegistrationLifetimeAndDescriptors() {
     CVar::CVarDescriptor descriptor{
         .name         = "Test.Lifetime.Toggle",
@@ -100,6 +127,46 @@ void TestRegistrationLifetimeAndDescriptors() {
     Expect(
         destructor_reentered.load(std::memory_order_acquire),
         "callback capture was destroyed under the registry lock"
+    );
+
+    SelfOwnedRegistrationCallback bool_callback("Test.Lifetime.SelfOwnedBool");
+    SelfOwnedRegistrationCallback int_callback("Test.Lifetime.SelfOwnedInt");
+    SelfOwnedRegistrationCallback float_callback("Test.Lifetime.SelfOwnedFloat");
+    SelfOwnedRegistrationCallback string_callback("Test.Lifetime.SelfOwnedString", "owned default");
+    SelfOwnedRegistrationCallback string_default_callback("unused", "default-only value");
+    CVar::CVarDescriptor          external_string_descriptor{
+        .name   = "Test.Lifetime.SelfOwnedStringDefault",
+        .helper = "external helper",
+    };
+    CVar::RegistrationResult self_owned_bool =
+        CVar::RegisterBool(bool_callback.descriptor, false, std::move(bool_callback));
+    CVar::RegistrationResult self_owned_int =
+        CVar::RegisterInt(int_callback.descriptor, 3, std::move(int_callback));
+    CVar::RegistrationResult self_owned_float =
+        CVar::RegisterFloat(float_callback.descriptor, 1.5, std::move(float_callback));
+    CVar::RegistrationResult self_owned_string = CVar::RegisterString(
+        string_callback.descriptor, string_callback.default_value, std::move(string_callback)
+    );
+    CVar::RegistrationResult self_owned_string_default = CVar::RegisterString(
+        external_string_descriptor,
+        string_default_callback.default_value,
+        std::move(string_default_callback)
+    );
+    const std::optional<CVar::CVarSnapshot> self_owned_bool_snapshot =
+        CVar::Find("Test.Lifetime.SelfOwnedBool");
+    const std::optional<CVar::CVarSnapshot> self_owned_string_snapshot =
+        CVar::Find("Test.Lifetime.SelfOwnedString");
+    const std::optional<CVar::CVarSnapshot> self_owned_string_default_snapshot =
+        CVar::Find("Test.Lifetime.SelfOwnedStringDefault");
+    Expect(
+        self_owned_bool.Succeeded() && self_owned_int.Succeeded() &&
+            self_owned_float.Succeeded() && self_owned_string.Succeeded() &&
+            self_owned_string_default.Succeeded() && self_owned_bool_snapshot &&
+            self_owned_bool_snapshot->helper == "self-owned helper" &&
+            self_owned_string_snapshot && self_owned_string_snapshot->value == "owned default" &&
+            self_owned_string_default_snapshot &&
+            self_owned_string_default_snapshot->value == "default-only value",
+        "callback move invalidated borrowed registration inputs"
     );
 
     Expect(

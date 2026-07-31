@@ -335,9 +335,10 @@ template<typename Callback>
 RegistrationResult
 RegisterBool(const CVarDescriptor& _descriptor, bool _default_value, Callback&& _callback) {
     using StoredCallback = std::decay_t<Callback>;
-    auto* context        = new StoredCallback(std::forward<Callback>(_callback));
+    CVarDescriptor descriptor_snapshot = _descriptor;
+    auto*          context             = new StoredCallback(std::forward<Callback>(_callback));
     return Detail::
-        RegisterBoolRaw(Detail::ViewOf(_descriptor), _default_value, &Detail::InvokeBoolCallback<StoredCallback>, context, &Detail::DestroyOwnedCallback<StoredCallback>);
+        RegisterBoolRaw(Detail::ViewOf(descriptor_snapshot), _default_value, &Detail::InvokeBoolCallback<StoredCallback>, context, &Detail::DestroyOwnedCallback<StoredCallback>);
 }
 
 inline RegistrationResult RegisterInt(const CVarDescriptor& _descriptor, std::int64_t _default_value) {
@@ -348,9 +349,10 @@ template<typename Callback>
 RegistrationResult
 RegisterInt(const CVarDescriptor& _descriptor, std::int64_t _default_value, Callback&& _callback) {
     using StoredCallback = std::decay_t<Callback>;
-    auto* context        = new StoredCallback(std::forward<Callback>(_callback));
+    CVarDescriptor descriptor_snapshot = _descriptor;
+    auto*          context             = new StoredCallback(std::forward<Callback>(_callback));
     return Detail::
-        RegisterIntRaw(Detail::ViewOf(_descriptor), _default_value, &Detail::InvokeIntCallback<StoredCallback>, context, &Detail::DestroyOwnedCallback<StoredCallback>);
+        RegisterIntRaw(Detail::ViewOf(descriptor_snapshot), _default_value, &Detail::InvokeIntCallback<StoredCallback>, context, &Detail::DestroyOwnedCallback<StoredCallback>);
 }
 
 inline RegistrationResult RegisterFloat(const CVarDescriptor& _descriptor, double _default_value) {
@@ -361,9 +363,10 @@ template<typename Callback>
 RegistrationResult
 RegisterFloat(const CVarDescriptor& _descriptor, double _default_value, Callback&& _callback) {
     using StoredCallback = std::decay_t<Callback>;
-    auto* context        = new StoredCallback(std::forward<Callback>(_callback));
+    CVarDescriptor descriptor_snapshot = _descriptor;
+    auto*          context             = new StoredCallback(std::forward<Callback>(_callback));
     return Detail::
-        RegisterFloatRaw(Detail::ViewOf(_descriptor), _default_value, &Detail::InvokeFloatCallback<StoredCallback>, context, &Detail::DestroyOwnedCallback<StoredCallback>);
+        RegisterFloatRaw(Detail::ViewOf(descriptor_snapshot), _default_value, &Detail::InvokeFloatCallback<StoredCallback>, context, &Detail::DestroyOwnedCallback<StoredCallback>);
 }
 
 inline RegistrationResult RegisterString(const CVarDescriptor& _descriptor, std::string_view _default_value) {
@@ -374,9 +377,11 @@ template<typename Callback>
 RegistrationResult
 RegisterString(const CVarDescriptor& _descriptor, std::string_view _default_value, Callback&& _callback) {
     using StoredCallback = std::decay_t<Callback>;
-    auto* context        = new StoredCallback(std::forward<Callback>(_callback));
+    CVarDescriptor descriptor_snapshot = _descriptor;
+    std::string    default_snapshot(_default_value);
+    auto*          context = new StoredCallback(std::forward<Callback>(_callback));
     return Detail::
-        RegisterStringRaw(Detail::ViewOf(_descriptor), _default_value, &Detail::InvokeStringCallback<StoredCallback>, context, &Detail::DestroyOwnedCallback<StoredCallback>);
+        RegisterStringRaw(Detail::ViewOf(descriptor_snapshot), default_snapshot, &Detail::InvokeStringCallback<StoredCallback>, context, &Detail::DestroyOwnedCallback<StoredCallback>);
 }
 
 inline std::optional<CVarSnapshot> Find(std::string_view _name) {
