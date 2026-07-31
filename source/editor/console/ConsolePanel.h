@@ -17,6 +17,10 @@ public:
 
     void ShowWindow(bool* open);
 
+    [[nodiscard]] bool IsInputActive() const noexcept {
+        return input_active;
+    }
+
 private:
     static int InputCallback(ImGuiInputTextCallbackData* data);
     int        HandleInputCallback(ImGuiInputTextCallbackData& data);
@@ -34,6 +38,7 @@ private:
     std::string                            history_draft;
     bool                                   auto_scroll         = true;
     bool                                   reclaim_input_focus = false;
+    bool                                   input_active        = false;
 };
 
 } // namespace Moer

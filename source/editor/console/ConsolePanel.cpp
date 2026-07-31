@@ -39,6 +39,7 @@ std::size_t CommonPrefixLength(const std::vector<Command::CommandCandidate>& can
 ConsolePanel::ConsolePanel(std::shared_ptr<EngineCommandEndpoint> endpoint) : model(std::move(endpoint)) {}
 
 void ConsolePanel::ShowWindow(bool* open) {
+    input_active = false;
     static_cast<void>(model.Pump());
     if (!ImGui::Begin("Console", open)) {
         ImGui::End();
@@ -119,6 +120,7 @@ void ConsolePanel::ShowWindow(bool* open) {
         &ConsolePanel::InputCallback,
         this
     );
+    input_active = ImGui::IsItemActive() || ImGui::IsItemFocused();
     ImGui::PopItemWidth();
     if (submitted) {
         const Command::ESubmitStatus status = model.Submit(input_buffer.data());
@@ -132,6 +134,7 @@ void ConsolePanel::ShowWindow(bool* open) {
     }
     if (reclaim_input_focus) {
         ImGui::SetKeyboardFocusHere(-1);
+        input_active        = true;
         reclaim_input_focus = false;
     }
 

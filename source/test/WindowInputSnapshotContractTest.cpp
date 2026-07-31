@@ -99,6 +99,50 @@ int main() {
     Require(!clear_toggle_frame.key_toggle[KeyButtons::F]);
     Require(!clear_toggle_frame.cursor_hidden);
 
+    // A text field in a docked Editor panel shares platform focus with the
+    // active Scene/Game viewport. The UI integration revokes its owners,
+    // clears free-look, suppresses viewport input, and forces a visible cursor.
+    WindowInputFrameTracker   text_input_tracker;
+    WindowInputSourceSnapshot text_input_free_look   = MakeSource(1);
+    text_input_free_look.key_released[KeyButtons::F] = true;
+    Require(text_input_tracker.BeginFrame(text_input_free_look));
+    const WindowInputFrameSnapshot text_input_captured = text_input_tracker.Finalize(active_policy);
+    Require(text_input_captured.cursor_hidden);
+    Require(text_input_captured.key_toggle[KeyButtons::F]);
+
+    WindowInputSourceSnapshot text_input_focus = MakeSource(2);
+    text_input_focus.want_capture_keyboard     = true;
+    text_input_focus.want_text_input           = true;
+    text_input_focus.mouse_delta               = float2(8.0f, -4.0f);
+    Require(text_input_tracker.BeginFrame(text_input_focus));
+    text_input_tracker.ClearKeyToggle(KeyButtons::F);
+    WindowInputPolicy text_input_policy             = active_policy;
+    text_input_policy.scene_active                  = false;
+    text_input_policy.viewport_hovered              = false;
+    text_input_policy.force_cursor_visible          = true;
+    const WindowInputFrameSnapshot text_input_frame = text_input_tracker.Finalize(text_input_policy);
+    Require(!text_input_frame.scene_active);
+    Require(!text_input_frame.mouse_input_allowed);
+    Require(!text_input_frame.keyboard_input_allowed);
+    Require(!text_input_frame.key_toggle[KeyButtons::F]);
+    Require(!text_input_frame.cursor_hidden);
+    Require(text_input_frame.cursor_mode_changed);
+    RequireFloat2(text_input_frame.cursor_delta, 0.0f, 0.0f);
+
+    WindowInputSourceSnapshot text_input_released = MakeSource(3);
+    Require(text_input_tracker.BeginFrame(text_input_released));
+    Require(!text_input_tracker.IsKeyToggled(KeyButtons::F));
+    const uint32_t resumed_free_look_owner = ResolveFreeLookCaptureViewportId(
+        text_input_released.focused_viewport_id, text_input_tracker.IsKeyToggled(KeyButtons::F), true, 17u, 0u
+    );
+    Require(resumed_free_look_owner == 0u);
+    WindowInputPolicy text_input_released_policy = active_policy;
+    text_input_released_policy.scene_active      = false;
+    const WindowInputFrameSnapshot text_input_released_frame =
+        text_input_tracker.Finalize(text_input_released_policy);
+    Require(!text_input_released_frame.cursor_hidden);
+    Require(!text_input_released_frame.key_toggle[KeyButtons::F]);
+
     // Releasing F away from active viewport content must not leave a latent
     // toggle that starts free-look on a later hover without another F edge.
     WindowInputFrameTracker latent_toggle_tracker;

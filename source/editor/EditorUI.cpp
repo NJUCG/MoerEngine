@@ -438,6 +438,8 @@ void EditorUI::TickUI(Scene& scene) {
     };
     const WindowInputSourceSnapshot& pending_input_source =
         m_window_input_tracker.GetPendingSource();
+    const bool console_input_active =
+        m_b_show_console && m_console_panel.IsInputActive();
     const bool any_mouse_button_down =
         pending_input_source.mouse_button_down[MouseButtons::Left] ||
         pending_input_source.mouse_button_down[MouseButtons::Middle] ||
@@ -483,12 +485,21 @@ void EditorUI::TickUI(Scene& scene) {
         // free-look request that activates later from hover alone.
         m_window_input_tracker.ClearKeyToggle(KeyButtons::F);
     }
+    if (console_input_active) {
+        // A docked Console shares the same platform viewport focus as the
+        // Scene/Game panel. Its text input nevertheless owns both keyboard and
+        // mouse for this frame, so revoke any latched scene capture explicitly.
+        m_window_input_tracker.ClearKeyToggle(KeyButtons::F);
+        m_mouse_capture_viewport_id     = 0;
+        m_free_look_capture_viewport_id = 0;
+    }
 
     m_window_input_snapshot = m_window_input_tracker.Finalize(WindowInputPolicy{
         .scene_active =
-            active_viewport_focused &&
+            !console_input_active && active_viewport_focused &&
             (m_mouse_capture_viewport_id != 0 || m_free_look_capture_viewport_id != 0),
-        .viewport_hovered = m_b_active_viewport_hovered,
+        .viewport_hovered     = !console_input_active && m_b_active_viewport_hovered,
+        .force_cursor_visible = console_input_active,
         .viewport_resolution = uint2(
             to_extent_component(m_scene_color_resolution.x),
             to_extent_component(m_scene_color_resolution.y)
