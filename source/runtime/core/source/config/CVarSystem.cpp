@@ -946,13 +946,15 @@ bool VisitEntrySnapshot(const std::shared_ptr<EntryBase>& _entry, SnapshotVisito
         return false;
     }
 
-    EntryBase::Operation operation(*_entry);
-    if (!operation.IsValid()) {
-        return false;
-    }
-    const std::string value = _entry->CopyValueString();
-    _visitor(
-        {
+    std::string      value;
+    CVarSnapshotView snapshot;
+    {
+        EntryBase::Operation operation(*_entry);
+        if (!operation.IsValid()) {
+            return false;
+        }
+        value    = _entry->CopyValueString();
+        snapshot = {
             .id                       = _entry->id,
             .name                     = _entry->descriptor.name,
             .helper                   = _entry->descriptor.helper,
@@ -965,9 +967,13 @@ bool VisitEntrySnapshot(const std::shared_ptr<EntryBase>& _entry, SnapshotVisito
             .max_value                = _entry->descriptor.max_value,
             .callback_dispatch_budget = _entry->descriptor.callback_dispatch_budget,
             .startup_sealed           = _entry->startup_sealed.load(std::memory_order_acquire),
-        },
-        _context
-    );
+        };
+    }
+
+    // The shared_ptr keeps descriptor storage alive and value owns its copy.
+    // End the active operation before entering caller code so cross-entry
+    // Reset calls from concurrent visitors cannot form a quiescence wait cycle.
+    _visitor(snapshot, _context);
     return true;
 }
 

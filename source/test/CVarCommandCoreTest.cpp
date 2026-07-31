@@ -654,8 +654,6 @@ void TestFlagsOwnerSyncAndCallbacks() {
         "self-Reset allowed a queued mutation to invoke a late callback"
     );
 
-    CVar::RegistrationResult visitor_blocker =
-        CVar::RegisterBool(CVar::CVarDescriptor{.name = "Test.Visitor.Pin.Blocker"}, false);
     std::atomic_uint32_t            pinned_callback_destroyed{0};
     std::shared_ptr<CountOnDestroy> pinned_lifetime = std::make_shared<CountOnDestroy>();
     pinned_lifetime->count                          = &pinned_callback_destroyed;
@@ -664,22 +662,29 @@ void TestFlagsOwnerSyncAndCallbacks() {
     CVar::RegistrationResult visitor_target = CVar::RegisterInt(
         CVar::CVarDescriptor{.name = "Test.Visitor.Pin.Target"}, 0, std::move(pinned_callback)
     );
+    Expect(visitor_target.Succeeded(), "snapshot visitor lifetime fixture did not register");
     struct VisitorPinContext {
         std::atomic_bool entered{false};
         std::atomic_bool release{false};
-    } visitor_context;
+        std::atomic_bool view_remained_valid{false};
+        std::uint64_t    expected_id = 0;
+    } visitor_context{
+        .expected_id = visitor_target.registration.GetId(),
+    };
     std::jthread visitor([&] {
-        CVar::Detail::VisitAllSnapshotsRaw(
-            "Test.Visitor.Pin.",
+        CVar::Detail::VisitSnapshotRaw(
+            "Test.Visitor.Pin.Target",
             [](const CVar::CVarSnapshotView& _snapshot, void* _context) {
                 auto& context = *static_cast<VisitorPinContext*>(_context);
-                if (_snapshot.name != "Test.Visitor.Pin.Blocker") {
-                    return;
-                }
                 context.entered.store(true, std::memory_order_release);
                 while (!context.release.load(std::memory_order_acquire)) {
                     std::this_thread::yield();
                 }
+                context.view_remained_valid.store(
+                    _snapshot.id == context.expected_id &&
+                        _snapshot.name == "Test.Visitor.Pin.Target" && _snapshot.value == "0",
+                    std::memory_order_release
+                );
             },
             &visitor_context
         );
@@ -687,13 +692,91 @@ void TestFlagsOwnerSyncAndCallbacks() {
     while (!visitor_context.entered.load(std::memory_order_acquire)) {
         std::this_thread::yield();
     }
-    visitor_target.registration.Reset();
+    std::atomic_bool reset_during_visitor_returned{false};
+    std::jthread     reset_during_visitor([&] {
+        visitor_target.registration.Reset();
+        reset_during_visitor_returned.store(true, std::memory_order_release);
+    });
+    while (!reset_during_visitor_returned.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
     Expect(
-        pinned_callback_destroyed.load(std::memory_order_acquire) == 1,
-        "Reset deferred caller callback destruction behind a snapshot pin"
+        pinned_callback_destroyed.load(std::memory_order_acquire) == 1 &&
+            !CVar::Find("Test.Visitor.Pin.Target"),
+        "Reset did not retire a cvar and its callback capture while its snapshot visitor was active"
+    );
+    CVar::RegistrationResult visitor_replacement =
+        CVar::RegisterInt(CVar::CVarDescriptor{.name = "Test.Visitor.Pin.Target"}, 7);
+    const std::optional<CVar::CVarSnapshot> replacement_snapshot =
+        CVar::Find("Test.Visitor.Pin.Target");
+    Expect(
+        visitor_replacement.Succeeded() &&
+            visitor_replacement.registration.GetId() != visitor_context.expected_id &&
+            replacement_snapshot &&
+            replacement_snapshot->id == visitor_replacement.registration.GetId(),
+        "same-name replacement did not establish a distinct snapshot generation"
     );
     visitor_context.release.store(true, std::memory_order_release);
     visitor.join();
+    reset_during_visitor.join();
+    Expect(
+        visitor_context.view_remained_valid.load(std::memory_order_acquire),
+        "Reset or same-name replacement invalidated the active visitor's old snapshot view"
+    );
+
+    CVar::RegistrationResult cross_visitor_a =
+        CVar::RegisterBool(CVar::CVarDescriptor{.name = "Test.Visitor.CrossResetA"}, false);
+    CVar::RegistrationResult cross_visitor_b =
+        CVar::RegisterBool(CVar::CVarDescriptor{.name = "Test.Visitor.CrossResetB"}, false);
+    Expect(
+        cross_visitor_a.Succeeded() && cross_visitor_b.Succeeded(),
+        "cross-reset snapshot visitor fixtures did not register"
+    );
+    struct CrossVisitorContext {
+        CVar::Registration*   target = nullptr;
+        std::atomic_uint32_t* entered = nullptr;
+        std::atomic_bool*     completed = nullptr;
+    };
+    std::atomic_uint32_t cross_visitor_entered{0};
+    std::atomic_bool     cross_visitor_a_completed{false};
+    std::atomic_bool     cross_visitor_b_completed{false};
+    CrossVisitorContext  cross_visitor_a_context{
+        .target    = &cross_visitor_b.registration,
+        .entered   = &cross_visitor_entered,
+        .completed = &cross_visitor_a_completed,
+    };
+    CrossVisitorContext cross_visitor_b_context{
+        .target    = &cross_visitor_a.registration,
+        .entered   = &cross_visitor_entered,
+        .completed = &cross_visitor_b_completed,
+    };
+    const auto cross_reset_visitor = [](const CVar::CVarSnapshotView&, void* _context) {
+        auto& context = *static_cast<CrossVisitorContext*>(_context);
+        context.entered->fetch_add(1, std::memory_order_acq_rel);
+        while (context.entered->load(std::memory_order_acquire) != 2) {
+            std::this_thread::yield();
+        }
+        context.target->Reset();
+        context.completed->store(true, std::memory_order_release);
+    };
+    std::jthread cross_visitor_a_thread([&] {
+        CVar::Detail::VisitSnapshotRaw(
+            "Test.Visitor.CrossResetA", cross_reset_visitor, &cross_visitor_a_context
+        );
+    });
+    std::jthread cross_visitor_b_thread([&] {
+        CVar::Detail::VisitAllSnapshotsRaw(
+            "Test.Visitor.CrossResetB", cross_reset_visitor, &cross_visitor_b_context
+        );
+    });
+    cross_visitor_a_thread.join();
+    cross_visitor_b_thread.join();
+    Expect(
+        cross_visitor_a_completed.load(std::memory_order_acquire) &&
+            cross_visitor_b_completed.load(std::memory_order_acquire) &&
+            !CVar::Find("Test.Visitor.CrossResetA") && !CVar::Find("Test.Visitor.CrossResetB"),
+        "cross-resetting snapshot visitors deadlocked or left a registration active"
+    );
 }
 
 void TestListingAndCandidates() {

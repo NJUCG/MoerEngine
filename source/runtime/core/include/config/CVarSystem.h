@@ -172,7 +172,9 @@ public:
     // Calls made outside cvar callbacks and callback-capture destruction wait
     // for in-flight work. Any Reset made from either chain is non-blocking to
     // avoid cross-entry wait cycles; the last active dispatcher retires the
-    // thunk after returning from user code.
+    // thunk after returning from user code. Snapshot visitors are not in-flight
+    // operations after capture: Reset does not wait for them, and a visitor may
+    // finish with an old id/value after a same-name generation is registered.
     CORE_API void Reset() noexcept;
 
 private:
@@ -194,7 +196,9 @@ struct RegistrationResult {
 };
 
 // Every string_view in CVarSnapshotView is valid only for the duration of the
-// visitor call. Copy it inside the callback; never retain the view.
+// visitor call. Copy it inside the callback; never retain the view. The visitor
+// runs after snapshot capture has released its active Entry operation, so Reset
+// may complete concurrently while the immutable old snapshot remains valid.
 using SnapshotVisitor = void (*)(const CVarSnapshotView& _snapshot, void* _context);
 
 namespace Detail {
