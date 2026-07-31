@@ -121,19 +121,22 @@ void ResetEnsureFailures() noexcept {
 bool HandleEnsureFailure(const FailureInfo& _info) noexcept {
     g_has_ensure_failures.store(true, std::memory_order_release);
     try {
-        LOG_WARNING(
-            "[MOER_ENSURE] expr=`{}` file={} line={} function={} thread={} "
-            "message={}",
-            _info.expression ? _info.expression : "",
-            _info.file ? _info.file : "",
-            _info.line,
-            _info.function ? _info.function : "",
-            _info.thread_id,
-            _info.message.View()
-        );
+        if (auto logger = spdlog::default_logger()) {
+            SPDLOG_LOGGER_WARN(
+                logger,
+                "[MOER_ENSURE] expr=`{}` file={} line={} function={} thread={} "
+                "message={}",
+                _info.expression ? _info.expression : "",
+                _info.file ? _info.file : "",
+                _info.line,
+                _info.function ? _info.function : "",
+                _info.thread_id,
+                _info.message.View()
+            );
+        }
     } catch (...) {
         // Ensure remains non-fatal even if the configured logger rejects the
-        // diagnostic or is already tearing down.
+        // diagnostic or its registry is already tearing down.
     }
     return false;
 }

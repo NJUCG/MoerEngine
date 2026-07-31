@@ -1,4 +1,5 @@
 #include "ProfileDumpTesting.h"
+#include "log/LogSystem.h"
 #include "misc/Assert.h"
 #include "platform/Platform.h"
 #include "profile/ProfileDump.h"
@@ -14,6 +15,7 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <ranges>
 #include <span>
 #include <stdexcept>
@@ -399,6 +401,18 @@ void TestEnsureContract() {
     ResetEnsureFailures();
     Expect(MOER_ENSURE(true, "unreachable ensure"), "successful ensure returned false");
     Expect(!HasEnsureFailures(), "successful ensure changed the process failure flag");
+
+    auto saved_logger = spdlog::default_logger();
+    spdlog::set_default_logger(std::shared_ptr<spdlog::logger>{});
+    ResetEnsureFailures();
+    const bool missing_logger_result =
+        MOER_ENSURE(false, "ensure without a default logger");
+    spdlog::set_default_logger(std::move(saved_logger));
+    Expect(!missing_logger_result, "ensure without a default logger returned true");
+    Expect(
+        HasEnsureFailures(),
+        "ensure without a default logger did not set the process flag"
+    );
 }
 
 void TestFixedMessageAndStackContract() {

@@ -220,12 +220,19 @@ struct Hub {
     // atomics only until its bounded deadline.
     std::atomic<std::uint64_t> crash_flush_requested{0};
     std::atomic<std::uint64_t> crash_flush_completed{0};
-    std::atomic<std::uint64_t> crash_flush_failed{0};
+    // Writer failure is terminal within one generation. This stores the
+    // first failed ticket so a later failed batch cannot poison an earlier
+    // successfully completed waiter.
+    std::atomic<std::uint64_t> crash_flush_first_failed{0};
     std::atomic<std::uint64_t> crash_flush_epoch{0};
     std::atomic<std::uint32_t> writer_thread_id{0};
     std::atomic<bool>          test_pause_crash_flush_before_publish{false};
     std::atomic<bool>          test_crash_flush_before_publish_paused{false};
     std::atomic<bool>          test_crash_flush_before_publish_resume{false};
+    std::atomic<bool>          test_pause_crash_flush_after_completion_observed{false};
+    std::atomic<bool>          test_crash_flush_after_completion_observed_claimed{false};
+    std::atomic<bool>          test_crash_flush_after_completion_observed_paused{false};
+    std::atomic<bool>          test_crash_flush_after_completion_observed_resume{false};
 
     RuntimeConfig             config{};
     std::filesystem::path     temp_path{};
@@ -982,8 +989,19 @@ void CompleteCrashFlushRequest(Hub& _hub, std::uint64_t _target, bool _succeeded
     if (_target == 0) {
         return;
     }
+    const std::uint64_t previous_completed =
+        _hub.crash_flush_completed.load(std::memory_order_acquire);
+    if (_target <= previous_completed) {
+        return;
+    }
     if (!_succeeded) {
-        _hub.crash_flush_failed.store(_target, std::memory_order_release);
+        std::uint64_t no_failure = 0;
+        static_cast<void>(_hub.crash_flush_first_failed.compare_exchange_strong(
+            no_failure,
+            previous_completed + 1,
+            std::memory_order_release,
+            std::memory_order_relaxed
+        ));
     }
     _hub.crash_flush_completed.store(_target, std::memory_order_release);
 }
@@ -1515,7 +1533,7 @@ StartResult Start(const RuntimeConfig& _config) noexcept {
             hub.crash_flush_completed.store(
                 settled_crash_request, std::memory_order_seq_cst
             );
-            hub.crash_flush_failed.store(0, std::memory_order_seq_cst);
+            hub.crash_flush_first_failed.store(0, std::memory_order_seq_cst);
             hub.crash_flush_epoch.store(0, std::memory_order_seq_cst);
             hub.last_fault.store(RuntimeFault::None, std::memory_order_release);
             hub.schemas.store(std::move(initial_schemas), std::memory_order_release);
@@ -1807,6 +1825,57 @@ FlushResult FlushAll() noexcept {
     return ResolveHarvestedFlush(harvested, flushed);
 }
 
+namespace {
+
+std::optional<CrashFlushResult> ResolveCrashFlushTicket(
+    Hub& _hub, std::uint64_t _generation, std::uint64_t _ticket
+) noexcept {
+    if (_hub.generation.load(std::memory_order_seq_cst) != _generation) {
+        return CrashFlushResult::NotRunning;
+    }
+    if (_hub.crash_flush_completed.load(std::memory_order_acquire) < _ticket) {
+        return std::nullopt;
+    }
+
+    if (_hub.test_pause_crash_flush_after_completion_observed.load(
+            std::memory_order_acquire
+        )) {
+        bool unclaimed = false;
+        if (_hub.test_crash_flush_after_completion_observed_claimed.compare_exchange_strong(
+                unclaimed,
+                true,
+                std::memory_order_acq_rel,
+                std::memory_order_acquire
+            )) {
+            _hub.test_crash_flush_after_completion_observed_paused.store(
+                true, std::memory_order_release
+            );
+            while (!_hub.test_crash_flush_after_completion_observed_resume.load(
+                std::memory_order_acquire
+            )) {
+                std::this_thread::yield();
+            }
+            _hub.test_crash_flush_after_completion_observed_paused.store(
+                false, std::memory_order_release
+            );
+        }
+    }
+
+    const std::uint64_t first_failed =
+        _hub.crash_flush_first_failed.load(std::memory_order_acquire);
+    // Start publishes the new generation before resetting its result
+    // markers. A final generation check therefore rejects any mixed snapshot
+    // that observed the next generation's reset values.
+    if (_hub.generation.load(std::memory_order_seq_cst) != _generation) {
+        return CrashFlushResult::NotRunning;
+    }
+    return first_failed != 0 && _ticket >= first_failed ?
+               CrashFlushResult::Faulted :
+               CrashFlushResult::Completed;
+}
+
+} // namespace
+
 CrashFlushResult FlushCrashPublishedPrefix(std::uint32_t _timeout_ms) noexcept {
     Hub* const hub_ptr = TryGetHub();
     if (!hub_ptr) {
@@ -1864,20 +1933,9 @@ CrashFlushResult FlushCrashPublishedPrefix(std::uint32_t _timeout_ms) noexcept {
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(_timeout_ms);
     for (;;) {
-        if (hub.generation.load(std::memory_order_seq_cst) != generation) {
-            return CrashFlushResult::NotRunning;
-        }
-        const std::uint64_t completed =
-            hub.crash_flush_completed.load(std::memory_order_acquire);
-        if (completed >= ticket) {
-            if (hub.generation.load(std::memory_order_seq_cst) !=
-                generation) {
-                return CrashFlushResult::NotRunning;
-            }
-            const std::uint64_t failed =
-                hub.crash_flush_failed.load(std::memory_order_acquire);
-            return failed >= ticket ? CrashFlushResult::Faulted :
-                                      CrashFlushResult::Completed;
+        if (const auto result =
+                ResolveCrashFlushTicket(hub, generation, ticket)) {
+            return *result;
         }
 
         if (hub.state.load(std::memory_order_acquire) == RuntimeState::Faulted) {
@@ -1885,21 +1943,9 @@ CrashFlushResult FlushCrashPublishedPrefix(std::uint32_t _timeout_ms) noexcept {
         }
         if (std::chrono::steady_clock::now() >= deadline) {
             // One final acquire closes the completion-at-deadline race.
-            if (hub.generation.load(std::memory_order_seq_cst) !=
-                generation) {
-                return CrashFlushResult::NotRunning;
-            }
-            const std::uint64_t final_completed =
-                hub.crash_flush_completed.load(std::memory_order_acquire);
-            if (final_completed >= ticket) {
-                if (hub.generation.load(std::memory_order_seq_cst) !=
-                    generation) {
-                    return CrashFlushResult::NotRunning;
-                }
-                const std::uint64_t failed =
-                    hub.crash_flush_failed.load(std::memory_order_acquire);
-                return failed >= ticket ? CrashFlushResult::Faulted :
-                                          CrashFlushResult::Completed;
+            if (const auto result =
+                    ResolveCrashFlushTicket(hub, generation, ticket)) {
+                return *result;
             }
             return CrashFlushResult::TimedOut;
         }
@@ -2122,6 +2168,26 @@ bool ConfigureCrashFlushPauseBeforePublish(bool _enabled) noexcept {
     return true;
 }
 
+bool ConfigureCrashFlushPauseAfterCompletionObserved(bool _enabled) noexcept {
+    Hub& hub = GetHub();
+    if (hub.state.load(std::memory_order_acquire) != RuntimeState::Stopped) {
+        return false;
+    }
+    hub.test_pause_crash_flush_after_completion_observed.store(
+        _enabled, std::memory_order_release
+    );
+    hub.test_crash_flush_after_completion_observed_claimed.store(
+        false, std::memory_order_release
+    );
+    hub.test_crash_flush_after_completion_observed_paused.store(
+        false, std::memory_order_release
+    );
+    hub.test_crash_flush_after_completion_observed_resume.store(
+        false, std::memory_order_release
+    );
+    return true;
+}
+
 bool ConfigureWriterPauseBeforeTempOpen(bool _enabled) noexcept {
     Hub&            hub = GetHub();
     std::lock_guard lock(hub.mutex);
@@ -2183,6 +2249,25 @@ bool WaitForCrashFlushBeforePublishPaused(
         std::this_thread::sleep_for(1ms);
     }
     return hub.test_crash_flush_before_publish_paused.load(
+        std::memory_order_acquire
+    );
+}
+
+bool WaitForCrashFlushAfterCompletionObservedPaused(
+    std::uint32_t _timeout_ms
+) noexcept {
+    Hub&       hub      = GetHub();
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(_timeout_ms);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (hub.test_crash_flush_after_completion_observed_paused.load(
+                std::memory_order_acquire
+            )) {
+            return true;
+        }
+        std::this_thread::sleep_for(1ms);
+    }
+    return hub.test_crash_flush_after_completion_observed_paused.load(
         std::memory_order_acquire
     );
 }
@@ -2253,6 +2338,13 @@ void ResumeCrashFlushBeforePublish() noexcept {
     );
 }
 
+void ResumeCrashFlushAfterCompletionObserved() noexcept {
+    Hub& hub = GetHub();
+    hub.test_crash_flush_after_completion_observed_resume.store(
+        true, std::memory_order_release
+    );
+}
+
 void ResumeEmitter() noexcept {
     Hub& hub = GetHub();
     {
@@ -2276,6 +2368,18 @@ void ClearHooks() noexcept {
         false, std::memory_order_release
     );
     hub.test_crash_flush_before_publish_resume.store(
+        false, std::memory_order_release
+    );
+    hub.test_pause_crash_flush_after_completion_observed.store(
+        false, std::memory_order_release
+    );
+    hub.test_crash_flush_after_completion_observed_claimed.store(
+        false, std::memory_order_release
+    );
+    hub.test_crash_flush_after_completion_observed_paused.store(
+        false, std::memory_order_release
+    );
+    hub.test_crash_flush_after_completion_observed_resume.store(
         false, std::memory_order_release
     );
 }

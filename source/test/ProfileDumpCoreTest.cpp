@@ -2128,6 +2128,113 @@ void TestCrashFlushFinalizeRaceDoesNotTimeout() {
     Testing::ClearHooks();
 }
 
+void TestLaterCrashFlushFailureDoesNotPoisonEarlierSuccess() {
+    Testing::ClearHooks();
+    Expect(
+        Testing::ConfigureFault(Testing::FaultPoint::FlushFile, 2),
+        "crash multi-ticket flush fault could not be configured"
+    );
+    Expect(
+        Testing::ConfigureCrashFlushPauseAfterCompletionObserved(true),
+        "crash multi-ticket completion pause could not be configured"
+    );
+
+    ScopedOutput  output("moer-profile-crash-ticket-result");
+    RuntimeConfig config = MakeRuntimeConfig(output);
+    Expect(
+        Start(config) == StartResult::Started,
+        "crash multi-ticket runtime failed to start"
+    );
+
+    std::atomic<CrashFlushResult> first_result{CrashFlushResult::Busy};
+    std::thread first_requester([&] {
+        first_result.store(
+            FlushCrashPublishedPrefix(2000), std::memory_order_release
+        );
+    });
+    const bool first_paused =
+        Testing::WaitForCrashFlushAfterCompletionObservedPaused(2000);
+    if (!first_paused) {
+        Testing::ResumeCrashFlushAfterCompletionObserved();
+        first_requester.join();
+        Expect(false, "first crash request did not pause after successful completion");
+    }
+
+    const CrashFlushResult second_result = FlushCrashPublishedPrefix(2000);
+    Testing::ResumeCrashFlushAfterCompletionObserved();
+    first_requester.join();
+
+    Expect(
+        second_result == CrashFlushResult::Faulted,
+        "second crash request did not report its injected flush failure"
+    );
+    Expect(
+        first_result.load(std::memory_order_acquire) ==
+            CrashFlushResult::Completed,
+        "later crash flush failure poisoned an earlier successful ticket"
+    );
+    Expect(
+        Shutdown() == ShutdownResult::Faulted,
+        "faulted multi-ticket runtime did not shut down as faulted"
+    );
+    Testing::ClearHooks();
+}
+
+void TestCrashFlushRestartRejectsOldResultSnapshot() {
+    Testing::ClearHooks();
+    Expect(
+        Testing::ConfigureCrashFlushPauseAfterCompletionObserved(true),
+        "crash restart completion pause could not be configured"
+    );
+
+    ScopedOutput  first_output("moer-profile-crash-restart-first");
+    RuntimeConfig first_config = MakeRuntimeConfig(first_output);
+    ScopedOutput  second_output("moer-profile-crash-restart-second");
+    RuntimeConfig second_config = MakeRuntimeConfig(second_output);
+    Expect(
+        Start(first_config) == StartResult::Started,
+        "first crash restart runtime failed to start"
+    );
+
+    std::atomic<CrashFlushResult> old_result{CrashFlushResult::Busy};
+    std::thread old_requester([&] {
+        old_result.store(
+            FlushCrashPublishedPrefix(2000), std::memory_order_release
+        );
+    });
+    const bool old_paused =
+        Testing::WaitForCrashFlushAfterCompletionObservedPaused(2000);
+    if (!old_paused) {
+        Testing::ResumeCrashFlushAfterCompletionObserved();
+        old_requester.join();
+        Expect(false, "old crash request did not pause after completion");
+    }
+    const ShutdownResult first_shutdown = Shutdown();
+    if (first_shutdown != ShutdownResult::Completed) {
+        Testing::ResumeCrashFlushAfterCompletionObserved();
+        old_requester.join();
+        Expect(false, "first crash restart runtime did not shut down cleanly");
+    }
+
+    const StartResult second_start = Start(second_config);
+    Testing::ResumeCrashFlushAfterCompletionObserved();
+    old_requester.join();
+    Expect(
+        second_start == StartResult::Started,
+        "second crash restart runtime failed to start"
+    );
+    Expect(
+        old_result.load(std::memory_order_acquire) ==
+            CrashFlushResult::NotRunning,
+        "old crash request consumed the next generation's result markers"
+    );
+    Expect(
+        Shutdown() == ShutdownResult::Completed,
+        "second crash restart runtime did not shut down cleanly"
+    );
+    Testing::ClearHooks();
+}
+
 } // namespace
 
 int main() {
@@ -2163,6 +2270,8 @@ int main() {
         TestCrashFlushTimeoutIsBounded();
         TestCrashFlushRetriesLostWakeupWindow();
         TestCrashFlushFinalizeRaceDoesNotTimeout();
+        TestLaterCrashFlushFailureDoesNotPoisonEarlierSuccess();
+        TestCrashFlushRestartRejectsOldResultSnapshot();
         std::cout << "ProfileDump core contract tests passed." << std::endl;
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
