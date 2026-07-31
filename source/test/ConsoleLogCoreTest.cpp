@@ -1,5 +1,6 @@
 #include "log/LogSystem.h"
 
+#include "spdlog/details/os.h"
 #include "spdlog/sinks/null_sink.h"
 
 #include <algorithm>
@@ -9,6 +10,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -109,6 +111,36 @@ public:
     void set_formatter(std::unique_ptr<spdlog::formatter>) override {}
 };
 
+class ThreadRecordingSink final : public spdlog::sinks::sink {
+    struct Record {
+        std::string message;
+        std::size_t thread_id = 0;
+    };
+
+public:
+    void log(const spdlog::details::log_msg& _message) override {
+        std::lock_guard lock(records_mutex);
+        records.push_back({
+            .message   = std::string(_message.payload.data(), _message.payload.size()),
+            .thread_id = _message.thread_id,
+        });
+    }
+
+    void flush() override {}
+    void set_pattern(const std::string&) override {}
+    void set_formatter(std::unique_ptr<spdlog::formatter>) override {}
+
+    [[nodiscard]] std::size_t FindThreadId(std::string_view _message) const {
+        std::lock_guard lock(records_mutex);
+        const auto      found = std::ranges::find(records, _message, &Record::message);
+        return found == records.end() ? 0 : found->thread_id;
+    }
+
+private:
+    mutable std::mutex  records_mutex;
+    std::vector<Record> records;
+};
+
 struct VirtualDispatchState {
     std::atomic<std::size_t> clone_count{0};
     std::atomic<std::size_t> dispatch_count{0};
@@ -153,6 +185,10 @@ void TestInstallationAndCapture(
     const std::size_t                     original_sink_count = original_logger->sinks().size();
     const std::string                     original_name       = original_logger->name();
     const spdlog::level::level_enum       original_level      = original_logger->level();
+    auto                                  source_error_count  = std::make_shared<std::atomic<std::size_t>>(0);
+    original_logger->set_error_handler([source_error_count](const std::string&) {
+        ++*source_error_count;
+    });
     original_logger->flush_on(spdlog::level::err);
     LogSystem::Init();
     const std::shared_ptr<spdlog::logger> installed_logger = spdlog::default_logger();
@@ -189,7 +225,6 @@ void TestInstallationAndCapture(
     installed_logger->set_level(spdlog::level::trace);
     _logger = installed_logger;
 
-    installed_logger->set_error_handler([](const std::string&) {});
     auto throwing_sink = std::make_shared<ThrowingSink>();
     auto external_sink = std::make_shared<CountingSink>();
     installed_logger->sinks().push_back(throwing_sink);
@@ -217,8 +252,9 @@ void TestInstallationAndCapture(
     Expect(
         external_sink->flush_count.load() == 1 &&
             (!original_counting_sink ||
-             original_counting_sink->flush_count.load() == downstream_flush_count + 1),
-        "explicit flush skipped or duplicated a downstream/extra flush target"
+             original_counting_sink->flush_count.load() == downstream_flush_count + 1) &&
+            source_error_count->load() == 3,
+        "explicit flush or the preconfigured error handler was not preserved exactly once"
     );
 
     installed_logger->set_level(spdlog::level::err);
@@ -289,6 +325,40 @@ void TestVirtualLoggerBacktraceDispatch(std::shared_ptr<spdlog::logger>& _logger
         batch.entries.size() == 3 && has_debug_entry && state->dispatch_count.load() == 3 &&
             sink->log_count.load() == 3,
         "backtrace replay bypassed the source logger's virtual dispatch path"
+    );
+    _logger = installed_logger;
+}
+
+void TestBacktraceThreadMetadata(std::shared_ptr<spdlog::logger>& _logger) {
+    auto sink          = std::make_shared<ThreadRecordingSink>();
+    auto source_logger = std::make_shared<spdlog::logger>("console-log-thread-metadata", sink);
+    source_logger->set_level(spdlog::level::warn);
+    spdlog::set_default_logger(source_logger);
+
+    LogSystem::Init();
+    const std::shared_ptr<spdlog::logger> installed_logger = spdlog::default_logger();
+    const std::uint64_t                   cursor           = ClearAndGetNextSequence();
+    installed_logger->set_level(spdlog::level::warn);
+    installed_logger->enable_backtrace(4);
+
+    std::atomic<std::size_t> producer_thread_id{0};
+    std::jthread             producer([installed_logger, &producer_thread_id] {
+        producer_thread_id.store(spdlog::details::os::thread_id());
+        installed_logger->debug("console-log-worker-backtrace");
+    });
+    producer.join();
+
+    installed_logger->dump_backtrace();
+    installed_logger->disable_backtrace();
+
+    const CapturedBatch batch           = Poll(cursor, 8);
+    const bool          has_debug_entry = std::ranges::any_of(batch.entries, [](const CapturedEntry& _entry) {
+        return _entry.message == "console-log-worker-backtrace";
+    });
+    Expect(
+        batch.entries.size() == 3 && has_debug_entry &&
+            sink->FindThreadId("console-log-worker-backtrace") == producer_thread_id.load(),
+        "backtrace forwarding replaced the producer thread metadata"
     );
     _logger = installed_logger;
 }
@@ -526,6 +596,7 @@ int main() {
         TestConcurrentProducers(logger);
         TestVisitorReentry(logger);
         TestVirtualLoggerBacktraceDispatch(logger);
+        TestBacktraceThreadMetadata(logger);
         TestSpdlogTeardownAndReattach(logger);
         std::cout << "Console log core contract tests passed.\n";
         return EXIT_SUCCESS;

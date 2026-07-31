@@ -126,6 +126,35 @@ private:
     std::uint64_t                      next_sequence = 1;
 };
 
+// spdlog exposes these operations to derived logger implementations. This
+// adapter is never instantiated; it only obtains public member pointers through
+// the derived access path, then invokes the base operations on the actual
+// logger. That preserves complete log_msg metadata and the configured error
+// handler without changing the vendored spdlog API or object layout.
+class LoggerDispatchAccess : public spdlog::logger {
+public:
+    using spdlog::logger::err_handler_;
+    using spdlog::logger::log_it_;
+
+    static void Log(spdlog::logger& _logger, const spdlog::details::log_msg& _message) {
+        const bool log_enabled       = _logger.should_log(_message.level);
+        const bool backtrace_enabled = _logger.should_backtrace();
+        if (!log_enabled && !backtrace_enabled) {
+            return;
+        }
+
+        using LogFunction = void (spdlog::logger::*)(const spdlog::details::log_msg&, bool, bool);
+        const LogFunction log_function = &LoggerDispatchAccess::log_it_;
+        (_logger.*log_function)(_message, log_enabled, backtrace_enabled);
+    }
+
+    static void ReportError(spdlog::logger& _logger, const std::string& _message) {
+        using ErrorFunction                = void (spdlog::logger::*)(const std::string&);
+        const ErrorFunction error_function = &LoggerDispatchAccess::err_handler_;
+        (_logger.*error_function)(_message);
+    }
+};
+
 class ConsoleForwardingLogger final : public spdlog::logger {
 public:
     ConsoleForwardingLogger(
@@ -146,6 +175,9 @@ public:
         source_logger->flush_on(spdlog::level::off);
         dispatch_logger->set_level(spdlog::level::trace);
         dispatch_logger->flush_on(source_flush_level);
+        set_error_handler([error_logger = dispatch_logger](const std::string& _message) {
+            LoggerDispatchAccess::ReportError(*error_logger, _message);
+        });
     }
 
 protected:
@@ -157,7 +189,7 @@ protected:
         // example an async queue or a custom sink_it_ override).
         SynchronizeConfiguration();
         SPDLOG_TRY {
-            dispatch_logger->log(_message.time, _message.source, _message.level, _message.payload);
+            LoggerDispatchAccess::Log(*dispatch_logger, _message);
         }
         SPDLOG_LOGGER_CATCH(_message.source)
 
