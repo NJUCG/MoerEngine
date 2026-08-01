@@ -3,13 +3,19 @@
 #include "API_Macro.h"
 #include "Thread.h"
 #include "misc/CountableRef.h"
+#include "taskgraph/WorkStealing.h"
+
+#include <memory>
 
 enum class ESchedule {
     Max_Local_Capacity = 16
 };
 
+class AnyThreadScheduler;
+
 class TaskGraph {
 private:
+    friend class TaskThreadAnyThread;
     static TaskGraph* instance;
 
 public:
@@ -41,8 +47,17 @@ public:
     inline uint32_t        GetWorkerThreadCount() const {
         return m_worker_thread_count;
     }
+    inline uint32_t GetWorkerThreadCount(EThread::Type priority) const {
+        const int32_t priority_index = EThread::GetThreadPriority(priority);
+        assert(priority_index >= 0 && priority_index < EThread::PriorityCount);
+        return static_cast<uint32_t>(m_worker_topology.counts[priority_index]);
+    }
     /** Returns the scheduler identity of the caller, or UNKNOWN for an external thread. */
     CORE_API EThread::Type GetCurrentThread(bool localQueue = false);
+    /** True after shutdown has stopped accepting external AnyThread publications. */
+    CORE_API bool IsDraining() const noexcept;
+    /** Shutdown diagnostic used to verify that pending work is actively being drained. */
+    CORE_API bool IsWaitingForIdle() const noexcept;
 
 protected:
     void TriggerEventWhenTasksComplete(
@@ -54,18 +69,21 @@ protected:
 
 private:
     TaskThreadBase& GetThread(ThreadIndex index);
-    int32_t         GetThreadPriorityFromIndex(int32_t threadIndex) {
-        return (threadIndex - m_named_thread_count) / m_worker_per_priority;
+    int32_t         GetThreadPriorityFromIndex(int32_t threadIndex) const noexcept {
+        return m_worker_topology.PriorityForThread(threadIndex);
     }
-    void         WakeUpWorkerThread(int32_t threadIndex, QueueIndex index) noexcept;
+    void        WakeUpWorkerThread(int32_t threadIndex, QueueIndex index) noexcept;
+    static void WakeWorkerCallback(void* context, int32_t threadIndex) noexcept;
+    static void SetCurrentWorkerThread(EThread::Type thread) noexcept;
+    static void ClearCurrentWorkerThread() noexcept;
+    void        NotifyAnyThreadTaskCompleted() noexcept;
     WorkerThread m_workers[INT16_MAX];
     int32_t      m_thread_count;
     int32_t      m_named_thread_count;
-    int32_t      m_worker_per_priority;
     int32_t      m_worker_thread_count;
 
-    TaskFIFOQueue<BaseGraphTask, 1> m_task_queue[EThread::PriorityCount];
-    TaskFIFOQueue<BaseGraphTask, 1> m_global_queue; //
+    Moer::TaskGraphDetail::WorkerPoolTopology m_worker_topology{};
+    std::unique_ptr<AnyThreadScheduler>        m_any_thread_scheduler{};
 };
 
 class CORE_API TriggerEventGraphTask {

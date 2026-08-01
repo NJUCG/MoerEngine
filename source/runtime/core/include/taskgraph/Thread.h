@@ -26,6 +26,7 @@ public:
     TaskThreadBase() : m_worker{nullptr}, m_thread_type{EThread::UNKNOWN_THREAD} {
         // m_graph_tasks.reserve(128);
     }
+    virtual ~TaskThreadBase() = default;
 
     void SetAttributes(EThread::Type _threadIndex, WorkerThread* worker) {
         m_worker      = worker;
@@ -115,9 +116,7 @@ public:
         m_queue.m_close = true;
         m_queue.m_hang_event->Trigger();
     }
-    virtual uint32_t Run() override {
-        return TaskThreadBase::Run(); //process task until quit
-    }
+    uint32_t Run() override;
     uint32_t     ProcessTasks();
     virtual bool IsProcessingTask(QueueIndex queueIndex) override {
         return m_queue.call_amount > 0;
@@ -167,17 +166,18 @@ public:
         m_queue[queueIndex].m_hang_event->Trigger();
     }
     virtual void RequestQuit(QueueIndex queueIndex) override {
-        if (m_queue[queueIndex].m_hang_event == nullptr)
-            return;
         //main queue means quit
         if (queueIndex == QUIT) {
             m_queue[EThread::MAIN_QUEUE].m_close = true;
             m_queue[EThread::MAIN_QUEUE].m_hang_event->Trigger();
             m_queue[EThread::LOCAL_QUEUE >> EThread::QUEUE_MASK_SHEFT].m_close = true;
             m_queue[EThread::LOCAL_QUEUE >> EThread::QUEUE_MASK_SHEFT].m_hang_event->Trigger();
-        } else {
-            m_queue[queueIndex].m_should_return = true;
+            return;
         }
+        if (queueIndex < 0 || queueIndex >= 2 || m_queue[queueIndex].m_hang_event == nullptr) {
+            return;
+        }
+        m_queue[queueIndex].m_should_return = true;
     }
     virtual void EnqueueFromCurrentThread(QueueIndex queueIndex, BaseGraphTask* task) override {
 

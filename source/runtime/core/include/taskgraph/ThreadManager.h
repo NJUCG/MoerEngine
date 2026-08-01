@@ -80,7 +80,7 @@ private:
     void Initialize();
 
 public:
-    void           AddThread(uint32_t id, RunnableThread*);
+    void           AddThread(uint32_t id, RunnableThread*) noexcept;
     void           RemoveThread(RunnableThread*);
     inline int32_t GetNum() {
         return m_threads.size();
@@ -114,12 +114,13 @@ class RunnableThread {
 
 public:
     CORE_API static RunnableThread* Create(Runnable* _runnable, ThreadAttributes _attributes);
-    virtual ~RunnableThread();
+    CORE_API virtual ~RunnableThread();
     void Tick();
     void Join() {
         if (m_thread && m_thread->joinable()) {
             m_thread->join();
-            MoerDelete(m_thread);
+            delete m_thread;
+            m_thread = nullptr;
         }
     }
     void Detach() {
@@ -128,7 +129,7 @@ public:
     bool Joinable() {
         return m_thread->joinable();
     }
-    void WaitUntilFinished();
+    CORE_API void WaitUntilFinished();
 
     inline const std::string& GetName() {
         return name;
@@ -142,12 +143,12 @@ protected:
     uint32_t Run();
 
 private:
-    Runnable*    m_runnable;
-    Event*       m_create_event;
-    Event*       m_end_event;
-    uint32_t     id;
+    Runnable*    m_runnable     = nullptr;
+    Event*       m_create_event = nullptr;
+    Event*       m_end_event    = nullptr;
+    uint32_t     id             = 0;
     std::string  name;
-    std::thread* m_thread;
+    std::thread* m_thread = nullptr;
 };
 
 class Runnable {

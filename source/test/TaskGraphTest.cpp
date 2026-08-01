@@ -190,5 +190,6 @@ int main() {
     TaskGraph::GetInterface().WaitUntilTaskComplete(finished, EThread::EMainThread);
     assert(k == 1200);
 
+    Moer::TaskSystem::ShutDown();
     return 0;
 }

@@ -40,10 +40,16 @@ std::string GetPriorityStr(int32_t priority) {
 ThreadManager::~ThreadManager() {
     ShutDown();
 }
-void ThreadManager::AddThread(uint32_t id, RunnableThread* thread) {
-    if (m_threads.find(id) == m_threads.end()) {
-        m_threads.emplace(id, thread);
-        m_thread_indexs.emplace(id, m_threads.size() - 1);
+void ThreadManager::AddThread(uint32_t id, RunnableThread* thread) noexcept {
+    try {
+        if (m_threads.find(id) == m_threads.end()) {
+            m_threads.emplace(id, thread);
+            m_thread_indexs.emplace(id, m_threads.size() - 1);
+        }
+    } catch (...) {
+        // RunnableThread registration happens only after the OS thread has
+        // started; generic Runnable::Stop is not strong enough for rollback.
+        Platform::FailFast("RunnableThread registry publication failed");
     }
 }
 
@@ -135,12 +141,30 @@ void RunnableThread::SetName(std::string_view _name) {
 RunnableThread::~RunnableThread() {
     ThreadManager::Instance().RemoveThread(this);
     Join();
+    if (m_end_event != nullptr) {
+        EventPool::Get()->ReleaseEvent(m_end_event);
+        m_end_event = nullptr;
+    }
 }
 
 RunnableThread* RunnableThread::Create(Runnable* _runnable, ThreadAttributes _attributes) {
+    // Resolve the registry before starting the OS thread. Once construction
+    // succeeds the worker is externally observable, so registration is a
+    // process-fatal publication boundary rather than a recoverable exception.
+    ThreadManager& manager = ThreadManager::Instance();
+    void* storage = Memory::Malloc(sizeof(RunnableThread));
+    if (storage == nullptr) {
+        throw std::bad_alloc();
+    }
+
     RunnableThread* created_thread = nullptr;
-    created_thread                 = MoerNew(RunnableThread)(_runnable, _attributes);
-    ThreadManager::Instance().AddThread(created_thread->id, created_thread);
+    try {
+        created_thread = MoerPlacementNew(storage) RunnableThread(_runnable, _attributes);
+    } catch (...) {
+        Memory::Free(storage);
+        throw;
+    }
+    manager.AddThread(created_thread->id, created_thread);
     return created_thread;
 }
 
@@ -148,20 +172,37 @@ void RunnableThread::Tick() {}
 
 RunnableThread::RunnableThread(Runnable* _in_runnable, ThreadAttributes _attributes) {
     assert(_in_runnable != nullptr);
-    m_runnable     = _in_runnable;
+    m_runnable = _in_runnable;
+    name       = _attributes.name;
+    std::string thread_name = name;
+    Affinity    affinity    = std::move(_attributes.affinity);
+
     m_create_event = EventPool::Get()->GetEvent(false);
-    m_end_event    = EventPool::Get()->GetEvent(false);
     EventRef create_event(m_create_event);
-    m_thread = MoerNew(std::thread)(
-        [_in_runnable, name(_attributes.name), affinity(std::move(_attributes.affinity)), this]() {
-            SetName(name);
-            auto tmp_affinity = affinity;
-            SetAffinity(std::move(tmp_affinity));
-            Run();
-        }
-    );
-    create_event.Wait();
-    this->name = _attributes.name;
+    m_end_event    = EventPool::Get()->GetEvent(false);
+
+    try {
+        m_thread = new std::thread(
+            [thread_name = std::move(thread_name), affinity = std::move(affinity), this]() mutable {
+                Platform::SetCurrentThreadName(thread_name);
+                SetAffinity(std::move(affinity));
+                Run();
+            }
+        );
+    } catch (...) {
+        EventPool::Get()->ReleaseEvent(m_end_event);
+        m_end_event = nullptr;
+        throw;
+    }
+
+    // No exception may escape after the OS thread has started: the generic
+    // Runnable contract cannot guarantee that Stop() can unwind every worker.
+    try {
+        create_event.Wait();
+    } catch (...) {
+        Platform::FailFast("RunnableThread startup handshake failed");
+    }
+    m_create_event = nullptr;
 
     // SPDLOG_DEBUG("[{}] {} thread created", name, this->id);
 }
