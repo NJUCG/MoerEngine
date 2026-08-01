@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import json
+import math
+import os
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
@@ -19,6 +23,112 @@ INJECTION_RE = re.compile(
     r"\[ParallelRecord\]\[Injection\].*?point=worker-throw "
     r"phase=after-first-command.*?batch=(?P<batch>\d+)"
 )
+GPU_ENV_LINE_RE = re.compile(r"\[Vulkan\]\[GPU_ENV\][^\r\n]*")
+GPU_ENV_RE = re.compile(
+    r"\[Vulkan\]\[GPU_ENV\] schema=1 backend=vulkan "
+    r"validation_requested=(?P<validation_requested>true|false) "
+    r"validation_layer_available=(?P<validation_layer_available>true|false) "
+    r"validation_enabled=(?P<validation_enabled>true|false) "
+    r"device_type=(?P<device_type>other|integrated_gpu|discrete_gpu|virtual_gpu|cpu|unknown) "
+    r"vendor_id=(?P<vendor_id>0x[0-9a-f]{8}) "
+    r"device_id=(?P<device_id>0x[0-9a-f]{8}) "
+    r"device_uuid=(?P<device_uuid>[0-9a-f]{32}) "
+    r"requested_api=(?P<requested_api>\d+\.\d+\.\d+) "
+    r"device_api=(?P<device_api>\d+\.\d+\.\d+) "
+    r"api_variant=(?P<api_variant>\d+) "
+    r"device_api_raw=(?P<device_api_raw>0x[0-9a-f]{8}) "
+    r"driver_id=(?P<driver_id>\d+) "
+    r"driver_version_raw=(?P<driver_version_raw>0x[0-9a-f]{8})"
+)
+
+
+@dataclass(frozen=True)
+class VulkanTestCase:
+    mode: str
+    arguments: tuple[str, ...]
+
+
+VULKAN_TEST_CASES = (
+    VulkanTestCase("serial", ()),
+    VulkanTestCase("parallel", ("--parallel",)),
+    VulkanTestCase("fallback", ("--parallel", "--inject-worker-failure")),
+    VulkanTestCase("gated", ("--parallel", "--production-gate")),
+    VulkanTestCase("heavy", ("--parallel", "--production-heavy")),
+    VulkanTestCase("translate-hard", ("--inject-translate-failure",)),
+    VulkanTestCase(
+        "multi-segment-hard", ("--inject-multi-segment-translate-failure",)
+    ),
+    VulkanTestCase("pipeline-window1", ("--pipeline-window1",)),
+    VulkanTestCase("pipeline-window2", ("--pipeline-window2",)),
+    VulkanTestCase("present-boundary", ("--present-boundary",)),
+    VulkanTestCase("present-hard", ("--present-hard",)),
+    VulkanTestCase("present-legacy-owner", ("--present-legacy-owner",)),
+    VulkanTestCase(
+        "present-completion-shutdown", ("--present-completion-shutdown",)
+    ),
+    VulkanTestCase("rt-export-rejection", ("--rt-export-rejection",)),
+    VulkanTestCase("readback-future", ("--readback-future",)),
+    VulkanTestCase("occlusion-query", ("--occlusion-query",)),
+    VulkanTestCase("timestamp-query", ("--timestamp-query",)),
+    VulkanTestCase(
+        "timestamp-query-success-batch", ("--timestamp-query-success-batch",)
+    ),
+    VulkanTestCase(
+        "timestamp-query-mid-failure", ("--timestamp-query-mid-failure",)
+    ),
+    VulkanTestCase(
+        "timestamp-query-record-failure", ("--timestamp-query-record-failure",)
+    ),
+    VulkanTestCase("gpu-scope-stream", ("--gpu-scope-stream",)),
+)
+VULKAN_TEST_CASE_BY_MODE = {case.mode: case for case in VULKAN_TEST_CASES}
+assert len(VULKAN_TEST_CASE_BY_MODE) == len(VULKAN_TEST_CASES)
+
+
+@dataclass(frozen=True)
+class GpuEnvironment:
+    validation_requested: bool
+    validation_layer_available: bool
+    validation_enabled: bool
+    device_type: str
+    vendor_id: int
+    device_id: int
+    device_uuid: str
+    requested_api: tuple[int, int, int]
+    device_api: tuple[int, int, int]
+    api_variant: int
+    device_api_raw: int
+    driver_id: int
+    driver_version_raw: int
+
+
+@dataclass(frozen=True)
+class GpuGateRequirements:
+    require_marker: bool = False
+    vendor_id: int | None = None
+    device_id: int | None = None
+    device_type: str | None = None
+    require_validation: bool = False
+    minimum_device_api: tuple[int, int, int] | None = None
+    reject_testcase_skips: bool = False
+
+    @property
+    def active(self) -> bool:
+        return (
+            self.require_marker
+            or self.vendor_id is not None
+            or self.device_id is not None
+            or self.device_type is not None
+            or self.require_validation
+            or self.minimum_device_api is not None
+            or self.reject_testcase_skips
+        )
+
+
+@dataclass(frozen=True)
+class CaseResult:
+    log_path: Path
+    environment: GpuEnvironment | None
 
 
 class VulkanTestError(RuntimeError):
@@ -32,6 +142,184 @@ def _require(condition: bool, message: str) -> None:
 
 def _native_ids_have_alias(*native_ids: str) -> bool:
     return len(set(native_ids)) != len(native_ids)
+
+
+def _parse_api_version(value: str) -> tuple[int, int, int]:
+    parts = value.split(".")
+    if len(parts) not in (2, 3) or any(not part.isdigit() for part in parts):
+        raise ValueError(f"expected MAJOR.MINOR[.PATCH], got {value!r}")
+    numbers = tuple(int(part) for part in parts)
+    if len(numbers) == 2:
+        return numbers[0], numbers[1], 0
+    return numbers
+
+
+def _gpu_environment(text: str, *, required: bool) -> GpuEnvironment | None:
+    lines = GPU_ENV_LINE_RE.findall(text)
+    if not lines:
+        _require(not required, "GPU_ENV: expected exactly one marker, got 0")
+        return None
+    _require(
+        len(lines) == 1,
+        f"GPU_ENV: expected exactly one marker, got {len(lines)}",
+    )
+    match = GPU_ENV_RE.fullmatch(lines[0])
+    _require(match is not None, "GPU_ENV: malformed or unsupported schema")
+    assert match is not None
+
+    environment = GpuEnvironment(
+        validation_requested=match.group("validation_requested") == "true",
+        validation_layer_available=(
+            match.group("validation_layer_available") == "true"
+        ),
+        validation_enabled=match.group("validation_enabled") == "true",
+        device_type=match.group("device_type"),
+        vendor_id=int(match.group("vendor_id"), 16),
+        device_id=int(match.group("device_id"), 16),
+        device_uuid=match.group("device_uuid"),
+        requested_api=_parse_api_version(match.group("requested_api")),
+        device_api=_parse_api_version(match.group("device_api")),
+        api_variant=int(match.group("api_variant")),
+        device_api_raw=int(match.group("device_api_raw"), 16),
+        driver_id=int(match.group("driver_id")),
+        driver_version_raw=int(match.group("driver_version_raw"), 16),
+    )
+    encoded_device_api = (
+        (environment.api_variant << 29)
+        | (environment.device_api[0] << 22)
+        | (environment.device_api[1] << 12)
+        | environment.device_api[2]
+    )
+    _require(
+        encoded_device_api == environment.device_api_raw,
+        "GPU_ENV: device_api fields do not match device_api_raw",
+    )
+    return environment
+
+
+def _validate_gpu_environment(
+    environment: GpuEnvironment | None,
+    requirements: GpuGateRequirements,
+) -> None:
+    if not requirements.active:
+        return
+    _require(environment is not None, "GPU_ENV: required marker is missing")
+    assert environment is not None
+    if requirements.vendor_id is not None:
+        _require(
+            environment.vendor_id == requirements.vendor_id,
+            "GPU_ENV: vendor mismatch: "
+            f"expected 0x{requirements.vendor_id:08x}, "
+            f"got 0x{environment.vendor_id:08x}",
+        )
+    if requirements.device_id is not None:
+        _require(
+            environment.device_id == requirements.device_id,
+            "GPU_ENV: device mismatch: "
+            f"expected 0x{requirements.device_id:08x}, "
+            f"got 0x{environment.device_id:08x}",
+        )
+    if requirements.device_type is not None:
+        _require(
+            environment.device_type == requirements.device_type,
+            "GPU_ENV: device type mismatch: "
+            f"expected {requirements.device_type}, got {environment.device_type}",
+        )
+    if requirements.require_validation:
+        _require(
+            environment.validation_requested
+            and environment.validation_layer_available
+            and environment.validation_enabled,
+            "GPU_ENV: validation requested/available/enabled proof is incomplete",
+        )
+    if requirements.minimum_device_api is not None:
+        _require(
+            environment.api_variant == 0,
+            "GPU_ENV: strict gate requires standard Vulkan API variant 0",
+        )
+        _require(
+            environment.requested_api >= requirements.minimum_device_api,
+            "GPU_ENV: requested API is below required minimum: "
+            f"expected >= {'.'.join(map(str, requirements.minimum_device_api))}, "
+            f"got {'.'.join(map(str, environment.requested_api))}",
+        )
+        _require(
+            environment.device_api >= requirements.minimum_device_api,
+            "GPU_ENV: device API is below required minimum: "
+            f"expected >= {'.'.join(map(str, requirements.minimum_device_api))}, "
+            f"got {'.'.join(map(str, environment.device_api))}",
+        )
+
+
+def _validate_consistent_gpu_environments(results: Sequence[CaseResult]) -> None:
+    environments = [result.environment for result in results]
+    if not any(environment is not None for environment in environments):
+        return
+    _require(
+        all(environment is not None for environment in environments),
+        "GPU_ENV: marker presence changed across test modes",
+    )
+    first = environments[0]
+    _require(
+        all(environment == first for environment in environments[1:]),
+        "GPU_ENV: selected device or validation state changed across test modes",
+    )
+
+
+def _write_summary(outdir: Path, results: Sequence[CaseResult]) -> Path:
+    environment = results[0].environment if results else None
+    gpu_environment = None
+    if environment is not None:
+        gpu_environment = {
+            "validation_requested": environment.validation_requested,
+            "validation_layer_available": environment.validation_layer_available,
+            "validation_enabled": environment.validation_enabled,
+            "device_type": environment.device_type,
+            "vendor_id": f"0x{environment.vendor_id:08x}",
+            "device_id": f"0x{environment.device_id:08x}",
+            "device_uuid": environment.device_uuid,
+            "requested_api": ".".join(map(str, environment.requested_api)),
+            "device_api": ".".join(map(str, environment.device_api)),
+            "api_variant": environment.api_variant,
+            "device_api_raw": f"0x{environment.device_api_raw:08x}",
+            "driver_id": environment.driver_id,
+            "driver_version_raw": f"0x{environment.driver_version_raw:08x}",
+        }
+    payload = {
+        "schema": 1,
+        "result": "PASS",
+        "commit": os.environ.get("MOER_GATE_SHA") or os.environ.get("GITHUB_SHA"),
+        "pull_request": os.environ.get("MOER_GATE_PR_NUMBER"),
+        "workflow_run_url": os.environ.get("MOER_GATE_RUN_URL"),
+        "mode_count": len(results),
+        "gpu_environment": gpu_environment,
+        "modes": [
+            {
+                "mode": result.log_path.stem,
+                "log": result.log_path.name,
+                "result": "PASS",
+            }
+            for result in results
+        ],
+    }
+    outdir.mkdir(parents=True, exist_ok=True)
+    summary_path = outdir / "summary.json"
+    summary_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return summary_path
+
+
+def _prepare_outdir(outdir: Path) -> None:
+    if outdir.exists():
+        _require(outdir.is_dir(), f"output path is not a directory: {outdir}")
+        _require(
+            not any(outdir.iterdir()),
+            f"refusing to reuse non-empty output directory: {outdir}",
+        )
+        return
+    outdir.mkdir(parents=True, exist_ok=False)
 
 
 def _testcase_marker(name: str, text: str) -> tuple[str, dict[str, str]] | None:
@@ -377,6 +665,21 @@ def _require_rt_export_rejection(text: str) -> None:
         and fields.get("keepalive") == "terminal"
         and fields.get("replay") == "0",
         "rt-export-rejection: incomplete export transaction contract",
+    )
+    materialization = _testcase_marker(
+        "RaytracingAcceptedReadbackMaterializationFailure", text
+    )
+    _require(
+        materialization is not None and materialization[0] == "PASS",
+        "rt-export-rejection: missing accepted-readback failure PASS marker",
+    )
+    _, materialization_fields = materialization
+    _require(
+        materialization_fields.get("native") == "accepted"
+        and materialization_fields.get("payload") == "error"
+        and materialization_fields.get("encoder") == "0"
+        and materialization_fields.get("latch") == "true",
+        "rt-export-rejection: incomplete accepted-readback failure contract",
     )
 
 
@@ -738,6 +1041,66 @@ def _require_bounded_cross_batch_pipeline(mode: str, text: str) -> None:
 
 def _require_phase15f_present_boundary(mode: str, text: str) -> None:
     if mode == "present-boundary":
+        source_contract = _testcase_marker(
+            "PresentSourceContractRejection", text
+        )
+        _require(
+            source_contract is not None and source_contract[0] == "PASS",
+            f"{mode}: missing PresentSourceContractRejection PASS marker",
+        )
+        _, source_fields = source_contract
+        rejected = source_fields.get("rejected")
+        copy_commit = source_fields.get("copy_commit")
+        bindless_cross_queue = source_fields.get("bindless_cross_queue")
+        expected_rejected = (
+            15
+            + int(copy_commit == "verified")
+            + int(bindless_cross_queue == "verified")
+        )
+        _require(
+            rejected is not None
+            and rejected.isdigit()
+            and int(rejected) == expected_rejected
+            and all(
+                source_fields.get(field) == "true"
+                for field in (
+                    "null",
+                    "usage",
+                    "transfer_src",
+                    "samples",
+                    "format",
+                    "compressed",
+                    "mip",
+                    "layer",
+                    "offset",
+                    "extent",
+                    "fresh",
+                    "accepted_export",
+                    "stale_clear",
+                    "backend_tracked_same_batch",
+                    "backend_rejected",
+                    "marker_then_clear",
+                    "accepted_mutation_clear",
+                    "rejected_mutation_preserves",
+                    "accepted_copy_mutation",
+                    "marker_then_segmented_state_change",
+                    "accepted_prefix_rejected_suffix",
+                    "wrong_queue_clear",
+                    "rejected_export_clear",
+                    "bindless_source_order",
+                    "bindless_refcount",
+                    "bindless_rejected_update",
+                    "bindless_segments",
+                    "bindless_parallel_record",
+                )
+            )
+            and copy_commit in {"verified", "skipped"}
+            and bindless_cross_queue in {"verified", "skipped"}
+            and source_fields.get("valid_override") == "4"
+            and source_fields.get("owner") == "Submission",
+            f"{mode}: incomplete Present source rejection contract",
+        )
+
         serial_control = _testcase_marker(
             "SerialControlPipelineBoundary", text
         )
@@ -777,6 +1140,23 @@ def _require_phase15f_present_boundary(mode: str, text: str) -> None:
             and shutdown_fields.get("owners") == "stopped"
             and shutdown_fields.get("replay") == "0",
             f"{mode}: incomplete queued Present shutdown contract",
+        )
+        completion = _testcase_marker(
+            "PresentationCompletionIntegrationBoundary", text
+        )
+        _require(
+            completion is not None and completion[0] == "PASS",
+            f"{mode}: missing PresentationCompletionIntegrationBoundary PASS marker",
+        )
+        _, completion_fields = completion
+        _require(
+            completion_fields.get("present_fence") == "nonblocking_targeted"
+            and completion_fields.get("fence_owner") == "Completion"
+            and completion_fields.get("completion_threads") == "1"
+            and completion_fields.get("queue_idle_fallback") == "targeted"
+            and completion_fields.get("queue_idle_owner") == "Submission"
+            and completion_fields.get("outstanding") == "0",
+            f"{mode}: incomplete Presentation completion integration contract",
         )
 
     marker_name = (
@@ -1000,6 +1380,252 @@ def _require_timestamp_query_success_batch(text: str) -> None:
     )
 
 
+def _nonnegative_number(value: str | None) -> bool:
+    if value is None:
+        return False
+    try:
+        number = float(value)
+    except ValueError:
+        return False
+    return math.isfinite(number) and number >= 0.0
+
+
+def _number_pair(value: str | None) -> tuple[float, float] | None:
+    if value is None:
+        return None
+    parts = value.split(",")
+    if len(parts) != 2:
+        return None
+    try:
+        pair = float(parts[0]), float(parts[1])
+    except ValueError:
+        return None
+    if not all(math.isfinite(number) for number in pair):
+        return None
+    return pair
+
+
+def _require_present_legacy_owner(text: str) -> None:
+    marker = _testcase_marker("LegacyDirectPresentOwnerBoundary", text)
+    _require(
+        marker is not None and marker[0] == "PASS",
+        "present-legacy-owner: missing legacy owner PASS marker",
+    )
+    _, fields = marker
+    _require(
+        fields.get("rhi_thread") == "false"
+        and fields.get("owner") == "Submission"
+        and fields.get("thread") == "caller"
+        and fields.get("receipt") == "exactly_once"
+        and fields.get("native_present") == "0",
+        "present-legacy-owner: incomplete direct Present ownership contract",
+    )
+
+
+def _require_present_completion_shutdown(text: str) -> None:
+    marker = _testcase_marker(
+        "PresentationCompletionShutdownDrainBoundary", text
+    )
+    _require(
+        marker is not None and marker[0] == "PASS",
+        "present-completion-shutdown: missing shutdown-drain PASS marker",
+    )
+    _, fields = marker
+    _require(
+        fields.get("pending") == "fence+fallback"
+        and fields.get("fence_owner") == "Completion"
+        and fields.get("queue_idle_owner") == "Submission"
+        and fields.get("outstanding") == "0"
+        and fields.get("dispose") == "returned",
+        "present-completion-shutdown: incomplete final owner-drain contract",
+    )
+
+
+def _require_timestamp_query(text: str) -> None:
+    completion = _testcase_marker("TimestampQueryCompletionOwnership", text)
+    _require(
+        completion is not None and completion[0] == "PASS",
+        "timestamp-query: missing Completion ownership PASS marker",
+    )
+    _, completion_fields = completion
+    valid_bits = completion_fields.get("valid_bits")
+    _require(
+        completion_fields.get("status") == "Ready"
+        and completion_fields.get("gpu_completion") == "Ready"
+        and completion_fields.get("owner") == "Completion"
+        and completion_fields.get("order")
+        == "signal->completion->query->ordinary"
+        and completion_fields.get("allocator_slot_reuse") == "verified"
+        and completion_fields.get("large_query_pairs") == "501"
+        and completion_fields.get("post_growth_submit") == "accepted"
+        and valid_bits is not None
+        and valid_bits.isdigit()
+        and 0 < int(valid_bits) <= 64
+        and _nonnegative_number(completion_fields.get("duration_ns"))
+        and _nonnegative_number(completion_fields.get("reused_duration_ns"))
+        and completion_fields.get("readback") == "verified"
+        and completion_fields.get("replay") == "0",
+        "timestamp-query: incomplete Completion ownership contract",
+    )
+
+    _require_timestamp_query_success_batch(text)
+
+    preparation = _testcase_marker("TimestampQueryPreparationRejection", text)
+    _require(
+        preparation is not None and preparation[0] == "PASS",
+        "timestamp-query: missing preparation rejection PASS marker",
+    )
+    _, preparation_fields = preparation
+    async_scope = preparation_fields.get("async_scope")
+    _require(
+        async_scope is not None
+        and async_scope.isdigit()
+        and int(async_scope) > 0
+        and preparation_fields.get("prepare_calls") in {"1", "2"}
+        and preparation_fields.get("status") == "Error"
+        and preparation_fields.get("suffix_query") == "Error"
+        and preparation_fields.get("publish_before_completion") == "true"
+        and preparation_fields.get("signal") == "rejected-not-failed"
+        and preparation_fields.get("native_rejected_batch") == "0"
+        and preparation_fields.get("recovery_submit") == "accepted"
+        and preparation_fields.get("owner") == "Completion"
+        and preparation_fields.get("callbacks") == "exactly_once"
+        and preparation_fields.get("replay") == "0",
+        "timestamp-query: incomplete preparation rejection contract",
+    )
+
+    preflight = _testcase_marker("TimestampQueryPreflightRejection", text)
+    _require(
+        preflight is not None and preflight[0] == "PASS",
+        "timestamp-query: missing preflight rejection PASS marker",
+    )
+    _, preflight_fields = preflight
+    _require(
+        preflight_fields.get("reason") == "multi-segment-query"
+        and preflight_fields.get("sources") == "2"
+        and preflight_fields.get("status") == "Error"
+        and preflight_fields.get("owner") == "Completion"
+        and preflight_fields.get("batch_terminal_before_notify") == "true"
+        and preflight_fields.get("bounded_cross_future_wait") == "true"
+        and preflight_fields.get("ordinary_callback") == "exactly_once"
+        and preflight_fields.get("query_callback") == "exactly_once"
+        and preflight_fields.get("success_callback") == "0"
+        and preflight_fields.get("native_submit") == "0"
+        and preflight_fields.get("replay") == "0",
+        "timestamp-query: incomplete preflight rejection contract",
+    )
+
+
+def _require_timestamp_query_mid_failure(text: str) -> None:
+    marker = _testcase_marker("TimestampQueryMidBatchTranslateFailure", text)
+    _require(
+        marker is not None and marker[0] == "PASS",
+        "timestamp-query-mid-failure: missing mid-batch failure PASS marker",
+    )
+    _, fields = marker
+    _require(
+        fields.get("queues") == "Graphics,Graphics"
+        and fields.get("native_prefix_submit") == "1"
+        and fields.get("suffix_translate") == "main-thread-released"
+        and fields.get("suffix_status") == "Error"
+        and fields.get("prefix_completion") == "Ready"
+        and fields.get("suffix_completion") == "Error"
+        and fields.get("pre_terminal_callback_entry") == "0"
+        and fields.get("batch_terminal_before_notify") == "true"
+        and fields.get("bounded_cross_future_wait") == "true"
+        and fields.get("owner") == "Completion"
+        and fields.get("callbacks") == "exactly_once"
+        and fields.get("replay") == "0",
+        "timestamp-query-mid-failure: incomplete terminal-frontier contract",
+    )
+
+
+def _require_timestamp_query_record_failure(text: str) -> None:
+    marker = _testcase_marker("TimestampQuerySerialRecordFailure", text)
+    _require(
+        marker is not None and marker[0] == "PASS",
+        "timestamp-query-record-failure: missing record failure PASS marker",
+    )
+    _, fields = marker
+    recorded_count = fields.get("recorded_phase_gate_count")
+    failure_count = fields.get("failed_phase_gate_count")
+    _require(
+        fields.get("sources") == "2"
+        and fields.get("failing_source") == "0"
+        and fields.get("serial_query_island") == "true"
+        and fields.get("sibling_query") == "Error"
+        and fields.get("sibling_signal") == "failed"
+        and fields.get("batch_terminal_before_notify") == "true"
+        and recorded_count is not None
+        and recorded_count.isdigit()
+        and failure_count is not None
+        and failure_count.isdigit()
+        and int(recorded_count) + int(failure_count) == 1
+        and fields.get("pre_release_callback") == "0"
+        and fields.get("owner") == "Completion"
+        and fields.get("callbacks") == "exactly_once"
+        and fields.get("native_submit") == "0"
+        and fields.get("replay") == "0",
+        "timestamp-query-record-failure: incomplete record-failure contract",
+    )
+
+
+def _require_gpu_scope_stream(text: str) -> None:
+    marker = _testcase_marker(
+        "GpuScopeStreamCompletionAndParallelIsolation", text
+    )
+    _require(marker is not None, "gpu-scope-stream: missing terminal marker")
+    status, fields = marker
+    if status == "SKIP":
+        _require(
+            fields.get("reason") == "graphics_queue_unavailable",
+            "gpu-scope-stream: invalid SKIP contract",
+        )
+        return
+    _require(status == "PASS", "gpu-scope-stream: missing GPU scope stream PASS marker")
+    frame_id = fields.get("frame_id")
+    durations = _number_pair(fields.get("duration_ns"))
+    exclusives = _number_pair(fields.get("exclusive_ns"))
+    timing_contract = False
+    if durations is not None and exclusives is not None:
+        outer_duration, inner_duration = durations
+        outer_exclusive, inner_exclusive = exclusives
+        approximately_equal = lambda actual, expected: math.isclose(
+            actual,
+            expected,
+            rel_tol=1.0e-9,
+            abs_tol=1.0e-9,
+        )
+        timing_contract = (
+            outer_duration > 0.0
+            and inner_duration > 0.0
+            and outer_exclusive >= 0.0
+            and inner_exclusive >= 0.0
+            and approximately_equal(inner_exclusive, inner_duration)
+            and approximately_equal(
+                outer_exclusive,
+                max(0.0, outer_duration - inner_duration),
+            )
+        )
+    _require(
+        frame_id is not None
+        and frame_id.isdigit()
+        and int(frame_id) > 0
+        and fields.get("queue") == "Graphics"
+        and fields.get("scopes") == "2"
+        and fields.get("hierarchy") == "nested"
+        and fields.get("query_source") == "query-serial-island"
+        and fields.get("query_free_sibling") == "parallel-effective"
+        and fields.get("raw_ticks") == "verified"
+        and timing_contract
+        and fields.get("owner") == "Completion"
+        and fields.get("readback") == "verified"
+        and fields.get("sibling_readbacks") == "8/8"
+        and fields.get("replay") == "0",
+        "gpu-scope-stream: incomplete query-island/parallel-sibling contract",
+    )
+
+
 def _require_owning_readback_future(text: str) -> None:
     marker = _testcase_marker("OwningReadbackFuture", text)
     _require(
@@ -1055,14 +1681,32 @@ def validate_log(mode: str, text: str) -> None:
     _require("[TESTCASE][FAIL]" not in text, f"{mode}: test emitted a FAIL marker")
     _require("VUID-" not in text, f"{mode}: Vulkan validation VUID was emitted")
     _require("Validation Error" not in text, f"{mode}: Vulkan validation error was emitted")
+    if mode == "present-legacy-owner":
+        _require_present_legacy_owner(text)
+        return
+    if mode == "present-completion-shutdown":
+        _require_present_completion_shutdown(text)
+        return
     if mode == "readback-future":
         _require_owning_readback_future(text)
         return
     if mode == "occlusion-query":
         _require_occlusion_query(text)
         return
+    if mode == "timestamp-query":
+        _require_timestamp_query(text)
+        return
     if mode == "timestamp-query-success-batch":
         _require_timestamp_query_success_batch(text)
+        return
+    if mode == "timestamp-query-mid-failure":
+        _require_timestamp_query_mid_failure(text)
+        return
+    if mode == "timestamp-query-record-failure":
+        _require_timestamp_query_record_failure(text)
+        return
+    if mode == "gpu-scope-stream":
+        _require_gpu_scope_stream(text)
         return
     if mode == "rt-export-rejection":
         _require_rt_export_rejection(text)
@@ -1333,54 +1977,93 @@ def validate_log(mode: str, text: str) -> None:
         )
 
 
-def run_case(executable: Path, outdir: Path, mode: str, timeout: float) -> Path:
-    arguments: list[str] = []
-    if mode in ("parallel", "fallback", "gated", "heavy"):
-        arguments.append("--parallel")
-    if mode == "fallback":
-        arguments.append("--inject-worker-failure")
-    if mode == "gated":
-        arguments.append("--production-gate")
-    if mode == "heavy":
-        arguments.append("--production-heavy")
-    if mode == "translate-hard":
-        arguments.append("--inject-translate-failure")
-    if mode == "multi-segment-hard":
-        arguments.append("--inject-multi-segment-translate-failure")
-    if mode == "pipeline-window1":
-        arguments.append("--pipeline-window1")
-    if mode == "pipeline-window2":
-        arguments.append("--pipeline-window2")
-    if mode == "present-boundary":
-        arguments.append("--present-boundary")
-    if mode == "present-hard":
-        arguments.append("--present-hard")
-    if mode == "rt-export-rejection":
-        arguments.append("--rt-export-rejection")
-    if mode == "readback-future":
-        arguments.append("--readback-future")
-    if mode == "occlusion-query":
-        arguments.append("--occlusion-query")
-    if mode == "timestamp-query-success-batch":
-        arguments.append("--timestamp-query-success-batch")
+def _output_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
 
-    completed = subprocess.run(
-        [str(executable), *arguments],
-        cwd=executable.parent,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-        check=False,
-    )
-    text = completed.stdout + completed.stderr
+
+def _write_case_logs(
+    outdir: Path,
+    mode: str,
+    stdout: str,
+    stderr: str,
+) -> Path:
     outdir.mkdir(parents=True, exist_ok=True)
+    (outdir / f"{mode}.stdout.log").write_text(stdout, encoding="utf-8")
+    (outdir / f"{mode}.stderr.log").write_text(stderr, encoding="utf-8")
     log_path = outdir / f"{mode}.log"
-    log_path.write_text(text, encoding="utf-8")
-    _require(completed.returncode == 0, f"{mode}: executable returned {completed.returncode}")
-    validate_log(mode, text)
+    log_path.write_text(stdout + stderr, encoding="utf-8")
     return log_path
+
+
+def run_case(
+    executable: Path,
+    outdir: Path,
+    mode: str,
+    timeout: float,
+    requirements: GpuGateRequirements | None = None,
+) -> CaseResult:
+    test_case = VULKAN_TEST_CASE_BY_MODE.get(mode)
+    _require(test_case is not None, f"unknown Vulkan test mode: {mode}")
+    assert test_case is not None
+    arguments = list(test_case.arguments)
+
+    try:
+        completed = subprocess.run(
+            [str(executable), *arguments],
+            cwd=executable.parent,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        stdout = _output_text(error.stdout)
+        stderr = _output_text(error.stderr)
+        log_path = _write_case_logs(outdir, mode, stdout, stderr)
+        raise VulkanTestError(
+            f"{mode}: timed out after {timeout:g}s; partial log: {log_path}"
+        ) from error
+
+    stdout = _output_text(completed.stdout)
+    stderr = _output_text(completed.stderr)
+    text = stdout + stderr
+    log_path = _write_case_logs(outdir, mode, stdout, stderr)
+    _require(completed.returncode == 0, f"{mode}: executable returned {completed.returncode}")
+    requirements = requirements or GpuGateRequirements()
+    environment = _gpu_environment(text, required=requirements.active)
+    _validate_gpu_environment(environment, requirements)
+    validate_log(mode, text)
+    if requirements.reject_testcase_skips:
+        _require(
+            "[TESTCASE][SKIP]" not in text,
+            f"{mode}: strict GPU gate does not permit TESTCASE skips",
+        )
+    return CaseResult(log_path=log_path, environment=environment)
+
+
+def _uint32_argument(value: str) -> int:
+    try:
+        number = int(value, 0)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"expected a decimal or 0x-prefixed integer, got {value!r}"
+        ) from error
+    if not 0 <= number <= 0xFFFFFFFF:
+        raise argparse.ArgumentTypeError("value must fit in uint32")
+    return number
+
+
+def _api_version_argument(value: str) -> tuple[int, int, int]:
+    try:
+        return _parse_api_version(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -1390,9 +2073,53 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--executable", required=True, type=Path)
     parser.add_argument("--outdir", required=True, type=Path)
     parser.add_argument("--timeout", type=float, default=180.0)
+    parser.add_argument(
+        "--strict-gpu-gate",
+        action="store_true",
+        help=(
+            "require the GPU_ENV marker, active validation, Vulkan 1.3+, "
+            "and no TESTCASE skips"
+        ),
+    )
+    parser.add_argument(
+        "--require-gpu-env",
+        action="store_true",
+        help="require one exact GPU_ENV schema marker from every process",
+    )
+    parser.add_argument("--require-vendor-id", type=_uint32_argument)
+    parser.add_argument("--require-device-id", type=_uint32_argument)
+    parser.add_argument(
+        "--require-device-type",
+        choices=(
+            "other",
+            "integrated_gpu",
+            "discrete_gpu",
+            "virtual_gpu",
+            "cpu",
+            "unknown",
+        ),
+    )
+    parser.add_argument(
+        "--require-validation",
+        action="store_true",
+        help="require validation to be requested, available, and enabled",
+    )
+    parser.add_argument(
+        "--minimum-device-api",
+        type=_api_version_argument,
+        metavar="MAJOR.MINOR[.PATCH]",
+    )
     args = parser.parse_args(argv)
-    if args.timeout <= 0.0:
-        parser.error("--timeout must be positive")
+    if not math.isfinite(args.timeout) or args.timeout <= 0.0:
+        parser.error("--timeout must be finite and positive")
+    strict_minimum_api = (1, 3, 0)
+    if args.strict_gpu_gate:
+        if args.minimum_device_api is None:
+            args.minimum_device_api = strict_minimum_api
+        elif args.minimum_device_api < strict_minimum_api:
+            parser.error(
+                "--strict-gpu-gate requires --minimum-device-api >= 1.3.0"
+            )
     return args
 
 
@@ -1402,31 +2129,36 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not executable.is_file():
         print(f"parallel Vulkan test: executable not found: {executable}", file=sys.stderr)
         return 2
+    requirements = GpuGateRequirements(
+        require_marker=args.require_gpu_env or args.strict_gpu_gate,
+        vendor_id=args.require_vendor_id,
+        device_id=args.require_device_id,
+        device_type=args.require_device_type,
+        require_validation=args.require_validation or args.strict_gpu_gate,
+        minimum_device_api=args.minimum_device_api,
+        reject_testcase_skips=args.strict_gpu_gate,
+    )
     try:
-        logs = [
-            run_case(executable, args.outdir, mode, args.timeout)
-            for mode in (
-                "serial",
-                "parallel",
-                "fallback",
-                "gated",
-                "heavy",
-                "translate-hard",
-                "multi-segment-hard",
-                "pipeline-window1",
-                "pipeline-window2",
-                "present-boundary",
-                "present-hard",
-                "rt-export-rejection",
-                "readback-future",
-                "occlusion-query",
-                "timestamp-query-success-batch",
+        _prepare_outdir(args.outdir)
+        results = [
+            run_case(
+                executable,
+                args.outdir,
+                test_case.mode,
+                args.timeout,
+                requirements,
             )
+            for test_case in VULKAN_TEST_CASES
         ]
+        _validate_consistent_gpu_environments(results)
+        _write_summary(args.outdir, results)
     except (OSError, subprocess.TimeoutExpired, VulkanTestError) as error:
         print(f"parallel Vulkan test: FAIL: {error}", file=sys.stderr)
         return 1
-    print("parallel Vulkan test: PASS: " + ", ".join(str(path) for path in logs))
+    print(
+        "parallel Vulkan test: PASS: "
+        + ", ".join(str(result.log_path) for result in results)
+    )
     return 0
 
 

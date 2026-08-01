@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import contextlib
+import io
+import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -147,16 +151,46 @@ def queued_present_shutdown_line() -> str:
     )
 
 
+def present_source_contract_line() -> str:
+    return (
+        "[TESTCASE][PASS] name=PresentSourceContractRejection "
+        "rejected=17 null=true usage=true transfer_src=true samples=true "
+        "format=true compressed=true mip=true layer=true offset=true extent=true "
+        "fresh=true accepted_export=true stale_clear=true "
+        "backend_tracked_same_batch=true backend_rejected=true "
+        "marker_then_clear=true accepted_mutation_clear=true "
+        "rejected_mutation_preserves=true accepted_copy_mutation=true "
+        "marker_then_segmented_state_change=true "
+        "accepted_prefix_rejected_suffix=true copy_commit=verified "
+        "wrong_queue_clear=true rejected_export_clear=true "
+        "bindless_source_order=true bindless_refcount=true "
+        "bindless_rejected_update=true bindless_segments=true "
+        "bindless_cross_queue=verified bindless_parallel_record=true "
+        "valid_override=4 owner=Submission\n"
+    )
+
+
+def presentation_completion_integration_line() -> str:
+    return (
+        "[TESTCASE][PASS] name=PresentationCompletionIntegrationBoundary "
+        "present_fence=nonblocking_targeted fence_owner=Completion "
+        "completion_threads=1 queue_idle_fallback=targeted "
+        "queue_idle_owner=Submission outstanding=0\n"
+    )
+
+
 def present_boundary_line(bridge: str = "required") -> str:
     prefix_native = "2" if bridge == "required" else "0"
     return (
-        serial_control_boundary_line()
+        present_source_contract_line()
+        + serial_control_boundary_line()
         + "[TESTCASE][PASS] name=PresentPipelineBoundary "
         "outcome=Recreate order=Prefix,Bridge?,Present,Later "
         "owner=Submission receipt_attempts=1 submitted=false "
         "recreate=true completion=drained later_batch=success "
         f"present_only=verified bridge={bridge} graphics_native=0 "
         f"prefix_native={prefix_native} readback=verified replay=0\n"
+        + presentation_completion_integration_line()
         + queued_present_shutdown_line()
     )
 
@@ -179,6 +213,8 @@ def rt_export_rejection_line() -> str:
         "readback_retry=frame_accepted recovery_consumed=true encoder=once "
         "decision_table=verified native_rejected=0 callbacks=exactly_once "
         "keepalive=terminal replay=0\n"
+        "[TESTCASE][PASS] name=RaytracingAcceptedReadbackMaterializationFailure "
+        "native=accepted payload=error encoder=0 latch=true\n"
     )
 
 
@@ -252,6 +288,79 @@ def timestamp_query_success_batch_line() -> str:
         "signal=success gpu_completion=Ready native_submit=accepted "
         "native_owner=Submission owner=Completion "
         "callbacks=exactly_once runtime=recovered replay=0\n"
+    )
+
+
+def present_legacy_owner_line() -> str:
+    return (
+        "[TESTCASE][PASS] name=LegacyDirectPresentOwnerBoundary "
+        "rhi_thread=false owner=Submission thread=caller "
+        "receipt=exactly_once native_present=0\n"
+    )
+
+
+def present_completion_shutdown_line() -> str:
+    return (
+        "[TESTCASE][PASS] name=PresentationCompletionShutdownDrainBoundary "
+        "pending=fence+fallback fence_owner=Completion "
+        "queue_idle_owner=Submission outstanding=0 dispose=returned\n"
+    )
+
+
+def timestamp_query_line() -> str:
+    return (
+        "[TESTCASE][PASS] name=TimestampQueryCompletionOwnership "
+        "status=Ready gpu_completion=Ready owner=Completion "
+        "order=signal->completion->query->ordinary "
+        "allocator_slot_reuse=verified large_query_pairs=501 "
+        "post_growth_submit=accepted valid_bits=64 duration_ns=12.5 "
+        "reused_duration_ns=3.25 readback=verified replay=0\n"
+        + timestamp_query_success_batch_line()
+        + "[TESTCASE][PASS] name=TimestampQueryPreparationRejection "
+        "async_scope=5784928276370600517 prepare_calls=2 status=Error "
+        "suffix_query=Error publish_before_completion=true "
+        "signal=rejected-not-failed native_rejected_batch=0 "
+        "recovery_submit=accepted owner=Completion callbacks=exactly_once "
+        "replay=0\n"
+        "[TESTCASE][PASS] name=TimestampQueryPreflightRejection "
+        "reason=multi-segment-query sources=2 status=Error owner=Completion "
+        "batch_terminal_before_notify=true bounded_cross_future_wait=true "
+        "ordinary_callback=exactly_once query_callback=exactly_once "
+        "success_callback=0 native_submit=0 replay=0\n"
+    )
+
+
+def timestamp_query_mid_failure_line() -> str:
+    return (
+        "[TESTCASE][PASS] name=TimestampQueryMidBatchTranslateFailure "
+        "queues=Graphics,Graphics native_prefix_submit=1 "
+        "suffix_translate=main-thread-released suffix_status=Error "
+        "prefix_completion=Ready suffix_completion=Error "
+        "pre_terminal_callback_entry=0 batch_terminal_before_notify=true "
+        "bounded_cross_future_wait=true owner=Completion "
+        "callbacks=exactly_once replay=0\n"
+    )
+
+
+def timestamp_query_record_failure_line() -> str:
+    return (
+        "[TESTCASE][PASS] name=TimestampQuerySerialRecordFailure "
+        "sources=2 failing_source=0 serial_query_island=true "
+        "sibling_query=Error sibling_signal=failed "
+        "batch_terminal_before_notify=true recorded_phase_gate_count=1 "
+        "failed_phase_gate_count=0 pre_release_callback=0 "
+        "owner=Completion callbacks=exactly_once native_submit=0 replay=0\n"
+    )
+
+
+def gpu_scope_stream_line() -> str:
+    return (
+        "[TESTCASE][PASS] name=GpuScopeStreamCompletionAndParallelIsolation "
+        "frame_id=7 queue=Graphics scopes=2 hierarchy=nested "
+        "query_source=query-serial-island "
+        "query_free_sibling=parallel-effective raw_ticks=verified "
+        "duration_ns=12.5,3.25 exclusive_ns=9.25,3.25 "
+        "owner=Completion readback=verified sibling_readbacks=8/8 replay=0\n"
     )
 
 
@@ -346,7 +455,308 @@ def summary(batch: int, outcome: str = "parallel") -> str:
     )
 
 
+def gpu_env_line(
+    *,
+    validation_requested: str = "true",
+    validation_layer_available: str = "true",
+    validation_enabled: str = "true",
+    device_type: str = "discrete_gpu",
+    vendor_id: str = "0x000010de",
+    device_id: str = "0x00002c02",
+    device_uuid: str = "3b172c4f63b522546e783cce9b27bd48",
+    requested_api: str = "1.3.0",
+    device_api: str = "1.3.280",
+    device_api_raw: str = "0x00403118",
+) -> str:
+    return (
+        "[Vulkan][GPU_ENV] schema=1 backend=vulkan "
+        f"validation_requested={validation_requested} "
+        f"validation_layer_available={validation_layer_available} "
+        f"validation_enabled={validation_enabled} "
+        f"device_type={device_type} vendor_id={vendor_id} device_id={device_id} "
+        f"device_uuid={device_uuid} requested_api={requested_api} "
+        f"device_api={device_api} api_variant=0 device_api_raw={device_api_raw} "
+        "driver_id=4 driver_version_raw=0x12345678\n"
+    )
+
+
 class VulkanRunnerTests(unittest.TestCase):
+    def test_gpu_environment_schema_is_accepted(self) -> None:
+        environment = runner._gpu_environment(gpu_env_line(), required=True)
+        self.assertIsNotNone(environment)
+        assert environment is not None
+        self.assertEqual(environment.vendor_id, 0x10DE)
+        self.assertEqual(environment.device_id, 0x2C02)
+        self.assertEqual(
+            environment.device_uuid, "3b172c4f63b522546e783cce9b27bd48"
+        )
+        self.assertEqual(environment.device_type, "discrete_gpu")
+        self.assertEqual(environment.device_api, (1, 3, 280))
+
+    def test_gpu_environment_is_required_in_strict_mode(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "expected exactly one marker"
+        ):
+            runner._gpu_environment("", required=True)
+
+    def test_gpu_environment_rejects_duplicate_markers(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "expected exactly one marker"
+        ):
+            runner._gpu_environment(gpu_env_line() * 2, required=True)
+
+    def test_gpu_environment_rejects_unknown_fields(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "malformed or unsupported schema"
+        ):
+            runner._gpu_environment(
+                gpu_env_line().replace(
+                    " driver_id=4", " unexpected=true driver_id=4"
+                ),
+                required=True,
+            )
+
+    def test_gpu_environment_rejects_inconsistent_raw_api(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "do not match device_api_raw"
+        ):
+            runner._gpu_environment(
+                gpu_env_line(device_api_raw="0x00403119"),
+                required=True,
+            )
+
+    def test_gpu_gate_requires_full_validation_proof(self) -> None:
+        environment = runner._gpu_environment(
+            gpu_env_line(validation_enabled="false"), required=True
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "validation requested/available/enabled"
+        ):
+            runner._validate_gpu_environment(
+                environment,
+                runner.GpuGateRequirements(require_validation=True),
+            )
+
+    def test_gpu_gate_rejects_wrong_vendor(self) -> None:
+        environment = runner._gpu_environment(gpu_env_line(), required=True)
+        with self.assertRaisesRegex(runner.VulkanTestError, "vendor mismatch"):
+            runner._validate_gpu_environment(
+                environment,
+                runner.GpuGateRequirements(vendor_id=0x1002),
+            )
+
+    def test_gpu_gate_rejects_device_api_below_minimum(self) -> None:
+        environment = runner._gpu_environment(
+            gpu_env_line(device_api="1.2.0", device_api_raw="0x00402000"),
+            required=True,
+        )
+        with self.assertRaisesRegex(runner.VulkanTestError, "below required"):
+            runner._validate_gpu_environment(
+                environment,
+                runner.GpuGateRequirements(minimum_device_api=(1, 3, 0)),
+            )
+
+    def test_gpu_gate_rejects_requested_api_below_minimum(self) -> None:
+        environment = runner._gpu_environment(
+            gpu_env_line(requested_api="1.2.0"), required=True
+        )
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "requested API is below required"
+        ):
+            runner._validate_gpu_environment(
+                environment,
+                runner.GpuGateRequirements(minimum_device_api=(1, 3, 0)),
+            )
+
+    def test_gpu_gate_rejects_environment_changes_across_modes(self) -> None:
+        first = runner._gpu_environment(gpu_env_line(), required=True)
+        second = runner._gpu_environment(
+            gpu_env_line(device_id="0x00002704"), required=True
+        )
+        with self.assertRaisesRegex(runner.VulkanTestError, "changed across"):
+            runner._validate_consistent_gpu_environments(
+                (
+                    runner.CaseResult(Path("first.log"), first),
+                    runner.CaseResult(Path("second.log"), second),
+                )
+            )
+
+    def test_gpu_gate_distinguishes_same_model_devices_by_uuid(self) -> None:
+        first = runner._gpu_environment(gpu_env_line(), required=True)
+        second = runner._gpu_environment(
+            gpu_env_line(device_uuid="00112233445566778899aabbccddeeff"),
+            required=True,
+        )
+        with self.assertRaisesRegex(runner.VulkanTestError, "changed across"):
+            runner._validate_consistent_gpu_environments(
+                (
+                    runner.CaseResult(Path("first.log"), first),
+                    runner.CaseResult(Path("second.log"), second),
+                )
+            )
+
+    def test_parse_args_accepts_strict_gpu_policy(self) -> None:
+        args = runner.parse_args(
+            (
+                "--executable",
+                "test.exe",
+                "--outdir",
+                "logs",
+                "--strict-gpu-gate",
+                "--require-vendor-id",
+                "0x10de",
+                "--require-device-type",
+                "discrete_gpu",
+                "--minimum-device-api",
+                "1.3",
+            )
+        )
+        self.assertTrue(args.strict_gpu_gate)
+        self.assertEqual(args.require_vendor_id, 0x10DE)
+        self.assertEqual(args.minimum_device_api, (1, 3, 0))
+
+    def test_strict_gpu_policy_defaults_to_vulkan_1_3(self) -> None:
+        args = runner.parse_args(
+            (
+                "--executable",
+                "test.exe",
+                "--outdir",
+                "logs",
+                "--strict-gpu-gate",
+            )
+        )
+        self.assertEqual(args.minimum_device_api, (1, 3, 0))
+
+    def test_strict_gpu_policy_rejects_lower_explicit_api(self) -> None:
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(
+            SystemExit
+        ):
+            runner.parse_args(
+                (
+                    "--executable",
+                    "test.exe",
+                    "--outdir",
+                    "logs",
+                    "--strict-gpu-gate",
+                    "--minimum-device-api",
+                    "1.2",
+                )
+            )
+
+    def test_timeout_must_be_finite_and_positive(self) -> None:
+        for value in ("nan", "inf", "-inf", "0", "-1"):
+            with self.subTest(value=value), contextlib.redirect_stderr(
+                io.StringIO()
+            ), self.assertRaises(SystemExit):
+                runner.parse_args(
+                    (
+                        "--executable",
+                        "test.exe",
+                        "--outdir",
+                        "logs",
+                        "--timeout",
+                        value,
+                    )
+                )
+
+    def test_timeout_persists_partial_stdout_and_stderr(self) -> None:
+        timeout = subprocess.TimeoutExpired(
+            cmd=["test.exe"],
+            timeout=1.0,
+            output=b"partial stdout\n",
+            stderr=b"partial stderr\n",
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            outdir = Path(temporary_directory)
+            with mock.patch.object(runner.subprocess, "run", side_effect=timeout):
+                with self.assertRaisesRegex(runner.VulkanTestError, "timed out"):
+                    runner.run_case(Path("test.exe"), outdir, "serial", 1.0)
+            self.assertEqual(
+                (outdir / "serial.stdout.log").read_text(encoding="utf-8"),
+                "partial stdout\n",
+            )
+            self.assertEqual(
+                (outdir / "serial.stderr.log").read_text(encoding="utf-8"),
+                "partial stderr\n",
+            )
+
+    def test_strict_gpu_gate_rejects_any_testcase_skip(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                gpu_env_line()
+                + pipeline_line(1, "false", "blocked")
+                + "[TESTCASE][SKIP] name=Unexpected reason=unsupported\n"
+            ),
+            stderr="",
+        )
+        requirements = runner.GpuGateRequirements(
+            require_marker=True,
+            require_validation=True,
+            reject_testcase_skips=True,
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            with mock.patch.object(
+                runner.subprocess, "run", return_value=completed
+            ):
+                with self.assertRaisesRegex(
+                    runner.VulkanTestError, "does not permit TESTCASE skips"
+                ):
+                    runner.run_case(
+                        Path("test.exe"),
+                        Path(temporary_directory),
+                        "pipeline-window1",
+                        30.0,
+                        requirements,
+                    )
+
+    def test_summary_records_stable_gpu_identity(self) -> None:
+        environment = runner._gpu_environment(gpu_env_line(), required=True)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            outdir = Path(temporary_directory)
+            summary_path = runner._write_summary(
+                outdir,
+                (runner.CaseResult(outdir / "serial.log", environment),),
+            )
+            summary_text = summary_path.read_text(encoding="utf-8")
+            self.assertIn('"mode_count": 1', summary_text)
+            self.assertIn('"vendor_id": "0x000010de"', summary_text)
+            self.assertIn(
+                '"device_uuid": "3b172c4f63b522546e783cce9b27bd48"',
+                summary_text,
+            )
+            self.assertIn('"validation_enabled": true', summary_text)
+
+    def test_summary_records_explicit_tested_sha_over_event_sha(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory, mock.patch.dict(
+            os.environ,
+            {
+                "MOER_GATE_SHA": "tested-merge-sha",
+                "GITHUB_SHA": "controller-base-sha",
+                "MOER_GATE_PR_NUMBER": "232",
+                "MOER_GATE_RUN_URL": "https://example.invalid/run/1",
+            },
+            clear=False,
+        ):
+            outdir = Path(temporary_directory)
+            summary_path = runner._write_summary(outdir, ())
+            payload = json.loads(summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["commit"], "tested-merge-sha")
+            self.assertEqual(payload["pull_request"], "232")
+            self.assertEqual(
+                payload["workflow_run_url"], "https://example.invalid/run/1"
+            )
+
+    def test_runner_refuses_nonempty_output_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            outdir = Path(temporary_directory)
+            (outdir / "stale.log").write_text("old", encoding="utf-8")
+            with self.assertRaisesRegex(
+                runner.VulkanTestError, "refusing to reuse non-empty"
+            ):
+                runner._prepare_outdir(outdir)
+
     def test_pipeline_window1_contract_is_accepted(self) -> None:
         runner.validate_log(
             "pipeline-window1",
@@ -1036,6 +1446,16 @@ class VulkanRunnerTests(unittest.TestCase):
                 present_hard_line(),
             ),
             (
+                "present-legacy-owner",
+                "--present-legacy-owner",
+                present_legacy_owner_line(),
+            ),
+            (
+                "present-completion-shutdown",
+                "--present-completion-shutdown",
+                present_completion_shutdown_line(),
+            ),
+            (
                 "rt-export-rejection",
                 "--rt-export-rejection",
                 rt_export_rejection_line(),
@@ -1054,6 +1474,26 @@ class VulkanRunnerTests(unittest.TestCase):
                 "timestamp-query-success-batch",
                 "--timestamp-query-success-batch",
                 timestamp_query_success_batch_line(),
+            ),
+            (
+                "timestamp-query",
+                "--timestamp-query",
+                timestamp_query_line(),
+            ),
+            (
+                "timestamp-query-mid-failure",
+                "--timestamp-query-mid-failure",
+                timestamp_query_mid_failure_line(),
+            ),
+            (
+                "timestamp-query-record-failure",
+                "--timestamp-query-record-failure",
+                timestamp_query_record_failure_line(),
+            ),
+            (
+                "gpu-scope-stream",
+                "--gpu-scope-stream",
+                gpu_scope_stream_line(),
             ),
         )
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1083,6 +1523,180 @@ class VulkanRunnerTests(unittest.TestCase):
                             expected_argument,
                         ],
                     )
+
+    def test_declared_gpu_matrix_contains_all_21_unique_modes(self) -> None:
+        modes = [test_case.mode for test_case in runner.VULKAN_TEST_CASES]
+        self.assertEqual(
+            set(modes),
+            {
+                "serial",
+                "parallel",
+                "fallback",
+                "gated",
+                "heavy",
+                "translate-hard",
+                "multi-segment-hard",
+                "pipeline-window1",
+                "pipeline-window2",
+                "present-boundary",
+                "present-hard",
+                "present-legacy-owner",
+                "present-completion-shutdown",
+                "rt-export-rejection",
+                "readback-future",
+                "occlusion-query",
+                "timestamp-query",
+                "timestamp-query-success-batch",
+                "timestamp-query-mid-failure",
+                "timestamp-query-record-failure",
+                "gpu-scope-stream",
+            },
+        )
+        self.assertEqual(len(modes), 21)
+        self.assertEqual(len(set(modes)), 21)
+        self.assertEqual(set(modes), set(runner.VULKAN_TEST_CASE_BY_MODE))
+
+    def test_new_focused_modes_reject_weakened_terminal_contracts(self) -> None:
+        cases = (
+            (
+                "present-legacy-owner",
+                present_legacy_owner_line().replace(
+                    "owner=Submission", "owner=Completion"
+                ),
+            ),
+            (
+                "present-completion-shutdown",
+                present_completion_shutdown_line().replace(
+                    "outstanding=0", "outstanding=1"
+                ),
+            ),
+            (
+                "timestamp-query",
+                timestamp_query_line().replace(
+                    "allocator_slot_reuse=verified",
+                    "allocator_slot_reuse=missing",
+                ),
+            ),
+            (
+                "timestamp-query-mid-failure",
+                timestamp_query_mid_failure_line().replace(
+                    "pre_terminal_callback_entry=0",
+                    "pre_terminal_callback_entry=1",
+                ),
+            ),
+            (
+                "timestamp-query-record-failure",
+                timestamp_query_record_failure_line().replace(
+                    "failed_phase_gate_count=0",
+                    "failed_phase_gate_count=1",
+                ),
+            ),
+            (
+                "gpu-scope-stream",
+                gpu_scope_stream_line().replace(
+                    "query_free_sibling=parallel-effective",
+                    "query_free_sibling=serial",
+                ),
+            ),
+        )
+        for mode, text in cases:
+            with self.subTest(mode=mode), self.assertRaises(
+                runner.VulkanTestError
+            ):
+                runner.validate_log(mode, text)
+
+    def test_gpu_scope_stream_accepts_only_documented_nonstrict_skip(self) -> None:
+        documented = (
+            "[TESTCASE][SKIP] "
+            "name=GpuScopeStreamCompletionAndParallelIsolation "
+            "reason=graphics_queue_unavailable\n"
+        )
+        runner.validate_log("gpu-scope-stream", documented)
+        with self.assertRaisesRegex(runner.VulkanTestError, "invalid SKIP"):
+            runner.validate_log(
+                "gpu-scope-stream",
+                documented.replace(
+                    "graphics_queue_unavailable", "test_disabled"
+                ),
+            )
+
+    def test_gpu_scope_stream_rejects_invalid_timing_evidence(self) -> None:
+        for duration, exclusive in (
+            ("0,3.25", "0,3.25"),
+            ("nan,3.25", "0,3.25"),
+            ("12.5,3.25", "8.0,3.25"),
+        ):
+            with self.subTest(
+                duration=duration, exclusive=exclusive
+            ), self.assertRaisesRegex(
+                runner.VulkanTestError,
+                "query-island/parallel-sibling contract",
+            ):
+                runner.validate_log(
+                    "gpu-scope-stream",
+                    gpu_scope_stream_line()
+                    .replace("duration_ns=12.5,3.25", f"duration_ns={duration}")
+                    .replace("exclusive_ns=9.25,3.25", f"exclusive_ns={exclusive}"),
+                )
+
+    def test_full_timestamp_mode_requires_all_three_unique_boundaries(self) -> None:
+        for marker_name in (
+            "TimestampQueryCompletionOwnership",
+            "TimestampQueryPreparationRejection",
+            "TimestampQueryPreflightRejection",
+        ):
+            with self.subTest(marker=marker_name), self.assertRaises(
+                runner.VulkanTestError
+            ):
+                runner.validate_log(
+                    "timestamp-query",
+                    replace_testcase_marker(
+                        timestamp_query_line(), marker_name, ""
+                    ),
+                )
+
+    def test_timestamp_dynamic_success_variants_are_accepted(self) -> None:
+        runner.validate_log(
+            "timestamp-query",
+            timestamp_query_line().replace("prepare_calls=2", "prepare_calls=1"),
+        )
+        runner.validate_log(
+            "timestamp-query-record-failure",
+            timestamp_query_record_failure_line()
+            .replace("recorded_phase_gate_count=1", "recorded_phase_gate_count=0")
+            .replace("failed_phase_gate_count=0", "failed_phase_gate_count=1"),
+        )
+
+    def test_strict_gate_rejects_documented_gpu_scope_skip(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                gpu_env_line()
+                + "[TESTCASE][SKIP] "
+                "name=GpuScopeStreamCompletionAndParallelIsolation "
+                "reason=graphics_queue_unavailable\n"
+            ),
+            stderr="",
+        )
+        requirements = runner.GpuGateRequirements(
+            require_marker=True,
+            require_validation=True,
+            reject_testcase_skips=True,
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory, mock.patch.object(
+            runner.subprocess, "run", return_value=completed
+        ):
+            with self.assertRaisesRegex(
+                runner.VulkanTestError, "does not permit TESTCASE skips"
+            ):
+                runner.run_case(
+                    Path("TestRHIParallelRecordVulkan.exe"),
+                    Path(temporary_directory),
+                    "gpu-scope-stream",
+                    30.0,
+                    requirements,
+                )
 
     def test_readback_future_contract_is_accepted(self) -> None:
         runner.validate_log(
@@ -1355,6 +1969,19 @@ class VulkanRunnerTests(unittest.TestCase):
                 ),
             )
 
+    def test_rt_export_rejection_requires_materialization_failure(self) -> None:
+        with self.assertRaisesRegex(
+            runner.VulkanTestError, "accepted-readback failure"
+        ):
+            runner.validate_log(
+                "rt-export-rejection",
+                replace_testcase_marker(
+                    rt_export_rejection_line(),
+                    "RaytracingAcceptedReadbackMaterializationFailure",
+                    "",
+                ),
+            )
+
     def test_present_boundary_contract_is_accepted(self) -> None:
         runner.validate_log(
             "present-boundary", present_boundary_line()
@@ -1374,6 +2001,30 @@ class VulkanRunnerTests(unittest.TestCase):
                     serial_control_boundary_line(), ""
                 ),
             )
+
+    def test_present_boundary_requires_every_invoked_subtest_marker(self) -> None:
+        for marker_name in (
+            "PresentSourceContractRejection",
+            "PresentationCompletionIntegrationBoundary",
+        ):
+            with self.subTest(marker=marker_name), self.assertRaises(
+                runner.VulkanTestError
+            ):
+                runner.validate_log(
+                    "present-boundary",
+                    replace_testcase_marker(
+                        present_boundary_line(), marker_name, ""
+                    ),
+                )
+
+    def test_present_source_contract_accepts_qualified_queue_skips(self) -> None:
+        runner.validate_log(
+            "present-boundary",
+            present_boundary_line()
+            .replace("rejected=17", "rejected=15")
+            .replace("copy_commit=verified", "copy_commit=skipped")
+            .replace("bindless_cross_queue=verified", "bindless_cross_queue=skipped"),
+        )
 
     def test_serial_control_boundary_requires_blocked_later_translate(
         self,
