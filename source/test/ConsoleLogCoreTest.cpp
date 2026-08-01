@@ -1,16 +1,22 @@
 #include "log/LogSystem.h"
+#include "platform/Platform.h"
 
 #include "spdlog/details/os.h"
 #include "spdlog/sinks/null_sink.h"
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <mutex>
+#include <regex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -18,11 +24,25 @@
 #include <unordered_set>
 #include <vector>
 
+#if PLATFORM_WINDOWS
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+// clang-format off
+#include <Windows.h>
+// clang-format on
+#endif
+
 namespace {
 
 using namespace Moer;
 
 constexpr std::size_t ConsoleLogCapacity = 4096;
+constexpr std::size_t FileLogThreadCount = 4;
+constexpr std::size_t FileLogEntriesPerThread = 64;
 
 struct CapturedEntry {
     std::uint64_t             sequence = 0;
@@ -39,6 +59,69 @@ void Expect(bool _condition, std::string_view _message) {
     if (!_condition) {
         throw std::runtime_error(std::string(_message));
     }
+}
+
+class ScopedDirectory {
+public:
+    ScopedDirectory() {
+        static std::atomic<std::uint64_t> next_id{1};
+        for (std::uint32_t attempt = 0; attempt < 64; ++attempt) {
+            const auto tick = static_cast<std::uint64_t>(
+                std::chrono::steady_clock::now().time_since_epoch().count()
+            );
+            const std::filesystem::path candidate =
+                std::filesystem::temp_directory_path() /
+                ("moer-console-log-" + std::to_string(tick) + "-" +
+                 std::to_string(next_id.fetch_add(1, std::memory_order_relaxed)));
+            std::error_code error;
+            if (std::filesystem::create_directory(candidate, error)) {
+                path = candidate;
+                return;
+            }
+            if (error && error != std::errc::file_exists) {
+                break;
+            }
+        }
+        throw std::runtime_error("console log fixture directory could not be created");
+    }
+
+    ~ScopedDirectory() {
+        std::error_code ignored;
+        std::filesystem::remove_all(path, ignored);
+    }
+
+    std::filesystem::path path;
+};
+
+std::string ReadText(const std::filesystem::path& _path) {
+    std::ifstream stream(_path, std::ios::binary);
+    Expect(stream.is_open(), "session log could not be opened");
+    return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+}
+
+std::size_t CountOccurrences(std::string_view _text, std::string_view _needle) {
+    std::size_t count  = 0;
+    std::size_t offset = 0;
+    while ((offset = _text.find(_needle, offset)) != std::string_view::npos) {
+        ++count;
+        offset += _needle.size();
+    }
+    return count;
+}
+
+std::vector<std::filesystem::path> FindLogFiles(const std::filesystem::path& _directory) {
+    std::vector<std::filesystem::path> files;
+    std::error_code                    error;
+    std::filesystem::directory_iterator iterator(_directory, error);
+    const std::filesystem::directory_iterator end;
+    while (!error && iterator != end) {
+        if (iterator->is_regular_file(error) && iterator->path().extension() == ".log") {
+            files.push_back(iterator->path());
+        }
+        iterator.increment(error);
+    }
+    std::ranges::sort(files);
+    return files;
 }
 
 CapturedBatch Poll(std::uint64_t _next_sequence, std::size_t _max_count) {
@@ -96,6 +179,187 @@ public:
     std::atomic<std::size_t> log_count{0};
     std::atomic<std::size_t> flush_count{0};
 };
+
+int RunFileLogChild(const std::filesystem::path& _directory, std::string_view _file_name) {
+    auto source_sink = std::make_shared<CountingSink>();
+    auto source_logger = std::make_shared<spdlog::logger>("file-log-contract-source", source_sink);
+    source_logger->set_level(spdlog::level::trace);
+    source_logger->flush_on(spdlog::level::err);
+    spdlog::set_default_logger(source_logger);
+
+    const std::string directory = _directory.generic_string();
+    const LogSystem::FileLogInitOptions options{
+        .directory = directory,
+        .file_name = _file_name,
+    };
+    Expect(
+        LogSystem::Init(options) == LogSystem::EFileLogInitStatus::Active,
+        "file logging did not become active"
+    );
+    const std::shared_ptr<spdlog::logger> installed_logger = spdlog::default_logger();
+    Expect(
+        installed_logger && installed_logger.get() != source_logger.get() &&
+            installed_logger->sinks().empty(),
+        "file logging changed the ABI-safe forwarding logger contract"
+    );
+
+    const std::uint64_t cursor = ClearAndGetNextSequence();
+    Expect(
+        LogSystem::Init(options) == LogSystem::EFileLogInitStatus::Active &&
+            spdlog::default_logger().get() == installed_logger.get(),
+        "repeated file logging initialization replaced the forwarding logger"
+    );
+
+    installed_logger->info("file-log-contract-info");
+    installed_logger->warn("file-log-contract-warning");
+    installed_logger->error("file-log-contract-error");
+
+    std::vector<std::thread> producers;
+    producers.reserve(FileLogThreadCount);
+    for (std::size_t thread_index = 0; thread_index < FileLogThreadCount; ++thread_index) {
+        producers.emplace_back([installed_logger, thread_index]() {
+            for (std::size_t entry_index = 0; entry_index < FileLogEntriesPerThread; ++entry_index) {
+                installed_logger->info(
+                    "file-log-thread-{}-entry-{}#", thread_index, entry_index
+                );
+            }
+        });
+    }
+    for (std::thread& producer : producers) {
+        producer.join();
+    }
+    LogSystem::Flush();
+
+    const CapturedBatch batch = Poll(cursor, 1024);
+    const std::size_t expected_message_count =
+        3 + FileLogThreadCount * FileLogEntriesPerThread;
+    Expect(
+        batch.result.dropped_count == 0 && batch.entries.size() == expected_message_count,
+        "file logging child did not retain every message in the console channel"
+    );
+    const auto has_entry = [&batch](spdlog::level::level_enum _level, std::string_view _message) {
+        return std::ranges::any_of(batch.entries, [_level, _message](const CapturedEntry& _entry) {
+            return _entry.level == _level && _entry.message == _message;
+        });
+    };
+    Expect(
+        has_entry(spdlog::level::info, "file-log-contract-info") &&
+            has_entry(spdlog::level::warn, "file-log-contract-warning") &&
+            has_entry(spdlog::level::err, "file-log-contract-error"),
+        "file logging child changed message severity or payload"
+    );
+    Expect(
+        source_sink->log_count.load() == expected_message_count + 1,
+        "file logging duplicated or bypassed the downstream logger"
+    );
+    return EXIT_SUCCESS;
+}
+
+int RunFileLogFailureChild(const std::filesystem::path& _directory) {
+    std::error_code directory_error;
+    std::filesystem::create_directories(_directory, directory_error);
+    Expect(!directory_error, "file logging failure fixture directory could not be created");
+
+    const std::filesystem::path blocker = _directory / "blocked";
+    {
+        std::ofstream stream(blocker, std::ios::binary);
+        Expect(stream.is_open(), "file logging failure fixture blocker could not be created");
+        stream << "not-a-directory";
+    }
+
+    auto source_sink = std::make_shared<CountingSink>();
+    auto source_logger = std::make_shared<spdlog::logger>(
+        "file-log-failure-contract-source", source_sink
+    );
+    source_logger->set_level(spdlog::level::trace);
+    spdlog::set_default_logger(source_logger);
+
+    const std::string blocked_directory = blocker.generic_string();
+    Expect(
+        LogSystem::Init({.directory = blocked_directory, .file_name = "contract.log"}) ==
+            LogSystem::EFileLogInitStatus::Failed,
+        "file logging did not report an unusable directory"
+    );
+    const std::shared_ptr<spdlog::logger> installed_logger = spdlog::default_logger();
+    Expect(
+        installed_logger && installed_logger.get() != source_logger.get(),
+        "file logging failure prevented console forwarding installation"
+    );
+
+    const std::uint64_t cursor = ClearAndGetNextSequence();
+    installed_logger->info("file-log-failure-console-sentinel");
+    LogSystem::Flush();
+    const CapturedBatch batch = Poll(cursor, 4);
+    Expect(
+        batch.entries.size() == 1 &&
+            batch.entries.front().message == "file-log-failure-console-sentinel" &&
+            source_sink->log_count.load() >= 2,
+        "file logging failure disabled an existing log channel"
+    );
+    return EXIT_SUCCESS;
+}
+
+#if PLATFORM_WINDOWS
+std::filesystem::path CurrentExecutablePath() {
+    std::vector<wchar_t> path(1024);
+    for (;;) {
+        const DWORD length = ::GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+        if (length == 0) {
+            throw std::runtime_error("GetModuleFileNameW failed");
+        }
+        if (length < path.size() - 1) {
+            return std::filesystem::path(std::wstring_view(path.data(), length));
+        }
+        path.resize(path.size() * 2);
+    }
+}
+
+DWORD RunFileLogChildProcess(
+    const std::filesystem::path& _directory,
+    std::wstring_view            _mode
+) {
+    const std::filesystem::path executable = CurrentExecutablePath();
+    std::wstring command = L"\"" + executable.wstring() + L"\" " + std::wstring(_mode) +
+                           L" \"" + _directory.wstring() + L"\"";
+    std::vector<wchar_t> mutable_command(command.begin(), command.end());
+    mutable_command.push_back(L'\0');
+
+    STARTUPINFOW        startup{};
+    PROCESS_INFORMATION process{};
+    startup.cb = sizeof(startup);
+    Expect(
+        ::CreateProcessW(
+            nullptr,
+            mutable_command.data(),
+            nullptr,
+            nullptr,
+            FALSE,
+            CREATE_NO_WINDOW,
+            nullptr,
+            nullptr,
+            &startup,
+            &process
+        ) != FALSE,
+        "file logging child process could not be created"
+    );
+
+    const DWORD wait_result = ::WaitForSingleObject(process.hProcess, 15000);
+    if (wait_result != WAIT_OBJECT_0) {
+        static_cast<void>(::TerminateProcess(process.hProcess, 0xEE));
+        static_cast<void>(::WaitForSingleObject(process.hProcess, 2000));
+        ::CloseHandle(process.hThread);
+        ::CloseHandle(process.hProcess);
+        throw std::runtime_error("file logging child did not terminate within the bounded timeout");
+    }
+
+    DWORD      exit_code     = 0;
+    const BOOL got_exit_code = ::GetExitCodeProcess(process.hProcess, &exit_code);
+    ::CloseHandle(process.hThread);
+    ::CloseHandle(process.hProcess);
+    Expect(got_exit_code != FALSE, "file logging child exit code was unavailable");
+    return exit_code;
+}
+#endif
 
 class ThrowingSink final : public spdlog::sinks::sink {
 public:
@@ -560,9 +824,99 @@ void TestSpdlogTeardownAndReattach(std::shared_ptr<spdlog::logger>& _logger) {
     _logger = installed_replacement;
 }
 
+void TestFileLoggingContract() {
+#if PLATFORM_WINDOWS
+    ScopedDirectory output;
+
+    const std::filesystem::path fixed_directory = output.path / "fixed";
+    Expect(
+        RunFileLogChildProcess(fixed_directory, L"--file-log-fixed-child") == EXIT_SUCCESS,
+        "fixed-name file logging child failed"
+    );
+    const std::vector<std::filesystem::path> fixed_logs = FindLogFiles(fixed_directory);
+    Expect(
+        fixed_logs.size() == 1 && fixed_logs.front().filename() == "contract.log",
+        "fixed-name file logging did not create exactly one requested file"
+    );
+    const std::string fixed_text = ReadText(fixed_logs.front());
+    Expect(
+        std::regex_search(
+            fixed_text,
+            std::regex(
+                R"([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} \[[0-9]+\] \[info\] file-log-contract-info)"
+            )
+        ),
+        "session log omitted its timestamp, thread id, level, or payload"
+    );
+    Expect(
+        CountOccurrences(fixed_text, "file-log-contract-info") == 1 &&
+            CountOccurrences(fixed_text, "file-log-contract-warning") == 1 &&
+            CountOccurrences(fixed_text, "file-log-contract-error") == 1 &&
+            fixed_text.find("[warning] file-log-contract-warning") != std::string::npos &&
+            fixed_text.find("[error] file-log-contract-error") != std::string::npos,
+        "session log duplicated or changed a severity sentinel"
+    );
+    Expect(
+        CountOccurrences(fixed_text, "file-log-thread-") ==
+            FileLogThreadCount * FileLogEntriesPerThread,
+        "session log lost or duplicated concurrent messages"
+    );
+    for (std::size_t thread_index = 0; thread_index < FileLogThreadCount; ++thread_index) {
+        for (std::size_t entry_index = 0; entry_index < FileLogEntriesPerThread; ++entry_index) {
+            const std::string message = "file-log-thread-" + std::to_string(thread_index) +
+                                        "-entry-" + std::to_string(entry_index) + "#";
+            Expect(
+                CountOccurrences(fixed_text, message) == 1,
+                "session log did not preserve each concurrent message exactly once"
+            );
+        }
+    }
+
+    const std::filesystem::path timestamp_directory = output.path / "timestamp";
+    Expect(
+        RunFileLogChildProcess(timestamp_directory, L"--file-log-timestamp-child") == EXIT_SUCCESS,
+        "timestamped file logging child failed"
+    );
+    const std::vector<std::filesystem::path> timestamp_logs = FindLogFiles(timestamp_directory);
+    Expect(timestamp_logs.size() == 1, "timestamped file logging did not create exactly one file");
+    Expect(
+        std::regex_match(
+            timestamp_logs.front().filename().string(),
+            std::regex(R"(MoerEditor_[0-9]{8}_[0-9]{6}_[0-9]{3}_p[0-9]+\.log)")
+        ),
+        "timestamped session log file name did not match its contract"
+    );
+
+    const std::filesystem::path failure_directory = output.path / "failure";
+    Expect(
+        RunFileLogChildProcess(failure_directory, L"--file-log-failure-child") == EXIT_SUCCESS,
+        "file logging failure child failed"
+    );
+    Expect(
+        FindLogFiles(failure_directory).empty(),
+        "file logging failure unexpectedly created a session log"
+    );
+#endif
+}
+
 } // namespace
 
-int main() {
+int main(int _argc, char** _argv) {
+    try {
+        if (_argc == 3 && std::string_view(_argv[1]) == "--file-log-fixed-child") {
+            return RunFileLogChild(std::filesystem::path(_argv[2]), "contract.log");
+        }
+        if (_argc == 3 && std::string_view(_argv[1]) == "--file-log-timestamp-child") {
+            return RunFileLogChild(std::filesystem::path(_argv[2]), {});
+        }
+        if (_argc == 3 && std::string_view(_argv[1]) == "--file-log-failure-child") {
+            return RunFileLogFailureChild(std::filesystem::path(_argv[2]));
+        }
+    } catch (const std::exception& error) {
+        std::cerr << "Console log file child failed: " << error.what() << '\n';
+        return EXIT_FAILURE;
+    }
+
     DefaultLoggerRestore restore_default_logger;
 
     const LogSystem::ConsoleLogPollResult initial = LogSystem::VisitConsoleLogs(0, 0, nullptr, nullptr);
@@ -598,6 +952,7 @@ int main() {
         TestVirtualLoggerBacktraceDispatch(logger);
         TestBacktraceThreadMetadata(logger);
         TestSpdlogTeardownAndReattach(logger);
+        TestFileLoggingContract();
         std::cout << "Console log core contract tests passed.\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
