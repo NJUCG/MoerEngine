@@ -62,6 +62,8 @@ Engine for Realtime Rendering
   5. After configuration succeeds, select `MoerEditor.exe` in the Startup Item dropdown. Choose `Build -> Build All`, or open CMake Targets View in Solution Explorer, right-click `MoerEditor`, and choose Build.
   6. Press `F5` to build and debug. To run without the debugger, press `Ctrl+F5` or select `Debug -> Start Without Debugging`.
 
+  The `CopyResources` build dependency copies the root `MoerEngine.toml` and runtime assets into the matching `target/bin/<Config>` directory. Rebuild after editing the root configuration to refresh that copy.
+
   The Debug executable is written to `target/bin/Debug/MoerEditor.exe`. Select `x64-Release` in the Configuration dropdown for a Release build, which writes `target/bin/Release/MoerEditor.exe`.
 
   Rider 2026.1 introduced Beta support for CMake C++ projects, but current Rider releases do not yet expose the same CMake toolchain/profile configuration UI as CLion. This guide therefore does not present an unverified Rider menu path as a supported build method. See [Rider 2026.1 CMake support](https://www.jetbrains.com/rider/whatsnew/2026-1/#cmake-support-for-c-gaming-projects-beta).

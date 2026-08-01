@@ -63,6 +63,8 @@
   5. Configure 成功后，在 Startup Item 下拉框选择 `MoerEditor.exe`。选择 `Build -> Build All`，或在 Solution Explorer 的 CMake Targets View 中右键 `MoerEditor` 后选择 Build。
   6. 按 `F5` 构建并调试；若不附加调试器，按 `Ctrl+F5`，或选择 `Debug -> Start Without Debugging`。
 
+  构建会通过 `CopyResources` 依赖把仓库根目录的 `MoerEngine.toml` 和运行资源复制到对应的 `target/bin/<Config>` 目录；修改根配置后重新构建即可同步。
+
   Debug 产物位于 `target/bin/Debug/MoerEditor.exe`。Release 构建时在 Configuration 下拉框切换到 `x64-Release`，产物位于 `target/bin/Release/MoerEditor.exe`。
 
   Rider 2026.1 开始提供 CMake C++ 工程的 Beta 支持，但当前版本尚未提供与 CLion 完全一致的 CMake toolchain/profile 配置界面，因此本文不把未经验证的 Rider 菜单路径作为受支持构建方法。参见 [JetBrains Rider 2026.1 CMake support](https://www.jetbrains.com/rider/whatsnew/2026-1/#cmake-support-for-c-gaming-projects-beta)。
