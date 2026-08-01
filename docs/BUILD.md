@@ -52,9 +52,24 @@
   
   - 如果安装了 [just](https://github.com/casey/just)，你可以参考根目录下的 `template.justfile` 文件来编写你自己的脚本
   
-- 方法二：Rider
-  
-  - TODO
+- 方法二：Rider（GUI）
+
+  > Rider 从 2026.1 开始提供 CMake C++ 工程支持，目前仍标记为 Beta。请使用 Rider 2026.1 或更高版本；旧版本无法直接完成这一流程。参见 [JetBrains Rider 2026.1 CMake support](https://www.jetbrains.com/rider/whatsnew/2026-1/#cmake-support-for-c-gaming-projects-beta)。
+
+  1. 在文件管理器中把 `template.MoerEngine.toml` 复制为仓库根目录下的 `MoerEngine.toml`。首次 CMake Configure 前必须存在该文件。
+  2. 在 Rider 中选择 `File -> Open` 并打开仓库根目录。Rider 会从根 `CMakeLists.txt` 加载工程。
+  3. 打开 `Settings -> Build, Execution, Deployment -> Toolchains`：
+     - 选择 Visual Studio 2022 工具链，以提供 Windows SDK、`rc.exe` 和链接器；
+     - 确认 CMake、Ninja、Clang 与 Clang++ 均能被检测到。
+  4. 打开 `Settings -> Build, Execution, Deployment -> CMake`，创建 Debug Profile：
+     - Generator：`Ninja`；
+     - Build type：`Debug`；
+     - Build directory：仓库根目录下的 `build`；
+     - CMake options：`-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++`。
+  5. Reload CMake Project，等待 Configure 成功后，在 Rider 顶部工具栏选择 `MoerEditor` target 并执行 Build。
+  6. 打开 `Run -> Edit Configurations`，创建或选择 CMake Application：target 设为 `MoerEditor`，Working directory 设为仓库根目录。随后使用 Run 或 Debug 启动。
+
+  Debug 产物位于 `target/bin/Debug/MoerEditor.exe`。Release 构建应新建独立的 Release Profile，并把 Build type 改为 `Release`；不要只修改运行配置而继续复用 Debug Profile。
 
 - 成功启动后，可以参考 [DEVELOPMENT.md](DEVELOPMENT.md) 来了解MoerEngine的开发规范等其他内容
 

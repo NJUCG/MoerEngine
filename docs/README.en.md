@@ -51,8 +51,22 @@ Engine for Realtime Rendering
     just gbr # generate build run
     ```
 
-- Method 2: Rider
-  - TODO
+- Method 2: Rider (GUI)
+
+  > Direct CMake C++ project support is available in Rider 2026.1 and newer and is currently marked Beta. Older Rider releases cannot use this workflow. See [CMake support for C++ gaming projects](https://www.jetbrains.com/rider/whatsnew/2026-1/#cmake-support-for-c-gaming-projects-beta).
+
+  1. In File Explorer, copy `template.MoerEngine.toml` to `MoerEngine.toml` in the repository root. This file must exist before the first CMake configure.
+  2. Select `File -> Open` in Rider and open the repository root. Rider loads the project from the root `CMakeLists.txt`.
+  3. Open `Settings -> Build, Execution, Deployment -> Toolchains`. Select the Visual Studio 2022 toolchain to provide the Windows SDK, `rc.exe`, and the linker, then make sure Rider detects CMake, Ninja, Clang, and Clang++.
+  4. Open `Settings -> Build, Execution, Deployment -> CMake` and create a Debug profile with:
+     - Generator: `Ninja`;
+     - Build type: `Debug`;
+     - Build directory: `build` under the repository root;
+     - CMake options: `-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++`.
+  5. Reload the CMake project. After configuration succeeds, select the `MoerEditor` target in the Rider toolbar and build it.
+  6. Open `Run -> Edit Configurations` and create or select a CMake Application. Set the target to `MoerEditor` and the working directory to the repository root, then choose Run or Debug.
+
+  The Debug executable is written to `target/bin/Debug/MoerEditor.exe`. Create a separate Release CMake profile with Build type `Release`; changing only the run configuration does not reconfigure a Debug build as Release.
 
 ### CUDA, LibTorch, and TensorRT
 
