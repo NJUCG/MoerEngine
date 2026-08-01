@@ -41,10 +41,10 @@ public:
     inline uint32_t        GetWorkerThreadCount() const {
         return m_worker_thread_count;
     }
+    /** Returns the scheduler identity of the caller, or UNKNOWN for an external thread. */
+    CORE_API EThread::Type GetCurrentThread(bool localQueue = false);
 
 protected:
-    EThread::Type GetCurrentThread(bool localQueue = false);
-
     void TriggerEventWhenTasksComplete(
         Event*                 event,
         const GraphEventArray& task_events,

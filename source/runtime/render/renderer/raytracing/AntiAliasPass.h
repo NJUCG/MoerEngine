@@ -78,6 +78,14 @@ public:
     bool   IsHistoryReadyForGraph() const;
 
 private:
+    struct SetupInput {
+        Params params{};
+        uint2  input_extent{};
+        uint2  output_extent{};
+        float2 pixel_offset{};
+        bool   prev_view_valid = false;
+    };
+
     struct RecordingOwner {
         BufferRef   constants{};
         TAAPipeline pipeline{};
@@ -90,7 +98,7 @@ private:
             RenderGraph::BufferState::TransferDestination
         );
         SharedPtr<RecordingOwner> owner{};
-        PreparedCommand           command{};
+        RGPreparedValue<PreparedCommand> command{};
 
         DEFINE_RG_PARAMETER_ACCESS(constants);
     };
@@ -127,7 +135,7 @@ private:
             RenderGraph::TextureState::UnorderedAccess
         );
         SharedPtr<RecordingOwner> owner{};
-        PreparedCommand           command{};
+        RGPreparedValue<PreparedCommand> command{};
         RecordResources           resources{};
 
         DEFINE_RG_PARAMETER_ACCESS(
@@ -140,12 +148,13 @@ private:
         );
     };
 
-    PreparedCommand Prepare(
+    SetupInput CaptureSetupInput(
         Params            params,
         bool              prev_view_valid,
         const TextureRef& input,
         const TextureRef& output
     ) const;
+    static PreparedCommand Prepare(const SetupInput& input);
     RecordResources CaptureResources(
         TextureRef input,
         TextureRef output

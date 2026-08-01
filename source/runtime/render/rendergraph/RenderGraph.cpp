@@ -12,14 +12,293 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <condition_variable>
 #include <exception>
 #include <limits>
 #include <mutex>
+#include <new>
 #include <sstream>
 #include <unordered_set>
 #include <utility>
 
 namespace Moer::Render {
+
+namespace {
+
+struct InjectedSetupDispatchFault {};
+
+} // namespace
+
+struct RenderGraph::SetupBatchState {
+    enum class Status : uint8_t {
+        Pending,
+        Succeeded,
+        Failed,
+    };
+
+    SetupBatchState() = default;
+
+    void AdoptJobs(
+        std::vector<SetupPassDeclaration>&& declarations,
+        uint8_t                             faults_for_testing
+    ) noexcept {
+        static_assert(std::is_nothrow_move_assignable_v<
+                      std::vector<SetupPassDeclaration>>);
+        jobs       = std::move(declarations);
+        fault_mask = faults_for_testing;
+    }
+
+    void Run() noexcept {
+        try {
+            for (size_t index = 0; index < jobs.size(); ++index) {
+                try {
+                    jobs[index].execute();
+                } catch (const std::exception& exception) {
+                    HandleExecutionFailure(index, exception.what());
+                    return;
+                } catch (...) {
+                    HandleExecutionFailure(index, nullptr);
+                    return;
+                }
+            }
+            CompleteSucceeded();
+        } catch (...) {
+            // This is deliberately allocation-free until every value and the
+            // aggregate gate have a terminal failure state. It is the final
+            // guard against an unexpected exception escaping a noexcept task.
+            TerminalizeAllPending(kCallbackFailed);
+            CompleteFailedWithoutDiagnostic(kCallbackFailed);
+        }
+    }
+
+    void FailBeforeDispatch(const char* reason) noexcept {
+        TerminalizeAllPending(kDispatchFailed);
+
+        std::string diagnostic{};
+        const bool diagnostic_available = TryBuildDispatchDiagnostic(
+            reason,
+            diagnostic
+        );
+        if (diagnostic_available) {
+            AnnotateAllFailed(diagnostic);
+        }
+        CompleteFailed(
+            kDispatchFailed,
+            std::move(diagnostic),
+            !diagnostic_available
+        );
+    }
+
+    [[nodiscard]] bool Wait(std::string& out_error) noexcept {
+        try {
+            std::unique_lock lock(mutex);
+            completion.wait(lock, [&] { return status != Status::Pending; });
+            if (status == Status::Succeeded) {
+                try {
+                    out_error.clear();
+                } catch (...) {
+                }
+                return true;
+            }
+
+            const char* fallback = diagnostic_storage_failed ?
+                                       kDiagnosticUnavailable :
+                                       fallback_error;
+            try {
+                out_error = error.empty() ? fallback : error;
+            } catch (...) {
+            }
+            return false;
+        } catch (...) {
+            return false;
+        }
+    }
+
+private:
+    static constexpr const char* kCallbackFailed =
+        "asynchronous RenderGraph setup failed";
+    static constexpr const char* kCallbackSkipped =
+        "asynchronous RenderGraph setup skipped after an earlier failure";
+    static constexpr const char* kDispatchFailed =
+        "failed to dispatch asynchronous RenderGraph setup";
+    static constexpr const char* kDiagnosticUnavailable =
+        "asynchronous RenderGraph setup failed (diagnostic unavailable)";
+
+    [[nodiscard]] bool HasFault(SetupFaultForTesting fault) const noexcept {
+        return (fault_mask & static_cast<uint8_t>(fault)) != 0;
+    }
+
+    void HandleExecutionFailure(size_t failed_index, const char* reason) noexcept {
+        // Publish fallback terminal states before attempting any detailed
+        // diagnostic allocation.
+        FailJob(jobs[failed_index], kCallbackFailed);
+        for (size_t index = failed_index + 1; index < jobs.size(); ++index) {
+            FailJob(jobs[index], kCallbackSkipped);
+        }
+
+        std::string diagnostic{};
+        const bool diagnostic_available = TryBuildCallbackDiagnostic(
+            failed_index,
+            reason,
+            diagnostic
+        );
+        if (diagnostic_available) {
+            AnnotateJob(jobs[failed_index], diagnostic);
+        }
+        CompleteFailed(
+            kCallbackFailed,
+            std::move(diagnostic),
+            !diagnostic_available
+        );
+    }
+
+    [[nodiscard]] bool TryBuildCallbackDiagnostic(
+        size_t       failed_index,
+        const char*  reason,
+        std::string& diagnostic
+    ) const noexcept {
+        if (HasFault(SetupFaultForTesting::FailureDiagnostic)) {
+            return false;
+        }
+        try {
+            diagnostic = "async setup pass '";
+            diagnostic += jobs[failed_index].name;
+            diagnostic += "' failed";
+            if (reason != nullptr && reason[0] != '\0') {
+                diagnostic += ": ";
+                diagnostic += reason;
+            } else {
+                diagnostic += " with an unknown exception";
+            }
+            return true;
+        } catch (...) {
+            diagnostic.clear();
+            return false;
+        }
+    }
+
+    [[nodiscard]] bool TryBuildDispatchDiagnostic(
+        const char*  reason,
+        std::string& diagnostic
+    ) const noexcept {
+        if (HasFault(SetupFaultForTesting::FailureDiagnostic)) {
+            return false;
+        }
+        try {
+            diagnostic = kDispatchFailed;
+            if (reason != nullptr && reason[0] != '\0') {
+                diagnostic += ": ";
+                diagnostic += reason;
+            }
+            return true;
+        } catch (...) {
+            diagnostic.clear();
+            return false;
+        }
+    }
+
+    void TerminalizeAllPending(std::string_view message) noexcept {
+        for (const auto& job : jobs) {
+            FailJob(job, message);
+        }
+    }
+
+    void AnnotateAllFailed(std::string_view message) noexcept {
+        for (const auto& job : jobs) {
+            AnnotateJob(job, message);
+        }
+    }
+
+    static void FailJob(
+        const SetupPassDeclaration& job,
+        std::string_view            message
+    ) noexcept {
+        try {
+            if (job.fail) {
+                job.fail(message);
+            }
+        } catch (...) {
+        }
+    }
+
+    static void AnnotateJob(
+        const SetupPassDeclaration& job,
+        std::string_view            message
+    ) noexcept {
+        try {
+            if (job.annotate_failure) {
+                job.annotate_failure(message);
+            }
+        } catch (...) {
+        }
+    }
+
+    void CompleteSucceeded() noexcept {
+        try {
+            {
+                std::lock_guard lock(mutex);
+                if (status != Status::Pending) {
+                    return;
+                }
+                status = Status::Succeeded;
+            }
+            completion.notify_all();
+        } catch (...) {
+        }
+    }
+
+    void CompleteFailed(
+        const char* fallback,
+        std::string diagnostic,
+        bool        diagnostic_unavailable
+    ) noexcept {
+        try {
+            {
+                std::lock_guard lock(mutex);
+                if (status != Status::Pending) {
+                    return;
+                }
+                // Aggregate failure is published before retaining diagnostics.
+                status                    = Status::Failed;
+                fallback_error            = fallback;
+                diagnostic_storage_failed = diagnostic_unavailable;
+                try {
+                    error = std::move(diagnostic);
+                } catch (...) {
+                    error.clear();
+                    diagnostic_storage_failed = true;
+                }
+            }
+            completion.notify_all();
+        } catch (...) {
+            CompleteFailedWithoutDiagnostic(fallback);
+        }
+    }
+
+    void CompleteFailedWithoutDiagnostic(const char* fallback) noexcept {
+        try {
+            {
+                std::lock_guard lock(mutex);
+                if (status == Status::Pending) {
+                    status         = Status::Failed;
+                    fallback_error = fallback;
+                    diagnostic_storage_failed = true;
+                }
+            }
+            completion.notify_all();
+        } catch (...) {
+        }
+    }
+
+    std::vector<SetupPassDeclaration> jobs{};
+    std::mutex                        mutex{};
+    std::condition_variable           completion{};
+    std::string                       error{};
+    const char*                       fallback_error = kCallbackFailed;
+    Status                            status = Status::Pending;
+    uint8_t                           fault_mask = 0;
+    bool                              diagnostic_storage_failed = false;
+};
 
 namespace {
 
@@ -298,7 +577,26 @@ RenderGraph::RenderGraph(std::string_view graph_name, QueueTopology topology) :
     assert(graph_id != 0 && "RenderGraph id counter wrapped.");
 }
 
-RenderGraph::~RenderGraph() = default;
+RenderGraph::~RenderGraph() {
+    if (!setup_dispatched) {
+        for (const auto& setup : setup_passes) {
+            try {
+                if (setup.fail) {
+                    setup.fail(
+                        "RenderGraph was destroyed before async setup ran"
+                    );
+                }
+            } catch (...) {
+            }
+        }
+        return;
+    }
+    try {
+        std::string ignored{};
+        (void)WaitSetupPasses(ignored);
+    } catch (...) {
+    }
+}
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::Read(ResourceHandle resource, std::string_view range) {
     ResourceRange typed_range = ResourceRange::Token();
@@ -1255,7 +1553,32 @@ bool RenderGraph::Compile() {
         return false;
     }
     MOER_PROFILE_SCOPE("RenderGraph.Compile");
-    return RenderGraphCompiler(*this).Compile();
+    DispatchSetupPassesAsync();
+
+    bool compiler_succeeded = false;
+    try {
+        compiler_succeeded = RenderGraphCompiler(*this).Compile();
+    } catch (...) {
+        std::string ignored{};
+        (void)WaitSetupPasses(ignored);
+        throw;
+    }
+
+    std::string setup_error{};
+    const bool  setup_succeeded = WaitSetupPasses(setup_error);
+    if (setup_succeeded) {
+        return compiler_succeeded;
+    }
+
+    compiled = false;
+    if (compiler_succeeded || compile_error.empty()) {
+        compile_error = setup_error.empty() ?
+                            "asynchronous RenderGraph setup failed" :
+                            std::move(setup_error);
+    } else if (!setup_error.empty()) {
+        compile_error += "; " + setup_error;
+    }
+    return false;
 }
 
 bool RenderGraph::Execute() {
@@ -3323,9 +3646,162 @@ void RenderGraph::SetPassTranslateExecutionClass(
     passes[pass_index].translate_execution_class = execution_class;
 }
 
+bool RenderGraph::RegisterSetupPass(
+    std::string_view                         setup_name,
+    std::function<void()>                    execute,
+    std::function<void(std::string_view)>    fail,
+    std::function<void(std::string_view)>    annotate_failure
+) {
+    if (!InvalidateCompile()) {
+        return false;
+    }
+    if (setup_name.empty()) {
+        declaration_errors.emplace_back("setup pass name cannot be empty");
+        return false;
+    }
+    if (!execute || !fail || !annotate_failure) {
+        declaration_errors.emplace_back(
+            "setup pass has no prepare callback: " +
+            std::string(setup_name)
+        );
+        return false;
+    }
+    if (std::any_of(
+            setup_passes.begin(),
+            setup_passes.end(),
+            [&](const SetupPassDeclaration& setup) {
+                return setup.name == setup_name;
+            }
+        )) {
+        declaration_errors.emplace_back(
+            "duplicate setup pass name: " + std::string(setup_name)
+        );
+        return false;
+    }
+
+    setup_passes.emplace_back(SetupPassDeclaration{
+        .name    = std::string(setup_name),
+        .execute = std::move(execute),
+        .fail    = std::move(fail),
+        .annotate_failure = std::move(annotate_failure),
+    });
+    return true;
+}
+
+void RenderGraph::DispatchSetupPassesAsync() {
+    if (setup_dispatched || setup_passes.empty()) {
+        return;
+    }
+
+    // Establish throwing, single-allocation shared ownership before moving any
+    // declarations. If owner creation throws, setup_passes still owns every
+    // failure callback so no externally held RGPreparedValue remains Pending.
+    try {
+        if ((setup_faults_for_testing &
+             static_cast<uint8_t>(SetupFaultForTesting::BatchOwnerCreate)) != 0) {
+            throw std::bad_alloc{};
+        }
+        auto candidate = std::make_shared<SetupBatchState>();
+        candidate->AdoptJobs(std::move(setup_passes), setup_faults_for_testing);
+        setup_batch      = std::move(candidate);
+        setup_dispatched = true;
+        setup_passes.clear();
+    } catch (...) {
+        setup_failed_before_batch = true;
+        setup_dispatched          = true;
+        for (const auto& setup : setup_passes) {
+            try {
+                if (setup.fail) {
+                    setup.fail("RenderGraph async setup batch creation failed");
+                }
+            } catch (...) {
+            }
+        }
+        setup_passes.clear();
+        return;
+    }
+
+    if (!TaskGraph::IsInitialized()) {
+        setup_batch->Run();
+        return;
+    }
+
+    // A Normal-priority worker cannot block waiting for work queued back to
+    // the same bounded pool. If every worker compiled a graph concurrently,
+    // asynchronous dispatch would otherwise starve all setup jobs. Main,
+    // render, external, and other-priority callers retain compile overlap.
+    const EThread::Type current_thread =
+        TaskGraph::GetInterface().GetCurrentThread();
+    const ThreadIndex current_index = EThread::GetThreadIndex(current_thread);
+    const bool current_is_normal_worker =
+        current_index >= EThread::NamedThreadCount &&
+        current_index != EThread::UNKNOWN_THREAD &&
+        EThread::GetThreadPriority(current_thread) ==
+            EThread::GetThreadPriority(EThread::AnyThread_NormalPri);
+    if (current_is_normal_worker) {
+        setup_batch->Run();
+        return;
+    }
+
+    const auto batch = setup_batch;
+    try {
+        if ((setup_faults_for_testing &
+             static_cast<uint8_t>(SetupFaultForTesting::TaskDispatchThrows)) != 0) {
+            throw InjectedSetupDispatchFault{};
+        }
+        (void)LambdaTask::Dispatch([batch] { batch->Run(); });
+    } catch (const std::exception& exception) {
+        batch->FailBeforeDispatch(exception.what());
+    } catch (...) {
+        batch->FailBeforeDispatch(nullptr);
+    }
+}
+
+bool RenderGraph::WaitSetupPasses(std::string& error) noexcept {
+    if (setup_failed_before_batch) {
+        try {
+            error = "RenderGraph async setup batch creation failed";
+        } catch (...) {
+        }
+        return false;
+    }
+    if (!setup_batch) {
+        return true;
+    }
+    try {
+        return setup_batch->Wait(error);
+    } catch (const std::exception& exception) {
+        try {
+            error = std::string("failed to join asynchronous RenderGraph setup: ") +
+                    exception.what();
+        } catch (...) {
+        }
+    } catch (...) {
+        try {
+            error = "failed to join asynchronous RenderGraph setup";
+        } catch (...) {
+        }
+    }
+    return false;
+}
+
 bool RenderGraph::InvalidateCompile() {
     if (executed) {
         declaration_errors.emplace_back("graph declarations cannot be mutated after execution");
+        return false;
+    }
+    if (setup_dispatched) {
+        compiled = false;
+        compile_error.clear();
+        compiled_plan.Clear();
+        ReleaseNonExportedTransientBindings();
+        for (auto& resource : resources) {
+            resource.first_use = PassHandle::InvalidIndex;
+            resource.last_use  = PassHandle::InvalidIndex;
+        }
+        declaration_errors.emplace_back(
+            "graph declarations cannot be mutated after asynchronous setup dispatch"
+        );
         return false;
     }
     compiled = false;
