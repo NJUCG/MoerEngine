@@ -3726,6 +3726,23 @@ void RenderGraph::DispatchSetupPassesAsync() {
         return;
     }
 
+    // A Normal-priority worker cannot block waiting for work queued back to
+    // the same bounded pool. If every worker compiled a graph concurrently,
+    // asynchronous dispatch would otherwise starve all setup jobs. Main,
+    // render, external, and other-priority callers retain compile overlap.
+    const EThread::Type current_thread =
+        TaskGraph::GetInterface().GetCurrentThread();
+    const ThreadIndex current_index = EThread::GetThreadIndex(current_thread);
+    const bool current_is_normal_worker =
+        current_index >= EThread::NamedThreadCount &&
+        current_index != EThread::UNKNOWN_THREAD &&
+        EThread::GetThreadPriority(current_thread) ==
+            EThread::GetThreadPriority(EThread::AnyThread_NormalPri);
+    if (current_is_normal_worker) {
+        setup_batch->Run();
+        return;
+    }
+
     const auto batch = setup_batch;
     try {
         if ((setup_faults_for_testing &

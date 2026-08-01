@@ -7,6 +7,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -16,6 +17,22 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <cerrno>
+#include <csignal>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 namespace Moer::Render {
 
@@ -74,6 +91,115 @@ private:
 [[nodiscard]] bool Contains(std::string_view text, std::string_view fragment) {
     return text.find(fragment) != std::string_view::npos;
 }
+
+struct ChildProcessResult {
+    bool started   = false;
+    bool timed_out = false;
+    int  exit_code = -1;
+};
+
+#if defined(_WIN32)
+[[nodiscard]] std::wstring CurrentExecutablePath() {
+    std::vector<wchar_t> path(1024);
+    for (;;) {
+        const DWORD length =
+            ::GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+        if (length == 0) {
+            return {};
+        }
+        if (length < path.size() - 1) {
+            return std::wstring(path.data(), length);
+        }
+        path.resize(path.size() * 2);
+    }
+}
+
+[[nodiscard]] ChildProcessResult RunStarvationChild(const char*) {
+    const std::wstring executable = CurrentExecutablePath();
+    if (executable.empty()) {
+        return {};
+    }
+    std::wstring command =
+        L"\"" + executable + L"\" --worker-starvation-child";
+    std::vector<wchar_t> mutable_command(command.begin(), command.end());
+    mutable_command.push_back(L'\0');
+
+    STARTUPINFOW        startup{};
+    PROCESS_INFORMATION process{};
+    startup.cb = sizeof(startup);
+    if (::CreateProcessW(
+            executable.c_str(),
+            mutable_command.data(),
+            nullptr,
+            nullptr,
+            FALSE,
+            CREATE_NO_WINDOW,
+            nullptr,
+            nullptr,
+            &startup,
+            &process
+        ) == FALSE) {
+        return {};
+    }
+
+    ChildProcessResult result{.started = true};
+    const DWORD        wait_result = ::WaitForSingleObject(process.hProcess, 5000);
+    if (wait_result != WAIT_OBJECT_0) {
+        result.timed_out = wait_result == WAIT_TIMEOUT;
+        static_cast<void>(::TerminateProcess(process.hProcess, 0xEE));
+        static_cast<void>(::WaitForSingleObject(process.hProcess, 2000));
+    }
+    DWORD exit_code = 0;
+    if (::GetExitCodeProcess(process.hProcess, &exit_code) != FALSE) {
+        result.exit_code = static_cast<int>(exit_code);
+    }
+    ::CloseHandle(process.hThread);
+    ::CloseHandle(process.hProcess);
+    return result;
+}
+#else
+[[nodiscard]] ChildProcessResult RunStarvationChild(const char* argv0) {
+    const std::filesystem::path executable = std::filesystem::absolute(argv0);
+    const pid_t                 child      = ::fork();
+    if (child < 0) {
+        return {};
+    }
+    if (child == 0) {
+        ::execl(
+            executable.c_str(),
+            executable.c_str(),
+            "--worker-starvation-child",
+            static_cast<char*>(nullptr)
+        );
+        ::_exit(127);
+    }
+
+    ChildProcessResult result{.started = true};
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    int        status   = 0;
+    for (;;) {
+        const pid_t waited = ::waitpid(child, &status, WNOHANG);
+        if (waited == child) {
+            result.exit_code = WIFEXITED(status) ? WEXITSTATUS(status) :
+                                                   128 + WTERMSIG(status);
+            return result;
+        }
+        if (waited < 0 && errno != EINTR) {
+            static_cast<void>(::kill(child, SIGKILL));
+            static_cast<void>(::waitpid(child, &status, 0));
+            return result;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            result.timed_out = true;
+            static_cast<void>(::kill(child, SIGKILL));
+            while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+            result.exit_code = 128 + SIGKILL;
+            return result;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+#endif
 
 void AddNoOpPass(RenderGraph& graph, std::string_view name = "NoOp") {
     graph.AddPass(
@@ -311,6 +437,92 @@ void TestAsyncOrderJoinAndNamedThreadIsolation(TestSuite& suite) {
             named_task_ran.load(std::memory_order_acquire),
         test_name,
         "setup join pumped unrelated named-thread work or explicit drain failed"
+    );
+}
+
+int RunNormalWorkerStarvationChild() {
+    struct StartBarrier {
+        std::mutex              mutex{};
+        std::condition_variable cv{};
+        uint32_t                arrived = 0;
+        uint32_t                target  = 0;
+    };
+
+    Moer::TaskSystem::Init();
+    TaskGraph& task_graph = TaskGraph::GetInterface();
+    const uint32_t normal_worker_count =
+        (task_graph.GetWorkerThreadCount() + EThread::PriorityCount - 1) /
+        EThread::PriorityCount;
+    if (normal_worker_count == 0) {
+        Moer::TaskSystem::ShutDown();
+        std::cerr << "normal worker starvation child: no Normal workers\n";
+        return EXIT_FAILURE;
+    }
+
+    auto barrier    = std::make_shared<StartBarrier>();
+    barrier->target = normal_worker_count;
+    auto failures   = std::make_shared<std::atomic<uint32_t>>(0);
+    GraphEventArray compile_events;
+    compile_events.reserve(normal_worker_count);
+
+    for (uint32_t worker = 0; worker < normal_worker_count; ++worker) {
+        compile_events.emplace_back(LambdaTask::Dispatch(
+            [barrier, failures, worker] {
+                {
+                    std::unique_lock lock(barrier->mutex);
+                    ++barrier->arrived;
+                    if (barrier->arrived == barrier->target) {
+                        barrier->cv.notify_all();
+                    } else {
+                        barrier->cv.wait(
+                            lock,
+                            [&] { return barrier->arrived == barrier->target; }
+                        );
+                    }
+                }
+
+                try {
+                    RenderGraph graph("NormalWorkerSetupStarvation");
+                    const auto prepared = graph.AddSetupPass(
+                        "PrepareOnSaturatedPool",
+                        worker,
+                        [](const uint32_t& input) { return input + 1; }
+                    );
+                    AddNoOpPass(graph);
+                    if (!graph.Compile() || prepared.Get() != worker + 1) {
+                        failures->fetch_add(1, std::memory_order_relaxed);
+                    }
+                } catch (...) {
+                    failures->fetch_add(1, std::memory_order_relaxed);
+                }
+            },
+            EThread::AnyThread_NormalPri
+        ));
+    }
+
+    task_graph.WaitUntilTasksComplete(compile_events, EThread::EMainThread);
+    const uint32_t failure_count = failures->load(std::memory_order_relaxed);
+    Moer::TaskSystem::ShutDown();
+    if (failure_count != 0) {
+        std::cerr << "normal worker starvation child: " << failure_count
+                  << " compile failure(s)\n";
+        return EXIT_FAILURE;
+    }
+    std::cout << "normal worker starvation child: all workers completed\n";
+    return EXIT_SUCCESS;
+}
+
+void TestNormalWorkerStarvationSubprocess(TestSuite& suite, const char* argv0) {
+    constexpr std::string_view test_name =
+        "normal worker compile avoids setup pool starvation";
+    const ChildProcessResult result = RunStarvationChild(argv0);
+    suite.Check(result.started, test_name, "could not launch isolated child process");
+    suite.Check(
+        result.started && !result.timed_out && result.exit_code == EXIT_SUCCESS,
+        test_name,
+        result.timed_out ?
+            "all Normal workers blocked waiting for setup work queued to the same pool" :
+            "isolated worker-saturation child failed"
     );
 }
 
@@ -767,12 +979,17 @@ void TestDeclarationFreezeAfterDispatch(TestSuite& suite) {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--worker-starvation-child") {
+        return RunNormalWorkerStarvationChild();
+    }
+
     TestSuite suite;
     TestSynchronousFallbackAndOneShot(suite);
     TestNullableSetupFailsClosed(suite);
     TestGraphDestructionTerminatesPendingValue(suite);
     TestBatchOwnerFailureTerminalizesValues(suite);
+    TestNormalWorkerStarvationSubprocess(suite, argv[0]);
 
     Moer::TaskSystem::Init();
     TestAsyncOrderJoinAndNamedThreadIsolation(suite);
