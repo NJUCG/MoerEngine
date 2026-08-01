@@ -194,11 +194,11 @@ auto RenderGraph::AddSetupPass(
         }
     }
 
-    auto state = MakeShared<StateType>();
-    SharedPtr<const InputType> input_owner = MakeShared<InputType>(
+    auto state = std::make_shared<StateType>();
+    SharedPtr<const InputType> input_owner = std::make_shared<InputType>(
         std::forward<Input>(immutable_input)
     );
-    auto prepare_owner = MakeShared<PrepareType>(
+    auto prepare_owner = std::make_shared<PrepareType>(
         std::forward<Prepare>(prepare)
     );
 

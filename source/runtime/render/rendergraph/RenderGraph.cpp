@@ -23,6 +23,12 @@
 
 namespace Moer::Render {
 
+namespace {
+
+struct InjectedSetupDispatchFault {};
+
+} // namespace
+
 struct RenderGraph::SetupBatchState {
     enum class Status : uint8_t {
         Pending,
@@ -3687,16 +3693,15 @@ void RenderGraph::DispatchSetupPassesAsync() {
         return;
     }
 
-    // Build empty shared ownership before moving any declarations. The custom
-    // MakeShared performs object and control-block allocation separately; if
-    // either throws, setup_passes must still own every failure callback so no
-    // externally held RGPreparedValue can remain Pending.
+    // Establish throwing, single-allocation shared ownership before moving any
+    // declarations. If owner creation throws, setup_passes still owns every
+    // failure callback so no externally held RGPreparedValue remains Pending.
     try {
         if ((setup_faults_for_testing &
              static_cast<uint8_t>(SetupFaultForTesting::BatchOwnerCreate)) != 0) {
             throw std::bad_alloc{};
         }
-        auto candidate = MakeShared<SetupBatchState>();
+        auto candidate = std::make_shared<SetupBatchState>();
         candidate->AdoptJobs(std::move(setup_passes), setup_faults_for_testing);
         setup_batch      = std::move(candidate);
         setup_dispatched = true;
@@ -3724,8 +3729,8 @@ void RenderGraph::DispatchSetupPassesAsync() {
     const auto batch = setup_batch;
     try {
         if ((setup_faults_for_testing &
-             static_cast<uint8_t>(SetupFaultForTesting::TaskDispatch)) != 0) {
-            throw std::bad_alloc{};
+             static_cast<uint8_t>(SetupFaultForTesting::TaskDispatchThrows)) != 0) {
+            throw InjectedSetupDispatchFault{};
         }
         (void)LambdaTask::Dispatch([batch] { batch->Run(); });
     } catch (const std::exception& exception) {

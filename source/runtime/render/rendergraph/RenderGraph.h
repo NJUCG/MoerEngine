@@ -1037,10 +1037,10 @@ private:
     friend class RenderGraphAsyncSetupTestAccess;
 
     enum class SetupFaultForTesting : uint8_t {
-        None              = 0,
-        BatchOwnerCreate  = 1 << 0,
-        TaskDispatch      = 1 << 1,
-        FailureDiagnostic = 1 << 2,
+        None               = 0,
+        BatchOwnerCreate   = 1 << 0,
+        TaskDispatchThrows = 1 << 1,
+        FailureDiagnostic  = 1 << 2,
     };
 
     struct AccessDeclaration {

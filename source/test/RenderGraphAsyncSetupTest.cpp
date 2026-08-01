@@ -26,7 +26,7 @@ public:
     }
 
     static void InjectTaskDispatchFailure(RenderGraph& graph) noexcept {
-        AddFault(graph, RenderGraph::SetupFaultForTesting::TaskDispatch);
+        AddFault(graph, RenderGraph::SetupFaultForTesting::TaskDispatchThrows);
     }
 
     static void InjectFailureDiagnosticFailure(RenderGraph& graph) noexcept {
@@ -562,7 +562,7 @@ void TestFailureDiagnosticFaultIsTerminal(TestSuite& suite) {
 
 void TestTaskDispatchAndDiagnosticFaultsAreTerminal(TestSuite& suite) {
     constexpr std::string_view test_name =
-        "task dispatch plus diagnostic fault preserves terminal state";
+        "task dispatch exception plus diagnostic fault preserves terminal state";
 
     std::atomic<int> setup_calls{0};
     RenderGraph      graph("TaskDispatchDiagnosticFailure");
