@@ -359,21 +359,66 @@ changes, and native copy/clear calls contribute units; GPU byte counts,
 dispatch group counts, and indirect draw counts do not. A wave needs at least
 two qualifying jobs, otherwise it safely uses the serial recorder.
 
-Run the nine-mode Vulkan correctness/fallback gate after building the target:
+Run the 21-mode Vulkan correctness/fallback gate after building the target. The
+native integration target is intentionally excluded from default CTest because
+it requires a real Vulkan device:
 
 ```powershell
 python tools/threading/run_parallel_record_vulkan_test.py `
-  --executable target/bin/Release/TestRHIParallelRecordVulkan.exe `
-  --outdir target/validation/parallel_record/release
+  --executable target/bin/Debug/TestRHIParallelRecordVulkan.exe `
+  --outdir target/validation/parallel_record/debug
 ```
 
-The runner checks serial, forced-parallel, injected worker failure, production
-gate rejection, production-heavy admission, hard cross-queue Translate failure
-retirement, multi-segment prefix-submit/suffix-failure retirement, and bounded
-Submission-pipeline windows 1 and 2. It requires real worker overlap, stable
-`wave -> serial island -> wave` assembly, GPU readback correctness, exact
-failure/fallback counts, no native submit after the injected hard fault, and
-clean Vulkan logs. The ready-native-lane gate accepts a PASS only when the
+The matrix covers serial, forced-parallel, injected worker failure,
+production-gate rejection, production-heavy admission, hard cross-queue
+Translate failure retirement, multi-segment prefix-submit/suffix-failure
+retirement, bounded Submission-pipeline windows 1 and 2, Present ownership and
+hard-fault boundaries, RT export rejection, owning readback futures, occlusion
+queries, complete timestamp-query success/rejection/failure ownership, and the
+GPU-scope query-island/parallel-sibling stream. It requires real worker overlap,
+stable `wave -> serial island -> wave` assembly, GPU readback correctness,
+exact failure/fallback counts, no native submit after the injected hard fault,
+and clean Vulkan logs. Every process also emits one fixed-schema
+`[Vulkan][GPU_ENV]` record after complete Vulkan initialization. The record
+proves which physical device ran the test and distinguishes validation being
+requested, available, and actually enabled.
+
+The pull-request workflow `.github/workflows/vulkan-gpu-gate.yml` runs Debug on
+the dedicated Windows/NVIDIA self-hosted runner and enables the fail-closed
+policy:
+
+```powershell
+python tools/threading/run_parallel_record_vulkan_test.py `
+  --executable target/bin/Debug/TestRHIParallelRecordVulkan.exe `
+  --outdir target/validation/gpu-ci/local `
+  --strict-gpu-gate `
+  --require-vendor-id 0x000010de `
+  --require-device-id 0x00002c02 `
+  --require-device-type discrete_gpu `
+  --minimum-device-api 1.3.0
+```
+
+Strict mode requires the same GPU identity in all 21 processes, complete
+validation-layer proof, Vulkan 1.3 or newer, and zero `TESTCASE` skips. It
+preserves separate stdout/stderr plus a combined log for every mode, including
+partial output on timeout, and writes `summary.json` on success. The workflow
+preflights the toolchain, registered RTX 5080 identity, `vulkaninfo`, and the
+Khronos validation layer; evidence is uploaded even when the gate fails. The
+controller is loaded from the protected default branch via
+`pull_request_target`, but it never checks out or executes a fork head. Only a
+same-repository PR test-merge SHA may reach the persistent self-hosted runner;
+fork changes must be reviewed and mirrored to a repository branch. A separate
+GitHub-hosted job publishes the stable `Vulkan GPU Gate` status on the exact
+tested SHA without giving a write token to the GPU runner. The GPU job is also
+bound to the protected `vulkan-gpu-persistent` environment, whose required
+reviewer and no-self-review policy must remain enabled. Draft PRs are denied.
+Repository branch protection/rulesets must require the exact
+`Vulkan GPU Gate` context after the first main-branch qualification run; the
+workflow cannot make its own status required. The runner
+refuses a non-empty output directory so a failed retry cannot inherit stale
+mode logs or a previous PASS summary.
+
+The ready-native-lane gate accepts a PASS only when the
 `G,G,C,Copy` source order produces first-ready `G,C,Copy` Translate lanes and
 an actually observed serial Submission-owner order of `G,G,C,Copy`. When Copy
 aliases Graphics or Compute, the marker must explicitly report

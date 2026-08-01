@@ -356,6 +356,9 @@ private:
     VulkanDeviceInfo m_device_info{};
 
     VkDebugUtilsMessengerEXT m_debug_utils_messenger = VK_NULL_HANDLE;
+    bool                     validation_layer_requested = false;
+    bool                     validation_layer_available = false;
+    bool                     validation_layer_enabled   = false;
 
     VmaAllocator              m_allocator = VK_NULL_HANDLE;
     VulkanDescriptorHeap      m_global_descriptor_heap{};
@@ -414,6 +417,7 @@ private:
     void             InitVulkanInstance(uint32 _api_version);
     VkPhysicalDevice SelectGpu(uint32 _api_version);
     void             InitGpu(uint32 _api_version);
+    void             LogGpuEnvironment(uint32 _requested_api_version) const;
     void             CreateDevice(uint32 _api_version);
     void             CreateMemoryAllocator(VkInstance _instance, uint32 _api_version);
     void             CreateDescriptorHeap();

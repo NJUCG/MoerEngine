@@ -94,6 +94,7 @@ VulkanDevice::VulkanDevice(const VulkanRHIConfig&& _config) : RenderDevice::Impl
     CreateInternalResources();
 
     LoadDefaultExtensions();
+    LogGpuEnvironment(_config.api_version);
 }
 
 void VulkanDevice::PostInit() {
@@ -158,6 +159,13 @@ void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
 
     TLayerArray instance_layers_required;
     VulkanPlatform::GetInstanceLayers(instance_layers_required);
+
+    validation_layer_requested = std::ranges::any_of(
+        instance_layers_required,
+        [](std::string_view layer) { return layer == "VK_LAYER_KHRONOS_validation"; }
+    );
+    validation_layer_available =
+        instance_layers.contains("VK_LAYER_KHRONOS_validation");
 
     VkDebugUtilsMessengerCreateInfoEXT debug_create_info{};
     Array<const char*>                 instance_layers_loaded;
@@ -253,8 +261,11 @@ void VulkanDevice::InitVulkanInstance(uint32 _api_version) {
     VK_CHECK_RESULT(vkCreateInstance(&instance_create_info, nullptr, &m_instance))
     volkLoadInstance(m_instance);
 
-    if (b_validation_layer_enabled)
+    if (b_validation_layer_enabled) {
         SetupDebugUtilsMessengerEXT();
+    }
+    validation_layer_enabled =
+        b_validation_layer_enabled && m_debug_utils_messenger != VK_NULL_HANDLE;
 }
 
 /**
@@ -478,6 +489,63 @@ void VulkanDevice::InitGpu(uint32 _api_version) {
     LogCooperativeSupportSummary(m_device_info.optional_extensions, m_device_info.optional_properties);
     m_cooperative_extension_info =
         BuildCooperativeExtensionInfo(m_device_info.optional_extensions, m_device_info.optional_properties);
+}
+
+void VulkanDevice::LogGpuEnvironment(uint32 _requested_api_version) const {
+    const auto& properties = m_device_info.core_properties.core_1_0;
+    const char* device_type = "unknown";
+    switch (properties.deviceType) {
+        case VK_PHYSICAL_DEVICE_TYPE_OTHER:
+            device_type = "other";
+            break;
+        case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU:
+            device_type = "integrated_gpu";
+            break;
+        case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU:
+            device_type = "discrete_gpu";
+            break;
+        case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU:
+            device_type = "virtual_gpu";
+            break;
+        case VK_PHYSICAL_DEVICE_TYPE_CPU:
+            device_type = "cpu";
+            break;
+        default:
+            break;
+    }
+
+    constexpr char hex_digits[] = "0123456789abcdef";
+    std::string    device_uuid;
+    device_uuid.reserve(VK_UUID_SIZE * 2);
+    for (const uint8_t byte : m_device_info.core_properties.core_1_1.deviceUUID) {
+        device_uuid.push_back(hex_digits[byte >> 4]);
+        device_uuid.push_back(hex_digits[byte & 0x0f]);
+    }
+
+    LOG_INFO(
+        "[Vulkan][GPU_ENV] schema=1 backend=vulkan "
+        "validation_requested={} validation_layer_available={} validation_enabled={} "
+        "device_type={} vendor_id=0x{:08x} device_id=0x{:08x} device_uuid={} "
+        "requested_api={}.{}.{} device_api={}.{}.{} api_variant={} "
+        "device_api_raw=0x{:08x} driver_id={} driver_version_raw=0x{:08x}",
+        validation_layer_requested,
+        validation_layer_available,
+        validation_layer_enabled,
+        device_type,
+        properties.vendorID,
+        properties.deviceID,
+        device_uuid,
+        VK_API_VERSION_MAJOR(_requested_api_version),
+        VK_API_VERSION_MINOR(_requested_api_version),
+        VK_API_VERSION_PATCH(_requested_api_version),
+        VK_API_VERSION_MAJOR(properties.apiVersion),
+        VK_API_VERSION_MINOR(properties.apiVersion),
+        VK_API_VERSION_PATCH(properties.apiVersion),
+        VK_API_VERSION_VARIANT(properties.apiVersion),
+        properties.apiVersion,
+        static_cast<uint32>(m_device_info.core_properties.core_1_2.driverID),
+        properties.driverVersion
+    );
 }
 
 void VulkanDevice::CreateDevice(uint32 _api_version) {
@@ -760,6 +828,24 @@ void VulkanDevice::Destroy() {
     FlushDeferredReleases();
     vmaDestroyAllocator(m_allocator);
     vkDestroyDevice(m_device, VK_NULL_HANDLE);
+    m_device = VK_NULL_HANDLE;
+
+    // The callback coalesces non-error messages. Flush before removing the
+    // messenger so short-lived GPU gate processes cannot lose a final warning.
+    FlushBufferedDebugMessages();
+    if (m_debug_utils_messenger != VK_NULL_HANDLE) {
+        vkDestroyDebugUtilsMessengerEXT(
+            m_instance, m_debug_utils_messenger, VK_NULL_HANDLE
+        );
+        m_debug_utils_messenger = VK_NULL_HANDLE;
+    }
+    if (m_instance != VK_NULL_HANDLE) {
+        vkDestroyInstance(m_instance, VK_NULL_HANDLE);
+        m_instance = VK_NULL_HANDLE;
+    }
+    // The VkInstanceCreateInfo pNext callback is active during instance
+    // destruction even after the explicit messenger is gone.
+    FlushBufferedDebugMessages();
 
     LOG_INFO("VulkanRHI: Device destroyed.");
 
