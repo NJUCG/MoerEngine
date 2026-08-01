@@ -96,8 +96,6 @@ jobs:
       group: moerengine-gpu-valerie
       queue: max
     env:
-      BUILD_DIR: ${{ runner.temp }}\moerengine-gpu-${{ github.run_id }}-${{ github.run_attempt }}\build
-      OUTPUT_DIR: ${{ runner.temp }}\moerengine-gpu-${{ github.run_id }}-${{ github.run_attempt }}\output
       EVIDENCE_DIR: ${{ github.workspace }}\target\validation\gpu-ci\${{ github.run_id }}-${{ github.run_attempt }}
       MOER_GATE_SHA: ${{ needs.trust_policy.outputs.target_sha }}
       MOER_GATE_PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -112,6 +110,21 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
           submodules: recursive
+
+      - name: Initialize runner-local paths
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+            throw "RUNNER_TEMP is unavailable"
+          }
+          $runRoot = Join-Path $env:RUNNER_TEMP (
+            "moerengine-gpu-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT
+          )
+          "BUILD_DIR=$(Join-Path $runRoot 'build')" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "OUTPUT_DIR=$(Join-Path $runRoot 'output')" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Parser contract tests
         timeout-minutes: 5
