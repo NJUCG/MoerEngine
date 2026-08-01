@@ -51,22 +51,20 @@ Engine for Realtime Rendering
     just gbr # generate build run
     ```
 
-- Method 2: Rider (GUI)
+- Method 2: Visual Studio 2022 (GUI)
 
-  > Direct CMake C++ project support is available in Rider 2026.1 and newer and is currently marked Beta. Older Rider releases cannot use this workflow. See [CMake support for C++ gaming projects](https://www.jetbrains.com/rider/whatsnew/2026-1/#cmake-support-for-c-gaming-projects-beta).
+  Visual Studio 2022 can open a folder whose root contains `CMakeLists.txt` directly; no generated `.sln` is required. See [CMake projects in Visual Studio](https://learn.microsoft.com/en-us/cpp/build/cmake-projects-in-visual-studio?view=msvc-170).
 
-  1. In File Explorer, copy `template.MoerEngine.toml` to `MoerEngine.toml` in the repository root. This file must exist before the first CMake configure.
-  2. Select `File -> Open` in Rider and open the repository root. Rider loads the project from the root `CMakeLists.txt`.
-  3. Open `Settings -> Build, Execution, Deployment -> Toolchains`. Select the Visual Studio 2022 toolchain to provide the Windows SDK, `rc.exe`, and the linker, then make sure Rider detects CMake, Ninja, Clang, and Clang++.
-  4. Open `Settings -> Build, Execution, Deployment -> CMake` and create a Debug profile with:
-     - Generator: `Ninja`;
-     - Build type: `Debug`;
-     - Build directory: `build` under the repository root;
-     - CMake options: `-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++`.
-  5. Reload the CMake project. After configuration succeeds, select the `MoerEditor` target in the Rider toolbar and build it.
-  6. Open `Run -> Edit Configurations` and create or select a CMake Application. Set the target to `MoerEditor` and the working directory to the repository root, then choose Run or Debug.
+  1. In Visual Studio Installer, install the **Desktop development with C++** workload and the **C++ CMake tools for Windows** component.
+  2. In File Explorer, copy `template.MoerEngine.toml` to `MoerEngine.toml` in the repository root. This file must exist before the first configure.
+  3. Select `File -> Open -> Folder` in Visual Studio and open the repository root. Because the root contains `CMakeLists.txt`, Visual Studio enables CMake integration and automatically generates the cache for its default configuration.
+  4. Select `x64-Debug` in the Configuration dropdown. If automatic configuration did not run, or a setting changed, select `Project -> Configure Cache`. CMake diagnostics are available in the CMake category of the Output window.
+  5. After configuration succeeds, select `MoerEditor.exe` in the Startup Item dropdown. Choose `Build -> Build All`, or open CMake Targets View in Solution Explorer, right-click `MoerEditor`, and choose Build.
+  6. Press `F5` to build and debug. To run without the debugger, press `Ctrl+F5` or select `Debug -> Start Without Debugging`.
 
-  The Debug executable is written to `target/bin/Debug/MoerEditor.exe`. Create a separate Release CMake profile with Build type `Release`; changing only the run configuration does not reconfigure a Debug build as Release.
+  The Debug executable is written to `target/bin/Debug/MoerEditor.exe`. Select `x64-Release` in the Configuration dropdown for a Release build, which writes `target/bin/Release/MoerEditor.exe`.
+
+  Rider 2026.1 introduced Beta support for CMake C++ projects, but current Rider releases do not yet expose the same CMake toolchain/profile configuration UI as CLion. This guide therefore does not present an unverified Rider menu path as a supported build method. See [Rider 2026.1 CMake support](https://www.jetbrains.com/rider/whatsnew/2026-1/#cmake-support-for-c-gaming-projects-beta).
 
 ### CUDA, LibTorch, and TensorRT
 
