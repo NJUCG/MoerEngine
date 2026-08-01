@@ -29,38 +29,52 @@ AntialiasPass::AntialiasPass(RenderDevice& _device, ShaderManager& _manager, Cre
     recording_owner = std::move(owner);
 }
 
-AntialiasPass::PreparedCommand AntialiasPass::Prepare(
+AntialiasPass::SetupInput AntialiasPass::CaptureSetupInput(
     Params            params,
     bool              prev_view_valid,
     const TextureRef& input,
     const TextureRef& output
 ) const {
+    return SetupInput{
+        .params          = params,
+        .input_extent    = uint2(input->GetExtent().x, input->GetExtent().y),
+        .output_extent   = uint2(output->GetExtent().x, output->GetExtent().y),
+        .pixel_offset    = GetPixelOffset(),
+        .prev_view_valid = prev_view_valid,
+    };
+}
+
+AntialiasPass::PreparedCommand AntialiasPass::Prepare(
+    const SetupInput& input
+) {
     PreparedCommand command{};
     command.params.in_view_origin = float2(0.f);
     command.params.in_view_size =
-        float2(input->GetExtent().x, input->GetExtent().y);
+        float2(input.input_extent.x, input.input_extent.y);
     command.params.out_view_origin = float2(0.f);
     command.params.out_view_size =
-        float2(output->GetExtent().x, output->GetExtent().y);
-    command.params.in_pixel_offset      = GetPixelOffset();
+        float2(input.output_extent.x, input.output_extent.y);
+    command.params.in_pixel_offset      = input.pixel_offset;
     command.params.out_texture_size_inv = float2(
-        1.f / output->GetExtent().x,
-        1.f / output->GetExtent().y
+        1.f / input.output_extent.x,
+        1.f / input.output_extent.y
     );
     command.params.input_over_output_size =
         command.params.in_view_size / command.params.out_view_size;
     command.params.output_over_input_size =
         command.params.out_view_size / command.params.in_view_size;
     command.params.clamping_factor =
-        params.enable_history_clamp ? params.clamping_factor : -1.f;
+        input.params.enable_history_clamp ?
+            input.params.clamping_factor :
+            -1.f;
     command.params.new_frame_weight =
-        prev_view_valid ? params.new_frame_weight : 1.f;
+        input.prev_view_valid ? input.params.new_frame_weight : 1.f;
     command.params.pqc =
-        std::clamp(params.max_radiance, 1e-4f, 1e8f);
+        std::clamp(input.params.max_radiance, 1e-4f, 1e8f);
     command.params.inv_pqc = 1.f / command.params.pqc;
     command.dispatch_groups = uint3(
-        (output->GetExtent().x + 15) / 16,
-        (output->GetExtent().y + 15) / 16,
+        (input.output_extent.x + 15) / 16,
+        (input.output_extent.y + 15) / 16,
         1
     );
     return command;
@@ -121,8 +135,9 @@ void AntialiasPass::Process(
     TextureRef   input,
     TextureRef   output
 ) {
-    const PreparedCommand command =
-        Prepare(params, prev_view_valid, input, output);
+    const PreparedCommand command = Prepare(
+        CaptureSetupInput(params, prev_view_valid, input, output)
+    );
     const RecordResources resources =
         CaptureResources(std::move(input), std::move(output));
     const auto owner = recording_owner;
@@ -159,8 +174,8 @@ bool AntialiasPass::AddPasses(
         !feedback_color_ping || !feedback_color_pong) {
         return false;
     }
-    const PreparedCommand command =
-        Prepare(params, prev_view_valid, input, output);
+    SetupInput setup_input =
+        CaptureSetupInput(params, prev_view_valid, input, output);
     const RecordResources resources =
         CaptureResources(std::move(input), std::move(output));
     if (!resources.input || !resources.output || !resources.motion ||
@@ -216,6 +231,15 @@ bool AntialiasPass::AddPasses(
         );
     }
 
+    const auto command = graph.AddSetupPass(
+        "RT.AntiAlias.Prepare",
+        std::move(setup_input),
+        [](const SetupInput& input) { return Prepare(input); }
+    );
+    if (!command.IsValid()) {
+        return false;
+    }
+
     UploadGraphParameters upload_parameters{};
     upload_parameters.constants = constants;
     upload_parameters.owner     = owner;
@@ -238,7 +262,7 @@ bool AntialiasPass::AddPasses(
             RecordConstantsUpload(
                 cmd_list,
                 *parameters.owner,
-                parameters.command
+                parameters.command.Get()
             );
         },
         RenderGraph::PassExecutionClass::ParallelRecordEligible
@@ -273,7 +297,7 @@ bool AntialiasPass::AddPasses(
             RecordTAA(
                 cmd_list,
                 *parameters.owner,
-                parameters.command,
+                parameters.command.Get(),
                 parameters.resources
             );
         },

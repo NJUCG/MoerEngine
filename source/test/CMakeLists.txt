@@ -215,6 +215,18 @@ add_test(
 )
 set_tests_properties(RenderGraphParameterAccessContract PROPERTIES TIMEOUT 60)
 
+set(test_target TestRenderGraphAsyncSetup)
+add_executable(${test_target} "RenderGraphAsyncSetupTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(
+    NAME RenderGraphAsyncSetupContract
+    COMMAND $<TARGET_FILE:${test_target}>
+)
+set_tests_properties(RenderGraphAsyncSetupContract PROPERTIES TIMEOUT 60)
+
 set(test_target TestRenderGraphLowering)
 add_executable(${test_target} "RenderGraphLoweringTest.cpp")
 target_link_libraries(${test_target}

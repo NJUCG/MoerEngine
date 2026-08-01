@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RenderAPI.h"
+#include "misc/STL.h"
 #include "rendergraph/RenderGraphResourcePool.h"
 #include "rhi/RHIExecutor.h"
 
@@ -20,6 +21,14 @@ namespace Moer::Render {
 class RenderGraphCompiler;
 class RenderGraphLowering;
 class RGParameterAccessCollector;
+class RenderGraphAsyncSetupTestAccess;
+template<typename T>
+class RGPreparedValue;
+
+template<typename Input, typename Prepare>
+using RGSetupResult = std::remove_cvref_t<std::invoke_result_t<
+    std::decay_t<Prepare>&,
+    const std::decay_t<Input>&>>;
 
 template<typename T>
 concept RGParameterAccessProvider =
@@ -918,6 +927,29 @@ public:
         BufferRange  range       = BufferRange::Whole()
     );
 
+    /**
+     * Schedules one graph-owned, pure CPU preparation callback. Setup may run
+     * concurrently with compilation, is joined before Compile() returns, and
+     * publishes one immutable result for later recording callbacks.
+     */
+    template<typename Input, typename Prepare>
+        requires std::invocable<
+                     std::decay_t<Prepare>&,
+                     const std::decay_t<Input>&> &&
+                 (!std::is_void_v<RGSetupResult<Input, Prepare>>) &&
+                 (!std::is_reference_v<
+                     std::invoke_result_t<
+                         std::decay_t<Prepare>&,
+                         const std::decay_t<Input>&>>) &&
+                 std::move_constructible<RGSetupResult<Input, Prepare>> &&
+                 std::constructible_from<std::decay_t<Input>, Input&&> &&
+                 std::constructible_from<std::decay_t<Prepare>, Prepare&&>
+    auto AddSetupPass(
+        std::string_view name,
+        Input&&          immutable_input,
+        Prepare&&        prepare
+    ) -> RGPreparedValue<RGSetupResult<Input, Prepare>>;
+
     PassHandle AddPass(std::string_view name, const SetupCallback& setup, ExecuteCallback execute);
     PassHandle AddRecordPass(
         std::string_view     name,
@@ -1002,6 +1034,14 @@ private:
     friend class RenderGraphCompiler;
     friend class RenderGraphLowering;
     friend class RenderGraphTransientAllocator;
+    friend class RenderGraphAsyncSetupTestAccess;
+
+    enum class SetupFaultForTesting : uint8_t {
+        None              = 0,
+        BatchOwnerCreate  = 1 << 0,
+        TaskDispatch      = 1 << 1,
+        FailureDiagnostic = 1 << 2,
+    };
 
     struct AccessDeclaration {
         ResourceHandle resource{};
@@ -1057,6 +1097,15 @@ private:
         uint32_t                       workload = 1;
     };
 
+    struct SetupPassDeclaration {
+        std::string                              name{};
+        std::function<void()>                    execute{};
+        std::function<void(std::string_view)>    fail{};
+        std::function<void(std::string_view)>    annotate_failure{};
+    };
+
+    struct SetupBatchState;
+
     ResourceHandle ImportInternal(
         std::string_view   name,
         ResourceKind       kind,
@@ -1103,6 +1152,14 @@ private:
         uint32_t                    pass_index,
         ERHITranslateExecutionClass execution_class
     );
+    bool RegisterSetupPass(
+        std::string_view                         setup_name,
+        std::function<void()>                    execute,
+        std::function<void(std::string_view)>    fail,
+        std::function<void(std::string_view)>    annotate_failure
+    );
+    void DispatchSetupPassesAsync();
+    bool WaitSetupPasses(std::string& error) noexcept;
     bool InvalidateCompile();
     bool FailCompile(std::string message);
 
@@ -1112,6 +1169,8 @@ private:
     std::string                      name{};
     std::vector<ResourceDeclaration> resources{};
     std::vector<PassDeclaration>     passes{};
+    std::vector<SetupPassDeclaration> setup_passes{};
+    SharedPtr<SetupBatchState>        setup_batch{};
     CompiledPlan                     compiled_plan{};
     std::vector<std::string>         declaration_errors{};
     std::string                      compile_error{};
@@ -1119,8 +1178,12 @@ private:
     QueueTopology                    queue_topology{};
     bool                             compiled = false;
     bool                             executed = false;
+    bool                             setup_dispatched = false;
+    bool                             setup_failed_before_batch = false;
+    uint8_t                          setup_faults_for_testing = 0;
 };
 
 } // namespace Moer::Render
 
 #include "RenderGraphPassParameters.h"
+#include "RenderGraphSetup.h"
