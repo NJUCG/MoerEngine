@@ -1,9 +1,15 @@
 #include "taskgraph/TaskGraph.h"
+#include "AnyThreadScheduler.h"
 #include "platform/Platform.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/ThreadManager.h"
 //#define NOMINMAX 1
 #undef max
+
+namespace {
+thread_local EThread::Type g_task_graph_worker_thread = EThread::UNKNOWN_THREAD;
+}
+
 TaskGraph* TaskGraph::instance = nullptr;
 
 TaskGraph& TaskGraph::GetInterface() {
@@ -17,11 +23,25 @@ bool TaskGraph::IsInitialized() noexcept {
 
 void TaskGraph::Init() {
     if (instance == nullptr) {
-        instance = MoerNew(TaskGraph)();
+        void* storage = Memory::Malloc(sizeof(TaskGraph));
+        if (storage == nullptr) {
+            throw std::bad_alloc();
+        }
+        try {
+            instance = MoerPlacementNew(storage) TaskGraph();
+        } catch (...) {
+            Memory::Free(storage);
+            throw;
+        }
     }
 }
 void TaskGraph::Shutdown() {
     if (instance != nullptr) {
+        // A worker cannot wait for pending==0 while its own executing task is
+        // still part of that count. Shutdown is an external-owner operation.
+        if (!EThread::IsUnKnownThread(g_task_graph_worker_thread)) {
+            Platform::FailFast("TaskGraph shutdown requested from an AnyThread worker");
+        }
         MoerDelete(instance);
         instance = nullptr;
     }
@@ -35,8 +55,20 @@ TaskThreadBase& TaskGraph::GetThread(ThreadIndex index) {
 }
 
 void TaskGraph::WakeUpWorkerThread(int32_t threadIndex, QueueIndex index) noexcept {
-    assert(threadIndex >= 0);
+    assert(threadIndex >= m_named_thread_count && threadIndex < m_thread_count);
     m_workers[threadIndex].task_thread->Wake(index);
+}
+void TaskGraph::WakeWorkerCallback(void* context, int32_t threadIndex) noexcept {
+    static_cast<TaskGraph*>(context)->WakeUpWorkerThread(threadIndex, EThread::MAIN_QUEUE);
+}
+void TaskGraph::SetCurrentWorkerThread(EThread::Type thread) noexcept {
+    g_task_graph_worker_thread = thread;
+}
+void TaskGraph::ClearCurrentWorkerThread() noexcept {
+    g_task_graph_worker_thread = EThread::UNKNOWN_THREAD;
+}
+void TaskGraph::NotifyAnyThreadTaskCompleted() noexcept {
+    m_any_thread_scheduler->NotifyTaskCompleted();
 }
 void TaskGraph::WaitUntilTaskComplete(const GraphEventRef& task, EThread::Type currentThread) {
     WaitUntilTasksComplete({task}, currentThread);
@@ -46,49 +78,98 @@ void TaskGraph::WaitUntilTaskComplete(GraphEventRef&& task, EThread::Type curren
 };
 TaskGraph::TaskGraph() {
     assert(instance == nullptr);
-    int32_t actual_thread_num = Platform::GetProcessorCoreCount();
+    const int32_t actual_thread_num = Platform::GetProcessorCoreCount();
 
     m_named_thread_count                   = EThread::NamedThreadCount;
-    int32_t min_worker_thread_per_priority = 1;
-    int32_t min_thread_count = min_worker_thread_per_priority * EThread::PriorityCount + m_named_thread_count;
+    const int32_t min_worker_thread_per_priority = 1;
+    const int32_t min_thread_count =
+        min_worker_thread_per_priority * EThread::PriorityCount + m_named_thread_count;
 
-    m_thread_count = std::max(min_thread_count, actual_thread_num);
+    // EThread reserves the all-ones 8-bit index for UNKNOWN_THREAD, so valid
+    // worker/named indices end at 254 even on very large server topologies.
+    m_thread_count = std::min(
+        std::max(min_thread_count, actual_thread_num),
+        static_cast<int32_t>(EThread::UNKNOWN_THREAD)
+    );
 
     m_worker_thread_count = m_thread_count - m_named_thread_count;
+    m_worker_topology = Moer::TaskGraphDetail::BuildWorkerPoolTopology(
+        m_named_thread_count,
+        m_worker_thread_count
+    );
 
-    m_worker_per_priority = m_worker_thread_count / EThread::PriorityCount;
-    m_worker_per_priority =
-        m_worker_thread_count % EThread::PriorityCount ? m_worker_per_priority + 1 : m_worker_per_priority;
-    int32_t priority_set_count = m_worker_thread_count / EThread::PriorityCount;
+    // Allocate the owning scheduler before raw queue objects so a failure here
+    // cannot strand TaskThread Event resources in a partially-built TaskGraph.
+    m_any_thread_scheduler = std::make_unique<AnyThreadScheduler>(
+        m_worker_topology,
+        &TaskGraph::WakeWorkerCallback,
+        this
+    );
 
-    for (int32_t i = 0; i < m_thread_count; i++) {
-        EThread::Type  type     = EThread::SetThreadIndex(EThread::UNKNOWN_THREAD, i);
-        ThreadPriority priority = GetThreadPriorityFromIndex(i) << EThread::PRIORITY_SHEFT;
-        type                    = EThread::SetPriority(type, priority);
-        if (i >= m_named_thread_count) {
-            //any_thread
-            m_workers[i].task_thread = new TaskThreadAnyThread(type);
-        } else {
-            m_workers[i].task_thread = new NamedThread;
-            //named_thread
+    int32_t constructed_task_threads = 0;
+    try {
+        for (int32_t i = 0; i < m_thread_count; i++) {
+            EThread::Type type = EThread::SetThreadIndex(EThread::UNKNOWN_THREAD, i);
+            const int32_t priority_index =
+                i < m_named_thread_count ? 0 : GetThreadPriorityFromIndex(i);
+            assert(priority_index >= 0 && priority_index < EThread::PriorityCount);
+            const ThreadPriority priority = priority_index << EThread::PRIORITY_SHEFT;
+            type                          = EThread::SetPriority(type, priority);
+            m_workers[i].task_thread = i >= m_named_thread_count
+                                           ? static_cast<TaskThreadBase*>(new TaskThreadAnyThread(type))
+                                           : static_cast<TaskThreadBase*>(new NamedThread);
+            m_workers[i].task_thread->SetAttributes(type, &m_workers[i]);
+            ++constructed_task_threads;
         }
-        m_workers[i].task_thread->SetAttributes(type, &m_workers[i]);
-    }
-    instance = this; //set here to make sure access of worker_threads below
-    //todo no handle for thread groups
-    for (int32_t i = m_named_thread_count; i < m_thread_count; i++) {
-        int32_t     priority = GetThreadPriorityFromIndex(i);
-        std::string name     = "WorkerThread_" + GetPriorityStr(priority) + "_" +
-                           std::to_string((i - m_named_thread_count) % m_worker_per_priority);
-        m_workers[i].actual_thread = RunnableThread::Create(
-            &GetThread(i),
-            ThreadAttributes{.affinity = Affinity::AnyOf(i, std::move(Affinity::All())), .name = name}
-        );
-        m_workers[i].attached = true;
+
+        instance = this; // Worker entry resolves the graph through the singleton.
+        // TODO: no handle for thread groups.
+        for (int32_t i = m_named_thread_count; i < m_thread_count; i++) {
+            const int32_t priority = GetThreadPriorityFromIndex(i);
+            const std::string name = "WorkerThread_" + GetPriorityStr(priority) + "_" +
+                                     std::to_string(m_worker_topology.LocalIndex(i, priority));
+            m_workers[i].actual_thread = RunnableThread::Create(
+                &GetThread(i),
+                ThreadAttributes{
+                    .affinity = Affinity::AnyOf(i, std::move(Affinity::All())),
+                    .name     = name
+                }
+            );
+            m_workers[i].attached = true;
+        }
+    } catch (...) {
+        // Successfully-started workers still require the live singleton while
+        // they observe their close signal and leave the scheduler loop.
+        for (int32_t i = m_named_thread_count; i < m_thread_count; ++i) {
+            if (m_workers[i].actual_thread != nullptr) {
+                m_workers[i].task_thread->RequestQuit(QUIT);
+            }
+        }
+        for (int32_t i = m_named_thread_count; i < m_thread_count; ++i) {
+            if (m_workers[i].actual_thread != nullptr) {
+                m_workers[i].actual_thread->WaitUntilFinished();
+                MoerDelete(m_workers[i].actual_thread);
+                m_workers[i].actual_thread = nullptr;
+            }
+        }
+        if (instance == this) {
+            instance = nullptr;
+        }
+        for (int32_t i = 0; i < constructed_task_threads; ++i) {
+            delete m_workers[i].task_thread;
+            m_workers[i].task_thread = nullptr;
+        }
+        m_any_thread_scheduler.reset();
+        throw;
     }
 }
 
 TaskGraph::~TaskGraph() {
+    // TaskSystem shutdown requires external producers to be quiescent. Keep
+    // every priority pool alive until already-published work (including
+    // cross-priority continuations) has completed, then close the workers.
+    m_any_thread_scheduler->BeginDrain();
+    m_any_thread_scheduler->WaitUntilIdle();
     for (int32_t i = 0; i < m_thread_count; i++) {
         m_workers[i].task_thread->RequestQuit(QUIT);
     }
@@ -100,32 +181,43 @@ TaskGraph::~TaskGraph() {
             m_workers[i].actual_thread = nullptr;
         }
         m_workers[i].attached = false;
+        // Named owners are externally joined before TaskSystem shutdown (the
+        // render service enforces this ordering), but TaskGraph still owns the
+        // NamedThread queue objects and their pooled Events.
+        delete m_workers[i].task_thread;
+        m_workers[i].task_thread = nullptr;
     }
+    m_any_thread_scheduler.reset();
     instance = nullptr;
 }
 EThread::Type TaskGraph::GetCurrentThread(bool localQueue) {
-    ThreadIndex index = Platform::GetCurrentThreadID();
-    if (Platform::GetCurrentThreadID() == ThreadManager::g_game_thread_id)
+    if (!EThread::IsUnKnownThread(g_task_graph_worker_thread)) {
         return EThread::Type(
-            localQueue ? (EThread::EMainThread | EThread::LOCAL_QUEUE) : EThread::EMainThread
-        );
-    if (Platform::GetCurrentThreadID() == ThreadManager::g_render_thread_id)
-        return EThread::Type(
-            localQueue ? (EThread::ERenderThread | EThread::LOCAL_QUEUE) : EThread::ERenderThread
-        );
-    auto* thread = ThreadManager::Instance().GetRunnableThread(Platform::GetCurrentThreadID());
-    if (thread) {
-        ThreadIndex index = thread->m_runnable->GetIndex();
-        return EThread::Type(
-            m_workers[index].task_thread->m_thread_type |
+            g_task_graph_worker_thread |
             (localQueue ? EThread::LOCAL_QUEUE : EThread::MAIN_QUEUE)
         );
     }
+
+    const uint32_t current_thread_id = Platform::GetCurrentThreadID();
+    if (current_thread_id == ThreadManager::g_game_thread_id)
+        return EThread::Type(
+            localQueue ? (EThread::EMainThread | EThread::LOCAL_QUEUE) : EThread::EMainThread
+        );
+    if (current_thread_id == ThreadManager::g_render_thread_id)
+        return EThread::Type(
+            localQueue ? (EThread::ERenderThread | EThread::LOCAL_QUEUE) : EThread::ERenderThread
+        );
     // Dedicated runtime owners such as the RHI Executor are intentionally not
     // TaskGraph workers. Treat them as external callers so GraphEvent::Wait()
     // installs an ordinary completion event instead of indexing a named
     // worker queue. This matches the dev_parallel_rhi ownership model.
     return EThread::SetPriority(EThread::UNKNOWN_THREAD, EThread::NORMAL_PRI);
+}
+bool TaskGraph::IsDraining() const noexcept {
+    return m_any_thread_scheduler->IsDraining();
+}
+bool TaskGraph::IsWaitingForIdle() const noexcept {
+    return m_any_thread_scheduler->IsWaitingForIdle();
 }
 bool TaskGraph::IsThreadProcessingTask(EThread::Type index) {
     return m_workers[EThread::GetThreadIndex(index)].task_thread->IsProcessingTask(
@@ -219,17 +311,20 @@ void TaskGraph::QueueTask(
     bool           wake_worker
 ) noexcept {
     if (EThread::GetThreadIndex(_prefered_thread) == EThread::UNKNOWN_THREAD) { //any thread is ok
-        ThreadPriority priority                = task->GetPriority();
-        int32_t        possible_thread_to_wake = m_task_queue[priority].Push(task, 0);
-        if (possible_thread_to_wake >= 0) {
-            //start task thread
-            possible_thread_to_wake =
-                possible_thread_to_wake + priority * m_worker_per_priority + m_named_thread_count;
-            WakeUpWorkerThread(possible_thread_to_wake, 0);
-        }
+        // Scheduler ownership comes only from trusted worker TLS, never from
+        // ThreadManager's mutable registry or the caller-supplied hint.
+        const EThread::Type actual_current_thread = g_task_graph_worker_thread;
+        m_any_thread_scheduler->Enqueue(task, actual_current_thread, wake_worker);
         return;
     }
     //named thread
+    // Shutdown only owns/drains the AnyThread pools. Publishing a named-target
+    // continuation after their drain point would leave work in a queue whose
+    // owner is no longer guaranteed to pump, so reject it at the same fatal
+    // post-ownership-transfer boundary as a late external AnyThread publish.
+    if (m_any_thread_scheduler->IsDraining()) {
+        Platform::FailFast("TaskGraph named-target publication attempted during drain");
+    }
     EThread::Type temp_current_thread;
     temp_current_thread = GetCurrentThread();
 
@@ -242,11 +337,5 @@ void TaskGraph::QueueTask(
     }
 }
 BaseGraphTask* TaskGraph::DequeueTask(int32_t threadIndex) {
-    int32_t        priority          = GetThreadPriorityFromIndex(threadIndex);
-    int32_t        index_in_priority = (threadIndex - m_named_thread_count) % m_worker_per_priority;
-    BaseGraphTask* task              = m_task_queue[priority].Pop(index_in_priority);
-    //if (task != nullptr) {
-    //	task = m_global_queue.pop(index_in_priority);
-    //}
-    return task;
+    return m_any_thread_scheduler->DequeueOrPrepareToPark(threadIndex);
 }

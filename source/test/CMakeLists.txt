@@ -652,6 +652,11 @@ target_link_libraries(${test_target}
     PUBLIC Moer::Core
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME TaskGraphContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(
+    TaskGraphContract
+    PROPERTIES TIMEOUT 120 CONFIGURATIONS Debug
+)
 
 set(pipe_test_target TestTaskPipe)
 add_executable(${pipe_test_target} "TaskPipeTest.cpp")
@@ -662,6 +667,20 @@ target_link_libraries(${pipe_test_target}
     PUBLIC Moer::Core
 )
 set_target_properties(${pipe_test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME TaskPipeContract COMMAND $<TARGET_FILE:${pipe_test_target}>)
+set_tests_properties(
+    TaskPipeContract
+    PROPERTIES TIMEOUT 60 CONFIGURATIONS Debug
+)
+
+set(test_target TestTaskGraphScheduler)
+add_executable(${test_target} "TaskGraphSchedulerTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Core
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME TaskGraphSchedulerContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(TaskGraphSchedulerContract PROPERTIES TIMEOUT 60)
 
 add_executable(MeshProcessTest "MeshProcessTest.cpp")
 target_link_libraries(MeshProcessTest

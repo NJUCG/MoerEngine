@@ -2,6 +2,19 @@
 #include "platform/Platform.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskGraph.h"
+
+uint32_t TaskThreadAnyThread::Run() {
+    TaskGraph::SetCurrentWorkerThread(m_thread_type);
+    try {
+        const uint32_t result = TaskThreadBase::Run();
+        TaskGraph::ClearCurrentWorkerThread();
+        return result;
+    } catch (...) {
+        TaskGraph::ClearCurrentWorkerThread();
+        throw;
+    }
+}
+
 BaseGraphTask* TaskThreadAnyThread::FindTaskToDo() {
 
     return TaskGraph::GetInterface().DequeueTask(EThread::GetThreadIndex(m_thread_type));
@@ -19,6 +32,7 @@ uint32_t TaskThreadAnyThread::ProcessTasks() {
             continue;
         }
         task->Execute(m_thread_type);
+        TaskGraph::GetInterface().NotifyAnyThreadTaskCompleted();
     }
     assert(--m_queue.call_amount == 0);
     return 0;

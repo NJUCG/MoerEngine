@@ -451,8 +451,7 @@ int RunNormalWorkerStarvationChild() {
     Moer::TaskSystem::Init();
     TaskGraph& task_graph = TaskGraph::GetInterface();
     const uint32_t normal_worker_count =
-        (task_graph.GetWorkerThreadCount() + EThread::PriorityCount - 1) /
-        EThread::PriorityCount;
+        task_graph.GetWorkerThreadCount(EThread::AnyThread_NormalPri);
     if (normal_worker_count == 0) {
         Moer::TaskSystem::ShutDown();
         std::cerr << "normal worker starvation child: no Normal workers\n";
