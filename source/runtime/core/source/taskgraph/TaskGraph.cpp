@@ -318,13 +318,11 @@ void TaskGraph::QueueTask(
         return;
     }
     //named thread
-    // Shutdown only owns/drains the AnyThread pools. Publishing a named-target
-    // continuation after their drain point would leave work in a queue whose
-    // owner is no longer guaranteed to pump, so reject it at the same fatal
-    // post-ownership-transfer boundary as a late external AnyThread publish.
-    if (m_any_thread_scheduler->IsDraining()) {
-        Platform::FailFast("TaskGraph named-target publication attempted during drain");
-    }
+    // Shutdown only owns/drains the AnyThread pools. Keep the drain check and
+    // named-queue publication under the same admission gate so BeginDrain
+    // cannot linearize between them and strand a continuation after shutdown.
+    [[maybe_unused]] auto named_admission =
+        m_any_thread_scheduler->AcquireNamedPublication();
     EThread::Type temp_current_thread;
     temp_current_thread = GetCurrentThread();
 

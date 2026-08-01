@@ -232,6 +232,15 @@ void AnyThreadScheduler::BeginDrain() noexcept {
     m_draining.store(true, std::memory_order_release);
 }
 
+AnyThreadScheduler::NamedPublicationGuard
+AnyThreadScheduler::AcquireNamedPublication() noexcept {
+    NamedPublicationGuard guard(m_admission_mutex);
+    if (m_draining.load(std::memory_order_acquire)) {
+        Platform::FailFast("TaskGraph named-target publication attempted during drain");
+    }
+    return guard;
+}
+
 bool AnyThreadScheduler::IsDraining() const noexcept {
     return m_draining.load(std::memory_order_acquire);
 }

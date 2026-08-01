@@ -17,6 +17,21 @@ class AnyThreadScheduler {
 public:
     using WakeWorkerFn = void (*)(void* context, int32_t thread_index) noexcept;
 
+    class NamedPublicationGuard {
+    public:
+        NamedPublicationGuard(NamedPublicationGuard&&) noexcept = default;
+        NamedPublicationGuard& operator=(NamedPublicationGuard&&) noexcept = default;
+
+        NamedPublicationGuard(const NamedPublicationGuard&)            = delete;
+        NamedPublicationGuard& operator=(const NamedPublicationGuard&) = delete;
+
+    private:
+        friend class AnyThreadScheduler;
+        explicit NamedPublicationGuard(std::mutex& admission_mutex) : m_lock(admission_mutex) {}
+
+        std::unique_lock<std::mutex> m_lock;
+    };
+
     AnyThreadScheduler(
         Moer::TaskGraphDetail::WorkerPoolTopology topology,
         WakeWorkerFn                              wake_worker,
@@ -38,6 +53,8 @@ public:
     void                         NotifyTaskCompleted() noexcept;
     /** Stop external/named producers while allowing in-flight workers to publish continuations. */
     void                         BeginDrain() noexcept;
+    /** Keep the drain decision and named-queue publication in one admission interval. */
+    [[nodiscard]] NamedPublicationGuard AcquireNamedPublication() noexcept;
     [[nodiscard]] bool           IsDraining() const noexcept;
     [[nodiscard]] bool           IsWaitingForIdle() const noexcept;
     void                         WaitUntilIdle() noexcept;
