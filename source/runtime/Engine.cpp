@@ -4,6 +4,7 @@
 // Runtime
 #include "config/CVarSystem.h"
 #include "config/ConfigManager.h"
+#include "log/LogSystem.h"
 #include "misc/Assert.h"
 #include "misc/ScopedLogTimer.h"
 #include "remote/RemoteConfig.h"
@@ -1191,14 +1192,15 @@ void Engine::Init(
 
     report_startup("Starting engine core", "Initializing logging and configuration");
 
+    std::filesystem::path path = argv[0];
+    path = path.filename().string().find(".exe") != std::string::npos ? path.parent_path() : path;
+    const std::string log_directory = (path / "logs").generic_string();
+
     // Init LogSystem
-    LogSystem::Init(); // for LOG_DEBUG & LOG_TRACE when debug mode
+    static_cast<void>(LogSystem::Init({.directory = log_directory}));
     startup_logging_ready = true;
 
     // Init ConfigManager
-    std::filesystem::path path = argv[0];
-    path = path.filename().string().find(".exe") != std::string::npos ? path.parent_path() : path;
-
     report_startup("Reading configuration", path.string());
     LOG_INFO("Workspace Path : {}", path.string());
 
@@ -2159,6 +2161,7 @@ void Engine::ShutDown() noexcept {
     }
     m_console_control.reset();
     m_editor_config.reset();
+    LogSystem::Flush();
 }
 
 // 检测路径中是否包含非ASCII字符（包括中文）

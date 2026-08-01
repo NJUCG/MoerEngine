@@ -1,12 +1,21 @@
 #include "log/LogSystem.h"
 
+#include "spdlog/details/os.h"
+#include "spdlog/sinks/basic_file_sink.h"
 #include "spdlog/sinks/sink.h"
 
 #include <algorithm>
+#include <array>
+#include <chrono>
+#include <cstdio>
+#include <ctime>
 #include <deque>
+#include <filesystem>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace Moer::LogSystem {
@@ -17,6 +26,7 @@ namespace fmt_lib = spdlog::fmt_lib;
 
 constexpr std::size_t ConsoleLogCapacity        = 4096;
 constexpr std::size_t AbiSafeLoggerNameCapacity = 64;
+constexpr std::string_view FileLogPattern = "%Y-%m-%d %H:%M:%S.%e [%t] [%l] %v";
 
 std::string MakeCoreOwnedLoggerName(std::string_view _name) {
     std::string owned_name;
@@ -28,6 +38,93 @@ std::string MakeCoreOwnedLoggerName(std::string_view _name) {
         owned_name.append(_name.data(), _name.size());
     }
     return owned_name;
+}
+
+std::string MakeTimestampedFileName() {
+    const auto now = std::chrono::system_clock::now();
+    const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  now.time_since_epoch()
+                              ) %
+                              std::chrono::seconds(1);
+    const std::time_t time = std::chrono::system_clock::to_time_t(now);
+    const std::tm     local_time = spdlog::details::os::localtime(time);
+
+    std::array<char, 128> file_name{};
+    const int written = std::snprintf(
+        file_name.data(),
+        file_name.size(),
+        "MoerEditor_%04d%02d%02d_%02d%02d%02d_%03lld_p%d.log",
+        local_time.tm_year + 1900,
+        local_time.tm_mon + 1,
+        local_time.tm_mday,
+        local_time.tm_hour,
+        local_time.tm_min,
+        local_time.tm_sec,
+        static_cast<long long>(milliseconds.count()),
+        spdlog::details::os::pid()
+    );
+    if (written <= 0 || static_cast<std::size_t>(written) >= file_name.size()) {
+        throw std::runtime_error("timestamped log file name exceeded its fixed buffer");
+    }
+    return std::string(file_name.data(), static_cast<std::size_t>(written));
+}
+
+struct FileLogSetupResult {
+    EFileLogInitStatus                  status = EFileLogInitStatus::Disabled;
+    std::shared_ptr<spdlog::sinks::sink> sink;
+    std::string                         path;
+    std::string                         error;
+};
+
+FileLogSetupResult CreateFileLogSink(const FileLogInitOptions& _options) {
+    FileLogSetupResult result;
+    if (_options.directory.empty()) {
+        return result;
+    }
+
+    try {
+        const std::filesystem::path directory(std::string(_options.directory));
+        std::error_code             directory_error;
+        std::filesystem::create_directories(directory, directory_error);
+        if (directory_error || !std::filesystem::is_directory(directory, directory_error)) {
+            result.status = EFileLogInitStatus::Failed;
+            result.error  = "could not create log directory '" + directory.generic_string() + "'";
+            if (directory_error) {
+                result.error.append(": ").append(directory_error.message());
+            }
+            return result;
+        }
+
+        const std::filesystem::path requested_file_name = _options.file_name.empty() ?
+                                                                    MakeTimestampedFileName() :
+                                                                    std::string(_options.file_name);
+        const std::filesystem::path file_name = requested_file_name.filename();
+        if (file_name.empty() || file_name == "." || file_name == "..") {
+            result.status = EFileLogInitStatus::Failed;
+            result.error  = "log file name is empty or invalid";
+            return result;
+        }
+
+        const std::filesystem::path log_path = directory / file_name;
+        auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
+            log_path.string(), true
+        );
+        file_sink->set_level(spdlog::level::trace);
+        file_sink->set_pattern(std::string(FileLogPattern));
+
+        result.status = EFileLogInitStatus::Active;
+        result.sink   = std::move(file_sink);
+        result.path   = log_path.generic_string();
+        return result;
+    } catch (const std::exception& error) {
+        result.status = EFileLogInitStatus::Failed;
+        result.error  = error.what();
+        return result;
+    } catch (...) {
+        result.status = EFileLogInitStatus::Failed;
+        result.error  = "unknown file logging initialization failure";
+        return result;
+    }
 }
 
 struct ConsoleLogEntryStorage {
@@ -161,12 +258,14 @@ public:
         std::string                     _name,
         std::shared_ptr<spdlog::logger> _source_logger,
         std::shared_ptr<spdlog::logger> _dispatch_logger,
-        std::shared_ptr<ConsoleLogSink> _console_sink
+        std::shared_ptr<ConsoleLogSink> _console_sink,
+        std::shared_ptr<spdlog::sinks::sink> _file_sink
     ) :
         spdlog::logger(std::move(_name)),
         source_logger(std::move(_source_logger)),
         dispatch_logger(std::move(_dispatch_logger)),
-        console_sink(std::move(_console_sink)) {
+        console_sink(std::move(_console_sink)),
+        file_sink(std::move(_file_sink)) {
         const spdlog::level::level_enum source_level       = source_logger->level();
         const spdlog::level::level_enum source_flush_level = source_logger->flush_level();
         set_level(source_level);
@@ -198,6 +297,16 @@ protected:
         }
         SPDLOG_LOGGER_CATCH(_message.source)
 
+        if (file_sink && file_sink->should_log(_message.level)) {
+            SPDLOG_TRY {
+                file_sink->log(_message);
+                if (_message.level >= spdlog::level::err) {
+                    file_sink->flush();
+                }
+            }
+            SPDLOG_LOGGER_CATCH(_message.source)
+        }
+
         // Keep the normal logger::sinks() extension point functional without
         // placing the downstream sink vector in a different module's heap.
         for (const spdlog::sink_ptr& sink : sinks_) {
@@ -214,6 +323,12 @@ protected:
                 console_sink->flush();
             }
             SPDLOG_LOGGER_CATCH(_message.source)
+            if (file_sink) {
+                SPDLOG_TRY {
+                    file_sink->flush();
+                }
+                SPDLOG_LOGGER_CATCH(_message.source)
+            }
             for (const spdlog::sink_ptr& sink : sinks_) {
                 SPDLOG_TRY {
                     sink->flush();
@@ -233,6 +348,12 @@ protected:
             console_sink->flush();
         }
         SPDLOG_LOGGER_CATCH(spdlog::source_loc())
+        if (file_sink) {
+            SPDLOG_TRY {
+                file_sink->flush();
+            }
+            SPDLOG_LOGGER_CATCH(spdlog::source_loc())
+        }
         for (const spdlog::sink_ptr& sink : sinks_) {
             SPDLOG_TRY {
                 sink->flush();
@@ -243,9 +364,9 @@ protected:
 
 public:
     std::shared_ptr<spdlog::logger> clone(std::string _logger_name) override {
-        // Clones preserve the original logger behavior. The console channel is
-        // intentionally default-logger scoped; make a clone default and call
-        // LogSystem::Init again if it also needs capture.
+        // Clones preserve the original logger behavior. The console and file
+        // channels are intentionally default-logger scoped; make a clone
+        // default and call LogSystem::Init again if it also needs capture.
         SynchronizeConfiguration();
         std::shared_ptr<spdlog::logger> cloned = source_logger->clone(std::move(_logger_name));
         if (cloned) {
@@ -266,12 +387,17 @@ private:
     std::shared_ptr<spdlog::logger> source_logger;
     std::shared_ptr<spdlog::logger> dispatch_logger;
     std::shared_ptr<ConsoleLogSink> console_sink;
+    std::shared_ptr<spdlog::sinks::sink> file_sink;
 };
 
 struct LogRuntime {
     std::mutex                                   install_mutex;
     std::shared_ptr<ConsoleLogSink>              console_sink = std::make_shared<ConsoleLogSink>();
+    std::shared_ptr<spdlog::sinks::sink>         file_sink;
     std::vector<std::shared_ptr<spdlog::logger>> installed_loggers;
+    EFileLogInitStatus                           file_status = EFileLogInitStatus::Disabled;
+    bool                                         file_configuration_locked = false;
+    std::string                                  file_path;
 };
 
 LogRuntime& GetLogRuntime() {
@@ -285,57 +411,122 @@ LogRuntime& GetLogRuntime() {
 } // namespace
 
 void Init() {
+    static_cast<void>(Init(FileLogInitOptions{}));
+}
+
+EFileLogInitStatus Init(const FileLogInitOptions& _options) {
 
 #if !defined(NDEBUG)
     spdlog::set_level(spdlog::level::trace);
 #endif
 
-    LogRuntime&     runtime = GetLogRuntime();
-    std::lock_guard install_lock(runtime.install_mutex);
+    LogRuntime& runtime = GetLogRuntime();
+    bool        report_file_active = false;
+    bool        report_file_failure = false;
+    std::string report_path;
+    std::string report_error;
 
-    const std::shared_ptr<spdlog::logger> logger = spdlog::default_logger();
-    if (!logger) {
-        return;
-    }
+    {
+        std::lock_guard install_lock(runtime.install_mutex);
 
-    const bool already_attached = std::ranges::any_of(
-        runtime.installed_loggers,
-        [&logger](const std::shared_ptr<spdlog::logger>& _installed) {
-            return _installed.get() == logger.get();
+        const std::shared_ptr<spdlog::logger> logger = spdlog::default_logger();
+        if (!logger) {
+            return _options.directory.empty() ? EFileLogInitStatus::Disabled :
+                                                EFileLogInitStatus::Failed;
         }
-    );
-    if (already_attached) {
-        return;
+
+        const bool already_attached = std::ranges::any_of(
+            runtime.installed_loggers,
+            [&logger](const std::shared_ptr<spdlog::logger>& _installed) {
+                return _installed.get() == logger.get();
+            }
+        );
+        if (already_attached) {
+            return runtime.file_status;
+        }
+
+        // logger::sinks() is an owning std::vector. Mutating or copying it into
+        // a logger owned by another DLL makes later reallocation/free depend on
+        // the wrong mimalloc heap. Leave the original logger untouched and
+        // forward to it instead. Runtime keeps every forwarding logger alive
+        // so spdlog shutdown cannot become the final release of Core-defined
+        // state.
+        const std::string& downstream_name = logger->name();
+        const std::string_view downstream_name_view(
+            downstream_name.data(), downstream_name.size()
+        );
+        // The private clone only handles below-threshold backtrace replay and
+        // is retained for process lifetime with its Core-owned, non-SSO name
+        // storage. All messages use the clone so explicit flush has exactly one
+        // downstream target and custom/async virtual dispatch remains intact.
+        std::shared_ptr<spdlog::logger> dispatch_logger =
+            logger->clone(MakeCoreOwnedLoggerName(downstream_name_view));
+        if (!dispatch_logger) {
+            return _options.directory.empty() ? runtime.file_status : EFileLogInitStatus::Failed;
+        }
+        dispatch_logger->disable_backtrace();
+        dispatch_logger->set_level(spdlog::level::trace);
+
+        if (!runtime.file_configuration_locked) {
+            FileLogSetupResult setup = CreateFileLogSink(_options);
+            runtime.file_configuration_locked = true;
+            runtime.file_status               = setup.status;
+            runtime.file_sink                 = std::move(setup.sink);
+            runtime.file_path                 = std::move(setup.path);
+            report_error                      = std::move(setup.error);
+            report_file_active                = runtime.file_status == EFileLogInitStatus::Active;
+            report_file_failure               = runtime.file_status == EFileLogInitStatus::Failed;
+            report_path                       = runtime.file_path;
+        }
+
+        auto replacement = std::make_shared<ConsoleForwardingLogger>(
+            MakeCoreOwnedLoggerName(downstream_name_view),
+            logger,
+            std::move(dispatch_logger),
+            runtime.console_sink,
+            runtime.file_sink
+        );
+
+        runtime.installed_loggers.push_back(replacement);
+        spdlog::set_default_logger(std::move(replacement));
     }
 
-    // logger::sinks() is an owning std::vector. Mutating or copying it into a
-    // logger owned by another DLL makes later reallocation/free depend on the
-    // wrong mimalloc heap. Leave the original logger untouched and forward to
-    // it instead. Runtime keeps every forwarding logger alive so spdlog
-    // shutdown cannot become the final release of Core-defined state.
-    const std::string&     downstream_name = logger->name();
-    const std::string_view downstream_name_view(downstream_name.data(), downstream_name.size());
-    // The private clone only handles below-threshold backtrace replay and is
-    // retained for process lifetime with its Core-owned, non-SSO name storage.
-    // All messages use the clone so explicit flush has exactly one downstream
-    // target and custom/async virtual dispatch remains intact.
-    std::shared_ptr<spdlog::logger> dispatch_logger =
-        logger->clone(MakeCoreOwnedLoggerName(downstream_name_view));
-    if (!dispatch_logger) {
-        return;
+    if (report_file_active) {
+        try {
+            if (const std::shared_ptr<spdlog::logger> logger = spdlog::default_logger()) {
+                logger->info("[LogSystem] Session log: {}", report_path);
+            }
+        } catch (...) {
+            std::fprintf(stderr, "[LogSystem] Session log: %s\n", report_path.c_str());
+        }
+    } else if (report_file_failure) {
+        try {
+            if (const std::shared_ptr<spdlog::logger> logger = spdlog::default_logger()) {
+                logger->warn("[LogSystem] File logging disabled: {}", report_error);
+            }
+        } catch (...) {
+            std::fprintf(
+                stderr, "[LogSystem] File logging disabled: %s\n", report_error.c_str()
+            );
+        }
     }
-    dispatch_logger->disable_backtrace();
-    dispatch_logger->set_level(spdlog::level::trace);
 
-    auto replacement = std::make_shared<ConsoleForwardingLogger>(
-        MakeCoreOwnedLoggerName(downstream_name_view),
-        logger,
-        std::move(dispatch_logger),
-        runtime.console_sink
-    );
+    return runtime.file_status;
+}
 
-    runtime.installed_loggers.push_back(replacement);
-    spdlog::set_default_logger(std::move(replacement));
+void Flush() noexcept {
+    std::shared_ptr<spdlog::sinks::sink> file_sink;
+    try {
+        LogRuntime& runtime = GetLogRuntime();
+        {
+            std::lock_guard lock(runtime.install_mutex);
+            file_sink = runtime.file_sink;
+        }
+        if (file_sink) {
+            file_sink->flush();
+        }
+    } catch (...) {
+    }
 }
 
 ConsoleLogPollResult VisitConsoleLogs(

@@ -29,6 +29,19 @@ struct ConsoleLogPollResult {
     std::size_t   visited_count = 0;
 };
 
+enum class EFileLogInitStatus : std::uint8_t {
+    Disabled,
+    Active,
+    Failed,
+};
+
+struct FileLogInitOptions {
+    // Both views are borrowed only for Init. An empty directory disables file
+    // logging. An empty file name creates a timestamped per-process name.
+    std::string_view directory;
+    std::string_view file_name;
+};
+
 // Views are borrowed only for the visitor invocation. Init installs a
 // process-lifetime forwarding default logger: the previous logger's sink
 // storage remains untouched in its owning module, and the previous logger is
@@ -46,6 +59,15 @@ struct ConsoleLogPollResult {
 using ConsoleLogVisitor = void (*)(const ConsoleLogEntryView& _entry, void* _context);
 
 CORE_API void Init();
+
+// File output is configured by the first successful default-logger install and
+// remains process-scoped. Repeated calls reuse the same file sink. Failure to
+// create the file degrades to the existing console and in-editor channels.
+[[nodiscard]] CORE_API EFileLogInitStatus Init(const FileLogInitOptions& _options);
+
+// Flushes the process-scoped file sink when present. Safe to call during
+// orderly shutdown after concurrent log producers have stopped.
+CORE_API void Flush() noexcept;
 
 // Sequence zero is normalized to one. Entries removed by bounded overwrite or
 // ClearConsoleLogs are reported through dropped_count. The visitor runs after
