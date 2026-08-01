@@ -51,8 +51,22 @@ Engine for Realtime Rendering
     just gbr # generate build run
     ```
 
-- Method 2: Rider
-  - TODO
+- Method 2: Visual Studio 2022 (GUI)
+
+  Visual Studio 2022 can open a folder whose root contains `CMakeLists.txt` directly; no generated `.sln` is required. See [CMake projects in Visual Studio](https://learn.microsoft.com/en-us/cpp/build/cmake-projects-in-visual-studio?view=msvc-170).
+
+  1. In Visual Studio Installer, install the **Desktop development with C++** workload and the **C++ CMake tools for Windows** component.
+  2. In File Explorer, copy `template.MoerEngine.toml` to `MoerEngine.toml` in the repository root. This file must exist before the first configure.
+  3. Select `File -> Open -> Folder` in Visual Studio and open the repository root. Because the root contains `CMakeLists.txt`, Visual Studio enables CMake integration and automatically generates the cache for its default configuration.
+  4. Select `x64-Debug` in the Configuration dropdown. If automatic configuration did not run, or a setting changed, select `Project -> Configure Cache`. CMake diagnostics are available in the CMake category of the Output window.
+  5. After configuration succeeds, select `MoerEditor.exe` in the Startup Item dropdown. Choose `Build -> Build All`, or open CMake Targets View in Solution Explorer, right-click `MoerEditor`, and choose Build.
+  6. Press `F5` to build and debug. To run without the debugger, press `Ctrl+F5` or select `Debug -> Start Without Debugging`.
+
+  The `CopyResources` build dependency copies the root `MoerEngine.toml` and runtime assets into the matching `target/bin/<Config>` directory. Rebuild after editing the root configuration to refresh that copy.
+
+  The Debug executable is written to `target/bin/Debug/MoerEditor.exe`. Select `x64-Release` in the Configuration dropdown for a Release build, which writes `target/bin/Release/MoerEditor.exe`.
+
+  Rider 2026.1 introduced Beta support for CMake C++ projects, but current Rider releases do not yet expose the same CMake toolchain/profile configuration UI as CLion. This guide therefore does not present an unverified Rider menu path as a supported build method. See [Rider 2026.1 CMake support](https://www.jetbrains.com/rider/whatsnew/2026-1/#cmake-support-for-c-gaming-projects-beta).
 
 ### CUDA, LibTorch, and TensorRT
 

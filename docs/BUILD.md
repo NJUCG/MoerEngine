@@ -52,9 +52,22 @@
   
   - 如果安装了 [just](https://github.com/casey/just)，你可以参考根目录下的 `template.justfile` 文件来编写你自己的脚本
   
-- 方法二：Rider
-  
-  - TODO
+- 方法二：Visual Studio 2022（GUI）
+
+  Visual Studio 2022 可以直接打开根目录包含 `CMakeLists.txt` 的工程，不需要生成 `.sln`。参见 [Microsoft：Visual Studio 中的 CMake 项目](https://learn.microsoft.com/zh-cn/cpp/build/cmake-projects-in-visual-studio?view=msvc-170)。
+
+  1. 在 Visual Studio Installer 中安装“使用 C++ 的桌面开发”，并勾选“用于 Windows 的 C++ CMake 工具”。
+  2. 在文件管理器中把 `template.MoerEngine.toml` 复制为仓库根目录下的 `MoerEngine.toml`。首次 Configure 前必须存在该文件。
+  3. 在 Visual Studio 中选择 `File -> Open -> Folder` 并打开仓库根目录。根目录已有 `CMakeLists.txt`，Visual Studio 会自动启用 CMake integration 并生成默认配置的 cache。
+  4. 在顶部 Configuration 下拉框选择 `x64-Debug`。如果自动 Configure 没有运行，或修改配置后需要重新生成，选择 `Project -> Configure Cache`；错误信息可在 Output 窗口的 CMake 分类中查看。
+  5. Configure 成功后，在 Startup Item 下拉框选择 `MoerEditor.exe`。选择 `Build -> Build All`，或在 Solution Explorer 的 CMake Targets View 中右键 `MoerEditor` 后选择 Build。
+  6. 按 `F5` 构建并调试；若不附加调试器，按 `Ctrl+F5`，或选择 `Debug -> Start Without Debugging`。
+
+  构建会通过 `CopyResources` 依赖把仓库根目录的 `MoerEngine.toml` 和运行资源复制到对应的 `target/bin/<Config>` 目录；修改根配置后重新构建即可同步。
+
+  Debug 产物位于 `target/bin/Debug/MoerEditor.exe`。Release 构建时在 Configuration 下拉框切换到 `x64-Release`，产物位于 `target/bin/Release/MoerEditor.exe`。
+
+  Rider 2026.1 开始提供 CMake C++ 工程的 Beta 支持，但当前版本尚未提供与 CLion 完全一致的 CMake toolchain/profile 配置界面，因此本文不把未经验证的 Rider 菜单路径作为受支持构建方法。参见 [JetBrains Rider 2026.1 CMake support](https://www.jetbrains.com/rider/whatsnew/2026-1/#cmake-support-for-c-gaming-projects-beta)。
 
 - 成功启动后，可以参考 [DEVELOPMENT.md](DEVELOPMENT.md) 来了解MoerEngine的开发规范等其他内容
 
