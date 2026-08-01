@@ -383,9 +383,8 @@ and clean Vulkan logs. Every process also emits one fixed-schema
 proves which physical device ran the test and distinguishes validation being
 requested, available, and actually enabled.
 
-The pull-request workflow `.github/workflows/vulkan-gpu-gate.yml` runs Debug on
-the dedicated Windows/NVIDIA self-hosted runner and enables the fail-closed
-policy:
+For a manually operated strict qualification run on a known Windows/NVIDIA
+machine, enable the fail-closed policy explicitly:
 
 ```powershell
 python tools/threading/run_parallel_record_vulkan_test.py `
@@ -401,22 +400,11 @@ python tools/threading/run_parallel_record_vulkan_test.py `
 Strict mode requires the same GPU identity in all 21 processes, complete
 validation-layer proof, Vulkan 1.3 or newer, and zero `TESTCASE` skips. It
 preserves separate stdout/stderr plus a combined log for every mode, including
-partial output on timeout, and writes `summary.json` on success. The workflow
-preflights the toolchain, registered RTX 5080 identity, `vulkaninfo`, and the
-Khronos validation layer; evidence is uploaded even when the gate fails. The
-controller is loaded from the protected default branch via
-`pull_request_target`, but it never checks out or executes a fork head. Only a
-same-repository PR test-merge SHA may reach the persistent self-hosted runner;
-fork changes must be reviewed and mirrored to a repository branch. A separate
-GitHub-hosted job publishes the stable `Vulkan GPU Gate` status on the exact
-tested SHA without giving a write token to the GPU runner. The GPU job is also
-bound to the protected `vulkan-gpu-persistent` environment, whose required
-reviewer and no-self-review policy must remain enabled. Draft PRs are denied.
-Repository branch protection/rulesets must require the exact
-`Vulkan GPU Gate` context after the first main-branch qualification run; the
-workflow cannot make its own status required. The runner
+partial output on timeout, and writes `summary.json` on success. The runner
 refuses a non-empty output directory so a failed retry cannot inherit stale
-mode logs or a previous PASS summary.
+mode logs or a previous PASS summary. This qualification remains a local tool;
+the repository does not register it as an automated GitHub Actions PR gate or
+require a persistent self-hosted GPU runner.
 
 The ready-native-lane gate accepts a PASS only when the
 `G,G,C,Copy` source order produces first-ready `G,C,Copy` Translate lanes and
