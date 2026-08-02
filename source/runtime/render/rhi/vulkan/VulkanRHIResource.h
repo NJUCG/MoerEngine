@@ -532,6 +532,10 @@ public:
         return b_uses_stencil_attachment;
     }
 
+    uint32_t GetViewMask() const {
+        return view_mask;
+    }
+
     void InitDescriptorSetLayouts(
         Moer::Array<Moer::Render::TDescriptorSetLayoutBindingArray>& _descriptor_bindings
     );
@@ -565,6 +569,7 @@ protected:
     Moer::Render::VulkanDescriptorSetsLayout* m_descriptor_sets_layout = nullptr;
     EType                                     m_type;
     bool                                      b_uses_stencil_attachment = false;
+    uint32_t                                  view_mask                 = 0;
 };
 
 #pragma endregion
@@ -721,6 +726,12 @@ public:
         uint _base_layer = 0,
         uint _layer_cnt  = VK_REMAINING_ARRAY_LAYERS
     );
+    VkImageView GetAttachmentView(
+        uint _mip_level  = 0,
+        uint _mip_cnt    = 1,
+        uint _base_layer = 0,
+        uint _layer_cnt  = 1
+    );
 
     void          SetName(const std::string_view _name) override;
     bool          b_has_preferred_state : 1 = false;
@@ -786,6 +797,7 @@ private:
         VmaAllocation alloc;
     } m_alloc;
     UnorderedMap<uint64, VkImageView> m_views;
+    UnorderedMap<uint64, VkImageView> m_attachment_views;
     mutable std::mutex                m_views_mutex;
     VkImageLayout                     m_preferred_layout = VK_IMAGE_LAYOUT_GENERAL;
     std::atomic_bool                  presentation_source_ready{false};

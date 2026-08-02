@@ -2018,6 +2018,10 @@ public:
         return 0;
     }
 
+    virtual bool SupportsMultiview(uint32_t) const {
+        return false;
+    }
+
     virtual bool IsExtensionCooperativeEnabled() const {
         return false;
     }

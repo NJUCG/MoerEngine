@@ -27,6 +27,19 @@ public:
     MUTATION_SET(MutationSet, SHADOW_DEPTH_PASS);
 };
 
+class PointShadowMultiviewPipeline : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(PointShadowMultiviewPipeline);
+    DEFINE_SHADER_BUFFER(point_shadow_view_matrices);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_CONSTANT_STRUCT(GeometryPassBindlessParam, param);
+    DEFINE_SHADER_ARGS(point_shadow_view_matrices, bdls, param);
+
+    MUTATION_BOOL(SHADOW_DEPTH_PASS);
+    MUTATION_BOOL(POINT_SHADOW_MULTIVIEW);
+    MUTATION_SET(MutationSet, SHADOW_DEPTH_PASS, POINT_SHADOW_MULTIVIEW);
+};
+
 class ShadowDepthPass {
 public:
     ShadowDepthPass(RasterContext& context);
@@ -59,9 +72,24 @@ private:
         std::optional<std::string_view> profile_scope_name = std::nullopt
     );
 
+    void RenderPointShadowMultiview(
+        RasterContext&                  context,
+        const RasterConfig&             config,
+        const PointShadowViewMatrices&  view_matrices,
+        const Rect2D&                   rect,
+        TextureView                     depth_view,
+        std::string_view                pass_name
+    );
+
 private:
+    static constexpr uint32_t k_point_shadow_view_count = 6u;
+    static constexpr uint32_t k_point_shadow_view_mask  = (1u << k_point_shadow_view_count) - 1u;
+
     uint                    enabled_cascade_layers;
     ShadowDepthPassPipeline m_pso;
+    PointShadowMultiviewPipeline m_point_shadow_multiview_pso;
+    BufferRef                    m_point_shadow_view_matrices;
+    bool                         m_point_shadow_multiview_supported = false;
     CullingPass             m_culling_pass;
     Array<Box3D>            m_shadow_caster_bounds;
     uint64_t                m_shadow_caster_bounds_generation = 0u;

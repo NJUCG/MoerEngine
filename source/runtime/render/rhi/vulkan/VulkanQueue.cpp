@@ -20,6 +20,7 @@
 #include "rhi/RHICommon.h"
 #include "rhi/RHIExecutorBackend.h"
 #include "rhi/RHIIO.h"
+#include "rhi/RHIMultiview.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIThreadHeartbeat.h"
 
@@ -638,8 +639,11 @@ VkRenderingAttachmentInfo FromColorAttachmentInfo(const ColorAttachment& _attach
     attachment_info.pNext = nullptr;
 
     VulkanTexture* vk_texture = reinterpret_cast<VulkanTexture*>(_attachment.target);
-    attachment_info.imageView = vk_texture->GetView(
-        static_cast<uint8>(_attachment.mip_level), 1, static_cast<uint8>(_attachment.array_layer), 1
+    attachment_info.imageView = vk_texture->GetAttachmentView(
+        static_cast<uint8>(_attachment.mip_level),
+        1,
+        static_cast<uint8>(_attachment.array_layer),
+        static_cast<uint8>(_attachment.array_count)
     );
 
     attachment_info.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -671,6 +675,86 @@ static bool PipelineUsesStencilAttachment(const PipelineHandle& pipeline) {
     return vk_pso->UsesStencilAttachment();
 }
 
+static uint32_t PipelineViewMask(const PipelineHandle& pipeline) {
+    if (!pipeline.IsValid()) {
+        return 0;
+    }
+
+    auto* vk_pso = reinterpret_cast<VulkanPipelineState*>(pipeline.handle);
+    return vk_pso->GetViewMask();
+}
+
+static void ValidateRenderPassMultiview(const RenderPassInfo& pass_info) {
+    const uint32_t required_view_count = Multiview::RequiredViewCount(pass_info.view_mask);
+    auto validate_attachment = [required_view_count, view_mask = pass_info.view_mask](
+                                   Texture* texture,
+                                   uint32_t mip_level,
+                                   uint32_t base_layer,
+                                   uint32_t layer_count,
+                                   std::string_view attachment_name
+                               ) {
+        if (texture == nullptr || mip_level >= texture->GetNumMips() ||
+            !Multiview::IsAttachmentRangeValid(
+                base_layer,
+                layer_count,
+                texture->GetNumArray()
+            )) {
+            LOG_ERROR(
+                "Invalid {} attachment subresource range: mip={}, base_layer={}, "
+                "layer_count={}, texture_mips={}, texture_layers={}.",
+                attachment_name,
+                mip_level,
+                base_layer,
+                layer_count,
+                texture ? texture->GetNumMips() : 0,
+                texture ? texture->GetNumArray() : 0
+            );
+            throw std::invalid_argument("render attachment subresource range is invalid");
+        }
+        if (!Multiview::AttachmentCoversViewMask(layer_count, view_mask)) {
+            LOG_ERROR(
+                "Multiview {} attachment exposes {} layers, but view_mask=0x{:x} requires at least {}.",
+                attachment_name,
+                layer_count,
+                view_mask,
+                required_view_count
+            );
+            throw std::invalid_argument("multiview attachment does not cover the view mask");
+        }
+    };
+
+    for (const ColorAttachment& attachment : pass_info.color_attachments) {
+        validate_attachment(
+            attachment.target,
+            attachment.mip_level,
+            attachment.array_layer,
+            attachment.array_count,
+            "color"
+        );
+    }
+    if (pass_info.depth_attachment.Valid()) {
+        validate_attachment(
+            pass_info.depth_attachment.target,
+            pass_info.depth_attachment.mip_level,
+            pass_info.depth_attachment.array_layer,
+            pass_info.depth_attachment.array_count,
+            "depth"
+        );
+    }
+}
+
+static void ValidatePipelineViewMask(const PipelineHandle& pipeline, const RenderPassInfo& pass_info) {
+    const uint32_t pipeline_view_mask = PipelineViewMask(pipeline);
+    if (!Multiview::PipelineMatchesRenderPass(pipeline_view_mask, pass_info.view_mask)) {
+        LOG_ERROR(
+            "Graphics pipeline view mask 0x{:x} does not match rendering view mask 0x{:x}.",
+            pipeline_view_mask,
+            pass_info.view_mask
+        );
+        throw std::logic_error("graphics pipeline and rendering view masks do not match");
+    }
+}
+
 static bool DrawBatchUsesStencilAttachment(const DrawBatch& draw_batch) {
     for (const DrawBatchElement& draw_cmd : draw_batch.draw_cmds) {
         if (PipelineUsesStencilAttachment(draw_cmd.handle)) {
@@ -687,8 +771,11 @@ VkRenderingAttachmentInfo FromDepthAttachmentInfo(const DepthAttachment& _attach
     attachment_info.pNext = nullptr;
 
     VulkanTexture* vk_texture = reinterpret_cast<VulkanTexture*>(_attachment.target);
-    attachment_info.imageView = vk_texture->GetView(
-        static_cast<uint8>(_attachment.mip_level), 1, static_cast<uint8>(_attachment.array_layer), 1
+    attachment_info.imageView = vk_texture->GetAttachmentView(
+        static_cast<uint8>(_attachment.mip_level),
+        1,
+        static_cast<uint8>(_attachment.array_layer),
+        static_cast<uint8>(_attachment.array_count)
     );
 
     bool has_stencil            = FormatHasStencil(_attachment.target->GetFormat());
@@ -1067,6 +1154,32 @@ struct VkCmdPreprocessor {
                 );
             }
         );
+    }
+
+    void RecordAttachmentState(
+        VulkanTexture*            _texture,
+        VkAccessFlagBits2         _access,
+        VkImageLayout             _layout,
+        VkPipelineStageFlagBits2  _stage,
+        uint32_t                  _mip_level,
+        uint32_t                  _base_layer,
+        uint32_t                  _layer_count
+    ) {
+        // Keep inferred attachment state mip/layer atomic. A layered multiview
+        // attachment may be consumed one face at a time later in the same
+        // submit; aggregate tracker keys cannot join that transition exactly.
+        for (uint32_t layer = 0; layer < _layer_count; ++layer) {
+            tracker.RecordState(
+                _texture,
+                _access,
+                _layout,
+                _stage,
+                static_cast<uint8>(_mip_level),
+                1,
+                static_cast<uint8>(_base_layer + layer),
+                1
+            );
+        }
     }
 
     void HandleBindless(BindlessArrayRef _bindless_array, VkPipelineStageFlagBits2 _pipeline_stages) {
@@ -1949,6 +2062,8 @@ struct VkCmdPreprocessor {
         }
     }
     void Visit(const SetDrawStateCmd* _cmd) {
+        ValidateRenderPassMultiview(_cmd->RenderPassInfo());
+        ValidatePipelineViewMask(_cmd->Pipeline(), _cmd->RenderPassInfo());
 
         const auto& vbs = _cmd->VertexBuffers();
         for (const auto& vb : vbs) {
@@ -2008,16 +2123,15 @@ struct VkCmdPreprocessor {
             auto  action     = rt.action;
             bool  b_load     = GetLoadOp(action) == EAttachmentLoadOp::LOAD;
             bool  b_store    = GetStoreOp(action) == EAttachmentStoreOp::STORE;
-            tracker.RecordState(
+            RecordAttachmentState(
                 vk_texture,
                 (b_load ? VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT : VK_ACCESS_2_NONE) |
                     (b_store ? VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT : VK_ACCESS_2_NONE),
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                static_cast<uint8>(rt.mip_level),
-                1,
-                static_cast<uint8>(rt.array_layer),
-                1
+                rt.mip_level,
+                rt.array_layer,
+                rt.array_count
             );
         }
         if (_cmd->RenderPassInfo().depth_attachment.Valid()) {
@@ -2029,21 +2143,25 @@ struct VkCmdPreprocessor {
             bool  b_stencil_store = GetStoreOp(GetStencilAction(action)) == EAttachmentStoreOp::STORE;
             bool  b_read          = b_depth_load || b_stencil_load;
             bool  b_write         = b_depth_store || b_stencil_store;
-            tracker.RecordState(
+            RecordAttachmentState(
                 vk_texture,
                 (b_read ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT : VK_ACCESS_2_NONE) |
                     (b_write ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : VK_ACCESS_2_NONE),
                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                static_cast<uint8>(_cmd->RenderPassInfo().depth_attachment.mip_level),
-                1,
-                static_cast<uint8>(_cmd->RenderPassInfo().depth_attachment.array_layer),
-                1
+                _cmd->RenderPassInfo().depth_attachment.mip_level,
+                _cmd->RenderPassInfo().depth_attachment.array_layer,
+                _cmd->RenderPassInfo().depth_attachment.array_count
             );
         }
     }
 
     void Visit(const MultiDrawCmd* _cmd) {
+        ValidateRenderPassMultiview(_cmd->RenderPassInfo());
+        for (const DrawBatchElement& draw_cmd : _cmd->draw_batch.draw_cmds) {
+            ValidatePipelineViewMask(draw_cmd.handle, _cmd->RenderPassInfo());
+        }
+
         const auto& vbs = _cmd->VertexBuffers();
         for (const auto& vb : vbs) {
             auto* vk_buffer = ResourceCast(vb.first);
@@ -2104,16 +2222,15 @@ struct VkCmdPreprocessor {
             auto  action     = rt.action;
             bool  b_load     = GetLoadOp(action) == EAttachmentLoadOp::LOAD;
             bool  b_store    = GetStoreOp(action) == EAttachmentStoreOp::STORE;
-            tracker.RecordState(
+            RecordAttachmentState(
                 vk_texture,
                 (b_load ? VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT : VK_ACCESS_2_NONE) |
                     (b_store ? VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT : VK_ACCESS_2_NONE),
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                static_cast<uint8>(rt.mip_level),
-                1,
-                static_cast<uint8>(rt.array_layer),
-                1
+                rt.mip_level,
+                rt.array_layer,
+                rt.array_count
             );
         }
         if (_cmd->RenderPassInfo().depth_attachment.Valid()) {
@@ -2125,16 +2242,15 @@ struct VkCmdPreprocessor {
             bool  b_stencil_store = GetStoreOp(GetStencilAction(action)) == EAttachmentStoreOp::STORE;
             bool  b_read          = b_depth_load || b_stencil_load;
             bool  b_write         = b_depth_store || b_stencil_store;
-            tracker.RecordState(
+            RecordAttachmentState(
                 vk_texture,
                 (b_read ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT : VK_ACCESS_2_NONE) |
                     (b_write ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : VK_ACCESS_2_NONE),
                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                static_cast<uint8>(_cmd->RenderPassInfo().depth_attachment.mip_level),
-                1,
-                static_cast<uint8>(_cmd->RenderPassInfo().depth_attachment.array_layer),
-                1
+                _cmd->RenderPassInfo().depth_attachment.mip_level,
+                _cmd->RenderPassInfo().depth_attachment.array_layer,
+                _cmd->RenderPassInfo().depth_attachment.array_count
             );
         }
     }
@@ -2700,6 +2816,9 @@ public:
 
     void Visit(const SetDrawStateCmd& _cmd) {
 
+        ValidateRenderPassMultiview(_cmd.RenderPassInfo());
+        ValidatePipelineViewMask(_cmd.Pipeline(), _cmd.RenderPassInfo());
+
         static float4 draw_color = {0.0f, 1.0f, 0.0f, 1.0f};
         cmd_list.BeginLabel(_cmd.name, draw_color);
         state = EState::Draw;
@@ -2746,6 +2865,7 @@ public:
                 {.offset = {pass_info.render_area.offset.x, pass_info.render_area.offset.y},
                  .extent = {pass_info.render_area.extent.width, pass_info.render_area.extent.height}},
             .layerCount           = 1,
+            .viewMask             = pass_info.view_mask,
             .colorAttachmentCount = uint(pass_info.color_attachments.size()),
             .pColorAttachments    = color_attachments.data(),
             .pDepthAttachment =
@@ -2902,6 +3022,11 @@ public:
     }
 
     void Visit(const MultiDrawCmd& _cmd) {
+        ValidateRenderPassMultiview(_cmd.RenderPassInfo());
+        for (const DrawBatchElement& draw_cmd : _cmd.draw_batch.draw_cmds) {
+            ValidatePipelineViewMask(draw_cmd.handle, _cmd.RenderPassInfo());
+        }
+
         static float4 draw_color = {0.0f, 1.0f, 0.0f, 1.0f};
         cmd_list.BeginLabel(_cmd.name, draw_color);
         state = EState::Draw;
@@ -2927,6 +3052,7 @@ public:
                 {.offset = {pass_info.render_area.offset.x, pass_info.render_area.offset.y},
                  .extent = {pass_info.render_area.extent.width, pass_info.render_area.extent.height}},
             .layerCount           = 1,
+            .viewMask             = pass_info.view_mask,
             .colorAttachmentCount = uint(pass_info.color_attachments.size()),
             .pColorAttachments    = color_attachments.data(),
             .pDepthAttachment =

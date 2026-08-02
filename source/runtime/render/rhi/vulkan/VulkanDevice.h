@@ -9,6 +9,7 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
+#include "rhi/RHIMultiview.h"
 #include "rhi/RHIResource.h"
 
 #include "VulkanCommand.h"
@@ -132,6 +133,14 @@ public:
         return SupportsTessellation() ?
                    m_device_info.core_properties.core_1_0.limits.maxTessellationGenerationLevel :
                    0;
+    }
+
+    bool SupportsMultiview(uint32_t view_count) const override {
+        return Multiview::SupportsViewCount(
+            m_device_info.core_features.core_1_1.multiview == VK_TRUE,
+            m_device_info.core_properties.core_1_1.maxMultiviewViewCount,
+            view_count
+        );
     }
 
     // Cooperative support related
