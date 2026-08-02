@@ -1008,14 +1008,16 @@ void ShadowDepthPass::RenderPointShadows(
             GpuMarkerPalette::Subpass()
         );
 
-        m_culling_pass.Process(
+        const float3 point_shadow_extent(far_plane, far_plane, far_plane);
+        m_culling_pass.ProcessAabb(
             context,
-            view_projections[0],
+            cube_res.light_pos - point_shadow_extent,
+            cube_res.light_pos + point_shadow_extent,
             context.GetGpuSceneRes(),
             context.gpu_culling_buffers.shadow,
             nullptr,
             "PointShadow Multiview Culling",
-            CullingPass::CullingOptions{false, false, 1.0f, -1}
+            CullingPass::CullingOptions{true, false, 1.0f, -1}
         );
 
         RenderPointShadowMultiview(

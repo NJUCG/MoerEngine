@@ -1728,8 +1728,10 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         uint _base_layer,
         uint _layer_cnt
     ) {
-        if (GetDimension() != ETextureDimension::TEX_CUBE &&
-            GetDimension() != ETextureDimension::TEX_CUBE_ARRAY) {
+        const bool requires_attachment_view =
+            _layer_cnt > 1 || GetDimension() == ETextureDimension::TEX_CUBE ||
+            GetDimension() == ETextureDimension::TEX_CUBE_ARRAY;
+        if (!requires_attachment_view) {
             return GetView(_mip_level, _mip_cnt, _base_layer, _layer_cnt);
         }
 

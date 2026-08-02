@@ -15895,14 +15895,16 @@ void RunMultiviewCubeAttachmentDraw(ShaderManager& shader_manager) {
     if (!cube.IsValid() || cube->GetNumArray() != view_count) {
         throw std::runtime_error("multiview cube attachment creation failed");
     }
-    TextureRef depth_cube = device.CreateCubeMap(
-        "multiview_depth_cube_attachment",
+    DepthBufferRef depth_array = device.CreateDepthBuffer(
+        "multiview_depth_array_attachment",
         Extent2D(width, height),
         PF_D32_SFLOAT,
+        view_count,
         ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
     );
-    if (!depth_cube.IsValid() || depth_cube->GetNumArray() != view_count) {
-        throw std::runtime_error("multiview depth cube attachment creation failed");
+    if (!depth_array.IsValid() || depth_array->GetNumArray() != view_count ||
+        depth_array->GetDimension() != ETextureDimension::TEX_2D_ARRAY) {
+        throw std::runtime_error("multiview depth array attachment creation failed");
     }
 
     CommandList draw_commands(EQueueType::Graphics);
@@ -15912,7 +15914,7 @@ void RunMultiviewCubeAttachmentDraw(ShaderManager& shader_manager) {
         "MultiviewCubeAttachmentDraw",
         Rect2D(0, 0, width, height),
         Array<SingleDrawParam>{SingleDrawParam{3, 1, 0, 0, 0}},
-        DepthAttachment(depth_cube->GetView(0, 1).Slice(0, view_count)),
+        DepthAttachment(depth_array->GetView().Slice(0, view_count)),
         ColorAttachment{
             .target      = cube.Get(),
             .action      = AC_CLEAR_STORE,

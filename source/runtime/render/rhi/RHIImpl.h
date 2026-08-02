@@ -1965,8 +1965,10 @@ public:
         uint32_t           _array_size = 1,
         ETextureUsageFlags _usage      = ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
     ) {
+        const ETextureDimension dimension =
+            _array_size > 1 ? ETextureDimension::TEX_2D_ARRAY : ETextureDimension::TEX_2D;
         return DepthBufferRef(MoerNew(DepthBuffer)(
-            CreateTexture(_name, ETextureDimension::TEX_2D, _size, _format, _usage, 1, _array_size)
+            CreateTexture(_name, dimension, _size, _format, _usage, 1, _array_size)
         ));
     }
 
