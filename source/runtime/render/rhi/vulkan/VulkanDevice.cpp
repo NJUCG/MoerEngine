@@ -22,6 +22,7 @@
 #include "misc/STL.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
+#include "rhi/RHIMultiview.h"
 #include "rhi/RHIThreadHeartbeat.h"
 #include "rhi/RHIResource.h"
 #include "rhi/RHIResourceInitilizer.h"
@@ -1930,6 +1931,19 @@ static void MergeReflectInfo(
 
 PipelineHandle
 VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo&& _shader_info) {
+    const uint32_t required_view_count = Multiview::RequiredViewCount(_create_info.view_mask);
+    if (_create_info.view_mask != 0 && !SupportsMultiview(required_view_count)) {
+        LOG_ERROR(
+            "Cannot create multiview graphics pipeline: view_mask=0x{:x} requires {} views, "
+            "but the selected device supports at most {} (feature enabled={}).",
+            _create_info.view_mask,
+            required_view_count,
+            m_device_info.core_properties.core_1_1.maxMultiviewViewCount,
+            m_device_info.core_features.core_1_1.multiview == VK_TRUE
+        );
+        return {};
+    }
+
     const bool uses_tessellation = std::holds_alternative<ShaderVsHsDsPs>(_shader_info.shader_group);
     if (uses_tessellation) {
         const uint32_t patch_control_points = _create_info.patch_control_points;
@@ -1966,7 +1980,7 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     }
     VkPipelineRenderingCreateInfo rendering_create_info{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
     rendering_create_info.pNext                   = nullptr;
-    rendering_create_info.viewMask                = 0;
+    rendering_create_info.viewMask                = _create_info.view_mask;
     rendering_create_info.colorAttachmentCount    = attachment_count;
     rendering_create_info.pColorAttachmentFormats = color_attachment_formats.data();
     rendering_create_info.depthAttachmentFormat =
@@ -1981,6 +1995,7 @@ VulkanDevice::CreatePipeline(GfxPsoCreateInfo&& _create_info, PipelineShaderInfo
     bool stencil_enabled = _create_info.depth_stencil_info.b_enable_front_face_stencil ||
                            _create_info.depth_stencil_info.b_enable_back_face_stencil;
     vk_pso->b_uses_stencil_attachment = depth_has_stencil && stencil_enabled;
+    vk_pso->view_mask                 = _create_info.view_mask;
     rendering_create_info.stencilAttachmentFormat =
         vk_pso->b_uses_stencil_attachment ?
             VulkanEnumTranslator::METoVKFormat(_create_info.depth_stencil_format) :

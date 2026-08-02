@@ -45,6 +45,16 @@ struct GeometryPassBindlessParam {
     uint  debug_visualization_mode;
 };
 
+// Six transposed world-to-clip matrices used by Vulkan point-shadow multiview.
+// Matrices have a 64-byte stride in both C++ and HLSL constant-buffer layouts.
+struct PointShadowViewMatrices {
+    float4x4 world2clip[6];
+};
+
+#ifdef __cplusplus
+static_assert(sizeof(PointShadowViewMatrices) == sizeof(float4x4) * 6);
+#endif
+
 // MARK: Main Content End
 
 #ifdef __cplusplus

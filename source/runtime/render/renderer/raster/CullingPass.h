@@ -192,6 +192,39 @@ public:
         Process(context, gpu_scene_res, params, data, visibility_set, out_stats, profile_scope_name);
     }
 
+    // Builds one conservative visibility set for an axis-aligned world-space volume.
+    // Point-shadow multiview uses this cube as the union of its six 90-degree frusta.
+    void ProcessAabb(
+        RasterContext&                    context,
+        const float3&                     bounds_min,
+        const float3&                     bounds_max,
+        const GpuScene::Res&              gpu_scene_res,
+        GpuCullingBuffers::VisibilitySet& visibility_set,
+        CullStatistics*                   out_stats          = nullptr,
+        std::string_view                  profile_scope_name = {},
+        CullingOptions                    options            = {true, false, 1.0f, -1}
+    ) {
+        const uint draw_count = gpu_scene_res.draw_cmd_buf.buf->GetNumElement();
+
+        CullParams params{};
+        CullData   data{};
+        params.draw_count = draw_count;
+        data.frustum_planes[0] = float4(1.0f, 0.0f, 0.0f, -bounds_min.x);
+        data.frustum_planes[1] = float4(-1.0f, 0.0f, 0.0f, bounds_max.x);
+        data.frustum_planes[2] = float4(0.0f, 1.0f, 0.0f, -bounds_min.y);
+        data.frustum_planes[3] = float4(0.0f, -1.0f, 0.0f, bounds_max.y);
+        data.frustum_planes[4] = float4(0.0f, 0.0f, 1.0f, -bounds_min.z);
+        data.frustum_planes[5] = float4(0.0f, 0.0f, -1.0f, bounds_max.z);
+
+        if (options.enable_frustum_culling) {
+            params.flags |= CULL_FLAG_ENABLE_FRUSTUM;
+        }
+
+        FillHiZOcclusionParams(context, options, params, data);
+
+        Process(context, gpu_scene_res, params, data, visibility_set, out_stats, profile_scope_name);
+    }
+
 private:
     // Converts the raw GPU counters into UI-facing culling statistics.
     static CullStatistics ToStatistics(const GpuCullingCounterData& counters) {

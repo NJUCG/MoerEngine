@@ -1273,7 +1273,7 @@ public:
                 EmplaceArg(
                     (uint64)(depth.target),
                     ResourceType::Texture_Buffer,
-                    Range(depth.mip_level, 1, depth.array_layer, 1),
+                    Range(depth.mip_level, 1, depth.array_layer, depth.array_count),
                     false
                 );
             }
@@ -1281,7 +1281,7 @@ public:
                 EmplaceArg(
                     (uint64)(depth.target),
                     ResourceType::Texture_Buffer,
-                    Range(depth.mip_level, 1, depth.array_layer, 1),
+                    Range(depth.mip_level, 1, depth.array_layer, depth.array_count),
                     true
                 );
             }
@@ -1292,7 +1292,7 @@ public:
                 EmplaceArg(
                     (uint64)(target.target),
                     ResourceType::Texture_Buffer,
-                    Range(target.mip_level, 1, target.array_layer, 1),
+                    Range(target.mip_level, 1, target.array_layer, target.array_count),
                     false
                 );
             }
@@ -1300,7 +1300,7 @@ public:
                 EmplaceArg(
                     (uint64)(target.target),
                     ResourceType::Texture_Buffer,
-                    Range(target.mip_level, 1, target.array_layer, 1),
+                    Range(target.mip_level, 1, target.array_layer, target.array_count),
                     true
                 );
             }
@@ -1388,7 +1388,7 @@ public:
                 EmplaceArg(
                     (uint64)(depth.target),
                     ResourceType::Texture_Buffer,
-                    Range(depth.mip_level, 1, depth.array_layer, 1),
+                    Range(depth.mip_level, 1, depth.array_layer, depth.array_count),
                     false
                 );
             }
@@ -1396,7 +1396,7 @@ public:
                 EmplaceArg(
                     (uint64)(depth.target),
                     ResourceType::Texture_Buffer,
-                    Range(depth.mip_level, 1, depth.array_layer, 1),
+                    Range(depth.mip_level, 1, depth.array_layer, depth.array_count),
                     true
                 );
             }
@@ -1407,7 +1407,7 @@ public:
                 EmplaceArg(
                     (uint64)(target.target),
                     ResourceType::Texture_Buffer,
-                    Range(target.mip_level, 1, target.array_layer, 1),
+                    Range(target.mip_level, 1, target.array_layer, target.array_count),
                     false
                 );
             }
@@ -1415,7 +1415,7 @@ public:
                 EmplaceArg(
                     (uint64)(target.target),
                     ResourceType::Texture_Buffer,
-                    Range(target.mip_level, 1, target.array_layer, 1),
+                    Range(target.mip_level, 1, target.array_layer, target.array_count),
                     true
                 );
             }

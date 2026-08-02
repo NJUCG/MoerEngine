@@ -1004,6 +1004,11 @@ public:
 
         DrawDispatcher(RasterPipeline& _pso, CommandList& _cmd_list, ArrayArguments&& _args);
 
+        DrawDispatcher& SetViewMask(uint32_t mask) {
+            view_mask = mask;
+            return *this;
+        }
+
         // Unnamed Draw with mesh data list and depth attachment
         template<typename... TRenderTarget>
         void Draw(
@@ -1013,6 +1018,7 @@ public:
             TRenderTarget&&... _render_targets
         ) {
             RenderPassInfo pass_info({std::forward<TRenderTarget>(_render_targets)...}, _depth, _rect);
+            pass_info.view_mask = view_mask;
             cmd_list.SetRenderCmds(pso.handle, std::move(args), std::move(pass_info), std::move(_mesh_data));
         };
 
@@ -1062,6 +1068,7 @@ public:
             TRenderTarget&&... _render_targets
         ) {
             RenderPassInfo      pass_info({std::forward<TRenderTarget>(_render_targets)...}, _depth, _rect);
+            pass_info.view_mask = view_mask;
             Array<MeshDrawData> mesh_data;
             mesh_data.emplace_back(_vtx, _vtx_cnt);
             mesh_data.back().draw_params = std::move(_mesh_data);
@@ -1090,6 +1097,7 @@ public:
             TRenderTarget&&... _render_targets
         ) {
             RenderPassInfo pass_info({std::forward<TRenderTarget>(_render_targets)...}, _depth, _rect);
+            pass_info.view_mask = view_mask;
             cmd_list.SetRenderCmds(
                 pso.handle, std::move(args), std::move(pass_info), std::move(_mesh_data), _name
             );
@@ -1142,6 +1150,7 @@ public:
             TRenderTarget&&... _render_targets
         ) {
             RenderPassInfo      pass_info({std::forward<TRenderTarget>(_render_targets)...}, _depth, _rect);
+            pass_info.view_mask = view_mask;
             Array<MeshDrawData> mesh_data;
             mesh_data.emplace_back();
             mesh_data.back().draw_params = std::move(_mesh_data);
@@ -1162,6 +1171,7 @@ public:
             RenderPassInfo pass_info(
                 {std::forward<TRenderTarget>(_render_targets)...}, DepthAttachment{}, _rect
             );
+            pass_info.view_mask = view_mask;
             Array<MeshDrawData> mesh_data;
             mesh_data.emplace_back();
             mesh_data.back().draw_params = std::move(_mesh_data);
@@ -1183,6 +1193,7 @@ public:
             TRenderTarget&&... _render_targets
         ) {
             RenderPassInfo      pass_info({std::forward<TRenderTarget>(_render_targets)...}, _depth, _rect);
+            pass_info.view_mask = view_mask;
             Array<MeshDrawData> mesh_data;
             mesh_data.emplace_back(_vtx, _vtx_cnt);
             mesh_data.back().draw_params = std::move(_mesh_data);
@@ -1205,6 +1216,7 @@ public:
             RenderPassInfo pass_info(
                 {std::forward<TRenderTarget>(_render_targets)...}, DepthAttachment{}, _rect
             );
+            pass_info.view_mask = view_mask;
             Array<MeshDrawData> mesh_data;
             mesh_data.emplace_back(_vtx, _vtx_cnt);
             mesh_data.back().draw_params = std::move(_mesh_data);
@@ -1246,6 +1258,7 @@ public:
             RenderPassInfo pass_info(
                 {std::forward<TRenderTarget>(_render_targets)...}, DepthAttachment{}, _rect
             );
+            pass_info.view_mask = view_mask;
             Array<MeshDrawData> mesh_data;
             mesh_data.emplace_back(_vtx, _idx);
             mesh_data.back().DrawIndirect(_indirect_buffer, _count, _stride);
@@ -1269,6 +1282,7 @@ public:
             TRenderTarget&&... _render_targets
         ) {
             RenderPassInfo      pass_info({std::forward<TRenderTarget>(_render_targets)...}, _depth, _rect);
+            pass_info.view_mask = view_mask;
             Array<MeshDrawData> mesh_data;
             mesh_data.emplace_back(_vtx, _idx);
             mesh_data.back().DrawIndirect(_indirect_buffer, _count, _stride);
@@ -1293,6 +1307,7 @@ public:
             TRenderTarget&&... _render_targets
         ) {
             RenderPassInfo      pass_info({std::forward<TRenderTarget>(_render_targets)...}, _depth, _rect);
+            pass_info.view_mask = view_mask;
             Array<MeshDrawData> mesh_data;
             mesh_data.emplace_back(_vtx, _idx);
             mesh_data.back().DrawIndirect(_indirect_buffer, _count_buffer, _max_cnt, _stride);
@@ -1318,6 +1333,7 @@ public:
             RenderPassInfo pass_info(
                 {std::forward<TRenderTarget>(_render_targets)...}, DepthAttachment{}, _rect
             );
+            pass_info.view_mask = view_mask;
             Array<MeshDrawData> mesh_data;
             mesh_data.emplace_back(_vtx, _idx);
             mesh_data.back().DrawIndirect(_indirect_buffer, _count_buffer, _max_cnt, _stride);
@@ -1341,6 +1357,7 @@ public:
             TRenderTarget&&... _render_targets
         ) {
             RenderPassInfo      pass_info({std::forward<TRenderTarget>(_render_targets)...}, _depth, _rect);
+            pass_info.view_mask = view_mask;
             Array<MeshDrawData> mesh_data;
             mesh_data.emplace_back(_vtx, _vtx_cnt);
             mesh_data.back().DrawIndirect(_indirect_buffer, _count_buffer, _max_cnt, _stride);
@@ -1365,6 +1382,7 @@ public:
             RenderPassInfo pass_info(
                 {std::forward<TRenderTarget>(_render_targets)...}, DepthAttachment{}, _rect
             );
+            pass_info.view_mask = view_mask;
             Array<MeshDrawData> mesh_data;
             mesh_data.emplace_back(_vtx, _vtx_cnt);
             mesh_data.back().DrawIndirect(_indirect_buffer, _count_buffer, _max_cnt, _stride);
@@ -1388,6 +1406,7 @@ public:
             RenderPassInfo pass_info(
                 {std::forward<TRenderTarget>(_render_targets)...}, DepthAttachment{}, _rect
             );
+            pass_info.view_mask = view_mask;
             Array<MeshDrawData> mesh_data;
             mesh_data.emplace_back(_vtx, _vtx_cnt);
             mesh_data.back().DrawIndirect(_indirect_buffer, _count, _stride);
@@ -1410,6 +1429,7 @@ public:
             TRenderTarget&&... _render_targets
         ) {
             RenderPassInfo      pass_info({std::forward<TRenderTarget>(_render_targets)...}, _depth, _rect);
+            pass_info.view_mask = view_mask;
             Array<MeshDrawData> mesh_data;
             mesh_data.emplace_back(_vtx, _vtx_cnt);
             mesh_data.back().DrawIndirect(_indirect_buffer, _count, _stride);
@@ -1424,6 +1444,7 @@ public:
         ArrayArguments  args;
 
     private:
+        uint32_t        view_mask = 0;
         TCachedArgArray args_cache;
     };
 
@@ -1448,6 +1469,10 @@ public:
 
         MutiDrawDispatcher& AcceptDrawBatch(DrawBatch&& _draw_batch) {
             draw_batch = std::move(_draw_batch);
+            return *this;
+        }
+        MutiDrawDispatcher& SetViewMask(uint32_t mask) {
+            pass_info.view_mask = mask;
             return *this;
         }
         void Dispatch() {

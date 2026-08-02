@@ -17,6 +17,7 @@
 #include "shaderheaders/shared/raster/geometry_pass/ShaderParameters.h"
 
 #include <cmath>
+#include <cstring>
 #include <sstream>
 
 namespace {
@@ -506,6 +507,61 @@ ShadowDepthPass::ShadowDepthPass(RasterContext& context) : m_culling_pass(contex
     m_pso = ShaderManager::Get().Raster().Vertex(vtx).Pixel(frag).Build<ShadowDepthPassPipeline>(
         std::move(pso_info)
     );
+
+    m_point_shadow_multiview_supported = context.device.SupportsMultiview(k_point_shadow_view_count);
+    if (!m_point_shadow_multiview_supported) {
+        LOG_INFO(
+            "[PointShadow][Multiview] requested_views={} path=serial fallback_reason=device_capability",
+            k_point_shadow_view_count
+        );
+        return;
+    }
+
+    GfxPsoCreateInfo multiview_pso_info(
+        RHIRasterizeInfo::Preset(),
+        {},
+        {},
+        RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>(),
+        context.textures.depth_linear_sampler.tex->GetFormat()
+    );
+    multiview_pso_info.SetViewMask(k_point_shadow_view_mask);
+
+    PointShadowMultiviewPipeline::MutationSet multiview_mutation_set{};
+    multiview_mutation_set.SetMutation<PointShadowMultiviewPipeline::SHADOW_DEPTH_PASS>(true);
+    multiview_mutation_set.SetMutation<PointShadowMultiviewPipeline::POINT_SHADOW_MULTIVIEW>(true);
+
+    Shader& multiview_vtx = ShaderManager::Get().CompileShader(
+        ST_VERTEX,
+        "pipelines/raster/deferred/geometry/GeometryPassVertex.hlsl",
+        multiview_mutation_set
+    );
+    Shader& multiview_frag = ShaderManager::Get().CompileShader(
+        ST_FRAGMENT,
+        "pipelines/raster/deferred/geometry/GeometryPassPixel.hlsl",
+        multiview_mutation_set
+    );
+
+    m_point_shadow_multiview_pso = ShaderManager::Get()
+                                           .Raster()
+                                           .Vertex(multiview_vtx)
+                                           .Pixel(multiview_frag)
+                                           .Build<PointShadowMultiviewPipeline>(
+                                               std::move(multiview_pso_info)
+                                           );
+    m_point_shadow_view_matrices = context.device.CreateBuffer<byte>(
+        "Raster::PointShadowMultiviewMatrices",
+        sizeof(PointShadowViewMatrices),
+        EBufferUsageFlags::CONSTANT_BUFFER
+    );
+
+    m_point_shadow_multiview_supported =
+        m_point_shadow_multiview_pso.handle.IsValid() && m_point_shadow_view_matrices != nullptr;
+    LOG_INFO(
+        "[PointShadow][Multiview] requested_views={} view_mask=0x{:x} path={}",
+        k_point_shadow_view_count,
+        k_point_shadow_view_mask,
+        m_point_shadow_multiview_supported ? "multiview" : "serial"
+    );
 }
 
 bool ShadowDepthPass::RefreshShadowCasterBounds(RasterContext& context) {
@@ -936,11 +992,48 @@ void ShadowDepthPass::RenderPointShadows(
         {{0, 0, -1}, {0, -1, 0}}  // -Z (Back)
     };
 
-    // 4. 遍历 6 个面进行渲染
+    StaticArray<float4x4, CUBE_FACE_Num> view_projections{};
+    PointShadowViewMatrices              multiview_matrices{};
     for (uint face = 0; face < CUBE_FACE_Num; ++face) {
-        float3   light_pos = cube_res.light_pos;
-        float4x4 view      = MakeLookatViewMatrixRH(light_pos, light_pos + faces[face].dir, faces[face].up);
-        float4x4 view_proj = proj * view;
+        const float3   light_pos = cube_res.light_pos;
+        const float4x4 view = MakeLookatViewMatrixRH(light_pos, light_pos + faces[face].dir, faces[face].up);
+        view_projections[face]            = proj * view;
+        multiview_matrices.world2clip[face] = Transpose(view_projections[face]);
+    }
+
+    if (m_point_shadow_multiview_supported && config.shadow_point_multiview_enabled) {
+        ScopedGpuMarker multiview_marker(
+            context.cmd_list,
+            "PointShadow Multiview",
+            GpuMarkerPalette::Subpass()
+        );
+
+        const float3 point_shadow_extent(far_plane, far_plane, far_plane);
+        m_culling_pass.ProcessAabb(
+            context,
+            cube_res.light_pos - point_shadow_extent,
+            cube_res.light_pos + point_shadow_extent,
+            context.GetGpuSceneRes(),
+            context.gpu_culling_buffers.shadow,
+            nullptr,
+            "PointShadow Multiview Culling",
+            CullingPass::CullingOptions{true, false, 1.0f, -1}
+        );
+
+        RenderPointShadowMultiview(
+            context,
+            config,
+            multiview_matrices,
+            Rect2D(0, 0, config.shadow_csm_sm_size, config.shadow_csm_sm_size),
+            TextureView(cube_res.tex.Get()).Slice(0, k_point_shadow_view_count),
+            std::format("PointShadow L{} Multiview", light_idx)
+        );
+        return;
+    }
+
+    // Compatibility path: cull and render each cube face independently.
+    for (uint face = 0; face < CUBE_FACE_Num; ++face) {
+        const float4x4& view_proj = view_projections[face];
 
         TextureView face_view = TextureView(cube_res.tex.Get()).Slice(face, 1);
 
@@ -971,6 +1064,64 @@ void ShadowDepthPass::RenderPointShadows(
     }
 }
 
+void ShadowDepthPass::RenderPointShadowMultiview(
+    RasterContext&                 context,
+    const RasterConfig&            config,
+    const PointShadowViewMatrices& view_matrices,
+    const Rect2D&                  rect,
+    TextureView                    depth_view,
+    std::string_view               pass_name
+) {
+    Array<byte> matrix_upload(sizeof(PointShadowViewMatrices));
+    std::memcpy(matrix_upload.data(), &view_matrices, sizeof(PointShadowViewMatrices));
+    context.cmd_list.CopyFrom(
+        std::move(matrix_upload),
+        m_point_shadow_view_matrices->GetView(),
+        "Raster::PointShadowMultiviewMatrices"
+    );
+
+    GeometryPassBindlessParam param{};
+    param.world2clip = view_matrices.world2clip[0];
+
+    const auto& gpu_scene_res           = context.GetGpuSceneRes();
+    param.instance_buf_hdl              = gpu_scene_res.instance_buf.hdl;
+    param.visible_instance_id_buf_hdl   = context.gpu_culling_buffers.shadow.visible_instance_id_buf.hdl;
+    param.use_visible_instance_id_remap = 1;
+    param.primitive_buf_hdl             = gpu_scene_res.primitive_buf.hdl;
+    param.position_buf_hdl              = gpu_scene_res.position_buf.hdl;
+    param.packed_normal_buf_hdl         = gpu_scene_res.packed_normal_buf.hdl;
+    param.packed_tangent_buf_hdl        = gpu_scene_res.packed_tangent_buf.hdl;
+    param.texcoord0_buf_hdl             = gpu_scene_res.texcoord0_buf.hdl;
+    param.material_buf_hdl              = gpu_scene_res.material_buf.hdl;
+    param.enable_alpha_test             = config.geometry_enable_alpha_test ? 1 : 0;
+    param.alpha_test_blend_pixel_cutoff = config.geometry_alpha_test_blend_pixel_cutoff;
+
+    context.cmd_list.PushScopeWithTimeScope("PointShadow Multiview Draw");
+
+    auto draw = context.cmd_list.Gfx(
+        m_point_shadow_multiview_pso,
+        m_point_shadow_view_matrices,
+        context.bdls,
+        param
+    );
+    draw.SetViewMask(k_point_shadow_view_mask);
+
+    const auto& visibility = context.gpu_culling_buffers.shadow;
+    draw.DrawIndirect(
+        pass_name,
+        rect,
+        {},
+        IndexBuffer{gpu_scene_res.index_buf.buf->GetView(), EIndexElementType::IET_UINT32},
+        visibility.draw_cmd_buf->GetView(),
+        visibility.GetDrawCountView(),
+        visibility.draw_cmd_buf->GetStride(),
+        visibility.max_draw_count,
+        DepthAttachment(depth_view)
+    );
+
+    context.cmd_list.PopScopeWithTimeScope();
+}
+
 void ShadowDepthPass::RenderShadow(
     RasterContext&      context,
     const RasterConfig& config,
@@ -980,7 +1131,7 @@ void ShadowDepthPass::RenderShadow(
     std::string_view                pass_name,
     std::optional<std::string_view> profile_scope_name
 ) {
-    GeometryPassBindlessParam param;
+    GeometryPassBindlessParam param{};
     param.world2clip = Transpose(view_proj);
 
     const auto& gpu_scene_res           = context.GetGpuSceneRes();
@@ -1013,7 +1164,7 @@ void ShadowDepthPass::RenderShadow(
         visibility.GetDrawCountView(),
         visibility.draw_cmd_buf->GetStride(),
         visibility.max_draw_count,
-        DepthAttachment(depth_view.GetTexture())
+        DepthAttachment(depth_view)
     );
 
     if (profile_scope_name.has_value()) {

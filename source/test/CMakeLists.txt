@@ -320,6 +320,17 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHIExplicitBarrierContract COMMAND $<TARGET_FILE:${test_target}>)
 
+# CPU-only contract for Vulkan-style multiview masks and attachment layer
+# coverage. The Vulkan integration test below owns the real GPU draw/readback.
+set(test_target TestRHIMultiviewContract)
+add_executable(${test_target} "RHIMultiviewContractTest.cpp")
+target_link_libraries(${test_target}
+    PRIVATE Moer::Render
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME RHIMultiviewContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(RHIMultiviewContract PROPERTIES TIMEOUT 60)
+
 set(test_target TestRHICommandMarker)
 add_executable(${test_target} "RHICommandMarkerTest.cpp")
 target_link_libraries(${test_target}

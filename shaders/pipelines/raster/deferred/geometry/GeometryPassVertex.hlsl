@@ -2,6 +2,10 @@
 #define SHADOW_DEPTH_PASS 0
 #endif
 
+#ifndef POINT_SHADOW_MULTIVIEW
+#define POINT_SHADOW_MULTIVIEW 0
+#endif
+
 #include "core/common/Bindless.hlsl"
 #include "core/common/Common.hlsl"
 #include "shared/ShaderParameters.h"
@@ -14,6 +18,10 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "pipelines/raster/deferred/geometry/GeometryPassCommon.hlsli"
 
 [[vk::push_constant]] ConstantBuffer<Moer::GeometryPassBindlessParam> param;
+
+#if POINT_SHADOW_MULTIVIEW
+[[vk::binding(0, 0)]] ConstantBuffer<Moer::PointShadowViewMatrices> point_shadow_view_matrices;
+#endif
 
 struct VsContext {
     // input
@@ -41,7 +49,7 @@ struct VsContext {
 
     // funcs
 
-    void Load(uint _vertex_id, uint _instance_id) {
+    void Load(uint _vertex_id, uint _instance_id, uint _view_id) {
         vertex_id   = _vertex_id;
         instance_id = _instance_id;
 
@@ -74,7 +82,11 @@ struct VsContext {
             vertex_pos               = position_buf.Load<float3>(primitive.position_start_idx + vertex_id);
         }
         float3 world_pos = mul(model2world, float4(vertex_pos, 1.0)).xyz;
-        out_clip_pos  = mul(param.world2clip, float4(world_pos, 1.0));
+        float4x4 world2clip = param.world2clip;
+#if POINT_SHADOW_MULTIVIEW
+        world2clip = point_shadow_view_matrices.world2clip[min(_view_id, 5u)];
+#endif
+        out_clip_pos = mul(world2clip, float4(world_pos, 1.0));
 
 #if !SHADOW_DEPTH_PASS
 
@@ -120,10 +132,16 @@ struct VsContext {
 VsOutput main(
     uint vertex_id : SV_VertexID,    // 顶点 ID（自动由 GPU 提供）
     uint instance_id : SV_InstanceID // 实例 ID（自动由 GPU 提供）
+#if POINT_SHADOW_MULTIVIEW
+    , uint view_id : SV_ViewID
+#endif
 ) {
 
     VsContext context;
-    context.Load(vertex_id, instance_id);
+#if !POINT_SHADOW_MULTIVIEW
+    uint view_id = 0u;
+#endif
+    context.Load(vertex_id, instance_id, view_id);
 
     VsOutput output;
 

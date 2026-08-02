@@ -1722,6 +1722,50 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
         return view;
     }
 
+    VkImageView VulkanTexture::GetAttachmentView(
+        uint _mip_level,
+        uint _mip_cnt,
+        uint _base_layer,
+        uint _layer_cnt
+    ) {
+        const bool requires_attachment_view =
+            _layer_cnt > 1 || GetDimension() == ETextureDimension::TEX_CUBE ||
+            GetDimension() == ETextureDimension::TEX_CUBE_ARRAY;
+        if (!requires_attachment_view) {
+            return GetView(_mip_level, _mip_cnt, _base_layer, _layer_cnt);
+        }
+
+        std::lock_guard<std::mutex> lock(m_views_mutex);
+        const uint64 key = EncodeViewKey(_mip_level, _mip_cnt, _base_layer, _layer_cnt);
+        const auto   it  = m_attachment_views.find(key);
+        if (it != m_attachment_views.end()) {
+            return it->second;
+        }
+
+        VkImageViewCreateInfo view_create_info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        view_create_info.image = m_alloc.image;
+        view_create_info.viewType =
+            _layer_cnt == 1 ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        view_create_info.format = VulkanEnumTranslator::METoVKFormat(GetFormat());
+        view_create_info.components = {
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY
+        };
+        view_create_info.subresourceRange.aspectMask =
+            VulkanEnumTranslator::METoVKImageAspectFlags(GetAspectFlags());
+        view_create_info.subresourceRange.baseMipLevel   = _mip_level;
+        view_create_info.subresourceRange.levelCount     = _mip_cnt;
+        view_create_info.subresourceRange.baseArrayLayer = _base_layer;
+        view_create_info.subresourceRange.layerCount     = _layer_cnt;
+
+        VkImageView view = VK_NULL_HANDLE;
+        VK_CHECK_RESULT(vkCreateImageView(m_device->GetDevice(), &view_create_info, nullptr, &view));
+        m_attachment_views.emplace(key, view);
+        return view;
+    }
+
     uint VulkanTexture::GetMipByteSize(uint _mip_level) const {
         uint mip_width  = std::max(1u, GetWidth() >> _mip_level);
         uint mip_height = std::max(1u, GetHeight() >> _mip_level);
@@ -4258,6 +4302,10 @@ VkAccessFlags2 VulkanEnumTranslator::METoVkAccessFlags2(ERHIAccessFlags _flags) 
                 vkDestroyImageView(m_device->GetDevice(), view, VK_NULL_HANDLE);
             }
             m_views.clear();
+            for (auto& [key, view] : m_attachment_views) {
+                vkDestroyImageView(m_device->GetDevice(), view, VK_NULL_HANDLE);
+            }
+            m_attachment_views.clear();
         }
         if (m_alloc.image != VK_NULL_HANDLE && m_alloc.alloc != VK_NULL_HANDLE) { vmaDestroyImage(m_device->GetVmaAllocator(), m_alloc.image, m_alloc.alloc); }
         //free descriptors

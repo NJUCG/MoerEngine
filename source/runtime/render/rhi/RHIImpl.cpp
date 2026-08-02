@@ -148,6 +148,10 @@ uint32_t RenderDevice::GetMaxTessellationFactor() const {
     return impl ? impl->GetMaxTessellationFactor() : 0;
 }
 
+bool RenderDevice::SupportsMultiview(uint32_t view_count) const {
+    return impl && impl->SupportsMultiview(view_count);
+}
+
 RaytracingGeometryRef RenderDevice::CreateRaytracingGeometry(const RaytracingGeometryInfo& _init) {
     return impl->CreateRaytracingGeometry(_init);
 }

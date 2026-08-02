@@ -1271,6 +1271,11 @@ struct GfxPsoCreateInfo {
         return *this;
     }
 
+    GfxPsoCreateInfo& SetViewMask(uint32_t mask) {
+        view_mask = mask;
+        return *this;
+    }
+
     RHIRasterizeInfo         rasterizer_info;
     VertexStream             vertex_stream;
     RHIMultisampleStateInfo  multisample_info;
@@ -1287,6 +1292,10 @@ struct GfxPsoCreateInfo {
     uint32_t color_attachment_count;
 
     uint8_t multi_view_count = 1;
+
+    // Vulkan multiview view mask. This is intentionally independent from
+    // multi_view_count, which controls the number of dynamic viewports/scissors.
+    uint32_t view_mask = 0;
 
     //for VSR
     bool                b_has_fragment_density_attachments;
@@ -1356,12 +1365,14 @@ struct ColorAttachment {
     float4            clear_color = {0, 0, 0, 0};
     uint              mip_level   = 0;
     uint              array_layer = 0;
+    uint              array_count = 1;
 };
 
 // 聚合初始化会触发零初始化，但构造函数不会，所以必须设置默认值
 struct DepthAttachment {
     Texture*          target{nullptr};
     uint              array_layer   = 0;
+    uint              array_count   = 1;
     uint              mip_level     = 0;
     EAttachmentAction action        = AC_DS_CLEAR_STORE;
     float             clear_depth   = 0.f;
@@ -1374,6 +1385,7 @@ struct DepthAttachment {
     DepthAttachment(const TextureView& _view) :
         target(_view.GetTexture()),
         array_layer(_view.array_layer),
+        array_count(_view.num_array),
         mip_level(_view.mip_level) {}
 };
 
@@ -1382,6 +1394,7 @@ struct RenderPassInfo {
     DepthAttachment        depth_attachment;
     Rect2D                 render_area;
     uint                   viewport_cnt = 1;
+    uint32_t               view_mask    = 0;
 };
 
 struct SwapchainCreateInfo {

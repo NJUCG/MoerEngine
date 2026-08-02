@@ -347,12 +347,14 @@ struct VulkanSerialGoldenTrace::Impl {
             AddFloat(_hash, attachment.clear_color.w);
             _hash.Add(attachment.mip_level);
             _hash.Add(attachment.array_layer);
+            _hash.Add(attachment.array_count);
         }
         const DepthAttachment& depth = _pass.depth_attachment;
         _hash.Add(depth.Valid() ? 1u : 0u);
         if (depth.Valid()) {
             _resources.push_back(RegisterTexture(depth.target));
             _hash.Add(depth.array_layer);
+            _hash.Add(depth.array_count);
             _hash.Add(depth.mip_level);
             _hash.Add(static_cast<uint64_t>(depth.action));
             AddFloat(_hash, depth.clear_depth);
@@ -363,6 +365,7 @@ struct VulkanSerialGoldenTrace::Impl {
         _hash.Add(_pass.render_area.extent.width);
         _hash.Add(_pass.render_area.extent.height);
         _hash.Add(_pass.viewport_cnt);
+        _hash.Add(_pass.view_mask);
     }
 
     void HashIndirect(

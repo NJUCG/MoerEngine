@@ -17,6 +17,7 @@
 #include "rhi/vulkan/VulkanRHIResource.h"
 #include "rhi/vulkan/VulkanSubmissionDiagnostics.h"
 #include "renderer/raytracing/RaytracingExportSubmission.h"
+#include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
 
 #include <algorithm>
@@ -51,6 +52,12 @@ constexpr size_t kElementCount = 64;
 constexpr uint32 kIterations   = 24;
 constexpr uint32 kHeavyCopiesPerWave = 48;
 constexpr uint32 kHeavyCopyCount = kHeavyCopiesPerWave * 2;
+
+class MultiviewLayerPipeline final : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(MultiviewLayerPipeline);
+    DEFINE_SHADER_ARGS();
+};
 
 bool IsExpectedZeroOcclusionResult(
     const OcclusionQueryResult* _result,
@@ -1556,7 +1563,8 @@ void ValidateArguments(int _argc, const char** _argv) {
             argument != "--timestamp-query-success-batch" &&
             argument != "--timestamp-query-mid-failure" &&
             argument != "--timestamp-query-record-failure" &&
-            argument != "--gpu-scope-stream") {
+            argument != "--gpu-scope-stream" &&
+            argument != "--multiview") {
             throw std::invalid_argument("unsupported argument: " + std::string(argument));
         }
     }
@@ -15846,6 +15854,128 @@ void RunTimestampQuerySerialRecordFailure() {
     );
 }
 
+void RunMultiviewCubeAttachmentDraw(ShaderManager& shader_manager) {
+    auto& device = RenderDevice::Get();
+    constexpr uint32 view_count = 6u;
+    constexpr uint32 view_mask  = 0x3fu;
+    constexpr uint32 width      = 8u;
+    constexpr uint32 height     = 8u;
+
+    GfxPsoCreateInfo pipeline_info(
+        RHIRasterizeInfo::Preset(),
+        {},
+        {RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM)},
+        RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>(),
+        PF_D32_SFLOAT
+    );
+    pipeline_info.SetViewMask(view_mask);
+    MultiviewLayerPipeline pipeline = shader_manager.Raster()
+                                              .Vertex(
+                                                  "test/MultiviewLayer.hlsl",
+                                                  "MultiviewVS"
+                                              )
+                                              .Pixel(
+                                                  "test/MultiviewLayer.hlsl",
+                                                  "MultiviewPS"
+                                              )
+                                              .Build<MultiviewLayerPipeline>(
+                                                  std::move(pipeline_info)
+                                              );
+    if (!pipeline.handle.IsValid()) {
+        throw std::runtime_error("multiview test pipeline creation failed");
+    }
+
+    TextureRef cube = device.CreateCubeMap(
+        "multiview_cube_attachment",
+        Extent2D(width, height),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::COLOR_ATTACHMENT |
+            ETextureUsageFlags::TRANSFER_SRC
+    );
+    if (!cube.IsValid() || cube->GetNumArray() != view_count) {
+        throw std::runtime_error("multiview cube attachment creation failed");
+    }
+    DepthBufferRef depth_array = device.CreateDepthBuffer(
+        "multiview_depth_array_attachment",
+        Extent2D(width, height),
+        PF_D32_SFLOAT,
+        view_count,
+        ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
+    );
+    if (!depth_array.IsValid() || depth_array->GetNumArray() != view_count ||
+        depth_array->GetDimension() != ETextureDimension::TEX_2D_ARRAY) {
+        throw std::runtime_error("multiview depth array attachment creation failed");
+    }
+
+    CommandList draw_commands(EQueueType::Graphics);
+    auto        draw = draw_commands.Gfx(pipeline);
+    draw.SetViewMask(view_mask);
+    draw.Draw(
+        "MultiviewCubeAttachmentDraw",
+        Rect2D(0, 0, width, height),
+        Array<SingleDrawParam>{SingleDrawParam{3, 1, 0, 0, 0}},
+        DepthAttachment(depth_array->GetView().Slice(0, view_count)),
+        ColorAttachment{
+            .target      = cube.Get(),
+            .action      = AC_CLEAR_STORE,
+            .clear_color = float4(0.0f, 0.0f, 0.0f, 1.0f),
+            .mip_level   = 0u,
+            .array_layer = 0u,
+            .array_count = view_count,
+        }
+    );
+    Array<ReadbackFuture> readbacks;
+    readbacks.reserve(view_count);
+    for (uint32 layer = 0; layer < view_count; ++layer) {
+        readbacks.emplace_back(draw_commands.Readback(
+            cube->GetView(0, 1).Slice(layer, 1),
+            std::format("MultiviewCubeLayer{}", layer)
+        ));
+        if (!readbacks.back().Valid()) {
+            throw std::runtime_error("multiview layer readback was rejected");
+        }
+    }
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics,
+        draw_commands.Submit(),
+        ERHIExecSubmitFlags::FlushGPU
+    );
+
+    constexpr std::array<uint32, view_count> expected_colors{
+        0xff0000ffu,
+        0xff00ff00u,
+        0xffff0000u,
+        0xff00ffffu,
+        0xffff00ffu,
+        0xffffff00u,
+    };
+    for (uint32 layer = 0; layer < view_count; ++layer) {
+        const ReadbackResult result = readbacks[layer].Get();
+        const auto            pixels = result.CopyAs<uint32>();
+        if (result.status != ReadbackStatus::Ready || !pixels.has_value() ||
+            pixels->size() != width * height ||
+            !std::all_of(
+                pixels->begin(),
+                pixels->end(),
+                [expected = expected_colors[layer]](uint32 pixel) {
+                    return pixel == expected;
+                }
+            )) {
+            throw std::runtime_error(
+                std::format("multiview cube layer {} readback mismatch", layer)
+            );
+        }
+    }
+
+    LOG_INFO(
+        "[TESTCASE][PASS] name=MultiviewCubeAttachment "
+        "views={} view_mask=0x{:x} color_view=2d_array depth_view=2d_array "
+        "draws=1 layers=readback_verified",
+        view_count,
+        view_mask
+    );
+}
+
 void RunOwningReadbackFuture() {
     auto& device = RenderDevice::Get();
     constexpr size_t buffer_element_count = 16;
@@ -16234,8 +16364,9 @@ void RunOwningReadbackFuture() {
 } // namespace
 
 int main(int argc, const char** argv) {
-    bool task_system_initialized = false;
+    bool task_system_initialized    = false;
     bool render_device_initialized = false;
+    bool shader_manager_initialized = false;
     try {
         ValidateArguments(argc, argv);
         const bool parallel = HasArgument(argc, argv, "--parallel");
@@ -16296,6 +16427,8 @@ int main(int argc, const char** argv) {
             );
         const bool gpu_scope_stream_mode =
             HasArgument(argc, argv, "--gpu-scope-stream");
+        const bool multiview_mode =
+            HasArgument(argc, argv, "--multiview");
         const uint32 submission_batch_window =
             pipeline_window1 ? 1u : 2u;
 
@@ -16336,6 +16469,26 @@ int main(int argc, const char** argv) {
             .parallel_record_worker_throw_trigger = inject_worker_failure ? 1u : 0u,
         });
         render_device_initialized = true;
+
+        if (multiview_mode) {
+            if (RenderDevice::Get().SupportsMultiview(6u)) {
+                ShaderManager& shader_manager = ShaderManager::Get();
+                shader_manager_initialized = true;
+                RunMultiviewCubeAttachmentDraw(shader_manager);
+                ShaderManager::ShutDown();
+                shader_manager_initialized = false;
+            } else {
+                LOG_INFO(
+                    "[TESTCASE][SKIP] name=MultiviewCubeAttachment "
+                    "reason=device_does_not_support_six_views"
+                );
+            }
+            RenderDevice::Dispose();
+            render_device_initialized = false;
+            TaskSystem::ShutDown();
+            task_system_initialized = false;
+            return 0;
+        }
 
         if (present_legacy_owner) {
             RunLegacyDirectPresentOwnerBoundary();
@@ -16545,6 +16698,9 @@ int main(int argc, const char** argv) {
     } catch (const std::exception& error) {
         std::cerr << "[TESTCASE][EXCEPTION] " << error.what() << std::endl;
         LOG_ERROR("[TESTCASE][FAIL] name=ParallelRecordOrderedReadback error={}", error.what());
+        if (shader_manager_initialized) {
+            ShaderManager::ShutDown();
+        }
         if (render_device_initialized) {
             RenderDevice::Dispose();
         }
@@ -16555,6 +16711,9 @@ int main(int argc, const char** argv) {
     } catch (...) {
         std::cerr << "[TESTCASE][EXCEPTION] unknown" << std::endl;
         LOG_ERROR("[TESTCASE][FAIL] name=ParallelRecordOrderedReadback error=unknown");
+        if (shader_manager_initialized) {
+            ShaderManager::ShutDown();
+        }
         if (render_device_initialized) {
             RenderDevice::Dispose();
         }

@@ -839,6 +839,10 @@ void RasterUI::ShowConfig() {
 
         if (m_config.shadow_map_mode == EShadowMapMode::POINT_CUBE) {
             ImGui::SliderInt("Shadow Map Size", &m_config.shadow_csm_sm_size, 512, 4096);
+            ImGui::Checkbox(
+                "Enable Point Shadow Multiview",
+                &m_config.shadow_point_multiview_enabled
+            );
         } else if (m_config.shadow_map_mode == EShadowMapMode::CSM) {
             draw_csm_common_settings();
             float minimum_cover_ratio = 0.0f;

@@ -1111,6 +1111,67 @@ void ResourceImportExactHistorySurvivesReadWriteAndTwoDimensionalCompression() {
     );
 }
 
+void MultiviewAttachmentsPublishEveryLayerWrite() {
+    TCachedArgArray cached_args;
+    CmdReorderer   reorderer(MakeFunctionTable(), cached_args);
+
+    TestTexture draw_color(8);
+    RenderPassInfo draw_pass{};
+    draw_pass.color_attachments.emplace_back(ColorAttachment{
+        .target      = &draw_color,
+        .action      = AC_CLEAR_STORE,
+        .mip_level   = 0,
+        .array_layer = 1,
+        .array_count = 6,
+    });
+
+    PipelineHandle      pipeline{};
+    ArrayArguments      args{};
+    Array<MeshDrawData> meshes{};
+    SetDrawStateCmd     draw(
+        pipeline, std::move(args), std::move(draw_pass), std::move(meshes), "MultiviewSetDraw"
+    );
+    reorderer.AcceptCmd(&draw);
+
+    auto* draw_color_handle = reorderer.GetHandle(
+        uint64(&draw_color), CmdReorderer::ResourceType::Texture_Buffer
+    );
+    Expect(
+        reorderer.SetRead(draw_color_handle, CmdReorderer::Range(0, 1, 6, 1)) == 1,
+        "set-draw attachment did not publish the last multiview layer write"
+    );
+    Expect(
+        reorderer.SetRead(draw_color_handle, CmdReorderer::Range(0, 1, 7, 1)) == 0,
+        "set-draw attachment published a write outside its layer range"
+    );
+
+    TestTexture multi_draw_depth(8);
+    RenderPassInfo multi_draw_pass{};
+    multi_draw_pass.depth_attachment.target       = &multi_draw_depth;
+    multi_draw_pass.depth_attachment.action       = AC_DS_CLEAR_STORE;
+    multi_draw_pass.depth_attachment.mip_level    = 0;
+    multi_draw_pass.depth_attachment.array_layer  = 1;
+    multi_draw_pass.depth_attachment.array_count  = 6;
+
+    DrawBatch    batch{};
+    MultiDrawCmd multi_draw(
+        std::move(batch), std::move(multi_draw_pass), "MultiviewMultiDraw"
+    );
+    reorderer.AcceptCmd(&multi_draw);
+
+    auto* multi_draw_depth_handle = reorderer.GetHandle(
+        uint64(&multi_draw_depth), CmdReorderer::ResourceType::Texture_Buffer
+    );
+    Expect(
+        reorderer.SetRead(multi_draw_depth_handle, CmdReorderer::Range(0, 1, 6, 1)) == 1,
+        "multi-draw attachment did not publish the last multiview layer write"
+    );
+    Expect(
+        reorderer.SetRead(multi_draw_depth_handle, CmdReorderer::Range(0, 1, 7, 1)) == 0,
+        "multi-draw attachment published a write outside its layer range"
+    );
+}
+
 void CommandResourcePreprocessingIsTaskGraphIndependent() {
     std::exception_ptr worker_error;
     std::jthread worker([&] {
@@ -1260,6 +1321,7 @@ int main() {
         QueueTransferWritesFeedBindlessAliasOrderingWithoutExactPollution();
         ExactImportHistoryIsBoundedAndMergesDuplicateRanges();
         ResourceImportExactHistorySurvivesReadWriteAndTwoDimensionalCompression();
+        MultiviewAttachmentsPublishEveryLayerWrite();
         CommandResourcePreprocessingIsTaskGraphIndependent();
         std::cout << "RHI command reorderer tests passed\n";
         return 0;

@@ -202,6 +202,7 @@ public:
 
     RENDER_API bool SupportsTessellation() const;
     RENDER_API uint32_t GetMaxTessellationFactor() const;
+    RENDER_API bool SupportsMultiview(uint32_t view_count) const;
 
     RENDER_API PipelineHandle
     CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders); //gfx
