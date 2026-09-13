@@ -48,15 +48,20 @@ struct RenderGraph::SetupBatchState {
         std::string            diagnostic{};
     };
 
-    SetupBatchState(size_t job_count, uint8_t faults_for_testing) :
-        fault_mask(faults_for_testing) {
-        if (HasFault(SetupFaultForTesting::BatchRuntimeCreate)) {
+    [[nodiscard]] static std::vector<JobRuntime> CreateRuntimes(
+        size_t  job_count,
+        uint8_t faults_for_testing
+    ) {
+        if ((faults_for_testing &
+             static_cast<uint8_t>(SetupFaultForTesting::BatchRuntimeCreate)) != 0) {
             throw std::bad_alloc{};
         }
-        runtimes.reserve(job_count);
-        for (size_t index = 0; index < job_count; ++index) {
-            runtimes.emplace_back(std::make_shared<JobRuntime>());
-        }
+        return std::vector<JobRuntime>(job_count);
+    }
+
+    SetupBatchState(size_t job_count, uint8_t faults_for_testing) :
+        runtimes(CreateRuntimes(job_count, faults_for_testing)),
+        fault_mask(faults_for_testing) {
     }
 
     void AdoptJobs(std::vector<SetupPassDeclaration>&& declarations) noexcept {
@@ -181,11 +186,11 @@ private:
             AnnotateJob(jobs[failed_index], diagnostic);
         }
         try {
-            runtimes[failed_index]->diagnostic = std::move(diagnostic);
+            runtimes[failed_index].diagnostic = std::move(diagnostic);
         } catch (...) {
-            runtimes[failed_index]->diagnostic.clear();
+            runtimes[failed_index].diagnostic.clear();
         }
-        runtimes[failed_index]->status.store(JobStatus::Failed, std::memory_order_release);
+        runtimes[failed_index].status.store(JobStatus::Failed, std::memory_order_release);
     }
 
     void RunJob(size_t index) noexcept {
@@ -193,7 +198,7 @@ private:
             return;
         }
         JobStatus expected = JobStatus::Pending;
-        if (!runtimes[index]->status.compare_exchange_strong(
+        if (!runtimes[index].status.compare_exchange_strong(
                 expected,
                 JobStatus::Running,
                 std::memory_order_acq_rel
@@ -203,7 +208,7 @@ private:
         try {
             jobs[index].execute();
             if (!cancelled.load(std::memory_order_acquire)) {
-                runtimes[index]->status.store(
+                runtimes[index].status.store(
                     JobStatus::Succeeded,
                     std::memory_order_release
                 );
@@ -217,7 +222,7 @@ private:
 
     [[nodiscard]] bool DependenciesSucceeded(size_t index) const noexcept {
         for (const uint32_t dependency : jobs[index].dependencies) {
-            if (runtimes[dependency]->status.load(std::memory_order_acquire) !=
+            if (runtimes[dependency].status.load(std::memory_order_acquire) !=
                 JobStatus::Succeeded) {
                 return false;
             }
@@ -227,7 +232,7 @@ private:
 
     void FailDependency(size_t index) noexcept {
         JobStatus expected = JobStatus::Pending;
-        if (!runtimes[index]->status.compare_exchange_strong(
+        if (!runtimes[index].status.compare_exchange_strong(
                 expected,
                 JobStatus::Failed,
                 std::memory_order_acq_rel
@@ -238,19 +243,19 @@ private:
             "asynchronous RenderGraph setup skipped after a dependency failure";
         FailJob(jobs[index], message);
         try {
-            runtimes[index]->diagnostic = "async setup pass '" + jobs[index].name +
-                                          "' skipped after a dependency failure";
-            AnnotateJob(jobs[index], runtimes[index]->diagnostic);
+            runtimes[index].diagnostic = "async setup pass '" + jobs[index].name +
+                                         "' skipped after a dependency failure";
+            AnnotateJob(jobs[index], runtimes[index].diagnostic);
         } catch (...) {
-            runtimes[index]->diagnostic.clear();
+            runtimes[index].diagnostic.clear();
         }
     }
 
     void CompleteFromJobs() noexcept {
         for (size_t index = 0; index < runtimes.size(); ++index) {
-            if (runtimes[index]->status.load(std::memory_order_acquire) ==
+            if (runtimes[index].status.load(std::memory_order_acquire) ==
                 JobStatus::Failed) {
-                const std::string& diagnostic = runtimes[index]->diagnostic;
+                const std::string& diagnostic = runtimes[index].diagnostic;
                 CompleteFailed(
                     kCallbackFailed,
                     diagnostic,
@@ -309,7 +314,7 @@ private:
 
     void TerminalizeAllPending(std::string_view message) noexcept {
         for (size_t index = 0; index < jobs.size(); ++index) {
-            const JobStatus previous = runtimes[index]->status.exchange(
+            const JobStatus previous = runtimes[index].status.exchange(
                 JobStatus::Failed,
                 std::memory_order_acq_rel
             );
@@ -407,7 +412,7 @@ private:
     }
 
     std::vector<SetupPassDeclaration> jobs{};
-    std::vector<SharedPtr<JobRuntime>> runtimes{};
+    std::vector<JobRuntime>           runtimes{};
     GraphEventRef                     completion_event{};
     std::mutex                        mutex{};
     std::condition_variable           completion{};
