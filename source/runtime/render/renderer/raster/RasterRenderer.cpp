@@ -913,14 +913,20 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 );
             };
             auto schedule_prepared =
-                [&](std::string_view name, auto&& setup, auto&& prepare, auto&& record) {
+                [&](std::string_view name,
+                    auto&& setup,
+                    auto&& prepare,
+                    auto&& record,
+                    RenderGraph::PrepareSafety prepare_safety =
+                        RenderGraph::PrepareSafety::Restricted) {
                     return dispatch_prepared(
                         name,
                         std::forward<decltype(setup)>(setup),
                         RenderGraph::PassExecutionClass::ParallelRecordEligible,
                         std::forward<decltype(prepare)>(prepare),
                         std::forward<decltype(record)>(record),
-                        std::span<const RenderGraph::SetupPassHandle>{}
+                        std::span<const RenderGraph::SetupPassHandle>{},
+                        prepare_safety
                     );
                 };
             auto schedule_prepared_after =
@@ -928,7 +934,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     RenderGraph::SetupPassHandle dependency,
                     auto&& setup,
                     auto&& prepare,
-                    auto&& record) {
+                    auto&& record,
+                    RenderGraph::PrepareSafety prepare_safety =
+                        RenderGraph::PrepareSafety::Restricted) {
                     const StaticArray<RenderGraph::SetupPassHandle, 1> dependencies{
                         dependency
                     };
@@ -938,7 +946,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         RenderGraph::PassExecutionClass::ParallelRecordEligible,
                         std::forward<decltype(prepare)>(prepare),
                         std::forward<decltype(record)>(record),
-                        std::span<const RenderGraph::SetupPassHandle>(dependencies)
+                        std::span<const RenderGraph::SetupPassHandle>(dependencies),
+                        prepare_safety
                     );
                 };
             auto schedule_prepared_after_two =
@@ -947,7 +956,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     RenderGraph::SetupPassHandle second_dependency,
                     auto&& setup,
                     auto&& prepare,
-                    auto&& record) {
+                    auto&& record,
+                    RenderGraph::PrepareSafety prepare_safety =
+                        RenderGraph::PrepareSafety::Restricted) {
                     const StaticArray<RenderGraph::SetupPassHandle, 2> dependencies{
                         first_dependency,
                         second_dependency
@@ -958,7 +969,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         RenderGraph::PassExecutionClass::ParallelRecordEligible,
                         std::forward<decltype(prepare)>(prepare),
                         std::forward<decltype(record)>(record),
-                        std::span<const RenderGraph::SetupPassHandle>(dependencies)
+                        std::span<const RenderGraph::SetupPassHandle>(dependencies),
+                        prepare_safety
                     );
                 };
             const auto shadow_depth_pass_handle = schedule_prepared(
@@ -978,7 +990,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     );
                     shadow_depth_pass->Record(recording_cmd_list, parameters);
                     recording_cmd_list.PopScopeWithTimeScope();
-                }
+                },
+                // Updates the persistent shadow cache and shadow resources.
+                RenderGraph::PrepareSafety::Unsafe
             );
             const auto probe_update_pass_handle = schedule_prepared(
                 "ProbeUpdate",
@@ -995,7 +1009,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 [&](CommandList& recording_cmd_list,
                     const ProbeUpdatePass::RecordParameters& parameters) {
                     probe_update_pass->Record(recording_cmd_list, parameters);
-                }
+                },
+                // Advances persistent probe-volume streaming and layout state.
+                RenderGraph::PrepareSafety::Unsafe
             );
             schedule_prepared_after_two(
                 "UploadLightingData",
@@ -1036,7 +1052,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     );
                     geometry_pass->Record(recording_cmd_list, parameters);
                     recording_cmd_list.PopScopeWithTimeScope();
-                }
+                },
+                // Publishes culling statistics into the frame's mutable config.
+                RenderGraph::PrepareSafety::Unsafe
             );
             schedule_prepared(
                 "TessellatedSurface",
@@ -1462,7 +1480,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     RenderGraph::PassExecutionClass execution_class,
                     auto&&                          prepare,
                     auto&&                          record,
-                    std::span<const RenderGraph::SetupPassHandle>) {
+                    std::span<const RenderGraph::SetupPassHandle>,
+                    RenderGraph::PrepareSafety) {
                     auto parameters = std::forward<decltype(prepare)>(prepare)();
                     linear_schedule(
                         name,
@@ -1625,7 +1644,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     if (execution_class == RenderGraph::PassExecutionClass::MainThread ||
                         execution_class == RenderGraph::PassExecutionClass::CpuPrepare ||
                         execution_class == RenderGraph::PassExecutionClass::ExternalControl) {
-                        graph.AddPass(
+                        graph.AddUnsafePass(
                             name,
                             std::forward<decltype(setup)>(setup),
                             [&, marker_name, execution_class,
@@ -1668,7 +1687,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         RenderGraph::PassExecutionClass     execution_class,
                         auto&&                              prepare,
                         auto&&                              record,
-                        std::span<const RenderGraph::SetupPassHandle> setup_dependencies) {
+                        std::span<const RenderGraph::SetupPassHandle> setup_dependencies,
+                        RenderGraph::PrepareSafety           prepare_safety) {
                         const std::string marker_name = std::format("Pass: {}", name);
                         return graph.AddPreparedPass(
                             name,
@@ -1689,7 +1709,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                             },
                             execution_class,
                             1,
-                            setup_dependencies
+                            setup_dependencies,
+                            prepare_safety
                         );
                     };
                 define_raster_passes(graph_schedule, graph_prepared_schedule);
