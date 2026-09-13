@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <semaphore>
+#include <string_view>
 
 namespace Moer::Render {
 
@@ -25,6 +26,27 @@ RENDER_API const char*    RHIThreadRoleName(ERHIThreadRole _role) noexcept;
 // Public blocking lifecycle calls may wait for every owned stage downstream.
 // Calling one from any stage owner can therefore form a self-join.
 RENDER_API bool IsRHIBlockingCallAllowedOnCurrentThread() noexcept;
+
+// Restricted RenderGraph Prepare callbacks are CPU-only. This intentionally
+// remains a shallow runtime boundary: ordinary CPU work is allowed, while
+// command-list mutation/submission and RenderDevice resource creation reject
+// access on the current thread. Explicit unsafe Prepare callbacks opt out.
+RENDER_API bool IsRHICommandAccessRestricted() noexcept;
+RENDER_API void ValidateRHICommandAccess(std::string_view _operation);
+
+class RENDER_API RHICommandAccessRestrictionScope final {
+public:
+    explicit RHICommandAccessRestrictionScope(bool _restricted) noexcept;
+    ~RHICommandAccessRestrictionScope();
+
+    RHICommandAccessRestrictionScope(const RHICommandAccessRestrictionScope&) = delete;
+    RHICommandAccessRestrictionScope& operator=(const RHICommandAccessRestrictionScope&) = delete;
+    RHICommandAccessRestrictionScope(RHICommandAccessRestrictionScope&&) = delete;
+    RHICommandAccessRestrictionScope& operator=(RHICommandAccessRestrictionScope&&) = delete;
+
+private:
+    bool restricted = false;
+};
 
 class RENDER_API RHIThreadRoleScope final {
 public:

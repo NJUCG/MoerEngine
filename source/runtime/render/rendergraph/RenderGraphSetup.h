@@ -182,7 +182,8 @@ auto RenderGraph::AddSetupPass(
     std::string_view name,
     Input&&          immutable_input,
     Prepare&&        prepare,
-    std::span<const SetupPassHandle> dependencies
+    std::span<const SetupPassHandle> dependencies,
+    PrepareSafety    safety
 ) -> RGPreparedValue<RGSetupResult<Input, Prepare>> {
     using InputType   = std::decay_t<Input>;
     using PrepareType = std::decay_t<Prepare>;
@@ -191,14 +192,14 @@ auto RenderGraph::AddSetupPass(
 
     if constexpr (std::is_pointer_v<PrepareType>) {
         if (prepare == nullptr) {
-            RegisterSetupPass(name, dependencies, {}, {}, {});
+            RegisterSetupPass(name, dependencies, safety, {}, {}, {});
             return {};
         }
     } else if constexpr (requires(const PrepareType& candidate) {
                              { candidate.operator bool() } -> std::same_as<bool>;
                          }) {
         if (!prepare.operator bool()) {
-            RegisterSetupPass(name, dependencies, {}, {}, {});
+            RegisterSetupPass(name, dependencies, safety, {}, {}, {});
             return {};
         }
     }
@@ -231,6 +232,7 @@ auto RenderGraph::AddSetupPass(
     const SetupPassHandle registered = RegisterSetupPass(
         name,
         resolved_dependencies,
+        safety,
         [state, input_owner, prepare_owner] {
             state->Publish(std::invoke(*prepare_owner, *input_owner));
         },
@@ -264,7 +266,8 @@ RenderGraph::PreparedPassHandle RenderGraph::AddPreparedPass(
     Record&&                        record,
     PassExecutionClass              execution,
     uint32_t                        workload,
-    std::span<const SetupPassHandle> setup_dependencies
+    std::span<const SetupPassHandle> setup_dependencies,
+    PrepareSafety                   prepare_safety
 ) {
     if (execution != PassExecutionClass::SerialRecord &&
         execution != PassExecutionClass::ParallelRecordEligible) {
@@ -282,7 +285,8 @@ RenderGraph::PreparedPassHandle RenderGraph::AddPreparedPass(
         setup_name,
         std::forward<Input>(immutable_input),
         std::forward<Prepare>(prepare),
-        setup_dependencies
+        setup_dependencies,
+        prepare_safety
     );
     if (!prepared.IsValid()) {
         return {};

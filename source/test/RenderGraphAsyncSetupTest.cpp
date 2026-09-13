@@ -1108,6 +1108,55 @@ void TestCombinedPreparedPassContract(TestSuite& suite) {
     );
 }
 
+void TestRestrictedPrepareRHIBarrier(
+    TestSuite&       suite,
+    std::string_view execution_model
+) {
+    const std::string test_name =
+        "restricted Prepare RHI barrier (" + std::string(execution_model) + ")";
+
+    CommandList restricted_cmd_list;
+    RenderGraph restricted_graph("RestrictedPrepareRHIBarrier");
+    const auto restricted_value = restricted_graph.AddSetupPass(
+        "RestrictedPrepare",
+        7,
+        [&](const int& input) {
+            static_cast<void>(restricted_cmd_list.Submit());
+            return input;
+        }
+    );
+    AddNoOpPass(restricted_graph);
+
+    suite.Check(
+        !restricted_graph.Compile() && restricted_value.HasFailed() &&
+            Contains(
+                restricted_graph.GetCompileError(),
+                "forbidden during restricted RenderGraph Prepare"
+            ),
+        test_name,
+        "restricted Prepare was allowed to submit a command list"
+    );
+
+    CommandList unsafe_cmd_list;
+    RenderGraph unsafe_graph("UnsafePrepareRHIBarrier");
+    const auto unsafe_value = unsafe_graph.AddUnsafeSetupPass(
+        "UnsafePrepare",
+        11,
+        [&](const int& input) {
+            static_cast<void>(unsafe_cmd_list.Submit());
+            return input * 2;
+        }
+    );
+    AddNoOpPass(unsafe_graph);
+
+    suite.Check(
+        unsafe_graph.Compile() && unsafe_value.IsReady() &&
+            unsafe_value.Get() == 22,
+        test_name,
+        unsafe_graph.GetCompileError()
+    );
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1121,6 +1170,7 @@ int main(int argc, char** argv) {
     TestGraphDestructionTerminatesPendingValue(suite);
     TestBatchCreationFailuresTerminalizeValues(suite);
     TestNormalWorkerStarvationSubprocess(suite, argv[0]);
+    TestRestrictedPrepareRHIBarrier(suite, "synchronous fallback");
 
     Moer::TaskSystem::Init();
     TestAsyncOrderJoinAndNamedThreadIsolation(suite);
@@ -1131,6 +1181,7 @@ int main(int argc, char** argv) {
     TestDeclarationFreezeAfterDispatch(suite);
     TestFailureDiagnosticFaultIsTerminal(suite);
     TestTaskDispatchAndDiagnosticFaultsAreTerminal(suite);
+    TestRestrictedPrepareRHIBarrier(suite, "task graph");
     Moer::TaskSystem::ShutDown();
 
     if (suite.FailureCount() != 0) {

@@ -270,6 +270,11 @@ public:
         }
     };
 
+    enum class PrepareSafety : uint8_t {
+        Restricted,
+        Unsafe,
+    };
+
     enum class AccessMode : uint8_t {
         Unknown,
         None,
@@ -975,8 +980,37 @@ public:
         std::string_view name,
         Input&&          immutable_input,
         Prepare&&        prepare,
-        std::span<const SetupPassHandle> dependencies = {}
+        std::span<const SetupPassHandle> dependencies = {},
+        PrepareSafety    safety = PrepareSafety::Restricted
     ) -> RGPreparedValue<RGSetupResult<Input, Prepare>>;
+
+    /** Explicit escape hatch for CPU preparation that must use the RHI. */
+    template<typename Input, typename Prepare>
+        requires std::invocable<
+                     std::decay_t<Prepare>&,
+                     const std::decay_t<Input>&> &&
+                 (!std::is_void_v<RGSetupResult<Input, Prepare>>) &&
+                 (!std::is_reference_v<
+                     std::invoke_result_t<
+                         std::decay_t<Prepare>&,
+                         const std::decay_t<Input>&>>) &&
+                 std::move_constructible<RGSetupResult<Input, Prepare>> &&
+                 std::constructible_from<std::decay_t<Input>, Input&&> &&
+                 std::constructible_from<std::decay_t<Prepare>, Prepare&&>
+    auto AddUnsafeSetupPass(
+        std::string_view name,
+        Input&&          immutable_input,
+        Prepare&&        prepare,
+        std::span<const SetupPassHandle> dependencies = {}
+    ) -> RGPreparedValue<RGSetupResult<Input, Prepare>> {
+        return AddSetupPass(
+            name,
+            std::forward<Input>(immutable_input),
+            std::forward<Prepare>(prepare),
+            dependencies,
+            PrepareSafety::Unsafe
+        );
+    }
 
     /**
      * The preferred combined API for a graph-owned prepared rendering pass:
@@ -1004,10 +1038,55 @@ public:
         Record&&                         record,
         PassExecutionClass               execution = PassExecutionClass::ParallelRecordEligible,
         uint32_t                         workload = 1,
-        std::span<const SetupPassHandle>  setup_dependencies = {}
+        std::span<const SetupPassHandle>  setup_dependencies = {},
+        PrepareSafety                    prepare_safety = PrepareSafety::Restricted
     );
 
+    /** Explicit escape hatch for a prepared pass whose Prepare phase needs RHI access. */
+    template<typename Input, typename Prepare, typename Record>
+        requires std::invocable<
+                     std::decay_t<Prepare>&,
+                     const std::decay_t<Input>&> &&
+                 (!std::is_void_v<RGSetupResult<Input, Prepare>>) &&
+                 (!std::is_reference_v<
+                     std::invoke_result_t<
+                         std::decay_t<Prepare>&,
+                         const std::decay_t<Input>&>>) &&
+                 std::invocable<
+                     std::decay_t<Record>&,
+                     CommandList&,
+                     const RGSetupResult<Input, Prepare>&>
+    PreparedPassHandle AddUnsafePreparedPass(
+        std::string_view                 name,
+        Input&&                          immutable_input,
+        Prepare&&                        prepare,
+        const SetupCallback&             declare_access,
+        Record&&                         record,
+        PassExecutionClass               execution = PassExecutionClass::ParallelRecordEligible,
+        uint32_t                         workload = 1,
+        std::span<const SetupPassHandle>  setup_dependencies = {}
+    ) {
+        return AddPreparedPass(
+            name,
+            std::forward<Input>(immutable_input),
+            std::forward<Prepare>(prepare),
+            declare_access,
+            std::forward<Record>(record),
+            execution,
+            workload,
+            setup_dependencies,
+            PrepareSafety::Unsafe
+        );
+    }
+
     PassHandle AddPass(std::string_view name, const SetupCallback& setup, ExecuteCallback execute);
+    PassHandle AddUnsafePass(
+        std::string_view     name,
+        const SetupCallback& setup,
+        ExecuteCallback      execute
+    ) {
+        return AddPass(name, setup, std::move(execute));
+    }
     PassHandle AddRecordPass(
         std::string_view     name,
         const SetupCallback& setup,
@@ -1158,6 +1237,7 @@ private:
     struct SetupPassDeclaration {
         std::string                              name{};
         std::vector<uint32_t>                    dependencies{};
+        PrepareSafety                            safety = PrepareSafety::Restricted;
         std::function<void()>                    execute{};
         std::function<void(std::string_view)>    fail{};
         std::function<void(std::string_view)>    annotate_failure{};
@@ -1214,6 +1294,7 @@ private:
     SetupPassHandle RegisterSetupPass(
         std::string_view                         setup_name,
         std::span<const SetupPassHandle>         dependencies,
+        PrepareSafety                           safety,
         std::function<void()>                    execute,
         std::function<void(std::string_view)>    fail,
         std::function<void(std::string_view)>    annotate_failure

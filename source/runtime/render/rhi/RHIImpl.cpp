@@ -3,6 +3,7 @@
 #include "rhi/RHI.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "rhi/RHIThreadOwnership.h"
 #include "shader/ShaderResourceManager.h"
 
 #include "rhi/plugin/NrdPlugin.h"
@@ -12,10 +13,12 @@
 
 namespace Moer::Render {
 PipelineHandle RenderDevice::CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) {
+    ValidateRHICommandAccess("RenderDevice::CreatePipeline");
     return impl->CreatePipeline(std::move(_pso_info), std::move(_shaders));
 }
 
 PipelineHandle RenderDevice::CreatePipeline(PipelineShaderInfo&& _shaders) {
+    ValidateRHICommandAccess("RenderDevice::CreatePipeline");
     return impl->CreatePipeline(std::move(_shaders));
 }
 
@@ -26,6 +29,7 @@ TextureRef RenderDevice::CreateTexture(
     uint32_t           _mip_cnt,
     uint32_t           _array_size
 ) {
+    ValidateRHICommandAccess("RenderDevice::CreateTexture");
     ETextureDimension dim = _array_size > 1 ? ETextureDimension::TEX_2D_ARRAY : ETextureDimension::TEX_2D;
 
     return impl->CreateTexture("User2DTexture", dim, _size, _format, _usage, _mip_cnt, _array_size);
@@ -38,6 +42,7 @@ TextureRef RenderDevice::CreateTexture(
     uint32_t           _mip_cnt,
     uint32_t           _array_size
 ) {
+    ValidateRHICommandAccess("RenderDevice::CreateTexture");
     ETextureDimension dim =
         _size.z > 1 ? ETextureDimension::TEX_3D :
                       (_array_size > 1 ? ETextureDimension::TEX_2D_ARRAY : ETextureDimension::TEX_2D);
@@ -53,6 +58,7 @@ TextureRef RenderDevice::CreateTexture(
     uint32_t           _mip_cnt,
     uint32_t           _array_size
 ) {
+    ValidateRHICommandAccess("RenderDevice::CreateTexture");
     ETextureDimension dim =
         _size.z > 1 ? ETextureDimension::TEX_3D :
                       (_array_size > 1 ? ETextureDimension::TEX_2D_ARRAY : ETextureDimension::TEX_2D);
@@ -62,6 +68,7 @@ TextureRef RenderDevice::CreateTexture(
 
 TextureRef
 RenderDevice::CreateTexture(std::string_view _name, const TextureInfo& _info) {
+    ValidateRHICommandAccess("RenderDevice::CreateTexture");
     return impl->CreateTexture(_name, _info);
 }
 
@@ -72,6 +79,7 @@ TextureRef RenderDevice::CreateCubeMap(
     ETextureUsageFlags _usage,
     uint32_t           _mip_cnt
 ) {
+    ValidateRHICommandAccess("RenderDevice::CreateCubeMap");
     ETextureDimension dim = ETextureDimension::TEX_CUBE; // TODO:未来支持CUBE_ARRAY
     return impl->CreateTexture(_name, dim, _size, _format, _usage, _mip_cnt, 1);
 }
@@ -83,14 +91,17 @@ DepthBufferRef RenderDevice::CreateDepthBuffer(
     uint32_t           _array_size,
     ETextureUsageFlags _usage
 ) {
+    ValidateRHICommandAccess("RenderDevice::CreateDepthBuffer");
     return impl->CreateDepthBuffer(_name, _size, _format, _array_size, _usage);
 }
 
 BindlessArrayRef RenderDevice::CreateBindlessArray(uint _max_size) {
+    ValidateRHICommandAccess("RenderDevice::CreateBindlessArray");
     return impl->CreateBindlessArray(_max_size);
 }
 
 FenceRef RenderDevice::CreateFence() {
+    ValidateRHICommandAccess("RenderDevice::CreateFence");
     return impl->CreateFence();
 }
 
@@ -99,6 +110,7 @@ RHIQueueTopology RenderDevice::GetQueueTopology() const {
 }
 
 SwapchainRef RenderDevice::CreateSwapchain(const SwapchainCreateInfo& _info) {
+    ValidateRHICommandAccess("RenderDevice::CreateSwapchain");
     return impl->CreateSwapchain(_info);
 }
 
@@ -109,6 +121,7 @@ BufferRef RenderDevice::CreateBuffer(
     EBufferUsageFlags _usage,
     EPixelFormat      _format
 ) {
+    ValidateRHICommandAccess("RenderDevice::CreateBuffer");
     return impl->CreateBuffer(_name, _element_cnt, _stride, _usage, _format);
 }
 
@@ -153,10 +166,12 @@ bool RenderDevice::SupportsMultiview(uint32_t view_count) const {
 }
 
 RaytracingGeometryRef RenderDevice::CreateRaytracingGeometry(const RaytracingGeometryInfo& _init) {
+    ValidateRHICommandAccess("RenderDevice::CreateRaytracingGeometry");
     return impl->CreateRaytracingGeometry(_init);
 }
 
 RaytracingSceneRef RenderDevice::CreateRaytracingScene() {
+    ValidateRHICommandAccess("RenderDevice::CreateRaytracingScene");
     return impl->CreateRaytracingScene();
 }
 
