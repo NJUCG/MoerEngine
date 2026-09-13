@@ -48,20 +48,22 @@ struct RenderGraph::SetupBatchState {
         std::string            diagnostic{};
     };
 
-    SetupBatchState() = default;
-
-    void AdoptJobs(
-        std::vector<SetupPassDeclaration>&& declarations,
-        uint8_t                             faults_for_testing
-    ) noexcept {
-        static_assert(std::is_nothrow_move_assignable_v<
-                      std::vector<SetupPassDeclaration>>);
-        jobs       = std::move(declarations);
-        fault_mask = faults_for_testing;
-        runtimes.reserve(jobs.size());
-        for (size_t index = 0; index < jobs.size(); ++index) {
+    SetupBatchState(size_t job_count, uint8_t faults_for_testing) :
+        fault_mask(faults_for_testing) {
+        if (HasFault(SetupFaultForTesting::BatchRuntimeCreate)) {
+            throw std::bad_alloc{};
+        }
+        runtimes.reserve(job_count);
+        for (size_t index = 0; index < job_count; ++index) {
             runtimes.emplace_back(std::make_shared<JobRuntime>());
         }
+    }
+
+    void AdoptJobs(std::vector<SetupPassDeclaration>&& declarations) noexcept {
+        assert(declarations.size() == runtimes.size());
+        static_assert(std::is_nothrow_move_assignable_v<
+                      std::vector<SetupPassDeclaration>>);
+        jobs = std::move(declarations);
     }
 
     void RunSynchronously() noexcept {
@@ -3822,31 +3824,26 @@ void RenderGraph::DispatchSetupPassesAsync() {
         return;
     }
 
-    // Establish throwing, single-allocation shared ownership before moving any
-    // declarations. If owner creation throws, setup_passes still owns every
-    // failure callback so no externally held RGPreparedValue remains Pending.
+    // Finish every throwing allocation while setup_passes still owns all
+    // failure callbacks. Adoption and publication are then noexcept commits.
     try {
         if ((setup_faults_for_testing &
              static_cast<uint8_t>(SetupFaultForTesting::BatchOwnerCreate)) != 0) {
             throw std::bad_alloc{};
         }
-        auto candidate = std::make_shared<SetupBatchState>();
-        candidate->AdoptJobs(std::move(setup_passes), setup_faults_for_testing);
+        auto candidate = std::make_shared<SetupBatchState>(
+            setup_passes.size(),
+            setup_faults_for_testing
+        );
+        candidate->AdoptJobs(std::move(setup_passes));
         setup_batch      = std::move(candidate);
         setup_dispatched = true;
-        setup_passes.clear();
     } catch (...) {
         setup_failed_before_batch = true;
         setup_dispatched          = true;
-        for (const auto& setup : setup_passes) {
-            try {
-                if (setup.fail) {
-                    setup.fail("RenderGraph async setup batch creation failed");
-                }
-            } catch (...) {
-            }
-        }
-        setup_passes.clear();
+        FailUndispatchedSetupPasses(
+            "RenderGraph async setup batch creation failed"
+        );
         return;
     }
 
@@ -3886,6 +3883,20 @@ void RenderGraph::DispatchSetupPassesAsync() {
     } catch (...) {
         batch->FailBeforeDispatch(nullptr);
     }
+}
+
+void RenderGraph::FailUndispatchedSetupPasses(
+    std::string_view reason
+) noexcept {
+    for (const auto& setup : setup_passes) {
+        try {
+            if (setup.fail) {
+                setup.fail(reason);
+            }
+        } catch (...) {
+        }
+    }
+    setup_passes.clear();
 }
 
 bool RenderGraph::WaitSetupPasses(std::string& error) noexcept {

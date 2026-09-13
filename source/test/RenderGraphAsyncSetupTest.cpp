@@ -43,6 +43,10 @@ public:
         AddFault(graph, RenderGraph::SetupFaultForTesting::BatchOwnerCreate);
     }
 
+    static void InjectBatchRuntimeFailure(RenderGraph& graph) noexcept {
+        AddFault(graph, RenderGraph::SetupFaultForTesting::BatchRuntimeCreate);
+    }
+
     static void InjectTaskDispatchFailure(RenderGraph& graph) noexcept {
         AddFault(graph, RenderGraph::SetupFaultForTesting::TaskDispatchThrows);
     }
@@ -716,67 +720,85 @@ void TestGraphDestructionTerminatesPendingValue(TestSuite& suite) {
     );
 }
 
-void TestBatchOwnerFailureTerminalizesValues(TestSuite& suite) {
-    constexpr std::string_view test_name =
-        "setup batch owner failure is terminal and one-shot";
+void TestBatchCreationFailuresTerminalizeValues(TestSuite& suite) {
+    using FailureInjector = void (*)(RenderGraph&) noexcept;
+    struct FailureCase {
+        std::string_view name{};
+        FailureInjector inject{};
+    };
+    constexpr std::array cases{
+        FailureCase{
+            "setup batch owner failure is terminal and one-shot",
+            &Moer::Render::RenderGraphAsyncSetupTestAccess::InjectBatchOwnerFailure,
+        },
+        FailureCase{
+            "setup batch runtime allocation failure is terminal and one-shot",
+            &Moer::Render::RenderGraphAsyncSetupTestAccess::InjectBatchRuntimeFailure,
+        },
+    };
 
-    Moer::Render::RGPreparedValue<int> survivor{};
-    std::atomic<int>                   setup_calls{0};
-    bool                               threw = false;
-    {
-        RenderGraph graph("BatchOwnerFailure");
-        survivor = graph.AddSetupPass(
-            "NeverRuns",
-            42,
-            [&](const int& value) {
-                setup_calls.fetch_add(1, std::memory_order_relaxed);
-                return value;
+    for (const FailureCase& failure_case : cases) {
+        const std::string_view test_name = failure_case.name;
+
+        Moer::Render::RGPreparedValue<int> survivor{};
+        std::atomic<int>                   setup_calls{0};
+        bool                               threw = false;
+        {
+            RenderGraph graph("BatchCreationFailure");
+            survivor = graph.AddSetupPass(
+                "NeverRuns",
+                42,
+                [&](const int& value) {
+                    setup_calls.fetch_add(1, std::memory_order_relaxed);
+                    return value;
+                }
+            );
+            AddNoOpPass(graph);
+            failure_case.inject(graph);
+
+            bool compiled = false;
+            try {
+                compiled = graph.Compile();
+            } catch (...) {
+                threw = true;
             }
-        );
-        AddNoOpPass(graph);
-        Moer::Render::RenderGraphAsyncSetupTestAccess::InjectBatchOwnerFailure(
-            graph
-        );
 
-        bool compiled = false;
-        try {
-            compiled = graph.Compile();
-        } catch (...) {
-            threw = true;
+            bool get_failed = false;
+            try {
+                (void)survivor.Get();
+            } catch (const std::runtime_error&) {
+                get_failed = true;
+            }
+
+            suite.Check(
+                !threw && !compiled && !graph.IsCompiled() &&
+                    survivor.HasFailed() && get_failed &&
+                    setup_calls.load(std::memory_order_relaxed) == 0,
+                test_name,
+                "batch creation failure escaped, compiled, ran setup, or left a value Pending"
+            );
+            suite.Check(
+                Contains(graph.GetCompileError(), "batch creation failed") &&
+                    Contains(survivor.GetError(), "batch creation failed"),
+                test_name,
+                "batch creation failure did not retain a stable fallback diagnostic"
+            );
+            suite.Check(
+                !graph.Compile() &&
+                    setup_calls.load(std::memory_order_relaxed) == 0 &&
+                    survivor.HasFailed(),
+                test_name,
+                "Compile retry reran or revived a batch that failed before dispatch"
+            );
         }
 
-        bool get_failed = false;
-        try {
-            (void)survivor.Get();
-        } catch (const std::runtime_error&) {
-            get_failed = true;
-        }
-
         suite.Check(
-            !threw && !compiled && !graph.IsCompiled() && survivor.HasFailed() &&
-                get_failed && setup_calls.load(std::memory_order_relaxed) == 0,
+            survivor.HasFailed() &&
+                setup_calls.load(std::memory_order_relaxed) == 0,
             test_name,
-            "batch owner failure escaped, compiled, ran setup, or left a value Pending"
-        );
-        suite.Check(
-            Contains(graph.GetCompileError(), "batch creation failed") &&
-                Contains(survivor.GetError(), "batch creation failed"),
-            test_name,
-            "batch owner failure did not retain a stable fallback diagnostic"
-        );
-        suite.Check(
-            !graph.Compile() && setup_calls.load(std::memory_order_relaxed) == 0 &&
-                survivor.HasFailed(),
-            test_name,
-            "Compile retry reran or revived a batch that failed before dispatch"
+            "graph destruction changed the terminal value after batch creation failure"
         );
     }
-
-    suite.Check(
-        survivor.HasFailed() && setup_calls.load(std::memory_order_relaxed) == 0,
-        test_name,
-        "graph destruction changed the terminal value after owner failure"
-    );
 }
 
 void TestFailureDiagnosticFaultIsTerminal(TestSuite& suite) {
@@ -1097,7 +1119,7 @@ int main(int argc, char** argv) {
     TestSynchronousFallbackAndOneShot(suite);
     TestNullableSetupFailsClosed(suite);
     TestGraphDestructionTerminatesPendingValue(suite);
-    TestBatchOwnerFailureTerminalizesValues(suite);
+    TestBatchCreationFailuresTerminalizeValues(suite);
     TestNormalWorkerStarvationSubprocess(suite, argv[0]);
 
     Moer::TaskSystem::Init();

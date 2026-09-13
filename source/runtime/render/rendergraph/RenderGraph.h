@@ -1094,10 +1094,11 @@ private:
     friend class RenderGraphAsyncSetupTestAccess;
 
     enum class SetupFaultForTesting : uint8_t {
-        None               = 0,
-        BatchOwnerCreate   = 1 << 0,
-        TaskDispatchThrows = 1 << 1,
-        FailureDiagnostic  = 1 << 2,
+        None                 = 0,
+        BatchOwnerCreate     = 1 << 0,
+        BatchRuntimeCreate   = 1 << 1,
+        TaskDispatchThrows   = 1 << 2,
+        FailureDiagnostic    = 1 << 3,
     };
 
     struct AccessDeclaration {
@@ -1218,6 +1219,7 @@ private:
         std::function<void(std::string_view)>    annotate_failure
     );
     void DispatchSetupPassesAsync();
+    void FailUndispatchedSetupPasses(std::string_view reason) noexcept;
     bool WaitSetupPasses(std::string& error) noexcept;
     bool InvalidateCompile();
     bool FailCompile(std::string message);
