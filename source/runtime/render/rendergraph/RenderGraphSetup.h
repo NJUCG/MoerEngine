@@ -3,6 +3,7 @@
 #include "RenderGraph.h"
 #include "misc/STL.h"
 
+#include <algorithm>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -140,6 +141,11 @@ public:
         return state ? state->GetError() : "RDG prepared value is invalid";
     }
 
+    /** Producer identity used to declare dependencies between setup tasks. */
+    [[nodiscard]] RenderGraph::SetupPassHandle GetSetupPass() const {
+        return producer;
+    }
+
     [[nodiscard]] const T& Get() const & {
         if (!state) {
             throw std::logic_error("RDG prepared value is invalid");
@@ -152,10 +158,12 @@ private:
     friend class RenderGraph;
 
     explicit RGPreparedValue(
-        SharedPtr<const Detail::RGSetupState<T>> setup_state
-    ) : state(std::move(setup_state)) {}
+        SharedPtr<const Detail::RGSetupState<T>> setup_state,
+        RenderGraph::SetupPassHandle             setup_producer
+    ) : state(std::move(setup_state)), producer(setup_producer) {}
 
     SharedPtr<const Detail::RGSetupState<T>> state{};
+    RenderGraph::SetupPassHandle             producer{};
 };
 
 template<typename Input, typename Prepare>
@@ -173,7 +181,8 @@ template<typename Input, typename Prepare>
 auto RenderGraph::AddSetupPass(
     std::string_view name,
     Input&&          immutable_input,
-    Prepare&&        prepare
+    Prepare&&        prepare,
+    std::span<const SetupPassHandle> dependencies
 ) -> RGPreparedValue<RGSetupResult<Input, Prepare>> {
     using InputType   = std::decay_t<Input>;
     using PrepareType = std::decay_t<Prepare>;
@@ -182,14 +191,14 @@ auto RenderGraph::AddSetupPass(
 
     if constexpr (std::is_pointer_v<PrepareType>) {
         if (prepare == nullptr) {
-            RegisterSetupPass(name, {}, {}, {});
+            RegisterSetupPass(name, dependencies, {}, {}, {});
             return {};
         }
     } else if constexpr (requires(const PrepareType& candidate) {
                              { candidate.operator bool() } -> std::same_as<bool>;
                          }) {
         if (!prepare.operator bool()) {
-            RegisterSetupPass(name, {}, {}, {});
+            RegisterSetupPass(name, dependencies, {}, {}, {});
             return {};
         }
     }
@@ -202,18 +211,109 @@ auto RenderGraph::AddSetupPass(
         std::forward<Prepare>(prepare)
     );
 
-    const bool registered = RegisterSetupPass(
+    std::vector<SetupPassHandle> resolved_dependencies(
+        dependencies.begin(), dependencies.end()
+    );
+    if constexpr (requires(const InputType& input) {
+                      { input.GetSetupPass() } -> std::same_as<SetupPassHandle>;
+                  }) {
+        const SetupPassHandle inferred = input_owner->GetSetupPass();
+        if (inferred.IsValid() &&
+            std::find(
+                resolved_dependencies.begin(),
+                resolved_dependencies.end(),
+                inferred
+            ) == resolved_dependencies.end()) {
+            resolved_dependencies.emplace_back(inferred);
+        }
+    }
+
+    const SetupPassHandle registered = RegisterSetupPass(
         name,
+        resolved_dependencies,
         [state, input_owner, prepare_owner] {
             state->Publish(std::invoke(*prepare_owner, *input_owner));
         },
         [state](std::string_view error) { state->Fail(error); },
         [state](std::string_view error) { state->AnnotateFailure(error); }
     );
-    if (!registered) {
+    if (!registered.IsValid()) {
         return {};
     }
-    return RGPreparedValue<ResultType>(std::move(state));
+    return RGPreparedValue<ResultType>(std::move(state), registered);
+}
+
+template<typename Input, typename Prepare, typename Record>
+    requires std::invocable<
+                 std::decay_t<Prepare>&,
+                 const std::decay_t<Input>&> &&
+             (!std::is_void_v<RGSetupResult<Input, Prepare>>) &&
+             (!std::is_reference_v<
+                 std::invoke_result_t<
+                     std::decay_t<Prepare>&,
+                     const std::decay_t<Input>&>>) &&
+             std::invocable<
+                 std::decay_t<Record>&,
+                 CommandList&,
+                 const RGSetupResult<Input, Prepare>&>
+RenderGraph::PreparedPassHandle RenderGraph::AddPreparedPass(
+    std::string_view                name,
+    Input&&                         immutable_input,
+    Prepare&&                       prepare,
+    const SetupCallback&            declare_access,
+    Record&&                        record,
+    PassExecutionClass              execution,
+    uint32_t                        workload,
+    std::span<const SetupPassHandle> setup_dependencies
+) {
+    if (execution != PassExecutionClass::SerialRecord &&
+        execution != PassExecutionClass::ParallelRecordEligible) {
+        if (InvalidateCompile()) {
+            declaration_errors.emplace_back(
+                "prepared pass '" + std::string(name) +
+                "' must use SerialRecord or ParallelRecordEligible"
+            );
+        }
+        return {};
+    }
+
+    const std::string setup_name = std::string(name) + ".Prepare";
+    auto prepared = AddSetupPass(
+        setup_name,
+        std::forward<Input>(immutable_input),
+        std::forward<Prepare>(prepare),
+        setup_dependencies
+    );
+    if (!prepared.IsValid()) {
+        return {};
+    }
+
+    using RecordType = std::decay_t<Record>;
+    auto record_owner = std::make_shared<RecordType>(std::forward<Record>(record));
+    const SetupPassHandle setup_handle = prepared.GetSetupPass();
+    const PassHandle record_handle = AddRecordPass(
+        name,
+        declare_access,
+        [prepared = std::move(prepared), record_owner](CommandList& cmd_list) {
+            std::invoke(*record_owner, cmd_list, prepared.Get());
+        },
+        execution,
+        workload
+    );
+    if (!record_handle.IsValid()) {
+        return {};
+    }
+    const PassExecutionClass declared_execution =
+        passes[record_handle.index].execution_class;
+    if (declared_execution != PassExecutionClass::SerialRecord &&
+        declared_execution != PassExecutionClass::ParallelRecordEligible) {
+        declaration_errors.emplace_back(
+            "prepared pass '" + std::string(name) +
+            "' setup changed it to a non-recording execution class"
+        );
+        return {};
+    }
+    return PreparedPassHandle{setup_handle, record_handle};
 }
 
 } // namespace Moer::Render

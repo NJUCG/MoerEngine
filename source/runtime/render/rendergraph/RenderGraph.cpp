@@ -36,6 +36,18 @@ struct RenderGraph::SetupBatchState {
         Failed,
     };
 
+    enum class JobStatus : uint8_t {
+        Pending,
+        Running,
+        Succeeded,
+        Failed,
+    };
+
+    struct JobRuntime {
+        std::atomic<JobStatus> status{JobStatus::Pending};
+        std::string            diagnostic{};
+    };
+
     SetupBatchState() = default;
 
     void AdoptJobs(
@@ -46,32 +58,61 @@ struct RenderGraph::SetupBatchState {
                       std::vector<SetupPassDeclaration>>);
         jobs       = std::move(declarations);
         fault_mask = faults_for_testing;
+        runtimes.reserve(jobs.size());
+        for (size_t index = 0; index < jobs.size(); ++index) {
+            runtimes.emplace_back(std::make_shared<JobRuntime>());
+        }
     }
 
-    void Run() noexcept {
+    void RunSynchronously() noexcept {
         try {
             for (size_t index = 0; index < jobs.size(); ++index) {
-                try {
-                    jobs[index].execute();
-                } catch (const std::exception& exception) {
-                    HandleExecutionFailure(index, exception.what());
-                    return;
-                } catch (...) {
-                    HandleExecutionFailure(index, nullptr);
-                    return;
+                if (!DependenciesSucceeded(index)) {
+                    FailDependency(index);
+                    continue;
                 }
+                RunJob(index);
             }
-            CompleteSucceeded();
+            CompleteFromJobs();
         } catch (...) {
-            // This is deliberately allocation-free until every value and the
-            // aggregate gate have a terminal failure state. It is the final
-            // guard against an unexpected exception escaping a noexcept task.
             TerminalizeAllPending(kCallbackFailed);
             CompleteFailedWithoutDiagnostic(kCallbackFailed);
         }
     }
 
+    void DispatchAsync(const SharedPtr<SetupBatchState>& owner) {
+        GraphEventArray events(jobs.size());
+        for (size_t index = 0; index < jobs.size(); ++index) {
+            GraphEventArray prerequisites{};
+            prerequisites.reserve(jobs[index].dependencies.size());
+            for (const uint32_t dependency : jobs[index].dependencies) {
+                prerequisites.emplace_back(events[dependency]);
+            }
+            auto task = LambdaTask::Create([owner, index] {
+                if (!owner->DependenciesSucceeded(index)) {
+                    owner->FailDependency(index);
+                    return;
+                }
+                owner->RunJob(index);
+            });
+            if (!prerequisites.empty()) {
+                task.Wait(std::move(prerequisites));
+            }
+            events[index] = task.Dispatch();
+        }
+
+        auto completion_task = LambdaTask::Create(
+            [owner] { owner->CompleteFromJobs(); },
+            EThread::AnyThread_HighPri
+        );
+        if (!events.empty()) {
+            completion_task.Wait(std::move(events));
+        }
+        completion_event = completion_task.Dispatch();
+    }
+
     void FailBeforeDispatch(const char* reason) noexcept {
+        cancelled.store(true, std::memory_order_release);
         TerminalizeAllPending(kDispatchFailed);
 
         std::string diagnostic{};
@@ -117,8 +158,6 @@ struct RenderGraph::SetupBatchState {
 private:
     static constexpr const char* kCallbackFailed =
         "asynchronous RenderGraph setup failed";
-    static constexpr const char* kCallbackSkipped =
-        "asynchronous RenderGraph setup skipped after an earlier failure";
     static constexpr const char* kDispatchFailed =
         "failed to dispatch asynchronous RenderGraph setup";
     static constexpr const char* kDiagnosticUnavailable =
@@ -128,14 +167,8 @@ private:
         return (fault_mask & static_cast<uint8_t>(fault)) != 0;
     }
 
-    void HandleExecutionFailure(size_t failed_index, const char* reason) noexcept {
-        // Publish fallback terminal states before attempting any detailed
-        // diagnostic allocation.
+    void RecordExecutionFailure(size_t failed_index, const char* reason) noexcept {
         FailJob(jobs[failed_index], kCallbackFailed);
-        for (size_t index = failed_index + 1; index < jobs.size(); ++index) {
-            FailJob(jobs[index], kCallbackSkipped);
-        }
-
         std::string diagnostic{};
         const bool diagnostic_available = TryBuildCallbackDiagnostic(
             failed_index,
@@ -145,11 +178,86 @@ private:
         if (diagnostic_available) {
             AnnotateJob(jobs[failed_index], diagnostic);
         }
-        CompleteFailed(
-            kCallbackFailed,
-            std::move(diagnostic),
-            !diagnostic_available
-        );
+        try {
+            runtimes[failed_index]->diagnostic = std::move(diagnostic);
+        } catch (...) {
+            runtimes[failed_index]->diagnostic.clear();
+        }
+        runtimes[failed_index]->status.store(JobStatus::Failed, std::memory_order_release);
+    }
+
+    void RunJob(size_t index) noexcept {
+        if (cancelled.load(std::memory_order_acquire)) {
+            return;
+        }
+        JobStatus expected = JobStatus::Pending;
+        if (!runtimes[index]->status.compare_exchange_strong(
+                expected,
+                JobStatus::Running,
+                std::memory_order_acq_rel
+            )) {
+            return;
+        }
+        try {
+            jobs[index].execute();
+            if (!cancelled.load(std::memory_order_acquire)) {
+                runtimes[index]->status.store(
+                    JobStatus::Succeeded,
+                    std::memory_order_release
+                );
+            }
+        } catch (const std::exception& exception) {
+            RecordExecutionFailure(index, exception.what());
+        } catch (...) {
+            RecordExecutionFailure(index, nullptr);
+        }
+    }
+
+    [[nodiscard]] bool DependenciesSucceeded(size_t index) const noexcept {
+        for (const uint32_t dependency : jobs[index].dependencies) {
+            if (runtimes[dependency]->status.load(std::memory_order_acquire) !=
+                JobStatus::Succeeded) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void FailDependency(size_t index) noexcept {
+        JobStatus expected = JobStatus::Pending;
+        if (!runtimes[index]->status.compare_exchange_strong(
+                expected,
+                JobStatus::Failed,
+                std::memory_order_acq_rel
+            )) {
+            return;
+        }
+        const std::string_view message =
+            "asynchronous RenderGraph setup skipped after a dependency failure";
+        FailJob(jobs[index], message);
+        try {
+            runtimes[index]->diagnostic = "async setup pass '" + jobs[index].name +
+                                          "' skipped after a dependency failure";
+            AnnotateJob(jobs[index], runtimes[index]->diagnostic);
+        } catch (...) {
+            runtimes[index]->diagnostic.clear();
+        }
+    }
+
+    void CompleteFromJobs() noexcept {
+        for (size_t index = 0; index < runtimes.size(); ++index) {
+            if (runtimes[index]->status.load(std::memory_order_acquire) ==
+                JobStatus::Failed) {
+                const std::string& diagnostic = runtimes[index]->diagnostic;
+                CompleteFailed(
+                    kCallbackFailed,
+                    diagnostic,
+                    diagnostic.empty()
+                );
+                return;
+            }
+        }
+        CompleteSucceeded();
     }
 
     [[nodiscard]] bool TryBuildCallbackDiagnostic(
@@ -198,8 +306,14 @@ private:
     }
 
     void TerminalizeAllPending(std::string_view message) noexcept {
-        for (const auto& job : jobs) {
-            FailJob(job, message);
+        for (size_t index = 0; index < jobs.size(); ++index) {
+            const JobStatus previous = runtimes[index]->status.exchange(
+                JobStatus::Failed,
+                std::memory_order_acq_rel
+            );
+            if (previous == JobStatus::Pending || previous == JobStatus::Running) {
+                FailJob(jobs[index], message);
+            }
         }
     }
 
@@ -291,6 +405,8 @@ private:
     }
 
     std::vector<SetupPassDeclaration> jobs{};
+    std::vector<SharedPtr<JobRuntime>> runtimes{};
+    GraphEventRef                     completion_event{};
     std::mutex                        mutex{};
     std::condition_variable           completion{};
     std::string                       error{};
@@ -298,6 +414,7 @@ private:
     Status                            status = Status::Pending;
     uint8_t                           fault_mask = 0;
     bool                              diagnostic_storage_failed = false;
+    std::atomic<bool>                 cancelled{false};
 };
 
 namespace {
@@ -1555,30 +1672,17 @@ bool RenderGraph::Compile() {
     MOER_PROFILE_SCOPE("RenderGraph.Compile");
     DispatchSetupPassesAsync();
 
-    bool compiler_succeeded = false;
-    try {
-        compiler_succeeded = RenderGraphCompiler(*this).Compile();
-    } catch (...) {
-        std::string ignored{};
-        (void)WaitSetupPasses(ignored);
-        throw;
-    }
-
     std::string setup_error{};
     const bool  setup_succeeded = WaitSetupPasses(setup_error);
-    if (setup_succeeded) {
-        return compiler_succeeded;
+    if (!setup_succeeded) {
+        compiled = false;
+        compile_error = setup_error.empty() ?
+                            "asynchronous RenderGraph setup failed before compilation" :
+                            std::move(setup_error);
+        return false;
     }
 
-    compiled = false;
-    if (compiler_succeeded || compile_error.empty()) {
-        compile_error = setup_error.empty() ?
-                            "asynchronous RenderGraph setup failed" :
-                            std::move(setup_error);
-    } else if (!setup_error.empty()) {
-        compile_error += "; " + setup_error;
-    }
-    return false;
+    return RenderGraphCompiler(*this).Compile();
 }
 
 bool RenderGraph::Execute() {
@@ -3646,25 +3750,26 @@ void RenderGraph::SetPassTranslateExecutionClass(
     passes[pass_index].translate_execution_class = execution_class;
 }
 
-bool RenderGraph::RegisterSetupPass(
+RenderGraph::SetupPassHandle RenderGraph::RegisterSetupPass(
     std::string_view                         setup_name,
+    std::span<const SetupPassHandle>         dependencies,
     std::function<void()>                    execute,
     std::function<void(std::string_view)>    fail,
     std::function<void(std::string_view)>    annotate_failure
 ) {
     if (!InvalidateCompile()) {
-        return false;
+        return {};
     }
     if (setup_name.empty()) {
         declaration_errors.emplace_back("setup pass name cannot be empty");
-        return false;
+        return {};
     }
     if (!execute || !fail || !annotate_failure) {
         declaration_errors.emplace_back(
             "setup pass has no prepare callback: " +
             std::string(setup_name)
         );
-        return false;
+        return {};
     }
     if (std::any_of(
             setup_passes.begin(),
@@ -3676,16 +3781,40 @@ bool RenderGraph::RegisterSetupPass(
         declaration_errors.emplace_back(
             "duplicate setup pass name: " + std::string(setup_name)
         );
-        return false;
+        return {};
+    }
+
+    std::vector<uint32_t> dependency_indices{};
+    dependency_indices.reserve(dependencies.size());
+    for (const SetupPassHandle dependency : dependencies) {
+        if (!dependency.IsValid() || dependency.owner_id != graph_id ||
+            dependency.index >= setup_passes.size()) {
+            declaration_errors.emplace_back(
+                "setup pass '" + std::string(setup_name) +
+                "' has an invalid or forward dependency"
+            );
+            return {};
+        }
+        if (std::find(
+                dependency_indices.begin(),
+                dependency_indices.end(),
+                dependency.index
+            ) == dependency_indices.end()) {
+            dependency_indices.emplace_back(dependency.index);
+        }
     }
 
     setup_passes.emplace_back(SetupPassDeclaration{
         .name    = std::string(setup_name),
+        .dependencies = std::move(dependency_indices),
         .execute = std::move(execute),
         .fail    = std::move(fail),
         .annotate_failure = std::move(annotate_failure),
     });
-    return true;
+    return SetupPassHandle{
+        .index    = static_cast<uint32_t>(setup_passes.size() - 1),
+        .owner_id = graph_id,
+    };
 }
 
 void RenderGraph::DispatchSetupPassesAsync() {
@@ -3722,14 +3851,16 @@ void RenderGraph::DispatchSetupPassesAsync() {
     }
 
     if (!TaskGraph::IsInitialized()) {
-        setup_batch->Run();
+        setup_batch->RunSynchronously();
         return;
     }
 
     // A Normal-priority worker cannot block waiting for work queued back to
     // the same bounded pool. If every worker compiled a graph concurrently,
     // asynchronous dispatch would otherwise starve all setup jobs. Main,
-    // render, external, and other-priority callers retain compile overlap.
+    // render, external, and other-priority callers still dispatch independent
+    // setup jobs concurrently, but Compile always joins them before invoking
+    // the graph compiler.
     const EThread::Type current_thread =
         TaskGraph::GetInterface().GetCurrentThread();
     const ThreadIndex current_index = EThread::GetThreadIndex(current_thread);
@@ -3739,7 +3870,7 @@ void RenderGraph::DispatchSetupPassesAsync() {
         EThread::GetThreadPriority(current_thread) ==
             EThread::GetThreadPriority(EThread::AnyThread_NormalPri);
     if (current_is_normal_worker) {
-        setup_batch->Run();
+        setup_batch->RunSynchronously();
         return;
     }
 
@@ -3749,7 +3880,7 @@ void RenderGraph::DispatchSetupPassesAsync() {
              static_cast<uint8_t>(SetupFaultForTesting::TaskDispatchThrows)) != 0) {
             throw InjectedSetupDispatchFault{};
         }
-        (void)LambdaTask::Dispatch([batch] { batch->Run(); });
+        batch->DispatchAsync(batch);
     } catch (const std::exception& exception) {
         batch->FailBeforeDispatch(exception.what());
     } catch (...) {

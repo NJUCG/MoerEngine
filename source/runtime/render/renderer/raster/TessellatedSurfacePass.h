@@ -17,8 +17,26 @@ public:
 
 class TessellatedSurfacePass {
 public:
+    struct RecordParameters {
+        bool                   enabled{false};
+        TessellatedSurfaceData data{};
+        BufferRef              surface_data{};
+        TextureWithHandle      base_color{};
+        TextureWithHandle      normal{};
+        TextureWithHandle      metal_rough_ao{};
+        TextureView            depth{};
+        Rect2D                 render_area{};
+        uint32_t               instance_count{0};
+    };
+
     explicit TessellatedSurfacePass(RasterContext& context);
 
+    [[nodiscard]] RecordParameters Prepare(
+        const RasterContext& context,
+        const RasterConfig&  config,
+        const Camera&        camera
+    ) const;
+    void Record(CommandList& cmd_list, const RecordParameters& parameters);
     void Process(RasterContext& context, const RasterConfig& config, const Camera& camera);
 
     bool IsSupported() const {

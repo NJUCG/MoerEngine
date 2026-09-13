@@ -104,13 +104,14 @@ TessellatedSurfacePass::TessellatedSurfacePass(RasterContext& context) {
     );
 }
 
-void TessellatedSurfacePass::Process(
-    RasterContext&     context,
+TessellatedSurfacePass::RecordParameters TessellatedSurfacePass::Prepare(
+    const RasterContext& context,
     const RasterConfig& config,
     const Camera&       camera
-) {
+) const {
+    RecordParameters parameters{};
     if (!supported || !config.tessellated_surface_enabled) {
-        return;
+        return parameters;
     }
 
     const uint32_t grid_resolution = static_cast<uint32_t>(
@@ -142,7 +143,7 @@ void TessellatedSurfacePass::Process(
     const Vector3f camera_position = camera.GetPosition();
     const uint2 resolution = context.GetResolution();
 
-    TessellatedSurfaceData data{};
+    auto& data = parameters.data;
     data.world2clip = Transpose(camera.GetViewProjectionMatrix());
     data.camera_position_tan_half_fov = float4(
         camera_position.x,
@@ -188,42 +189,69 @@ void TessellatedSurfacePass::Process(
         static_cast<uint32_t>(std::clamp(config.tessellated_surface_debug_mode, 0, 3))
     );
 
-    Array<byte> upload(sizeof(TessellatedSurfaceData));
-    std::memcpy(upload.data(), &data, sizeof(TessellatedSurfaceData));
-    context.cmd_list.CopyFrom(std::move(upload), surface_data_buffer->GetView());
+    parameters.enabled        = true;
+    parameters.surface_data   = surface_data_buffer;
+    parameters.base_color     = context.textures.base_color;
+    parameters.normal         = context.textures.normal;
+    parameters.metal_rough_ao = context.textures.metal_rough_ao;
+    parameters.depth          = context.textures.depth_linear_sampler.tex->GetView();
+    parameters.render_area    = parameters.base_color.GetRect2D();
+    parameters.instance_count = grid_resolution * grid_resolution;
+    return parameters;
+}
 
-    DepthAttachment depth_attachment(context.textures.depth_linear_sampler.tex->GetView());
+void TessellatedSurfacePass::Record(
+    CommandList& cmd_list,
+    const RecordParameters& parameters
+) {
+    if (!parameters.enabled) {
+        return;
+    }
+
+    Array<byte> upload(sizeof(TessellatedSurfaceData));
+    std::memcpy(upload.data(), &parameters.data, sizeof(TessellatedSurfaceData));
+    cmd_list.CopyFrom(std::move(upload), parameters.surface_data->GetView());
+
+    DepthAttachment depth_attachment(parameters.depth);
     depth_attachment.action = EAttachmentAction::AC_DS_LOAD_STORE_DEPTH;
 
-    const auto render_area = context.textures.base_color.GetRect2D();
     Array<SingleDrawParam> draw_params{
-        SingleDrawParam{6u, grid_resolution * grid_resolution, 0u, 0u, 0u}
+        SingleDrawParam{6u, parameters.instance_count, 0u, 0u, 0u}
     };
 
-    context.cmd_list.PushScopeWithTimeScope("Tessellated Surface");
-    context.cmd_list.Gfx(pipeline, surface_data_buffer->GetView())
+    cmd_list.PushScopeWithTimeScope("Tessellated Surface");
+    cmd_list.Gfx(pipeline, parameters.surface_data->GetView())
         .Draw(
             "Tessellated Surface Pass",
-            render_area,
+            parameters.render_area,
             std::move(draw_params),
             depth_attachment,
             ColorAttachment{
-                context.textures.base_color.tex,
+                parameters.base_color.tex,
                 EAttachmentAction::AC_LOAD_STORE,
                 float4(0.0f, 0.0f, 0.0f, 0.0f)
             },
             ColorAttachment{
-                context.textures.normal.tex,
+                parameters.normal.tex,
                 EAttachmentAction::AC_LOAD_STORE,
                 float4(0.0f, 0.0f, 0.0f, 0.0f)
             },
             ColorAttachment{
-                context.textures.metal_rough_ao.tex,
+                parameters.metal_rough_ao.tex,
                 EAttachmentAction::AC_LOAD_STORE,
                 float4(0.0f, 0.0f, 0.0f, 0.0f)
             }
         );
-    context.cmd_list.PopScopeWithTimeScope();
+    cmd_list.PopScopeWithTimeScope();
+}
+
+void TessellatedSurfacePass::Process(
+    RasterContext&      context,
+    const RasterConfig& config,
+    const Camera&       camera
+) {
+    const RecordParameters parameters = Prepare(context, config, camera);
+    Record(context.cmd_list, parameters);
 }
 
 } // namespace Moer::Render::Raster

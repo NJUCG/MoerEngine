@@ -69,9 +69,6 @@ public:
 
     bool RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks);
 
-    void
-    UpdateGlobalLightingData(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
-
 private:
     // 使用堆所有权，使公共头文件中只需前置声明 RasterContext。
     UniquePtr<RasterContext> raster_context_ptr;

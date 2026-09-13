@@ -53,6 +53,19 @@ public:
         StaticArray<UpdateJob, RASTER_PROBE_MAX_BRICK_COUNT> jobs{};
     };
 
+    struct SceneDataUpload {
+        BufferRef   cell_buffer{};
+        BufferRef   volume_buffer{};
+        BufferRef   brick_buffer{};
+        BufferRef   page_table_buffer{};
+        BufferRef   scene_data_buffer{};
+        Array<byte> cell_data{};
+        Array<byte> volume_data{};
+        Array<byte> brick_data{};
+        Array<byte> page_table_data{};
+        Array<byte> scene_data{};
+    };
+
     void Create(RenderDevice& device, BindlessArrayRef& bdls);
     void Destroy(BindlessArrayRef& bdls);
 
@@ -63,6 +76,8 @@ public:
         float3                  camera_position,
         uint64                  frame_index
     );
+    [[nodiscard]] SceneDataUpload PrepareSceneDataUpload(const GpuScene::Res& gpu_scene);
+    static void RecordSceneDataUpload(CommandList& cmd_list, const SceneDataUpload& upload);
     void UpdateSceneData(CommandList& cmd_list, const GpuScene::Res& gpu_scene);
     void TrackFrameSubmission(CommandList& cmd_list, uint64 frame_index);
     void FillLightingData(LightingData& lighting_data) const;
@@ -506,7 +521,6 @@ private:
     TextureWithHandle m_visibility_atlas_texture;
     TextureWithHandle m_irradiance_atlas_texture;
     BufferRef        m_scene_data_buffer;
-    Array<byte>      m_scene_data_upload;
     Array<byte>      m_volume_data_upload;
     Array<byte>      m_cell_data_upload;
     Array<byte>      m_brick_data_upload;

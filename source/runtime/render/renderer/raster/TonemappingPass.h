@@ -56,6 +56,15 @@ public:
  */
 class TonemappingPass {
 public:
+    struct RecordParameters {
+        TonemappingPipelineBindlessParam shader{};
+        TextureWithHandle                input{};
+        TextureWithHandle                output{};
+        BufferRef                        histogram{};
+        BufferRef                        exposure{};
+        uint3                            histogram_groups{};
+    };
+
     TonemappingPass(RasterContext& context) {
         GfxPsoCreateInfo pso_full_screen_info(
             RHIRasterizeInfo::Preset(),
@@ -91,15 +100,22 @@ public:
         );
     }
 
-    TextureWithHandle
-    Process(RasterContext& context, const RasterConfig& ui_config, TextureWithHandle input_image) {
+    [[nodiscard]] RecordParameters Prepare(
+        const RasterContext& context,
+        const RasterConfig&  ui_config,
+        TextureWithHandle    input_image
+    ) const {
+        RecordParameters parameters{};
+        parameters.input     = std::move(input_image);
+        parameters.output    = context.textures.tonemapping_output;
+        parameters.histogram = histogram_buffer;
+        parameters.exposure  = exposure_buffer;
 
-        uint2 input_res = input_image.GetSize();
-
-        TonemappingPipelineBindlessParam param;
+        const uint2 input_res = parameters.input.GetSize();
+        auto&       param     = parameters.shader;
         {
             auto& ae  = param.ae;
-            auto& uae = ui_config.tonemapping_ae;
+            const auto& uae = ui_config.tonemapping_ae;
 
             ae.enabled = uae.enabled ? 1 : 0;
 
@@ -137,45 +153,71 @@ public:
             param.debug_param = ui_config.debug_param;
         }
 
+        parameters.histogram_groups = uint3(
+            (input_res.x - 1) / TONEMAPPING_HISTOGRAM_GROUP_X + 1,
+            (input_res.y - 1) / TONEMAPPING_HISTOGRAM_GROUP_Y + 1,
+            1
+        );
+        return parameters;
+    }
+
+    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
         // Reset
         {
-            context.cmd_list.ClearResource(histogram_buffer->GetView(), 0);
+            cmd_list.ClearResource(parameters.histogram->GetView(), 0);
             // 需要last_exposure，所以不能清零
-            // context.cmd_list.ClearResource(exposure_buffer->GetView(), 0);
+            // cmd_list.ClearResource(parameters.exposure->GetView(), 0);
         }
 
         // Histogram Pass
         {
-            context.cmd_list.Compute(tonemapping_histogram_pipeline, param, input_image.tex, histogram_buffer)
+            cmd_list.Compute(
+                        tonemapping_histogram_pipeline,
+                        parameters.shader,
+                        parameters.input.tex,
+                        parameters.histogram
+                    )
                 .Dispatch(
-                    uint3(
-                        (input_res.x - 1) / TONEMAPPING_HISTOGRAM_GROUP_X + 1,
-                        (input_res.y - 1) / TONEMAPPING_HISTOGRAM_GROUP_Y + 1,
-                        1
-                    ),
+                    parameters.histogram_groups,
                     "Tonemapping Histogram Pass"
                 );
         }
 
         // Exposure Pass
         {
-            context.cmd_list.Compute(tonemapping_exposure_pipeline, param, histogram_buffer, exposure_buffer)
+            cmd_list.Compute(
+                        tonemapping_exposure_pipeline,
+                        parameters.shader,
+                        parameters.histogram,
+                        parameters.exposure
+                    )
                 .Dispatch(uint3(1, 1, 1), "Tonemapping Exposure Pass");
         }
 
         // Tonemapping Pass
         {
-            context.cmd_list
-                .Gfx(tonemapping_pipeline, param, input_image.tex, exposure_buffer, histogram_buffer)
+            cmd_list
+                .Gfx(
+                    tonemapping_pipeline,
+                    parameters.shader,
+                    parameters.input.tex,
+                    parameters.exposure,
+                    parameters.histogram
+                )
                 .Draw(
                     "Tonemapping Pass",
-                    context.textures.tonemapping_output.GetRect2D(),
+                    parameters.output.GetRect2D(),
                     std::move(RasterTool::GetFullScreenDrawDatas()),
-                    ColorAttachment(context.textures.tonemapping_output.tex)
+                    ColorAttachment(parameters.output.tex)
                 );
         }
+    }
 
-        return context.textures.tonemapping_output;
+    TextureWithHandle
+    Process(RasterContext& context, const RasterConfig& ui_config, TextureWithHandle input_image) {
+        const RecordParameters parameters = Prepare(context, ui_config, std::move(input_image));
+        Record(context.cmd_list, parameters);
+        return parameters.output;
     }
 
 private:

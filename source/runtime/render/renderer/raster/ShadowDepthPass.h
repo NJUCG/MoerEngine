@@ -42,43 +42,61 @@ public:
 
 class ShadowDepthPass {
 public:
+    struct DrawBatch {
+        CullingPass::RecordParameters culling{};
+        GeometryPassBindlessParam      shader{};
+        Rect2D                         rect{};
+        TextureView                    depth_view{};
+        std::string                    pass_name{};
+        std::string                    marker_name{};
+        std::string                    draw_profile_scope_name{};
+        PointShadowViewMatrices        multiview_matrices{};
+        bool                           multiview = false;
+    };
+
+    struct RecordParameters {
+        BindlessArrayRef bindless{};
+        BufferView       index_buffer{};
+        BufferRef        point_shadow_view_matrices{};
+        bool             update_bindless_array = false;
+        Array<DrawBatch> draws{};
+    };
+
     ShadowDepthPass(RasterContext& context);
 
+    [[nodiscard]] RecordParameters
+    Prepare(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
+    void Record(CommandList& cmd_list, const RecordParameters& parameters);
+
+    // Legacy synchronous adapter. New graph passes call Prepare/Record directly.
     void Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
 
     // 资源管理
-    void PrepareCSMResources(RasterContext& context, const RasterConfig& ui_config);
-    void PreparePointShadowResources(RasterContext& context, const RasterConfig& ui_config);
+    [[nodiscard]] bool PrepareCSMResources(RasterContext& context, const RasterConfig& ui_config);
+    [[nodiscard]] bool PreparePointShadowResources(RasterContext& context, const RasterConfig& ui_config);
 
     // 辅助函数
     static std::optional<ecs::CLightDirectional> GetMainLightDirection(RasterContext& context);
     static std::optional<ecs::CLightPoint>       GetMainPointLight(RasterContext& context);
 
-    // 渲染逻辑
-
-    void RenderCSM(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
-    void RenderPointShadows(RasterContext& context, const RasterConfig& config, const Camera& camera);
-
 private:
     bool RefreshShadowCasterBounds(RasterContext& context);
 
-    void RenderShadow(
-        RasterContext&      context,
-        const RasterConfig& config,
-        const float4x4&     view_proj,
-        const Rect2D&       rect,
-        TextureView         depth_view,
-        std::string_view    pass_name,
-        std::optional<std::string_view> profile_scope_name = std::nullopt
+    void PrepareCSM(
+        RasterContext& context, const RasterConfig& ui_config, const Camera& camera,
+        RecordParameters& parameters
     );
-
-    void RenderPointShadowMultiview(
-        RasterContext&                  context,
-        const RasterConfig&             config,
-        const PointShadowViewMatrices&  view_matrices,
-        const Rect2D&                   rect,
-        TextureView                     depth_view,
-        std::string_view                pass_name
+    void PreparePointShadows(
+        RasterContext& context, const RasterConfig& config, const Camera& camera,
+        RecordParameters& parameters
+    );
+    [[nodiscard]] GeometryPassBindlessParam BuildDrawParameters(
+        const RasterContext& context, const RasterConfig& config, const float4x4& world2clip,
+        bool already_transposed
+    ) const;
+    void RecordShadowDraw(CommandList& cmd_list, const RecordParameters& parameters, const DrawBatch& batch);
+    void RecordPointShadowMultiview(
+        CommandList& cmd_list, const RecordParameters& parameters, const DrawBatch& batch
     );
 
 private:

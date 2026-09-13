@@ -28,6 +28,18 @@ public:
 
 class ProbeGizmoPass {
 public:
+    struct DrawBatch {
+        ProbeGizmoParam       shader{};
+        Array<SingleDrawParam> draws{};
+        std::string           name{};
+    };
+
+    struct RecordParameters {
+        BindlessArrayRef bindless{};
+        TextureWithHandle output{};
+        Array<DrawBatch> batches{};
+    };
+
     ProbeGizmoPass(RasterContext& context) {
         GfxPsoCreateInfo pso_info(
             RHIRasterizeInfo::Preset(),
@@ -44,7 +56,14 @@ public:
                          .Build<ProbeGizmoPipeline>(std::move(pso_info));
     }
 
-    void Process(RasterContext& context, const RasterConfig& config, const Camera& camera) {
+    [[nodiscard]] RecordParameters Prepare(
+        const RasterContext& context,
+        const RasterConfig&  config,
+        const Camera&        camera
+    ) const {
+        RecordParameters parameters{};
+        parameters.bindless = context.bdls;
+        parameters.output   = context.textures.lighting_output;
         const uint probe_count = context.probe_volume.GetPhysicalAllocatorCapacity();
         const uint gizmo_color_mode = static_cast<uint>(Clamp(
             config.probe_gi_gizmo_color_mode,
@@ -64,7 +83,7 @@ public:
             (config.probe_gi_debug_mode == 9 || draw_apv_selected_level) &&
             context.probe_volume.GetCellCount() != 0;
         if (!draw_probes && !draw_bounds && !draw_adaptive_cells) {
-            return;
+            return parameters;
         }
 
         if (draw_probes) {
@@ -76,7 +95,7 @@ public:
                        streaming_state == RASTER_PROBE_STREAMING_RESIDENT;
             };
 
-            auto draw_probe_batch = [&](Array<SingleDrawParam>&& draws,
+            auto append_probe_batch = [&](Array<SingleDrawParam>&& draws,
                                         uint                     color_mode,
                                         float3                   fixed_color,
                                         float                    alpha,
@@ -108,17 +127,11 @@ public:
                 param.camera_position =
                     float4(camera.GetPosition().x, camera.GetPosition().y, camera.GetPosition().z, 0.0f);
 
-                context.cmd_list.Gfx(m_pipeline, context.bdls, param)
-                    .Draw(
-                        pass_name,
-                        context.textures.lighting_output.GetRect2D(),
-                        std::move(draws),
-                        ColorAttachment{
-                            context.textures.lighting_output.tex,
-                            EAttachmentAction::AC_LOAD_STORE,
-                            float4(0, 0, 0, 0)
-                        }
-                    );
+                parameters.batches.emplace_back(DrawBatch{
+                    .shader = param,
+                    .draws  = std::move(draws),
+                    .name   = pass_name
+                });
             };
 
             if (!draw_apv_selected_level) {
@@ -134,14 +147,13 @@ public:
                     );
                 }
 
-                draw_probe_batch(
+                append_probe_batch(
                     std::move(resident_draws),
                     gizmo_color_mode,
                     config.probe_gi_gizmo_fixed_color,
                     0.65f,
                     "Probe GI Gizmo Pass"
                 );
-                RasterTool::LogDebugEverySeconds("[ProbeGI] Probe gizmo pass active.", 3.0);
             } else {
                 StaticArray<bool, RASTER_PROBE_VOLUME_MAX_COUNT> volume_has_coarse_cell{};
                 for (uint cell_index = 0u; cell_index < context.probe_volume.GetCellCount(); ++cell_index) {
@@ -187,7 +199,7 @@ public:
                     "Probe GI APV Coarse Gizmo Pass",
                 };
                 for (int level = int(RASTER_PROBE_MAX_SUBDIVISION_LEVEL); level >= 0; --level) {
-                    draw_probe_batch(
+                    append_probe_batch(
                         std::move(level_draws[level]),
                         RASTER_PROBE_GIZMO_COLOR_FIXED,
                         GetAdaptiveCellColor(static_cast<uint>(level)),
@@ -196,10 +208,6 @@ public:
                     );
                 }
 
-                RasterTool::LogDebugEverySeconds(
-                    "[ProbeGI] APV selected-level gizmo pass active.",
-                    3.0
-                );
             }
         }
 
@@ -207,8 +215,8 @@ public:
             for (uint volume_index = 0; volume_index < context.probe_volume.GetVolumeCount(); ++volume_index) {
                 const ProbeVolumeGpuDesc& volume = context.probe_volume.GetVolumeDesc(volume_index);
                 const float3 volume_color = GetVolumeBoundsColor(config, volume_index);
-                DrawBounds(
-                    context,
+                AppendBounds(
+                    parameters,
                     camera,
                     float3(volume.origin_bias.x, volume.origin_bias.y, volume.origin_bias.z),
                     float3(volume.extent_blend.x, volume.extent_blend.y, volume.extent_blend.z),
@@ -219,7 +227,6 @@ public:
                     "Probe GI Volume Bounds Pass"
                 );
             }
-            RasterTool::LogDebugEverySeconds("[ProbeGI] Multi-volume bounds pass active.", 3.0);
         }
 
         if (draw_adaptive_cells) {
@@ -248,8 +255,8 @@ public:
                     continue;
                 }
 
-                DrawBounds(
-                    context,
+                AppendBounds(
+                    parameters,
                     camera,
                     cell_bounds.min,
                     cell_bounds.GetExtent(),
@@ -260,13 +267,34 @@ public:
                     "Probe GI Adaptive Cell Bounds Pass"
                 );
             }
-            RasterTool::LogDebugEverySeconds("[ProbeGI] Adaptive Cell bounds pass active.", 3.0);
+        }
+        return parameters;
+    }
+
+    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
+        for (const DrawBatch& batch : parameters.batches) {
+            cmd_list.Gfx(m_pipeline, parameters.bindless, batch.shader)
+                .Draw(
+                    batch.name,
+                    parameters.output.GetRect2D(),
+                    Array<SingleDrawParam>(batch.draws),
+                    ColorAttachment{
+                        parameters.output.tex,
+                        EAttachmentAction::AC_LOAD_STORE,
+                        float4(0, 0, 0, 0)
+                    }
+                );
         }
     }
 
+    void Process(RasterContext& context, const RasterConfig& config, const Camera& camera) {
+        const RecordParameters parameters = Prepare(context, config, camera);
+        Record(context.cmd_list, parameters);
+    }
+
 private:
-    void DrawBounds(
-        RasterContext& context,
+    static void AppendBounds(
+        RecordParameters& parameters,
         const Camera&  camera,
         float3         origin,
         float3         extent,
@@ -294,17 +322,11 @@ private:
         param.camera_position =
             float4(camera.GetPosition().x, camera.GetPosition().y, camera.GetPosition().z, 0.0f);
 
-        context.cmd_list.Gfx(m_pipeline, context.bdls, param)
-            .Draw(
-                pass_name,
-                context.textures.lighting_output.GetRect2D(),
-                Array<SingleDrawParam>{SingleDrawParam{72, 1, 0, 0, 0}},
-                ColorAttachment{
-                    context.textures.lighting_output.tex,
-                    EAttachmentAction::AC_LOAD_STORE,
-                    float4(0, 0, 0, 0)
-                }
-            );
+        parameters.batches.emplace_back(DrawBatch{
+            .shader = param,
+            .draws  = Array<SingleDrawParam>{SingleDrawParam{72, 1, 0, 0, 0}},
+            .name   = pass_name
+        });
     }
 
     static float3 GetVolumeBoundsColor(const RasterConfig& config, uint volume_index) {

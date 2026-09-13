@@ -186,7 +186,6 @@ void ProbeVolumeResource::Create(RenderDevice& device, BindlessArrayRef& bdls) {
         scene_data_byte_size,
         EBufferUsageFlags::UNORDERED_ACCESS
     );
-    m_scene_data_upload.resize(scene_data_byte_size);
 
     LOG_DEBUG(
         "[ProbeGI] Created probe buffers: max_volumes={}, max_count={}, probe_byte_size={}, probe_handle={}, volume_desc_byte_size={}, volume_desc_handle={}, max_cells={}, cell_desc_byte_size={}, cell_desc_handle={}, max_bricks={}, brick_desc_byte_size={}, brick_desc_handle={}, max_pages={}, page_table_byte_size={}, page_table_handle={}, visibility_dim={}x{}, visibility_byte_size={}, visibility_handle={}, irradiance_dim={}x{}, irradiance_byte_size={}, irradiance_handle={}, atlas_texture={}x{}, visibility_texture_handle={}, irradiance_texture_handle={}, scene_data_byte_size={}",
@@ -268,7 +267,6 @@ void ProbeVolumeResource::Destroy(BindlessArrayRef& bdls) {
     m_visibility_atlas_texture.tex = nullptr;
     m_irradiance_atlas_texture.tex = nullptr;
     m_scene_data_buffer = nullptr;
-    m_scene_data_upload.clear();
     m_volume_data_upload.clear();
     m_cell_data_upload.clear();
     m_brick_data_upload.clear();
@@ -483,49 +481,27 @@ void ProbeVolumeResource::ApplyDirtyEvents(Snapshot& snapshot) {
     }
 }
 
-void ProbeVolumeResource::UpdateSceneData(
-    CommandList& cmd_list, const GpuScene::Res& gpu_scene_res
-) {
+ProbeVolumeResource::SceneDataUpload
+ProbeVolumeResource::PrepareSceneDataUpload(const GpuScene::Res& gpu_scene_res) {
+    SceneDataUpload upload{};
     if (m_scene_data_buffer == nullptr || m_volume_buffer.buf == nullptr || m_cell_buffer.buf == nullptr ||
         m_brick_buffer.buf == nullptr || m_page_table_buffer.buf == nullptr) {
-        return;
+        return upload;
     }
 
-    if (!m_cell_data_upload.empty()) {
-        cmd_list.CopyFrom(
-            std::move(m_cell_data_upload),
-            m_cell_buffer.buf->GetView(),
-            "Raster::ProbeVolume::Cell Descriptor Upload"
-        );
-        m_cell_data_upload.clear();
-    }
-
-    if (!m_volume_data_upload.empty()) {
-        cmd_list.CopyFrom(
-            std::move(m_volume_data_upload),
-            m_volume_buffer.buf->GetView(),
-            "Raster::ProbeVolume::Volume Descriptor Upload"
-        );
-        m_volume_data_upload.clear();
-    }
-
-    if (!m_brick_data_upload.empty()) {
-        cmd_list.CopyFrom(
-            std::move(m_brick_data_upload),
-            m_brick_buffer.buf->GetView(),
-            "Raster::ProbeVolume::Brick Descriptor Upload"
-        );
-        m_brick_data_upload.clear();
-    }
-
-    if (!m_page_table_upload.empty()) {
-        cmd_list.CopyFrom(
-            std::move(m_page_table_upload),
-            m_page_table_buffer.buf->GetView(),
-            "Raster::ProbeVolume::Brick Page Table Upload"
-        );
-        m_page_table_upload.clear();
-    }
+    upload.cell_buffer       = m_cell_buffer.buf;
+    upload.volume_buffer     = m_volume_buffer.buf;
+    upload.brick_buffer      = m_brick_buffer.buf;
+    upload.page_table_buffer = m_page_table_buffer.buf;
+    upload.scene_data_buffer = m_scene_data_buffer;
+    upload.cell_data         = std::move(m_cell_data_upload);
+    upload.volume_data       = std::move(m_volume_data_upload);
+    upload.brick_data        = std::move(m_brick_data_upload);
+    upload.page_table_data   = std::move(m_page_table_upload);
+    m_cell_data_upload.clear();
+    m_volume_data_upload.clear();
+    m_brick_data_upload.clear();
+    m_page_table_upload.clear();
 
     GBufferPassParams params{};
     params.instance_buf_hdl  = gpu_scene_res.instance_buf.hdl;
@@ -541,13 +517,45 @@ void ProbeVolumeResource::UpdateSceneData(
     params.rt_instance_buf_hdl        = gpu_scene_res.rt_instance_buf.hdl;
     params.rt_primitive_table_buf_hdl = gpu_scene_res.rt_primitive_table_buf.hdl;
 
-    m_scene_data_upload.resize(sizeof(GBufferPassParams));
-    std::memcpy(m_scene_data_upload.data(), &params, sizeof(GBufferPassParams));
-    cmd_list.CopyFrom(
-        std::move(m_scene_data_upload),
-        m_scene_data_buffer->GetView(),
-        "Raster::ProbeVolume::SceneData Upload"
+    upload.scene_data.resize(sizeof(GBufferPassParams));
+    std::memcpy(upload.scene_data.data(), &params, sizeof(GBufferPassParams));
+    return upload;
+}
+
+void ProbeVolumeResource::RecordSceneDataUpload(
+    CommandList& cmd_list,
+    const SceneDataUpload& upload
+) {
+    auto copy_if_present = [&](const Array<byte>& data, const BufferRef& destination, std::string_view name) {
+        if (!data.empty() && destination != nullptr) {
+            cmd_list.CopyFrom(std::span<const byte>(data.data(), data.size()), destination->GetView(), name);
+        }
+    };
+    copy_if_present(
+        upload.cell_data, upload.cell_buffer, "Raster::ProbeVolume::Cell Descriptor Upload"
     );
+    copy_if_present(
+        upload.volume_data, upload.volume_buffer, "Raster::ProbeVolume::Volume Descriptor Upload"
+    );
+    copy_if_present(
+        upload.brick_data, upload.brick_buffer, "Raster::ProbeVolume::Brick Descriptor Upload"
+    );
+    copy_if_present(
+        upload.page_table_data,
+        upload.page_table_buffer,
+        "Raster::ProbeVolume::Brick Page Table Upload"
+    );
+    copy_if_present(
+        upload.scene_data, upload.scene_data_buffer, "Raster::ProbeVolume::SceneData Upload"
+    );
+}
+
+void ProbeVolumeResource::UpdateSceneData(
+    CommandList& cmd_list,
+    const GpuScene::Res& gpu_scene_res
+) {
+    const SceneDataUpload upload = PrepareSceneDataUpload(gpu_scene_res);
+    RecordSceneDataUpload(cmd_list, upload);
 }
 
 void ProbeVolumeResource::TrackFrameSubmission(CommandList& cmd_list, uint64 frame_index) {

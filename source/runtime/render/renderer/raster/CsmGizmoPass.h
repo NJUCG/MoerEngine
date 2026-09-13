@@ -23,6 +23,17 @@ public:
 
 class CsmGizmoPass {
 public:
+    struct RecordParameters {
+        bool                                              enabled{false};
+        BindlessArrayRef                                  bindless{};
+        BufferWithHandle                                  cascade_buffer{};
+        StaticArray<CsmGizmoCascadeData, CSM_MAX_CASCADES> cascade_data{};
+        uint                                              cascade_count{0};
+        uint                                              vertex_count{0};
+        CsmGizmoParam                                     shader{};
+        TextureWithHandle                                 output{};
+    };
+
     CsmGizmoPass(RasterContext& context) {
         GfxPsoCreateInfo pso_info(
             RHIRasterizeInfo::Preset(),
@@ -48,17 +59,18 @@ public:
         m_cascade_data_buffer.hdl = context.bdls->AllocateBuffer(m_cascade_data_buffer.buf->GetView());
     }
 
-    void Process(
-        RasterContext&               context,
+    [[nodiscard]] RecordParameters Prepare(
+        const RasterContext&         context,
         const RasterConfig&          raster_config,
         const SceneViewGizmoConfig&  gizmo_config,
         const Camera&                scene_camera,
         const Camera&                main_camera
-    ) {
+    ) const {
+        RecordParameters parameters{};
         if (!gizmo_config.show_csm ||
             (raster_config.shadow_map_mode != EShadowMapMode::CSM &&
              raster_config.shadow_map_mode != EShadowMapMode::CSM_AUTO)) {
-            return;
+            return parameters;
         }
 
         uint draw_flags = 0u;
@@ -69,17 +81,16 @@ public:
             draw_flags |= RASTER_CSM_GIZMO_DRAW_BOUNDING_SPHERE;
         }
         if (draw_flags == 0u || m_cascade_data_buffer.hdl == 0u) {
-            return;
+            return parameters;
         }
 
         const uint cascade_count =
             Min(static_cast<uint>(raster_config.shadow_csm_num_of_cascades), static_cast<uint>(CSM_MAX_CASCADES));
         if (cascade_count == 0u) {
-            return;
+            return parameters;
         }
 
-        StaticArray<CsmGizmoCascadeData, CSM_MAX_CASCADES> cascade_data{};
-        uint                                               valid_cascade_count = 0u;
+        uint valid_cascade_count = 0u;
         for (uint cascade_index = 0u; cascade_index < cascade_count; ++cascade_index) {
             if ((gizmo_config.csm_cascade_visibility_mask & (1u << cascade_index)) == 0u) {
                 continue;
@@ -95,25 +106,16 @@ public:
                 continue;
             }
 
-            cascade_data[valid_cascade_count] =
+            parameters.cascade_data[valid_cascade_count] =
                 BuildCascadeData(main_camera, near_ratio, far_ratio, cascade_index);
             valid_cascade_count++;
         }
 
         if (valid_cascade_count == 0u) {
-            return;
+            return parameters;
         }
 
-        const size_t cascade_data_size = sizeof(CsmGizmoCascadeData) * valid_cascade_count;
-        Array<byte>  cascade_data_upload(cascade_data_size);
-        std::memcpy(cascade_data_upload.data(), cascade_data.data(), cascade_data_size);
-        context.cmd_list.CopyFrom(
-            std::move(cascade_data_upload),
-            m_cascade_data_buffer.buf->GetView(),
-            "Raster::CsmGizmoCascadeData"
-        );
-
-        CsmGizmoParam param{};
+        auto& param = parameters.shader;
         param.world2clip = Transpose(scene_camera.GetViewProjectionMatrix());
         param.csm_config = uint4(m_cascade_data_buffer.hdl, valid_cascade_count, draw_flags, 0u);
 
@@ -125,22 +127,55 @@ public:
             Max(gizmo_config.line_thickness, 0.001f)
         );
 
-        const uint vertex_count =
+        parameters.vertex_count =
             (gizmo_config.show_csm_split_frustums ? k_frustum_vertex_count : 0u) +
             (gizmo_config.show_csm_bounding_spheres ? k_sphere_vertex_count : 0u);
+        parameters.enabled        = true;
+        parameters.bindless       = context.bdls;
+        parameters.cascade_buffer = m_cascade_data_buffer;
+        parameters.cascade_count  = valid_cascade_count;
+        parameters.output         = context.textures.tonemapping_output;
+        return parameters;
+    }
 
-        context.cmd_list.Gfx(m_pipeline, context.bdls, param)
+    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
+        if (!parameters.enabled) {
+            return;
+        }
+        const size_t upload_size =
+            sizeof(CsmGizmoCascadeData) * parameters.cascade_count;
+        Array<byte> upload(upload_size);
+        std::memcpy(upload.data(), parameters.cascade_data.data(), upload_size);
+        cmd_list.CopyFrom(
+            std::move(upload),
+            parameters.cascade_buffer.buf->GetView(),
+            "Raster::CsmGizmoCascadeData"
+        );
+        cmd_list.Gfx(m_pipeline, parameters.bindless, parameters.shader)
             .Draw(
                 "CSM Gizmo Pass",
-                context.textures.tonemapping_output.GetRect2D(),
-                Array<SingleDrawParam>{SingleDrawParam{vertex_count, valid_cascade_count, 0, 0, 0}},
+                parameters.output.GetRect2D(),
+                Array<SingleDrawParam>{SingleDrawParam{
+                    parameters.vertex_count, parameters.cascade_count, 0, 0, 0
+                }},
                 ColorAttachment{
-                    context.textures.tonemapping_output.tex,
+                    parameters.output.tex,
                     EAttachmentAction::AC_LOAD_STORE,
                     float4(0, 0, 0, 0)
                 }
             );
+    }
 
+    void Process(
+        RasterContext&              context,
+        const RasterConfig&         raster_config,
+        const SceneViewGizmoConfig& gizmo_config,
+        const Camera&               scene_camera,
+        const Camera&               main_camera
+    ) {
+        const RecordParameters parameters =
+            Prepare(context, raster_config, gizmo_config, scene_camera, main_camera);
+        Record(context.cmd_list, parameters);
     }
 
 private:

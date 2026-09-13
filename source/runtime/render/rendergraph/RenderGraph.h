@@ -10,6 +10,7 @@
 #include <functional>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -241,6 +242,31 @@ public:
 
         friend bool operator==(PassHandle lhs, PassHandle rhs) {
             return lhs.index == rhs.index && lhs.owner_id == rhs.owner_id;
+        }
+    };
+
+    /** Stable identity for one graph-owned CPU setup task. */
+    struct SetupPassHandle {
+        static constexpr uint32_t InvalidIndex = std::numeric_limits<uint32_t>::max();
+
+        uint32_t index    = InvalidIndex;
+        uint64_t owner_id = 0;
+
+        [[nodiscard]] bool IsValid() const {
+            return index != InvalidIndex && owner_id != 0;
+        }
+
+        friend bool operator==(SetupPassHandle lhs, SetupPassHandle rhs) {
+            return lhs.index == rhs.index && lhs.owner_id == rhs.owner_id;
+        }
+    };
+
+    struct PreparedPassHandle {
+        SetupPassHandle setup{};
+        PassHandle      record{};
+
+        [[nodiscard]] bool IsValid() const {
+            return setup.IsValid() && record.IsValid();
         }
     };
 
@@ -928,8 +954,9 @@ public:
     );
 
     /**
-     * Schedules one graph-owned, pure CPU preparation callback. Setup may run
-     * concurrently with compilation, is joined before Compile() returns, and
+     * Schedules one graph-owned, CPU-only preparation callback. Independent
+     * setup passes may run concurrently; declared dependencies are completed
+     * first. Every setup pass is joined before graph compilation begins and
      * publishes one immutable result for later recording callbacks.
      */
     template<typename Input, typename Prepare>
@@ -947,8 +974,38 @@ public:
     auto AddSetupPass(
         std::string_view name,
         Input&&          immutable_input,
-        Prepare&&        prepare
+        Prepare&&        prepare,
+        std::span<const SetupPassHandle> dependencies = {}
     ) -> RGPreparedValue<RGSetupResult<Input, Prepare>>;
+
+    /**
+     * The preferred combined API for a graph-owned prepared rendering pass:
+     * Prepare runs as a setup task, publishes a write-once value, then Record
+     * receives that value through const access after Compile joined setup work.
+     */
+    template<typename Input, typename Prepare, typename Record>
+        requires std::invocable<
+                     std::decay_t<Prepare>&,
+                     const std::decay_t<Input>&> &&
+                 (!std::is_void_v<RGSetupResult<Input, Prepare>>) &&
+                 (!std::is_reference_v<
+                     std::invoke_result_t<
+                         std::decay_t<Prepare>&,
+                         const std::decay_t<Input>&>>) &&
+                 std::invocable<
+                     std::decay_t<Record>&,
+                     CommandList&,
+                     const RGSetupResult<Input, Prepare>&>
+    PreparedPassHandle AddPreparedPass(
+        std::string_view                 name,
+        Input&&                          immutable_input,
+        Prepare&&                        prepare,
+        const SetupCallback&             declare_access,
+        Record&&                         record,
+        PassExecutionClass               execution = PassExecutionClass::ParallelRecordEligible,
+        uint32_t                         workload = 1,
+        std::span<const SetupPassHandle>  setup_dependencies = {}
+    );
 
     PassHandle AddPass(std::string_view name, const SetupCallback& setup, ExecuteCallback execute);
     PassHandle AddRecordPass(
@@ -1099,6 +1156,7 @@ private:
 
     struct SetupPassDeclaration {
         std::string                              name{};
+        std::vector<uint32_t>                    dependencies{};
         std::function<void()>                    execute{};
         std::function<void(std::string_view)>    fail{};
         std::function<void(std::string_view)>    annotate_failure{};
@@ -1152,8 +1210,9 @@ private:
         uint32_t                    pass_index,
         ERHITranslateExecutionClass execution_class
     );
-    bool RegisterSetupPass(
+    SetupPassHandle RegisterSetupPass(
         std::string_view                         setup_name,
+        std::span<const SetupPassHandle>         dependencies,
         std::function<void()>                    execute,
         std::function<void(std::string_view)>    fail,
         std::function<void(std::string_view)>    annotate_failure

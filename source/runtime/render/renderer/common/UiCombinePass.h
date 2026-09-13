@@ -40,6 +40,20 @@ class UiCombinePass {
         {PF_R8G8B8A8_UNORM, PF_R8G8B8A8_SRGB, PF_B8G8R8A8_UNORM, PF_B8G8R8A8_SRGB};
 
 public:
+    struct RecordParameters {
+        bool                     sample_to_separate_window{false};
+        TextureView              target{};
+        TextureView              input_color{};
+        TextureView              default_output{};
+        Rect2D                   render_area{};
+        Sampler                  linear_sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE};
+        CombineUIPipeline::Param scene_rect{};
+
+        [[nodiscard]] TextureRef Output() const {
+            return default_output.GetTexture();
+        }
+    };
+
     explicit UiCombinePass(ShaderManager& manager) {
         for (const auto format : s_supported_formats) {
             GfxPsoCreateInfo combine_pso_info(
@@ -61,6 +75,88 @@ public:
         }
     }
 
+    [[nodiscard]] RecordParameters Prepare(
+        bool         is_separate_window,
+        const uint2& resolution,
+        float2       scene_color_pos,
+        float2       scene_color_resolution,
+        TextureView  input_window_frame_buffer,
+        TextureView  input_color_texture,
+        TextureView  default_output_texture
+    ) const {
+        RecordParameters parameters{};
+        parameters.sample_to_separate_window =
+            is_separate_window && input_window_frame_buffer.GetTexture();
+        parameters.target = parameters.sample_to_separate_window ?
+                                input_window_frame_buffer :
+                                default_output_texture;
+        parameters.input_color   = input_color_texture;
+        parameters.default_output = default_output_texture;
+        if (parameters.sample_to_separate_window) {
+            parameters.render_area = Rect2D(
+                scene_color_pos.x,
+                scene_color_pos.y,
+                scene_color_resolution.x,
+                scene_color_resolution.y
+            );
+        } else {
+            const float2 output_resolution = float2(resolution.x, resolution.y);
+            parameters.scene_rect = CombineUIPipeline::Param{
+                scene_color_pos / output_resolution,
+                (scene_color_pos + scene_color_resolution) / output_resolution
+            };
+            parameters.render_area = Rect2D(0, 0, resolution.x, resolution.y);
+        }
+        return parameters;
+    }
+
+    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
+        ScopedGpuMarker ui_composition_marker(
+            cmd_list, "UI Composition", GpuMarkerPalette::Ui()
+        );
+        if (parameters.sample_to_separate_window) {
+            assert(
+                sample_texture_pipelines.contains(parameters.target.format) &&
+                "Unsupported format for SampleTexturePipeline"
+            );
+            cmd_list
+                .Gfx(
+                    sample_texture_pipelines[parameters.target.format],
+                    parameters.input_color,
+                    parameters.linear_sampler
+                )
+                .Draw(
+                    "SampleTexture",
+                    parameters.render_area,
+                    {},
+                    3,
+                    {SingleDrawParam(3, 1, 0, 0, 0)},
+                    ColorAttachment(parameters.target.GetTexture())
+                );
+            return;
+        }
+
+        assert(
+            combine_ui_pipelines.contains(parameters.target.format) &&
+            "Unsupported format for CombineUIPipeline"
+        );
+        cmd_list
+            .Gfx(
+                combine_ui_pipelines[parameters.target.format],
+                parameters.input_color,
+                parameters.linear_sampler,
+                parameters.scene_rect
+            )
+            .Draw(
+                "Combine UI Pass",
+                parameters.render_area,
+                {},
+                3,
+                {SingleDrawParam(3, 1, 0, 0, 0)},
+                ColorAttachment(parameters.target.GetTexture())
+            );
+    }
+
     TextureRef Process(
         CommandList& cmd_list,
         bool         is_separate_window,
@@ -71,61 +167,17 @@ public:
         TextureView  input_color_texture,
         TextureView  default_output_texture
     ) {
-        ScopedGpuMarker ui_composition_marker(
-            cmd_list, "UI Composition", GpuMarkerPalette::Ui()
+        const RecordParameters parameters = Prepare(
+            is_separate_window,
+            resolution,
+            scene_color_pos,
+            scene_color_resolution,
+            input_window_frame_buffer,
+            input_color_texture,
+            default_output_texture
         );
-        if (is_separate_window && input_window_frame_buffer.GetTexture()) {
-            assert(
-                sample_texture_pipelines.contains(input_window_frame_buffer.format) &&
-                "Unsupported format for SampleTexturePipeline"
-            );
-            auto frame_buffer = input_window_frame_buffer;
-            cmd_list
-                .Gfx(
-                    sample_texture_pipelines[frame_buffer.format],
-                    input_color_texture,
-                    Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE)
-                )
-                .Draw(
-                    "SampleTexture",
-                    Rect2D(
-                        scene_color_pos.x,
-                        scene_color_pos.y,
-                        scene_color_resolution.x,
-                        scene_color_resolution.y
-                    ),
-                    {},
-                    3,
-                    {SingleDrawParam(3, 1, 0, 0, 0)},
-                    ColorAttachment(frame_buffer.GetTexture())
-                );
-            // The Scene Color platform-window framebuffer is presented separately by the ImGui backend.
-            return default_output_texture.GetTexture();
-        }
-
-        assert(
-            combine_ui_pipelines.contains(default_output_texture.format) &&
-            "Unsupported format for CombineUIPipeline"
-        );
-        const float2 output_resolution = float2(resolution.x, resolution.y);
-        const float2 scene_rect_min    = scene_color_pos / output_resolution;
-        const float2 scene_rect_max    = (scene_color_pos + scene_color_resolution) / output_resolution;
-        cmd_list
-            .Gfx(
-                combine_ui_pipelines[default_output_texture.format],
-                input_color_texture,
-                Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE),
-                CombineUIPipeline::Param{scene_rect_min, scene_rect_max}
-            )
-            .Draw(
-                "Combine UI Pass",
-                Rect2D(0, 0, resolution.x, resolution.y),
-                {},
-                3,
-                {SingleDrawParam(3, 1, 0, 0, 0)},
-                ColorAttachment(default_output_texture.GetTexture())
-            );
-        return default_output_texture.GetTexture();
+        Record(cmd_list, parameters);
+        return parameters.Output();
     }
 
 private:

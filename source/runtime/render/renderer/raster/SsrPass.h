@@ -35,6 +35,14 @@ public:
  */
 class SsrPass {
 public:
+    struct RecordParameters {
+        bool                         enabled{false};
+        SsrPipelineBindlessParam     shader{};
+        BindlessArrayRef             bindless{};
+        TextureWithHandle            input{};
+        TextureWithHandle            output{};
+    };
+
     SsrPass(RasterContext& context) {
         GfxPsoCreateInfo pso_full_screen_info(
             RHIRasterizeInfo::Preset(),
@@ -48,22 +56,27 @@ public:
                            .Build<SsrPipeline>(std::move(pso_full_screen_info));
     }
 
-    TextureWithHandle Process(
-        RasterContext&      context,
+    [[nodiscard]] RecordParameters Prepare(
+        const RasterContext& context,
         const RasterConfig& ui_config,
         const Camera&       camera,
         TextureWithHandle   input_image
-    ) {
-        if (ui_config.ssr_is_ssr_enabled == 0) {
-            return input_image;
+    ) const {
+        RecordParameters parameters{};
+        parameters.enabled  = ui_config.ssr_is_ssr_enabled != 0;
+        parameters.bindless = context.bdls;
+        parameters.input    = std::move(input_image);
+        parameters.output = parameters.enabled ? context.textures.ssr_output : parameters.input;
+        if (!parameters.enabled) {
+            return parameters;
         }
 
-        SsrPipelineBindlessParam param;
+        auto& param = parameters.shader;
         param.clip2world                     = Transpose(camera.GetViewProjectionMatrixInv());
         param.world2clip                     = Transpose(camera.GetViewProjectionMatrix());
         param.camera_position                = camera.GetPosition();
         param.near_clip                      = camera.GetNearClip();
-        param.resolution                     = float2(context.textures.ssr_output.GetSize());
+        param.resolution                     = float2(parameters.output.GetSize());
         param.far_clip                       = camera.GetFarClip();
         param.ssr_roughness_threshold        = ui_config.ssr_roughness_threshold;
         param.ssr_metallic_threshold         = ui_config.ssr_metallic_threshold;
@@ -71,20 +84,36 @@ public:
         param.ssr_sample_count               = ui_config.ssr_sample_count;
         param.ssr_is_enable_jitter           = ui_config.ssr_is_enable_jitter;
         param.ssr_is_force_ground_enable_ssr = ui_config.ssr_is_force_ground_enable_ssr;
-        param.color_tex                      = input_image.hdl;
+        param.color_tex                      = parameters.input.hdl;
         param.normal_tex                     = context.textures.normal.hdl;
         param.depth_tex                      = context.textures.depth_linear_sampler.hdl;
         param.gbuffer_metal_rough_ao         = context.textures.metal_rough_ao.hdl;
+        return parameters;
+    }
 
-        context.cmd_list.Gfx(ssr_pipeline, context.bdls, param)
+    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
+        if (!parameters.enabled) {
+            return;
+        }
+        cmd_list.Gfx(ssr_pipeline, parameters.bindless, parameters.shader)
             .Draw(
                 "SSR Pass",
-                context.textures.ssr_output.GetRect2D(),
+                parameters.output.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment(context.textures.ssr_output.tex)
+                ColorAttachment(parameters.output.tex)
             );
+    }
 
-        return context.textures.ssr_output;
+    TextureWithHandle Process(
+        RasterContext&      context,
+        const RasterConfig& ui_config,
+        const Camera&       camera,
+        TextureWithHandle   input_image
+    ) {
+        const RecordParameters parameters =
+            Prepare(context, ui_config, camera, std::move(input_image));
+        Record(context.cmd_list, parameters);
+        return parameters.output;
     }
 
 private:

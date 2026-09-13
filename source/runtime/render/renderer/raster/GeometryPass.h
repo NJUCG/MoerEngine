@@ -32,6 +32,22 @@ public:
 
 class GeometryPass {
 public:
+    struct RecordParameters {
+        CullingPass::RecordParameters culling{};
+        GeometryPassBindlessParam      shader{};
+        BindlessArrayRef               bindless{};
+        BufferView                     index_buffer{};
+        BufferView                     draw_commands{};
+        BufferView                     draw_count{};
+        uint                           draw_command_stride = 0;
+        uint                           max_draw_count      = 0;
+        Rect2D                         render_area{};
+        DepthBufferRef                 depth{};
+        TextureRef                     base_color{};
+        TextureRef                     normal{};
+        TextureRef                     metal_rough_ao{};
+    };
+
     GeometryPass(RasterContext& context) : culling_pass(context) {
         RHIDepthStencilStateInfo depth_stencil_info =
             RHIDepthStencilStateInfo::Preset<DepthStencil::DEPTH_WRITE_GREATER>();
@@ -65,7 +81,8 @@ public:
                        .Build<GeometryPassPipeline>(std::move(pipeline_info));
     }
 
-    void Process(RasterContext& context, RasterConfig& raster_config, const Camera& camera) {
+    [[nodiscard]] RecordParameters
+    Prepare(RasterContext& context, RasterConfig& raster_config, const Camera& camera) {
         const auto& gpu_scene_res = context.GetGpuSceneRes();
 
         const bool use_occlusion_culling = raster_config.enable_occlusion_culling &&
@@ -82,7 +99,7 @@ public:
             raster_config.force_lod_level
         };
 
-        culling_pass.Process(
+        auto culling = culling_pass.Prepare(
             context,
             camera,
             gpu_scene_res,
@@ -102,7 +119,7 @@ public:
             culling_stats.occlusion_culled_instances;
         raster_config.culling_stats.lod_culled_instances = culling_stats.lod_culled_instances;
 
-        GeometryPassBindlessParam param;
+        GeometryPassBindlessParam param{};
         param.world2clip = Transpose(camera.GetViewProjectionMatrix());
 
         param.instance_buf_hdl              = gpu_scene_res.instance_buf.hdl;
@@ -127,25 +144,49 @@ public:
             render_area == context.textures.metal_rough_ao.GetRect2D()
         );
 
-        context.cmd_list.PushScopeWithTimeScope(RasterTool::GetGeometryDrawProfileScopeName());
-        auto draw_command = context.cmd_list.Gfx(pipeline, context.bdls, param);
-
         const auto& visibility = context.gpu_culling_buffers.geometry;
+        return RecordParameters{
+            .culling = std::move(culling),
+            .shader = param,
+            .bindless = context.bdls,
+            .index_buffer = gpu_scene_res.index_buf.buf->GetView(),
+            .draw_commands = visibility.draw_cmd_buf->GetView(),
+            .draw_count = visibility.GetDrawCountView(),
+            .draw_command_stride = visibility.draw_cmd_buf->GetStride(),
+            .max_draw_count = visibility.max_draw_count,
+            .render_area = render_area,
+            .depth = context.textures.depth_linear_sampler.tex,
+            .base_color = context.textures.base_color.tex,
+            .normal = context.textures.normal.tex,
+            .metal_rough_ao = context.textures.metal_rough_ao.tex
+        };
+    }
+
+    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
+        culling_pass.Record(cmd_list, parameters.culling);
+
+        cmd_list.PushScopeWithTimeScope(RasterTool::GetGeometryDrawProfileScopeName());
+        auto draw_command = cmd_list.Gfx(pipeline, parameters.bindless, parameters.shader);
         draw_command.DrawIndirect(
             "Geometry Pass",
-            render_area,
+            parameters.render_area,
             {},
-            IndexBuffer{gpu_scene_res.index_buf.buf->GetView(), EIndexElementType::IET_UINT32},
-            visibility.draw_cmd_buf->GetView(),
-            visibility.GetDrawCountView(),
-            visibility.draw_cmd_buf->GetStride(),
-            visibility.max_draw_count,
-            DepthAttachment(context.textures.depth_linear_sampler.tex->GetView().GetTexture()),
-            ColorAttachment(context.textures.base_color.tex),
-            ColorAttachment(context.textures.normal.tex),
-            ColorAttachment(context.textures.metal_rough_ao.tex)
+            IndexBuffer{parameters.index_buffer, EIndexElementType::IET_UINT32},
+            parameters.draw_commands,
+            parameters.draw_count,
+            parameters.draw_command_stride,
+            parameters.max_draw_count,
+            DepthAttachment(parameters.depth->GetView().GetTexture()),
+            ColorAttachment(parameters.base_color),
+            ColorAttachment(parameters.normal),
+            ColorAttachment(parameters.metal_rough_ao)
         );
-        context.cmd_list.PopScopeWithTimeScope();
+        cmd_list.PopScopeWithTimeScope();
+    }
+
+    void Process(RasterContext& context, RasterConfig& raster_config, const Camera& camera) {
+        const auto parameters = Prepare(context, raster_config, camera);
+        Record(context.cmd_list, parameters);
     }
 
 private:

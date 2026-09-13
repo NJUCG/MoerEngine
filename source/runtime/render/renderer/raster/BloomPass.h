@@ -48,10 +48,44 @@ public:
 
 class BloomPass {
 public:
+    struct DownsampleDispatch {
+        TextureView          source{};
+        Rect2D               render_area{};
+        BloomDownsampleParam shader{};
+        uint32                mip{0};
+    };
+
+    struct UpsampleDispatch {
+        TextureView        source{};
+        TextureView        downsample{};
+        Rect2D             render_area{};
+        BloomUpsampleParam shader{};
+        uint32             mip{0};
+    };
+
+    struct RecordParameters {
+        bool                      enabled{false};
+        TextureWithHandle         input{};
+        TextureWithHandle         downsample_chain{};
+        TextureWithHandle         upsample_chain{};
+        Sampler                   linear_sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE};
+        BloomPrefilterParam       prefilter{};
+        BloomApplyParam           apply{};
+        Array<DownsampleDispatch> downsample_dispatches{};
+        Array<UpsampleDispatch>   upsample_dispatches{};
+    };
+
     BloomPass(RasterContext& context);
 
+    [[nodiscard]] RecordParameters Prepare(
+        const RasterContext& context,
+        const RasterConfig&  raster_config,
+        TextureWithHandle    input_texture
+    ) const;
+    void Record(CommandList& cmd_list, const RecordParameters& parameters);
+
     TextureWithHandle
-    Process(RasterContext& context, const RasterConfig& raster_config, TextureWithHandle& input_texture);
+    Process(RasterContext& context, const RasterConfig& raster_config, TextureWithHandle input_texture);
 
 private:
     BloomPassPrefilterPipeline  prefilter_pipeline;

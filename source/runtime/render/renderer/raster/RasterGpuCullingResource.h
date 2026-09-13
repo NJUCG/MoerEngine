@@ -26,10 +26,9 @@ struct GpuCullingBuffers {
         }
 
         // Ensures the visibility buffers are large enough and rebound after reallocations.
-        void EnsureCapacity(
+        [[nodiscard]] bool EnsureCapacity(
             RenderDevice&     device,
             BindlessArrayRef& bdls,
-            CommandList&      cmd_list,
             std::string_view  debug_name_prefix,
             uint              draw_count,
             uint              instance_count
@@ -72,9 +71,7 @@ struct GpuCullingBuffers {
                 );
             }
 
-            if (need_bindless_update) {
-                cmd_list.UpdateBindlessArray(bdls);
-            }
+            return need_bindless_update;
         }
     };
 

@@ -114,6 +114,27 @@ public:
         uint32_t lod_culled_instances       = 0; // 被 Cluster LOD 剔除的实例数
     };
 
+    struct RecordParameters {
+        BufferView       source_draw_commands{};
+        BufferView       primitives{};
+        BufferView       instances{};
+        BufferView       visible_instance_ids{};
+        BufferView       draw_commands{};
+        BufferView       counters{};
+        BufferView       draw_count{};
+        BufferView       cull_data_buffer{};
+        BufferView       cluster_groups{};
+        BindlessArrayRef bindless{};
+        CullParams       shader_params{};
+        CullData         cull_data{};
+        uint             dispatch_count       = 0;
+        uint             draw_command_stride  = 0;
+        uint             max_draw_count       = 0;
+        bool             use_hiz               = false;
+        bool             update_bindless_array = false;
+        std::string      profile_scope_name{};
+    };
+
 public:
     // Creates the compute pipeline used to build per-pass visibility buffers.
     CullingPass(RasterContext& context) {
@@ -136,8 +157,8 @@ public:
         );
     }
 
-    // Builds a visibility set from the main camera frustum.
-    void Process(
+    // Freezes the CPU culling inputs and pass-owned resources for later recording.
+    [[nodiscard]] RecordParameters Prepare(
         RasterContext&                    context,
         const Camera&                     camera,
         const GpuScene::Res&              gpu_scene_res,
@@ -162,12 +183,14 @@ public:
         const float viewport_height = static_cast<float>(context.textures.depth_linear_sampler.GetSize().y);
         FillClusterLodParams(camera, gpu_scene_res, options, viewport_height, params, data);
 
-        Process(context, gpu_scene_res, params, data, visibility_set, out_stats, profile_scope_name);
+        return Prepare(
+            context, gpu_scene_res, params, data, visibility_set, out_stats, profile_scope_name
+        );
     }
 
     // Builds a visibility set from an explicit view-projection matrix (shadow pass).
     // LOD 数据不由此路径填充，shader 将回退到叶子 cluster 渲染。
-    void Process(
+    [[nodiscard]] RecordParameters Prepare(
         RasterContext&                    context,
         const float4x4&                   view_proj,
         const GpuScene::Res&              gpu_scene_res,
@@ -189,12 +212,14 @@ public:
 
         FillHiZOcclusionParams(context, options, params, data);
 
-        Process(context, gpu_scene_res, params, data, visibility_set, out_stats, profile_scope_name);
+        return Prepare(
+            context, gpu_scene_res, params, data, visibility_set, out_stats, profile_scope_name
+        );
     }
 
     // Builds one conservative visibility set for an axis-aligned world-space volume.
     // Point-shadow multiview uses this cube as the union of its six 90-degree frusta.
-    void ProcessAabb(
+    [[nodiscard]] RecordParameters PrepareAabb(
         RasterContext&                    context,
         const float3&                     bounds_min,
         const float3&                     bounds_max,
@@ -222,7 +247,137 @@ public:
 
         FillHiZOcclusionParams(context, options, params, data);
 
-        Process(context, gpu_scene_res, params, data, visibility_set, out_stats, profile_scope_name);
+        return Prepare(
+            context, gpu_scene_res, params, data, visibility_set, out_stats, profile_scope_name
+        );
+    }
+
+    // Records only commands from the immutable packet produced by Prepare.
+    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
+        if (parameters.update_bindless_array) {
+            cmd_list.UpdateBindlessArray(parameters.bindless);
+        }
+
+        cmd_list.ClearResource(parameters.counters, 0u);
+        if (parameters.dispatch_count == 0) {
+            QueueCounterReadback(cmd_list, parameters.counters);
+            return;
+        }
+
+        cmd_list.CopyFrom(
+            std::span<const byte>(
+                reinterpret_cast<const byte*>(&parameters.cull_data), sizeof(CullData)
+            ),
+            parameters.cull_data_buffer
+        );
+
+        if (!parameters.profile_scope_name.empty()) {
+            cmd_list.PushScopeWithTimeScope(parameters.profile_scope_name);
+        }
+
+        if (parameters.use_hiz) {
+            cmd_list
+                .Compute(
+                    m_hiz_occlusion_pso,
+                    parameters.source_draw_commands,
+                    parameters.primitives,
+                    parameters.instances,
+                    parameters.visible_instance_ids,
+                    parameters.draw_commands,
+                    parameters.counters,
+                    parameters.cull_data_buffer,
+                    parameters.cluster_groups,
+                    parameters.bindless,
+                    parameters.shader_params
+                )
+                .Dispatch(uint3(parameters.dispatch_count, 1, 1), "Hi-Z Occlusion Culling");
+        } else {
+            cmd_list
+                .Compute(
+                    m_pso,
+                    parameters.source_draw_commands,
+                    parameters.primitives,
+                    parameters.instances,
+                    parameters.visible_instance_ids,
+                    parameters.draw_commands,
+                    parameters.counters,
+                    parameters.cull_data_buffer,
+                    parameters.cluster_groups,
+                    parameters.shader_params
+                )
+                .Dispatch(uint3(parameters.dispatch_count, 1, 1), "Culling");
+        }
+
+        if (!parameters.profile_scope_name.empty()) {
+            cmd_list.PopScopeWithTimeScope();
+        }
+        QueueCounterReadback(cmd_list, parameters.counters);
+    }
+
+    // Legacy synchronous adapters. New graph passes call Prepare/Record directly.
+    void Process(
+        RasterContext&                    context,
+        const Camera&                     camera,
+        const GpuScene::Res&              gpu_scene_res,
+        GpuCullingBuffers::VisibilitySet& visibility_set,
+        CullStatistics*                   out_stats          = nullptr,
+        std::string_view                  profile_scope_name = {},
+        CullingOptions                    options            = {true, false, 1.0f, -1}
+    ) {
+        const auto parameters = Prepare(
+            context,
+            camera,
+            gpu_scene_res,
+            visibility_set,
+            out_stats,
+            profile_scope_name,
+            options
+        );
+        Record(context.cmd_list, parameters);
+    }
+
+    void Process(
+        RasterContext&                    context,
+        const float4x4&                   view_proj,
+        const GpuScene::Res&              gpu_scene_res,
+        GpuCullingBuffers::VisibilitySet& visibility_set,
+        CullStatistics*                   out_stats          = nullptr,
+        std::string_view                  profile_scope_name = {},
+        CullingOptions                    options            = {true, false, 1.0f, -1}
+    ) {
+        const auto parameters = Prepare(
+            context,
+            view_proj,
+            gpu_scene_res,
+            visibility_set,
+            out_stats,
+            profile_scope_name,
+            options
+        );
+        Record(context.cmd_list, parameters);
+    }
+
+    void ProcessAabb(
+        RasterContext&                    context,
+        const float3&                     bounds_min,
+        const float3&                     bounds_max,
+        const GpuScene::Res&              gpu_scene_res,
+        GpuCullingBuffers::VisibilitySet& visibility_set,
+        CullStatistics*                   out_stats          = nullptr,
+        std::string_view                  profile_scope_name = {},
+        CullingOptions                    options            = {true, false, 1.0f, -1}
+    ) {
+        const auto parameters = PrepareAabb(
+            context,
+            bounds_min,
+            bounds_max,
+            gpu_scene_res,
+            visibility_set,
+            out_stats,
+            profile_scope_name,
+            options
+        );
+        Record(context.cmd_list, parameters);
     }
 
 private:
@@ -370,8 +525,7 @@ private:
             );
     }
 
-    // Dispatches the culling compute pass and prepares its outputs for indirect drawing.
-    void Process(
+    [[nodiscard]] RecordParameters Prepare(
         RasterContext&                    context,
         const GpuScene::Res&              gpu_scene_res,
         const CullParams&                 params,
@@ -384,8 +538,8 @@ private:
         const uint instance_count =
             static_cast<uint>(gpu_scene_res.instance_buf.buf->GetByteSize() / sizeof(GInstance));
 
-        visibility_set.EnsureCapacity(
-            context.device, context.bdls, context.cmd_list, "Raster::GpuCulling", draw_count, instance_count
+        const bool update_bindless_array = visibility_set.EnsureCapacity(
+            context.device, context.bdls, "Raster::GpuCulling", draw_count, instance_count
         );
 
         ConsumeCounterReadback();
@@ -393,73 +547,30 @@ private:
             *out_stats = ToStatistics(m_readback_counters);
         }
 
-        context.cmd_list.ClearResource(visibility_set.counter_buf->GetView(), 0u);
-
-        if (draw_count == 0) {
-            QueueCounterReadback(
-                context.cmd_list,
-                visibility_set.counter_buf->GetView()
-            );
-            return;
-        }
-
-        const uint dispatch_count = (params.draw_count + 63) / 64;
-
-        // CopyFrom(span) 只保存指针，不能传入栈上的 CullData
-        Array<byte> cull_data_upload(sizeof(CullData));
-        std::memcpy(cull_data_upload.data(), &data, sizeof(CullData));
-        context.cmd_list.CopyFrom(std::move(cull_data_upload), m_cull_data_buffer->GetView());
-
-        if (!profile_scope_name.empty()) {
-            context.cmd_list.PushScopeWithTimeScope(profile_scope_name);
-        }
-
         const auto cluster_group_view =
             gpu_scene_res.cluster_group_buf.buf != nullptr
                 ? gpu_scene_res.cluster_group_buf.buf->GetView()
                 : m_cluster_group_dummy_buf->GetView();
-
-        if ((params.flags & CULL_FLAG_ENABLE_HIZ_OCCLUSION) != 0u) {
-            context.cmd_list
-                .Compute(
-                    m_hiz_occlusion_pso,
-                    gpu_scene_res.draw_cmd_buf.buf->GetView(),             // SRV: source_draw_commands
-                    gpu_scene_res.primitive_buf.buf->GetView(),            // SRV: primitives
-                    gpu_scene_res.instance_buf.buf->GetView(),             // SRV: instances
-                    visibility_set.visible_instance_id_buf.buf->GetView(), // UAV: visible_instance_ids
-                    visibility_set.draw_cmd_buf->GetView(),                // UAV: draw_commands
-                    visibility_set.counter_buf->GetView(),                 // UAV: counters
-                    m_cull_data_buffer->GetView(),                         // CBV: cull_data
-                    cluster_group_view,                                    // SRV: cluster_groups
-                    context.bdls,                                          // Bindless heap for Hi-Z mip views
-                    params                                                 // Push constant: cull_params
-                )
-                .Dispatch(uint3(dispatch_count, 1, 1), "Hi-Z Occlusion Culling");
-        } else {
-            context.cmd_list
-                .Compute(
-                    m_pso,
-                    gpu_scene_res.draw_cmd_buf.buf->GetView(),             // SRV: source_draw_commands
-                    gpu_scene_res.primitive_buf.buf->GetView(),            // SRV: primitives
-                    gpu_scene_res.instance_buf.buf->GetView(),             // SRV: instances
-                    visibility_set.visible_instance_id_buf.buf->GetView(), // UAV: visible_instance_ids
-                    visibility_set.draw_cmd_buf->GetView(),                // UAV: draw_commands
-                    visibility_set.counter_buf->GetView(),                 // UAV: counters
-                    m_cull_data_buffer->GetView(),                         // CBV: cull_data
-                    cluster_group_view,                                    // SRV: cluster_groups
-                    params                                                 // Push constant: cull_params
-                )
-                .Dispatch(uint3(dispatch_count, 1, 1), "Culling");
-        }
-
-        if (!profile_scope_name.empty()) {
-            context.cmd_list.PopScopeWithTimeScope();
-        }
-
-        QueueCounterReadback(
-            context.cmd_list,
-            visibility_set.counter_buf->GetView()
-        );
+        return RecordParameters{
+            .source_draw_commands = gpu_scene_res.draw_cmd_buf.buf->GetView(),
+            .primitives = gpu_scene_res.primitive_buf.buf->GetView(),
+            .instances = gpu_scene_res.instance_buf.buf->GetView(),
+            .visible_instance_ids = visibility_set.visible_instance_id_buf.buf->GetView(),
+            .draw_commands = visibility_set.draw_cmd_buf->GetView(),
+            .counters = visibility_set.counter_buf->GetView(),
+            .draw_count = visibility_set.GetDrawCountView(),
+            .cull_data_buffer = m_cull_data_buffer->GetView(),
+            .cluster_groups = cluster_group_view,
+            .bindless = context.bdls,
+            .shader_params = params,
+            .cull_data = data,
+            .dispatch_count = draw_count == 0 ? 0u : (params.draw_count + 63u) / 64u,
+            .draw_command_stride = visibility_set.draw_cmd_buf->GetStride(),
+            .max_draw_count = visibility_set.max_draw_count,
+            .use_hiz = (params.flags & CULL_FLAG_ENABLE_HIZ_OCCLUSION) != 0u,
+            .update_bindless_array = update_bindless_array,
+            .profile_scope_name = std::string(profile_scope_name)
+        };
     }
 
 private:

@@ -3,6 +3,7 @@
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/TaskSystem.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -440,6 +441,70 @@ void TestAsyncOrderJoinAndNamedThreadIsolation(TestSuite& suite) {
     );
 }
 
+void TestIndependentSetupTasksRunConcurrently(TestSuite& suite) {
+    using namespace std::chrono_literals;
+    constexpr std::string_view test_name =
+        "independent setup tasks execute concurrently before compilation";
+
+    std::mutex              mutex{};
+    std::condition_variable cv{};
+    int                     entered = 0;
+    std::atomic<bool>       timed_out{false};
+    std::atomic<int>        inflight{0};
+    std::atomic<int>        max_inflight{0};
+    std::atomic<int>        completed{0};
+    std::atomic<int>        join_observed{0};
+
+    auto prepare = [&](const int& value) {
+        const int current = inflight.fetch_add(1, std::memory_order_acq_rel) + 1;
+        int observed = max_inflight.load(std::memory_order_acquire);
+        while (observed < current &&
+               !max_inflight.compare_exchange_weak(observed, current)) {}
+        {
+            std::unique_lock lock(mutex);
+            ++entered;
+            cv.notify_all();
+            if (!cv.wait_for(lock, 2s, [&] { return entered == 2; })) {
+                timed_out.store(true, std::memory_order_release);
+            }
+        }
+        inflight.fetch_sub(1, std::memory_order_acq_rel);
+        completed.fetch_add(1, std::memory_order_release);
+        return value * 2;
+    };
+
+    RenderGraph graph("ParallelSetup");
+    const auto  first  = graph.AddSetupPass("FirstIndependent", 20, prepare);
+    const auto  second = graph.AddSetupPass("SecondIndependent", 21, prepare);
+    const std::array dependencies{
+        first.GetSetupPass(),
+        second.GetSetupPass(),
+    };
+    const auto joined = graph.AddSetupPass(
+        "JoinIndependent",
+        0,
+        [&](const int&) {
+            join_observed.store(
+                completed.load(std::memory_order_acquire),
+                std::memory_order_release
+            );
+            return first.Get() + second.Get();
+        },
+        std::span<const RenderGraph::SetupPassHandle>(dependencies)
+    );
+    AddNoOpPass(graph);
+
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(
+        first.Get() == 40 && second.Get() == 42 && joined.Get() == 82 &&
+            join_observed.load(std::memory_order_acquire) == 2 &&
+            max_inflight.load() >= 2 &&
+            !timed_out.load(std::memory_order_acquire),
+        test_name,
+        "independent setup tasks were serialized, dependencies were not joined, or Compile returned early"
+    );
+}
+
 int RunNormalWorkerStarvationChild() {
     struct StartBarrier {
         std::mutex              mutex{};
@@ -556,10 +621,10 @@ void TestFailureJoinAndStableRetry(TestSuite& suite) {
     );
     const auto skipped = graph.AddSetupPass(
         "SkippedSetup",
-        2,
-        [&](const int& value) {
+        failed,
+        [&](const Moer::Render::RGPreparedValue<int>& dependency) {
             skipped_calls.fetch_add(1, std::memory_order_relaxed);
-            return value;
+            return dependency.Get();
         }
     );
     graph.AddRecordPass(
@@ -595,11 +660,11 @@ void TestFailureJoinAndStableRetry(TestSuite& suite) {
         "Compile did not join the throwing setup before returning failure"
     );
     suite.Check(
-        Contains(graph.GetCompileError(), "declared an invalid resource") &&
+        !Contains(graph.GetCompileError(), "declared an invalid resource") &&
             Contains(graph.GetCompileError(), "FailingSetup") &&
             Contains(graph.GetCompileError(), "setup boom"),
         test_name,
-        "compiler-primary and setup diagnostics were not preserved together"
+        "compiler ran before setup joined or the setup diagnostic was lost"
     );
     suite.Check(
         failed.HasFailed() && failed_get_throws && skipped.HasFailed() &&
@@ -731,10 +796,10 @@ void TestFailureDiagnosticFaultIsTerminal(TestSuite& suite) {
     );
     const auto skipped = graph.AddSetupPass(
         "SkippedAfterDiagnosticFault",
-        2,
-        [&](const int& value) {
+        failed,
+        [&](const Moer::Render::RGPreparedValue<int>& dependency) {
             skipped_calls.fetch_add(1, std::memory_order_relaxed);
-            return value;
+            return dependency.Get();
         }
     );
     AddNoOpPass(graph);
@@ -976,6 +1041,51 @@ void TestDeclarationFreezeAfterDispatch(TestSuite& suite) {
     );
 }
 
+void TestCombinedPreparedPassContract(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "combined prepared pass exposes const setup result to record";
+
+    RenderGraph     graph("CombinedPreparedPass");
+    const auto      token = graph.CreateTransientToken("Output");
+    std::atomic<int> prepare_calls{0};
+    std::atomic<int> record_value{0};
+
+    const auto handles = graph.AddPreparedPass(
+        "Prepared",
+        21,
+        [&](const int& input) {
+            prepare_calls.fetch_add(1, std::memory_order_relaxed);
+            return input * 2;
+        },
+        [&](RenderGraph::PassBuilder& builder) {
+            builder.Write(token).SideEffect();
+        },
+        [&](CommandList&, const int& immutable_parameters) {
+            static_assert(std::is_const_v<
+                          std::remove_reference_t<decltype(immutable_parameters)>>);
+            record_value.store(immutable_parameters, std::memory_order_release);
+        }
+    );
+
+    suite.Check(handles.IsValid(), test_name, "combined pass handles are invalid");
+    suite.Check(
+        graph.Compile() && prepare_calls.load(std::memory_order_acquire) == 1,
+        test_name,
+        graph.GetCompileError()
+    );
+    const bool executed = graph.ExecuteRecording(
+        {},
+        {},
+        true,
+        [](Moer::Array<Moer::Render::RHIRecordingSource>&&) {}
+    );
+    suite.Check(
+        executed && record_value.load(std::memory_order_acquire) == 42,
+        test_name,
+        graph.GetCompileError()
+    );
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -992,8 +1102,10 @@ int main(int argc, char** argv) {
 
     Moer::TaskSystem::Init();
     TestAsyncOrderJoinAndNamedThreadIsolation(suite);
+    TestIndependentSetupTasksRunConcurrently(suite);
     TestFailureJoinAndStableRetry(suite);
     TestParallelRecordingReadsOnePreparedValue(suite);
+    TestCombinedPreparedPassContract(suite);
     TestDeclarationFreezeAfterDispatch(suite);
     TestFailureDiagnosticFaultIsTerminal(suite);
     TestTaskDispatchAndDiagnosticFaultsAreTerminal(suite);

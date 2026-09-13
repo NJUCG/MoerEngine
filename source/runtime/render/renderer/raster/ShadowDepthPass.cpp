@@ -614,7 +614,8 @@ bool ShadowDepthPass::RefreshShadowCasterBounds(RasterContext& context) {
     return true;
 }
 
-void ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterConfig& ui_config) {
+bool ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterConfig& ui_config) {
+    bool bindless_changed = false;
     for (uint i = 0; i < enabled_cascade_layers; i++) {
         auto& shadow_map_texture = context.csm_data.shadow_map_textures[i];
 
@@ -657,12 +658,14 @@ void ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterCo
                 shadow_map_texture.hdl
             );
 
-            context.cmd_list.UpdateBindlessArray(context.bdls);
+            bindless_changed = true;
         }
     }
+    return bindless_changed;
 }
 
-void ShadowDepthPass::PreparePointShadowResources(RasterContext& context, const RasterConfig& ui_config) {
+bool ShadowDepthPass::PreparePointShadowResources(RasterContext& context, const RasterConfig& ui_config) {
+    bool bindless_changed = false;
     for (uint i = 0; i < RasterContext::PointShadowData::MAX_POINT_SHADOWS; i++) {
         auto& cube_res = context.point_shadow_data.shadow_cubes[i];
 
@@ -701,10 +704,10 @@ void ShadowDepthPass::PreparePointShadowResources(RasterContext& context, const 
                 cube_res.handle
             );
 
-            // 5. 更新 Bindless Array (提交描述符更新)
-            context.cmd_list.UpdateBindlessArray(context.bdls);
+            bindless_changed = true;
         }
     }
+    return bindless_changed;
 }
 
 std::optional<ecs::CLightDirectional> ShadowDepthPass::GetMainLightDirection(RasterContext& context) {
@@ -732,11 +735,16 @@ std::optional<ecs::CLightPoint> ShadowDepthPass::GetMainPointLight(RasterContext
     return light;
 }
 
-void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_config, const Camera& camera) {
+void ShadowDepthPass::PrepareCSM(
+    RasterContext& context,
+    const RasterConfig& ui_config,
+    const Camera& camera,
+    RecordParameters& parameters
+) {
     enabled_cascade_layers = ui_config.shadow_csm_num_of_cascades;
     assert(enabled_cascade_layers <= CSM_MAX_CASCADES);
 
-    PrepareCSMResources(context, ui_config);
+    parameters.update_bindless_array |= PrepareCSMResources(context, ui_config);
 
     // Light
     auto light = GetMainLightDirection(context);
@@ -875,13 +883,7 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
         context.lighting_data.scale_data[cascade_index]        = shadow_candidate.scale_data;
         context.csm_data.world2shadow_clip[cascade_index]      = shadow_candidate.world2shadow_clip;
 
-        ScopedGpuMarker cascade_marker(
-            context.cmd_list,
-            RasterTool::GetCsmShadowCascadeMarkerName(cascade_index),
-            GpuMarkerPalette::Subpass()
-        );
-
-        m_culling_pass.Process(
+        auto culling = m_culling_pass.Prepare(
             context,
             context.lighting_data.world2shadow_clip[cascade_index],
             context.GetGpuSceneRes(),
@@ -889,16 +891,22 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
             nullptr,
             RasterTool::GetCsmShadowCullingProfileScopeName(cascade_index)
         );
-
-        RenderShadow(
-            context,
-            ui_config,
-            context.lighting_data.world2shadow_clip[cascade_index],
-            Rect2D(0, 0, ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
-            context.csm_data.shadow_map_textures[cascade_index].tex->GetView(),
-            std::format("Shadow Depth Pass - {}", cascade_index),
-            RasterTool::GetCsmShadowDrawProfileScopeName(cascade_index)
-        );
+        parameters.draws.push_back(DrawBatch{
+            .culling = std::move(culling),
+            .shader = BuildDrawParameters(
+                context,
+                ui_config,
+                context.lighting_data.world2shadow_clip[cascade_index],
+                false
+            ),
+            .rect = Rect2D(0, 0, ui_config.shadow_csm_sm_size, ui_config.shadow_csm_sm_size),
+            .depth_view = context.csm_data.shadow_map_textures[cascade_index].tex->GetView(),
+            .pass_name = std::format("Shadow Depth Pass - {}", cascade_index),
+            .marker_name =
+                std::string(RasterTool::GetCsmShadowCascadeMarkerName(cascade_index)),
+            .draw_profile_scope_name =
+                std::string(RasterTool::GetCsmShadowDrawProfileScopeName(cascade_index))
+        });
 
         store_shadow_cache_entry(shadow_cache_entry, shadow_candidate, shadow_cache_frame_index);
     }
@@ -917,7 +925,17 @@ void ShadowDepthPass::RenderCSM(RasterContext& context, const RasterConfig& ui_c
     // );
 }
 
-void ShadowDepthPass::Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera) {
+ShadowDepthPass::RecordParameters ShadowDepthPass::Prepare(
+    RasterContext& context,
+    const RasterConfig& ui_config,
+    const Camera& camera
+) {
+    RecordParameters parameters{
+        .bindless = context.bdls,
+        .index_buffer = context.GetGpuSceneRes().index_buf.buf->GetView(),
+        .point_shadow_view_matrices = m_point_shadow_view_matrices
+    };
+
     const bool  shadow_caster_bounds_changed = RefreshShadowCasterBounds(context);
     const auto& scene_tick_state             = context.GetSceneUpdates().tick_state;
     const bool  main_light_changed =
@@ -936,25 +954,35 @@ void ShadowDepthPass::Process(RasterContext& context, const RasterConfig& ui_con
         case EShadowMapMode::NONE:
             break;
         case EShadowMapMode::POINT_CUBE:
-            RenderPointShadows(context, ui_config, camera);
+            PreparePointShadows(context, ui_config, camera, parameters);
             break;
         case EShadowMapMode::CSM:
         case EShadowMapMode::CSM_AUTO:
-            RenderCSM(context, ui_config, camera);
+            PrepareCSM(context, ui_config, camera, parameters);
             break;
         default:
             LOG_ERROR("Shadow map mode {} not supported", static_cast<int>(ui_config.shadow_map_mode));
             break;
     }
-    return;
+    return parameters;
 }
 
-void ShadowDepthPass::RenderPointShadows(
+void ShadowDepthPass::Process(
+    RasterContext& context,
+    const RasterConfig& ui_config,
+    const Camera& camera
+) {
+    const auto parameters = Prepare(context, ui_config, camera);
+    Record(context.cmd_list, parameters);
+}
+
+void ShadowDepthPass::PreparePointShadows(
     RasterContext&      context,
     const RasterConfig& config,
-    const Camera&       camera
+    const Camera&       camera,
+    RecordParameters&   parameters
 ) {
-    PreparePointShadowResources(context, config);
+    parameters.update_bindless_array |= PreparePointShadowResources(context, config);
 
     auto light = GetMainPointLight(context);
     if (!light) {
@@ -1002,14 +1030,8 @@ void ShadowDepthPass::RenderPointShadows(
     }
 
     if (m_point_shadow_multiview_supported && config.shadow_point_multiview_enabled) {
-        ScopedGpuMarker multiview_marker(
-            context.cmd_list,
-            "PointShadow Multiview",
-            GpuMarkerPalette::Subpass()
-        );
-
         const float3 point_shadow_extent(far_plane, far_plane, far_plane);
-        m_culling_pass.ProcessAabb(
+        auto culling = m_culling_pass.PrepareAabb(
             context,
             cube_res.light_pos - point_shadow_extent,
             cube_res.light_pos + point_shadow_extent,
@@ -1019,15 +1041,19 @@ void ShadowDepthPass::RenderPointShadows(
             "PointShadow Multiview Culling",
             CullingPass::CullingOptions{true, false, 1.0f, -1}
         );
-
-        RenderPointShadowMultiview(
-            context,
-            config,
-            multiview_matrices,
-            Rect2D(0, 0, config.shadow_csm_sm_size, config.shadow_csm_sm_size),
-            TextureView(cube_res.tex.Get()).Slice(0, k_point_shadow_view_count),
-            std::format("PointShadow L{} Multiview", light_idx)
-        );
+        parameters.draws.push_back(DrawBatch{
+            .culling = std::move(culling),
+            .shader = BuildDrawParameters(
+                context, config, multiview_matrices.world2clip[0], true
+            ),
+            .rect = Rect2D(0, 0, config.shadow_csm_sm_size, config.shadow_csm_sm_size),
+            .depth_view = TextureView(cube_res.tex.Get()).Slice(0, k_point_shadow_view_count),
+            .pass_name = std::format("PointShadow L{} Multiview", light_idx),
+            .marker_name = "PointShadow Multiview",
+            .draw_profile_scope_name = "PointShadow Multiview Draw",
+            .multiview_matrices = multiview_matrices,
+            .multiview = true
+        });
         return;
     }
 
@@ -1037,13 +1063,7 @@ void ShadowDepthPass::RenderPointShadows(
 
         TextureView face_view = TextureView(cube_res.tex.Get()).Slice(face, 1);
 
-        ScopedGpuMarker face_marker(
-            context.cmd_list,
-            RasterTool::GetPointShadowFaceMarkerName(face),
-            GpuMarkerPalette::Subpass()
-        );
-
-        m_culling_pass.Process(
+        auto culling = m_culling_pass.Prepare(
             context,
             view_proj,
             context.GetGpuSceneRes(),
@@ -1051,124 +1071,116 @@ void ShadowDepthPass::RenderPointShadows(
             nullptr,
             RasterTool::GetPointShadowCullingProfileScopeName(face)
         );
-
-        RenderShadow(
-            context,
-            config,
-            view_proj,
-            Rect2D(0, 0, config.shadow_csm_sm_size, config.shadow_csm_sm_size),
-            face_view,
-            std::format("PointShadow L{} F{}", light_idx, face),
-            RasterTool::GetPointShadowDrawProfileScopeName(face)
-        );
+        parameters.draws.push_back(DrawBatch{
+            .culling = std::move(culling),
+            .shader = BuildDrawParameters(context, config, view_proj, false),
+            .rect = Rect2D(0, 0, config.shadow_csm_sm_size, config.shadow_csm_sm_size),
+            .depth_view = face_view,
+            .pass_name = std::format("PointShadow L{} F{}", light_idx, face),
+            .marker_name = std::string(RasterTool::GetPointShadowFaceMarkerName(face)),
+            .draw_profile_scope_name =
+                std::string(RasterTool::GetPointShadowDrawProfileScopeName(face))
+        });
     }
 }
 
-void ShadowDepthPass::RenderPointShadowMultiview(
-    RasterContext&                 context,
-    const RasterConfig&            config,
-    const PointShadowViewMatrices& view_matrices,
-    const Rect2D&                  rect,
-    TextureView                    depth_view,
-    std::string_view               pass_name
+GeometryPassBindlessParam ShadowDepthPass::BuildDrawParameters(
+    const RasterContext& context,
+    const RasterConfig& config,
+    const float4x4& world2clip,
+    bool already_transposed
+) const {
+    GeometryPassBindlessParam param{};
+    param.world2clip = already_transposed ? world2clip : Transpose(world2clip);
+
+    const auto& gpu_scene_res           = context.GetGpuSceneRes();
+    param.instance_buf_hdl              = gpu_scene_res.instance_buf.hdl;
+    param.visible_instance_id_buf_hdl   = context.gpu_culling_buffers.shadow.visible_instance_id_buf.hdl;
+    param.use_visible_instance_id_remap = 1;
+    param.primitive_buf_hdl             = gpu_scene_res.primitive_buf.hdl;
+    param.position_buf_hdl              = gpu_scene_res.position_buf.hdl;
+    param.packed_normal_buf_hdl         = gpu_scene_res.packed_normal_buf.hdl;
+    param.packed_tangent_buf_hdl        = gpu_scene_res.packed_tangent_buf.hdl;
+    param.texcoord0_buf_hdl             = gpu_scene_res.texcoord0_buf.hdl;
+    param.material_buf_hdl              = gpu_scene_res.material_buf.hdl;
+    param.enable_alpha_test             = config.geometry_enable_alpha_test ? 1 : 0;
+    param.alpha_test_blend_pixel_cutoff = config.geometry_alpha_test_blend_pixel_cutoff;
+    return param;
+}
+
+void ShadowDepthPass::Record(CommandList& cmd_list, const RecordParameters& parameters) {
+    if (parameters.update_bindless_array) {
+        cmd_list.UpdateBindlessArray(parameters.bindless);
+    }
+    for (const DrawBatch& batch : parameters.draws) {
+        ScopedGpuMarker marker(cmd_list, batch.marker_name, GpuMarkerPalette::Subpass());
+        m_culling_pass.Record(cmd_list, batch.culling);
+        if (batch.multiview) {
+            RecordPointShadowMultiview(cmd_list, parameters, batch);
+        } else {
+            RecordShadowDraw(cmd_list, parameters, batch);
+        }
+    }
+}
+
+void ShadowDepthPass::RecordPointShadowMultiview(
+    CommandList& cmd_list,
+    const RecordParameters& parameters,
+    const DrawBatch& batch
 ) {
-    Array<byte> matrix_upload(sizeof(PointShadowViewMatrices));
-    std::memcpy(matrix_upload.data(), &view_matrices, sizeof(PointShadowViewMatrices));
-    context.cmd_list.CopyFrom(
-        std::move(matrix_upload),
-        m_point_shadow_view_matrices->GetView(),
+    cmd_list.CopyFrom(
+        std::span<const byte>(
+            reinterpret_cast<const byte*>(&batch.multiview_matrices),
+            sizeof(PointShadowViewMatrices)
+        ),
+        parameters.point_shadow_view_matrices->GetView(),
         "Raster::PointShadowMultiviewMatrices"
     );
 
-    GeometryPassBindlessParam param{};
-    param.world2clip = view_matrices.world2clip[0];
-
-    const auto& gpu_scene_res           = context.GetGpuSceneRes();
-    param.instance_buf_hdl              = gpu_scene_res.instance_buf.hdl;
-    param.visible_instance_id_buf_hdl   = context.gpu_culling_buffers.shadow.visible_instance_id_buf.hdl;
-    param.use_visible_instance_id_remap = 1;
-    param.primitive_buf_hdl             = gpu_scene_res.primitive_buf.hdl;
-    param.position_buf_hdl              = gpu_scene_res.position_buf.hdl;
-    param.packed_normal_buf_hdl         = gpu_scene_res.packed_normal_buf.hdl;
-    param.packed_tangent_buf_hdl        = gpu_scene_res.packed_tangent_buf.hdl;
-    param.texcoord0_buf_hdl             = gpu_scene_res.texcoord0_buf.hdl;
-    param.material_buf_hdl              = gpu_scene_res.material_buf.hdl;
-    param.enable_alpha_test             = config.geometry_enable_alpha_test ? 1 : 0;
-    param.alpha_test_blend_pixel_cutoff = config.geometry_alpha_test_blend_pixel_cutoff;
-
-    context.cmd_list.PushScopeWithTimeScope("PointShadow Multiview Draw");
-
-    auto draw = context.cmd_list.Gfx(
+    cmd_list.PushScopeWithTimeScope(batch.draw_profile_scope_name);
+    auto draw = cmd_list.Gfx(
         m_point_shadow_multiview_pso,
-        m_point_shadow_view_matrices,
-        context.bdls,
-        param
+        parameters.point_shadow_view_matrices,
+        parameters.bindless,
+        batch.shader
     );
     draw.SetViewMask(k_point_shadow_view_mask);
-
-    const auto& visibility = context.gpu_culling_buffers.shadow;
     draw.DrawIndirect(
-        pass_name,
-        rect,
+        batch.pass_name,
+        batch.rect,
         {},
-        IndexBuffer{gpu_scene_res.index_buf.buf->GetView(), EIndexElementType::IET_UINT32},
-        visibility.draw_cmd_buf->GetView(),
-        visibility.GetDrawCountView(),
-        visibility.draw_cmd_buf->GetStride(),
-        visibility.max_draw_count,
-        DepthAttachment(depth_view)
+        IndexBuffer{parameters.index_buffer, EIndexElementType::IET_UINT32},
+        batch.culling.draw_commands,
+        batch.culling.draw_count,
+        batch.culling.draw_command_stride,
+        batch.culling.max_draw_count,
+        DepthAttachment(batch.depth_view)
     );
-
-    context.cmd_list.PopScopeWithTimeScope();
+    cmd_list.PopScopeWithTimeScope();
 }
 
-void ShadowDepthPass::RenderShadow(
-    RasterContext&      context,
-    const RasterConfig& config,
-    const float4x4&     view_proj,
-    const Rect2D&       rect,
-    TextureView         depth_view,
-    std::string_view                pass_name,
-    std::optional<std::string_view> profile_scope_name
+void ShadowDepthPass::RecordShadowDraw(
+    CommandList& cmd_list,
+    const RecordParameters& parameters,
+    const DrawBatch& batch
 ) {
-    GeometryPassBindlessParam param{};
-    param.world2clip = Transpose(view_proj);
-
-    const auto& gpu_scene_res           = context.GetGpuSceneRes();
-    param.instance_buf_hdl              = gpu_scene_res.instance_buf.hdl;
-    param.visible_instance_id_buf_hdl   = context.gpu_culling_buffers.shadow.visible_instance_id_buf.hdl;
-    param.use_visible_instance_id_remap = 1;
-    param.primitive_buf_hdl             = gpu_scene_res.primitive_buf.hdl;
-    param.position_buf_hdl              = gpu_scene_res.position_buf.hdl;
-    param.packed_normal_buf_hdl         = gpu_scene_res.packed_normal_buf.hdl;
-    param.packed_tangent_buf_hdl        = gpu_scene_res.packed_tangent_buf.hdl;
-    param.texcoord0_buf_hdl             = gpu_scene_res.texcoord0_buf.hdl;
-    param.material_buf_hdl              = gpu_scene_res.material_buf.hdl;
-
-    param.enable_alpha_test             = config.geometry_enable_alpha_test ? 1 : 0;
-    param.alpha_test_blend_pixel_cutoff = config.geometry_alpha_test_blend_pixel_cutoff;
-
-    if (profile_scope_name.has_value()) {
-        context.cmd_list.PushScopeWithTimeScope(profile_scope_name.value());
+    if (!batch.draw_profile_scope_name.empty()) {
+        cmd_list.PushScopeWithTimeScope(batch.draw_profile_scope_name);
     }
-
-    auto draw = context.cmd_list.Gfx(m_pso, context.bdls, param);
-
-    const auto& visibility = context.gpu_culling_buffers.shadow;
+    auto draw = cmd_list.Gfx(m_pso, parameters.bindless, batch.shader);
     draw.DrawIndirect(
-        pass_name,
-        rect,
+        batch.pass_name,
+        batch.rect,
         {},
-        IndexBuffer{gpu_scene_res.index_buf.buf->GetView(), EIndexElementType::IET_UINT32},
-        visibility.draw_cmd_buf->GetView(),
-        visibility.GetDrawCountView(),
-        visibility.draw_cmd_buf->GetStride(),
-        visibility.max_draw_count,
-        DepthAttachment(depth_view)
+        IndexBuffer{parameters.index_buffer, EIndexElementType::IET_UINT32},
+        batch.culling.draw_commands,
+        batch.culling.draw_count,
+        batch.culling.draw_command_stride,
+        batch.culling.max_draw_count,
+        DepthAttachment(batch.depth_view)
     );
-
-    if (profile_scope_name.has_value()) {
-        context.cmd_list.PopScopeWithTimeScope();
+    if (!batch.draw_profile_scope_name.empty()) {
+        cmd_list.PopScopeWithTimeScope();
     }
 }
 

@@ -17,25 +17,37 @@ namespace Moer::Render::Raster {
  */
 class CooperativeOpsPass {
 public:
+    struct PreparedStatus {
+        CooperativeOpsStatus status{};
+    };
+
     explicit CooperativeOpsPass(RasterContext& context) :
         m_cooperative_info(context.device.GetCooperativeExtensionInfo()) {}
 
-    TextureWithHandle
-    Process(RasterContext& context, RasterConfig& ui_config, TextureWithHandle input_image) {
-        (void)context;
-        UpdateSnapshotStatus(ui_config.cooperative_ops_status);
-
-        auto& status = ui_config.cooperative_ops_status;
+    [[nodiscard]] PreparedStatus Prepare(const RasterConfig& ui_config) const {
+        PreparedStatus prepared{.status = ui_config.cooperative_ops_status};
+        UpdateSnapshotStatus(prepared.status);
+        auto& status = prepared.status;
         if (!ui_config.cooperative_ops_enabled) {
             status.matrix_runtime_status = "Inactive";
             status.vector_runtime_status = "Inactive";
-            return input_image;
+            return prepared;
         }
 
         ++status.frames_evaluated;
 
         UpdateRuntimeStatus(status);
+        return prepared;
+    }
 
+    void Commit(RasterConfig& ui_config, const PreparedStatus& prepared) const {
+        ui_config.cooperative_ops_status = prepared.status;
+    }
+
+    TextureWithHandle
+    Process(RasterContext& context, RasterConfig& ui_config, TextureWithHandle input_image) {
+        (void)context;
+        Commit(ui_config, Prepare(ui_config));
         return input_image;
     }
 

@@ -16,6 +16,11 @@ public:
 
 class CameraGizmoPass {
 public:
+    struct RecordParameters {
+        CameraGizmoParam  shader{};
+        TextureWithHandle output{};
+    };
+
     CameraGizmoPass(RasterContext& context) {
         GfxPsoCreateInfo pso_info(
             RHIRasterizeInfo::Preset(),
@@ -34,8 +39,13 @@ public:
                          .Build<CameraGizmoPipeline>(std::move(pso_info));
     }
 
-    void Process(RasterContext& context, const Camera& scene_camera, const Camera& main_camera) {
-        CameraGizmoParam param{};
+    [[nodiscard]] RecordParameters Prepare(
+        const RasterContext& context,
+        const Camera&        scene_camera,
+        const Camera&        main_camera
+    ) const {
+        RecordParameters parameters{};
+        auto& param = parameters.shader;
         param.world2clip = Transpose(scene_camera.GetViewProjectionMatrix());
 
         const float near_depth = Max(main_camera.GetNearClip(), 0.001f);
@@ -54,18 +64,27 @@ public:
             float4(up.x, up.y, up.z, main_camera.GetAspectRatio());
         param.camera_front_far =
             float4(front.x, front.y, front.z, Max(far_depth, near_depth * 2.0f));
+        parameters.output = context.textures.tonemapping_output;
+        return parameters;
+    }
 
-        context.cmd_list.Gfx(m_pipeline, param)
+    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
+        cmd_list.Gfx(m_pipeline, parameters.shader)
             .Draw(
                 "Main Camera Gizmo Pass",
-                context.textures.tonemapping_output.GetRect2D(),
+                parameters.output.GetRect2D(),
                 Array<SingleDrawParam>{SingleDrawParam{114, 1, 0, 0, 0}},
                 ColorAttachment{
-                    context.textures.tonemapping_output.tex,
+                    parameters.output.tex,
                     EAttachmentAction::AC_LOAD_STORE,
                     float4(0, 0, 0, 0)
                 }
             );
+    }
+
+    void Process(RasterContext& context, const Camera& scene_camera, const Camera& main_camera) {
+        const RecordParameters parameters = Prepare(context, scene_camera, main_camera);
+        Record(context.cmd_list, parameters);
     }
 
 private:

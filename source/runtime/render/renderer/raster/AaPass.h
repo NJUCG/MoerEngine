@@ -108,6 +108,22 @@ public:
  */
 class AaPass {
 public:
+    struct RecordParameters {
+        EAaMode                              mode{EAaMode::NONE};
+        BindlessArrayRef                     bindless{};
+        TextureWithHandle                    input{};
+        TextureWithHandle                    output{};
+        TextureWithHandle                    texture_1{};
+        TextureWithHandle                    texture_2{};
+        TextureWithHandle                    temporal_output{};
+        FxaaPrecomputePipelineBindlessParam  fxaa_precompute{};
+        FxaaPipelineBindlessParam            fxaa{};
+        SmaaSharedPipelineBindlessParam       smaa{};
+        bool                                 commit_history_valid{false};
+        uint8                                commit_frame_parity{0};
+        Matrix4x4f                           commit_view_proj{Matrix4x4f::Identity()};
+    };
+
     AaPass(RasterContext& context) {
 
         auto& tex    = context.textures;
@@ -203,8 +219,6 @@ public:
         frame_parity          = 0;
         history_valid         = false;
         current_view_proj     = Matrix4x4f::Identity();
-        previous_view_proj    = Matrix4x4f::Identity();
-        current_inv_view_proj = Matrix4x4f::Identity();
     }
 
     [[nodiscard]] uint8 NextSmaaT2xPhase() const noexcept {
@@ -248,77 +262,39 @@ public:
         smaa_search_tex.hdl = context.bdls->AllocateTexture(smaa_search_tex.tex, linear_sampler);
     }
 
-    TextureWithHandle Process(
-        RasterContext&      context,
-        const RasterConfig& ui_config,
-        const Camera&       camera,
-        TextureWithHandle   input_image,
-        uint8               smaa_t2x_phase
-    ) {
-        if (ui_config.aa_mode != EAaMode::SMAA_T2X && history_valid) {
-            ResetHistory();
-        }
+    [[nodiscard]] RecordParameters Prepare(
+        const RasterContext& context,
+        const RasterConfig&  ui_config,
+        const Camera&        camera,
+        TextureWithHandle    input_image,
+        uint8                smaa_t2x_phase
+    ) const {
+        RecordParameters parameters{};
+        parameters.mode      = ui_config.aa_mode;
+        parameters.bindless  = context.bdls;
+        parameters.input     = std::move(input_image);
+        parameters.output    = context.textures.aa_output;
+        parameters.texture_1 = context.textures.aa_texture_1;
+        parameters.texture_2 = context.textures.aa_texture_2;
+        parameters.commit_view_proj = camera.GetViewProjectionMatrix();
 
-        if (ui_config.aa_mode == EAaMode::NONE || ui_config.aa_mode == EAaMode::FXAA_SIMPLIFIED ||
+        if (ui_config.aa_mode == EAaMode::NONE ||
+            ui_config.aa_mode == EAaMode::FXAA_SIMPLIFIED ||
             ui_config.aa_mode == EAaMode::FXAA_QUALITY) {
-            return ProcessFxaa(context, ui_config, camera, input_image);
+            parameters.fxaa_precompute.input_image = parameters.input.hdl;
+            parameters.fxaa.input_image            = parameters.texture_1.hdl;
+            parameters.fxaa.fxaa_mode              = static_cast<uint32>(ui_config.aa_mode);
+            parameters.fxaa.resolution             = float2(parameters.output.GetSize());
+            parameters.fxaa.inv_resolution = float2(1.0) / parameters.fxaa.resolution;
+            return parameters;
         }
 
-        if (ui_config.aa_mode == EAaMode::SMAA_1X || ui_config.aa_mode == EAaMode::SMAA_T2X) {
-            return ProcessSmaa(
-                context,
-                ui_config,
-                camera,
-                input_image,
-                smaa_t2x_phase
-            );
-        }
+        assert(
+            (ui_config.aa_mode == EAaMode::SMAA_1X ||
+             ui_config.aa_mode == EAaMode::SMAA_T2X) &&
+            "Invalid antialiasing mode"
+        );
 
-        assert(false && "Invalid antialiasing mode");
-        return input_image;
-    }
-
-    TextureWithHandle ProcessFxaa(
-        RasterContext&      context,
-        const RasterConfig& ui_config,
-        const Camera&       camera,
-        TextureWithHandle   input_image
-    ) {
-        FxaaPrecomputePipelineBindlessParam param_fxaa_precomputed;
-        param_fxaa_precomputed.input_image = input_image.hdl;
-
-        context.cmd_list.Gfx(fxaa_precompute_pipeline, context.bdls, param_fxaa_precomputed)
-            .Draw(
-                "FXAA Precompute Pass",
-                context.textures.aa_texture_1.GetRect2D(),
-                std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment(context.textures.aa_texture_1.tex)
-            );
-
-        FxaaPipelineBindlessParam param_fxaa;
-        param_fxaa.input_image    = context.textures.aa_texture_1.hdl;
-        param_fxaa.fxaa_mode      = static_cast<uint32>(ui_config.aa_mode);
-        param_fxaa.resolution     = float2(context.textures.aa_output.GetSize());
-        param_fxaa.inv_resolution = float2(1.0) / float2(context.textures.aa_output.GetSize());
-
-        context.cmd_list.Gfx(fxaa_pipeline, context.bdls, param_fxaa)
-            .Draw(
-                "FXAA Pass",
-                context.textures.aa_output.GetRect2D(),
-                std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment(context.textures.aa_output.tex)
-            );
-
-        return context.textures.aa_output;
-    }
-
-    TextureWithHandle ProcessSmaa(
-        RasterContext&      context,
-        const RasterConfig& ui_config,
-        const Camera&       camera,
-        TextureWithHandle   input_image,
-        uint8               smaa_t2x_phase
-    ) {
         // TODO: optimize the following code
         //           以下是我会写出这段代码的原因：
         //       SMAA官方提供了一段代码SMAA.hlsl，只需要一些简单的修改，就可以让我们快速将SMAA集成到MoerEngine中
@@ -342,34 +318,33 @@ public:
             // return sampler_idx;
         };
 
-        const bool uses_temporal_history =
-            ui_config.aa_mode == EAaMode::SMAA_T2X;
+        const bool uses_temporal_history = ui_config.aa_mode == EAaMode::SMAA_T2X;
         const bool had_valid_history =
             uses_temporal_history && history_valid;
-        previous_view_proj =
+        const Matrix4x4f previous =
             had_valid_history ? current_view_proj : camera.GetViewProjectionMatrix();
-        current_view_proj     = camera.GetViewProjectionMatrix();
-        current_inv_view_proj = camera.GetViewProjectionMatrixInv();
-        frame_parity = uses_temporal_history ? smaa_t2x_phase : 0u;
-        assert(frame_parity < aa_texture_34.size());
-        history_valid = uses_temporal_history;
+        const uint8 phase = uses_temporal_history ? smaa_t2x_phase : 0u;
+        assert(phase < aa_texture_34.size());
+        parameters.temporal_output       = *aa_texture_34[phase];
+        parameters.commit_history_valid  = uses_temporal_history;
+        parameters.commit_frame_parity   = phase;
 
-        auto smaa_shared_param = [&]() {
-            SmaaSharedPipelineBindlessParam param;
+        parameters.smaa = [&]() {
+            SmaaSharedPipelineBindlessParam param{};
             param.clip2world         = Transpose(camera.GetViewProjectionMatrixInv());
             param.aa_mode            = static_cast<uint32>(ui_config.aa_mode);
-            param.color_tex          = input_image.hdl;
+            param.color_tex          = parameters.input.hdl;
             param.depth_tex          = context.textures.depth_linear_sampler.hdl;
             param.search_tex         = smaa_search_tex.hdl;
             param.area_tex           = smaa_area_tex.hdl;
-            param.edges_tex          = context.textures.aa_texture_1.hdl;
-            param.blend_tex          = context.textures.aa_texture_2.hdl;
-            param.current_color_tex  = aa_texture_34[frame_parity]->hdl;
+            param.edges_tex          = parameters.texture_1.hdl;
+            param.blend_tex          = parameters.texture_2.hdl;
+            param.current_color_tex  = parameters.temporal_output.hdl;
             param.previous_color_tex =
                 aa_texture_34[
-                    had_valid_history ? static_cast<uint8>(frame_parity ^ 1u) : frame_parity
+                    had_valid_history ? static_cast<uint8>(phase ^ 1u) : phase
                 ]->hdl;
-            param.frame_index        = frame_parity;
+            param.frame_index        = phase;
             param.point_sampler      = GetSamplerIdx(Sampler(SF_NEAREST, SAM_CLAMP_TO_EDGE));
             param.linear_sampler     = GetSamplerIdx(Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
             param.rt_metrics         = float4(
@@ -378,55 +353,110 @@ public:
                 context.textures.aa_output.GetSizeX(),
                 context.textures.aa_output.GetSizeY()
             );
-            param.clip2prev_clip = Transpose(previous_view_proj * current_inv_view_proj);
+            param.clip2prev_clip = Transpose(previous * camera.GetViewProjectionMatrixInv());
             return param;
         }();
 
-        context.cmd_list.Gfx(smaa_edge_detection_pipeline, context.bdls, smaa_shared_param)
+        return parameters;
+    }
+
+    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
+        if (parameters.mode == EAaMode::NONE ||
+            parameters.mode == EAaMode::FXAA_SIMPLIFIED ||
+            parameters.mode == EAaMode::FXAA_QUALITY) {
+            cmd_list.Gfx(fxaa_precompute_pipeline, parameters.bindless, parameters.fxaa_precompute)
+                .Draw(
+                    "FXAA Precompute Pass",
+                    parameters.texture_1.GetRect2D(),
+                    std::move(RasterTool::GetFullScreenDrawDatas()),
+                    ColorAttachment(parameters.texture_1.tex)
+                );
+            cmd_list.Gfx(fxaa_pipeline, parameters.bindless, parameters.fxaa)
+                .Draw(
+                    "FXAA Pass",
+                    parameters.output.GetRect2D(),
+                    std::move(RasterTool::GetFullScreenDrawDatas()),
+                    ColorAttachment(parameters.output.tex)
+                );
+            return;
+        }
+
+        cmd_list.Gfx(smaa_edge_detection_pipeline, parameters.bindless, parameters.smaa)
             .Draw(
                 "SMAA Edge Detection Pass",
-                context.textures.aa_texture_1.GetRect2D(),
+                parameters.texture_1.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment(context.textures.aa_texture_1.tex)
+                ColorAttachment(parameters.texture_1.tex)
             );
 
-        context.cmd_list.Gfx(smaa_blending_weight_pipeline, context.bdls, smaa_shared_param)
+        cmd_list.Gfx(smaa_blending_weight_pipeline, parameters.bindless, parameters.smaa)
             .Draw(
                 "SMAA Blending Weight Calculation Pass",
-                context.textures.aa_texture_2.GetRect2D(),
+                parameters.texture_2.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment(context.textures.aa_texture_2.tex)
+                ColorAttachment(parameters.texture_2.tex)
             );
 
-        if (ui_config.aa_mode == EAaMode::SMAA_1X) {
-            context.cmd_list.Gfx(smaa_neighborhood_blending_pipeline, context.bdls, smaa_shared_param)
+        if (parameters.mode == EAaMode::SMAA_1X) {
+            cmd_list.Gfx(smaa_neighborhood_blending_pipeline, parameters.bindless, parameters.smaa)
                 .Draw(
                     "SMAA Neighborhood Blending Pass",
-                    context.textures.aa_output.GetRect2D(),
+                    parameters.output.GetRect2D(),
                     std::move(RasterTool::GetFullScreenDrawDatas()),
-                    ColorAttachment(context.textures.aa_output.tex)
+                    ColorAttachment(parameters.output.tex)
                 );
-        } else if (ui_config.aa_mode == EAaMode::SMAA_T2X) {
-            context.cmd_list.Gfx(smaa_t2x_neighborhood_blending_pipeline, context.bdls, smaa_shared_param)
+        } else if (parameters.mode == EAaMode::SMAA_T2X) {
+            cmd_list.Gfx(smaa_t2x_neighborhood_blending_pipeline, parameters.bindless, parameters.smaa)
                 .Draw(
                     "SMAA T2x Neighborhood Blending Pass",
-                    context.textures.aa_texture_3.GetRect2D(),
+                    parameters.temporal_output.GetRect2D(),
                     std::move(RasterTool::GetFullScreenDrawDatas()),
-                    ColorAttachment(aa_texture_34[frame_parity]->tex)
+                    ColorAttachment(parameters.temporal_output.tex)
                 );
 
-            context.cmd_list.Gfx(smaa_t2x_resolve_pipeline, context.bdls, smaa_shared_param)
+            cmd_list.Gfx(smaa_t2x_resolve_pipeline, parameters.bindless, parameters.smaa)
                 .Draw(
                     "SMAA T2x Resolve Pass",
-                    context.textures.aa_output.GetRect2D(),
+                    parameters.output.GetRect2D(),
                     std::move(RasterTool::GetFullScreenDrawDatas()),
-                    ColorAttachment(context.textures.aa_output.tex)
+                    ColorAttachment(parameters.output.tex)
                 );
         } else {
             assert(false && "Invalid antialiasing mode");
         }
+    }
 
-        return context.textures.aa_output;
+    void Commit(const RecordParameters& parameters) {
+        history_valid = parameters.commit_history_valid;
+        if (!history_valid) {
+            frame_parity      = 0;
+            current_view_proj = Matrix4x4f::Identity();
+            return;
+        }
+        frame_parity      = parameters.commit_frame_parity;
+        current_view_proj = parameters.commit_view_proj;
+    }
+
+    void CommitFrame(EAaMode mode, uint8 smaa_t2x_phase, const Matrix4x4f& view_proj) {
+        RecordParameters parameters{};
+        parameters.commit_history_valid = mode == EAaMode::SMAA_T2X;
+        parameters.commit_frame_parity  = parameters.commit_history_valid ? smaa_t2x_phase : 0u;
+        parameters.commit_view_proj      = view_proj;
+        Commit(parameters);
+    }
+
+    TextureWithHandle Process(
+        RasterContext&      context,
+        const RasterConfig& ui_config,
+        const Camera&       camera,
+        TextureWithHandle   input_image,
+        uint8               smaa_t2x_phase
+    ) {
+        const RecordParameters parameters =
+            Prepare(context, ui_config, camera, std::move(input_image), smaa_t2x_phase);
+        Record(context.cmd_list, parameters);
+        Commit(parameters);
+        return parameters.output;
     }
 
 private:
@@ -442,8 +472,6 @@ private:
     uint8                              frame_parity = 0;
     bool                               history_valid = false;
     Matrix4x4f                         current_view_proj = Matrix4x4f::Identity();
-    Matrix4x4f                         previous_view_proj = Matrix4x4f::Identity();
-    Matrix4x4f                         current_inv_view_proj = Matrix4x4f::Identity();
 
     TextureWithHandle smaa_area_tex;
     TextureWithHandle smaa_search_tex;
