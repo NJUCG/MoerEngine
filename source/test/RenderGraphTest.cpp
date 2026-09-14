@@ -3957,6 +3957,19 @@ void TestRecordingBatchPlanAndClassification(TestSuite& suite) {
         "independent recording passes must share a wave while their consumer follows"
     );
     suite.Check(
+        plan.recording_groups.size() == 2 &&
+            plan.recording_groups[0].first_batch == 0 &&
+            plan.recording_groups[0].batch_count == 2 &&
+            plan.recording_groups[0].execution ==
+                RenderGraph::PassExecutionClass::ParallelRecordEligible &&
+            plan.recording_groups[1].first_batch == 2 &&
+            plan.recording_groups[1].batch_count == 1 &&
+            plan.recording_groups[1].execution ==
+                RenderGraph::PassExecutionClass::MainThread,
+        test_name,
+        "the compiler must precompute contiguous CPU recording dispatch groups"
+    );
+    suite.Check(
         Contains(graph.Dump(), "recording_batches:\n") &&
             Contains(
                 graph.Dump(),

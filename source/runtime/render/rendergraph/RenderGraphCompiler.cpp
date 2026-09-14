@@ -1718,9 +1718,14 @@ void RenderGraphCompiler::BuildRecordingBatches() {
     }
 
     graph.compiled_plan.recording_batches.reserve(graph.compiled_plan.execution_order.size());
+    std::vector<uint32_t> pass_to_batch(
+        graph.passes.size(),
+        RenderGraph::PassHandle::InvalidIndex
+    );
     for (const auto pass_handle : graph.compiled_plan.execution_order) {
         const auto& pass = graph.passes[pass_handle.index];
         const auto  id = static_cast<uint32_t>(graph.compiled_plan.recording_batches.size());
+        pass_to_batch[pass_handle.index] = id;
         graph.compiled_plan.recording_batches.push_back(RenderGraph::CompiledRecordingBatch{
             .id              = id,
             .queue           = graph.queue_topology.Resolve(pass.domain.queue),
@@ -1731,6 +1736,65 @@ void RenderGraphCompiler::BuildRecordingBatches() {
             .workload        = pass.workload,
             .dependency_wave = pass_to_wave[pass_handle.index],
         });
+    }
+
+    auto has_cpu_recording_dependency =
+        [&](RenderGraph::PassHandle candidate,
+            uint32_t                group_begin,
+            uint32_t                group_end) {
+            for (const auto& edge : graph.compiled_plan.edges) {
+                if (edge.dst != candidate) {
+                    continue;
+                }
+
+                const uint32_t source_batch = pass_to_batch[edge.src.index];
+                if (source_batch < group_begin || source_batch >= group_end) {
+                    continue;
+                }
+
+                for (const auto& reason : edge.reasons) {
+                    if (reason.kind == RenderGraph::EdgeReasonKind::Explicit) {
+                        return true;
+                    }
+                    if (graph.IsValidResource(reason.resource) &&
+                        graph.resources[reason.resource.index].kind ==
+                            RenderGraph::ResourceKind::Token) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+
+    uint32_t batch_index = 0;
+    while (batch_index < graph.compiled_plan.recording_batches.size()) {
+        const auto& first = graph.compiled_plan.recording_batches[batch_index];
+        uint32_t    group_end = batch_index + 1;
+        if (first.execution ==
+            RenderGraph::PassExecutionClass::ParallelRecordEligible) {
+            while (group_end < graph.compiled_plan.recording_batches.size()) {
+                const auto& candidate =
+                    graph.compiled_plan.recording_batches[group_end];
+                if (candidate.execution !=
+                        RenderGraph::PassExecutionClass::ParallelRecordEligible ||
+                    candidate.passes.size() != 1 ||
+                    has_cpu_recording_dependency(
+                        candidate.passes.front(), batch_index, group_end
+                    )) {
+                    break;
+                }
+                ++group_end;
+            }
+        }
+
+        graph.compiled_plan.recording_groups.push_back(
+            RenderGraph::CompiledRecordingGroup{
+                .first_batch = batch_index,
+                .batch_count = group_end - batch_index,
+                .execution   = first.execution,
+            }
+        );
+        batch_index = group_end;
     }
 }
 

@@ -527,6 +527,18 @@ public:
     };
 
     /**
+     * Contiguous CPU recording batches that may be dispatched together.
+     * GPU resource hazards do not split a group because immutable frontend
+     * command streams can be recorded concurrently and assembled later in
+     * compiled order. Explicit CPU dependencies and token edges do split it.
+     */
+    struct CompiledRecordingGroup {
+        uint32_t           first_batch = 0;
+        uint32_t           batch_count = 0;
+        PassExecutionClass execution  = PassExecutionClass::SerialRecord;
+    };
+
+    /**
      * One canonical synchronization decision for one atomic resource cell.
      * Lowering materializes queue_ownership as one paired release/acquire;
      * RDG compilation itself remains backend-neutral.
@@ -646,6 +658,8 @@ public:
         std::vector<CompiledWave> dependency_waves{};
         /** Stable one-pass CPU recording batches with explicit thread-safety classification. */
         std::vector<CompiledRecordingBatch> recording_batches{};
+        /** Precompiled dispatch groups; execution never rescans semantic edges. */
+        std::vector<CompiledRecordingGroup> recording_groups{};
         /** Canonical state/memory/ownership decisions, prior to backend-specific lowering. */
         std::vector<CompiledBarrier> barriers{};
         /** Descriptor-exact, non-overlapping whole-object transient reuse boundaries. */
@@ -671,6 +685,7 @@ public:
             resources.clear();
             dependency_waves.clear();
             recording_batches.clear();
+            recording_groups.clear();
             barriers.clear();
             alias_boundaries.clear();
             queue_batches.clear();
