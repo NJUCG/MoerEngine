@@ -1392,8 +1392,8 @@ BarrierSemanticDiagnostics VkTracker::GetPendingBarrierDiagnostics(
     return diagnostics;
 }
 
-void VkTracker::DispatchBarriers(VulkanCmdList& _cmdlist) {
-    if (!buffer_barriers.empty() || !texture_barriers.empty() || !memory_barriers.empty()) {
+void VulkanResolvedBarrierBatch::Record(VulkanCmdList& _cmd_list) const {
+    if (!Empty()) {
         VkDependencyInfoKHR dependency_info{};
         dependency_info.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO_KHR;
         dependency_info.pNext                    = nullptr;
@@ -1403,11 +1403,24 @@ void VkTracker::DispatchBarriers(VulkanCmdList& _cmdlist) {
         dependency_info.pImageMemoryBarriers     = texture_barriers.data();
         dependency_info.memoryBarrierCount       = static_cast<uint32>(memory_barriers.size());
         dependency_info.pMemoryBarriers          = memory_barriers.data();
-        vkCmdPipelineBarrier2(_cmdlist.GetHandle(), &dependency_info);
-        buffer_barriers.clear();
-        texture_barriers.clear();
-        memory_barriers.clear();
+        vkCmdPipelineBarrier2(_cmd_list.GetHandle(), &dependency_info);
     }
+}
+
+VulkanResolvedBarrierBatch VkTracker::TakeResolvedBarriers() {
+    VulkanResolvedBarrierBatch batch{
+        .buffer_barriers  = std::move(buffer_barriers),
+        .texture_barriers = std::move(texture_barriers),
+        .memory_barriers  = std::move(memory_barriers),
+    };
+    buffer_barriers.clear();
+    texture_barriers.clear();
+    memory_barriers.clear();
+    return batch;
+}
+
+void VkTracker::DispatchBarriers(VulkanCmdList& _cmdlist) {
+    TakeResolvedBarriers().Record(_cmdlist);
 }
 
 void VkTracker::RestoreState() {

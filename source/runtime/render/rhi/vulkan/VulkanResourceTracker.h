@@ -18,6 +18,22 @@ struct BarrierSemanticDiagnostics {
     uint32 memory_count{0};
 };
 
+// A self-contained, ordered barrier prefix produced by the coordinator. It
+// can outlive the tracker's pending arrays and be emitted later while a single
+// primary command buffer assembles pass secondaries in graph order.
+struct VulkanResolvedBarrierBatch {
+    Array<VkBufferMemoryBarrier2> buffer_barriers;
+    Array<VkImageMemoryBarrier2>  texture_barriers;
+    Array<VkMemoryBarrier2>       memory_barriers;
+
+    [[nodiscard]] bool Empty() const noexcept {
+        return buffer_barriers.empty() && texture_barriers.empty() &&
+               memory_barriers.empty();
+    }
+
+    void Record(class VulkanCmdList& _cmd_list) const;
+};
+
 template<typename TTexture>
 [[nodiscard]] constexpr bool TextureSubresourceRangesOverlap(
     const TextureSubresourceKeyT<TTexture>& lhs,
@@ -262,6 +278,8 @@ public:
     }
 
     void ResolveBarriers();
+
+    VulkanResolvedBarrierBatch TakeResolvedBarriers();
 
     BarrierSemanticDiagnostics GetPendingBarrierDiagnostics(
         VulkanSerialGoldenTrace*   _serial_golden,
