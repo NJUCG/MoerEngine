@@ -1136,6 +1136,34 @@ void TestBoundedQueuesAndOutputCursor() {
     );
 }
 
+void TestSourcePriorityAndApplyPhase() {
+    CVar::RegistrationResult prioritized = CVar::RegisterInt(
+        CVar::CVarDescriptor{
+            .name        = "Test.Priority.Value",
+            .apply_phase = CVar::EApplyPhase::FrameBoundary,
+        },
+        1
+    );
+    Expect(prioritized.Succeeded(), "priority test cvar did not register");
+    Expect(
+        CVar::SetValueFromString("Test.Priority.Value", "2", CVar::ESetSource::StartupConfig).Succeeded() &&
+            CVar::SetValueFromString("Test.Priority.Value", "3", CVar::ESetSource::Profile).Succeeded() &&
+            CVar::SetValueFromString("Test.Priority.Value", "4", CVar::ESetSource::CommandLine).Succeeded(),
+        "ordered startup sources did not apply"
+    );
+    Expect(
+        CVar::SetValueFromString("Test.Priority.Value", "5", CVar::ESetSource::Profile).status ==
+            CVar::ESetStatus::LowerPriority,
+        "lower-priority source replaced a command-line value"
+    );
+    const auto snapshot = CVar::Find("Test.Priority.Value");
+    Expect(
+        snapshot && snapshot->value == "4" && snapshot->set_source == CVar::ESetSource::CommandLine &&
+            snapshot->apply_phase == CVar::EApplyPhase::FrameBoundary,
+        "source or apply-phase metadata was not preserved"
+    );
+}
+
 void TestStartupSealLast() {
     CVar::RegistrationResult startup = CVar::RegisterInt(
         CVar::CVarDescriptor{
@@ -1145,6 +1173,10 @@ void TestStartupSealLast() {
         1
     );
     Expect(startup.Succeeded(), "startup-only cvar did not register");
+    Expect(
+        CVar::Find("Test.Startup.BeforeSeal")->apply_phase == CVar::EApplyPhase::StartupOnly,
+        "startup-only flag was not reflected in apply-phase metadata"
+    );
     Expect(
         CVar::SetValueFromString("Test.Startup.BeforeSeal", "2", CVar::ESetSource::Runtime).status ==
             CVar::ESetStatus::StartupSealed,
@@ -1231,6 +1263,7 @@ int main() {
         TestListingAndCandidates();
         TestCommandProcessing();
         TestBoundedQueuesAndOutputCursor();
+        TestSourcePriorityAndApplyPhase();
         TestStartupSealLast();
         InstallExitLifetimeSmoke();
         std::cout << "CVar/command core contract tests passed.\n" << std::flush;

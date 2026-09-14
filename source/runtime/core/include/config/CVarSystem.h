@@ -41,8 +41,17 @@ inline constexpr std::size_t DefaultCallbackDispatchBudget = 64;
 inline constexpr std::size_t MaxCallbackDispatchBudget     = 4096;
 
 enum class ESetSource : std::uint8_t {
-    Runtime,
-    StartupConfig,
+    Constructor   = 0,
+    StartupConfig = 10,
+    Profile       = 20,
+    CommandLine   = 30,
+    Runtime       = 40,
+};
+
+enum class EApplyPhase : std::uint8_t {
+    Immediate,
+    FrameBoundary,
+    StartupOnly,
 };
 
 enum class ESetStatus : std::uint8_t {
@@ -53,6 +62,7 @@ enum class ESetStatus : std::uint8_t {
     OutOfRange,
     ReadOnly,
     StartupSealed,
+    LowerPriority,
     CallbackQueueFull,
     InvalidRegistration,
 };
@@ -75,6 +85,7 @@ struct CVarDescriptor {
     std::string           true_helper;
     std::string           false_helper;
     EFlags                flags = EFlags::None;
+    EApplyPhase           apply_phase = EApplyPhase::Immediate;
     std::optional<double> min_value;
     std::optional<double> max_value;
     std::size_t           callback_dispatch_budget = DefaultCallbackDispatchBudget;
@@ -86,6 +97,7 @@ struct CVarDescriptorView {
     std::string_view      true_helper;
     std::string_view      false_helper;
     EFlags                flags = EFlags::None;
+    EApplyPhase           apply_phase = EApplyPhase::Immediate;
     std::optional<double> min_value;
     std::optional<double> max_value;
     std::size_t           callback_dispatch_budget = DefaultCallbackDispatchBudget;
@@ -100,6 +112,8 @@ struct CVarSnapshotView {
     std::string_view      value;
     EType                 type  = EType::String;
     EFlags                flags = EFlags::None;
+    EApplyPhase           apply_phase = EApplyPhase::Immediate;
+    ESetSource            set_source  = ESetSource::Constructor;
     std::optional<double> min_value;
     std::optional<double> max_value;
     std::size_t           callback_dispatch_budget = DefaultCallbackDispatchBudget;
@@ -115,6 +129,8 @@ struct CVarSnapshot {
     std::string           value;
     EType                 type  = EType::String;
     EFlags                flags = EFlags::None;
+    EApplyPhase           apply_phase = EApplyPhase::Immediate;
+    ESetSource            set_source  = ESetSource::Constructor;
     std::optional<double> min_value;
     std::optional<double> max_value;
     std::size_t           callback_dispatch_budget = DefaultCallbackDispatchBudget;
@@ -257,6 +273,7 @@ inline CVarDescriptorView ViewOf(const CVarDescriptor& _descriptor) noexcept {
         .true_helper              = _descriptor.true_helper,
         .false_helper             = _descriptor.false_helper,
         .flags                    = _descriptor.flags,
+        .apply_phase              = _descriptor.apply_phase,
         .min_value                = _descriptor.min_value,
         .max_value                = _descriptor.max_value,
         .callback_dispatch_budget = _descriptor.callback_dispatch_budget,
@@ -318,6 +335,8 @@ inline CVarSnapshot CopySnapshot(const CVarSnapshotView& _view) {
         .value                    = std::string(_view.value),
         .type                     = _view.type,
         .flags                    = _view.flags,
+        .apply_phase              = _view.apply_phase,
+        .set_source               = _view.set_source,
         .min_value                = _view.min_value,
         .max_value                = _view.max_value,
         .callback_dispatch_budget = _view.callback_dispatch_budget,

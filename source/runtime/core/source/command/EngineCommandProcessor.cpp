@@ -118,6 +118,8 @@ std::string SetErrorText(const CVar::CVarSetResult& _result) {
             return "cvar is read-only";
         case CVar::ESetStatus::StartupSealed:
             return "cvar is sealed after startup";
+        case CVar::ESetStatus::LowerPriority:
+            return "a higher-priority source already set this cvar";
         case CVar::ESetStatus::CallbackQueueFull:
             return "cvar callback dispatch budget is exhausted";
         case CVar::ESetStatus::InvalidRegistration:

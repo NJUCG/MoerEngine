@@ -73,6 +73,16 @@ bool StartsWithInsensitive(std::string_view _text, std::string_view _prefix) noe
     return true;
 }
 
+constexpr bool IsStartupSetSource(ESetSource _source) noexcept {
+    return _source == ESetSource::StartupConfig || _source == ESetSource::Profile ||
+           _source == ESetSource::CommandLine;
+}
+
+constexpr EApplyPhase EffectiveApplyPhase(const CVarDescriptor& _descriptor) noexcept {
+    return HasFlag(_descriptor.flags, EFlags::StartupOnly) ? EApplyPhase::StartupOnly :
+                                                            _descriptor.apply_phase;
+}
+
 template<typename T>
 constexpr EType TypeOf();
 
@@ -378,6 +388,7 @@ public:
     CVarDescriptor   descriptor;
     EType            type = EType::String;
     std::atomic_bool startup_sealed{false};
+    std::atomic<ESetSource> set_source{ESetSource::Constructor};
 
 protected:
     virtual CallbackOwner* RetireCallbacksLocked() noexcept     = 0;
@@ -473,7 +484,7 @@ public:
             };
         }
         if (HasFlag(descriptor.flags, EFlags::StartupOnly)) {
-            if (_source != ESetSource::StartupConfig) {
+            if (!IsStartupSetSource(_source)) {
                 return {
                     .status = ESetStatus::StartupSealed,
                     .detail = "cvar can only be changed by startup configuration",
@@ -486,6 +497,13 @@ public:
                 };
             }
         }
+        if (static_cast<std::uint8_t>(_source) <
+            static_cast<std::uint8_t>(set_source.load(std::memory_order_relaxed))) {
+            return {
+                .status = ESetStatus::LowerPriority,
+                .detail = "cvar already has a higher-priority value",
+            };
+        }
 
         T             parsed{};
         CVarSetResult result = ParseValue<T>(_text, parsed);
@@ -493,6 +511,9 @@ public:
             return result;
         }
         outcome = SetParsedValueLocked(std::move(parsed), true);
+        if (outcome.result.Succeeded()) {
+            set_source.store(_source, std::memory_order_release);
+        }
         mutation_lock.unlock();
         return CompleteMutation(std::move(outcome));
     }
@@ -836,6 +857,7 @@ CVarDescriptor CopyDescriptor(CVarDescriptorView _view) {
         .true_helper              = std::string(_view.true_helper),
         .false_helper             = std::string(_view.false_helper),
         .flags                    = _view.flags,
+        .apply_phase              = _view.apply_phase,
         .min_value                = _view.min_value,
         .max_value                = _view.max_value,
         .callback_dispatch_budget = _view.callback_dispatch_budget,
@@ -989,6 +1011,8 @@ bool VisitEntrySnapshot(const std::shared_ptr<EntryBase>& _entry, SnapshotVisito
             .value                    = value,
             .type                     = _entry->type,
             .flags                    = _entry->descriptor.flags,
+            .apply_phase              = EffectiveApplyPhase(_entry->descriptor),
+            .set_source               = _entry->set_source.load(std::memory_order_acquire),
             .min_value                = _entry->descriptor.min_value,
             .max_value                = _entry->descriptor.max_value,
             .callback_dispatch_budget = _entry->descriptor.callback_dispatch_budget,
