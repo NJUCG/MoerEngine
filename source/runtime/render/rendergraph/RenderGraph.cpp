@@ -2336,112 +2336,6 @@ bool RenderGraph::ExecuteRecording(
     }
     executed = true;
 
-    auto make_pass_info = [&](PassHandle handle) {
-        const auto& pass = passes[handle.index];
-        return ExecutedPassInfo{
-            .handle          = handle,
-            .name            = pass.name,
-            .domain          = pass.domain,
-            .side_effect     = pass.side_effect,
-            .execution_class = pass.execution_class,
-            .translate_execution_class =
-                pass.translate_execution_class,
-        };
-    };
-
-    enum class GpuProfileBindOutcome : uint8 {
-        Bound,
-        Dropped,
-        Failed,
-    };
-    auto bind_gpu_profile_source =
-        [&](const ExecutedPassInfo& pass_info,
-            CommandList&            command_list,
-            RHIQueueBinding         queue_binding,
-            uint64                  source_order) {
-            if (!gpu_profiling.try_bind_source) {
-                return GpuProfileBindOutcome::Dropped;
-            }
-            if (!command_list.IsEmpty() ||
-                command_list.HasGpuScopeRecorder() ||
-                command_list
-                    .IsLegacyGpuProfilingSuppressedForGeneration()) {
-                compile_error =
-                    "GPU profiling source binding requires an empty, unbound, "
-                    "unsuppressed "
-                    "CommandList for pass '" +
-                    std::string(pass_info.name) + "'";
-                return GpuProfileBindOutcome::Failed;
-            }
-
-            const uint64 seal_generation =
-                command_list.GetSealGeneration();
-            const bool explicit_resource_state =
-                command_list.HasExplicitResourceStateOwnership();
-            const ERHITranslateExecutionClass translate_execution =
-                command_list.GetTranslateExecutionClass();
-            const bool legacy_profiling_suppressed =
-                command_list
-                    .IsLegacyGpuProfilingSuppressedForGeneration();
-
-            bool bound = false;
-            try {
-                RHIThreadRoleScope configuration_owner(
-                    ERHIThreadRole::RecordWorker
-                );
-                bound = gpu_profiling.try_bind_source(
-                    pass_info,
-                    command_list,
-                    queue_binding,
-                    source_order
-                );
-            } catch (const std::exception& exception) {
-                compile_error =
-                    "GPU profiling source binding failed for pass '" +
-                    std::string(pass_info.name) + "': " + exception.what();
-                return GpuProfileBindOutcome::Failed;
-            } catch (...) {
-                compile_error =
-                    "GPU profiling source binding failed for pass '" +
-                    std::string(pass_info.name) + "'";
-                return GpuProfileBindOutcome::Failed;
-            }
-
-            if (!command_list.IsEmpty() ||
-                command_list.GetSealGeneration() != seal_generation ||
-                command_list.HasExplicitResourceStateOwnership() !=
-                    explicit_resource_state ||
-                command_list.GetTranslateExecutionClass() !=
-                    translate_execution ||
-                command_list
-                        .IsLegacyGpuProfilingSuppressedForGeneration() !=
-                    legacy_profiling_suppressed ||
-                command_list.HasGpuScopeRecorder() != bound) {
-                compile_error =
-                    "GPU profiling source binding illegally mutated "
-                    "CommandList state for pass '" +
-                    std::string(pass_info.name) + "'";
-                return GpuProfileBindOutcome::Failed;
-            }
-            if (bound) {
-                return GpuProfileBindOutcome::Bound;
-            }
-            try {
-                command_list
-                    .SuppressLegacyGpuProfilingForGeneration();
-            } catch (const std::exception& exception) {
-                compile_error =
-                    "GPU profiling source drop suppression failed for pass '" +
-                    std::string(pass_info.name) + "': " + exception.what();
-                return GpuProfileBindOutcome::Failed;
-            } catch (...) {
-                compile_error =
-                    "GPU profiling source drop suppression failed for pass '" +
-                    std::string(pass_info.name) + "'";
-                return GpuProfileBindOutcome::Failed;
-            }
-            return GpuProfileBindOutcome::Dropped;
-        };
     std::optional<uint64> gpu_profile_main_thread_generation{};
     bool                  gpu_profile_main_thread_bound{false};
     bool gpu_profile_managed_source_since_main_thread{false};
@@ -2554,8 +2448,9 @@ bool RenderGraph::ExecuteRecording(
                             gpu_profiling.source_order_base +
                             static_cast<uint64>(first_batch.id);
                         const GpuProfileBindOutcome bind_outcome =
-                            bind_gpu_profile_source(
-                                make_pass_info(first_handle),
+                            BindGpuProfileSource(
+                                gpu_profiling,
+                                MakeExecutedPassInfo(first_handle),
                                 profiling_list,
                                 ToRHIQueueBinding(first_batch.queue),
                                 source_order
@@ -2667,7 +2562,7 @@ bool RenderGraph::ExecuteRecording(
             }
             if (first_batch.execution == PassExecutionClass::MainThread &&
                 after_main_thread_pass) {
-                after_main_thread_pass(make_pass_info(first_handle));
+                after_main_thread_pass(MakeExecutedPassInfo(first_handle));
             }
             ++batch_index;
             ++group_index;
@@ -2793,7 +2688,7 @@ bool RenderGraph::ExecuteRecording(
                     RHIThreadRoleScope configuration_owner(
                         ERHIThreadRole::RecordWorker
                     );
-                    configure_recording_source(make_pass_info(handle), source);
+                    configure_recording_source(MakeExecutedPassInfo(handle), source);
                 } catch (const std::exception& exception) {
                     compile_error = "recording source configuration failed for pass '" + pass.name +
                                     "': " + exception.what();
@@ -2856,8 +2751,9 @@ bool RenderGraph::ExecuteRecording(
         if (gpu_profiling.try_bind_source) {
             for (RecordingJob& job : jobs) {
                 const GpuProfileBindOutcome bind_outcome =
-                    bind_gpu_profile_source(
-                        make_pass_info(job.pass),
+                    BindGpuProfileSource(
+                        gpu_profiling,
+                        MakeExecutedPassInfo(job.pass),
                         *job.command_list,
                         job.gpu_profile_queue_binding,
                         job.gpu_profile_source_order

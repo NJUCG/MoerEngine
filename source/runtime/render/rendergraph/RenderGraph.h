@@ -1211,6 +1211,12 @@ private:
         FailureDiagnostic    = 1 << 3,
     };
 
+    enum class GpuProfileBindOutcome : uint8_t {
+        Bound,
+        Dropped,
+        Failed,
+    };
+
     struct AccessDeclaration {
         ResourceHandle resource{};
         AccessMode     mode = AccessMode::Read;
@@ -1335,6 +1341,17 @@ private:
     bool WaitSetupPasses(std::string& error) noexcept;
     bool InvalidateCompile();
     bool FailCompile(std::string message);
+
+    [[nodiscard]] ExecutedPassInfo MakeExecutedPassInfo(
+        PassHandle pass
+    ) const;
+    GpuProfileBindOutcome BindGpuProfileSource(
+        const GpuProfilingOptions& options,
+        const ExecutedPassInfo&    pass_info,
+        CommandList&               command_list,
+        RHIQueueBinding            queue_binding,
+        uint64                     source_order
+    );
 
     [[nodiscard]] bool IsValidResource(ResourceHandle resource) const;
     [[nodiscard]] bool IsValidPass(PassHandle pass) const;
