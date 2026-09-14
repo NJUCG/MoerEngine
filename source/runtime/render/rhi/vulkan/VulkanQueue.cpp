@@ -6728,6 +6728,7 @@ bool VkCommandQueue::TryExecuteParallel(
         bool                           preprocessed{false};
         bool                           worker_recorded{false};
         std::optional<VulkanDynamicRenderingEnvelope> rendering_envelope;
+        VulkanResolvedBarrierBatch     barrier_prefix;
     };
 
     const std::string queue_label = !_submit.debug_label.empty() ?
@@ -6966,7 +6967,7 @@ bool VkCommandQueue::TryExecuteParallel(
     }
     assert(active_scopes.empty() && "validated scope stack changed during parallel prepare");
 
-    auto record_layer_prefix = [&](size_t _layer_index, VulkanCmdList& _cmd_list) {
+    auto prepare_layer_prefix = [&](size_t _layer_index) {
         ParallelLayerRuntime& runtime = runtime_layers[_layer_index];
         assert(!runtime.preprocessed && "parallel layer prefix was recorded twice");
         const auto preprocess_begin = std::chrono::steady_clock::now();
@@ -6974,14 +6975,45 @@ bool VkCommandQueue::TryExecuteParallel(
             preprocessor.VisitCmd(command);
         }
         tracker.ResolveBarriers();
-        tracker.DispatchBarriers(_cmd_list);
+        runtime.barrier_prefix = tracker.TakeResolvedBarriers();
         runtime.preprocessed = true;
         preprocess_time += std::chrono::duration<double, std::milli>(
                                std::chrono::steady_clock::now() - preprocess_begin
                            ).count();
+    };
+    auto record_layer_prefix = [&](size_t _layer_index, VulkanCmdList& _cmd_list) {
+        ParallelLayerRuntime& runtime = runtime_layers[_layer_index];
+        prepare_layer_prefix(_layer_index);
+        runtime.barrier_prefix.Record(_cmd_list);
         _cmd_list.InsertLabel(
             std::format("[RHI Parallel] Layer {}", _layer_index),
             {0.15f, 0.25f, 0.55f, 1.0f}
+        );
+    };
+    auto prepare_rendering_envelope = [&](ParallelLayerRuntime& _runtime) {
+        if (!_runtime.graphics_secondary || _runtime.rendering_envelope.has_value()) {
+            return;
+        }
+        const Command* draw_command = _runtime.commands.front();
+        const RenderPassInfo* pass_info = nullptr;
+        bool uses_stencil_attachment = false;
+        if (draw_command->Type() == Command::EType::SetDrawState) {
+            const auto& draw = *static_cast<const SetDrawStateCmd*>(draw_command);
+            pass_info = &draw.RenderPassInfo();
+            uses_stencil_attachment =
+                pass_info->depth_attachment.Valid() &&
+                FormatHasStencil(pass_info->depth_attachment.target->GetFormat()) &&
+                PipelineUsesStencilAttachment(draw.Pipeline());
+        } else {
+            const auto& draw = *static_cast<const MultiDrawCmd*>(draw_command);
+            pass_info = &draw.RenderPassInfo();
+            uses_stencil_attachment =
+                pass_info->depth_attachment.Valid() &&
+                FormatHasStencil(pass_info->depth_attachment.target->GetFormat()) &&
+                DrawBatchUsesStencilAttachment(draw.draw_batch);
+        }
+        _runtime.rendering_envelope.emplace(
+            *pass_info, uses_stencil_attachment
         );
     };
 
@@ -6993,6 +7025,569 @@ bool VkCommandQueue::TryExecuteParallel(
     uint32                serial_island_count = 0;
     bool                  parallel_recorded = true;
     double                worker_join_time = 0.0;
+
+    auto finalize_parallel_record = [&] (
+                                        Array<VulkanCmdList*>&& _ordered_cmd_lists,
+                                        Array<UniquePtr<VulkanAllocator>>&& _submitted_allocators,
+                                        Array<UniquePtr<VulkanAllocator>>&& _abandoned_allocators,
+                                        uint32 _secondary_command_buffer_count,
+                                        uint32 _parallel_layer_count,
+                                        uint64 _job_count,
+                                        uint64 _work_units,
+                                        uint32 _wave_count,
+                                        uint32 _island_count,
+                                        bool   _parallel_recorded
+                                    ) -> bool {
+        tracker.Reset();
+        descriptor_heap.EndPushDescriptors(descriptor_lease);
+        const uint64 descriptor_bytes =
+            descriptor_heap.CurrentPushDescriptorOffset(descriptor_lease.state) -
+            descriptor_lease.state->begin;
+
+        Array<RHIResource*> deferred_releases = TakeDeferredReleases();
+        const double profile_record_wall_ms = parallel_record_profile ?
+                                                  RhiThreadProfileMilliseconds(
+                                                      _profile_started,
+                                                      std::chrono::steady_clock::now()
+                                                  ) :
+                                                  0.0;
+        CurrentVulkanRecordedSubmit recorded_submit{
+            std::move(_submit), _context, _timeline
+        };
+        recorded_submit.presentation_source_program =
+            std::move(_presentation_source_program);
+        recorded_submit.has_commands      = true;
+        recorded_submit.ordered_cmd_lists = std::move(_ordered_cmd_lists);
+        recorded_submit.allocators = VulkanAllocatorBatch{
+            std::move(_submitted_allocators), std::move(_abandoned_allocators)
+        };
+        recorded_submit.descriptor_lease.emplace(std::move(descriptor_lease));
+        recorded_submit.deferred_releases = std::move(deferred_releases);
+        recorded_submit.profile.sample = {
+            .requested       = true,
+            .planned         = true,
+            .effective       = _parallel_recorded,
+            .worker_fallback = !_parallel_recorded,
+            .record_wall_ms  = profile_record_wall_ms,
+            .reorder_ms      = _reorder_time,
+            .preprocess_ms   = preprocess_time,
+            .worker_join_ms  = worker_join_time,
+            .layers          = static_cast<uint32>(runtime_layers.size()),
+            .jobs            = static_cast<uint32>(_job_count),
+            .work_units      = _work_units,
+            .secondary_cb    = _secondary_command_buffer_count,
+            .max_active      = max_active_jobs.load(std::memory_order_relaxed),
+        };
+        if (parallel_record_profile) {
+            recorded_submit.profile.enabled         = true;
+            recorded_submit.profile.execute_started = _profile_started;
+        }
+        const uint32 recorded_cmd_list_count =
+            static_cast<uint32>(recorded_submit.ordered_cmd_lists.size());
+        CurrentVulkanSubmitResult submit_result{};
+        if (_out_recorded != nullptr) {
+            _out_recorded->emplace(std::move(recorded_submit));
+        } else {
+            submit_result = SubmitRecorded(recorded_submit);
+        }
+
+        QueryFrameDiagnostics query_diagnostics{};
+        if (complete_profiling_frame) {
+            execute_timer.Stop();
+            query_diagnostics = profiler_storage.GetCurrentFrameQueryDiagnostics();
+            const double execute_time = execute_timer.ElapsedMilliseconds();
+            profiler_storage.RegisterCpuTimestamp("Queue Execution", execute_time);
+            profiler_storage.RegisterCpuTimestamp("Command Reorder", _reorder_time);
+            profiler_storage.RegisterCpuTimestamp("Command Preprocess", preprocess_time);
+            if (execute_time > 0.0) {
+                profiler_storage.RegisterCpuTimestamp(
+                    "Reorder Percentage", _reorder_time / execute_time
+                );
+                profiler_storage.RegisterCpuTimestamp(
+                    "Preprocess Percentage", preprocess_time / execute_time
+                );
+            }
+            profiler_storage.AdvanceFrame();
+        } else if (emits_profiling_queries) {
+            const bool submission_accepted =
+                _out_recorded != nullptr || submit_result.outcome.WasSubmitted();
+            if (!submission_accepted) {
+                ResetSplitProfilingCpuFrame();
+            } else {
+                AccumulateSplitProfilingCpuFrame(_reorder_time, preprocess_time);
+                if (ends_profiling_frame) {
+                    query_diagnostics = profiler_storage.GetCurrentFrameQueryDiagnostics();
+                    EndSplitProfilingCpuFrame();
+                }
+            }
+        }
+
+        if (parallel_record_verify) {
+            try {
+                LOG_INFO(
+                    "[ParallelRecord] batch={} requested=true effective={} outcome={} "
+                    "layers={} jobs={} work_units={} ordered_cb={} secondary_cb={} "
+                    "waves={} islands={} workers={} distinct_workers={} max_active={} "
+                    "coordinator={} submit_status={} descriptor_bytes={} "
+                    "query_digest={:016x} queries={}",
+                    batch_serial,
+                    _parallel_recorded,
+                    _parallel_recorded ? "parallel" : "serial-fallback-worker-failure",
+                    _parallel_layer_count,
+                    _job_count,
+                    _work_units,
+                    _out_recorded != nullptr ? recorded_cmd_list_count :
+                                               submit_result.ordered_cmd_list_count,
+                    _secondary_command_buffer_count,
+                    _wave_count,
+                    _island_count,
+                    parallel_record_workers,
+                    distinct_workers.size(),
+                    max_active_jobs.load(std::memory_order_relaxed),
+                    Platform::GetCurrentThreadID(),
+                    _out_recorded != nullptr ? std::numeric_limits<uint32>::max() :
+                                               static_cast<uint32>(submit_result.outcome.status),
+                    descriptor_bytes,
+                    query_diagnostics.digest,
+                    query_diagnostics.used_query_count
+                );
+            } catch (...) {
+            }
+        }
+        return true;
+    };
+
+    // Record every replay-safe compute/draw body into a secondary first, then
+    // assemble barriers, rendering envelopes and executions into one primary
+    // command buffer in dependency order. Unsupported layer shapes stay serial
+    // in that same primary instead of becoming extra native submit entries.
+    // Explicit RDG streams contribute their compiled barriers; legacy streams
+    // additionally append the tracker restore batch to this primary.
+    const bool has_secondary_compatible_layer = std::any_of(
+        runtime_layers.begin(),
+        runtime_layers.end(),
+        [](const ParallelLayerRuntime& _runtime) {
+            return _runtime.parallel && _runtime.use_secondary;
+        }
+    );
+    if (has_secondary_compatible_layer) {
+        uint32 secondary_layer_count = 0;
+        uint64 secondary_work_units  = 0;
+        for (size_t layer_index = 0; layer_index < runtime_layers.size(); ++layer_index) {
+            ParallelLayerRuntime& runtime = runtime_layers[layer_index];
+            runtime.parallel = runtime.parallel && runtime.use_secondary;
+            if (!runtime.parallel) {
+                continue;
+            }
+            ++secondary_layer_count;
+            const ParallelRecordLayerPlan& layer_plan = plan.layers[layer_index];
+            for (uint32 job_index = 0; job_index < layer_plan.job_count; ++job_index) {
+                secondary_work_units +=
+                    plan.jobs[layer_plan.first_job + job_index].work_units;
+            }
+        }
+        VulkanCmdList& assembly_cmd = tracker_owner->GetCmdList();
+        assembly_cmd.SetDescriptorPushLease(descriptor_lease.state);
+        const VkResult assembly_begin = begin_primary(assembly_cmd, {}, true);
+        if (assembly_begin != VK_SUCCESS) {
+            reject_prepared_recording("assembly-begin-failed", assembly_begin);
+            return true;
+        }
+
+        auto record_secondary_wave = [&](size_t _first_layer, size_t _layer_end) -> bool {
+            Array<ExternalCpuJoinPool::Job> wave_jobs;
+            for (size_t layer_index = _first_layer; layer_index < _layer_end; ++layer_index) {
+                ParallelLayerRuntime& runtime = runtime_layers[layer_index];
+                if (!runtime.parallel) {
+                    continue;
+                }
+                try {
+                    prepare_layer_prefix(layer_index);
+                    prepare_rendering_envelope(runtime);
+                } catch (const std::exception& error) {
+                    try {
+                        LOG_ERROR(
+                            "[ParallelRecord] assembly prefix failed: layer={} error={}",
+                            layer_index,
+                            error.what()
+                        );
+                    } catch (...) {
+                    }
+                    reject_prepared_recording(
+                        "assembly-prefix-failed", VK_ERROR_OUT_OF_POOL_MEMORY
+                    );
+                    return false;
+                } catch (...) {
+                    reject_prepared_recording(
+                        "assembly-prefix-failed", VK_ERROR_OUT_OF_POOL_MEMORY
+                    );
+                    return false;
+                }
+
+                const ParallelRecordLayerPlan& layer_plan = plan.layers[layer_index];
+                runtime.chunks.reserve(layer_plan.job_count);
+                for (uint32 job_index = 0; job_index < layer_plan.job_count; ++job_index) {
+                    ParallelChunkRuntime chunk{
+                        .range     = plan.jobs[layer_plan.first_job + job_index],
+                        .allocator = GetAllocator(),
+                    };
+                    chunk.allocator->PrepareSecondaryCmdList();
+                    runtime.chunks.push_back(std::move(chunk));
+                }
+
+                for (size_t chunk_index = 0; chunk_index < runtime.chunks.size(); ++chunk_index) {
+                    wave_jobs.emplace_back([&, layer_index, chunk_index] {
+                        RHIThreadRoleScope owner_scope(ERHIThreadRole::RecordWorker);
+                        RHIThreadHeartbeatScope heartbeat(
+                            ERHIThreadRole::RecordWorker,
+                            HeartbeatDomainForQueue(queue.GetType()),
+                            ERHIHeartbeatStage::RecordCommands
+                        );
+                        ParallelLayerRuntime& job_layer = runtime_layers[layer_index];
+                        ParallelChunkRuntime& chunk = job_layer.chunks[chunk_index];
+                        const uint32 now_active =
+                            active_jobs.fetch_add(1, std::memory_order_acq_rel) + 1;
+                        uint32 observed = max_active_jobs.load(std::memory_order_relaxed);
+                        while (observed < now_active &&
+                               !max_active_jobs.compare_exchange_weak(
+                                   observed, now_active, std::memory_order_relaxed
+                               )) {
+                        }
+                        auto finish_active = [&] {
+                            active_jobs.fetch_sub(1, std::memory_order_acq_rel);
+                        };
+
+                        try {
+                            chunk.worker_id = Platform::GetCurrentThreadID();
+                            VulkanCmdList& cmd_list =
+                                chunk.allocator->GetSecondaryCmdList();
+                            cmd_list.SetDescriptorPushLease(descriptor_lease.state);
+                            VkResult worker_begin = VK_SUCCESS;
+                            if (job_layer.graphics_secondary) {
+                                assert(job_layer.rendering_envelope.has_value());
+                                worker_begin = begin_graphics_secondary(
+                                    cmd_list,
+                                    job_layer.scopes,
+                                    job_layer.rendering_envelope.value()
+                                );
+                            } else {
+                                worker_begin = begin_compute_secondary(
+                                    cmd_list, job_layer.scopes
+                                );
+                            }
+                            if (worker_begin != VK_SUCCESS) {
+                                chunk.native_failure = worker_begin;
+                                throw std::runtime_error(
+                                    "secondary command buffer begin failed"
+                                );
+                            }
+                            bool inject_after_first_command = false;
+                            if (parallel_record_worker_throw_trigger != 0) {
+                                const uint64 attempt =
+                                    parallel_record_worker_attempts.fetch_add(
+                                        1, std::memory_order_acq_rel
+                                    ) + 1;
+                                inject_after_first_command =
+                                    attempt == parallel_record_worker_throw_trigger;
+                            }
+                            cmd_list.InsertLabel(
+                                std::format(
+                                    "[RHI Parallel] Layer {} Commands {}..{}",
+                                    layer_index,
+                                    chunk.range.command_begin,
+                                    chunk.range.CommandEnd()
+                                ),
+                                {0.1f, 0.55f, 0.8f, 1.0f}
+                            );
+                            VkCmdVisitor visitor(
+                                vk_device,
+                                *chunk.allocator,
+                                chunk.allocator->GetTracker(),
+                                cmd_list,
+                                _submit.cached_args,
+                                nullptr,
+                                false,
+                                job_layer.graphics_secondary
+                            );
+                            for (uint32 command_index = chunk.range.command_begin;
+                                 command_index < chunk.range.CommandEnd(); ++command_index) {
+                                visitor.VisitCmd(job_layer.commands[command_index]);
+                                if (inject_after_first_command) {
+                                    throw std::runtime_error(
+                                        "injected parallel command recorder worker failure"
+                                    );
+                                }
+                            }
+                            const VkResult worker_end =
+                                end_command_buffer(cmd_list, job_layer.scopes_after);
+                            if (worker_end != VK_SUCCESS) {
+                                chunk.native_failure = worker_end;
+                                throw std::runtime_error(
+                                    "secondary command buffer end failed"
+                                );
+                            }
+                            chunk.recorded = true;
+                        } catch (...) {
+                            finish_active();
+                            throw;
+                        }
+                        finish_active();
+                    });
+                }
+            }
+
+            const uint32 wave_index = parallel_wave_count++;
+            total_job_count += wave_jobs.size();
+            const uint64 worker_descriptor_begin =
+                descriptor_heap.CurrentPushDescriptorOffset(descriptor_lease.state);
+            ExternalJoinResult join_result = ExternalJoinResult::Failed;
+            const auto worker_join_started = std::chrono::steady_clock::now();
+            try {
+                join_result = parallel_record_pool->RunAndWait(
+                    std::span<const ExternalCpuJoinPool::Job>(
+                        wave_jobs.data(), wave_jobs.size()
+                    )
+                );
+            } catch (...) {
+                join_result = ExternalJoinResult::Failed;
+            }
+            worker_join_time += RhiThreadProfileMilliseconds(
+                worker_join_started, std::chrono::steady_clock::now()
+            );
+
+            bool wave_recorded = join_result == ExternalJoinResult::Completed;
+            VkResult native_failure = VK_SUCCESS;
+            for (size_t layer_index = _first_layer; layer_index < _layer_end; ++layer_index) {
+                ParallelLayerRuntime& runtime = runtime_layers[layer_index];
+                if (!runtime.parallel) {
+                    continue;
+                }
+                for (ParallelChunkRuntime& chunk : runtime.chunks) {
+                    if (chunk.native_failure != VK_SUCCESS &&
+                        native_failure == VK_SUCCESS) {
+                        native_failure = chunk.native_failure;
+                    }
+                    wave_recorded = wave_recorded && chunk.recorded;
+                    if (chunk.recorded) {
+                        distinct_workers.insert(chunk.worker_id);
+                    }
+                }
+            }
+            if (native_failure != VK_SUCCESS) {
+                reject_prepared_recording(
+                    "worker-native-record-failed", native_failure
+                );
+                return false;
+            }
+            if (!wave_recorded) {
+                parallel_recorded = false;
+                descriptor_heap.RewindPushDescriptors(
+                    descriptor_lease.state, worker_descriptor_begin
+                );
+            }
+
+            try {
+                for (size_t layer_index = _first_layer; layer_index < _layer_end; ++layer_index) {
+                    ParallelLayerRuntime& runtime = runtime_layers[layer_index];
+                    if (!runtime.parallel) {
+                        continue;
+                    }
+                    runtime.barrier_prefix.Record(assembly_cmd);
+                    assembly_cmd.InsertLabel(
+                        std::format("[RHI Parallel] Layer {}", layer_index),
+                        {0.15f, 0.25f, 0.55f, 1.0f}
+                    );
+                    if (wave_recorded) {
+                        Array<VkCommandBuffer> secondaries;
+                        secondaries.reserve(runtime.chunks.size());
+                        for (ParallelChunkRuntime& chunk : runtime.chunks) {
+                            secondaries.push_back(
+                                chunk.allocator->GetSecondaryCmdList().GetHandle()
+                            );
+                        }
+                        if (runtime.graphics_secondary) {
+                            VkRenderingInfo rendering_info =
+                                runtime.rendering_envelope->RenderingInfo(
+                                    VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT
+                                );
+                            assembly_cmd.BeginRendering(std::move(rendering_info));
+                            assembly_cmd.ExecuteCommands(secondaries);
+                            assembly_cmd.EndRendering();
+                        } else {
+                            assembly_cmd.ExecuteCommands(secondaries);
+                        }
+                        runtime.worker_recorded = true;
+                    } else {
+                        VkCmdVisitor visitor(
+                            vk_device,
+                            *tracker_owner,
+                            tracker,
+                            assembly_cmd,
+                            _submit.cached_args,
+                            nullptr,
+                            false
+                        );
+                        for (const Command* command : runtime.commands) {
+                            visitor.VisitCmd(command);
+                        }
+                    }
+                }
+            } catch (const std::exception& error) {
+                try {
+                    LOG_ERROR(
+                        "[ParallelRecord] assembly record failed: error={}",
+                        error.what()
+                    );
+                } catch (...) {
+                }
+                reject_prepared_recording(
+                    "assembly-record-failed", VK_ERROR_OUT_OF_POOL_MEMORY
+                );
+                return false;
+            } catch (...) {
+                reject_prepared_recording(
+                    "assembly-record-failed", VK_ERROR_OUT_OF_POOL_MEMORY
+                );
+                return false;
+            }
+
+            if (parallel_record_verify) {
+                try {
+                    LOG_INFO(
+                        "[ParallelRecord][Wave] batch={} wave={} layers={}..{} "
+                        "jobs={} join_completed={} worker_recorded={}",
+                        batch_serial,
+                        wave_index,
+                        _first_layer,
+                        _layer_end,
+                        wave_jobs.size(),
+                        join_result == ExternalJoinResult::Completed,
+                        wave_recorded
+                    );
+                } catch (...) {
+                }
+            }
+            return true;
+        };
+
+        for (size_t layer_index = 0; layer_index < runtime_layers.size();) {
+            if (runtime_layers[layer_index].parallel) {
+                const size_t wave_begin = layer_index;
+                while (layer_index < runtime_layers.size() &&
+                       runtime_layers[layer_index].parallel) {
+                    ++layer_index;
+                }
+                if (!record_secondary_wave(wave_begin, layer_index)) {
+                    return true;
+                }
+                continue;
+            }
+
+            ++serial_island_count;
+            try {
+                while (layer_index < runtime_layers.size() &&
+                       !runtime_layers[layer_index].parallel) {
+                    ParallelLayerRuntime& runtime = runtime_layers[layer_index];
+                    if (!runtime.commands.empty()) {
+                        prepare_layer_prefix(layer_index);
+                        runtime.barrier_prefix.Record(assembly_cmd);
+                        assembly_cmd.InsertLabel(
+                            std::format("[RHI Serial] Layer {}", layer_index),
+                            {0.55f, 0.3f, 0.1f, 1.0f}
+                        );
+                        VkCmdVisitor visitor(
+                            vk_device,
+                            *tracker_owner,
+                            tracker,
+                            assembly_cmd,
+                            _submit.cached_args,
+                            emits_profiling_queries ? &profiler_storage : nullptr,
+                            emits_profiling_queries
+                        );
+                        for (const Command* command : runtime.commands) {
+                            visitor.VisitCmd(command);
+                        }
+                    }
+                    ++layer_index;
+                }
+            } catch (const StaleBindlessUpdateBatch& error) {
+                try {
+                    LOG_WARNING(
+                        "[ParallelRecord] assembly rejected stale bindless batch: {}",
+                        error.what()
+                    );
+                } catch (...) {
+                }
+                reject_prepared_recording(
+                    "stale-bindless-update", VK_ERROR_VALIDATION_FAILED_EXT
+                );
+                return true;
+            } catch (const std::exception& error) {
+                try {
+                    LOG_ERROR(
+                        "[ParallelRecord] assembly serial record failed: {}",
+                        error.what()
+                    );
+                } catch (...) {
+                }
+                reject_prepared_recording(
+                    "assembly-serial-record-failed", VK_ERROR_OUT_OF_POOL_MEMORY
+                );
+                return true;
+            } catch (...) {
+                reject_prepared_recording(
+                    "assembly-serial-record-failed", VK_ERROR_OUT_OF_POOL_MEMORY
+                );
+                return true;
+            }
+        }
+
+        if (!_submit.HasExplicitResourceStateOwnership()) {
+            tracker.RestoreState();
+        }
+        tracker.DispatchBarriers(assembly_cmd);
+        if (ends_profiling_frame) {
+            profiler_storage.EndProfilerSession(assembly_cmd, "Graphics Exec");
+        }
+        const VkResult assembly_end = end_command_buffer(assembly_cmd, {});
+        if (assembly_end != VK_SUCCESS) {
+            reject_prepared_recording("assembly-end-failed", assembly_end);
+            return true;
+        }
+
+        Array<VulkanCmdList*> ordered_cmd_lists{&assembly_cmd};
+        Array<UniquePtr<VulkanAllocator>> submitted_allocators;
+        Array<UniquePtr<VulkanAllocator>> abandoned_allocators;
+        submitted_allocators.reserve(total_job_count + 1);
+        abandoned_allocators.reserve(total_job_count);
+        uint32 secondary_command_buffer_count = 0;
+        for (ParallelLayerRuntime& runtime : runtime_layers) {
+            if (!runtime.parallel) {
+                continue;
+            }
+            for (ParallelChunkRuntime& chunk : runtime.chunks) {
+                if (runtime.worker_recorded) {
+                    ++secondary_command_buffer_count;
+                    submitted_allocators.push_back(std::move(chunk.allocator));
+                } else {
+                    abandoned_allocators.push_back(std::move(chunk.allocator));
+                }
+            }
+        }
+        submitted_allocators.push_back(std::move(tracker_owner));
+        return finalize_parallel_record(
+            std::move(ordered_cmd_lists),
+            std::move(submitted_allocators),
+            std::move(abandoned_allocators),
+            secondary_command_buffer_count,
+            secondary_layer_count,
+            total_job_count,
+            secondary_work_units,
+            parallel_wave_count,
+            serial_island_count,
+            parallel_recorded
+        );
+    }
 
     // Preserve translate-time side-effect ordering by draining each contiguous
     // safe wave before the coordinator visits the next serial island. The GPU
@@ -7355,35 +7950,7 @@ bool VkCommandQueue::TryExecuteParallel(
                 }
                 try {
                     record_layer_prefix(layer_index, primary_cmd);
-                    if (first_runtime.graphics_secondary) {
-                        const Command* draw_command = first_runtime.commands.front();
-                        const RenderPassInfo* pass_info = nullptr;
-                        bool uses_stencil_attachment = false;
-                        if (draw_command->Type() == Command::EType::SetDrawState) {
-                            const auto& draw =
-                                *static_cast<const SetDrawStateCmd*>(draw_command);
-                            pass_info = &draw.RenderPassInfo();
-                            uses_stencil_attachment =
-                                pass_info->depth_attachment.Valid() &&
-                                FormatHasStencil(
-                                    pass_info->depth_attachment.target->GetFormat()
-                                ) &&
-                                PipelineUsesStencilAttachment(draw.Pipeline());
-                        } else {
-                            const auto& draw =
-                                *static_cast<const MultiDrawCmd*>(draw_command);
-                            pass_info = &draw.RenderPassInfo();
-                            uses_stencil_attachment =
-                                pass_info->depth_attachment.Valid() &&
-                                FormatHasStencil(
-                                    pass_info->depth_attachment.target->GetFormat()
-                                ) &&
-                                DrawBatchUsesStencilAttachment(draw.draw_batch);
-                        }
-                        first_runtime.rendering_envelope.emplace(
-                            *pass_info, uses_stencil_attachment
-                        );
-                    }
+                    prepare_rendering_envelope(first_runtime);
                 } catch (const std::exception& error) {
                     try {
                         LOG_ERROR(
@@ -7567,12 +8134,6 @@ bool VkCommandQueue::TryExecuteParallel(
         reject_prepared_recording("epilogue-end-failed", epilogue_end);
         return true;
     }
-    tracker.Reset();
-    descriptor_heap.EndPushDescriptors(descriptor_lease);
-    const uint64 descriptor_bytes =
-        descriptor_heap.CurrentPushDescriptorOffset(descriptor_lease.state) -
-        descriptor_lease.state->begin;
-
     Array<VulkanCmdList*> ordered_cmd_lists;
     Array<UniquePtr<VulkanAllocator>> submitted_allocators;
     Array<UniquePtr<VulkanAllocator>> abandoned_allocators;
@@ -7608,115 +8169,18 @@ bool VkCommandQueue::TryExecuteParallel(
     }
     ordered_cmd_lists.push_back(&tracker_owner->GetCmdList());
     submitted_allocators.push_back(std::move(tracker_owner));
-
-    Array<RHIResource*> deferred_releases = TakeDeferredReleases();
-    const double profile_record_wall_ms = parallel_record_profile ?
-                                              RhiThreadProfileMilliseconds(
-                                                  _profile_started,
-                                                  std::chrono::steady_clock::now()
-                                              ) :
-                                              0.0;
-    CurrentVulkanRecordedSubmit recorded_submit{
-        std::move(_submit), _context, _timeline
-    };
-    recorded_submit.presentation_source_program =
-        std::move(_presentation_source_program);
-    recorded_submit.has_commands      = true;
-    recorded_submit.ordered_cmd_lists = std::move(ordered_cmd_lists);
-    recorded_submit.allocators = VulkanAllocatorBatch{
-        std::move(submitted_allocators), std::move(abandoned_allocators)
-    };
-    recorded_submit.descriptor_lease.emplace(std::move(descriptor_lease));
-    recorded_submit.deferred_releases = std::move(deferred_releases);
-    recorded_submit.profile.sample = {
-        .requested       = true,
-        .planned         = true,
-        .effective       = parallel_recorded,
-        .worker_fallback = !parallel_recorded,
-        .record_wall_ms  = profile_record_wall_ms,
-        .reorder_ms      = _reorder_time,
-        .preprocess_ms   = preprocess_time,
-        .worker_join_ms  = worker_join_time,
-        .layers          = static_cast<uint32>(runtime_layers.size()),
-        .jobs            = static_cast<uint32>(total_job_count),
-        .work_units      = parallel_work_units,
-        .secondary_cb    = secondary_command_buffer_count,
-        .max_active      = max_active_jobs.load(std::memory_order_relaxed),
-    };
-    if (parallel_record_profile) {
-        recorded_submit.profile.enabled         = true;
-        recorded_submit.profile.execute_started = _profile_started;
-    }
-    const uint32 recorded_cmd_list_count =
-        static_cast<uint32>(recorded_submit.ordered_cmd_lists.size());
-    CurrentVulkanSubmitResult submit_result{};
-    if (_out_recorded != nullptr) {
-        _out_recorded->emplace(std::move(recorded_submit));
-    } else {
-        submit_result = SubmitRecorded(recorded_submit);
-    }
-
-    QueryFrameDiagnostics query_diagnostics{};
-    if (complete_profiling_frame) {
-        execute_timer.Stop();
-        query_diagnostics = profiler_storage.GetCurrentFrameQueryDiagnostics();
-        const double execute_time = execute_timer.ElapsedMilliseconds();
-        profiler_storage.RegisterCpuTimestamp("Queue Execution", execute_time);
-        profiler_storage.RegisterCpuTimestamp("Command Reorder", _reorder_time);
-        profiler_storage.RegisterCpuTimestamp("Command Preprocess", preprocess_time);
-        if (execute_time > 0.0) {
-            profiler_storage.RegisterCpuTimestamp("Reorder Percentage", _reorder_time / execute_time);
-            profiler_storage.RegisterCpuTimestamp(
-                "Preprocess Percentage", preprocess_time / execute_time
-            );
-        }
-        profiler_storage.AdvanceFrame();
-    } else if (emits_profiling_queries) {
-        const bool submission_accepted =
-            _out_recorded != nullptr || submit_result.outcome.WasSubmitted();
-        if (!submission_accepted) {
-            ResetSplitProfilingCpuFrame();
-        } else {
-            AccumulateSplitProfilingCpuFrame(_reorder_time, preprocess_time);
-            if (ends_profiling_frame) {
-                query_diagnostics = profiler_storage.GetCurrentFrameQueryDiagnostics();
-                EndSplitProfilingCpuFrame();
-            }
-        }
-    }
-
-    if (parallel_record_verify) {
-        try {
-            LOG_INFO(
-            "[ParallelRecord] batch={} requested=true effective={} outcome={} layers={} jobs={} "
-            "work_units={} ordered_cb={} secondary_cb={} waves={} islands={} workers={} distinct_workers={} max_active={} "
-            "coordinator={} submit_status={} "
-            "descriptor_bytes={} query_digest={:016x} queries={}",
-            batch_serial,
-            parallel_recorded,
-            parallel_recorded ? "parallel" : "serial-fallback-worker-failure",
-            plan.parallel_layer_count,
-            total_job_count,
-            parallel_work_units,
-            _out_recorded != nullptr ? recorded_cmd_list_count :
-                                       submit_result.ordered_cmd_list_count,
-            secondary_command_buffer_count,
-            parallel_wave_count,
-            serial_island_count,
-            parallel_record_workers,
-            distinct_workers.size(),
-            max_active_jobs.load(std::memory_order_relaxed),
-            Platform::GetCurrentThreadID(),
-            _out_recorded != nullptr ? std::numeric_limits<uint32>::max() :
-                                       static_cast<uint32>(submit_result.outcome.status),
-            descriptor_bytes,
-            query_diagnostics.digest,
-            query_diagnostics.used_query_count
-            );
-        } catch (...) {
-        }
-    }
-    return true;
+    return finalize_parallel_record(
+        std::move(ordered_cmd_lists),
+        std::move(submitted_allocators),
+        std::move(abandoned_allocators),
+        secondary_command_buffer_count,
+        plan.parallel_layer_count,
+        total_job_count,
+        parallel_work_units,
+        parallel_wave_count,
+        serial_island_count,
+        parallel_recorded
+    );
 }
 
 void VkCommandQueue::ExecuteNow(
