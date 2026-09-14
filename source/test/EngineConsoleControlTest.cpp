@@ -95,8 +95,10 @@ int main() {
         editor_config.raytracing_config.tone_mapping_cfg.exposure_bias = -0.5f;
         control.BindEditorConfig(editor_config);
         Expect(
-            !CVar::Find("Render.Raster.Bloom.Enabled")->startup_sealed,
-            "global startup seal incorrectly sealed a live cvar"
+            !CVar::Find("Render.Raster.Bloom.Enabled")->startup_sealed &&
+                CVar::Find("Render.Raster.Bloom.Enabled")->apply_phase ==
+                    CVar::EApplyPhase::FrameBoundary,
+            "live cvar sealing or frame-boundary metadata is incorrect"
         );
 
         retained_endpoint = control.GetCommandEndpoint();

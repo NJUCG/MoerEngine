@@ -26,12 +26,14 @@ CVar::CVarDescriptor MakeDescriptor(
     std::string           helper,
     CVar::EFlags          flags     = CVar::EFlags::None,
     std::optional<double> min_value = std::nullopt,
-    std::optional<double> max_value = std::nullopt
+    std::optional<double> max_value = std::nullopt,
+    CVar::EApplyPhase     apply_phase = CVar::EApplyPhase::Immediate
 ) {
     return {
         .name      = std::move(name),
         .helper    = std::move(helper),
         .flags     = flags,
+        .apply_phase = apply_phase,
         .initial_source = CVar::HasFlag(flags, CVar::EFlags::StartupOnly) ?
                               CVar::ESetSource::StartupConfig :
                               CVar::ESetSource::Constructor,
@@ -296,7 +298,11 @@ struct EngineConsoleControl::Impl {
         auto bloom_result = CVar::RegisterBool(
             MakeDescriptor(
                 "Render.Raster.Bloom.Enabled",
-                "Enable or disable Raster bloom for subsequent frame snapshots."
+                "Enable or disable Raster bloom for subsequent frame snapshots.",
+                CVar::EFlags::None,
+                std::nullopt,
+                std::nullopt,
+                CVar::EApplyPhase::FrameBoundary
             ),
             config.raster_config.bloom_enabled,
             [this](bool, bool new_value) {
@@ -312,7 +318,8 @@ struct EngineConsoleControl::Impl {
                 "Raster tonemapping exposure in EV stops.",
                 CVar::EFlags::None,
                 -15.0,
-                10.0
+                10.0,
+                CVar::EApplyPhase::FrameBoundary
             ),
             config.raster_config.tonemapping_exposure_ev,
             [this](double, double new_value) {
@@ -332,7 +339,8 @@ struct EngineConsoleControl::Impl {
                 "Raytracing tonemapping exposure bias in EV stops.",
                 CVar::EFlags::None,
                 -10.0,
-                10.0
+                10.0,
+                CVar::EApplyPhase::FrameBoundary
             ),
             config.raytracing_config.tone_mapping_cfg.exposure_bias,
             [this](double, double new_value) {
