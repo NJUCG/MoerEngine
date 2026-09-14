@@ -128,6 +128,15 @@ public:
     virtual ~Command()                      = default;
     virtual EQueueType GetQueueType() const = 0;
 
+    // Frontend CommandLists own independent cached-argument arrays. Commands
+    // which retain an ArrayArgReference must validate and rebase that index
+    // before their stream is appended to another CommandList.
+    [[nodiscard]] virtual bool
+    CachedArgumentReferencesAreValid(size_t) const noexcept {
+        return true;
+    }
+    virtual void RebaseCachedArgumentReferences(uint) noexcept {}
+
 public:
     EType Type() const {
         return type;
@@ -1955,6 +1964,20 @@ public:
     ) noexcept;
 
     RENDER_API CmdSubmit Submit();
+
+    /**
+     * Seals an independently recorded frontend list and appends its complete
+     * payload to this list. No RHI/native submission is created. Command,
+     * cached-argument, callback, query, completion and signal order is
+     * preserved; the destination's eventual Submit() remains the sole native
+     * submission boundary.
+     *
+     * Both lists must target the same queue and resource-state ownership
+     * model, and neither may have an open query, marker, barrier batch or
+     * graph-managed recording lease. Failure may consume the source but never
+     * publishes it to RHI.
+     */
+    RENDER_API void AppendRecorded(CommandList&& _source);
 
     // CommandList must remain at a stable address for the lifetime of the
     // returned lease.

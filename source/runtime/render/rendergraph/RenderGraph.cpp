@@ -3182,6 +3182,119 @@ bool RenderGraph::ExecuteRecording(
     return true;
 }
 
+bool RenderGraph::ExecuteRecordingMerged(
+    CommandList&               command_list,
+    bool                       parallel_recording_enabled,
+    const GpuProfilingOptions& gpu_profiling
+) {
+    if (!compiled) {
+        compile_error =
+            "ExecuteRecordingMerged called before a successful Compile";
+        return false;
+    }
+    if (executed) {
+        compile_error = "a per-frame RenderGraph can only be executed once";
+        return false;
+    }
+    if (command_list.GetQueueType() != EQueueType::Graphics) {
+        compile_error =
+            "ExecuteRecordingMerged requires a Graphics CommandList";
+        return false;
+    }
+    const bool has_allocation_backed_transient = std::any_of(
+        compiled_plan.resources.begin(),
+        compiled_plan.resources.end(),
+        [](const CompiledResource& resource) {
+            return !resource.imported &&
+                   resource.first_use != PassHandle::InvalidIndex &&
+                   resource.transient_slot != PassHandle::InvalidIndex;
+        }
+    );
+    if (has_allocation_backed_transient) {
+        compile_error =
+            "allocation-backed transient resources require active ExecuteRecording";
+        return false;
+    }
+
+    for (const CompiledRecordingBatch& batch :
+         compiled_plan.recording_batches) {
+        if (batch.passes.size() != 1) {
+            compile_error =
+                "merged recording requires one pass per compiled recording batch";
+            return false;
+        }
+        const PassHandle pass_handle = batch.passes.front();
+        const auto&      pass        = passes[pass_handle.index];
+        if (batch.execution != PassExecutionClass::SerialRecord &&
+            batch.execution != PassExecutionClass::ParallelRecordEligible) {
+            compile_error =
+                "merged recording only supports record-class passes; pass '" +
+                pass.name + "' uses " + ToString(batch.execution);
+            return false;
+        }
+        if (!pass.record || pass.execute) {
+            compile_error =
+                "merged recording pass has an invalid callback shape: " +
+                pass.name;
+            return false;
+        }
+        if (pass.domain.queue != QueueRole::Graphics) {
+            compile_error =
+                "merged recording only supports Graphics passes; pass '" +
+                pass.name + "' declared another queue";
+            return false;
+        }
+    }
+
+    MOER_PROFILE_SCOPE("RenderGraph.ExecuteRecordingMerged");
+    Array<RHIRecordingSource> recorded_sources{};
+    const auto capture_sources =
+        [&recorded_sources](Array<RHIRecordingSource>&& sources) {
+            recorded_sources.reserve(
+                recorded_sources.size() + sources.size()
+            );
+            for (auto& source : sources) {
+                recorded_sources.emplace_back(std::move(source));
+            }
+        };
+
+    if (!ExecuteRecording(
+            {},
+            {},
+            parallel_recording_enabled,
+            capture_sources,
+            {},
+            gpu_profiling
+        )) {
+        return false;
+    }
+
+    try {
+        for (auto& source : recorded_sources) {
+            if (!source.command_list || !source.completion ||
+                source.completion.Status() !=
+                    ERHIRecordingStatus::Succeeded ||
+                source.commit) {
+                throw std::logic_error(
+                    "captured frontend recording source is not terminal"
+                );
+            }
+            command_list.AppendRecorded(
+                std::move(*source.command_list)
+            );
+        }
+    } catch (const std::exception& exception) {
+        compile_error =
+            std::string("failed to merge frontend CommandLists: ") +
+            exception.what();
+        return false;
+    } catch (...) {
+        compile_error = "failed to merge frontend CommandLists";
+        return false;
+    }
+    return true;
+}
+
 std::string RenderGraph::Dump() const {
     std::ostringstream stream;
     stream << "graph='" << name

@@ -1315,6 +1315,29 @@ public:
         return EQueueType::Graphics;
     }
 
+    [[nodiscard]] bool CachedArgumentReferencesAreValid(
+        size_t _cache_size
+    ) const noexcept override {
+        for (const DrawBatchElement& draw : draw_batch.draw_cmds) {
+            if (std::holds_alternative<ArrayArgReference>(draw.args) &&
+                std::get<ArrayArgReference>(draw.args).handle >= _cache_size) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void RebaseCachedArgumentReferences(uint _offset) noexcept override {
+        if (_offset == 0) {
+            return;
+        }
+        for (DrawBatchElement& draw : draw_batch.draw_cmds) {
+            if (std::holds_alternative<ArrayArgReference>(draw.args)) {
+                std::get<ArrayArgReference>(draw.args).handle += _offset;
+            }
+        }
+    }
+
 public:
     DrawBatch      draw_batch;
     RenderPassInfo render_pass_info;
@@ -1496,6 +1519,20 @@ public:
 
     EQueueType GetQueueType() const override {
         return EQueueType::Compute;
+    }
+
+    [[nodiscard]] bool CachedArgumentReferencesAreValid(
+        size_t _cache_size
+    ) const noexcept override {
+        return !std::holds_alternative<ArrayArgReference>(args) ||
+               std::get<ArrayArgReference>(args).handle < _cache_size;
+    }
+
+    void RebaseCachedArgumentReferences(uint _offset) noexcept override {
+        if (_offset != 0 &&
+            std::holds_alternative<ArrayArgReference>(args)) {
+            std::get<ArrayArgReference>(args).handle += _offset;
+        }
     }
 
     const auto& Args(const TCachedArgArray& _args_cache) const {

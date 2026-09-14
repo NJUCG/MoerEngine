@@ -12,6 +12,7 @@
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
 #include <atomic>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 namespace Moer::Render {
@@ -656,6 +657,165 @@ CmdSubmit CommandList::Submit() {
     translate_execution_class = ERHITranslateExecutionClass::Parallel;
     resource_state_ownership  = ERHIResourceStateOwnership::BackendTracked;
     return std::move(submit);
+}
+
+void CommandList::AppendRecorded(CommandList&& _source) {
+    ValidateRHICommandAccess("CommandList::AppendRecorded");
+    if (this == &_source) {
+        throw std::invalid_argument(
+            "CommandList cannot append its own recording generation"
+        );
+    }
+    if (managed_recording_lease_count != 0 ||
+        _source.managed_recording_lease_count != 0) {
+        throw std::logic_error(
+            "CommandList merge is forbidden while graph-managed recording is active"
+        );
+    }
+    if (queue_type != _source.queue_type) {
+        throw std::invalid_argument(
+            "frontend CommandList merge requires matching queue types"
+        );
+    }
+    if (resource_state_ownership != _source.resource_state_ownership) {
+        throw std::invalid_argument(
+            "frontend CommandList merge requires matching resource-state ownership"
+        );
+    }
+    if (current_barriers != nullptr || _source.current_barriers != nullptr) {
+        throw std::logic_error(
+            "frontend CommandList merge requires every barrier batch to be closed"
+        );
+    }
+    if (!scope_stack.empty() || !_source.scope_stack.empty() ||
+        HasOpenQueries() || _source.HasOpenQueries()) {
+        throw std::logic_error(
+            "frontend CommandList merge requires closed marker and query scopes"
+        );
+    }
+    if (gpu_completion_cancellation_domain.IsCancelled() ||
+        _source.gpu_completion_cancellation_domain.IsCancelled() ||
+        query_cancellation_domain.IsCancelled() ||
+        _source.query_cancellation_domain.IsCancelled()) {
+        throw std::logic_error(
+            "frontend CommandList merge cannot consume a cancelled recording generation"
+        );
+    }
+
+    const size_t destination_cache_size = cached_args.size();
+    const size_t source_cache_size      = _source.cached_args.size();
+    if (destination_cache_size > std::numeric_limits<uint>::max() ||
+        source_cache_size > std::numeric_limits<uint>::max() ||
+        source_cache_size >
+            std::numeric_limits<uint>::max() - destination_cache_size) {
+        throw std::overflow_error(
+            "frontend CommandList cached-argument index overflow"
+        );
+    }
+    for (const auto& command : _source.commands) {
+        if (command != nullptr &&
+            !command->CachedArgumentReferencesAreValid(source_cache_size)) {
+            throw std::out_of_range(
+                "frontend CommandList contains an invalid cached-argument reference"
+            );
+        }
+    }
+
+    auto merged_timestamp_names = timestamp_scope_names;
+    for (const std::string& name : _source.timestamp_scope_names) {
+        if (!merged_timestamp_names.emplace(name).second) {
+            throw std::logic_error(
+                "frontend CommandList merge produced a duplicate legacy GPU timestamp scope"
+            );
+        }
+    }
+
+    const ERHITranslateExecutionClass merged_translate_class =
+        translate_execution_class ==
+                    ERHITranslateExecutionClass::SerialControl ||
+                _source.translate_execution_class ==
+                    ERHITranslateExecutionClass::SerialControl ?
+            ERHITranslateExecutionClass::SerialControl :
+            ERHITranslateExecutionClass::Parallel;
+
+    // Submit() is only a frontend sealing operation. It rotates the source's
+    // cancellation generation and packages every side payload without
+    // publishing anything to RHI.
+    CmdSubmit source = _source.Submit();
+    if (source.gpu_completion_publish_batch.Valid() ||
+        source.query_publish_batch.Valid() || !source.wait_events.empty() ||
+        source.b_sync || source.EmitsProfilingQueries() ||
+        source.b_delete_resources || source.async_queue_scope != 0 ||
+        !source.debug_label.empty()) {
+        throw std::logic_error(
+            "frontend CommandList source contains submit-boundary metadata"
+        );
+    }
+
+    const auto reserve_append = [](auto& destination, const auto& input) {
+        if (input.size() > destination.max_size() - destination.size()) {
+            throw std::length_error(
+                "frontend CommandList merge exceeds container capacity"
+            );
+        }
+        destination.reserve(destination.size() + input.size());
+    };
+    reserve_append(commands, source.cmds);
+    reserve_append(callbacks, source.callbacks);
+    reserve_append(success_callbacks, source.success_callbacks);
+    reserve_append(gpu_completion_tokens, source.gpu_completion_tokens);
+    reserve_append(query_tokens, source.query_tokens);
+    reserve_append(signal_events, source.signal_events);
+    reserve_append(
+        signal_rejection_keepalives,
+        source.signal_rejection_keepalives
+    );
+    reserve_append(cached_args, source.cached_args);
+
+    // Extend this still-mutable generation's cancellation reachability before
+    // moving the source tokens. If allocation fails, the sealed source packet
+    // rejects itself and the destination command payload remains unchanged.
+    for (const auto& token : source.gpu_completion_tokens) {
+        gpu_completion_cancellation_domain.Register(token);
+    }
+    for (const auto& token : source.query_tokens) {
+        query_cancellation_domain.Register(token);
+    }
+
+    const uint cache_offset = static_cast<uint>(destination_cache_size);
+    for (auto& command : source.cmds) {
+        if (command != nullptr) {
+            command->RebaseCachedArgumentReferences(cache_offset);
+        }
+    }
+
+    const auto append_moved = [](auto& destination, auto& input) {
+        destination.insert(
+            destination.end(),
+            std::make_move_iterator(input.begin()),
+            std::make_move_iterator(input.end())
+        );
+        input.clear();
+    };
+    append_moved(commands, source.cmds);
+    append_moved(callbacks, source.callbacks);
+    append_moved(success_callbacks, source.success_callbacks);
+    append_moved(gpu_completion_tokens, source.gpu_completion_tokens);
+    append_moved(query_tokens, source.query_tokens);
+    append_moved(signal_events, source.signal_events);
+    append_moved(
+        signal_rejection_keepalives,
+        source.signal_rejection_keepalives
+    );
+    append_moved(cached_args, source.cached_args);
+
+    timestamp_scope_names.swap(merged_timestamp_names);
+    translate_execution_class = merged_translate_class;
+
+    // The destination Submit() creates one segment spanning the concatenated
+    // stream. Per-source frontend segments must not survive as native submit
+    // boundaries.
+    source.segments.clear();
 }
 
 Array<std::function<void()>> CommandList::DrainOrdinaryCallbacksForRejection() {

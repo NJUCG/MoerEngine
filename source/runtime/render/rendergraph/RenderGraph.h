@@ -1146,6 +1146,22 @@ public:
         const GpuProfilingOptions&            gpu_profiling = {}
     );
 
+    /**
+     * Records every eligible pass into its own frontend CommandList (and may
+     * do so concurrently), joins all producers, then appends those frontend
+     * streams to one caller-owned Graphics CommandList in compiled order.
+     * The destination's later Submit() is the only native submission boundary.
+     *
+     * This compatibility path supports record-class Graphics passes backed by
+     * already-created resources. Active transient lowering and multi-queue
+     * execution remain on ExecuteRecording's immutable RHI handoff path.
+     */
+    bool ExecuteRecordingMerged(
+        CommandList&               command_list,
+        bool                       parallel_recording_enabled = true,
+        const GpuProfilingOptions& gpu_profiling = {}
+    );
+
     [[nodiscard]] bool IsCompiled() const {
         return compiled;
     }

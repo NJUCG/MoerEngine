@@ -76,7 +76,11 @@ RasterRenderer::RasterRenderer(
     LOG_INFO(
         "[RenderGraph] Raster execution mode: {}, upper recording: {}",
         render_graph_enabled ? "graph" : "linear",
-        parallel_recording_enabled ? "parallel-eligible" : "serial-fallback"
+        render_graph_enabled ?
+            (parallel_recording_enabled ?
+                 "parallel-frontend/merged-submit" :
+                 "serial-frontend/merged-submit") :
+            "linear"
     );
     if (!config->validation_selected_frame_buffer_name.empty()) {
         LOG_INFO(
@@ -2014,84 +2018,22 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                             LOG_INFO("[RenderGraph][DebugDump]\n{}", dump);
                         }
                     }
-                    // A long-lived renderer/graph marker cannot cross the per-pass Submit boundaries.
-                    // Every pass still owns its own marker and the immutable source packet carries a
-                    // stable frame/pass debug label.
+                    // Passes record independent frontend command streams (and
+                    // may do so in parallel). After the producer join, those
+                    // streams are concatenated in compiled order into this
+                    // backend-tracked frame list, retaining one native submit
+                    // and one continuous cross-pass state-tracker lifetime.
                     if (renderer_marker) {
                         renderer_marker->Close();
                     }
                     const uint64 graph_source_order_base =
                         next_profile_source_order;
-                    tail_source_order =
-                        graph_source_order_base +
-                        static_cast<uint64>(
-                            graph.GetCompiledPlan().execution_order.size()
-                        );
-                    const auto submit_main_thread_pass =
-                        [&](const RenderGraph::ExecutedPassInfo& pass) {
-                            assert(
-                                pass.domain.queue == RenderGraph::QueueRole::Graphics &&
-                                "Raster RDG pass recorded into a Graphics CommandList but declared another queue"
-                            );
-                            if (cmd_list.IsEmpty()) {
-                                return;
-                            }
-                            CmdSubmit pass_submit = cmd_list.Submit();
-                            pass_submit.DebugLabel(
-                                std::format(
-                                    "Raster Frame {}/{}",
-                                    frame_packet.frame_id,
-                                    pass.name
-                                ),
-                                GpuMarkerPalette::Pass()
-                            );
-                            // Preserve the old one-frame timestamp transaction even though RDG
-                            // now seals several source submissions.  The first source resets the
-                            // frame query range and opens Graphics Exec; intermediate sources only
-                            // emit their pass queries; the UI/frame-tail source closes and advances
-                            // the profiler below.  This also survives TensorRT's explicit mid-frame
-                            // Flush/Sync boundary.
-                            pass_submit.SetProfilingPhase(
-                                split_graph_profiling_frame ?
-                                    ERHIProfilingPhase::Continue :
-                                    ERHIProfilingPhase::Begin
-                            );
-                            split_graph_profiling_frame = true;
-                            // Until RDG barrier/ownership metadata is lowered into the runtime
-                            // topology, pass packets remain an explicit ordered-control stream.
-                            // Their command bodies can still use the lower parallel recorder.
-                            pass_submit.SetTranslateExecutionClass(
-                                ERHITranslateExecutionClass::SerialControl
-                            );
-                            RHIExecutor::Get().Submit(
-                                EQueueType::Graphics,
-                                std::move(pass_submit),
-                                ERHIExecSubmitFlags::None
-                            );
-                        };
-                    const auto configure_recording_source =
-                        [&](const RenderGraph::ExecutedPassInfo& pass,
-                            RHIRecordingSource&                  source) {
-                            assert(
-                                pass.domain.queue == RenderGraph::QueueRole::Graphics &&
-                                "Raster RDG record source declared a non-Graphics queue"
-                            );
-                            const auto profiling_phase =
-                                split_graph_profiling_frame ?
-                                    ERHIProfilingPhase::Continue :
-                                    ERHIProfilingPhase::Begin;
-                            split_graph_profiling_frame = true;
-                            const std::string debug_label = std::format(
-                                "Raster Frame {}/{}", frame_packet.frame_id, pass.name
-                            );
-                            source.submit_metadata.debug_label       = debug_label;
-                            source.submit_metadata.debug_label_color = GpuMarkerPalette::Pass();
-                            source.submit_metadata.profiling_phase   = profiling_phase;
-                            // RDG barrier/ownership lowering is still guarded; keep the backend
-                            // translator ordered even though CPU recording overlaps.
-                            source.submit_metadata.translate_execution_class =
-                                ERHITranslateExecutionClass::SerialControl;
-                        };
+                    tail_source_order = graph_source_order_base;
+                    static_cast<void>(ensure_profile_source(
+                        cmd_list,
+                        graphics_profile_binding,
+                        graph_source_order_base
+                    ));
                     RenderGraph::GpuProfilingOptions gpu_profiling{};
                     if (gpu_profile_frame.Valid()) {
                         gpu_profiling.try_bind_source =
@@ -2105,16 +2047,15 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                                     source_order
                                 );
                             };
-                        gpu_profiling.main_thread_command_list = &cmd_list;
+                        // The caller-owned frame stream is the first logical
+                        // profiling source. Per-pass frontend sources follow
+                        // it while still sharing the final native submit.
                         gpu_profiling.source_order_base =
-                            graph_source_order_base;
+                            graph_source_order_base + 1;
                     }
-                    const bool graph_recorded = graph.ExecuteRecording(
-                        submit_main_thread_pass,
-                        configure_recording_source,
+                    const bool graph_recorded = graph.ExecuteRecordingMerged(
+                        cmd_list,
                         parallel_recording_enabled,
-                        {},
-                        {},
                         gpu_profiling
                     );
                     raster_pipeline_recorded = graph_recorded;
@@ -2123,10 +2064,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                             (cmd_list.HasGpuScopeRecorder() ||
                              cmd_list
                                  .IsLegacyGpuProfilingSuppressedForGeneration())) {
-                            // A failed caller-thread pass never reaches the
-                            // observer Submit boundary. Rotate and reject that
-                            // partial generation so the frame tail cannot be
-                            // attributed to the failed pass source.
+                            // Reject any already-merged prefix so a failed
+                            // graph can never leak partial commands into the
+                            // unrelated frame tail.
                             CmdSubmit rejected_graph_generation =
                                 cmd_list.Submit();
                             static_cast<void>(rejected_graph_generation);

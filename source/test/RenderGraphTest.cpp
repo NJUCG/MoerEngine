@@ -259,6 +259,133 @@ void TestStableSerialCallbackOrder(TestSuite& suite) {
     );
 }
 
+void TestMergedRecordingPreservesFrontendSourcesAndSubmitOrder(
+    TestSuite& suite
+) {
+    constexpr std::string_view test_name =
+        "merged recording preserves frontend sources and submit order";
+    RenderGraph                 graph("MergedRecording");
+    std::vector<int>            callback_order;
+    std::array<Moer::Render::CommandList*, 2> observed_command_lists{};
+
+    graph.AddRecordPass(
+        "First",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect();
+        },
+        [&](Moer::Render::CommandList& command_list) {
+            observed_command_lists[0] = &command_list;
+            command_list.AddCallback(
+                [&callback_order] { callback_order.push_back(1); }
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "Second",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect();
+        },
+        [&](Moer::Render::CommandList& command_list) {
+            observed_command_lists[1] = &command_list;
+            command_list.AddCallback(
+                [&callback_order] { callback_order.push_back(2); }
+            );
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+
+    const bool compiled = graph.Compile();
+    suite.Check(compiled, test_name, graph.GetCompileError());
+    Moer::Render::CommandList command_list(
+        Moer::Render::EQueueType::Graphics
+    );
+    const bool executed =
+        compiled && graph.ExecuteRecordingMerged(command_list);
+    suite.Check(executed, test_name, graph.GetCompileError());
+    suite.Check(
+        observed_command_lists[0] != nullptr &&
+            observed_command_lists[1] != nullptr &&
+            observed_command_lists[0] != observed_command_lists[1] &&
+            observed_command_lists[0] != &command_list &&
+            observed_command_lists[1] != &command_list,
+        test_name,
+        "record callbacks must use independent frontend CommandLists"
+    );
+    suite.Check(
+        !command_list.IsEmpty(),
+        test_name,
+        "recorded payloads must be merged into the caller-owned CommandList"
+    );
+
+    Moer::Render::CmdSubmit merged_submit = command_list.Submit();
+    suite.Check(
+        merged_submit.segments.size() == 1,
+        test_name,
+        "the merged destination must produce one submit segment"
+    );
+    for (auto& callback : merged_submit.callbacks) {
+        if (callback) {
+            callback();
+        }
+    }
+    merged_submit.callbacks.clear();
+    suite.Check(
+        callback_order == std::vector<int>{1, 2},
+        test_name,
+        "frontend callback payload must be concatenated in compiled order"
+    );
+    suite.Check(
+        !graph.ExecuteRecordingMerged(command_list),
+        test_name,
+        "merged execution must preserve the graph one-shot contract"
+    );
+}
+
+void TestFrontendCommandListMergeRebasesCachedArguments(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "frontend CommandList merge rebases cached arguments";
+    using namespace Moer::Render;
+
+    CommandList destination(EQueueType::Graphics);
+    CommandList source(EQueueType::Graphics);
+    static_cast<void>(destination.RegisterArgs(ArrayArguments{}));
+    const ArrayArgReference source_args =
+        source.RegisterArgs(ArrayArguments{});
+    PipelineHandle pipeline{};
+    source.SetTranslateExecutionClass(
+        ERHITranslateExecutionClass::SerialControl
+    );
+    source.AddCustomCommand(
+        Moer::MakeUnique<DispatchCmd>(
+            TShaderArgArray(source_args),
+            pipeline,
+            Moer::uint3(1, 1, 1),
+            ProfileSection("Other")
+        ),
+        "CachedDispatch"
+    );
+
+    destination.AppendRecorded(std::move(source));
+    CmdSubmit submit = destination.Submit();
+    suite.Check(
+        submit.cached_args.size() == 2 && submit.cmds.size() == 1 &&
+            submit.translate_execution_class ==
+                ERHITranslateExecutionClass::SerialControl,
+        test_name,
+        "cache, command, and stronger translation policy must survive the merge"
+    );
+    if (submit.cached_args.size() == 2 && submit.cmds.size() == 1) {
+        const auto& dispatch =
+            static_cast<const DispatchCmd&>(*submit.cmds.front());
+        suite.Check(
+            &dispatch.Args(submit.cached_args) == &submit.cached_args[1],
+            test_name,
+            "source-local cached argument index must be rebased"
+        );
+    }
+}
+
 void TestPassCompletionObserverRunsAfterEachCallback(TestSuite& suite) {
     constexpr std::string_view test_name = "pass completion observer ordering";
     RenderGraph                graph("PassCompletionObserver");
@@ -7420,6 +7547,8 @@ void TestNrdDenoiserFamiliesAreExplicit(TestSuite& suite) {
 int main() {
     TestSuite suite;
     TestStableSerialCallbackOrder(suite);
+    TestMergedRecordingPreservesFrontendSourcesAndSubmitOrder(suite);
+    TestFrontendCommandListMergeRebasesCachedArguments(suite);
     TestPassCompletionObserverRunsAfterEachCallback(suite);
     TestUiDrawablePresentationContracts(suite);
     TestRasterStyleUiSlotClaimTracksNativeAcceptance(suite);
