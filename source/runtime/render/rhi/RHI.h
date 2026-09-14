@@ -45,7 +45,7 @@ struct DeviceInitInfo {
     uint32_t         parallel_record_workers              = 0;
     bool             parallel_record_verify              = false;
     bool             parallel_record_profile             = false;
-    uint32_t         parallel_record_min_work_units_per_job = 64;
+    uint32_t         parallel_record_min_work_units_per_job = 8;
     uint32_t         submission_batch_window =
         Moer::Render::RHISubmissionPipelinePolicy::DefaultBatchWindow;
     bool             rhi_heartbeat_enabled               = false;

@@ -24,10 +24,10 @@ enum class ParallelRecordFallbackReason : uint8_t {
     LayerTooLarge,
 };
 
-// Mirrors UE's 64-draw floor, but uses backend-estimated native recording work
-// rather than Moer's high-level command count. A single MultiDraw may therefore
-// qualify while a long list of cheap copies still remains serial.
-inline constexpr uint32_t kDefaultParallelRecordMinWorkUnitsPerJob = 64;
+// Moer uses backend-estimated native recording work rather than a high-level
+// draw count. Keep the default small enough to expose useful pass-level
+// concurrency while still rejecting trivial singleton work.
+inline constexpr uint32_t kDefaultParallelRecordMinWorkUnitsPerJob = 8;
 
 // A borrowed, immutable view of one reorderer layer. Command indices in the
 // generated plan are local to this span, which lets the backend bind the plan

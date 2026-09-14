@@ -48,7 +48,7 @@ GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_p
         toml_config.at_path("engine.threading.parallel_record_profile").value_or(false);
     loaded_config.engine.threading.parallel_record_min_work_units_per_job =
         toml_config.at_path("engine.threading.parallel_record_min_work_units_per_job")
-            .value_or(uint{64});
+            .value_or(uint{8});
     loaded_config.engine.threading.submission_batch_window =
         toml_config.at_path("engine.threading.submission_batch_window").value_or(uint{2});
     loaded_config.engine.threading.rhi_heartbeat_enabled =

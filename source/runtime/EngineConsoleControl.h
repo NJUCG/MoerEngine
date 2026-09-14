@@ -22,7 +22,7 @@ struct EngineConsoleStartupConfig {
     std::uint32_t parallel_record_workers                = 0;
     bool          parallel_record_verify                 = false;
     bool          parallel_record_profile                = false;
-    std::uint32_t parallel_record_min_work_units_per_job = 64;
+    std::uint32_t parallel_record_min_work_units_per_job = 8;
     std::uint32_t configured_submission_batch_window     = 2;
     bool          rhi_heartbeat_enabled                  = false;
     std::uint32_t rhi_heartbeat_stall_timeout_ms         = 5000;

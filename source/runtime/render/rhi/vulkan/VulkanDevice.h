@@ -70,7 +70,7 @@ struct VulkanRHIConfig {
     uint32 parallel_record_workers      = 0;
     bool   parallel_record_verify       = false;
     bool   parallel_record_profile      = false;
-    uint32 parallel_record_min_work_units_per_job = 64;
+    uint32 parallel_record_min_work_units_per_job = 8;
     uint64 parallel_record_worker_throw_trigger = 0;
     uint64 present_submit_fault_trigger = 0;
 };
@@ -380,7 +380,7 @@ private:
     uint32                    parallel_record_workers      = 0;
     bool                      parallel_record_verify       = false;
     bool                      parallel_record_profile      = false;
-    uint32                    parallel_record_min_work_units_per_job = 64;
+    uint32                    parallel_record_min_work_units_per_job = 8;
     uint64                    parallel_record_worker_throw_trigger = 0;
     uint64                    present_submit_fault_trigger = 0;
     bool                      surface_maintenance1_enabled = false;

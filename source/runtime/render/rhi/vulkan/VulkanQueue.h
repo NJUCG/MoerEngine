@@ -619,7 +619,7 @@ public:
         uint32_t      _parallel_record_workers = 0,
         bool          _parallel_record_verify = false,
         bool          _parallel_record_profile = false,
-        uint32_t      _parallel_record_min_work_units_per_job = 64,
+        uint32_t      _parallel_record_min_work_units_per_job = 8,
         uint64_t      _parallel_record_worker_throw_trigger = 0
     );
     ~VkCommandQueue();
@@ -1023,7 +1023,7 @@ private:
     bool                    parallel_record_verify{false};
     bool                    parallel_record_profile_enabled{false};
     uint32                  parallel_record_workers{0};
-    uint32                  parallel_record_min_work_units_per_job{64};
+    uint32                  parallel_record_min_work_units_per_job{8};
     UniquePtr<ExternalCpuJoinPool> parallel_record_pool;
     uint64                  parallel_record_batch_serial{0};
     uint64                  parallel_record_worker_throw_trigger{0};
