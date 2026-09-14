@@ -791,6 +791,121 @@ VkRenderingAttachmentInfo FromDepthAttachmentInfo(const DepthAttachment& _attach
     return attachment_info;
 }
 
+static std::optional<uint32_t> UniformRenderPassSampleCount(
+    const RenderPassInfo& _pass_info
+) {
+    std::optional<uint32_t> sample_count;
+    auto merge_samples = [&](const Texture* _texture) {
+        if (_texture == nullptr) {
+            return false;
+        }
+        const uint32_t attachment_samples = _texture->GetNumSamples();
+        if (sample_count.has_value() && sample_count.value() != attachment_samples) {
+            return false;
+        }
+        sample_count = attachment_samples;
+        return true;
+    };
+
+    for (const ColorAttachment& attachment : _pass_info.color_attachments) {
+        if (!merge_samples(attachment.target)) {
+            return std::nullopt;
+        }
+    }
+    if (_pass_info.depth_attachment.Valid() &&
+        !merge_samples(_pass_info.depth_attachment.target)) {
+        return std::nullopt;
+    }
+    return sample_count.value_or(1u);
+}
+
+// Owns every array/address referenced by the Vulkan rendering and inheritance
+// structures. Build it on the coordinator before worker dispatch, then use the
+// same immutable signature for vkBeginCommandBuffer and vkCmdBeginRendering.
+class VulkanDynamicRenderingEnvelope {
+public:
+    VulkanDynamicRenderingEnvelope(
+        const RenderPassInfo& _pass_info,
+        bool                  _uses_stencil_attachment
+    ) :
+        pass_info(&_pass_info),
+        uses_stencil_attachment(_uses_stencil_attachment) {
+        const std::optional<uint32_t> uniform_samples =
+            UniformRenderPassSampleCount(_pass_info);
+        if (!uniform_samples.has_value()) {
+            throw std::logic_error(
+                "dynamic rendering attachments use incompatible sample counts"
+            );
+        }
+        rasterization_samples =
+            VulkanEnumTranslator::METoVKSampleCountFlagBits(uniform_samples.value());
+
+        color_attachments.reserve(_pass_info.color_attachments.size());
+        color_formats.reserve(_pass_info.color_attachments.size());
+        for (const ColorAttachment& attachment : _pass_info.color_attachments) {
+            color_attachments.push_back(FromColorAttachmentInfo(attachment));
+            color_formats.push_back(
+                VulkanEnumTranslator::METoVKFormat(attachment.target->GetFormat())
+            );
+        }
+        if (_pass_info.depth_attachment.Valid()) {
+            depth_stencil_attachment.emplace(
+                FromDepthAttachmentInfo(_pass_info.depth_attachment)
+            );
+            depth_format = VulkanEnumTranslator::METoVKFormat(
+                _pass_info.depth_attachment.target->GetFormat()
+            );
+            stencil_format = _uses_stencil_attachment ? depth_format : VK_FORMAT_UNDEFINED;
+        }
+    }
+
+    VkRenderingInfo RenderingInfo(VkRenderingFlags _flags = 0) const {
+        return {
+            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+            .pNext = nullptr,
+            .flags = _flags,
+            .renderArea =
+                {.offset = {pass_info->render_area.offset.x, pass_info->render_area.offset.y},
+                 .extent = {pass_info->render_area.extent.width, pass_info->render_area.extent.height}},
+            .layerCount           = 1,
+            .viewMask             = pass_info->view_mask,
+            .colorAttachmentCount = static_cast<uint32_t>(color_attachments.size()),
+            .pColorAttachments    = color_attachments.data(),
+            .pDepthAttachment = depth_stencil_attachment.has_value() ?
+                                    &depth_stencil_attachment.value() :
+                                    nullptr,
+            .pStencilAttachment =
+                depth_stencil_attachment.has_value() && uses_stencil_attachment ?
+                    &depth_stencil_attachment.value() :
+                    nullptr,
+        };
+    }
+
+    VkCommandBufferInheritanceRenderingInfo InheritanceInfo() const {
+        return {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_RENDERING_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .viewMask = pass_info->view_mask,
+            .colorAttachmentCount = static_cast<uint32_t>(color_formats.size()),
+            .pColorAttachmentFormats = color_formats.data(),
+            .depthAttachmentFormat = depth_format,
+            .stencilAttachmentFormat = stencil_format,
+            .rasterizationSamples = rasterization_samples,
+        };
+    }
+
+private:
+    const RenderPassInfo*                    pass_info{};
+    bool                                     uses_stencil_attachment{false};
+    Array<VkRenderingAttachmentInfo>         color_attachments;
+    Array<VkFormat>                          color_formats;
+    std::optional<VkRenderingAttachmentInfo> depth_stencil_attachment;
+    VkFormat                                 depth_format{VK_FORMAT_UNDEFINED};
+    VkFormat                                 stencil_format{VK_FORMAT_UNDEFINED};
+    VkSampleCountFlagBits rasterization_samples{VK_SAMPLE_COUNT_1_BIT};
+};
+
 static bool IsBufferTextureWrite(VulkanShaderResourceState _state) {
     switch (_state.resource_type) {
         case SRT_UAV:
@@ -2415,6 +2530,7 @@ class VkCmdVisitor : VulkanDeviceObject {
     const TCachedArgArray& cached_args;
     ProfilerStorage*       profiler = nullptr;
     bool                   query_profiling_enabled = false;
+    bool                   inside_inherited_rendering = false;
 
     class ScopedNativeLabel {
     public:
@@ -2445,7 +2561,8 @@ public:
         VulkanCmdList&         _cmd_list,
         const TCachedArgArray& _cached_args,
         ProfilerStorage*       _profiler = nullptr,
-        bool                   _query_profiling_enabled = false
+        bool                   _query_profiling_enabled = false,
+        bool                   _inside_inherited_rendering = false
     ) :
         VulkanDeviceObject(&_device),
         allocator(_allocator),
@@ -2453,7 +2570,8 @@ public:
         cmd_list(_cmd_list),
         cached_args(_cached_args),
         profiler(_profiler),
-        query_profiling_enabled(_query_profiling_enabled) {}
+        query_profiling_enabled(_query_profiling_enabled),
+        inside_inherited_rendering(_inside_inherited_rendering) {}
 
     void VisitCmd(const Command* _cmd) {
         switch (_cmd->Type()) {
@@ -2831,10 +2949,7 @@ public:
         uint tex_min_width  = pass_info.render_area.extent.width + pass_info.render_area.offset.x;
         uint tex_min_height = pass_info.render_area.extent.height + pass_info.render_area.offset.y;
 
-        Array<VkRenderingAttachmentInfo> color_attachments(pass_info.color_attachments.size());
         for (size_t i = 0; i < pass_info.color_attachments.size(); ++i) {
-            color_attachments[i] = FromColorAttachmentInfo(pass_info.color_attachments[i]);
-
             if (pass_info.color_attachments[i].target->GetWidth() < tex_min_width ||
                 pass_info.color_attachments[i].target->GetHeight() < tex_min_height) {
                 LOG_ERROR(
@@ -2849,33 +2964,16 @@ public:
                 );
             }
         }
-        std::optional<VkRenderingAttachmentInfo> depth_stencil_attachment;
-        bool                                     uses_stencil_attachment = false;
-        if (pass_info.depth_attachment.Valid()) {
-            depth_stencil_attachment = FromDepthAttachmentInfo(pass_info.depth_attachment);
-            uses_stencil_attachment  = FormatHasStencil(pass_info.depth_attachment.target->GetFormat()) &&
-                                      PipelineUsesStencilAttachment(_cmd.Pipeline());
+        std::optional<VulkanDynamicRenderingEnvelope> rendering_envelope;
+        if (!inside_inherited_rendering) {
+            const bool uses_stencil_attachment =
+                pass_info.depth_attachment.Valid() &&
+                FormatHasStencil(pass_info.depth_attachment.target->GetFormat()) &&
+                PipelineUsesStencilAttachment(_cmd.Pipeline());
+            rendering_envelope.emplace(pass_info, uses_stencil_attachment);
+            VkRenderingInfo dynamic_rendering_info = rendering_envelope->RenderingInfo();
+            cmd_list.BeginRendering(std::move(dynamic_rendering_info));
         }
-
-        VkRenderingInfo dynamic_rendering_info{
-            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .renderArea =
-                {.offset = {pass_info.render_area.offset.x, pass_info.render_area.offset.y},
-                 .extent = {pass_info.render_area.extent.width, pass_info.render_area.extent.height}},
-            .layerCount           = 1,
-            .viewMask             = pass_info.view_mask,
-            .colorAttachmentCount = uint(pass_info.color_attachments.size()),
-            .pColorAttachments    = color_attachments.data(),
-            .pDepthAttachment =
-                depth_stencil_attachment.has_value() ? &depth_stencil_attachment.value() : nullptr,
-            .pStencilAttachment = (depth_stencil_attachment.has_value() && uses_stencil_attachment) ?
-                                      &depth_stencil_attachment.value() :
-                                      nullptr
-        };
-
-        cmd_list.BeginRendering(std::move(dynamic_rendering_info));
 
         cmd_list.SetPso(_cmd.Pipeline());
 
@@ -3017,7 +3115,9 @@ public:
                 draw_data.idx_view
             );
         }
-        cmd_list.EndRendering();
+        if (!inside_inherited_rendering) {
+            cmd_list.EndRendering();
+        }
         cmd_list.EndLabel();
     }
 
@@ -3031,38 +3131,17 @@ public:
         cmd_list.BeginLabel(_cmd.name, draw_color);
         state = EState::Draw;
 
-        const auto&                      pass_info = _cmd.RenderPassInfo();
-        Array<VkRenderingAttachmentInfo> color_attachments(pass_info.color_attachments.size());
-        for (size_t i = 0; i < pass_info.color_attachments.size(); ++i) {
-            color_attachments[i] = FromColorAttachmentInfo(pass_info.color_attachments[i]);
+        const auto& pass_info = _cmd.RenderPassInfo();
+        std::optional<VulkanDynamicRenderingEnvelope> rendering_envelope;
+        if (!inside_inherited_rendering) {
+            const bool uses_stencil_attachment =
+                pass_info.depth_attachment.Valid() &&
+                FormatHasStencil(pass_info.depth_attachment.target->GetFormat()) &&
+                DrawBatchUsesStencilAttachment(_cmd.draw_batch);
+            rendering_envelope.emplace(pass_info, uses_stencil_attachment);
+            VkRenderingInfo dynamic_rendering_info = rendering_envelope->RenderingInfo();
+            cmd_list.BeginRendering(std::move(dynamic_rendering_info));
         }
-        std::optional<VkRenderingAttachmentInfo> depth_stencil_attachment;
-        bool                                     uses_stencil_attachment = false;
-        if (pass_info.depth_attachment.Valid()) {
-            depth_stencil_attachment = FromDepthAttachmentInfo(pass_info.depth_attachment);
-            uses_stencil_attachment  = FormatHasStencil(pass_info.depth_attachment.target->GetFormat()) &&
-                                      DrawBatchUsesStencilAttachment(_cmd.draw_batch);
-        }
-
-        VkRenderingInfo dynamic_rendering_info{
-            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .renderArea =
-                {.offset = {pass_info.render_area.offset.x, pass_info.render_area.offset.y},
-                 .extent = {pass_info.render_area.extent.width, pass_info.render_area.extent.height}},
-            .layerCount           = 1,
-            .viewMask             = pass_info.view_mask,
-            .colorAttachmentCount = uint(pass_info.color_attachments.size()),
-            .pColorAttachments    = color_attachments.data(),
-            .pDepthAttachment =
-                depth_stencil_attachment.has_value() ? &depth_stencil_attachment.value() : nullptr,
-            .pStencilAttachment = (depth_stencil_attachment.has_value() && uses_stencil_attachment) ?
-                                      &depth_stencil_attachment.value() :
-                                      nullptr
-        };
-
-        cmd_list.BeginRendering(std::move(dynamic_rendering_info));
         const auto& rect = pass_info.render_area;
         VkViewport  viewport{
             .x        = float(rect.offset.x),
@@ -3263,7 +3342,9 @@ public:
             );
         }
 
-        cmd_list.EndRendering();
+        if (!inside_inherited_rendering) {
+            cmd_list.EndRendering();
+        }
         cmd_list.EndLabel();
     }
 
@@ -6642,9 +6723,11 @@ bool VkCommandQueue::TryExecuteParallel(
         UniquePtr<VulkanAllocator>     fallback_allocator;
         bool                           parallel{false};
         bool                           use_secondary{false};
+        bool                           graphics_secondary{false};
         bool                           scope_only{false};
         bool                           preprocessed{false};
         bool                           worker_recorded{false};
+        std::optional<VulkanDynamicRenderingEnvelope> rendering_envelope;
     };
 
     const std::string queue_label = !_submit.debug_label.empty() ?
@@ -6700,6 +6783,37 @@ bool VkCommandQueue::TryExecuteParallel(
             .pipelineStatistics   = 0,
         };
         const VkResult begin_result = _cmd_list.BeginSecondary(inheritance);
+        if (begin_result != VK_SUCCESS) {
+            return begin_result;
+        }
+        _cmd_list.BeginLabel(queue_label, queue_label_color);
+        for (const ScopeCmd* scope : _scopes) {
+            _cmd_list.BeginLabel(scope->ScopeName(), scope->Color());
+        }
+        return VK_SUCCESS;
+    };
+    auto begin_graphics_secondary = [&] (
+                                        VulkanCmdList& _cmd_list,
+                                        const Array<const ScopeCmd*>& _scopes,
+                                        const VulkanDynamicRenderingEnvelope& _envelope
+                                    ) -> VkResult {
+        const VkCommandBufferInheritanceRenderingInfo rendering_inheritance =
+            _envelope.InheritanceInfo();
+        const VkCommandBufferInheritanceInfo inheritance{
+            .sType                = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO,
+            .pNext                = &rendering_inheritance,
+            .renderPass           = VK_NULL_HANDLE,
+            .subpass              = 0,
+            .framebuffer          = VK_NULL_HANDLE,
+            .occlusionQueryEnable = VK_FALSE,
+            .queryFlags           = 0,
+            .pipelineStatistics   = 0,
+        };
+        const VkResult begin_result = _cmd_list.BeginSecondary(
+            inheritance,
+            VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT |
+                VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT
+        );
         if (begin_result != VK_SUCCESS) {
             return begin_result;
         }
@@ -6818,7 +6932,7 @@ bool VkCommandQueue::TryExecuteParallel(
         runtime.scope_only = runtime.commands.size() == 1 &&
                              runtime.commands.front()->Type() == Command::EType::Scope;
         runtime.parallel = plan.layers[layer_index].parallel;
-        runtime.use_secondary = runtime.parallel &&
+        const bool compute_secondary = runtime.parallel &&
             std::all_of(
                 runtime.commands.begin(),
                 runtime.commands.end(),
@@ -6826,6 +6940,20 @@ bool VkCommandQueue::TryExecuteParallel(
                     return IsComputeSecondaryRecordSafe(_command->Type());
                 }
             );
+        runtime.graphics_secondary =
+            runtime.parallel && runtime.commands.size() == 1 &&
+            plan.layers[layer_index].job_count == 1 &&
+            IsGraphicsSecondaryRecordSafe(runtime.commands.front()->Type());
+        if (runtime.graphics_secondary) {
+            const Command* draw_command = runtime.commands.front();
+            const RenderPassInfo& pass_info =
+                draw_command->Type() == Command::EType::SetDrawState ?
+                    static_cast<const SetDrawStateCmd*>(draw_command)->RenderPassInfo() :
+                    static_cast<const MultiDrawCmd*>(draw_command)->RenderPassInfo();
+            runtime.graphics_secondary =
+                UniformRenderPassSampleCount(pass_info).has_value();
+        }
+        runtime.use_secondary = compute_secondary || runtime.graphics_secondary;
         if (runtime.scope_only) {
             const auto* scope = static_cast<const ScopeCmd*>(runtime.commands.front());
             if (scope->IsPush()) {
@@ -6905,9 +7033,23 @@ bool VkCommandQueue::TryExecuteParallel(
                                                       chunk.allocator->GetSecondaryCmdList() :
                                                       chunk.allocator->GetCmdList();
                         cmd_list.SetDescriptorPushLease(descriptor_lease.state);
-                        const VkResult worker_begin = job_layer.use_secondary ?
-                            begin_compute_secondary(cmd_list, job_layer.scopes) :
-                            begin_primary(cmd_list, job_layer.scopes, false);
+                        VkResult worker_begin = VK_SUCCESS;
+                        if (job_layer.graphics_secondary) {
+                            assert(job_layer.rendering_envelope.has_value());
+                            worker_begin = begin_graphics_secondary(
+                                cmd_list,
+                                job_layer.scopes,
+                                job_layer.rendering_envelope.value()
+                            );
+                        } else if (job_layer.use_secondary) {
+                            worker_begin = begin_compute_secondary(
+                                cmd_list, job_layer.scopes
+                            );
+                        } else {
+                            worker_begin = begin_primary(
+                                cmd_list, job_layer.scopes, false
+                            );
+                        }
                         if (worker_begin != VK_SUCCESS) {
                             chunk.native_failure = worker_begin;
                             throw std::runtime_error("parallel command buffer begin failed");
@@ -6936,7 +7078,8 @@ bool VkCommandQueue::TryExecuteParallel(
                             cmd_list,
                             _submit.cached_args,
                             nullptr,
-                            false
+                            false,
+                            job_layer.graphics_secondary
                         );
                         for (uint32 command_index = chunk.range.command_begin;
                              command_index < chunk.range.CommandEnd(); ++command_index) {
@@ -7052,7 +7195,18 @@ bool VkCommandQueue::TryExecuteParallel(
                             chunk.allocator->GetSecondaryCmdList().GetHandle()
                         );
                     }
-                    primary.ExecuteCommands(secondaries);
+                    if (runtime.graphics_secondary) {
+                        assert(runtime.rendering_envelope.has_value());
+                        VkRenderingInfo rendering_info =
+                            runtime.rendering_envelope->RenderingInfo(
+                                VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT
+                            );
+                        primary.BeginRendering(std::move(rendering_info));
+                        primary.ExecuteCommands(secondaries);
+                        primary.EndRendering();
+                    } else {
+                        primary.ExecuteCommands(secondaries);
+                    }
                 }
                 const VkResult end_result =
                     end_command_buffer(primary, runtime.scopes_after);
@@ -7201,6 +7355,35 @@ bool VkCommandQueue::TryExecuteParallel(
                 }
                 try {
                     record_layer_prefix(layer_index, primary_cmd);
+                    if (first_runtime.graphics_secondary) {
+                        const Command* draw_command = first_runtime.commands.front();
+                        const RenderPassInfo* pass_info = nullptr;
+                        bool uses_stencil_attachment = false;
+                        if (draw_command->Type() == Command::EType::SetDrawState) {
+                            const auto& draw =
+                                *static_cast<const SetDrawStateCmd*>(draw_command);
+                            pass_info = &draw.RenderPassInfo();
+                            uses_stencil_attachment =
+                                pass_info->depth_attachment.Valid() &&
+                                FormatHasStencil(
+                                    pass_info->depth_attachment.target->GetFormat()
+                                ) &&
+                                PipelineUsesStencilAttachment(draw.Pipeline());
+                        } else {
+                            const auto& draw =
+                                *static_cast<const MultiDrawCmd*>(draw_command);
+                            pass_info = &draw.RenderPassInfo();
+                            uses_stencil_attachment =
+                                pass_info->depth_attachment.Valid() &&
+                                FormatHasStencil(
+                                    pass_info->depth_attachment.target->GetFormat()
+                                ) &&
+                                DrawBatchUsesStencilAttachment(draw.draw_batch);
+                        }
+                        first_runtime.rendering_envelope.emplace(
+                            *pass_info, uses_stencil_attachment
+                        );
+                    }
                 } catch (const std::exception& error) {
                     try {
                         LOG_ERROR(

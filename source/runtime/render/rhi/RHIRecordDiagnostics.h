@@ -167,6 +167,15 @@ constexpr bool IsComputeSecondaryRecordSafe(Command::EType _type) {
            IsParallelRecordReplaySafe(_type);
 }
 
+// Graphics secondaries additionally require a coordinator-owned dynamic-
+// rendering envelope and a matching immutable inheritance signature. The
+// backend applies those shape checks before selecting this path.
+constexpr bool IsGraphicsSecondaryRecordSafe(Command::EType _type) {
+    return (_type == Command::EType::SetDrawState ||
+            _type == Command::EType::MultiDraw) &&
+           IsParallelRecordReplaySafe(_type);
+}
+
 class StableRecordHash {
 public:
     static constexpr uint64_t kOffset = 14695981039346656037ull;

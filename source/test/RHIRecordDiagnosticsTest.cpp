@@ -149,6 +149,15 @@ void ParallelReplayContractExcludesSideEffects() {
            "transfer work entered the compute-only secondary proof path");
     Expect(!IsComputeSecondaryRecordSafe(Command::EType::Query),
            "query work entered the compute-only secondary proof path");
+
+    Expect(IsGraphicsSecondaryRecordSafe(Command::EType::SetDrawState),
+           "single-draw work was not exposed to graphics secondary recording");
+    Expect(IsGraphicsSecondaryRecordSafe(Command::EType::MultiDraw),
+           "multi-draw work was not exposed to graphics secondary recording");
+    Expect(!IsGraphicsSecondaryRecordSafe(Command::EType::ShaderDispatch),
+           "compute work entered the graphics secondary path");
+    Expect(!IsGraphicsSecondaryRecordSafe(Command::EType::ClearResource),
+           "clear work entered the graphics secondary path");
 }
 
 void TopologyDigestIsDeterministicAndOrderSensitive() {
