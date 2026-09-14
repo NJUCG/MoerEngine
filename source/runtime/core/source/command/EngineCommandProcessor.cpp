@@ -21,13 +21,13 @@ struct BuiltinCommand {
 constexpr BuiltinCommand builtin_commands[] = {
     {
         "help",
-        "Show engine commands and the default cvar syntax.",
-        "/help",
+        "Show commands, cvar syntax, or detailed help for one item.",
+        "help [command-or-cvar]",
     },
     {
         "cvar.list",
         "List registered cvars, optionally filtered by prefix.",
-        "/cvar.list [prefix]",
+        "cvar.list [prefix]",
     },
 };
 
@@ -64,6 +64,36 @@ bool StartsWithInsensitive(std::string_view _text, std::string_view _prefix) noe
         }
     }
     return true;
+}
+
+std::size_t FindInsensitive(std::string_view _text, std::string_view _needle) noexcept {
+    if (_needle.empty()) {
+        return 0;
+    }
+    if (_needle.size() > _text.size()) {
+        return std::string_view::npos;
+    }
+    for (std::size_t begin = 0; begin + _needle.size() <= _text.size(); ++begin) {
+        if (StartsWithInsensitive(_text.substr(begin), _needle)) {
+            return begin;
+        }
+    }
+    return std::string_view::npos;
+}
+
+int MatchRank(std::string_view _name, std::string_view _query) noexcept {
+    if (StartsWithInsensitive(_name, _query)) {
+        return 0;
+    }
+    std::size_t segment = _name.find('.');
+    while (segment != std::string_view::npos && segment + 1 < _name.size()) {
+        ++segment;
+        if (StartsWithInsensitive(_name.substr(segment), _query)) {
+            return 1;
+        }
+        segment = _name.find('.', segment);
+    }
+    return FindInsensitive(_name, _query) != std::string_view::npos ? 2 : -1;
 }
 
 const BuiltinCommand* FindBuiltin(std::string_view _name) {
@@ -291,6 +321,7 @@ std::size_t EngineCommandProcessor::VisitCandidates(
             candidates.push_back({
                 .text       = "/" + std::string(command.name),
                 .helper     = std::string(command.helper),
+                .value      = {},
                 .is_command = true,
             });
             if (candidates.size() == _max_count) {
@@ -303,20 +334,41 @@ std::size_t EngineCommandProcessor::VisitCandidates(
         if (token_end != std::string_view::npos) {
             token = token.substr(0, token_end);
         }
-        if (token.empty()) {
-            return 0;
-        }
-
-        std::vector<CVar::CVarSnapshot> snapshots = CVar::List(token);
-        candidates.reserve((std::min)(_max_count, snapshots.size()));
-        for (const CVar::CVarSnapshot& snapshot : snapshots) {
+        for (const BuiltinCommand& command : builtin_commands) {
+            if (!token.empty() && !StartsWithInsensitive(command.name, token)) {
+                continue;
+            }
             candidates.push_back({
-                .text       = snapshot.name,
-                .helper     = snapshot.helper,
-                .is_command = false,
+                .text       = std::string(command.name),
+                .helper     = std::string(command.helper),
+                .value      = {},
+                .is_command = true,
             });
             if (candidates.size() == _max_count) {
                 break;
+            }
+        }
+
+        if (candidates.size() < _max_count) {
+            // Registry enumeration intentionally uses strict prefixes.
+            // Interactive discovery is broader: rank full-name prefixes
+            // first, then dotted-segment prefixes, then substring matches.
+            const std::vector<CVar::CVarSnapshot> snapshots = CVar::List();
+            for (int rank = 0; rank <= 2 && candidates.size() < _max_count; ++rank) {
+                for (const CVar::CVarSnapshot& snapshot : snapshots) {
+                    if (MatchRank(snapshot.name, token) != rank) {
+                        continue;
+                    }
+                    candidates.push_back({
+                        .text       = snapshot.name,
+                        .helper     = snapshot.helper,
+                        .value      = snapshot.value,
+                        .is_command = false,
+                    });
+                    if (candidates.size() == _max_count) {
+                        break;
+                    }
+                }
             }
         }
     }
@@ -326,6 +378,7 @@ std::size_t EngineCommandProcessor::VisitCandidates(
             {
                 .text       = candidate.text,
                 .helper     = candidate.helper,
+                .value      = candidate.value,
                 .is_command = candidate.is_command,
             },
             _context
@@ -346,13 +399,33 @@ void EngineCommandProcessor::ProcessCommand(std::string_view _text) {
     }
     if (_text.front() == '/') {
         ProcessSlashCommand(_text);
-    } else {
-        ProcessDefaultCVar(_text);
+        return;
     }
+
+    const std::size_t      name_end = _text.find_first_of(" \t?");
+    const std::string_view name =
+        name_end == std::string_view::npos ? _text : _text.substr(0, name_end);
+    if (FindBuiltin(name)) {
+        ProcessBuiltinCommand(_text, false);
+        return;
+    }
+    ProcessDefaultCVar(_text);
 }
 
 void EngineCommandProcessor::ProcessSlashCommand(std::string_view _text) {
-    std::string_view body       = TrimView(_text.substr(1));
+    const std::string_view body = TrimView(_text.substr(1));
+    if (body.empty()) {
+        AppendOutput("Error: missing command after '/'. Try help");
+        return;
+    }
+    ProcessBuiltinCommand(body, true);
+}
+
+void EngineCommandProcessor::ProcessBuiltinCommand(
+    std::string_view _text,
+    bool             _slash_alias
+) {
+    std::string_view body       = TrimView(_text);
     bool             wants_help = false;
     if (!body.empty() && body.back() == '?') {
         wants_help = true;
@@ -360,7 +433,7 @@ void EngineCommandProcessor::ProcessSlashCommand(std::string_view _text) {
         body = TrimView(body);
     }
     if (body.empty()) {
-        AppendOutput("Error: missing command after '/'. Try /help");
+        AppendOutput("Error: missing command. Try help");
         return;
     }
 
@@ -371,22 +444,49 @@ void EngineCommandProcessor::ProcessSlashCommand(std::string_view _text) {
         name_end == std::string_view::npos ? std::string_view{} : TrimView(body.substr(name_end + 1));
     const BuiltinCommand* command = FindBuiltin(command_name);
     if (!command) {
-        AppendOutput("Error: unknown command: /" + std::string(command_name));
+        AppendOutput(
+            "Error: unknown command: " +
+            std::string(_slash_alias ? "/" : "") +
+            std::string(command_name)
+        );
         return;
     }
 
     if (wants_help) {
-        AppendOutput("/" + std::string(command->name));
+        AppendOutput(std::string(command->name));
         AppendOutput("  help: " + std::string(command->helper));
         AppendOutput("  usage: " + std::string(command->usage));
+        AppendOutput("  slash alias: /" + std::string(command->name));
         return;
     }
 
     if (command->name == "help") {
+        if (!arguments.empty()) {
+            std::string_view target = arguments;
+            if (target.front() == '/') {
+                target.remove_prefix(1);
+            }
+            target = TrimView(target);
+            if (const BuiltinCommand* target_command = FindBuiltin(target)) {
+                AppendOutput(std::string(target_command->name));
+                AppendOutput("  help: " + std::string(target_command->helper));
+                AppendOutput("  usage: " + std::string(target_command->usage));
+                AppendOutput("  slash alias: /" + std::string(target_command->name));
+                return;
+            }
+            if (CVar::Find(target)) {
+                AppendCVarHelp(std::string(target));
+                return;
+            }
+            AppendOutput("Error: no command or cvar named: " + std::string(target));
+            return;
+        }
+
         AppendOutput("Commands:");
         for (const BuiltinCommand& builtin : builtin_commands) {
-            AppendOutput("  /" + std::string(builtin.name) + " - " + std::string(builtin.helper));
+            AppendOutput("  " + std::string(builtin.name) + " - " + std::string(builtin.helper));
         }
+        AppendOutput("  Slash-prefixed aliases remain supported (for example, /help).");
         AppendOutput("CVar syntax:");
         AppendOutput("  <cvar>            show current value");
         AppendOutput("  <cvar> <value>    set value");
@@ -412,6 +512,38 @@ void EngineCommandProcessor::ProcessSlashCommand(std::string_view _text) {
             }
             AppendOutput(line);
         }
+    }
+}
+
+void EngineCommandProcessor::AppendCVarHelp(const std::string& _name) {
+    const std::optional<CVar::CVarSnapshot> current = CVar::Find(_name);
+    if (!current) {
+        AppendOutput("Error: unknown cvar: " + _name);
+        return;
+    }
+    AppendOutput(current->name + " = " + current->value);
+    AppendOutput("  type: " + TypeName(current->type));
+    if (!current->helper.empty()) {
+        AppendOutput("  help: " + current->helper);
+    }
+    if (current->type == CVar::EType::Bool) {
+        if (!current->true_helper.empty()) {
+            AppendOutput("  true: " + current->true_helper);
+        }
+        if (!current->false_helper.empty()) {
+            AppendOutput("  false: " + current->false_helper);
+        }
+    }
+    if (current->min_value) {
+        AppendOutput("  minimum: " + std::to_string(*current->min_value));
+    }
+    if (current->max_value) {
+        AppendOutput("  maximum: " + std::to_string(*current->max_value));
+    }
+    AppendOutput("  callback dispatch budget: " + std::to_string(current->callback_dispatch_budget));
+    const std::string flags = FlagsText(current->flags);
+    if (!flags.empty()) {
+        AppendOutput("  flags: " + flags);
     }
 }
 
@@ -441,30 +573,7 @@ void EngineCommandProcessor::ProcessDefaultCVar(std::string_view _text) {
         return;
     }
     if (wants_help) {
-        AppendOutput(current->name + " = " + current->value);
-        AppendOutput("  type: " + TypeName(current->type));
-        if (!current->helper.empty()) {
-            AppendOutput("  help: " + current->helper);
-        }
-        if (current->type == CVar::EType::Bool) {
-            if (!current->true_helper.empty()) {
-                AppendOutput("  true: " + current->true_helper);
-            }
-            if (!current->false_helper.empty()) {
-                AppendOutput("  false: " + current->false_helper);
-            }
-        }
-        if (current->min_value) {
-            AppendOutput("  minimum: " + std::to_string(*current->min_value));
-        }
-        if (current->max_value) {
-            AppendOutput("  maximum: " + std::to_string(*current->max_value));
-        }
-        AppendOutput("  callback dispatch budget: " + std::to_string(current->callback_dispatch_budget));
-        const std::string flags = FlagsText(current->flags);
-        if (!flags.empty()) {
-            AppendOutput("  flags: " + flags);
-        }
+        AppendCVarHelp(current->name);
         return;
     }
     if (path_end == std::string_view::npos) {

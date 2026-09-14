@@ -36,8 +36,13 @@ struct ConsoleSessionLine {
 };
 
 struct ConsoleSessionLimits {
-    std::size_t display_capacity = 2048;
-    std::size_t history_capacity = 128;
+    std::size_t display_capacity            = 2048;
+    std::size_t history_capacity            = 128;
+    std::size_t display_byte_capacity       = 8 * 1024 * 1024;
+    std::size_t display_visual_row_capacity = 16 * 1024;
+    std::size_t max_entry_bytes             = 64 * 1024;
+    std::size_t max_visual_rows_per_entry   = 256;
+    std::size_t max_visual_row_bytes        = 4096;
 };
 
 struct ConsoleSessionPumpResult {
@@ -89,6 +94,8 @@ private:
     ConsoleSessionLimits                   limits;
     std::deque<ConsoleSessionLine>         lines;
     std::deque<std::string>                history;
+    std::size_t                            displayed_text_bytes  = 0;
+    std::size_t                            displayed_visual_rows = 0;
     std::uint64_t                          next_session_sequence = 1;
     std::uint64_t                          next_log_sequence     = 1;
     std::uint64_t                          next_command_sequence = 1;

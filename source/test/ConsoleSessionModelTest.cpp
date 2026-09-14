@@ -33,6 +33,33 @@ const ConsoleSessionLine* FindLine(const ConsoleSessionModel& model, std::string
     return nullptr;
 }
 
+std::size_t VisualRowCount(std::string_view text) {
+    std::size_t count = 1;
+    for (char value : text) {
+        if (value == '\n') {
+            ++count;
+        }
+    }
+    return count;
+}
+
+bool VisualRowsFit(std::string_view text, std::size_t max_bytes) {
+    std::size_t row_begin = 0;
+    while (row_begin <= text.size()) {
+        const std::size_t row_end = text.find('\n', row_begin);
+        const std::size_t end =
+            row_end == std::string_view::npos ? text.size() : row_end;
+        if (end - row_begin > max_bytes) {
+            return false;
+        }
+        if (row_end == std::string_view::npos) {
+            return true;
+        }
+        row_begin = row_end + 1;
+    }
+    return true;
+}
+
 } // namespace
 
 int main() {
@@ -121,6 +148,92 @@ int main() {
         FindLine(bounded_model, "ConsoleSessionModel post-clear line") != nullptr &&
             FindLine(bounded_model, "Commands:") == nullptr,
         "local clear replayed old global source data or skipped new data"
+    );
+
+    ConsoleSessionModel limited_model(
+        endpoint,
+        {
+            .display_capacity            = 8,
+            .history_capacity            = 2,
+            .display_byte_capacity       = 96,
+            .display_visual_row_capacity = 4,
+            .max_entry_bytes             = 64,
+            .max_visual_rows_per_entry   = 2,
+            .max_visual_row_bytes        = 32,
+        }
+    );
+    limited_model.Clear();
+    std::string long_utf8_row;
+    for (int index = 0; index < 24; ++index) {
+        long_utf8_row += "\xE4\xB8\xAD";
+    }
+    LOG_INFO("{}", long_utf8_row + "\nsecond-row\nthird-row");
+    static_cast<void>(limited_model.Pump());
+    Expect(
+        limited_model.GetLines().size() == 1 &&
+            limited_model.GetLines().front().text.size() <= 64 &&
+            VisualRowCount(limited_model.GetLines().front().text) <= 2 &&
+            VisualRowsFit(limited_model.GetLines().front().text, 32) &&
+            limited_model.GetLines().front().text.find("[truncated]") != std::string::npos,
+        "display entry, visual-row, or row-byte limit was not enforced"
+    );
+    const std::size_t first_marker =
+        limited_model.GetLines().front().text.find(" ... [truncated]");
+    Expect(
+        first_marker != std::string::npos && first_marker % 3 == 0,
+        "display truncation split a UTF-8 code point"
+    );
+
+    ConsoleSessionModel byte_budget_model(
+        endpoint,
+        {
+            .display_capacity            = 8,
+            .history_capacity            = 2,
+            .display_byte_capacity       = 48,
+            .display_visual_row_capacity = 8,
+            .max_entry_bytes             = 32,
+            .max_visual_rows_per_entry   = 2,
+            .max_visual_row_bytes        = 32,
+        }
+    );
+    byte_budget_model.Clear();
+    LOG_INFO("budget-old-1234567890");
+    static_cast<void>(byte_budget_model.Pump());
+    LOG_INFO("budget-middle-123456");
+    static_cast<void>(byte_budget_model.Pump());
+    LOG_INFO("budget-new-1234567890");
+    static_cast<void>(byte_budget_model.Pump());
+    std::size_t displayed_bytes = 0;
+    for (const ConsoleSessionLine& line : byte_budget_model.GetLines()) {
+        displayed_bytes += line.text.size();
+    }
+    Expect(
+        displayed_bytes <= 48 && FindLine(byte_budget_model, "budget-old") == nullptr &&
+            FindLine(byte_budget_model, "budget-new") != nullptr,
+        "aggregate display byte budget did not evict the oldest entries"
+    );
+
+    ConsoleSessionModel visual_budget_model(
+        endpoint,
+        {
+            .display_capacity            = 8,
+            .history_capacity            = 2,
+            .display_byte_capacity       = 1024,
+            .display_visual_row_capacity = 3,
+            .max_entry_bytes             = 128,
+            .max_visual_rows_per_entry   = 4,
+            .max_visual_row_bytes        = 64,
+        }
+    );
+    visual_budget_model.Clear();
+    LOG_INFO("visual-old-a\nvisual-old-b");
+    static_cast<void>(visual_budget_model.Pump());
+    LOG_INFO("visual-new-a\nvisual-new-b");
+    static_cast<void>(visual_budget_model.Pump());
+    Expect(
+        FindLine(visual_budget_model, "visual-old") == nullptr &&
+            FindLine(visual_budget_model, "visual-new") != nullptr,
+        "aggregate visual-row budget did not evict the oldest entries"
     );
 
     for (int batch = 0; batch < 9; ++batch) {

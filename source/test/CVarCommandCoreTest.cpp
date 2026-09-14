@@ -965,6 +965,24 @@ void TestListingAndCandidates() {
             command_candidates.front().is_command,
         "command autocomplete was not case-insensitive"
     );
+    Expect(processor.GetCandidates("").empty(), "empty autocomplete unexpectedly opened a candidate list");
+    const std::vector<Command::CommandCandidate> plain_help_candidates =
+        processor.GetCandidates("HE");
+    Expect(
+        plain_help_candidates.size() == 1 &&
+            plain_help_candidates.front().text == "help" &&
+            plain_help_candidates.front().is_command,
+        "plain command autocomplete was not case-insensitive"
+    );
+    const std::vector<Command::CommandCandidate> segment_candidates =
+        processor.GetCandidates("BRAV");
+    Expect(
+        segment_candidates.size() == 1 &&
+            segment_candidates.front().text == "Test.List.bravo" &&
+            segment_candidates.front().value == "value" &&
+            !segment_candidates.front().is_command,
+        "cvar autocomplete did not search dotted segments or expose the current value"
+    );
     Expect(processor.GetCandidates("test.list.", 2).size() == 2, "autocomplete ignored its result bound");
 }
 
@@ -1022,6 +1040,9 @@ void TestCommandProcessing() {
         "Cmd.Text =",
         "Cmd.Text question?",
         "Cmd.Reentrant 1",
+        "help Cmd.Toggle",
+        "help cvar.list",
+        "help absent.item",
         "/help",
         "/cvar.list cmd.",
         "/cvar.list absent.",
@@ -1062,7 +1083,8 @@ void TestCommandProcessing() {
     const Command::CommandOutputBatch output = processor.PollOutput();
     Expect(
         OutputContains(output, "Cmd.Toggle = true") && OutputContains(output, "toggle helper") &&
-            OutputContains(output, "Commands:") &&
+            OutputContains(output, "Commands:") && OutputContains(output, "usage: cvar.list [prefix]") &&
+            OutputContains(output, "no command or cvar named: absent.item") &&
             OutputContains(output, "No cvar matches prefix: absent.") &&
             OutputContains(output, "unknown command") && OutputContains(output, "unknown cvar") &&
             OutputContains(output, "above the allowed maximum") && OutputContains(output, "expected integer"),

@@ -61,12 +61,14 @@ struct CommandOutputBatch {
 struct CommandCandidateView {
     std::string_view text;
     std::string_view helper;
+    std::string_view value;
     bool             is_command = false;
 };
 
 struct CommandCandidate {
     std::string text;
     std::string helper;
+    std::string value;
     bool        is_command = false;
 };
 
@@ -134,6 +136,7 @@ public:
                 static_cast<std::vector<CommandCandidate>*>(_context)->push_back({
                     .text       = std::string(_candidate.text),
                     .helper     = std::string(_candidate.helper),
+                    .value      = std::string(_candidate.value),
                     .is_command = _candidate.is_command,
                 });
             },
@@ -147,7 +150,9 @@ public:
 private:
     void ProcessCommand(std::string_view _text);
     void ProcessSlashCommand(std::string_view _text);
+    void ProcessBuiltinCommand(std::string_view _text, bool _slash_alias);
     void ProcessDefaultCVar(std::string_view _text);
+    void AppendCVarHelp(const std::string& _name);
     void AppendOutput(std::string_view _text);
 
     struct Impl;
