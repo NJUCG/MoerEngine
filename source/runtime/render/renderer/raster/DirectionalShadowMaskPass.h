@@ -5,6 +5,7 @@
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 
 #include "RasterResource.h"
+#include "rendergraph/RenderGraph.h"
 
 namespace Moer::Render::Raster {
 
@@ -19,6 +20,14 @@ public:
 
 class DirectionalShadowMaskPass {
 public:
+    struct GraphResources {
+        RenderGraph::TextureHandle normal{};
+        RenderGraph::TextureHandle depth{};
+        RenderGraph::BufferHandle  lighting_data{};
+        RenderGraph::TokenHandle   shadow_maps{};
+        RenderGraph::TextureHandle shadow_mask{};
+    };
+
     struct RecordParameters {
         uint             normal_handle{0};
         uint             depth_handle{0};
@@ -37,6 +46,12 @@ public:
 
     [[nodiscard]] RecordParameters Prepare(const RasterContext& context) const;
     void Record(CommandList& cmd_list, const RecordParameters& parameters);
+    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+        RenderGraph& graph,
+        const RasterContext& context,
+        GraphResources resources,
+        std::span<const RenderGraph::SetupPassHandle> setup_dependencies = {}
+    );
     void Process(RasterContext& context);
 
 private:

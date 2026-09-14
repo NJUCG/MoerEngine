@@ -7,6 +7,7 @@
 #include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
+#include "rendergraph/RenderGraph.h"
 
 namespace Moer::Render::Raster {
 
@@ -21,6 +22,19 @@ public:
 
 class LightingPass {
 public:
+    struct GraphResources {
+        RenderGraph::TextureHandle base_color{};
+        RenderGraph::TextureHandle normal{};
+        RenderGraph::TextureHandle metal_rough_ao{};
+        RenderGraph::TextureHandle depth{};
+        RenderGraph::TextureHandle shadow_mask{};
+        RenderGraph::BufferHandle  lighting_data{};
+        RenderGraph::TextureHandle cubemap{};
+        RenderGraph::TokenHandle   probe_volume{};
+        RenderGraph::TextureHandle lighting_output{};
+        RenderGraph::BufferHandle  scene_lights{};
+    };
+
     /**
      * Immutable recording input captured on the render thread. Bindless handles
      * alone do not own their resources, so every referenced buffer/texture is
@@ -102,6 +116,13 @@ public:
                 ColorAttachment(parameters.output)
             );
     }
+
+    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+        RenderGraph& graph,
+        const RasterContext& context,
+        const RasterConfig& ui_config,
+        GraphResources resources
+    );
 
     void Process(RasterContext& context, const RasterConfig& ui_config) {
         Record(context.cmd_list, Prepare(context, ui_config));

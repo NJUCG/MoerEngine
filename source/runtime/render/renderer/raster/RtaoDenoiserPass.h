@@ -9,6 +9,7 @@
 #include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
+#include "rendergraph/RenderGraph.h"
 
 namespace Moer::Render::Raster {
 
@@ -36,6 +37,13 @@ public:
  */
 class RtaoDenoiserPass {
 public:
+    struct GraphResources {
+        RenderGraph::TextureHandle normal{};
+        RenderGraph::TextureHandle depth{};
+        RenderGraph::TokenHandle   motion_vectors{};
+        RenderGraph::TokenHandle   ao_working_set{};
+    };
+
     struct RecordParameters {
         bool                           enabled{false};
         bool                           half_resolution{false};
@@ -167,6 +175,14 @@ public:
                 ColorAttachment(parameters.ao_only.tex)
             );
     }
+
+    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+        RenderGraph& graph,
+        RasterContext& context,
+        const RasterConfig& ui_config,
+        uint ao_only_index,
+        GraphResources resources
+    );
 
     void CommitFrame(const RecordParameters& parameters) {
         history_valid               = parameters.enabled;

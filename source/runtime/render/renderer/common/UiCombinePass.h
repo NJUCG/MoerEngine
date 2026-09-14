@@ -4,6 +4,7 @@
 
 #include "PixelFormat.h"
 #include "misc/STL.h"
+#include "rendergraph/RenderGraph.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
@@ -40,6 +41,13 @@ class UiCombinePass {
         {PF_R8G8B8A8_UNORM, PF_R8G8B8A8_SRGB, PF_B8G8R8A8_UNORM, PF_B8G8R8A8_SRGB};
 
 public:
+    struct GraphResources {
+        RenderGraph::TokenHandle   processing_image{};
+        RenderGraph::TextureHandle selected_framebuffer{};
+        RenderGraph::TextureHandle window_framebuffer{};
+        RenderGraph::TextureHandle output{};
+    };
+
     struct RecordParameters {
         bool                     sample_to_separate_window{false};
         TextureView              target{};
@@ -156,6 +164,21 @@ public:
                 ColorAttachment(parameters.target.GetTexture())
             );
     }
+
+    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+        RenderGraph& graph,
+        bool ui_enabled,
+        bool writes_external_window,
+        bool is_separate_window,
+        uint2 resolution,
+        float2 scene_color_position,
+        float2 scene_color_resolution,
+        TextureView window_framebuffer,
+        TextureView selected_framebuffer,
+        TextureView default_output,
+        TextureView processing_input,
+        GraphResources resources
+    );
 
     TextureRef Process(
         CommandList& cmd_list,

@@ -6,6 +6,7 @@
 
 #include "RasterConfig.h"
 #include "RasterResource.h"
+#include "rendergraph/RenderGraph.h"
 
 namespace Moer::Render::Raster {
 
@@ -48,6 +49,11 @@ public:
 
 class BloomPass {
 public:
+    struct GraphResources {
+        RenderGraph::TokenHandle processing_image{};
+        RenderGraph::TokenHandle bloom_chain{};
+    };
+
     struct DownsampleDispatch {
         TextureView          source{};
         Rect2D               render_area{};
@@ -83,6 +89,13 @@ public:
         TextureWithHandle    input_texture
     ) const;
     void Record(CommandList& cmd_list, const RecordParameters& parameters);
+    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+        RenderGraph& graph,
+        const RasterContext& context,
+        const RasterConfig& raster_config,
+        TextureWithHandle input_texture,
+        GraphResources resources
+    );
 
     TextureWithHandle
     Process(RasterContext& context, const RasterConfig& raster_config, TextureWithHandle input_texture);

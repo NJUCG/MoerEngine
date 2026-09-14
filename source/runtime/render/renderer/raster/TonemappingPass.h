@@ -8,6 +8,7 @@
 #include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
+#include "rendergraph/RenderGraph.h"
 
 namespace Moer::Render::Raster {
 
@@ -56,6 +57,12 @@ public:
  */
 class TonemappingPass {
 public:
+    struct GraphResources {
+        RenderGraph::TokenHandle   processing_image{};
+        RenderGraph::TokenHandle   tonemapping_state{};
+        RenderGraph::TextureHandle tonemapping_output{};
+    };
+
     struct RecordParameters {
         TonemappingPipelineBindlessParam shader{};
         TextureWithHandle                input{};
@@ -160,6 +167,14 @@ public:
         );
         return parameters;
     }
+
+    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+        RenderGraph& graph,
+        const RasterContext& context,
+        const RasterConfig& ui_config,
+        TextureWithHandle input_image,
+        GraphResources resources
+    );
 
     void Record(CommandList& cmd_list, const RecordParameters& parameters) {
         // Reset

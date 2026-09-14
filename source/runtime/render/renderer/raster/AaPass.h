@@ -9,6 +9,7 @@
 #include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
+#include "rendergraph/RenderGraph.h"
 
 namespace Moer::Render::Raster {
 
@@ -108,6 +109,12 @@ public:
  */
 class AaPass {
 public:
+    struct GraphResources {
+        RenderGraph::TokenHandle   processing_image{};
+        RenderGraph::TextureHandle depth{};
+        RenderGraph::TextureHandle aa_output{};
+    };
+
     struct RecordParameters {
         EAaMode                              mode{EAaMode::NONE};
         BindlessArrayRef                     bindless{};
@@ -425,6 +432,16 @@ public:
             assert(false && "Invalid antialiasing mode");
         }
     }
+
+    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+        RenderGraph& graph,
+        const RasterContext& context,
+        const RasterConfig& ui_config,
+        const Camera& camera,
+        TextureWithHandle input_image,
+        uint8 smaa_phase,
+        GraphResources resources
+    );
 
     void Commit(const RecordParameters& parameters) {
         history_valid = parameters.commit_history_valid;

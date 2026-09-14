@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RasterResource.h"
+#include "rendergraph/RenderGraph.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
@@ -16,6 +17,12 @@ public:
 
 class CameraGizmoPass {
 public:
+    struct GraphResources {
+        RenderGraph::TokenHandle   scene{};
+        RenderGraph::TextureHandle tonemapping_output{};
+        RenderGraph::TokenHandle   processing_image{};
+    };
+
     struct RecordParameters {
         CameraGizmoParam  shader{};
         TextureWithHandle output{};
@@ -81,6 +88,14 @@ public:
                 }
             );
     }
+
+    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+        RenderGraph& graph,
+        const RasterContext& context,
+        const Camera& scene_camera,
+        const Camera& main_camera,
+        GraphResources resources
+    );
 
     void Process(RasterContext& context, const Camera& scene_camera, const Camera& main_camera) {
         const RecordParameters parameters = Prepare(context, scene_camera, main_camera);

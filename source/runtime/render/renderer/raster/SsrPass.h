@@ -8,6 +8,7 @@
 #include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
+#include "rendergraph/RenderGraph.h"
 
 namespace Moer::Render::Raster {
 
@@ -35,6 +36,14 @@ public:
  */
 class SsrPass {
 public:
+    struct GraphResources {
+        RenderGraph::TokenHandle   processing_image{};
+        RenderGraph::TextureHandle normal{};
+        RenderGraph::TextureHandle depth{};
+        RenderGraph::TextureHandle metal_rough_ao{};
+        RenderGraph::TextureHandle ssr_output{};
+    };
+
     struct RecordParameters {
         bool                         enabled{false};
         SsrPipelineBindlessParam     shader{};
@@ -103,6 +112,15 @@ public:
                 ColorAttachment(parameters.output.tex)
             );
     }
+
+    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+        RenderGraph& graph,
+        const RasterContext& context,
+        const RasterConfig& ui_config,
+        const Camera& camera,
+        TextureWithHandle input_image,
+        GraphResources resources
+    );
 
     TextureWithHandle Process(
         RasterContext&      context,

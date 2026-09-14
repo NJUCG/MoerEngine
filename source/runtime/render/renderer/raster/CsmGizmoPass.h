@@ -2,6 +2,7 @@
 
 #include "RasterConfig.h"
 #include "RasterResource.h"
+#include "rendergraph/RenderGraph.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
@@ -23,6 +24,12 @@ public:
 
 class CsmGizmoPass {
 public:
+    struct GraphResources {
+        RenderGraph::TokenHandle   shadow_maps{};
+        RenderGraph::TextureHandle tonemapping_output{};
+        RenderGraph::TokenHandle   processing_image{};
+    };
+
     struct RecordParameters {
         bool                                              enabled{false};
         BindlessArrayRef                                  bindless{};
@@ -165,6 +172,17 @@ public:
                 }
             );
     }
+
+    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+        RenderGraph& graph,
+        const RasterContext& context,
+        const RasterConfig& config,
+        const SceneViewGizmoConfig& gizmos,
+        const Camera& camera,
+        const Camera& main_camera,
+        GraphResources resources,
+        std::span<const RenderGraph::SetupPassHandle> setup_dependencies = {}
+    );
 
     void Process(
         RasterContext&              context,

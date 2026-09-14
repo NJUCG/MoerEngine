@@ -2,6 +2,7 @@
 #pragma once
 
 #include "RasterResource.h"
+#include "rendergraph/RenderGraph.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
 #include "shaderheaders/shared/raster/culling/ShaderParameters.h"
@@ -21,6 +22,11 @@ public:
 
 class HiZBuildPass {
 public:
+    struct GraphResources {
+        RenderGraph::TextureHandle depth{};
+        RenderGraph::TextureHandle hiz_current{};
+    };
+
     struct MipDispatch {
         TextureView source{};
         TextureView destination{};
@@ -121,6 +127,12 @@ public:
         }
         cmd_list.PopScopeWithTimeScope();
     }
+
+    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+        RenderGraph& graph,
+        const RasterContext& context,
+        GraphResources resources
+    );
 
     void Process(RasterContext& context) {
         Record(context.cmd_list, Prepare(context));

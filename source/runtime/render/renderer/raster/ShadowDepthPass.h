@@ -4,6 +4,7 @@
 #include "math/Function.h"
 #include "misc/BoundingBox.h"
 #include "misc/Timer.h"
+#include "rendergraph/RenderGraph.h"
 #include "shader/ShaderPipeline.h"
 
 #include <optional>
@@ -42,6 +43,11 @@ public:
 
 class ShadowDepthPass {
 public:
+    struct GraphResources {
+        RenderGraph::TokenHandle scene{};
+        RenderGraph::TokenHandle shadow_maps{};
+    };
+
     struct DrawBatch {
         CullingPass::RecordParameters culling{};
         GeometryPassBindlessParam      shader{};
@@ -67,6 +73,14 @@ public:
     [[nodiscard]] RecordParameters
     Prepare(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
     void Record(CommandList& cmd_list, const RecordParameters& parameters);
+    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+        RenderGraph& graph,
+        RasterContext& context,
+        const RasterConfig& ui_config,
+        const Camera& camera,
+        GraphResources resources,
+        std::span<const RenderGraph::SetupPassHandle> setup_dependencies = {}
+    );
 
     // Legacy synchronous adapter. New graph passes call Prepare/Record directly.
     void Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);

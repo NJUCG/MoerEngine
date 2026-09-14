@@ -2,6 +2,7 @@
 
 #include "RasterConfig.h"
 #include "RasterResource.h"
+#include "rendergraph/RenderGraph.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/tessellated_surface/ShaderParameters.h"
@@ -17,6 +18,13 @@ public:
 
 class TessellatedSurfacePass {
 public:
+    struct GraphResources {
+        RenderGraph::TextureHandle base_color{};
+        RenderGraph::TextureHandle normal{};
+        RenderGraph::TextureHandle metal_rough_ao{};
+        RenderGraph::TextureHandle depth{};
+    };
+
     struct RecordParameters {
         bool                   enabled{false};
         TessellatedSurfaceData data{};
@@ -37,6 +45,13 @@ public:
         const Camera&        camera
     ) const;
     void Record(CommandList& cmd_list, const RecordParameters& parameters);
+    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+        RenderGraph& graph,
+        const RasterContext& context,
+        const RasterConfig& config,
+        const Camera& camera,
+        GraphResources resources
+    );
     void Process(RasterContext& context, const RasterConfig& config, const Camera& camera);
 
     bool IsSupported() const {

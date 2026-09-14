@@ -8,6 +8,7 @@
 #include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
+#include "rendergraph/RenderGraph.h"
 
 namespace Moer::Render::Raster {
 
@@ -62,6 +63,24 @@ public:
  */
 class AoPass {
 public:
+    struct GraphResources {
+        RenderGraph::TextureHandle normal{};
+        RenderGraph::TextureHandle depth{};
+        RenderGraph::TextureHandle lighting_output{};
+        RenderGraph::TokenHandle   scene{};
+        RenderGraph::TokenHandle   ao_working_set{};
+        RenderGraph::TokenHandle   motion_vectors{};
+    };
+
+    struct CompositeGraphResources {
+        RenderGraph::TokenHandle   ao_working_set{};
+        RenderGraph::TextureHandle lighting_output{};
+        RenderGraph::TextureHandle depth{};
+        RenderGraph::TextureHandle normal{};
+        RenderGraph::TextureHandle ao_output{};
+        RenderGraph::TokenHandle   processing_image{};
+    };
+
     struct AoPassOutput {
         uint ao_only;     // bindless hdl, for composite
         uint ao_only_idx; // 0 or 1, for denoiser double-buffering
@@ -304,6 +323,15 @@ public:
             );
     }
 
+    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+        RenderGraph& graph,
+        RasterContext& context,
+        const RasterConfig& ui_config,
+        const Camera& camera,
+        uint64 frame_index,
+        GraphResources resources
+    );
+
     [[nodiscard]] CompositeRecordParameters PrepareComposite(
         RasterContext&       context,
         const RasterConfig&  ui_config,
@@ -341,6 +369,14 @@ public:
                 )
             .Dispatch(parameters.groups, "AO Composite Pass");
     }
+
+    [[nodiscard]] RenderGraph::PreparedPassHandle AddCompositeToGraph(
+        RenderGraph& graph,
+        RasterContext& context,
+        const RasterConfig& ui_config,
+        uint ao_only_handle,
+        CompositeGraphResources resources
+    );
 
     void CommitFrame(const RecordParameters& parameters) {
         camera_mv_data_in_cpu = parameters.motion_vector_upload;

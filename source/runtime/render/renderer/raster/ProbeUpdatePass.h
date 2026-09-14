@@ -2,6 +2,7 @@
 
 #include "RasterConfig.h"
 #include "RasterResource.h"
+#include "rendergraph/RenderGraph.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
@@ -70,6 +71,11 @@ MUTATION_SET(ProbeUpdateRayQueryMacros, ProbeUpdateRayQueryPipeline::PROBE_GI_US
 
 class ProbeUpdatePass {
 public:
+    struct GraphResources {
+        RenderGraph::TokenHandle scene{};
+        RenderGraph::TokenHandle probe_volume{};
+    };
+
     struct RecordParameters {
         bool                            enabled{false};
         bool                            ray_query{false};
@@ -204,6 +210,16 @@ public:
                 );
         }
     }
+
+    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+        RenderGraph& graph,
+        RasterContext& context,
+        const RasterConfig& config,
+        const Camera& camera,
+        uint64 frame_index,
+        GraphResources resources,
+        std::span<const RenderGraph::SetupPassHandle> setup_dependencies = {}
+    );
 
     void Process(
         RasterContext&      context,

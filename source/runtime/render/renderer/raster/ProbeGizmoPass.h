@@ -4,6 +4,7 @@
 #include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
+#include "rendergraph/RenderGraph.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
@@ -28,6 +29,11 @@ public:
 
 class ProbeGizmoPass {
 public:
+    struct GraphResources {
+        RenderGraph::TokenHandle   probe_volume{};
+        RenderGraph::TextureHandle lighting_output{};
+    };
+
     struct DrawBatch {
         ProbeGizmoParam       shader{};
         Array<SingleDrawParam> draws{};
@@ -286,6 +292,15 @@ public:
                 );
         }
     }
+
+    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+        RenderGraph& graph,
+        RasterContext& context,
+        const RasterConfig& config,
+        const Camera& camera,
+        GraphResources resources,
+        std::span<const RenderGraph::SetupPassHandle> setup_dependencies = {}
+    );
 
     void Process(RasterContext& context, const RasterConfig& config, const Camera& camera) {
         const RecordParameters parameters = Prepare(context, config, camera);

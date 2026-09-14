@@ -5,6 +5,7 @@
 #include "misc/STL.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
+#include "rendergraph/RenderGraph.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderMutation.h"
@@ -32,6 +33,15 @@ public:
 
 class GeometryPass {
 public:
+    struct GraphResources {
+        RenderGraph::TokenHandle   scene{};
+        RenderGraph::TextureHandle hiz_previous{};
+        RenderGraph::TextureHandle base_color{};
+        RenderGraph::TextureHandle normal{};
+        RenderGraph::TextureHandle metal_rough_ao{};
+        RenderGraph::TextureHandle depth{};
+    };
+
     struct RecordParameters {
         CullingPass::RecordParameters culling{};
         GeometryPassBindlessParam      shader{};
@@ -183,6 +193,15 @@ public:
         );
         cmd_list.PopScopeWithTimeScope();
     }
+
+    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+        RenderGraph& graph,
+        RasterContext& context,
+        RasterConfig& raster_config,
+        const Camera& camera,
+        GraphResources resources,
+        std::span<const RenderGraph::SetupPassHandle> setup_dependencies = {}
+    );
 
     void Process(RasterContext& context, RasterConfig& raster_config, const Camera& camera) {
         const auto parameters = Prepare(context, raster_config, camera);

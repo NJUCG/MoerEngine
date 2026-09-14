@@ -6,6 +6,7 @@
 
 #include "RasterConfig.h"
 #include "RasterResource.h"
+#include "rendergraph/RenderGraph.h"
 
 namespace Moer::Render::Raster {
 
@@ -19,6 +20,12 @@ public:
 
 class SkyboxPass {
 public:
+    struct GraphResources {
+        RenderGraph::TextureHandle depth{};
+        RenderGraph::TextureHandle cubemap{};
+        RenderGraph::TextureHandle lighting_output{};
+    };
+
     struct RecordParameters {
         SkyboxPassBindlessParam pass_param{};
         BindlessArrayRef        bindless{};
@@ -36,6 +43,13 @@ public:
         const Camera&        camera
     ) const;
     void Record(CommandList& cmd_list, const RecordParameters& parameters);
+    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+        RenderGraph& graph,
+        const RasterContext& context,
+        const RasterConfig& config,
+        const Camera& camera,
+        GraphResources resources
+    );
     void Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
 
 private:

@@ -8,6 +8,7 @@
 #include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
+#include "rendergraph/RenderGraph.h"
 
 namespace Moer::Render::Raster {
 
@@ -22,6 +23,11 @@ public:
 /** 启用双边滤波降噪时，过滤 TensorRT 输出并写入专用降噪目标。 */
 class BilateralFilterDenoiserPass {
 public:
+    struct GraphResources {
+        RenderGraph::TokenHandle   processing_image{};
+        RenderGraph::TextureHandle denoiser_output{};
+    };
+
     struct RecordParameters {
         bool                                           enabled{false};
         BilateralFilterDenoiserPipelineBindlessParam   shader{};
@@ -80,6 +86,14 @@ public:
                 ColorAttachment(parameters.output.tex)
             );
     }
+
+    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+        RenderGraph& graph,
+        const RasterContext& context,
+        const RasterConfig& ui_config,
+        TextureWithHandle input_image,
+        GraphResources resources
+    );
 
     TextureWithHandle Process(
         RasterContext&      context,
