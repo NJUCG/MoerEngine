@@ -2,6 +2,7 @@
 #include "EngineConsoleControl.h"
 
 // Runtime
+#include "config/CVarOverrides.h"
 #include "config/CVarSystem.h"
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
@@ -38,6 +39,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 // namespace
 using namespace Moer::Render;
@@ -200,6 +202,72 @@ std::optional<std::filesystem::path> ParseConfigOverride(int argc, const char** 
     }
 
     return std::nullopt;
+}
+
+struct StartupCVarOverrides {
+    std::string              profile;
+    std::vector<std::string> assignments;
+};
+
+StartupCVarOverrides ParseStartupCVarOverrides(int argc, const char** argv) {
+    constexpr std::string_view profile_prefix = "--profile=";
+    constexpr std::string_view set_prefix     = "--set=";
+
+    StartupCVarOverrides overrides;
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view argument = argv[index];
+        if (argument == "--profile") {
+            if (index + 1 >= argc || std::string_view(argv[index + 1]).empty()) {
+                throw std::invalid_argument("--profile requires a profile name");
+            }
+            overrides.profile = argv[++index];
+        } else if (argument.starts_with(profile_prefix)) {
+            overrides.profile = argument.substr(profile_prefix.size());
+            if (overrides.profile.empty()) {
+                throw std::invalid_argument("--profile requires a profile name");
+            }
+        } else if (argument == "--set") {
+            if (index + 1 >= argc || std::string_view(argv[index + 1]).empty()) {
+                throw std::invalid_argument("--set requires Name=Value");
+            }
+            overrides.assignments.emplace_back(argv[++index]);
+        } else if (argument.starts_with(set_prefix)) {
+            overrides.assignments.emplace_back(argument.substr(set_prefix.size()));
+        }
+    }
+    return overrides;
+}
+
+EngineConsoleStartupConfig MakeConsoleStartupConfig(const Config::GlobalConfig& config) {
+    return {
+        .render_thread = config.engine.threading.render_thread,
+        .rhi_thread = config.engine.threading.rhi_thread,
+        .rhi_bypass = config.engine.threading.rhi_bypass,
+        .profile_logging = config.engine.threading.profile_logging,
+        .parallel_recording = config.engine.threading.parallel_recording,
+        .parallel_record_workers = config.engine.threading.parallel_record_workers,
+        .parallel_record_verify = config.engine.threading.parallel_record_verify,
+        .parallel_record_profile = config.engine.threading.parallel_record_profile,
+        .parallel_record_min_work_units_per_job =
+            config.engine.threading.parallel_record_min_work_units_per_job,
+        .configured_submission_batch_window = config.engine.threading.submission_batch_window,
+        .rhi_heartbeat_enabled = config.engine.threading.rhi_heartbeat_enabled,
+        .rhi_heartbeat_stall_timeout_ms = config.engine.threading.rhi_heartbeat_stall_timeout_ms,
+        .rhi_heartbeat_poll_interval_ms = config.engine.threading.rhi_heartbeat_poll_interval_ms,
+        .max_frame_lag = config.engine.threading.max_frame_lag,
+        .max_frames_in_flight = config.engine.rhi.max_frame_in_flight,
+        .raster_rdg_enabled = config.engine.render.raster.render_graph,
+        .raster_rdg_debug_dump = config.engine.render.raster.render_graph_debug_dump,
+        .raster_rdg_parallel_recording = config.engine.render.raster.render_graph_parallel_recording,
+        .raytracing_rdg_enabled = config.engine.render.raytracing.render_graph,
+        .raytracing_rdg_debug_dump = config.engine.render.raytracing.render_graph_debug_dump,
+        .raytracing_rdg_parallel_recording =
+            config.engine.render.raytracing.render_graph_parallel_recording,
+    };
+}
+
+void LogCVarOverrideIssue(const CVar::OverrideIssueView& issue, void*) {
+    LOG_ERROR("[Config][CVar] {}: {}", issue.name, issue.detail);
 }
 
 uint64_t ParseVulkanPresentSubmitFaultTrigger(int argc, const char** argv) {
@@ -540,6 +608,7 @@ void RunBoundedRenderLoop(
 Engine::Engine() {}
 
 void Engine::ValidateCommandLine(int argc, const char** argv) {
+    (void)ParseStartupCVarOverrides(argc, argv);
     (void)ParseVulkanPresentSubmitFaultTrigger(argc, argv);
     (void)ParseParallelRecordWorkerThrowTrigger(argc, argv);
     const bool renderer_switch_validation =
@@ -1212,12 +1281,50 @@ void Engine::Init(
         );
     }
 
-    if (const auto config_override = ParseConfigOverride(argc, argv)) {
+    const auto config_override = ParseConfigOverride(argc, argv);
+    const std::filesystem::path config_path =
+        config_override.value_or(path / "MoerEngine.toml");
+    if (config_override) {
         ConfigManager::GetInstance().Init(path, *config_override);
     } else {
         ConfigManager::GetInstance().Init(path);
     }
     const auto& config = ConfigManager::GetInstance().GetConfig();
+    const StartupCVarOverrides cvar_overrides = ParseStartupCVarOverrides(argc, argv);
+    EngineConsoleStartupConfig startup_config = MakeConsoleStartupConfig(config);
+    m_console_control = MakeUnique<EngineConsoleControl>(startup_config);
+
+    const CVar::OverrideReport toml_overrides = CVar::ApplyOverridesFromTomlFile(
+        config_path.generic_string(), cvar_overrides.profile, &LogCVarOverrideIssue
+    );
+    const CVar::OverrideReport command_line_overrides =
+        CVar::ApplyCommandLineOverrides(cvar_overrides.assignments, &LogCVarOverrideIssue);
+    if (!toml_overrides.Succeeded() || !command_line_overrides.Succeeded()) {
+        throw std::invalid_argument("one or more startup cvar overrides are invalid");
+    }
+
+    startup_config = m_console_control->CaptureStartupConfig();
+    m_thread_profile_logging = startup_config.profile_logging;
+    m_raster_graph_config = {
+        .enabled            = startup_config.raster_rdg_enabled,
+        .debug_dump         = startup_config.raster_rdg_debug_dump,
+        .parallel_recording = startup_config.raster_rdg_parallel_recording,
+    };
+    m_raytracing_graph_config = {
+        .enabled            = startup_config.raytracing_rdg_enabled,
+        .debug_dump         = startup_config.raytracing_rdg_debug_dump,
+        .parallel_recording = startup_config.raytracing_rdg_parallel_recording,
+    };
+    const uint submission_batch_window = RHISubmissionPipelinePolicy::ClampBatchWindow(
+        startup_config.configured_submission_batch_window
+    );
+    if (submission_batch_window != startup_config.configured_submission_batch_window) {
+        LOG_WARNING(
+            "[Threading] RHI.Submission.BatchWindow={} is outside the supported range; clamping to {}.",
+            startup_config.configured_submission_batch_window,
+            submission_batch_window
+        );
+    }
     const uint64_t vulkan_present_submit_fault_trigger =
         ParseVulkanPresentSubmitFaultTrigger(argc, argv);
     const uint64_t parallel_record_worker_throw_trigger =
@@ -1230,18 +1337,6 @@ void Engine::Init(
         ParseThreadingRasterFramebufferValidation(argc, argv);
     m_profile_capture_lifecycle_validation_enabled =
         ParseProfileCaptureLifecycleValidation(argc, argv);
-    const uint submission_batch_window =
-        RHISubmissionPipelinePolicy::ClampBatchWindow(
-            config.engine.threading.submission_batch_window
-        );
-    if (submission_batch_window != config.engine.threading.submission_batch_window) {
-        LOG_WARNING(
-            "[Threading] submission_batch_window={} is outside the supported range; "
-            "clamping to {}.",
-            config.engine.threading.submission_batch_window,
-            submission_batch_window
-        );
-    }
     if (renderer_switch_validation_enabled && raster_lifecycle_validation_enabled) {
         throw std::invalid_argument(
             "renderer-switch and Raster lifecycle validation modes are mutually exclusive"
@@ -1272,47 +1367,7 @@ void Engine::Init(
         );
     }
 
-    m_console_control = MakeUnique<EngineConsoleControl>(
-        EngineConsoleStartupConfig{
-            .render_thread = config.engine.threading.render_thread,
-            .rhi_thread = config.engine.threading.rhi_thread,
-            .rhi_bypass = config.engine.threading.rhi_bypass,
-            .profile_logging = config.engine.threading.profile_logging,
-            .parallel_recording =
-                config.engine.threading.parallel_recording,
-            .parallel_record_workers =
-                config.engine.threading.parallel_record_workers,
-            .parallel_record_verify =
-                config.engine.threading.parallel_record_verify,
-            .parallel_record_profile =
-                config.engine.threading.parallel_record_profile,
-            .parallel_record_min_work_units_per_job =
-                config.engine.threading.parallel_record_min_work_units_per_job,
-            .configured_submission_batch_window =
-                config.engine.threading.submission_batch_window,
-            .rhi_heartbeat_enabled =
-                config.engine.threading.rhi_heartbeat_enabled,
-            .rhi_heartbeat_stall_timeout_ms =
-                config.engine.threading.rhi_heartbeat_stall_timeout_ms,
-            .rhi_heartbeat_poll_interval_ms =
-                config.engine.threading.rhi_heartbeat_poll_interval_ms,
-            .max_frame_lag = config.engine.threading.max_frame_lag,
-            .max_frames_in_flight = config.engine.rhi.max_frame_in_flight,
-            .raster_rdg_enabled =
-                config.engine.render.raster.render_graph,
-            .raster_rdg_debug_dump =
-                config.engine.render.raster.render_graph_debug_dump,
-            .raster_rdg_parallel_recording =
-                config.engine.render.raster.render_graph_parallel_recording,
-            .raytracing_rdg_enabled =
-                config.engine.render.raytracing.render_graph,
-            .raytracing_rdg_debug_dump =
-                config.engine.render.raytracing.render_graph_debug_dump,
-            .raytracing_rdg_parallel_recording =
-                config.engine.render.raytracing.render_graph_parallel_recording,
-        },
-        submission_batch_window
-    );
+    m_console_control->PublishPolicyClampedSubmissionBatchWindow(submission_batch_window);
     CVar::SealStartupOnlyCVars();
 
     try {
@@ -1357,36 +1412,36 @@ void Engine::Init(
         "parallel_record_min_work_units_per_job={}, submission_batch_window={}, "
         "rhi_heartbeat_enabled={}, rhi_heartbeat_stall_timeout_ms={}, "
         "rhi_heartbeat_poll_interval_ms={}",
-        config.engine.threading.render_thread,
-        config.engine.threading.rhi_thread,
-        config.engine.threading.rhi_bypass,
-        config.engine.threading.max_frame_lag,
-        config.engine.threading.profile_logging,
-        config.engine.threading.parallel_recording,
-        config.engine.threading.parallel_record_workers,
-        config.engine.threading.parallel_record_verify,
-        config.engine.threading.parallel_record_profile,
-        config.engine.threading.parallel_record_min_work_units_per_job,
+        startup_config.render_thread,
+        startup_config.rhi_thread,
+        startup_config.rhi_bypass,
+        startup_config.max_frame_lag,
+        startup_config.profile_logging,
+        startup_config.parallel_recording,
+        startup_config.parallel_record_workers,
+        startup_config.parallel_record_verify,
+        startup_config.parallel_record_profile,
+        startup_config.parallel_record_min_work_units_per_job,
         submission_batch_window,
-        config.engine.threading.rhi_heartbeat_enabled,
-        config.engine.threading.rhi_heartbeat_stall_timeout_ms,
-        config.engine.threading.rhi_heartbeat_poll_interval_ms
+        startup_config.rhi_heartbeat_enabled,
+        startup_config.rhi_heartbeat_stall_timeout_ms,
+        startup_config.rhi_heartbeat_poll_interval_ms
     );
 
-    if (config.engine.threading.render_thread) {
+    if (startup_config.render_thread) {
         report_startup("Starting render thread", "Creating the configured render-thread service");
-        m_max_frame_lag = std::min(config.engine.threading.max_frame_lag, uint{1});
-        if (config.engine.threading.max_frame_lag > 1) {
+        m_max_frame_lag = std::min(startup_config.max_frame_lag, uint{1});
+        if (startup_config.max_frame_lag > 1) {
             LOG_WARNING(
                 "[Threading] max_frame_lag={} exceeds the validated range; clamping to 1.",
-                config.engine.threading.max_frame_lag
+                startup_config.max_frame_lag
             );
         }
 
         m_render_thread_service = MakeUnique<RenderThreadService>();
         m_render_thread_service->Start();
         LOG_INFO("[Threading] Effective Render Thread max_frame_lag={}", m_max_frame_lag);
-    } else if (config.engine.threading.max_frame_lag != 0) {
+    } else if (startup_config.max_frame_lag != 0) {
         LOG_WARNING("[Threading] max_frame_lag is ignored while render_thread=false.");
     }
 
@@ -1422,22 +1477,22 @@ void Engine::Init(
                 .rhi_type        = rhi_type,
                 .name            = "MoerEngine",
                 .rhi_api_version = config.engine.rhi.api_version,
-                .rhi_thread              = config.engine.threading.rhi_thread,
-                .rhi_bypass              = config.engine.threading.rhi_bypass,
-                .thread_profile_logging  = config.engine.threading.profile_logging,
-                .parallel_recording      = config.engine.threading.parallel_recording,
-                .parallel_record_workers = config.engine.threading.parallel_record_workers,
-                .parallel_record_verify  = config.engine.threading.parallel_record_verify,
-                .parallel_record_profile = config.engine.threading.parallel_record_profile,
+                .rhi_thread              = startup_config.rhi_thread,
+                .rhi_bypass              = startup_config.rhi_bypass,
+                .thread_profile_logging  = startup_config.profile_logging,
+                .parallel_recording      = startup_config.parallel_recording,
+                .parallel_record_workers = startup_config.parallel_record_workers,
+                .parallel_record_verify  = startup_config.parallel_record_verify,
+                .parallel_record_profile = startup_config.parallel_record_profile,
                 .parallel_record_min_work_units_per_job =
-                    config.engine.threading.parallel_record_min_work_units_per_job,
+                    startup_config.parallel_record_min_work_units_per_job,
                 .submission_batch_window = submission_batch_window,
                 .rhi_heartbeat_enabled =
-                    config.engine.threading.rhi_heartbeat_enabled,
+                    startup_config.rhi_heartbeat_enabled,
                 .rhi_heartbeat_stall_timeout_ms =
-                    config.engine.threading.rhi_heartbeat_stall_timeout_ms,
+                    startup_config.rhi_heartbeat_stall_timeout_ms,
                 .rhi_heartbeat_poll_interval_ms =
-                    config.engine.threading.rhi_heartbeat_poll_interval_ms,
+                    startup_config.rhi_heartbeat_poll_interval_ms,
                 .parallel_record_worker_throw_trigger =
                     parallel_record_worker_throw_trigger,
                 .vulkan_present_submit_fault_trigger = vulkan_present_submit_fault_trigger,
@@ -1543,8 +1598,7 @@ void Engine::Run(const EngineHooks& hooks) {
                 }
             }
         };
-    const bool thread_profile_logging =
-        ConfigManager::GetInstance().GetConfig().engine.threading.profile_logging;
+    const bool thread_profile_logging = m_thread_profile_logging;
     auto on_tick_engine_control = std::move(runtime_hooks.on_tick_engine_control);
     runtime_hooks.on_tick_engine_control =
         [this, callback = std::move(on_tick_engine_control)]() {
@@ -1620,6 +1674,7 @@ void Engine::Run(const EngineHooks& hooks) {
                 m_renderer = MakeUnique<Raster::RasterRenderer>(
                     m_editor_config->GetResolution(),
                     m_editor_config,
+                    m_raster_graph_config,
                     m_main_window_surface,
                     m_render_profile_capture.get()
                 );
@@ -1628,6 +1683,7 @@ void Engine::Run(const EngineHooks& hooks) {
                 m_renderer = MakeUnique<Raytracing::RaytracingRenderer>(
                     m_editor_config->GetResolution(),
                     m_editor_config,
+                    m_raytracing_graph_config,
                     m_main_window_surface,
                     *m_runtime_assets,
                     m_render_profile_capture.get()

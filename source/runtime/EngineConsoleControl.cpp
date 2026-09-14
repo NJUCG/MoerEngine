@@ -32,6 +32,9 @@ CVar::CVarDescriptor MakeDescriptor(
         .name      = std::move(name),
         .helper    = std::move(helper),
         .flags     = flags,
+        .initial_source = CVar::HasFlag(flags, CVar::EFlags::StartupOnly) ?
+                              CVar::ESetSource::StartupConfig :
+                              CVar::ESetSource::Constructor,
         .min_value = min_value,
         .max_value = max_value,
     };
@@ -438,13 +441,6 @@ struct EngineConsoleControl::Impl {
 
 EngineConsoleControl::EngineConsoleControl(const EngineConsoleStartupConfig& config) :
     impl(std::make_unique<Impl>(config)) {}
-
-EngineConsoleControl::EngineConsoleControl(
-    const EngineConsoleStartupConfig& config,
-    unsigned int                      policy_clamped_submission_batch_window
-) : EngineConsoleControl(config) {
-    PublishPolicyClampedSubmissionBatchWindow(policy_clamped_submission_batch_window);
-}
 
 EngineConsoleControl::~EngineConsoleControl() {
     impl->command_endpoint->CloseAdmission();

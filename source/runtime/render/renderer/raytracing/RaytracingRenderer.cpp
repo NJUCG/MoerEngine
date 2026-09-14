@@ -440,6 +440,7 @@ struct RaytracingRenderer::RuntimeState {
 RaytracingRenderer::RaytracingRenderer(
     uint2&                        resolution,
     const SharedPtr<EditorConfig> config,
+    RenderGraphExecutionConfig    graph_config,
     SwapchainSurfaceInfo          main_window_surface,
     RuntimeAssets&                runtime_assets,
     RenderProfileCapture*         render_profile_capture
@@ -448,10 +449,9 @@ RaytracingRenderer::RaytracingRenderer(
     runtime_assets(runtime_assets),
     scene_render_extent_tracker(resolution),
     runtime_state(MakeUnique<RuntimeState>(*this, scene_render_extent_tracker.GetActiveExtent())) {
-    const auto& graph_config            = ConfigManager::GetInstance().GetConfig().engine.render.raytracing;
-    runtime_state->render_graph_enabled = graph_config.render_graph;
-    runtime_state->render_graph_debug_dump         = graph_config.render_graph_debug_dump;
-    runtime_state->render_graph_parallel_recording = graph_config.render_graph_parallel_recording;
+    runtime_state->render_graph_enabled            = graph_config.enabled;
+    runtime_state->render_graph_debug_dump         = graph_config.debug_dump;
+    runtime_state->render_graph_parallel_recording = graph_config.parallel_recording;
     LOG_INFO(
         "[RenderGraph] Raytracing execution mode: {}, primary graph recording: {}",
         runtime_state->render_graph_enabled ? "graph-pilot" : "linear",

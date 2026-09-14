@@ -115,6 +115,9 @@ private:
     UniquePtr<Render::ProfileCaptureController> m_profile_capture_controller;
 
     uint m_max_frame_lag = 0;
+    Render::RenderGraphExecutionConfig m_raster_graph_config;
+    Render::RenderGraphExecutionConfig m_raytracing_graph_config;
+    bool m_thread_profile_logging = false;
     bool m_has_shutdown = false;
     bool m_first_main_present_notified = false;
     bool m_task_system_initialized     = false;

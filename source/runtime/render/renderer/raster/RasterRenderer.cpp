@@ -23,7 +23,6 @@
 #include "SkyboxPass.h"
 #include "SsrPass.h"
 #include "TonemappingPass.h"
-#include "config/ConfigManager.h"
 #include "debug/RenderDocApi.h"
 #include "misc/ScopedLogTimer.h"
 #include "profile/ProfileScope.h"
@@ -61,6 +60,7 @@ float GetElapsedTimeSeconds() {
 RasterRenderer::RasterRenderer(
     uint2                         initial_resolution,
     SharedPtr<EditorConfig>       config,
+    RenderGraphExecutionConfig    graph_config,
     SwapchainSurfaceInfo          main_window_surface,
     RenderProfileCapture*         render_profile_capture
 ) :
@@ -68,11 +68,9 @@ RasterRenderer::RasterRenderer(
     scene_render_extent_tracker(initial_resolution) {
     ScopedLogTimer startup_timer("[Startup][RasterRenderer] RasterRenderer::Constructor() total");
 
-    const auto& engine_config = ConfigManager::GetInstance().GetConfig().engine;
-    const auto& graph_config  = engine_config.render.raster;
-    render_graph_enabled    = graph_config.render_graph;
-    render_graph_debug_dump = graph_config.render_graph_debug_dump;
-    parallel_recording_enabled = graph_config.render_graph_parallel_recording;
+    render_graph_enabled       = graph_config.enabled;
+    render_graph_debug_dump    = graph_config.debug_dump;
+    parallel_recording_enabled = graph_config.parallel_recording;
     LOG_INFO(
         "[RenderGraph] Raster execution mode: {}, upper recording: {}",
         render_graph_enabled ? "graph" : "linear",

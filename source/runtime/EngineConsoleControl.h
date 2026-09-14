@@ -74,10 +74,6 @@ private:
 class RENDER_API EngineConsoleControl {
 public:
     explicit EngineConsoleControl(const EngineConsoleStartupConfig& config);
-    EngineConsoleControl(
-        const EngineConsoleStartupConfig& config,
-        unsigned int                      policy_clamped_submission_batch_window
-    );
     ~EngineConsoleControl();
 
     EngineConsoleControl(const EngineConsoleControl&)            = delete;

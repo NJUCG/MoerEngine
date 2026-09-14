@@ -311,7 +311,8 @@ public:
         id(_id),
         registry_key(std::move(_registry_key)),
         descriptor(std::move(_descriptor)),
-        type(_type) {}
+        type(_type),
+        set_source(descriptor.initial_source) {}
 
     virtual ~EntryBase() = default;
 
@@ -858,6 +859,7 @@ CVarDescriptor CopyDescriptor(CVarDescriptorView _view) {
         .false_helper             = std::string(_view.false_helper),
         .flags                    = _view.flags,
         .apply_phase              = _view.apply_phase,
+        .initial_source           = _view.initial_source,
         .min_value                = _view.min_value,
         .max_value                = _view.max_value,
         .callback_dispatch_budget = _view.callback_dispatch_budget,

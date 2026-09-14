@@ -86,6 +86,7 @@ struct CVarDescriptor {
     std::string           false_helper;
     EFlags                flags = EFlags::None;
     EApplyPhase           apply_phase = EApplyPhase::Immediate;
+    ESetSource            initial_source = ESetSource::Constructor;
     std::optional<double> min_value;
     std::optional<double> max_value;
     std::size_t           callback_dispatch_budget = DefaultCallbackDispatchBudget;
@@ -98,6 +99,7 @@ struct CVarDescriptorView {
     std::string_view      false_helper;
     EFlags                flags = EFlags::None;
     EApplyPhase           apply_phase = EApplyPhase::Immediate;
+    ESetSource            initial_source = ESetSource::Constructor;
     std::optional<double> min_value;
     std::optional<double> max_value;
     std::size_t           callback_dispatch_budget = DefaultCallbackDispatchBudget;
@@ -274,6 +276,7 @@ inline CVarDescriptorView ViewOf(const CVarDescriptor& _descriptor) noexcept {
         .false_helper             = _descriptor.false_helper,
         .flags                    = _descriptor.flags,
         .apply_phase              = _descriptor.apply_phase,
+        .initial_source           = _descriptor.initial_source,
         .min_value                = _descriptor.min_value,
         .max_value                = _descriptor.max_value,
         .callback_dispatch_budget = _descriptor.callback_dispatch_budget,
