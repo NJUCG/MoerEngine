@@ -6641,6 +6641,7 @@ bool VkCommandQueue::TryExecuteParallel(
         Array<ParallelChunkRuntime>    chunks;
         UniquePtr<VulkanAllocator>     fallback_allocator;
         bool                           parallel{false};
+        bool                           use_secondary{false};
         bool                           scope_only{false};
         bool                           preprocessed{false};
         bool                           worker_recorded{false};
@@ -6684,7 +6685,31 @@ bool VkCommandQueue::TryExecuteParallel(
         }
         return VK_SUCCESS;
     };
-    auto end_primary = [&](VulkanCmdList& _cmd_list, const Array<const ScopeCmd*>& _scopes) -> VkResult {
+    auto begin_compute_secondary = [&] (
+                                       VulkanCmdList& _cmd_list,
+                                       const Array<const ScopeCmd*>& _scopes
+                                   ) -> VkResult {
+        const VkCommandBufferInheritanceInfo inheritance{
+            .sType                = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO,
+            .pNext                = nullptr,
+            .renderPass           = VK_NULL_HANDLE,
+            .subpass              = 0,
+            .framebuffer          = VK_NULL_HANDLE,
+            .occlusionQueryEnable = VK_FALSE,
+            .queryFlags           = 0,
+            .pipelineStatistics   = 0,
+        };
+        const VkResult begin_result = _cmd_list.BeginSecondary(inheritance);
+        if (begin_result != VK_SUCCESS) {
+            return begin_result;
+        }
+        _cmd_list.BeginLabel(queue_label, queue_label_color);
+        for (const ScopeCmd* scope : _scopes) {
+            _cmd_list.BeginLabel(scope->ScopeName(), scope->Color());
+        }
+        return VK_SUCCESS;
+    };
+    auto end_command_buffer = [&](VulkanCmdList& _cmd_list, const Array<const ScopeCmd*>& _scopes) -> VkResult {
         for (auto scope = _scopes.rbegin(); scope != _scopes.rend(); ++scope) {
             _cmd_list.EndLabel();
         }
@@ -6793,6 +6818,14 @@ bool VkCommandQueue::TryExecuteParallel(
         runtime.scope_only = runtime.commands.size() == 1 &&
                              runtime.commands.front()->Type() == Command::EType::Scope;
         runtime.parallel = plan.layers[layer_index].parallel;
+        runtime.use_secondary = runtime.parallel &&
+            std::all_of(
+                runtime.commands.begin(),
+                runtime.commands.end(),
+                [](const Command* _command) {
+                    return IsComputeSecondaryRecordSafe(_command->Type());
+                }
+            );
         if (runtime.scope_only) {
             const auto* scope = static_cast<const ScopeCmd*>(runtime.commands.front());
             if (scope->IsPush()) {
@@ -6868,9 +6901,12 @@ bool VkCommandQueue::TryExecuteParallel(
 
                     try {
                         chunk.worker_id = Platform::GetCurrentThreadID();
-                        VulkanCmdList& cmd_list = chunk.allocator->GetCmdList();
+                        VulkanCmdList& cmd_list = job_layer.use_secondary ?
+                                                      chunk.allocator->GetSecondaryCmdList() :
+                                                      chunk.allocator->GetCmdList();
                         cmd_list.SetDescriptorPushLease(descriptor_lease.state);
-                        const VkResult worker_begin =
+                        const VkResult worker_begin = job_layer.use_secondary ?
+                            begin_compute_secondary(cmd_list, job_layer.scopes) :
                             begin_primary(cmd_list, job_layer.scopes, false);
                         if (worker_begin != VK_SUCCESS) {
                             chunk.native_failure = worker_begin;
@@ -6921,7 +6957,7 @@ bool VkCommandQueue::TryExecuteParallel(
                             }
                         }
                         const VkResult worker_end =
-                            end_primary(cmd_list, job_layer.scopes_after);
+                            end_command_buffer(cmd_list, job_layer.scopes_after);
                         if (worker_end != VK_SUCCESS) {
                             chunk.native_failure = worker_end;
                             throw std::runtime_error("parallel command buffer end failed");
@@ -7001,11 +7037,51 @@ bool VkCommandQueue::TryExecuteParallel(
                 runtime_layers[layer_index].worker_recorded = wave_recorded;
             }
         }
+        auto close_secondary_coordinators = [&](bool _execute_workers) -> VkResult {
+            for (size_t layer_index = _first_layer; layer_index < _layer_end; ++layer_index) {
+                ParallelLayerRuntime& runtime = runtime_layers[layer_index];
+                if (!runtime.parallel || !runtime.use_secondary) {
+                    continue;
+                }
+                VulkanCmdList& primary = runtime.primary_allocator->GetCmdList();
+                if (_execute_workers) {
+                    Array<VkCommandBuffer> secondaries;
+                    secondaries.reserve(runtime.chunks.size());
+                    for (ParallelChunkRuntime& chunk : runtime.chunks) {
+                        secondaries.push_back(
+                            chunk.allocator->GetSecondaryCmdList().GetHandle()
+                        );
+                    }
+                    primary.ExecuteCommands(secondaries);
+                }
+                const VkResult end_result =
+                    end_command_buffer(primary, runtime.scopes_after);
+                if (end_result != VK_SUCCESS) {
+                    return end_result;
+                }
+            }
+            return VK_SUCCESS;
+        };
         if (wave_recorded) {
+            const VkResult assembly_result =
+                close_secondary_coordinators(true);
+            if (assembly_result != VK_SUCCESS) {
+                reject_prepared_recording(
+                    "secondary-assembly-end-failed", assembly_result
+                );
+                return false;
+            }
             return true;
         }
 
         parallel_recorded = false;
+        const VkResult close_result = close_secondary_coordinators(false);
+        if (close_result != VK_SUCCESS) {
+            reject_prepared_recording(
+                "secondary-fallback-prefix-end-failed", close_result
+            );
+            return false;
+        }
         // The join contract drains all accepted jobs. No worker can still be
         // writing when the submit-local descriptor cursor is rewound.
         descriptor_heap.RewindPushDescriptors(
@@ -7075,7 +7151,7 @@ bool VkCommandQueue::TryExecuteParallel(
                 );
                 return false;
             }
-            const VkResult fallback_end = end_primary(fallback_cmd, runtime.scopes_after);
+            const VkResult fallback_end = end_command_buffer(fallback_cmd, runtime.scopes_after);
             if (fallback_end != VK_SUCCESS) {
                 reject_prepared_recording("fallback-end-failed", fallback_end);
                 return false;
@@ -7145,20 +7221,29 @@ bool VkCommandQueue::TryExecuteParallel(
                     );
                     return true;
                 }
-                const VkResult primary_end = end_primary(primary_cmd, first_runtime.scopes_after);
-                if (primary_end != VK_SUCCESS) {
-                    reject_prepared_recording("coordinator-end-failed", primary_end);
-                    return true;
+                if (!first_runtime.use_secondary) {
+                    const VkResult primary_end =
+                        end_command_buffer(primary_cmd, first_runtime.scopes_after);
+                    if (primary_end != VK_SUCCESS) {
+                        reject_prepared_recording("coordinator-end-failed", primary_end);
+                        return true;
+                    }
                 }
             }
 
             const ParallelRecordLayerPlan& layer_plan = plan.layers[layer_index];
             first_runtime.chunks.reserve(layer_plan.job_count);
             for (uint32 job_index = 0; job_index < layer_plan.job_count; ++job_index) {
-                first_runtime.chunks.push_back({
+                ParallelChunkRuntime chunk{
                     .range     = plan.jobs[layer_plan.first_job + job_index],
                     .allocator = GetAllocator(),
-                });
+                };
+                if (first_runtime.use_secondary) {
+                    // Allocate from the chunk's private pool on the
+                    // coordinator before the worker can observe it.
+                    chunk.allocator->PrepareSecondaryCmdList();
+                }
+                first_runtime.chunks.push_back(std::move(chunk));
             }
             if (pending_wave_begin == no_pending_wave) {
                 pending_wave_begin = layer_index;
@@ -7228,6 +7313,7 @@ bool VkCommandQueue::TryExecuteParallel(
             // body, so its primary can own that body's state-transition prefix.
             if (layer_index < runtime_layers.size() &&
                 runtime_layers[layer_index].parallel &&
+                !runtime_layers[layer_index].use_secondary &&
                 !runtime_layers[layer_index].commands.empty()) {
                 record_layer_prefix(layer_index, island_cmd);
                 island_exit_scopes = &runtime_layers[layer_index].scopes;
@@ -7267,7 +7353,7 @@ bool VkCommandQueue::TryExecuteParallel(
             return true;
         }
 
-        const VkResult island_end = end_primary(island_cmd, *island_exit_scopes);
+        const VkResult island_end = end_command_buffer(island_cmd, *island_exit_scopes);
         if (island_end != VK_SUCCESS) {
             reject_prepared_recording("coordinator-end-failed", island_end);
             return true;
@@ -7293,7 +7379,7 @@ bool VkCommandQueue::TryExecuteParallel(
     if (ends_profiling_frame) {
         profiler_storage.EndProfilerSession(epilogue_cmd, "Graphics Exec");
     }
-    const VkResult epilogue_end = end_primary(epilogue_cmd, active_scopes);
+    const VkResult epilogue_end = end_command_buffer(epilogue_cmd, active_scopes);
     if (epilogue_end != VK_SUCCESS) {
         reject_prepared_recording("epilogue-end-failed", epilogue_end);
         return true;
@@ -7307,6 +7393,7 @@ bool VkCommandQueue::TryExecuteParallel(
     Array<VulkanCmdList*> ordered_cmd_lists;
     Array<UniquePtr<VulkanAllocator>> submitted_allocators;
     Array<UniquePtr<VulkanAllocator>> abandoned_allocators;
+    uint32 secondary_command_buffer_count = 0;
     ordered_cmd_lists.reserve(plan.layers.size() + total_job_count + 1);
     submitted_allocators.reserve(plan.layers.size() + total_job_count + 1);
     for (ParallelLayerRuntime& runtime : runtime_layers) {
@@ -7319,7 +7406,11 @@ bool VkCommandQueue::TryExecuteParallel(
         }
         if (runtime.worker_recorded) {
             for (ParallelChunkRuntime& chunk : runtime.chunks) {
-                ordered_cmd_lists.push_back(&chunk.allocator->GetCmdList());
+                if (!runtime.use_secondary) {
+                    ordered_cmd_lists.push_back(&chunk.allocator->GetCmdList());
+                } else {
+                    ++secondary_command_buffer_count;
+                }
                 submitted_allocators.push_back(std::move(chunk.allocator));
             }
         } else {
@@ -7366,6 +7457,7 @@ bool VkCommandQueue::TryExecuteParallel(
         .layers          = static_cast<uint32>(runtime_layers.size()),
         .jobs            = static_cast<uint32>(total_job_count),
         .work_units      = parallel_work_units,
+        .secondary_cb    = secondary_command_buffer_count,
         .max_active      = max_active_jobs.load(std::memory_order_relaxed),
     };
     if (parallel_record_profile) {
@@ -7414,7 +7506,7 @@ bool VkCommandQueue::TryExecuteParallel(
         try {
             LOG_INFO(
             "[ParallelRecord] batch={} requested=true effective={} outcome={} layers={} jobs={} "
-            "work_units={} ordered_cb={} waves={} islands={} workers={} distinct_workers={} max_active={} "
+            "work_units={} ordered_cb={} secondary_cb={} waves={} islands={} workers={} distinct_workers={} max_active={} "
             "coordinator={} submit_status={} "
             "descriptor_bytes={} query_digest={:016x} queries={}",
             batch_serial,
@@ -7425,6 +7517,7 @@ bool VkCommandQueue::TryExecuteParallel(
             parallel_work_units,
             _out_recorded != nullptr ? recorded_cmd_list_count :
                                        submit_result.ordered_cmd_list_count,
+            secondary_command_buffer_count,
             parallel_wave_count,
             serial_island_count,
             parallel_record_workers,
@@ -9327,6 +9420,7 @@ void VkCommandQueue::RecordParallelRecordProfile(
     profile.job_total += _sample.jobs;
     profile.work_unit_total += _sample.work_units;
     profile.ordered_cb_total += _sample.ordered_cb;
+    profile.secondary_cb_total += _sample.secondary_cb;
     profile.max_active = std::max(profile.max_active, _sample.max_active);
 
     const auto now = std::chrono::steady_clock::now();
@@ -9370,7 +9464,7 @@ void VkCommandQueue::FlushParallelRecordProfile() {
         "execute_cpu_p99_ms={:.6f} execute_cpu_max_ms={:.6f} "
         "reorder_avg_ms={:.6f} preprocess_avg_ms={:.6f} worker_join_avg_ms={:.6f} "
         "submit_cpu_avg_ms={:.6f} layers_avg={:.3f} jobs_avg={:.3f} "
-        "work_units_avg={:.3f} ordered_cb_avg={:.3f} max_active={}",
+        "work_units_avg={:.3f} ordered_cb_avg={:.3f} secondary_cb_avg={:.3f} max_active={}",
         mode,
         window_ms,
         profile.samples,
@@ -9394,6 +9488,7 @@ void VkCommandQueue::FlushParallelRecordProfile() {
         static_cast<double>(profile.job_total) / sample_count,
         static_cast<double>(profile.work_unit_total) / sample_count,
         static_cast<double>(profile.ordered_cb_total) / sample_count,
+        static_cast<double>(profile.secondary_cb_total) / sample_count,
         profile.max_active
     );
 
@@ -9413,6 +9508,7 @@ void VkCommandQueue::FlushParallelRecordProfile() {
     profile.job_total = 0;
     profile.work_unit_total = 0;
     profile.ordered_cb_total = 0;
+    profile.secondary_cb_total = 0;
     profile.max_active = 0;
 }
 

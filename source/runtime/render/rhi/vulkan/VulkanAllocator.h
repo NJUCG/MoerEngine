@@ -59,6 +59,9 @@ public:
     // pools require external synchronization even when different command
     // buffers are allocated from the pool.
     VulkanCmdList& PrepareSecondaryCmdList();
+    VulkanCmdList& GetSecondaryCmdList() {
+        return secondary_cmd_list.value();
+    }
     [[nodiscard]] bool HasSecondaryCmdList() const noexcept {
         return secondary_cmd_list.has_value();
     }

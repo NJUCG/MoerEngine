@@ -140,6 +140,15 @@ void ParallelReplayContractExcludesSideEffects() {
            "timestamp query was marked replay safe");
     Expect(!IsParallelRecordReplaySafe(Command::EType::Custom),
            "host callback command was marked replay safe");
+
+    Expect(IsComputeSecondaryRecordSafe(Command::EType::ShaderDispatch),
+           "compute dispatch was not exposed to secondary recording");
+    Expect(!IsComputeSecondaryRecordSafe(Command::EType::MultiDraw),
+           "graphics work bypassed the dynamic-rendering inheritance gate");
+    Expect(!IsComputeSecondaryRecordSafe(Command::EType::BufferToBuffer),
+           "transfer work entered the compute-only secondary proof path");
+    Expect(!IsComputeSecondaryRecordSafe(Command::EType::Query),
+           "query work entered the compute-only secondary proof path");
 }
 
 void TopologyDigestIsDeterministicAndOrderSensitive() {

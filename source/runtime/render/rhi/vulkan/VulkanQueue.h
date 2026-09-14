@@ -772,6 +772,7 @@ private:
         uint32 jobs{0};
         uint64 work_units{0};
         uint32 ordered_cb{0};
+        uint32 secondary_cb{0};
         uint32 max_active{0};
     };
 
@@ -794,6 +795,7 @@ private:
         uint64 job_total{0};
         uint64 work_unit_total{0};
         uint64 ordered_cb_total{0};
+        uint64 secondary_cb_total{0};
         uint32 max_active{0};
     };
 

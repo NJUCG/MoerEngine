@@ -158,6 +158,15 @@ constexpr bool IsParallelRecordReplaySafe(Command::EType _type) {
            !HasRecordConstraint(traits.constraints, replay_forbidden);
 }
 
+// Phase-one secondary recording is intentionally compute-only. Graphics
+// commands require an immutable dynamic-rendering inheritance signature and a
+// primary-owned rendering envelope; transfer commands stay on the proven
+// parallel-primary path until their queue-family coverage is validated.
+constexpr bool IsComputeSecondaryRecordSafe(Command::EType _type) {
+    return _type == Command::EType::ShaderDispatch &&
+           IsParallelRecordReplaySafe(_type);
+}
+
 class StableRecordHash {
 public:
     static constexpr uint64_t kOffset = 14695981039346656037ull;
