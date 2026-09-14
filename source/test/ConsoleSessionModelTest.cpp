@@ -38,7 +38,7 @@ const ConsoleSessionLine* FindLine(const ConsoleSessionModel& model, std::string
 int main() {
     LogSystem::Init();
 
-    EngineConsoleControl control(EngineConsoleStartupConfig{}, 2);
+    EngineConsoleControl control(EngineConsoleStartupConfig{});
     EditorConfig         editor_config{};
     control.BindEditorConfig(editor_config);
     auto endpoint = control.GetCommandEndpoint();
