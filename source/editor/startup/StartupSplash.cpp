@@ -1154,7 +1154,10 @@ private:
             const UINT    dpi         = GetInitialDpi();
             const RECT    window_rect = CenteredWindowRect(dpi);
             HWND          window      = CreateWindowExW(
-                WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_LAYERED,
+                // Keep the splash in the normal, non-activating window band. It
+                // starts centered and visible without pinning itself above the
+                // user's other applications for the whole startup sequence.
+                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
                 kWindowClassName,
                 kWindowTitle,
                 WS_POPUP,
