@@ -2472,40 +2472,18 @@ bool RenderGraph::ExecuteRecording(
             command_list.AddSuccessCallback([lifetime] {});
         };
 
-    auto has_cpu_recording_dependency = [&](PassHandle candidate,
-                                            size_t     group_begin,
-                                            size_t     group_end) {
-        for (const auto& edge : compiled_plan.edges) {
-            if (edge.dst != candidate) {
-                continue;
-            }
-
-            const bool source_is_in_group = std::any_of(
-                compiled_plan.recording_batches.begin() + group_begin,
-                compiled_plan.recording_batches.begin() + group_end,
-                [&](const CompiledRecordingBatch& batch) {
-                    return batch.passes.size() == 1 && batch.passes.front() == edge.src;
-                }
-            );
-            if (!source_is_in_group) {
-                continue;
-            }
-
-            for (const auto& reason : edge.reasons) {
-                if (reason.kind == EdgeReasonKind::Explicit) {
-                    return true;
-                }
-                if (IsValidResource(reason.resource) &&
-                    resources[reason.resource.index].kind == ResourceKind::Token) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    };
-
     size_t batch_index = 0;
+    size_t group_index = 0;
     while (batch_index < compiled_plan.recording_batches.size()) {
+        assert(group_index < compiled_plan.recording_groups.size());
+        const auto& recording_group =
+            compiled_plan.recording_groups[group_index];
+        assert(recording_group.first_batch == batch_index);
+        assert(recording_group.batch_count != 0);
+        const size_t group_end =
+            batch_index + recording_group.batch_count;
+        assert(group_end <= compiled_plan.recording_batches.size());
+
         const auto& first_batch = compiled_plan.recording_batches[batch_index];
         if (first_batch.passes.size() != 1) {
             compile_error = "recording execution currently requires one pass per compiled batch";
@@ -2692,6 +2670,7 @@ bool RenderGraph::ExecuteRecording(
                 after_main_thread_pass(make_pass_info(first_handle));
             }
             ++batch_index;
+            ++group_index;
             continue;
         }
 
@@ -2716,21 +2695,6 @@ bool RenderGraph::ExecuteRecording(
                     "replacement recording generation empty and unbound "
                     "before a managed GPU source is bound or published";
                 return false;
-            }
-        }
-
-        size_t group_end = batch_index + 1;
-        if (first_batch.execution == PassExecutionClass::ParallelRecordEligible) {
-            while (group_end < compiled_plan.recording_batches.size()) {
-                const auto& candidate = compiled_plan.recording_batches[group_end];
-                if (candidate.execution != PassExecutionClass::ParallelRecordEligible ||
-                    candidate.passes.size() != 1 ||
-                    has_cpu_recording_dependency(
-                        candidate.passes.front(), batch_index, group_end
-                    )) {
-                    break;
-                }
-                ++group_end;
             }
         }
 
@@ -3172,7 +3136,9 @@ bool RenderGraph::ExecuteRecording(
             gpu_profile_managed_source_since_main_thread = true;
         }
         batch_index = group_end;
+        ++group_index;
     }
+    assert(group_index == compiled_plan.recording_groups.size());
     if (!active_transaction_guard.Commit()) {
         compile_error =
             "active recording transaction gate completed before graph commit";
