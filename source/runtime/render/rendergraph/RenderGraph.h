@@ -1167,9 +1167,10 @@ public:
      * streams to one caller-owned Graphics CommandList in compiled order.
      * The destination's later Submit() is the only native submission boundary.
      *
-     * This compatibility path supports record-class Graphics passes backed by
-     * already-created resources. Active transient lowering and multi-queue
-     * execution remain on ExecuteRecording's immutable RHI handoff path.
+     * This is the direct path for record-class Graphics passes backed by
+     * already-created resources. It uses the compiler's recording groups and
+     * never publishes per-pass RHIRecordingSources. Active transient lowering
+     * and multi-queue execution remain on ExecuteRecording's RHI handoff path.
      */
     bool ExecuteRecordingMerged(
         CommandList&               command_list,

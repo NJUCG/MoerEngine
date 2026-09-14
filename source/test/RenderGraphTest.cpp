@@ -342,6 +342,56 @@ void TestMergedRecordingPreservesFrontendSourcesAndSubmitOrder(
     );
 }
 
+void TestMergedRecordingFailureLeavesDestinationUntouched(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "merged recording failure leaves destination untouched";
+    RenderGraph graph("MergedRecordingFailure");
+
+    graph.AddRecordPass(
+        "RecordedPrefix",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect();
+        },
+        [](Moer::Render::CommandList& command_list) {
+            command_list.AddCallback([] {});
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+    graph.AddRecordPass(
+        "FailingPass",
+        [](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect();
+        },
+        [](Moer::Render::CommandList&) {
+            throw std::runtime_error("injected recording failure");
+        },
+        RenderGraph::PassExecutionClass::ParallelRecordEligible
+    );
+
+    const bool compiled = graph.Compile();
+    suite.Check(compiled, test_name, graph.GetCompileError());
+    Moer::Render::CommandList destination(
+        Moer::Render::EQueueType::Graphics
+    );
+    const bool executed =
+        compiled && graph.ExecuteRecordingMerged(destination);
+    suite.Check(
+        !executed,
+        test_name,
+        "a failed record callback must fail the whole recording batch"
+    );
+    suite.Check(
+        destination.IsEmpty(),
+        test_name,
+        "a failed graph must not merge an already-recorded prefix"
+    );
+    suite.Check(
+        graph.GetCompileError().find("FailingPass") != std::string::npos,
+        test_name,
+        "the failing pass name must be preserved in the diagnostic"
+    );
+}
+
 void TestFrontendCommandListMergeRebasesCachedArguments(TestSuite& suite) {
     constexpr std::string_view test_name =
         "frontend CommandList merge rebases cached arguments";
@@ -7561,6 +7611,7 @@ int main() {
     TestSuite suite;
     TestStableSerialCallbackOrder(suite);
     TestMergedRecordingPreservesFrontendSourcesAndSubmitOrder(suite);
+    TestMergedRecordingFailureLeavesDestinationUntouched(suite);
     TestFrontendCommandListMergeRebasesCachedArguments(suite);
     TestPassCompletionObserverRunsAfterEachCallback(suite);
     TestUiDrawablePresentationContracts(suite);
