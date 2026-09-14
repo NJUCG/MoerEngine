@@ -87,3 +87,22 @@ enable = true
 bind_address = "127.0.0.1"
 http_port = 18080
 websocket_port = 18081
+
+# Canonical startup CVar overrides. Quoted keys preserve dotted CVar names.
+# These override the equivalent legacy fields above without requiring a new
+# GlobalConfig field or loader entry.
+[cvars]
+# "RHI.CommandRecording.Parallel" = true
+# "RHI.CommandRecording.Parallel.Workers" = 0
+# "RHI.CommandRecording.Parallel.MinWorkUnitsPerJob" = 64
+# "RHI.Submission.BatchWindow" = 2
+# "Render.Raster.RDG.Enabled" = true
+# "Render.Raster.RDG.ParallelRecording" = true
+
+# Named profiles are inactive unless selected with `--profile <name>`.
+[profiles.rdg-parallel.cvars]
+"RHI.CommandRecording.Parallel" = true
+"Render.Raster.RDG.Enabled" = true
+"Render.Raster.RDG.ParallelRecording" = true
+"Render.Raytracing.RDG.Enabled" = true
+"Render.Raytracing.RDG.ParallelRecording" = true

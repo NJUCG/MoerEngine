@@ -78,6 +78,7 @@
   - 打开MoerEditor后，点击左上角 `File -> OpenScene` 打开文件选择器，并根据右下角支持格式来选择不同格式的场景
 - 方法二：配置文件
   - `MoerEditor.exe` 会使用同目录下的 `MoerEngine.toml` 作为配置文件。这个配置文件包含了启动时的默认场景
+  - 线程、RHI 和 RDG 的覆盖方式见 [配置说明](docs/CONFIGURATION.md)
 
 ### 2.3 如何移动摄像机
 
