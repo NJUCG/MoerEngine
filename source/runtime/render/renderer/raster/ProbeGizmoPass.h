@@ -296,7 +296,7 @@ public:
     [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
         RenderGraph& graph,
         RasterContext& context,
-        const RasterConfig& config,
+        RasterConfig config,
         const Camera& camera,
         GraphResources resources,
         std::span<const RenderGraph::SetupPassHandle> setup_dependencies = {}

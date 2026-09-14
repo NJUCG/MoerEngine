@@ -344,7 +344,7 @@ RenderGraph::PreparedPassHandle SkyboxPass::AddToGraph(
 RenderGraph::PreparedPassHandle ProbeGizmoPass::AddToGraph(
     RenderGraph& graph,
     RasterContext& context,
-    const RasterConfig& config,
+    RasterConfig config,
     const Camera& camera,
     GraphResources resources,
     std::span<const RenderGraph::SetupPassHandle> setup_dependencies
@@ -352,7 +352,7 @@ RenderGraph::PreparedPassHandle ProbeGizmoPass::AddToGraph(
     auto prepared = graph.AddSetupPass(
         "ProbeGizmo.Prepare",
         uint8_t{0},
-        [this, &context, &config, &camera](const uint8_t&) {
+        [this, &context, config = std::move(config), &camera](const uint8_t&) {
             return Prepare(context, config, camera);
         },
         setup_dependencies
