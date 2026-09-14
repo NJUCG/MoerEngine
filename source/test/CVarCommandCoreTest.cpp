@@ -1,4 +1,5 @@
 #include "command/EngineCommandProcessor.h"
+#include "config/CVarOverrides.h"
 #include "config/CVarSystem.h"
 
 #include <algorithm>
@@ -1164,6 +1165,72 @@ void TestSourcePriorityAndApplyPhase() {
     );
 }
 
+void TestConfigurationOverrides() {
+    CVar::RegistrationResult enabled = CVar::RegisterBool(
+        CVar::CVarDescriptor{
+            .name  = "Test.Config.Enabled",
+            .flags = CVar::EFlags::StartupOnly,
+        },
+        false
+    );
+    CVar::RegistrationResult workers = CVar::RegisterInt(
+        CVar::CVarDescriptor{
+            .name  = "Test.Config.Workers",
+            .flags = CVar::EFlags::StartupOnly,
+        },
+        1
+    );
+    CVar::RegistrationResult label = CVar::RegisterString(
+        CVar::CVarDescriptor{
+            .name  = "Test.Config.Label",
+            .flags = CVar::EFlags::StartupOnly,
+        },
+        "default"
+    );
+    Expect(enabled.Succeeded() && workers.Succeeded() && label.Succeeded(), "test cvar registration failed");
+
+    constexpr std::string_view config = R"toml(
+[cvars]
+"Test.Config.Enabled" = true
+"Test.Config.Workers" = 2
+"Test.Config.Label" = "project"
+
+[profiles.fast.cvars]
+"Test.Config.Workers" = 6
+"Test.Config.Label" = "profile"
+)toml";
+    const CVar::OverrideReport project = CVar::ApplyOverridesFromToml(config, "fast");
+    Expect(project.Succeeded() && project.applied_count == 5, "project/profile cvar overrides failed");
+
+    const auto enabled_snapshot = CVar::Find("Test.Config.Enabled");
+    const auto workers_snapshot = CVar::Find("Test.Config.Workers");
+    Expect(
+        enabled_snapshot->set_source == CVar::ESetSource::StartupConfig && workers_snapshot->value == "6" &&
+            workers_snapshot->set_source == CVar::ESetSource::Profile,
+        "project/profile precedence was not applied"
+    );
+
+    const std::vector<std::string> command_line = {
+        "Test.Config.Workers=9",
+        "Test.Config.Label=command line",
+    };
+    const CVar::OverrideReport command = CVar::ApplyCommandLineOverrides(command_line);
+    Expect(command.Succeeded() && command.applied_count == 2, "command-line cvar overrides failed");
+    Expect(
+        CVar::Find("Test.Config.Workers")->value == "9" &&
+            CVar::Find("Test.Config.Label")->value == "command line" &&
+            CVar::Find("Test.Config.Label")->set_source == CVar::ESetSource::CommandLine,
+        "command-line precedence was not applied"
+    );
+
+    const CVar::OverrideReport lower_priority = CVar::ApplyOverridesFromToml(config, "fast");
+    Expect(
+        !lower_priority.Succeeded() && lower_priority.issue_count == 4 &&
+            CVar::Find("Test.Config.Workers")->value == "9",
+        "lower-priority configuration unexpectedly replaced command-line values"
+    );
+}
+
 void TestStartupSealLast() {
     CVar::RegistrationResult startup = CVar::RegisterInt(
         CVar::CVarDescriptor{
@@ -1264,6 +1331,7 @@ int main() {
         TestCommandProcessing();
         TestBoundedQueuesAndOutputCursor();
         TestSourcePriorityAndApplyPhase();
+        TestConfigurationOverrides();
         TestStartupSealLast();
         InstallExitLifetimeSmoke();
         std::cout << "CVar/command core contract tests passed.\n" << std::flush;
