@@ -1282,6 +1282,7 @@ private:
     };
 
     struct SetupBatchState;
+    class MergedRecordingExecutor;
 
     ResourceHandle ImportInternal(
         std::string_view   name,

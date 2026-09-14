@@ -189,122 +189,175 @@ RenderGraph::GpuProfileBindOutcome RenderGraph::BindGpuProfileSource(
     return GpuProfileBindOutcome::Dropped;
 }
 
-bool RenderGraph::ExecuteRecordingMerged(
-    CommandList&               command_list,
-    bool                       parallel_recording_enabled,
-    const GpuProfilingOptions& gpu_profiling
-) {
-    if (!compiled) {
-        compile_error =
-            "ExecuteRecordingMerged called before a successful Compile";
-        return false;
-    }
-    if (executed) {
-        compile_error = "a per-frame RenderGraph can only be executed once";
-        return false;
-    }
-    if (command_list.GetQueueType() != EQueueType::Graphics) {
-        compile_error =
-            "ExecuteRecordingMerged requires a Graphics CommandList";
-        return false;
-    }
-    if (command_list.HasExplicitResourceStateOwnership()) {
-        compile_error =
-            "ExecuteRecordingMerged requires a backend-tracked destination "
-            "CommandList";
-        return false;
+class RenderGraph::MergedRecordingExecutor {
+public:
+    MergedRecordingExecutor(
+        RenderGraph&               graph,
+        CommandList&               destination,
+        bool                       parallel_recording_enabled,
+        const GpuProfilingOptions& gpu_profiling
+    ) :
+        graph(graph),
+        destination(destination),
+        parallel_recording_enabled(parallel_recording_enabled),
+        gpu_profiling(gpu_profiling) {
     }
 
-    const bool has_allocation_backed_transient = std::any_of(
-        compiled_plan.resources.begin(),
-        compiled_plan.resources.end(),
-        [](const CompiledResource& resource) {
-            return !resource.imported &&
-                   resource.first_use != PassHandle::InvalidIndex &&
-                   resource.transient_slot != PassHandle::InvalidIndex;
-        }
-    );
-    if (has_allocation_backed_transient) {
-        compile_error =
-            "allocation-backed transient resources require active "
-            "ExecuteRecording";
-        return false;
-    }
-
-    for (const CompiledRecordingBatch& batch :
-         compiled_plan.recording_batches) {
-        if (batch.passes.size() != 1) {
-            compile_error =
-                "merged recording requires one pass per compiled recording "
-                "batch";
+    [[nodiscard]] bool Execute() {
+        if (!Validate()) {
             return false;
+        }
+
+        MOER_PROFILE_SCOPE("RenderGraph.ExecuteRecordingMerged");
+        graph.executed = true;
+        try {
+            recorded_lists.resize(
+                graph.compiled_plan.recording_batches.size()
+            );
+        } catch (const std::exception& exception) {
+            return Fail(
+                std::string("failed to allocate recording slots: ") +
+                exception.what()
+            );
+        } catch (...) {
+            return Fail("failed to allocate recording slots");
+        }
+
+        for (const CompiledRecordingGroup& group :
+             graph.compiled_plan.recording_groups) {
+            if (!RecordGroup(group)) {
+                return false;
+            }
+        }
+        return MergeRecordedLists();
+    }
+
+private:
+    [[nodiscard]] bool Fail(std::string message) {
+        graph.compile_error = std::move(message);
+        return false;
+    }
+
+    [[nodiscard]] bool Validate() {
+        if (!graph.compiled) {
+            return Fail(
+                "ExecuteRecordingMerged called before a successful Compile"
+            );
+        }
+        if (graph.executed) {
+            return Fail(
+                "a per-frame RenderGraph can only be executed once"
+            );
+        }
+        if (destination.GetQueueType() != EQueueType::Graphics) {
+            return Fail(
+                "ExecuteRecordingMerged requires a Graphics CommandList"
+            );
+        }
+        if (destination.HasExplicitResourceStateOwnership()) {
+            return Fail(
+                "ExecuteRecordingMerged requires a backend-tracked "
+                "destination CommandList"
+            );
+        }
+
+        const bool has_allocation_backed_transient = std::any_of(
+            graph.compiled_plan.resources.begin(),
+            graph.compiled_plan.resources.end(),
+            [](const CompiledResource& resource) {
+                return !resource.imported &&
+                       resource.first_use != PassHandle::InvalidIndex &&
+                       resource.transient_slot != PassHandle::InvalidIndex;
+            }
+        );
+        if (has_allocation_backed_transient) {
+            return Fail(
+                "allocation-backed transient resources require active "
+                "ExecuteRecording"
+            );
+        }
+
+        for (const CompiledRecordingBatch& batch :
+             graph.compiled_plan.recording_batches) {
+            if (!ValidateBatch(batch)) {
+                return false;
+            }
+        }
+        return ValidateGroups();
+    }
+
+    [[nodiscard]] bool ValidateBatch(
+        const CompiledRecordingBatch& batch
+    ) {
+        if (batch.passes.size() != 1) {
+            return Fail(
+                "merged recording requires one pass per compiled recording "
+                "batch"
+            );
         }
         const PassHandle pass_handle = batch.passes.front();
-        const auto&      pass        = passes[pass_handle.index];
+        const auto&      pass = graph.passes[pass_handle.index];
         if (batch.execution != PassExecutionClass::SerialRecord &&
             batch.execution != PassExecutionClass::ParallelRecordEligible) {
-            compile_error =
+            return Fail(
                 "merged recording only supports record-class passes; pass '" +
-                pass.name + "' uses " + RecordingClassName(batch.execution);
-            return false;
+                pass.name + "' uses " + RecordingClassName(batch.execution)
+            );
         }
         if (!pass.record || pass.execute) {
-            compile_error =
+            return Fail(
                 "merged recording pass has an invalid callback shape: " +
-                pass.name;
-            return false;
+                pass.name
+            );
         }
         if (pass.domain.queue != QueueRole::Graphics) {
-            compile_error =
+            return Fail(
                 "merged recording only supports Graphics passes; pass '" +
-                pass.name + "' declared another queue";
-            return false;
+                pass.name + "' declared another queue"
+            );
         }
         if (gpu_profiling.try_bind_source &&
             gpu_profiling.source_order_base >
                 std::numeric_limits<uint64>::max() -
                     static_cast<uint64>(batch.id)) {
-            compile_error = "GPU profiling source order overflow";
-            return false;
+            return Fail("GPU profiling source order overflow");
         }
+        return true;
     }
 
-    size_t expected_first_batch = 0;
-    for (const CompiledRecordingGroup& group :
-         compiled_plan.recording_groups) {
-        if (group.first_batch != expected_first_batch ||
-            group.batch_count == 0 ||
-            group.first_batch + group.batch_count >
-                compiled_plan.recording_batches.size()) {
-            compile_error = "compiled recording groups are inconsistent";
-            return false;
+    [[nodiscard]] bool ValidateGroups() {
+        size_t expected_first_batch = 0;
+        for (const CompiledRecordingGroup& group :
+             graph.compiled_plan.recording_groups) {
+            if (group.first_batch != expected_first_batch ||
+                group.batch_count == 0 ||
+                group.first_batch + group.batch_count >
+                    graph.compiled_plan.recording_batches.size()) {
+                return Fail("compiled recording groups are inconsistent");
+            }
+            expected_first_batch += group.batch_count;
         }
-        expected_first_batch += group.batch_count;
+        if (expected_first_batch !=
+            graph.compiled_plan.recording_batches.size()) {
+            return Fail(
+                "compiled recording groups do not cover every pass"
+            );
+        }
+        return true;
     }
-    if (expected_first_batch != compiled_plan.recording_batches.size()) {
-        compile_error = "compiled recording groups do not cover every pass";
-        return false;
-    }
 
-    MOER_PROFILE_SCOPE("RenderGraph.ExecuteRecordingMerged");
-    executed = true;
-
-    Array<SharedPtr<CommandList>> recorded_lists(
-        compiled_plan.recording_batches.size()
-    );
-
-    for (const CompiledRecordingGroup& group :
-         compiled_plan.recording_groups) {
-        Array<MergedRecordingJob> jobs{};
-        jobs.reserve(group.batch_count);
-
+    [[nodiscard]] bool CreateJobs(
+        const CompiledRecordingGroup& group,
+        Array<MergedRecordingJob>&    jobs
+    ) {
         try {
+            jobs.reserve(group.batch_count);
             for (uint32_t offset = 0; offset < group.batch_count; ++offset) {
                 const size_t batch_index = group.first_batch + offset;
                 const auto&  batch =
-                    compiled_plan.recording_batches[batch_index];
+                    graph.compiled_plan.recording_batches[batch_index];
                 const PassHandle pass_handle = batch.passes.front();
-                const auto&      pass = passes[pass_handle.index];
+                const auto&      pass = graph.passes[pass_handle.index];
 
                 auto pass_command_list =
                     MakeShared<CommandList>(EQueueType::Graphics);
@@ -315,9 +368,9 @@ bool RenderGraph::ExecuteRecordingMerged(
                 bool gpu_profile_bound = false;
                 if (gpu_profiling.try_bind_source) {
                     const GpuProfileBindOutcome bind_outcome =
-                        BindGpuProfileSource(
+                        graph.BindGpuProfileSource(
                             gpu_profiling,
-                            MakeExecutedPassInfo(pass_handle),
+                            graph.MakeExecutedPassInfo(pass_handle),
                             *pass_command_list,
                             GraphicsQueueBinding(batch.queue),
                             gpu_profiling.source_order_base +
@@ -337,90 +390,112 @@ bool RenderGraph::ExecuteRecordingMerged(
                     .command_list          = std::move(pass_command_list),
                     .gpu_profile_requested =
                         static_cast<bool>(gpu_profiling.try_bind_source),
-                    .gpu_profile_bound     = gpu_profile_bound,
+                    .gpu_profile_bound = gpu_profile_bound,
                     .translate_execution_class =
                         batch.translate_execution_class,
                 });
             }
         } catch (const std::exception& exception) {
-            compile_error =
+            return Fail(
                 std::string("failed to create merged recording batch: ") +
-                exception.what();
-            return false;
+                exception.what()
+            );
         } catch (...) {
-            compile_error = "failed to create merged recording batch";
+            return Fail("failed to create merged recording batch");
+        }
+        return true;
+    }
+
+    static void RunJob(
+        MergedRecordingJob                         job,
+        const SharedPtr<MergedRecordingCompletion>& completion
+    ) noexcept {
+        auto fail = [&](std::string_view detail) noexcept {
+            try {
+                std::string message =
+                    "record pass '" + job.pass_name + "' failed";
+                if (!detail.empty()) {
+                    message += ": ";
+                    message += detail;
+                }
+                completion->Finish(std::move(message));
+            } catch (...) {
+                completion->Finish("recording batch failed");
+            }
+        };
+
+        try {
+            RHIThreadRoleScope record_owner(ERHIThreadRole::RecordWorker);
+            ProfileDump::ScopedCpuProfile profile_scope(
+                "RenderGraph.Record",
+                job.pass_name
+            );
+
+            const uint64 seal_generation =
+                job.command_list->GetSealGeneration();
+            if (job.gpu_profile_requested) {
+                ScopedGpuMarker pass_marker(
+                    *job.command_list,
+                    job.pass_name,
+                    GpuMarkerPalette::Pass(),
+                    job.gpu_profile_bound ?
+                        EGpuMarkerMode::Timestamp :
+                        EGpuMarkerMode::Label
+                );
+                job.record(*job.command_list);
+            } else {
+                job.record(*job.command_list);
+            }
+
+            if (job.command_list->GetSealGeneration() != seal_generation) {
+                throw std::logic_error(
+                    "record callback sealed its CommandList"
+                );
+            }
+            if (job.command_list->HasExplicitResourceStateOwnership()) {
+                throw std::logic_error(
+                    "record callback changed resource-state ownership"
+                );
+            }
+            if (job.command_list->GetTranslateExecutionClass() !=
+                job.translate_execution_class) {
+                throw std::logic_error(
+                    "record callback changed its translation class"
+                );
+            }
+
+            auto lifetime =
+                std::make_shared<RecordCallback>(std::move(job.record));
+            job.command_list->AddCallback([lifetime] {});
+            job.command_list->AddSuccessCallback([lifetime] {});
+            completion->Finish();
+        } catch (const std::exception& exception) {
+            fail(exception.what());
+        } catch (...) {
+            fail({});
+        }
+    }
+
+    [[nodiscard]] bool RecordGroup(
+        const CompiledRecordingGroup& group
+    ) {
+        Array<MergedRecordingJob> jobs{};
+        if (!CreateJobs(group, jobs)) {
             return false;
         }
 
-        const auto completion =
-            std::make_shared<MergedRecordingCompletion>(jobs.size());
-        auto run_job = [completion](MergedRecordingJob job) mutable {
-            auto fail = [&](std::string_view detail) noexcept {
-                try {
-                    std::string message =
-                        "record pass '" + job.pass_name + "' failed";
-                    if (!detail.empty()) {
-                        message += ": ";
-                        message += detail;
-                    }
-                    completion->Finish(std::move(message));
-                } catch (...) {
-                    completion->Finish("recording batch failed");
-                }
-            };
-
-            try {
-                RHIThreadRoleScope record_owner(ERHIThreadRole::RecordWorker);
-                ProfileDump::ScopedCpuProfile profile_scope(
-                    "RenderGraph.Record",
-                    job.pass_name
-                );
-
-                const uint64 seal_generation =
-                    job.command_list->GetSealGeneration();
-                if (job.gpu_profile_requested) {
-                    ScopedGpuMarker pass_marker(
-                        *job.command_list,
-                        job.pass_name,
-                        GpuMarkerPalette::Pass(),
-                        job.gpu_profile_bound ?
-                            EGpuMarkerMode::Timestamp :
-                            EGpuMarkerMode::Label
-                    );
-                    job.record(*job.command_list);
-                } else {
-                    job.record(*job.command_list);
-                }
-
-                if (job.command_list->GetSealGeneration() !=
-                    seal_generation) {
-                    throw std::logic_error(
-                        "record callback sealed its CommandList"
-                    );
-                }
-                if (job.command_list->HasExplicitResourceStateOwnership()) {
-                    throw std::logic_error(
-                        "record callback changed resource-state ownership"
-                    );
-                }
-                if (job.command_list->GetTranslateExecutionClass() !=
-                    job.translate_execution_class) {
-                    throw std::logic_error(
-                        "record callback changed its translation class"
-                    );
-                }
-
-                auto lifetime =
-                    std::make_shared<RecordCallback>(std::move(job.record));
-                job.command_list->AddCallback([lifetime] {});
-                job.command_list->AddSuccessCallback([lifetime] {});
-                completion->Finish();
-            } catch (const std::exception& exception) {
-                fail(exception.what());
-            } catch (...) {
-                fail({});
-            }
-        };
+        SharedPtr<MergedRecordingCompletion> completion{};
+        try {
+            completion =
+                std::make_shared<MergedRecordingCompletion>(jobs.size());
+        } catch (const std::exception& exception) {
+            return Fail(
+                std::string("failed to create recording completion: ") +
+                exception.what()
+            );
+        } catch (...) {
+            return Fail("failed to create recording completion");
+        }
 
         const bool dispatch_parallel =
             group.execution == PassExecutionClass::ParallelRecordEligible &&
@@ -429,7 +504,7 @@ bool RenderGraph::ExecuteRecordingMerged(
         GraphEventArray record_events{};
         if (!dispatch_parallel) {
             for (auto& job : jobs) {
-                run_job(std::move(job));
+                RunJob(std::move(job), completion);
             }
         } else {
             record_events.reserve(jobs.size());
@@ -438,24 +513,24 @@ bool RenderGraph::ExecuteRecordingMerged(
                 for (; dispatched_count < jobs.size(); ++dispatched_count) {
                     record_events.emplace_back(LambdaTask::Dispatch(
                         [job = std::move(jobs[dispatched_count]),
-                         run_job]() mutable {
-                            run_job(std::move(job));
+                         completion]() mutable {
+                            RunJob(std::move(job), completion);
                         }
                     ));
                 }
             } catch (const std::exception& exception) {
-                for (size_t index = dispatched_count;
-                     index < jobs.size();
-                     ++index) {
+                const size_t undispatched_count =
+                    jobs.size() - dispatched_count;
+                for (size_t index = 0; index < undispatched_count; ++index) {
                     completion->Finish(
                         std::string("failed to dispatch recording task: ") +
                         exception.what()
                     );
                 }
             } catch (...) {
-                for (size_t index = dispatched_count;
-                     index < jobs.size();
-                     ++index) {
+                const size_t undispatched_count =
+                    jobs.size() - dispatched_count;
+                for (size_t index = 0; index < undispatched_count; ++index) {
                     completion->Finish(
                         "failed to dispatch recording task"
                     );
@@ -465,30 +540,50 @@ bool RenderGraph::ExecuteRecordingMerged(
 
         std::string group_error{};
         if (!completion->Wait(group_error)) {
-            compile_error = std::move(group_error);
-            return false;
+            return Fail(std::move(group_error));
         }
+        return true;
     }
 
-    try {
-        for (auto& recorded_list : recorded_lists) {
-            if (!recorded_list) {
-                throw std::logic_error(
-                    "recording batch left an empty CommandList slot"
-                );
+    [[nodiscard]] bool MergeRecordedLists() {
+        try {
+            for (auto& recorded_list : recorded_lists) {
+                if (!recorded_list) {
+                    throw std::logic_error(
+                        "recording batch left an empty CommandList slot"
+                    );
+                }
+                destination.AppendRecorded(std::move(*recorded_list));
             }
-            command_list.AppendRecorded(std::move(*recorded_list));
+        } catch (const std::exception& exception) {
+            return Fail(
+                std::string("failed to merge frontend CommandLists: ") +
+                exception.what()
+            );
+        } catch (...) {
+            return Fail("failed to merge frontend CommandLists");
         }
-    } catch (const std::exception& exception) {
-        compile_error =
-            std::string("failed to merge frontend CommandLists: ") +
-            exception.what();
-        return false;
-    } catch (...) {
-        compile_error = "failed to merge frontend CommandLists";
-        return false;
+        return true;
     }
-    return true;
+
+    RenderGraph&               graph;
+    CommandList&               destination;
+    bool                       parallel_recording_enabled = true;
+    const GpuProfilingOptions& gpu_profiling;
+    Array<SharedPtr<CommandList>> recorded_lists{};
+};
+
+bool RenderGraph::ExecuteRecordingMerged(
+    CommandList&               command_list,
+    bool                       parallel_recording_enabled,
+    const GpuProfilingOptions& gpu_profiling
+) {
+    return MergedRecordingExecutor(
+        *this,
+        command_list,
+        parallel_recording_enabled,
+        gpu_profiling
+    ).Execute();
 }
 
 } // namespace Moer::Render
