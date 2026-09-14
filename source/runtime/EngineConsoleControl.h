@@ -73,6 +73,7 @@ private:
 // TickGameThread.
 class RENDER_API EngineConsoleControl {
 public:
+    explicit EngineConsoleControl(const EngineConsoleStartupConfig& config);
     EngineConsoleControl(
         const EngineConsoleStartupConfig& config,
         unsigned int                      policy_clamped_submission_batch_window
@@ -86,6 +87,9 @@ public:
 
     void BindEditorConfig(EditorConfig& config);
     void UnbindEditorConfig() noexcept;
+
+    [[nodiscard]] EngineConsoleStartupConfig CaptureStartupConfig() const;
+    void PublishPolicyClampedSubmissionBatchWindow(unsigned int value);
 
     [[nodiscard]] std::size_t TickGameThread(EditorConfig& config, std::size_t max_commands = 64);
 

@@ -5,6 +5,7 @@
 #include "renderer/EditorConfig.h"
 
 #include <cstdint>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -17,7 +18,8 @@ namespace Moer {
 
 namespace {
 
-constexpr CVar::EFlags kStartupReadOnlyFlags = CVar::EFlags::ReadOnly | CVar::EFlags::StartupOnly;
+constexpr CVar::EFlags kStartupFlags         = CVar::EFlags::StartupOnly;
+constexpr CVar::EFlags kStartupReadOnlyFlags = CVar::EFlags::ReadOnly | kStartupFlags;
 
 CVar::CVarDescriptor MakeDescriptor(
     std::string           name,
@@ -106,151 +108,175 @@ void EngineCommandEndpoint::CloseAdmission() noexcept {
 }
 
 struct EngineConsoleControl::Impl {
-    explicit Impl(
-        const EngineConsoleStartupConfig& config,
-        unsigned int                      policy_clamped_submission_batch_window
-    ) {
-        RegisterStartupVariables(config, policy_clamped_submission_batch_window);
+    explicit Impl(const EngineConsoleStartupConfig& config) : startup_config(config) {
+        RegisterStartupVariables();
     }
 
-    void RegisterStartupVariables(
-        const EngineConsoleStartupConfig& config,
-        unsigned int                      policy_clamped_submission_batch_window
-    ) {
-        const auto register_bool = [this](std::string name, std::string helper, bool value) {
+    void RegisterStartupVariables() {
+        const auto register_bool = [this](
+                                       std::string name,
+                                       std::string helper,
+                                       bool EngineConsoleStartupConfig::* member
+                                   ) {
             const std::string registered_name = name;
             RequireRegistration(
                 startup_registrations,
                 CVar::RegisterBool(
-                    MakeDescriptor(std::move(name), std::move(helper), kStartupReadOnlyFlags), value
+                    MakeDescriptor(std::move(name), std::move(helper), kStartupFlags),
+                    startup_config.*member,
+                    [this, member](bool, bool value) {
+                        startup_config.*member = value;
+                    }
                 ),
                 registered_name
             );
         };
-        const auto register_int = [this](std::string name, std::string helper, std::int64_t value) {
+        const auto register_uint = [this](
+                                       std::string name,
+                                       std::string helper,
+                                       std::uint32_t EngineConsoleStartupConfig::* member
+                                   ) {
             const std::string registered_name = name;
             RequireRegistration(
                 startup_registrations,
                 CVar::RegisterInt(
-                    MakeDescriptor(std::move(name), std::move(helper), kStartupReadOnlyFlags), value
+                    MakeDescriptor(
+                        std::move(name),
+                        std::move(helper),
+                        kStartupFlags,
+                        0.0,
+                        static_cast<double>((std::numeric_limits<std::uint32_t>::max)())
+                    ),
+                    startup_config.*member,
+                    [this, member](std::int64_t, std::int64_t value) {
+                        startup_config.*member = static_cast<std::uint32_t>(value);
+                    }
                 ),
                 registered_name
             );
         };
 
         register_bool(
-            "Engine.Threading.RenderThread.Configured",
+            "Engine.Threading.RenderThread",
             "Configured request for a dedicated Render Thread.",
-            config.render_thread
+            &EngineConsoleStartupConfig::render_thread
         );
         register_bool(
-            "Engine.Threading.RHIThread.Configured",
+            "Engine.Threading.RHIThread",
             "Configured request for a dedicated RHI thread; bypass and backend policy may disable it.",
-            config.rhi_thread
+            &EngineConsoleStartupConfig::rhi_thread
         );
         register_bool(
-            "Engine.Threading.RHIBypass.Configured",
+            "Engine.Threading.RHIBypass",
             "Configured request to bypass queued RHI translation.",
-            config.rhi_bypass
+            &EngineConsoleStartupConfig::rhi_bypass
         );
         register_bool(
-            "Engine.Threading.ProfileLogging.Configured",
+            "Engine.Threading.ProfileLogging",
             "Configured request for periodic threading profile diagnostics.",
-            config.profile_logging
+            &EngineConsoleStartupConfig::profile_logging
         );
-        register_int(
-            "Engine.Threading.MaxFrameLag.Configured",
+        register_uint(
+            "Engine.Threading.MaxFrameLag",
             "Configured maximum Render Thread frame lag; runtime policy may clamp it.",
-            config.max_frame_lag
+            &EngineConsoleStartupConfig::max_frame_lag
         );
         register_bool(
-            "RHI.CommandRecording.Parallel.Configured",
+            "RHI.CommandRecording.Parallel",
             "Configured request for parallel backend command-list translation/recording.",
-            config.parallel_recording
+            &EngineConsoleStartupConfig::parallel_recording
         );
-        register_int(
-            "RHI.CommandRecording.Parallel.Workers.Configured",
+        register_uint(
+            "RHI.CommandRecording.Parallel.Workers",
             "Configured parallel command-recording worker count; zero selects the runtime default.",
-            config.parallel_record_workers
+            &EngineConsoleStartupConfig::parallel_record_workers
         );
         register_bool(
-            "RHI.CommandRecording.Parallel.Verify.Configured",
+            "RHI.CommandRecording.Parallel.Verify",
             "Whether parallel command recording runs verification checks.",
-            config.parallel_record_verify
+            &EngineConsoleStartupConfig::parallel_record_verify
         );
         register_bool(
-            "RHI.CommandRecording.Parallel.Profile.Configured",
+            "RHI.CommandRecording.Parallel.Profile",
             "Whether parallel command recording emits profiling diagnostics.",
-            config.parallel_record_profile
+            &EngineConsoleStartupConfig::parallel_record_profile
         );
-        register_int(
-            "RHI.CommandRecording.Parallel.MinWorkUnitsPerJob.Configured",
+        register_uint(
+            "RHI.CommandRecording.Parallel.MinWorkUnitsPerJob",
             "Minimum estimated work units assigned to each parallel recording job.",
-            config.parallel_record_min_work_units_per_job
+            &EngineConsoleStartupConfig::parallel_record_min_work_units_per_job
         );
-        register_int(
-            "RHI.Submission.BatchWindow.Configured",
+        register_uint(
+            "RHI.Submission.BatchWindow",
             "Configured bounded submission batch window before policy clamping.",
-            config.configured_submission_batch_window
-        );
-        register_int(
-            "RHI.Submission.BatchWindow.PolicyClamped",
-            "Startup request after the generic [1, 8] policy clamp; native queue aliasing may reduce the "
-            "effective window further.",
-            policy_clamped_submission_batch_window
+            &EngineConsoleStartupConfig::configured_submission_batch_window
         );
         register_bool(
-            "RHI.Heartbeat.Enabled.Configured",
+            "RHI.Heartbeat.Enabled",
             "Configured request for the RHI ownership heartbeat watchdog.",
-            config.rhi_heartbeat_enabled
+            &EngineConsoleStartupConfig::rhi_heartbeat_enabled
         );
-        register_int(
-            "RHI.Heartbeat.StallTimeoutMs.Configured",
+        register_uint(
+            "RHI.Heartbeat.StallTimeoutMs",
             "Configured RHI heartbeat stall timeout in milliseconds.",
-            config.rhi_heartbeat_stall_timeout_ms
+            &EngineConsoleStartupConfig::rhi_heartbeat_stall_timeout_ms
         );
-        register_int(
-            "RHI.Heartbeat.PollIntervalMs.Configured",
+        register_uint(
+            "RHI.Heartbeat.PollIntervalMs",
             "Configured RHI heartbeat polling interval in milliseconds.",
-            config.rhi_heartbeat_poll_interval_ms
-        );
-        register_int(
-            "RHI.MaxFramesInFlight.Configured",
-            "Configured maximum frames in flight.",
-            config.max_frames_in_flight
+            &EngineConsoleStartupConfig::rhi_heartbeat_poll_interval_ms
         );
 
         const auto register_rdg =
             [&register_bool](
-                std::string_view prefix, bool enabled, bool debug_dump, bool parallel_recording
+                std::string_view prefix,
+                bool EngineConsoleStartupConfig::* enabled,
+                bool EngineConsoleStartupConfig::* debug_dump,
+                bool EngineConsoleStartupConfig::* parallel_recording
             ) {
                 register_bool(
-                    std::string(prefix) + ".Enabled.Configured",
+                    std::string(prefix) + ".Enabled",
                     "Configured request for the compiled Render Dependency Graph path.",
                     enabled
                 );
                 register_bool(
-                    std::string(prefix) + ".DebugDump.Configured",
+                    std::string(prefix) + ".DebugDump",
                     "Whether the renderer emits compiled RDG diagnostic dumps.",
                     debug_dump
                 );
                 register_bool(
-                    std::string(prefix) + ".ParallelRecording.Configured",
+                    std::string(prefix) + ".ParallelRecording",
                     "Configured request to record eligible compiled RDG waves in parallel.",
                     parallel_recording
                 );
             };
         register_rdg(
             "Render.Raster.RDG",
-            config.raster_rdg_enabled,
-            config.raster_rdg_debug_dump,
-            config.raster_rdg_parallel_recording
+            &EngineConsoleStartupConfig::raster_rdg_enabled,
+            &EngineConsoleStartupConfig::raster_rdg_debug_dump,
+            &EngineConsoleStartupConfig::raster_rdg_parallel_recording
         );
         register_rdg(
             "Render.Raytracing.RDG",
-            config.raytracing_rdg_enabled,
-            config.raytracing_rdg_debug_dump,
-            config.raytracing_rdg_parallel_recording
+            &EngineConsoleStartupConfig::raytracing_rdg_enabled,
+            &EngineConsoleStartupConfig::raytracing_rdg_debug_dump,
+            &EngineConsoleStartupConfig::raytracing_rdg_parallel_recording
+        );
+    }
+
+    void PublishPolicyClampedSubmissionBatchWindow(unsigned int value) {
+        RequireRegistration(
+            startup_registrations,
+            CVar::RegisterInt(
+                MakeDescriptor(
+                    "RHI.Submission.BatchWindow.PolicyClamped",
+                    "Startup request after the generic [1, 8] policy clamp; native queue aliasing may reduce "
+                    "the effective window further.",
+                    kStartupReadOnlyFlags
+                ),
+                value
+            ),
+            "RHI.Submission.BatchWindow.PolicyClamped"
         );
     }
 
@@ -399,6 +425,7 @@ struct EngineConsoleControl::Impl {
 
     std::shared_ptr<EngineCommandEndpoint> command_endpoint = std::make_shared<EngineCommandEndpoint>();
     std::vector<CVar::Registration>        startup_registrations;
+    EngineConsoleStartupConfig             startup_config;
 
     std::mutex             live_mutex;
     LiveValueState<bool>   bloom;
@@ -409,11 +436,15 @@ struct EngineConsoleControl::Impl {
     CVar::Registration     raytracing_exposure_registration;
 };
 
+EngineConsoleControl::EngineConsoleControl(const EngineConsoleStartupConfig& config) :
+    impl(std::make_unique<Impl>(config)) {}
+
 EngineConsoleControl::EngineConsoleControl(
     const EngineConsoleStartupConfig& config,
     unsigned int                      policy_clamped_submission_batch_window
-) :
-    impl(std::make_unique<Impl>(config, policy_clamped_submission_batch_window)) {}
+) : EngineConsoleControl(config) {
+    PublishPolicyClampedSubmissionBatchWindow(policy_clamped_submission_batch_window);
+}
 
 EngineConsoleControl::~EngineConsoleControl() {
     impl->command_endpoint->CloseAdmission();
@@ -426,6 +457,14 @@ void EngineConsoleControl::BindEditorConfig(EditorConfig& config) {
 
 void EngineConsoleControl::UnbindEditorConfig() noexcept {
     impl->UnbindEditorConfig();
+}
+
+EngineConsoleStartupConfig EngineConsoleControl::CaptureStartupConfig() const {
+    return impl->startup_config;
+}
+
+void EngineConsoleControl::PublishPolicyClampedSubmissionBatchWindow(unsigned int value) {
+    impl->PublishPolicyClampedSubmissionBatchWindow(value);
 }
 
 std::size_t EngineConsoleControl::TickGameThread(EditorConfig& config, std::size_t max_commands) {

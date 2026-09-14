@@ -55,7 +55,22 @@ int main() {
 
     std::shared_ptr<EngineCommandEndpoint> retained_endpoint;
     {
-        EngineConsoleControl control(startup_config, 4);
+        EngineConsoleControl control(startup_config);
+        Expect(
+            CVar::SetValueFromString(
+                "RHI.CommandRecording.Parallel.Workers", "7", CVar::ESetSource::Profile
+            ).Succeeded() &&
+                CVar::SetValueFromString(
+                    "Render.Raster.RDG.ParallelRecording", "false", CVar::ESetSource::CommandLine
+                ).Succeeded(),
+            "startup cvar overrides were rejected"
+        );
+        const EngineConsoleStartupConfig effective = control.CaptureStartupConfig();
+        Expect(
+            effective.parallel_record_workers == 7 && !effective.raster_rdg_parallel_recording,
+            "startup cvar overrides were not captured into the typed snapshot"
+        );
+        control.PublishPolicyClampedSubmissionBatchWindow(4);
         CVar::SealStartupOnlyCVars();
 
         const auto submission = CVar::Find("RHI.Submission.BatchWindow.PolicyClamped");
@@ -66,10 +81,11 @@ int main() {
             "policy-clamped startup topology was not exposed as read-only metadata"
         );
         Expect(
-            CVar::Find("RHI.CommandRecording.Parallel.Configured")->value == "true" &&
-                CVar::Find("Render.Raster.RDG.ParallelRecording.Configured")->value == "true" &&
-                CVar::Find("Render.Raytracing.RDG.DebugDump.Configured")->value == "true",
-            "startup topology cvars do not reflect GlobalConfig"
+            CVar::Find("RHI.CommandRecording.Parallel")->value == "true" &&
+                CVar::Find("RHI.CommandRecording.Parallel.Workers")->value == "7" &&
+                CVar::Find("Render.Raster.RDG.ParallelRecording")->value == "false" &&
+                CVar::Find("Render.Raytracing.RDG.DebugDump")->value == "true",
+            "startup topology cvars do not reflect the typed snapshot"
         );
 
         EditorConfig editor_config{};
