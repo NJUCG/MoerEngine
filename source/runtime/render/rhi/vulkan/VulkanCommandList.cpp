@@ -156,21 +156,30 @@ struct VulkanPipelineReflection {
 //     }
 // }
 
-VulkanCmdList::VulkanCmdList(VulkanCmdAllocator* _alloc, VulkanDevice& _device) :
+VulkanCmdList::VulkanCmdList(
+    VulkanCmdAllocator*  _alloc,
+    VulkanDevice&        _device,
+    VkCommandBufferLevel _level
+) :
     allocator(_alloc),
-    device(_device) {
+    device(_device),
+    level(_level) {
     VkCommandBufferAllocateInfo command_buffer_info = {
         .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .pNext              = nullptr,
         .commandPool        = allocator->GetHandle(),
-        .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .level              = level,
         .commandBufferCount = 1
     };
     VK_CHECK_RESULT(vkAllocateCommandBuffers(device.GetDevice(), &command_buffer_info, &command_buffer));
     _device.SetResourceName(
         (uint64)command_buffer,
         VK_OBJECT_TYPE_COMMAND_BUFFER,
-        std::format("CommandBuffer_{}", allocator->GetQueueName())
+        std::format(
+            "{}CommandBuffer_{}",
+            level == VK_COMMAND_BUFFER_LEVEL_PRIMARY ? "Primary" : "Secondary",
+            allocator->GetQueueName()
+        )
     );
 }
 
@@ -178,6 +187,7 @@ VulkanCmdList::~VulkanCmdList() {
     vkFreeCommandBuffers(device.GetDevice(), allocator->GetHandle(), 1, &command_buffer);
 }
 VkResult VulkanCmdList::Begin() {
+    assert(level == VK_COMMAND_BUFFER_LEVEL_PRIMARY);
     VkCommandBufferBeginInfo begin_info = {
         .sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .pNext            = nullptr,
@@ -186,8 +196,34 @@ VkResult VulkanCmdList::Begin() {
     };
     return vkBeginCommandBuffer(command_buffer, &begin_info);
 }
+VkResult VulkanCmdList::BeginSecondary(
+    const VkCommandBufferInheritanceInfo& _inheritance,
+    VkCommandBufferUsageFlags             _flags
+) {
+    assert(level == VK_COMMAND_BUFFER_LEVEL_SECONDARY);
+    VkCommandBufferBeginInfo begin_info = {
+        .sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .pNext            = nullptr,
+        .flags            = _flags,
+        .pInheritanceInfo = &_inheritance
+    };
+    return vkBeginCommandBuffer(command_buffer, &begin_info);
+}
 VkResult VulkanCmdList::End() {
     return vkEndCommandBuffer(command_buffer);
+}
+void VulkanCmdList::ExecuteCommands(
+    std::span<const VkCommandBuffer> _secondary_buffers
+) {
+    assert(level == VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+    if (_secondary_buffers.empty()) {
+        return;
+    }
+    vkCmdExecuteCommands(
+        command_buffer,
+        static_cast<uint32_t>(_secondary_buffers.size()),
+        _secondary_buffers.data()
+    );
 }
 void VulkanCmdList::CopyBuffer(
     VulkanBuffer* _src,

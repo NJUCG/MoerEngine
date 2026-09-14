@@ -61,10 +61,22 @@ VulkanAllocatorBase::VulkanAllocatorBase(VulkanDevice* _device, EQueueType _type
 }
 
 VulkanAllocatorBase::~VulkanAllocatorBase() {
+    secondary_cmd_list.reset();
     cmd_list.reset();
     cmd_allocator.reset();
     on_complete.clear();
     tracker.Reset();
+}
+
+VulkanCmdList& VulkanAllocatorBase::PrepareSecondaryCmdList() {
+    if (!secondary_cmd_list.has_value()) {
+        secondary_cmd_list.emplace(
+            &cmd_allocator.value(),
+            *m_device,
+            VK_COMMAND_BUFFER_LEVEL_SECONDARY
+        );
+    }
+    return secondary_cmd_list.value();
 }
 
 bool VulkanAllocatorBase::ResetCmdList() {
@@ -98,6 +110,9 @@ bool VulkanAllocatorBase::ResetCmdList() {
     );
     if (result == VK_SUCCESS) {
         cmd_list->SetDescriptorPushLease({});
+        if (secondary_cmd_list.has_value()) {
+            secondary_cmd_list->SetDescriptorPushLease({});
+        }
         return true;
     }
     return false;

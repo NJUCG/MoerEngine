@@ -54,6 +54,14 @@ public:
     VulkanCmdList& GetCmdList() {
         return cmd_list.value();
     }
+    // Secondary allocation is deliberately explicit. Call this on the
+    // coordinator before publishing work to a record worker: Vulkan command
+    // pools require external synchronization even when different command
+    // buffers are allocated from the pool.
+    VulkanCmdList& PrepareSecondaryCmdList();
+    [[nodiscard]] bool HasSecondaryCmdList() const noexcept {
+        return secondary_cmd_list.has_value();
+    }
     VkTracker& GetTracker() {
         return tracker;
     }
@@ -74,6 +82,7 @@ public:
 protected:
     std::optional<VulkanCmdAllocator> cmd_allocator;
     std::optional<VulkanCmdList>      cmd_list;
+    std::optional<VulkanCmdList>      secondary_cmd_list;
 
     Array<std::function<void()>> on_complete;
 

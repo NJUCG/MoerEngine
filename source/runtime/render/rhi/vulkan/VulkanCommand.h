@@ -26,13 +26,23 @@ private:
     VkCommandBuffer           command_buffer;
     class VulkanCmdAllocator* allocator;
     VulkanDevice&             device;
+    VkCommandBufferLevel      level;
     std::shared_ptr<VulkanDescriptorPushLeaseState> descriptor_push_lease;
 
 public:
-    VulkanCmdList(VulkanCmdAllocator* _allocator, VulkanDevice& _device);
+    VulkanCmdList(
+        VulkanCmdAllocator*   _allocator,
+        VulkanDevice&         _device,
+        VkCommandBufferLevel  _level = VK_COMMAND_BUFFER_LEVEL_PRIMARY
+    );
     ~VulkanCmdList();
     [[nodiscard]] VkResult Begin();
+    [[nodiscard]] VkResult BeginSecondary(
+        const VkCommandBufferInheritanceInfo& _inheritance,
+        VkCommandBufferUsageFlags _flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
+    );
     [[nodiscard]] VkResult End();
+    void ExecuteCommands(std::span<const VkCommandBuffer> _secondary_buffers);
     void
     CopyBuffer(VulkanBuffer* _src, VulkanBuffer* _dst, uint64 _size, uint64 _src_offset, uint64 _dst_offset);
     void CopyBufferToTexture(
@@ -168,6 +178,9 @@ public:
 
     VkCommandBuffer GetHandle() const {
         return command_buffer;
+    }
+    VkCommandBufferLevel GetLevel() const {
+        return level;
     }
 };
 
