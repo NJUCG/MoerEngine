@@ -173,7 +173,7 @@ public:
             );
     }
 
-    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+    RenderGraph::PreparedPassHandle AddToGraph(
         RenderGraph& graph,
         const RasterContext& context,
         const RasterConfig& config,

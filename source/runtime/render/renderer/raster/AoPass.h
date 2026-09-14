@@ -323,7 +323,7 @@ public:
             );
     }
 
-    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+    RenderGraph::PreparedPassHandle AddToGraph(
         RenderGraph& graph,
         RasterContext& context,
         const RasterConfig& ui_config,
@@ -370,7 +370,7 @@ public:
             .Dispatch(parameters.groups, "AO Composite Pass");
     }
 
-    [[nodiscard]] RenderGraph::PreparedPassHandle AddCompositeToGraph(
+    RenderGraph::PreparedPassHandle AddCompositeToGraph(
         RenderGraph& graph,
         RasterContext& context,
         const RasterConfig& ui_config,

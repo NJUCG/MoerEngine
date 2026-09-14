@@ -1063,6 +1063,65 @@ void TestDeclarationFreezeAfterDispatch(TestSuite& suite) {
     );
 }
 
+void TestExplicitPreparedPassComposition(TestSuite& suite) {
+    constexpr std::string_view test_name =
+        "explicit setup and record pass composition";
+
+    RenderGraph      graph("ExplicitPreparedPass");
+    const auto       token = graph.CreateTransientToken("Output");
+    std::atomic<int> prepare_calls{0};
+    std::atomic<int> record_value{0};
+
+    const auto prepared = graph.AddSetupPass(
+        "Prepared.Prepare",
+        21,
+        [&](const int& input) {
+            prepare_calls.fetch_add(1, std::memory_order_relaxed);
+            return input * 2;
+        }
+    );
+    const auto pass = graph.AddRecordPass(
+        "Prepared",
+        [&](RenderGraph::PassBuilder& builder) {
+            builder.Write(token).SideEffect();
+        },
+        [prepared, &record_value](CommandList&) {
+            const auto& immutable_parameters = prepared.Get();
+            static_assert(std::is_const_v<
+                          std::remove_reference_t<decltype(immutable_parameters)>>);
+            record_value.store(immutable_parameters, std::memory_order_release);
+        }
+    );
+    const RenderGraph::PreparedPassHandle handles{
+        prepared.GetSetupPass(),
+        pass
+    };
+
+    suite.Check(
+        handles.IsValid() && prepare_calls.load(std::memory_order_acquire) == 0 &&
+            record_value.load(std::memory_order_acquire) == 0,
+        test_name,
+        "registration eagerly executed Prepare or Record"
+    );
+    suite.Check(
+        graph.Compile() && prepare_calls.load(std::memory_order_acquire) == 1 &&
+            record_value.load(std::memory_order_acquire) == 0,
+        test_name,
+        graph.GetCompileError()
+    );
+    const bool executed = graph.ExecuteRecording(
+        {},
+        {},
+        true,
+        [](Moer::Array<Moer::Render::RHIRecordingSource>&&) {}
+    );
+    suite.Check(
+        executed && record_value.load(std::memory_order_acquire) == 42,
+        test_name,
+        graph.GetCompileError()
+    );
+}
+
 void TestCombinedPreparedPassContract(TestSuite& suite) {
     constexpr std::string_view test_name =
         "combined prepared pass exposes const setup result to record";
@@ -1177,6 +1236,7 @@ int main(int argc, char** argv) {
     TestIndependentSetupTasksRunConcurrently(suite);
     TestFailureJoinAndStableRetry(suite);
     TestParallelRecordingReadsOnePreparedValue(suite);
+    TestExplicitPreparedPassComposition(suite);
     TestCombinedPreparedPassContract(suite);
     TestDeclarationFreezeAfterDispatch(suite);
     TestFailureDiagnosticFaultIsTerminal(suite);

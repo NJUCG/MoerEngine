@@ -45,7 +45,7 @@ public:
         const Camera&        camera
     ) const;
     void Record(CommandList& cmd_list, const RecordParameters& parameters);
-    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+    RenderGraph::PreparedPassHandle AddToGraph(
         RenderGraph& graph,
         const RasterContext& context,
         const RasterConfig& config,

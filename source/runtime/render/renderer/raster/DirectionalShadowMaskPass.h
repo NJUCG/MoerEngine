@@ -46,7 +46,7 @@ public:
 
     [[nodiscard]] RecordParameters Prepare(const RasterContext& context) const;
     void Record(CommandList& cmd_list, const RecordParameters& parameters);
-    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+    RenderGraph::PreparedPassHandle AddToGraph(
         RenderGraph& graph,
         const RasterContext& context,
         GraphResources resources,

@@ -194,7 +194,7 @@ public:
         cmd_list.PopScopeWithTimeScope();
     }
 
-    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+    RenderGraph::PreparedPassHandle AddToGraph(
         RenderGraph& graph,
         RasterContext& context,
         RasterConfig& raster_config,

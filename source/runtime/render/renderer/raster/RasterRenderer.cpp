@@ -341,7 +341,7 @@ public:
         RenderGraph::BufferHandle lighting_data{};
     };
 
-    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+    RenderGraph::PreparedPassHandle AddToGraph(
         RenderGraph& graph,
         RasterContext& context,
         const RasterConfig& config,

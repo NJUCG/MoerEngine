@@ -73,7 +73,7 @@ public:
     [[nodiscard]] RecordParameters
     Prepare(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
     void Record(CommandList& cmd_list, const RecordParameters& parameters);
-    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+    RenderGraph::PreparedPassHandle AddToGraph(
         RenderGraph& graph,
         RasterContext& context,
         const RasterConfig& ui_config,

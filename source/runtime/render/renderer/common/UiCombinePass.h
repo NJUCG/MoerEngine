@@ -165,7 +165,7 @@ public:
             );
     }
 
-    [[nodiscard]] RenderGraph::PreparedPassHandle AddToGraph(
+    RenderGraph::PreparedPassHandle AddToGraph(
         RenderGraph& graph,
         bool ui_enabled,
         bool writes_external_window,

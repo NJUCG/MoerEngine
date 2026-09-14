@@ -1013,9 +1013,9 @@ public:
     }
 
     /**
-     * The preferred combined API for a graph-owned prepared rendering pass:
-     * Prepare runs as a setup task, publishes a write-once value, then Record
-     * receives that value through const access after Compile joined setup work.
+     * Convenience wrapper around AddSetupPass followed by AddRecordPass.
+     * Pass-owned registration should prefer the two explicit calls so setup
+     * dependencies and record-pass declaration remain independently visible.
      */
     template<typename Input, typename Prepare, typename Record>
         requires std::invocable<
@@ -1042,7 +1042,7 @@ public:
         PrepareSafety                    prepare_safety = PrepareSafety::Restricted
     );
 
-    /** Explicit escape hatch for a prepared pass whose Prepare phase needs RHI access. */
+    /** Convenience escape hatch for a combined prepared pass that needs RHI access. */
     template<typename Input, typename Prepare, typename Record>
         requires std::invocable<
                      std::decay_t<Prepare>&,
