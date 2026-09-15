@@ -50,8 +50,8 @@ public:
 class BloomPass {
 public:
     struct GraphResources {
-        RenderGraph::TokenHandle processing_image{};
-        RenderGraph::TokenHandle bloom_chain{};
+        RenderGraph::TextureHandle input{};
+        RenderGraph::TokenHandle   bloom_chain{};
     };
 
     struct DownsampleDispatch {

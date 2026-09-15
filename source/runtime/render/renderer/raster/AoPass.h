@@ -78,7 +78,6 @@ public:
         RenderGraph::TextureHandle depth{};
         RenderGraph::TextureHandle normal{};
         RenderGraph::TextureHandle ao_output{};
-        RenderGraph::TokenHandle   processing_image{};
     };
 
     struct AoPassOutput {

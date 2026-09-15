@@ -58,7 +58,7 @@ public:
 class TonemappingPass {
 public:
     struct GraphResources {
-        RenderGraph::TokenHandle   processing_image{};
+        RenderGraph::TextureHandle input{};
         RenderGraph::TokenHandle   tonemapping_state{};
         RenderGraph::TextureHandle tonemapping_output{};
     };

@@ -27,7 +27,6 @@ public:
     struct GraphResources {
         RenderGraph::TokenHandle   shadow_maps{};
         RenderGraph::TextureHandle tonemapping_output{};
-        RenderGraph::TokenHandle   processing_image{};
     };
 
     struct RecordParameters {

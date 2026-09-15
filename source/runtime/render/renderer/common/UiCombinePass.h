@@ -42,7 +42,7 @@ class UiCombinePass {
 
 public:
     struct GraphResources {
-        RenderGraph::TokenHandle   processing_image{};
+        RenderGraph::TextureHandle processing_input{};
         RenderGraph::TextureHandle selected_framebuffer{};
         RenderGraph::TextureHandle window_framebuffer{};
         RenderGraph::TextureHandle output{};

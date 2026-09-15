@@ -20,7 +20,6 @@ public:
     struct GraphResources {
         RenderGraph::TokenHandle   scene{};
         RenderGraph::TextureHandle tonemapping_output{};
-        RenderGraph::TokenHandle   processing_image{};
     };
 
     struct RecordParameters {

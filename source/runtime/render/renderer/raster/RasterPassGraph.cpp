@@ -442,8 +442,7 @@ RenderGraph::PreparedPassHandle AoPass::AddCompositeToGraph(
                 .Read(resources.lighting_output)
                 .Read(resources.depth)
                 .Read(resources.normal)
-                .Write(resources.ao_output)
-                .Write(resources.processing_image);
+                .Write(resources.ao_output);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "AoComposite", [&] {
@@ -512,7 +511,7 @@ RenderGraph::PreparedPassHandle BilateralFilterDenoiserPass::AddToGraph(
     auto pass = graph.AddRecordPass(
         "BilateralDenoise",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.ReadWrite(resources.processing_image)
+            builder.Read(resources.input)
                 .Write(resources.denoiser_output);
         },
         [this, prepared](CommandList& cmd_list) {
@@ -547,7 +546,7 @@ RenderGraph::PreparedPassHandle SsrPass::AddToGraph(
     auto pass = graph.AddRecordPass(
         "ScreenSpaceReflection",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.ReadWrite(resources.processing_image)
+            builder.Read(resources.input)
                 .Read(resources.normal)
                 .Read(resources.depth)
                 .Read(resources.metal_rough_ao)
@@ -586,7 +585,7 @@ RenderGraph::PreparedPassHandle AaPass::AddToGraph(
     auto pass = graph.AddRecordPass(
         "AntiAliasing",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.ReadWrite(resources.processing_image)
+            builder.Read(resources.input)
                 .Read(resources.depth)
                 .Write(resources.aa_output);
         },
@@ -621,7 +620,7 @@ RenderGraph::PreparedPassHandle BloomPass::AddToGraph(
     auto pass = graph.AddRecordPass(
         "Bloom",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.ReadWrite(resources.processing_image)
+            builder.ReadWrite(resources.input)
                 .Write(resources.bloom_chain);
         },
         [this, prepared](CommandList& cmd_list) {
@@ -655,7 +654,7 @@ RenderGraph::PreparedPassHandle TonemappingPass::AddToGraph(
     auto pass = graph.AddRecordPass(
         "Tonemapping",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.ReadWrite(resources.processing_image)
+            builder.Read(resources.input)
                 .ReadWrite(resources.tonemapping_state)
                 .Write(resources.tonemapping_output);
         },
@@ -692,7 +691,6 @@ RenderGraph::PreparedPassHandle CameraGizmoPass::AddToGraph(
         [resources](RenderGraph::PassBuilder& builder) {
             builder.Read(resources.scene)
                 .ReadWrite(resources.tonemapping_output)
-                .ReadWrite(resources.processing_image)
                 .SideEffect();
         },
         [this, prepared](CommandList& cmd_list) {
@@ -732,7 +730,6 @@ RenderGraph::PreparedPassHandle CsmGizmoPass::AddToGraph(
         [resources](RenderGraph::PassBuilder& builder) {
             builder.Read(resources.shadow_maps)
                 .ReadWrite(resources.tonemapping_output)
-                .ReadWrite(resources.processing_image)
                 .SideEffect();
         },
         [this, prepared](CommandList& cmd_list) {
@@ -808,7 +805,7 @@ RenderGraph::PreparedPassHandle UiCombinePass::AddToGraph(
         "UiCombine",
         [resources, ui_enabled, writes_external_window](RenderGraph::PassBuilder& builder) {
             if (!ui_enabled) {
-                builder.Read(resources.processing_image).Write(resources.output);
+                builder.Read(resources.processing_input).Write(resources.output);
             } else if (writes_external_window) {
                 builder.Read(resources.selected_framebuffer)
                     .Write(resources.window_framebuffer);

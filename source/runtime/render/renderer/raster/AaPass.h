@@ -110,7 +110,7 @@ public:
 class AaPass {
 public:
     struct GraphResources {
-        RenderGraph::TokenHandle   processing_image{};
+        RenderGraph::TextureHandle input{};
         RenderGraph::TextureHandle depth{};
         RenderGraph::TextureHandle aa_output{};
     };
