@@ -338,8 +338,6 @@ static void RecordGlobalLightingData(
 class LightingUploadPass {
 public:
     struct GraphResources {
-        RenderGraph::TokenHandle  shadow_maps{};
-        RenderGraph::TokenHandle  probe_volume{};
         RenderGraph::BufferHandle lighting_data{};
     };
 
@@ -366,9 +364,7 @@ public:
         auto pass = graph.AddRecordPass(
             "UploadLightingData",
             [resources](RenderGraph::PassBuilder& builder) {
-                builder.Read(resources.shadow_maps)
-                    .Read(resources.probe_volume)
-                    .Write(resources.lighting_data)
+                builder.Write(resources.lighting_data)
                     .SideEffect();
             },
             [prepared](CommandList& cmd_list) {
@@ -918,7 +914,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             window_framebuffer_view.GetTexture() != nullptr;
 
         struct RasterGraphResources {
-            RenderGraph::TokenHandle   scene;
             RenderGraph::TokenHandle   shadow_maps;
             RenderGraph::TokenHandle   probe_volume;
             RenderGraph::BufferHandle  lighting_data;
@@ -1031,8 +1026,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             const auto shadow_depth_pass_handle = schedule_prepared(
                 "ShadowDepth",
                 [&](RenderGraph::PassBuilder& builder) {
-                    builder.Read(graph_resources.scene)
-                        .Write(graph_resources.shadow_maps)
+                    builder.Write(graph_resources.shadow_maps)
                         .SideEffect();
                 },
                 [&]() {
@@ -1052,8 +1046,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             const auto probe_update_pass_handle = schedule_prepared(
                 "ProbeUpdate",
                 [&](RenderGraph::PassBuilder& builder) {
-                    builder.Read(graph_resources.scene)
-                        .ReadWrite(graph_resources.probe_volume)
+                    builder.ReadWrite(graph_resources.probe_volume)
                         .SideEffect();
                 },
                 [&]() {
@@ -1073,9 +1066,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 shadow_depth_pass_handle.setup,
                 probe_update_pass_handle.setup,
                 [&](RenderGraph::PassBuilder& builder) {
-                    builder.Read(graph_resources.shadow_maps)
-                        .Read(graph_resources.probe_volume)
-                        .Write(graph_resources.lighting_data)
+                    builder.Write(graph_resources.lighting_data)
                         .SideEffect();
                 },
                 [&]() {
@@ -1090,8 +1081,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 "Geometry",
                 shadow_depth_pass_handle.setup,
                 [&](RenderGraph::PassBuilder& builder) {
-                    builder.Read(graph_resources.scene)
-                        .Read(graph_resources.hiz_previous)
+                    builder.Read(graph_resources.hiz_previous)
                         .Write(graph_resources.base_color)
                         .Write(graph_resources.normal)
                         .Write(graph_resources.metal_rough_ao)
@@ -1409,12 +1399,11 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             processing_image = raster_context.textures.tonemapping_output;
             processing_image_resource = graph_resources.tonemapping_output;
 
-            if (draw_scene_gizmos && scene_gizmos.show_main_camera) {
-                schedule_prepared(
-                    "CameraGizmo",
-                    [&](RenderGraph::PassBuilder& builder) {
-                        builder.Read(graph_resources.scene)
-                            .ReadWrite(graph_resources.tonemapping_output)
+                if (draw_scene_gizmos && scene_gizmos.show_main_camera) {
+                    schedule_prepared(
+                        "CameraGizmo",
+                        [&](RenderGraph::PassBuilder& builder) {
+                        builder.ReadWrite(graph_resources.tonemapping_output)
                             .SideEffect();
                     },
                     [&]() { return camera_gizmo_pass->Prepare(raster_context, camera, main_camera); },
@@ -1603,7 +1592,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 return import_physical_texture(name, texture->GetView().GetTexture());
             };
 
-            graph_resources.scene = graph.ImportToken("scene", render_scene.get());
             graph_resources.shadow_maps =
                 graph.ImportToken("shadow_maps", &raster_context.csm_data);
             graph_resources.probe_volume =
@@ -1750,7 +1738,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     raster_context,
                     raster_config,
                     camera,
-                    {.scene = graph_resources.scene, .shadow_maps = graph_resources.shadow_maps}
+                    {.shadow_maps = graph_resources.shadow_maps}
                 );
                 const auto probe_update_handle = probe_update_pass->AddToGraph(
                     graph,
@@ -1758,7 +1746,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     raster_config,
                     camera,
                     time,
-                    {.scene = graph_resources.scene, .probe_volume = graph_resources.probe_volume}
+                    {.probe_volume = graph_resources.probe_volume}
                 );
 
                 const StaticArray<RenderGraph::SetupPassHandle, 2> lighting_dependencies{
@@ -1770,11 +1758,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     raster_context,
                     raster_config,
                     camera,
-                    {
-                        .shadow_maps = graph_resources.shadow_maps,
-                        .probe_volume = graph_resources.probe_volume,
-                        .lighting_data = graph_resources.lighting_data
-                    },
+                    {.lighting_data = graph_resources.lighting_data},
                     lighting_dependencies
                 );
 
@@ -1787,7 +1771,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     raster_config,
                     camera,
                     {
-                        .scene = graph_resources.scene,
                         .hiz_previous = graph_resources.hiz_previous,
                         .base_color = graph_resources.base_color,
                         .normal = graph_resources.normal,
@@ -2028,10 +2011,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         raster_context,
                         camera,
                         main_camera,
-                        {
-                            .scene = graph_resources.scene,
-                            .tonemapping_output = graph_resources.tonemapping_output
-                        }
+                        {.tonemapping_output = graph_resources.tonemapping_output}
                     );
                 }
                 if (draw_scene_gizmos && scene_gizmos.show_csm) {

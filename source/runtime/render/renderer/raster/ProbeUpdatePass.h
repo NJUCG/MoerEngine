@@ -72,7 +72,6 @@ MUTATION_SET(ProbeUpdateRayQueryMacros, ProbeUpdateRayQueryPipeline::PROBE_GI_US
 class ProbeUpdatePass {
 public:
     struct GraphResources {
-        RenderGraph::TokenHandle scene{};
         RenderGraph::TokenHandle probe_volume{};
     };
 

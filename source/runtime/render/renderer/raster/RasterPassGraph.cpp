@@ -63,7 +63,7 @@ RenderGraph::PreparedPassHandle ShadowDepthPass::AddToGraph(
     auto pass = graph.AddRecordPass(
         "ShadowDepth",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.scene).Write(resources.shadow_maps).SideEffect();
+            builder.Write(resources.shadow_maps).SideEffect();
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "ShadowDepth", [&] {
@@ -104,8 +104,7 @@ RenderGraph::PreparedPassHandle ProbeUpdatePass::AddToGraph(
     auto pass = graph.AddRecordPass(
         "ProbeUpdate",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.scene)
-                .ReadWrite(resources.probe_volume)
+            builder.ReadWrite(resources.probe_volume)
                 .SideEffect();
         },
         [this, prepared](CommandList& cmd_list) {
@@ -142,8 +141,7 @@ RenderGraph::PreparedPassHandle GeometryPass::AddToGraph(
     auto pass = graph.AddRecordPass(
         "Geometry",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.scene)
-                .Read(resources.hiz_previous)
+            builder.Read(resources.hiz_previous)
                 .Write(resources.base_color)
                 .Write(resources.normal)
                 .Write(resources.metal_rough_ao)
@@ -693,8 +691,7 @@ RenderGraph::PreparedPassHandle CameraGizmoPass::AddToGraph(
     auto pass = graph.AddRecordPass(
         "CameraGizmo",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.scene)
-                .ReadWrite(resources.tonemapping_output)
+            builder.ReadWrite(resources.tonemapping_output)
                 .SideEffect();
         },
         [this, prepared](CommandList& cmd_list) {

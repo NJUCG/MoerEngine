@@ -18,7 +18,6 @@ public:
 class CameraGizmoPass {
 public:
     struct GraphResources {
-        RenderGraph::TokenHandle   scene{};
         RenderGraph::TextureHandle tonemapping_output{};
     };
 
