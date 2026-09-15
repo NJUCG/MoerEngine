@@ -931,8 +931,11 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             RenderGraph::TextureHandle hiz_previous;
             RenderGraph::TextureHandle shadow_mask;
             RenderGraph::TextureHandle lighting_output;
-            RenderGraph::TokenHandle   ao_working_set;
-            RenderGraph::TokenHandle   motion_vectors;
+            RenderGraph::TextureHandle ao_only;
+            RenderGraph::TextureHandle camera_motion_vector;
+            RenderGraph::TextureHandle ao_history_read;
+            RenderGraph::TextureHandle ao_history_write;
+            RenderGraph::BufferHandle  motion_vector_data;
             RenderGraph::TextureHandle ao_output;
             RenderGraph::TextureHandle denoiser_output;
             RenderGraph::TextureHandle ssr_output;
@@ -1226,9 +1229,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     builder.Read(graph_resources.normal)
                         .Read(graph_resources.depth)
                         .Read(graph_resources.lighting_output)
-                        .Read(graph_resources.scene)
-                        .Write(graph_resources.ao_working_set)
-                        .Write(graph_resources.motion_vectors);
+                        .Write(graph_resources.ao_only)
+                        .Write(graph_resources.camera_motion_vector)
+                        .Write(graph_resources.motion_vector_data);
                 },
                 [&]() { return ao_pass->Prepare(raster_context, raster_config, camera, time); },
                 [&](CommandList& recording_cmd_list,
@@ -1241,8 +1244,10 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 [&](RenderGraph::PassBuilder& builder) {
                     builder.Read(graph_resources.normal)
                         .Read(graph_resources.depth)
-                        .Read(graph_resources.motion_vectors)
-                        .ReadWrite(graph_resources.ao_working_set);
+                        .Read(graph_resources.camera_motion_vector)
+                        .Read(graph_resources.ao_history_read)
+                        .ReadWrite(graph_resources.ao_only)
+                        .Write(graph_resources.ao_history_write);
                 },
                 [&]() {
                     return rtao_denoiser_pass->Prepare(
@@ -1257,7 +1262,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             schedule_prepared(
                 "AoComposite",
                 [&](RenderGraph::PassBuilder& builder) {
-                    builder.Read(graph_resources.ao_working_set)
+                    builder.Read(graph_resources.ao_only)
                         .Read(graph_resources.lighting_output)
                         .Read(graph_resources.depth)
                         .Read(graph_resources.normal)
@@ -1281,9 +1286,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 schedule_external(
                     "TensorRT",
                     [&](RenderGraph::PassBuilder& builder) {
-                        builder.Read(graph_resources.ao_working_set)
+                        builder.Read(graph_resources.ao_only)
                             .Read(graph_resources.depth)
-                            .Read(graph_resources.motion_vectors)
+                            .Read(graph_resources.camera_motion_vector)
                             .ReadWrite(graph_resources.lighting_output)
                             .SideEffect();
                     },
@@ -1638,9 +1643,42 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 import_texture("shadow_mask", raster_context.textures.shadow_mask.tex);
             graph_resources.lighting_output =
                 import_texture("lighting_output", raster_context.textures.lighting_output.tex);
-            graph_resources.ao_working_set = graph.ImportToken("ao_working_set", ao_pass.get());
-            graph_resources.motion_vectors =
-                graph.ImportToken("motion_vectors", rtao_denoiser_pass.get());
+            const uint next_ao_only_index = ao_pass->NextAoOnlyIndex();
+            const bool ao_half_resolution = raster_config.ao_half_resolution;
+            const auto& ao_only_texture = next_ao_only_index == 0u ?
+                (ao_half_resolution ? raster_context.textures.ao_output_ambient_only_half :
+                                      raster_context.textures.ao_output_ambient_only) :
+                (ao_half_resolution ? raster_context.textures.ao_output_ambient_only_1_half :
+                                      raster_context.textures.ao_output_ambient_only_1);
+            const auto& camera_motion_vector_texture = ao_half_resolution ?
+                raster_context.textures.camera_motion_vector_half :
+                raster_context.textures.camera_motion_vector;
+            const auto& ao_history_read_texture = next_ao_only_index == 0u ?
+                (ao_half_resolution ? raster_context.textures.ao_denoiser_accumulate_1_half :
+                                      raster_context.textures.ao_denoiser_accumulate_1) :
+                (ao_half_resolution ? raster_context.textures.ao_denoiser_accumulate_half :
+                                      raster_context.textures.ao_denoiser_accumulate);
+            const auto& ao_history_write_texture = next_ao_only_index == 0u ?
+                (ao_half_resolution ? raster_context.textures.ao_denoiser_accumulate_half :
+                                      raster_context.textures.ao_denoiser_accumulate) :
+                (ao_half_resolution ? raster_context.textures.ao_denoiser_accumulate_1_half :
+                                      raster_context.textures.ao_denoiser_accumulate_1);
+            graph_resources.ao_only = import_texture("ao_only", ao_only_texture.tex);
+            graph_resources.camera_motion_vector = import_texture(
+                "camera_motion_vector", camera_motion_vector_texture.tex
+            );
+            graph_resources.ao_history_read = import_texture(
+                "ao_history_read", ao_history_read_texture.tex
+            );
+            graph_resources.ao_history_write = import_texture(
+                "ao_history_write", ao_history_write_texture.tex
+            );
+            const auto& motion_vector_data = ao_pass->GetMotionVectorDataBuffer();
+            graph_resources.motion_vector_data = graph.ImportBuffer(
+                "motion_vector_data",
+                motion_vector_data,
+                RenderGraph::BufferDesc{.byte_size = motion_vector_data->GetByteSize()}
+            );
             graph_resources.ao_output =
                 import_texture("ao_output", raster_context.textures.ao_output.tex);
             graph_resources.denoiser_output =
@@ -1853,9 +1891,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         .normal = graph_resources.normal,
                         .depth = graph_resources.depth,
                         .lighting_output = graph_resources.lighting_output,
-                        .scene = graph_resources.scene,
-                        .ao_working_set = graph_resources.ao_working_set,
-                        .motion_vectors = graph_resources.motion_vectors
+                        .ao_only = graph_resources.ao_only,
+                        .camera_motion_vector = graph_resources.camera_motion_vector,
+                        .motion_vector_data = graph_resources.motion_vector_data
                     }
                 );
                 rtao_denoiser_pass->AddToGraph(
@@ -1866,8 +1904,10 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     {
                         .normal = graph_resources.normal,
                         .depth = graph_resources.depth,
-                        .motion_vectors = graph_resources.motion_vectors,
-                        .ao_working_set = graph_resources.ao_working_set
+                        .camera_motion_vector = graph_resources.camera_motion_vector,
+                        .ao_only = graph_resources.ao_only,
+                        .history_read = graph_resources.ao_history_read,
+                        .history_write = graph_resources.ao_history_write
                     }
                 );
                 ao_pass->AddCompositeToGraph(
@@ -1876,7 +1916,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     raster_config,
                     ao_result.ao_only,
                     {
-                        .ao_working_set = graph_resources.ao_working_set,
+                        .ao_only = graph_resources.ao_only,
                         .lighting_output = graph_resources.lighting_output,
                         .depth = graph_resources.depth,
                         .normal = graph_resources.normal,
@@ -1891,9 +1931,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     graph.AddUnsafePass(
                         "TensorRT",
                         [&](RenderGraph::PassBuilder& builder) {
-                            builder.Read(graph_resources.ao_working_set)
+                            builder.Read(graph_resources.ao_only)
                                 .Read(graph_resources.depth)
-                                .Read(graph_resources.motion_vectors)
+                                .Read(graph_resources.camera_motion_vector)
                                 .ReadWrite(graph_resources.lighting_output)
                                 .SideEffect()
                                 .ExternalControl();

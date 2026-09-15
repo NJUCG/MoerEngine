@@ -40,8 +40,10 @@ public:
     struct GraphResources {
         RenderGraph::TextureHandle normal{};
         RenderGraph::TextureHandle depth{};
-        RenderGraph::TokenHandle   motion_vectors{};
-        RenderGraph::TokenHandle   ao_working_set{};
+        RenderGraph::TextureHandle camera_motion_vector{};
+        RenderGraph::TextureHandle ao_only{};
+        RenderGraph::TextureHandle history_read{};
+        RenderGraph::TextureHandle history_write{};
     };
 
     struct RecordParameters {

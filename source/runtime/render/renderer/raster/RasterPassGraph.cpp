@@ -403,9 +403,9 @@ RenderGraph::PreparedPassHandle AoPass::AddToGraph(
             builder.Read(resources.normal)
                 .Read(resources.depth)
                 .Read(resources.lighting_output)
-                .Read(resources.scene)
-                .Write(resources.ao_working_set)
-                .Write(resources.motion_vectors);
+                .Write(resources.ao_only)
+                .Write(resources.camera_motion_vector)
+                .Write(resources.motion_vector_data);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "AmbientOcclusion", [&] {
@@ -438,7 +438,7 @@ RenderGraph::PreparedPassHandle AoPass::AddCompositeToGraph(
     auto pass = graph.AddRecordPass(
         "AoComposite",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.ao_working_set)
+            builder.Read(resources.ao_only)
                 .Read(resources.lighting_output)
                 .Read(resources.depth)
                 .Read(resources.normal)
@@ -477,8 +477,10 @@ RenderGraph::PreparedPassHandle RtaoDenoiserPass::AddToGraph(
         [resources](RenderGraph::PassBuilder& builder) {
             builder.Read(resources.normal)
                 .Read(resources.depth)
-                .Read(resources.motion_vectors)
-                .ReadWrite(resources.ao_working_set);
+                .Read(resources.camera_motion_vector)
+                .Read(resources.history_read)
+                .ReadWrite(resources.ao_only)
+                .Write(resources.history_write);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "RtaoDenoise", [&] {
