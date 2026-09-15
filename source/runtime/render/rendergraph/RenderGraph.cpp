@@ -1719,7 +1719,7 @@ bool RenderGraph::Execute(const PassCompletedCallback& after_pass) {
     );
     if (has_active_allocation_backed_transient) {
         compile_error =
-            "allocation-backed transient resources require active ExecuteRecording";
+            "allocation-backed transient resources require active ExecuteFrontendRecordingPlan";
         return false;
     }
     if (std::any_of(compiled_plan.execution_order.begin(),
@@ -1749,48 +1749,54 @@ bool RenderGraph::Execute(const PassCompletedCallback& after_pass) {
     return true;
 }
 
-bool RenderGraph::ExecuteRecording(
+/**
+ * Executes the compiled CPU recording schedule. Caller-thread passes run
+ * inline; managed passes publish ordered frontend CommandLists before their
+ * producers run. Native command-buffer translation and submission stay in RHI.
+ */
+bool RenderGraph::ExecuteFrontendRecordingPlan(
     const PassCompletedCallback&        after_main_thread_pass,
     const RecordingSourceSetupCallback& configure_recording_source,
     bool                                parallel_recording_enabled,
-    const RecordingBatchPublisher&      publish_recording_batch,
+    const FrontendSourcePublisher&       publish_frontend_sources,
     const ActiveRecordingOptions&       active_recording,
     const GpuProfilingOptions&          gpu_profiling
 ) {
     if (!compiled) {
-        compile_error = "ExecuteRecording called before a successful Compile";
+        compile_error =
+            "ExecuteFrontendRecordingPlan called before a successful Compile";
         return false;
     }
     if (executed) {
         compile_error = "a per-frame RenderGraph can only be executed once";
         return false;
     }
-    MOER_PROFILE_SCOPE("RenderGraph.ExecuteRecording");
+    MOER_PROFILE_SCOPE("RenderGraph.ExecuteFrontendRecordingPlan");
 
+    // Reject optional-mode contract errors before publishing any RHI source.
     if (gpu_profiling.try_bind_source) {
         bool has_main_thread_pass = false;
-        for (const CompiledRecordingBatch& batch :
-             compiled_plan.recording_batches) {
-            if (batch.passes.size() != 1) {
+        for (const CompiledFrontendRecordUnit& unit :
+             compiled_plan.frontend_record_units) {
+            if (!IsValidPass(unit.pass)) {
                 compile_error =
-                    "GPU profiling requires one pass per compiled recording batch";
+                    "GPU profiling found an invalid frontend record unit";
                 return false;
             }
-            if (batch.id >= compiled_plan.execution_order.size() ||
-                compiled_plan.execution_order[batch.id] !=
-                    batch.passes.front()) {
+            if (unit.source_index >= compiled_plan.execution_order.size() ||
+                compiled_plan.execution_order[unit.source_index] != unit.pass) {
                 compile_error =
-                    "GPU profiling recording batch order does not match "
+                    "GPU profiling frontend source order does not match "
                     "compiled execution order";
                 return false;
             }
             if (gpu_profiling.source_order_base >
                 std::numeric_limits<uint64>::max() -
-                    static_cast<uint64>(batch.id)) {
+                    static_cast<uint64>(unit.source_index)) {
                 compile_error = "GPU profiling source order overflow";
                 return false;
             }
-            if (batch.execution == PassExecutionClass::MainThread) {
+            if (unit.record_execution_class == PassExecutionClass::MainThread) {
                 has_main_thread_pass = true;
                 if (gpu_profiling.main_thread_command_list == nullptr) {
                     compile_error =
@@ -1799,7 +1805,7 @@ bool RenderGraph::ExecuteRecording(
                     return false;
                 }
                 if (gpu_profiling.main_thread_command_list->GetQueueType() !=
-                    ToRHIQueue(batch.queue.role)) {
+                    ToRHIQueue(unit.target_queue.role)) {
                     compile_error =
                         "GPU profiling MainThread CommandList queue does not "
                         "match compiled pass queue";
@@ -1840,6 +1846,8 @@ bool RenderGraph::ExecuteRecording(
         }
     };
 
+    // Active recording materializes logical RDG state into physical resources,
+    // barriers, lifetimes, and cross-queue synchronization for each pass.
     const bool has_active_allocation_backed_transient = std::any_of(
         compiled_plan.resources.begin(),
         compiled_plan.resources.end(),
@@ -1916,7 +1924,7 @@ bool RenderGraph::ExecuteRecording(
             );
         }
         if (active_async_multiqueue &&
-            (configure_recording_source || publish_recording_batch)) {
+            (configure_recording_source || publish_frontend_sources)) {
             compile_error =
                 "active multi-queue lowering requires the built-in immutable "
                 "RHI graph handoff";
@@ -2076,26 +2084,30 @@ bool RenderGraph::ExecuteRecording(
         if (active_has_physical_main_thread && after_main_thread_pass) {
             compile_error =
                 "RenderGraph active lowering requires caller-owned MainThread "
-                "commands to remain unsealed until ExecuteRecording returns";
+                "commands to remain unsealed until ExecuteFrontendRecordingPlan returns";
             return false;
         }
 
         const bool has_any_managed_record_pass = std::any_of(
-            compiled_plan.recording_batches.begin(),
-            compiled_plan.recording_batches.end(),
-            [](const CompiledRecordingBatch& batch) {
-                return batch.execution == PassExecutionClass::SerialRecord ||
-                       batch.execution ==
+            compiled_plan.frontend_record_units.begin(),
+            compiled_plan.frontend_record_units.end(),
+            [](const CompiledFrontendRecordUnit& unit) {
+                return unit.record_execution_class ==
+                           PassExecutionClass::SerialRecord ||
+                       unit.record_execution_class ==
                            PassExecutionClass::ParallelRecordEligible;
             }
         );
         const bool has_any_caller_thread_pass = std::any_of(
-            compiled_plan.recording_batches.begin(),
-            compiled_plan.recording_batches.end(),
-            [](const CompiledRecordingBatch& batch) {
-                return batch.execution == PassExecutionClass::MainThread ||
-                       batch.execution == PassExecutionClass::CpuPrepare ||
-                       batch.execution == PassExecutionClass::ExternalControl;
+            compiled_plan.frontend_record_units.begin(),
+            compiled_plan.frontend_record_units.end(),
+            [](const CompiledFrontendRecordUnit& unit) {
+                return unit.record_execution_class ==
+                           PassExecutionClass::MainThread ||
+                       unit.record_execution_class ==
+                           PassExecutionClass::CpuPrepare ||
+                       unit.record_execution_class ==
+                           PassExecutionClass::ExternalControl;
             }
         );
         if (has_any_caller_thread_pass && has_any_managed_record_pass) {
@@ -2105,17 +2117,18 @@ bool RenderGraph::ExecuteRecording(
             return false;
         }
         if (active_has_physical_main_thread) {
-            const bool has_nonphysical_or_nonmain_batch = std::any_of(
-                compiled_plan.recording_batches.begin(),
-                compiled_plan.recording_batches.end(),
-                [&](const CompiledRecordingBatch& batch) {
-                    return batch.execution != PassExecutionClass::MainThread ||
-                           batch.passes.size() != 1 ||
-                           !active_pass_states[batch.passes.front().index]
+            const bool has_nonphysical_or_nonmain_unit = std::any_of(
+                compiled_plan.frontend_record_units.begin(),
+                compiled_plan.frontend_record_units.end(),
+                [&](const CompiledFrontendRecordUnit& unit) {
+                    return unit.record_execution_class !=
+                               PassExecutionClass::MainThread ||
+                           !IsValidPass(unit.pass) ||
+                           !active_pass_states[unit.pass.index]
                                 .RequiresCompletionLifetime();
                 }
             );
-            if (has_nonphysical_or_nonmain_batch) {
+            if (has_nonphysical_or_nonmain_unit) {
                 compile_error =
                     "RenderGraph active MainThread lowering currently requires "
                     "an isolated graph of physical MainThread passes";
@@ -2290,6 +2303,8 @@ bool RenderGraph::ExecuteRecording(
         }
     };
 
+    // One shared commit gate prevents a partially recorded active graph from
+    // becoming visible to RHI when a later pass fails.
     RHIRecordingGateRef active_recording_commit{};
     Array<ManagedRecordingOwner> active_recording_owners{};
     try {
@@ -2366,29 +2381,39 @@ bool RenderGraph::ExecuteRecording(
             command_list.AddSuccessCallback([lifetime] {});
         };
 
-    size_t batch_index = 0;
-    size_t group_index = 0;
-    while (batch_index < compiled_plan.recording_batches.size()) {
-        assert(group_index < compiled_plan.recording_groups.size());
-        const auto& recording_group =
-            compiled_plan.recording_groups[group_index];
-        assert(recording_group.first_batch == batch_index);
-        assert(recording_group.batch_count != 0);
-        const size_t group_end =
-            batch_index + recording_group.batch_count;
-        assert(group_end <= compiled_plan.recording_batches.size());
+    // Consume the compiler-built frontend dispatch groups in stable graph order.
+    size_t record_unit_index = 0;
+    size_t dispatch_group_index = 0;
+    while (record_unit_index < compiled_plan.frontend_record_units.size()) {
+        assert(
+            dispatch_group_index <
+            compiled_plan.frontend_dispatch_groups.size()
+        );
+        const auto& dispatch_group =
+            compiled_plan.frontend_dispatch_groups[dispatch_group_index];
+        assert(dispatch_group.first_unit == record_unit_index);
+        assert(dispatch_group.unit_count != 0);
+        const size_t unit_end =
+            record_unit_index + dispatch_group.unit_count;
+        assert(unit_end <= compiled_plan.frontend_record_units.size());
 
-        const auto& first_batch = compiled_plan.recording_batches[batch_index];
-        if (first_batch.passes.size() != 1) {
-            compile_error = "recording execution currently requires one pass per compiled batch";
+        const auto& first_unit =
+            compiled_plan.frontend_record_units[record_unit_index];
+        if (!IsValidPass(first_unit.pass)) {
+            compile_error =
+                "frontend recording found an invalid compiled record unit";
             return false;
         }
 
-        const PassHandle first_handle = first_batch.passes.front();
+        const PassHandle first_handle = first_unit.pass;
         auto&            first_pass   = passes[first_handle.index];
-        if (first_batch.execution == PassExecutionClass::MainThread ||
-            first_batch.execution == PassExecutionClass::CpuPrepare ||
-            first_batch.execution == PassExecutionClass::ExternalControl) {
+        // Caller-thread classes are hard recording boundaries and execute inline.
+        if (first_unit.record_execution_class ==
+                PassExecutionClass::MainThread ||
+            first_unit.record_execution_class ==
+                PassExecutionClass::CpuPrepare ||
+            first_unit.record_execution_class ==
+                PassExecutionClass::ExternalControl) {
             if (!first_pass.execute || first_pass.record) {
                 compile_error = "compiled caller-thread pass has an invalid callback shape: " +
                                 first_pass.name;
@@ -2435,7 +2460,7 @@ bool RenderGraph::ExecuteRecording(
 
             try {
                 bool gpu_profile_bound = false;
-                if (first_batch.execution ==
+                if (first_unit.record_execution_class ==
                         PassExecutionClass::MainThread &&
                     gpu_profiling.try_bind_source) {
                     CommandList& profiling_list =
@@ -2446,13 +2471,13 @@ bool RenderGraph::ExecuteRecording(
                         *gpu_profile_main_thread_generation != generation) {
                         const uint64 source_order =
                             gpu_profiling.source_order_base +
-                            static_cast<uint64>(first_batch.id);
+                            static_cast<uint64>(first_unit.source_index);
                         const GpuProfileBindOutcome bind_outcome =
                             BindGpuProfileSource(
                                 gpu_profiling,
                                 MakeExecutedPassInfo(first_handle),
                                 profiling_list,
-                                ToRHIQueueBinding(first_batch.queue),
+                                ToRHIQueueBinding(first_unit.target_queue),
                                 source_order
                             );
                         if (bind_outcome == GpuProfileBindOutcome::Failed) {
@@ -2509,7 +2534,7 @@ bool RenderGraph::ExecuteRecording(
                         active_recording.main_thread_command_list
                             ->GetSealGeneration() :
                         0;
-                if (first_batch.execution ==
+                if (first_unit.record_execution_class ==
                         PassExecutionClass::MainThread &&
                     gpu_profiling.try_bind_source) {
                     ScopedGpuMarker pass_marker(
@@ -2560,12 +2585,13 @@ bool RenderGraph::ExecuteRecording(
                     "main-thread pass '" + first_pass.name + "' failed"
                 );
             }
-            if (first_batch.execution == PassExecutionClass::MainThread &&
+            if (first_unit.record_execution_class ==
+                    PassExecutionClass::MainThread &&
                 after_main_thread_pass) {
                 after_main_thread_pass(MakeExecutedPassInfo(first_handle));
             }
-            ++batch_index;
-            ++group_index;
+            ++record_unit_index;
+            ++dispatch_group_index;
             continue;
         }
 
@@ -2593,18 +2619,20 @@ bool RenderGraph::ExecuteRecording(
             }
         }
 
+        // Managed passes receive independent frontend streams and producer gates.
         Array<RecordingJob>        jobs{};
-        Array<RHIRecordingSource>  sources{};
-        Array<RHIRecordingGateRef> group_gates{};
-        jobs.reserve(group_end - batch_index);
-        sources.reserve(group_end - batch_index);
-        group_gates.reserve(group_end - batch_index);
+        Array<RHIRecordingSource>  frontend_sources{};
+        Array<RHIRecordingGateRef> producer_gates{};
+        jobs.reserve(unit_end - record_unit_index);
+        frontend_sources.reserve(unit_end - record_unit_index);
+        producer_gates.reserve(unit_end - record_unit_index);
 
-        for (size_t index = batch_index; index < group_end; ++index) {
-            const auto& batch = compiled_plan.recording_batches[index];
-            const auto  handle = batch.passes.front();
+
+        for (size_t index = record_unit_index; index < unit_end; ++index) {
+            const auto& unit = compiled_plan.frontend_record_units[index];
+            const auto  handle = unit.pass;
             auto&       pass   = passes[handle.index];
-            const auto  queue  = ToRHIQueue(batch.queue.role);
+            const auto  queue  = ToRHIQueue(unit.target_queue.role);
             if (!pass.record || pass.execute || queue == EQueueType::Ignore) {
                 compile_error = "compiled recording pass has an invalid callback or queue: " +
                                 pass.name;
@@ -2618,16 +2646,16 @@ bool RenderGraph::ExecuteRecording(
                 .command_list = MakeShared<CommandList>(queue),
                 .completion   = RHIRecordingGate::Create(),
                 .gpu_profile_queue_binding =
-                    ToRHIQueueBinding(batch.queue),
+                    ToRHIQueueBinding(unit.target_queue),
                 .gpu_profile_source_order =
                     gpu_profiling.try_bind_source ?
                         gpu_profiling.source_order_base +
-                            static_cast<uint64>(batch.id) :
+                            static_cast<uint64>(unit.source_index) :
                         0,
                 .gpu_profile_requested =
                     static_cast<bool>(gpu_profiling.try_bind_source),
                 .translate_execution_class =
-                    batch.translate_execution_class,
+                    unit.native_translate_class,
             };
             job.command_list->SetTranslateExecutionClass(
                 job.translate_execution_class
@@ -2643,10 +2671,10 @@ bool RenderGraph::ExecuteRecording(
                 .completion   = job.completion,
                 .commit       = active_recording_commit,
             };
-            if (batch.translate_execution_class !=
+            if (unit.native_translate_class !=
                 ERHITranslateExecutionClass::Parallel) {
                 source.submit_metadata.translate_execution_class =
-                    batch.translate_execution_class;
+                    unit.native_translate_class;
             }
             if (active_recording.enabled) {
                 const auto& pass_state = active_pass_states[handle.index];
@@ -2704,7 +2732,7 @@ bool RenderGraph::ExecuteRecording(
                                     pass.name + "'";
                     return false;
                 }
-                if (batch.translate_execution_class ==
+                if (unit.native_translate_class ==
                         ERHITranslateExecutionClass::SerialControl &&
                     source.submit_metadata.translate_execution_class !=
                         ERHITranslateExecutionClass::SerialControl) {
@@ -2735,7 +2763,7 @@ bool RenderGraph::ExecuteRecording(
                         ->IsLegacyGpuProfilingSuppressedForGeneration() ||
                     source.command_list->HasExplicitResourceStateOwnership() ||
                     source.command_list->GetTranslateExecutionClass() !=
-                        batch.translate_execution_class) {
+                        unit.native_translate_class) {
                     compile_error =
                         "recording source configuration may only change submit metadata "
                         "for pass '" +
@@ -2743,9 +2771,9 @@ bool RenderGraph::ExecuteRecording(
                     return false;
                 }
             }
-            group_gates.emplace_back(job.completion);
+            producer_gates.emplace_back(job.completion);
             jobs.emplace_back(std::move(job));
-            sources.emplace_back(std::move(source));
+            frontend_sources.emplace_back(std::move(source));
         }
 
         if (gpu_profiling.try_bind_source) {
@@ -2766,7 +2794,7 @@ bool RenderGraph::ExecuteRecording(
             }
         }
 
-        PendingGateGuard pending_gate_guard{.gates = &group_gates};
+        PendingGateGuard pending_gate_guard{.gates = &producer_gates};
 
         const auto error = std::make_shared<RecordingError>();
         auto run_job =
@@ -2898,16 +2926,21 @@ bool RenderGraph::ExecuteRecording(
             RHIThreadRoleScope publication_owner(
                 ERHIThreadRole::RecordWorker
             );
-            if (publish_recording_batch) {
-                publish_recording_batch(std::move(sources));
+            if (publish_frontend_sources) {
+                publish_frontend_sources(std::move(frontend_sources));
             } else {
-                RHIExecutor::Get().SubmitRecording(std::move(sources), ERHIExecSubmitFlags::None);
+                RHIExecutor::Get().SubmitRecording(
+                    std::move(frontend_sources),
+                    ERHIExecSubmitFlags::None
+                );
             }
         } catch (const std::exception& exception) {
-            compile_error = std::string("failed to publish recording batch: ") + exception.what();
+            compile_error =
+                std::string("failed to publish frontend sources: ") +
+                exception.what();
             return false;
         } catch (...) {
-            compile_error = "failed to publish recording batch";
+            compile_error = "failed to publish frontend sources";
             return false;
         }
         for (size_t index = 0; index < jobs.size(); ++index) {
@@ -2934,28 +2967,32 @@ bool RenderGraph::ExecuteRecording(
                  active_recording_commit->Status() !=
                      ERHIRecordingStatus::Pending)) {
                 compile_error =
-                    "recording batch publisher mutated pending source state for pass '" +
+                    "frontend source publisher mutated pending source state for pass '" +
                     job.pass_name + "'";
                 return false;
             }
         }
 
+        // Dispatch only inside the compiler-approved group; serial modes use
+        // the same recording body inline.
         const bool task_graph_available = TaskGraph::IsInitialized();
-        const bool task_graph_dispatch =
-            first_batch.execution == PassExecutionClass::ParallelRecordEligible &&
+        const bool can_dispatch_parallel =
+            first_unit.record_execution_class ==
+                PassExecutionClass::ParallelRecordEligible &&
             parallel_recording_enabled && task_graph_available;
-        if (first_batch.execution == PassExecutionClass::SerialRecord ||
+        if (first_unit.record_execution_class ==
+                PassExecutionClass::SerialRecord ||
             !parallel_recording_enabled || !task_graph_available) {
             for (auto& job : jobs) {
                 run_job(std::move(job));
             }
         } else {
-            GraphEventArray record_events{};
-            record_events.reserve(jobs.size());
+            GraphEventArray record_task_events{};
+            record_task_events.reserve(jobs.size());
             size_t dispatched_count = 0;
             try {
                 for (; dispatched_count < jobs.size(); ++dispatched_count) {
-                    record_events.emplace_back(LambdaTask::Dispatch(
+                    record_task_events.emplace_back(LambdaTask::Dispatch(
                         [job = std::move(jobs[dispatched_count]), run_job]() mutable {
                             run_job(std::move(job));
                         }
@@ -2964,46 +3001,50 @@ bool RenderGraph::ExecuteRecording(
             } catch (const std::exception& exception) {
                 store_error(error, std::string("failed to dispatch recording task: ") + exception.what());
                 for (size_t index = dispatched_count; index < jobs.size(); ++index) {
-                    group_gates[index]->Fail();
+                    producer_gates[index]->Fail();
                 }
             } catch (...) {
                 store_error(error, "failed to dispatch recording task");
                 for (size_t index = dispatched_count; index < jobs.size(); ++index) {
-                    group_gates[index]->Fail();
+                    producer_gates[index]->Fail();
                 }
             }
-            if (!record_events.empty()) {
+            if (!record_task_events.empty()) {
                 // Do not use TaskGraph::WaitUntilTasksComplete here. On a named Render Thread that
                 // wait is allowed to pump the same named queue, which can execute the next
                 // RenderFrame re-entrantly while this frame still owns mutable renderer state.
                 // The producer gate is the handoff contract: Signal/Fail happens only after the
                 // worker has stopped mutating its CommandList, and its condition variable gives the
                 // caller the required happens-before edge without processing unrelated RT work.
-                // Keep record_events alive until every producer is terminal so the task/event
+                // Keep record_task_events alive until every producer is terminal so the task/event
                 // ownership also remains explicit across the blocking join.
-                for (const auto& gate : group_gates) {
+                for (const auto& gate : producer_gates) {
                     (void)gate->Wait();
                 }
             }
         }
 
         bool group_succeeded = true;
-        for (const auto& gate : group_gates) {
+        for (const auto& gate : producer_gates) {
             group_succeeded =
                 gate->Wait() == ERHIRecordingStatus::Succeeded && group_succeeded;
         }
         if (!group_succeeded) {
             std::lock_guard lock(error->mutex);
-            compile_error = error->message.empty() ? "recording batch failed" : error->message;
+            compile_error =
+                error->message.empty() ?
+                    "frontend dispatch group failed" :
+                    error->message;
             return false;
         }
-        if (task_graph_dispatch && group_end - batch_index > 1) {
+        if (can_dispatch_parallel && unit_end - record_unit_index > 1) {
             std::ostringstream pass_list;
-            for (size_t index = batch_index; index < group_end; ++index) {
-                if (index != batch_index) {
+            for (size_t index = record_unit_index; index < unit_end; ++index) {
+                if (index != record_unit_index) {
                     pass_list << ',';
                 }
-                const auto pass_handle = compiled_plan.recording_batches[index].passes.front();
+                const auto pass_handle =
+                    compiled_plan.frontend_record_units[index].pass;
                 pass_list << passes[pass_handle.index].name;
             }
 
@@ -3022,7 +3063,7 @@ bool RenderGraph::ExecuteRecording(
                     "dispatch=task-graph worker_jobs={} completed=true",
                     name,
                     pass_names,
-                    group_end - batch_index
+                    unit_end - record_unit_index
                 );
             }
         }
@@ -3031,10 +3072,15 @@ bool RenderGraph::ExecuteRecording(
             gpu_profile_main_thread_generation) {
             gpu_profile_managed_source_since_main_thread = true;
         }
-        batch_index = group_end;
-        ++group_index;
+        record_unit_index = unit_end;
+        ++dispatch_group_index;
     }
-    assert(group_index == compiled_plan.recording_groups.size());
+    assert(
+        dispatch_group_index ==
+        compiled_plan.frontend_dispatch_groups.size()
+    );
+    // Make the already-published active graph consumable only after every
+    // producer has succeeded.
     if (!active_transaction_guard.Commit()) {
         compile_error =
             "active recording transaction gate completed before graph commit";
@@ -3386,40 +3432,38 @@ std::string RenderGraph::Dump() const {
         stream << "]\n";
     }
 
-    stream << "dependency_waves:\n";
-    for (uint32_t wave_index = 0; wave_index < compiled_plan.dependency_waves.size(); ++wave_index) {
-        stream << "  [" << wave_index << "] [";
-        const auto& wave = compiled_plan.dependency_waves[wave_index];
-        for (uint32_t pass_index = 0; pass_index < wave.passes.size(); ++pass_index) {
+    stream << "dependency_levels:\n";
+    for (uint32_t level_index = 0;
+         level_index < compiled_plan.dependency_levels.size();
+         ++level_index) {
+        stream << "  [" << level_index << "] [";
+        const auto& level = compiled_plan.dependency_levels[level_index];
+        for (uint32_t pass_index = 0;
+             pass_index < level.passes.size();
+             ++pass_index) {
             if (pass_index != 0) {
                 stream << ", ";
             }
-            stream << passes[wave.passes[pass_index].index].name;
+            stream << passes[level.passes[pass_index].index].name;
         }
         stream << "]\n";
     }
 
-    stream << "recording_batches:\n";
-    for (const auto& batch : compiled_plan.recording_batches) {
-        stream << "  [" << batch.id << "] queue=" << ToString(batch.queue.role)
-               << "/native" << batch.queue.native_queue_id << "/family" << batch.queue.family_id
-               << " cpu=" << ToString(batch.execution)
-               << " translate=" << ToString(batch.translate_execution_class)
-               << " workload=" << batch.workload
-               << " wave=";
-        if (batch.dependency_wave == PassHandle::InvalidIndex) {
+    stream << "frontend_record_units:\n";
+    for (const auto& unit : compiled_plan.frontend_record_units) {
+        stream << "  [" << unit.source_index << "] queue="
+               << ToString(unit.target_queue.role) << "/native"
+               << unit.target_queue.native_queue_id << "/family"
+               << unit.target_queue.family_id << " record="
+               << ToString(unit.record_execution_class) << " native="
+               << ToString(unit.native_translate_class) << " work="
+               << unit.estimated_record_work << " level=";
+        if (unit.dependency_level_index == PassHandle::InvalidIndex) {
             stream << "none";
         } else {
-            stream << batch.dependency_wave;
+            stream << unit.dependency_level_index;
         }
-        stream << " passes=[";
-        for (uint32_t index = 0; index < batch.passes.size(); ++index) {
-            if (index != 0) {
-                stream << ", ";
-            }
-            stream << passes[batch.passes[index].index].name;
-        }
-        stream << "]\n";
+        stream << " pass=" << passes[unit.pass.index].name << '\n';
     }
     return stream.str();
 }

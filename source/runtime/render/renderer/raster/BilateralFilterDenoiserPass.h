@@ -24,7 +24,7 @@ public:
 class BilateralFilterDenoiserPass {
 public:
     struct GraphResources {
-        RenderGraph::TokenHandle   processing_image{};
+        RenderGraph::TextureHandle input{};
         RenderGraph::TextureHandle denoiser_output{};
     };
 

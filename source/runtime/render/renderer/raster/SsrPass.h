@@ -37,7 +37,7 @@ public:
 class SsrPass {
 public:
     struct GraphResources {
-        RenderGraph::TokenHandle   processing_image{};
+        RenderGraph::TextureHandle input{};
         RenderGraph::TextureHandle normal{};
         RenderGraph::TextureHandle depth{};
         RenderGraph::TextureHandle metal_rough_ao{};

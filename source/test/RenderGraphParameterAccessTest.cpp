@@ -335,12 +335,15 @@ PlanResult BuildPlan(
     }
     result.graph_dump = graph.Dump();
     const auto& plan  = graph.GetCompiledPlan();
-    if (plan.recording_batches.size() == 2) {
-        result.consumer_execution = plan.recording_batches[1].execution;
+    if (plan.frontend_record_units.size() == 2) {
+        result.consumer_execution =
+            plan.frontend_record_units[1].record_execution_class;
         result.consumer_translate =
-            plan.recording_batches[1].translate_execution_class;
-        result.consumer_workload = plan.recording_batches[1].workload;
-        result.consumer_queue    = plan.recording_batches[1].queue.role;
+            plan.frontend_record_units[1].native_translate_class;
+        result.consumer_workload =
+            plan.frontend_record_units[1].estimated_record_work;
+        result.consumer_queue =
+            plan.frontend_record_units[1].target_queue.role;
     }
 
     RenderGraphLowering::LoweredPlan lowered{};
@@ -569,7 +572,7 @@ void TestMoveOnlyParameterLifetimeAndParallelRecord(TestSuite& suite) {
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
         size_t published_source_count = 0;
         Moer::TaskSystem::Init();
-        const bool executed = graph.ExecuteRecording(
+        const bool executed = graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             true,

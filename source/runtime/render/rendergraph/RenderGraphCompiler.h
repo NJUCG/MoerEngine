@@ -66,8 +66,9 @@ private:
     bool BuildTopologicalOrder();
     bool BuildExecutionOrder();
     void BuildQueuePlan();
-    void BuildDependencyWaves();
-    void BuildRecordingBatches();
+    void BuildDependencyLevels();
+    void BuildFrontendRecordUnits();
+    void BuildFrontendDispatchGroups();
     void BuildLifetimes();
     void BuildTransientAliasPlan();
     bool ValidateTransientAliasPlan();

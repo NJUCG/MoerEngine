@@ -243,8 +243,9 @@ bool RenderGraphCompiler::Compile() {
         return false;
     }
     BuildQueuePlan();
-    BuildDependencyWaves();
-    BuildRecordingBatches();
+    BuildDependencyLevels();
+    BuildFrontendRecordUnits();
+    BuildFrontendDispatchGroups();
     graph.compiled = true;
     return true;
 }
@@ -1673,7 +1674,7 @@ void RenderGraphCompiler::BuildQueuePlan() {
     }
 }
 
-void RenderGraphCompiler::BuildDependencyWaves() {
+void RenderGraphCompiler::BuildDependencyLevels() {
     std::vector<uint32_t> indegree(graph.passes.size(), 0);
     for (const auto& edge : graph.compiled_plan.edges) {
         ++indegree[edge.dst.index];
@@ -1682,18 +1683,18 @@ void RenderGraphCompiler::BuildDependencyWaves() {
     std::vector<bool> scheduled(graph.passes.size(), false);
     uint32_t          scheduled_count = 0;
     while (scheduled_count < graph.passes.size()) {
-        RenderGraph::CompiledWave wave{};
+        RenderGraph::CompiledDependencyLevel level{};
         for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
             if (!scheduled[pass_index] && indegree[pass_index] == 0) {
-                wave.passes.push_back(RenderGraph::PassHandle{pass_index, graph.graph_id});
+                level.passes.push_back(RenderGraph::PassHandle{pass_index, graph.graph_id});
             }
         }
-        assert(!wave.passes.empty());
-        for (const auto pass : wave.passes) {
+        assert(!level.passes.empty());
+        for (const auto pass : level.passes) {
             scheduled[pass.index] = true;
             ++scheduled_count;
         }
-        for (const auto pass : wave.passes) {
+        for (const auto pass : level.passes) {
             for (const auto& edge : graph.compiled_plan.edges) {
                 if (edge.src == pass && !scheduled[edge.dst.index]) {
                     assert(indegree[edge.dst.index] > 0);
@@ -1701,100 +1702,80 @@ void RenderGraphCompiler::BuildDependencyWaves() {
                 }
             }
         }
-        graph.compiled_plan.dependency_waves.push_back(std::move(wave));
+        graph.compiled_plan.dependency_levels.push_back(std::move(level));
     }
 }
 
-void RenderGraphCompiler::BuildRecordingBatches() {
-    std::vector<uint32_t> pass_to_wave(
+void RenderGraphCompiler::BuildFrontendRecordUnits() {
+    std::vector<uint32_t> pass_to_dependency_level(
         graph.passes.size(),
         RenderGraph::PassHandle::InvalidIndex
     );
-    for (uint32_t wave_index = 0; wave_index < graph.compiled_plan.dependency_waves.size();
-         ++wave_index) {
-        for (const auto pass : graph.compiled_plan.dependency_waves[wave_index].passes) {
-            pass_to_wave[pass.index] = wave_index;
+    for (uint32_t level_index = 0;
+         level_index < graph.compiled_plan.dependency_levels.size();
+         ++level_index) {
+        for (const auto pass :
+             graph.compiled_plan.dependency_levels[level_index].passes) {
+            pass_to_dependency_level[pass.index] = level_index;
         }
     }
 
-    graph.compiled_plan.recording_batches.reserve(graph.compiled_plan.execution_order.size());
-    std::vector<uint32_t> pass_to_batch(
-        graph.passes.size(),
-        RenderGraph::PassHandle::InvalidIndex
+    // Preserve one stable frontend source identity per pass in execution order.
+    graph.compiled_plan.frontend_record_units.reserve(
+        graph.compiled_plan.execution_order.size()
     );
     for (const auto pass_handle : graph.compiled_plan.execution_order) {
         const auto& pass = graph.passes[pass_handle.index];
-        const auto  id = static_cast<uint32_t>(graph.compiled_plan.recording_batches.size());
-        pass_to_batch[pass_handle.index] = id;
-        graph.compiled_plan.recording_batches.push_back(RenderGraph::CompiledRecordingBatch{
-            .id              = id,
-            .queue           = graph.queue_topology.Resolve(pass.domain.queue),
-            .passes          = {pass_handle},
-            .execution       = pass.execution_class,
-            .translate_execution_class =
-                pass.translate_execution_class,
-            .workload        = pass.workload,
-            .dependency_wave = pass_to_wave[pass_handle.index],
-        });
-    }
-
-    auto has_cpu_recording_dependency =
-        [&](RenderGraph::PassHandle candidate,
-            uint32_t                group_begin,
-            uint32_t                group_end) {
-            for (const auto& edge : graph.compiled_plan.edges) {
-                if (edge.dst != candidate) {
-                    continue;
-                }
-
-                const uint32_t source_batch = pass_to_batch[edge.src.index];
-                if (source_batch < group_begin || source_batch >= group_end) {
-                    continue;
-                }
-
-                for (const auto& reason : edge.reasons) {
-                    if (reason.kind == RenderGraph::EdgeReasonKind::Explicit) {
-                        return true;
-                    }
-                    if (graph.IsValidResource(reason.resource) &&
-                        graph.resources[reason.resource.index].kind ==
-                            RenderGraph::ResourceKind::Token) {
-                        return true;
-                    }
-                }
+        const auto source_index = static_cast<uint32_t>(
+            graph.compiled_plan.frontend_record_units.size()
+        );
+        graph.compiled_plan.frontend_record_units.push_back(
+            RenderGraph::CompiledFrontendRecordUnit{
+                .source_index = source_index,
+                .target_queue = graph.queue_topology.Resolve(pass.domain.queue),
+                .pass         = pass_handle,
+                .record_execution_class = pass.execution_class,
+                .native_translate_class = pass.translate_execution_class,
+                .estimated_record_work  = pass.workload,
+                .dependency_level_index =
+                    pass_to_dependency_level[pass_handle.index],
             }
-            return false;
-        };
+        );
+    }
+}
 
-    uint32_t batch_index = 0;
-    while (batch_index < graph.compiled_plan.recording_batches.size()) {
-        const auto& first = graph.compiled_plan.recording_batches[batch_index];
-        uint32_t    group_end = batch_index + 1;
-        if (first.execution ==
+void RenderGraphCompiler::BuildFrontendDispatchGroups() {
+    // Graph edges describe GPU execution, state, and ownership. They do not
+    // order frontend Record callbacks: every callback consumes immutable
+    // prepared data and writes a private command stream. Only the declared CPU
+    // execution class creates a frontend dispatch boundary.
+    uint32_t unit_index = 0;
+    while (unit_index < graph.compiled_plan.frontend_record_units.size()) {
+        const auto& first =
+            graph.compiled_plan.frontend_record_units[unit_index];
+        uint32_t group_end = unit_index + 1;
+        if (first.record_execution_class ==
             RenderGraph::PassExecutionClass::ParallelRecordEligible) {
-            while (group_end < graph.compiled_plan.recording_batches.size()) {
+            while (group_end <
+                   graph.compiled_plan.frontend_record_units.size()) {
                 const auto& candidate =
-                    graph.compiled_plan.recording_batches[group_end];
-                if (candidate.execution !=
-                        RenderGraph::PassExecutionClass::ParallelRecordEligible ||
-                    candidate.passes.size() != 1 ||
-                    has_cpu_recording_dependency(
-                        candidate.passes.front(), batch_index, group_end
-                    )) {
+                    graph.compiled_plan.frontend_record_units[group_end];
+                if (candidate.record_execution_class !=
+                    RenderGraph::PassExecutionClass::ParallelRecordEligible) {
                     break;
                 }
                 ++group_end;
             }
         }
 
-        graph.compiled_plan.recording_groups.push_back(
-            RenderGraph::CompiledRecordingGroup{
-                .first_batch = batch_index,
-                .batch_count = group_end - batch_index,
-                .execution   = first.execution,
+        graph.compiled_plan.frontend_dispatch_groups.push_back(
+            RenderGraph::CompiledFrontendDispatchGroup{
+                .first_unit = unit_index,
+                .unit_count = group_end - unit_index,
+                .record_execution_class = first.record_execution_class,
             }
         );
-        batch_index = group_end;
+        unit_index = group_end;
     }
 }
 

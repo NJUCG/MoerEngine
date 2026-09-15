@@ -267,7 +267,7 @@ void TestActiveTransientLifetimeIsCompletionOwned(TestSuite& suite) {
         "compiler did not publish a transient allocation slot/lifetime"
     );
 
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         {},
         false,
@@ -336,7 +336,7 @@ void TestRejectedProducerRetiresThroughOrdinaryCallbacks(TestSuite& suite) {
 
     const bool compiled = graph.Compile();
     suite.Check(compiled, test, graph.GetCompileError());
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         {},
         false,
@@ -404,7 +404,7 @@ void TestUnusedTransientDoesNotAllocate(TestSuite& suite) {
 
     const bool compiled = graph.Compile();
     suite.Check(compiled, test, graph.GetCompileError());
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         {},
         false,
@@ -541,7 +541,7 @@ void TestNonOverlappingBuffersAliasUntilEveryCompletion(TestSuite& suite) {
         "alias reuse did not become a formal compiled dependency"
     );
 
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         {},
         false,
@@ -1098,7 +1098,7 @@ void TestMainThreadReferenceRetainsCompletionLifetime(TestSuite& suite) {
     const bool compiled = graph.Compile();
     suite.Check(compiled, test, graph.GetCompileError());
     CommandList main_commands(EQueueType::Graphics);
-    const bool executed = compiled && graph.ExecuteRecording(
+    const bool executed = compiled && graph.ExecuteFrontendRecordingPlan(
         {},
         {},
         false,
@@ -1176,7 +1176,7 @@ void TestTransientExecutionContractsAndRollback(TestSuite& suite) {
         );
         const bool compiled = graph.Compile();
         suite.Check(compiled, disabled_test, graph.GetCompileError());
-        const bool executed = compiled && graph.ExecuteRecording({});
+        const bool executed = compiled && graph.ExecuteFrontendRecordingPlan({});
         suite.Check(
             !executed &&
                 graph.GetCompileError().find("active recording") !=
@@ -1209,7 +1209,7 @@ void TestTransientExecutionContractsAndRollback(TestSuite& suite) {
         const bool executed = compiled && graph.Execute();
         suite.Check(
             !executed && !callback_ran &&
-                graph.GetCompileError().find("active ExecuteRecording") !=
+                graph.GetCompileError().find("active ExecuteFrontendRecordingPlan") !=
                     std::string::npos,
             serial_test,
             "serial Execute ran an allocation-backed transient callback"
@@ -1242,7 +1242,7 @@ void TestTransientExecutionContractsAndRollback(TestSuite& suite) {
         );
         const bool compiled = graph.Compile();
         suite.Check(compiled, rollback_test, graph.GetCompileError());
-        const bool executed = compiled && graph.ExecuteRecording(
+        const bool executed = compiled && graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             false,

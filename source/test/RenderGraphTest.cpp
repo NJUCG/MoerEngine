@@ -166,8 +166,12 @@ void ReleaseRenderGraphSubmit(Moer::Render::CmdSubmit& submit) {
     return false;
 }
 
-[[nodiscard]] bool WaveContains(const RenderGraph::CompiledWave& wave, RenderGraph::PassHandle pass) {
-    return std::find(wave.passes.begin(), wave.passes.end(), pass) != wave.passes.end();
+[[nodiscard]] bool DependencyLevelContains(
+    const RenderGraph::CompiledDependencyLevel& level,
+    RenderGraph::PassHandle                     pass
+) {
+    return std::find(level.passes.begin(), level.passes.end(), pass) !=
+           level.passes.end();
 }
 
 [[nodiscard]] const RenderGraph::CompiledBarrier* FindBarrier(
@@ -301,7 +305,7 @@ void TestMergedRecordingPreservesFrontendSourcesAndSubmitOrder(
         Moer::Render::EQueueType::Graphics
     );
     const bool executed =
-        compiled && graph.ExecuteRecordingMerged(command_list);
+        compiled && graph.RecordAndMergeFrontendCommands(command_list);
     suite.Check(executed, test_name, graph.GetCompileError());
     suite.Check(
         observed_command_lists[0] != nullptr &&
@@ -336,7 +340,7 @@ void TestMergedRecordingPreservesFrontendSourcesAndSubmitOrder(
         "frontend callback payload must be concatenated in compiled order"
     );
     suite.Check(
-        !graph.ExecuteRecordingMerged(command_list),
+        !graph.RecordAndMergeFrontendCommands(command_list),
         test_name,
         "merged execution must preserve the graph one-shot contract"
     );
@@ -374,11 +378,11 @@ void TestMergedRecordingFailureLeavesDestinationUntouched(TestSuite& suite) {
         Moer::Render::EQueueType::Graphics
     );
     const bool executed =
-        compiled && graph.ExecuteRecordingMerged(destination);
+        compiled && graph.RecordAndMergeFrontendCommands(destination);
     suite.Check(
         !executed,
         test_name,
-        "a failed record callback must fail the whole recording batch"
+        "a failed record callback must fail the whole frontend dispatch group"
     );
     suite.Check(
         destination.IsEmpty(),
@@ -830,11 +834,12 @@ void TestTypedTextureSubresourceHazards(TestSuite& suite) {
         "a read must not depend on a writer of another mip"
     );
     suite.Check(
-        plan.dependency_waves.size() == 2 && WaveContains(plan.dependency_waves[0], write_mip0) &&
-            WaveContains(plan.dependency_waves[0], write_mip1) &&
-            WaveContains(plan.dependency_waves[1], read_mip0),
+        plan.dependency_levels.size() == 2 &&
+            DependencyLevelContains(plan.dependency_levels[0], write_mip0) &&
+            DependencyLevelContains(plan.dependency_levels[0], write_mip1) &&
+            DependencyLevelContains(plan.dependency_levels[1], read_mip0),
         test_name,
-        "dependency waves must expose independent mip writers without changing execution policy"
+        "dependency levels must expose independent mip writers without changing execution policy"
     );
     suite.Check(graph.Execute(), test_name, graph.GetCompileError());
     suite.Check(
@@ -2532,12 +2537,13 @@ void TestSameNativeReadsDependOnTransitionFrontier(TestSuite& suite) {
         "compatible reads must fan out from the transition frontier without restoring a stale writer"
     );
     suite.Check(
-        plan.dependency_waves.size() == 3 && WaveContains(plan.dependency_waves[0], writer) &&
-            WaveContains(plan.dependency_waves[1], transition) &&
-            WaveContains(plan.dependency_waves[2], sibling_a) &&
-            WaveContains(plan.dependency_waves[2], sibling_b),
+        plan.dependency_levels.size() == 3 &&
+            DependencyLevelContains(plan.dependency_levels[0], writer) &&
+            DependencyLevelContains(plan.dependency_levels[1], transition) &&
+            DependencyLevelContains(plan.dependency_levels[2], sibling_a) &&
+            DependencyLevelContains(plan.dependency_levels[2], sibling_b),
         test_name,
-        "the writer, transition, and compatible sibling reads must occupy three dependency waves"
+        "the writer, transition, and compatible sibling reads must occupy three dependency levels"
     );
     suite.Check(
         FindBarrier(plan, buffer.Untyped(), transition, sibling_a) == nullptr &&
@@ -3945,7 +3951,8 @@ void TestMergedAccessStateDeterminesPlanCompleteness(TestSuite& suite) {
 }
 
 void TestRecordingBatchPlanAndClassification(TestSuite& suite) {
-    constexpr std::string_view test_name = "recording batch plan and classification";
+    constexpr std::string_view test_name =
+        "frontend record plan and classification";
     RenderGraph                graph("RecordingBatches");
     const auto                 hiz_token    = graph.CreateTransientToken("HiZ");
     const auto                 shadow_token = graph.CreateTransientToken("ShadowMask");
@@ -3979,51 +3986,53 @@ void TestRecordingBatchPlanAndClassification(TestSuite& suite) {
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
-        plan.recording_batches.size() == 3 && plan.recording_batches[0].passes == std::vector{hiz} &&
-            plan.recording_batches[1].passes == std::vector{shadow} &&
-            plan.recording_batches[2].passes == std::vector{commit},
+        plan.frontend_record_units.size() == 3 &&
+            plan.frontend_record_units[0].pass == hiz &&
+            plan.frontend_record_units[1].pass == shadow &&
+            plan.frontend_record_units[2].pass == commit,
         test_name,
-        "the compiler must emit one stable CPU ownership batch per pass"
+        "the compiler must emit one stable frontend record unit per pass"
     );
     suite.Check(
-        plan.recording_batches.size() == 3 &&
-            plan.recording_batches[0].execution ==
+        plan.frontend_record_units.size() == 3 &&
+            plan.frontend_record_units[0].record_execution_class ==
                 RenderGraph::PassExecutionClass::ParallelRecordEligible &&
-            plan.recording_batches[1].execution ==
+            plan.frontend_record_units[1].record_execution_class ==
                 RenderGraph::PassExecutionClass::ParallelRecordEligible &&
-            plan.recording_batches[2].execution == RenderGraph::PassExecutionClass::MainThread &&
-            plan.recording_batches[0].workload == 8 &&
-            plan.recording_batches[1].workload == 4,
+            plan.frontend_record_units[2].record_execution_class ==
+                RenderGraph::PassExecutionClass::MainThread &&
+            plan.frontend_record_units[0].estimated_record_work == 8 &&
+            plan.frontend_record_units[1].estimated_record_work == 4,
         test_name,
         "recording class and workload must survive compilation"
     );
     suite.Check(
-        plan.recording_batches.size() == 3 &&
-            plan.recording_batches[0].dependency_wave ==
-                plan.recording_batches[1].dependency_wave &&
-            plan.recording_batches[2].dependency_wave >
-                plan.recording_batches[0].dependency_wave,
+        plan.frontend_record_units.size() == 3 &&
+            plan.frontend_record_units[0].dependency_level_index ==
+                plan.frontend_record_units[1].dependency_level_index &&
+            plan.frontend_record_units[2].dependency_level_index >
+                plan.frontend_record_units[0].dependency_level_index,
         test_name,
-        "independent recording passes must share a wave while their consumer follows"
+        "independent recording passes must share a dependency level while their consumer follows"
     );
     suite.Check(
-        plan.recording_groups.size() == 2 &&
-            plan.recording_groups[0].first_batch == 0 &&
-            plan.recording_groups[0].batch_count == 2 &&
-            plan.recording_groups[0].execution ==
+        plan.frontend_dispatch_groups.size() == 2 &&
+            plan.frontend_dispatch_groups[0].first_unit == 0 &&
+            plan.frontend_dispatch_groups[0].unit_count == 2 &&
+            plan.frontend_dispatch_groups[0].record_execution_class ==
                 RenderGraph::PassExecutionClass::ParallelRecordEligible &&
-            plan.recording_groups[1].first_batch == 2 &&
-            plan.recording_groups[1].batch_count == 1 &&
-            plan.recording_groups[1].execution ==
+            plan.frontend_dispatch_groups[1].first_unit == 2 &&
+            plan.frontend_dispatch_groups[1].unit_count == 1 &&
+            plan.frontend_dispatch_groups[1].record_execution_class ==
                 RenderGraph::PassExecutionClass::MainThread,
         test_name,
         "the compiler must precompute contiguous CPU recording dispatch groups"
     );
     suite.Check(
-        Contains(graph.Dump(), "recording_batches:\n") &&
+        Contains(graph.Dump(), "frontend_record_units:\n") &&
             Contains(
                 graph.Dump(),
-                "cpu=parallel-record translate=parallel workload=8 wave=0"
+                "record=parallel-record native=parallel work=8 level=0"
             ),
         test_name,
         "the deterministic dump must expose the executable CPU recording schedule"
@@ -4103,16 +4112,17 @@ void TestExternalControlIsAnUnmanagedJoinBoundary(TestSuite& suite) {
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
-        plan.recording_batches.size() == 3 &&
-            plan.recording_batches[1].execution ==
+        plan.frontend_record_units.size() == 3 &&
+            plan.frontend_record_units[1].record_execution_class ==
                 RenderGraph::PassExecutionClass::ExternalControl &&
-            Contains(graph.Dump(), "cpu=external-control"),
+            Contains(graph.Dump(), "record=external-control"),
         test_name,
         "the compiler and dump must retain the explicit external-control policy"
     );
     suite.Check(
         plan.queue_batches.size() == 3 &&
-            plan.queue_batches[0].passes == std::vector{plan.recording_batches[0].passes.front()} &&
+            plan.queue_batches[0].passes ==
+                std::vector{plan.frontend_record_units[0].pass} &&
             !plan.queue_batches[0].external_control &&
             plan.queue_batches[1].passes == std::vector{external} &&
             plan.queue_batches[1].external_control &&
@@ -4125,7 +4135,7 @@ void TestExternalControlIsAnUnmanagedJoinBoundary(TestSuite& suite) {
 
     size_t published_groups = 0;
     size_t managed_observers = 0;
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         [&](const RenderGraph::ExecutedPassInfo& pass) {
             ++managed_observers;
             events.emplace_back(std::string("observer:") + std::string(pass.name));
@@ -5153,23 +5163,24 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
         "ShowTexture -> Clear -> Compose -> Draw ordering was not explicit"
     );
 
-    const auto& clear_batch =
-        plan.recording_batches[ui_passes.clear.index];
-    const auto& compose_batch =
-        plan.recording_batches[ui_passes.compose.index];
-    const auto& draw_batch =
-        plan.recording_batches[ui_passes.draw.index];
+    const auto& clear_unit =
+        plan.frontend_record_units[ui_passes.clear.index];
+    const auto& compose_unit =
+        plan.frontend_record_units[ui_passes.compose.index];
+    const auto& draw_unit =
+        plan.frontend_record_units[ui_passes.draw.index];
     suite.Check(
-        clear_batch.execution == RenderGraph::PassExecutionClass::SerialRecord &&
-            compose_batch.execution ==
+        clear_unit.record_execution_class ==
                 RenderGraph::PassExecutionClass::SerialRecord &&
-            draw_batch.execution ==
+            compose_unit.record_execution_class ==
                 RenderGraph::PassExecutionClass::SerialRecord &&
-            clear_batch.translate_execution_class ==
+            draw_unit.record_execution_class ==
+                RenderGraph::PassExecutionClass::SerialRecord &&
+            clear_unit.native_translate_class ==
                 ERHITranslateExecutionClass::Parallel &&
-            compose_batch.translate_execution_class ==
+            compose_unit.native_translate_class ==
                 ERHITranslateExecutionClass::Parallel &&
-            draw_batch.translate_execution_class ==
+            draw_unit.native_translate_class ==
                 ERHITranslateExecutionClass::SerialControl,
         test_name,
         "UI recording/translation ownership classes changed"
@@ -5249,7 +5260,7 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
     );
 
     bool draw_source_kept_serial_control = false;
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         [&](const RenderGraph::ExecutedPassInfo& pass,
             RHIRecordingSource& source) {
@@ -5441,17 +5452,17 @@ void TestSerialControlTranslationIsADeclaredRecordingPolicy(TestSuite& suite) {
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
-        plan.recording_batches.size() == 1 &&
-            plan.recording_batches.front().execution ==
+        plan.frontend_record_units.size() == 1 &&
+            plan.frontend_record_units.front().record_execution_class ==
                 RenderGraph::PassExecutionClass::SerialRecord &&
-            plan.recording_batches.front().translate_execution_class ==
+            plan.frontend_record_units.front().native_translate_class ==
                 Moer::Render::ERHITranslateExecutionClass::SerialControl &&
             Contains(graph.Dump(), "translate=serial-control"),
         test_name,
         "the compiler and dump must retain the declared translation frontier"
     );
 
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         {},
         false,
@@ -5481,7 +5492,7 @@ void TestSerialControlTranslationIsADeclaredRecordingPolicy(TestSuite& suite) {
     );
     suite.Check(weakened.Compile(), test_name, weakened.GetCompileError());
     bool weakened_published = false;
-    const bool weakened_executed = weakened.ExecuteRecording(
+    const bool weakened_executed = weakened.ExecuteFrontendRecordingPlan(
         {},
         [](const RenderGraph::ExecutedPassInfo&,
            Moer::Render::RHIRecordingSource& source) {
@@ -5519,7 +5530,7 @@ void TestSerialControlTranslationIsADeclaredRecordingPolicy(TestSuite& suite) {
     );
     bool command_list_kept_floor = false;
     const bool publisher_attempt_executed =
-        publisher_attempt.ExecuteRecording(
+        publisher_attempt.ExecuteFrontendRecordingPlan(
             {},
             {},
             false,
@@ -5561,8 +5572,8 @@ void TestCpuPrepareReferencesIdentityWithoutGpuAccess(TestSuite& suite) {
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
-        plan.recording_batches.size() == 1 &&
-            plan.recording_batches.front().execution ==
+        plan.frontend_record_units.size() == 1 &&
+            plan.frontend_record_units.front().record_execution_class ==
                 RenderGraph::PassExecutionClass::CpuPrepare &&
             plan.accesses.empty() && plan.edges.empty() && plan.barriers.empty() &&
             plan.queue_batches.empty(),
@@ -5578,7 +5589,7 @@ void TestCpuPrepareReferencesIdentityWithoutGpuAccess(TestSuite& suite) {
 
     size_t observer_calls = 0;
     size_t published_groups = 0;
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         [&](const RenderGraph::ExecutedPassInfo&) { ++observer_calls; },
         {},
         true,
@@ -5646,7 +5657,7 @@ void TestCpuPrepareIsExcludedFromGpuQueuePlan(TestSuite& suite) {
         HasEdgeReason(
             plan, prepare, consume, RenderGraph::EdgeReasonKind::ReadAfterWrite, token.Untyped()
         ) &&
-            plan.recording_batches.size() == 2 && plan.queue_batches.size() == 1 &&
+            plan.frontend_record_units.size() == 2 && plan.queue_batches.size() == 1 &&
             plan.queue_batches.front().passes == std::vector<RenderGraph::PassHandle>{consume} &&
             plan.queue_syncs.empty(),
         test_name,
@@ -5688,7 +5699,7 @@ void TestParallelRecordingFallsBackWithoutTaskGraph(TestSuite& suite) {
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     Moer::Array<Moer::Render::RHIRecordingGateView> published_gates{};
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         {},
         true,
@@ -5813,12 +5824,12 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
     );
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-    const auto& recording_plan = graph.GetCompiledPlan().recording_batches;
+    const auto& recording_plan = graph.GetCompiledPlan().frontend_record_units;
     suite.Check(
         recording_plan.size() == 3 &&
-            recording_plan[1].dependency_wave > recording_plan[0].dependency_wave,
+            recording_plan[1].dependency_level_index > recording_plan[0].dependency_level_index,
         test_name,
-        "the fixture must place the two record callbacks in different GPU dependency waves"
+        "the fixture must place the two record callbacks in different GPU dependency levels"
     );
 
     Moer::Array<Moer::Array<Moer::Render::RHIRecordingSource>> published{};
@@ -5828,7 +5839,7 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
         Moer::Render::EQueueType::Graphics
     );
     Moer::TaskSystem::Init();
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         {},
         true,
@@ -5951,7 +5962,7 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
     suite.Check(
         joined_before_main,
         test_name,
-        "a caller-thread pass must not run until the recording wave has joined"
+        "a caller-thread pass must not run until the frontend dispatch group has joined"
     );
     suite.Check(
         avoided_named_thread_reentry && explicitly_drained_named_task,
@@ -6036,7 +6047,7 @@ void TestGpuProfilingMainThreadSparseOrderAndRebind(TestSuite& suite) {
     bool recorder_cleared_after_submit = true;
     int  observer_calls = 0;
     int  publish_calls = 0;
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         [&](const RenderGraph::ExecutedPassInfo&) {
             ++observer_calls;
             main_submits.emplace_back(main_command_list.Submit());
@@ -6139,7 +6150,7 @@ void TestGpuProfilingMainThreadGenerationReuse(TestSuite& suite) {
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     int                bind_calls = 0;
     std::vector<uint64_t> source_orders{};
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         {},
         false,
@@ -6255,7 +6266,7 @@ void TestGpuProfilingMainThreadManagedBoundary(TestSuite& suite) {
         std::vector<uint64_t> source_orders{};
         Moer::Array<CmdSubmit> main_submits{};
         Moer::Array<RHIRecordingSource> published{};
-        const bool executed = graph.ExecuteRecording(
+        const bool executed = graph.ExecuteFrontendRecordingPlan(
             [&](const RenderGraph::ExecutedPassInfo&) {
                 ++observer_calls;
                 if (rotate_main_generation) {
@@ -6352,7 +6363,7 @@ void TestGpuProfilingMainThreadManagedBoundary(TestSuite& suite) {
         int                   bind_calls = 0;
         int                   publish_calls = 0;
         std::vector<uint64_t> source_orders{};
-        const bool executed = graph.ExecuteRecording(
+        const bool executed = graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             false,
@@ -6417,7 +6428,7 @@ void TestGpuProfilingMainThreadManagedBoundary(TestSuite& suite) {
         int                    bind_calls = 0;
         int                    publish_calls = 0;
         Moer::Array<CmdSubmit> main_submits{};
-        const bool executed = graph.ExecuteRecording(
+        const bool executed = graph.ExecuteFrontendRecordingPlan(
             [&](const RenderGraph::ExecutedPassInfo&) {
                 ++observer_calls;
                 main_submits.emplace_back(main_command_list.Submit());
@@ -6477,7 +6488,7 @@ void TestGpuProfilingMainThreadManagedBoundary(TestSuite& suite) {
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
         int bind_calls = 0;
         Moer::Array<RHIRecordingSource> published{};
-        const bool executed = graph.ExecuteRecording(
+        const bool executed = graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             false,
@@ -6549,7 +6560,7 @@ void TestGpuProfilingBindingFailureContracts(TestSuite& suite) {
             RenderGraph::PassExecutionClass::SerialRecord
         );
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        const bool executed = graph.ExecuteRecording(
+        const bool executed = graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             false,
@@ -6598,7 +6609,7 @@ void TestGpuProfilingBindingFailureContracts(TestSuite& suite) {
             RenderGraph::PassExecutionClass::SerialRecord
         );
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        const bool executed = graph.ExecuteRecording(
+        const bool executed = graph.ExecuteFrontendRecordingPlan(
             {},
             [&](const RenderGraph::ExecutedPassInfo&,
                 RHIRecordingSource& source) {
@@ -6651,7 +6662,7 @@ void TestGpuProfilingBindingFailureContracts(TestSuite& suite) {
                 RenderGraph::PassExecutionClass::SerialRecord
             );
             suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-            const bool executed = graph.ExecuteRecording(
+            const bool executed = graph.ExecuteFrontendRecordingPlan(
                 {},
                 {},
                 false,
@@ -6720,7 +6731,7 @@ void TestGpuProfilingBindingFailureContracts(TestSuite& suite) {
             RenderGraph::PassExecutionClass::SerialRecord
         );
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        const bool executed = graph.ExecuteRecording(
+        const bool executed = graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             false,
@@ -6787,7 +6798,7 @@ void TestGpuProfilingBindingFailureContracts(TestSuite& suite) {
             );
         }
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        const bool executed = graph.ExecuteRecording(
+        const bool executed = graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             false,
@@ -6840,7 +6851,7 @@ void TestGpuProfilingBindingFailureContracts(TestSuite& suite) {
             RenderGraph::PassExecutionClass::SerialRecord
         );
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        const bool executed = graph.ExecuteRecording(
+        const bool executed = graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             false,
@@ -6877,35 +6888,28 @@ void TestGpuProfilingBindingFailureContracts(TestSuite& suite) {
     }
 }
 
-void TestCpuRecordingDependenciesSplitParallelGroups(TestSuite& suite) {
-    constexpr std::string_view test_name = "CPU recording dependencies split parallel groups";
+void TestGpuDependenciesDoNotSplitFrontendGroups(TestSuite& suite) {
+    constexpr std::string_view test_name = "GPU dependencies do not split frontend groups";
 
-    std::atomic<int>        inflight{0};
-    std::atomic<int>        max_inflight{0};
     std::mutex              order_mutex{};
     std::vector<int>        record_order{};
     std::vector<size_t>     published_group_sizes{};
 
     const auto make_record = [&](int id) {
         return [&, id](Moer::Render::CommandList&) {
-            const int active = inflight.fetch_add(1) + 1;
-            int       observed = max_inflight.load();
-            while (observed < active &&
-                   !max_inflight.compare_exchange_weak(observed, active)) {}
             {
                 std::lock_guard lock(order_mutex);
                 record_order.push_back(id);
             }
-            inflight.fetch_sub(1);
         };
     };
 
-    RenderGraph graph("CpuRecordingDependencies");
-    const auto  cpu_token = graph.CreateTransientToken("CpuToken");
+    RenderGraph graph("GpuDependenciesOnly");
+    const auto  ordering_token = graph.CreateTransientToken("GpuOrderingToken");
     const auto  first = graph.AddRecordPass(
         "TokenProducer",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Write(cpu_token).SideEffect();
+            builder.Write(ordering_token).SideEffect();
         },
         make_record(1),
         RenderGraph::PassExecutionClass::ParallelRecordEligible
@@ -6913,7 +6917,7 @@ void TestCpuRecordingDependenciesSplitParallelGroups(TestSuite& suite) {
     const auto second = graph.AddRecordPass(
         "TokenConsumer",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(cpu_token).SideEffect();
+            builder.Read(ordering_token).SideEffect();
         },
         make_record(2),
         RenderGraph::PassExecutionClass::ParallelRecordEligible
@@ -6928,8 +6932,18 @@ void TestCpuRecordingDependenciesSplitParallelGroups(TestSuite& suite) {
     );
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    suite.Check(
+        plan.frontend_dispatch_groups.size() == 1 &&
+            plan.frontend_dispatch_groups.front().first_unit == 0 &&
+            plan.frontend_dispatch_groups.front().unit_count == 3 &&
+            plan.frontend_dispatch_groups.front().record_execution_class ==
+                RenderGraph::PassExecutionClass::ParallelRecordEligible,
+        test_name,
+        "GPU token and explicit edges must not become CPU recording boundaries"
+    );
     Moer::TaskSystem::Init();
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         {},
         true,
@@ -6941,14 +6955,15 @@ void TestCpuRecordingDependenciesSplitParallelGroups(TestSuite& suite) {
 
     suite.Check(executed, test_name, graph.GetCompileError());
     suite.Check(
-        published_group_sizes == std::vector<size_t>{1, 1, 1},
+        published_group_sizes == std::vector<size_t>{3},
         test_name,
-        "token and explicit dependencies must form CPU recording group boundaries"
+        "all adjacent parallel-record callbacks must publish as one frontend group"
     );
+    std::ranges::sort(record_order);
     suite.Check(
-        max_inflight.load() == 1 && record_order == std::vector<int>{1, 2, 3},
+        record_order == std::vector<int>{1, 2, 3},
         test_name,
-        "CPU-dependent callbacks must record in dependency order without overlap"
+        "every frontend callback must still record exactly once"
     );
     (void)first;
 }
@@ -6967,7 +6982,7 @@ void TestRecordingPublicationFailureTerminatesGates(TestSuite& suite) {
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
 
     Moer::Array<Moer::Render::RHIRecordingSource> published{};
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         {},
         true,
@@ -6999,7 +7014,7 @@ void TestRecordingPublicationFailureTerminatesGates(TestSuite& suite) {
     );
     suite.Check(ownership_graph.Compile(), test_name, ownership_graph.GetCompileError());
     bool publisher_called = false;
-    const bool ownership_executed = ownership_graph.ExecuteRecording(
+    const bool ownership_executed = ownership_graph.ExecuteFrontendRecordingPlan(
         {},
         [](const RenderGraph::ExecutedPassInfo&, Moer::Render::RHIRecordingSource& source) {
             source.completion = Moer::Render::RHIRecordingGate::Create();
@@ -7570,9 +7585,9 @@ void TestNrdSerialControlIslandContract(TestSuite& suite) {
         "NRD storage outputs must normalize to Sampled before Composition"
     );
     suite.Check(
-        plan.recording_batches[nrd.index].execution ==
+        plan.frontend_record_units[nrd.index].record_execution_class ==
                 RenderGraph::PassExecutionClass::SerialRecord &&
-            plan.recording_batches[nrd.index].translate_execution_class ==
+            plan.frontend_record_units[nrd.index].native_translate_class ==
                 Moer::Render::ERHITranslateExecutionClass::SerialControl,
         test_name,
         "only the NRD island must carry the explicit translation frontier"
@@ -7679,7 +7694,7 @@ int main() {
     TestGpuProfilingMainThreadGenerationReuse(suite);
     TestGpuProfilingMainThreadManagedBoundary(suite);
     TestGpuProfilingBindingFailureContracts(suite);
-    TestCpuRecordingDependenciesSplitParallelGroups(suite);
+    TestGpuDependenciesDoNotSplitFrontendGroups(suite);
     TestRecordingPublicationFailureTerminatesGates(suite);
     TestFrameSetupTokenAndTlasBoundaryContract(suite);
     TestNrdSerialControlIslandContract(suite);

@@ -44,7 +44,6 @@ public:
 class ShadowDepthPass {
 public:
     struct GraphResources {
-        RenderGraph::TokenHandle scene{};
         RenderGraph::TokenHandle shadow_maps{};
     };
 

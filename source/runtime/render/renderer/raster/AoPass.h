@@ -67,18 +67,17 @@ public:
         RenderGraph::TextureHandle normal{};
         RenderGraph::TextureHandle depth{};
         RenderGraph::TextureHandle lighting_output{};
-        RenderGraph::TokenHandle   scene{};
-        RenderGraph::TokenHandle   ao_working_set{};
-        RenderGraph::TokenHandle   motion_vectors{};
+        RenderGraph::TextureHandle ao_only{};
+        RenderGraph::TextureHandle camera_motion_vector{};
+        RenderGraph::BufferHandle  motion_vector_data{};
     };
 
     struct CompositeGraphResources {
-        RenderGraph::TokenHandle   ao_working_set{};
+        RenderGraph::TextureHandle ao_only{};
         RenderGraph::TextureHandle lighting_output{};
         RenderGraph::TextureHandle depth{};
         RenderGraph::TextureHandle normal{};
         RenderGraph::TextureHandle ao_output{};
-        RenderGraph::TokenHandle   processing_image{};
     };
 
     struct AoPassOutput {
@@ -167,6 +166,10 @@ public:
 
     [[nodiscard]] uint NextAoOnlyIndex() const noexcept {
         return committed_ao_only_idx ^ 1u;
+    }
+
+    [[nodiscard]] const BufferRef& GetMotionVectorDataBuffer() const {
+        return camera_mv_data_in_gpu.buf;
     }
 
     [[nodiscard]] AoPassOutput DescribeNextOutput(

@@ -34,7 +34,6 @@ public:
 class GeometryPass {
 public:
     struct GraphResources {
-        RenderGraph::TokenHandle   scene{};
         RenderGraph::TextureHandle hiz_previous{};
         RenderGraph::TextureHandle base_color{};
         RenderGraph::TextureHandle normal{};

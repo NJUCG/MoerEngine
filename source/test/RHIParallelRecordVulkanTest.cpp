@@ -1898,7 +1898,7 @@ void RunActiveRdgExplicitBarrierReadback(bool _parallel) {
             "active RDG compile failed: " + graph.GetCompileError()
         );
     }
-    if (!graph.ExecuteRecording(
+    if (!graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             _parallel,
@@ -1968,7 +1968,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                 stale_topology_graph.GetCompileError()
             );
         }
-        if (stale_topology_graph.ExecuteRecording(
+        if (stale_topology_graph.ExecuteFrontendRecordingPlan(
                 {},
                 {},
                 _parallel,
@@ -2033,7 +2033,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         );
     }
     CommandList caller_commands(EQueueType::Graphics);
-    if (caller_graph.ExecuteRecording(
+    if (caller_graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             _parallel,
@@ -2226,7 +2226,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                 independent_graph.GetCompileError()
             );
         }
-        if (!independent_graph.ExecuteRecording(
+        if (!independent_graph.ExecuteFrontendRecordingPlan(
                 {},
                 {},
                 _parallel,
@@ -2502,7 +2502,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                 );
             }
         }
-        if (!physical_graph.ExecuteRecording(
+        if (!physical_graph.ExecuteFrontendRecordingPlan(
                 {},
                 {},
                 _parallel,
@@ -2722,7 +2722,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
             "active RDG async queue plan disagrees with runtime topology"
         );
     }
-    if (!graph.ExecuteRecording(
+    if (!graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             _parallel,
@@ -3171,7 +3171,7 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
         topology.graphics
     );
 
-    if (!graph.ExecuteRecording(
+    if (!graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             _parallel,
@@ -3331,7 +3331,7 @@ void RunActiveRdgTransientAliasReadback(bool _parallel) {
     if (transient_desc.ByteSize() != byte_size) {
         throw std::runtime_error("transient alias descriptor byte size mismatch");
     }
-    if (!graph.ExecuteRecording(
+    if (!graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             _parallel,
@@ -3499,7 +3499,7 @@ void RunActiveRdgTransientTextureAliasReadback(bool _parallel) {
             "active RDG transient texture alias did not reuse one slot"
         );
     }
-    if (!graph.ExecuteRecording(
+    if (!graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             _parallel,
@@ -3654,7 +3654,7 @@ void RunActiveRdgTextureArraySubrange(bool _parallel) {
             "active RDG texture array compile failed: " + graph.GetCompileError()
         );
     }
-    if (!graph.ExecuteRecording(
+    if (!graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             _parallel,
