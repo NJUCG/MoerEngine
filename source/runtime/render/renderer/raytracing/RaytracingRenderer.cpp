@@ -1527,7 +1527,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                     gpu_profiling.source_order_base =
                         graph_source_order_base;
                 }
-                if (graph.ExecuteRecording(
+                if (graph.ExecuteFrontendRecordingPlan(
                         {},
                         configure_recording_source,
                         state.render_graph_parallel_recording,
@@ -1559,7 +1559,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                             cmd_list.Submit();
                         static_cast<void>(rejected_graph_generation);
                     }
-                    // ExecuteRecording joins every producer and fails the
+                    // ExecuteFrontendRecordingPlan joins every producer and fails the
                     // graph-wide commit gate. Sync only joins the resulting
                     // rejection cleanup and the already accepted Prefix; it is
                     // not used as a resource-state substitute.

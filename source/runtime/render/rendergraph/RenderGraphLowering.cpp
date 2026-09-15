@@ -508,20 +508,20 @@ bool RenderGraphLowering::Lower(
         }
         execution_member[pass.index] = true;
     }
-    if (compiled.recording_batches.size() != compiled.execution_order.size()) {
+    if (compiled.frontend_record_units.size() != compiled.execution_order.size()) {
         return fail("recording schedule does not cover the execution order");
     }
-    for (uint32_t batch_index = 0;
-         batch_index < compiled.recording_batches.size();
-         ++batch_index) {
-        const auto& batch = compiled.recording_batches[batch_index];
-        const auto  pass  = compiled.execution_order[batch_index];
+    for (uint32_t unit_index = 0;
+         unit_index < compiled.frontend_record_units.size();
+         ++unit_index) {
+        const auto& unit = compiled.frontend_record_units[unit_index];
+        const auto  pass = compiled.execution_order[unit_index];
         const auto& declaration = graph.passes[pass.index];
-        if (batch.id != batch_index || batch.passes.size() != 1 ||
-            batch.passes.front() != pass ||
-            batch.queue != graph.queue_topology.Resolve(declaration.domain.queue) ||
-            batch.execution != declaration.execution_class ||
-            batch.workload != declaration.workload) {
+        if (unit.source_index != unit_index || unit.pass != pass ||
+            unit.target_queue !=
+                graph.queue_topology.Resolve(declaration.domain.queue) ||
+            unit.record_execution_class != declaration.execution_class ||
+            unit.estimated_record_work != declaration.workload) {
             return fail(
                 "recording schedule disagrees with stable execution order"
             );

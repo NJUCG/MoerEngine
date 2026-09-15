@@ -830,9 +830,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             );
         }
 
-        // ExecuteRecording owns modern per-source binding and requires the
-        // caller-thread list to be empty at graph entry. Preserve the legacy
-        // renderer label only when no modern frame was admitted.
+        // ExecuteFrontendRecordingPlan owns modern per-source binding and
+        // requires the caller-thread list to be empty at graph entry. Preserve
+        // the legacy renderer label only when no modern frame was admitted.
         std::optional<ScopedGpuMarker> renderer_marker{};
         if (!gpu_profile_frame.Valid()) {
             renderer_marker.emplace(
@@ -2051,7 +2051,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         gpu_profiling.source_order_base =
                             graph_source_order_base + 1;
                     }
-                    const bool graph_recorded = graph.ExecuteRecordingMerged(
+                    const bool graph_recorded = graph.RecordAndMergeFrontendCommands(
                         cmd_list,
                         parallel_recording_enabled,
                         gpu_profiling

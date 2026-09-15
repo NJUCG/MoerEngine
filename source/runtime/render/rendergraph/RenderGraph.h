@@ -505,37 +505,38 @@ public:
         bool           exported      = false;
     };
 
-    struct CompiledWave {
+    struct CompiledDependencyLevel {
         std::vector<PassHandle> passes{};
     };
 
     /**
-     * Stable CPU recording unit. The first implementation deliberately keeps
-     * one pass per batch; coalescing is a later optimization and must not alter
-     * callback ownership or source order.
+     * One stable frontend recording source. Native translation batching is a
+     * separate backend concern and must not change this pass identity.
      */
-    struct CompiledRecordingBatch {
-        uint32_t                id = 0;
-        QueueBinding            queue{};
-        std::vector<PassHandle> passes{};
-        PassExecutionClass      execution = PassExecutionClass::SerialRecord;
-        ERHITranslateExecutionClass translate_execution_class{
+    struct CompiledFrontendRecordUnit {
+        uint32_t                source_index = 0;
+        QueueBinding            target_queue{};
+        PassHandle              pass{};
+        PassExecutionClass      record_execution_class = PassExecutionClass::SerialRecord;
+        ERHITranslateExecutionClass native_translate_class{
             ERHITranslateExecutionClass::Parallel
         };
-        uint32_t                workload = 1;
-        uint32_t                dependency_wave = PassHandle::InvalidIndex;
+        uint32_t                estimated_record_work = 1;
+        uint32_t                dependency_level_index = PassHandle::InvalidIndex;
     };
 
     /**
-     * Contiguous CPU recording batches that may be dispatched together.
+     * Contiguous frontend recording units that may be dispatched together.
      * GPU resource hazards do not split a group because immutable frontend
      * command streams can be recorded concurrently and assembled later in
-     * compiled order. Explicit CPU dependencies and token edges do split it.
+     * compiled order. Explicit and token edges still split groups only as a
+     * legacy compatibility rule; new strict Prepare/Record passes must not use
+     * graph edges to communicate CPU recording dependencies.
      */
-    struct CompiledRecordingGroup {
-        uint32_t           first_batch = 0;
-        uint32_t           batch_count = 0;
-        PassExecutionClass execution  = PassExecutionClass::SerialRecord;
+    struct CompiledFrontendDispatchGroup {
+        uint32_t           first_unit = 0;
+        uint32_t           unit_count = 0;
+        PassExecutionClass record_execution_class = PassExecutionClass::SerialRecord;
     };
 
     /**
@@ -638,7 +639,7 @@ public:
     };
 
     /**
-     * Immutable compiler output. recording_batches is the executable CPU
+     * Immutable compiler output. frontend_record_units is the executable CPU
      * ownership schedule; barriers, queue_batches, and queue_syncs are the
      * active Graphics/Compute/Copy lowering contract. Queue syncs describe
      * managed internal pass/batch edges only. External import/export/present
@@ -654,12 +655,12 @@ public:
         /** Atomic subresource/range accesses with logical input/output versions. */
         std::vector<CompiledAccess>   accesses{};
         std::vector<CompiledResource> resources{};
-        /** Semantic dependency waves; CPU recording groups apply their own edge taxonomy. */
-        std::vector<CompiledWave> dependency_waves{};
-        /** Stable one-pass CPU recording batches with explicit thread-safety classification. */
-        std::vector<CompiledRecordingBatch> recording_batches{};
+        /** Semantic dependency levels; frontend dispatch uses its own edge taxonomy. */
+        std::vector<CompiledDependencyLevel> dependency_levels{};
+        /** Stable one-pass frontend sources with explicit thread-safety classification. */
+        std::vector<CompiledFrontendRecordUnit> frontend_record_units{};
         /** Precompiled dispatch groups; execution never rescans semantic edges. */
-        std::vector<CompiledRecordingGroup> recording_groups{};
+        std::vector<CompiledFrontendDispatchGroup> frontend_dispatch_groups{};
         /** Canonical state/memory/ownership decisions, prior to backend-specific lowering. */
         std::vector<CompiledBarrier> barriers{};
         /** Descriptor-exact, non-overlapping whole-object transient reuse boundaries. */
@@ -683,9 +684,9 @@ public:
             edges.clear();
             accesses.clear();
             resources.clear();
-            dependency_waves.clear();
-            recording_batches.clear();
-            recording_groups.clear();
+            dependency_levels.clear();
+            frontend_record_units.clear();
+            frontend_dispatch_groups.clear();
             barriers.clear();
             alias_boundaries.clear();
             queue_batches.clear();
@@ -816,13 +817,14 @@ public:
      * handoff, but must not mutate/seal their CommandLists, replace or complete
      * their producer/transaction gates, wait on those gates, or call blocking
      * RHI lifecycle operations such as Sync. Producer completion is joined by
-     * ExecuteRecording; active lowering releases every published group through
-     * one graph-wide commit gate only after the whole graph succeeds.
+     * ExecuteFrontendRecordingPlan; active lowering releases every published
+     * group through one graph-wide commit gate only after the whole graph succeeds.
      */
-    using RecordingBatchPublisher = std::function<void(Array<RHIRecordingSource>&&)>;
+    using FrontendSourcePublisher =
+        std::function<void(Array<RHIRecordingSource>&&)>;
 
     /**
-     * Opts ExecuteRecording into the authoritative RDG state path.
+     * Opts ExecuteFrontendRecordingPlan into the authoritative RDG state path.
      *
      * Active lowering materializes a fully validated Graphics-only plan into
      * explicit RHI barriers and allocates descriptor-backed transients from a
@@ -833,8 +835,9 @@ public:
      * texture aspects, and an initially empty main-thread list. Active lowering
      * fails closed when caller-thread and managed-record passes are mixed in
      * one graph. A physical MainThread graph must be isolated from nonphysical
-     * passes and keep its caller-owned list unsealed until ExecuteRecording
-     * returns (therefore no per-pass completion observer). Leaving enabled
+     * passes and keep its caller-owned list unsealed until
+     * ExecuteFrontendRecordingPlan returns (therefore no per-pass completion
+     * observer). Leaving enabled
      * false preserves the legacy backend-tracked path and rejects active
      * allocation-backed transient declarations.
      */
@@ -846,7 +849,7 @@ public:
     };
 
     /**
-     * Optional modern GPU profiling seam for ExecuteRecording.
+     * Optional modern GPU profiling seam for ExecuteFrontendRecordingPlan.
      *
      * The graph assigns source_order from the immutable compiled execution
      * schedule before any managed producer is dispatched. A false callback
@@ -1147,16 +1150,18 @@ public:
      * Executes legacy callbacks on the caller and explicit record callbacks on
      * independently owned CommandLists. Contiguous eligible passes on one queue
      * are dispatched together even when texture/buffer GPU hazards place them
-     * in different dependency waves: those hazards constrain submission, not
-     * immutable CPU command recording. Token hazards and explicit DependsOn
-     * edges remain CPU recording boundaries. Sources are registered with RHI
-     * in compiled order and joined before the next caller-thread pass.
+     * in different dependency levels: those hazards constrain submission, not
+     * immutable CPU command recording. As a compatibility rule, token hazards
+     * and explicit DependsOn edges still split frontend dispatch groups; new
+     * strict Prepare/Record passes must not rely on that behavior. Sources are
+     * registered with RHI in compiled order and joined before the next
+     * caller-thread pass.
      */
-    bool ExecuteRecording(
+    bool ExecuteFrontendRecordingPlan(
         const PassCompletedCallback&        after_main_thread_pass,
         const RecordingSourceSetupCallback& configure_recording_source = {},
         bool                                parallel_recording_enabled = true,
-        const RecordingBatchPublisher&      publish_recording_batch = {},
+        const FrontendSourcePublisher&      publish_frontend_sources = {},
         const ActiveRecordingOptions&        active_recording = {},
         const GpuProfilingOptions&            gpu_profiling = {}
     );
@@ -1168,11 +1173,12 @@ public:
      * The destination's later Submit() is the only native submission boundary.
      *
      * This is the direct path for record-class Graphics passes backed by
-     * already-created resources. It uses the compiler's recording groups and
-     * never publishes per-pass RHIRecordingSources. Active transient lowering
-     * and multi-queue execution remain on ExecuteRecording's RHI handoff path.
+     * already-created resources. It uses the compiler's frontend dispatch
+     * groups and never publishes per-pass RHIRecordingSources. Active transient
+     * lowering and multi-queue execution remain on
+     * ExecuteFrontendRecordingPlan's RHI handoff path.
      */
-    bool ExecuteRecordingMerged(
+    bool RecordAndMergeFrontendCommands(
         CommandList&               command_list,
         bool                       parallel_recording_enabled = true,
         const GpuProfilingOptions& gpu_profiling = {}
@@ -1282,7 +1288,7 @@ private:
     };
 
     struct SetupBatchState;
-    class MergedRecordingExecutor;
+    class FrontendRecordMergeExecutor;
 
     ResourceHandle ImportInternal(
         std::string_view   name,

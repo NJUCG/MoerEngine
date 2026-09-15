@@ -227,7 +227,7 @@ void TestRecordPassMaterializesExplicitBeforeBodyAfter(TestSuite& suite) {
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     Moer::Array<RHIRecordingSource> published{};
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         {},
         false,
@@ -352,7 +352,7 @@ void TestSameStateSecondReadMaterializesStateSeed(TestSuite& suite) {
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     Moer::Array<RHIRecordingSource> published{};
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         {},
         false,
@@ -431,7 +431,7 @@ void ExpectActiveFailClosed(
     int&             publish_calls
 ) {
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         [&](const RenderGraph::ExecutedPassInfo&, RHIRecordingSource&) {
             ++configure_calls;
@@ -641,7 +641,7 @@ void TestUnsupportedInputsFailBeforeCallbacksOrPublish(TestSuite& suite) {
         );
 
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        const bool executed = graph.ExecuteRecording(
+        const bool executed = graph.ExecuteFrontendRecordingPlan(
             {},
             [&](const RenderGraph::ExecutedPassInfo&, RHIRecordingSource& source) {
                 ++configure_calls;
@@ -712,7 +712,7 @@ void TestRecordingSourceSetupCannotCompleteProducerGate(TestSuite& suite) {
             );
 
             suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-            const bool executed = graph.ExecuteRecording(
+            const bool executed = graph.ExecuteFrontendRecordingPlan(
                 {},
                 [&](const RenderGraph::ExecutedPassInfo&, RHIRecordingSource& source) {
                     ++configure_calls;
@@ -803,7 +803,7 @@ void TestManagedRecordCallbackCannotSealOrDowngrade(TestSuite& suite) {
             );
 
             suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-            const bool executed = graph.ExecuteRecording(
+            const bool executed = graph.ExecuteFrontendRecordingPlan(
                 {},
                 {},
                 true,
@@ -886,7 +886,7 @@ void TestManagedRecordCallbackCannotMoveCommandList(TestSuite& suite) {
             );
 
             suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-            const bool executed = graph.ExecuteRecording(
+            const bool executed = graph.ExecuteFrontendRecordingPlan(
                 {},
                 {},
                 true,
@@ -959,7 +959,7 @@ void TestRecordProducerRejectsBlockingSync(TestSuite& suite) {
         );
 
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        const bool executed = graph.ExecuteRecording(
+        const bool executed = graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             true,
@@ -1019,7 +1019,7 @@ void TestRecordingPublisherRejectsBlockingSync(TestSuite& suite) {
     );
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         {},
         false,
@@ -1080,7 +1080,7 @@ void TestRecordingConfigurationRejectsBlockingSync(TestSuite& suite) {
     );
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         [&](const RenderGraph::ExecutedPassInfo&, RHIRecordingSource&) {
             ++configure_calls;
@@ -1148,7 +1148,7 @@ void TestRecordingPublisherCannotMutatePendingSource(TestSuite& suite) {
         );
 
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        const bool executed = graph.ExecuteRecording(
+        const bool executed = graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             false,
@@ -1240,7 +1240,7 @@ void TestActiveRecordingGroupsCommitAtomically(TestSuite& suite) {
 
     Moer::Array<Moer::Array<RHIRecordingSource>> published_groups{};
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         {},
         false,
@@ -1344,7 +1344,7 @@ void TestActiveMixedMainThreadAndRecordFailsBeforeCallbacks(TestSuite& suite) {
     );
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         {},
         false,
@@ -1416,7 +1416,7 @@ void TestActiveMainThreadCallbackCannotSealOrDowngrade(TestSuite& suite) {
         );
 
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        const bool executed = graph.ExecuteRecording(
+        const bool executed = graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             false,
@@ -1507,7 +1507,7 @@ void TestActiveRecordingLifetimeOutlivesUserCallbacks(TestSuite& suite) {
 
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
         suite.Check(
-            graph.ExecuteRecording(
+            graph.ExecuteFrontendRecordingPlan(
                 {},
                 {},
                 false,
@@ -1591,7 +1591,7 @@ void TestActiveMainThreadExceptionIsReportedAndDrained(TestSuite& suite) {
     bool escaped = false;
     bool executed = false;
     try {
-        executed = graph.ExecuteRecording(
+        executed = graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             false,
@@ -1655,7 +1655,7 @@ void TestMainThreadPhysicalPassRequiresAndUsesCallerList(TestSuite& suite) {
         );
 
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        const bool executed = graph.ExecuteRecording(
+        const bool executed = graph.ExecuteFrontendRecordingPlan(
             [&](const RenderGraph::ExecutedPassInfo&) {
                 ++observer_calls;
             },
@@ -1714,7 +1714,7 @@ void TestMainThreadPhysicalPassRequiresAndUsesCallerList(TestSuite& suite) {
         );
 
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        const bool executed = graph.ExecuteRecording(
+        const bool executed = graph.ExecuteFrontendRecordingPlan(
             [&](const RenderGraph::ExecutedPassInfo&) {
                 ++observer_calls;
             },
@@ -1778,7 +1778,7 @@ void TestMainThreadPhysicalPassRequiresAndUsesCallerList(TestSuite& suite) {
         );
 
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        const bool executed = graph.ExecuteRecording(
+        const bool executed = graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             false,

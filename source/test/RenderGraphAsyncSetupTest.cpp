@@ -686,7 +686,7 @@ void TestFailureJoinAndStableRetry(TestSuite& suite) {
         "Compile retry re-executed one-shot setup work"
     );
     suite.Check(
-        !graph.ExecuteRecording({}, {}, true) &&
+        !graph.ExecuteFrontendRecordingPlan({}, {}, true) &&
             record_calls.load(std::memory_order_relaxed) == 0,
         test_name,
         "recording ran after setup/compiler failure"
@@ -1010,7 +1010,7 @@ void TestParallelRecordingReadsOnePreparedValue(TestSuite& suite) {
 
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
         size_t published_sources = 0;
-        const bool executed = graph.ExecuteRecording(
+        const bool executed = graph.ExecuteFrontendRecordingPlan(
             {},
             {},
             true,
@@ -1109,7 +1109,7 @@ void TestExplicitPreparedPassComposition(TestSuite& suite) {
         test_name,
         graph.GetCompileError()
     );
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         {},
         true,
@@ -1154,7 +1154,7 @@ void TestCombinedPreparedPassContract(TestSuite& suite) {
         test_name,
         graph.GetCompileError()
     );
-    const bool executed = graph.ExecuteRecording(
+    const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
         {},
         true,
