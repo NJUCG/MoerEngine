@@ -937,8 +937,10 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             RenderGraph::TextureHandle denoiser_output;
             RenderGraph::TextureHandle ssr_output;
             RenderGraph::TextureHandle aa_output;
-            RenderGraph::TokenHandle   bloom_chain;
-            RenderGraph::TokenHandle   tonemapping_state;
+            RenderGraph::TextureHandle bloom_downsample_chain;
+            RenderGraph::TextureHandle bloom_upsample_chain;
+            RenderGraph::BufferHandle  tonemapping_histogram;
+            RenderGraph::BufferHandle  tonemapping_exposure;
             RenderGraph::TextureHandle tonemapping_output;
             RenderGraph::TextureHandle selected_framebuffer;
             RenderGraph::TextureHandle window_framebuffer;
@@ -1369,7 +1371,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 "Bloom",
                 [&](RenderGraph::PassBuilder& builder) {
                     builder.ReadWrite(processing_image_resource)
-                        .Write(graph_resources.bloom_chain);
+                        .Write(graph_resources.bloom_downsample_chain)
+                        .Write(graph_resources.bloom_upsample_chain);
                 },
                 [&, bloom_input]() {
                     return bloom_pass->Prepare(raster_context, raster_config, bloom_input);
@@ -1384,7 +1387,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 "Tonemapping",
                 [&](RenderGraph::PassBuilder& builder) {
                     builder.Read(processing_image_resource)
-                        .ReadWrite(graph_resources.tonemapping_state)
+                        .ReadWrite(graph_resources.tonemapping_histogram)
+                        .ReadWrite(graph_resources.tonemapping_exposure)
                         .Write(graph_resources.tonemapping_output);
                 },
                 [&, tonemapping_input]() {
@@ -1645,9 +1649,24 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 import_texture("ssr_output", raster_context.textures.ssr_output.tex);
             graph_resources.aa_output =
                 import_texture("aa_output", raster_context.textures.aa_output.tex);
-            graph_resources.bloom_chain = graph.ImportToken("bloom_chain", bloom_pass.get());
-            graph_resources.tonemapping_state =
-                graph.ImportToken("tonemapping_state", tonemapping_pass.get());
+            graph_resources.bloom_downsample_chain = import_texture(
+                "bloom_downsample_chain", raster_context.textures.bloom_downsample_chain.tex
+            );
+            graph_resources.bloom_upsample_chain = import_texture(
+                "bloom_upsample_chain", raster_context.textures.bloom_upsample_chain.tex
+            );
+            const auto& tonemapping_histogram = tonemapping_pass->GetHistogramBuffer();
+            graph_resources.tonemapping_histogram = graph.ImportBuffer(
+                "tonemapping_histogram",
+                tonemapping_histogram,
+                RenderGraph::BufferDesc{.byte_size = tonemapping_histogram->GetByteSize()}
+            );
+            const auto& tonemapping_exposure = tonemapping_pass->GetExposureBuffer();
+            graph_resources.tonemapping_exposure = graph.ImportBuffer(
+                "tonemapping_exposure",
+                tonemapping_exposure,
+                RenderGraph::BufferDesc{.byte_size = tonemapping_exposure->GetByteSize()}
+            );
             graph_resources.tonemapping_output =
                 import_texture("tonemapping_output", raster_context.textures.tonemapping_output.tex);
             if (frame_packet.ui_composition.enabled) {
@@ -1944,7 +1963,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     processing_image,
                     {
                         .input = processing_image_resource,
-                        .bloom_chain = graph_resources.bloom_chain
+                        .downsample_chain = graph_resources.bloom_downsample_chain,
+                        .upsample_chain = graph_resources.bloom_upsample_chain
                     }
                 );
                 tonemapping_pass->AddToGraph(
@@ -1954,7 +1974,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     processing_image,
                     {
                         .input = processing_image_resource,
-                        .tonemapping_state = graph_resources.tonemapping_state,
+                        .histogram = graph_resources.tonemapping_histogram,
+                        .exposure = graph_resources.tonemapping_exposure,
                         .tonemapping_output = graph_resources.tonemapping_output
                     }
                 );

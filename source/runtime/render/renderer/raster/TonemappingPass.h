@@ -59,7 +59,8 @@ class TonemappingPass {
 public:
     struct GraphResources {
         RenderGraph::TextureHandle input{};
-        RenderGraph::TokenHandle   tonemapping_state{};
+        RenderGraph::BufferHandle  histogram{};
+        RenderGraph::BufferHandle  exposure{};
         RenderGraph::TextureHandle tonemapping_output{};
     };
 
@@ -175,6 +176,14 @@ public:
         TextureWithHandle input_image,
         GraphResources resources
     );
+
+    [[nodiscard]] const BufferRef& GetHistogramBuffer() const {
+        return histogram_buffer;
+    }
+
+    [[nodiscard]] const BufferRef& GetExposureBuffer() const {
+        return exposure_buffer;
+    }
 
     void Record(CommandList& cmd_list, const RecordParameters& parameters) {
         // Reset

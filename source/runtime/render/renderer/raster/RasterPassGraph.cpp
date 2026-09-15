@@ -621,7 +621,8 @@ RenderGraph::PreparedPassHandle BloomPass::AddToGraph(
         "Bloom",
         [resources](RenderGraph::PassBuilder& builder) {
             builder.ReadWrite(resources.input)
-                .Write(resources.bloom_chain);
+                .Write(resources.downsample_chain)
+                .Write(resources.upsample_chain);
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "Bloom", [&] {
@@ -655,7 +656,8 @@ RenderGraph::PreparedPassHandle TonemappingPass::AddToGraph(
         "Tonemapping",
         [resources](RenderGraph::PassBuilder& builder) {
             builder.Read(resources.input)
-                .ReadWrite(resources.tonemapping_state)
+                .ReadWrite(resources.histogram)
+                .ReadWrite(resources.exposure)
                 .Write(resources.tonemapping_output);
         },
         [this, prepared](CommandList& cmd_list) {
