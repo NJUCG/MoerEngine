@@ -655,11 +655,11 @@ public:
         /** Atomic subresource/range accesses with logical input/output versions. */
         std::vector<CompiledAccess>   accesses{};
         std::vector<CompiledResource> resources{};
-        /** Semantic dependency levels; frontend dispatch uses its own edge taxonomy. */
+        /** Semantic dependency levels for GPU graph analysis, independent of frontend recording. */
         std::vector<CompiledDependencyLevel> dependency_levels{};
         /** Stable one-pass frontend sources with explicit thread-safety classification. */
         std::vector<CompiledFrontendRecordUnit> frontend_record_units{};
-        /** Precompiled dispatch groups; execution never rescans semantic edges. */
+        /** CPU-class dispatch groups; GPU dependency edges never split them. */
         std::vector<CompiledFrontendDispatchGroup> frontend_dispatch_groups{};
         /** Canonical state/memory/ownership decisions, prior to backend-specific lowering. */
         std::vector<CompiledBarrier> barriers{};
@@ -1151,11 +1151,10 @@ public:
      * independently owned CommandLists. Contiguous eligible passes on one queue
      * are dispatched together even when texture/buffer GPU hazards place them
      * in different dependency levels: those hazards constrain submission, not
-     * immutable CPU command recording. As a compatibility rule, token hazards
-     * and explicit DependsOn edges still split frontend dispatch groups; new
-     * strict Prepare/Record passes must not rely on that behavior. Sources are
-     * registered with RHI in compiled order and joined before the next
-     * caller-thread pass.
+     * immutable CPU command recording. Token hazards and explicit DependsOn
+     * edges follow the same rule. Only PassExecutionClass creates a frontend
+     * dispatch boundary. Sources are registered with RHI in compiled order and
+     * joined before the next caller-thread pass.
      */
     bool ExecuteFrontendRecordingPlan(
         const PassCompletedCallback&        after_main_thread_pass,

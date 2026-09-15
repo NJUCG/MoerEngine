@@ -6888,35 +6888,28 @@ void TestGpuProfilingBindingFailureContracts(TestSuite& suite) {
     }
 }
 
-void TestCpuRecordingDependenciesSplitParallelGroups(TestSuite& suite) {
-    constexpr std::string_view test_name = "CPU recording dependencies split parallel groups";
+void TestGpuDependenciesDoNotSplitFrontendGroups(TestSuite& suite) {
+    constexpr std::string_view test_name = "GPU dependencies do not split frontend groups";
 
-    std::atomic<int>        inflight{0};
-    std::atomic<int>        max_inflight{0};
     std::mutex              order_mutex{};
     std::vector<int>        record_order{};
     std::vector<size_t>     published_group_sizes{};
 
     const auto make_record = [&](int id) {
         return [&, id](Moer::Render::CommandList&) {
-            const int active = inflight.fetch_add(1) + 1;
-            int       observed = max_inflight.load();
-            while (observed < active &&
-                   !max_inflight.compare_exchange_weak(observed, active)) {}
             {
                 std::lock_guard lock(order_mutex);
                 record_order.push_back(id);
             }
-            inflight.fetch_sub(1);
         };
     };
 
-    RenderGraph graph("CpuRecordingDependencies");
-    const auto  cpu_token = graph.CreateTransientToken("CpuToken");
+    RenderGraph graph("GpuDependenciesOnly");
+    const auto  ordering_token = graph.CreateTransientToken("GpuOrderingToken");
     const auto  first = graph.AddRecordPass(
         "TokenProducer",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Write(cpu_token).SideEffect();
+            builder.Write(ordering_token).SideEffect();
         },
         make_record(1),
         RenderGraph::PassExecutionClass::ParallelRecordEligible
@@ -6924,7 +6917,7 @@ void TestCpuRecordingDependenciesSplitParallelGroups(TestSuite& suite) {
     const auto second = graph.AddRecordPass(
         "TokenConsumer",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(cpu_token).SideEffect();
+            builder.Read(ordering_token).SideEffect();
         },
         make_record(2),
         RenderGraph::PassExecutionClass::ParallelRecordEligible
@@ -6939,6 +6932,16 @@ void TestCpuRecordingDependenciesSplitParallelGroups(TestSuite& suite) {
     );
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const auto& plan = graph.GetCompiledPlan();
+    suite.Check(
+        plan.frontend_dispatch_groups.size() == 1 &&
+            plan.frontend_dispatch_groups.front().first_unit == 0 &&
+            plan.frontend_dispatch_groups.front().unit_count == 3 &&
+            plan.frontend_dispatch_groups.front().record_execution_class ==
+                RenderGraph::PassExecutionClass::ParallelRecordEligible,
+        test_name,
+        "GPU token and explicit edges must not become CPU recording boundaries"
+    );
     Moer::TaskSystem::Init();
     const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
@@ -6952,14 +6955,15 @@ void TestCpuRecordingDependenciesSplitParallelGroups(TestSuite& suite) {
 
     suite.Check(executed, test_name, graph.GetCompileError());
     suite.Check(
-        published_group_sizes == std::vector<size_t>{1, 1, 1},
+        published_group_sizes == std::vector<size_t>{3},
         test_name,
-        "token and explicit dependencies must retain legacy frontend dispatch group boundaries"
+        "all adjacent parallel-record callbacks must publish as one frontend group"
     );
+    std::ranges::sort(record_order);
     suite.Check(
-        max_inflight.load() == 1 && record_order == std::vector<int>{1, 2, 3},
+        record_order == std::vector<int>{1, 2, 3},
         test_name,
-        "CPU-dependent callbacks must record in dependency order without overlap"
+        "every frontend callback must still record exactly once"
     );
     (void)first;
 }
@@ -7690,7 +7694,7 @@ int main() {
     TestGpuProfilingMainThreadGenerationReuse(suite);
     TestGpuProfilingMainThreadManagedBoundary(suite);
     TestGpuProfilingBindingFailureContracts(suite);
-    TestCpuRecordingDependenciesSplitParallelGroups(suite);
+    TestGpuDependenciesDoNotSplitFrontendGroups(suite);
     TestRecordingPublicationFailureTerminatesGates(suite);
     TestFrameSetupTokenAndTlasBoundaryContract(suite);
     TestNrdSerialControlIslandContract(suite);

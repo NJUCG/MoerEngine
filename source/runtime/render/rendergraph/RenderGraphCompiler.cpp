@@ -1745,54 +1745,10 @@ void RenderGraphCompiler::BuildFrontendRecordUnits() {
 }
 
 void RenderGraphCompiler::BuildFrontendDispatchGroups() {
-    std::vector<uint32_t> pass_to_record_unit(
-        graph.passes.size(),
-        RenderGraph::PassHandle::InvalidIndex
-    );
-    for (uint32_t unit_index = 0;
-         unit_index < graph.compiled_plan.frontend_record_units.size();
-         ++unit_index) {
-        pass_to_record_unit[
-            graph.compiled_plan.frontend_record_units[unit_index].pass.index
-        ] = unit_index;
-    }
-
-    // Compatibility-only recording serialization. New strict passes must not
-    // rely on this: Prepare publishes immutable data and Record owns a private
-    // command stream, so explicit and token graph edges should normally affect
-    // GPU assembly only. Keep this split until legacy token users are audited.
-    auto has_legacy_record_serialization_edge =
-        [&](RenderGraph::PassHandle candidate,
-            uint32_t                group_begin,
-            uint32_t                group_end) {
-            for (const auto& edge : graph.compiled_plan.edges) {
-                if (edge.dst != candidate) {
-                    continue;
-                }
-
-                const uint32_t source_unit =
-                    pass_to_record_unit[edge.src.index];
-                if (source_unit < group_begin || source_unit >= group_end) {
-                    continue;
-                }
-
-                for (const auto& reason : edge.reasons) {
-                    if (reason.kind == RenderGraph::EdgeReasonKind::Explicit) {
-                        return true;
-                    }
-                    if (graph.IsValidResource(reason.resource) &&
-                        graph.resources[reason.resource.index].kind ==
-                            RenderGraph::ResourceKind::Token) {
-                        return true;
-                    }
-                }
-            }
-            return false;
-        };
-
-    // Coalesce adjacent eligible passes. Ordinary GPU hazards constrain
-    // assembly, not frontend recording; only the retained legacy rule above
-    // splits otherwise compatible passes.
+    // Graph edges describe GPU execution, state, and ownership. They do not
+    // order frontend Record callbacks: every callback consumes immutable
+    // prepared data and writes a private command stream. Only the declared CPU
+    // execution class creates a frontend dispatch boundary.
     uint32_t unit_index = 0;
     while (unit_index < graph.compiled_plan.frontend_record_units.size()) {
         const auto& first =
@@ -1805,10 +1761,7 @@ void RenderGraphCompiler::BuildFrontendDispatchGroups() {
                 const auto& candidate =
                     graph.compiled_plan.frontend_record_units[group_end];
                 if (candidate.record_execution_class !=
-                        RenderGraph::PassExecutionClass::ParallelRecordEligible ||
-                    has_legacy_record_serialization_edge(
-                        candidate.pass, unit_index, group_end
-                    )) {
+                    RenderGraph::PassExecutionClass::ParallelRecordEligible) {
                     break;
                 }
                 ++group_end;
