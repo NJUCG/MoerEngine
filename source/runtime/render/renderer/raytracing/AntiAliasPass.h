@@ -63,6 +63,7 @@ public:
         TextureRef   _input,
         TextureRef   _output
     );
+    void RebindResources(const CreateInfo& info);
     bool AddPasses(
         RenderGraph&                 graph,
         const RTGraphFrameResources& graph_resources,

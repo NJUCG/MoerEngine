@@ -2474,7 +2474,9 @@ bool RaytracingRenderer::RecreateSceneResources(uint2 new_extent) {
     state.antialias_pass_info.motion              = state.rt_ctx->frame_rt.motion;
     state.antialias_pass_info.feedback_color_ping = state.rt_ctx->frame_rt.feedback_color_ping;
     state.antialias_pass_info.feedback_color_pong = state.rt_ctx->frame_rt.feedback_color_pong;
-    state.antialias_pass   = MakeUnique<AntialiasPass>(device, manager, state.antialias_pass_info);
+    // The TAA pipeline is resolution-independent. Keep the pass alive so an
+    // in-flight frame cannot observe its Vulkan pipeline being destroyed.
+    state.antialias_pass->RebindResources(state.antialias_pass_info);
     state.b_feedback_valid = false;
     state.gbuffer_initialized_history_mask     = 0;
     state.normal_roughness_readable            = false;
