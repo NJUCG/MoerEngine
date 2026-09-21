@@ -1554,12 +1554,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         };
 
         if (render_graph_enabled && !render_graph_fallback_latched) {
-            // Profile sources and RDG barriers must use the initialized RHI's
-            // physical queue identity rather than the test-only single-queue
-            // default (native/family zero).
-            RenderGraph graph(
-                "RasterFrame", RenderGraph::QueueTopology::FromRHI()
-            );
+            // The graph snapshots the initialized RHI queue topology.
+            RenderGraph graph("RasterFrame");
             auto import_physical_texture = [&](std::string_view name, Texture* physical_texture) {
                 assert(physical_texture != nullptr);
                 RenderGraph::TextureAspect aspects = RenderGraph::TextureAspect::None;

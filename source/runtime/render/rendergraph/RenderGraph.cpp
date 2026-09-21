@@ -10,6 +10,7 @@
 #include "taskgraph/TaskGraph.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <condition_variable>
@@ -677,31 +678,84 @@ void AppendVersion(std::ostringstream& stream, uint32_t version) {
 
 } // namespace
 
-RenderGraph::RenderGraph(std::string_view graph_name) :
-    RenderGraph(graph_name, QueueTopology::SingleQueue()) {}
+std::optional<RenderGraph::QueueTopology> RenderGraph::QueueTopology::Create(
+    const QueueTopologyDesc& desc,
+    std::string&             error
+) {
+    const std::array locations{desc.graphics, desc.compute, desc.copy};
+    for (uint32_t lhs = 0; lhs < locations.size(); ++lhs) {
+        for (uint32_t rhs = lhs + 1; rhs < locations.size(); ++rhs) {
+            if (locations[lhs].native_queue_id == locations[rhs].native_queue_id &&
+                locations[lhs].family_id != locations[rhs].family_id) {
+                error = "one native queue id cannot belong to multiple queue families";
+                return std::nullopt;
+            }
+        }
+    }
+    error.clear();
+    return QueueTopology(desc);
+}
 
-RenderGraph::QueueTopology RenderGraph::QueueTopology::FromRHI() {
+std::optional<RenderGraph::QueueTopology> RenderGraph::QueueTopology::FromRHI(
+    std::string& error
+) {
     const RHIQueueTopology topology = RenderDevice::Get().GetQueueTopology();
-    auto convert = [](QueueRole role, const RHIQueueBinding& binding) {
-        return QueueBinding{
-            .role            = role,
+    auto convert = [](const RHIQueueBinding& binding) {
+        return QueueLocation{
             .native_queue_id = binding.native_queue_id,
             .family_id       = binding.family_id,
             .available       = binding.available,
         };
     };
-    return QueueTopology{
-        .graphics = convert(QueueRole::Graphics, topology.graphics),
-        .compute  = convert(QueueRole::Compute, topology.compute),
-        .copy     = convert(QueueRole::Copy, topology.copy),
-    };
+    return Create(
+        QueueTopologyDesc{
+            .graphics = convert(topology.graphics),
+            .compute  = convert(topology.compute),
+            .copy     = convert(topology.copy),
+        },
+        error
+    );
 }
 
-RenderGraph::RenderGraph(std::string_view graph_name, QueueTopology topology) :
+RenderGraph::RenderGraph(std::string_view graph_name) :
     name(graph_name),
-    queue_topology(topology),
     graph_id(s_next_graph_id.fetch_add(1, std::memory_order_relaxed)) {
     assert(graph_id != 0 && "RenderGraph id counter wrapped.");
+    if (!RenderDevice::IsInitialized()) {
+        return;
+    }
+
+    std::string topology_error{};
+    auto        topology = QueueTopology::FromRHI(topology_error);
+    if (!topology.has_value()) {
+        declaration_errors.push_back(std::move(topology_error));
+        return;
+    }
+    queue_topology = *topology;
+}
+
+RenderGraph::RenderGraph(
+    std::string_view       graph_name,
+    QueueTopologyDesc      topology_desc
+) :
+    name(graph_name),
+    graph_id(s_next_graph_id.fetch_add(1, std::memory_order_relaxed)) {
+    assert(graph_id != 0 && "RenderGraph id counter wrapped.");
+
+    std::string topology_error{};
+    auto        topology = QueueTopology::Create(topology_desc, topology_error);
+    if (!topology.has_value()) {
+        declaration_errors.push_back(std::move(topology_error));
+        return;
+    }
+    queue_topology = *topology;
+}
+
+RenderGraph RenderGraph::CreateForTesting(
+    std::string_view  graph_name,
+    QueueTopologyDesc topology
+) {
+    return RenderGraph(graph_name, topology);
 }
 
 RenderGraph::~RenderGraph() {
@@ -1017,13 +1071,14 @@ RenderGraph::PassBuilder::ExecuteOn(QueueRole queue, PipelineType pipeline) {
 }
 
 [[nodiscard]] RHIQueueBinding ToRHIQueueBinding(
-    const RenderGraph::QueueBinding& binding
+    RenderGraph::QueueRole            role,
+    const RenderGraph::QueueLocation& location
 ) {
     return RHIQueueBinding{
-        .queue           = ToRHIQueue(binding.role),
-        .native_queue_id = binding.native_queue_id,
-        .family_id       = binding.family_id,
-        .available       = binding.available,
+        .queue           = ToRHIQueue(role),
+        .native_queue_id = location.native_queue_id,
+        .family_id       = location.family_id,
+        .available       = location.available,
     };
 }
 
@@ -1075,9 +1130,8 @@ ToBarrierState(const RenderGraphLowering::Scope& scope, bool texture) {
             output.queue_transfer = {};
             return true;
         }
-        const auto src_queue = ToRHIQueue(instruction.transfer_source.role);
-        const auto dst_queue =
-            ToRHIQueue(instruction.transfer_destination.role);
+        const auto src_queue = instruction.transfer_source.queue;
+        const auto dst_queue = instruction.transfer_destination.queue;
         if ((src_queue != EQueueType::Graphics &&
              src_queue != EQueueType::Compute &&
              src_queue != EQueueType::Copy) ||
@@ -1805,7 +1859,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     return false;
                 }
                 if (gpu_profiling.main_thread_command_list->GetQueueType() !=
-                    ToRHIQueue(unit.target_queue.role)) {
+                    ToRHIQueue(unit.target_queue_role)) {
                     compile_error =
                         "GPU profiling MainThread CommandList queue does not "
                         "match compiled pass queue";
@@ -1892,7 +1946,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
             compiled_plan.queue_batches.begin(),
             compiled_plan.queue_batches.end(),
             [](const CompiledQueueBatch& batch) {
-                return batch.queue.role != QueueRole::Graphics;
+                return batch.queue_role != QueueRole::Graphics;
             }
         );
         if (active_uses_non_graphics_queue) {
@@ -1901,25 +1955,34 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     "active non-Graphics queue lowering requires an initialized RHI";
                 return false;
             }
-            const QueueTopology runtime_topology = QueueTopology::FromRHI();
+            std::string runtime_topology_error{};
+            auto runtime_topology = QueueTopology::FromRHI(runtime_topology_error);
+            if (!runtime_topology.has_value()) {
+                compile_error = std::move(runtime_topology_error);
+                return false;
+            }
             for (const auto& batch : compiled_plan.queue_batches) {
-                if (batch.queue.role == QueueRole::None ||
-                    batch.queue != runtime_topology.Resolve(batch.queue.role)) {
+                if (batch.queue_role == QueueRole::None ||
+                    queue_topology.Resolve(batch.queue_role) !=
+                        runtime_topology->Resolve(batch.queue_role)) {
                     compile_error =
                         "compiled queue topology does not match the initialized "
-                        "RHI; construct the graph with QueueTopology::FromRHI()";
+                        "RHI queue topology";
                     return false;
                 }
             }
         }
         if (!compiled_plan.queue_batches.empty()) {
             const uint32_t first_native_queue =
-                compiled_plan.queue_batches.front().queue.native_queue_id;
+                queue_topology
+                    .Resolve(compiled_plan.queue_batches.front().queue_role)
+                    .native_queue_id;
             active_async_multiqueue = std::any_of(
                 compiled_plan.queue_batches.begin() + 1,
                 compiled_plan.queue_batches.end(),
                 [&](const CompiledQueueBatch& batch) {
-                    return batch.queue.native_queue_id != first_native_queue;
+                    return queue_topology.Resolve(batch.queue_role).native_queue_id !=
+                           first_native_queue;
                 }
             );
         }
@@ -2477,7 +2540,10 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                                 gpu_profiling,
                                 MakeExecutedPassInfo(first_handle),
                                 profiling_list,
-                                ToRHIQueueBinding(first_unit.target_queue),
+                                ToRHIQueueBinding(
+                                    first_unit.target_queue_role,
+                                    queue_topology.Resolve(first_unit.target_queue_role)
+                                ),
                                 source_order
                             );
                         if (bind_outcome == GpuProfileBindOutcome::Failed) {
@@ -2632,7 +2698,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
             const auto& unit = compiled_plan.frontend_record_units[index];
             const auto  handle = unit.pass;
             auto&       pass   = passes[handle.index];
-            const auto  queue  = ToRHIQueue(unit.target_queue.role);
+            const auto  queue  = ToRHIQueue(unit.target_queue_role);
             if (!pass.record || pass.execute || queue == EQueueType::Ignore) {
                 compile_error = "compiled recording pass has an invalid callback or queue: " +
                                 pass.name;
@@ -2646,7 +2712,10 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                 .command_list = MakeShared<CommandList>(queue),
                 .completion   = RHIRecordingGate::Create(),
                 .gpu_profile_queue_binding =
-                    ToRHIQueueBinding(unit.target_queue),
+                    ToRHIQueueBinding(
+                        unit.target_queue_role,
+                        queue_topology.Resolve(unit.target_queue_role)
+                    ),
                 .gpu_profile_source_order =
                     gpu_profiling.try_bind_source ?
                         gpu_profiling.source_order_base +
@@ -3357,9 +3426,10 @@ std::string RenderGraph::Dump() const {
 
     stream << "queue_batches:\n";
     for (const auto& batch : compiled_plan.queue_batches) {
-        stream << "  [" << batch.id << "] " << ToString(batch.queue.role) << " native="
-               << batch.queue.native_queue_id << " family=" << batch.queue.family_id
-               << " available=" << (batch.queue.available ? "true" : "false")
+        const auto queue_location = queue_topology.Resolve(batch.queue_role);
+        stream << "  [" << batch.id << "] " << ToString(batch.queue_role) << " native="
+               << queue_location.native_queue_id << " family=" << queue_location.family_id
+               << " available=" << (queue_location.available ? "true" : "false")
                << " external_control=" << (batch.external_control ? "true" : "false")
                << " passes=[";
         for (uint32_t pass_index = 0; pass_index < batch.passes.size(); ++pass_index) {
@@ -3451,10 +3521,11 @@ std::string RenderGraph::Dump() const {
 
     stream << "frontend_record_units:\n";
     for (const auto& unit : compiled_plan.frontend_record_units) {
+        const auto queue_location = queue_topology.Resolve(unit.target_queue_role);
         stream << "  [" << unit.source_index << "] queue="
-               << ToString(unit.target_queue.role) << "/native"
-               << unit.target_queue.native_queue_id << "/family"
-               << unit.target_queue.family_id << " record="
+               << ToString(unit.target_queue_role) << "/native"
+               << queue_location.native_queue_id << "/family"
+               << queue_location.family_id << " record="
                << ToString(unit.record_execution_class) << " native="
                << ToString(unit.native_translate_class) << " work="
                << unit.estimated_record_work << " level=";

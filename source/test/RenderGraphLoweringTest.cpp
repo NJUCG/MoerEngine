@@ -15,6 +15,8 @@ using Moer::Render::BufferInfo;
 using Moer::Render::BufferRef;
 using Moer::Render::RenderGraph;
 using Moer::Render::RenderGraphLowering;
+using Moer::Render::RHIQueueBinding;
+using Moer::Render::EQueueType;
 using Moer::Render::Texture;
 using Moer::Render::TextureInfo;
 using Moer::Render::TextureRef;
@@ -39,6 +41,18 @@ private:
 
 [[nodiscard]] bool Contains(std::string_view text, std::string_view expected) {
     return text.find(expected) != std::string_view::npos;
+}
+
+[[nodiscard]] RHIQueueBinding MakeQueueBinding(
+    EQueueType                       queue,
+    const RenderGraph::QueueLocation& location
+) {
+    return RHIQueueBinding{
+        .queue           = queue,
+        .native_queue_id = location.native_queue_id,
+        .family_id       = location.family_id,
+        .available       = location.available,
+    };
 }
 
 class FakeTexture final : public Texture {
@@ -580,7 +594,8 @@ void ExpectLowerFailure(
 void TestCrossNativeTokenSynchronization(TestSuite& suite) {
     constexpr std::string_view test_name =
         "cross-native token synchronization is lowered";
-    RenderGraph graph("CrossNativeTokenSync", RenderGraph::QueueTopology::DedicatedQueues());
+    const auto topology = RenderGraph::QueueTopologyDesc::DedicatedQueues();
+    auto graph = RenderGraph::CreateForTesting("CrossNativeTokenSync", topology);
     const auto token = graph.CreateTransientToken("GraphicsToCompute");
     const auto producer = graph.AddPass(
         "GraphicsProducer",
@@ -617,9 +632,9 @@ void TestCrossNativeTokenSynchronization(TestSuite& suite) {
             lowered.queue_syncs.front().signal_pass == producer &&
             lowered.queue_syncs.front().wait_pass == consumer &&
             lowered.queue_syncs.front().signal_queue ==
-                graph.GetQueueTopology().Resolve(RenderGraph::QueueRole::Graphics) &&
+                MakeQueueBinding(EQueueType::Graphics, topology.graphics) &&
             lowered.queue_syncs.front().wait_queue ==
-                graph.GetQueueTopology().Resolve(RenderGraph::QueueRole::Compute),
+                MakeQueueBinding(EQueueType::Compute, topology.compute),
         test_name,
         "the token hazard must become one Graphics-to-Compute lowered GPU sync"
     );
@@ -633,7 +648,10 @@ void TestCrossNativeTokenSynchronization(TestSuite& suite) {
 void TestSameNativeTokenSynchronizationNeedsNoGpuSync(TestSuite& suite) {
     constexpr std::string_view test_name =
         "same-native token synchronization needs no lowered GPU sync";
-    RenderGraph graph("SameNativeTokenSync", RenderGraph::QueueTopology::SingleQueue());
+    auto graph = RenderGraph::CreateForTesting(
+        "SameNativeTokenSync",
+        RenderGraph::QueueTopologyDesc::SingleQueue()
+    );
     const auto token = graph.CreateTransientToken("GraphicsToCompute");
     graph.AddPass(
         "GraphicsProducer",
@@ -681,7 +699,10 @@ void TestSameNativePhysicalBarrierRetainsSourceScope(TestSuite& suite) {
     constexpr std::string_view test_name =
         "same-native physical queue barrier retains source scope";
     BufferRef buffer = MoerNew(FakeBuffer)(256);
-    RenderGraph graph("SameNativePhysicalBarrier", RenderGraph::QueueTopology::SingleQueue());
+    auto graph = RenderGraph::CreateForTesting(
+        "SameNativePhysicalBarrier",
+        RenderGraph::QueueTopologyDesc::SingleQueue()
+    );
     const auto data = graph.ImportBuffer(
         "Shared",
         buffer,
@@ -750,13 +771,13 @@ void TestSameNativePhysicalBarrierRetainsSourceScope(TestSuite& suite) {
 void TestSameFamilyQueueBarrierLowersToAcquire(TestSuite& suite) {
     constexpr std::string_view test_name =
         "same-family queue barrier lowers to destination acquire";
-    const RenderGraph::QueueTopology topology{
-        .graphics = {RenderGraph::QueueRole::Graphics, 0, 0},
-        .compute  = {RenderGraph::QueueRole::Compute, 1, 0},
-        .copy     = {RenderGraph::QueueRole::Copy, 2, 0},
+    const RenderGraph::QueueTopologyDesc topology{
+        .graphics = {0, 0, true},
+        .compute  = {1, 0, true},
+        .copy     = {2, 0, true},
     };
     BufferRef buffer = MoerNew(FakeBuffer)(256);
-    RenderGraph graph("SameFamilyQueueAcquire", topology);
+    auto graph = RenderGraph::CreateForTesting("SameFamilyQueueAcquire", topology);
     const auto data = graph.ImportBuffer(
         "Shared",
         buffer,
@@ -826,13 +847,13 @@ void TestSameFamilyQueueBarrierLowersToAcquire(TestSuite& suite) {
 void TestMixedQueueFanInRetainsLocalSourceScope(TestSuite& suite) {
     constexpr std::string_view test_name =
         "mixed queue fan-in retains the local source scope";
-    const RenderGraph::QueueTopology topology{
-        .graphics = {RenderGraph::QueueRole::Graphics, 0, 0},
-        .compute  = {RenderGraph::QueueRole::Compute, 1, 0},
-        .copy     = {RenderGraph::QueueRole::Copy, 2, 0},
+    const RenderGraph::QueueTopologyDesc topology{
+        .graphics = {0, 0, true},
+        .compute  = {1, 0, true},
+        .copy     = {2, 0, true},
     };
     BufferRef buffer = MoerNew(FakeBuffer)(256);
-    RenderGraph graph("MixedQueueFanIn", topology);
+    auto graph = RenderGraph::CreateForTesting("MixedQueueFanIn", topology);
     const auto data = graph.ImportBuffer(
         "Shared",
         buffer,
@@ -926,7 +947,8 @@ void TestMixedQueueFanInRetainsLocalSourceScope(TestSuite& suite) {
 void TestCrossFamilyExclusiveOwnershipLowersPairedTransfer(TestSuite& suite) {
     constexpr std::string_view test_name = "cross-family exclusive ownership lowers one paired transfer";
     TextureRef                 texture   = MoerNew(FakeTexture)(2, 2, ETextureAspectFlags::COLOR);
-    RenderGraph                graph("CrossFamilyOwnership", RenderGraph::QueueTopology::DedicatedQueues());
+    const auto topology = RenderGraph::QueueTopologyDesc::DedicatedQueues();
+    auto graph = RenderGraph::CreateForTesting("CrossFamilyOwnership", topology);
     const auto                 data = graph.ImportTexture(
         "Exclusive",
         texture,
@@ -1052,11 +1074,14 @@ void TestCrossFamilyExclusiveOwnershipLowersPairedTransfer(TestSuite& suite) {
         "paired halves must preserve identical correlation, resource, range, state and layout"
     );
 
-    const auto& topology = graph.GetQueueTopology();
+    const auto graphics_queue =
+        MakeQueueBinding(EQueueType::Graphics, topology.graphics);
+    const auto compute_queue =
+        MakeQueueBinding(EQueueType::Compute, topology.compute);
     suite.Check(
-        release->transfer_source == topology.graphics && acquire->transfer_source == topology.graphics &&
-            release->transfer_destination == topology.compute &&
-            acquire->transfer_destination == topology.compute &&
+        release->transfer_source == graphics_queue && acquire->transfer_source == graphics_queue &&
+            release->transfer_destination == compute_queue &&
+            acquire->transfer_destination == compute_queue &&
             release->transfer_source.family_id != release->transfer_destination.family_id &&
             !release->queue_acquire && acquire->queue_acquire,
         test_name,
@@ -1076,8 +1101,8 @@ void TestCrossFamilyExclusiveOwnershipLowersPairedTransfer(TestSuite& suite) {
     );
     suite.Check(
         transfer_sync != lowered.queue_syncs.end() && transfer_sync->signal_pass == producer &&
-            transfer_sync->wait_pass == consumer && transfer_sync->signal_queue == topology.graphics &&
-            transfer_sync->wait_queue == topology.compute,
+            transfer_sync->wait_pass == consumer && transfer_sync->signal_queue == graphics_queue &&
+            transfer_sync->wait_queue == compute_queue,
         test_name,
         "release owner must signal the destination acquire through its correlated GPU sync"
     );
@@ -1085,13 +1110,13 @@ void TestCrossFamilyExclusiveOwnershipLowersPairedTransfer(TestSuite& suite) {
 
 void TestCrossFamilyOwnershipFanInUsesOneReleaseOwner(TestSuite& suite) {
     constexpr std::string_view       test_name = "cross-family ownership fan-in uses one release owner";
-    const RenderGraph::QueueTopology topology{
-        .graphics = {RenderGraph::QueueRole::Graphics, 0, 0},
-        .compute  = {RenderGraph::QueueRole::Compute, 1, 0},
-        .copy     = {RenderGraph::QueueRole::Copy, 2, 1},
+    const RenderGraph::QueueTopologyDesc topology{
+        .graphics = {0, 0, true},
+        .compute  = {1, 0, true},
+        .copy     = {2, 1, true},
     };
     BufferRef   buffer = MoerNew(FakeBuffer)(256);
-    RenderGraph graph("CrossFamilyOwnershipFanIn", topology);
+    auto graph = RenderGraph::CreateForTesting("CrossFamilyOwnershipFanIn", topology);
     const auto  data = graph.ImportBuffer(
         "Exclusive",
         buffer,
@@ -1210,10 +1235,16 @@ void TestCrossFamilyOwnershipFanInUsesOneReleaseOwner(TestSuite& suite) {
                    instruction.correlation_id == ownership_barrier_index;
         }
     );
+    const auto graphics_queue =
+        MakeQueueBinding(EQueueType::Graphics, topology.graphics);
+    const auto compute_queue =
+        MakeQueueBinding(EQueueType::Compute, topology.compute);
+    const auto copy_queue =
+        MakeQueueBinding(EQueueType::Copy, topology.copy);
     suite.Check(
         release_count == 1 && compute_release != after_compute.end() && !graphics_has_release &&
-            compute_release->transfer_source == topology.compute &&
-            compute_release->transfer_destination == topology.copy,
+            compute_release->transfer_source == compute_queue &&
+            compute_release->transfer_destination == copy_queue,
         test_name,
         "the maximum source batch must be the unique Compute release owner"
     );
@@ -1228,8 +1259,8 @@ void TestCrossFamilyOwnershipFanInUsesOneReleaseOwner(TestSuite& suite) {
         }
     );
     suite.Check(
-        copy_acquire != before_copy.end() && copy_acquire->transfer_source == topology.compute &&
-            copy_acquire->transfer_destination == topology.copy,
+        copy_acquire != before_copy.end() && copy_acquire->transfer_source == compute_queue &&
+            copy_acquire->transfer_destination == copy_queue,
         test_name,
         "the Copy destination must acquire from the designated Compute release owner"
     );
@@ -1238,7 +1269,7 @@ void TestCrossFamilyOwnershipFanInUsesOneReleaseOwner(TestSuite& suite) {
         lowered.queue_syncs.begin(),
         lowered.queue_syncs.end(),
         [&](const RenderGraphLowering::QueueSyncInstruction& sync) {
-            return sync.signal_queue == topology.graphics && sync.wait_queue == topology.compute &&
+            return sync.signal_queue == graphics_queue && sync.wait_queue == compute_queue &&
                    std::find(
                        sync.ownership_join_barriers.begin(),
                        sync.ownership_join_barriers.end(),
@@ -1256,8 +1287,8 @@ void TestCrossFamilyOwnershipFanInUsesOneReleaseOwner(TestSuite& suite) {
         lowered.queue_syncs.begin(),
         lowered.queue_syncs.end(),
         [&](const RenderGraphLowering::QueueSyncInstruction& sync) {
-            return sync.signal_queue == topology.compute &&
-                   sync.wait_queue == topology.copy &&
+            return sync.signal_queue == compute_queue &&
+                   sync.wait_queue == copy_queue &&
                    std::find(
                        sync.ownership_transfer_barriers.begin(),
                        sync.ownership_transfer_barriers.end(),
@@ -1275,9 +1306,9 @@ void TestCrossFamilyOwnershipFanInUsesOneReleaseOwner(TestSuite& suite) {
 void TestMissingCrossNativeSyncFailsClosed(TestSuite& suite) {
     constexpr std::string_view test_name =
         "missing cross-native queue sync fails closed";
-    RenderGraph graph(
+    auto graph = RenderGraph::CreateForTesting(
         "MissingCrossNativeSync",
-        RenderGraph::QueueTopology::DedicatedQueues()
+        RenderGraph::QueueTopologyDesc::DedicatedQueues()
     );
     const auto token = graph.CreateTransientToken("GraphicsToCompute");
     graph.AddPass(
@@ -1327,9 +1358,9 @@ void TestMissingCrossNativeSyncFailsClosed(TestSuite& suite) {
 void TestUnavailableQueueFailsAtCompile(TestSuite& suite) {
     constexpr std::string_view test_name =
         "unavailable logical queue fails at compile";
-    auto topology = RenderGraph::QueueTopology::SingleQueue();
+    auto topology = RenderGraph::QueueTopologyDesc::SingleQueue();
     topology.compute.available = false;
-    RenderGraph graph("UnavailableCompute", topology);
+    auto graph = RenderGraph::CreateForTesting("UnavailableCompute", topology);
     const auto token = graph.CreateTransientToken("ComputeOnly");
     graph.AddPass(
         "Compute",

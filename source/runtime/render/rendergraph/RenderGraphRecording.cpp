@@ -36,13 +36,13 @@ namespace {
 }
 
 [[nodiscard]] RHIQueueBinding GraphicsQueueBinding(
-    const RenderGraph::QueueBinding& binding
+    const RenderGraph::QueueLocation& location
 ) noexcept {
     return RHIQueueBinding{
         .queue           = EQueueType::Graphics,
-        .native_queue_id = binding.native_queue_id,
-        .family_id       = binding.family_id,
-        .available       = binding.available,
+        .native_queue_id = location.native_queue_id,
+        .family_id       = location.family_id,
+        .available       = location.available,
     };
 }
 
@@ -376,7 +376,11 @@ private:
                             gpu_profiling,
                             graph.MakeExecutedPassInfo(pass_handle),
                             *pass_command_list,
-                            GraphicsQueueBinding(unit.target_queue),
+                            GraphicsQueueBinding(
+                                graph.queue_topology.Resolve(
+                                    unit.target_queue_role
+                                )
+                            ),
                             gpu_profiling.source_order_base +
                                 static_cast<uint64>(unit.source_index)
                         );

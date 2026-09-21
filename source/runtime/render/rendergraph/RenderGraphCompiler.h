@@ -58,7 +58,6 @@ private:
     };
 
     void InitializeWorkingState();
-    bool ValidateQueueTopology();
     bool ValidateAndNormalizeDeclarations();
     bool ValidateAndNormalizePassDeclarations();
     bool ValidateAndNormalizeBoundaryStateDeclarations();

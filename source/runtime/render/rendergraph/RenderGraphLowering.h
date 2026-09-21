@@ -99,16 +99,16 @@ public:
         /** Destination-side visibility/layout barrier after a GPU queue wait. */
         bool queue_acquire              = false;
         /** Canonical logical endpoints shared by paired release/acquire halves. */
-        RenderGraph::QueueBinding transfer_source{};
-        RenderGraph::QueueBinding transfer_destination{};
+        RHIQueueBinding transfer_source{};
+        RHIQueueBinding transfer_destination{};
     };
 
     struct QueueSyncInstruction {
         uint32_t                correlation_id = 0;
         RenderGraph::PassHandle signal_pass{};
         RenderGraph::PassHandle wait_pass{};
-        RenderGraph::QueueBinding signal_queue{};
-        RenderGraph::QueueBinding wait_queue{};
+        RHIQueueBinding signal_queue{};
+        RHIQueueBinding wait_queue{};
         uint32_t signal_batch = RenderGraph::PassHandle::InvalidIndex;
         uint32_t wait_batch   = RenderGraph::PassHandle::InvalidIndex;
         /** Added by lowering to join a fan-in frontier at one release owner. */

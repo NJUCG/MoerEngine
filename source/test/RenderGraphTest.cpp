@@ -2113,13 +2113,27 @@ void TestImportAndExportBoundaries(TestSuite& suite) {
 
 void TestQueueTopologySynchronization(TestSuite& suite) {
     constexpr std::string_view test_name = "queue topology synchronization";
-    auto check_case = [&](RenderGraph::QueueTopology topology,
+    auto invalid_topology = RenderGraph::QueueTopologyDesc::SingleQueue();
+    invalid_topology.compute.family_id = 1;
+    auto invalid_graph = RenderGraph::CreateForTesting(
+        "InvalidQueueTopology", invalid_topology
+    );
+    suite.Check(
+        !invalid_graph.Compile() &&
+            invalid_graph.GetCompileError().find(
+                "one native queue id cannot belong to multiple queue families"
+            ) != std::string::npos,
+        test_name,
+        "invalid physical topology must be rejected when the graph is created"
+    );
+
+    auto check_case = [&](RenderGraph::QueueTopologyDesc topology,
                           RenderGraph::TextureDesc::SharingMode sharing,
                           bool                                  queue_dependency,
                           bool                                  ownership,
                           bool                                  gpu_wait,
                           std::string_view                      expectation) {
-        RenderGraph graph("QueueTopology", topology);
+        auto graph = RenderGraph::CreateForTesting("QueueTopology", topology);
         const auto  buffer = graph.CreateTransientBuffer(
             "Shared", RenderGraph::BufferDesc{.byte_size = 64, .sharing_mode = sharing}
         );
@@ -2156,7 +2170,7 @@ void TestQueueTopologySynchronization(TestSuite& suite) {
     };
 
     check_case(
-        RenderGraph::QueueTopology::SingleQueue(),
+        RenderGraph::QueueTopologyDesc::SingleQueue(),
         RenderGraph::TextureDesc::SharingMode::Exclusive,
         false,
         false,
@@ -2164,10 +2178,10 @@ void TestQueueTopologySynchronization(TestSuite& suite) {
         "logical roles on one native queue must not transfer ownership"
     );
     check_case(
-        RenderGraph::QueueTopology{
-            .graphics = {RenderGraph::QueueRole::Graphics, 0, 0},
-            .compute  = {RenderGraph::QueueRole::Compute, 1, 0},
-            .copy     = {RenderGraph::QueueRole::Copy, 2, 0},
+        RenderGraph::QueueTopologyDesc{
+            .graphics = {0, 0, true},
+            .compute  = {1, 0, true},
+            .copy     = {2, 0, true},
         },
         RenderGraph::TextureDesc::SharingMode::Exclusive,
         true,
@@ -2176,7 +2190,7 @@ void TestQueueTopologySynchronization(TestSuite& suite) {
         "different native queues in one family require synchronization but no ownership transfer"
     );
     check_case(
-        RenderGraph::QueueTopology::DedicatedQueues(),
+        RenderGraph::QueueTopologyDesc::DedicatedQueues(),
         RenderGraph::TextureDesc::SharingMode::Exclusive,
         true,
         true,
@@ -2184,7 +2198,7 @@ void TestQueueTopologySynchronization(TestSuite& suite) {
         "different families must transfer an exclusive resource"
     );
     check_case(
-        RenderGraph::QueueTopology::DedicatedQueues(),
+        RenderGraph::QueueTopologyDesc::DedicatedQueues(),
         RenderGraph::TextureDesc::SharingMode::Concurrent,
         true,
         false,
@@ -2195,7 +2209,10 @@ void TestQueueTopologySynchronization(TestSuite& suite) {
 
 void TestExclusiveOwnershipUsesCurrentOwnerFamily(TestSuite& suite) {
     constexpr std::string_view test_name = "exclusive ownership follows current owner family";
-    RenderGraph graph("OwnershipChain", RenderGraph::QueueTopology::DedicatedQueues());
+    auto graph = RenderGraph::CreateForTesting(
+        "OwnershipChain",
+        RenderGraph::QueueTopologyDesc::DedicatedQueues()
+    );
     int         physical = 0;
     const auto  buffer = graph.ImportBuffer(
         "Shared",
@@ -2280,9 +2297,11 @@ void TestExclusiveOwnershipUsesCurrentOwnerFamily(TestSuite& suite) {
     const auto graphics_to_copy = std::find_if(
         plan.queue_syncs.begin(),
         plan.queue_syncs.end(),
-        [](const RenderGraph::CompiledQueueSync& sync) {
-            return sync.signal_queue.role == RenderGraph::QueueRole::Graphics &&
-                   sync.wait_queue.role == RenderGraph::QueueRole::Copy;
+        [&](const RenderGraph::CompiledQueueSync& sync) {
+            return plan.queue_batches[sync.signal_batch].queue_role ==
+                       RenderGraph::QueueRole::Graphics &&
+                   plan.queue_batches[sync.wait_batch].queue_role ==
+                       RenderGraph::QueueRole::Copy;
         }
     );
     suite.Check(
@@ -2294,7 +2313,10 @@ void TestExclusiveOwnershipUsesCurrentOwnerFamily(TestSuite& suite) {
 
 void TestOwnershipWriterChainUsesCurrentFrontier(TestSuite& suite) {
     constexpr std::string_view test_name = "ownership writer chain uses current frontier";
-    RenderGraph graph("WriterOwnershipChain", RenderGraph::QueueTopology::DedicatedQueues());
+    auto graph = RenderGraph::CreateForTesting(
+        "WriterOwnershipChain",
+        RenderGraph::QueueTopologyDesc::DedicatedQueues()
+    );
     const auto  buffer = graph.CreateTransientBuffer(
         "Shared", RenderGraph::BufferDesc{.byte_size = 64}
     );
@@ -2373,7 +2395,10 @@ void TestOwnershipWriterChainUsesCurrentFrontier(TestSuite& suite) {
 
 void TestAutomaticReadsPreserveAvailabilityFrontier(TestSuite& suite) {
     constexpr std::string_view test_name = "automatic reads preserve availability frontier";
-    RenderGraph graph("AutomaticAvailability", RenderGraph::QueueTopology::DedicatedQueues());
+    auto graph = RenderGraph::CreateForTesting(
+        "AutomaticAvailability",
+        RenderGraph::QueueTopologyDesc::DedicatedQueues()
+    );
     const auto  buffer = graph.CreateTransientBuffer(
         "Concurrent",
         RenderGraph::BufferDesc{
@@ -2462,7 +2487,10 @@ void TestAutomaticReadsPreserveAvailabilityFrontier(TestSuite& suite) {
 
 void TestSameNativeReadsDependOnTransitionFrontier(TestSuite& suite) {
     constexpr std::string_view test_name = "same-native reads depend on transition frontier";
-    RenderGraph graph("SameNativeAvailability", RenderGraph::QueueTopology::SingleQueue());
+    auto graph = RenderGraph::CreateForTesting(
+        "SameNativeAvailability",
+        RenderGraph::QueueTopologyDesc::SingleQueue()
+    );
     const auto  buffer = graph.CreateTransientBuffer(
         "Buffer", RenderGraph::BufferDesc{.byte_size = 64}
     );
@@ -2556,12 +2584,12 @@ void TestSameNativeReadsDependOnTransitionFrontier(TestSuite& suite) {
 
 void TestOwnershipAcquireOrdersSiblingNativeQueue(TestSuite& suite) {
     constexpr std::string_view test_name = "ownership acquire orders sibling native queue";
-    RenderGraph graph(
+    auto graph = RenderGraph::CreateForTesting(
         "OwnershipAcquireFrontier",
-        RenderGraph::QueueTopology{
-            .graphics = {RenderGraph::QueueRole::Graphics, 1, 1},
-            .compute  = {RenderGraph::QueueRole::Compute, 2, 1},
-            .copy     = {RenderGraph::QueueRole::Copy, 0, 0},
+        RenderGraph::QueueTopologyDesc{
+            .graphics = {1, 1, true},
+            .compute  = {2, 1, true},
+            .copy     = {0, 0, true},
         }
     );
     int        physical = 0;
@@ -2614,12 +2642,12 @@ void TestOwnershipAcquireOrdersSiblingNativeQueue(TestSuite& suite) {
 
 void TestImportAvailabilityOrdersSiblingNativeQueue(TestSuite& suite) {
     constexpr std::string_view test_name = "import availability orders sibling native queue";
-    RenderGraph graph(
+    auto graph = RenderGraph::CreateForTesting(
         "ImportAvailabilityFrontier",
-        RenderGraph::QueueTopology{
-            .graphics = {RenderGraph::QueueRole::Graphics, 1, 1},
-            .compute  = {RenderGraph::QueueRole::Compute, 2, 1},
-            .copy     = {RenderGraph::QueueRole::Copy, 0, 0},
+        RenderGraph::QueueTopologyDesc{
+            .graphics = {1, 1, true},
+            .compute  = {2, 1, true},
+            .copy     = {0, 0, true},
         }
     );
     int        physical = 0;
@@ -2682,12 +2710,12 @@ void TestImportAvailabilityOrdersSiblingNativeQueue(TestSuite& suite) {
 
 void TestOwnershipTransitionCollapsesReaderFrontier(TestSuite& suite) {
     constexpr std::string_view test_name = "ownership transition collapses reader frontier";
-    RenderGraph graph(
+    auto graph = RenderGraph::CreateForTesting(
         "OwnershipStateFrontier",
-        RenderGraph::QueueTopology{
-            .graphics = {RenderGraph::QueueRole::Graphics, 1, 1},
-            .compute  = {RenderGraph::QueueRole::Compute, 2, 1},
-            .copy     = {RenderGraph::QueueRole::Copy, 0, 0},
+        RenderGraph::QueueTopologyDesc{
+            .graphics = {1, 1, true},
+            .compute  = {2, 1, true},
+            .copy     = {0, 0, true},
         }
     );
     int        physical = 0;
@@ -2782,12 +2810,12 @@ void TestOwnershipTransitionCollapsesReaderFrontier(TestSuite& suite) {
 
 void TestWriterAdvancesAvailabilityFrontiers(TestSuite& suite) {
     constexpr std::string_view test_name = "writer advances availability frontiers";
-    RenderGraph graph(
+    auto graph = RenderGraph::CreateForTesting(
         "WriterFrontier",
-        RenderGraph::QueueTopology{
-            .graphics = {RenderGraph::QueueRole::Graphics, 1, 1},
-            .compute  = {RenderGraph::QueueRole::Compute, 2, 1},
-            .copy     = {RenderGraph::QueueRole::Copy, 0, 0},
+        RenderGraph::QueueTopologyDesc{
+            .graphics = {1, 1, true},
+            .compute  = {2, 1, true},
+            .copy     = {0, 0, true},
         }
     );
     int        physical = 0;
@@ -2874,12 +2902,12 @@ void TestWriterAdvancesAvailabilityFrontiers(TestSuite& suite) {
 
 void TestOwnershipEpochDoesNotReusePriorFamilySources(TestSuite& suite) {
     constexpr std::string_view test_name = "ownership epochs do not reuse prior family sources";
-    RenderGraph graph(
+    auto graph = RenderGraph::CreateForTesting(
         "OwnershipEpochs",
-        RenderGraph::QueueTopology{
-            .graphics = {RenderGraph::QueueRole::Graphics, 0, 0},
-            .compute  = {RenderGraph::QueueRole::Compute, 1, 1},
-            .copy     = {RenderGraph::QueueRole::Copy, 2, 2},
+        RenderGraph::QueueTopologyDesc{
+            .graphics = {0, 0, true},
+            .compute  = {1, 1, true},
+            .copy     = {2, 2, true},
         }
     );
     int        physical = 0;
@@ -2963,7 +2991,10 @@ void TestOwnershipEpochDoesNotReusePriorFamilySources(TestSuite& suite) {
 
 void TestTokenCrossQueueSyncHasNoOwnership(TestSuite& suite) {
     constexpr std::string_view test_name = "token cross-queue synchronization";
-    RenderGraph graph("TokenSync", RenderGraph::QueueTopology::DedicatedQueues());
+    auto graph = RenderGraph::CreateForTesting(
+        "TokenSync",
+        RenderGraph::QueueTopologyDesc::DedicatedQueues()
+    );
     const auto  token = graph.CreateTransientToken("Token");
     const auto  producer = graph.AddPass(
         "Produce",
@@ -3000,7 +3031,10 @@ void TestTokenCrossQueueSyncHasNoOwnership(TestSuite& suite) {
 
 void TestBatchPairSyncDeduplication(TestSuite& suite) {
     constexpr std::string_view test_name = "batch-pair synchronization deduplication";
-    RenderGraph graph("SyncDedup", RenderGraph::QueueTopology::DedicatedQueues());
+    auto graph = RenderGraph::CreateForTesting(
+        "SyncDedup",
+        RenderGraph::QueueTopologyDesc::DedicatedQueues()
+    );
     const auto  first = graph.CreateTransientBuffer("First", RenderGraph::BufferDesc{.byte_size = 64});
     const auto  second = graph.CreateTransientBuffer("Second", RenderGraph::BufferDesc{.byte_size = 64});
     graph.AddPass(
@@ -3045,7 +3079,10 @@ void TestBatchPairSyncDeduplication(TestSuite& suite) {
 
 void TestPipelineDomainsAndBarrierSources(TestSuite& suite) {
     constexpr std::string_view test_name = "pipeline domains and barrier sources";
-    RenderGraph graph("DomainsAndSources", RenderGraph::QueueTopology::DedicatedQueues());
+    auto graph = RenderGraph::CreateForTesting(
+        "DomainsAndSources",
+        RenderGraph::QueueTopologyDesc::DedicatedQueues()
+    );
     const auto buffer = graph.CreateTransientBuffer(
         "Shared",
         RenderGraph::BufferDesc{
@@ -3165,7 +3202,10 @@ void TestPartialRangeBarrier(TestSuite& suite) {
 
 void TestMixedQueueExecuteRemainsDeclarationOrder(TestSuite& suite) {
     constexpr std::string_view test_name = "mixed-queue serial execution order";
-    RenderGraph graph("MixedQueueExecute", RenderGraph::QueueTopology::DedicatedQueues());
+    auto graph = RenderGraph::CreateForTesting(
+        "MixedQueueExecute",
+        RenderGraph::QueueTopologyDesc::DedicatedQueues()
+    );
     std::vector<int> callbacks;
     const auto first = graph.AddPass(
         "Compute",
@@ -3212,7 +3252,10 @@ void TestMixedQueueExecuteRemainsDeclarationOrder(TestSuite& suite) {
 }
 
 [[nodiscard]] std::string BuildStageTwoDump(TestSuite& suite, std::string_view test_name) {
-    RenderGraph graph("StageTwoDump", RenderGraph::QueueTopology::DedicatedQueues());
+    auto graph = RenderGraph::CreateForTesting(
+        "StageTwoDump",
+        RenderGraph::QueueTopologyDesc::DedicatedQueues()
+    );
     const auto  buffer = graph.CreateTransientBuffer(
         "Output",
         RenderGraph::BufferDesc{
@@ -3273,12 +3316,12 @@ void TestStageTwoDumpDeterminism(TestSuite& suite) {
 
 void TestBarrierSourcesIgnoreUnrelatedLastRead(TestSuite& suite) {
     constexpr std::string_view test_name = "barrier sources ignore unrelated last read";
-    RenderGraph graph(
+    auto graph = RenderGraph::CreateForTesting(
         "SourceEndpoint",
-        RenderGraph::QueueTopology{
-            .graphics = {RenderGraph::QueueRole::Graphics, 0, 0},
-            .compute  = {RenderGraph::QueueRole::Compute, 1, 0},
-            .copy     = {RenderGraph::QueueRole::Copy, 2, 0},
+        RenderGraph::QueueTopologyDesc{
+            .graphics = {0, 0, true},
+            .compute  = {1, 0, true},
+            .copy     = {2, 0, true},
         }
     );
     const auto buffer = graph.CreateTransientBuffer(
@@ -3337,7 +3380,10 @@ void TestBarrierSourcesIgnoreUnrelatedLastRead(TestSuite& suite) {
 
 void TestFanInBarrierPlacementCoversEverySourceBatch(TestSuite& suite) {
     constexpr std::string_view test_name = "fan-in barrier placement covers every source batch";
-    RenderGraph graph("FanInPlacement", RenderGraph::QueueTopology::DedicatedQueues());
+    auto graph = RenderGraph::CreateForTesting(
+        "FanInPlacement",
+        RenderGraph::QueueTopologyDesc::DedicatedQueues()
+    );
     int         physical = 0;
     const auto  buffer = graph.ImportBuffer(
         "Concurrent",
@@ -3517,7 +3563,10 @@ void TestShaderReadStatesRequireTransition(TestSuite& suite) {
 
 void TestReadTransitionWaitsForEveryActiveReader(TestSuite& suite) {
     constexpr std::string_view test_name = "read transition waits for every active reader";
-    RenderGraph graph("ReadTransitionFanIn", RenderGraph::QueueTopology::DedicatedQueues());
+    auto graph = RenderGraph::CreateForTesting(
+        "ReadTransitionFanIn",
+        RenderGraph::QueueTopologyDesc::DedicatedQueues()
+    );
     int         physical = 0;
     const auto  buffer = graph.ImportBuffer(
         "Concurrent",
@@ -5629,7 +5678,10 @@ void TestCpuPrepareRejectsGpuAccess(TestSuite& suite) {
 
 void TestCpuPrepareIsExcludedFromGpuQueuePlan(TestSuite& suite) {
     constexpr std::string_view test_name = "cpu prepare is excluded from GPU queue plan";
-    RenderGraph graph("CpuPrepareQueuePlan", RenderGraph::QueueTopology::DedicatedQueues());
+    auto graph = RenderGraph::CreateForTesting(
+        "CpuPrepareQueuePlan",
+        RenderGraph::QueueTopologyDesc::DedicatedQueues()
+    );
     const auto  token = graph.CreateTransientToken("CpuPreparedToken");
     const auto  prepare = graph.AddPass(
         "PrepareOnCpu",

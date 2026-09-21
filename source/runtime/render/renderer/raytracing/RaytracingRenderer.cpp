@@ -1269,10 +1269,7 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
             !render_graph_boundary_frame;
 
         if (unified_graph_eligible) {
-            RenderGraph graph(
-                "Raytracing.Frame",
-                RenderGraph::QueueTopology::FromRHI()
-            );
+            RenderGraph graph("Raytracing.Frame");
             RTGraphFrameSetupResources setup_resources{};
             const bool setup_passes_added = state.frame_setup_pass->AddPasses(
                 graph,

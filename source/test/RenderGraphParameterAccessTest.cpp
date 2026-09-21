@@ -149,9 +149,9 @@ PlanResult BuildPlan(
     const TextureRef& physical_texture,
     const BufferRef&  physical_buffer
 ) {
-    RenderGraph graph(
+    auto graph = RenderGraph::CreateForTesting(
         "ParameterAccessEquivalence",
-        RenderGraph::QueueTopology::DedicatedQueues()
+        RenderGraph::QueueTopologyDesc::DedicatedQueues()
     );
     const auto texture = graph.ImportTexture(
         "Texture",
@@ -343,7 +343,7 @@ PlanResult BuildPlan(
         result.consumer_workload =
             plan.frontend_record_units[1].estimated_record_work;
         result.consumer_queue =
-            plan.frontend_record_units[1].target_queue.role;
+            plan.frontend_record_units[1].target_queue_role;
     }
 
     RenderGraphLowering::LoweredPlan lowered{};

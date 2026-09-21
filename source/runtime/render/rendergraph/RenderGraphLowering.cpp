@@ -18,6 +18,20 @@ using ResourceState = RenderGraph::ResourceState;
 using TextureAspect = RenderGraph::TextureAspect;
 using TextureState  = RenderGraph::TextureState;
 
+[[nodiscard]] constexpr EQueueType ToRHIQueue(RenderGraph::QueueRole role) {
+    switch (role) {
+        case RenderGraph::QueueRole::Graphics:
+            return EQueueType::Graphics;
+        case RenderGraph::QueueRole::Compute:
+            return EQueueType::Compute;
+        case RenderGraph::QueueRole::Copy:
+            return EQueueType::Copy;
+        case RenderGraph::QueueRole::None:
+            return EQueueType::Ignore;
+    }
+    return EQueueType::Ignore;
+}
+
 [[nodiscard]] constexpr bool HasRead(AccessMode access) {
     return access == AccessMode::Read || access == AccessMode::ReadWrite;
 }
@@ -346,14 +360,14 @@ void AppendInstruction(
            << " export=" << instruction.export_boundary
            << " transient_alias=" << instruction.transient_alias
            << " queue_acquire=" << instruction.queue_acquire
-           << " transfer_src_role="
-           << static_cast<uint32_t>(instruction.transfer_source.role)
+           << " transfer_src_queue="
+           << static_cast<uint32_t>(instruction.transfer_source.queue)
            << " transfer_src_native="
            << instruction.transfer_source.native_queue_id
            << " transfer_src_family="
            << instruction.transfer_source.family_id
-           << " transfer_dst_role="
-           << static_cast<uint32_t>(instruction.transfer_destination.role)
+           << " transfer_dst_queue="
+           << static_cast<uint32_t>(instruction.transfer_destination.queue)
            << " transfer_dst_native="
            << instruction.transfer_destination.native_queue_id
            << " transfer_dst_family="
@@ -488,6 +502,15 @@ bool RenderGraphLowering::Lower(
                role == RenderGraph::QueueRole::Compute ||
                role == RenderGraph::QueueRole::Copy;
     };
+    auto resolve_queue = [&](RenderGraph::QueueRole role) {
+        const auto location = graph.queue_topology.Resolve(role);
+        return RHIQueueBinding{
+            .queue           = ToRHIQueue(role),
+            .native_queue_id = location.native_queue_id,
+            .family_id       = location.family_id,
+            .available       = location.available,
+        };
+    };
     std::vector<bool>     gpu_pass(graph.passes.size(), false);
     std::vector<uint32_t> pass_queue_batch(
         graph.passes.size(), RenderGraph::PassHandle::InvalidIndex
@@ -518,8 +541,7 @@ bool RenderGraphLowering::Lower(
         const auto  pass = compiled.execution_order[unit_index];
         const auto& declaration = graph.passes[pass.index];
         if (unit.source_index != unit_index || unit.pass != pass ||
-            unit.target_queue !=
-                graph.queue_topology.Resolve(declaration.domain.queue) ||
+            unit.target_queue_role != declaration.domain.queue ||
             unit.record_execution_class != declaration.execution_class ||
             unit.estimated_record_work != declaration.workload) {
             return fail(
@@ -533,14 +555,11 @@ bool RenderGraphLowering::Lower(
         if (batch.external_control) {
             return fail("external-control queue batch is outside the managed lowering domain");
         }
-        if (batch.id != batch_index || !batch.queue.available ||
-            !supported_queue(batch.queue.role)) {
+        if (batch.id != batch_index || !supported_queue(batch.queue_role) ||
+            !graph.queue_topology.Resolve(batch.queue_role).available) {
             return fail(
                 "queue batch has an unsupported role or unstable identifier"
             );
-        }
-        if (batch.queue != graph.queue_topology.Resolve(batch.queue.role)) {
-            return fail("queue batch binding disagrees with the graph topology");
         }
         if (batch.passes.empty()) {
             return fail("queue batch contains no GPU pass");
@@ -554,7 +573,7 @@ bool RenderGraphLowering::Lower(
             }
             gpu_pass[pass.index] = true;
             pass_queue_batch[pass.index] = batch_index;
-            if (graph.passes[pass.index].domain.queue != batch.queue.role) {
+            if (graph.passes[pass.index].domain.queue != batch.queue_role) {
                 return fail("GPU pass '" + graph.passes[pass.index].name +
                             "' disagrees with its queue batch role");
             }
@@ -603,9 +622,7 @@ bool RenderGraphLowering::Lower(
             sync.signal_batch >= compiled.queue_batches.size() ||
             sync.wait_batch >= compiled.queue_batches.size() ||
             !graph.IsValidPass(sync.signal_pass) ||
-            !graph.IsValidPass(sync.wait_pass) ||
-            !supported_queue(sync.signal_queue.role) ||
-            !supported_queue(sync.wait_queue.role)) {
+            !graph.IsValidPass(sync.wait_pass)) {
             return fail("queue synchronization record is malformed");
         }
         const bool duplicate_pair = std::any_of(
@@ -628,8 +645,6 @@ bool RenderGraphLowering::Lower(
         if (signal_batch.passes.empty() || wait_batch.passes.empty() ||
             sync.signal_pass != signal_batch.passes.back() ||
             sync.wait_pass != wait_batch.passes.front() ||
-            sync.signal_queue != signal_batch.queue ||
-            sync.wait_queue != wait_batch.queue ||
             pass_queue_batch[sync.signal_pass.index] != sync.signal_batch ||
             pass_queue_batch[sync.wait_pass.index] != sync.wait_batch) {
             return fail("queue synchronization endpoints disagree with their batches");
@@ -646,8 +661,10 @@ bool RenderGraphLowering::Lower(
             ) != 1) {
             return fail("queue synchronization is not owned by both endpoint batches");
         }
+        const auto signal_queue = resolve_queue(signal_batch.queue_role);
+        const auto wait_queue   = resolve_queue(wait_batch.queue_role);
         const bool crosses_native =
-            sync.signal_queue.native_queue_id != sync.wait_queue.native_queue_id;
+            signal_queue.native_queue_id != wait_queue.native_queue_id;
         if (sync.gpu_wait_required != crosses_native) {
             return fail("queue synchronization GPU-wait policy disagrees with topology");
         }
@@ -706,8 +723,8 @@ bool RenderGraphLowering::Lower(
                 .correlation_id = sync.id,
                 .signal_pass    = sync.signal_pass,
                 .wait_pass      = sync.wait_pass,
-                .signal_queue   = sync.signal_queue,
-                .wait_queue     = sync.wait_queue,
+                .signal_queue   = signal_queue,
+                .wait_queue     = wait_queue,
                 .signal_batch   = sync.signal_batch,
                 .wait_batch     = sync.wait_batch,
             });
@@ -726,8 +743,10 @@ bool RenderGraphLowering::Lower(
             signal_batch == wait_batch) {
             continue;
         }
-        const auto& signal_queue = compiled.queue_batches[signal_batch].queue;
-        const auto& wait_queue   = compiled.queue_batches[wait_batch].queue;
+        const auto signal_queue =
+            resolve_queue(compiled.queue_batches[signal_batch].queue_role);
+        const auto wait_queue =
+            resolve_queue(compiled.queue_batches[wait_batch].queue_role);
         if (signal_queue.native_queue_id == wait_queue.native_queue_id) {
             continue;
         }
@@ -1154,8 +1173,12 @@ bool RenderGraphLowering::Lower(
                     error = "queue barrier source or destination has no queue batch";
                     return false;
                 }
-                if (compiled.queue_batches[signal_batch].queue.native_queue_id ==
-                    compiled.queue_batches[wait_batch].queue.native_queue_id) {
+                if (resolve_queue(
+                        compiled.queue_batches[signal_batch].queue_role
+                    ).native_queue_id ==
+                    resolve_queue(
+                        compiled.queue_batches[wait_batch].queue_role
+                    ).native_queue_id) {
                     continue;
                 }
                 queue_acquire = true;
@@ -1274,10 +1297,12 @@ bool RenderGraphLowering::Lower(
                     barrier.queue_ownership || !instruction.queue_acquire ||
                     (source_batch != RenderGraph::PassHandle::InvalidIndex &&
                      destination_batch != RenderGraph::PassHandle::InvalidIndex &&
-                     compiled.queue_batches[source_batch]
-                             .queue.native_queue_id ==
-                         compiled.queue_batches[destination_batch]
-                             .queue.native_queue_id);
+                     resolve_queue(
+                         compiled.queue_batches[source_batch].queue_role
+                     ).native_queue_id ==
+                         resolve_queue(
+                             compiled.queue_batches[destination_batch].queue_role
+                         ).native_queue_id);
                 if (!contributes_local_scope) {
                     continue;
                 }
@@ -1374,8 +1399,9 @@ bool RenderGraphLowering::Lower(
             }
             const auto& signal = compiled.queue_batches[signal_batch];
             const auto& wait   = compiled.queue_batches[wait_batch];
-            if (signal.queue.native_queue_id ==
-                wait.queue.native_queue_id) {
+            const auto signal_queue = resolve_queue(signal.queue_role);
+            const auto wait_queue   = resolve_queue(wait.queue_role);
+            if (signal_queue.native_queue_id == wait_queue.native_queue_id) {
                 error =
                     "ownership fan-in join redundantly targets one native queue";
                 return false;
@@ -1393,8 +1419,8 @@ bool RenderGraphLowering::Lower(
                 .correlation_id = next_synthetic_sync_id++,
                 .signal_pass    = signal.passes.back(),
                 .wait_pass      = wait.passes.front(),
-                .signal_queue   = signal.queue,
-                .wait_queue     = wait.queue,
+                .signal_queue   = signal_queue,
+                .wait_queue     = wait_queue,
                 .signal_batch   = signal_batch,
                 .wait_batch     = wait_batch,
                 .synthetic_ownership_join = true,
@@ -1435,8 +1461,9 @@ bool RenderGraphLowering::Lower(
                     "ownership destination has no managed queue batch"
                 );
             }
-            const auto& destination_binding =
-                compiled.queue_batches[destination_batch].queue;
+            const auto destination_binding = resolve_queue(
+                compiled.queue_batches[destination_batch].queue_role
+            );
 
             struct SourceNativeTail {
                 uint32_t native_queue_id = 0;
@@ -1459,13 +1486,15 @@ bool RenderGraphLowering::Lower(
                         "ownership source is not a forward managed queue batch"
                     );
                 }
-                const auto& source_binding =
-                    compiled.queue_batches[source_batch].queue;
-                if (source_binding.role != source.domain.queue) {
+                const auto& source_batch_record =
+                    compiled.queue_batches[source_batch];
+                if (source_batch_record.queue_role != source.domain.queue) {
                     return fail(
                         "ownership source domain disagrees with its queue batch"
                     );
                 }
+                const auto source_binding =
+                    resolve_queue(source_batch_record.queue_role);
                 if (source_family == RenderGraph::PassHandle::InvalidIndex) {
                     source_family = source_binding.family_id;
                 } else if (source_family != source_binding.family_id) {
@@ -1507,8 +1536,9 @@ bool RenderGraphLowering::Lower(
                 }
             );
             const uint32_t release_batch = release_tail->batch;
-            const auto& release_binding =
-                compiled.queue_batches[release_batch].queue;
+            const auto release_binding = resolve_queue(
+                compiled.queue_batches[release_batch].queue_role
+            );
             if (release_binding.family_id != source_family ||
                 release_binding.native_queue_id ==
                     destination_binding.native_queue_id) {

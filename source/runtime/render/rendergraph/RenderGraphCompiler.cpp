@@ -237,9 +237,9 @@ bool RenderGraphCompiler::Compile() {
 
     InitializeWorkingState();
 
-    if (!ValidateQueueTopology() || !ValidateAndNormalizeDeclarations() || !BuildAtomicCells() ||
-        !BuildSemanticDependencies() || !BuildFinalBarriers() || !BuildTopologicalOrder() ||
-        !BuildExecutionOrder()) {
+    if (!ValidateAndNormalizeDeclarations() || !BuildAtomicCells() ||
+        !BuildSemanticDependencies() || !BuildFinalBarriers() ||
+        !BuildTopologicalOrder() || !BuildExecutionOrder()) {
         return false;
     }
 
@@ -254,30 +254,6 @@ bool RenderGraphCompiler::Compile() {
     BuildFrontendRecordUnits();
     BuildFrontendDispatchGroups();
     graph.compiled = true;
-    return true;
-}
-
-bool RenderGraphCompiler::ValidateQueueTopology() {
-    const std::array expected_roles{
-        RenderGraph::QueueRole::Graphics,
-        RenderGraph::QueueRole::Compute,
-        RenderGraph::QueueRole::Copy,
-    };
-    std::array<RenderGraph::QueueBinding, 3> bindings{};
-    for (uint32_t index = 0; index < expected_roles.size(); ++index) {
-        bindings[index] = graph.queue_topology.Resolve(expected_roles[index]);
-        if (bindings[index].role != expected_roles[index]) {
-            return Fail("queue topology contains a binding with the wrong logical role");
-        }
-    }
-    for (uint32_t lhs = 0; lhs < bindings.size(); ++lhs) {
-        for (uint32_t rhs = lhs + 1; rhs < bindings.size(); ++rhs) {
-            if (bindings[lhs].native_queue_id == bindings[rhs].native_queue_id &&
-                bindings[lhs].family_id != bindings[rhs].family_id) {
-                return Fail("one native queue id cannot belong to multiple queue families");
-            }
-        }
-    }
     return true;
 }
 
@@ -1510,13 +1486,12 @@ void RenderGraphCompiler::BuildQueuePlan() {
         if (pass.execution_class == RenderGraph::PassExecutionClass::CpuPrepare) {
             continue;
         }
-        const auto  binding = graph.queue_topology.Resolve(pass.domain.queue);
         if (pass.execution_class == RenderGraph::PassExecutionClass::ExternalControl) {
             const uint32_t batch_id =
                 static_cast<uint32_t>(graph.compiled_plan.queue_batches.size());
             graph.compiled_plan.queue_batches.push_back(RenderGraph::CompiledQueueBatch{
                 .id               = batch_id,
-                .queue            = binding,
+                .queue_role       = pass.domain.queue,
                 .passes           = {pass_handle},
                 .external_control = true,
             });
@@ -1526,12 +1501,12 @@ void RenderGraphCompiler::BuildQueuePlan() {
         }
         if (graph.compiled_plan.queue_batches.empty() || force_new_managed_batch ||
             graph.compiled_plan.queue_batches.back().external_control ||
-            graph.compiled_plan.queue_batches.back().queue.role != binding.role) {
+            graph.compiled_plan.queue_batches.back().queue_role != pass.domain.queue) {
             const uint32_t batch_id =
                 static_cast<uint32_t>(graph.compiled_plan.queue_batches.size());
             graph.compiled_plan.queue_batches.push_back(RenderGraph::CompiledQueueBatch{
                 .id = batch_id,
-                .queue = binding,
+                .queue_role = pass.domain.queue,
             });
         }
         force_new_managed_batch = false;
@@ -1580,8 +1555,6 @@ void RenderGraphCompiler::BuildQueuePlan() {
             .id                = sync_id,
             .signal_pass       = producer.passes.back(),
             .wait_pass         = consumer.passes.front(),
-            .signal_queue      = producer.queue,
-            .wait_queue        = consumer.queue,
             .signal_batch      = signal_batch,
             .wait_batch        = wait_batch,
             .gpu_wait_required = gpu_wait_required,
@@ -1607,20 +1580,28 @@ void RenderGraphCompiler::BuildQueuePlan() {
         }
         const auto& producer = graph.compiled_plan.queue_batches[signal_batch];
         const auto& consumer = graph.compiled_plan.queue_batches[wait_batch];
+        const auto  producer_location =
+            graph.queue_topology.Resolve(producer.queue_role);
+        const auto  consumer_location =
+            graph.queue_topology.Resolve(consumer.queue_role);
         add_batch_dependency(
             signal_batch,
             wait_batch,
-            producer.queue.native_queue_id != consumer.queue.native_queue_id,
+            producer_location.native_queue_id != consumer_location.native_queue_id,
             edge_index
         );
     }
 
     for (uint32_t wait_batch = 0; wait_batch < graph.compiled_plan.queue_batches.size(); ++wait_batch) {
         const auto native_queue_id =
-            graph.compiled_plan.queue_batches[wait_batch].queue.native_queue_id;
+            graph.queue_topology
+                .Resolve(graph.compiled_plan.queue_batches[wait_batch].queue_role)
+                .native_queue_id;
         for (uint32_t candidate = wait_batch; candidate > 0; --candidate) {
             const uint32_t signal_batch = candidate - 1;
-            if (graph.compiled_plan.queue_batches[signal_batch].queue.native_queue_id ==
+            if (graph.queue_topology
+                    .Resolve(graph.compiled_plan.queue_batches[signal_batch].queue_role)
+                    .native_queue_id ==
                 native_queue_id) {
                 add_batch_dependency(
                     signal_batch,
@@ -1655,8 +1636,12 @@ void RenderGraphCompiler::BuildQueuePlan() {
             }
             const uint32_t src_batch = pass_to_batch[source_pass.index];
             const uint32_t dst_batch = pass_to_batch[barrier.dst_pass.index];
-            if (graph.compiled_plan.queue_batches[src_batch].queue.native_queue_id ==
-                graph.compiled_plan.queue_batches[dst_batch].queue.native_queue_id) {
+            if (graph.queue_topology
+                    .Resolve(graph.compiled_plan.queue_batches[src_batch].queue_role)
+                    .native_queue_id ==
+                graph.queue_topology
+                    .Resolve(graph.compiled_plan.queue_batches[dst_batch].queue_role)
+                    .native_queue_id) {
                 return;
             }
             auto& post = graph.compiled_plan.queue_batches[src_batch].post_barriers;
@@ -1676,8 +1661,12 @@ void RenderGraphCompiler::BuildQueuePlan() {
                 return;
             }
             const uint32_t src_batch = pass_to_batch[source_pass.index];
-            if (graph.compiled_plan.queue_batches[src_batch].queue.native_queue_id ==
-                graph.compiled_plan.queue_batches[dst_batch].queue.native_queue_id) {
+            if (graph.queue_topology
+                    .Resolve(graph.compiled_plan.queue_batches[src_batch].queue_role)
+                    .native_queue_id ==
+                graph.queue_topology
+                    .Resolve(graph.compiled_plan.queue_batches[dst_batch].queue_role)
+                    .native_queue_id) {
                 return;
             }
             auto sync = std::find_if(
@@ -1757,7 +1746,7 @@ void RenderGraphCompiler::BuildFrontendRecordUnits() {
         graph.compiled_plan.frontend_record_units.push_back(
             RenderGraph::CompiledFrontendRecordUnit{
                 .source_index = source_index,
-                .target_queue = graph.queue_topology.Resolve(pass.domain.queue),
+                .target_queue_role = pass.domain.queue,
                 .pass         = pass_handle,
                 .record_execution_class = pass.execution_class,
                 .native_translate_class = pass.translate_execution_class,

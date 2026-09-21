@@ -300,40 +300,38 @@ public:
         Copy,
     };
 
-    struct QueueBinding {
-        QueueRole role            = QueueRole::None;
-        uint32_t  native_queue_id = 0;
-        uint32_t  family_id       = 0;
-        bool      available       = true;
+    /** Physical destination selected for one logical queue role. */
+    struct QueueLocation {
+        uint32_t native_queue_id = 0;
+        uint32_t family_id       = 0;
+        bool     available       = false;
 
-        friend bool operator==(const QueueBinding&, const QueueBinding&) = default;
+        friend bool operator==(const QueueLocation&, const QueueLocation&) = default;
     };
 
-    /**
-     * Maps logical roles to actual queues. Tests may provide a fake topology;
-     * active production graphs should snapshot QueueTopology::FromRHI().
-     */
-    struct QueueTopology {
-        QueueBinding graphics{QueueRole::Graphics, 0, 0};
-        QueueBinding compute{QueueRole::Compute, 0, 0};
-        QueueBinding copy{QueueRole::Copy, 0, 0};
+    /** Explicit physical topology override used by queue-planning tests. */
+    struct QueueTopologyDesc {
+        QueueLocation graphics{0, 0, true};
+        QueueLocation compute{0, 0, true};
+        QueueLocation copy{0, 0, true};
 
-        [[nodiscard]] static constexpr QueueTopology SingleQueue() {
+        [[nodiscard]] static constexpr QueueTopologyDesc SingleQueue() {
             return {};
         }
 
-        [[nodiscard]] static constexpr QueueTopology DedicatedQueues() {
-            return QueueTopology{
-                .graphics = QueueBinding{QueueRole::Graphics, 0, 0},
-                .compute  = QueueBinding{QueueRole::Compute, 1, 1},
-                .copy     = QueueBinding{QueueRole::Copy, 2, 2},
+        [[nodiscard]] static constexpr QueueTopologyDesc DedicatedQueues() {
+            return QueueTopologyDesc{
+                .graphics = QueueLocation{0, 0, true},
+                .compute  = QueueLocation{1, 1, true},
+                .copy     = QueueLocation{2, 2, true},
             };
         }
+    };
 
-        /** Snapshot the initialized RHI's real native queue/family mapping. */
-        [[nodiscard]] RENDER_API static QueueTopology FromRHI();
-
-        [[nodiscard]] constexpr QueueBinding Resolve(QueueRole role) const {
+    /** Immutable logical-role to physical-location mapping owned by the graph. */
+    class QueueTopology {
+    public:
+        [[nodiscard]] constexpr QueueLocation Resolve(QueueRole role) const {
             switch (role) {
                 case QueueRole::Graphics:
                     return graphics;
@@ -348,6 +346,22 @@ public:
         }
 
         friend bool operator==(const QueueTopology&, const QueueTopology&) = default;
+
+    private:
+        QueueLocation graphics{0, 0, true};
+        QueueLocation compute{0, 0, true};
+        QueueLocation copy{0, 0, true};
+
+        constexpr QueueTopology() = default;
+        explicit constexpr QueueTopology(const QueueTopologyDesc& desc) :
+            graphics(desc.graphics), compute(desc.compute), copy(desc.copy) {}
+
+        [[nodiscard]] static std::optional<QueueTopology>
+        Create(const QueueTopologyDesc& desc, std::string& error);
+        [[nodiscard]] static std::optional<QueueTopology>
+        FromRHI(std::string& error);
+
+        friend class RenderGraph;
     };
 
     struct ExecutionDomain {
@@ -515,7 +529,7 @@ public:
      */
     struct CompiledFrontendRecordUnit {
         uint32_t                source_index = 0;
-        QueueBinding            target_queue{};
+        QueueRole               target_queue_role = QueueRole::None;
         PassHandle              pass{};
         PassExecutionClass      record_execution_class = PassExecutionClass::SerialRecord;
         ERHITranslateExecutionClass native_translate_class{
@@ -603,8 +617,6 @@ public:
         uint32_t     id = 0;
         PassHandle   signal_pass{};
         PassHandle   wait_pass{};
-        QueueBinding signal_queue{};
-        QueueBinding wait_queue{};
         uint32_t     signal_batch = PassHandle::InvalidIndex;
         uint32_t     wait_batch   = PassHandle::InvalidIndex;
         bool         gpu_wait_required = false;
@@ -619,7 +631,7 @@ public:
 
     struct CompiledQueueBatch {
         uint32_t                id = 0;
-        QueueBinding            queue{};
+        QueueRole               queue_role = QueueRole::None;
         std::vector<PassHandle> passes{};
         /**
          * An externally managed submit/synchronization scope. It is always a
@@ -881,7 +893,8 @@ public:
     };
 
     explicit RenderGraph(std::string_view name = "RenderGraph");
-    RenderGraph(std::string_view name, QueueTopology topology);
+    [[nodiscard]] static RenderGraph
+    CreateForTesting(std::string_view name, QueueTopologyDesc topology);
     ~RenderGraph();
 
     RenderGraph(const RenderGraph&)            = delete;
@@ -1196,10 +1209,6 @@ public:
         return compiled_plan;
     }
 
-    [[nodiscard]] const QueueTopology& GetQueueTopology() const {
-        return queue_topology;
-    }
-
     /** Deterministic text dump of passes, typed accesses, edges, versions and lifetimes. */
     [[nodiscard]] std::string Dump() const;
 
@@ -1216,6 +1225,8 @@ private:
         TaskDispatchThrows   = 1 << 2,
         FailureDiagnostic    = 1 << 3,
     };
+
+    RenderGraph(std::string_view name, QueueTopologyDesc topology);
 
     enum class GpuProfileBindOutcome : uint8_t {
         Bound,

@@ -1925,7 +1925,7 @@ void RunActiveRdgExplicitBarrierReadback(bool _parallel) {
 
 void RunActiveRdgAsyncQueueDag(bool _parallel) {
     auto& device = RenderDevice::Get();
-    const auto topology = RenderGraph::QueueTopology::FromRHI();
+    const auto topology = device.GetQueueTopology();
     const bool dedicated_compute =
         topology.graphics.native_queue_id != topology.compute.native_queue_id;
     const bool same_queue_family =
@@ -1933,7 +1933,10 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
     const bool graphics_compute_available =
         topology.graphics.available && topology.compute.available;
     if (dedicated_compute) {
-        RenderGraph stale_topology_graph("ActiveRdgRejectStaleTopology");
+        auto stale_topology_graph = RenderGraph::CreateForTesting(
+            "ActiveRdgRejectStaleTopology",
+            RenderGraph::QueueTopologyDesc::SingleQueue()
+        );
         const auto graphics_done =
             stale_topology_graph.CreateTransientToken("GraphicsDone");
         stale_topology_graph.AddRecordPass(
@@ -1993,9 +1996,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
     }
 
     std::atomic<uint32> caller_callbacks{0};
-    RenderGraph caller_graph(
-        "ActiveRdgRejectCallerThreadMultiQueue", topology
-    );
+    RenderGraph caller_graph("ActiveRdgRejectCallerThreadMultiQueue");
     const auto caller_graphics_done =
         caller_graph.CreateTransientToken("GraphicsDone");
     caller_graph.AddPass(
@@ -2106,9 +2107,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
     {
         std::binary_semaphore graphics_record_started{0};
         std::binary_semaphore compute_record_started{0};
-        RenderGraph independent_graph(
-            "ActiveRdgIndependentQueueRoots", topology
-        );
+        RenderGraph independent_graph("ActiveRdgIndependentQueueRoots");
         const auto graphics_handle = independent_graph.ImportBuffer(
             "GraphicsIndependent",
             graphics_independent.buffer,
@@ -2302,9 +2301,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         }
         shared_destination.values = shared_source.values;
 
-        RenderGraph physical_graph(
-            "ActiveRdgDistinctNativePhysicalRaw", topology
-        );
+        RenderGraph physical_graph("ActiveRdgDistinctNativePhysicalRaw");
         const auto source_handle = physical_graph.ImportBuffer(
             "SharedSource",
             shared_source.buffer,
@@ -2550,7 +2547,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         );
     }
 
-    RenderGraph graph("ActiveRdgAsyncQueueDag", topology);
+    RenderGraph graph("ActiveRdgAsyncQueueDag");
     const auto graphics_root_handle = graph.ImportBuffer(
         "GraphicsRoot",
         graphics_root.buffer,
@@ -2790,7 +2787,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
 
 void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
     auto&      device   = RenderDevice::Get();
-    const auto topology = RenderGraph::QueueTopology::FromRHI();
+    const auto topology = device.GetQueueTopology();
     if (!topology.copy.available) {
         LOG_INFO(
             "[TESTCASE][SKIP] name=ActiveRdgGraphicsCopyRoundTrip "
@@ -2828,7 +2825,7 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
         expected[index] = 0xC7400000u + index * 73u + 29u;
     }
 
-    RenderGraph graph("ActiveRdgGraphicsCopyRoundTrip", topology);
+    RenderGraph graph("ActiveRdgGraphicsCopyRoundTrip");
     const auto source_handle = graph.ImportBuffer(
         "RoundTripSource",
         source,
@@ -3022,8 +3019,8 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
             RenderGraph::BufferHandle    resource,
             RenderGraph::PassHandle      producer,
             RenderGraph::PassHandle      consumer,
-            RenderGraph::QueueBinding    source_queue,
-            RenderGraph::QueueBinding    destination_queue) {
+            RHIQueueBinding              source_queue,
+            RHIQueueBinding              destination_queue) {
             const auto after_producer  = lowered.After(producer);
             const auto before_consumer = lowered.Before(consumer);
             const auto matches_resource =
