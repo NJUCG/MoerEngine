@@ -21,6 +21,13 @@ just clean          # Remove build/ and target/
 - Set `default_render_method = "Raster"` when working on the raster pipeline, and set `default_render_method = "Raytracing"` when working on the ray tracing pipeline.
 - After starting the editor with `just r`, allow up to one minute for the engine to finish loading so startup errors, validation errors, and obvious runtime regressions have time to surface.
 
+## GitHub Operations
+
+- Create, comment on, review, or merge pull requests only through the local GitHub CLI (`gh`). Do not use a GitHub connector or browser session for GitHub write operations.
+- On Windows, if a long-running process has not refreshed `PATH` after installation, use `C:\Program Files\GitHub CLI\gh.exe` directly.
+- Before every GitHub write operation, run `gh auth status --active --hostname github.com` and verify that `gh api user --jq .login` returns exactly `Irk2wd`. If either check fails, stop without performing the write operation and ask the user to correct the local GitHub CLI authentication.
+- Do not use `gh pr create --web`; create pull requests through the authenticated CLI API path.
+
 ## Architecture Overview
 
 ```

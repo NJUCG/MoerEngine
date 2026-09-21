@@ -57,8 +57,11 @@ private:
         RenderGraph::ResourceState state{};
     };
 
+    void InitializeWorkingState();
     bool ValidateQueueTopology();
-    bool NormalizeDeclarations();
+    bool ValidateAndNormalizeDeclarations();
+    bool ValidateAndNormalizePassDeclarations();
+    bool ValidateAndNormalizeBoundaryStateDeclarations();
     bool BuildAtomicCells();
     bool BuildSemanticDependencies();
     bool BuildFinalBarriers();

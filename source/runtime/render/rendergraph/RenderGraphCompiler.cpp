@@ -207,6 +207,18 @@ void RetainCurrentOwnerFamilySources(
 
 } // namespace
 
+void RenderGraphCompiler::InitializeWorkingState() {
+    const auto pass_count     = graph.passes.size();
+    const auto resource_count = graph.resources.size();
+
+    normalized_accesses.assign(pass_count, {});
+    normalized_initial_states.assign(resource_count, {});
+    normalized_final_states.assign(resource_count, {});
+    resource_cells.assign(resource_count, {});
+    resource_version_counts.assign(resource_count, 0);
+    resource_ever_written.assign(resource_count, false);
+}
+
 bool RenderGraphCompiler::Compile() {
     graph.compiled = false;
     graph.compile_error.clear();
@@ -223,14 +235,9 @@ bool RenderGraphCompiler::Compile() {
         return Fail("graph contains no passes");
     }
 
-    normalized_accesses.assign(graph.passes.size(), {});
-    normalized_initial_states.assign(graph.resources.size(), {});
-    normalized_final_states.assign(graph.resources.size(), {});
-    resource_cells.assign(graph.resources.size(), {});
-    resource_version_counts.assign(graph.resources.size(), 0);
-    resource_ever_written.assign(graph.resources.size(), false);
+    InitializeWorkingState();
 
-    if (!ValidateQueueTopology() || !NormalizeDeclarations() || !BuildAtomicCells() ||
+    if (!ValidateQueueTopology() || !ValidateAndNormalizeDeclarations() || !BuildAtomicCells() ||
         !BuildSemanticDependencies() || !BuildFinalBarriers() || !BuildTopologicalOrder() ||
         !BuildExecutionOrder()) {
         return false;
@@ -274,173 +281,191 @@ bool RenderGraphCompiler::ValidateQueueTopology() {
     return true;
 }
 
-bool RenderGraphCompiler::NormalizeDeclarations() {
+bool RenderGraphCompiler::ValidateAndNormalizeDeclarations() {
+    return ValidateAndNormalizePassDeclarations() &&
+           ValidateAndNormalizeBoundaryStateDeclarations();
+}
+
+bool RenderGraphCompiler::ValidateAndNormalizePassDeclarations() {
     for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
         if (!ValidateExecutionDomain(pass_index)) {
             return false;
         }
-        const auto& pass = graph.passes[pass_index];
-        const bool has_execute = static_cast<bool>(pass.execute);
-        const bool has_record  = static_cast<bool>(pass.record);
-        if (has_execute == has_record) {
+        const auto& pass_decl            = graph.passes[pass_index];
+        const bool  has_execute_callback = static_cast<bool>(pass_decl.execute);
+        const bool  has_record_callback  = static_cast<bool>(pass_decl.record);
+        if (has_execute_callback == has_record_callback) {
             return Fail(
-                "pass '" + pass.name + "' must declare exactly one execute or record callback"
+                "pass '" + pass_decl.name + "' must declare exactly one execute or record callback"
             );
         }
-        const bool caller_thread =
-            pass.execution_class == RenderGraph::PassExecutionClass::MainThread ||
-            pass.execution_class == RenderGraph::PassExecutionClass::CpuPrepare ||
-            pass.execution_class == RenderGraph::PassExecutionClass::ExternalControl;
-        if (has_execute && !caller_thread) {
+        const bool is_caller_thread_class =
+            pass_decl.execution_class == RenderGraph::PassExecutionClass::MainThread ||
+            pass_decl.execution_class == RenderGraph::PassExecutionClass::CpuPrepare ||
+            pass_decl.execution_class == RenderGraph::PassExecutionClass::ExternalControl;
+        if (has_execute_callback && !is_caller_thread_class) {
             return Fail(
-                "main-thread pass '" + pass.name + "' cannot use a command-recording class"
+                "main-thread pass '" + pass_decl.name + "' cannot use a command-recording class"
             );
         }
-        if (has_record && caller_thread) {
+        if (has_record_callback && is_caller_thread_class) {
             return Fail(
-                "record pass '" + pass.name + "' must use SerialRecord or ParallelRecordEligible"
+                "record pass '" + pass_decl.name + "' must use SerialRecord or ParallelRecordEligible"
             );
         }
-        if (has_execute &&
-            pass.translate_execution_class !=
+        if (has_execute_callback &&
+            pass_decl.translate_execution_class !=
                 ERHITranslateExecutionClass::Parallel) {
             return Fail(
-                "caller-thread pass '" + pass.name +
+                "caller-thread pass '" + pass_decl.name +
                 "' cannot declare a backend translation policy"
             );
         }
-        if (pass.workload == 0) {
-            return Fail("pass '" + pass.name + "' has zero recording workload");
+        if (pass_decl.workload == 0) {
+            return Fail("pass '" + pass_decl.name + "' has zero recording workload");
         }
-        for (const auto reference : pass.references) {
-            if (!graph.IsValidResource(reference)) {
-                return Fail("pass '" + pass.name + "' has an invalid resource identity reference");
+        for (const auto resource_ref : pass_decl.references) {
+            if (!graph.IsValidResource(resource_ref)) {
+                return Fail("pass '" + pass_decl.name + "' has an invalid resource identity reference");
             }
         }
-        for (const auto& access : pass.accesses) {
-            if (!graph.IsValidResource(access.resource)) {
-                return Fail("pass '" + pass.name + "' references an invalid resource");
+        for (const auto& access_decl : pass_decl.accesses) {
+            if (!graph.IsValidResource(access_decl.resource)) {
+                return Fail("pass '" + pass_decl.name + "' references an invalid resource");
             }
-            const auto&   resource = graph.resources[access.resource.index];
-            if (pass.execution_class == RenderGraph::PassExecutionClass::CpuPrepare &&
-                resource.kind != RenderGraph::ResourceKind::Token) {
+            const auto& resource_decl = graph.resources[access_decl.resource.index];
+            if (pass_decl.execution_class == RenderGraph::PassExecutionClass::CpuPrepare &&
+                resource_decl.kind != RenderGraph::ResourceKind::Token) {
                 return Fail(
-                    "cpu-prepare pass '" + pass.name +
+                    "cpu-prepare pass '" + pass_decl.name +
                     "' may only access token resources; use Reference for GPU resource identity"
                 );
             }
-            ResourceRange normalized{};
-            if (!NormalizeRange(resource, access.range, normalized) ||
+            ResourceRange normalized_range{};
+            if (!NormalizeRange(resource_decl, access_decl.range, normalized_range) ||
                 !ValidateAccessState(
                     pass_index,
-                    resource,
-                    normalized,
-                    access.mode,
-                    access.state,
-                    access.explicit_state
+                    resource_decl,
+                    normalized_range,
+                    access_decl.mode,
+                    access_decl.state,
+                    access_decl.explicit_state
                 )) {
                 return false;
             }
             normalized_accesses[pass_index].push_back(
                 NormalizedAccess{
-                    access.resource,
-                    access.mode,
-                    normalized,
-                    access.state,
-                    access.explicit_state
+                    access_decl.resource,
+                    access_decl.mode,
+                    normalized_range,
+                    access_decl.state,
+                    access_decl.explicit_state
                 }
             );
         }
     }
+    return true;
+}
+
+bool RenderGraphCompiler::ValidateAndNormalizeBoundaryStateDeclarations() {
+    enum class BoundaryKind : uint8_t {
+        Import,
+        Export,
+    };
 
     for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
-        const auto& resource = graph.resources[resource_index];
-        auto normalize_states = [&](
-                                    const std::vector<RenderGraph::StateDeclaration>& declarations,
-                                    std::vector<NormalizedStateDeclaration>&          normalized_states,
-                                    bool                                              initial
-                                ) -> bool {
-            for (const auto& declaration : declarations) {
-                if (declaration.state.IsAutomatic()) {
-                    return Fail("boundary state cannot be automatic on resource '" + resource.name + "'");
+        const auto& resource_decl = graph.resources[resource_index];
+        auto validate_and_normalize_boundary_states =
+            [&](const std::vector<RenderGraph::StateDeclaration>& boundary_decls,
+                std::vector<NormalizedStateDeclaration>&          normalized_boundary_states,
+                BoundaryKind                                      boundary_kind) -> bool {
+            for (const auto& boundary_decl : boundary_decls) {
+                if (boundary_decl.state.IsAutomatic()) {
+                    return Fail("boundary state cannot be automatic on resource '" + resource_decl.name + "'");
                 }
-                const bool presentation_source =
-                    resource.kind == ResourceKind::Texture &&
-                    declaration.state.texture ==
+                const bool is_presentation_source =
+                    resource_decl.kind == ResourceKind::Texture &&
+                    boundary_decl.state.texture ==
                         RenderGraph::TextureState::PresentationSource;
-                if (presentation_source && initial) {
+                if (is_presentation_source && boundary_kind == BoundaryKind::Import) {
                     return Fail(
                         "PresentationSource is an export-boundary-only state on resource '" +
-                        resource.name + "'"
+                        resource_decl.name + "'"
                     );
                 }
-                if (presentation_source &&
-                    declaration.queue != RenderGraph::QueueRole::Graphics) {
+                if (is_presentation_source &&
+                    boundary_decl.queue != RenderGraph::QueueRole::Graphics) {
                     return Fail(
                         "PresentationSource export requires the Graphics queue on resource '" +
-                        resource.name + "'"
+                        resource_decl.name + "'"
                     );
                 }
-                if (declaration.queue == RenderGraph::QueueRole::None &&
-                    !declaration.state.IsUndefined()) {
-                    return Fail("a known boundary state requires an owner queue on resource '" + resource.name + "'");
+                if (boundary_decl.queue == RenderGraph::QueueRole::None &&
+                    !boundary_decl.state.IsUndefined()) {
+                    return Fail("a known boundary state requires an owner queue on resource '" + resource_decl.name + "'");
                 }
-                if (!initial && declaration.state.IsUndefined()) {
-                    return Fail("an exported resource cannot require the undefined state: " + resource.name);
+                if (boundary_kind == BoundaryKind::Export && boundary_decl.state.IsUndefined()) {
+                    return Fail("an exported resource cannot require the undefined state: " + resource_decl.name);
                 }
-                if (initial && !declaration.state.IsUndefined() &&
-                    declaration.boundary_access == RenderGraph::AccessMode::None) {
+                if (boundary_kind == BoundaryKind::Import && !boundary_decl.state.IsUndefined() &&
+                    boundary_decl.boundary_access == RenderGraph::AccessMode::None) {
                     return Fail("a known imported state must describe its previous access on resource '" +
-                                resource.name + "'");
+                                resource_decl.name + "'");
                 }
-                if (initial && declaration.state.IsUndefined() &&
-                    declaration.boundary_access != RenderGraph::AccessMode::None) {
+                if (boundary_kind == BoundaryKind::Import && boundary_decl.state.IsUndefined() &&
+                    boundary_decl.boundary_access != RenderGraph::AccessMode::None) {
                     return Fail("an undefined imported state must have no previous access on resource '" +
-                                resource.name + "'");
+                                resource_decl.name + "'");
                 }
-                if (declaration.boundary_access != RenderGraph::AccessMode::None) {
-                    const bool supported = resource.kind == ResourceKind::Texture ?
-                                               TextureStateSupports(
-                                                   declaration.state.texture,
-                                                   declaration.boundary_access
-                                               ) :
-                                               BufferStateSupports(
-                                                   declaration.state.buffer,
-                                                   declaration.boundary_access
-                                               );
-                    if (!supported) {
+                if (boundary_decl.boundary_access != RenderGraph::AccessMode::None) {
+                    const bool is_access_compatible = resource_decl.kind == ResourceKind::Texture ?
+                                                          TextureStateSupports(
+                                                              boundary_decl.state.texture,
+                                                              boundary_decl.boundary_access
+                                                          ) :
+                                                          BufferStateSupports(
+                                                              boundary_decl.state.buffer,
+                                                              boundary_decl.boundary_access
+                                                          );
+                    if (!is_access_compatible) {
                         return Fail("boundary access is incompatible with the state on resource '" +
-                                    resource.name + "'");
+                                    resource_decl.name + "'");
                     }
                 }
-                ResourceRange normalized{};
-                if (!NormalizeRange(resource, declaration.range, normalized)) {
+                ResourceRange normalized_range{};
+                if (!NormalizeRange(resource_decl, boundary_decl.range, normalized_range)) {
                     return false;
                 }
-                if (resource.kind == ResourceKind::Texture &&
+                if (resource_decl.kind == ResourceKind::Texture &&
                     !TextureStateSupportsAspects(
-                        declaration.state.texture, normalized.texture.aspects
+                        boundary_decl.state.texture, normalized_range.texture.aspects
                     )) {
                     return Fail(
                         "boundary texture state is incompatible with the selected aspects on resource '" +
-                        resource.name + "'"
+                        resource_decl.name + "'"
                     );
                 }
-                normalized_states.push_back(
+                normalized_boundary_states.push_back(
                     NormalizedStateDeclaration{
-                        normalized,
-                        declaration.state,
-                        declaration.queue,
-                        declaration.boundary_access
+                        normalized_range,
+                        boundary_decl.state,
+                        boundary_decl.queue,
+                        boundary_decl.boundary_access
                     }
                 );
             }
             return true;
         };
-        if (!normalize_states(
-                resource.initial_states, normalized_initial_states[resource_index], true
+        if (!validate_and_normalize_boundary_states(
+                resource_decl.initial_states,
+                normalized_initial_states[resource_index],
+                BoundaryKind::Import
             ) ||
-            !normalize_states(resource.final_states, normalized_final_states[resource_index], false)) {
+            !validate_and_normalize_boundary_states(
+                resource_decl.final_states,
+                normalized_final_states[resource_index],
+                BoundaryKind::Export
+            )) {
             return false;
         }
     }
