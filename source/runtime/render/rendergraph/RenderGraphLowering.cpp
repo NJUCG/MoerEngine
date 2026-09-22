@@ -580,15 +580,8 @@ bool RenderGraphLowering::Lower(
         }
     }
     for (const auto pass : compiled.execution_order) {
-        const bool should_be_gpu =
-            graph.passes[pass.index].execution_class !=
-            RenderGraph::PassExecutionClass::CpuPrepare;
-        if (gpu_pass[pass.index] != should_be_gpu) {
-            return fail(
-                should_be_gpu ?
-                    "execution-order GPU pass has no queue batch" :
-                    "CpuPrepare pass unexpectedly belongs to a queue batch"
-            );
+        if (!gpu_pass[pass.index]) {
+            return fail("execution-order GPU pass has no queue batch");
         }
     }
     for (uint32_t batch_index = 0; batch_index < compiled.queue_batches.size();

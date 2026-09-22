@@ -208,6 +208,14 @@ void RetainCurrentOwnerFamilySources(
 } // namespace
 
 void RenderGraphCompiler::InitializeWorkingState() {
+    graph.compiled = false;
+    graph.compile_error.clear();
+    graph.compiled_plan.Clear();
+    for (auto& resource : graph.resources) {
+        resource.first_use = RenderGraph::PassHandle::InvalidIndex;
+        resource.last_use  = RenderGraph::PassHandle::InvalidIndex;
+    }
+
     const auto pass_count     = graph.passes.size();
     const auto resource_count = graph.resources.size();
 
@@ -220,14 +228,6 @@ void RenderGraphCompiler::InitializeWorkingState() {
 }
 
 bool RenderGraphCompiler::Compile() {
-    graph.compiled = false;
-    graph.compile_error.clear();
-    graph.compiled_plan.Clear();
-    for (auto& resource : graph.resources) {
-        resource.first_use = RenderGraph::PassHandle::InvalidIndex;
-        resource.last_use  = RenderGraph::PassHandle::InvalidIndex;
-    }
-
     if (!graph.declaration_errors.empty()) {
         return Fail(graph.declaration_errors.front());
     }
@@ -277,7 +277,6 @@ bool RenderGraphCompiler::ValidateAndNormalizePassDeclarations() {
         }
         const bool is_caller_thread_class =
             pass_decl.execution_class == RenderGraph::PassExecutionClass::MainThread ||
-            pass_decl.execution_class == RenderGraph::PassExecutionClass::CpuPrepare ||
             pass_decl.execution_class == RenderGraph::PassExecutionClass::ExternalControl;
         if (has_execute_callback && !is_caller_thread_class) {
             return Fail(
@@ -310,13 +309,6 @@ bool RenderGraphCompiler::ValidateAndNormalizePassDeclarations() {
                 return Fail("pass '" + pass_decl.name + "' references an invalid resource");
             }
             const auto& resource_decl = graph.resources[access_decl.resource.index];
-            if (pass_decl.execution_class == RenderGraph::PassExecutionClass::CpuPrepare &&
-                resource_decl.kind != RenderGraph::ResourceKind::Token) {
-                return Fail(
-                    "cpu-prepare pass '" + pass_decl.name +
-                    "' may only access token resources; use Reference for GPU resource identity"
-                );
-            }
             ResourceRange normalized_range{};
             if (!NormalizeRange(resource_decl, access_decl.range, normalized_range) ||
                 !ValidateAccessState(
@@ -1483,9 +1475,6 @@ void RenderGraphCompiler::BuildQueuePlan() {
     bool force_new_managed_batch = false;
     for (const auto pass_handle : graph.compiled_plan.execution_order) {
         const auto& pass    = graph.passes[pass_handle.index];
-        if (pass.execution_class == RenderGraph::PassExecutionClass::CpuPrepare) {
-            continue;
-        }
         if (pass.execution_class == RenderGraph::PassExecutionClass::ExternalControl) {
             const uint32_t batch_id =
                 static_cast<uint32_t>(graph.compiled_plan.queue_batches.size());

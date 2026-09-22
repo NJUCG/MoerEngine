@@ -1502,8 +1502,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     auto&&,
                     RenderGraph::PassExecutionClass execution_class,
                     auto&&                          execute) {
-                if (execution_class == RenderGraph::PassExecutionClass::CpuPrepare ||
-                    execution_class == RenderGraph::PassExecutionClass::ExternalControl) {
+                if (execution_class == RenderGraph::PassExecutionClass::ExternalControl) {
                     std::forward<decltype(execute)>(execute)(cmd_list);
                     if (execution_class == RenderGraph::PassExecutionClass::ExternalControl &&
                         gpu_profile_frame.Valid()) {

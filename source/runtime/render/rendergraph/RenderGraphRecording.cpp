@@ -23,8 +23,6 @@ namespace {
     switch (execution) {
         case RenderGraph::PassExecutionClass::MainThread:
             return "main-thread";
-        case RenderGraph::PassExecutionClass::CpuPrepare:
-            return "cpu-prepare";
         case RenderGraph::PassExecutionClass::ExternalControl:
             return "external-control";
         case RenderGraph::PassExecutionClass::SerialRecord:

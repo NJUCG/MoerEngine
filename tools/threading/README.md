@@ -328,9 +328,9 @@ an independent CommandList and an immutable, strongly-owned Prepare snapshot.
 The second pair deliberately spans two GPU dependency waves: GPU hazards still
 fix Lighting-before-Skybox submission, but do not serialize their CPU command
 recording. Token hazards and explicit `DependsOn` edges still split CPU record
-groups. `CpuPrepare` is a managed caller-thread join boundary with no command
-submission: it may access logical Tokens or `Reference` GPU identities and is
-excluded from the GPU queue plan. `ExternalControl` is reserved for
+groups. CPU preparation uses the independent `AddSetupPass` dependency graph,
+which is joined before RenderGraph compilation and never enters frontend
+recording or the GPU queue plan. `ExternalControl` is reserved for
 TensorRT/Vulkan-CUDA work that owns its own submit/sync scope. Other mutable
 Raster passes remain explicit caller-thread boundaries until their state is
 similarly split.

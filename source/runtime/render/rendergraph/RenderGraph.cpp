@@ -521,8 +521,6 @@ const char* ToString(RenderGraph::PassExecutionClass execution) {
     switch (execution) {
         case RenderGraph::PassExecutionClass::MainThread:
             return "main-thread";
-        case RenderGraph::PassExecutionClass::CpuPrepare:
-            return "cpu-prepare";
         case RenderGraph::PassExecutionClass::ExternalControl:
             return "external-control";
         case RenderGraph::PassExecutionClass::SerialRecord:
@@ -1219,11 +1217,6 @@ ToBarrierState(const RenderGraphLowering::Scope& scope, bool texture) {
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::MainThread() {
     graph.SetPassExecutionClass(pass_index, PassExecutionClass::MainThread, 1);
-    return *this;
-}
-
-RenderGraph::PassBuilder& RenderGraph::PassBuilder::CpuPrepare() {
-    graph.SetPassExecutionClass(pass_index, PassExecutionClass::CpuPrepare, 1);
     return *this;
 }
 
@@ -2114,8 +2107,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                 return false;
             }
             const auto execution = passes[pass_index].execution_class;
-            if (execution == PassExecutionClass::CpuPrepare ||
-                execution == PassExecutionClass::ExternalControl) {
+            if (execution == PassExecutionClass::ExternalControl) {
                 compile_error =
                     "RenderGraph active lowering cannot materialize physical state for pass '" +
                     passes[pass_index].name + "' on its execution class";
@@ -2167,8 +2159,6 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
             [](const CompiledFrontendRecordUnit& unit) {
                 return unit.record_execution_class ==
                            PassExecutionClass::MainThread ||
-                       unit.record_execution_class ==
-                           PassExecutionClass::CpuPrepare ||
                        unit.record_execution_class ==
                            PassExecutionClass::ExternalControl;
             }
@@ -2473,8 +2463,6 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
         // Caller-thread classes are hard recording boundaries and execute inline.
         if (first_unit.record_execution_class ==
                 PassExecutionClass::MainThread ||
-            first_unit.record_execution_class ==
-                PassExecutionClass::CpuPrepare ||
             first_unit.record_execution_class ==
                 PassExecutionClass::ExternalControl) {
             if (!first_pass.execute || first_pass.record) {

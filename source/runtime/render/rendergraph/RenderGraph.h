@@ -376,12 +376,6 @@ public:
         /** Caller-thread callback whose commands are sealed by the graph observer. */
         MainThread,
         /**
-         * Caller-thread, CPU-only preparation/history callback. It may order
-         * Token resources or Reference GPU identities, never seals commands,
-         * and is excluded from the prospective GPU queue plan.
-         */
-        CpuPrepare,
-        /**
          * Caller-thread hard boundary that owns its command/submission scope.
          * Used for external Vulkan/CUDA synchronization and unmanaged submission.
          */
@@ -781,7 +775,6 @@ public:
         PassBuilder& SideEffect();
         PassBuilder& ExecuteOn(QueueRole queue, PipelineType pipeline);
         PassBuilder& MainThread();
-        PassBuilder& CpuPrepare();
         PassBuilder& ExternalControl();
         PassBuilder& SerialRecord(uint32_t workload = 1);
         PassBuilder& ParallelRecord(uint32_t workload = 1);

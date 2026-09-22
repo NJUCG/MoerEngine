@@ -5600,123 +5600,6 @@ void TestSerialControlTranslationIsADeclaredRecordingPolicy(TestSuite& suite) {
     );
 }
 
-void TestCpuPrepareReferencesIdentityWithoutGpuAccess(TestSuite& suite) {
-    constexpr std::string_view test_name = "cpu prepare identity reference";
-    RenderGraph                graph("CpuPrepareIdentity");
-    int                        physical_texture = 0;
-    const auto texture = graph.ImportTexture(
-        "PreparedTexture",
-        &physical_texture,
-        RenderGraph::TextureDesc{.mip_count = 1, .layer_count = 1}
-    );
-    bool cpu_prepare_ran = false;
-    graph.AddPass(
-        "Prepare",
-        [=](RenderGraph::PassBuilder& builder) {
-            builder.Reference(texture).SideEffect().CpuPrepare();
-        },
-        [&] { cpu_prepare_ran = true; }
-    );
-
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-    const auto& plan = graph.GetCompiledPlan();
-    suite.Check(
-        plan.frontend_record_units.size() == 1 &&
-            plan.frontend_record_units.front().record_execution_class ==
-                RenderGraph::PassExecutionClass::CpuPrepare &&
-            plan.accesses.empty() && plan.edges.empty() && plan.barriers.empty() &&
-            plan.queue_batches.empty(),
-        test_name,
-        "a CPU identity reference must not synthesize GPU access, version, barrier, or queue metadata"
-    );
-    suite.Check(
-        Contains(graph.Dump(), "cpu=cpu-prepare") &&
-            Contains(graph.Dump(), "references=[PreparedTexture]"),
-        test_name,
-        "the dump must expose CPU-only scheduling and identity retention"
-    );
-
-    size_t observer_calls = 0;
-    size_t published_groups = 0;
-    const bool executed = graph.ExecuteFrontendRecordingPlan(
-        [&](const RenderGraph::ExecutedPassInfo&) { ++observer_calls; },
-        {},
-        true,
-        [&](Moer::Array<Moer::Render::RHIRecordingSource>&&) { ++published_groups; }
-    );
-    suite.Check(executed && cpu_prepare_ran, test_name, graph.GetCompileError());
-    suite.Check(
-        observer_calls == 0 && published_groups == 0,
-        test_name,
-        "CPU-only callbacks must bypass both managed CommandList sealing and recording publication"
-    );
-}
-
-void TestCpuPrepareRejectsGpuAccess(TestSuite& suite) {
-    constexpr std::string_view test_name = "cpu prepare rejects GPU access";
-    RenderGraph                graph("CpuPrepareGpuAccess");
-    int                        physical_texture = 0;
-    const auto texture = graph.ImportTexture(
-        "GpuTexture",
-        &physical_texture,
-        RenderGraph::TextureDesc{.mip_count = 1, .layer_count = 1}
-    );
-    graph.AddPass(
-        "InvalidPrepare",
-        [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(texture).SideEffect().CpuPrepare();
-        },
-        [] {}
-    );
-
-    suite.Check(
-        !graph.Compile() && Contains(graph.GetCompileError(), "may only access token resources"),
-        test_name,
-        "CPU-only callbacks must use Reference rather than synthesize GPU accesses"
-    );
-}
-
-void TestCpuPrepareIsExcludedFromGpuQueuePlan(TestSuite& suite) {
-    constexpr std::string_view test_name = "cpu prepare is excluded from GPU queue plan";
-    auto graph = RenderGraph::CreateForTesting(
-        "CpuPrepareQueuePlan",
-        RenderGraph::QueueTopologyDesc::DedicatedQueues()
-    );
-    const auto  token = graph.CreateTransientToken("CpuPreparedToken");
-    const auto  prepare = graph.AddPass(
-        "PrepareOnCpu",
-        [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute)
-                .Write(token)
-                .SideEffect()
-                .CpuPrepare();
-        },
-        [] {}
-    );
-    const auto consume = graph.AddPass(
-        "ConsumeOnGpu",
-        [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
-                .Read(token)
-                .SideEffect();
-        },
-        [] {}
-    );
-
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-    const auto& plan = graph.GetCompiledPlan();
-    suite.Check(
-        HasEdgeReason(
-            plan, prepare, consume, RenderGraph::EdgeReasonKind::ReadAfterWrite, token.Untyped()
-        ) &&
-            plan.frontend_record_units.size() == 2 && plan.queue_batches.size() == 1 &&
-            plan.queue_batches.front().passes == std::vector<RenderGraph::PassHandle>{consume} &&
-            plan.queue_syncs.empty(),
-        test_name,
-        "CPU preparation must order callbacks without requiring a nonexistent GPU signal"
-    );
-}
-
 void TestParallelRecordingFallsBackWithoutTaskGraph(TestSuite& suite) {
     constexpr std::string_view test_name = "parallel recording without task graph";
     suite.Check(
@@ -6046,7 +5929,6 @@ void TestGpuProfilingMainThreadSparseOrderAndRebind(TestSuite& suite) {
     RenderGraph    graph("GpuProfileMainThread");
 
     int main_a_calls = 0;
-    int cpu_calls = 0;
     int external_calls = 0;
     int main_b_calls = 0;
     graph.AddPass(
@@ -6055,20 +5937,6 @@ void TestGpuProfilingMainThreadSparseOrderAndRebind(TestSuite& suite) {
             builder.SideEffect().MainThread();
         },
         [&] { ++main_a_calls; }
-    );
-    graph.AddPass(
-        "CpuPrepare",
-        [](RenderGraph::PassBuilder& builder) {
-            builder.SideEffect().CpuPrepare();
-        },
-        [&] {
-            ++cpu_calls;
-            suite.Check(
-                !main_command_list.HasGpuScopeRecorder(),
-                test_name,
-                "CpuPrepare unexpectedly inherited a GPU profiling source"
-            );
-        }
     );
     graph.AddPass(
         "ExternalControl",
@@ -6150,14 +6018,13 @@ void TestGpuProfilingMainThreadSparseOrderAndRebind(TestSuite& suite) {
 
     suite.Check(executed, test_name, graph.GetCompileError());
     suite.Check(
-        main_a_calls == 1 && cpu_calls == 1 &&
-            external_calls == 1 && main_b_calls == 1 &&
+        main_a_calls == 1 && external_calls == 1 && main_b_calls == 1 &&
             observer_calls == 2 && publish_calls == 0,
         test_name,
-        "MainThread/CPU/External callbacks did not retain their ownership classes"
+        "MainThread/External callbacks did not retain their ownership classes"
     );
     suite.Check(
-        source_orders == std::vector<uint64_t>{100, 103} &&
+        source_orders == std::vector<uint64_t>{100, 102} &&
             pass_names == std::vector<std::string>{"MainA", "MainB"} &&
             recorder_cleared_after_submit,
         test_name,
@@ -6169,7 +6036,7 @@ void TestGpuProfilingMainThreadSparseOrderAndRebind(TestSuite& suite) {
             resolved.queue_roots[0][0].name == "MainA" &&
             resolved.queue_roots[0][0].source_order == 100 &&
             resolved.queue_roots[0][1].name == "MainB" &&
-            resolved.queue_roots[0][1].source_order == 103,
+            resolved.queue_roots[0][1].source_order == 102,
         test_name,
         "MainThread timestamp roots did not preserve sparse compiled order"
     );
@@ -7737,9 +7604,6 @@ int main() {
     TestRecordingCallbackClassMismatchFails(suite);
     TestExternalControlIsAnUnmanagedJoinBoundary(suite);
     TestSerialControlTranslationIsADeclaredRecordingPolicy(suite);
-    TestCpuPrepareReferencesIdentityWithoutGpuAccess(suite);
-    TestCpuPrepareRejectsGpuAccess(suite);
-    TestCpuPrepareIsExcludedFromGpuQueuePlan(suite);
     TestParallelRecordingFallsBackWithoutTaskGraph(suite);
     TestParallelRecordingDispatchAndJoin(suite);
     TestGpuProfilingMainThreadSparseOrderAndRebind(suite);
