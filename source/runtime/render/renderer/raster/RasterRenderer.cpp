@@ -954,7 +954,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         RenderGraph::PassBuilder& builder
                     ) mutable {
                         setup(builder);
-                        builder.ExternalControl();
                     },
                     RenderGraph::PassExecutionClass::ExternalControl,
                     [execute = std::forward<decltype(execute)>(execute)](CommandList&) mutable {
@@ -1906,15 +1905,14 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
 #if WITH_CUDA
                 if (raster_config.ai_is_cuda_enabled) {
-                    graph.AddUnsafePass(
+                    graph.AddExternalPass(
                         "TensorRT",
                         [&](RenderGraph::PassBuilder& builder) {
                             builder.Read(graph_resources.ao_only)
                                 .Read(graph_resources.depth)
                                 .Read(graph_resources.camera_motion_vector)
                                 .ReadWrite(graph_resources.lighting_output)
-                                .SideEffect()
-                                .ExternalControl();
+                                .SideEffect();
                         },
                         [&]() {
                             processing_image = tensor_rt_pass->Process(

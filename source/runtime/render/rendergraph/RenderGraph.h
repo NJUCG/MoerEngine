@@ -15,6 +15,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace Moer::Render {
@@ -41,14 +42,14 @@ concept RGParameterAccessProvider =
     };
 
 /**
- * Typed RDG frontend with an opt-in command-recording schedule.
+ * Typed RDG frontend with a command-recording schedule.
  *
  * The compiler owns typed resource declarations, subresource-aware hazards,
  * logical resource versions, stable dependency analysis and lifetimes. Its
  * default execution remains backend-tracked for compatibility; the guarded
  * active path lowers a complete supported state plan into authoritative RHI
- * barriers. Legacy callbacks stay serial. Explicit record callbacks may be
- * assigned independent CommandLists while preserving stable source order.
+ * barriers. Record callbacks own independent CommandLists while preserving
+ * stable source order.
  */
 class RENDER_API RenderGraph {
 public:
@@ -371,10 +372,8 @@ public:
         friend bool operator==(const ExecutionDomain&, const ExecutionDomain&) = default;
     };
 
-    /** CPU callback/CommandList ownership; distinct from backend translate policy. */
+    /** Frontend callback ownership; distinct from backend translate policy. */
     enum class PassExecutionClass : uint8_t {
-        /** Caller-thread callback whose commands are sealed by the graph observer. */
-        MainThread,
         /**
          * Caller-thread hard boundary that owns its command/submission scope.
          * Used for external Vulkan/CUDA synchronization and unmanaged submission.
@@ -774,8 +773,6 @@ public:
         PassBuilder& DependsOn(PassHandle dependency);
         PassBuilder& SideEffect();
         PassBuilder& ExecuteOn(QueueRole queue, PipelineType pipeline);
-        PassBuilder& MainThread();
-        PassBuilder& ExternalControl();
         PassBuilder& SerialRecord(uint32_t workload = 1);
         PassBuilder& ParallelRecord(uint32_t workload = 1);
         /**
@@ -800,16 +797,15 @@ public:
         std::string_view name{};
         ExecutionDomain domain{};
         bool             side_effect{false};
-        PassExecutionClass execution_class = PassExecutionClass::MainThread;
+        PassExecutionClass execution_class = PassExecutionClass::SerialRecord;
         ERHITranslateExecutionClass translate_execution_class{
             ERHITranslateExecutionClass::Parallel
         };
     };
 
     using SetupCallback         = std::function<void(PassBuilder&)>;
-    using ExecuteCallback       = std::function<void()>;
+    using ExternalCallback      = std::function<void()>;
     using RecordCallback        = std::function<void(CommandList&)>;
-    using PassCompletedCallback = std::function<void(const ExecutedPassInfo&)>;
     /**
      * May attach submit metadata; CommandList, producer gate and transaction
      * gate ownership are immutable. It must not wait on RHI work.
@@ -833,22 +829,13 @@ public:
      *
      * Active lowering materializes a fully validated Graphics-only plan into
      * explicit RHI barriers and allocates descriptor-backed transients from a
-     * Completion-safe pool. Main-thread passes record into the caller-owned
-     * list; independently recorded passes continue to own their own lists and
-     * are mutation-sealed until one graph-wide RHI transaction commits. The
-     * current backend-tracker bridge requires full-buffer ranges, all physical
-     * texture aspects, and an initially empty main-thread list. Active lowering
-     * fails closed when caller-thread and managed-record passes are mixed in
-     * one graph. A physical MainThread graph must be isolated from nonphysical
-     * passes and keep its caller-owned list unsealed until
-     * ExecuteFrontendRecordingPlan returns (therefore no per-pass completion
-     * observer). Leaving enabled
-     * false preserves the legacy backend-tracked path and rejects active
-     * allocation-backed transient declarations.
+     * Completion-safe pool. Recorded passes own independent CommandLists and
+     * are mutation-sealed until one graph-wide RHI transaction commits.
+     * Leaving enabled false preserves the backend-tracked path and rejects
+     * active allocation-backed transient declarations.
      */
     struct ActiveRecordingOptions {
-        bool         enabled                  = false;
-        CommandList* main_thread_command_list = nullptr;
+        bool         enabled = false;
         /** Defaults to the global completion-safe pool/allocator. */
         RenderGraphTransientAllocator* transient_allocator = nullptr;
     };
@@ -862,14 +849,6 @@ public:
      * CommandList generation and does not fail graph execution.
      * Throwing, changing CommandList recording state, or returning a value that
      * disagrees with HasGpuScopeRecorder() fails before source publication.
-     * MainThread passes reuse one binding while the caller-owned CommandList
-     * seal generation is unchanged and no managed GPU source intervenes.
-     * Before any managed GPU source is bound or published after a MainThread
-     * source, the completion observer must rotate the caller-owned generation
-     * and leave its replacement empty, unbound, and unsuppressed. The first
-     * pass of each new generation binds a new source. If a MainThread callback
-     * fails after recording begins, the caller still owns that partial
-     * generation and must reject/rotate it before recording an unrelated tail.
      */
     struct GpuProfilingOptions {
         using TryBindSource = std::function<bool(
@@ -880,8 +859,6 @@ public:
         )>;
 
         TryBindSource try_bind_source{};
-        /** Required for MainThread passes when try_bind_source is present. */
-        CommandList*  main_thread_command_list = nullptr;
         uint64        source_order_base         = 0;
     };
 
@@ -1103,14 +1080,11 @@ public:
         );
     }
 
-    PassHandle AddPass(std::string_view name, const SetupCallback& setup, ExecuteCallback execute);
-    PassHandle AddUnsafePass(
-        std::string_view     name,
+    PassHandle AddExternalPass(
+        std::string_view name,
         const SetupCallback& setup,
-        ExecuteCallback      execute
-    ) {
-        return AddPass(name, setup, std::move(execute));
-    }
+        ExternalCallback callback
+    );
     PassHandle AddRecordPass(
         std::string_view     name,
         const SetupCallback& setup,
@@ -1142,28 +1116,17 @@ public:
     /** Compiles declarations without emitting barriers or recording RHI commands. */
     bool Compile();
 
-    /** Executes callbacks synchronously and serially once in compiled order. */
-    bool Execute();
-
     /**
-     * Executes callbacks serially and invokes the observer after each callback
-     * has completely returned. The observer can safely seal the commands just
-     * recorded by that pass without allowing GPU scopes to cross a submission.
-     */
-    bool Execute(const PassCompletedCallback& after_pass);
-
-    /**
-     * Executes legacy callbacks on the caller and explicit record callbacks on
+     * Executes external callbacks on the caller and record callbacks on
      * independently owned CommandLists. Contiguous eligible passes on one queue
      * are dispatched together even when texture/buffer GPU hazards place them
      * in different dependency levels: those hazards constrain submission, not
      * immutable CPU command recording. Token hazards and explicit DependsOn
      * edges follow the same rule. Only PassExecutionClass creates a frontend
      * dispatch boundary. Sources are registered with RHI in compiled order and
-     * joined before the next caller-thread pass.
+     * joined before the next external pass.
      */
     bool ExecuteFrontendRecordingPlan(
-        const PassCompletedCallback&        after_main_thread_pass,
         const RecordingSourceSetupCallback& configure_recording_source = {},
         bool                                parallel_recording_enabled = true,
         const FrontendSourcePublisher&      publish_frontend_sources = {},
@@ -1270,11 +1233,16 @@ private:
         std::vector<AccessDeclaration> accesses{};
         std::vector<ResourceHandle>    references{};
         std::vector<PassHandle>        explicit_dependencies{};
-        ExecuteCallback                execute{};
-        RecordCallback                 record{};
+        struct ManagedBody {
+            RecordCallback callback{};
+        };
+        struct ExternalBody {
+            ExternalCallback callback{};
+        };
+        std::variant<ManagedBody, ExternalBody> body{};
         ExecutionDomain               domain{};
         bool                           side_effect = false;
-        PassExecutionClass             execution_class = PassExecutionClass::MainThread;
+        PassExecutionClass             execution_class = PassExecutionClass::SerialRecord;
         ERHITranslateExecutionClass     translate_execution_class{
             ERHITranslateExecutionClass::Parallel
         };

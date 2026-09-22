@@ -267,34 +267,21 @@ bool RenderGraphCompiler::ValidateAndNormalizePassDeclarations() {
         if (!ValidateExecutionDomain(pass_index)) {
             return false;
         }
-        const auto& pass_decl            = graph.passes[pass_index];
-        const bool  has_execute_callback = static_cast<bool>(pass_decl.execute);
-        const bool  has_record_callback  = static_cast<bool>(pass_decl.record);
-        if (has_execute_callback == has_record_callback) {
-            return Fail(
-                "pass '" + pass_decl.name + "' must declare exactly one execute or record callback"
-            );
-        }
-        const bool is_caller_thread_class =
-            pass_decl.execution_class == RenderGraph::PassExecutionClass::MainThread ||
-            pass_decl.execution_class == RenderGraph::PassExecutionClass::ExternalControl;
-        if (has_execute_callback && !is_caller_thread_class) {
-            return Fail(
-                "main-thread pass '" + pass_decl.name + "' cannot use a command-recording class"
-            );
-        }
-        if (has_record_callback && is_caller_thread_class) {
-            return Fail(
-                "record pass '" + pass_decl.name + "' must use SerialRecord or ParallelRecordEligible"
-            );
-        }
-        if (has_execute_callback &&
-            pass_decl.translate_execution_class !=
-                ERHITranslateExecutionClass::Parallel) {
-            return Fail(
-                "caller-thread pass '" + pass_decl.name +
-                "' cannot declare a backend translation policy"
-            );
+        const auto& pass_decl = graph.passes[pass_index];
+        if (const auto* managed =
+                std::get_if<RenderGraph::PassDeclaration::ManagedBody>(&pass_decl.body)) {
+            if (!managed->callback ||
+                pass_decl.execution_class == RenderGraph::PassExecutionClass::ExternalControl) {
+                return Fail("pass '" + pass_decl.name + "' has an invalid managed callback or policy");
+            }
+        } else {
+            const auto& external =
+                std::get<RenderGraph::PassDeclaration::ExternalBody>(pass_decl.body);
+            if (!external.callback ||
+                pass_decl.execution_class != RenderGraph::PassExecutionClass::ExternalControl ||
+                pass_decl.translate_execution_class != ERHITranslateExecutionClass::Parallel) {
+                return Fail("pass '" + pass_decl.name + "' has an invalid external callback or policy");
+            }
         }
         if (pass_decl.workload == 0) {
             return Fail("pass '" + pass_decl.name + "' has zero recording workload");

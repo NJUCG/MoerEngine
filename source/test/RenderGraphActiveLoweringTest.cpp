@@ -229,7 +229,6 @@ void TestRecordPassMaterializesExplicitBeforeBodyAfter(TestSuite& suite) {
     Moer::Array<RHIRecordingSource> published{};
     const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
-        {},
         false,
         [&](Moer::Array<RHIRecordingSource>&& sources) {
             for (auto& source : sources) {
@@ -354,7 +353,6 @@ void TestSameStateSecondReadMaterializesStateSeed(TestSuite& suite) {
     Moer::Array<RHIRecordingSource> published{};
     const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
-        {},
         false,
         [&](Moer::Array<RHIRecordingSource>&& sources) {
             for (auto& source : sources) {
@@ -432,7 +430,6 @@ void ExpectActiveFailClosed(
 ) {
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
         [&](const RenderGraph::ExecutedPassInfo&, RHIRecordingSource&) {
             ++configure_calls;
         },
@@ -642,7 +639,6 @@ void TestUnsupportedInputsFailBeforeCallbacksOrPublish(TestSuite& suite) {
 
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
         const bool executed = graph.ExecuteFrontendRecordingPlan(
-            {},
             [&](const RenderGraph::ExecutedPassInfo&, RHIRecordingSource& source) {
                 ++configure_calls;
                 source.command_list->AddCustomCommand(
@@ -713,7 +709,6 @@ void TestRecordingSourceSetupCannotCompleteProducerGate(TestSuite& suite) {
 
             suite.Check(graph.Compile(), test_name, graph.GetCompileError());
             const bool executed = graph.ExecuteFrontendRecordingPlan(
-                {},
                 [&](const RenderGraph::ExecutedPassInfo&, RHIRecordingSource& source) {
                     ++configure_calls;
                     auto replacement = RHIRecordingGate::Create();
@@ -805,7 +800,6 @@ void TestManagedRecordCallbackCannotSealOrDowngrade(TestSuite& suite) {
             suite.Check(graph.Compile(), test_name, graph.GetCompileError());
             const bool executed = graph.ExecuteFrontendRecordingPlan(
                 {},
-                {},
                 true,
                 [&](Moer::Array<RHIRecordingSource>&&) {
                     ++publish_calls;
@@ -888,7 +882,6 @@ void TestManagedRecordCallbackCannotMoveCommandList(TestSuite& suite) {
             suite.Check(graph.Compile(), test_name, graph.GetCompileError());
             const bool executed = graph.ExecuteFrontendRecordingPlan(
                 {},
-                {},
                 true,
                 [&](Moer::Array<RHIRecordingSource>&&) {
                     ++publish_calls;
@@ -961,7 +954,6 @@ void TestRecordProducerRejectsBlockingSync(TestSuite& suite) {
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
         const bool executed = graph.ExecuteFrontendRecordingPlan(
             {},
-            {},
             true,
             [&](Moer::Array<RHIRecordingSource>&&) {
                 ++publish_calls;
@@ -1020,7 +1012,6 @@ void TestRecordingPublisherRejectsBlockingSync(TestSuite& suite) {
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
         {},
         false,
         [&](Moer::Array<RHIRecordingSource>&&) {
@@ -1081,7 +1072,6 @@ void TestRecordingConfigurationRejectsBlockingSync(TestSuite& suite) {
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
         [&](const RenderGraph::ExecutedPassInfo&, RHIRecordingSource&) {
             ++configure_calls;
             RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
@@ -1149,7 +1139,6 @@ void TestRecordingPublisherCannotMutatePendingSource(TestSuite& suite) {
 
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
         const bool executed = graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             false,
             [&](Moer::Array<RHIRecordingSource>&& sources) {
@@ -1242,7 +1231,6 @@ void TestActiveRecordingGroupsCommitAtomically(TestSuite& suite) {
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
-        {},
         false,
         [&](Moer::Array<RHIRecordingSource>&& sources) {
             published_groups.emplace_back(std::move(sources));
@@ -1289,164 +1277,6 @@ void TestActiveRecordingGroupsCommitAtomically(TestSuite& suite) {
                 callback();
             }
         }
-    }
-}
-
-void TestActiveMixedMainThreadAndRecordFailsBeforeCallbacks(TestSuite& suite) {
-    constexpr std::string_view test_name =
-        "active mixed MainThread and record passes fail closed";
-    BufferRef buffer = MoerNew(FakeBuffer)(64);
-    CommandList caller_commands(EQueueType::Graphics);
-    RenderGraph graph("MixedMainAndRecordRejected");
-    const auto data = graph.ImportBuffer(
-        "Data",
-        buffer,
-        RenderGraph::BufferDesc{.byte_size = 64}
-    );
-    const auto token = graph.CreateTransientToken("MainToRecordToken");
-    graph.SetInitialState(
-        data,
-        RenderGraph::BufferState::Undefined,
-        RenderGraph::QueueRole::None,
-        RenderGraph::AccessMode::None
-    );
-    int main_calls    = 0;
-    int record_calls  = 0;
-    int publish_calls = 0;
-    const auto main_pass = graph.AddPass(
-        "MainWrite",
-        [=](RenderGraph::PassBuilder& builder) {
-            builder.Write(data, RenderGraph::BufferState::UnorderedAccess)
-                .Write(token)
-                .SideEffect();
-        },
-        [&] {
-            ++main_calls;
-        }
-    );
-    graph.AddRecordPass(
-        "TokenOnlyRecord",
-        [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(token)
-                .DependsOn(main_pass)
-                .SideEffect();
-        },
-        [&](CommandList&) {
-            ++record_calls;
-        },
-        RenderGraph::PassExecutionClass::SerialRecord
-    );
-    graph.Export(
-        data,
-        RenderGraph::BufferState::ShaderResource,
-        RenderGraph::QueueRole::Graphics,
-        RenderGraph::AccessMode::Read
-    );
-
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-    const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
-        {},
-        false,
-        [&](Moer::Array<RHIRecordingSource>&&) {
-            ++publish_calls;
-        },
-        RenderGraph::ActiveRecordingOptions{
-            .enabled                  = true,
-            .main_thread_command_list = &caller_commands,
-        }
-    );
-    suite.Check(!executed, test_name, "mixed active execution unexpectedly succeeded");
-    suite.Check(
-        Contains(graph.GetCompileError(), "does not yet support mixing"),
-        test_name,
-        graph.GetCompileError()
-    );
-    suite.Check(
-        main_calls == 0 && record_calls == 0 && publish_calls == 0 &&
-            caller_commands.IsEmpty(),
-        test_name,
-        "mixed-path rejection must precede callbacks and materialization"
-    );
-}
-
-void TestActiveMainThreadCallbackCannotSealOrDowngrade(TestSuite& suite) {
-    for (const bool seal : {false, true}) {
-        const std::string test_name =
-            std::string("active MainThread callback cannot ") +
-            (seal ? "seal" : "downgrade ownership");
-        BufferRef buffer = MoerNew(FakeBuffer)(64);
-        CommandList caller_commands(EQueueType::Graphics);
-        RenderGraph graph("MainThreadMutationRejected");
-        const auto data = graph.ImportBuffer(
-            "Data",
-            buffer,
-            RenderGraph::BufferDesc{.byte_size = 64}
-        );
-        graph.SetInitialState(
-            data,
-            RenderGraph::BufferState::Undefined,
-            RenderGraph::QueueRole::None,
-            RenderGraph::AccessMode::None
-        );
-        int execute_calls = 0;
-        graph.AddPass(
-            "MainWrite",
-            [=](RenderGraph::PassBuilder& builder) {
-                builder.Write(data, RenderGraph::BufferState::UnorderedAccess)
-                    .SideEffect();
-            },
-            [&] {
-                ++execute_calls;
-                if (seal) {
-                    [[maybe_unused]] CmdSubmit discarded =
-                        caller_commands.Submit();
-                } else {
-                    caller_commands.SetResourceStateOwnership(
-                        ERHIResourceStateOwnership::BackendTracked
-                    );
-                }
-            }
-        );
-        graph.Export(
-            data,
-            RenderGraph::BufferState::ShaderResource,
-            RenderGraph::QueueRole::Graphics,
-            RenderGraph::AccessMode::Read
-        );
-
-        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        const bool executed = graph.ExecuteFrontendRecordingPlan(
-            {},
-            {},
-            false,
-            {},
-            RenderGraph::ActiveRecordingOptions{
-                .enabled                  = true,
-                .main_thread_command_list = &caller_commands,
-            }
-        );
-        suite.Check(!executed, test_name, "MainThread mutation unexpectedly succeeded");
-        suite.Check(
-            Contains(
-                graph.GetCompileError(),
-                seal ? "Submit is forbidden while graph-managed recording is active" :
-                       "changed explicit state ownership"
-            ),
-            test_name,
-            graph.GetCompileError()
-        );
-        suite.Check(
-            execute_calls == 1,
-            test_name,
-            "MainThread mutation callback was not executed exactly once"
-        );
-        suite.Check(
-            caller_commands.IsEmpty() &&
-                !caller_commands.HasExplicitResourceStateOwnership(),
-            test_name,
-            "rejected MainThread commands remained GPU-submittable"
-        );
     }
 }
 
@@ -1509,7 +1339,6 @@ void TestActiveRecordingLifetimeOutlivesUserCallbacks(TestSuite& suite) {
         suite.Check(
             graph.ExecuteFrontendRecordingPlan(
                 {},
-                {},
                 false,
                 [&](Moer::Array<RHIRecordingSource>&& sources) {
                     published = std::move(sources);
@@ -1553,264 +1382,6 @@ void TestActiveRecordingLifetimeOutlivesUserCallbacks(TestSuite& suite) {
     );
 }
 
-void TestActiveMainThreadExceptionIsReportedAndDrained(TestSuite& suite) {
-    constexpr std::string_view test_name =
-        "active MainThread exception is reported and drained";
-    BufferRef buffer = MoerNew(FakeBuffer)(64);
-    CommandList caller_commands(EQueueType::Graphics);
-    RenderGraph graph("MainThreadException");
-    const auto data = graph.ImportBuffer(
-        "Data",
-        buffer,
-        RenderGraph::BufferDesc{.byte_size = 64}
-    );
-    graph.SetInitialState(
-        data,
-        RenderGraph::BufferState::Undefined,
-        RenderGraph::QueueRole::None,
-        RenderGraph::AccessMode::None
-    );
-    graph.AddPass(
-        "ThrowingMain",
-        [=](RenderGraph::PassBuilder& builder) {
-            builder.Write(data, RenderGraph::BufferState::UnorderedAccess)
-                .SideEffect();
-        },
-        [] {
-            throw std::runtime_error("injected main failure");
-        }
-    );
-    graph.Export(
-        data,
-        RenderGraph::BufferState::ShaderResource,
-        RenderGraph::QueueRole::Graphics,
-        RenderGraph::AccessMode::Read
-    );
-
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-    bool escaped = false;
-    bool executed = false;
-    try {
-        executed = graph.ExecuteFrontendRecordingPlan(
-            {},
-            {},
-            false,
-            {},
-            RenderGraph::ActiveRecordingOptions{
-                .enabled                  = true,
-                .main_thread_command_list = &caller_commands,
-            }
-        );
-    } catch (...) {
-        escaped = true;
-    }
-    suite.Check(
-        !escaped && !executed &&
-            Contains(graph.GetCompileError(), "injected main failure"),
-        test_name,
-        graph.GetCompileError()
-    );
-    suite.Check(
-        caller_commands.IsEmpty() &&
-            !caller_commands.HasExplicitResourceStateOwnership(),
-        test_name,
-        "failed MainThread stream remained GPU-submittable"
-    );
-}
-
-void TestMainThreadPhysicalPassRequiresAndUsesCallerList(TestSuite& suite) {
-    {
-        constexpr std::string_view test_name =
-            "main-thread physical pass requires caller CommandList";
-        BufferRef buffer = MoerNew(FakeBuffer)(64);
-        RenderGraph graph("ActiveMainThreadMissingList");
-        const auto  data = graph.ImportBuffer(
-            "Data",
-            buffer,
-            RenderGraph::BufferDesc{.byte_size = 64}
-        );
-        graph.SetInitialState(
-            data,
-            RenderGraph::BufferState::Undefined,
-            RenderGraph::QueueRole::None,
-            RenderGraph::AccessMode::None
-        );
-        int execute_calls = 0;
-        int observer_calls = 0;
-        graph.AddPass(
-            "MainWrite",
-            [=](RenderGraph::PassBuilder& builder) {
-                builder.Write(data, RenderGraph::BufferState::UnorderedAccess)
-                    .SideEffect();
-            },
-            [&] {
-                ++execute_calls;
-            }
-        );
-        graph.Export(
-            data,
-            RenderGraph::BufferState::ShaderResource,
-            RenderGraph::QueueRole::Graphics,
-            RenderGraph::AccessMode::Read
-        );
-
-        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        const bool executed = graph.ExecuteFrontendRecordingPlan(
-            [&](const RenderGraph::ExecutedPassInfo&) {
-                ++observer_calls;
-            },
-            {},
-            false,
-            {},
-            RenderGraph::ActiveRecordingOptions{.enabled = true}
-        );
-        suite.Check(!executed, test_name, "execution unexpectedly succeeded without a list");
-        suite.Check(
-            Contains(graph.GetCompileError(), "caller-owned CommandList"),
-            test_name,
-            graph.GetCompileError()
-        );
-        suite.Check(
-            execute_calls == 0 && observer_calls == 0,
-            test_name,
-            "missing-list validation must precede the main-thread callback and observer"
-        );
-    }
-
-    {
-        constexpr std::string_view test_name =
-            "active MainThread physical pass defers submission until graph return";
-        BufferRef buffer = MoerNew(FakeBuffer)(64);
-        CommandList caller_commands(EQueueType::Graphics);
-        RenderGraph graph("ActiveMainThreadObserverRejected");
-        const auto data = graph.ImportBuffer(
-            "Data",
-            buffer,
-            RenderGraph::BufferDesc{.byte_size = 64}
-        );
-        graph.SetInitialState(
-            data,
-            RenderGraph::BufferState::Undefined,
-            RenderGraph::QueueRole::None,
-            RenderGraph::AccessMode::None
-        );
-        int execute_calls  = 0;
-        int observer_calls = 0;
-        graph.AddPass(
-            "MainWrite",
-            [=](RenderGraph::PassBuilder& builder) {
-                builder.Write(data, RenderGraph::BufferState::UnorderedAccess)
-                    .SideEffect();
-            },
-            [&] {
-                ++execute_calls;
-            }
-        );
-        graph.Export(
-            data,
-            RenderGraph::BufferState::ShaderResource,
-            RenderGraph::QueueRole::Graphics,
-            RenderGraph::AccessMode::Read
-        );
-
-        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        const bool executed = graph.ExecuteFrontendRecordingPlan(
-            [&](const RenderGraph::ExecutedPassInfo&) {
-                ++observer_calls;
-            },
-            {},
-            false,
-            {},
-            RenderGraph::ActiveRecordingOptions{
-                .enabled                  = true,
-                .main_thread_command_list = &caller_commands,
-            }
-        );
-        suite.Check(!executed, test_name, "per-pass active submission was accepted");
-        suite.Check(
-            Contains(graph.GetCompileError(), "remain unsealed"),
-            test_name,
-            graph.GetCompileError()
-        );
-        suite.Check(
-            execute_calls == 0 && observer_calls == 0 &&
-                caller_commands.IsEmpty(),
-            test_name,
-            "observer restriction must be validated before materialization"
-        );
-    }
-
-    {
-        constexpr std::string_view test_name =
-            "main-thread physical pass materializes into caller CommandList";
-        BufferRef buffer = MoerNew(FakeBuffer)(64);
-        CommandList caller_commands(EQueueType::Graphics);
-        RenderGraph graph("ActiveMainThreadCallerList");
-        const auto  data = graph.ImportBuffer(
-            "Data",
-            buffer,
-            RenderGraph::BufferDesc{.byte_size = 64}
-        );
-        graph.SetInitialState(
-            data,
-            RenderGraph::BufferState::Undefined,
-            RenderGraph::QueueRole::None,
-            RenderGraph::AccessMode::None
-        );
-        graph.AddPass(
-            "MainWrite",
-            [=](RenderGraph::PassBuilder& builder) {
-                builder.Write(data, RenderGraph::BufferState::UnorderedAccess)
-                    .SideEffect();
-            },
-            [&] {
-                caller_commands.AddCustomCommand(
-                    MakeUnique<ProbeCommand>(303),
-                    "MainThreadBody"
-                );
-            }
-        );
-        graph.Export(
-            data,
-            RenderGraph::BufferState::ShaderResource,
-            RenderGraph::QueueRole::Graphics,
-            RenderGraph::AccessMode::Read
-        );
-
-        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        const bool executed = graph.ExecuteFrontendRecordingPlan(
-            {},
-            {},
-            false,
-            {},
-            RenderGraph::ActiveRecordingOptions{
-                .enabled                  = true,
-                .main_thread_command_list = &caller_commands,
-            }
-        );
-        suite.Check(executed, test_name, graph.GetCompileError());
-
-        CmdSubmit submit = caller_commands.Submit();
-        suite.Check(
-            submit.HasExplicitResourceStateOwnership() && submit.cmds.size() == 3,
-            test_name,
-            "caller list must seal an Explicit before-body-after stream"
-        );
-        if (submit.cmds.size() == 3) {
-            const auto* before = AsBarrier(submit.cmds[0]);
-            const auto* body   = AsProbe(submit.cmds[1]);
-            const auto* after  = AsBarrier(submit.cmds[2]);
-            suite.Check(
-                before != nullptr && before->ExplicitBuffers().size() == 1 &&
-                    body != nullptr && body->Marker() == 303 &&
-                    after != nullptr && after->ExplicitBuffers().size() == 1,
-                test_name,
-                "main-thread barriers must be materialized around its callback body"
-            );
-        }
-    }
-}
-
 } // namespace
 
 int main() {
@@ -1826,11 +1397,7 @@ int main() {
     TestRecordingConfigurationRejectsBlockingSync(suite);
     TestRecordingPublisherCannotMutatePendingSource(suite);
     TestActiveRecordingGroupsCommitAtomically(suite);
-    TestActiveMixedMainThreadAndRecordFailsBeforeCallbacks(suite);
-    TestActiveMainThreadCallbackCannotSealOrDowngrade(suite);
     TestActiveRecordingLifetimeOutlivesUserCallbacks(suite);
-    TestActiveMainThreadExceptionIsReportedAndDrained(suite);
-    TestMainThreadPhysicalPassRequiresAndUsesCallerList(suite);
 
     if (suite.FailureCount() != 0) {
         std::cerr << "TestRenderGraphActiveLowering: " << suite.FailureCount()

@@ -1525,7 +1525,6 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                         graph_source_order_base;
                 }
                 if (graph.ExecuteFrontendRecordingPlan(
-                        {},
                         configure_recording_source,
                         state.render_graph_parallel_recording,
                         {},

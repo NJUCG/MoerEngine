@@ -137,7 +137,7 @@ struct PlanResult {
     std::string graph_dump{};
     std::string lowered_dump{};
     RenderGraph::PassExecutionClass consumer_execution =
-        RenderGraph::PassExecutionClass::MainThread;
+        RenderGraph::PassExecutionClass::SerialRecord;
     Moer::Render::ERHITranslateExecutionClass consumer_translate =
         Moer::Render::ERHITranslateExecutionClass::Parallel;
     uint32_t               consumer_workload = 0;
@@ -573,7 +573,6 @@ void TestMoveOnlyParameterLifetimeAndParallelRecord(TestSuite& suite) {
         size_t published_source_count = 0;
         Moer::TaskSystem::Init();
         const bool executed = graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             true,
             [&](Moer::Array<Moer::Render::RHIRecordingSource>&& sources) {

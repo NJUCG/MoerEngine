@@ -1900,7 +1900,6 @@ void RunActiveRdgExplicitBarrierReadback(bool _parallel) {
     }
     if (!graph.ExecuteFrontendRecordingPlan(
             {},
-            {},
             _parallel,
             {},
             RenderGraph::ActiveRecordingOptions{.enabled = true}
@@ -1973,7 +1972,6 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         }
         if (stale_topology_graph.ExecuteFrontendRecordingPlan(
                 {},
-                {},
                 _parallel,
                 {},
                 RenderGraph::ActiveRecordingOptions{.enabled = true}
@@ -1996,10 +1994,10 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
     }
 
     std::atomic<uint32> caller_callbacks{0};
-    RenderGraph caller_graph("ActiveRdgRejectCallerThreadMultiQueue");
+    RenderGraph caller_graph("ActiveRdgRejectExternalMultiQueue");
     const auto caller_graphics_done =
         caller_graph.CreateTransientToken("GraphicsDone");
-    caller_graph.AddPass(
+    caller_graph.AddExternalPass(
             "Graphics",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
@@ -2013,7 +2011,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                 caller_callbacks.fetch_add(1, std::memory_order_relaxed);
             }
     );
-    caller_graph.AddPass(
+    caller_graph.AddExternalPass(
             "Compute",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
@@ -2033,33 +2031,27 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
             caller_graph.GetCompileError()
         );
     }
-    CommandList caller_commands(EQueueType::Graphics);
     if (caller_graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             _parallel,
             {},
-            RenderGraph::ActiveRecordingOptions{
-                .enabled = true,
-                .main_thread_command_list = &caller_commands,
-            }
+            RenderGraph::ActiveRecordingOptions{.enabled = true}
         )) {
         throw std::runtime_error(
-            "active RDG accepted caller-thread multi-queue endpoints"
+            "active RDG accepted external multi-queue endpoints"
         );
     }
     if (caller_callbacks.load(std::memory_order_relaxed) != 0 ||
-        !caller_commands.IsEmpty() ||
         caller_graph.GetCompileError().find(
-            "managed recording handoff"
+            "requires an external pass"
         ) == std::string::npos) {
         throw std::runtime_error(
-            "caller-thread multi-queue rejection was not immutable and diagnostic"
+            "external multi-queue rejection was not immutable and diagnostic"
         );
     }
     LOG_INFO(
-        "[TESTCASE][PASS] name=ActiveRdgRejectCallerThreadMultiQueue "
-        "callbacks=0 command_stream=empty execution=rejected"
+        "[TESTCASE][PASS] name=ActiveRdgRejectExternalMultiQueue "
+        "callbacks=0 execution=rejected"
     );
 
     const EBufferUsageFlags usage =
@@ -2226,7 +2218,6 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
             );
         }
         if (!independent_graph.ExecuteFrontendRecordingPlan(
-                {},
                 {},
                 _parallel,
                 {},
@@ -2501,7 +2492,6 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         }
         if (!physical_graph.ExecuteFrontendRecordingPlan(
                 {},
-                {},
                 _parallel,
                 {},
                 RenderGraph::ActiveRecordingOptions{.enabled = true}
@@ -2720,7 +2710,6 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         );
     }
     if (!graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             _parallel,
             {},
@@ -3170,7 +3159,6 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
 
     if (!graph.ExecuteFrontendRecordingPlan(
             {},
-            {},
             _parallel,
             {},
             RenderGraph::ActiveRecordingOptions{.enabled = true}
@@ -3329,7 +3317,6 @@ void RunActiveRdgTransientAliasReadback(bool _parallel) {
         throw std::runtime_error("transient alias descriptor byte size mismatch");
     }
     if (!graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             _parallel,
             {},
@@ -3498,7 +3485,6 @@ void RunActiveRdgTransientTextureAliasReadback(bool _parallel) {
     }
     if (!graph.ExecuteFrontendRecordingPlan(
             {},
-            {},
             _parallel,
             {},
             RenderGraph::ActiveRecordingOptions{
@@ -3652,7 +3638,6 @@ void RunActiveRdgTextureArraySubrange(bool _parallel) {
         );
     }
     if (!graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             _parallel,
             {},

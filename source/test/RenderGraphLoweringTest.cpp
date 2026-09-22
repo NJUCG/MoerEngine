@@ -1,4 +1,5 @@
 #include "rendergraph/RenderGraph.h"
+#include "RenderGraphTestSupport.h"
 #include "rendergraph/RenderGraphLowering.h"
 #include "rhi/RHIResource.h"
 
@@ -125,21 +126,21 @@ void TestTextureFanInAndDeterminism(TestSuite& suite) {
         RenderGraph::AccessMode::None,
         range
     );
-    const auto writer = graph.AddPass(
+    const auto writer = AddTestRecordPass(graph,
         "Writer",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(color, RenderGraph::TextureState::RenderTarget, range).SideEffect();
         },
         [] {}
     );
-    const auto graphics_reader = graph.AddPass(
+    const auto graphics_reader = AddTestRecordPass(graph,
         "GraphicsReader",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Read(color, RenderGraph::TextureState::ShaderResource, range).SideEffect();
         },
         [] {}
     );
-    const auto compute_reader = graph.AddPass(
+    const auto compute_reader = AddTestRecordPass(graph,
         "ComputeReader",
         [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
@@ -151,7 +152,7 @@ void TestTextureFanInAndDeterminism(TestSuite& suite) {
         },
         [] {}
     );
-    const auto uav_writer = graph.AddPass(
+    const auto uav_writer = AddTestRecordPass(graph,
         "UavWriter",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
@@ -255,14 +256,14 @@ void TestShaderResourceAndSampledLayoutsRemainDistinct(TestSuite& suite) {
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    graph.AddPass(
+    AddTestRecordPass(graph,
         "StorageRead",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Read(color, RenderGraph::TextureState::ShaderResource).SideEffect();
         },
         [] {}
     );
-    const auto sampled_read = graph.AddPass(
+    const auto sampled_read = AddTestRecordPass(graph,
         "SampledRead",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Read(color, RenderGraph::TextureState::Sampled).SideEffect();
@@ -323,14 +324,14 @@ void TestDepthAttachmentReadUsesBackendAttachmentLayout(TestSuite& suite) {
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
-    graph.AddPass(
+    AddTestRecordPass(graph,
         "DepthWrite",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(depth, RenderGraph::TextureState::DepthStencilWrite).SideEffect();
         },
         [] {}
     );
-    const auto depth_read = graph.AddPass(
+    const auto depth_read = AddTestRecordPass(graph,
         "DepthRead",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Read(depth, RenderGraph::TextureState::DepthStencilRead).SideEffect();
@@ -394,7 +395,7 @@ void TestPresentationSourceLowersToCommonTransferRead(TestSuite& suite) {
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
-    const auto writer = graph.AddPass(
+    const auto writer = AddTestRecordPass(graph,
         "Writer",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(color, RenderGraph::TextureState::RenderTarget)
@@ -462,7 +463,7 @@ void TestPresentationSourceLowersToCommonTransferRead(TestSuite& suite) {
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    rejected_graph.AddPass(
+    AddTestRecordPass(rejected_graph,
         "ReadImportedColor",
         [=](RenderGraph::PassBuilder& builder) {
             builder
@@ -523,14 +524,14 @@ void TestSameStateReadGetsStateSeed(TestSuite& suite) {
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    const auto first_read = graph.AddPass(
+    const auto first_read = AddTestRecordPass(graph,
         "FirstRead",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Read(data, RenderGraph::BufferState::ShaderResource).SideEffect();
         },
         [] {}
     );
-    const auto second_read = graph.AddPass(
+    const auto second_read = AddTestRecordPass(graph,
         "SecondRead",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Read(data, RenderGraph::BufferState::ShaderResource).SideEffect();
@@ -597,7 +598,7 @@ void TestCrossNativeTokenSynchronization(TestSuite& suite) {
     const auto topology = RenderGraph::QueueTopologyDesc::DedicatedQueues();
     auto graph = RenderGraph::CreateForTesting("CrossNativeTokenSync", topology);
     const auto token = graph.CreateTransientToken("GraphicsToCompute");
-    const auto producer = graph.AddPass(
+    const auto producer = AddTestRecordPass(graph,
         "GraphicsProducer",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
@@ -609,7 +610,7 @@ void TestCrossNativeTokenSynchronization(TestSuite& suite) {
         },
         [] {}
     );
-    const auto consumer = graph.AddPass(
+    const auto consumer = AddTestRecordPass(graph,
         "ComputeConsumer",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
@@ -653,7 +654,7 @@ void TestSameNativeTokenSynchronizationNeedsNoGpuSync(TestSuite& suite) {
         RenderGraph::QueueTopologyDesc::SingleQueue()
     );
     const auto token = graph.CreateTransientToken("GraphicsToCompute");
-    graph.AddPass(
+    AddTestRecordPass(graph,
         "GraphicsProducer",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
@@ -665,7 +666,7 @@ void TestSameNativeTokenSynchronizationNeedsNoGpuSync(TestSuite& suite) {
         },
         [] {}
     );
-    graph.AddPass(
+    AddTestRecordPass(graph,
         "ComputeConsumer",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
@@ -714,14 +715,14 @@ void TestSameNativePhysicalBarrierRetainsSourceScope(TestSuite& suite) {
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
-    graph.AddPass(
+    AddTestRecordPass(graph,
         "GraphicsWrite",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(data, RenderGraph::BufferState::UnorderedAccess).SideEffect();
         },
         [] {}
     );
-    const auto consumer = graph.AddPass(
+    const auto consumer = AddTestRecordPass(graph,
         "ComputeRead",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
@@ -792,14 +793,14 @@ void TestSameFamilyQueueBarrierLowersToAcquire(TestSuite& suite) {
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
-    graph.AddPass(
+    AddTestRecordPass(graph,
         "GraphicsWrite",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(data, RenderGraph::BufferState::UnorderedAccess).SideEffect();
         },
         [] {}
     );
-    const auto consumer = graph.AddPass(
+    const auto consumer = AddTestRecordPass(graph,
         "ComputeRead",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
@@ -865,21 +866,21 @@ void TestMixedQueueFanInRetainsLocalSourceScope(TestSuite& suite) {
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
-    graph.AddPass(
+    AddTestRecordPass(graph,
         "InitialGraphicsWrite",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(data, RenderGraph::BufferState::UnorderedAccess).SideEffect();
         },
         [] {}
     );
-    const auto graphics_reader = graph.AddPass(
+    const auto graphics_reader = AddTestRecordPass(graph,
         "GraphicsRead",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Read(data, RenderGraph::BufferState::ShaderResource).SideEffect();
         },
         [] {}
     );
-    const auto compute_reader = graph.AddPass(
+    const auto compute_reader = AddTestRecordPass(graph,
         "ComputeRead",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
@@ -891,7 +892,7 @@ void TestMixedQueueFanInRetainsLocalSourceScope(TestSuite& suite) {
         },
         [] {}
     );
-    const auto final_writer = graph.AddPass(
+    const auto final_writer = AddTestRecordPass(graph,
         "FinalGraphicsWrite",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(data, RenderGraph::BufferState::UnorderedAccess).SideEffect();
@@ -965,14 +966,14 @@ void TestCrossFamilyExclusiveOwnershipLowersPairedTransfer(TestSuite& suite) {
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
-    const auto producer = graph.AddPass(
+    const auto producer = AddTestRecordPass(graph,
         "GraphicsWrite",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(data, RenderGraph::TextureState::UnorderedAccess).SideEffect();
         },
         [] {}
     );
-    const auto consumer = graph.AddPass(
+    const auto consumer = AddTestRecordPass(graph,
         "ComputeRead",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute)
@@ -1128,21 +1129,21 @@ void TestCrossFamilyOwnershipFanInUsesOneReleaseOwner(TestSuite& suite) {
     graph.SetInitialState(
         data, RenderGraph::BufferState::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None
     );
-    graph.AddPass(
+    AddTestRecordPass(graph,
         "GraphicsWrite",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(data, RenderGraph::BufferState::UnorderedAccess).SideEffect();
         },
         [] {}
     );
-    const auto graphics_reader = graph.AddPass(
+    const auto graphics_reader = AddTestRecordPass(graph,
         "GraphicsRead",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Read(data, RenderGraph::BufferState::ShaderResource).SideEffect();
         },
         [] {}
     );
-    const auto compute_reader = graph.AddPass(
+    const auto compute_reader = AddTestRecordPass(graph,
         "ComputeRead",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute)
@@ -1151,7 +1152,7 @@ void TestCrossFamilyOwnershipFanInUsesOneReleaseOwner(TestSuite& suite) {
         },
         [] {}
     );
-    const auto copy_writer = graph.AddPass(
+    const auto copy_writer = AddTestRecordPass(graph,
         "CopyWrite",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::PipelineType::Copy)
@@ -1311,14 +1312,14 @@ void TestMissingCrossNativeSyncFailsClosed(TestSuite& suite) {
         RenderGraph::QueueTopologyDesc::DedicatedQueues()
     );
     const auto token = graph.CreateTransientToken("GraphicsToCompute");
-    graph.AddPass(
+    AddTestRecordPass(graph,
         "Graphics",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(token).SideEffect();
         },
         [] {}
     );
-    graph.AddPass(
+    AddTestRecordPass(graph,
         "Compute",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
@@ -1362,7 +1363,7 @@ void TestUnavailableQueueFailsAtCompile(TestSuite& suite) {
     topology.compute.available = false;
     auto graph = RenderGraph::CreateForTesting("UnavailableCompute", topology);
     const auto token = graph.CreateTransientToken("ComputeOnly");
-    graph.AddPass(
+    AddTestRecordPass(graph,
         "Compute",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
@@ -1418,7 +1419,7 @@ void TestFailClosedContracts(TestSuite& suite) {
             RenderGraph::QueueRole::None,
             RenderGraph::AccessMode::None
         );
-        graph.AddPass(
+        AddTestRecordPass(graph,
             "Write",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.Write(handle, RenderGraph::TextureState::RenderTarget).SideEffect();
@@ -1438,7 +1439,7 @@ void TestFailClosedContracts(TestSuite& suite) {
         RenderGraph graph(name);
         const auto handle =
             graph.CreateTransientBuffer("Transient", RenderGraph::BufferDesc{.byte_size = 64});
-        graph.AddPass(
+        AddTestRecordPass(graph,
             "Write",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
@@ -1470,7 +1471,7 @@ void TestFailClosedContracts(TestSuite& suite) {
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
-        graph.AddPass(
+        AddTestRecordPass(graph,
             "Read",
             [=](RenderGraph::PassBuilder& builder) { builder.Read(handle).SideEffect(); },
             [] {}
@@ -1495,7 +1496,7 @@ void TestFailClosedContracts(TestSuite& suite) {
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Unknown
         );
-        graph.AddPass(
+        AddTestRecordPass(graph,
             "Read",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.Read(handle, RenderGraph::BufferState::ShaderResource).SideEffect();
@@ -1522,7 +1523,7 @@ void TestFailClosedContracts(TestSuite& suite) {
             RenderGraph::QueueRole::None,
             RenderGraph::AccessMode::None
         );
-        graph.AddPass(
+        AddTestRecordPass(graph,
             "Write",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.Write(handle, RenderGraph::TextureState::RenderTarget).SideEffect();
@@ -1549,11 +1550,10 @@ void TestFailClosedContracts(TestSuite& suite) {
             RenderGraph::QueueRole::None,
             RenderGraph::AccessMode::None
         );
-        graph.AddPass(
+        graph.AddExternalPass(
             "External",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.Write(handle, RenderGraph::BufferState::UnorderedAccess)
-                    .ExternalControl()
                     .SideEffect();
             },
             [] {}
@@ -1572,7 +1572,7 @@ void TestFailClosedContracts(TestSuite& suite) {
         RenderGraph graph(name);
         const auto handle =
             graph.ImportBuffer("Buffer", buffer, RenderGraph::BufferDesc{.byte_size = 64});
-        graph.AddPass(
+        AddTestRecordPass(graph,
             "Write",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.Write(handle, RenderGraph::BufferState::UnorderedAccess).SideEffect();
@@ -1599,7 +1599,7 @@ void TestFailClosedContracts(TestSuite& suite) {
             RenderGraph::QueueRole::None,
             RenderGraph::AccessMode::None
         );
-        graph.AddPass(
+        AddTestRecordPass(graph,
             "Write",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.Write(handle, RenderGraph::BufferState::UnorderedAccess).SideEffect();

@@ -1,5 +1,6 @@
 #include "rendergraph/RenderGraphPassParameters.h"
 #include "rendergraph/RenderGraphSetup.h"
+#include "RenderGraphTestSupport.h"
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/TaskSystem.h"
 
@@ -207,7 +208,7 @@ struct ChildProcessResult {
 #endif
 
 void AddNoOpPass(RenderGraph& graph, std::string_view name = "NoOp") {
-    graph.AddPass(
+    AddTestRecordPass(graph,
         name,
         [](RenderGraph::PassBuilder& builder) { builder.SideEffect(); },
         [] {}
@@ -686,7 +687,7 @@ void TestFailureJoinAndStableRetry(TestSuite& suite) {
         "Compile retry re-executed one-shot setup work"
     );
     suite.Check(
-        !graph.ExecuteFrontendRecordingPlan({}, {}, true) &&
+        !graph.ExecuteFrontendRecordingPlan( {}, true) &&
             record_calls.load(std::memory_order_relaxed) == 0,
         test_name,
         "recording ran after setup/compiler failure"
@@ -1012,7 +1013,6 @@ void TestParallelRecordingReadsOnePreparedValue(TestSuite& suite) {
         size_t published_sources = 0;
         const bool executed = graph.ExecuteFrontendRecordingPlan(
             {},
-            {},
             true,
             [&](Moer::Array<Moer::Render::RHIRecordingSource>&& sources) {
                 published_sources += sources.size();
@@ -1111,7 +1111,6 @@ void TestExplicitPreparedPassComposition(TestSuite& suite) {
     );
     const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
-        {},
         true,
         [](Moer::Array<Moer::Render::RHIRecordingSource>&&) {}
     );
@@ -1155,7 +1154,6 @@ void TestCombinedPreparedPassContract(TestSuite& suite) {
         graph.GetCompileError()
     );
     const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
         {},
         true,
         [](Moer::Array<Moer::Render::RHIRecordingSource>&&) {}

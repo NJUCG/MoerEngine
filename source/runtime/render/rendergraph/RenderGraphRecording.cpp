@@ -21,8 +21,6 @@ namespace {
     RenderGraph::PassExecutionClass execution
 ) noexcept {
     switch (execution) {
-        case RenderGraph::PassExecutionClass::MainThread:
-            return "main-thread";
         case RenderGraph::PassExecutionClass::ExternalControl:
             return "external-control";
         case RenderGraph::PassExecutionClass::SerialRecord:
@@ -305,7 +303,8 @@ private:
                     RecordingClassName(unit.record_execution_class)
             );
         }
-        if (!pass.record || pass.execute) {
+        const auto* managed = std::get_if<RenderGraph::PassDeclaration::ManagedBody>(&pass.body);
+        if (!managed || !managed->callback) {
             return Fail(
                 "merged recording pass has an invalid callback shape: " +
                 pass.name
@@ -392,7 +391,7 @@ private:
                 frontend_streams_by_unit[unit_index] = pass_command_list;
                 jobs.emplace_back(FrontendRecordJob{
                     .pass_name       = pass.name,
-                    .record_callback = pass.record,
+                    .record_callback = std::get<RenderGraph::PassDeclaration::ManagedBody>(pass.body).callback,
                     .frontend_command_list = std::move(pass_command_list),
                     .gpu_profile_requested =
                         static_cast<bool>(gpu_profiling.try_bind_source),

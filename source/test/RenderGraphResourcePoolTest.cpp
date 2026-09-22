@@ -1,4 +1,5 @@
 #include "rendergraph/RenderGraph.h"
+#include "RenderGraphTestSupport.h"
 #include "rendergraph/RenderGraphLowering.h"
 #include "rendergraph/RenderGraphResourcePool.h"
 
@@ -269,7 +270,6 @@ void TestActiveTransientLifetimeIsCompletionOwned(TestSuite& suite) {
 
     const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
-        {},
         false,
         [&](Moer::Array<RHIRecordingSource>&& sources) {
             published = std::move(sources);
@@ -338,7 +338,6 @@ void TestRejectedProducerRetiresThroughOrdinaryCallbacks(TestSuite& suite) {
     suite.Check(compiled, test, graph.GetCompileError());
     const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
-        {},
         false,
         [&](Moer::Array<RHIRecordingSource>&& sources) {
             published = std::move(sources);
@@ -405,7 +404,6 @@ void TestUnusedTransientDoesNotAllocate(TestSuite& suite) {
     const bool compiled = graph.Compile();
     suite.Check(compiled, test, graph.GetCompileError());
     const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
         {},
         false,
         [&](Moer::Array<RHIRecordingSource>&& sources) {
@@ -542,7 +540,6 @@ void TestNonOverlappingBuffersAliasUntilEveryCompletion(TestSuite& suite) {
     );
 
     const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
         {},
         false,
         [&](Moer::Array<RHIRecordingSource>&& sources) {
@@ -1068,16 +1065,16 @@ void TestAliasChainUsesOneSlot(TestSuite& suite) {
     );
 }
 
-void TestMainThreadReferenceRetainsCompletionLifetime(TestSuite& suite) {
+void TestRecordedReferenceRetainsCompletionLifetime(TestSuite& suite) {
     constexpr std::string_view test =
-        "main-thread reference retains completion lifetime";
+        "recorded reference retains completion lifetime";
     FactoryProbe probe{};
     auto         pool = probe.MakePool();
     RenderGraphTransientAllocator allocator(pool);
-    RenderGraph graph("MainThreadReferenceLifetime");
+    RenderGraph graph("RecordedReferenceLifetime");
     const auto transient =
         graph.CreateTransientBuffer("Referenced", kBufferDesc);
-    graph.AddPass(
+    AddTestRecordPass(graph,
         "WriteReferenced",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(
@@ -1087,7 +1084,7 @@ void TestMainThreadReferenceRetainsCompletionLifetime(TestSuite& suite) {
         },
         [] {}
     );
-    graph.AddPass(
+    AddTestRecordPass(graph,
         "ReferenceOnly",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Reference(transient).SideEffect();
@@ -1097,16 +1094,18 @@ void TestMainThreadReferenceRetainsCompletionLifetime(TestSuite& suite) {
 
     const bool compiled = graph.Compile();
     suite.Check(compiled, test, graph.GetCompileError());
-    CommandList main_commands(EQueueType::Graphics);
+    Moer::Array<RHIRecordingSource> published{};
     const bool executed = compiled && graph.ExecuteFrontendRecordingPlan(
         {},
-        {},
         false,
-        {},
+        [&](Moer::Array<RHIRecordingSource>&& sources) {
+            for (auto& source : sources) {
+                published.emplace_back(std::move(source));
+            }
+        },
         RenderGraph::ActiveRecordingOptions{
-            .enabled                  = true,
-            .main_thread_command_list = &main_commands,
-            .transient_allocator      = &allocator,
+            .enabled             = true,
+            .transient_allocator = &allocator,
         }
     );
     suite.Check(executed, test, graph.GetCompileError());
@@ -1115,17 +1114,25 @@ void TestMainThreadReferenceRetainsCompletionLifetime(TestSuite& suite) {
             pool.BufferCount() == 1 &&
             pool.AvailableBufferCount() == 0,
         test,
-        "reference-only MainThread pass did not transfer ownership to Completion"
+        "reference-only record pass did not transfer ownership to Completion"
     );
     if (executed) {
-        CmdSubmit submit = main_commands.Submit();
-        InvokeCallbacks(submit.callbacks);
+        suite.Check(published.size() == 2, test, "expected one source per pass");
+        Moer::Array<CmdSubmit> submits{};
+        for (auto& source : published) {
+            submits.emplace_back(source.command_list->Submit());
+        }
+        for (auto& submit : submits) {
+            InvokeCallbacks(submit.callbacks);
+        }
         suite.Check(
             pool.AvailableBufferCount() == 0,
             test,
             "ordinary callbacks released a reference before the success tail"
         );
-        InvokeCallbacks(submit.success_callbacks);
+        for (auto& submit : submits) {
+            InvokeCallbacks(submit.success_callbacks);
+        }
         suite.Check(
             pool.AvailableBufferCount() == 1,
             test,
@@ -1188,13 +1195,13 @@ void TestTransientExecutionContractsAndRollback(TestSuite& suite) {
     }
 
     constexpr std::string_view serial_test =
-        "allocation-backed transient rejects serial execute";
+        "allocation-backed transient rejects inactive recording";
     {
         bool callback_ran = false;
         RenderGraph graph("SerialTransientExecute");
         const auto transient =
             graph.CreateTransientBuffer("Scratch", kBufferDesc);
-        graph.AddPass(
+        AddTestRecordPass(graph,
             "WriteScratch",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.Write(
@@ -1206,13 +1213,13 @@ void TestTransientExecutionContractsAndRollback(TestSuite& suite) {
         );
         const bool compiled = graph.Compile();
         suite.Check(compiled, serial_test, graph.GetCompileError());
-        const bool executed = compiled && graph.Execute();
+        const bool executed = compiled && RecordTestGraph(graph);
         suite.Check(
             !executed && !callback_ran &&
-                graph.GetCompileError().find("active ExecuteFrontendRecordingPlan") !=
+                graph.GetCompileError().find("active recording") !=
                     std::string::npos,
             serial_test,
-            "serial Execute ran an allocation-backed transient callback"
+            "inactive recording ran an allocation-backed transient callback"
         );
     }
 
@@ -1243,7 +1250,6 @@ void TestTransientExecutionContractsAndRollback(TestSuite& suite) {
         const bool compiled = graph.Compile();
         suite.Check(compiled, rollback_test, graph.GetCompileError());
         const bool executed = compiled && graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             false,
             {},
@@ -1279,7 +1285,7 @@ int main() {
     TestNonOverlappingTexturesAlias(suite);
     TestAliasBarrierCoversCompleteReaderFrontier(suite);
     TestAliasChainUsesOneSlot(suite);
-    TestMainThreadReferenceRetainsCompletionLifetime(suite);
+    TestRecordedReferenceRetainsCompletionLifetime(suite);
     TestTransientExecutionContractsAndRollback(suite);
 
     if (suite.FailureCount() != 0) {
