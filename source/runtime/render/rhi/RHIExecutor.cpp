@@ -1310,6 +1310,9 @@ std::shared_ptr<RHIBackendExecutor> CreateBackendExecutor(uint32 _submission_bat
                 "[RHIExecutor] D3D12 uses the legacy queue adapter; upper Vulkan topology is unavailable"
             );
             return std::make_shared<LegacyQueueBackendExecutor>();
+        case ERHIType::Metal:
+            LOG_INFO("[RHIExecutor] Metal bootstrap uses the single-segment legacy queue adapter");
+            return std::make_shared<LegacyQueueBackendExecutor>();
     }
     LOG_ERROR("[RHIExecutor] unsupported RHI type");
     assert(false && "Unsupported RHI type");

@@ -148,6 +148,8 @@ const EShaderPlatform RenderDevice::GetShaderPlatform() const {
             return EShaderPlatform::SP_VULKAN_SM6;
         case ERHIType::D3D12:
             return EShaderPlatform::SP_WIN_D3D_SM6;
+        case ERHIType::Metal:
+            return EShaderPlatform::SP_METAL_MSL;
         default:
             return EShaderPlatform::SP_Num;
     }

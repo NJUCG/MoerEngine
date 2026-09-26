@@ -5,6 +5,9 @@
 #if defined(_WIN32)
 #include "d3d12/D3D12Device.h"
 #endif
+#if defined(__APPLE__)
+#include "metal/MetalDevice.h"
+#endif
 #include "log/LogSystem.h"
 #include "rendergraph/RenderGraphResourcePool.h"
 #include "rhi/RHICommand.h"
@@ -139,6 +142,13 @@ void RenderDevice::Init(DeviceInitInfo&& _info) {
 #else
             case ERHIType::D3D12:
                 throw std::runtime_error("D3D12 backend is only available on Windows");
+#endif
+            case ERHIType::Metal:
+#if defined(__APPLE__)
+                Get().impl = UniquePtr<Impl>(MoerNew(MetalDevice)());
+                break;
+#else
+                throw std::runtime_error("Metal backend is only available on macOS");
 #endif
         }
         Get().rhi_type = _info.rhi_type;

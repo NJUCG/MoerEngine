@@ -17,7 +17,8 @@
 
 enum class ERHIType : uint8_t {
     Vulkan,
-    D3D12
+    D3D12,
+    Metal
 };
 /** Maximum number of miplevels in a texture. */
 enum {

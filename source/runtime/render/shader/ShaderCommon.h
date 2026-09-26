@@ -460,6 +460,8 @@ FORCEINLINE EShaderPlatform GetShaderPlatformByRHIType(ERHIType _type) {
         case ERHIType::D3D12:
             return EShaderPlatform::SP_WIN_D3D_SM6;
             break;
+        case ERHIType::Metal:
+            return EShaderPlatform::SP_METAL_MSL;
         default:
             assert(false && "not supported rhi");
     }

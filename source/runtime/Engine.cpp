@@ -1466,6 +1466,10 @@ void Engine::Init(
             LOG_INFO("Using D3D12 as RHI backend");
             return ERHIType::D3D12;
         }
+        if (rhi_type_str == "metal") {
+            LOG_INFO("Using Metal as RHI backend");
+            return ERHIType::Metal;
+        }
 
         LOG_WARNING("Unknown RHI type '{}', fallback to Vulkan", config.engine.rhi.type);
         return ERHIType::Vulkan;
@@ -1474,7 +1478,8 @@ void Engine::Init(
     report_startup(
         "Initializing graphics device",
         rhi_type == ERHIType::Vulkan ? "Creating the Vulkan device, queues, and descriptors" :
-                                       "Creating the D3D12 device, queues, and descriptors"
+        rhi_type == ERHIType::Metal ? "Creating the Metal device and command queue" :
+                                     "Creating the D3D12 device, queues, and descriptors"
     );
     // Dispose is safe when initialization leaves a partially constructed
     // implementation behind, so arm cleanup before entering the backend.
@@ -1561,6 +1566,15 @@ void Engine::Init(
     m_main_window_surface        = WindowContext::CreateSwapchainSurfaceInfo(*WindowContext::GetMainWindow());
     if (!m_main_window_surface.IsValid()) {
         throw std::runtime_error("Failed to capture the main window surface source");
+    }
+
+    // The first Metal milestone validates the production device and presentation
+    // path in MetalRHISmoke. RuntimeAssets uses upload commands that are not yet
+    // translated by Metal; stop on the game thread before worker uploads begin.
+    if (rhi_type == ERHIType::Metal) {
+        throw std::runtime_error(
+            "Metal RHI resource uploads are not implemented yet; run MetalRHISmoke for the device/present check"
+        );
     }
 
     report_startup("Loading editor resources", "Uploading editor textures and environment assets");

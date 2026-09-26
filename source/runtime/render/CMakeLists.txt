@@ -6,6 +6,10 @@ configure_file(${moer_runtime_render_dir}/config.h.in ${moer_runtime_render_dir}
 
 file(GLOB_RECURSE render_module_headers CONFIGURE_DEPENDS "*.h" ".hpp" "*.hlsli")
 file(GLOB_RECURSE render_module_sources CONFIGURE_DEPENDS "*.cpp")
+if (APPLE)
+    file(GLOB_RECURSE metal_module_sources CONFIGURE_DEPENDS "rhi/metal/*.mm")
+    list(APPEND render_module_sources ${metal_module_sources})
+endif()
 if (NOT WIN32)
     list(FILTER render_module_headers EXCLUDE REGEX "/rhi/d3d12/")
     list(FILTER render_module_sources EXCLUDE REGEX "/rhi/d3d12/")
@@ -95,6 +99,15 @@ target_compile_definitions(${target_name} PRIVATE
 
 if (APPLE)
     target_link_libraries(${target_name} PRIVATE spirv-cross-msl)
+    target_link_libraries(${target_name} PRIVATE "-framework Metal" "-framework QuartzCore" "-framework AppKit")
+    target_compile_options(${target_name} PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+
+    add_executable(MetalRHISmoke EXCLUDE_FROM_ALL
+        ${moer_source_dir}/test/MetalRHISmoke.mm
+    )
+    target_link_libraries(MetalRHISmoke PRIVATE Moer::Render glfw
+        "-framework Metal" "-framework QuartzCore" "-framework AppKit")
+    target_compile_options(MetalRHISmoke PRIVATE -fobjc-arc)
 endif()
 
 if (WIN32)
