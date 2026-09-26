@@ -11,11 +11,15 @@
 #include "rhi/metal/MetalDevice.h"
 #include "log/LogSystem.h"
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 
 namespace Moer::Render {
 namespace {
@@ -40,6 +44,78 @@ MTLPixelFormat ToMetalFormat(EPixelFormat format) {
 NSUInteger PixelStride(EPixelFormat format) {
     return format == PF_R32G32B32A32_SFLOAT ? 16 : 4;
 }
+
+// The bootstrap queues wait for each command buffer to finish. This host
+// timeline still distinguishes submitted, completed, and rejected values so
+// callers cannot mistake a rejected dependency for completed GPU work.
+class MetalFence final : public Fence {
+public:
+    uint64 GetValue() const override {
+        std::lock_guard lock(mutex_);
+        return completed_;
+    }
+
+    void Wait(uint64 value) override {
+        std::unique_lock lock(mutex_);
+        cv_.wait(lock, [&] { return completed_ >= value || IsRejectedLocked(value); });
+    }
+
+    void MarkSubmitted(uint64 value) override {
+        {
+            std::lock_guard lock(mutex_);
+            submitted_ = std::max(submitted_, value);
+        }
+        cv_.notify_all();
+    }
+
+    bool WaitSubmitted(
+        uint64 value, const std::atomic_bool* continue_waiting, EQueueType, uint32
+    ) override {
+        std::unique_lock lock(mutex_);
+        while (submitted_ < value && !IsRejectedLocked(value) &&
+               (continue_waiting == nullptr || continue_waiting->load(std::memory_order_acquire))) {
+            cv_.wait_for(lock, std::chrono::milliseconds(20));
+        }
+        return submitted_ >= value && !IsRejectedLocked(value);
+    }
+
+    void Reject(uint64 value) noexcept override {
+        {
+            std::lock_guard lock(mutex_);
+            try {
+                rejected_.insert(value);
+            } catch (...) {
+                reject_all_ = true;
+            }
+        }
+        cv_.notify_all();
+    }
+
+    bool IsRejected(uint64 value) const override {
+        std::lock_guard lock(mutex_);
+        return IsRejectedLocked(value);
+    }
+
+    void Complete(uint64 value) {
+        {
+            std::lock_guard lock(mutex_);
+            completed_ = std::max(completed_, value);
+        }
+        cv_.notify_all();
+    }
+
+private:
+    bool IsRejectedLocked(uint64 value) const {
+        return reject_all_ || rejected_.contains(value);
+    }
+
+    mutable std::mutex mutex_;
+    std::condition_variable cv_;
+    uint64 submitted_{0};
+    uint64 completed_{0};
+    std::unordered_set<uint64> rejected_;
+    bool reject_all_{false};
+};
 
 class MetalBuffer final : public Buffer {
 public:
@@ -264,7 +340,8 @@ private:
 
 class MetalCopyQueue final : public CopyQueue {
 public:
-    explicit MetalCopyQueue(id<MTLCommandQueue> queue) : queue_(queue) {}
+    explicit MetalCopyQueue(id<MTLCommandQueue> queue) :
+        queue_(queue), timeline_fence_(MoerNew(MetalFence)()) {}
 
     IOWaitEvt Execute(IOQueueSubmission&&) override { Unsupported("IO queue submission"); }
     IOWaitEvt Execute(CmdSubmit&& submit) override {
@@ -331,7 +408,7 @@ public:
                     Unsupported("this copy command");
             }
         }
-        if (submit.cmds.empty()) return {0, completed_timeline_.load()};
+        if (submit.cmds.empty()) return {uint64(timeline_fence_.Get()), timeline_fence_->GetValue()};
 
         @autoreleasepool {
             id<MTLCommandBuffer> command_buffer = [queue_ commandBuffer];
@@ -405,7 +482,10 @@ public:
                     std::string([command_buffer.error.localizedDescription UTF8String] ?: "unknown GPU error"));
             }
         }
-        return {0, completed_timeline_.fetch_add(1) + 1};
+        const uint64 timeline = ++next_timeline_;
+        timeline_fence_->MarkSubmitted(timeline);
+        static_cast<MetalFence*>(timeline_fence_.Get())->Complete(timeline);
+        return {uint64(timeline_fence_.Get()), timeline};
     }
     void CopyFrom(BufferView, BufferView) override { Unsupported("buffer copy"); }
     void CopyFrom(TextureView, TextureView) override { Unsupported("texture copy"); }
@@ -413,18 +493,19 @@ public:
     void CopyFrom(BufferView, TextureView) override { Unsupported("texture upload"); }
     void CopyFrom(std::span<byte>, BufferView) override { Unsupported("buffer upload"); }
     void CopyFrom(std::span<byte>, TextureView) override { Unsupported("texture upload"); }
-    FenceRef GetFenceHandle() override { Unsupported("copy fence"); }
+    FenceRef GetFenceHandle() override { return timeline_fence_; }
     void Sync(uint64 timeline) override {
-        std::lock_guard lock(mutex_);
-        if (timeline > completed_timeline_.load()) {
-            throw std::runtime_error("Metal copy timeline has not completed");
+        timeline_fence_->Wait(timeline);
+        if (timeline_fence_->IsRejected(timeline)) {
+            throw std::runtime_error("Metal copy timeline was rejected");
         }
     }
 
 private:
     id<MTLCommandQueue> queue_;
     std::mutex mutex_;
-    std::atomic<uint64> completed_timeline_{0};
+    FenceRef timeline_fence_;
+    uint64 next_timeline_{0};
 };
 
 } // namespace
@@ -450,7 +531,7 @@ MetalDevice::MetalDevice() {
 
 MetalDevice::~MetalDevice() = default;
 
-FenceRef MetalDevice::CreateFence() { Unsupported("fences"); }
+FenceRef MetalDevice::CreateFence() { return FenceRef(MoerNew(MetalFence)()); }
 BufferRef MetalDevice::CreateBuffer(
     std::string_view name, uint count, uint stride, EBufferUsageFlags usage, EPixelFormat format
 ) {

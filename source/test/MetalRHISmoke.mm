@@ -94,6 +94,8 @@ void UploadAndCheckTexture(
         throw std::runtime_error("Metal upload test input has the wrong size");
     }
     TextureRef texture = RenderDevice::Get().CreateTexture(Extent2D(width, height), format, usage);
+    FenceRef copy_fence = RenderDevice::Get().GetCopyQueue().GetFenceHandle();
+    const uint64_t before_upload = copy_fence->GetValue();
     CommandList upload(EQueueType::Copy);
     upload.CopyFrom(
         std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(input.data()), input.size()),
@@ -101,12 +103,22 @@ void UploadAndCheckTexture(
     );
     RHIExecutor::Get().Submit(EQueueType::Copy, upload.Submit());
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    const uint64_t after_upload = copy_fence->GetValue();
+    if (after_upload <= before_upload ||
+        !copy_fence->WaitSubmitted(after_upload) || copy_fence->IsRejected(after_upload)) {
+        throw std::runtime_error("Metal copy fence did not complete the upload");
+    }
 
     TextureRef copied = RenderDevice::Get().CreateTexture(Extent2D(width, height), format, usage);
     CommandList copy(EQueueType::Copy);
     copy.CopyFrom(texture->GetView(), copied->GetView());
     RHIExecutor::Get().Submit(EQueueType::Copy, copy.Submit());
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    const uint64_t after_copy = copy_fence->GetValue();
+    if (after_copy <= after_upload ||
+        !copy_fence->WaitSubmitted(after_copy) || copy_fence->IsRejected(after_copy)) {
+        throw std::runtime_error("Metal copy fence did not complete the texture copy");
+    }
 
     id<MTLTexture> native = (__bridge id<MTLTexture>)GetMetalNativeTexture(copied.Get());
     if (native == nil) throw std::runtime_error("Metal upload texture bridge failed");
