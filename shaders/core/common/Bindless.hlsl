@@ -60,6 +60,14 @@ struct RenderResourceHandle {
   ITERATOR(uint4, ##__VA_ARGS__)                                               \
   ITERATOR(float4, ##__VA_ARGS__)
 
+// Integer textures support loads, but HLSL sampling methods require a
+// floating-point texture.
+#define ITERATE_SAMPLE_TEXTURE_TYPES(ITERATOR, ...)                            \
+  ITERATOR(float, ##__VA_ARGS__)                                                \
+  ITERATOR(float2, ##__VA_ARGS__)                                               \
+  ITERATOR(float3, ##__VA_ARGS__)                                               \
+  ITERATOR(float4, ##__VA_ARGS__)
+
 struct ByteBufferHandle {
   uint internalIndex;
 };
@@ -266,9 +274,9 @@ struct SamplerHeapHandle {
 
 #define DEFINE_FETCH_TEXTURE_TYPE_AND_FORMATS(TextureType, CoordType, OffsetType)                     \
   ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_FETCH, TextureType)                               \
-  ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_SAMPLE, TextureType, CoordType, OffsetType)       \
-  ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_SAMPLE_LEVEL, TextureType, CoordType, OffsetType) \
-  ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_SAMPLE_GRAD, TextureType, CoordType, OffsetType)  \
+  ITERATE_SAMPLE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_SAMPLE, TextureType, CoordType, OffsetType)       \
+  ITERATE_SAMPLE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_SAMPLE_LEVEL, TextureType, CoordType, OffsetType) \
+  ITERATE_SAMPLE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_SAMPLE_GRAD, TextureType, CoordType, OffsetType)  \
   INNER_GENERATE_TEXTURE_TYPE_FETCH_WITHOUT_TEMPLATE(TextureType)                                     \
   INNER_GENERATE_TEXTURE_TYPE_SAMPLE_WITHOUT_TEMPLATE(TextureType, CoordType, OffsetType)             \
   INNER_GENERATE_TEXTURE_TYPE_SAMPLE_LEVEL_WITHOUT_TEMPLATE(                                          \
@@ -363,9 +371,9 @@ struct SamplerHeapHandle {
 // Define Fetch Macro for Cube (Combines the above)
 #define DEFINE_FETCH_TEXTURE_CUBE_AND_FORMATS(TextureType, CoordType)                     \
   ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_TYPE_FETCH, TextureType)                   \
-  ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_CUBE_SAMPLE, TextureType, CoordType)       \
-  ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_CUBE_SAMPLE_LEVEL, TextureType, CoordType) \
-  ITERATE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_CUBE_SAMPLE_GRAD, TextureType, CoordType)  \
+  ITERATE_SAMPLE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_CUBE_SAMPLE, TextureType, CoordType)       \
+  ITERATE_SAMPLE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_CUBE_SAMPLE_LEVEL, TextureType, CoordType) \
+  ITERATE_SAMPLE_TEXTURE_TYPES(INNER_GENERATE_TEXTURE_CUBE_SAMPLE_GRAD, TextureType, CoordType)  \
   INNER_GENERATE_TEXTURE_TYPE_FETCH_WITHOUT_TEMPLATE(TextureType)                         \
   INNER_GENERATE_TEXTURE_CUBE_SAMPLE_WITHOUT_TEMPLATE(TextureType, CoordType)             \
   INNER_GENERATE_TEXTURE_CUBE_SAMPLE_LEVEL_WITHOUT_TEMPLATE(TextureType, CoordType)       \
