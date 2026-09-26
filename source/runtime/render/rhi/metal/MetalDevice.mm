@@ -260,7 +260,7 @@ void ValidateTextureUpload(const UploadTextureCmd& upload) {
     const uint3 size = upload.Size();
     const uint mip = upload.MipLevel();
     if (texture == nullptr || upload.Format() != texture->GetFormat() ||
-        mip >= texture->GetNumMips() || upload.ArrayLayer() != 0 ||
+        mip >= texture->GetNumMips() || upload.ArrayLayer() >= texture->GetNumArray() ||
         upload.Offset() != uint3{0, 0, 0} ||
         size != uint3{std::max(1u, texture->GetWidth() >> mip),
                       std::max(1u, texture->GetHeight() >> mip), 1} ||
@@ -302,7 +302,8 @@ void EncodeTextureUpload(
       sourceBytesPerRow:staging_row_bytes
     sourceBytesPerImage:staging_row_bytes * height
              sourceSize:MTLSizeMake(width, height, 1)
-              toTexture:texture->Native() destinationSlice:0 destinationLevel:upload.MipLevel()
+              toTexture:texture->Native() destinationSlice:upload.ArrayLayer()
+       destinationLevel:upload.MipLevel()
      destinationOrigin:MTLOriginMake(0, 0, 0)];
 }
 
@@ -363,10 +364,29 @@ public:
     uint AllocateTexture(const TextureView& view, Sampler sampler) override {
         auto* texture = dynamic_cast<MetalTexture*>(view.GetTexture());
         if (texture == nullptr || view.format != texture->GetFormat() ||
-            view.mip_level != 0 || view.num_mips != 1 || view.array_layer != 0 ||
-            view.num_array != 1 || view.offset != uint3{0, 0, 0} ||
+            view.num_mips == 0 || view.mip_level + view.num_mips > texture->GetNumMips() ||
+            view.num_array == 0 || view.array_layer + view.num_array > texture->GetNumArray() ||
+            view.offset != uint3{0, 0, 0} ||
             view.extent != texture->GetExtent()) {
             Unsupported("this bindless texture view");
+        }
+        const bool is_cube = texture->GetDimension() == ETextureDimension::TEX_CUBE;
+        if (is_cube && view.num_array != 1 &&
+            (view.array_layer != 0 || view.num_array != 6)) {
+            Unsupported("this cube bindless texture view");
+        }
+        id<MTLTexture> native_view = texture->Native();
+        if (view.mip_level != 0 || view.num_mips != texture->GetNumMips() ||
+            view.array_layer != 0 || view.num_array != texture->GetNumArray()) {
+            MTLTextureType type = MTLTextureType2D;
+            if (is_cube && view.num_array == 6) type = MTLTextureTypeCube;
+            else if (view.num_array > 1) type = MTLTextureType2DArray;
+            native_view = [texture->Native()
+                newTextureViewWithPixelFormat:ToMetalFormat(view.format)
+                                  textureType:type
+                                       levels:NSMakeRange(view.mip_level, view.num_mips)
+                                       slices:NSMakeRange(view.array_layer, view.num_array)];
+            if (native_view == nil) Unsupported("this Metal texture subresource view");
         }
         const uint sampler_index = SamplerIndex(sampler);
         EnsureSampler(sampler, sampler_index);
@@ -380,6 +400,7 @@ public:
             view.array_layer, view.num_array, generation, generation, 0, false
         });
         slot.texture = std::move(reference);
+        slot.texture_view = native_view;
         slot.buffer = {};
         slot.sampler_index = sampler_index;
         slot.kind = Kind::Texture;
@@ -405,6 +426,7 @@ public:
         });
         slot.buffer = std::move(reference);
         slot.texture = {};
+        slot.texture_view = nil;
         slot.buffer_offset = view.GetByteOffset();
         slot.kind = Kind::Buffer;
         slot.active = true;
@@ -433,13 +455,14 @@ public:
                         textures[item.array_idx] = 0;
                         buffers[item.array_idx + 1] = 0;
                         slot.texture = {};
+                        slot.texture_view = nil;
                         slot.buffer = {};
                         slot.kind = Kind::Empty;
                         free_slots_.push_back(item.array_idx);
                     } else if (slot.active) {
                         if constexpr (std::is_same_v<T, TextureUpdateInfo>) {
                             textures[item.array_idx] =
-                                static_cast<MetalTexture*>(slot.texture.Get())->Native().gpuResourceID._impl;
+                                slot.texture_view.gpuResourceID._impl;
                             indices[item.array_idx] = (item.array_idx << 8) | slot.sampler_index;
                         } else {
                             buffers[item.array_idx + 1] =
@@ -500,6 +523,7 @@ private:
     enum class Kind { Empty, Texture, Buffer };
     struct Slot {
         TextureRef texture{};
+        id<MTLTexture> texture_view{nil};
         BufferRef buffer{};
         uint64 generation{0};
         uint64 buffer_offset{0};
@@ -1143,7 +1167,11 @@ BufferRef MetalDevice::CreateBuffer(
     return result;
 }
 TextureRef MetalDevice::CreateTexture(std::string_view name, const TextureInfo& info) {
-    if (info.dimension != ETextureDimension::TEX_2D || info.array_size != 1 ||
+    const bool is_2d = info.dimension == ETextureDimension::TEX_2D && info.array_size == 1;
+    const bool is_2d_array = info.dimension == ETextureDimension::TEX_2D_ARRAY && info.array_size > 0;
+    const bool is_cube = info.dimension == ETextureDimension::TEX_CUBE &&
+                         info.array_size == 6 && info.extent.x == info.extent.y;
+    if ((!is_2d && !is_2d_array && !is_cube) || info.depth != 1 ||
         info.num_mips < 1 || info.num_samples != 1 || info.extent.x <= 0 || info.extent.y <= 0) {
         throw std::runtime_error(
             "Metal RHI has not implemented texture layout: dimension=" +
@@ -1162,13 +1190,21 @@ TextureRef MetalDevice::CreateTexture(std::string_view name, const TextureInfo& 
         (is_depth && (info.usage & ETextureUsageFlags::UNORDERED_ACCESS) != ETextureUsageFlags::UNDEFINED)) {
         Unsupported("this texture format and usage combination");
     }
-    MTLTextureDescriptor* desc = [MTLTextureDescriptor
-        texture2DDescriptorWithPixelFormat:native_format
-                                 width:info.extent.x height:info.extent.y
-                             mipmapped:info.num_mips > 1];
+    MTLTextureDescriptor* desc = is_cube ?
+        [MTLTextureDescriptor textureCubeDescriptorWithPixelFormat:native_format
+                                                              size:info.extent.x
+                                                         mipmapped:info.num_mips > 1] :
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:native_format
+                                                            width:info.extent.x
+                                                           height:info.extent.y
+                                                        mipmapped:info.num_mips > 1];
+    if (is_2d_array) {
+        desc.textureType = MTLTextureType2DArray;
+        desc.arrayLength = info.array_size;
+    }
     desc.mipmapLevelCount = info.num_mips;
     desc.storageMode = MTLStorageModePrivate;
-    desc.usage = MTLTextureUsageShaderRead;
+    desc.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
     if ((info.usage & ETextureUsageFlags::COLOR_ATTACHMENT) != ETextureUsageFlags::UNDEFINED) {
         desc.usage |= MTLTextureUsageRenderTarget;
     }

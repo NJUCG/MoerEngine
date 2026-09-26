@@ -269,6 +269,83 @@ void CheckMipTexture() {
     std::cout << "mip texture allocation and level 2 upload/readback: success" << std::endl;
 }
 
+void CheckLayeredTextures() {
+    using namespace Moer::Render;
+    struct Case {
+        TextureRef texture;
+        MTLTextureType type;
+        NSUInteger layer;
+    };
+    const Case cases[] = {
+        {RenderDevice::Get().CreateTexture(
+            Extent2D(8, 8), PF_R8G8B8A8_UNORM,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST, 2, 3
+        ), MTLTextureType2DArray, 2},
+        {RenderDevice::Get().CreateCubeMap(
+            "Metal smoke cube", Extent2D(8, 8), PF_R8G8B8A8_UNORM,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST, 2
+        ), MTLTextureTypeCube, 5},
+    };
+    constexpr NSUInteger width = 4;
+    constexpr NSUInteger height = 4;
+    for (const Case& item : cases) {
+        id<MTLTexture> native = (__bridge id<MTLTexture>)GetMetalNativeTexture(item.texture.Get());
+        if (native.textureType != item.type || native.mipmapLevelCount != 2) {
+            throw std::runtime_error("Metal layered texture allocation is incorrect");
+        }
+        std::vector<uint8_t> pixels(width * height * 4);
+        for (size_t i = 0; i < pixels.size(); ++i) pixels[i] = uint8_t(i * 3 + item.layer);
+        CommandList upload(EQueueType::Graphics);
+        upload.CopyFrom(
+            std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(pixels.data()), pixels.size()),
+            item.texture->GetView(1).Slice(item.layer)
+        );
+        RHIExecutor::Get().Submit(EQueueType::Graphics, upload.Submit());
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+        id<MTLBuffer> readback = [native.device
+            newBufferWithLength:256 * height options:MTLResourceStorageModeShared];
+        id<MTLCommandQueue> queue = [native.device newCommandQueue];
+        id<MTLCommandBuffer> command = [queue commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+        [blit copyFromTexture:native sourceSlice:item.layer sourceLevel:1
+                sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(width, height, 1)
+                    toBuffer:readback destinationOffset:0 destinationBytesPerRow:256
+           destinationBytesPerImage:256 * height];
+        [blit endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        if (command.status != MTLCommandBufferStatusCompleted) {
+            throw std::runtime_error("Metal layered texture readback failed");
+        }
+        const auto* output = static_cast<const uint8_t*>(readback.contents);
+        for (NSUInteger row = 0; row < height; ++row) {
+            if (std::memcmp(output + row * 256, pixels.data() + row * width * 4,
+                            width * 4) != 0) {
+                throw std::runtime_error("Metal layered texture upload differs from input");
+            }
+        }
+    }
+    BindlessArrayRef bindless = RenderDevice::Get().CreateBindlessArray(16);
+    const Sampler sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE);
+    const uint cube_base = bindless->AllocateTexture(cases[1].texture->GetView(), sampler);
+    const uint cube_mip = bindless->AllocateTexture(cases[1].texture->GetView(1), sampler);
+    const uint cube_face = bindless->AllocateTexture(cases[1].texture->GetView(1).Slice(5), sampler);
+    const uint array_layer = bindless->AllocateTexture(cases[0].texture->GetView(1).Slice(2), sampler);
+    CommandList update(EQueueType::Graphics);
+    update.UpdateBindlessArray(bindless);
+    RHIExecutor::Get().Submit(EQueueType::Graphics, update.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    id<MTLBuffer> table = (__bridge id<MTLBuffer>)GetMetalNativeBindlessArgumentBuffer(bindless.Get(), 2);
+    const auto* ids = static_cast<const uint64_t*>(table.contents);
+    if (ids[cube_base] == 0 || ids[cube_mip] == 0 || ids[cube_face] == 0 ||
+        ids[array_layer] == 0 || ids[cube_base] == ids[cube_mip] ||
+        ids[cube_mip] == ids[cube_face]) {
+        throw std::runtime_error("Metal layered bindless texture views are incorrect");
+    }
+    std::cout << "2D array and cube texture allocation and subresource upload: success" << std::endl;
+}
+
 Moer::Render::TextureRef ClearAndCheckTexture(int width, int height) {
     using namespace Moer::Render;
     TextureRef texture = RenderDevice::Get().CreateTexture(
@@ -737,6 +814,7 @@ int main(int argc, char** argv) {
             CheckGraphicsPipeline();
             CheckGraphicsUploads();
             CheckMipTexture();
+            CheckLayeredTextures();
             std::vector<uint8_t> rgba8(7 * 5 * 4);
             for (size_t i = 0; i < rgba8.size(); ++i) rgba8[i] = static_cast<uint8_t>(i * 17);
             UploadAndCheckTexture(PF_R8G8B8A8_UNORM, ETextureUsageFlags::SAMPLED, rgba8, 4);
