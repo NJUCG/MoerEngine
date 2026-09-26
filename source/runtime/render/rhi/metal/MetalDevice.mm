@@ -147,6 +147,20 @@ MTLBlendFactor ToMetalBlendFactor(EBlendFactor factor) {
     }
 }
 
+MTLCompareFunction ToMetalCompare(ECompareOption compare) {
+    switch (compare) {
+        case CO_NEVER: return MTLCompareFunctionNever;
+        case CO_LESS: return MTLCompareFunctionLess;
+        case CO_EQUAL: return MTLCompareFunctionEqual;
+        case CO_LESS_OR_EQUAL: return MTLCompareFunctionLessEqual;
+        case CO_GREATER: return MTLCompareFunctionGreater;
+        case CO_NOT_EQUAL: return MTLCompareFunctionNotEqual;
+        case CO_GREATER_OR_EQUAL: return MTLCompareFunctionGreaterEqual;
+        case CO_ALWAYS: return MTLCompareFunctionAlways;
+        default: Unsupported("this depth comparison");
+    }
+}
+
 // The bootstrap queues wait for each command buffer to finish. This host
 // timeline still distinguishes submitted, completed, and rejected values so
 // callers cannot mistake a rejected dependency for completed GPU work.
@@ -327,15 +341,20 @@ public:
         id<MTLRenderPipelineState> pipeline,
         std::vector<MTLPixelFormat> color_formats,
         uint vertex_bindings,
-        RHIRasterizeInfo rasterizer
+        RHIRasterizeInfo rasterizer,
+        MTLPixelFormat depth_format,
+        id<MTLDepthStencilState> depth_state
     ) : render_(pipeline), color_formats_(std::move(color_formats)),
-        vertex_bindings_(vertex_bindings), rasterizer_(rasterizer) {}
+        vertex_bindings_(vertex_bindings), rasterizer_(rasterizer),
+        depth_format_(depth_format), depth_state_(depth_state) {}
     explicit MetalPipelineState(id<MTLComputePipelineState> pipeline) : compute_(pipeline) {}
     id<MTLRenderPipelineState> NativeRender() const noexcept { return render_; }
     id<MTLComputePipelineState> NativeCompute() const noexcept { return compute_; }
     const std::vector<MTLPixelFormat>& ColorFormats() const noexcept { return color_formats_; }
     uint VertexBindingCount() const noexcept { return vertex_bindings_; }
     const RHIRasterizeInfo& Rasterizer() const noexcept { return rasterizer_; }
+    MTLPixelFormat DepthFormat() const noexcept { return depth_format_; }
+    id<MTLDepthStencilState> DepthState() const noexcept { return depth_state_; }
 
 private:
     id<MTLRenderPipelineState> render_{nil};
@@ -343,6 +362,8 @@ private:
     std::vector<MTLPixelFormat> color_formats_;
     uint vertex_bindings_{0};
     RHIRasterizeInfo rasterizer_{};
+    MTLPixelFormat depth_format_{MTLPixelFormatInvalid};
+    id<MTLDepthStencilState> depth_state_{nil};
 };
 
 id<MTLFunction> CompileMetalFunction(id<MTLDevice> device, const SingleShaderInfo& shader) {
@@ -905,7 +926,7 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
     if (pipeline == nullptr || pipeline->NativeRender() == nil ||
         pipeline->ColorFormats().size() != 1 ||
         !draw.Args().args.empty() || !draw.Args().constants.empty() ||
-        pass.color_attachments.size() != 1 || pass.depth_attachment.Valid() ||
+        pass.color_attachments.size() != 1 ||
         pass.view_mask != 0 || pass.viewport_cnt != 1 || !pass.render_area.IsValid() ||
         draw.DrawData().empty()) {
         Unsupported("this graphics draw layout");
@@ -922,6 +943,25 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
             std::max(1u, target->GetHeight() >> attachment.mip_level) ||
         GetStoreOp(attachment.action) == EAttachmentStoreOp::MULTISAMPLE_RESOLVE) {
         Unsupported("this graphics color attachment");
+    }
+    const DepthAttachment& depth = pass.depth_attachment;
+    if (depth.Valid()) {
+        auto* depth_target = dynamic_cast<MetalTexture*>(depth.target);
+        const EAttachmentAction action = GetDepthAction(depth.action);
+        if (depth_target == nullptr ||
+            pipeline->DepthFormat() != ToMetalFormat(depth_target->GetFormat()) ||
+            depth_target->GetFormat() == PF_D32_SFLOAT_S8_UINT ||
+            depth_target->GetWidth() != target->GetWidth() ||
+            depth_target->GetHeight() != target->GetHeight() ||
+            depth.mip_level != attachment.mip_level ||
+            depth.array_layer != attachment.array_layer || depth.array_count != 1 ||
+            depth.mip_level >= depth_target->GetNumMips() ||
+            depth.array_layer >= depth_target->GetNumArray() ||
+            GetStoreOp(action) == EAttachmentStoreOp::MULTISAMPLE_RESOLVE) {
+            Unsupported("this graphics depth attachment");
+        }
+    } else if (pipeline->DepthFormat() != MTLPixelFormatInvalid) {
+        Unsupported("this graphics depth attachment");
     }
     const RHIRasterizeInfo& raster = pipeline->Rasterizer();
     if (raster.cull_mode == RCM_FRONT_AND_BACK ||
@@ -985,10 +1025,28 @@ void EncodeSimpleDraw(id<MTLCommandBuffer> command_buffer, const SetDrawStateCmd
         MTLStoreActionStore : MTLStoreActionDontCare;
     const float4 clear = attachment.clear_color;
     color.clearColor = MTLClearColorMake(clear.x, clear.y, clear.z, clear.w);
+    if (pass.depth_attachment.Valid()) {
+        const DepthAttachment& depth = pass.depth_attachment;
+        auto* depth_target = static_cast<MetalTexture*>(depth.target);
+        auto* native_depth = descriptor.depthAttachment;
+        native_depth.texture = depth_target->Native();
+        native_depth.level = depth.mip_level;
+        native_depth.slice = depth.array_layer;
+        const EAttachmentAction action = GetDepthAction(depth.action);
+        switch (GetLoadOp(action)) {
+            case EAttachmentLoadOp::CLEAR: native_depth.loadAction = MTLLoadActionClear; break;
+            case EAttachmentLoadOp::LOAD: native_depth.loadAction = MTLLoadActionLoad; break;
+            default: native_depth.loadAction = MTLLoadActionDontCare; break;
+        }
+        native_depth.storeAction = GetStoreOp(action) == EAttachmentStoreOp::STORE ?
+            MTLStoreActionStore : MTLStoreActionDontCare;
+        native_depth.clearDepth = depth.clear_depth;
+    }
     id<MTLRenderCommandEncoder> encoder =
         [command_buffer renderCommandEncoderWithDescriptor:descriptor];
     if (encoder == nil) throw std::runtime_error("Cannot encode Metal draw render pass");
     [encoder setRenderPipelineState:pipeline->NativeRender()];
+    if (pipeline->DepthState() != nil) [encoder setDepthStencilState:pipeline->DepthState()];
     const Rect2D& rect = pass.render_area;
     [encoder setViewport:MTLViewport{double(rect.offset.x), double(rect.offset.y),
                                      double(rect.extent.width), double(rect.extent.height), 0.0, 1.0}];
@@ -1492,7 +1550,9 @@ PipelineHandle MetalDevice::CreatePipeline(GfxPsoCreateInfo&& create_info, Pipel
         create_info.multisample_info.sample_count != 1 ||
         create_info.color_attachment_count > 8 ||
         shader_info.layout_hash.size() != shader_info.arg_cpp_info.size() ||
-        shader_info.layout_hash.size() > 64) {
+        shader_info.layout_hash.size() > 64 ||
+        create_info.depth_stencil_info.b_enable_front_face_stencil ||
+        create_info.depth_stencil_info.b_enable_back_face_stencil) {
         Unsupported("this graphics pipeline layout");
     }
     const auto& shaders = std::get<ShaderVsPs>(shader_info.shader_group);
@@ -1563,6 +1623,15 @@ PipelineHandle MetalDevice::CreatePipeline(GfxPsoCreateInfo&& create_info, Pipel
             throw std::runtime_error("Metal render pipeline creation failed: " +
                 std::string(error.localizedDescription.UTF8String ?: "unknown error"));
         }
+        id<MTLDepthStencilState> depth_state = nil;
+        if (create_info.depth_stencil_format != PF_UNDEFINED) {
+            MTLDepthStencilDescriptor* depth_descriptor = [MTLDepthStencilDescriptor new];
+            depth_descriptor.depthCompareFunction =
+                ToMetalCompare(create_info.depth_stencil_info.depth_test_op);
+            depth_descriptor.depthWriteEnabled = create_info.depth_stencil_info.b_enable_depth_write;
+            depth_state = [native_->device newDepthStencilStateWithDescriptor:depth_descriptor];
+            if (depth_state == nil) throw std::runtime_error("Cannot create Metal depth state");
+        }
         PipelineHandle handle = MetalPipelineMetadata(shader_info, {&shaders.vs, &shaders.ps});
         std::vector<MTLPixelFormat> color_formats;
         color_formats.reserve(create_info.color_attachment_count);
@@ -1571,7 +1640,8 @@ PipelineHandle MetalDevice::CreatePipeline(GfxPsoCreateInfo&& create_info, Pipel
         }
         handle.handle = reinterpret_cast<uint64>(MoerNew(MetalPipelineState)(
             native_pipeline, std::move(color_formats),
-            uint(create_info.vertex_stream.bindings.size()), create_info.rasterizer_info
+            uint(create_info.vertex_stream.bindings.size()), create_info.rasterizer_info,
+            descriptor.depthAttachmentPixelFormat, depth_state
         ));
         return handle;
     }

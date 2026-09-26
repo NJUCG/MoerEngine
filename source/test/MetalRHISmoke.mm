@@ -311,6 +311,84 @@ void CheckIndexedGraphicsDraw() {
     std::cout << "RHI indexed graphics draw and GPU color readback: success" << std::endl;
 }
 
+void CheckDepthGraphicsDraw() {
+    using namespace Moer::Render;
+    constexpr std::string_view source = R"(
+        #include <metal_stdlib>
+        using namespace metal;
+        struct VertexOutput { float4 position [[position]]; };
+        vertex VertexOutput front_vertex(uint index [[vertex_id]]) {
+            const float2 positions[3] = {float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0)};
+            return {float4(positions[index], 0.25, 1.0)};
+        }
+        vertex VertexOutput back_vertex(uint index [[vertex_id]]) {
+            const float2 positions[3] = {float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0)};
+            return {float4(positions[index], 0.75, 1.0)};
+        }
+        fragment float4 red_fragment() { return float4(1.0, 0.0, 0.0, 1.0); }
+        fragment float4 green_fragment() { return float4(0.0, 1.0, 0.0, 1.0); }
+    )";
+    std::vector<Moer::uint8> code(source.begin(), source.end());
+    auto make_pipeline = [&](const char* vertex_entry, const char* fragment_entry) {
+        SingleShaderInfo vertex{.entry_point = vertex_entry, .shader_data = code,
+                                .shader_type = EShaderType::ST_VERTEX};
+        SingleShaderInfo fragment{.entry_point = fragment_entry, .shader_data = code,
+                                  .shader_type = EShaderType::ST_FRAGMENT};
+        PipelineShaderInfo shaders{.shader_group = ShaderVsPs{vertex, fragment}};
+        GfxPsoCreateInfo info(
+            RHIRasterizeInfo::Preset<Rast::CULL_NONE>(), VertexStream{},
+            {RHIColorAttachmentInfo::Preset<>(PF_R8G8B8A8_UNORM)},
+            RHIDepthStencilStateInfo(true, CO_LESS), PF_D32_SFLOAT
+        );
+        return RasterPipeline(RenderDevice::Get().CreatePipeline(std::move(info), std::move(shaders)));
+    };
+    RasterPipeline front = make_pipeline("front_vertex", "red_fragment");
+    RasterPipeline back = make_pipeline("back_vertex", "green_fragment");
+    TextureRef color = RenderDevice::Get().CreateTexture(
+        Extent2D(8, 8), PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_SRC
+    );
+    TextureRef depth = RenderDevice::Get().CreateTexture(
+        Extent2D(8, 8), PF_D32_SFLOAT, ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
+    );
+    CommandList draw(EQueueType::Graphics);
+    for (uint pass_index = 0; pass_index < 2; ++pass_index) {
+        Moer::Array<MeshDrawData> meshes;
+        meshes.emplace_back().EmplaceDraw(3, 0, 0);
+        DepthAttachment depth_attachment(depth.Get());
+        depth_attachment.action = pass_index == 0 ? AC_DS_CLEAR_STORE : AC_DS_LOAD_STORE;
+        depth_attachment.clear_depth = 1.0f;
+        CommandList::DrawDispatcher(pass_index == 0 ? front : back, draw).Draw(
+            Rect2D(0, 0, 8, 8), std::move(meshes), depth_attachment,
+            ColorAttachment{.target = color.Get(),
+                            .action = pass_index == 0 ? AC_CLEAR_STORE : AC_LOAD_STORE,
+                            .clear_color = {0, 0, 0, 1}}
+        );
+    }
+    RHIExecutor::Get().Submit(EQueueType::Graphics, draw.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    id<MTLTexture> native = (__bridge id<MTLTexture>)GetMetalNativeTexture(color.Get());
+    id<MTLBuffer> readback = [native.device
+        newBufferWithLength:256 * 8 options:MTLResourceStorageModeShared];
+    id<MTLCommandQueue> queue = [native.device newCommandQueue];
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    [blit copyFromTexture:native sourceSlice:0 sourceLevel:0
+            sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(8, 8, 1)
+                toBuffer:readback destinationOffset:0 destinationBytesPerRow:256
+       destinationBytesPerImage:256 * 8];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    const auto* middle = static_cast<const uint8_t*>(readback.contents) + 4 * 256 + 4 * 4;
+    if (command.status != MTLCommandBufferStatusCompleted ||
+        middle[0] != 255 || middle[1] != 0 || middle[2] != 0 || middle[3] != 255) {
+        throw std::runtime_error("Metal RHI depth test did not reject the farther triangle");
+    }
+    std::cout << "RHI depth attachment and depth test: success" << std::endl;
+}
+
 void CheckComputePipeline() {
     using namespace Moer::Render;
     constexpr std::string_view source = R"(
@@ -1042,6 +1120,7 @@ int main(int argc, char** argv) {
             CheckGraphicsPipeline();
             CheckGraphicsDraw();
             CheckIndexedGraphicsDraw();
+            CheckDepthGraphicsDraw();
             CheckComputePipeline();
             CheckGraphicsUploads();
             CheckMipTexture();
