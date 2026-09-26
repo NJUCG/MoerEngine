@@ -16,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
@@ -41,6 +42,78 @@ public:
 private:
     GLFWwindow* window_;
 };
+
+void CheckRasterTextureFormats() {
+    using namespace Moer::Render;
+    struct FormatCase {
+        EPixelFormat format;
+        MTLPixelFormat native_format;
+        ETextureUsageFlags usage;
+        uint32_t pixel_stride;
+    };
+    const FormatCase formats[] = {
+        {PF_R8_UNORM, MTLPixelFormatR8Unorm, ETextureUsageFlags::COLOR_ATTACHMENT, 1},
+        {PF_A2R10G10B10_UNORM_PACK32, MTLPixelFormatBGR10A2Unorm,
+         ETextureUsageFlags::COLOR_ATTACHMENT, 4},
+        {PF_R16G16B16A16_SFLOAT, MTLPixelFormatRGBA16Float,
+         ETextureUsageFlags::COLOR_ATTACHMENT, 8},
+        {PF_D16_UNORM, MTLPixelFormatDepth16Unorm,
+         ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT, 2},
+        {PF_D32_SFLOAT, MTLPixelFormatDepth32Float,
+         ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT, 4},
+        {PF_D32_SFLOAT_S8_UINT, MTLPixelFormatDepth32Float_Stencil8,
+         ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT, 8},
+    };
+    for (const FormatCase& item : formats) {
+        TextureRef texture = RenderDevice::Get().CreateTexture(
+            Extent2D(4, 4), item.format, item.usage | ETextureUsageFlags::SAMPLED
+        );
+        id<MTLTexture> native = (__bridge id<MTLTexture>)GetMetalNativeTexture(texture.Get());
+        if (native == nil || native.pixelFormat != item.native_format ||
+            (native.usage & MTLTextureUsageRenderTarget) == 0 ||
+            texture->GetMipByteSize(0) != 16 * item.pixel_stride) {
+            throw std::runtime_error("Metal raster texture format allocation failed");
+        }
+    }
+    bool rejected_invalid_usage = false;
+    try {
+        RenderDevice::Get().CreateTexture(
+            Extent2D(4, 4), PF_D32_SFLOAT, ETextureUsageFlags::COLOR_ATTACHMENT
+        );
+    } catch (const std::runtime_error&) {
+        rejected_invalid_usage = true;
+    }
+    if (!rejected_invalid_usage) {
+        throw std::runtime_error("Metal accepted a depth texture as a color attachment");
+    }
+    TextureRef packed = RenderDevice::Get().CreateTexture(
+        Extent2D(4, 4), PF_A2R10G10B10_UNORM_PACK32,
+        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_SRC
+    );
+    CommandList clear(EQueueType::Graphics);
+    clear.ClearResource(packed->GetView(), Moer::float4{1.0f, 0.0f, 0.0f, 1.0f});
+    RHIExecutor::Get().Submit(EQueueType::Graphics, clear.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    id<MTLTexture> native = (__bridge id<MTLTexture>)GetMetalNativeTexture(packed.Get());
+    id<MTLCommandQueue> queue = [native.device newCommandQueue];
+    id<MTLBuffer> readback = [native.device newBufferWithLength:256 * 4
+                                                       options:MTLResourceStorageModeShared];
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    [blit copyFromTexture:native sourceSlice:0 sourceLevel:0
+            sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(4, 4, 1)
+                toBuffer:readback destinationOffset:0 destinationBytesPerRow:256
+       destinationBytesPerImage:256 * 4];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    uint32_t first_pixel = 0;
+    std::memcpy(&first_pixel, readback.contents, sizeof(first_pixel));
+    if (command.status != MTLCommandBufferStatusCompleted || first_pixel != 0xfff00000u) {
+        throw std::runtime_error("Metal A2R10G10B10 channel packing is incorrect");
+    }
+    std::cout << "raster color/depth texture format allocation: success" << std::endl;
+}
 
 Moer::Render::TextureRef ClearAndCheckTexture(int width, int height) {
     using namespace Moer::Render;
@@ -297,9 +370,16 @@ int main(int argc, char** argv) {
             if (!rejected_dependency_failed) {
                 throw std::runtime_error("Metal graphics queue accepted a rejected dependency");
             }
+            CheckRasterTextureFormats();
             std::vector<uint8_t> rgba8(7 * 5 * 4);
             for (size_t i = 0; i < rgba8.size(); ++i) rgba8[i] = static_cast<uint8_t>(i * 17);
             UploadAndCheckTexture(PF_R8G8B8A8_UNORM, ETextureUsageFlags::SAMPLED, rgba8, 4);
+            std::vector<uint8_t> r8(7 * 5);
+            for (size_t i = 0; i < r8.size(); ++i) r8[i] = static_cast<uint8_t>(i * 7);
+            UploadAndCheckTexture(PF_R8_UNORM, ETextureUsageFlags::SAMPLED, r8, 1);
+            std::vector<uint8_t> rgba16f(7 * 5 * 8);
+            for (size_t i = 0; i < rgba16f.size(); ++i) rgba16f[i] = static_cast<uint8_t>(i * 3);
+            UploadAndCheckTexture(PF_R16G16B16A16_SFLOAT, ETextureUsageFlags::SAMPLED, rgba16f, 8);
             std::vector<float> rgba32f(7 * 5 * 4);
             for (size_t i = 0; i < rgba32f.size(); ++i) rgba32f[i] = float(i) / 100.0f;
             UploadAndCheckTexture(

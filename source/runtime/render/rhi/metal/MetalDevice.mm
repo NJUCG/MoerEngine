@@ -35,19 +35,48 @@ namespace {
 
 MTLPixelFormat ToMetalFormat(EPixelFormat format) {
     switch (format) {
+        case PF_R8_UNORM:
+            return MTLPixelFormatR8Unorm;
         case PF_R8G8B8A8_UNORM:
             return MTLPixelFormatRGBA8Unorm;
         case PF_R8G8B8A8_SRGB:
             return MTLPixelFormatRGBA8Unorm_sRGB;
+        case PF_A2R10G10B10_UNORM_PACK32:
+            return MTLPixelFormatBGR10A2Unorm;
+        case PF_R16G16B16A16_SFLOAT:
+            return MTLPixelFormatRGBA16Float;
         case PF_R32G32B32A32_SFLOAT:
             return MTLPixelFormatRGBA32Float;
+        case PF_D16_UNORM:
+            return MTLPixelFormatDepth16Unorm;
+        case PF_D32_SFLOAT:
+            return MTLPixelFormatDepth32Float;
+        case PF_D32_SFLOAT_S8_UINT:
+            return MTLPixelFormatDepth32Float_Stencil8;
         default:
-            Unsupported("this color format");
+            Unsupported("this texture format");
     }
 }
 
 NSUInteger PixelStride(EPixelFormat format) {
-    return format == PF_R32G32B32A32_SFLOAT ? 16 : 4;
+    switch (format) {
+        case PF_R8_UNORM:
+            return 1;
+        case PF_D16_UNORM:
+            return 2;
+        case PF_R16G16B16A16_SFLOAT:
+        case PF_D32_SFLOAT_S8_UINT:
+            return 8;
+        case PF_R8G8B8A8_UNORM:
+        case PF_R8G8B8A8_SRGB:
+        case PF_A2R10G10B10_UNORM_PACK32:
+        case PF_D32_SFLOAT:
+            return 4;
+        case PF_R32G32B32A32_SFLOAT:
+            return 16;
+        default:
+            Unsupported("this texture format");
+    }
 }
 
 // The bootstrap queues wait for each command buffer to finish. This host
@@ -696,12 +725,23 @@ TextureRef MetalDevice::CreateTexture(std::string_view name, const TextureInfo& 
         info.num_mips != 1 || info.num_samples != 1 || info.extent.x <= 0 || info.extent.y <= 0) {
         Unsupported("this texture layout");
     }
+    const MTLPixelFormat native_format = ToMetalFormat(info.format);
+    const bool is_depth = info.format == PF_D16_UNORM || info.format == PF_D32_SFLOAT ||
+                          info.format == PF_D32_SFLOAT_S8_UINT;
+    if ((is_depth && (info.usage & ETextureUsageFlags::COLOR_ATTACHMENT) != ETextureUsageFlags::UNDEFINED) ||
+        (!is_depth && (info.usage & ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) != ETextureUsageFlags::UNDEFINED) ||
+        (is_depth && (info.usage & ETextureUsageFlags::UNORDERED_ACCESS) != ETextureUsageFlags::UNDEFINED)) {
+        Unsupported("this texture format and usage combination");
+    }
     MTLTextureDescriptor* desc = [MTLTextureDescriptor
-        texture2DDescriptorWithPixelFormat:ToMetalFormat(info.format)
+        texture2DDescriptorWithPixelFormat:native_format
                                  width:info.extent.x height:info.extent.y mipmapped:NO];
     desc.storageMode = MTLStorageModePrivate;
     desc.usage = MTLTextureUsageShaderRead;
     if ((info.usage & ETextureUsageFlags::COLOR_ATTACHMENT) != ETextureUsageFlags::UNDEFINED) {
+        desc.usage |= MTLTextureUsageRenderTarget;
+    }
+    if ((info.usage & ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT) != ETextureUsageFlags::UNDEFINED) {
         desc.usage |= MTLTextureUsageRenderTarget;
     }
     if ((info.usage & ETextureUsageFlags::UNORDERED_ACCESS) != ETextureUsageFlags::UNDEFINED) {
