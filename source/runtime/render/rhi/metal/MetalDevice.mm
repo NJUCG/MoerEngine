@@ -10,15 +10,20 @@
 
 #include "rhi/metal/MetalDevice.h"
 #include "log/LogSystem.h"
+#include "rhi/RHIThreadOwnership.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
+#include <functional>
+#include <list>
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <type_traits>
 #include <unordered_set>
 
 namespace Moer::Render {
@@ -174,6 +179,87 @@ void ValidateQueueTransfer(const QueueTransferCmd& transfer, EQueueType current_
     for (const auto& item : transfer.ImportBuffers()) validate_buffer(item.buffer);
     for (const auto& item : transfer.ExportBuffers()) validate_buffer(item.buffer);
 }
+
+// Completion callbacks may submit more RHI work. Run them after Execute has
+// returned from the executor publication gate, never on that gate's owner.
+class MetalCompletionDispatcher final {
+public:
+    struct Packet {
+        uint64 timeline{0};
+        Array<std::function<void()>> callbacks;
+        Array<std::function<void()>> success_callbacks;
+    };
+    static_assert(std::is_nothrow_move_assignable_v<Array<std::function<void()>>>);
+
+    MetalCompletionDispatcher() : worker_([this] { Run(); }) {}
+
+    ~MetalCompletionDispatcher() {
+        {
+            std::lock_guard lock(mutex_);
+            stopping_ = true;
+        }
+        cv_.notify_all();
+        worker_.join();
+    }
+
+    void Enqueue(std::list<Packet>& prepared) noexcept {
+        {
+            std::lock_guard lock(mutex_);
+            pending_.splice(pending_.end(), prepared);
+        }
+        cv_.notify_all();
+    }
+
+    void WaitThrough(uint64 timeline) {
+        if (std::this_thread::get_id() == worker_.get_id()) {
+            throw std::runtime_error("Metal completion callback cannot wait for copy callbacks");
+        }
+        std::unique_lock lock(mutex_);
+        cv_.wait(lock, [&] { return finished_timeline_ >= timeline; });
+    }
+
+private:
+    void Run() {
+        RHIThreadRoleScope role(ERHIThreadRole::Completion);
+        for (;;) {
+            std::list<Packet> ready;
+            {
+                std::unique_lock lock(mutex_);
+                cv_.wait(lock, [&] { return stopping_ || !pending_.empty(); });
+                if (pending_.empty() && stopping_) return;
+                ready.splice(ready.end(), pending_, pending_.begin());
+            }
+            Packet& packet = ready.front();
+            auto invoke = [](Array<std::function<void()>>& callbacks) {
+                for (auto& callback : callbacks) {
+                    try {
+                        if (callback) callback();
+                    } catch (const std::exception& error) {
+                        try { LOG_ERROR("[Metal] completion callback failed: {}", error.what()); } catch (...) {}
+                    } catch (...) {
+                        try { LOG_ERROR("[Metal] completion callback failed"); } catch (...) {}
+                    }
+                }
+            };
+            invoke(packet.callbacks);
+            invoke(packet.success_callbacks);
+            const uint64 timeline = packet.timeline;
+            ready.clear();
+            {
+                std::lock_guard lock(mutex_);
+                finished_timeline_ = timeline;
+            }
+            cv_.notify_all();
+        }
+    }
+
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    std::list<Packet> pending_;
+    uint64 finished_timeline_{0};
+    bool stopping_{false};
+    std::thread worker_;
+};
 
 class MetalSwapchain final : public Swapchain {
 public:
@@ -382,18 +468,17 @@ private:
 
 class MetalCopyQueue final : public CopyQueue {
 public:
-    explicit MetalCopyQueue(id<MTLCommandQueue> queue) :
-        queue_(queue), timeline_fence_(MoerNew(MetalFence)()) {}
+    MetalCopyQueue(id<MTLCommandQueue> queue, MetalCompletionDispatcher& completions) :
+        queue_(queue), completions_(completions), timeline_fence_(MoerNew(MetalFence)()) {}
 
     IOWaitEvt Execute(IOQueueSubmission&&) override { Unsupported("IO queue submission"); }
     IOWaitEvt Execute(CmdSubmit&& submit) override {
         std::lock_guard lock(mutex_);
         if (!submit.wait_events.empty() || !submit.signal_events.empty() ||
-            !submit.callbacks.empty() || !submit.success_callbacks.empty() ||
             !submit.gpu_completion_tokens.empty() || !submit.query_tokens.empty() ||
             submit.b_tick_profiling || submit.profiling_phase != ERHIProfilingPhase::Disabled ||
             submit.b_delete_resources) {
-            Unsupported("copy submission synchronization, callbacks, or profiling");
+            Unsupported("copy submission synchronization or profiling");
         }
         bool has_gpu_work = false;
         for (const auto& command : submit.cmds) {
@@ -458,9 +543,10 @@ public:
                     Unsupported("this copy command");
             }
         }
-        if (!has_gpu_work) return {uint64(timeline_fence_.Get()), timeline_fence_->GetValue()};
+        std::list<MetalCompletionDispatcher::Packet> prepared;
+        prepared.emplace_back(); // Allocate the completion node before GPU work is accepted.
 
-        @autoreleasepool {
+        if (has_gpu_work) @autoreleasepool {
             id<MTLCommandBuffer> command_buffer = [queue_ commandBuffer];
             id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
             if (blit == nil) throw std::runtime_error("Cannot encode Metal copy commands");
@@ -536,6 +622,10 @@ public:
         const uint64 timeline = ++next_timeline_;
         timeline_fence_->MarkSubmitted(timeline);
         static_cast<MetalFence*>(timeline_fence_.Get())->Complete(timeline);
+        prepared.front().timeline = timeline;
+        prepared.front().callbacks = std::move(submit.callbacks);
+        prepared.front().success_callbacks = std::move(submit.success_callbacks);
+        completions_.Enqueue(prepared);
         return {uint64(timeline_fence_.Get()), timeline};
     }
     void CopyFrom(BufferView, BufferView) override { Unsupported("buffer copy"); }
@@ -550,11 +640,13 @@ public:
         if (timeline_fence_->IsRejected(timeline)) {
             throw std::runtime_error("Metal copy timeline was rejected");
         }
+        completions_.WaitThrough(timeline);
     }
 
 private:
     id<MTLCommandQueue> queue_;
     std::mutex mutex_;
+    MetalCompletionDispatcher& completions_;
     FenceRef timeline_fence_;
     uint64 next_timeline_{0};
 };
@@ -564,11 +656,12 @@ private:
 struct MetalDevice::Native {
     id<MTLDevice> device;
     id<MTLCommandQueue> queue;
+    MetalCompletionDispatcher completions;
     MetalCommandQueue graphics;
     MetalCopyQueue copy;
 
     Native(id<MTLDevice> metal_device, id<MTLCommandQueue> metal_queue) :
-        device(metal_device), queue(metal_queue), graphics(metal_queue), copy(metal_queue) {}
+        device(metal_device), queue(metal_queue), graphics(metal_queue), copy(metal_queue, completions) {}
 };
 
 MetalDevice::MetalDevice() {

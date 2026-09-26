@@ -33,8 +33,8 @@ private:
     std::unique_ptr<Native> native_;
 };
 
-// Internal test bridge used by MetalRHISmoke to encode a native clear into a
-// texture allocated through RenderDevice. This does not expose Metal to passes.
+// Internal smoke-test bridges for GPU readback of resources allocated through
+// RenderDevice. They do not expose native Metal objects to renderer passes.
 RENDER_API void* GetMetalNativeTexture(Texture* texture) noexcept;
 RENDER_API void* GetMetalNativeBuffer(Buffer* buffer) noexcept;
 

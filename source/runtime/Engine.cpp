@@ -1568,15 +1568,6 @@ void Engine::Init(
         throw std::runtime_error("Failed to capture the main window surface source");
     }
 
-    // The first Metal milestone validates the production device and presentation
-    // path in MetalRHISmoke. RuntimeAssets also requires copy completion
-    // callbacks, fences, and queue transfers; stop before worker uploads begin.
-    if (rhi_type == ERHIType::Metal) {
-        throw std::runtime_error(
-            "Metal RHI editor resource initialization is incomplete; run MetalRHISmoke for the upload/clear/present checks"
-        );
-    }
-
     report_startup("Loading editor resources", "Uploading editor textures and environment assets");
     m_runtime_assets =
         MakeUnique<RuntimeAssets>(ConfigManager::GetInstance().GetEditorResourcePath(), RenderDevice::Get());
