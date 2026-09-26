@@ -30,10 +30,31 @@ MTLPixelFormat ToMetalFormat(EPixelFormat format) {
             return MTLPixelFormatRGBA8Unorm;
         case PF_R8G8B8A8_SRGB:
             return MTLPixelFormatRGBA8Unorm_sRGB;
+        case PF_R32G32B32A32_SFLOAT:
+            return MTLPixelFormatRGBA32Float;
         default:
             Unsupported("this color format");
     }
 }
+
+NSUInteger PixelStride(EPixelFormat format) {
+    return format == PF_R32G32B32A32_SFLOAT ? 16 : 4;
+}
+
+class MetalBuffer final : public Buffer {
+public:
+    MetalBuffer(const BufferInfo& info, id<MTLBuffer> buffer) : Buffer(info), buffer_(buffer) {}
+
+    id<MTLBuffer> Native() const noexcept { return buffer_; }
+
+    void SetName(const std::string_view name) override {
+        debug_name = std::string(name);
+        buffer_.label = [NSString stringWithUTF8String:debug_name->c_str()];
+    }
+
+private:
+    id<MTLBuffer> buffer_;
+};
 
 class MetalTexture final : public Texture {
 public:
@@ -43,7 +64,7 @@ public:
 
     uint GetMipByteSize(uint mip) const override {
         if (mip != 0) Unsupported("texture mip sizes");
-        return GetWidth() * GetHeight() * 4;
+        return GetWidth() * GetHeight() * PixelStride(GetFormat());
     }
 
     void SetName(const std::string_view name) override {
@@ -256,19 +277,32 @@ public:
             Unsupported("copy submission synchronization, callbacks, or profiling");
         }
         for (const auto& command : submit.cmds) {
-            if (command->Type() != Command::EType::UploadTexture) {
-                Unsupported("this copy command");
-            }
-            const auto& upload = static_cast<const UploadTextureCmd&>(*command);
-            auto* texture = dynamic_cast<MetalTexture*>(reinterpret_cast<Texture*>(upload.Handle()));
-            const uint3 size = upload.Size();
-            if (texture == nullptr || upload.Format() != texture->GetFormat() ||
-                (upload.Format() != PF_R8G8B8A8_UNORM &&
-                 upload.Format() != PF_R8G8B8A8_SRGB) ||
-                upload.MipLevel() != 0 || upload.ArrayLayer() != 0 ||
-                upload.Offset() != uint3{0, 0, 0} || size != texture->GetExtent() ||
-                upload.Data().size_bytes() != size_t(size.x) * size.y * 4) {
-                Unsupported("this texture upload layout");
+            switch (command->Type()) {
+                case Command::EType::UploadTexture: {
+                    const auto& upload = static_cast<const UploadTextureCmd&>(*command);
+                    auto* texture = dynamic_cast<MetalTexture*>(reinterpret_cast<Texture*>(upload.Handle()));
+                    const uint3 size = upload.Size();
+                    if (texture == nullptr || upload.Format() != texture->GetFormat() ||
+                        upload.MipLevel() != 0 || upload.ArrayLayer() != 0 ||
+                        upload.Offset() != uint3{0, 0, 0} || size != texture->GetExtent() ||
+                        upload.Data().size_bytes() != size_t(size.x) * size.y * PixelStride(upload.Format())) {
+                        Unsupported("this texture upload layout");
+                    }
+                    break;
+                }
+                case Command::EType::UploadBuffer: {
+                    const auto& upload = static_cast<const UploadBufferCmd&>(*command);
+                    auto* buffer = dynamic_cast<MetalBuffer*>(reinterpret_cast<Buffer*>(upload.Handle()));
+                    if (buffer == nullptr || upload.ByteSize() == 0 ||
+                        upload.Offset() > buffer->GetByteSize() ||
+                        upload.ByteSize() > buffer->GetByteSize() - upload.Offset() ||
+                        upload.Data().size_bytes() != upload.ByteSize()) {
+                        Unsupported("this buffer upload layout");
+                    }
+                    break;
+                }
+                default:
+                    Unsupported("this copy command");
             }
         }
         if (submit.cmds.empty()) return {0, completed_timeline_.load()};
@@ -279,11 +313,24 @@ public:
             if (blit == nil) throw std::runtime_error("Cannot encode Metal texture upload");
             NSMutableArray<id<MTLBuffer>>* staging_buffers = [NSMutableArray array];
             for (const auto& command : submit.cmds) {
+                if (command->Type() == Command::EType::UploadBuffer) {
+                    const auto& upload = static_cast<const UploadBufferCmd&>(*command);
+                    auto* buffer = static_cast<MetalBuffer*>(reinterpret_cast<Buffer*>(upload.Handle()));
+                    id<MTLBuffer> staging = [queue_.device
+                        newBufferWithBytes:upload.Data().data()
+                                   length:upload.ByteSize()
+                                  options:MTLResourceStorageModeShared];
+                    if (staging == nil) throw std::runtime_error("Cannot allocate Metal buffer staging");
+                    [staging_buffers addObject:staging];
+                    [blit copyFromBuffer:staging sourceOffset:0 toBuffer:buffer->Native()
+                      destinationOffset:upload.Offset() size:upload.ByteSize()];
+                    continue;
+                }
                 const auto& upload = static_cast<const UploadTextureCmd&>(*command);
                 auto* texture = static_cast<MetalTexture*>(reinterpret_cast<Texture*>(upload.Handle()));
                 const NSUInteger width = upload.Size().x;
                 const NSUInteger height = upload.Size().y;
-                const NSUInteger source_row_bytes = width * 4;
+                const NSUInteger source_row_bytes = width * PixelStride(upload.Format());
                 const NSUInteger staging_row_bytes = (source_row_bytes + 255) & ~NSUInteger(255);
                 id<MTLBuffer> staging = [queue_.device
                     newBufferWithLength:staging_row_bytes * height
@@ -357,8 +404,20 @@ MetalDevice::MetalDevice() {
 MetalDevice::~MetalDevice() = default;
 
 FenceRef MetalDevice::CreateFence() { Unsupported("fences"); }
-BufferRef MetalDevice::CreateBuffer(std::string_view, uint, uint, EBufferUsageFlags, EPixelFormat) {
-    Unsupported("buffers");
+BufferRef MetalDevice::CreateBuffer(
+    std::string_view name, uint count, uint stride, EBufferUsageFlags usage, EPixelFormat format
+) {
+    if (count == 0 || stride == 0) Unsupported("zero-sized buffers");
+    const BufferInfo info(count, stride, usage, format);
+    const MTLResourceOptions options =
+        (usage & EBufferUsageFlags::CPU_VISIBLE) != EBufferUsageFlags::NONE ?
+            MTLResourceStorageModeShared : MTLResourceStorageModePrivate;
+    id<MTLBuffer> buffer = [native_->device newBufferWithLength:info.size * info.stride
+                                                       options:options];
+    if (buffer == nil) throw std::runtime_error("Cannot allocate Metal buffer");
+    auto result = BufferRef(MoerNew(MetalBuffer)(info, buffer));
+    result->SetName(name);
+    return result;
 }
 TextureRef MetalDevice::CreateTexture(std::string_view name, const TextureInfo& info) {
     if (info.dimension != ETextureDimension::TEX_2D || info.array_size != 1 ||
@@ -369,7 +428,13 @@ TextureRef MetalDevice::CreateTexture(std::string_view name, const TextureInfo& 
         texture2DDescriptorWithPixelFormat:ToMetalFormat(info.format)
                                  width:info.extent.x height:info.extent.y mipmapped:NO];
     desc.storageMode = MTLStorageModePrivate;
-    desc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+    desc.usage = MTLTextureUsageShaderRead;
+    if ((info.usage & ETextureUsageFlags::COLOR_ATTACHMENT) != ETextureUsageFlags::UNDEFINED) {
+        desc.usage |= MTLTextureUsageRenderTarget;
+    }
+    if ((info.usage & ETextureUsageFlags::UNORDERED_ACCESS) != ETextureUsageFlags::UNDEFINED) {
+        desc.usage |= MTLTextureUsageShaderWrite;
+    }
     id<MTLTexture> texture = [native_->device newTextureWithDescriptor:desc];
     if (texture == nil) throw std::runtime_error("Cannot allocate Metal texture");
     auto result = TextureRef(MoerNew(MetalTexture)(info, texture));
@@ -404,6 +469,11 @@ void MetalDevice::WaitIdle() { native_->graphics.Sync(); }
 void* GetMetalNativeTexture(Texture* texture) noexcept {
     auto* metal_texture = dynamic_cast<MetalTexture*>(texture);
     return metal_texture == nullptr ? nullptr : (__bridge void*)metal_texture->Native();
+}
+
+void* GetMetalNativeBuffer(Buffer* buffer) noexcept {
+    auto* metal_buffer = dynamic_cast<MetalBuffer*>(buffer);
+    return metal_buffer == nullptr ? nullptr : (__bridge void*)metal_buffer->Native();
 }
 
 } // namespace Moer::Render

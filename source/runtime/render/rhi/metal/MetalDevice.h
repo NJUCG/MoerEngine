@@ -36,5 +36,6 @@ private:
 // Internal test bridge used by MetalRHISmoke to encode a native clear into a
 // texture allocated through RenderDevice. This does not expose Metal to passes.
 RENDER_API void* GetMetalNativeTexture(Texture* texture) noexcept;
+RENDER_API void* GetMetalNativeBuffer(Buffer* buffer) noexcept;
 
 } // namespace Moer::Render

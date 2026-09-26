@@ -73,7 +73,7 @@
 
 ### macOS 原生 Metal 开发基线
 
-当前 `metal` 分支可以在 macOS 上配置并编译 `MoerEditor`。原生 Metal RHI 已具备设备创建、2D RGBA 纹理、RGBA8 纹理上传、窗口交换链和 Present 的最小路径；EXR 上传、拷贝 fence、完整命令翻译、pipeline 和 bindless 尚待实现，因此编辑器暂不能使用 Metal 渲染场景。
+当前 `metal` 分支可以在 macOS 上配置并编译 `MoerEditor`。原生 Metal RHI 已具备设备创建、Buffer、2D RGBA8/RGBA32F 纹理、基础上传、窗口交换链和 Present 的最小路径；拷贝完成回调、fence、队列转移、完整命令翻译、pipeline 和 bindless 尚待实现，因此编辑器暂不能使用 Metal 渲染场景。
 
 准备 Xcode Command Line Tools、CMake 3.26 至 3.x、Python 3.12（含开发库）以及原生 DXC（`dxc` 可执行文件、`dxcapi.h`、`libdxcompiler`）。初始化子模块后，在仓库根目录执行：
 
@@ -92,7 +92,7 @@ cmake --build build/mac --target MetalRHISmoke -j 6
 ./target/bin/Debug/MetalRHISmoke
 ```
 
-程序会经由通用 `CommandList::CopyFrom` 和 `ClearResource`、`RHIExecutor` 及 Metal 命令翻译器上传、清屏，验证 GPU 读回颜色、首次呈现及调整窗口大小后的呈现，然后退出。上传验证使用 7×5 纹理，以覆盖 Metal blit 所需的行距对齐。可以传入保持窗口显示的秒数，例如 `MetalRHISmoke 10`。如果 DXC 未在 `PATH`，配置时追加 `-DMOER_DXC_ROOT=/path/to/dxc-prefix`；该目录应包含 `bin/dxc`、`include/dxc/dxcapi.h` 和 `lib/libdxcompiler.dylib`。CMake 会查找本机 Python 3.12，并将其标准库位置写入脚本模块的构建配置。默认 `MoerEngine.toml` 仍选择 Vulkan，因此编辑器会报告该后端未在 macOS 构建。配置为 Metal 时，编辑器会在资源上传前明确报告当前 RHI 的未实现部分。
+程序会经由通用 `CommandList::CopyFrom` 和 `ClearResource`、`RHIExecutor` 及 Metal 命令翻译器上传、清屏，验证 RGBA8/RGBA32F 纹理与 Buffer 的 GPU 读回、首次呈现及调整窗口大小后的呈现，然后退出。上传验证使用 7×5 纹理，以覆盖 Metal blit 所需的行距对齐。可以传入保持窗口显示的秒数，例如 `MetalRHISmoke 10`。如果 DXC 未在 `PATH`，配置时追加 `-DMOER_DXC_ROOT=/path/to/dxc-prefix`；该目录应包含 `bin/dxc`、`include/dxc/dxcapi.h` 和 `lib/libdxcompiler.dylib`。CMake 会查找本机 Python 3.12，并将其标准库位置写入脚本模块的构建配置。默认 `MoerEngine.toml` 仍选择 Vulkan，因此编辑器会报告该后端未在 macOS 构建。配置为 Metal 时，编辑器会在资源上传前明确报告当前 RHI 的未实现部分。
 
 Apple 构建还提供独立的 `SP_METAL_MSL` Shader 目标：DXC 先将 HLSL 编译为 SPIR-V，再由 SPIRV-Cross 转为 MSL。现有 Vulkan 目标仍直接使用 SPIR-V。Metal 目标目前支持顶点、片元和计算 Shader，生成的 bindless MSL 使用 Metal 3.0 argument buffer；实际资源绑定与运行时渲染仍依赖后续 Metal RHI 实现。
 

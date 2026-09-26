@@ -81,26 +81,22 @@ Moer::Render::TextureRef ClearAndCheckTexture(int width, int height) {
     return texture;
 }
 
-void UploadAndCheckTexture() {
+void UploadAndCheckTexture(
+    EPixelFormat format,
+    ETextureUsageFlags usage,
+    std::span<const uint8_t> input,
+    size_t pixel_stride
+) {
     using namespace Moer::Render;
     constexpr int width = 7;
     constexpr int height = 5;
-    TextureRef texture = RenderDevice::Get().CreateTexture(
-        Extent2D(width, height), PF_R8G8B8A8_UNORM, ETextureUsageFlags::SAMPLED
-    );
-    std::vector<uint8_t> input(width * height * 4);
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            const size_t index = (y * width + x) * 4;
-            input[index + 0] = static_cast<uint8_t>(x * 17 + y);
-            input[index + 1] = static_cast<uint8_t>(y * 31 + x);
-            input[index + 2] = static_cast<uint8_t>(255 - x - y);
-            input[index + 3] = 255;
-        }
+    if (input.size_bytes() != width * height * pixel_stride) {
+        throw std::runtime_error("Metal upload test input has the wrong size");
     }
+    TextureRef texture = RenderDevice::Get().CreateTexture(Extent2D(width, height), format, usage);
     CommandList upload(EQueueType::Copy);
     upload.CopyFrom(
-        std::span<Moer::byte>(reinterpret_cast<Moer::byte*>(input.data()), input.size()),
+        std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(input.data()), input.size()),
         texture->GetView()
     );
     RHIExecutor::Get().Submit(EQueueType::Copy, upload.Submit());
@@ -108,7 +104,7 @@ void UploadAndCheckTexture() {
 
     id<MTLTexture> native = (__bridge id<MTLTexture>)GetMetalNativeTexture(texture.Get());
     if (native == nil) throw std::runtime_error("Metal upload texture bridge failed");
-    constexpr NSUInteger row_bytes = 256;
+    const NSUInteger row_bytes = (width * pixel_stride + 255) & ~NSUInteger(255);
     id<MTLBuffer> readback = [native.device newBufferWithLength:row_bytes * height
                                                        options:MTLResourceStorageModeShared];
     id<MTLCommandQueue> queue = [native.device newCommandQueue];
@@ -126,13 +122,49 @@ void UploadAndCheckTexture() {
     }
     const auto* output = static_cast<const uint8_t*>(readback.contents);
     for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width * 4; ++x) {
-            if (output[y * row_bytes + x] != input[y * width * 4 + x]) {
+        for (size_t x = 0; x < width * pixel_stride; ++x) {
+            if (output[y * row_bytes + x] != input[y * width * pixel_stride + x]) {
                 throw std::runtime_error("Metal texture upload readback differs from input");
             }
         }
     }
-    std::cout << "texture upload/readback " << width << "x" << height << ": success" << std::endl;
+    std::cout << "texture upload/readback " << width << "x" << height
+              << " stride " << pixel_stride << ": success" << std::endl;
+}
+
+void CheckBufferUpload() {
+    using namespace Moer::Render;
+    constexpr size_t offset = 16;
+    std::vector<uint8_t> input(20);
+    for (size_t i = 0; i < input.size(); ++i) input[i] = static_cast<uint8_t>(i * 11);
+    BufferRef buffer = RenderDevice::Get().CreateBuffer(
+        "Metal smoke buffer", BufferInfo{64, 1, EBufferUsageFlags::TRANSFER_SRC}
+    );
+    CommandList upload(EQueueType::Copy);
+    upload.CopyFrom(
+        std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(input.data()), input.size()),
+        buffer->GetView(offset, input.size())
+    );
+    RHIExecutor::Get().Submit(EQueueType::Copy, upload.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    id<MTLBuffer> native = (__bridge id<MTLBuffer>)GetMetalNativeBuffer(buffer.Get());
+    if (native == nil) throw std::runtime_error("Metal buffer bridge failed");
+    id<MTLBuffer> readback = [native.device newBufferWithLength:input.size()
+                                                       options:MTLResourceStorageModeShared];
+    id<MTLCommandQueue> queue = [native.device newCommandQueue];
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    [blit copyFromBuffer:native sourceOffset:offset toBuffer:readback
+      destinationOffset:0 size:input.size()];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    if (command.status != MTLCommandBufferStatusCompleted ||
+        !std::equal(input.begin(), input.end(), static_cast<const uint8_t*>(readback.contents))) {
+        throw std::runtime_error("Metal buffer upload readback differs from input");
+    }
+    std::cout << "buffer upload/readback at offset " << offset << ": success" << std::endl;
 }
 
 void Present(Moer::Render::SwapchainRef swapchain, Moer::Render::TextureRef texture) {
@@ -169,7 +201,19 @@ int main(int argc, char** argv) {
             if (RenderDevice::Get().GetShaderPlatform() != EShaderPlatform::SP_METAL_MSL) {
                 throw std::runtime_error("Metal device selected the wrong shader platform");
             }
-            UploadAndCheckTexture();
+            std::vector<uint8_t> rgba8(7 * 5 * 4);
+            for (size_t i = 0; i < rgba8.size(); ++i) rgba8[i] = static_cast<uint8_t>(i * 17);
+            UploadAndCheckTexture(PF_R8G8B8A8_UNORM, ETextureUsageFlags::SAMPLED, rgba8, 4);
+            std::vector<float> rgba32f(7 * 5 * 4);
+            for (size_t i = 0; i < rgba32f.size(); ++i) rgba32f[i] = float(i) / 100.0f;
+            UploadAndCheckTexture(
+                PF_R32G32B32A32_SFLOAT,
+                ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS,
+                std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(rgba32f.data()),
+                                         rgba32f.size() * sizeof(float)),
+                16
+            );
+            CheckBufferUpload();
             auto source = std::make_shared<SmokeWindowSource>(window);
             int width = 0, height = 0;
             glfwGetFramebufferSize(window, &width, &height);
