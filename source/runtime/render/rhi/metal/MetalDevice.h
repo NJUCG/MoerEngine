@@ -39,5 +39,6 @@ RENDER_API void* GetMetalNativeTexture(Texture* texture) noexcept;
 RENDER_API void* GetMetalNativeBuffer(Buffer* buffer) noexcept;
 RENDER_API void* GetMetalNativeBindlessIndexBuffer(BindlessArray* array) noexcept;
 RENDER_API void* GetMetalNativeBindlessArgumentBuffer(BindlessArray* array, uint set) noexcept;
+RENDER_API void* GetMetalNativeComputePipeline(PipelineHandle pipeline) noexcept;
 
 } // namespace Moer::Render

@@ -162,6 +162,48 @@ void CheckGraphicsPipeline() {
               << std::endl;
 }
 
+void CheckComputePipeline() {
+    using namespace Moer::Render;
+    constexpr std::string_view source = R"(
+        #include <metal_stdlib>
+        using namespace metal;
+        kernel void compute_main(device uint* values [[buffer(0)]],
+                                 uint index [[thread_position_in_grid]]) {
+            values[index] += 7;
+        }
+    )";
+    std::vector<Moer::uint8> code(source.begin(), source.end());
+    SingleShaderInfo compute{.entry_point = "compute_main", .shader_data = code,
+                             .shader_type = EShaderType::ST_COMPUTE};
+    PipelineShaderInfo shaders{.shader_group = ShaderCs{compute}};
+    PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));
+    id<MTLComputePipelineState> native =
+        (__bridge id<MTLComputePipelineState>)GetMetalNativeComputePipeline(pipeline);
+    if (!pipeline.IsValid() || native == nil) {
+        throw std::runtime_error("Metal compute pipeline was not created");
+    }
+    uint32_t input[] = {1, 2, 3, 4};
+    id<MTLBuffer> values = [native.device newBufferWithBytes:input length:sizeof(input)
+                                                    options:MTLResourceStorageModeShared];
+    id<MTLCommandQueue> queue = [native.device newCommandQueue];
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+    [encoder setComputePipelineState:native];
+    [encoder setBuffer:values offset:0 atIndex:0];
+    [encoder dispatchThreads:MTLSizeMake(4, 1, 1)
+      threadsPerThreadgroup:MTLSizeMake(4, 1, 1)];
+    [encoder endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    const uint32_t expected[] = {8, 9, 10, 11};
+    if (command.status != MTLCommandBufferStatusCompleted ||
+        std::memcmp(values.contents, expected, sizeof(expected)) != 0) {
+        throw std::runtime_error("Metal compute pipeline dispatch returned the wrong values");
+    }
+    MoerDelete(reinterpret_cast<PipelineState*>(pipeline.handle));
+    std::cout << "native Metal compute pipeline creation and dispatch: success" << std::endl;
+}
+
 void CheckGraphicsUploads() {
     using namespace Moer::Render;
     constexpr NSUInteger width = 7;
@@ -812,6 +854,7 @@ int main(int argc, char** argv) {
             }
             CheckRasterTextureFormats();
             CheckGraphicsPipeline();
+            CheckComputePipeline();
             CheckGraphicsUploads();
             CheckMipTexture();
             CheckLayeredTextures();

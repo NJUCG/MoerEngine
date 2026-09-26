@@ -323,12 +323,87 @@ void EncodeBufferUpload(
 
 class MetalPipelineState final : public PipelineState {
 public:
-    explicit MetalPipelineState(id<MTLRenderPipelineState> pipeline) : pipeline_(pipeline) {}
-    id<MTLRenderPipelineState> Native() const noexcept { return pipeline_; }
+    explicit MetalPipelineState(id<MTLRenderPipelineState> pipeline) : render_(pipeline) {}
+    explicit MetalPipelineState(id<MTLComputePipelineState> pipeline) : compute_(pipeline) {}
+    id<MTLRenderPipelineState> NativeRender() const noexcept { return render_; }
+    id<MTLComputePipelineState> NativeCompute() const noexcept { return compute_; }
 
 private:
-    id<MTLRenderPipelineState> pipeline_;
+    id<MTLRenderPipelineState> render_{nil};
+    id<MTLComputePipelineState> compute_{nil};
 };
+
+id<MTLFunction> CompileMetalFunction(id<MTLDevice> device, const SingleShaderInfo& shader) {
+    if (shader.shader_data.empty() || shader.entry_point.empty()) {
+        throw std::runtime_error("Metal pipeline shader source or entry point is empty");
+    }
+    NSString* source = [[NSString alloc]
+        initWithBytes:shader.shader_data.data()
+               length:shader.shader_data.size()
+             encoding:NSUTF8StringEncoding];
+    if (source == nil) throw std::runtime_error("Metal pipeline shader source is not UTF-8 MSL");
+    NSError* error = nil;
+    MTLCompileOptions* options = [MTLCompileOptions new];
+    options.languageVersion = MTLLanguageVersion3_0;
+    id<MTLLibrary> library = [device newLibraryWithSource:source options:options error:&error];
+    if (library == nil) {
+        throw std::runtime_error("Metal shader compilation failed: " +
+            std::string(error.localizedDescription.UTF8String ?: "unknown error"));
+    }
+    NSString* entry = [[NSString alloc] initWithBytes:shader.entry_point.data()
+                                              length:shader.entry_point.size()
+                                            encoding:NSUTF8StringEncoding];
+    id<MTLFunction> function = [library newFunctionWithName:entry];
+    if (function == nil) {
+        throw std::runtime_error("Metal shader entry point was not found: " +
+            std::string(shader.entry_point));
+    }
+    return function;
+}
+
+PipelineHandle MetalPipelineMetadata(
+    const PipelineShaderInfo& shader_info,
+    std::initializer_list<const SingleShaderInfo*> stages
+) {
+    if (shader_info.layout_hash.size() != shader_info.arg_cpp_info.size() ||
+        shader_info.layout_hash.size() > 64) {
+        Unsupported("this pipeline argument layout");
+    }
+    PipelineHandle handle{};
+    handle.binding_infos.resize(shader_info.layout_hash.size());
+    for (uint index = 0; index < shader_info.layout_hash.size(); ++index) {
+        handle.hash_2_info_index[GetHash(shader_info.layout_hash[index])] = index;
+        for (const SingleShaderInfo* shader : stages) {
+            if (shader->shader_param_map == nullptr) continue;
+            const auto& reflection = shader->shader_param_map->reflect_map;
+            const bool bindless = shader_info.arg_cpp_info[index].type == SDA_BindlessArray;
+            const auto found = reflection.find(std::string(
+                bindless ? ReflectParamInfo::bdls_name : shader_info.layout_hash[index]
+            ));
+            if (found == reflection.end()) continue;
+            bool active = false;
+            if (bindless) {
+                const auto& resources = found->second.spirv.bindless;
+                active = (resources.array && resources.array->custom_flag.active) ||
+                         (resources.buffer && resources.buffer->custom_flag.active) ||
+                         (resources.image && resources.image->custom_flag.active) ||
+                         (resources.sampler && resources.sampler->custom_flag.active);
+            } else if (const auto* resource = std::get_if<ReflectParamInfo::Resource>(
+                           &found->second.spirv.resources.data)) {
+                active = resource->custom_flag.active;
+            } else if (const auto* constant = std::get_if<ReflectParamInfo::Constant>(
+                           &found->second.spirv.resources.data)) {
+                active = constant->custom_flag.active;
+            }
+            if (active) handle.valid_bits |= uint64(1) << index;
+        }
+        if (shader_info.arg_cpp_info[index].type == SDA_Constant &&
+            (handle.valid_bits & (uint64(1) << index))) {
+            handle.constant_idx = index;
+        }
+    }
+    return handle;
+}
 
 // The table layout mirrors the SPIRV-Cross MSL argument-buffer sets: set 1
 // contains the indirect uint table and buffer addresses, set 2 texture IDs,
@@ -1252,36 +1327,9 @@ PipelineHandle MetalDevice::CreatePipeline(GfxPsoCreateInfo&& create_info, Pipel
         Unsupported("this graphics pipeline layout");
     }
     const auto& shaders = std::get<ShaderVsPs>(shader_info.shader_group);
-    const auto compile_function = [this](const SingleShaderInfo& shader) -> id<MTLFunction> {
-        if (shader.shader_data.empty() || shader.entry_point.empty()) {
-            throw std::runtime_error("Metal pipeline shader source or entry point is empty");
-        }
-        NSString* source = [[NSString alloc]
-            initWithBytes:shader.shader_data.data()
-                   length:shader.shader_data.size()
-                 encoding:NSUTF8StringEncoding];
-        if (source == nil) throw std::runtime_error("Metal pipeline shader source is not UTF-8 MSL");
-        NSError* error = nil;
-        MTLCompileOptions* options = [MTLCompileOptions new];
-        options.languageVersion = MTLLanguageVersion3_0;
-        id<MTLLibrary> library = [native_->device newLibraryWithSource:source options:options error:&error];
-        if (library == nil) {
-            throw std::runtime_error("Metal shader compilation failed: " +
-                std::string(error.localizedDescription.UTF8String ?: "unknown error"));
-        }
-        NSString* entry = [[NSString alloc] initWithBytes:shader.entry_point.data()
-                                                  length:shader.entry_point.size()
-                                                encoding:NSUTF8StringEncoding];
-        id<MTLFunction> function = [library newFunctionWithName:entry];
-        if (function == nil) {
-            throw std::runtime_error("Metal shader entry point was not found: " +
-                std::string(shader.entry_point));
-        }
-        return function;
-    };
     @autoreleasepool {
-        id<MTLFunction> vertex = compile_function(shaders.vs);
-        id<MTLFunction> fragment = compile_function(shaders.ps);
+        id<MTLFunction> vertex = CompileMetalFunction(native_->device, shaders.vs);
+        id<MTLFunction> fragment = CompileMetalFunction(native_->device, shaders.ps);
         MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
         descriptor.vertexFunction = vertex;
         descriptor.fragmentFunction = fragment;
@@ -1346,46 +1394,30 @@ PipelineHandle MetalDevice::CreatePipeline(GfxPsoCreateInfo&& create_info, Pipel
             throw std::runtime_error("Metal render pipeline creation failed: " +
                 std::string(error.localizedDescription.UTF8String ?: "unknown error"));
         }
-        PipelineHandle handle{};
-        handle.binding_infos.resize(shader_info.layout_hash.size());
-        for (uint index = 0; index < shader_info.layout_hash.size(); ++index) {
-            handle.hash_2_info_index[GetHash(shader_info.layout_hash[index])] = index;
-            const auto mark_active = [&](const SingleShaderInfo& shader) {
-                if (shader.shader_param_map == nullptr) return;
-                const auto& reflection = shader.shader_param_map->reflect_map;
-                const bool bindless = shader_info.arg_cpp_info[index].type == SDA_BindlessArray;
-                const auto found = reflection.find(std::string(
-                    bindless ? ReflectParamInfo::bdls_name : shader_info.layout_hash[index]
-                ));
-                if (found == reflection.end()) return;
-                bool active = false;
-                if (bindless) {
-                    const auto& resources = found->second.spirv.bindless;
-                    active = (resources.array && resources.array->custom_flag.active) ||
-                             (resources.buffer && resources.buffer->custom_flag.active) ||
-                             (resources.image && resources.image->custom_flag.active) ||
-                             (resources.sampler && resources.sampler->custom_flag.active);
-                } else if (const auto* resource = std::get_if<ReflectParamInfo::Resource>(
-                               &found->second.spirv.resources.data)) {
-                    active = resource->custom_flag.active;
-                } else if (const auto* constant = std::get_if<ReflectParamInfo::Constant>(
-                               &found->second.spirv.resources.data)) {
-                    active = constant->custom_flag.active;
-                }
-                if (active) handle.valid_bits |= uint64(1) << index;
-            };
-            mark_active(shaders.vs);
-            mark_active(shaders.ps);
-            if (shader_info.arg_cpp_info[index].type == SDA_Constant &&
-                (handle.valid_bits & (uint64(1) << index))) {
-                handle.constant_idx = index;
-            }
-        }
+        PipelineHandle handle = MetalPipelineMetadata(shader_info, {&shaders.vs, &shaders.ps});
         handle.handle = reinterpret_cast<uint64>(MoerNew(MetalPipelineState)(native_pipeline));
         return handle;
     }
 }
-PipelineHandle MetalDevice::CreatePipeline(PipelineShaderInfo&&) { Unsupported("compute pipelines"); }
+PipelineHandle MetalDevice::CreatePipeline(PipelineShaderInfo&& shader_info) {
+    if (!std::holds_alternative<ShaderCs>(shader_info.shader_group)) {
+        Unsupported("this compute pipeline shader group");
+    }
+    const SingleShaderInfo& shader = std::get<ShaderCs>(shader_info.shader_group).cs;
+    @autoreleasepool {
+        id<MTLFunction> function = CompileMetalFunction(native_->device, shader);
+        NSError* error = nil;
+        id<MTLComputePipelineState> native_pipeline =
+            [native_->device newComputePipelineStateWithFunction:function error:&error];
+        if (native_pipeline == nil) {
+            throw std::runtime_error("Metal compute pipeline creation failed: " +
+                std::string(error.localizedDescription.UTF8String ?: "unknown error"));
+        }
+        PipelineHandle handle = MetalPipelineMetadata(shader_info, {&shader});
+        handle.handle = reinterpret_cast<uint64>(MoerNew(MetalPipelineState)(native_pipeline));
+        return handle;
+    }
+}
 void MetalDevice::WaitIdle() { native_->graphics.Sync(); }
 
 void* GetMetalNativeTexture(Texture* texture) noexcept {
@@ -1406,6 +1438,12 @@ void* GetMetalNativeBindlessIndexBuffer(BindlessArray* array) noexcept {
 void* GetMetalNativeBindlessArgumentBuffer(BindlessArray* array, uint set) noexcept {
     auto* metal = dynamic_cast<MetalBindlessArray*>(array);
     return metal == nullptr ? nullptr : (__bridge void*)metal->NativeArguments(set);
+}
+
+void* GetMetalNativeComputePipeline(PipelineHandle pipeline) noexcept {
+    auto* metal = dynamic_cast<MetalPipelineState*>(
+        reinterpret_cast<PipelineState*>(pipeline.handle));
+    return metal == nullptr ? nullptr : (__bridge void*)metal->NativeCompute();
 }
 
 } // namespace Moer::Render
