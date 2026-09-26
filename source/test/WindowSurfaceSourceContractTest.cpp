@@ -17,34 +17,15 @@ void Require(bool condition) {
 
 class FakeWindowSurfaceSource final : public WindowSurfaceSource {
 public:
-    WindowSurfaceIdentity     identity{};
-    WindowSurfaceCreateResult result{
-        .status = EWindowSurfaceCreateStatus::Success,
-    };
-    uintptr_t native_surface{0xabcdu};
-
-    mutable ERHIType    observed_rhi{ERHIType::Vulkan};
-    mutable void*       observed_instance{nullptr};
-    mutable const void* observed_allocator{nullptr};
-    mutable void*       observed_output{nullptr};
-    mutable uint32_t    create_calls{0};
+    WindowSurfaceIdentity identity{};
+    WindowNativeHandle    native_window{};
 
     [[nodiscard]] WindowSurfaceIdentity GetIdentity() const noexcept override {
         return identity;
     }
 
-    [[nodiscard]] WindowSurfaceCreateResult
-    CreateSurface(ERHIType rhi_type, void* instance, const void* allocation_callbacks, void* surface)
-        const noexcept override {
-        observed_rhi       = rhi_type;
-        observed_instance  = instance;
-        observed_allocator = allocation_callbacks;
-        observed_output    = surface;
-        ++create_calls;
-        if (result.Succeeded() && surface != nullptr) {
-            *static_cast<uintptr_t*>(surface) = native_surface;
-        }
-        return result;
+    [[nodiscard]] WindowNativeHandle GetNativeWindow() const noexcept override {
+        return native_window;
     }
 };
 
@@ -56,6 +37,11 @@ MakeSource(uintptr_t window_system_handle, uintptr_t platform_window_handle, uin
         .window_system_handle   = window_system_handle,
         .platform_window_handle = platform_window_handle,
         .generation             = generation,
+    };
+    source->native_window = {
+        .window_system          = EWindowSystemType::GLFW,
+        .window_system_handle   = window_system_handle,
+        .platform_window_handle = platform_window_handle,
     };
     return source;
 }
@@ -75,6 +61,13 @@ int main() {
     );
     const SwapchainSurfaceInfo platform_handle_optional{MakeSource(0x1002u, 0u, 1u)};
     Require(platform_handle_optional.IsValid());
+    Require(platform_handle_optional.source->GetNativeWindow().IsValid());
+    Require(platform_handle_optional.source->GetNativeWindow().platform_window_handle == 0);
+    Require(!WindowNativeHandle{}.IsValid());
+    Require(!WindowNativeHandle{.window_system = EWindowSystemType::GLFW}.IsValid());
+    auto inconsistent_source = MakeSource(0x1003u, 0x2003u, 1u);
+    inconsistent_source->native_window.window_system_handle = 0x1004u;
+    Require(!SwapchainSurfaceInfo{inconsistent_source}.IsValid());
 
     auto                 source_same_identity = MakeSource(0x1000u, 0x2000u, 1u);
     SwapchainSurfaceInfo surface_same_identity{source_same_identity};
@@ -104,30 +97,11 @@ int main() {
         ESwapchainSurfaceTransition::Replace
     );
 
-    auto*                           instance  = reinterpret_cast<void*>(0x3000u);
-    auto*                           allocator = reinterpret_cast<const void*>(0x4000u);
-    uintptr_t                       output    = 0;
-    const WindowSurfaceCreateResult create_result =
-        source_a->CreateSurface(ERHIType::D3D12, instance, allocator, &output);
-    Require(create_result.Succeeded());
-    Require(output == source_a->native_surface);
-    Require(source_a->create_calls == 1);
-    Require(source_a->observed_rhi == ERHIType::D3D12);
-    Require(source_a->observed_instance == instance);
-    Require(source_a->observed_allocator == allocator);
-    Require(source_a->observed_output == &output);
-
-    auto failing_source    = MakeSource(0x5000u, 0x6000u, 1u);
-    failing_source->result = {
-        .status            = EWindowSurfaceCreateStatus::NativeFailure,
-        .native_error_code = -7,
-    };
-    output = 0;
-    const WindowSurfaceCreateResult failure =
-        failing_source->CreateSurface(ERHIType::Vulkan, instance, allocator, &output);
-    Require(!failure.Succeeded());
-    Require(failure.native_error_code == -7);
-    Require(output == 0);
+    const WindowNativeHandle native_window = source_a->GetNativeWindow();
+    Require(native_window.IsValid());
+    Require(native_window.window_system == EWindowSystemType::GLFW);
+    Require(native_window.window_system_handle == 0x1000u);
+    Require(native_window.platform_window_handle == 0x2000u);
 
     std::weak_ptr<const WindowSurfaceSource> weak_source;
     SwapchainCreateInfo                      copied_info;

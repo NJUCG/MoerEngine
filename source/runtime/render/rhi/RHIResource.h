@@ -817,6 +817,9 @@ struct ExportBuffer {
     EBufferState state;
 };
 
+// Backend-owned descriptor/argument table. AllocateTexture/AllocateBuffer
+// return logical indices used by shaders; the backend owns their representation,
+// resource lifetime, and any residency declarations required during submission.
 class RENDER_API BindlessArray : public RHIResource {
 public:
     struct TextureUpdateInfo {
@@ -861,12 +864,16 @@ public:
     virtual void UnbindTexture(uint _handle) = 0;
     virtual void UnbindBuffer(uint _handle)  = 0;
 
+    // Opaque backend token for command translation. It is not a shader index
+    // or a portable GPU address; only the matching backend may interpret it.
     virtual uint64 ArrayHandle() const = 0;
 
 protected:
     friend class CommandList;
     friend class UpdateBindlessArrayCmd;
 
+    // Bindless membership changes travel through the command stream. A backend
+    // finalizes or discards each update when submission succeeds or is dropped.
     virtual UniquePtr<class Command> CreateUpdateCommand() = 0;
     virtual void DiscardUpdateCommand(const Array<UpdateCmd>&) {}
 };
@@ -1398,6 +1405,8 @@ struct RenderPassInfo {
 };
 
 struct SwapchainCreateInfo {
+    // The source retains the platform window while the backend owns its
+    // presentation objects (VkSurfaceKHR, CAMetalLayer/drawables, etc.).
     SwapchainSurfaceInfo surface;
     Extent2D             size;
     uint                 back_buffer_sz         = 2;

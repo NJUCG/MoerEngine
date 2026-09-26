@@ -1527,6 +1527,8 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
                     gpu_profiling.source_order_base =
                         graph_source_order_base;
                 }
+                // Initial Metal raster bring-up does not use this raytracing
+                // graph's active lowering; port its explicit barriers separately.
                 if (graph.ExecuteFrontendRecordingPlan(
                         {},
                         configure_recording_source,

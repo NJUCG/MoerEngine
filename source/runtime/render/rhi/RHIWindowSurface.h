@@ -13,22 +13,6 @@ enum class EWindowSystemType : uint8_t {
     GLFW,
 };
 
-enum class EWindowSurfaceCreateStatus : uint8_t {
-    Success,
-    InvalidSource,
-    UnsupportedRHI,
-    NativeFailure,
-};
-
-struct WindowSurfaceCreateResult {
-    EWindowSurfaceCreateStatus status{EWindowSurfaceCreateStatus::InvalidSource};
-    int64_t                    native_error_code{0};
-
-    [[nodiscard]] bool Succeeded() const noexcept {
-        return status == EWindowSurfaceCreateStatus::Success;
-    }
-};
-
 struct WindowSurfaceIdentity {
     EWindowSystemType window_system{EWindowSystemType::Unknown};
     uintptr_t         window_system_handle{0};
@@ -42,17 +26,30 @@ struct WindowSurfaceIdentity {
     friend bool operator==(const WindowSurfaceIdentity&, const WindowSurfaceIdentity&) = default;
 };
 
-// Immutable, non-owning lease over a native window. The platform window layer
-// owns native-window creation/destruction; swapchains retain this object only
-// to keep a stable identity and surface factory across render-thread work.
+// Borrowed handles for a window whose WindowSurfaceSource lease is retained.
+// window_system_handle is the window-library object (GLFWwindow* for GLFW);
+// platform_window_handle is optional (HWND on Windows). Backends create and
+// destroy their own presentation objects from these handles.
+struct WindowNativeHandle {
+    EWindowSystemType window_system{EWindowSystemType::Unknown};
+    uintptr_t         window_system_handle{0};
+    uintptr_t         platform_window_handle{0};
+
+    [[nodiscard]] bool IsValid() const noexcept {
+        return window_system != EWindowSystemType::Unknown && window_system_handle != 0;
+    }
+};
+
+// Immutable lease over a window owned by the platform window layer. Keep the
+// source alive while a backend uses its borrowed native handle. The native
+// handle must describe the same window as the identity. Identity is for
+// detecting window replacement; it is not a presentation API handle.
 class RENDER_API WindowSurfaceSource {
 public:
     virtual ~WindowSurfaceSource() = default;
 
     [[nodiscard]] virtual WindowSurfaceIdentity GetIdentity() const noexcept = 0;
-    [[nodiscard]] virtual WindowSurfaceCreateResult
-    CreateSurface(ERHIType rhi_type, void* instance, const void* allocation_callbacks, void* surface)
-        const noexcept = 0;
+    [[nodiscard]] virtual WindowNativeHandle GetNativeWindow() const noexcept = 0;
 };
 
 using WindowSurfaceSourceRef = SharedPtr<const WindowSurfaceSource>;
@@ -65,7 +62,14 @@ struct SwapchainSurfaceInfo {
     }
 
     [[nodiscard]] bool IsValid() const noexcept {
-        return GetIdentity().IsValid();
+        if (!source) {
+            return false;
+        }
+        const WindowSurfaceIdentity identity = source->GetIdentity();
+        const WindowNativeHandle    native   = source->GetNativeWindow();
+        return identity.IsValid() && native.IsValid() && identity.window_system == native.window_system &&
+               identity.window_system_handle == native.window_system_handle &&
+               identity.platform_window_handle == native.platform_window_handle;
     }
 
     [[nodiscard]] bool HasSameIdentity(const SwapchainSurfaceInfo& other) const noexcept {
