@@ -39,6 +39,8 @@ MTLPixelFormat ToMetalFormat(EPixelFormat format) {
     switch (format) {
         case PF_R8_UNORM:
             return MTLPixelFormatR8Unorm;
+        case PF_R8G8_UNORM:
+            return MTLPixelFormatRG8Unorm;
         case PF_R8G8B8A8_UNORM:
             return MTLPixelFormatRGBA8Unorm;
         case PF_R8G8B8A8_SRGB:
@@ -49,8 +51,16 @@ MTLPixelFormat ToMetalFormat(EPixelFormat format) {
             return MTLPixelFormatBGRA8Unorm_sRGB;
         case PF_A2R10G10B10_UNORM_PACK32:
             return MTLPixelFormatBGR10A2Unorm;
+        case PF_B10G11R11_UFLOAT_PACK32:
+            return MTLPixelFormatRG11B10Float;
+        case PF_R16_SFLOAT:
+            return MTLPixelFormatR16Float;
+        case PF_R16G16_SFLOAT:
+            return MTLPixelFormatRG16Float;
         case PF_R16G16B16A16_SFLOAT:
             return MTLPixelFormatRGBA16Float;
+        case PF_R32_SFLOAT:
+            return MTLPixelFormatR32Float;
         case PF_R32G32B32A32_SFLOAT:
             return MTLPixelFormatRGBA32Float;
         case PF_D16_UNORM:
@@ -60,7 +70,8 @@ MTLPixelFormat ToMetalFormat(EPixelFormat format) {
         case PF_D32_SFLOAT_S8_UINT:
             return MTLPixelFormatDepth32Float_Stencil8;
         default:
-            Unsupported("this texture format");
+            throw std::runtime_error("Metal RHI has not implemented texture format " +
+                                     std::to_string(static_cast<uint>(format)));
     }
 }
 
@@ -68,6 +79,8 @@ NSUInteger PixelStride(EPixelFormat format) {
     switch (format) {
         case PF_R8_UNORM:
             return 1;
+        case PF_R8G8_UNORM:
+        case PF_R16_SFLOAT:
         case PF_D16_UNORM:
             return 2;
         case PF_R16G16B16A16_SFLOAT:
@@ -78,6 +91,9 @@ NSUInteger PixelStride(EPixelFormat format) {
         case PF_B8G8R8A8_UNORM:
         case PF_B8G8R8A8_SRGB:
         case PF_A2R10G10B10_UNORM_PACK32:
+        case PF_B10G11R11_UFLOAT_PACK32:
+        case PF_R16G16_SFLOAT:
+        case PF_R32_SFLOAT:
         case PF_D32_SFLOAT:
             return 4;
         case PF_R32G32B32A32_SFLOAT:
@@ -225,8 +241,9 @@ public:
     id<MTLTexture> Native() const noexcept { return texture_; }
 
     uint GetMipByteSize(uint mip) const override {
-        if (mip != 0) Unsupported("texture mip sizes");
-        return GetWidth() * GetHeight() * PixelStride(GetFormat());
+        if (mip >= GetNumMips()) Unsupported("texture mip sizes");
+        return std::max(1u, GetWidth() >> mip) *
+               std::max(1u, GetHeight() >> mip) * PixelStride(GetFormat());
     }
 
     void SetName(const std::string_view name) override {
@@ -241,9 +258,12 @@ private:
 void ValidateTextureUpload(const UploadTextureCmd& upload) {
     auto* texture = dynamic_cast<MetalTexture*>(reinterpret_cast<Texture*>(upload.Handle()));
     const uint3 size = upload.Size();
+    const uint mip = upload.MipLevel();
     if (texture == nullptr || upload.Format() != texture->GetFormat() ||
-        upload.MipLevel() != 0 || upload.ArrayLayer() != 0 ||
-        upload.Offset() != uint3{0, 0, 0} || size != texture->GetExtent() ||
+        mip >= texture->GetNumMips() || upload.ArrayLayer() != 0 ||
+        upload.Offset() != uint3{0, 0, 0} ||
+        size != uint3{std::max(1u, texture->GetWidth() >> mip),
+                      std::max(1u, texture->GetHeight() >> mip), 1} ||
         upload.Data().size_bytes() != size_t(size.x) * size.y * PixelStride(upload.Format())) {
         Unsupported("this texture upload layout");
     }
@@ -282,7 +302,7 @@ void EncodeTextureUpload(
       sourceBytesPerRow:staging_row_bytes
     sourceBytesPerImage:staging_row_bytes * height
              sourceSize:MTLSizeMake(width, height, 1)
-              toTexture:texture->Native() destinationSlice:0 destinationLevel:0
+              toTexture:texture->Native() destinationSlice:0 destinationLevel:upload.MipLevel()
      destinationOrigin:MTLOriginMake(0, 0, 0)];
 }
 
@@ -1124,8 +1144,15 @@ BufferRef MetalDevice::CreateBuffer(
 }
 TextureRef MetalDevice::CreateTexture(std::string_view name, const TextureInfo& info) {
     if (info.dimension != ETextureDimension::TEX_2D || info.array_size != 1 ||
-        info.num_mips != 1 || info.num_samples != 1 || info.extent.x <= 0 || info.extent.y <= 0) {
-        Unsupported("this texture layout");
+        info.num_mips < 1 || info.num_samples != 1 || info.extent.x <= 0 || info.extent.y <= 0) {
+        throw std::runtime_error(
+            "Metal RHI has not implemented texture layout: dimension=" +
+            std::to_string(static_cast<uint>(info.dimension)) +
+            " extent=" + std::to_string(info.extent.x) + "x" + std::to_string(info.extent.y) +
+            " array=" + std::to_string(info.array_size) +
+            " mips=" + std::to_string(info.num_mips) +
+            " samples=" + std::to_string(info.num_samples)
+        );
     }
     const MTLPixelFormat native_format = ToMetalFormat(info.format);
     const bool is_depth = info.format == PF_D16_UNORM || info.format == PF_D32_SFLOAT ||
@@ -1137,7 +1164,9 @@ TextureRef MetalDevice::CreateTexture(std::string_view name, const TextureInfo& 
     }
     MTLTextureDescriptor* desc = [MTLTextureDescriptor
         texture2DDescriptorWithPixelFormat:native_format
-                                 width:info.extent.x height:info.extent.y mipmapped:NO];
+                                 width:info.extent.x height:info.extent.y
+                             mipmapped:info.num_mips > 1];
+    desc.mipmapLevelCount = info.num_mips;
     desc.storageMode = MTLStorageModePrivate;
     desc.usage = MTLTextureUsageShaderRead;
     if ((info.usage & ETextureUsageFlags::COLOR_ATTACHMENT) != ETextureUsageFlags::UNDEFINED) {
