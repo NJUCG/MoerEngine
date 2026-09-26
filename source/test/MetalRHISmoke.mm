@@ -102,7 +102,13 @@ void UploadAndCheckTexture(
     RHIExecutor::Get().Submit(EQueueType::Copy, upload.Submit());
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
-    id<MTLTexture> native = (__bridge id<MTLTexture>)GetMetalNativeTexture(texture.Get());
+    TextureRef copied = RenderDevice::Get().CreateTexture(Extent2D(width, height), format, usage);
+    CommandList copy(EQueueType::Copy);
+    copy.CopyFrom(texture->GetView(), copied->GetView());
+    RHIExecutor::Get().Submit(EQueueType::Copy, copy.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    id<MTLTexture> native = (__bridge id<MTLTexture>)GetMetalNativeTexture(copied.Get());
     if (native == nil) throw std::runtime_error("Metal upload texture bridge failed");
     const NSUInteger row_bytes = (width * pixel_stride + 255) & ~NSUInteger(255);
     id<MTLBuffer> readback = [native.device newBufferWithLength:row_bytes * height
@@ -128,7 +134,7 @@ void UploadAndCheckTexture(
             }
         }
     }
-    std::cout << "texture upload/readback " << width << "x" << height
+    std::cout << "texture upload/copy/readback " << width << "x" << height
               << " stride " << pixel_stride << ": success" << std::endl;
 }
 
@@ -148,14 +154,24 @@ void CheckBufferUpload() {
     RHIExecutor::Get().Submit(EQueueType::Copy, upload.Submit());
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
-    id<MTLBuffer> native = (__bridge id<MTLBuffer>)GetMetalNativeBuffer(buffer.Get());
+    BufferRef copied = RenderDevice::Get().CreateBuffer(
+        "Metal smoke copied buffer", BufferInfo{64, 1, EBufferUsageFlags::TRANSFER_SRC}
+    );
+    constexpr size_t destination_offset = 8;
+    CommandList copy(EQueueType::Copy);
+    copy.CopyFrom(buffer->GetView(offset, input.size()),
+                  copied->GetView(destination_offset, input.size()));
+    RHIExecutor::Get().Submit(EQueueType::Copy, copy.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    id<MTLBuffer> native = (__bridge id<MTLBuffer>)GetMetalNativeBuffer(copied.Get());
     if (native == nil) throw std::runtime_error("Metal buffer bridge failed");
     id<MTLBuffer> readback = [native.device newBufferWithLength:input.size()
                                                        options:MTLResourceStorageModeShared];
     id<MTLCommandQueue> queue = [native.device newCommandQueue];
     id<MTLCommandBuffer> command = [queue commandBuffer];
     id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
-    [blit copyFromBuffer:native sourceOffset:offset toBuffer:readback
+    [blit copyFromBuffer:native sourceOffset:destination_offset toBuffer:readback
       destinationOffset:0 size:input.size()];
     [blit endEncoding];
     [command commit];
@@ -164,7 +180,8 @@ void CheckBufferUpload() {
         !std::equal(input.begin(), input.end(), static_cast<const uint8_t*>(readback.contents))) {
         throw std::runtime_error("Metal buffer upload readback differs from input");
     }
-    std::cout << "buffer upload/readback at offset " << offset << ": success" << std::endl;
+    std::cout << "buffer upload/copy/readback at offsets " << offset << "/"
+              << destination_offset << ": success" << std::endl;
 }
 
 void Present(Moer::Render::SwapchainRef swapchain, Moer::Render::TextureRef texture) {

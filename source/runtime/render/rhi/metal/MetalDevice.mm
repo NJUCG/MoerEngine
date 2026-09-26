@@ -301,6 +301,32 @@ public:
                     }
                     break;
                 }
+                case Command::EType::BufferToBuffer: {
+                    const auto& copy = static_cast<const CopyBufferCmd&>(*command);
+                    auto* source = dynamic_cast<MetalBuffer*>(reinterpret_cast<Buffer*>(copy.SrcHandle()));
+                    auto* destination = dynamic_cast<MetalBuffer*>(reinterpret_cast<Buffer*>(copy.DstHandle()));
+                    if (source == nullptr || destination == nullptr || copy.ByteSize() == 0 ||
+                        copy.SrcOffset() > source->GetByteSize() ||
+                        copy.ByteSize() > source->GetByteSize() - copy.SrcOffset() ||
+                        copy.DstOffset() > destination->GetByteSize() ||
+                        copy.ByteSize() > destination->GetByteSize() - copy.DstOffset()) {
+                        Unsupported("this buffer copy layout");
+                    }
+                    break;
+                }
+                case Command::EType::TextureToTexture: {
+                    const auto& copy = static_cast<const CopyTextureCmd&>(*command);
+                    auto* source = dynamic_cast<MetalTexture*>(reinterpret_cast<Texture*>(copy.SrcHandle()));
+                    auto* destination = dynamic_cast<MetalTexture*>(reinterpret_cast<Texture*>(copy.DstHandle()));
+                    if (source == nullptr || destination == nullptr ||
+                        copy.Format() != source->GetFormat() || copy.Format() != destination->GetFormat() ||
+                        copy.SrcMipLevel() != 0 || copy.DstMipLevel() != 0 ||
+                        copy.SrcOffset() != uint3{0, 0, 0} || copy.DstOffset() != uint3{0, 0, 0} ||
+                        copy.Size() != source->GetExtent() || copy.Size() != destination->GetExtent()) {
+                        Unsupported("this texture copy layout");
+                    }
+                    break;
+                }
                 default:
                     Unsupported("this copy command");
             }
@@ -310,9 +336,30 @@ public:
         @autoreleasepool {
             id<MTLCommandBuffer> command_buffer = [queue_ commandBuffer];
             id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
-            if (blit == nil) throw std::runtime_error("Cannot encode Metal texture upload");
+            if (blit == nil) throw std::runtime_error("Cannot encode Metal copy commands");
             NSMutableArray<id<MTLBuffer>>* staging_buffers = [NSMutableArray array];
             for (const auto& command : submit.cmds) {
+                if (command->Type() == Command::EType::BufferToBuffer) {
+                    const auto& copy = static_cast<const CopyBufferCmd&>(*command);
+                    auto* source = static_cast<MetalBuffer*>(reinterpret_cast<Buffer*>(copy.SrcHandle()));
+                    auto* destination = static_cast<MetalBuffer*>(reinterpret_cast<Buffer*>(copy.DstHandle()));
+                    [blit copyFromBuffer:source->Native() sourceOffset:copy.SrcOffset()
+                               toBuffer:destination->Native() destinationOffset:copy.DstOffset()
+                                   size:copy.ByteSize()];
+                    continue;
+                }
+                if (command->Type() == Command::EType::TextureToTexture) {
+                    const auto& copy = static_cast<const CopyTextureCmd&>(*command);
+                    auto* source = static_cast<MetalTexture*>(reinterpret_cast<Texture*>(copy.SrcHandle()));
+                    auto* destination = static_cast<MetalTexture*>(reinterpret_cast<Texture*>(copy.DstHandle()));
+                    [blit copyFromTexture:source->Native() sourceSlice:0 sourceLevel:0
+                            sourceOrigin:MTLOriginMake(0, 0, 0)
+                              sourceSize:MTLSizeMake(copy.Size().x, copy.Size().y, 1)
+                               toTexture:destination->Native()
+                        destinationSlice:0 destinationLevel:0
+                       destinationOrigin:MTLOriginMake(0, 0, 0)];
+                    continue;
+                }
                 if (command->Type() == Command::EType::UploadBuffer) {
                     const auto& upload = static_cast<const UploadBufferCmd&>(*command);
                     auto* buffer = static_cast<MetalBuffer*>(reinterpret_cast<Buffer*>(upload.Handle()));
@@ -354,7 +401,7 @@ public:
             [command_buffer commit];
             [command_buffer waitUntilCompleted];
             if (command_buffer.status != MTLCommandBufferStatusCompleted) {
-                throw std::runtime_error("Metal texture upload failed: " +
+                throw std::runtime_error("Metal copy submission failed: " +
                     std::string([command_buffer.error.localizedDescription UTF8String] ?: "unknown GPU error"));
             }
         }
