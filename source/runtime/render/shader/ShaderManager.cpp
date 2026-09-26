@@ -97,7 +97,7 @@ void ShaderResourcesCache::RegisterCache(const ShaderCompilerInput& _input, Shad
             (EShaderType)_input.target_info.shader_type,
             StaticArray<uint64, 2>{_output.compiled_hash1, _output.compiled_hash2},
             uint64(_input.shader_name_hash),
-            _input.entry_point,
+            _output.compiled_entry_name.empty() ? _input.entry_point : _output.compiled_entry_name,
             _input.relative_source_file_path,
             key,
             std::move(_output.source_dependencies)

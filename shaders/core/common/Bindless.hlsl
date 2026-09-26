@@ -7,6 +7,16 @@
 #define BINDLESS_ARRAY_SUFFIX _array_114514_bdls
 #define BINDLESS_NAME_SUFFIX _
 #define CONCAT(x, y) x##y
+
+// Vulkan and Metal both compile this path through SPIR-V. Keep VULKAN as a
+// fallback for standalone shader compilation outside the engine.
+#ifndef MOER_SPIRV_BINDLESS
+#define MOER_SPIRV_BINDLESS VULKAN
+#endif
+#ifndef MOER_UNIFIED_RW_BINDING
+#define MOER_UNIFIED_RW_BINDING VULKAN
+#endif
+
 struct RenderResourceHandle {
   // 23 bits for index, 2 bits to indicate resource type, 1 bit for writability,
   // 6 bits for version
@@ -23,7 +33,7 @@ struct RenderResourceHandle {
 #endif
   }
 
-#if VULKAN
+#if MOER_UNIFIED_RW_BINDING
   uint WriteIndex() { return ReadIndex(); }
 #else
   uint WriteIndex() { return ReadIndex() + 1; }
@@ -457,7 +467,7 @@ struct SamplerHeapHandle {
     }                                                                                                               \
   };
 
-#if VULKAN
+#if MOER_SPIRV_BINDLESS
 
 #define ACCESS_GLOBAL_TEXTURE_HEAP(NativeType, TextureType, idx)      TextureType<NativeType>(g##TextureType##NativeType##__114514_bdls[NonUniformResourceIndex(idx)])
 #define ACCESS_GLOBAL_TEXTURE_HEAP_WITHOUT_TEMPLATE(TextureType, idx) TextureType(g##TextureType##__114514_bdls[NonUniformResourceIndex(idx)])
@@ -562,6 +572,6 @@ dxResourceDescriptorHeapAccessor.Sample(HandleType(handle), uv)
   HANDLES(DESCRIPTOR_HEAP, DESCRIPTOR_HEAP_SAMPLE, DESCRIPTOR_HEAP_SAMPLE_LEVEL, DESCRIPTOR_HEAP_SAMPLE_GRAD, \
           DESCRIPTOR_HEAP_SAMPLE_CUBE, DESCRIPTOR_HEAP_SAMPLE_LEVEL_CUBE, DESCRIPTOR_HEAP_SAMPLE_GRAD_CUBE)
 
-#endif// VULKAN/DXIL
+#endif // MOER_SPIRV_BINDLESS
 
 #endif// FRAMEWORK_BINDLESS_COMMON_HLSL

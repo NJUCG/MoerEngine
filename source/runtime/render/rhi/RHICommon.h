@@ -1071,6 +1071,7 @@ enum ERenderQueryType {
 enum EShaderPlatform : uint16_t {
     SP_WIN_D3D_SM6,
     SP_VULKAN_SM6,
+    SP_METAL_MSL,
 
     SP_Num,
     SP_D3D_SM_Num    = 1,
@@ -1080,6 +1081,7 @@ enum EShaderPlatform : uint16_t {
 BEGIN_ENUM_STR_DEFINITION(EShaderPlatform)
 ENUM_STR_ELEMENT(SP_WIN_D3D_SM6)
 ENUM_STR_ELEMENT(SP_VULKAN_SM6)
+ENUM_STR_ELEMENT(SP_METAL_MSL)
 END_ENUM_STR_DEFINITION(EShaderPlatform)
 static_assert(SP_Num < (1 << SP_NumBits) && "");
 

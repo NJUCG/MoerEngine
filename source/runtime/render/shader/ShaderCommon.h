@@ -153,6 +153,7 @@ struct ShaderCompilerOutput {
     ShaderTargetInfo target_info;
 
     Moer::Array<uint8_t> shader_code;
+    std::string          compiled_entry_name;
     uint64_t             compiled_hash1;
     uint64_t             compiled_hash2;
     uint32_t             num_instructions;

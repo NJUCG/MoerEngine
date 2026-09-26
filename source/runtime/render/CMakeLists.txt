@@ -85,6 +85,18 @@ target_link_libraries(${target_name}
     PUBLIC AssetLoad
 )
 
+get_target_property(dxc_shader_include_dir dxc DXC_TARGET_INCLUDE_DIR)
+if (NOT dxc_shader_include_dir)
+    message(FATAL_ERROR "DXC_TARGET_INCLUDE_DIR is missing from the dxc target")
+endif()
+target_compile_definitions(${target_name} PRIVATE
+    "MOER_DXC_SHADER_INCLUDE_DIR=\"${dxc_shader_include_dir}\""
+)
+
+if (APPLE)
+    target_link_libraries(${target_name} PRIVATE spirv-cross-msl)
+endif()
+
 if (WIN32)
     target_link_libraries(${target_name}
         PUBLIC d3d12_agilitysdk

@@ -195,6 +195,7 @@ const auto* GetShaderModel(EShaderPlatform _type) {
 
         case SP_WIN_D3D_SM6:
         case SP_VULKAN_SM6:
+        case SP_METAL_MSL:
             return L"6_7";
         case SP_Num:
         case SP_NumBits:

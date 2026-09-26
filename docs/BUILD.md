@@ -87,6 +87,8 @@ cmake --build build/mac --target MoerEditor -j 6
 
 如果 DXC 未在 `PATH`，配置时追加 `-DMOER_DXC_ROOT=/path/to/dxc-prefix`；该目录应包含 `bin/dxc`、`include/dxc/dxcapi.h` 和 `lib/libdxcompiler.dylib`。CMake 会查找本机 Python 3.12，并将其标准库位置写入脚本模块的构建配置。当前默认 `MoerEngine.toml` 选择 Vulkan，因此启动时应报告 `Vulkan backend is not built on macOS; select Metal when available`。在 Metal RHI 接入之前，尚不能在 macOS 上显示渲染画面。
 
+Apple 构建还提供独立的 `SP_METAL_MSL` Shader 目标：DXC 先将 HLSL 编译为 SPIR-V，再由 SPIRV-Cross 转为 MSL。现有 Vulkan 目标仍直接使用 SPIR-V。Metal 目标目前支持顶点、片元和计算 Shader，生成的 bindless MSL 使用 Metal 3.0 argument buffer；实际资源绑定与运行时渲染仍依赖后续 Metal RHI 实现。
+
 ## 3. CUDA等AI组件支持
 
 * 如果你希望在MoerEngine中启用CUDA、LibTorch、TensorRT，那么你需要手动在系统中安装这三个依赖，再在MoerEngine中配置他们。接下来为启用AI组件的具体操作手册：
