@@ -128,7 +128,63 @@ public:
     explicit MetalCommandQueue(id<MTLCommandQueue> queue) : queue_(queue) {}
 
     void Wait(WaitEvent) override { Unsupported("queue wait events"); }
-    WaitEvent Execute(CmdSubmit&&) override { Unsupported("command submission"); }
+    WaitEvent Execute(CmdSubmit&& submit) override {
+        if (!submit.wait_events.empty() || !submit.signal_events.empty() ||
+            !submit.callbacks.empty() || !submit.success_callbacks.empty() ||
+            !submit.gpu_completion_tokens.empty() || !submit.query_tokens.empty() ||
+            submit.b_tick_profiling || submit.profiling_phase != ERHIProfilingPhase::Disabled ||
+            submit.b_delete_resources) {
+            Unsupported("submission synchronization, callbacks, or profiling");
+        }
+        // Validate the complete submit before encoding any GPU work. A later
+        // unsupported command must not leave a partially executed submit.
+        for (const auto& command : submit.cmds) {
+            if (command->Type() != Command::EType::ClearResource) {
+                Unsupported("this graphics command");
+            }
+            const auto& clear = static_cast<const ClearResourceCmd&>(*command);
+            if (!clear.IsTexture() || !clear.IsFloat4()) {
+                Unsupported("this clear value or resource");
+            }
+            const TextureView& view = clear.Texture();
+            auto* texture = dynamic_cast<MetalTexture*>(view.GetTexture());
+            if (texture == nullptr || view.format != texture->GetFormat() ||
+                view.mip_level != 0 || view.num_mips != 1 ||
+                view.array_layer != 0 || view.num_array != 1 ||
+                view.offset != uint3{0, 0, 0} || view.extent != texture->GetExtent()) {
+                Unsupported("this texture clear view");
+            }
+        }
+        if (submit.cmds.empty()) return {0, 0};
+
+        @autoreleasepool {
+            id<MTLCommandBuffer> command_buffer = [queue_ commandBuffer];
+            if (command_buffer == nil) throw std::runtime_error("Cannot create Metal command buffer");
+            for (const auto& command : submit.cmds) {
+                const auto& clear = static_cast<const ClearResourceCmd&>(*command);
+                auto* texture = static_cast<MetalTexture*>(clear.Texture().GetTexture());
+                const float4 color = clear.Float4Value();
+                MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
+                pass.colorAttachments[0].texture = texture->Native();
+                pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+                pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+                pass.colorAttachments[0].clearColor = MTLClearColorMake(
+                    color.x, color.y, color.z, color.w
+                );
+                id<MTLRenderCommandEncoder> encoder =
+                    [command_buffer renderCommandEncoderWithDescriptor:pass];
+                if (encoder == nil) throw std::runtime_error("Cannot encode Metal texture clear");
+                [encoder endEncoding];
+            }
+            [command_buffer commit];
+            [command_buffer waitUntilCompleted];
+            if (command_buffer.status != MTLCommandBufferStatusCompleted) {
+                throw std::runtime_error("Metal texture clear failed: " +
+                    std::string([command_buffer.error.localizedDescription UTF8String] ?: "unknown GPU error"));
+            }
+        }
+        return {0, 0};
+    }
 
     void Present(SwapchainRef swapchain, TextureView source, PresentReceiptRef receipt) override {
         auto* target = dynamic_cast<MetalSwapchain*>(swapchain.Get());

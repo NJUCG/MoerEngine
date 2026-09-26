@@ -92,7 +92,7 @@ cmake --build build/mac --target MetalRHISmoke -j 6
 ./target/bin/Debug/MetalRHISmoke
 ```
 
-程序会验证清屏颜色的 GPU 读回、首次呈现、调整窗口大小后的呈现，然后退出。可以传入保持窗口显示的秒数，例如 `MetalRHISmoke 10`。如果 DXC 未在 `PATH`，配置时追加 `-DMOER_DXC_ROOT=/path/to/dxc-prefix`；该目录应包含 `bin/dxc`、`include/dxc/dxcapi.h` 和 `lib/libdxcompiler.dylib`。CMake 会查找本机 Python 3.12，并将其标准库位置写入脚本模块的构建配置。默认 `MoerEngine.toml` 仍选择 Vulkan，因此编辑器会报告该后端未在 macOS 构建。配置为 Metal 时，编辑器会在资源上传前明确报告当前 RHI 的未实现部分。
+程序会经由通用 `CommandList::ClearResource`、`RHIExecutor` 和 Metal 命令翻译器清屏，验证 GPU 读回颜色、首次呈现及调整窗口大小后的呈现，然后退出。可以传入保持窗口显示的秒数，例如 `MetalRHISmoke 10`。如果 DXC 未在 `PATH`，配置时追加 `-DMOER_DXC_ROOT=/path/to/dxc-prefix`；该目录应包含 `bin/dxc`、`include/dxc/dxcapi.h` 和 `lib/libdxcompiler.dylib`。CMake 会查找本机 Python 3.12，并将其标准库位置写入脚本模块的构建配置。默认 `MoerEngine.toml` 仍选择 Vulkan，因此编辑器会报告该后端未在 macOS 构建。配置为 Metal 时，编辑器会在资源上传前明确报告当前 RHI 的未实现部分。
 
 Apple 构建还提供独立的 `SP_METAL_MSL` Shader 目标：DXC 先将 HLSL 编译为 SPIR-V，再由 SPIRV-Cross 转为 MSL。现有 Vulkan 目标仍直接使用 SPIR-V。Metal 目标目前支持顶点、片元和计算 Shader，生成的 bindless MSL 使用 Metal 3.0 argument buffer；实际资源绑定与运行时渲染仍依赖后续 Metal RHI 实现。
 

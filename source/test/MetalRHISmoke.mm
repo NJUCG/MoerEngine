@@ -8,7 +8,9 @@
 #include <GLFW/glfw3native.h>
 
 #include "rhi/RHI.h"
+#include "rhi/RHIExecutor.h"
 #include "rhi/metal/MetalDevice.h"
+#include "taskgraph/TaskSystem.h"
 
 #include <algorithm>
 #include <chrono>
@@ -48,24 +50,15 @@ Moer::Render::TextureRef ClearAndCheckTexture(int width, int height) {
     if (native == nil) throw std::runtime_error("Metal texture bridge failed");
     id<MTLCommandQueue> queue = [native.device newCommandQueue];
 
-    MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
-    pass.colorAttachments[0].texture = native;
-    pass.colorAttachments[0].loadAction = MTLLoadActionClear;
-    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-    pass.colorAttachments[0].clearColor = MTLClearColorMake(0.08, 0.4, 0.75, 1.0);
-    id<MTLCommandBuffer> command = [queue commandBuffer];
-    id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
-    [encoder endEncoding];
-    [command commit];
-    [command waitUntilCompleted];
-    if (command.status != MTLCommandBufferStatusCompleted) {
-        throw std::runtime_error("Metal clear did not complete");
-    }
+    CommandList clear(EQueueType::Graphics);
+    clear.ClearResource(texture->GetView(), Moer::float4{0.08f, 0.4f, 0.75f, 1.0f});
+    RHIExecutor::Get().Submit(EQueueType::Graphics, clear.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
     const NSUInteger row_bytes = ((static_cast<NSUInteger>(width) * 4 + 255) / 256) * 256;
     id<MTLBuffer> readback = [native.device newBufferWithLength:row_bytes * height
                                                        options:MTLResourceStorageModeShared];
-    command = [queue commandBuffer];
+    id<MTLCommandBuffer> command = [queue commandBuffer];
     id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
     [blit copyFromTexture:native sourceSlice:0 sourceLevel:0
             sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(width, height, 1)
@@ -105,6 +98,7 @@ void Present(Moer::Render::SwapchainRef swapchain, Moer::Render::TextureRef text
 int main(int argc, char** argv) {
     @autoreleasepool {
         GLFWwindow* window = nullptr;
+        bool task_system_initialized = false;
         try {
             if (!glfwInit()) throw std::runtime_error("glfwInit failed");
             glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -114,6 +108,8 @@ int main(int argc, char** argv) {
             std::cout << "smoke window id: " << native_window.windowNumber << std::endl;
 
             using namespace Moer::Render;
+            Moer::TaskSystem::Init();
+            task_system_initialized = true;
             RenderDevice::Init(DeviceInitInfo{.rhi_type = ERHIType::Metal, .name = "MetalRHISmoke"});
             if (RenderDevice::Get().GetShaderPlatform() != EShaderPlatform::SP_METAL_MSL) {
                 throw std::runtime_error("Metal device selected the wrong shader platform");
@@ -155,6 +151,8 @@ int main(int argc, char** argv) {
             swapchain = {};
             source.reset();
             RenderDevice::Dispose();
+            Moer::TaskSystem::ShutDown();
+            task_system_initialized = false;
             glfwDestroyWindow(window);
             glfwTerminate();
             std::cout << "Metal RHI smoke passed" << std::endl;
@@ -162,6 +160,7 @@ int main(int argc, char** argv) {
         } catch (const std::exception& error) {
             std::cerr << "Metal RHI smoke failed: " << error.what() << std::endl;
             if (Moer::Render::RenderDevice::IsInitialized()) Moer::Render::RenderDevice::Dispose();
+            if (task_system_initialized) Moer::TaskSystem::ShutDown();
             if (window != nullptr) glfwDestroyWindow(window);
             glfwTerminate();
             return 1;
