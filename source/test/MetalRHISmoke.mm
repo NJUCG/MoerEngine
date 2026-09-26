@@ -156,6 +156,69 @@ void CheckGraphicsPipeline() {
               << std::endl;
 }
 
+void CheckGraphicsUploads() {
+    using namespace Moer::Render;
+    constexpr NSUInteger width = 7;
+    constexpr NSUInteger height = 5;
+    std::vector<uint8_t> pixels(width * height * 4);
+    std::vector<uint8_t> values(20);
+    for (size_t i = 0; i < pixels.size(); ++i) pixels[i] = uint8_t(i * 13);
+    for (size_t i = 0; i < values.size(); ++i) values[i] = uint8_t(i * 9);
+    TextureRef texture = RenderDevice::Get().CreateTexture(
+        Extent2D(width, height), PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
+    );
+    BufferRef buffer = RenderDevice::Get().CreateBuffer(
+        "Metal graphics upload buffer", BufferInfo{64, 1, EBufferUsageFlags::TRANSFER_DST}
+    );
+    CommandList upload(EQueueType::Graphics);
+    upload.CopyFrom(
+        std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(pixels.data()), pixels.size()),
+        texture->GetView()
+    );
+    upload.CopyFrom(
+        std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(values.data()), values.size()),
+        buffer->GetView(8, values.size())
+    );
+    RHIExecutor::Get().Submit(EQueueType::Graphics, upload.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    id<MTLTexture> native_texture = (__bridge id<MTLTexture>)GetMetalNativeTexture(texture.Get());
+    id<MTLBuffer> native_buffer = (__bridge id<MTLBuffer>)GetMetalNativeBuffer(buffer.Get());
+    constexpr NSUInteger row_bytes = 256;
+    id<MTLBuffer> texture_readback = [native_texture.device
+        newBufferWithLength:row_bytes * height options:MTLResourceStorageModeShared];
+    id<MTLBuffer> buffer_readback = [native_texture.device
+        newBufferWithLength:64 options:MTLResourceStorageModeShared];
+    id<MTLCommandQueue> queue = [native_texture.device newCommandQueue];
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    [blit copyFromTexture:native_texture sourceSlice:0 sourceLevel:0
+            sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(width, height, 1)
+                toBuffer:texture_readback destinationOffset:0 destinationBytesPerRow:row_bytes
+       destinationBytesPerImage:row_bytes * height];
+    [blit copyFromBuffer:native_buffer sourceOffset:0
+               toBuffer:buffer_readback destinationOffset:0 size:64];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    if (command.status != MTLCommandBufferStatusCompleted) {
+        throw std::runtime_error("Metal graphics upload readback failed");
+    }
+    const auto* texture_bytes = static_cast<const uint8_t*>(texture_readback.contents);
+    for (NSUInteger row = 0; row < height; ++row) {
+        if (std::memcmp(texture_bytes + row * row_bytes, pixels.data() + row * width * 4,
+                        width * 4) != 0) {
+            throw std::runtime_error("Metal graphics texture upload differs from input");
+        }
+    }
+    if (std::memcmp(static_cast<const uint8_t*>(buffer_readback.contents) + 8,
+                    values.data(), values.size()) != 0) {
+        throw std::runtime_error("Metal graphics buffer upload differs from input");
+    }
+    std::cout << "graphics queue texture and buffer upload/readback: success" << std::endl;
+}
+
 Moer::Render::TextureRef ClearAndCheckTexture(int width, int height) {
     using namespace Moer::Render;
     TextureRef texture = RenderDevice::Get().CreateTexture(
@@ -622,6 +685,7 @@ int main(int argc, char** argv) {
             }
             CheckRasterTextureFormats();
             CheckGraphicsPipeline();
+            CheckGraphicsUploads();
             std::vector<uint8_t> rgba8(7 * 5 * 4);
             for (size_t i = 0; i < rgba8.size(); ++i) rgba8[i] = static_cast<uint8_t>(i * 17);
             UploadAndCheckTexture(PF_R8G8B8A8_UNORM, ETextureUsageFlags::SAMPLED, rgba8, 4);

@@ -238,6 +238,68 @@ private:
     id<MTLTexture> texture_;
 };
 
+void ValidateTextureUpload(const UploadTextureCmd& upload) {
+    auto* texture = dynamic_cast<MetalTexture*>(reinterpret_cast<Texture*>(upload.Handle()));
+    const uint3 size = upload.Size();
+    if (texture == nullptr || upload.Format() != texture->GetFormat() ||
+        upload.MipLevel() != 0 || upload.ArrayLayer() != 0 ||
+        upload.Offset() != uint3{0, 0, 0} || size != texture->GetExtent() ||
+        upload.Data().size_bytes() != size_t(size.x) * size.y * PixelStride(upload.Format())) {
+        Unsupported("this texture upload layout");
+    }
+}
+
+void ValidateBufferUpload(const UploadBufferCmd& upload) {
+    auto* buffer = dynamic_cast<MetalBuffer*>(reinterpret_cast<Buffer*>(upload.Handle()));
+    if (buffer == nullptr || upload.ByteSize() == 0 ||
+        upload.Offset() > buffer->GetByteSize() ||
+        upload.ByteSize() > buffer->GetByteSize() - upload.Offset() ||
+        upload.Data().size_bytes() != upload.ByteSize()) {
+        Unsupported("this buffer upload layout");
+    }
+}
+
+void EncodeTextureUpload(
+    id<MTLDevice> device, id<MTLBlitCommandEncoder> blit,
+    NSMutableArray<id<MTLBuffer>>* staging_buffers, const UploadTextureCmd& upload
+) {
+    auto* texture = static_cast<MetalTexture*>(reinterpret_cast<Texture*>(upload.Handle()));
+    const NSUInteger width = upload.Size().x;
+    const NSUInteger height = upload.Size().y;
+    const NSUInteger source_row_bytes = width * PixelStride(upload.Format());
+    const NSUInteger staging_row_bytes = (source_row_bytes + 255) & ~NSUInteger(255);
+    id<MTLBuffer> staging = [device newBufferWithLength:staging_row_bytes * height
+                                               options:MTLResourceStorageModeShared];
+    if (staging == nil) throw std::runtime_error("Cannot allocate Metal upload staging buffer");
+    auto* destination = static_cast<uint8_t*>(staging.contents);
+    const auto* source = reinterpret_cast<const uint8_t*>(upload.Data().data());
+    for (NSUInteger row = 0; row < height; ++row) {
+        std::memcpy(destination + row * staging_row_bytes,
+                    source + row * source_row_bytes, source_row_bytes);
+    }
+    [staging_buffers addObject:staging];
+    [blit copyFromBuffer:staging sourceOffset:0
+      sourceBytesPerRow:staging_row_bytes
+    sourceBytesPerImage:staging_row_bytes * height
+             sourceSize:MTLSizeMake(width, height, 1)
+              toTexture:texture->Native() destinationSlice:0 destinationLevel:0
+     destinationOrigin:MTLOriginMake(0, 0, 0)];
+}
+
+void EncodeBufferUpload(
+    id<MTLDevice> device, id<MTLBlitCommandEncoder> blit,
+    NSMutableArray<id<MTLBuffer>>* staging_buffers, const UploadBufferCmd& upload
+) {
+    auto* buffer = static_cast<MetalBuffer*>(reinterpret_cast<Buffer*>(upload.Handle()));
+    id<MTLBuffer> staging = [device newBufferWithBytes:upload.Data().data()
+                                              length:upload.ByteSize()
+                                             options:MTLResourceStorageModeShared];
+    if (staging == nil) throw std::runtime_error("Cannot allocate Metal buffer staging");
+    [staging_buffers addObject:staging];
+    [blit copyFromBuffer:staging sourceOffset:0 toBuffer:buffer->Native()
+      destinationOffset:upload.Offset() size:upload.ByteSize()];
+}
+
 class MetalPipelineState final : public PipelineState {
 public:
     explicit MetalPipelineState(id<MTLRenderPipelineState> pipeline) : pipeline_(pipeline) {}
@@ -744,6 +806,16 @@ public:
                 }
                 continue;
             }
+            if (command->Type() == Command::EType::UploadTexture) {
+                ValidateTextureUpload(static_cast<const UploadTextureCmd&>(*command));
+                has_gpu_work = true;
+                continue;
+            }
+            if (command->Type() == Command::EType::UploadBuffer) {
+                ValidateBufferUpload(static_cast<const UploadBufferCmd&>(*command));
+                has_gpu_work = true;
+                continue;
+            }
             if (command->Type() != Command::EType::ClearResource) {
                 Unsupported("this graphics command");
             }
@@ -774,9 +846,24 @@ public:
         @autoreleasepool {
             id<MTLCommandBuffer> command_buffer = [queue_ commandBuffer];
             if (command_buffer == nil) throw std::runtime_error("Cannot create Metal command buffer");
+            NSMutableArray<id<MTLBuffer>>* staging_buffers = [NSMutableArray array];
             for (const auto& command : submit.cmds) {
                 if (command->Type() == Command::EType::QueueTransfer ||
                     command->Type() == Command::EType::UpdateBindlessArray) continue;
+                if (command->Type() == Command::EType::UploadTexture ||
+                    command->Type() == Command::EType::UploadBuffer) {
+                    id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
+                    if (blit == nil) throw std::runtime_error("Cannot encode Metal graphics upload");
+                    if (command->Type() == Command::EType::UploadTexture) {
+                        EncodeTextureUpload(queue_.device, blit, staging_buffers,
+                            static_cast<const UploadTextureCmd&>(*command));
+                    } else {
+                        EncodeBufferUpload(queue_.device, blit, staging_buffers,
+                            static_cast<const UploadBufferCmd&>(*command));
+                    }
+                    [blit endEncoding];
+                    continue;
+                }
                 const auto& clear = static_cast<const ClearResourceCmd&>(*command);
                 auto* texture = static_cast<MetalTexture*>(clear.Texture().GetTexture());
                 const float4 color = clear.Float4Value();
@@ -876,27 +963,12 @@ public:
                     break;
                 case Command::EType::UploadTexture: {
                     has_gpu_work = true;
-                    const auto& upload = static_cast<const UploadTextureCmd&>(*command);
-                    auto* texture = dynamic_cast<MetalTexture*>(reinterpret_cast<Texture*>(upload.Handle()));
-                    const uint3 size = upload.Size();
-                    if (texture == nullptr || upload.Format() != texture->GetFormat() ||
-                        upload.MipLevel() != 0 || upload.ArrayLayer() != 0 ||
-                        upload.Offset() != uint3{0, 0, 0} || size != texture->GetExtent() ||
-                        upload.Data().size_bytes() != size_t(size.x) * size.y * PixelStride(upload.Format())) {
-                        Unsupported("this texture upload layout");
-                    }
+                    ValidateTextureUpload(static_cast<const UploadTextureCmd&>(*command));
                     break;
                 }
                 case Command::EType::UploadBuffer: {
                     has_gpu_work = true;
-                    const auto& upload = static_cast<const UploadBufferCmd&>(*command);
-                    auto* buffer = dynamic_cast<MetalBuffer*>(reinterpret_cast<Buffer*>(upload.Handle()));
-                    if (buffer == nullptr || upload.ByteSize() == 0 ||
-                        upload.Offset() > buffer->GetByteSize() ||
-                        upload.ByteSize() > buffer->GetByteSize() - upload.Offset() ||
-                        upload.Data().size_bytes() != upload.ByteSize()) {
-                        Unsupported("this buffer upload layout");
-                    }
+                    ValidateBufferUpload(static_cast<const UploadBufferCmd&>(*command));
                     break;
                 }
                 case Command::EType::BufferToBuffer: {
@@ -963,41 +1035,12 @@ public:
                     continue;
                 }
                 if (command->Type() == Command::EType::UploadBuffer) {
-                    const auto& upload = static_cast<const UploadBufferCmd&>(*command);
-                    auto* buffer = static_cast<MetalBuffer*>(reinterpret_cast<Buffer*>(upload.Handle()));
-                    id<MTLBuffer> staging = [queue_.device
-                        newBufferWithBytes:upload.Data().data()
-                                   length:upload.ByteSize()
-                                  options:MTLResourceStorageModeShared];
-                    if (staging == nil) throw std::runtime_error("Cannot allocate Metal buffer staging");
-                    [staging_buffers addObject:staging];
-                    [blit copyFromBuffer:staging sourceOffset:0 toBuffer:buffer->Native()
-                      destinationOffset:upload.Offset() size:upload.ByteSize()];
+                    EncodeBufferUpload(queue_.device, blit, staging_buffers,
+                        static_cast<const UploadBufferCmd&>(*command));
                     continue;
                 }
-                const auto& upload = static_cast<const UploadTextureCmd&>(*command);
-                auto* texture = static_cast<MetalTexture*>(reinterpret_cast<Texture*>(upload.Handle()));
-                const NSUInteger width = upload.Size().x;
-                const NSUInteger height = upload.Size().y;
-                const NSUInteger source_row_bytes = width * PixelStride(upload.Format());
-                const NSUInteger staging_row_bytes = (source_row_bytes + 255) & ~NSUInteger(255);
-                id<MTLBuffer> staging = [queue_.device
-                    newBufferWithLength:staging_row_bytes * height
-                                options:MTLResourceStorageModeShared];
-                if (staging == nil) throw std::runtime_error("Cannot allocate Metal upload staging buffer");
-                auto* destination = static_cast<uint8_t*>(staging.contents);
-                const auto* source = reinterpret_cast<const uint8_t*>(upload.Data().data());
-                for (NSUInteger row = 0; row < height; ++row) {
-                    std::memcpy(destination + row * staging_row_bytes,
-                                source + row * source_row_bytes, source_row_bytes);
-                }
-                [staging_buffers addObject:staging];
-                [blit copyFromBuffer:staging sourceOffset:0
-                  sourceBytesPerRow:staging_row_bytes
-                sourceBytesPerImage:staging_row_bytes * height
-                         sourceSize:MTLSizeMake(width, height, 1)
-                          toTexture:texture->Native() destinationSlice:0 destinationLevel:0
-                 destinationOrigin:MTLOriginMake(0, 0, 0)];
+                EncodeTextureUpload(queue_.device, blit, staging_buffers,
+                    static_cast<const UploadTextureCmd&>(*command));
             }
             [blit endEncoding];
             [command_buffer commit];
