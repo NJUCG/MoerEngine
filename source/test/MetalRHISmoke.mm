@@ -162,6 +162,155 @@ void CheckGraphicsPipeline() {
               << std::endl;
 }
 
+void CheckGraphicsDraw() {
+    using namespace Moer::Render;
+    constexpr std::string_view source = R"(
+        #include <metal_stdlib>
+        using namespace metal;
+        struct VertexOutput { float4 position [[position]]; };
+        vertex VertexOutput draw_vertex(uint index [[vertex_id]]) {
+            const float2 positions[3] = {float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0)};
+            return {float4(positions[index], 0.0, 1.0)};
+        }
+        fragment float4 draw_fragment() { return float4(1.0, 0.0, 0.0, 1.0); }
+    )";
+    std::vector<Moer::uint8> code(source.begin(), source.end());
+    SingleShaderInfo vertex{.entry_point = "draw_vertex", .shader_data = code,
+                            .shader_type = EShaderType::ST_VERTEX};
+    SingleShaderInfo fragment{.entry_point = "draw_fragment", .shader_data = code,
+                              .shader_type = EShaderType::ST_FRAGMENT};
+    PipelineShaderInfo shaders{.shader_group = ShaderVsPs{vertex, fragment}};
+    GfxPsoCreateInfo info(
+        RHIRasterizeInfo::Preset<Rast::CULL_NONE>(), VertexStream{},
+        {RHIColorAttachmentInfo::Preset<>(PF_R8G8B8A8_UNORM)}
+    );
+    PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(info), std::move(shaders));
+    RasterPipeline raster(pipeline);
+    TextureRef texture = RenderDevice::Get().CreateTexture(
+        Extent2D(8, 8), PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_SRC
+    );
+    Moer::Array<MeshDrawData> meshes;
+    meshes.emplace_back().EmplaceDraw(3, 0, 0);
+    CommandList draw(EQueueType::Graphics);
+    CommandList::DrawDispatcher(raster, draw).Draw(
+        Rect2D(0, 0, 8, 8), std::move(meshes),
+        ColorAttachment{.target = texture.Get(), .action = AC_CLEAR_STORE,
+                        .clear_color = {0, 0, 0, 1}}
+    );
+    RHIExecutor::Get().Submit(EQueueType::Graphics, draw.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    id<MTLTexture> native = (__bridge id<MTLTexture>)GetMetalNativeTexture(texture.Get());
+    id<MTLBuffer> readback = [native.device
+        newBufferWithLength:256 * 8 options:MTLResourceStorageModeShared];
+    id<MTLCommandQueue> queue = [native.device newCommandQueue];
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    [blit copyFromTexture:native sourceSlice:0 sourceLevel:0
+            sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(8, 8, 1)
+                toBuffer:readback destinationOffset:0 destinationBytesPerRow:256
+       destinationBytesPerImage:256 * 8];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    const auto* middle = static_cast<const uint8_t*>(readback.contents) + 4 * 256 + 4 * 4;
+    if (command.status != MTLCommandBufferStatusCompleted ||
+        middle[0] != 255 || middle[1] != 0 || middle[2] != 0 || middle[3] != 255) {
+        throw std::runtime_error("Metal RHI triangle draw readback is not red");
+    }
+    std::cout << "RHI graphics draw and GPU color readback: success" << std::endl;
+}
+
+void CheckIndexedGraphicsDraw() {
+    using namespace Moer::Render;
+    constexpr std::string_view source = R"(
+        #include <metal_stdlib>
+        using namespace metal;
+        struct VertexInput { float2 position [[attribute(0)]]; };
+        struct VertexOutput { float4 position [[position]]; };
+        vertex VertexOutput indexed_vertex(VertexInput input [[stage_in]]) {
+            return {float4(input.position, 0.0, 1.0)};
+        }
+        fragment float4 indexed_fragment() { return float4(0.0, 1.0, 0.0, 1.0); }
+    )";
+    std::vector<Moer::uint8> code(source.begin(), source.end());
+    SingleShaderInfo vertex{.entry_point = "indexed_vertex", .shader_data = code,
+                            .shader_type = EShaderType::ST_VERTEX};
+    SingleShaderInfo fragment{.entry_point = "indexed_fragment", .shader_data = code,
+                              .shader_type = EShaderType::ST_FRAGMENT};
+    PipelineShaderInfo shaders{.shader_group = ShaderVsPs{vertex, fragment}};
+    VertexStream stream;
+    stream.EmplacePerVertex({Moer::Render::VertexElement(PF_R32G32_SFLOAT)});
+    GfxPsoCreateInfo info(
+        RHIRasterizeInfo::Preset<Rast::CULL_NONE>(), std::move(stream),
+        {RHIColorAttachmentInfo::Preset<>(PF_R8G8B8A8_UNORM)}
+    );
+    RasterPipeline raster(RenderDevice::Get().CreatePipeline(std::move(info), std::move(shaders)));
+    constexpr float positions[] = {-1.0f, -1.0f, 3.0f, -1.0f, -1.0f, 3.0f};
+    constexpr uint16_t indices[] = {99, 0, 1, 2};
+    BufferRef vertex_buffer = RenderDevice::Get().CreateBuffer(
+        "Metal indexed draw vertices",
+        BufferInfo{sizeof(positions), 1,
+                   EBufferUsageFlags::VERTEX_BUFFER | EBufferUsageFlags::TRANSFER_DST}
+    );
+    BufferRef index_buffer = RenderDevice::Get().CreateBuffer(
+        "Metal indexed draw indices",
+        BufferInfo{sizeof(indices), 1,
+                   EBufferUsageFlags::INDEX_BUFFER | EBufferUsageFlags::TRANSFER_DST}
+    );
+    CommandList upload(EQueueType::Graphics);
+    upload.CopyFrom(
+        std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(positions), sizeof(positions)),
+        vertex_buffer->GetView(0, sizeof(positions))
+    );
+    upload.CopyFrom(
+        std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(indices), sizeof(indices)),
+        index_buffer->GetView(0, sizeof(indices))
+    );
+    RHIExecutor::Get().Submit(EQueueType::Graphics, upload.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    TextureRef texture = RenderDevice::Get().CreateTexture(
+        Extent2D(8, 8), PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_SRC
+    );
+    MeshDrawData mesh;
+    mesh.vtx_views.emplace_back(VertexBuffer{vertex_buffer.Get(), 0});
+    mesh.idx_view = IndexBuffer{BufferView(index_buffer.Get(), 2, 3, 2), IET_UINT16};
+    mesh.EmplaceDrawIndexed(0, 3, 0, 0);
+    Moer::Array<MeshDrawData> meshes;
+    meshes.emplace_back(std::move(mesh));
+    CommandList draw(EQueueType::Graphics);
+    CommandList::DrawDispatcher(raster, draw).Draw(
+        Rect2D(0, 0, 8, 8), std::move(meshes),
+        ColorAttachment{.target = texture.Get(), .action = AC_CLEAR_STORE,
+                        .clear_color = {0, 0, 0, 1}}
+    );
+    RHIExecutor::Get().Submit(EQueueType::Graphics, draw.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    id<MTLTexture> native = (__bridge id<MTLTexture>)GetMetalNativeTexture(texture.Get());
+    id<MTLBuffer> readback = [native.device
+        newBufferWithLength:256 * 8 options:MTLResourceStorageModeShared];
+    id<MTLCommandQueue> queue = [native.device newCommandQueue];
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    [blit copyFromTexture:native sourceSlice:0 sourceLevel:0
+            sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(8, 8, 1)
+                toBuffer:readback destinationOffset:0 destinationBytesPerRow:256
+       destinationBytesPerImage:256 * 8];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    const auto* middle = static_cast<const uint8_t*>(readback.contents) + 4 * 256 + 4 * 4;
+    if (command.status != MTLCommandBufferStatusCompleted ||
+        middle[0] != 0 || middle[1] != 255 || middle[2] != 0 || middle[3] != 255) {
+        throw std::runtime_error("Metal RHI indexed triangle draw readback is not green");
+    }
+    std::cout << "RHI indexed graphics draw and GPU color readback: success" << std::endl;
+}
+
 void CheckComputePipeline() {
     using namespace Moer::Render;
     constexpr std::string_view source = R"(
@@ -891,6 +1040,8 @@ int main(int argc, char** argv) {
             }
             CheckRasterTextureFormats();
             CheckGraphicsPipeline();
+            CheckGraphicsDraw();
+            CheckIndexedGraphicsDraw();
             CheckComputePipeline();
             CheckGraphicsUploads();
             CheckMipTexture();

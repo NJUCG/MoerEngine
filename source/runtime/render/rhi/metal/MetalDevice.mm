@@ -323,14 +323,26 @@ void EncodeBufferUpload(
 
 class MetalPipelineState final : public PipelineState {
 public:
-    explicit MetalPipelineState(id<MTLRenderPipelineState> pipeline) : render_(pipeline) {}
+    MetalPipelineState(
+        id<MTLRenderPipelineState> pipeline,
+        std::vector<MTLPixelFormat> color_formats,
+        uint vertex_bindings,
+        RHIRasterizeInfo rasterizer
+    ) : render_(pipeline), color_formats_(std::move(color_formats)),
+        vertex_bindings_(vertex_bindings), rasterizer_(rasterizer) {}
     explicit MetalPipelineState(id<MTLComputePipelineState> pipeline) : compute_(pipeline) {}
     id<MTLRenderPipelineState> NativeRender() const noexcept { return render_; }
     id<MTLComputePipelineState> NativeCompute() const noexcept { return compute_; }
+    const std::vector<MTLPixelFormat>& ColorFormats() const noexcept { return color_formats_; }
+    uint VertexBindingCount() const noexcept { return vertex_bindings_; }
+    const RHIRasterizeInfo& Rasterizer() const noexcept { return rasterizer_; }
 
 private:
     id<MTLRenderPipelineState> render_{nil};
     id<MTLComputePipelineState> compute_{nil};
+    std::vector<MTLPixelFormat> color_formats_;
+    uint vertex_bindings_{0};
+    RHIRasterizeInfo rasterizer_{};
 };
 
 id<MTLFunction> CompileMetalFunction(id<MTLDevice> device, const SingleShaderInfo& shader) {
@@ -886,6 +898,139 @@ private:
     WindowSurfaceIdentity identity_{};
 };
 
+MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
+    auto* pipeline = dynamic_cast<MetalPipelineState*>(
+        reinterpret_cast<PipelineState*>(draw.Pipeline().handle));
+    const RenderPassInfo& pass = draw.RenderPassInfo();
+    if (pipeline == nullptr || pipeline->NativeRender() == nil ||
+        pipeline->ColorFormats().size() != 1 ||
+        !draw.Args().args.empty() || !draw.Args().constants.empty() ||
+        pass.color_attachments.size() != 1 || pass.depth_attachment.Valid() ||
+        pass.view_mask != 0 || pass.viewport_cnt != 1 || !pass.render_area.IsValid() ||
+        draw.DrawData().empty()) {
+        Unsupported("this graphics draw layout");
+    }
+    const ColorAttachment& attachment = pass.color_attachments[0];
+    auto* target = dynamic_cast<MetalTexture*>(attachment.target);
+    if (target == nullptr || pipeline->ColorFormats()[0] != ToMetalFormat(target->GetFormat()) ||
+        attachment.mip_level >= target->GetNumMips() ||
+        attachment.array_layer >= target->GetNumArray() || attachment.array_count != 1 ||
+        pass.render_area.offset.x < 0 || pass.render_area.offset.y < 0 ||
+        uint(pass.render_area.offset.x) + pass.render_area.extent.width >
+            std::max(1u, target->GetWidth() >> attachment.mip_level) ||
+        uint(pass.render_area.offset.y) + pass.render_area.extent.height >
+            std::max(1u, target->GetHeight() >> attachment.mip_level) ||
+        GetStoreOp(attachment.action) == EAttachmentStoreOp::MULTISAMPLE_RESOLVE) {
+        Unsupported("this graphics color attachment");
+    }
+    const RHIRasterizeInfo& raster = pipeline->Rasterizer();
+    if (raster.cull_mode == RCM_FRONT_AND_BACK ||
+        (raster.fill_mode != FM_FILL && raster.fill_mode != FM_LINE) ||
+        raster.b_depth_clamp_enable || raster.b_depth_bias) {
+        Unsupported("this graphics raster state");
+    }
+    for (const MeshDrawData& mesh : draw.DrawData()) {
+        if (mesh.vtx_views.size() != pipeline->VertexBindingCount() ||
+            mesh.indirect_draw_param.has_value() || mesh.draw_params.empty()) {
+            Unsupported("this mesh draw layout");
+        }
+        for (const VertexBuffer& vertex : mesh.vtx_views) {
+            auto* buffer = dynamic_cast<MetalBuffer*>(vertex.buffer);
+            if (buffer == nullptr || vertex.offset >= buffer->GetByteSize()) {
+                Unsupported("this vertex buffer view");
+            }
+        }
+        if (const auto* indexed = std::get_if<IndexBuffer>(&mesh.idx_view)) {
+            auto* buffer = dynamic_cast<MetalBuffer*>(indexed->buffer.GetBuffer());
+            if (buffer == nullptr ||
+                (indexed->stride != IET_UINT16 && indexed->stride != IET_UINT32)) {
+                Unsupported("this index buffer view");
+            }
+            const uint64 stride = indexed->stride == IET_UINT16 ? 2 : 4;
+            if (indexed->buffer.GetByteOffset() > buffer->GetByteSize() ||
+                indexed->buffer.GetByteSize() >
+                    buffer->GetByteSize() - indexed->buffer.GetByteOffset() ||
+                indexed->buffer.GetByteOffset() % stride != 0 ||
+                indexed->buffer.GetByteSize() % stride != 0) {
+                Unsupported("this index buffer range");
+            }
+            for (const SingleDrawParam& param : mesh.draw_params) {
+                if (uint64(param.first_index) + param.index_cnt >
+                    indexed->buffer.GetByteSize() / stride) {
+                    Unsupported("this indexed draw range");
+                }
+            }
+        }
+    }
+    return pipeline;
+}
+
+void EncodeSimpleDraw(id<MTLCommandBuffer> command_buffer, const SetDrawStateCmd& draw) {
+    auto* pipeline = static_cast<MetalPipelineState*>(
+        reinterpret_cast<PipelineState*>(draw.Pipeline().handle));
+    const RenderPassInfo& pass = draw.RenderPassInfo();
+    const ColorAttachment& attachment = pass.color_attachments[0];
+    auto* target = static_cast<MetalTexture*>(attachment.target);
+    MTLRenderPassDescriptor* descriptor = [MTLRenderPassDescriptor renderPassDescriptor];
+    auto* color = descriptor.colorAttachments[0];
+    color.texture = target->Native();
+    color.level = attachment.mip_level;
+    color.slice = attachment.array_layer;
+    switch (GetLoadOp(attachment.action)) {
+        case EAttachmentLoadOp::CLEAR: color.loadAction = MTLLoadActionClear; break;
+        case EAttachmentLoadOp::LOAD: color.loadAction = MTLLoadActionLoad; break;
+        default: color.loadAction = MTLLoadActionDontCare; break;
+    }
+    color.storeAction = GetStoreOp(attachment.action) == EAttachmentStoreOp::STORE ?
+        MTLStoreActionStore : MTLStoreActionDontCare;
+    const float4 clear = attachment.clear_color;
+    color.clearColor = MTLClearColorMake(clear.x, clear.y, clear.z, clear.w);
+    id<MTLRenderCommandEncoder> encoder =
+        [command_buffer renderCommandEncoderWithDescriptor:descriptor];
+    if (encoder == nil) throw std::runtime_error("Cannot encode Metal draw render pass");
+    [encoder setRenderPipelineState:pipeline->NativeRender()];
+    const Rect2D& rect = pass.render_area;
+    [encoder setViewport:MTLViewport{double(rect.offset.x), double(rect.offset.y),
+                                     double(rect.extent.width), double(rect.extent.height), 0.0, 1.0}];
+    [encoder setScissorRect:MTLScissorRect{NSUInteger(rect.offset.x), NSUInteger(rect.offset.y),
+                                          rect.extent.width, rect.extent.height}];
+    const RHIRasterizeInfo& raster = pipeline->Rasterizer();
+    [encoder setFrontFacingWinding:raster.b_front_counter_clockwise ?
+        MTLWindingCounterClockwise : MTLWindingClockwise];
+    [encoder setCullMode:raster.cull_mode == RCM_FRONT ? MTLCullModeFront :
+                         raster.cull_mode == RCM_BACK ? MTLCullModeBack : MTLCullModeNone];
+    [encoder setTriangleFillMode:raster.fill_mode == FM_LINE ?
+        MTLTriangleFillModeLines : MTLTriangleFillModeFill];
+    for (const MeshDrawData& mesh : draw.DrawData()) {
+        for (uint index = 0; index < mesh.vtx_views.size(); ++index) {
+            const VertexBuffer& vertex = mesh.vtx_views[index];
+            auto* buffer = static_cast<MetalBuffer*>(vertex.buffer);
+            [encoder setVertexBuffer:buffer->Native() offset:vertex.offset atIndex:16 + index];
+        }
+        if (const auto* indexed = std::get_if<IndexBuffer>(&mesh.idx_view)) {
+            auto* buffer = static_cast<MetalBuffer*>(indexed->buffer.GetBuffer());
+            const uint stride = indexed->stride == IET_UINT16 ? 2 : 4;
+            const MTLIndexType type = indexed->stride == IET_UINT16 ?
+                MTLIndexTypeUInt16 : MTLIndexTypeUInt32;
+            for (const SingleDrawParam& param : mesh.draw_params) {
+                [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                    indexCount:param.index_cnt indexType:type
+                                   indexBuffer:buffer->Native()
+                             indexBufferOffset:indexed->buffer.GetByteOffset() + param.first_index * stride
+                                instanceCount:param.instance_cnt
+                                   baseVertex:param.vertex_offset baseInstance:param.first_instance];
+            }
+        } else {
+            for (const SingleDrawParam& param : mesh.draw_params) {
+                [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                           vertexStart:param.vertex_offset vertexCount:param.index_cnt
+                         instanceCount:param.instance_cnt baseInstance:param.first_instance];
+            }
+        }
+    }
+    [encoder endEncoding];
+}
+
 class MetalCommandQueue final : public CommandQueue {
 public:
     MetalCommandQueue(id<MTLCommandQueue> queue, MetalCompletionDispatcher& completions) :
@@ -932,6 +1077,11 @@ public:
             }
             if (command->Type() == Command::EType::UploadBuffer) {
                 ValidateBufferUpload(static_cast<const UploadBufferCmd&>(*command));
+                has_gpu_work = true;
+                continue;
+            }
+            if (command->Type() == Command::EType::SetDrawState) {
+                ValidateSimpleDraw(static_cast<const SetDrawStateCmd&>(*command));
                 has_gpu_work = true;
                 continue;
             }
@@ -983,6 +1133,10 @@ public:
                             static_cast<const UploadBufferCmd&>(*command));
                     }
                     [blit endEncoding];
+                    continue;
+                }
+                if (command->Type() == Command::EType::SetDrawState) {
+                    EncodeSimpleDraw(command_buffer, static_cast<const SetDrawStateCmd&>(*command));
                     continue;
                 }
                 const auto& clear = static_cast<const ClearResourceCmd&>(*command);
@@ -1410,7 +1564,15 @@ PipelineHandle MetalDevice::CreatePipeline(GfxPsoCreateInfo&& create_info, Pipel
                 std::string(error.localizedDescription.UTF8String ?: "unknown error"));
         }
         PipelineHandle handle = MetalPipelineMetadata(shader_info, {&shaders.vs, &shaders.ps});
-        handle.handle = reinterpret_cast<uint64>(MoerNew(MetalPipelineState)(native_pipeline));
+        std::vector<MTLPixelFormat> color_formats;
+        color_formats.reserve(create_info.color_attachment_count);
+        for (uint index = 0; index < create_info.color_attachment_count; ++index) {
+            color_formats.push_back(ToMetalFormat(create_info.color_attachments_info[index].pixel_format));
+        }
+        handle.handle = reinterpret_cast<uint64>(MoerNew(MetalPipelineState)(
+            native_pipeline, std::move(color_formats),
+            uint(create_info.vertex_stream.bindings.size()), create_info.rasterizer_info
+        ));
         return handle;
     }
 }
