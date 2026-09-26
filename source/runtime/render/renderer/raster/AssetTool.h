@@ -363,8 +363,7 @@ private:
     }
 
     static ubyte* LoadImageData(const std::string& path, int& width, int& height) {
-        FILE* file = nullptr;
-        fopen_s(&file, path.c_str(), "rb");
+        FILE* file = std::fopen(path.c_str(), "rb");
 
         if (!file) {
             LOG_ERROR("Failed to load texture file: {}", path);

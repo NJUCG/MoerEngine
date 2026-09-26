@@ -9,9 +9,15 @@ PythonRuntimeConfig PythonRuntimeConfig::Default() {
 
     PythonRuntimeConfig config;
     config.runtime_root = runtime_root;
+#if defined(_WIN32)
     config.program_path = runtime_root / "MoerEditor.exe";
     config.stdlib_dir   = runtime_root / "Lib";
     config.dll_dir      = runtime_root / "DLLs";
+#else
+    config.program_path = runtime_root / "MoerEditor";
+    config.stdlib_dir   = MOER_PYTHON_STDLIB_DIR;
+    config.dll_dir      = MOER_PYTHON_DYNLOAD_DIR;
+#endif
     return config;
 }
 

@@ -91,7 +91,11 @@ void PythonRuntime::Initialize(const PythonRuntimeConfig& config) {
     py_config.site_import             = 0;
     py_config.module_search_paths_set = 1;
 
+#if defined(_WIN32)
     SetConfigString(py_config, &py_config.home, m_config.runtime_root, "Failed to set Python home");
+#else
+    SetConfigString(py_config, &py_config.home, MOER_PYTHON_HOME, "Failed to set Python home");
+#endif
     SetConfigString(
         py_config, &py_config.executable, m_config.program_path, "Failed to set Python executable"
     );

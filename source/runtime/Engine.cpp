@@ -639,9 +639,13 @@ void Engine::ValidateCommandLine(int argc, const char** argv) {
     }
 
     std::filesystem::path workspace_path = argv[0];
+#if defined(_WIN32)
     workspace_path = workspace_path.filename().string().find(".exe") != std::string::npos ?
                          workspace_path.parent_path() :
                          workspace_path;
+#else
+    workspace_path = workspace_path.parent_path();
+#endif
     const std::filesystem::path config_path =
         ParseConfigOverride(argc, argv).value_or(workspace_path / "MoerEngine.toml");
     if (!std::filesystem::is_regular_file(config_path)) {
@@ -1262,7 +1266,11 @@ void Engine::Init(
     report_startup("Starting engine core", "Initializing logging and configuration");
 
     std::filesystem::path path = argv[0];
+#if defined(_WIN32)
     path = path.filename().string().find(".exe") != std::string::npos ? path.parent_path() : path;
+#else
+    path = path.parent_path();
+#endif
     const std::string log_directory = (path / "logs").generic_string();
 
     // Init LogSystem

@@ -180,7 +180,7 @@ inline int ini_parse(const char* filename, ini_handler handler, void* user) {
     FILE* file;
     int   error;
 
-    fopen_s(&file, filename, "r");
+    file = fopen(filename, "r");
     if (!file)
         return -1;
     error = ini_parse_file(file, handler, user);

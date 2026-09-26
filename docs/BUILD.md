@@ -71,6 +71,22 @@
 
 - 成功启动后，可以参考 [DEVELOPMENT.md](DEVELOPMENT.md) 来了解MoerEngine的开发规范等其他内容
 
+### macOS 原生 Metal 开发基线
+
+当前 `metal` 分支可以在 macOS 上配置并编译 `MoerEditor`，但原生 Metal RHI 尚未实现，编辑器会在创建图形设备时报告后端不可用。此阶段用于验证跨平台 Core、Render 和脚本模块的编译与启动路径。
+
+准备 Xcode Command Line Tools、CMake 3.26 至 3.x、Python 3.12（含开发库）以及原生 DXC（`dxc` 可执行文件、`dxcapi.h`、`libdxcompiler`）。初始化子模块后，在仓库根目录执行：
+
+```bash
+cp template.MoerEngine.toml MoerEngine.toml # 已有本地配置时跳过
+cmake -S . -B build/mac -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Debug \
+  -Dmoer_build_test=OFF -DMOER_IGNORE_ENABLE_FEATURES=ON
+cmake --build build/mac --target MoerEditor -j 6
+./target/bin/Debug/MoerEditor --no-splash
+```
+
+如果 DXC 未在 `PATH`，配置时追加 `-DMOER_DXC_ROOT=/path/to/dxc-prefix`；该目录应包含 `bin/dxc`、`include/dxc/dxcapi.h` 和 `lib/libdxcompiler.dylib`。CMake 会查找本机 Python 3.12，并将其标准库位置写入脚本模块的构建配置。当前默认 `MoerEngine.toml` 选择 Vulkan，因此启动时应报告 `Vulkan backend is not built on macOS; select Metal when available`。在 Metal RHI 接入之前，尚不能在 macOS 上显示渲染画面。
+
 ## 3. CUDA等AI组件支持
 
 * 如果你希望在MoerEngine中启用CUDA、LibTorch、TensorRT，那么你需要手动在系统中安装这三个依赖，再在MoerEngine中配置他们。接下来为启用AI组件的具体操作手册：

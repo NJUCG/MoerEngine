@@ -10,7 +10,11 @@
 #include <cassert>
 #include <optional>
 #include <variant>
+#if defined(_WIN32)
 #include <winerror.h>
+#include <wrl/client.h>
+#include <d3d12shader.h>
+#endif
 #if PLATFORM_WINDOWS
 #ifndef NOMINMAX
 #define NOMINMAX 1
@@ -18,8 +22,6 @@
 #endif
 
 #include "rhi/RHI.h"
-#include <wrl/client.h>
-
 #include "DXCUtils.h"
 #include "log/LogSystem.h"
 #include "rhi/RHICommon.h"
@@ -34,9 +36,12 @@
 #include "dxcapi.h"
 #include "shader/ShaderCommon.h"
 #include "spirv_cross.hpp"
-#include <d3d12shader.h>
-
+#if defined(_WIN32)
 using Microsoft::WRL::ComPtr;
+#else
+template<typename T>
+using ComPtr = CComPtr<T>;
+#endif
 using ShaderParametersInfoMap   = Moer::Render::ShaderParametersInfoMap;
 using ShaderCompilerEnvironment = Moer::Render::ShaderCompilerEnvironment;
 using ShaderFileDependency      = Moer::Render::ShaderFileDependency;
@@ -109,11 +114,13 @@ private:
     void Compile(const ShaderCompilerInput& _input, ShaderCompilerOutput& _output);
 
     void ReflectSPIRV(ComPtr<IDxcResult> result, ShaderParametersInfoMap& _param_map);
+#if defined(_WIN32)
     void ReflectDXIL(
         ComPtr<IDxcResult>         result,
         const ShaderCompilerInput& _input,
         ShaderParametersInfoMap&   _param_map
     );
+#endif
 };
 
 DXCompiler::Impl::Impl() {
@@ -298,7 +305,11 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
             arguments_wchar[i] = arguments[i].data();
         }
 
+#if defined(_WIN32)
         auto* tracking_handler = new TrackingIncludeHandler(include_handler.Get());
+#else
+        auto* tracking_handler = new TrackingIncludeHandler(include_handler.p);
+#endif
         HRESULT hres = compiler->Compile(
             &buffer,
             (LPCWSTR*)arguments_wchar.data(),
@@ -346,8 +357,14 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
         if (_input.target_info.shader_platform == SP_VULKAN_SM6) {
             ReflectSPIRV(result, _output.parameter_map);
         } else {
+#if defined(_WIN32)
             // D3D12 使用 DXIL 反射，Vulkan 使用 SPIR-V 反射。
             ReflectDXIL(result, _input, _output.parameter_map);
+#else
+            push_back_error_message("DXIL shader reflection is only supported on Windows");
+            tracking_handler->Release();
+            return;
+#endif
         }
 
         auto fill_success_data =
@@ -373,7 +390,7 @@ void DXCompiler::Impl::Compile(const ShaderCompilerInput& _input, ShaderCompiler
                 _output.source_dependencies.clear();
                 _output.source_dependencies.push_back(ShaderFileDependency{
                     .path      = file_path.generic_string(),
-                    .timestamp = last_write_time.time_since_epoch().count(),
+                    .timestamp = static_cast<long long>(last_write_time.time_since_epoch().count()),
                 });
                 auto included = tracking_handler->TakeIncludedFiles();
                 for (auto& dep : included) {
@@ -653,6 +670,7 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
         }                                                            \
     } while (0)
 
+#if defined(_WIN32)
 void DXCompiler::Impl::ReflectDXIL(
     ComPtr<IDxcResult>         result,
     const ShaderCompilerInput& _input,
@@ -820,3 +838,4 @@ void DXCompiler::Impl::ReflectDXIL(
 
     _param_map.reflect_map.swap(reflect_map);
 }
+#endif

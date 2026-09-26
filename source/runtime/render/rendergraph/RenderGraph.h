@@ -880,6 +880,9 @@ public:
         uint64        source_order_base         = 0;
     };
 
+    static const ActiveRecordingOptions& DefaultActiveRecordingOptions();
+    static const GpuProfilingOptions& DefaultGpuProfilingOptions();
+
     explicit RenderGraph(std::string_view name = "RenderGraph");
     RenderGraph(std::string_view name, QueueTopology topology);
     ~RenderGraph();
@@ -1161,8 +1164,8 @@ public:
         const RecordingSourceSetupCallback& configure_recording_source = {},
         bool                                parallel_recording_enabled = true,
         const FrontendSourcePublisher&      publish_frontend_sources = {},
-        const ActiveRecordingOptions&        active_recording = {},
-        const GpuProfilingOptions&            gpu_profiling = {}
+        const ActiveRecordingOptions&        active_recording = DefaultActiveRecordingOptions(),
+        const GpuProfilingOptions&            gpu_profiling = DefaultGpuProfilingOptions()
     );
 
     /**
@@ -1180,7 +1183,7 @@ public:
     bool RecordAndMergeFrontendCommands(
         CommandList&               command_list,
         bool                       parallel_recording_enabled = true,
-        const GpuProfilingOptions& gpu_profiling = {}
+        const GpuProfilingOptions& gpu_profiling = DefaultGpuProfilingOptions()
     );
 
     [[nodiscard]] bool IsCompiled() const {

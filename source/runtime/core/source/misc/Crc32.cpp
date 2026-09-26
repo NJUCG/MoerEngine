@@ -44,6 +44,13 @@
 #else
 // defines __BYTE_ORDER as __LITTLE_ENDIAN or __BIG_ENDIAN
 #include <sys/param.h>
+#if !defined(__BYTE_ORDER) && defined(__BYTE_ORDER__)
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define __BYTE_ORDER __LITTLE_ENDIAN
+#elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define __BYTE_ORDER __BIG_ENDIAN
+#endif
+#endif
 
 // intrinsics / prefetching
 #ifdef __GNUC__

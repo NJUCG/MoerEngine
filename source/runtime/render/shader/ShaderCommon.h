@@ -366,7 +366,7 @@ namespace std {
 template<>
 struct hash<Shader> {
     size_t operator()(const Moer::Render::Shader& _shader) const {
-        size_t hash = _shader.compiled_hash[0];
+        uint64_t hash = _shader.compiled_hash[0];
         HashCombine(hash, _shader.compiled_hash[1]);
         return hash;
     }

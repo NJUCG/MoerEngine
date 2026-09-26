@@ -2,7 +2,9 @@
 #include "Core.h"
 #include "PixelFormat.h"
 #include "RHIImpl.h"
+#if defined(_WIN32)
 #include "d3d12/D3D12Device.h"
+#endif
 #include "log/LogSystem.h"
 #include "rendergraph/RenderGraphResourcePool.h"
 #include "rhi/RHICommand.h"
@@ -11,7 +13,11 @@
 #include "rhi/RHIResource.h"
 #include "rhi/RHIThreadHeartbeat.h"
 #include "shader/ShaderResourceManager.h"
+#if !defined(__APPLE__)
 #include "vulkan/VulkanDevice.h"
+#endif
+
+#include <stdexcept>
 
 namespace Moer::Render {
 namespace {
@@ -38,6 +44,7 @@ private:
 
 } // namespace
 
+#if !defined(__APPLE__)
 template<>
 VulkanRHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
     using std::string;
@@ -78,7 +85,9 @@ VulkanRHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
 
     return config;
 }
+#endif
 
+#if defined(_WIN32)
 template<>
 D3D12RHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
     MOER_ASSERT(
@@ -92,6 +101,7 @@ D3D12RHIConfig ResolveConfigAs(const DeviceInitInfo& _info) {
 
     return config;
 }
+#endif
 
 RenderDevice& RenderDevice::Get() {
     static RenderDevice device;
@@ -113,14 +123,23 @@ void RenderDevice::Init(DeviceInitInfo&& _info) {
     try {
         switch (_info.rhi_type) {
             case ERHIType::Vulkan:
+#if defined(__APPLE__)
+                throw std::runtime_error("Vulkan backend is not built on macOS; select Metal when available");
+#else
                 Get().impl =
                     std::move(UniquePtr<Impl>(MoerNew(VulkanDevice)(ResolveConfigAs<VulkanRHIConfig>(_info))));
                 break;
+#endif
+#if defined(_WIN32)
             case ERHIType::D3D12:
                 Get().impl =
                     std::move(UniquePtr<Impl>(MoerNew(D3D12Device)(ResolveConfigAs<D3D12RHIConfig>(_info))));
                 //LOG_ERROR("D3D12 is not supported yet");
                 break;
+#else
+            case ERHIType::D3D12:
+                throw std::runtime_error("D3D12 backend is only available on Windows");
+#endif
         }
         Get().rhi_type = _info.rhi_type;
         RHIExecutor::StartUp(_info.submission_batch_window);

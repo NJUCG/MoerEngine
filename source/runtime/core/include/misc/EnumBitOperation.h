@@ -1,7 +1,13 @@
 #ifndef ENUM_BIT_OPERATION_H_
 #define ENUM_BIT_OPERATION_H_
 #ifndef MOER_FORCE_INLINE
+#if defined(_MSC_VER)
 #define MOER_FORCE_INLINE __forceinline
+#elif defined(__GNUC__) || defined(__clang__)
+#define MOER_FORCE_INLINE inline __attribute__((always_inline))
+#else
+#define MOER_FORCE_INLINE inline
+#endif
 #endif // !FORCE_INLINE
 #include <type_traits>
 

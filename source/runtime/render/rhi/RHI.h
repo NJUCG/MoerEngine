@@ -19,6 +19,7 @@ namespace Moer::Render {
 class CommandQueue;
 class CopyQueue;
 class IOInterface;
+class RenderDevice;
 using IOInterfaceRef = std::shared_ptr<IOInterface>;
 } // namespace Moer::Render
 

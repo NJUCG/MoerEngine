@@ -29,3 +29,14 @@ target_link_libraries(${target_name}
     PUBLIC pybind11::headers
     PUBLIC python312_embed
 )
+
+if (NOT WIN32)
+    get_target_property(python312_home python312_embed PYTHON312_TARGET_ROOT)
+    get_target_property(python312_stdlib python312_embed PYTHON312_TARGET_STDLIB_DIR)
+    get_target_property(python312_dynload python312_embed PYTHON312_TARGET_DYNLOAD_DIR)
+    target_compile_definitions(${target_name} PRIVATE
+        "MOER_PYTHON_HOME=\"${python312_home}\""
+        "MOER_PYTHON_STDLIB_DIR=\"${python312_stdlib}\""
+        "MOER_PYTHON_DYNLOAD_DIR=\"${python312_dynload}\""
+    )
+endif()

@@ -38,15 +38,17 @@ set_target_folder(imgui ${third_party_folder}/imgui)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/nativefiledialog-extended-1.2.1)
 set_target_folder(native_file_dialog_extended ${third_party_folder}/nativefiledialog-extended-1.2.1)
 
-add_subdirectory(d3d12_agilitysdk)
-set_target_folder(d3d12_agilitysdk ${third_party_folder}/d3d12_agilitysdk)
-set_target_folder(d3d12_agilitysdk_d3dx12 ${third_party_folder}/d3d12_agilitysdk)
+if (WIN32)
+    add_subdirectory(d3d12_agilitysdk)
+    set_target_folder(d3d12_agilitysdk ${third_party_folder}/d3d12_agilitysdk)
+    set_target_folder(d3d12_agilitysdk_d3dx12 ${third_party_folder}/d3d12_agilitysdk)
 
-add_subdirectory(D3D12MemoryAllocator)
-set_target_folder(D3D12MemoryAllocator ${third_party_folder}/D3D12MemoryAllocator)
+    add_subdirectory(D3D12MemoryAllocator)
+    set_target_folder(D3D12MemoryAllocator ${third_party_folder}/D3D12MemoryAllocator)
 
-add_subdirectory(winpixeventruntime)
-set_target_folder(winpixeventruntime ${third_party_folder}/winpixeventruntime)
+    add_subdirectory(winpixeventruntime)
+    set_target_folder(winpixeventruntime ${third_party_folder}/winpixeventruntime)
+endif()
 
 # json
 set(JSON_BuildTests OFF CACHE INTERNAL "")
@@ -62,6 +64,13 @@ set(MI_BUILD_SHARED      ON)
 set(MI_BUILD_OBJECT      OFF)
 set(MI_WIN_REDIRECT      ON)
 set(MI_BUILD_TESTS       OFF)
+if (APPLE)
+    # Keep explicit Memory:: allocations, but do not interpose the process-wide
+    # malloc zone from a static library linked into multiple dylibs.
+    set(MI_OVERRIDE OFF CACHE BOOL "" FORCE)
+    set(MI_OSX_ZONE OFF CACHE BOOL "" FORCE)
+    set(MI_OSX_INTERPOSE OFF CACHE BOOL "" FORCE)
+endif()
 add_subdirectory(mimalloc)
 
 string(TOLOWER "${CMAKE_BUILD_TYPE}" CMAKE_BUILD_TYPE_LC)
@@ -89,6 +98,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/smaa.cmake)
 set_target_folder(smaa ${third_party_folder}/smaa)
 
 # Find Windows SDK
+if (WIN32)
 get_filename_component (MOER_WINDOWS_SDK_PATH "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots;KitsRoot10]" ABSOLUTE CACHE)
 if (MOER_WINDOWS_SDK_PATH)
     message(STATUS "Windows SDK found: ${MOER_WINDOWS_SDK_PATH}")
@@ -115,6 +125,7 @@ else ()
 endif ()
 
 set(CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION ${MOER_WINDOWS_SDK_VERSION})
+endif()
 
 
 # toml++

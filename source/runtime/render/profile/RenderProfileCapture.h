@@ -3,6 +3,7 @@
 
 #include "RenderAPI.h"
 #include "profile/ProfileDump.h"
+#include "misc/AtomicSharedPtr.h"
 #include "rhi/RHIGpuScope.h"
 
 #include <atomic>
@@ -174,7 +175,7 @@ public:
     [[nodiscard]] RenderProfileCaptureStats GetStats() const noexcept;
 
 private:
-    std::atomic<std::shared_ptr<RenderProfileDetail::CaptureState>> state_{};
+    Moer::AtomicSharedPtr<RenderProfileDetail::CaptureState> state_{};
 };
 
 #if defined(MOER_RENDER_PROFILE_CAPTURE_TEST_HOOKS)

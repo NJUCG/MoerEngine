@@ -6,6 +6,14 @@ configure_file(${moer_runtime_render_dir}/config.h.in ${moer_runtime_render_dir}
 
 file(GLOB_RECURSE render_module_headers CONFIGURE_DEPENDS "*.h" ".hpp" "*.hlsli")
 file(GLOB_RECURSE render_module_sources CONFIGURE_DEPENDS "*.cpp")
+if (NOT WIN32)
+    list(FILTER render_module_headers EXCLUDE REGEX "/rhi/d3d12/")
+    list(FILTER render_module_sources EXCLUDE REGEX "/rhi/d3d12/")
+endif()
+if (APPLE)
+    list(FILTER render_module_headers EXCLUDE REGEX "/rhi/vulkan/")
+    list(FILTER render_module_sources EXCLUDE REGEX "/rhi/vulkan/")
+endif()
 file(GLOB_RECURSE render_shader_sources CONFIGURE_DEPENDS
     "${moer_shader_dir}/*.hlsl"
     "${moer_shader_dir}/*.hlsli"
@@ -74,16 +82,20 @@ target_link_libraries(${target_name}
     PUBLIC meshoptimizer
     PUBLIC Moer::Core
     PRIVATE spirv-cross-cpp
-    # dx, maybe add a option based on platform
-    PUBLIC d3d12_agilitysdk
-    PUBLIC d3d12_agilitysdk_d3dx12
-    PUBLIC d3d12 
-    PUBLIC dxgi
-    PUBLIC dxguid
-    PUBLIC D3D12MemoryAllocator
-    PUBLIC winpixeventruntime
     PUBLIC AssetLoad
 )
+
+if (WIN32)
+    target_link_libraries(${target_name}
+        PUBLIC d3d12_agilitysdk
+        PUBLIC d3d12_agilitysdk_d3dx12
+        PUBLIC d3d12
+        PUBLIC dxgi
+        PUBLIC dxguid
+        PUBLIC D3D12MemoryAllocator
+        PUBLIC winpixeventruntime
+    )
+endif()
 
 # Link CUDA
 if (TARGET Moer::Cuda)
@@ -160,7 +172,9 @@ else()
     message(STATUS "WITH_RENDERDOC=0 in Moer::Render")
 endif()
 
-target_compile_definitions(${target_name} PUBLIC -DMOER_AGILITY_SDK_VERSION=${MOER_AGILITYSDK_VERSION_MAJOR})
+if (WIN32)
+    target_compile_definitions(${target_name} PUBLIC -DMOER_AGILITY_SDK_VERSION=${MOER_AGILITYSDK_VERSION_MAJOR})
+endif()
 # agilitysdk need to export symbols from exe, however current render module is dll, so not easy for exe to import this then export again...
 # so here use PUBLIC not PRIVATE
 # maybe ref https://github.com/TheRealMJP/SHforHLSL/blob/main/SHTest/SampleFramework12/v1.04/Graphics/DX12.cpp#L141-L178

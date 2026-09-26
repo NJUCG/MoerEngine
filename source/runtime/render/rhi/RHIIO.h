@@ -4,6 +4,7 @@
 #include "rhi/RHIResource.h"
 #include <atomic>
 #include <cassert>
+#include <cstring>
 #include <filesystem>
 #include <functional>
 #include <span>
@@ -56,7 +57,7 @@ struct IOCmd {
         return std::visit(
             Overload{
                 [](const RawDataDesc& _src) {
-                    return _src.data.size_bytes();
+                    return uint64(_src.data.size_bytes());
                 },
                 [](const BufferViewDesc& _src) {
                     return uint64(_src.size);
@@ -187,11 +188,11 @@ public:
     FileHandle ResolveFileHandle(const std::filesystem::path& _path) {
         assert(std::filesystem::exists(_path) && "File does not exist");
         FileHandle handle;
-        char*      path_str = (char*)Memory::Malloc(_path.string().size() + 1);
-        strcpy_s(path_str, _path.string().size(), _path.string().c_str());
-        path_str[_path.string().size()] = '\0';
+        const std::string path = _path.string();
+        char*             path_str = (char*)Memory::Malloc(path.size() + 1);
+        std::memcpy(path_str, path.c_str(), path.size() + 1);
         handle.file                     = path_str;
-        handle.length                   = _path.string().size();
+        handle.length                   = path.size();
         files.push_back(handle);
         return handle;
     }
