@@ -120,6 +120,22 @@ void UploadAndCheckTexture(
         throw std::runtime_error("Metal copy fence did not complete the texture copy");
     }
 
+    Moer::Array<ExportTexture> exports;
+    exports.emplace_back(copied->GetView(), ETextureState::SAMPLE);
+    CommandList export_command(EQueueType::Copy);
+    export_command.ExportResourcesToQueue(EQueueType::Graphics, std::move(exports), {});
+    RHIExecutor::Get().Submit(EQueueType::Copy, export_command.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    Moer::Array<ImportTexture> imports;
+    imports.emplace_back(copied->GetView(), ETextureState::SAMPLE);
+    CommandList import_command(EQueueType::Graphics);
+    import_command.ImportResourcesFromQueue(EQueueType::Copy, std::move(imports), {});
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics, import_command.Submit().Wait(copy_fence, after_copy)
+    );
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
     id<MTLTexture> native = (__bridge id<MTLTexture>)GetMetalNativeTexture(copied.Get());
     if (native == nil) throw std::runtime_error("Metal upload texture bridge failed");
     const NSUInteger row_bytes = (width * pixel_stride + 255) & ~NSUInteger(255);
@@ -146,7 +162,7 @@ void UploadAndCheckTexture(
             }
         }
     }
-    std::cout << "texture upload/copy/readback " << width << "x" << height
+    std::cout << "texture upload/copy/transfer/readback " << width << "x" << height
               << " stride " << pixel_stride << ": success" << std::endl;
 }
 
@@ -229,6 +245,19 @@ int main(int argc, char** argv) {
             RenderDevice::Init(DeviceInitInfo{.rhi_type = ERHIType::Metal, .name = "MetalRHISmoke"});
             if (RenderDevice::Get().GetShaderPlatform() != EShaderPlatform::SP_METAL_MSL) {
                 throw std::runtime_error("Metal device selected the wrong shader platform");
+            }
+            FenceRef rejected_fence = RenderDevice::Get().CreateFence();
+            rejected_fence->Reject(1);
+            bool rejected_dependency_failed = false;
+            try {
+                RenderDevice::Get().GetCommandQueue(EQueueType::Graphics).Wait(
+                    WaitEvent{uint64_t(rejected_fence.Get()), 1}
+                );
+            } catch (const std::runtime_error&) {
+                rejected_dependency_failed = true;
+            }
+            if (!rejected_dependency_failed) {
+                throw std::runtime_error("Metal graphics queue accepted a rejected dependency");
             }
             std::vector<uint8_t> rgba8(7 * 5 * 4);
             for (size_t i = 0; i < rgba8.size(); ++i) rgba8[i] = static_cast<uint8_t>(i * 17);

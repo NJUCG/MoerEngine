@@ -152,6 +152,29 @@ private:
     id<MTLTexture> texture_;
 };
 
+void ValidateQueueTransfer(const QueueTransferCmd& transfer, EQueueType current_queue) {
+    const EQueueType other_queue = transfer.IsImport() ? transfer.src_queue : transfer.dst_queue;
+    if ((current_queue != EQueueType::Graphics && current_queue != EQueueType::Copy) ||
+        (other_queue != EQueueType::Graphics && other_queue != EQueueType::Copy) ||
+        current_queue == other_queue) {
+        Unsupported("this queue transfer");
+    }
+    const auto validate_texture = [](TextureView view) {
+        if (dynamic_cast<MetalTexture*>(view.GetTexture()) == nullptr) {
+            Unsupported("a foreign texture in queue transfer");
+        }
+    };
+    const auto validate_buffer = [](BufferView view) {
+        if (dynamic_cast<MetalBuffer*>(view.GetBuffer()) == nullptr) {
+            Unsupported("a foreign buffer in queue transfer");
+        }
+    };
+    for (const auto& item : transfer.ImportTextures()) validate_texture(item.texture);
+    for (const auto& item : transfer.ExportTextures()) validate_texture(item.texture);
+    for (const auto& item : transfer.ImportBuffers()) validate_buffer(item.buffer);
+    for (const auto& item : transfer.ExportBuffers()) validate_buffer(item.buffer);
+}
+
 class MetalSwapchain final : public Swapchain {
 public:
     MetalSwapchain(id<MTLDevice> device, const SwapchainCreateInfo& info) : device_(device) {
@@ -227,10 +250,21 @@ class MetalCommandQueue final : public CommandQueue {
 public:
     explicit MetalCommandQueue(id<MTLCommandQueue> queue) : queue_(queue) {}
 
-    void Wait(WaitEvent) override { Unsupported("queue wait events"); }
+    void Wait(WaitEvent event) override {
+        auto* fence = dynamic_cast<MetalFence*>(reinterpret_cast<Fence*>(event.timeline_handle));
+        const std::atomic_bool do_not_wait{false};
+        if (fence == nullptr ||
+            !fence->WaitSubmitted(event.value, &do_not_wait, EQueueType::Graphics, 1)) {
+            throw std::runtime_error("Metal graphics dependency was not submitted or was rejected");
+        }
+        fence->Wait(event.value);
+        if (fence->IsRejected(event.value)) {
+            throw std::runtime_error("Metal graphics dependency was rejected");
+        }
+    }
     WaitEvent Execute(CmdSubmit&& submit) override {
-        if (!submit.wait_events.empty() || !submit.signal_events.empty() ||
-            !submit.callbacks.empty() || !submit.success_callbacks.empty() ||
+        if (!submit.signal_events.empty() || !submit.callbacks.empty() ||
+            !submit.success_callbacks.empty() ||
             !submit.gpu_completion_tokens.empty() || !submit.query_tokens.empty() ||
             submit.b_tick_profiling || submit.profiling_phase != ERHIProfilingPhase::Disabled ||
             submit.b_delete_resources) {
@@ -238,10 +272,16 @@ public:
         }
         // Validate the complete submit before encoding any GPU work. A later
         // unsupported command must not leave a partially executed submit.
+        bool has_gpu_work = false;
         for (const auto& command : submit.cmds) {
+            if (command->Type() == Command::EType::QueueTransfer) {
+                ValidateQueueTransfer(static_cast<const QueueTransferCmd&>(*command), EQueueType::Graphics);
+                continue;
+            }
             if (command->Type() != Command::EType::ClearResource) {
                 Unsupported("this graphics command");
             }
+            has_gpu_work = true;
             const auto& clear = static_cast<const ClearResourceCmd&>(*command);
             if (!clear.IsTexture() || !clear.IsFloat4()) {
                 Unsupported("this clear value or resource");
@@ -255,12 +295,14 @@ public:
                 Unsupported("this texture clear view");
             }
         }
-        if (submit.cmds.empty()) return {0, 0};
+        for (const WaitEvent& event : submit.wait_events) Wait(event);
+        if (!has_gpu_work) return {0, 0};
 
         @autoreleasepool {
             id<MTLCommandBuffer> command_buffer = [queue_ commandBuffer];
             if (command_buffer == nil) throw std::runtime_error("Cannot create Metal command buffer");
             for (const auto& command : submit.cmds) {
+                if (command->Type() == Command::EType::QueueTransfer) continue;
                 const auto& clear = static_cast<const ClearResourceCmd&>(*command);
                 auto* texture = static_cast<MetalTexture*>(clear.Texture().GetTexture());
                 const float4 color = clear.Float4Value();
@@ -353,9 +395,14 @@ public:
             submit.b_delete_resources) {
             Unsupported("copy submission synchronization, callbacks, or profiling");
         }
+        bool has_gpu_work = false;
         for (const auto& command : submit.cmds) {
             switch (command->Type()) {
+                case Command::EType::QueueTransfer:
+                    ValidateQueueTransfer(static_cast<const QueueTransferCmd&>(*command), EQueueType::Copy);
+                    break;
                 case Command::EType::UploadTexture: {
+                    has_gpu_work = true;
                     const auto& upload = static_cast<const UploadTextureCmd&>(*command);
                     auto* texture = dynamic_cast<MetalTexture*>(reinterpret_cast<Texture*>(upload.Handle()));
                     const uint3 size = upload.Size();
@@ -368,6 +415,7 @@ public:
                     break;
                 }
                 case Command::EType::UploadBuffer: {
+                    has_gpu_work = true;
                     const auto& upload = static_cast<const UploadBufferCmd&>(*command);
                     auto* buffer = dynamic_cast<MetalBuffer*>(reinterpret_cast<Buffer*>(upload.Handle()));
                     if (buffer == nullptr || upload.ByteSize() == 0 ||
@@ -379,6 +427,7 @@ public:
                     break;
                 }
                 case Command::EType::BufferToBuffer: {
+                    has_gpu_work = true;
                     const auto& copy = static_cast<const CopyBufferCmd&>(*command);
                     auto* source = dynamic_cast<MetalBuffer*>(reinterpret_cast<Buffer*>(copy.SrcHandle()));
                     auto* destination = dynamic_cast<MetalBuffer*>(reinterpret_cast<Buffer*>(copy.DstHandle()));
@@ -392,6 +441,7 @@ public:
                     break;
                 }
                 case Command::EType::TextureToTexture: {
+                    has_gpu_work = true;
                     const auto& copy = static_cast<const CopyTextureCmd&>(*command);
                     auto* source = dynamic_cast<MetalTexture*>(reinterpret_cast<Texture*>(copy.SrcHandle()));
                     auto* destination = dynamic_cast<MetalTexture*>(reinterpret_cast<Texture*>(copy.DstHandle()));
@@ -408,7 +458,7 @@ public:
                     Unsupported("this copy command");
             }
         }
-        if (submit.cmds.empty()) return {uint64(timeline_fence_.Get()), timeline_fence_->GetValue()};
+        if (!has_gpu_work) return {uint64(timeline_fence_.Get()), timeline_fence_->GetValue()};
 
         @autoreleasepool {
             id<MTLCommandBuffer> command_buffer = [queue_ commandBuffer];
@@ -416,6 +466,7 @@ public:
             if (blit == nil) throw std::runtime_error("Cannot encode Metal copy commands");
             NSMutableArray<id<MTLBuffer>>* staging_buffers = [NSMutableArray array];
             for (const auto& command : submit.cmds) {
+                if (command->Type() == Command::EType::QueueTransfer) continue;
                 if (command->Type() == Command::EType::BufferToBuffer) {
                     const auto& copy = static_cast<const CopyBufferCmd&>(*command);
                     auto* source = static_cast<MetalBuffer*>(reinterpret_cast<Buffer*>(copy.SrcHandle()));
