@@ -92,6 +92,17 @@ MetalShaderSource TranslateToMetal(IDxcResult* result) {
     mark_runtime_array_set(resources.separate_samplers);
     mark_runtime_array_set(resources.storage_buffers);
     mark_runtime_array_set(resources.acceleration_structures);
+    // Metal does not accept an acceleration-structure pointer as an argument-
+    // buffer member. Keep the descriptor set containing a scalar TLAS on the
+    // direct resource binding path; bindless runtime-array sets stay indirect.
+    for (const auto& resource : resources.acceleration_structures) {
+        const auto& type = compiler.get_type(resource.type_id);
+        if (std::find(type.array.begin(), type.array.end(), 0) == type.array.end()) {
+            compiler.add_discrete_descriptor_set(
+                compiler.get_decoration(resource.id, spv::DecorationDescriptorSet)
+            );
+        }
+    }
 
     const auto entry_points = compiler.get_entry_points_and_stages();
     if (entry_points.size() != 1) {

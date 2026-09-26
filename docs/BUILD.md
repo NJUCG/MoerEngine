@@ -92,9 +92,9 @@ cmake --build build/mac --target MetalRHISmoke -j 6
 ./target/bin/Debug/MetalRHISmoke
 ```
 
-程序会经由通用 `CommandList::CopyFrom` 和 `ClearResource`、`RHIExecutor` 及 Metal 命令翻译器上传、拷贝、清屏，验证 R8/RGBA8/RGBA16F/RGBA32F 纹理与 Buffer 的 GPU 读回、Raster 常用颜色和深度纹理的创建、RGB10A2 通道位序、原生顶点/片元图形 pipeline、Copy fence 完成值、Copy→Graphics 资源转移、无效 fence 依赖拒绝、Copy/Graphics 完成回调（含回调内再次提交）、bindless 纹理采样与 Buffer 读取、首次呈现及调整窗口大小后的呈现，然后退出。上传验证使用 7×5 纹理，以覆盖 Metal blit 所需的行距对齐。可以传入保持窗口显示的秒数，例如 `MetalRHISmoke 10`。如果 DXC 未在 `PATH`，配置时追加 `-DMOER_DXC_ROOT=/path/to/dxc-prefix`；该目录应包含 `bin/dxc`、`include/dxc/dxcapi.h` 和 `lib/libdxcompiler.dylib`。CMake 会查找本机 Python 3.12，并将其标准库位置写入脚本模块的构建配置。默认 `MoerEngine.toml` 仍选择 Vulkan，因此编辑器会报告该后端未在 macOS 构建。配置为 Metal 时，编辑器现可创建 UI 图形 pipeline；场景初始化继续受到 TLAS 参数缓冲区的 MSL 转译及未实现的绘制命令限制。
+程序会经由通用 `CommandList::CopyFrom` 和 `ClearResource`、`RHIExecutor` 及 Metal 命令翻译器上传、拷贝、清屏，验证 R8/RGBA8/RGBA16F/RGBA32F 纹理与 Buffer 的 GPU 读回、Raster 常用颜色和深度纹理的创建、RGB10A2 通道位序、原生顶点/片元图形 pipeline、Copy fence 完成值、Copy→Graphics 资源转移、无效 fence 依赖拒绝、Copy/Graphics 完成回调（含回调内再次提交）、bindless 纹理采样与 Buffer 读取、首次呈现及调整窗口大小后的呈现，然后退出。上传验证使用 7×5 纹理，以覆盖 Metal blit 所需的行距对齐。可以传入保持窗口显示的秒数，例如 `MetalRHISmoke 10`。如果 DXC 未在 `PATH`，配置时追加 `-DMOER_DXC_ROOT=/path/to/dxc-prefix`；该目录应包含 `bin/dxc`、`include/dxc/dxcapi.h` 和 `lib/libdxcompiler.dylib`。CMake 会查找本机 Python 3.12，并将其标准库位置写入脚本模块的构建配置。默认 `MoerEngine.toml` 仍选择 Vulkan，因此编辑器会报告该后端未在 macOS 构建。配置为 Metal 时，编辑器现可创建 UI 图形 pipeline；场景初始化继续受到未实现的光追场景、绘制命令等 RHI 能力限制。
 
-Apple 构建还提供独立的 `SP_METAL_MSL` Shader 目标：DXC 先将 HLSL 编译为 SPIR-V，再由 SPIRV-Cross 转为 MSL。现有 Vulkan 目标仍直接使用 SPIR-V。Metal 目标目前支持顶点、片元和计算 Shader，生成的 bindless MSL 使用 Metal 3.0 argument buffer；当前已验证单 mip 2D 纹理与无格式 Buffer 的 bindless 句柄更新及 GPU 访问，以及多级 mip、2D 数组和 cube 纹理的创建、指定子资源上传与 bindless view 更新，以及顶点/片元图形 pipeline 与计算 pipeline 的创建。绘制时的资源绑定仍依赖后续 Metal RHI 实现。
+Apple 构建还提供独立的 `SP_METAL_MSL` Shader 目标：DXC 先将 HLSL 编译为 SPIR-V，再由 SPIRV-Cross 转为 MSL。现有 Vulkan 目标仍直接使用 SPIR-V。Metal 目标目前支持顶点、片元和计算 Shader，生成的 bindless MSL 使用 Metal 3.0 argument buffer；含标量 TLAS 的 descriptor set 则使用直接资源绑定；当前已验证单 mip 2D 纹理与无格式 Buffer 的 bindless 句柄更新及 GPU 访问，以及多级 mip、2D 数组和 cube 纹理的创建、指定子资源上传与 bindless view 更新，以及顶点/片元图形 pipeline 与计算 pipeline 的创建。绘制时的资源绑定仍依赖后续 Metal RHI 实现。
 
 ## 3. CUDA等AI组件支持
 
