@@ -11,6 +11,9 @@
 #include "rhi/metal/MetalDevice.h"
 #include "log/LogSystem.h"
 
+#include <atomic>
+#include <cstring>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 
@@ -240,8 +243,76 @@ private:
 
 class MetalCopyQueue final : public CopyQueue {
 public:
+    explicit MetalCopyQueue(id<MTLCommandQueue> queue) : queue_(queue) {}
+
     IOWaitEvt Execute(IOQueueSubmission&&) override { Unsupported("IO queue submission"); }
-    IOWaitEvt Execute(CmdSubmit&&) override { Unsupported("copy queue submission"); }
+    IOWaitEvt Execute(CmdSubmit&& submit) override {
+        std::lock_guard lock(mutex_);
+        if (!submit.wait_events.empty() || !submit.signal_events.empty() ||
+            !submit.callbacks.empty() || !submit.success_callbacks.empty() ||
+            !submit.gpu_completion_tokens.empty() || !submit.query_tokens.empty() ||
+            submit.b_tick_profiling || submit.profiling_phase != ERHIProfilingPhase::Disabled ||
+            submit.b_delete_resources) {
+            Unsupported("copy submission synchronization, callbacks, or profiling");
+        }
+        for (const auto& command : submit.cmds) {
+            if (command->Type() != Command::EType::UploadTexture) {
+                Unsupported("this copy command");
+            }
+            const auto& upload = static_cast<const UploadTextureCmd&>(*command);
+            auto* texture = dynamic_cast<MetalTexture*>(reinterpret_cast<Texture*>(upload.Handle()));
+            const uint3 size = upload.Size();
+            if (texture == nullptr || upload.Format() != texture->GetFormat() ||
+                (upload.Format() != PF_R8G8B8A8_UNORM &&
+                 upload.Format() != PF_R8G8B8A8_SRGB) ||
+                upload.MipLevel() != 0 || upload.ArrayLayer() != 0 ||
+                upload.Offset() != uint3{0, 0, 0} || size != texture->GetExtent() ||
+                upload.Data().size_bytes() != size_t(size.x) * size.y * 4) {
+                Unsupported("this texture upload layout");
+            }
+        }
+        if (submit.cmds.empty()) return {0, completed_timeline_.load()};
+
+        @autoreleasepool {
+            id<MTLCommandBuffer> command_buffer = [queue_ commandBuffer];
+            id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
+            if (blit == nil) throw std::runtime_error("Cannot encode Metal texture upload");
+            NSMutableArray<id<MTLBuffer>>* staging_buffers = [NSMutableArray array];
+            for (const auto& command : submit.cmds) {
+                const auto& upload = static_cast<const UploadTextureCmd&>(*command);
+                auto* texture = static_cast<MetalTexture*>(reinterpret_cast<Texture*>(upload.Handle()));
+                const NSUInteger width = upload.Size().x;
+                const NSUInteger height = upload.Size().y;
+                const NSUInteger source_row_bytes = width * 4;
+                const NSUInteger staging_row_bytes = (source_row_bytes + 255) & ~NSUInteger(255);
+                id<MTLBuffer> staging = [queue_.device
+                    newBufferWithLength:staging_row_bytes * height
+                                options:MTLResourceStorageModeShared];
+                if (staging == nil) throw std::runtime_error("Cannot allocate Metal upload staging buffer");
+                auto* destination = static_cast<uint8_t*>(staging.contents);
+                const auto* source = reinterpret_cast<const uint8_t*>(upload.Data().data());
+                for (NSUInteger row = 0; row < height; ++row) {
+                    std::memcpy(destination + row * staging_row_bytes,
+                                source + row * source_row_bytes, source_row_bytes);
+                }
+                [staging_buffers addObject:staging];
+                [blit copyFromBuffer:staging sourceOffset:0
+                  sourceBytesPerRow:staging_row_bytes
+                sourceBytesPerImage:staging_row_bytes * height
+                         sourceSize:MTLSizeMake(width, height, 1)
+                          toTexture:texture->Native() destinationSlice:0 destinationLevel:0
+                 destinationOrigin:MTLOriginMake(0, 0, 0)];
+            }
+            [blit endEncoding];
+            [command_buffer commit];
+            [command_buffer waitUntilCompleted];
+            if (command_buffer.status != MTLCommandBufferStatusCompleted) {
+                throw std::runtime_error("Metal texture upload failed: " +
+                    std::string([command_buffer.error.localizedDescription UTF8String] ?: "unknown GPU error"));
+            }
+        }
+        return {0, completed_timeline_.fetch_add(1) + 1};
+    }
     void CopyFrom(BufferView, BufferView) override { Unsupported("buffer copy"); }
     void CopyFrom(TextureView, TextureView) override { Unsupported("texture copy"); }
     void CopyFrom(TextureView, BufferView) override { Unsupported("texture readback"); }
@@ -249,7 +320,17 @@ public:
     void CopyFrom(std::span<byte>, BufferView) override { Unsupported("buffer upload"); }
     void CopyFrom(std::span<byte>, TextureView) override { Unsupported("texture upload"); }
     FenceRef GetFenceHandle() override { Unsupported("copy fence"); }
-    void Sync(uint64) override { Unsupported("copy queue synchronization"); }
+    void Sync(uint64 timeline) override {
+        std::lock_guard lock(mutex_);
+        if (timeline > completed_timeline_.load()) {
+            throw std::runtime_error("Metal copy timeline has not completed");
+        }
+    }
+
+private:
+    id<MTLCommandQueue> queue_;
+    std::mutex mutex_;
+    std::atomic<uint64> completed_timeline_{0};
 };
 
 } // namespace
@@ -261,7 +342,7 @@ struct MetalDevice::Native {
     MetalCopyQueue copy;
 
     Native(id<MTLDevice> metal_device, id<MTLCommandQueue> metal_queue) :
-        device(metal_device), queue(metal_queue), graphics(metal_queue) {}
+        device(metal_device), queue(metal_queue), graphics(metal_queue), copy(metal_queue) {}
 };
 
 MetalDevice::MetalDevice() {
@@ -308,7 +389,6 @@ CopyQueue& MetalDevice::GetCopyQueue() { return native_->copy; }
 RHIQueueTopology MetalDevice::GetQueueTopology() const {
     RHIQueueTopology topology{};
     topology.compute.available = false;
-    topology.copy.available = false;
     return topology;
 }
 SwapchainRef MetalDevice::CreateSwapchain(const SwapchainCreateInfo& info) {

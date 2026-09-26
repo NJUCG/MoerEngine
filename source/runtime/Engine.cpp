@@ -1569,11 +1569,11 @@ void Engine::Init(
     }
 
     // The first Metal milestone validates the production device and presentation
-    // path in MetalRHISmoke. RuntimeAssets uses upload commands that are not yet
-    // translated by Metal; stop on the game thread before worker uploads begin.
+    // path in MetalRHISmoke. RuntimeAssets also requires EXR upload, copy
+    // fences, and queue transfers; stop before worker uploads begin.
     if (rhi_type == ERHIType::Metal) {
         throw std::runtime_error(
-            "Metal RHI resource uploads are not implemented yet; run MetalRHISmoke for the device/present check"
+            "Metal RHI editor resource initialization is incomplete; run MetalRHISmoke for the upload/clear/present checks"
         );
     }
 

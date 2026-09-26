@@ -19,6 +19,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -80,6 +81,60 @@ Moer::Render::TextureRef ClearAndCheckTexture(int width, int height) {
     return texture;
 }
 
+void UploadAndCheckTexture() {
+    using namespace Moer::Render;
+    constexpr int width = 7;
+    constexpr int height = 5;
+    TextureRef texture = RenderDevice::Get().CreateTexture(
+        Extent2D(width, height), PF_R8G8B8A8_UNORM, ETextureUsageFlags::SAMPLED
+    );
+    std::vector<uint8_t> input(width * height * 4);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const size_t index = (y * width + x) * 4;
+            input[index + 0] = static_cast<uint8_t>(x * 17 + y);
+            input[index + 1] = static_cast<uint8_t>(y * 31 + x);
+            input[index + 2] = static_cast<uint8_t>(255 - x - y);
+            input[index + 3] = 255;
+        }
+    }
+    CommandList upload(EQueueType::Copy);
+    upload.CopyFrom(
+        std::span<Moer::byte>(reinterpret_cast<Moer::byte*>(input.data()), input.size()),
+        texture->GetView()
+    );
+    RHIExecutor::Get().Submit(EQueueType::Copy, upload.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    id<MTLTexture> native = (__bridge id<MTLTexture>)GetMetalNativeTexture(texture.Get());
+    if (native == nil) throw std::runtime_error("Metal upload texture bridge failed");
+    constexpr NSUInteger row_bytes = 256;
+    id<MTLBuffer> readback = [native.device newBufferWithLength:row_bytes * height
+                                                       options:MTLResourceStorageModeShared];
+    id<MTLCommandQueue> queue = [native.device newCommandQueue];
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    [blit copyFromTexture:native sourceSlice:0 sourceLevel:0
+            sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(width, height, 1)
+                toBuffer:readback destinationOffset:0 destinationBytesPerRow:row_bytes
+       destinationBytesPerImage:row_bytes * height];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    if (command.status != MTLCommandBufferStatusCompleted) {
+        throw std::runtime_error("Metal upload readback failed");
+    }
+    const auto* output = static_cast<const uint8_t*>(readback.contents);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width * 4; ++x) {
+            if (output[y * row_bytes + x] != input[y * width * 4 + x]) {
+                throw std::runtime_error("Metal texture upload readback differs from input");
+            }
+        }
+    }
+    std::cout << "texture upload/readback " << width << "x" << height << ": success" << std::endl;
+}
+
 void Present(Moer::Render::SwapchainRef swapchain, Moer::Render::TextureRef texture) {
     using namespace Moer::Render;
     auto receipt = std::make_shared<PresentReceipt>();
@@ -114,6 +169,7 @@ int main(int argc, char** argv) {
             if (RenderDevice::Get().GetShaderPlatform() != EShaderPlatform::SP_METAL_MSL) {
                 throw std::runtime_error("Metal device selected the wrong shader platform");
             }
+            UploadAndCheckTexture();
             auto source = std::make_shared<SmokeWindowSource>(window);
             int width = 0, height = 0;
             glfwGetFramebufferSize(window, &width, &height);
