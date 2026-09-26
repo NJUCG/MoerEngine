@@ -596,6 +596,43 @@ void CheckCopyCompletionCallbacks() {
     std::cout << "copy completion callbacks and reentrant submit: success" << std::endl;
 }
 
+void CheckGraphicsCompletionCallbacks() {
+    using namespace Moer::Render;
+    auto callback_state = std::make_shared<std::atomic<int>>(0);
+    BufferRef buffer = RenderDevice::Get().CreateBuffer(
+        "Metal graphics callback buffer", BufferInfo{32, 1, EBufferUsageFlags::TRANSFER_DST}
+    );
+    std::vector<uint8_t> input(32, 0x3c);
+    CommandList upload(EQueueType::Graphics);
+    upload.CopyFrom(
+        std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(input.data()), input.size()),
+        buffer->GetView()
+    );
+    upload.AddCallback([callback_state] {
+        callback_state->fetch_add(1);
+        CommandList nested(EQueueType::Graphics);
+        nested.AddSuccessCallback([callback_state] { callback_state->fetch_add(10); });
+        RHIExecutor::Get().Submit(EQueueType::Graphics, nested.Submit());
+    });
+    upload.AddSuccessCallback([callback_state] {
+        if (callback_state->load() == 1) callback_state->fetch_add(100);
+    });
+    RHIExecutor::Get().Submit(EQueueType::Graphics, upload.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (callback_state->load() < 101) {
+        throw std::runtime_error("Metal graphics Sync returned before completion callbacks");
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (callback_state->load() != 111 && std::chrono::steady_clock::now() < deadline) {
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (callback_state->load() != 111) {
+        throw std::runtime_error("Metal graphics callbacks did not run in order");
+    }
+    std::cout << "graphics completion callbacks and reentrant submit: success" << std::endl;
+}
+
 void CheckBindlessTables() {
     using namespace Moer::Render;
     BindlessArrayRef array = RenderDevice::Get().CreateBindlessArray(8);
@@ -878,6 +915,7 @@ int main(int argc, char** argv) {
             );
             CheckBufferUpload();
             CheckCopyCompletionCallbacks();
+            CheckGraphicsCompletionCallbacks();
             CheckBindlessTables();
             auto source = std::make_shared<SmokeWindowSource>(window);
             int width = 0, height = 0;

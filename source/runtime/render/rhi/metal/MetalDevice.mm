@@ -766,7 +766,7 @@ public:
 
     void WaitThrough(uint64 timeline) {
         if (std::this_thread::get_id() == worker_.get_id()) {
-            throw std::runtime_error("Metal completion callback cannot wait for copy callbacks");
+            throw std::runtime_error("Metal completion callback cannot wait for its own queue");
         }
         std::unique_lock lock(mutex_);
         cv_.wait(lock, [&] { return finished_timeline_ >= timeline; });
@@ -888,7 +888,8 @@ private:
 
 class MetalCommandQueue final : public CommandQueue {
 public:
-    explicit MetalCommandQueue(id<MTLCommandQueue> queue) : queue_(queue) {}
+    MetalCommandQueue(id<MTLCommandQueue> queue, MetalCompletionDispatcher& completions) :
+        queue_(queue), completions_(completions) {}
 
     void Wait(WaitEvent event) override {
         auto* fence = dynamic_cast<MetalFence*>(reinterpret_cast<Fence*>(event.timeline_handle));
@@ -903,8 +904,7 @@ public:
         }
     }
     WaitEvent Execute(CmdSubmit&& submit) override {
-        if (!submit.signal_events.empty() || !submit.callbacks.empty() ||
-            !submit.success_callbacks.empty() ||
+        if (!submit.signal_events.empty() ||
             !submit.gpu_completion_tokens.empty() || !submit.query_tokens.empty() ||
             submit.b_tick_profiling || submit.profiling_phase != ERHIProfilingPhase::Disabled ||
             submit.b_delete_resources) {
@@ -952,6 +952,10 @@ public:
                 Unsupported("this texture clear view");
             }
         }
+        std::list<MetalCompletionDispatcher::Packet> prepared;
+        if (!submit.callbacks.empty() || !submit.success_callbacks.empty()) {
+            prepared.emplace_back(); // Reserve before accepting GPU work.
+        }
         for (const WaitEvent& event : submit.wait_events) Wait(event);
         for (const auto& command : submit.cmds) {
             if (command->Type() != Command::EType::UpdateBindlessArray) continue;
@@ -960,9 +964,7 @@ public:
                 static_cast<MetalBindlessArray*>(update.Handle())->Apply(update.UpdateCommands());
             }
         }
-        if (!has_gpu_work) return {0, 0};
-
-        @autoreleasepool {
+        if (has_gpu_work) @autoreleasepool {
             id<MTLCommandBuffer> command_buffer = [queue_ commandBuffer];
             if (command_buffer == nil) throw std::runtime_error("Cannot create Metal command buffer");
             NSMutableArray<id<MTLBuffer>>* staging_buffers = [NSMutableArray array];
@@ -1004,6 +1006,13 @@ public:
                 throw std::runtime_error("Metal texture clear failed: " +
                     std::string([command_buffer.error.localizedDescription UTF8String] ?: "unknown GPU error"));
             }
+        }
+        if (!prepared.empty()) {
+            std::lock_guard lock(completion_enqueue_mutex_);
+            prepared.front().timeline = ++next_callback_timeline_;
+            prepared.front().callbacks = std::move(submit.callbacks);
+            prepared.front().success_callbacks = std::move(submit.success_callbacks);
+            completions_.Enqueue(prepared);
         }
         return {0, 0};
     }
@@ -1052,12 +1061,16 @@ public:
         id<MTLCommandBuffer> command = [queue_ commandBuffer];
         [command commit];
         [command waitUntilCompleted];
+        completions_.WaitThrough(next_callback_timeline_.load());
     }
 
     ProfileData GetProfilerEntry() override { return {}; }
 
 private:
     id<MTLCommandQueue> queue_;
+    MetalCompletionDispatcher& completions_;
+    std::mutex completion_enqueue_mutex_;
+    std::atomic<uint64> next_callback_timeline_{0};
 };
 
 class MetalCopyQueue final : public CopyQueue {
@@ -1206,12 +1219,14 @@ private:
 struct MetalDevice::Native {
     id<MTLDevice> device;
     id<MTLCommandQueue> queue;
-    MetalCompletionDispatcher completions;
+    MetalCompletionDispatcher graphics_completions;
+    MetalCompletionDispatcher copy_completions;
     MetalCommandQueue graphics;
     MetalCopyQueue copy;
 
     Native(id<MTLDevice> metal_device, id<MTLCommandQueue> metal_queue) :
-        device(metal_device), queue(metal_queue), graphics(metal_queue), copy(metal_queue, completions) {}
+        device(metal_device), queue(metal_queue),
+        graphics(metal_queue, graphics_completions), copy(metal_queue, copy_completions) {}
 };
 
 MetalDevice::MetalDevice() {
