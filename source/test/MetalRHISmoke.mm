@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -323,6 +324,215 @@ void CheckCopyCompletionCallbacks() {
     std::cout << "copy completion callbacks and reentrant submit: success" << std::endl;
 }
 
+void CheckBindlessTables() {
+    using namespace Moer::Render;
+    BindlessArrayRef array = RenderDevice::Get().CreateBindlessArray(8);
+    id<MTLBuffer> indices = (__bridge id<MTLBuffer>)GetMetalNativeBindlessIndexBuffer(array.Get());
+    id<MTLBuffer> buffers = (__bridge id<MTLBuffer>)GetMetalNativeBindlessArgumentBuffer(array.Get(), 1);
+    id<MTLBuffer> textures = (__bridge id<MTLBuffer>)GetMetalNativeBindlessArgumentBuffer(array.Get(), 2);
+    id<MTLBuffer> samplers = (__bridge id<MTLBuffer>)GetMetalNativeBindlessArgumentBuffer(array.Get(), 3);
+    if (indices == nil || buffers == nil || textures == nil || samplers == nil ||
+        GetMetalNativeBindlessArgumentBuffer(array.Get(), 4) != nullptr ||
+        *static_cast<const uint64_t*>(buffers.contents) != indices.gpuAddress) {
+        throw std::runtime_error("Metal bindless argument tables are incomplete");
+    }
+    TextureRef texture = RenderDevice::Get().CreateTexture(
+        Extent2D(2, 2), PF_R8G8B8A8_UNORM, ETextureUsageFlags::SAMPLED
+    );
+    std::vector<uint8_t> pixels(2 * 2 * 4);
+    for (size_t i = 0; i < pixels.size(); i += 4) {
+        pixels[i] = 64; pixels[i + 1] = 128; pixels[i + 2] = 192; pixels[i + 3] = 255;
+    }
+    CommandList upload(EQueueType::Copy);
+    upload.CopyFrom(
+        std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(pixels.data()), pixels.size()),
+        texture->GetView()
+    );
+    RHIExecutor::Get().Submit(EQueueType::Copy, upload.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+    const uint handle = array->AllocateTexture(texture->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
+    if (handle != 1 || static_cast<const uint32_t*>(indices.contents)[handle] != 0 ||
+        static_cast<const uint64_t*>(textures.contents)[handle] != 0) {
+        throw std::runtime_error("Metal bindless allocation became visible before its update command");
+    }
+    CommandList update(EQueueType::Graphics);
+    update.UpdateBindlessArray(array);
+    RHIExecutor::Get().Submit(EQueueType::Graphics, update.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    const uint sampler_index = uint(SF_Num) * uint(SAM_CLAMP_TO_EDGE) + uint(SF_LINEAR);
+    if (static_cast<const uint32_t*>(indices.contents)[handle] != ((handle << 8) | sampler_index) ||
+        static_cast<const uint64_t*>(textures.contents)[handle] !=
+            ((__bridge id<MTLTexture>)GetMetalNativeTexture(texture.Get())).gpuResourceID._impl ||
+        static_cast<const uint64_t*>(samplers.contents)[sampler_index] == 0) {
+        throw std::runtime_error("Metal bindless texture update did not publish the GPU descriptors");
+    }
+
+    // Match the SPIRV-Cross runtime-array argument-buffer ABI and prove that
+    // the GPU can follow the indirect texture/sampler handle, not just that
+    // the CPU wrote plausible descriptor bytes.
+    static constexpr const char* shader_source = R"MSL(
+#include <metal_stdlib>
+using namespace metal;
+template<typename T> struct spvDescriptor { T value; };
+template<typename T> struct spvDescriptorArray {
+    spvDescriptorArray(const device spvDescriptor<T>* p) : ptr(&p->value) {}
+    const device T& operator[](size_t i) const { return ptr[i]; }
+    const device T* ptr;
+};
+struct Set1 { const device uint* handles [[id(0)]]; };
+struct Set2 { spvDescriptor<texture2d<float>> textures [[id(0)]][1]; };
+struct Set3 { spvDescriptor<sampler> samplers [[id(0)]][1]; };
+kernel void sample_bindless(
+    device float4* output [[buffer(0)]],
+    const device Set1& set1 [[buffer(1)]],
+    const device Set2& set2 [[buffer(2)]],
+    const device Set3& set3 [[buffer(3)]]) {
+    uint packed = set1.handles[1];
+    spvDescriptorArray<texture2d<float>> texture_table{set2.textures};
+    spvDescriptorArray<sampler> sampler_table{set3.samplers};
+    output[0] = texture_table[packed >> 8].sample(
+        sampler_table[packed & 255], float2(0.5, 0.5));
+}
+)MSL";
+    id<MTLDevice> device = indices.device;
+    NSError* shader_error = nil;
+    MTLCompileOptions* options = [MTLCompileOptions new];
+    options.languageVersion = MTLLanguageVersion3_0;
+    id<MTLLibrary> library = [device newLibraryWithSource:
+        [NSString stringWithUTF8String:shader_source] options:options error:&shader_error];
+    if (library == nil) {
+        throw std::runtime_error("Cannot compile Metal bindless shader: " +
+            std::string(shader_error.localizedDescription.UTF8String ?: "unknown error"));
+    }
+    id<MTLFunction> function = [library newFunctionWithName:@"sample_bindless"];
+    id<MTLComputePipelineState> pipeline =
+        [device newComputePipelineStateWithFunction:function error:&shader_error];
+    if (pipeline == nil) {
+        throw std::runtime_error("Cannot create Metal bindless pipeline: " +
+            std::string(shader_error.localizedDescription.UTF8String ?: "unknown error"));
+    }
+    id<MTLBuffer> sampled = [device newBufferWithLength:sizeof(float) * 4
+                                                options:MTLResourceStorageModeShared];
+    id<MTLCommandQueue> native_queue = [device newCommandQueue];
+    id<MTLCommandBuffer> native_command = [native_queue commandBuffer];
+    id<MTLComputeCommandEncoder> encoder = [native_command computeCommandEncoder];
+    [encoder setComputePipelineState:pipeline];
+    [encoder setBuffer:sampled offset:0 atIndex:0];
+    [encoder setBuffer:buffers offset:0 atIndex:1];
+    [encoder setBuffer:textures offset:0 atIndex:2];
+    [encoder setBuffer:samplers offset:0 atIndex:3];
+    [encoder useResource:(__bridge id<MTLTexture>)GetMetalNativeTexture(texture.Get())
+                usage:MTLResourceUsageRead];
+    [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+    [encoder endEncoding];
+    [native_command commit];
+    [native_command waitUntilCompleted];
+    const float* color = static_cast<const float*>(sampled.contents);
+    if (native_command.status != MTLCommandBufferStatusCompleted ||
+        std::abs(color[0] - 64.0f / 255.0f) > 0.01f ||
+        std::abs(color[1] - 128.0f / 255.0f) > 0.01f ||
+        std::abs(color[2] - 192.0f / 255.0f) > 0.01f ||
+        std::abs(color[3] - 1.0f) > 0.01f) {
+        throw std::runtime_error("Metal bindless GPU texture sampling did not match the upload");
+    }
+
+    array->UnbindTexture(handle);
+    CommandList release(EQueueType::Graphics);
+    release.UpdateBindlessArray(array);
+    RHIExecutor::Get().Submit(EQueueType::Graphics, release.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (static_cast<const uint32_t*>(indices.contents)[handle] != 0 ||
+        static_cast<const uint64_t*>(textures.contents)[handle] != 0) {
+        throw std::runtime_error("Metal bindless texture unbind left a GPU descriptor active");
+    }
+    BufferRef buffer = RenderDevice::Get().CreateBuffer(
+        "Metal bindless buffer smoke", BufferInfo{32, 1, EBufferUsageFlags::TRANSFER_SRC}
+    );
+    const uint32_t input_value = 0x12345678u;
+    CommandList fill_buffer(EQueueType::Copy);
+    fill_buffer.CopyFrom(
+        std::span<const Moer::byte>(reinterpret_cast<const Moer::byte*>(&input_value), sizeof(input_value)),
+        BufferView(buffer.Get(), 8, sizeof(input_value), 1)
+    );
+    RHIExecutor::Get().Submit(EQueueType::Copy, fill_buffer.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    const uint buffer_handle = array->AllocateBuffer(BufferView(buffer.Get(), 8, 8, 1));
+    if (buffer_handle != handle) throw std::runtime_error("Metal bindless slot was not recycled");
+    {
+        CommandList dropped(EQueueType::Graphics);
+        dropped.UpdateBindlessArray(array);
+    }
+    CommandList retry(EQueueType::Graphics);
+    retry.UpdateBindlessArray(array);
+    RHIExecutor::Get().Submit(EQueueType::Graphics, retry.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (static_cast<const uint32_t*>(indices.contents)[buffer_handle] != buffer_handle ||
+        static_cast<const uint64_t*>(buffers.contents)[buffer_handle + 1] !=
+            ((__bridge id<MTLBuffer>)GetMetalNativeBuffer(buffer.Get())).gpuAddress + 8) {
+        throw std::runtime_error("Metal bindless buffer update was not recovered after a dropped command");
+    }
+    static constexpr const char* buffer_shader_source = R"MSL(
+#include <metal_stdlib>
+using namespace metal;
+template<typename T> struct spvDescriptor { T value; };
+template<typename T> struct spvDescriptorArray {
+    spvDescriptorArray(const device spvDescriptor<T>* p) : ptr(&p->value) {}
+    const device T& operator[](size_t i) const { return ptr[i]; }
+    const device T* ptr;
+};
+struct Set1 {
+    const device uint* handles [[id(0)]];
+    spvDescriptor<const device uint*> buffers [[id(1)]][1];
+};
+kernel void read_bindless_buffer(device uint* output [[buffer(0)]],
+                                 const device Set1& set1 [[buffer(1)]]) {
+    spvDescriptorArray<const device uint*> table{set1.buffers};
+    output[0] = table[set1.handles[1]][0];
+}
+)MSL";
+    id<MTLLibrary> buffer_library = [device newLibraryWithSource:
+        [NSString stringWithUTF8String:buffer_shader_source] options:options error:&shader_error];
+    if (buffer_library == nil) {
+        throw std::runtime_error("Cannot compile Metal bindless buffer shader: " +
+            std::string(shader_error.localizedDescription.UTF8String ?: "unknown error"));
+    }
+    id<MTLFunction> buffer_function = [buffer_library newFunctionWithName:@"read_bindless_buffer"];
+    id<MTLComputePipelineState> buffer_pipeline =
+        [device newComputePipelineStateWithFunction:buffer_function error:&shader_error];
+    if (buffer_pipeline == nil) {
+        throw std::runtime_error("Cannot create Metal bindless buffer pipeline: " +
+            std::string(shader_error.localizedDescription.UTF8String ?: "unknown error"));
+    }
+    id<MTLBuffer> buffer_readback = [device newBufferWithLength:sizeof(uint32_t)
+                                                       options:MTLResourceStorageModeShared];
+    id<MTLCommandBuffer> buffer_command = [native_queue commandBuffer];
+    id<MTLComputeCommandEncoder> buffer_encoder = [buffer_command computeCommandEncoder];
+    [buffer_encoder setComputePipelineState:buffer_pipeline];
+    [buffer_encoder setBuffer:buffer_readback offset:0 atIndex:0];
+    [buffer_encoder setBuffer:buffers offset:0 atIndex:1];
+    [buffer_encoder useResource:(__bridge id<MTLBuffer>)GetMetalNativeBuffer(buffer.Get())
+                         usage:MTLResourceUsageRead];
+    [buffer_encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1)
+                   threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+    [buffer_encoder endEncoding];
+    [buffer_command commit];
+    [buffer_command waitUntilCompleted];
+    if (buffer_command.status != MTLCommandBufferStatusCompleted ||
+        *static_cast<const uint32_t*>(buffer_readback.contents) != input_value) {
+        throw std::runtime_error("Metal bindless GPU buffer read did not match the upload");
+    }
+    array->UnbindBuffer(buffer_handle);
+    CommandList release_buffer(EQueueType::Graphics);
+    release_buffer.UpdateBindlessArray(array);
+    RHIExecutor::Get().Submit(EQueueType::Graphics, release_buffer.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (static_cast<const uint64_t*>(buffers.contents)[buffer_handle + 1] != 0) {
+        throw std::runtime_error("Metal bindless buffer unbind left a GPU descriptor active");
+    }
+    std::cout << "bindless texture/buffer GPU access, update, drop, and reuse: success" << std::endl;
+}
+
 void Present(Moer::Render::SwapchainRef swapchain, Moer::Render::TextureRef texture) {
     using namespace Moer::Render;
     auto receipt = std::make_shared<PresentReceipt>();
@@ -391,6 +601,7 @@ int main(int argc, char** argv) {
             );
             CheckBufferUpload();
             CheckCopyCompletionCallbacks();
+            CheckBindlessTables();
             auto source = std::make_shared<SmokeWindowSource>(window);
             int width = 0, height = 0;
             glfwGetFramebufferSize(window, &width, &height);

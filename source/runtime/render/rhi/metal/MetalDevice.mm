@@ -19,12 +19,14 @@
 #include <cstring>
 #include <functional>
 #include <list>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <type_traits>
 #include <unordered_set>
+#include <vector>
 
 namespace Moer::Render {
 namespace {
@@ -184,6 +186,289 @@ public:
 
 private:
     id<MTLTexture> texture_;
+};
+
+// The table layout mirrors the SPIRV-Cross MSL argument-buffer sets: set 1
+// contains the indirect uint table and buffer addresses, set 2 texture IDs,
+// and set 3 sampler IDs. Index zero stays unbound, as on Vulkan.
+class MetalBindlessArray final : public BindlessArray {
+public:
+    static constexpr uint kSamplerCount = uint(SF_Num) * uint(SAM_Num) * uint(SCF_Num);
+    static_assert(kSamplerCount <= 256);
+    static_assert(sizeof(MTLResourceID) == sizeof(uint64_t));
+    static_assert(sizeof(MTLGPUAddress) == sizeof(uint64_t));
+
+    MetalBindlessArray(id<MTLDevice> device, uint capacity) :
+        device_(device), capacity_(capacity) {
+        if (capacity < 2 || capacity > (1u << 23)) {
+            throw std::runtime_error("Metal bindless capacity is outside the shader handle range");
+        }
+        slots_.resize(capacity);
+        const auto new_shared_buffer = [device](NSUInteger size) {
+            id<MTLBuffer> buffer = [device newBufferWithLength:size options:MTLResourceStorageModeShared];
+            if (buffer == nil) throw std::runtime_error("Cannot allocate Metal bindless table");
+            std::memset(buffer.contents, 0, size);
+            return buffer;
+        };
+        indices_ = new_shared_buffer(NSUInteger(capacity) * sizeof(uint32_t));
+        buffer_arguments_ = new_shared_buffer(NSUInteger(capacity + 1) * sizeof(uint64_t));
+        texture_arguments_ = new_shared_buffer(NSUInteger(capacity) * sizeof(uint64_t));
+        sampler_arguments_ = new_shared_buffer(NSUInteger(kSamplerCount) * sizeof(uint64_t));
+        const uint64_t index_address = indices_.gpuAddress;
+        std::memcpy(buffer_arguments_.contents, &index_address, sizeof(index_address));
+        free_slots_.reserve(capacity);
+    }
+
+    uint AllocateTexture(const TextureView& view, Sampler sampler) override {
+        auto* texture = dynamic_cast<MetalTexture*>(view.GetTexture());
+        if (texture == nullptr || view.format != texture->GetFormat() ||
+            view.mip_level != 0 || view.num_mips != 1 || view.array_layer != 0 ||
+            view.num_array != 1 || view.offset != uint3{0, 0, 0} ||
+            view.extent != texture->GetExtent()) {
+            Unsupported("this bindless texture view");
+        }
+        const uint sampler_index = SamplerIndex(sampler);
+        EnsureSampler(sampler, sampler_index);
+        std::lock_guard lock(mutex_);
+        const uint index = NextSlot();
+        Slot& slot = slots_[index];
+        const uint64 generation = NextGeneration(slot);
+        TextureRef reference(view.GetTexture());
+        pending_.emplace_back(TextureUpdateInfo{
+            reference, sampler, view.format, index, index, view.mip_level, view.num_mips,
+            view.array_layer, view.num_array, generation, generation, 0, false
+        });
+        slot.texture = std::move(reference);
+        slot.buffer = {};
+        slot.sampler_index = sampler_index;
+        slot.kind = Kind::Texture;
+        slot.active = true;
+        return index;
+    }
+
+    uint AllocateBuffer(BufferView view) override {
+        auto* buffer = dynamic_cast<MetalBuffer*>(view.GetBuffer());
+        if (buffer == nullptr || view.GetByteSize() == 0 ||
+            view.GetByteOffset() > buffer->GetByteSize() ||
+            view.GetByteSize() > buffer->GetByteSize() - view.GetByteOffset()) {
+            Unsupported("this bindless buffer view");
+        }
+        if (view.format != PF_UNDEFINED) Unsupported("formatted bindless buffers");
+        std::lock_guard lock(mutex_);
+        const uint index = NextSlot();
+        Slot& slot = slots_[index];
+        const uint64 generation = NextGeneration(slot);
+        BufferRef reference(view.GetBuffer());
+        pending_.emplace_back(BufferUpdateInfo{
+            reference, index, index, view.format, generation, generation, 0, false
+        });
+        slot.buffer = std::move(reference);
+        slot.texture = {};
+        slot.buffer_offset = view.GetByteOffset();
+        slot.kind = Kind::Buffer;
+        slot.active = true;
+        return index;
+    }
+
+    void UnbindTexture(uint index) override { Unbind(index, Kind::Texture); }
+    void UnbindBuffer(uint index) override { Unbind(index, Kind::Buffer); }
+    uint64 ArrayHandle() const override { return reinterpret_cast<uint64>(this); }
+
+    void Apply(const Array<UpdateCmd>& updates) {
+        std::lock_guard lock(mutex_);
+        auto* indices = static_cast<uint32_t*>(indices_.contents);
+        auto* buffers = static_cast<uint64_t*>(buffer_arguments_.contents);
+        auto* textures = static_cast<uint64_t*>(texture_arguments_.contents);
+        for (const UpdateCmd& update : updates) {
+            std::visit([&](const auto& item) {
+                using T = std::decay_t<decltype(item)>;
+                if constexpr (!std::is_same_v<T, InvalidUpdateInfo>) {
+                    if (item.array_idx == 0 || item.array_idx >= capacity_) return;
+                    Slot& slot = slots_[item.array_idx];
+                    if (slot.generation != item.array_generation) return;
+                    if (item.free) {
+                        if (slot.active || slot.kind == Kind::Empty) return;
+                        indices[item.array_idx] = 0;
+                        textures[item.array_idx] = 0;
+                        buffers[item.array_idx + 1] = 0;
+                        slot.texture = {};
+                        slot.buffer = {};
+                        slot.kind = Kind::Empty;
+                        free_slots_.push_back(item.array_idx);
+                    } else if (slot.active) {
+                        if constexpr (std::is_same_v<T, TextureUpdateInfo>) {
+                            textures[item.array_idx] =
+                                static_cast<MetalTexture*>(slot.texture.Get())->Native().gpuResourceID._impl;
+                            indices[item.array_idx] = (item.array_idx << 8) | slot.sampler_index;
+                        } else {
+                            buffers[item.array_idx + 1] =
+                                static_cast<MetalBuffer*>(slot.buffer.Get())->Native().gpuAddress +
+                                slot.buffer_offset;
+                            indices[item.array_idx] = item.array_idx;
+                        }
+                    }
+                }
+            }, update);
+        }
+    }
+
+    id<MTLBuffer> NativeIndices() const noexcept { return indices_; }
+    id<MTLBuffer> NativeArguments(uint set) const noexcept {
+        switch (set) {
+            case 1: return buffer_arguments_;
+            case 2: return texture_arguments_;
+            case 3: return sampler_arguments_;
+            default: return nil;
+        }
+    }
+
+protected:
+    UniquePtr<Command> CreateUpdateCommand() override {
+        std::lock_guard lock(mutex_);
+        Array<UpdateCmd> snapshot = pending_;
+        auto command = MakeUnique<UpdateBindlessArrayCmd>(
+            this, std::move(snapshot), Array<byte>{}, Array<std::pair<uint, uint>>{},
+            Array<byte>{}, Array<std::pair<uint, uint>>{}, Array<byte>{},
+            Array<std::pair<uint, uint>>{}
+        );
+        pending_.clear();
+        return command;
+    }
+
+    void DiscardUpdateCommand(const Array<UpdateCmd>& updates) override {
+        std::lock_guard lock(mutex_);
+        Array<UpdateCmd> recovered;
+        for (const UpdateCmd& update : updates) {
+            std::visit([&](const auto& item) {
+                using T = std::decay_t<decltype(item)>;
+                if constexpr (!std::is_same_v<T, InvalidUpdateInfo>) {
+                    if (item.array_idx > 0 && item.array_idx < capacity_) {
+                        const Slot& slot = slots_[item.array_idx];
+                        if (slot.generation == item.array_generation && slot.active != item.free) {
+                            recovered.emplace_back(update);
+                        }
+                    }
+                }
+            }, update);
+        }
+        for (const UpdateCmd& update : pending_) recovered.emplace_back(update);
+        pending_ = std::move(recovered);
+    }
+
+private:
+    enum class Kind { Empty, Texture, Buffer };
+    struct Slot {
+        TextureRef texture{};
+        BufferRef buffer{};
+        uint64 generation{0};
+        uint64 buffer_offset{0};
+        uint sampler_index{0};
+        Kind kind{Kind::Empty};
+        bool active{false};
+    };
+
+    uint NextSlot() {
+        if (!free_slots_.empty()) {
+            const uint index = free_slots_.back();
+            if (slots_[index].generation == std::numeric_limits<uint64>::max()) {
+                throw std::runtime_error("Metal bindless slot generation exhausted");
+            }
+            free_slots_.pop_back();
+            return index;
+        }
+        if (next_slot_ >= capacity_) throw std::runtime_error("Metal bindless capacity exhausted");
+        if (slots_[next_slot_].generation == std::numeric_limits<uint64>::max()) {
+            throw std::runtime_error("Metal bindless slot generation exhausted");
+        }
+        return next_slot_++;
+    }
+
+    static uint64 NextGeneration(Slot& slot) {
+        if (slot.generation == std::numeric_limits<uint64>::max()) {
+            throw std::runtime_error("Metal bindless slot generation exhausted");
+        }
+        return ++slot.generation;
+    }
+
+    static uint SamplerIndex(Sampler sampler) {
+        if (sampler.filter >= SF_Num || sampler.address_mode >= SAM_Num ||
+            sampler.compare_function >= SCF_Num) {
+            Unsupported("this bindless sampler");
+        }
+        return (uint(SF_Num) * uint(SAM_Num)) * uint(sampler.compare_function) +
+               uint(SF_Num) * uint(sampler.address_mode) + uint(sampler.filter);
+    }
+
+    void EnsureSampler(Sampler sampler, uint index) {
+        std::lock_guard lock(mutex_);
+        if (samplers_[index] != nil) return;
+        MTLSamplerDescriptor* desc = [MTLSamplerDescriptor new];
+        const bool nearest = sampler.filter == SF_NEAREST || sampler.filter == SF_ANISOTROPIC_NEAREST;
+        desc.minFilter = nearest ? MTLSamplerMinMagFilterNearest : MTLSamplerMinMagFilterLinear;
+        desc.magFilter = nearest ? MTLSamplerMinMagFilterNearest : MTLSamplerMinMagFilterLinear;
+        desc.mipFilter = nearest ? MTLSamplerMipFilterNearest : MTLSamplerMipFilterLinear;
+        desc.maxAnisotropy = sampler.filter == SF_ANISOTROPIC_NEAREST ||
+                             sampler.filter == SF_ANISOTROPIC_LINEAR ? 16 : 1;
+        MTLSamplerAddressMode address = MTLSamplerAddressModeRepeat;
+        switch (sampler.address_mode) {
+            case SAM_REPEAT: break;
+            case SAM_MIRRORED_REPEAT: address = MTLSamplerAddressModeMirrorRepeat; break;
+            case SAM_CLAMP_TO_EDGE: address = MTLSamplerAddressModeClampToEdge; break;
+            case SAM_CLAMP_TO_BORDER: address = MTLSamplerAddressModeClampToBorderColor; break;
+            default: Unsupported("this bindless sampler address mode");
+        }
+        desc.sAddressMode = address;
+        desc.tAddressMode = address;
+        desc.rAddressMode = address;
+        desc.supportArgumentBuffers = YES;
+        if (sampler.compare_function != SCF_NEVER) {
+            static constexpr MTLCompareFunction kCompare[] = {
+                MTLCompareFunctionNever, MTLCompareFunctionLess, MTLCompareFunctionEqual,
+                MTLCompareFunctionLessEqual, MTLCompareFunctionGreater,
+                MTLCompareFunctionNotEqual, MTLCompareFunctionGreaterEqual,
+                MTLCompareFunctionAlways
+            };
+            desc.compareFunction = kCompare[sampler.compare_function];
+        }
+        id<MTLSamplerState> native = [device_ newSamplerStateWithDescriptor:desc];
+        if (native == nil) throw std::runtime_error("Cannot create Metal bindless sampler");
+        samplers_[index] = native;
+        static_cast<uint64_t*>(sampler_arguments_.contents)[index] = native.gpuResourceID._impl;
+    }
+
+    void Unbind(uint index, Kind kind) {
+        std::lock_guard lock(mutex_);
+        if (index == 0 || index >= capacity_ || !slots_[index].active ||
+            slots_[index].kind != kind) {
+            throw std::runtime_error("Metal bindless handle is not allocated with this resource type");
+        }
+        Slot& slot = slots_[index];
+        if (kind == Kind::Texture) {
+            pending_.emplace_back(TextureUpdateInfo{
+                slot.texture, Sampler(SF_NEAREST, SAM_REPEAT), slot.texture->GetFormat(),
+                index, index, 0, 1, 0, 1, slot.generation, slot.generation, 0, true
+            });
+        } else {
+            pending_.emplace_back(BufferUpdateInfo{
+                slot.buffer, index, index, PF_UNDEFINED,
+                slot.generation, slot.generation, 0, true
+            });
+        }
+        slot.active = false;
+    }
+
+    id<MTLDevice> device_;
+    id<MTLBuffer> indices_;
+    id<MTLBuffer> buffer_arguments_;
+    id<MTLBuffer> texture_arguments_;
+    id<MTLBuffer> sampler_arguments_;
+    id<MTLSamplerState> samplers_[kSamplerCount]{};
+    std::vector<Slot> slots_;
+    std::vector<uint> free_slots_;
+    Array<UpdateCmd> pending_;
+    const uint capacity_;
+    uint next_slot_{1};
+    std::mutex mutex_;
 };
 
 void ValidateQueueTransfer(const QueueTransferCmd& transfer, EQueueType current_queue) {
@@ -393,6 +678,13 @@ public:
                 ValidateQueueTransfer(static_cast<const QueueTransferCmd&>(*command), EQueueType::Graphics);
                 continue;
             }
+            if (command->Type() == Command::EType::UpdateBindlessArray) {
+                const auto& update = static_cast<const UpdateBindlessArrayCmd&>(*command);
+                if (dynamic_cast<MetalBindlessArray*>(update.Handle()) == nullptr) {
+                    Unsupported("a foreign bindless array");
+                }
+                continue;
+            }
             if (command->Type() != Command::EType::ClearResource) {
                 Unsupported("this graphics command");
             }
@@ -411,13 +703,21 @@ public:
             }
         }
         for (const WaitEvent& event : submit.wait_events) Wait(event);
+        for (const auto& command : submit.cmds) {
+            if (command->Type() != Command::EType::UpdateBindlessArray) continue;
+            const auto& update = static_cast<const UpdateBindlessArrayCmd&>(*command);
+            if (update.HandOffUpdates()) {
+                static_cast<MetalBindlessArray*>(update.Handle())->Apply(update.UpdateCommands());
+            }
+        }
         if (!has_gpu_work) return {0, 0};
 
         @autoreleasepool {
             id<MTLCommandBuffer> command_buffer = [queue_ commandBuffer];
             if (command_buffer == nil) throw std::runtime_error("Cannot create Metal command buffer");
             for (const auto& command : submit.cmds) {
-                if (command->Type() == Command::EType::QueueTransfer) continue;
+                if (command->Type() == Command::EType::QueueTransfer ||
+                    command->Type() == Command::EType::UpdateBindlessArray) continue;
                 const auto& clear = static_cast<const ClearResourceCmd&>(*command);
                 auto* texture = static_cast<MetalTexture*>(clear.Texture().GetTexture());
                 const float4 color = clear.Float4Value();
@@ -753,7 +1053,9 @@ TextureRef MetalDevice::CreateTexture(std::string_view name, const TextureInfo& 
     result->SetName(name);
     return result;
 }
-BindlessArrayRef MetalDevice::CreateBindlessArray(uint) { Unsupported("bindless arrays"); }
+BindlessArrayRef MetalDevice::CreateBindlessArray(uint capacity) {
+    return BindlessArrayRef(MoerNew(MetalBindlessArray)(native_->device, capacity));
+}
 RaytracingGeometryRef MetalDevice::CreateRaytracingGeometry(const RaytracingGeometryInfo&) {
     Unsupported("raytracing geometry");
 }
@@ -786,6 +1088,16 @@ void* GetMetalNativeTexture(Texture* texture) noexcept {
 void* GetMetalNativeBuffer(Buffer* buffer) noexcept {
     auto* metal_buffer = dynamic_cast<MetalBuffer*>(buffer);
     return metal_buffer == nullptr ? nullptr : (__bridge void*)metal_buffer->Native();
+}
+
+void* GetMetalNativeBindlessIndexBuffer(BindlessArray* array) noexcept {
+    auto* metal = dynamic_cast<MetalBindlessArray*>(array);
+    return metal == nullptr ? nullptr : (__bridge void*)metal->NativeIndices();
+}
+
+void* GetMetalNativeBindlessArgumentBuffer(BindlessArray* array, uint set) noexcept {
+    auto* metal = dynamic_cast<MetalBindlessArray*>(array);
+    return metal == nullptr ? nullptr : (__bridge void*)metal->NativeArguments(set);
 }
 
 } // namespace Moer::Render

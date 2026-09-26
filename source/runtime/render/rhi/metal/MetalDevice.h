@@ -33,9 +33,11 @@ private:
     std::unique_ptr<Native> native_;
 };
 
-// Internal smoke-test bridges for GPU readback of resources allocated through
-// RenderDevice. They do not expose native Metal objects to renderer passes.
+// Internal smoke-test bridges for GPU readback and bindless argument-buffer
+// checks. They do not expose native Metal objects to renderer passes.
 RENDER_API void* GetMetalNativeTexture(Texture* texture) noexcept;
 RENDER_API void* GetMetalNativeBuffer(Buffer* buffer) noexcept;
+RENDER_API void* GetMetalNativeBindlessIndexBuffer(BindlessArray* array) noexcept;
+RENDER_API void* GetMetalNativeBindlessArgumentBuffer(BindlessArray* array, uint set) noexcept;
 
 } // namespace Moer::Render
