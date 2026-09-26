@@ -116,6 +116,46 @@ void CheckRasterTextureFormats() {
     std::cout << "raster color/depth texture format allocation: success" << std::endl;
 }
 
+void CheckGraphicsPipeline() {
+    using namespace Moer::Render;
+    constexpr std::string_view source = R"(
+        #include <metal_stdlib>
+        using namespace metal;
+        struct VertexInput {
+            float2 position [[attribute(0)]];
+            float4 color [[attribute(1)]];
+        };
+        struct VertexOutput {
+            float4 position [[position]];
+            float4 color;
+        };
+        vertex VertexOutput vertex_main(VertexInput input [[stage_in]]) {
+            return {float4(input.position, 0.0, 1.0), input.color};
+        }
+        fragment float4 fragment_main(VertexOutput input [[stage_in]]) {
+            return input.color;
+        }
+    )";
+    std::vector<Moer::uint8> code(source.begin(), source.end());
+    SingleShaderInfo vertex{.entry_point = "vertex_main", .shader_data = code,
+                            .shader_type = EShaderType::ST_VERTEX};
+    SingleShaderInfo fragment{.entry_point = "fragment_main", .shader_data = code,
+                              .shader_type = EShaderType::ST_FRAGMENT};
+    PipelineShaderInfo shaders{.shader_group = ShaderVsPs{vertex, fragment}};
+    VertexStream stream;
+    stream.EmplacePerVertex({Moer::Render::VertexElement(PF_R32G32_SFLOAT),
+                             Moer::Render::VertexElement(PF_R32G32B32A32_SFLOAT)});
+    GfxPsoCreateInfo info(
+        RHIRasterizeInfo::Preset<Rast::CULL_NONE>(), std::move(stream),
+        {RHIColorAttachmentInfo::Preset<Blend::ALPHA_BLEND>(PF_B8G8R8A8_UNORM)}
+    );
+    PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(info), std::move(shaders));
+    if (!pipeline.IsValid()) throw std::runtime_error("Metal graphics pipeline was not created");
+    MoerDelete(reinterpret_cast<PipelineState*>(pipeline.handle));
+    std::cout << "native Metal vertex/fragment pipeline with vertex input and blend: success"
+              << std::endl;
+}
+
 Moer::Render::TextureRef ClearAndCheckTexture(int width, int height) {
     using namespace Moer::Render;
     TextureRef texture = RenderDevice::Get().CreateTexture(
@@ -581,6 +621,7 @@ int main(int argc, char** argv) {
                 throw std::runtime_error("Metal graphics queue accepted a rejected dependency");
             }
             CheckRasterTextureFormats();
+            CheckGraphicsPipeline();
             std::vector<uint8_t> rgba8(7 * 5 * 4);
             for (size_t i = 0; i < rgba8.size(); ++i) rgba8[i] = static_cast<uint8_t>(i * 17);
             UploadAndCheckTexture(PF_R8G8B8A8_UNORM, ETextureUsageFlags::SAMPLED, rgba8, 4);

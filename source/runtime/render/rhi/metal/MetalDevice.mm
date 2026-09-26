@@ -43,6 +43,10 @@ MTLPixelFormat ToMetalFormat(EPixelFormat format) {
             return MTLPixelFormatRGBA8Unorm;
         case PF_R8G8B8A8_SRGB:
             return MTLPixelFormatRGBA8Unorm_sRGB;
+        case PF_B8G8R8A8_UNORM:
+            return MTLPixelFormatBGRA8Unorm;
+        case PF_B8G8R8A8_SRGB:
+            return MTLPixelFormatBGRA8Unorm_sRGB;
         case PF_A2R10G10B10_UNORM_PACK32:
             return MTLPixelFormatBGR10A2Unorm;
         case PF_R16G16B16A16_SFLOAT:
@@ -71,6 +75,8 @@ NSUInteger PixelStride(EPixelFormat format) {
             return 8;
         case PF_R8G8B8A8_UNORM:
         case PF_R8G8B8A8_SRGB:
+        case PF_B8G8R8A8_UNORM:
+        case PF_B8G8R8A8_SRGB:
         case PF_A2R10G10B10_UNORM_PACK32:
         case PF_D32_SFLOAT:
             return 4;
@@ -78,6 +84,50 @@ NSUInteger PixelStride(EPixelFormat format) {
             return 16;
         default:
             Unsupported("this texture format");
+    }
+}
+
+MTLVertexFormat ToMetalVertexFormat(EPixelFormat format) {
+    switch (format) {
+        case PF_R32_SFLOAT: return MTLVertexFormatFloat;
+        case PF_R32G32_SFLOAT: return MTLVertexFormatFloat2;
+        case PF_R32G32B32_SFLOAT: return MTLVertexFormatFloat3;
+        case PF_R32G32B32A32_SFLOAT: return MTLVertexFormatFloat4;
+        case PF_R8G8B8A8_UNORM: return MTLVertexFormatUChar4Normalized;
+        default: Unsupported("this vertex attribute format");
+    }
+}
+
+MTLBlendOperation ToMetalBlendOperation(EBlendOperation operation) {
+    switch (operation) {
+        case BO_ADD: return MTLBlendOperationAdd;
+        case BO_SUBTRACT: return MTLBlendOperationSubtract;
+        case BO_REVERSE_SUBTRACT: return MTLBlendOperationReverseSubtract;
+        case BO_MIN: return MTLBlendOperationMin;
+        case BO_MAX: return MTLBlendOperationMax;
+        default: Unsupported("this blend operation");
+    }
+}
+
+MTLBlendFactor ToMetalBlendFactor(EBlendFactor factor) {
+    switch (factor) {
+        case BF_ZERO: return MTLBlendFactorZero;
+        case BF_ONE: return MTLBlendFactorOne;
+        case BF_SRC_COLOR: return MTLBlendFactorSourceColor;
+        case BF_ONE_MINUS_SRC_COLOR: return MTLBlendFactorOneMinusSourceColor;
+        case BF_DST_COLOR: return MTLBlendFactorDestinationColor;
+        case BF_ONE_MINUS_DST_COLOR: return MTLBlendFactorOneMinusDestinationColor;
+        case BF_SRC_ALPHA: return MTLBlendFactorSourceAlpha;
+        case BF_ONE_MINUS_SRC_ALPHA: return MTLBlendFactorOneMinusSourceAlpha;
+        case BF_DST_ALPHA: return MTLBlendFactorDestinationAlpha;
+        case BF_ONE_MINUS_DST_ALPHA: return MTLBlendFactorOneMinusDestinationAlpha;
+        case BF_CONSTANT_ALPHA: return MTLBlendFactorBlendAlpha;
+        case BF_ONE_MINUS_CONSTANT_ALPHA: return MTLBlendFactorOneMinusBlendAlpha;
+        case BF_SRC1_COLOR: return MTLBlendFactorSource1Color;
+        case BF_ONE_MINUS_SRC1_COLOR: return MTLBlendFactorOneMinusSource1Color;
+        case BF_SRC1_ALPHA: return MTLBlendFactorSource1Alpha;
+        case BF_ONE_MINUS_SRC1_ALPHA: return MTLBlendFactorOneMinusSource1Alpha;
+        default: Unsupported("this blend factor");
     }
 }
 
@@ -186,6 +236,15 @@ public:
 
 private:
     id<MTLTexture> texture_;
+};
+
+class MetalPipelineState final : public PipelineState {
+public:
+    explicit MetalPipelineState(id<MTLRenderPipelineState> pipeline) : pipeline_(pipeline) {}
+    id<MTLRenderPipelineState> Native() const noexcept { return pipeline_; }
+
+private:
+    id<MTLRenderPipelineState> pipeline_;
 };
 
 // The table layout mirrors the SPIRV-Cross MSL argument-buffer sets: set 1
@@ -1074,8 +1133,149 @@ SwapchainRef MetalDevice::CreateSwapchain(const SwapchainCreateInfo& info) {
     auto result = SwapchainRef(MoerNew(MetalSwapchain)(native_->device, info));
     return result->IsPresentationReady() ? result : SwapchainRef{};
 }
-PipelineHandle MetalDevice::CreatePipeline(GfxPsoCreateInfo&&, PipelineShaderInfo&&) {
-    Unsupported("graphics pipelines");
+PipelineHandle MetalDevice::CreatePipeline(GfxPsoCreateInfo&& create_info, PipelineShaderInfo&& shader_info) {
+    if (!std::holds_alternative<ShaderVsPs>(shader_info.shader_group) ||
+        create_info.primitive_topology != EPrimitiveTopology::TRIANGLE_LIST ||
+        create_info.view_mask != 0 || create_info.multi_view_count != 1 ||
+        create_info.multisample_info.sample_count != 1 ||
+        create_info.color_attachment_count > 8 ||
+        shader_info.layout_hash.size() != shader_info.arg_cpp_info.size() ||
+        shader_info.layout_hash.size() > 64) {
+        Unsupported("this graphics pipeline layout");
+    }
+    const auto& shaders = std::get<ShaderVsPs>(shader_info.shader_group);
+    const auto compile_function = [this](const SingleShaderInfo& shader) -> id<MTLFunction> {
+        if (shader.shader_data.empty() || shader.entry_point.empty()) {
+            throw std::runtime_error("Metal pipeline shader source or entry point is empty");
+        }
+        NSString* source = [[NSString alloc]
+            initWithBytes:shader.shader_data.data()
+                   length:shader.shader_data.size()
+                 encoding:NSUTF8StringEncoding];
+        if (source == nil) throw std::runtime_error("Metal pipeline shader source is not UTF-8 MSL");
+        NSError* error = nil;
+        MTLCompileOptions* options = [MTLCompileOptions new];
+        options.languageVersion = MTLLanguageVersion3_0;
+        id<MTLLibrary> library = [native_->device newLibraryWithSource:source options:options error:&error];
+        if (library == nil) {
+            throw std::runtime_error("Metal shader compilation failed: " +
+                std::string(error.localizedDescription.UTF8String ?: "unknown error"));
+        }
+        NSString* entry = [[NSString alloc] initWithBytes:shader.entry_point.data()
+                                                  length:shader.entry_point.size()
+                                                encoding:NSUTF8StringEncoding];
+        id<MTLFunction> function = [library newFunctionWithName:entry];
+        if (function == nil) {
+            throw std::runtime_error("Metal shader entry point was not found: " +
+                std::string(shader.entry_point));
+        }
+        return function;
+    };
+    @autoreleasepool {
+        id<MTLFunction> vertex = compile_function(shaders.vs);
+        id<MTLFunction> fragment = compile_function(shaders.ps);
+        MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
+        descriptor.vertexFunction = vertex;
+        descriptor.fragmentFunction = fragment;
+        descriptor.rasterSampleCount = 1;
+        descriptor.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle;
+
+        MTLVertexDescriptor* vertex_descriptor = [MTLVertexDescriptor vertexDescriptor];
+        uint attribute_index = 0;
+        for (uint binding_index = 0; binding_index < create_info.vertex_stream.bindings.size(); ++binding_index) {
+            const VertexBinding& binding = create_info.vertex_stream.bindings[binding_index];
+            const uint metal_buffer_index = 16 + binding_index; // Reserve low slots for MSL resource sets.
+            if (metal_buffer_index >= 31) Unsupported("too many vertex streams");
+            NSUInteger stride = 0;
+            for (const VertexElement& element : binding.vertex_elements) {
+                if (attribute_index >= 31) Unsupported("too many vertex attributes");
+                auto* attribute = vertex_descriptor.attributes[attribute_index++];
+                attribute.format = ToMetalVertexFormat(element.format);
+                attribute.offset = stride;
+                attribute.bufferIndex = metal_buffer_index;
+                stride += GetByteFromPixelFormat(element.format);
+            }
+            auto* layout = vertex_descriptor.layouts[metal_buffer_index];
+            layout.stride = stride;
+            layout.stepFunction = binding.input_rate == VIR_INSTANCE ?
+                MTLVertexStepFunctionPerInstance : MTLVertexStepFunctionPerVertex;
+            layout.stepRate = 1;
+        }
+        descriptor.vertexDescriptor = vertex_descriptor;
+
+        for (uint index = 0; index < create_info.color_attachment_count; ++index) {
+            auto* attachment = descriptor.colorAttachments[index];
+            const RHIColorAttachmentInfo& info = create_info.color_attachments_info[index];
+            attachment.pixelFormat = ToMetalFormat(info.pixel_format);
+            const RHIBlendAttachmentInfo& blend = info.blend_state_info;
+            attachment.blendingEnabled =
+                blend.color_blend_op != BO_ADD || blend.color_src_blend_factor != BF_ONE ||
+                blend.color_dst_blend_factor != BF_ZERO || blend.alpha_blend_op != BO_ADD ||
+                blend.alpha_src_blend_factor != BF_ONE || blend.alpha_dst_blend_factor != BF_ZERO;
+            attachment.rgbBlendOperation = ToMetalBlendOperation(blend.color_blend_op);
+            attachment.alphaBlendOperation = ToMetalBlendOperation(blend.alpha_blend_op);
+            attachment.sourceRGBBlendFactor = ToMetalBlendFactor(blend.color_src_blend_factor);
+            attachment.destinationRGBBlendFactor = ToMetalBlendFactor(blend.color_dst_blend_factor);
+            attachment.sourceAlphaBlendFactor = ToMetalBlendFactor(blend.alpha_src_blend_factor);
+            attachment.destinationAlphaBlendFactor = ToMetalBlendFactor(blend.alpha_dst_blend_factor);
+            MTLColorWriteMask write_mask = MTLColorWriteMaskNone;
+            if (blend.color_write_mask & CW_RED) write_mask |= MTLColorWriteMaskRed;
+            if (blend.color_write_mask & CW_GREEN) write_mask |= MTLColorWriteMaskGreen;
+            if (blend.color_write_mask & CW_BLUE) write_mask |= MTLColorWriteMaskBlue;
+            if (blend.color_write_mask & CW_ALPHA) write_mask |= MTLColorWriteMaskAlpha;
+            attachment.writeMask = write_mask;
+        }
+        if (create_info.depth_stencil_format != PF_UNDEFINED) {
+            descriptor.depthAttachmentPixelFormat = ToMetalFormat(create_info.depth_stencil_format);
+            if (create_info.depth_stencil_format == PF_D32_SFLOAT_S8_UINT) {
+                descriptor.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+            }
+        }
+        NSError* error = nil;
+        id<MTLRenderPipelineState> native_pipeline =
+            [native_->device newRenderPipelineStateWithDescriptor:descriptor error:&error];
+        if (native_pipeline == nil) {
+            throw std::runtime_error("Metal render pipeline creation failed: " +
+                std::string(error.localizedDescription.UTF8String ?: "unknown error"));
+        }
+        PipelineHandle handle{};
+        handle.binding_infos.resize(shader_info.layout_hash.size());
+        for (uint index = 0; index < shader_info.layout_hash.size(); ++index) {
+            handle.hash_2_info_index[GetHash(shader_info.layout_hash[index])] = index;
+            const auto mark_active = [&](const SingleShaderInfo& shader) {
+                if (shader.shader_param_map == nullptr) return;
+                const auto& reflection = shader.shader_param_map->reflect_map;
+                const bool bindless = shader_info.arg_cpp_info[index].type == SDA_BindlessArray;
+                const auto found = reflection.find(std::string(
+                    bindless ? ReflectParamInfo::bdls_name : shader_info.layout_hash[index]
+                ));
+                if (found == reflection.end()) return;
+                bool active = false;
+                if (bindless) {
+                    const auto& resources = found->second.spirv.bindless;
+                    active = (resources.array && resources.array->custom_flag.active) ||
+                             (resources.buffer && resources.buffer->custom_flag.active) ||
+                             (resources.image && resources.image->custom_flag.active) ||
+                             (resources.sampler && resources.sampler->custom_flag.active);
+                } else if (const auto* resource = std::get_if<ReflectParamInfo::Resource>(
+                               &found->second.spirv.resources.data)) {
+                    active = resource->custom_flag.active;
+                } else if (const auto* constant = std::get_if<ReflectParamInfo::Constant>(
+                               &found->second.spirv.resources.data)) {
+                    active = constant->custom_flag.active;
+                }
+                if (active) handle.valid_bits |= uint64(1) << index;
+            };
+            mark_active(shaders.vs);
+            mark_active(shaders.ps);
+            if (shader_info.arg_cpp_info[index].type == SDA_Constant &&
+                (handle.valid_bits & (uint64(1) << index))) {
+                handle.constant_idx = index;
+            }
+        }
+        handle.handle = reinterpret_cast<uint64>(MoerNew(MetalPipelineState)(native_pipeline));
+        return handle;
+    }
 }
 PipelineHandle MetalDevice::CreatePipeline(PipelineShaderInfo&&) { Unsupported("compute pipelines"); }
 void MetalDevice::WaitIdle() { native_->graphics.Sync(); }
