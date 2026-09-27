@@ -223,6 +223,79 @@ void CheckGraphicsDraw() {
     std::cout << "RHI graphics draw and GPU color readback: success" << std::endl;
 }
 
+void CheckGraphicsMRT() {
+    using namespace Moer::Render;
+    constexpr std::string_view source = R"(
+        #include <metal_stdlib>
+        using namespace metal;
+        struct VertexOutput { float4 position [[position]]; };
+        struct FragmentOutput {
+            float4 first [[color(0)]];
+            float4 second [[color(1)]];
+            float4 third [[color(2)]];
+        };
+        vertex VertexOutput draw_vertex(uint index [[vertex_id]]) {
+            const float2 positions[3] = {float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0)};
+            return {float4(positions[index], 0.0, 1.0)};
+        }
+        fragment FragmentOutput draw_fragment() {
+            return {float4(1, 0, 0, 1), float4(0, 1, 0, 1), float4(0, 0, 1, 1)};
+        }
+    )";
+    std::vector<Moer::uint8> code(source.begin(), source.end());
+    SingleShaderInfo vertex{.entry_point = "draw_vertex", .shader_data = code,
+                            .shader_type = EShaderType::ST_VERTEX};
+    SingleShaderInfo fragment{.entry_point = "draw_fragment", .shader_data = code,
+                              .shader_type = EShaderType::ST_FRAGMENT};
+    PipelineShaderInfo shaders{.shader_group = ShaderVsPs{vertex, fragment}};
+    GfxPsoCreateInfo info(
+        RHIRasterizeInfo::Preset<Rast::CULL_NONE>(), VertexStream{},
+        {RHIColorAttachmentInfo::Preset<>(PF_R8G8B8A8_UNORM),
+         RHIColorAttachmentInfo::Preset<>(PF_R8G8B8A8_UNORM),
+         RHIColorAttachmentInfo::Preset<>(PF_R8G8B8A8_UNORM)}
+    );
+    PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(info), std::move(shaders));
+    RasterPipeline raster(pipeline);
+    TextureRef targets[3];
+    for (auto& target : targets) {
+        target = RenderDevice::Get().CreateTexture(
+            Extent2D(8, 8), PF_R8G8B8A8_UNORM,
+            ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_SRC
+        );
+    }
+    Moer::Array<MeshDrawData> meshes;
+    meshes.emplace_back().EmplaceDraw(3, 0, 0);
+    CommandList draw(EQueueType::Graphics);
+    CommandList::DrawDispatcher(raster, draw).Draw(
+        Rect2D(0, 0, 8, 8), std::move(meshes),
+        ColorAttachment(targets[0]), ColorAttachment(targets[1]), ColorAttachment(targets[2])
+    );
+    RHIExecutor::Get().Submit(EQueueType::Graphics, draw.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    const uint8_t expected[3][4] = {{255, 0, 0, 255}, {0, 255, 0, 255}, {0, 0, 255, 255}};
+    for (uint index = 0; index < 3; ++index) {
+        id<MTLTexture> texture = (__bridge id<MTLTexture>)GetMetalNativeTexture(targets[index].Get());
+        id<MTLBuffer> readback = [texture.device
+            newBufferWithLength:256 * 8 options:MTLResourceStorageModeShared];
+        id<MTLCommandQueue> queue = [texture.device newCommandQueue];
+        id<MTLCommandBuffer> command = [queue commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+        [blit copyFromTexture:texture sourceSlice:0 sourceLevel:0
+                sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(8, 8, 1)
+                    toBuffer:readback destinationOffset:0 destinationBytesPerRow:256
+           destinationBytesPerImage:256 * 8];
+        [blit endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        const auto* middle = static_cast<const uint8_t*>(readback.contents) + 4 * 256 + 4 * 4;
+        if (command.status != MTLCommandBufferStatusCompleted ||
+            std::memcmp(middle, expected[index], 4) != 0) {
+            throw std::runtime_error("Metal MRT attachment readback differs from shader output");
+        }
+    }
+    std::cout << "RHI three-attachment MRT draw and GPU readback: success" << std::endl;
+}
+
 void CheckIndexedGraphicsDraw() {
     using namespace Moer::Render;
     constexpr std::string_view source = R"(
@@ -1271,6 +1344,7 @@ int main(int argc, char** argv) {
             CheckRasterTextureFormats();
             CheckGraphicsPipeline();
             CheckGraphicsDraw();
+            CheckGraphicsMRT();
             CheckIndexedGraphicsDraw();
             CheckDepthGraphicsDraw();
             CheckComputePipeline();

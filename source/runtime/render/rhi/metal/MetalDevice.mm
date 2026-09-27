@@ -975,16 +975,27 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
         reinterpret_cast<PipelineState*>(draw.Pipeline().handle));
     const RenderPassInfo& pass = draw.RenderPassInfo();
     if (pipeline == nullptr || pipeline->NativeRender() == nil ||
-        pipeline->ColorFormats().size() != 1 ||
+        pipeline->ColorFormats().empty() ||
+        pipeline->ColorFormats().size() != pass.color_attachments.size() ||
         !draw.Args().args.empty() || !draw.Args().constants.empty() ||
-        pass.color_attachments.size() != 1 ||
         pass.view_mask != 0 || pass.viewport_cnt != 1 || !pass.render_area.IsValid() ||
         draw.DrawData().empty()) {
-        Unsupported("this graphics draw layout");
+        throw std::runtime_error(
+            "Metal RHI has not implemented graphics draw layout " + draw.name +
+            " (pipeline_colors=" +
+            std::to_string(pipeline == nullptr ? 0 : pipeline->ColorFormats().size()) +
+            ", pass_colors=" + std::to_string(pass.color_attachments.size()) +
+            ", args=" + std::to_string(draw.Args().args.size()) +
+            ", constants=" + std::to_string(draw.Args().constants.size()) +
+            ", view_mask=" + std::to_string(pass.view_mask) +
+            ", viewports=" + std::to_string(pass.viewport_cnt) +
+            ", meshes=" + std::to_string(draw.DrawData().size()) + ")"
+        );
     }
     const ColorAttachment& attachment = pass.color_attachments[0];
     auto* target = dynamic_cast<MetalTexture*>(attachment.target);
-    if (target == nullptr || pipeline->ColorFormats()[0] != ToMetalFormat(target->GetFormat()) ||
+    if (target == nullptr || pipeline->ColorFormats().size() > 8 ||
+        pipeline->ColorFormats()[0] != ToMetalFormat(target->GetFormat()) ||
         attachment.mip_level >= target->GetNumMips() ||
         attachment.array_layer >= target->GetNumArray() || attachment.array_count != 1 ||
         pass.render_area.offset.x < 0 || pass.render_area.offset.y < 0 ||
@@ -994,6 +1005,21 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
             std::max(1u, target->GetHeight() >> attachment.mip_level) ||
         GetStoreOp(attachment.action) == EAttachmentStoreOp::MULTISAMPLE_RESOLVE) {
         Unsupported("this graphics color attachment");
+    }
+    for (uint index = 1; index < pass.color_attachments.size(); ++index) {
+        const ColorAttachment& color = pass.color_attachments[index];
+        auto* color_target = dynamic_cast<MetalTexture*>(color.target);
+        if (color_target == nullptr ||
+            pipeline->ColorFormats()[index] != ToMetalFormat(color_target->GetFormat()) ||
+            color_target->GetWidth() != target->GetWidth() ||
+            color_target->GetHeight() != target->GetHeight() ||
+            color.mip_level != attachment.mip_level ||
+            color.array_layer != attachment.array_layer || color.array_count != 1 ||
+            color.mip_level >= color_target->GetNumMips() ||
+            color.array_layer >= color_target->GetNumArray() ||
+            GetStoreOp(color.action) == EAttachmentStoreOp::MULTISAMPLE_RESOLVE) {
+            Unsupported("this graphics MRT attachment");
+        }
     }
     const DepthAttachment& depth = pass.depth_attachment;
     if (depth.Valid()) {
@@ -1060,22 +1086,24 @@ void EncodeSimpleDraw(id<MTLCommandBuffer> command_buffer, const SetDrawStateCmd
     auto* pipeline = static_cast<MetalPipelineState*>(
         reinterpret_cast<PipelineState*>(draw.Pipeline().handle));
     const RenderPassInfo& pass = draw.RenderPassInfo();
-    const ColorAttachment& attachment = pass.color_attachments[0];
-    auto* target = static_cast<MetalTexture*>(attachment.target);
     MTLRenderPassDescriptor* descriptor = [MTLRenderPassDescriptor renderPassDescriptor];
-    auto* color = descriptor.colorAttachments[0];
-    color.texture = target->Native();
-    color.level = attachment.mip_level;
-    color.slice = attachment.array_layer;
-    switch (GetLoadOp(attachment.action)) {
-        case EAttachmentLoadOp::CLEAR: color.loadAction = MTLLoadActionClear; break;
-        case EAttachmentLoadOp::LOAD: color.loadAction = MTLLoadActionLoad; break;
-        default: color.loadAction = MTLLoadActionDontCare; break;
+    for (uint index = 0; index < pass.color_attachments.size(); ++index) {
+        const ColorAttachment& attachment = pass.color_attachments[index];
+        auto* target = static_cast<MetalTexture*>(attachment.target);
+        auto* color = descriptor.colorAttachments[index];
+        color.texture = target->Native();
+        color.level = attachment.mip_level;
+        color.slice = attachment.array_layer;
+        switch (GetLoadOp(attachment.action)) {
+            case EAttachmentLoadOp::CLEAR: color.loadAction = MTLLoadActionClear; break;
+            case EAttachmentLoadOp::LOAD: color.loadAction = MTLLoadActionLoad; break;
+            default: color.loadAction = MTLLoadActionDontCare; break;
+        }
+        color.storeAction = GetStoreOp(attachment.action) == EAttachmentStoreOp::STORE ?
+            MTLStoreActionStore : MTLStoreActionDontCare;
+        const float4 clear = attachment.clear_color;
+        color.clearColor = MTLClearColorMake(clear.x, clear.y, clear.z, clear.w);
     }
-    color.storeAction = GetStoreOp(attachment.action) == EAttachmentStoreOp::STORE ?
-        MTLStoreActionStore : MTLStoreActionDontCare;
-    const float4 clear = attachment.clear_color;
-    color.clearColor = MTLClearColorMake(clear.x, clear.y, clear.z, clear.w);
     if (pass.depth_attachment.Valid()) {
         const DepthAttachment& depth = pass.depth_attachment;
         auto* depth_target = static_cast<MetalTexture*>(depth.target);
