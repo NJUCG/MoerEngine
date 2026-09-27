@@ -71,6 +71,16 @@ RasterRenderer::RasterRenderer(
     render_graph_enabled       = graph_config.enabled;
     render_graph_debug_dump    = graph_config.debug_dump;
     parallel_recording_enabled = graph_config.parallel_recording;
+    if (device.GetRHIType() == ERHIType::Metal) {
+        auto& raster_config = config->raster_config;
+        if (raster_config.ao_mode == EAoMode::RTAO ||
+            raster_config.ao_mode == EAoMode::RTAO_AO_ONLY) {
+            raster_config.ao_mode = EAoMode::SSAO;
+        }
+        raster_config.probe_gi_enabled = false;
+        raster_config.shadow_map_mode = EShadowMapMode::NONE;
+        LOG_INFO("[Metal][Raster] Bootstrap uses SSAO, disables Probe GI and shadow maps");
+    }
     LOG_INFO(
         "[RenderGraph] Raster execution mode: {}, upper recording: {}",
         render_graph_enabled ? "graph" : "linear",
