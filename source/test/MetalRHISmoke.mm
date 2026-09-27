@@ -1313,6 +1313,10 @@ void CheckGraphicsBufferReadback() {
             reinterpret_cast<const Moer::byte*>(input), sizeof(input)),
         buffer->GetView(8, sizeof(input))
     );
+    commands.Barriers(
+        EQueueType::Graphics, EQueueType::Graphics, EPassType::Copy,
+        ReadBuffer{buffer->GetView(8, sizeof(input)), EBufferState::TRANSFER}
+    );
     commands.CopyFrom(
         buffer->GetView(8, sizeof(output)),
         std::span<Moer::byte>(reinterpret_cast<Moer::byte*>(output), sizeof(output))

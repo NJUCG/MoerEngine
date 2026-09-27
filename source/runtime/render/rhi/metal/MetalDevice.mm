@@ -909,6 +909,62 @@ void ValidateQueueTransfer(const QueueTransferCmd& transfer, EQueueType current_
     for (const auto& item : transfer.ExportBuffers()) validate_buffer(item.buffer);
 }
 
+void ValidateBarrier(const BarrierCmd& barrier) {
+    // Metal resources use the default tracked hazard mode. Each graphics,
+    // compute, and blit operation has its own encoder on the same native queue,
+    // so same-queue state transitions need no explicit encoding here.
+    if (barrier.IsQueueTransition() ||
+        (barrier.GetSrcQueue() != EQueueType::Ignore &&
+         barrier.GetSrcQueue() != EQueueType::Graphics) ||
+        (barrier.GetDstQueue() != EQueueType::Ignore &&
+         barrier.GetDstQueue() != EQueueType::Graphics)) {
+        Unsupported("a cross-queue graphics barrier");
+    }
+    const auto validate_texture = [](uint64 handle, uint mip, uint mip_count,
+                                     uint layer, uint layer_count) {
+        auto* texture = dynamic_cast<MetalTexture*>(reinterpret_cast<Texture*>(handle));
+        if (texture == nullptr || mip_count == 0 || layer_count == 0 ||
+            mip + mip_count > texture->GetNumMips() ||
+            layer + layer_count > texture->GetNumArray()) {
+            Unsupported("this graphics texture barrier range");
+        }
+    };
+    const auto validate_buffer = [](uint64 handle, uint64 offset, uint64 size) {
+        auto* buffer = dynamic_cast<MetalBuffer*>(reinterpret_cast<Buffer*>(handle));
+        if (buffer == nullptr || size == 0 || offset > buffer->GetByteSize() ||
+            size > buffer->GetByteSize() - offset) {
+            Unsupported("this graphics buffer barrier range");
+        }
+    };
+    for (const auto& item : barrier.ReadTextures()) {
+        validate_texture(item.handle, item.mip_level, item.mip_cnt,
+                         item.array_layer, item.array_cnt);
+    }
+    for (const auto& item : barrier.WriteTextures()) {
+        validate_texture(item.handle, item.mip_level, item.mip_cnt,
+                         item.array_layer, item.array_cnt);
+    }
+    for (const auto& item : barrier.ReadBuffers()) {
+        validate_buffer(item.handle, item.offset, item.byte_size);
+    }
+    for (const auto& item : barrier.WriteBuffers()) {
+        validate_buffer(item.handle, item.offset, item.byte_size);
+    }
+    for (const auto& item : barrier.ExplicitTextures()) {
+        if (item.queue_transfer.phase != EBarrierQueueTransferPhase::None) {
+            Unsupported("an explicit graphics queue ownership transfer");
+        }
+        validate_texture(item.handle, item.mip_level, item.mip_count,
+                         item.array_layer, item.array_count);
+    }
+    for (const auto& item : barrier.ExplicitBuffers()) {
+        if (item.queue_transfer.phase != EBarrierQueueTransferPhase::None) {
+            Unsupported("an explicit graphics queue ownership transfer");
+        }
+        validate_buffer(item.handle, item.offset, item.byte_size);
+    }
+}
+
 // Completion callbacks may submit more RHI work. Run them after Execute has
 // returned from the executor publication gate, never on that gate's owner.
 class MetalCompletionDispatcher final {
@@ -1673,6 +1729,10 @@ public:
                 ValidateQueueTransfer(static_cast<const QueueTransferCmd&>(*command), EQueueType::Graphics);
                 continue;
             }
+            if (command->Type() == Command::EType::Barrier) {
+                ValidateBarrier(static_cast<const BarrierCmd&>(*command));
+                continue;
+            }
             if (command->Type() == Command::EType::UpdateBindlessArray) {
                 const auto& update = static_cast<const UpdateBindlessArrayCmd&>(*command);
                 if (dynamic_cast<MetalBindlessArray*>(update.Handle()) == nullptr) {
@@ -1772,6 +1832,7 @@ public:
             for (const auto& command : submit.cmds) {
                 if (command->Type() == Command::EType::Scope ||
                     command->Type() == Command::EType::QueueTransfer ||
+                    command->Type() == Command::EType::Barrier ||
                     command->Type() == Command::EType::UpdateBindlessArray) continue;
                 if (command->Type() == Command::EType::UploadTexture ||
                     command->Type() == Command::EType::UploadBuffer) {

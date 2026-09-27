@@ -73,7 +73,7 @@
 
 ### macOS 原生 Metal 开发基线
 
-当前 `metal` 分支可以在 macOS 上配置并编译 `MoerEditor`。原生 Metal RHI 已具备设备创建、Buffer、2D 常用颜色及深度格式、多级 mip、2D 数组与 cube 纹理的分配及子资源上传、基础上传、同类资源拷贝、主机侧同步的 Copy timeline/fence、同一原生队列上的 Copy→Graphics 转移、Copy/Graphics 完成回调、bindless 句柄及 argument buffer 表、HLSL→MSL 图形与计算 pipeline、最多八个颜色附件及 D32/D32S8 深度附件的基础绘制、窗口交换链和 Present 的最小路径。Raster 场景更新会按设备能力跳过 BLAS/TLAS；Metal Raster 启动时将 RTAO 改为 SSAO，并暂时关闭 Probe GI 和阴影。Graphics 提交现支持帧级 fence、Scope 标记、Buffer 范围清零及同步读回；基础计算派发支持 Buffer 与 Texture argument buffer、单 mip 纹理视图、push constant 和反射出的工作组尺寸。图形绘制已支持普通 Buffer、纹理、采样器、bindless argument buffer 与分阶段 push constant，编辑器首帧已通过 Geometry Pass 的深度附件与间接绘制校验，当前越过 Bloom Prefilter Pass 的参数校验，停在后续资源 Barrier 命令校验。已验证的纹理格式包括 R8、RG8、R16F、RG16F、R32F、RGBA8、RGB10A2、RG11B10F、RGBA16F、RGBA32F、D16、D32 和 D32S8；D16 当前只验证了资源创建，尚未验证绘制。
+当前 `metal` 分支可以在 macOS 上配置并编译 `MoerEditor`。原生 Metal RHI 已具备设备创建、Buffer、2D 常用颜色及深度格式、多级 mip、2D 数组与 cube 纹理的分配及子资源上传、基础上传、同类资源拷贝、主机侧同步的 Copy timeline/fence、同一原生队列上的 Copy→Graphics 转移、Copy/Graphics 完成回调、bindless 句柄及 argument buffer 表、HLSL→MSL 图形与计算 pipeline、最多八个颜色附件及 D32/D32S8 深度附件的基础绘制、窗口交换链和 Present 的最小路径。Raster 场景更新会按设备能力跳过 BLAS/TLAS；Metal Raster 启动时将 RTAO 改为 SSAO，并暂时关闭 Probe GI 和阴影。Graphics 提交现支持帧级 fence、Scope 标记、同队列资源 Barrier、Buffer 范围清零及同步读回；基础计算派发支持 Buffer 与 Texture argument buffer、单 mip 纹理视图、push constant 和反射出的工作组尺寸。图形绘制已支持普通 Buffer、纹理、采样器、bindless argument buffer 与分阶段 push constant，编辑器首帧已通过 Geometry Pass 的深度附件与间接绘制校验，当前越过 Bloom Prefilter Pass 的参数校验，首帧已通过资源 Barrier 校验并提交 Present；完整窗口画面仍需确认。已验证的纹理格式包括 R8、RG8、R16F、RG16F、R32F、RGBA8、RGB10A2、RG11B10F、RGBA16F、RGBA32F、D16、D32 和 D32S8；D16 当前只验证了资源创建，尚未验证绘制。
 
 准备 Xcode Command Line Tools、CMake 3.26 至 3.x、Python 3.12（含开发库）以及原生 DXC（`dxc` 可执行文件、`dxcapi.h`、`libdxcompiler`）。初始化子模块后，在仓库根目录执行：
 
