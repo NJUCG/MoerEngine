@@ -475,7 +475,7 @@ void CheckIndexedGraphicsDraw() {
     std::cout << "RHI indexed graphics draw and GPU color readback: success" << std::endl;
 }
 
-void CheckDepthGraphicsDraw() {
+void CheckDepthGraphicsDraw(EPixelFormat depth_format) {
     using namespace Moer::Render;
     constexpr std::string_view source = R"(
         #include <metal_stdlib>
@@ -502,7 +502,7 @@ void CheckDepthGraphicsDraw() {
         GfxPsoCreateInfo info(
             RHIRasterizeInfo::Preset<Rast::CULL_NONE>(), VertexStream{},
             {RHIColorAttachmentInfo::Preset<>(PF_R8G8B8A8_UNORM)},
-            RHIDepthStencilStateInfo(true, CO_LESS), PF_D32_SFLOAT
+            RHIDepthStencilStateInfo(true, CO_LESS), depth_format
         );
         return RasterPipeline(RenderDevice::Get().CreatePipeline(std::move(info), std::move(shaders)));
     };
@@ -513,7 +513,7 @@ void CheckDepthGraphicsDraw() {
         ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_SRC
     );
     TextureRef depth = RenderDevice::Get().CreateTexture(
-        Extent2D(8, 8), PF_D32_SFLOAT, ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
+        Extent2D(8, 8), depth_format, ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
     );
     CommandList draw(EQueueType::Graphics);
     for (uint pass_index = 0; pass_index < 2; ++pass_index) {
@@ -550,7 +550,8 @@ void CheckDepthGraphicsDraw() {
         middle[0] != 255 || middle[1] != 0 || middle[2] != 0 || middle[3] != 255) {
         throw std::runtime_error("Metal RHI depth test did not reject the farther triangle");
     }
-    std::cout << "RHI depth attachment and depth test: success" << std::endl;
+    std::cout << "RHI depth attachment and depth test (format "
+              << static_cast<uint>(depth_format) << "): success" << std::endl;
 }
 
 void CheckComputePipeline() {
@@ -1437,7 +1438,8 @@ int main(int argc, char** argv) {
             CheckGraphicsMRT();
             CheckGraphicsBindlessArguments();
             CheckIndexedGraphicsDraw();
-            CheckDepthGraphicsDraw();
+            CheckDepthGraphicsDraw(PF_D32_SFLOAT);
+            CheckDepthGraphicsDraw(PF_D32_SFLOAT_S8_UINT);
             CheckComputePipeline();
             CheckRHIComputeDispatch();
             CheckGraphicsUploads();

@@ -1109,14 +1109,16 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
         const EAttachmentAction action = GetDepthAction(depth.action);
         if (depth_target == nullptr ||
             pipeline->DepthFormat() != ToMetalFormat(depth_target->GetFormat()) ||
-            depth_target->GetFormat() == PF_D32_SFLOAT_S8_UINT ||
             depth_target->GetWidth() != target->GetWidth() ||
             depth_target->GetHeight() != target->GetHeight() ||
             depth.mip_level != attachment.mip_level ||
             depth.array_layer != attachment.array_layer || depth.array_count != 1 ||
             depth.mip_level >= depth_target->GetNumMips() ||
             depth.array_layer >= depth_target->GetNumArray() ||
-            GetStoreOp(action) == EAttachmentStoreOp::MULTISAMPLE_RESOLVE) {
+            GetStoreOp(action) == EAttachmentStoreOp::MULTISAMPLE_RESOLVE ||
+            (depth_target->GetFormat() == PF_D32_SFLOAT_S8_UINT &&
+             GetStoreOp(GetStencilAction(depth.action)) ==
+                 EAttachmentStoreOp::MULTISAMPLE_RESOLVE)) {
             Unsupported("this graphics depth attachment");
         }
     } else if (pipeline->DepthFormat() != MTLPixelFormatInvalid) {
@@ -1202,6 +1204,22 @@ void EncodeSimpleDraw(id<MTLCommandBuffer> command_buffer, const SetDrawStateCmd
         native_depth.storeAction = GetStoreOp(action) == EAttachmentStoreOp::STORE ?
             MTLStoreActionStore : MTLStoreActionDontCare;
         native_depth.clearDepth = depth.clear_depth;
+        if (depth_target->GetFormat() == PF_D32_SFLOAT_S8_UINT) {
+            auto* native_stencil = descriptor.stencilAttachment;
+            native_stencil.texture = depth_target->Native();
+            native_stencil.level = depth.mip_level;
+            native_stencil.slice = depth.array_layer;
+            const EAttachmentAction stencil_action = GetStencilAction(depth.action);
+            switch (GetLoadOp(stencil_action)) {
+                case EAttachmentLoadOp::CLEAR: native_stencil.loadAction = MTLLoadActionClear; break;
+                case EAttachmentLoadOp::LOAD: native_stencil.loadAction = MTLLoadActionLoad; break;
+                default: native_stencil.loadAction = MTLLoadActionDontCare; break;
+            }
+            native_stencil.storeAction =
+                GetStoreOp(stencil_action) == EAttachmentStoreOp::STORE ?
+                    MTLStoreActionStore : MTLStoreActionDontCare;
+            native_stencil.clearStencil = depth.clear_stencil;
+        }
     }
     id<MTLRenderCommandEncoder> encoder =
         [command_buffer renderCommandEncoderWithDescriptor:descriptor];
