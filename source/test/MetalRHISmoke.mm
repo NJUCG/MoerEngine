@@ -983,6 +983,32 @@ void CheckGraphicsBufferClear() {
     std::cout << "graphics buffer clear ranges and uint pattern: success" << std::endl;
 }
 
+void CheckGraphicsBufferReadback() {
+    using namespace Moer::Render;
+    BufferRef buffer = RenderDevice::Get().CreateBuffer(
+        "Metal graphics readback smoke", BufferInfo{32, 1, EBufferUsageFlags::TRANSFER_SRC}
+    );
+    uint8_t input[16];
+    for (uint8_t i = 0; i < 16; ++i) input[i] = i * 7;
+    uint8_t output[16]{};
+    CommandList commands(EQueueType::Graphics);
+    commands.CopyFrom(
+        std::span<const Moer::byte>(
+            reinterpret_cast<const Moer::byte*>(input), sizeof(input)),
+        buffer->GetView(8, sizeof(input))
+    );
+    commands.CopyFrom(
+        buffer->GetView(8, sizeof(output)),
+        std::span<Moer::byte>(reinterpret_cast<Moer::byte*>(output), sizeof(output))
+    );
+    RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (std::memcmp(input, output, sizeof(input)) != 0) {
+        throw std::runtime_error("Metal graphics buffer readback returned incorrect bytes");
+    }
+    std::cout << "graphics buffer readback after upload: success" << std::endl;
+}
+
 void CheckBindlessTables() {
     using namespace Moer::Render;
     BindlessArrayRef array = RenderDevice::Get().CreateBindlessArray(8);
@@ -1275,6 +1301,7 @@ int main(int argc, char** argv) {
             CheckGraphicsCompletionCallbacks();
             CheckGraphicsFrameSignal();
             CheckGraphicsBufferClear();
+            CheckGraphicsBufferReadback();
             CheckBindlessTables();
             auto source = std::make_shared<SmokeWindowSource>(window);
             int width = 0, height = 0;

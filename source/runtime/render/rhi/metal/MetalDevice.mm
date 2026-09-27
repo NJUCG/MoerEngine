@@ -1294,6 +1294,19 @@ public:
                 has_gpu_work = true;
                 continue;
             }
+            if (command->Type() == Command::EType::CopyBackBuffer) {
+                const auto& copy = static_cast<const CopyBackBufferCmd&>(*command);
+                auto* buffer = dynamic_cast<MetalBuffer*>(
+                    reinterpret_cast<Buffer*>(copy.Handle()));
+                if (buffer == nullptr || copy.Data() == nullptr ||
+                    copy.HasOwningReadback() || copy.ByteSize() == 0 ||
+                    copy.Offset() > buffer->GetByteSize() ||
+                    copy.ByteSize() > buffer->GetByteSize() - copy.Offset()) {
+                    Unsupported("this graphics buffer readback layout");
+                }
+                has_gpu_work = true;
+                continue;
+            }
             if (command->Type() == Command::EType::SetDrawState) {
                 ValidateSimpleDraw(static_cast<const SetDrawStateCmd&>(*command));
                 has_gpu_work = true;
@@ -1352,6 +1365,12 @@ public:
             id<MTLCommandBuffer> command_buffer = [queue_ commandBuffer];
             if (command_buffer == nil) throw std::runtime_error("Cannot create Metal command buffer");
             NSMutableArray<id<MTLBuffer>>* staging_buffers = [NSMutableArray array];
+            struct PendingReadback {
+                NSUInteger staging_index;
+                void* destination;
+                uint64 byte_size;
+            };
+            std::vector<PendingReadback> readbacks;
             for (const auto& command : submit.cmds) {
                 if (command->Type() == Command::EType::Scope ||
                     command->Type() == Command::EType::QueueTransfer ||
@@ -1378,6 +1397,23 @@ public:
                     EncodeComputeDispatch(
                         command_buffer, staging_buffers,
                         static_cast<const DispatchCmd&>(*command), submit.cached_args);
+                    continue;
+                }
+                if (command->Type() == Command::EType::CopyBackBuffer) {
+                    const auto& copy = static_cast<const CopyBackBufferCmd&>(*command);
+                    auto* buffer = static_cast<MetalBuffer*>(
+                        reinterpret_cast<Buffer*>(copy.Handle()));
+                    id<MTLBuffer> staging = [queue_.device
+                        newBufferWithLength:copy.ByteSize()
+                        options:MTLResourceStorageModeShared];
+                    if (staging == nil) throw std::runtime_error("Cannot allocate Metal readback staging");
+                    [staging_buffers addObject:staging];
+                    readbacks.push_back({staging_buffers.count - 1, copy.Data(), copy.ByteSize()});
+                    id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
+                    if (blit == nil) throw std::runtime_error("Cannot encode Metal buffer readback");
+                    [blit copyFromBuffer:buffer->Native() sourceOffset:copy.Offset()
+                                toBuffer:staging destinationOffset:0 size:copy.ByteSize()];
+                    [blit endEncoding];
                     continue;
                 }
                 const auto& clear = static_cast<const ClearResourceCmd&>(*command);
@@ -1429,6 +1465,11 @@ public:
             if (command_buffer.status != MTLCommandBufferStatusCompleted) {
                 throw std::runtime_error("Metal texture clear failed: " +
                     std::string([command_buffer.error.localizedDescription UTF8String] ?: "unknown GPU error"));
+            }
+            for (const PendingReadback& readback : readbacks) {
+                std::memcpy(readback.destination,
+                            [staging_buffers[readback.staging_index] contents],
+                            readback.byte_size);
             }
         }
         for (const SignalEvent& signal : submit.signal_events) {
