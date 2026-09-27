@@ -143,6 +143,10 @@ public:
         );
     }
 
+    bool SupportsRaytracingAccelerationStructures() const override {
+        return true;
+    }
+
     // Cooperative support related
     bool                            IsExtensionCooperativeEnabled() const override;
     const CooperativeExtensionInfo& GetCooperativeExtensionInfo() const override;

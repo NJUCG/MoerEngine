@@ -151,20 +151,22 @@ void GpuScene::ApplyUpdate(
             UpdateInstanceBuffer(gfx_cmd_list, pending_update.instances);
         }
 
-        switch (pending_update.raytracing_update) {
-            case EGpuSceneRaytracingUpdate::None:
-                break;
-            case EGpuSceneRaytracingUpdate::UpdateInstances:
-                UpdateRaytracingScene(gfx_cmd_list, pending_update.rt_instances);
-                break;
-            case EGpuSceneRaytracingUpdate::RebuildTlas:
-                RebuildRaytracingSceneTlas(gfx_cmd_list, pending_update.rt_instances);
-                break;
-            case EGpuSceneRaytracingUpdate::RebuildBlas:
-                InitRaytracingScene(
-                    gfx_cmd_list, pending_update.rt_meshes, pending_update.rt_instances
-                );
-                break;
+        if (RenderDevice::Get().SupportsRaytracingAccelerationStructures()) {
+            switch (pending_update.raytracing_update) {
+                case EGpuSceneRaytracingUpdate::None:
+                    break;
+                case EGpuSceneRaytracingUpdate::UpdateInstances:
+                    UpdateRaytracingScene(gfx_cmd_list, pending_update.rt_instances);
+                    break;
+                case EGpuSceneRaytracingUpdate::RebuildTlas:
+                    RebuildRaytracingSceneTlas(gfx_cmd_list, pending_update.rt_instances);
+                    break;
+                case EGpuSceneRaytracingUpdate::RebuildBlas:
+                    InitRaytracingScene(
+                        gfx_cmd_list, pending_update.rt_meshes, pending_update.rt_instances
+                    );
+                    break;
+            }
         }
     }
 
@@ -422,9 +424,11 @@ void GpuScene::InitializeResources(GpuSceneUpdate& update) {
     m_pending_cmd_lists.gfx_queue_cmd_list.ImportResourcesFromQueue(
         EQueueType::Copy, std::move(import_textures), std::move(import_buffers)
     );
-    InitRaytracingScene(
-        m_pending_cmd_lists.gfx_queue_cmd_list, update.rt_meshes, update.rt_instances
-    );
+    if (device.SupportsRaytracingAccelerationStructures()) {
+        InitRaytracingScene(
+            m_pending_cmd_lists.gfx_queue_cmd_list, update.rt_meshes, update.rt_instances
+        );
+    }
 }
 
 void GpuScene::UpdateLightBuffer(CommandList& cmd_list, const Array<GLight>& lights) {

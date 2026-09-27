@@ -1103,6 +1103,9 @@ int main(int argc, char** argv) {
             if (RenderDevice::Get().GetShaderPlatform() != EShaderPlatform::SP_METAL_MSL) {
                 throw std::runtime_error("Metal device selected the wrong shader platform");
             }
+            if (RenderDevice::Get().SupportsRaytracingAccelerationStructures()) {
+                throw std::runtime_error("Metal device advertised unimplemented raytracing structures");
+            }
             FenceRef rejected_fence = RenderDevice::Get().CreateFence();
             rejected_fence->Reject(1);
             bool rejected_dependency_failed = false;

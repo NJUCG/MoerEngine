@@ -73,7 +73,7 @@
 
 ### macOS 原生 Metal 开发基线
 
-当前 `metal` 分支可以在 macOS 上配置并编译 `MoerEditor`。原生 Metal RHI 已具备设备创建、Buffer、2D 常用颜色及深度格式、多级 mip、2D 数组与 cube 纹理的分配及子资源上传、基础上传、同类资源拷贝、主机侧同步的 Copy timeline/fence、同一原生队列上的 Copy→Graphics 转移、Copy/Graphics 完成回调、bindless 句柄及 argument buffer 表、HLSL→MSL 图形与计算 pipeline、单颜色附件及 D32 深度附件的基础绘制、窗口交换链和 Present 的最小路径。编辑器首帧仍需要未实现的原生光追场景，暂不能使用 Metal 渲染场景。已验证的纹理格式包括 R8、RG8、R16F、RG16F、R32F、RGBA8、RGB10A2、RG11B10F、RGBA16F、RGBA32F、D16、D32 和 D32S8；D16 与 D32S8 当前只验证了资源创建，尚未验证绘制。
+当前 `metal` 分支可以在 macOS 上配置并编译 `MoerEditor`。原生 Metal RHI 已具备设备创建、Buffer、2D 常用颜色及深度格式、多级 mip、2D 数组与 cube 纹理的分配及子资源上传、基础上传、同类资源拷贝、主机侧同步的 Copy timeline/fence、同一原生队列上的 Copy→Graphics 转移、Copy/Graphics 完成回调、bindless 句柄及 argument buffer 表、HLSL→MSL 图形与计算 pipeline、单颜色附件及 D32 深度附件的基础绘制、窗口交换链和 Present 的最小路径。Raster 场景更新会按设备能力跳过 BLAS/TLAS；编辑器目前可进入首帧，但仍需补齐队列提交和 Raster 图形命令才能出画面。已验证的纹理格式包括 R8、RG8、R16F、RG16F、R32F、RGBA8、RGB10A2、RG11B10F、RGBA16F、RGBA32F、D16、D32 和 D32S8；D16 与 D32S8 当前只验证了资源创建，尚未验证绘制。
 
 准备 Xcode Command Line Tools、CMake 3.26 至 3.x、Python 3.12（含开发库）以及原生 DXC（`dxc` 可执行文件、`dxcapi.h`、`libdxcompiler`）。初始化子模块后，在仓库根目录执行：
 

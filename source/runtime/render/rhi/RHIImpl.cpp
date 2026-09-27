@@ -167,6 +167,10 @@ bool RenderDevice::SupportsMultiview(uint32_t view_count) const {
     return impl && impl->SupportsMultiview(view_count);
 }
 
+bool RenderDevice::SupportsRaytracingAccelerationStructures() const {
+    return impl && impl->SupportsRaytracingAccelerationStructures();
+}
+
 RaytracingGeometryRef RenderDevice::CreateRaytracingGeometry(const RaytracingGeometryInfo& _init) {
     ValidateRHICommandAccess("RenderDevice::CreateRaytracingGeometry");
     return impl->CreateRaytracingGeometry(_init);
