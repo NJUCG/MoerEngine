@@ -22,7 +22,7 @@ struct GpuCullingBuffers {
 
         // Returns the uint counter view consumed by counted indirect draw calls.
         BufferView GetDrawCountView() const {
-            return counter_buf->GetView(0, sizeof(uint));
+            return BufferView(counter_buf.Get(), 0, 1, sizeof(uint));
         }
 
         // Ensures the visibility buffers are large enough and rebound after reallocations.

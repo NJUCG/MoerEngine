@@ -386,7 +386,7 @@ void CheckGraphicsBindlessArguments() {
     std::cout << "RHI graphics bindless tables and stage constants: success" << std::endl;
 }
 
-void CheckIndexedGraphicsDraw() {
+void CheckIndexedGraphicsDraw(bool indirect) {
     using namespace Moer::Render;
     constexpr std::string_view source = R"(
         #include <metal_stdlib>
@@ -442,10 +442,37 @@ void CheckIndexedGraphicsDraw() {
     MeshDrawData mesh;
     mesh.vtx_views.emplace_back(VertexBuffer{vertex_buffer.Get(), 0});
     mesh.idx_view = IndexBuffer{BufferView(index_buffer.Get(), 2, 3, 2), IET_UINT16};
-    mesh.EmplaceDrawIndexed(0, 3, 0, 0);
+    BufferRef argument_buffer;
+    BufferRef count_buffer;
+    if (indirect) {
+        constexpr uint32_t arguments[] = {3, 1, 0, 0, 0};
+        argument_buffer = RenderDevice::Get().CreateBuffer(
+            "Metal indexed indirect arguments",
+            BufferInfo{sizeof(arguments), 1,
+                EBufferUsageFlags::INDIRECT_BUFFER | EBufferUsageFlags::TRANSFER_DST}
+        );
+        count_buffer = RenderDevice::Get().CreateBuffer(
+            "Metal indexed indirect count",
+            BufferInfo{sizeof(uint32_t), 1,
+                EBufferUsageFlags::INDIRECT_BUFFER | EBufferUsageFlags::UNORDERED_ACCESS}
+        );
+        CommandList arguments_upload(EQueueType::Graphics);
+        arguments_upload.CopyFrom(
+            std::span<const Moer::byte>(
+                reinterpret_cast<const Moer::byte*>(arguments), sizeof(arguments)),
+            argument_buffer->GetView()
+        );
+        RHIExecutor::Get().Submit(EQueueType::Graphics, arguments_upload.Submit());
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        mesh.DrawIndirect(argument_buffer->GetView(), count_buffer->GetView(), 1,
+                          sizeof(arguments));
+    } else {
+        mesh.EmplaceDrawIndexed(0, 3, 0, 0);
+    }
     Moer::Array<MeshDrawData> meshes;
     meshes.emplace_back(std::move(mesh));
     CommandList draw(EQueueType::Graphics);
+    if (indirect) draw.ClearResource(count_buffer->GetView(), 1u);
     CommandList::DrawDispatcher(raster, draw).Draw(
         Rect2D(0, 0, 8, 8), std::move(meshes),
         ColorAttachment{.target = texture.Get(), .action = AC_CLEAR_STORE,
@@ -472,7 +499,8 @@ void CheckIndexedGraphicsDraw() {
         middle[0] != 0 || middle[1] != 255 || middle[2] != 0 || middle[3] != 255) {
         throw std::runtime_error("Metal RHI indexed triangle draw readback is not green");
     }
-    std::cout << "RHI indexed graphics draw and GPU color readback: success" << std::endl;
+    std::cout << (indirect ? "RHI counted indexed indirect draw" : "RHI indexed graphics draw")
+              << " and GPU color readback: success" << std::endl;
 }
 
 void CheckDepthGraphicsDraw(EPixelFormat depth_format) {
@@ -1437,7 +1465,8 @@ int main(int argc, char** argv) {
             CheckGraphicsDraw();
             CheckGraphicsMRT();
             CheckGraphicsBindlessArguments();
-            CheckIndexedGraphicsDraw();
+            CheckIndexedGraphicsDraw(false);
+            CheckIndexedGraphicsDraw(true);
             CheckDepthGraphicsDraw(PF_D32_SFLOAT);
             CheckDepthGraphicsDraw(PF_D32_SFLOAT_S8_UINT);
             CheckComputePipeline();

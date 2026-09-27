@@ -1132,8 +1132,36 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
     }
     for (const MeshDrawData& mesh : draw.DrawData()) {
         if (mesh.vtx_views.size() != pipeline->VertexBindingCount() ||
-            mesh.indirect_draw_param.has_value() || mesh.draw_params.empty()) {
+            (mesh.indirect_draw_param.has_value() == !mesh.draw_params.empty())) {
             Unsupported("this mesh draw layout");
+        }
+        if (mesh.indirect_draw_param) {
+            const IndirectDrawParam& indirect = *mesh.indirect_draw_param;
+            auto* buffer = dynamic_cast<MetalBuffer*>(indirect.buffer.GetBuffer());
+            const bool indexed = std::holds_alternative<IndexBuffer>(mesh.idx_view);
+            const uint argument_size = indexed ?
+                sizeof(MTLDrawIndexedPrimitivesIndirectArguments) :
+                sizeof(MTLDrawPrimitivesIndirectArguments);
+            if (buffer == nullptr || indirect.stride < argument_size ||
+                indirect.stride % alignof(uint32_t) != 0 ||
+                indirect.buffer.GetByteOffset() % alignof(uint32_t) != 0 ||
+                indirect.buffer.GetByteOffset() > buffer->GetByteSize() ||
+                indirect.buffer.GetByteSize() >
+                    buffer->GetByteSize() - indirect.buffer.GetByteOffset() ||
+                indirect.count > indirect.buffer.GetByteSize() / indirect.stride) {
+                Unsupported("this indirect draw buffer view");
+            }
+            if (indirect.count_buffer) {
+                const BufferView& count_view = *indirect.count_buffer;
+                auto* count_buffer = dynamic_cast<MetalBuffer*>(count_view.GetBuffer());
+                if (count_buffer == nullptr || count_view.GetByteSize() != sizeof(uint32_t) ||
+                    count_view.GetByteOffset() % alignof(uint32_t) != 0 ||
+                    count_view.GetByteOffset() > count_buffer->GetByteSize() ||
+                    count_view.GetByteSize() >
+                        count_buffer->GetByteSize() - count_view.GetByteOffset()) {
+                    Unsupported("this indirect draw count view");
+                }
+            }
         }
         for (const VertexBuffer& vertex : mesh.vtx_views) {
             auto* buffer = dynamic_cast<MetalBuffer*>(vertex.buffer);
@@ -1166,7 +1194,10 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
     return pipeline;
 }
 
-void EncodeSimpleDraw(id<MTLCommandBuffer> command_buffer, const SetDrawStateCmd& draw) {
+void EncodeSimpleDraw(
+    id<MTLCommandBuffer> command_buffer, const SetDrawStateCmd& draw,
+    std::span<const uint> indirect_counts
+) {
     auto* pipeline = static_cast<MetalPipelineState*>(
         reinterpret_cast<PipelineState*>(draw.Pipeline().handle));
     const RenderPassInfo& pass = draw.RenderPassInfo();
@@ -1261,7 +1292,8 @@ void EncodeSimpleDraw(id<MTLCommandBuffer> command_buffer, const SetDrawStateCmd
                          raster.cull_mode == RCM_BACK ? MTLCullModeBack : MTLCullModeNone];
     [encoder setTriangleFillMode:raster.fill_mode == FM_LINE ?
         MTLTriangleFillModeLines : MTLTriangleFillModeFill];
-    for (const MeshDrawData& mesh : draw.DrawData()) {
+    for (uint mesh_index = 0; mesh_index < draw.DrawData().size(); ++mesh_index) {
+        const MeshDrawData& mesh = draw.DrawData()[mesh_index];
         for (uint index = 0; index < mesh.vtx_views.size(); ++index) {
             const VertexBuffer& vertex = mesh.vtx_views[index];
             auto* buffer = static_cast<MetalBuffer*>(vertex.buffer);
@@ -1272,6 +1304,17 @@ void EncodeSimpleDraw(id<MTLCommandBuffer> command_buffer, const SetDrawStateCmd
             const uint stride = indexed->stride == IET_UINT16 ? 2 : 4;
             const MTLIndexType type = indexed->stride == IET_UINT16 ?
                 MTLIndexTypeUInt16 : MTLIndexTypeUInt32;
+            if (mesh.indirect_draw_param) {
+                const IndirectDrawParam& indirect = *mesh.indirect_draw_param;
+                auto* arguments = static_cast<MetalBuffer*>(indirect.buffer.GetBuffer());
+                for (uint i = 0; i < indirect_counts[mesh_index]; ++i) {
+                    [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexType:type
+                        indexBuffer:buffer->Native()
+                        indexBufferOffset:indexed->buffer.GetByteOffset()
+                        indirectBuffer:arguments->Native()
+                        indirectBufferOffset:indirect.buffer.GetByteOffset() + i * indirect.stride];
+                }
+            }
             for (const SingleDrawParam& param : mesh.draw_params) {
                 [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
                                     indexCount:param.index_cnt indexType:type
@@ -1281,6 +1324,15 @@ void EncodeSimpleDraw(id<MTLCommandBuffer> command_buffer, const SetDrawStateCmd
                                    baseVertex:param.vertex_offset baseInstance:param.first_instance];
             }
         } else {
+            if (mesh.indirect_draw_param) {
+                const IndirectDrawParam& indirect = *mesh.indirect_draw_param;
+                auto* arguments = static_cast<MetalBuffer*>(indirect.buffer.GetBuffer());
+                for (uint i = 0; i < indirect_counts[mesh_index]; ++i) {
+                    [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                        indirectBuffer:arguments->Native()
+                        indirectBufferOffset:indirect.buffer.GetByteOffset() + i * indirect.stride];
+                }
+            }
             for (const SingleDrawParam& param : mesh.draw_params) {
                 [encoder drawPrimitives:MTLPrimitiveTypeTriangle
                            vertexStart:param.vertex_offset vertexCount:param.index_cnt
@@ -1541,7 +1593,53 @@ public:
                     continue;
                 }
                 if (command->Type() == Command::EType::SetDrawState) {
-                    EncodeSimpleDraw(command_buffer, static_cast<const SetDrawStateCmd&>(*command));
+                    const auto& draw = static_cast<const SetDrawStateCmd&>(*command);
+                    std::vector<uint> indirect_counts(draw.DrawData().size(), 0);
+                    std::vector<std::pair<uint, id<MTLBuffer>>> pending_counts;
+                    for (uint mesh_index = 0; mesh_index < draw.DrawData().size(); ++mesh_index) {
+                        const auto& indirect = draw.DrawData()[mesh_index].indirect_draw_param;
+                        if (!indirect) continue;
+                        indirect_counts[mesh_index] = indirect->count;
+                        if (!indirect->count_buffer) continue;
+                        const BufferView& view = *indirect->count_buffer;
+                        auto* source = static_cast<MetalBuffer*>(view.GetBuffer());
+                        id<MTLBuffer> staging = [queue_.device
+                            newBufferWithLength:sizeof(uint32_t)
+                            options:MTLResourceStorageModeShared];
+                        if (staging == nil) {
+                            throw std::runtime_error("Cannot allocate Metal indirect count staging");
+                        }
+                        [staging_buffers addObject:staging];
+                        pending_counts.emplace_back(mesh_index, staging);
+                        id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
+                        if (blit == nil) {
+                            throw std::runtime_error("Cannot encode Metal indirect count readback");
+                        }
+                        [blit copyFromBuffer:source->Native() sourceOffset:view.GetByteOffset()
+                                    toBuffer:staging destinationOffset:0 size:sizeof(uint32_t)];
+                        [blit endEncoding];
+                    }
+                    if (!pending_counts.empty()) {
+                        // The count may be produced by an earlier dispatch in this submit.
+                        // Finish that work before deciding how many Metal draws to encode.
+                        [command_buffer commit];
+                        [command_buffer waitUntilCompleted];
+                        if (command_buffer.status != MTLCommandBufferStatusCompleted) {
+                            throw std::runtime_error("Metal indirect count readback failed: " +
+                                std::string([command_buffer.error.localizedDescription UTF8String]
+                                    ?: "unknown GPU error"));
+                        }
+                        for (const auto& [mesh_index, staging] : pending_counts) {
+                            uint32_t count = 0;
+                            std::memcpy(&count, staging.contents, sizeof(count));
+                            indirect_counts[mesh_index] = std::min(count, indirect_counts[mesh_index]);
+                        }
+                        command_buffer = [queue_ commandBuffer];
+                        if (command_buffer == nil) {
+                            throw std::runtime_error("Cannot create Metal command buffer");
+                        }
+                    }
+                    EncodeSimpleDraw(command_buffer, draw, indirect_counts);
                     continue;
                 }
                 if (command->Type() == Command::EType::ShaderDispatch) {
