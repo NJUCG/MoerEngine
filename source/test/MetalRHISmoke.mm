@@ -860,6 +860,69 @@ void CheckGraphicsCompletionCallbacks() {
     std::cout << "graphics completion callbacks and reentrant submit: success" << std::endl;
 }
 
+void CheckGraphicsFrameSignal() {
+    using namespace Moer::Render;
+    FenceRef frame_fence = RenderDevice::Get().CreateFence();
+    TextureRef target = RenderDevice::Get().CreateTexture(
+        Extent2D(2, 2), PF_R8G8B8A8_UNORM, ETextureUsageFlags::COLOR_ATTACHMENT
+    );
+    CommandList frame(EQueueType::Graphics);
+    frame.PushScope("Metal frame smoke");
+    frame.ClearResource(target->GetView(), Moer::float4{0.25f, 0.5f, 0.75f, 1.0f});
+    frame.PopScope();
+    frame.Signal(frame_fence, 7);
+    CmdSubmit submit = frame.Submit();
+    submit.TickProfiling().DeleteResources();
+    RHIExecutor::Get().Submit(EQueueType::Graphics, std::move(submit));
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (frame_fence->GetValue() < 7 || !frame_fence->WaitSubmitted(7)) {
+        throw std::runtime_error("Metal graphics frame fence was not completed");
+    }
+    std::cout << "graphics frame signal and profiling marker: success" << std::endl;
+}
+
+void CheckGraphicsBufferClear() {
+    using namespace Moer::Render;
+    BufferRef buffer = RenderDevice::Get().CreateBuffer(
+        "Metal clear smoke", BufferInfo{64, 1, EBufferUsageFlags::TRANSFER_SRC}
+    );
+    std::vector<uint8_t> initial(64, 0xff);
+    CommandList commands(EQueueType::Graphics);
+    commands.CopyFrom(
+        std::span<const Moer::byte>(
+            reinterpret_cast<const Moer::byte*>(initial.data()), initial.size()),
+        buffer->GetView()
+    );
+    commands.ClearResource(buffer->GetView(16, 16), 0u);
+    commands.ClearResource(buffer->GetView(32, 16), 0x01020304u);
+    RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    id<MTLBuffer> native = (__bridge id<MTLBuffer>)GetMetalNativeBuffer(buffer.Get());
+    id<MTLBuffer> readback = [native.device newBufferWithLength:64
+                                                       options:MTLResourceStorageModeShared];
+    id<MTLCommandQueue> queue = [native.device newCommandQueue];
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    [blit copyFromBuffer:native sourceOffset:0 toBuffer:readback destinationOffset:0 size:64];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    const auto* bytes = static_cast<const uint8_t*>(readback.contents);
+    const uint8_t pattern[] = {4, 3, 2, 1};
+    bool repeated_pattern_matches = true;
+    for (size_t i = 32; i < 48; ++i) {
+        repeated_pattern_matches &= bytes[i] == pattern[(i - 32) % 4];
+    }
+    if (command.status != MTLCommandBufferStatusCompleted ||
+        !std::all_of(bytes, bytes + 16, [](uint8_t value) { return value == 0xff; }) ||
+        !std::all_of(bytes + 16, bytes + 32, [](uint8_t value) { return value == 0; }) ||
+        !repeated_pattern_matches ||
+        !std::all_of(bytes + 48, bytes + 64, [](uint8_t value) { return value == 0xff; })) {
+        throw std::runtime_error("Metal graphics buffer clear did not preserve its range or value");
+    }
+    std::cout << "graphics buffer clear ranges and uint pattern: success" << std::endl;
+}
+
 void CheckBindlessTables() {
     using namespace Moer::Render;
     BindlessArrayRef array = RenderDevice::Get().CreateBindlessArray(8);
@@ -1149,6 +1212,8 @@ int main(int argc, char** argv) {
             CheckBufferUpload();
             CheckCopyCompletionCallbacks();
             CheckGraphicsCompletionCallbacks();
+            CheckGraphicsFrameSignal();
+            CheckGraphicsBufferClear();
             CheckBindlessTables();
             auto source = std::make_shared<SmokeWindowSource>(window);
             int width = 0, height = 0;

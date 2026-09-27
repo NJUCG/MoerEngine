@@ -1107,16 +1107,28 @@ public:
         }
     }
     WaitEvent Execute(CmdSubmit&& submit) override {
-        if (!submit.signal_events.empty() ||
-            !submit.gpu_completion_tokens.empty() || !submit.query_tokens.empty() ||
-            submit.b_tick_profiling || submit.profiling_phase != ERHIProfilingPhase::Disabled ||
-            submit.b_delete_resources) {
-            Unsupported("submission synchronization, callbacks, or profiling");
+        if (!submit.gpu_completion_tokens.empty() || !submit.query_tokens.empty()) {
+            Unsupported("GPU completion or query tokens");
         }
+        for (const SignalEvent& signal : submit.signal_events) {
+            auto* fence = dynamic_cast<MetalFence*>(
+                reinterpret_cast<Fence*>(signal.timeline_handle));
+            if (fence == nullptr || signal.value == 0) {
+                Unsupported("this graphics signal fence");
+            }
+        }
+        // Frame profiling markers currently produce no Metal timestamp queries.
+        // A submit without query tokens may still carry the frame boundary and
+        // deferred-delete bit; Objective-C resource owners retire with CmdSubmit.
         // Validate the complete submit before encoding any GPU work. A later
         // unsupported command must not leave a partially executed submit.
         bool has_gpu_work = false;
         for (const auto& command : submit.cmds) {
+            if (command->Type() == Command::EType::Scope) {
+                // Scope commands only mark GPU debug/profiling regions. Metal
+                // timestamp collection is not enabled by this queue yet.
+                continue;
+            }
             if (command->Type() == Command::EType::QueueTransfer) {
                 ValidateQueueTransfer(static_cast<const QueueTransferCmd&>(*command), EQueueType::Graphics);
                 continue;
@@ -1144,10 +1156,24 @@ public:
                 continue;
             }
             if (command->Type() != Command::EType::ClearResource) {
-                Unsupported("this graphics command");
+                throw std::runtime_error("Metal RHI has not implemented graphics command " +
+                    command->name + " (type=" +
+                    std::to_string(static_cast<uint>(command->Type())) + ")");
             }
             has_gpu_work = true;
             const auto& clear = static_cast<const ClearResourceCmd&>(*command);
+            if (clear.IsBuffer() && clear.IsUInt()) {
+                const BufferView& view = clear.Buffer();
+                auto* buffer = dynamic_cast<MetalBuffer*>(view.GetBuffer());
+                if (buffer == nullptr || view.GetByteSize() == 0 ||
+                    view.GetByteOffset() % sizeof(uint32_t) != 0 ||
+                    view.GetByteSize() % sizeof(uint32_t) != 0 ||
+                    view.GetByteOffset() > buffer->GetByteSize() ||
+                    view.GetByteSize() > buffer->GetByteSize() - view.GetByteOffset()) {
+                    Unsupported("this buffer clear view");
+                }
+                continue;
+            }
             if (!clear.IsTexture() || !clear.IsFloat4()) {
                 Unsupported("this clear value or resource");
             }
@@ -1177,7 +1203,8 @@ public:
             if (command_buffer == nil) throw std::runtime_error("Cannot create Metal command buffer");
             NSMutableArray<id<MTLBuffer>>* staging_buffers = [NSMutableArray array];
             for (const auto& command : submit.cmds) {
-                if (command->Type() == Command::EType::QueueTransfer ||
+                if (command->Type() == Command::EType::Scope ||
+                    command->Type() == Command::EType::QueueTransfer ||
                     command->Type() == Command::EType::UpdateBindlessArray) continue;
                 if (command->Type() == Command::EType::UploadTexture ||
                     command->Type() == Command::EType::UploadBuffer) {
@@ -1198,6 +1225,35 @@ public:
                     continue;
                 }
                 const auto& clear = static_cast<const ClearResourceCmd&>(*command);
+                if (clear.IsBuffer()) {
+                    const BufferView& view = clear.Buffer();
+                    auto* buffer = static_cast<MetalBuffer*>(view.GetBuffer());
+                    const uint32_t value = clear.UIntValue();
+                    id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
+                    if (blit == nil) throw std::runtime_error("Cannot encode Metal buffer clear");
+                    if ((value & 0xffu) == ((value >> 8) & 0xffu) &&
+                        (value & 0xffu) == ((value >> 16) & 0xffu) &&
+                        (value & 0xffu) == ((value >> 24) & 0xffu)) {
+                        [blit fillBuffer:buffer->Native()
+                                    range:NSMakeRange(view.GetByteOffset(), view.GetByteSize())
+                                    value:static_cast<uint8_t>(value)];
+                    } else {
+                        id<MTLBuffer> staging = [queue_.device
+                            newBufferWithLength:view.GetByteSize()
+                            options:MTLResourceStorageModeShared];
+                        if (staging == nil) throw std::runtime_error("Cannot allocate Metal buffer clear staging");
+                        auto* words = static_cast<uint32_t*>(staging.contents);
+                        for (uint64 i = 0; i < view.GetByteSize() / sizeof(uint32_t); ++i) {
+                            words[i] = value;
+                        }
+                        [staging_buffers addObject:staging];
+                        [blit copyFromBuffer:staging sourceOffset:0
+                                    toBuffer:buffer->Native()
+                          destinationOffset:view.GetByteOffset() size:view.GetByteSize()];
+                    }
+                    [blit endEncoding];
+                    continue;
+                }
                 auto* texture = static_cast<MetalTexture*>(clear.Texture().GetTexture());
                 const float4 color = clear.Float4Value();
                 MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -1218,6 +1274,12 @@ public:
                 throw std::runtime_error("Metal texture clear failed: " +
                     std::string([command_buffer.error.localizedDescription UTF8String] ?: "unknown GPU error"));
             }
+        }
+        for (const SignalEvent& signal : submit.signal_events) {
+            auto* fence = static_cast<MetalFence*>(
+                reinterpret_cast<Fence*>(signal.timeline_handle));
+            fence->MarkSubmitted(signal.value);
+            fence->Complete(signal.value);
         }
         if (!prepared.empty()) {
             std::lock_guard lock(completion_enqueue_mutex_);
