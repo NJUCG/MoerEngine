@@ -807,6 +807,77 @@ void CheckRHIComputeTextureViews() {
     std::cout << "RHI compute texture argument and mip view: success" << std::endl;
 }
 
+void CheckRHIComputeTexelBuffers() {
+    using namespace Moer::Render;
+    constexpr std::string_view source = R"(
+        #include <metal_stdlib>
+        using namespace metal;
+        struct SmokeSet0 {
+            texture2d<uint, access::read> histogram [[id(0)]];
+            texture2d<uint, access::read_write> exposure [[id(1)]];
+        };
+        kernel void compute_main(constant SmokeSet0& resources [[buffer(0)]]) {
+            uint value = resources.histogram.read(uint2(0, 0)).x;
+            resources.exposure.write(uint4(value + 1), uint2(0, 0));
+        }
+    )";
+    std::vector<Moer::uint8> code(source.begin(), source.end());
+    ShaderParametersInfoMap reflection{};
+    reflection.reflect_map["histogram"].spirv.resources.data = ReflectParamInfo::Resource{
+        .set = 0, .binding = 0, .count = 1,
+        .desc_type = VDT_UNIFORM_TEXEL_BUFFER,
+        .custom_flag = {.active = 1}
+    };
+    reflection.reflect_map["exposure"].spirv.resources.data = ReflectParamInfo::Resource{
+        .set = 0, .binding = 1, .count = 1,
+        .desc_type = VDT_STORAGE_TEXEL_BUFFER,
+        .custom_flag = {.active = 1}
+    };
+    SingleShaderInfo compute{
+        .entry_point = "compute_main", .shader_data = code,
+        .shader_type = EShaderType::ST_COMPUTE, .shader_param_map = &reflection,
+        .compute_local_size = Moer::uint3{1, 1, 1}
+    };
+    PipelineShaderInfo shaders{.shader_group = ShaderCs{compute}};
+    shaders.layout_hash = {"histogram", "exposure"};
+    shaders.arg_cpp_info = {{1, SDA_Buffer}, {1, SDA_Buffer}};
+    PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));
+    BufferRef histogram = RenderDevice::Get().CreateBuffer<uint32_t>(
+        "Metal histogram texel buffer", 256,
+        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TEXTURE_BUFFER |
+            EBufferUsageFlags::TRANSFER_DST
+    );
+    BufferRef exposure = RenderDevice::Get().CreateBuffer<uint32_t>(
+        "Metal exposure texel buffer", 1,
+        EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TEXTURE_BUFFER |
+            EBufferUsageFlags::CPU_VISIBLE
+    );
+    constexpr uint32_t input = 41;
+    CommandList upload(EQueueType::Graphics);
+    upload.CopyFrom(
+        std::span<const Moer::byte>(
+            reinterpret_cast<const Moer::byte*>(&input), sizeof(input)),
+        histogram->GetView(0, sizeof(input))
+    );
+    RHIExecutor::Get().Submit(EQueueType::Graphics, upload.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    ArrayArguments args(2, 0, false);
+    args.args[0] = histogram->GetView();
+    args.args[1] = exposure->GetView();
+    Moer::Array<Moer::UniquePtr<Command>> commands;
+    commands.emplace_back(Moer::MakeUnique<DispatchCmd>(
+        std::move(args), pipeline, Moer::uint3{1, 1, 1}, ProfileSection("Other")));
+    RHIExecutor::Get().Submit(EQueueType::Graphics,
+                              CmdSubmit(std::move(commands), {}, {}, {}));
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    id<MTLBuffer> native = (__bridge id<MTLBuffer>)GetMetalNativeBuffer(exposure.Get());
+    if (*static_cast<const uint32_t*>(native.contents) != 42) {
+        throw std::runtime_error("Metal RHI texel buffer compute result was not 42");
+    }
+    MoerDelete(reinterpret_cast<PipelineState*>(pipeline.handle));
+    std::cout << "RHI compute R32Uint texel buffer read/write: success" << std::endl;
+}
+
 void CheckGraphicsUploads() {
     using namespace Moer::Render;
     constexpr NSUInteger width = 7;
@@ -1600,6 +1671,7 @@ int main(int argc, char** argv) {
             CheckComputePipeline();
             CheckRHIComputeDispatch();
             CheckRHIComputeTextureViews();
+            CheckRHIComputeTexelBuffers();
             CheckGraphicsUploads();
             CheckMipTexture();
             CheckLayeredTextures();

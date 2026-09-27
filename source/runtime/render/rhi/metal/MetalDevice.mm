@@ -235,9 +235,12 @@ private:
 
 class MetalBuffer final : public Buffer {
 public:
-    MetalBuffer(const BufferInfo& info, id<MTLBuffer> buffer) : Buffer(info), buffer_(buffer) {}
+    MetalBuffer(const BufferInfo& info, id<MTLBuffer> buffer,
+                id<MTLTexture> texel_texture = nil) :
+        Buffer(info), buffer_(buffer), texel_texture_(texel_texture) {}
 
     id<MTLBuffer> Native() const noexcept { return buffer_; }
+    id<MTLTexture> NativeTexelTexture() const noexcept { return texel_texture_; }
 
     void SetName(const std::string_view name) override {
         debug_name = std::string(name);
@@ -246,6 +249,7 @@ public:
 
 private:
     id<MTLBuffer> buffer_;
+    id<MTLTexture> texel_texture_{nil};
 };
 
 class MetalTexture final : public Texture {
@@ -341,6 +345,7 @@ struct MetalComputeBinding {
     EShaderArgType kind{SDA_Num};
     bool active{false};
     bool constant{false};
+    bool texel_buffer{false};
 };
 
 struct MetalRenderBindings {
@@ -525,7 +530,9 @@ MetalRenderBindings MetalRenderStageBindings(
             &resource_it->second.spirv.resources.data);
         if (resource == nullptr || !resource->custom_flag.active) continue;
         layout.scalar_bindings[index] = MetalComputeBinding{
-            resource->set, resource->binding, kind, true, false};
+            resource->set, resource->binding, kind, true, false,
+            resource->desc_type == VDT_UNIFORM_TEXEL_BUFFER ||
+                resource->desc_type == VDT_STORAGE_TEXEL_BUFFER};
         layout.constant_buffer_index = std::max(
             layout.constant_buffer_index, NSUInteger(resource->set) + 1);
     }
@@ -554,6 +561,9 @@ std::vector<MetalComputeBinding> MetalComputeBindings(
         binding.set = resource->set;
         binding.binding = resource->binding;
         binding.active = true;
+        binding.texel_buffer =
+            resource->desc_type == VDT_UNIFORM_TEXEL_BUFFER ||
+            resource->desc_type == VDT_STORAGE_TEXEL_BUFFER;
         highest_set = std::max(highest_set, NSUInteger(binding.set));
         has_set = true;
     }
@@ -1179,6 +1189,22 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
          !pipeline->FragmentBindingsLayout().bindless_sets.empty()) && bindless == nullptr) {
         Unsupported("missing graphics bindless array");
     }
+    const auto validate_texel_bindings = [&](const MetalRenderBindings& layout) {
+        for (uint index = 0; index < layout.scalar_bindings.size(); ++index) {
+            const auto& binding = layout.scalar_bindings[index];
+            if (!binding.active || !binding.texel_buffer) continue;
+            const auto* view = std::get_if<BufferView>(&draw.Args().args[index]);
+            auto* buffer = view == nullptr ? nullptr :
+                dynamic_cast<MetalBuffer*>(view->GetBuffer());
+            if (buffer == nullptr || buffer->NativeTexelTexture() == nil ||
+                view->GetByteOffset() != 0 ||
+                view->GetByteSize() != buffer->GetByteSize()) {
+                Unsupported("this graphics texel buffer view");
+            }
+        }
+    };
+    validate_texel_bindings(pipeline->VertexBindingsLayout());
+    validate_texel_bindings(pipeline->FragmentBindingsLayout());
     if (draw.Args().constants.size() * sizeof(uint) > 4096) {
         Unsupported("this graphics push constant size");
     }
@@ -1406,9 +1432,16 @@ void EncodeSimpleDraw(
                 if (binding.kind == SDA_Buffer || binding.kind == SDA_ConstantBuffer) {
                     const BufferView& view = std::get<BufferView>(draw.Args().args[index]);
                     auto* buffer = static_cast<MetalBuffer*>(view.GetBuffer());
-                    [arguments setBuffer:buffer->Native() offset:view.GetByteOffset()
-                                 atIndex:binding.binding];
-                    [encoder useResource:buffer->Native() usage:MTLResourceUsageRead];
+                    if (binding.texel_buffer) {
+                        [arguments setTexture:buffer->NativeTexelTexture()
+                                      atIndex:binding.binding];
+                        [encoder useResource:buffer->NativeTexelTexture()
+                                      usage:MTLResourceUsageRead];
+                    } else {
+                        [arguments setBuffer:buffer->Native() offset:view.GetByteOffset()
+                                     atIndex:binding.binding];
+                        [encoder useResource:buffer->Native() usage:MTLResourceUsageRead];
+                    }
                 } else if (binding.kind == SDA_Texture) {
                     const TextureView& view = std::get<TextureView>(draw.Args().args[index]);
                     auto* texture = static_cast<MetalTexture*>(view.GetTexture());
@@ -1608,6 +1641,11 @@ MetalPipelineState* ValidateComputeDispatch(
                 view->GetByteSize() > buffer->GetByteSize() - view->GetByteOffset()) {
                 Unsupported("this compute buffer argument view");
             }
+            if (binding.texel_buffer &&
+                (buffer->NativeTexelTexture() == nil || view->GetByteOffset() != 0 ||
+                 view->GetByteSize() != buffer->GetByteSize())) {
+                Unsupported("this compute texel buffer view");
+            }
         }
     }
     return pipeline;
@@ -1667,10 +1705,17 @@ void EncodeComputeDispatch(
             } else {
                 const BufferView& view = std::get<BufferView>(args.args[index]);
                 auto* buffer = static_cast<MetalBuffer*>(view.GetBuffer());
-                [arguments setBuffer:buffer->Native() offset:view.GetByteOffset()
-                             atIndex:binding.binding];
-                [encoder useResource:buffer->Native()
-                            usage:MTLResourceUsageRead | MTLResourceUsageWrite];
+                if (binding.texel_buffer) {
+                    [arguments setTexture:buffer->NativeTexelTexture()
+                                  atIndex:binding.binding];
+                    [encoder useResource:buffer->NativeTexelTexture()
+                                usage:MTLResourceUsageRead | MTLResourceUsageWrite];
+                } else {
+                    [arguments setBuffer:buffer->Native() offset:view.GetByteOffset()
+                                 atIndex:binding.binding];
+                    [encoder useResource:buffer->Native()
+                                usage:MTLResourceUsageRead | MTLResourceUsageWrite];
+                }
             }
         }
         [encoder setBuffer:table offset:0 atIndex:set];
@@ -2224,13 +2269,37 @@ BufferRef MetalDevice::CreateBuffer(
 ) {
     if (count == 0 || stride == 0) Unsupported("zero-sized buffers");
     const BufferInfo info(count, stride, usage, format);
+    const bool texel_buffer =
+        (usage & EBufferUsageFlags::TEXTURE_BUFFER) != EBufferUsageFlags::NONE;
+    if (texel_buffer && (stride != sizeof(uint32_t) ||
+                         (format != PF_UNDEFINED && format != PF_R32_UINT))) {
+        Unsupported("this Metal texel buffer format");
+    }
     const MTLResourceOptions options =
         (usage & EBufferUsageFlags::CPU_VISIBLE) != EBufferUsageFlags::NONE ?
             MTLResourceStorageModeShared : MTLResourceStorageModePrivate;
-    id<MTLBuffer> buffer = [native_->device newBufferWithLength:info.size * info.stride
+    const NSUInteger linear_alignment = texel_buffer ?
+        [native_->device minimumLinearTextureAlignmentForPixelFormat:MTLPixelFormatR32Uint] : 0;
+    const NSUInteger texel_width = texel_buffer ?
+        (count > 4096 ? 4096 : std::max<NSUInteger>(count, linear_alignment / sizeof(uint32_t))) : 0;
+    const NSUInteger texel_height = texel_buffer ? (count + 4095) / 4096 : 0;
+    const NSUInteger allocation_size = texel_buffer ?
+        texel_width * texel_height * sizeof(uint32_t) : info.size * info.stride;
+    id<MTLBuffer> buffer = [native_->device newBufferWithLength:allocation_size
                                                        options:options];
     if (buffer == nil) throw std::runtime_error("Cannot allocate Metal buffer");
-    auto result = BufferRef(MoerNew(MetalBuffer)(info, buffer));
+    id<MTLTexture> texel_texture = nil;
+    if (texel_buffer) {
+        MTLTextureDescriptor* descriptor = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Uint
+                                          width:texel_width height:texel_height mipmapped:NO];
+        descriptor.storageMode = buffer.storageMode;
+        descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+        texel_texture = [buffer newTextureWithDescriptor:descriptor offset:0
+                                            bytesPerRow:texel_width * sizeof(uint32_t)];
+        if (texel_texture == nil) Unsupported("this Metal texel buffer allocation");
+    }
+    auto result = BufferRef(MoerNew(MetalBuffer)(info, buffer, texel_texture));
     result->SetName(name);
     return result;
 }
