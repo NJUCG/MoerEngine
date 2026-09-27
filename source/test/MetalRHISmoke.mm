@@ -296,6 +296,96 @@ void CheckGraphicsMRT() {
     std::cout << "RHI three-attachment MRT draw and GPU readback: success" << std::endl;
 }
 
+void CheckGraphicsBindlessArguments() {
+    using namespace Moer::Render;
+    constexpr std::string_view source = R"(
+        #include <metal_stdlib>
+        using namespace metal;
+        struct Set3 { device uint* indices [[id(0)]]; };
+        struct Params { uint handle; };
+        struct VertexOutput { float4 position [[position]]; };
+        vertex VertexOutput draw_vertex(uint index [[vertex_id]],
+                                       const device Set3& table [[buffer(3)]],
+                                       constant Params& params [[buffer(4)]]) {
+            const float2 positions[3] = {float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0)};
+            float scale = table.indices[params.handle] != 0 ? 1.0 : 0.0;
+            return {float4(positions[index] * scale, 0.0, 1.0)};
+        }
+        fragment float4 draw_fragment(const device Set3& table [[buffer(3)]],
+                                      constant Params& params [[buffer(4)]]) {
+            return table.indices[params.handle] != 0 ? float4(1, 0, 0, 1) : float4(0, 0, 0, 1);
+        }
+    )";
+    std::vector<Moer::uint8> code(source.begin(), source.end());
+    ShaderParametersInfoMap reflection{};
+    auto& bindless = reflection.reflect_map[std::string(ReflectParamInfo::bdls_name)].spirv.bindless;
+    bindless.array = ReflectParamInfo::Bindless{
+        .set = 3, .binding = 0, .custom_flag = {.active = 1}
+    };
+    reflection.reflect_map["params"].spirv.resources.data = ReflectParamInfo::Constant{
+        .offset = 0, .size = sizeof(uint), .padded_size = sizeof(uint),
+        .custom_flag = {.active = 1}
+    };
+    SingleShaderInfo vertex{.entry_point = "draw_vertex", .shader_data = code,
+                            .shader_type = EShaderType::ST_VERTEX,
+                            .shader_param_map = &reflection};
+    SingleShaderInfo fragment{.entry_point = "draw_fragment", .shader_data = code,
+                              .shader_type = EShaderType::ST_FRAGMENT,
+                              .shader_param_map = &reflection};
+    PipelineShaderInfo shaders{.shader_group = ShaderVsPs{vertex, fragment}};
+    shaders.layout_hash.emplace_back("bdls");
+    shaders.layout_hash.emplace_back("params");
+    shaders.arg_cpp_info.emplace_back(ShaderArgCppInfo{1, SDA_BindlessArray});
+    shaders.arg_cpp_info.emplace_back(ShaderArgCppInfo{1, SDA_Constant});
+    GfxPsoCreateInfo info(
+        RHIRasterizeInfo::Preset<Rast::CULL_NONE>(), VertexStream{},
+        {RHIColorAttachmentInfo::Preset<>(PF_R8G8B8A8_UNORM)}
+    );
+    PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(info), std::move(shaders));
+    RasterPipeline raster(pipeline);
+    BindlessArrayRef array = RenderDevice::Get().CreateBindlessArray(8);
+    BufferRef buffer = RenderDevice::Get().CreateBuffer(
+        "Metal graphics bindless smoke", BufferInfo{4, 1, EBufferUsageFlags::UNORDERED_ACCESS}
+    );
+    const uint handle = array->AllocateBuffer(buffer->GetView());
+    TextureRef target = RenderDevice::Get().CreateTexture(
+        Extent2D(8, 8), PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_SRC
+    );
+    ArrayArguments args(2, 1, true);
+    args.args[0] = array;
+    args.constants[0] = handle;
+    Moer::Array<MeshDrawData> meshes;
+    meshes.emplace_back().EmplaceDraw(3, 0, 0);
+    CommandList draw(EQueueType::Graphics);
+    draw.UpdateBindlessArray(array);
+    CommandList::DrawDispatcher(raster, draw, std::move(args)).Draw(
+        Rect2D(0, 0, 8, 8), std::move(meshes), ColorAttachment(target)
+    );
+    RHIExecutor::Get().Submit(EQueueType::Graphics, draw.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    id<MTLTexture> texture = (__bridge id<MTLTexture>)GetMetalNativeTexture(target.Get());
+    id<MTLBuffer> readback = [texture.device
+        newBufferWithLength:256 * 8 options:MTLResourceStorageModeShared];
+    id<MTLCommandQueue> queue = [texture.device newCommandQueue];
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    [blit copyFromTexture:texture sourceSlice:0 sourceLevel:0
+            sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(8, 8, 1)
+                toBuffer:readback destinationOffset:0 destinationBytesPerRow:256
+       destinationBytesPerImage:256 * 8];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    const auto* middle = static_cast<const uint8_t*>(readback.contents) + 4 * 256 + 4 * 4;
+    const uint8_t red[] = {255, 0, 0, 255};
+    if (command.status != MTLCommandBufferStatusCompleted ||
+        std::memcmp(middle, red, 4) != 0) {
+        throw std::runtime_error("Metal graphics bindless and constants draw failed");
+    }
+    std::cout << "RHI graphics bindless tables and stage constants: success" << std::endl;
+}
+
 void CheckIndexedGraphicsDraw() {
     using namespace Moer::Render;
     constexpr std::string_view source = R"(
@@ -1345,6 +1435,7 @@ int main(int argc, char** argv) {
             CheckGraphicsPipeline();
             CheckGraphicsDraw();
             CheckGraphicsMRT();
+            CheckGraphicsBindlessArguments();
             CheckIndexedGraphicsDraw();
             CheckDepthGraphicsDraw();
             CheckComputePipeline();
