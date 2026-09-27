@@ -5,7 +5,7 @@
 
 [[vk::binding(0, 0)]] Texture2D    input_image;
 [[vk::binding(1, 0)]] Buffer<uint> exposure;
-[[vk::binding(2, 0)]] Buffer<uint> histogram;
+[[vk::binding(2, 0)]] StructuredBuffer<uint> histogram;
 
 // ACES 拟合函数
 float3 ACESFilm(float3 x) {
