@@ -1096,6 +1096,22 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
                 view->GetByteSize() > buffer->GetByteSize() - view->GetByteOffset()) {
                 Unsupported("this graphics buffer argument view");
             }
+        } else if (const auto* view = std::get_if<TextureView>(&argument)) {
+            auto* texture = dynamic_cast<MetalTexture*>(view->GetTexture());
+            if (texture == nullptr || view->format != texture->GetFormat() ||
+                view->num_mips == 0 ||
+                view->mip_level + view->num_mips > texture->GetNumMips() ||
+                view->num_array == 0 ||
+                view->array_layer + view->num_array > texture->GetNumArray() ||
+                view->offset != uint3{0, 0, 0} ||
+                view->extent != texture->GetExtent()) {
+                Unsupported("this graphics texture argument view");
+            }
+        } else if (const auto* sampler = std::get_if<Sampler>(&argument)) {
+            if (sampler->filter >= SF_Num || sampler->address_mode >= SAM_Num ||
+                sampler->compare_function >= SCF_Num) {
+                Unsupported("this graphics sampler argument");
+            }
         } else if (!std::holds_alternative<TInvalidArg>(argument)) {
             throw std::runtime_error(
                 "Metal RHI has not implemented graphics shader argument " + draw.name +
@@ -1233,7 +1249,9 @@ MetalPipelineState* ValidateSimpleDraw(const SetDrawStateCmd& draw) {
 void EncodeSimpleDraw(
     id<MTLCommandBuffer> command_buffer, const SetDrawStateCmd& draw,
     std::span<const uint> indirect_counts,
-    NSMutableArray<id<MTLBuffer>>* staging_buffers
+    NSMutableArray<id<MTLBuffer>>* staging_buffers,
+    NSMutableArray<id<MTLTexture>>* texture_views,
+    NSMutableArray<id<MTLSamplerState>>* sampler_states
 ) {
     auto* pipeline = static_cast<MetalPipelineState*>(
         reinterpret_cast<PipelineState*>(draw.Pipeline().handle));
@@ -1329,14 +1347,73 @@ void EncodeSimpleDraw(
             for (uint index = 0; index < layout.scalar_bindings.size(); ++index) {
                 const auto& binding = layout.scalar_bindings[index];
                 if (!binding.active || binding.set != set) continue;
-                if (binding.kind != SDA_Buffer && binding.kind != SDA_ConstantBuffer) {
+                if (binding.kind == SDA_Buffer || binding.kind == SDA_ConstantBuffer) {
+                    const BufferView& view = std::get<BufferView>(draw.Args().args[index]);
+                    auto* buffer = static_cast<MetalBuffer*>(view.GetBuffer());
+                    [arguments setBuffer:buffer->Native() offset:view.GetByteOffset()
+                                 atIndex:binding.binding];
+                    [encoder useResource:buffer->Native() usage:MTLResourceUsageRead];
+                } else if (binding.kind == SDA_Texture) {
+                    const TextureView& view = std::get<TextureView>(draw.Args().args[index]);
+                    auto* texture = static_cast<MetalTexture*>(view.GetTexture());
+                    id<MTLTexture> native_view = texture->Native();
+                    if (view.mip_level != 0 || view.num_mips != texture->GetNumMips() ||
+                        view.array_layer != 0 || view.num_array != texture->GetNumArray()) {
+                        const MTLTextureType type = view.num_array > 1 ?
+                            MTLTextureType2DArray : MTLTextureType2D;
+                        native_view = [texture->Native()
+                            newTextureViewWithPixelFormat:ToMetalFormat(view.format)
+                                              textureType:type
+                                                   levels:NSMakeRange(view.mip_level, view.num_mips)
+                                                   slices:NSMakeRange(view.array_layer, view.num_array)];
+                        if (native_view == nil) Unsupported("this Metal graphics texture view");
+                        [texture_views addObject:native_view];
+                    }
+                    [arguments setTexture:native_view atIndex:binding.binding];
+                    [encoder useResource:native_view usage:MTLResourceUsageRead];
+                } else if (binding.kind == SDA_Sampler) {
+                    const Sampler sampler = std::get<Sampler>(draw.Args().args[index]);
+                    MTLSamplerDescriptor* descriptor = [MTLSamplerDescriptor new];
+                    const bool nearest = sampler.filter == SF_NEAREST ||
+                        sampler.filter == SF_ANISOTROPIC_NEAREST;
+                    descriptor.minFilter = nearest ?
+                        MTLSamplerMinMagFilterNearest : MTLSamplerMinMagFilterLinear;
+                    descriptor.magFilter = nearest ?
+                        MTLSamplerMinMagFilterNearest : MTLSamplerMinMagFilterLinear;
+                    descriptor.mipFilter = nearest ?
+                        MTLSamplerMipFilterNearest : MTLSamplerMipFilterLinear;
+                    descriptor.maxAnisotropy = sampler.filter == SF_ANISOTROPIC_NEAREST ||
+                        sampler.filter == SF_ANISOTROPIC_LINEAR ? 16 : 1;
+                    MTLSamplerAddressMode address = MTLSamplerAddressModeRepeat;
+                    switch (sampler.address_mode) {
+                        case SAM_REPEAT: break;
+                        case SAM_MIRRORED_REPEAT: address = MTLSamplerAddressModeMirrorRepeat; break;
+                        case SAM_CLAMP_TO_EDGE: address = MTLSamplerAddressModeClampToEdge; break;
+                        case SAM_CLAMP_TO_BORDER:
+                            address = MTLSamplerAddressModeClampToBorderColor; break;
+                        default: Unsupported("this Metal graphics sampler address");
+                    }
+                    descriptor.sAddressMode = address;
+                    descriptor.tAddressMode = address;
+                    descriptor.rAddressMode = address;
+                    descriptor.supportArgumentBuffers = YES;
+                    if (sampler.compare_function != SCF_NEVER) {
+                        static constexpr MTLCompareFunction kCompare[] = {
+                            MTLCompareFunctionNever, MTLCompareFunctionLess,
+                            MTLCompareFunctionEqual, MTLCompareFunctionLessEqual,
+                            MTLCompareFunctionGreater, MTLCompareFunctionNotEqual,
+                            MTLCompareFunctionGreaterEqual, MTLCompareFunctionAlways
+                        };
+                        descriptor.compareFunction = kCompare[sampler.compare_function];
+                    }
+                    id<MTLSamplerState> native_sampler =
+                        [command_buffer.device newSamplerStateWithDescriptor:descriptor];
+                    if (native_sampler == nil) Unsupported("this Metal graphics sampler");
+                    [sampler_states addObject:native_sampler];
+                    [arguments setSamplerState:native_sampler atIndex:binding.binding];
+                } else {
                     Unsupported("this Metal graphics scalar argument kind");
                 }
-                const BufferView& view = std::get<BufferView>(draw.Args().args[index]);
-                auto* buffer = static_cast<MetalBuffer*>(view.GetBuffer());
-                [arguments setBuffer:buffer->Native() offset:view.GetByteOffset()
-                             atIndex:binding.binding];
-                [encoder useResource:buffer->Native() usage:MTLResourceUsageRead];
             }
             if (vertex) [encoder setVertexBuffer:table offset:0 atIndex:set];
             else [encoder setFragmentBuffer:table offset:0 atIndex:set];
@@ -1685,6 +1762,7 @@ public:
             if (command_buffer == nil) throw std::runtime_error("Cannot create Metal command buffer");
             NSMutableArray<id<MTLBuffer>>* staging_buffers = [NSMutableArray array];
             NSMutableArray<id<MTLTexture>>* texture_views = [NSMutableArray array];
+            NSMutableArray<id<MTLSamplerState>>* sampler_states = [NSMutableArray array];
             struct PendingReadback {
                 NSUInteger staging_index;
                 void* destination;
@@ -1756,7 +1834,9 @@ public:
                             throw std::runtime_error("Cannot create Metal command buffer");
                         }
                     }
-                    EncodeSimpleDraw(command_buffer, draw, indirect_counts, staging_buffers);
+                    EncodeSimpleDraw(
+                        command_buffer, draw, indirect_counts, staging_buffers,
+                        texture_views, sampler_states);
                     continue;
                 }
                 if (command->Type() == Command::EType::ShaderDispatch) {
