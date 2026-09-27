@@ -683,6 +683,83 @@ void CheckRHIComputeDispatch() {
     std::cout << "RHI compute dispatch with argument buffer and constants: success" << std::endl;
 }
 
+void CheckRHIComputeTextureViews() {
+    using namespace Moer::Render;
+    constexpr std::string_view source = R"(
+        #include <metal_stdlib>
+        using namespace metal;
+        struct SmokeSet0 {
+            texture2d<float, access::read> src [[id(0)]];
+            texture2d<float, access::write> dst [[id(1)]];
+        };
+        kernel void compute_main(constant SmokeSet0& resources [[buffer(0)]]) {
+            resources.dst.write(resources.src.read(uint2(0, 0)), uint2(0, 0));
+        }
+    )";
+    std::vector<Moer::uint8> code(source.begin(), source.end());
+    ShaderParametersInfoMap reflection{};
+    reflection.reflect_map["src"].spirv.resources.data = ReflectParamInfo::Resource{
+        .set = 0, .binding = 0, .count = 1, .custom_flag = {.active = 1}
+    };
+    reflection.reflect_map["dst"].spirv.resources.data = ReflectParamInfo::Resource{
+        .set = 0, .binding = 1, .count = 1, .custom_flag = {.active = 1}
+    };
+    SingleShaderInfo compute{
+        .entry_point = "compute_main", .shader_data = code,
+        .shader_type = EShaderType::ST_COMPUTE, .shader_param_map = &reflection,
+        .compute_local_size = Moer::uint3{1, 1, 1}
+    };
+    PipelineShaderInfo shaders{.shader_group = ShaderCs{compute}};
+    shaders.layout_hash = {"src", "dst"};
+    shaders.arg_cpp_info = {{1, SDA_Texture}, {1, SDA_Texture}};
+    PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));
+    TextureRef src = RenderDevice::Get().CreateTexture(
+        Extent2D(2, 2), PF_R32_SFLOAT,
+        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
+    );
+    TextureRef dst = RenderDevice::Get().CreateTexture(
+        Extent2D(2, 2), PF_R32_SFLOAT,
+        ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_SRC, 2
+    );
+    constexpr float values[] = {0.75f, 0.0f, 0.0f, 0.0f};
+    CommandList upload(EQueueType::Graphics);
+    upload.CopyFrom(
+        std::span<const Moer::byte>(
+            reinterpret_cast<const Moer::byte*>(values), sizeof(values)),
+        src->GetView()
+    );
+    RHIExecutor::Get().Submit(EQueueType::Graphics, upload.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    ArrayArguments args(2, 0, false);
+    args.args[0] = src->GetView();
+    args.args[1] = dst->GetView(1, 1);
+    Moer::Array<Moer::UniquePtr<Command>> commands;
+    commands.emplace_back(Moer::MakeUnique<DispatchCmd>(
+        std::move(args), pipeline, Moer::uint3{1, 1, 1}, ProfileSection("Other")));
+    CmdSubmit submit(std::move(commands), {}, {}, {});
+    RHIExecutor::Get().Submit(EQueueType::Graphics, std::move(submit));
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    id<MTLTexture> native = (__bridge id<MTLTexture>)GetMetalNativeTexture(dst.Get());
+    id<MTLBuffer> readback = [native.device
+        newBufferWithLength:256 options:MTLResourceStorageModeShared];
+    id<MTLCommandQueue> queue = [native.device newCommandQueue];
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    [blit copyFromTexture:native sourceSlice:0 sourceLevel:1
+            sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(1, 1, 1)
+                toBuffer:readback destinationOffset:0 destinationBytesPerRow:256
+       destinationBytesPerImage:256];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    if (command.status != MTLCommandBufferStatusCompleted ||
+        *static_cast<const float*>(readback.contents) != values[0]) {
+        throw std::runtime_error("Metal RHI compute texture mip view readback failed");
+    }
+    MoerDelete(reinterpret_cast<PipelineState*>(pipeline.handle));
+    std::cout << "RHI compute texture argument and mip view: success" << std::endl;
+}
+
 void CheckGraphicsUploads() {
     using namespace Moer::Render;
     constexpr NSUInteger width = 7;
@@ -1471,6 +1548,7 @@ int main(int argc, char** argv) {
             CheckDepthGraphicsDraw(PF_D32_SFLOAT_S8_UINT);
             CheckComputePipeline();
             CheckRHIComputeDispatch();
+            CheckRHIComputeTextureViews();
             CheckGraphicsUploads();
             CheckMipTexture();
             CheckLayeredTextures();

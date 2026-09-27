@@ -1372,15 +1372,37 @@ MetalPipelineState* ValidateComputeDispatch(
         }
         if (!binding.active) continue;
         if (binding.set >= pipeline->ConstantBufferIndex() || binding.set >= 16 ||
-            (binding.kind != SDA_Buffer && binding.kind != SDA_ConstantBuffer)) {
-            Unsupported("this compute shader argument kind or descriptor set");
+            (binding.kind != SDA_Buffer && binding.kind != SDA_ConstantBuffer &&
+             binding.kind != SDA_Texture)) {
+            throw std::runtime_error(
+                "Metal RHI has not implemented compute shader argument " + dispatch.name +
+                " (index=" + std::to_string(index) +
+                ", kind=" + std::to_string(static_cast<uint>(binding.kind)) +
+                ", set=" + std::to_string(binding.set) +
+                ", binding=" + std::to_string(binding.binding) + ")");
         }
-        const auto* view = std::get_if<BufferView>(&args.args[index]);
-        auto* buffer = view == nullptr ? nullptr : dynamic_cast<MetalBuffer*>(view->GetBuffer());
-        if (buffer == nullptr || view->GetByteSize() == 0 ||
-            view->GetByteOffset() > buffer->GetByteSize() ||
-            view->GetByteSize() > buffer->GetByteSize() - view->GetByteOffset()) {
-            Unsupported("this compute buffer argument view");
+        if (binding.kind == SDA_Texture) {
+            const auto* view = std::get_if<TextureView>(&args.args[index]);
+            auto* texture = view == nullptr ? nullptr :
+                dynamic_cast<MetalTexture*>(view->GetTexture());
+            if (texture == nullptr || view->format != texture->GetFormat() ||
+                view->num_mips == 0 ||
+                view->mip_level + view->num_mips > texture->GetNumMips() ||
+                view->num_array == 0 ||
+                view->array_layer + view->num_array > texture->GetNumArray() ||
+                view->offset != uint3{0, 0, 0} ||
+                view->extent != texture->GetExtent()) {
+                Unsupported("this compute texture argument view");
+            }
+        } else {
+            const auto* view = std::get_if<BufferView>(&args.args[index]);
+            auto* buffer = view == nullptr ? nullptr :
+                dynamic_cast<MetalBuffer*>(view->GetBuffer());
+            if (buffer == nullptr || view->GetByteSize() == 0 ||
+                view->GetByteOffset() > buffer->GetByteSize() ||
+                view->GetByteSize() > buffer->GetByteSize() - view->GetByteOffset()) {
+                Unsupported("this compute buffer argument view");
+            }
         }
     }
     return pipeline;
@@ -1388,6 +1410,7 @@ MetalPipelineState* ValidateComputeDispatch(
 
 void EncodeComputeDispatch(
     id<MTLCommandBuffer> command_buffer, NSMutableArray<id<MTLBuffer>>* staging_buffers,
+    NSMutableArray<id<MTLTexture>>* texture_views,
     const DispatchCmd& dispatch, const TCachedArgArray& cached_args
 ) {
     auto* pipeline = static_cast<MetalPipelineState*>(
@@ -1417,12 +1440,33 @@ void EncodeComputeDispatch(
         for (uint index = 0; index < bindings.size(); ++index) {
             const auto& binding = bindings[index];
             if (!binding.active || binding.set != set) continue;
-            const BufferView& view = std::get<BufferView>(args.args[index]);
-            auto* buffer = static_cast<MetalBuffer*>(view.GetBuffer());
-            [arguments setBuffer:buffer->Native() offset:view.GetByteOffset()
-                         atIndex:binding.binding];
-            [encoder useResource:buffer->Native()
-                        usage:MTLResourceUsageRead | MTLResourceUsageWrite];
+            if (binding.kind == SDA_Texture) {
+                const TextureView& view = std::get<TextureView>(args.args[index]);
+                auto* texture = static_cast<MetalTexture*>(view.GetTexture());
+                id<MTLTexture> native_view = texture->Native();
+                if (view.mip_level != 0 || view.num_mips != texture->GetNumMips() ||
+                    view.array_layer != 0 || view.num_array != texture->GetNumArray()) {
+                    MTLTextureType type = view.num_array > 1 ?
+                        MTLTextureType2DArray : MTLTextureType2D;
+                    native_view = [texture->Native()
+                        newTextureViewWithPixelFormat:ToMetalFormat(view.format)
+                                          textureType:type
+                                               levels:NSMakeRange(view.mip_level, view.num_mips)
+                                               slices:NSMakeRange(view.array_layer, view.num_array)];
+                    if (native_view == nil) Unsupported("this Metal compute texture view");
+                    [texture_views addObject:native_view];
+                }
+                [arguments setTexture:native_view atIndex:binding.binding];
+                [encoder useResource:native_view
+                            usage:MTLResourceUsageRead | MTLResourceUsageWrite];
+            } else {
+                const BufferView& view = std::get<BufferView>(args.args[index]);
+                auto* buffer = static_cast<MetalBuffer*>(view.GetBuffer());
+                [arguments setBuffer:buffer->Native() offset:view.GetByteOffset()
+                             atIndex:binding.binding];
+                [encoder useResource:buffer->Native()
+                            usage:MTLResourceUsageRead | MTLResourceUsageWrite];
+            }
         }
         [encoder setBuffer:table offset:0 atIndex:set];
     }
@@ -1568,6 +1612,7 @@ public:
             id<MTLCommandBuffer> command_buffer = [queue_ commandBuffer];
             if (command_buffer == nil) throw std::runtime_error("Cannot create Metal command buffer");
             NSMutableArray<id<MTLBuffer>>* staging_buffers = [NSMutableArray array];
+            NSMutableArray<id<MTLTexture>>* texture_views = [NSMutableArray array];
             struct PendingReadback {
                 NSUInteger staging_index;
                 void* destination;
@@ -1644,7 +1689,7 @@ public:
                 }
                 if (command->Type() == Command::EType::ShaderDispatch) {
                     EncodeComputeDispatch(
-                        command_buffer, staging_buffers,
+                        command_buffer, staging_buffers, texture_views,
                         static_cast<const DispatchCmd&>(*command), submit.cached_args);
                     continue;
                 }
