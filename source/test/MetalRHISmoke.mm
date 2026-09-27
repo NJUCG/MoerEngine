@@ -9,6 +9,7 @@
 
 #include "rhi/RHI.h"
 #include "rhi/RHIExecutor.h"
+#include "rhi/RHIImpl.h"
 #include "rhi/metal/MetalDevice.h"
 #include "taskgraph/TaskSystem.h"
 
@@ -429,6 +430,65 @@ void CheckComputePipeline() {
     }
     MoerDelete(reinterpret_cast<PipelineState*>(pipeline.handle));
     std::cout << "native Metal compute pipeline creation and dispatch: success" << std::endl;
+}
+
+void CheckRHIComputeDispatch() {
+    using namespace Moer::Render;
+    constexpr std::string_view source = R"(
+        #include <metal_stdlib>
+        using namespace metal;
+        struct SmokeSet0 { device uint* values [[id(0)]]; };
+        kernel void compute_main(constant SmokeSet0& resources [[buffer(0)]],
+                                 constant uint& increment [[buffer(1)]],
+                                 uint index [[thread_position_in_grid]]) {
+            resources.values[index] += increment;
+        }
+    )";
+    std::vector<Moer::uint8> code(source.begin(), source.end());
+    ShaderParametersInfoMap reflection{};
+    auto& buffer_info = reflection.reflect_map["values"].spirv.resources;
+    buffer_info.data = ReflectParamInfo::Resource{
+        .set = 0, .binding = 0, .count = 1, .custom_flag = {.active = 1}
+    };
+    auto& constant_info = reflection.reflect_map["increment"].spirv.resources;
+    constant_info.data = ReflectParamInfo::Constant{
+        .offset = 0, .size = sizeof(uint), .padded_size = sizeof(uint),
+        .custom_flag = {.active = 1}
+    };
+    SingleShaderInfo compute{
+        .entry_point = "compute_main", .shader_data = code,
+        .shader_type = EShaderType::ST_COMPUTE, .shader_param_map = &reflection,
+        .compute_local_size = Moer::uint3{4, 1, 1}
+    };
+    PipelineShaderInfo shaders{.shader_group = ShaderCs{compute}};
+    shaders.layout_hash.emplace_back("values");
+    shaders.layout_hash.emplace_back("increment");
+    shaders.arg_cpp_info.emplace_back(ShaderArgCppInfo{1, SDA_Buffer});
+    shaders.arg_cpp_info.emplace_back(ShaderArgCppInfo{1, SDA_Constant});
+    PipelineHandle pipeline = RenderDevice::Get().CreatePipeline(std::move(shaders));
+    BufferRef buffer = RenderDevice::Get().CreateBuffer(
+        "Metal compute dispatch smoke", BufferInfo{
+            4, sizeof(uint32_t), EBufferUsageFlags::CPU_VISIBLE | EBufferUsageFlags::UNORDERED_ACCESS
+        }
+    );
+    id<MTLBuffer> native = (__bridge id<MTLBuffer>)GetMetalNativeBuffer(buffer.Get());
+    const uint32_t input[] = {1, 2, 3, 4};
+    std::memcpy(native.contents, input, sizeof(input));
+    ArrayArguments args(2, 1, false);
+    args.args[0] = buffer->GetView();
+    args.constants[0] = 7;
+    Moer::Array<Moer::UniquePtr<Command>> commands;
+    commands.emplace_back(Moer::MakeUnique<DispatchCmd>(
+        std::move(args), pipeline, Moer::uint3{1, 1, 1}, ProfileSection("Other")));
+    CmdSubmit submit(std::move(commands), {}, {}, {});
+    RHIExecutor::Get().Submit(EQueueType::Graphics, std::move(submit));
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    const uint32_t expected[] = {8, 9, 10, 11};
+    if (std::memcmp(native.contents, expected, sizeof(expected)) != 0) {
+        throw std::runtime_error("Metal RHI compute dispatch returned the wrong values");
+    }
+    MoerDelete(reinterpret_cast<PipelineState*>(pipeline.handle));
+    std::cout << "RHI compute dispatch with argument buffer and constants: success" << std::endl;
 }
 
 void CheckGraphicsUploads() {
@@ -1188,6 +1248,7 @@ int main(int argc, char** argv) {
             CheckIndexedGraphicsDraw();
             CheckDepthGraphicsDraw();
             CheckComputePipeline();
+            CheckRHIComputeDispatch();
             CheckGraphicsUploads();
             CheckMipTexture();
             CheckLayeredTextures();

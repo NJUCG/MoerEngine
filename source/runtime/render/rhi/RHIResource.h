@@ -1158,6 +1158,7 @@ struct SingleShaderInfo {
     std::span<uint8>         shader_data;
     EShaderType              shader_type;
     ShaderParametersInfoMap* shader_param_map = nullptr;
+    uint3                   compute_local_size{0, 0, 0};
 };
 
 struct ShaderVsGsPs {

@@ -1436,6 +1436,7 @@ public:
     // private:
     // Moer::UnorderedMap<std::string, ParameterInfo>          param_map;
     Moer::UnorderedMap<std::string, ReflectParamInfo> reflect_map;
+    uint3 compute_local_size{0, 0, 0};
 };
 } // namespace Moer::Render
 

@@ -595,6 +595,13 @@ void DXCompiler::Impl::ReflectSPIRV(ComPtr<IDxcResult> _result, ShaderParameters
     {
         std::span<Moer::uint> spirv_code_span((Moer::uint*)data, size / sizeof(Moer::uint));
         spirv_cross::Compiler        comp(spirv_code_span.data(), spirv_code_span.size());
+        if (comp.get_execution_model() == spv::ExecutionModelGLCompute) {
+            _param_map.compute_local_size = uint3{
+                comp.get_execution_mode_argument(spv::ExecutionModeLocalSize, 0),
+                comp.get_execution_mode_argument(spv::ExecutionModeLocalSize, 1),
+                comp.get_execution_mode_argument(spv::ExecutionModeLocalSize, 2)
+            };
+        }
         spirv_cross::ShaderResources resources = comp.get_shader_resources();
 
         auto active     = comp.get_active_interface_variables();

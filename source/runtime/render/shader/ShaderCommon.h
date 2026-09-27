@@ -118,6 +118,8 @@ struct Shader {
         _stream << compiled_hash << type << mutation_id << shader_name_hash << entry_name << shader_path
                 << shader_key;
         _stream << reflection.reflect_map;
+        _stream << reflection.compute_local_size.x << reflection.compute_local_size.y
+                << reflection.compute_local_size.z;
         _stream << source_dependencies;
         return _stream;
     }
@@ -126,6 +128,8 @@ struct Shader {
         _stream >> compiled_hash >> type >> mutation_id >> shader_name_hash >> entry_name >> shader_path >>
             shader_key;
         _stream >> reflection.reflect_map;
+        _stream >> reflection.compute_local_size.x >> reflection.compute_local_size.y
+                >> reflection.compute_local_size.z;
         _stream >> source_dependencies;
         return _stream;
     }

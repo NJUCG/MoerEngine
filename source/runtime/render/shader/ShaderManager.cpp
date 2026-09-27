@@ -18,7 +18,7 @@ using std::move;
 namespace {
 
 constexpr uint32_t k_shader_cache_magic          = 0x4D534443; // "MSDC"
-constexpr uint32_t k_shader_cache_format_version = 1;
+constexpr uint32_t k_shader_cache_format_version = 2;
 
 std::string_view GetShaderTypeName(EShaderType shader_type) {
     switch (shader_type) {
@@ -397,7 +397,8 @@ PipelineHandle RasterPipelineConstructor::CreatePipeline(
                 .entry_point      = _output.entry_name,
                 .shader_data      = std::span<uint8_t>(entry.blob_data.data(), entry.blob_data.size()),
                 .shader_type      = _type,
-                .shader_param_map = &_output.reflection
+                .shader_param_map = &_output.reflection,
+                .compute_local_size = _output.reflection.compute_local_size
             }
         );
     };
@@ -483,7 +484,8 @@ PipelineShaderInfo ComputeConstructor::CompileShaderInfo(
                 .entry_point      = _output.entry_name,
                 .shader_data      = std::span<uint8_t>(entry.blob_data.data(), entry.blob_data.size()),
                 .shader_type      = _type,
-                .shader_param_map = &_output.reflection
+                .shader_param_map = &_output.reflection,
+                .compute_local_size = _output.reflection.compute_local_size
             }
         );
     };

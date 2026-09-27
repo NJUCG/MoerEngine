@@ -335,6 +335,14 @@ void EncodeBufferUpload(
       destinationOffset:upload.Offset() size:upload.ByteSize()];
 }
 
+struct MetalComputeBinding {
+    uint set{0};
+    uint binding{0};
+    EShaderArgType kind{SDA_Num};
+    bool active{false};
+    bool constant{false};
+};
+
 class MetalPipelineState final : public PipelineState {
 public:
     MetalPipelineState(
@@ -347,9 +355,19 @@ public:
     ) : render_(pipeline), color_formats_(std::move(color_formats)),
         vertex_bindings_(vertex_bindings), rasterizer_(rasterizer),
         depth_format_(depth_format), depth_state_(depth_state) {}
-    explicit MetalPipelineState(id<MTLComputePipelineState> pipeline) : compute_(pipeline) {}
+    MetalPipelineState(
+        id<MTLComputePipelineState> pipeline, id<MTLFunction> function,
+        std::vector<MetalComputeBinding> bindings, MTLSize local_size,
+        NSUInteger constant_buffer_index
+    ) : compute_(pipeline), compute_function_(function),
+        compute_bindings_(std::move(bindings)), local_size_(local_size),
+        constant_buffer_index_(constant_buffer_index) {}
     id<MTLRenderPipelineState> NativeRender() const noexcept { return render_; }
     id<MTLComputePipelineState> NativeCompute() const noexcept { return compute_; }
+    id<MTLFunction> ComputeFunction() const noexcept { return compute_function_; }
+    const std::vector<MetalComputeBinding>& ComputeBindings() const noexcept { return compute_bindings_; }
+    MTLSize LocalSize() const noexcept { return local_size_; }
+    NSUInteger ConstantBufferIndex() const noexcept { return constant_buffer_index_; }
     const std::vector<MTLPixelFormat>& ColorFormats() const noexcept { return color_formats_; }
     uint VertexBindingCount() const noexcept { return vertex_bindings_; }
     const RHIRasterizeInfo& Rasterizer() const noexcept { return rasterizer_; }
@@ -359,6 +377,10 @@ public:
 private:
     id<MTLRenderPipelineState> render_{nil};
     id<MTLComputePipelineState> compute_{nil};
+    id<MTLFunction> compute_function_{nil};
+    std::vector<MetalComputeBinding> compute_bindings_;
+    MTLSize local_size_{MTLSizeMake(0, 0, 0)};
+    NSUInteger constant_buffer_index_{0};
     std::vector<MTLPixelFormat> color_formats_;
     uint vertex_bindings_{0};
     RHIRasterizeInfo rasterizer_{};
@@ -436,6 +458,35 @@ PipelineHandle MetalPipelineMetadata(
         }
     }
     return handle;
+}
+
+std::vector<MetalComputeBinding> MetalComputeBindings(
+    const PipelineShaderInfo& shader_info, const SingleShaderInfo& shader,
+    NSUInteger& constant_buffer_index
+) {
+    std::vector<MetalComputeBinding> bindings(shader_info.layout_hash.size());
+    if (shader.shader_param_map == nullptr) return bindings;
+    const auto& reflection = shader.shader_param_map->reflect_map;
+    NSUInteger highest_set = 0;
+    bool has_set = false;
+    for (uint index = 0; index < bindings.size(); ++index) {
+        MetalComputeBinding& binding = bindings[index];
+        binding.kind = shader_info.arg_cpp_info[index].type;
+        binding.constant = shader_info.arg_cpp_info[index].type == SDA_Constant;
+        if (binding.constant) continue;
+        const auto found = reflection.find(std::string(shader_info.layout_hash[index]));
+        if (found == reflection.end()) continue;
+        const auto* resource = std::get_if<ReflectParamInfo::Resource>(
+            &found->second.spirv.resources.data);
+        if (resource == nullptr || !resource->custom_flag.active) continue;
+        binding.set = resource->set;
+        binding.binding = resource->binding;
+        binding.active = true;
+        highest_set = std::max(highest_set, NSUInteger(binding.set));
+        has_set = true;
+    }
+    constant_buffer_index = has_set ? highest_set + 1 : 0;
+    return bindings;
 }
 
 // The table layout mirrors the SPIRV-Cross MSL argument-buffer sets: set 1
@@ -1089,6 +1140,99 @@ void EncodeSimpleDraw(id<MTLCommandBuffer> command_buffer, const SetDrawStateCmd
     [encoder endEncoding];
 }
 
+MetalPipelineState* ValidateComputeDispatch(
+    const DispatchCmd& dispatch, const TCachedArgArray& cached_args
+) {
+    auto* pipeline = dynamic_cast<MetalPipelineState*>(
+        reinterpret_cast<PipelineState*>(dispatch.Pipeline().handle));
+    if (pipeline == nullptr || pipeline->NativeCompute() == nil ||
+        !std::holds_alternative<uint3>(dispatch.Param())) {
+        Unsupported("this compute dispatch pipeline or indirect layout");
+    }
+    const MTLSize local = pipeline->LocalSize();
+    if (local.width == 0 || local.height == 0 || local.depth == 0 ||
+        local.width * local.height * local.depth >
+            pipeline->NativeCompute().maxTotalThreadsPerThreadgroup) {
+        Unsupported("this compute shader workgroup size");
+    }
+    const ArrayArguments& args = dispatch.Args(cached_args);
+    const auto& bindings = pipeline->ComputeBindings();
+    if (args.args.size() != bindings.size()) Unsupported("this compute argument count");
+    for (uint index = 0; index < bindings.size(); ++index) {
+        const MetalComputeBinding& binding = bindings[index];
+        if (binding.constant) {
+            if ((dispatch.Pipeline().valid_bits & (uint64(1) << index)) &&
+                args.constants.empty()) {
+                Unsupported("empty compute push constants");
+            }
+            continue;
+        }
+        if (!binding.active) continue;
+        if (binding.set >= pipeline->ConstantBufferIndex() || binding.set >= 16 ||
+            (binding.kind != SDA_Buffer && binding.kind != SDA_ConstantBuffer)) {
+            Unsupported("this compute shader argument kind or descriptor set");
+        }
+        const auto* view = std::get_if<BufferView>(&args.args[index]);
+        auto* buffer = view == nullptr ? nullptr : dynamic_cast<MetalBuffer*>(view->GetBuffer());
+        if (buffer == nullptr || view->GetByteSize() == 0 ||
+            view->GetByteOffset() > buffer->GetByteSize() ||
+            view->GetByteSize() > buffer->GetByteSize() - view->GetByteOffset()) {
+            Unsupported("this compute buffer argument view");
+        }
+    }
+    return pipeline;
+}
+
+void EncodeComputeDispatch(
+    id<MTLCommandBuffer> command_buffer, NSMutableArray<id<MTLBuffer>>* staging_buffers,
+    const DispatchCmd& dispatch, const TCachedArgArray& cached_args
+) {
+    auto* pipeline = static_cast<MetalPipelineState*>(
+        reinterpret_cast<PipelineState*>(dispatch.Pipeline().handle));
+    const uint3 groups = std::get<uint3>(dispatch.Param());
+    if (groups.x == 0 || groups.y == 0 || groups.z == 0) return;
+    const ArrayArguments& args = dispatch.Args(cached_args);
+    const auto& bindings = pipeline->ComputeBindings();
+    id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+    if (encoder == nil) throw std::runtime_error("Cannot encode Metal compute dispatch");
+    [encoder setComputePipelineState:pipeline->NativeCompute()];
+    for (NSUInteger set = 0; set < pipeline->ConstantBufferIndex(); ++set) {
+        bool needed = false;
+        for (const auto& binding : bindings) {
+            needed |= binding.active && binding.set == set;
+        }
+        if (!needed) continue;
+        id<MTLArgumentEncoder> arguments = [pipeline->ComputeFunction()
+            newArgumentEncoderWithBufferIndex:set];
+        if (arguments == nil) Unsupported("this Metal compute argument buffer layout");
+        id<MTLBuffer> table = [command_buffer.device
+            newBufferWithLength:arguments.encodedLength
+            options:MTLResourceStorageModeShared];
+        if (table == nil) throw std::runtime_error("Cannot allocate Metal compute arguments");
+        [staging_buffers addObject:table];
+        [arguments setArgumentBuffer:table offset:0];
+        for (uint index = 0; index < bindings.size(); ++index) {
+            const auto& binding = bindings[index];
+            if (!binding.active || binding.set != set) continue;
+            const BufferView& view = std::get<BufferView>(args.args[index]);
+            auto* buffer = static_cast<MetalBuffer*>(view.GetBuffer());
+            [arguments setBuffer:buffer->Native() offset:view.GetByteOffset()
+                         atIndex:binding.binding];
+            [encoder useResource:buffer->Native()
+                        usage:MTLResourceUsageRead | MTLResourceUsageWrite];
+        }
+        [encoder setBuffer:table offset:0 atIndex:set];
+    }
+    if (!args.constants.empty()) {
+        [encoder setBytes:args.constants.data()
+                  length:args.constants.size() * sizeof(uint)
+                 atIndex:pipeline->ConstantBufferIndex()];
+    }
+    [encoder dispatchThreadgroups:MTLSizeMake(groups.x, groups.y, groups.z)
+            threadsPerThreadgroup:pipeline->LocalSize()];
+    [encoder endEncoding];
+}
+
 class MetalCommandQueue final : public CommandQueue {
 public:
     MetalCommandQueue(id<MTLCommandQueue> queue, MetalCompletionDispatcher& completions) :
@@ -1152,6 +1296,12 @@ public:
             }
             if (command->Type() == Command::EType::SetDrawState) {
                 ValidateSimpleDraw(static_cast<const SetDrawStateCmd&>(*command));
+                has_gpu_work = true;
+                continue;
+            }
+            if (command->Type() == Command::EType::ShaderDispatch) {
+                ValidateComputeDispatch(
+                    static_cast<const DispatchCmd&>(*command), submit.cached_args);
                 has_gpu_work = true;
                 continue;
             }
@@ -1222,6 +1372,12 @@ public:
                 }
                 if (command->Type() == Command::EType::SetDrawState) {
                     EncodeSimpleDraw(command_buffer, static_cast<const SetDrawStateCmd&>(*command));
+                    continue;
+                }
+                if (command->Type() == Command::EType::ShaderDispatch) {
+                    EncodeComputeDispatch(
+                        command_buffer, staging_buffers,
+                        static_cast<const DispatchCmd&>(*command), submit.cached_args);
                     continue;
                 }
                 const auto& clear = static_cast<const ClearResourceCmd&>(*command);
@@ -1723,7 +1879,13 @@ PipelineHandle MetalDevice::CreatePipeline(PipelineShaderInfo&& shader_info) {
                 std::string(error.localizedDescription.UTF8String ?: "unknown error"));
         }
         PipelineHandle handle = MetalPipelineMetadata(shader_info, {&shader});
-        handle.handle = reinterpret_cast<uint64>(MoerNew(MetalPipelineState)(native_pipeline));
+        NSUInteger constant_buffer_index = 0;
+        auto bindings = MetalComputeBindings(shader_info, shader, constant_buffer_index);
+        const uint3 group = shader.compute_local_size;
+        handle.handle = reinterpret_cast<uint64>(MoerNew(MetalPipelineState)(
+            native_pipeline, function, std::move(bindings),
+            MTLSizeMake(group.x, group.y, group.z), constant_buffer_index
+        ));
         return handle;
     }
 }
